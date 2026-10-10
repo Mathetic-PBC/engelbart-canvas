@@ -94,18 +94,28 @@ app.whenReady().then(async () => {
     assert.match(await text(wc, '[data-onboarding-step-of]'), /^2 of 3$/, 'welcome, connect, create: Add to your library, Custom instructions and Project context are gone');
     assert.ok(await has(wc, '[data-onboarding-skip]'), 'Skip for now before a session');
     assert.equal(await has(wc, '[data-onboarding-continue]'), false, 'no Continue before a session');
+    // David's mockup (2026-10-09): the agent picked inside the consent line, "Bring these in" by the pager, no Refine chip.
     assert.match(await text(wc, '[data-connect-provider]'), /^Claude Code$/);
-    assert.match(await text(wc, '[data-connect-chip]'), /Sonnet · High/, 'the pinned model, shown and not offered');
+    assert.ok(await has(wc, '[data-connect-permission] [data-connect-pick-provider]'), 'the agent, inside "Use my … subscription"');
+    assert.equal(await has(wc, '[data-connect-library="choose"] [data-connect-chip]'), false, 'no Refine chip');
+    assert.match(await text(wc, '[data-connect-foot] [data-connect-bring]'), /^Bring these in$/);
+    assert.match(await text(wc, '[data-connect-foot]'), /Skip for now[\s\S]*2 of 3[\s\S]*Bring these in/);
     await press(wc, '[data-connect-source="chats"] button[aria-expanded]');
     await press(wc, '[data-connect-app="ChatGPT"]');
     assert.equal(await attr(wc, '[data-connect-app=ChatGPT] [role=checkbox]', 'aria-checked'), 'true');
     // MATH-114: asking ChatGPT what it remembers is ticking it; one checkbox, naming the provider, for the rest.
-    assert.match(await text(wc, '[data-connect-app=ChatGPT]'), /asks what it remembers/);
+    assert.doesNotMatch(await text(wc, '[data-connect-app=ChatGPT]'), /asks what it remembers/, 'that is for the refine chat');
+    // Now-3a-Fix: no summary beside a section's name, and a line under an app only when it needs something.
+    assert.equal(await has(wc, '[data-connect-summary]'), false, 'no summary beside the section names');
+    assert.equal((await text(wc, '[data-connect-app=Obsidian]')).replace('✓', ''), 'Obsidian', 'a folder found says nothing under the name');
+    assert.ok(await js(wc, '!!document.querySelector("[data-connect-app=Obsidian] [title]") && /~/.test(document.querySelector("[data-connect-app=Obsidian] [title]").title)'), 'the folder is in its tooltip');
+    assert.match(await text(wc, '[data-connect-app=Notion]'), /Needs sign-in$/);
     assert.equal(await js(wc, 'document.querySelectorAll("[data-connect-permission]").length'), 1, 'one consent checkbox');
+    assert.equal(await js(wc, '!!document.querySelector("[data-connect-sources-box] [data-connect-permissions]")'), true, 'the consent card is under the sources, after Code');
     assert.match(await text(wc, '[data-connect-permission]'), /^✓?Use my Claude Code subscription to read these/);
-    assert.match(await text(wc, '[data-connect-permission]'), /macOS may ask before Engelbart reads some of these\.$/);
+    assert.match(await text(wc, '[data-connect-permission]'), /What leaves my Mac\?$/, 'one box: the reassurance under the checkbox');
     assert.doesNotMatch(await text(wc, '[data-connect-permissions]'), /what (it|they) remembers?/, 'no "Ask … remember" row');
-    assert.match(await text(wc, '[data-connect-reassure]'), /Stored only on your Mac in ~\/\.engelbart\. Claude Code reads it through your account\. Mathetic never sees it\./);
+    assert.match(await text(wc, '[data-connect-reassure]'), /^Saved only on your Mac\. Claude Code reads them through your account, and Mathetic never sees them\. What leaves my Mac\?$/);
     const buttons = await js(wc, 'JSON.stringify([...document.querySelectorAll("[data-connect-library=choose] button")].map((el) => el.textContent.trim()))');
     assert.equal(JSON.parse(buttons).some((label) => /^(Sign in…|Allow…)$/.test(label)), false, 'no Sign in… or Allow… buttons: ticking is the consent');
     // One column, stacked (2026-10-09): no custom instructions box.
@@ -126,7 +136,7 @@ app.whenReady().then(async () => {
     await press(wc, '[data-connect-source="code"] button[aria-expanded]');
 
     /* ------------------------------------------------ refine: a card with one option per line, the needs-you card, the survey's findings */
-    await press(wc, '[data-connect-library="choose"] [data-connect-send]');
+    await press(wc, '[data-connect-library="choose"] [data-connect-bring]');
     // No opening line (2026-10-09): the dots in the middle until the librarian says something, then never again.
     await until(async () => (await has(wc, '[data-connect-chat] [data-connect-starting]')) || has(wc, '[data-connect-chat] [data-connect-agent]'), 'the dots, or the librarian already');
     if (await has(wc, '[data-connect-chat] [data-connect-starting]')) {
@@ -135,16 +145,15 @@ app.whenReady().then(async () => {
       assert.equal(await has(wc, '[data-connect-starting-now]'), false, 'not what each agent is doing');
       await shot(wc, '1c-starting');
     } else assert.doesNotMatch(await text(wc, '[data-connect-chat]'), /Looking at what you picked|Found \d/, 'no opening line in the chat');
-    // One clear Continue on the connect step once a session exists: filled, by the pager; Skip for now gone.
-    await until(() => has(wc, '[data-onboarding-continue] button'), 'the connect step\'s Continue');
+    // One button by the pager once a session exists (2026-10-09, David's mockup): "Skip the rest", filled; Skip for now gone.
+    await until(() => has(wc, '[data-connect-foot] [data-connect-import]'), 'the chat\'s button by the pager');
+    assert.match(await text(wc, '[data-connect-import]'), /^Skip the rest$/);
     assert.equal(await has(wc, '[data-onboarding-skip]'), false, 'no Skip for now with a session');
-    const filled = await js(wc, '(()=>{const b=document.querySelector("[data-onboarding-continue] button");const c=getComputedStyle(b).backgroundColor;return c!=="rgba(0, 0, 0, 0)"&&c!=="transparent"&&c!=="rgb(255, 255, 255)"})()');
-    assert.equal(filled, true, 'Continue is a filled button');
-    // ChatGPT's sign-in, sorted before its survey: its card in the strip above Reply, not in the chat.
-    await until(() => has(wc, '[data-connect-needs] [data-connect-need="signin"]'), 'ChatGPT\'s sign-in card, before the run asks');
-    assert.equal(await has(wc, '[data-connect-chat] [data-connect-need]'), false, 'no sign-in card inside the chat');
-    const above = await js(wc, '(()=>{const strip=document.querySelector("[data-connect-needs]").getBoundingClientRect();const reply=document.querySelector("[data-connect-draft]").getBoundingClientRect();return strip.bottom<=reply.top})()');
-    assert.equal(above, true, 'the strip sits above Reply');
+    const filled = await js(wc, '(()=>{const b=document.querySelector("[data-connect-import]");const c=getComputedStyle(b).backgroundColor;return c!=="rgba(0, 0, 0, 0)"&&c!=="transparent"&&c!=="rgb(255, 255, 255)"})()');
+    assert.equal(filled, true, 'a filled button');
+    // ChatGPT's sign-in, sorted before its survey: one card in the chat, each app a row, what Skip means under it.
+    await until(() => has(wc, '[data-connect-chat] [data-connect-needs] [data-connect-need="signin"]'), 'ChatGPT\'s sign-in card, before the run asks');
+    assert.match(await text(wc, '[data-connect-needs]'), /Skipping one leaves it out\. You can add it later from Add sources\./);
     await until(() => has(wc, '[data-connect-card="live"] [data-connect-option="Everything"]'), 'the notes question, as a card');
     assert.equal(await attr(wc, '[data-connect-import]', 'data-ready'), '0', 'Import is not lit while questions remain');
     await shot(wc, '2-card');
@@ -152,7 +161,9 @@ app.whenReady().then(async () => {
     await press(wc, '[data-connect-card="live"] [data-connect-submit]');
     // One Log in button and Skip (2026-10-08). The run is hidden and no browser can be read here: Done is given through
     // the API, as main's windowClosed would.
-    assert.match(await text(wc, '[data-connect-need="signin"]'), /ChatGPT needs you to sign in[\s\S]*Skip\s*Log in/);
+    assert.match(await text(wc, '[data-connect-need="signin"]'), /ChatGPT[\s\S]*Opens in your browser · read-only[\s\S]*Skip\s*Log in/);
+    await until(() => has(wc, '[data-connect-answered]'), 'the answered question, folded to one line');
+    assert.match(await text(wc, '[data-connect-answered]'), /What from notes\?/);
     assert.equal(await has(wc, '[data-connect-need-done]'), false, 'no Done');
     assert.equal(await has(wc, '[data-connect-need-signins]'), false, 'nothing brought over from Chrome');
     await shot(wc, '3-needs-you');
@@ -162,18 +173,22 @@ app.whenReady().then(async () => {
     await pause(400); // the chat scrolls to its newest message first
     await press(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]');
     await press(wc, '[data-connect-card="live"] [data-connect-submit]');
-    await until(async () => (await attr(wc, '[data-connect-import]', 'data-ready')) === '1', 'Import lit: nothing more to ask', 400);
+    await until(async () => (await attr(wc, '[data-connect-import]', 'data-ready')) === '1', 'nothing more to ask', 400);
+    assert.match(await text(wc, '[data-connect-import]'), /^Bring these in$/);
+    assert.match(await text(wc, '[data-connect-foot-status]'), /\d+ of \d+/, 'how far the work is, at the foot');
     await pause(500); // the button's colour fades in
     await shot(wc, '4-chat-done');
 
     /* ------------------------------------------------ Import: the working view, MEMORY.md */
     await press(wc, '[data-connect-import]');
     await until(() => has(wc, '[data-connect-library="working"]'), 'the working view');
+    assert.match(await text(wc, '[data-connect-progress] h1'), /^(Bringing everything in|Your library is connected)$/);
+    assert.ok(await has(wc, '[data-connect-progress] [data-connect-done]'), 'Continue at its foot');
+    await shot(wc, '5a-bringing');
     await until(async () => (await attr(wc, '[data-connect-memory]', 'data-connect-memory')) === 'saved', 'MEMORY.md saved', 600);
     const progress = await text(wc, '[data-connect-progress]');
     assert.match(progress, /✓ 4 added/, 'the vault\'s four notes');
-    assert.match(progress, /✓ remembered/, 'what ChatGPT remembers');
-    assert.match(progress, /Saved · 1 secret masked/);
+    assert.match(progress, /Summary of your library\s*Saved as MEMORY\.md\s*Saved · 1 secret masked/);
     assert.doesNotMatch(progress, /Activity/, 'no activity log');
     const memoryFile = fs.readFileSync(path.join(root, '.engelbart', 'MEMORY.md'), 'utf8');
     assert.equal(fs.existsSync(path.join(root, '.engelbart', 'test', 'MEMORY.md')), false, 'the normal library\'s, not test mode\'s');
@@ -200,6 +215,7 @@ app.whenReady().then(async () => {
     const chip = await js(wc, 'JSON.stringify(document.querySelector("[data-connect-dock]").getBoundingClientRect())');
     assert.ok(JSON.parse(chip).width < 170, `the chip stays small beside the bell: ${chip}`);
     assert.equal(await has(wc, '[data-connect-popup]'), false, 'no offer: this person connected their library in onboarding');
+    assert.equal(await has(wc, '[data-guided-offer]'), false, 'nor the guided setup\'s: their onboarding was it');
     assert.equal(await text(wc, '[data-sb-count="inbox"]'), '1', 'the sidebar\'s Inbox says the library is connected');
     await shot(wc, '6-project');
     await press(wc, '[data-connect-dock-open]');
@@ -207,6 +223,30 @@ app.whenReady().then(async () => {
     await shot(wc, '7-popup');
     await press(wc, '[data-connect-close]');
     await until(() => js(wc, '!document.querySelector("[data-connect-popup]")'), 'closed again');
+
+    /* ------------------- the Welcome walkthrough (2026-10-09): the Library's tabs, @brainstorm, @discover */
+    await until(() => has(wc, '[data-getting-started]'), 'Get started under the Welcome workspace\'s title');
+    assert.equal(await js(wc, 'document.querySelector("[data-doc-title]").value'), 'Welcome');
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-getting-started-step]").length'), 3, 'three steps');
+    assert.match(await text(wc, '[data-getting-started-step="2"] [data-getting-started-title]'), /Brainstorm what to do next/);
+    assert.match(await text(wc, '[data-getting-started-step="3"] [data-getting-started-title]'), /Find prior work/);
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-getting-started-line]").length'), 2, 'the line from each circle down to the next');
+    assert.equal(await attr(wc, '[data-getting-started-step="1"]', 'data-open'), '1', 'the first step open');
+    assert.ok(await has(wc, '[data-getting-started-row^="1:"]'), 'the Library\'s tabs, under step 1');
+    assert.ok(await has(wc, '[data-editor][data-empty-hint]'), '"Write your thoughts…" on the empty line');
+    assert.match(await text(wc, '[data-getting-started] h2'), /^Get started$/);
+    await shot(wc, '8-welcome');
+    const project = await js(wc, 'window.engelbartAPI.listProjects().then((list)=>list[0].id)');
+    await press(wc, '[data-getting-started-row^="1:"]');
+    await until(async () => (await attr(wc, '[data-getting-started-step="1"]', 'data-done')) === '1', 'opening the Library ticks step 1');
+    await until(async () => (await attr(wc, '[data-library-chip="notes"]', 'aria-pressed')) === 'true', 'the Library open on the Notes tab');
+    await until(async () => (await attr(wc, '[data-getting-started-step="2"]', 'data-open')) === '1', 'step 2 opens next');
+    await js(wc, 'document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
+    assert.ok(await has(wc, '[data-getting-started-row="2:brainstorm"]'), '@brainstorm under step 2');
+    assert.deepEqual((await js(wc, `window.engelbartAPI.gettingStarted(${JSON.stringify(project)})`)).ticked, [1]);
+    await press(wc, '[data-getting-started-title="3"]');
+    await until(() => has(wc, '[data-getting-started-row="3:discover"]'), '@discover under step 3');
+    await shot(wc, '8b-steps');
     console.log(`Connect your library smoke passed. Data: ${root}`);
     app.exit(0);
   } catch (error) {

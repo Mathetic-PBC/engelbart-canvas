@@ -4,7 +4,8 @@
 // for, and its control. For now: Model, what Quick, Standard and Deep run on for each provider, the levels a plain
 // @discover line (Standard) and its --quick / --deep take (models file → `discover`, src/main/bart/settings.cjs; each pick
 // is saved as it is made, and the next run starts there, in any window, with no restart); Connections, the app's accounts
-// (../workspace/Connections.jsx; MATH-64, it was its own icon beside the bell until then); and in test mode Test data,
+// (../workspace/Connections.jsx; MATH-64, it was its own icon beside the bell until then); Guided setup, onboarding run
+// again (./GuidedSetup.jsx, 2026-10-10); and in test mode Test data,
 // the actions that were test mode's own gear (./TestToggle.jsx keeps the pill). A search field tops the column and
 // narrows it to the pages whose title or keywords hold the query (2026-10-07).
 import React from 'react';
@@ -14,6 +15,7 @@ import { EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { shownProviders, defaultProvider, defaultStep, patchOf } from '../model/intelligence.js';
 import { ConnectionsPage, TOOL_CONNECTIONS, TOOL_NAME } from '../workspace/Connections.jsx';
 import { Group, Row, BUTTON, text } from './SettingsRows.jsx';
+import { startGuidedSetup } from './GuidedSetup.jsx';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
@@ -111,6 +113,18 @@ function TestData({ test, close }) {
   );
 }
 
+// Guided setup (2026-10-10): a new user's onboarding again, at any time, over what they have (ui/GuidedSetup.jsx). Start
+// closes the window and opens its first screen.
+function GuidedSetupPage({ close }) {
+  return (
+    <Group title="Onboarding" data-guided-setup="1">
+      <Row label="Walk through setup again" hint="Bring in your library and try Brainstorm and Discover in a new project. Nothing you have is removed.">
+        <button type="button" className="hov-bd2" data-settings-item="guided-setup" onClick={() => { close(); startGuidedSetup(); }} style={BUTTON}>Start</button>
+      </Row>
+    </Group>
+  );
+}
+
 // Lucide's "cpu" (the model; its "sparkles" until 2026-10-07, too busy at this size: David) and "flask-conical", at the nav's
 // size; the plug Connections' own icon was (its 16-unit path at this grid's scale). Lucide is ISC; its paths are pasted in.
 const icon = (paths) => (
@@ -118,6 +132,8 @@ const icon = (paths) => (
 );
 const MODEL_ICON = icon(<><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="8" y="8" width="8" height="8" rx="1" /><path d="M12 2v2M12 20v2M17 2v2M17 20v2M7 2v2M7 20v2M2 12h2M2 17h2M2 7h2M20 12h2M20 17h2M20 7h2" /></>);
 const PLUG_ICON = icon(<path d="M8.25 2.25v4.5M15.75 2.25v4.5M6 6.75h12v3a6 6 0 0 1-12 0zM12 15.75v3a3 3 0 0 1-3 3H6" />);
+// Lucide's "compass".
+const COMPASS_ICON = icon(<><circle cx="12" cy="12" r="10" /><path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z" /></>);
 const FLASK_ICON = icon(<><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2" /><path d="M8.5 2h7" /><path d="M7 16h10" /></>);
 
 // The settings window's pages, in order, under their headings in the left column. `shown` (optional) decides from the
@@ -127,6 +143,8 @@ export const PAGES = Object.freeze([
     keywords: [...LEVELS.flatMap((level) => [level.name, level.hint]), 'model', 'effort', 'intelligence', 'discover', 'Claude', 'Codex'] },
   { id: 'connections', section: 'Settings', title: 'Connections', icon: PLUG_ICON, Body: ConnectionsPage,
     keywords: ['GitHub', 'Zotero', 'accounts', 'sign in', 'sign out', ...TOOL_CONNECTIONS.map((id) => TOOL_NAME[id])] },
+  { id: 'guided-setup', section: 'Settings', title: 'Guided setup', icon: COMPASS_ICON, Body: GuidedSetupPage,
+    keywords: ['onboarding', 'setup', 'walkthrough', 'getting started', 'welcome', 'brainstorm', 'discover', 'library'] },
   { id: 'test-data', section: 'Developer', title: 'Test data', icon: FLASK_ICON, shown: ({ test }) => !!(test && test.testMode), Body: TestData,
     keywords: ['reveal', 'reset', 'start over', 'test library'] },
 ]);

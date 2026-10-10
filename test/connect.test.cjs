@@ -538,6 +538,7 @@ test('a session with the fake agents: a folder button, a question card, imports 
   const fresh = fs.mkdtempSync(path.join(homeDir, 'fresh-')); // a home with no Obsidian: the vault comes from the button
   const { connect, snapshots, state } = fakeConnect({ home: fresh });
   const before = (await mdFiles()).length;
+  const earlier = new Set((await mdFiles()).map((row) => row.id));
   await assert.rejects(connect.start({ sources: {} }), /Pick at least one source/);
   const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, sites: { on: true } }, provider: 'openai' });
   assert.deepEqual(started.choice, { provider: 'openai', name: 'Codex', modelName: 'Sol', effort: 'high' }, 'only the provider was chosen; its model is pinned');
@@ -575,10 +576,17 @@ test('a session with the fake agents: a folder button, a question card, imports 
   assert.equal(now.memory.removed, 1);
   assert.ok(fs.existsSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json')));
 
-  const { project } = await projects.createProjectWithWelcome(ctx, { name: 'From connect' });
-  assert.equal(await connect.attachProject(ctx, started.id, project.id), 0, 'no notes were held for it');
+  const { project, workspaceId, noteId } = await projects.createProjectWithWelcome(ctx, { name: 'From connect' });
+  assert.equal(await connect.attachProject(ctx, started.id, project.id, workspaceId), 0, 'no notes were held for it');
   const names = (await ctx.libraryDb.list()).filter((row) => row.project_id === project.id && row.tags.includes('note')).map((row) => row.name);
   assert.deepEqual(names, ['Welcome!']);
+  // What it brought into the library joins the Welcome workspace (2026-10-10), so that workspace's agents are told of it.
+  const brought = (await mdFiles()).filter((row) => !earlier.has(row.id)).map((row) => row.id);
+  assert.equal(brought.length, 5);
+  const held = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
+  assert.equal(held[0], noteId, 'the Welcome! note first');
+  assert.deepEqual(brought.filter((id) => !held.includes(id)), [], 'every note it brought in');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8')).rows.sort(), [...new Set(held.slice(1))].sort(), 'kept with the session, for a resume');
   connect.dismiss(started.id);
   assert.equal(connect.list(ctx.dataRoot).some((s) => s.id === started.id), false);
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
@@ -837,7 +845,7 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   assert.equal(model.subOf('notes', start), 'Obsidian');
   assert.equal(model.subOf('transcripts', start), 'nothing picked');
   assert.equal(model.subOf('sites', start), model.BROWSER_ROW);
-  assert.equal(model.rowSub('ChatGPT'), 'Chats about your question · asks what it remembers, for a head start');
+  assert.equal(model.rowSub('ChatGPT'), '', 'what asking an assistant is, the refine chat says');
   assert.equal(model.rowSub('Apple Notes'), 'macOS will ask');
   assert.equal(model.rowSub('Obsidian'), '');
   assert.deepEqual(model.permissionsFor(['Granola', 'Apple Notes', 'Claude']), { web: ['Claude'], recall: ['Claude'], connectors: ['Granola'], notes: true });
@@ -856,9 +864,9 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   assert.deepEqual(model.rowLabel('Cursor', { found: seen }), { text: 'Not found', tone: 'muted' });
   assert.deepEqual(model.rowLabel('Cursor', { found: seen, folder: '~/Work' }), { text: '~/Work', tone: '' });
   assert.deepEqual(model.rowLabel('ChatGPT', { found: seen }), { text: 'signed in to Engelbart', tone: '' });
-  assert.deepEqual(model.rowLabel('Perplexity', { found: seen }), { text: 'Sign in to add', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Perplexity', { found: seen }), { text: 'Needs sign-in', tone: 'muted' });
   assert.deepEqual(model.rowLabel('Evernote', { found: seen }), { text: 'Not found', tone: 'muted' });
-  assert.deepEqual(model.rowLabel('Granola', { found: seen }), { text: 'Opens Granola in your browser to sign in', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Granola', { found: seen }), { text: 'Needs sign-in', tone: 'muted' });
   assert.deepEqual(model.rowLabel('Granola', { found: seen, connectors: { Granola: { pending: true } } }), { text: 'Waiting for Granola sign-in…', tone: 'busy' });
   assert.deepEqual(model.rowLabel('Notion', { found: seen, connectors: { Notion: { connected: true } } }), { text: 'signed in', tone: '' });
   assert.deepEqual(model.rowLabel('Apple Notes', { notes: 'asking' }), { text: 'macOS is asking you…', tone: 'busy' });
@@ -1017,4 +1025,35 @@ test('Skip on the librarian\'s question brings nothing of it in: the source is l
   assert.equal(readReply(`{"authorize":{"app":"${LOCAL_PDFS}","kind":"folder"}}`, choices).authorize.label, 'Choose a folder of PDFs…');
   assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /Skip means nothing of it comes in/);
   assert.doesNotMatch(prompts.INTERVIEW_SYSTEM_PROMPT, /Decide sensibly yourself/);
+});
+
+test('a row of onboarding\'s "Bringing everything in": the apps, what it brings in, where it stands (2026-10-09, David\'s mockup)', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const row = (job) => { const view = model.workRow({ kind: 'import', apps: [], notes: 0, items: 0, ...job }); return [view.title, view.sub, view.status.text]; };
+  assert.deepEqual(row({ source: 'transcripts', apps: ['Google Meet', 'Zoom'], label: 'Meeting transcripts: Google Meet, Zoom', status: 'running' }), ['Google Meet and Zoom', 'Meeting transcripts', 'Adding…']);
+  assert.deepEqual(row({ source: 'chats', apps: ['ChatGPT'], label: 'AI chats: chats about Engelbart product work', status: 'running', items: 65 }), ['ChatGPT', 'Chats about Engelbart product work', 'Adding · 65 so far']);
+  assert.deepEqual(row({ source: 'sites', label: 'Websites', status: 'queued' }), ['Websites', 'Pages from your browser history', 'Queued']);
+  assert.deepEqual(row({ source: 'notes', apps: ['Obsidian'], label: 'Obsidian: mathetic and Obsidian Vault', status: 'done', notes: 11 }), ['Obsidian', 'Mathetic and Obsidian Vault', '✓ 11 added']);
+  assert.deepEqual(row({ source: 'papers', label: 'Papers', status: 'failed' }), ['Papers', '', 'Failed']);
+  assert.equal(model.workRow({ kind: 'survey', apps: ['Overleaf'], label: 'Looking through Overleaf', status: 'running' }).status.text, 'Looking…');
+});
+
+test('the foot of onboarding\'s chat and what the chat says while it waits (2026-10-09, David\'s mockup)', async () => {
+  const model = await import(require('node:url').pathToFileURL(require('node:path').join(__dirname, '../src/renderer/model/connect.js')).href);
+  const jobs = [
+    { kind: 'import', label: 'Notes: Obsidian', status: 'running', notes: 1, items: 0 },
+    { kind: 'import', label: 'AI chats', status: 'queued', notes: 0, items: 0 },
+    { kind: 'survey', label: 'Looking through Overleaf', status: 'running', notes: 0, items: 0 },
+    { kind: 'survey', label: 'Looking through Notion', status: 'done', notes: 0, items: 0 },
+    { kind: 'memory', label: 'MEMORY.md', status: 'queued', notes: 0, items: 0 },
+  ];
+  assert.equal(model.footLine({ jobs, needs: [{}, {}] }), 'Bringing in 2 sources · 1 of 4 · 2 need you');
+  assert.equal(model.footLine({ jobs: jobs.slice(2), needs: [{}] }), 'Looking through your apps · 1 of 2 · 1 needs you');
+  assert.equal(model.footLine({ jobs: [jobs[3]], needs: [] }), 'Everything looked at · 1 of 1');
+  assert.equal(model.footLine({ jobs: [], needs: [] }), '');
+  assert.equal(model.chatStatus({ thinking: true, activity: 'Reading what the surveys found', jobs }), 'Reading what the surveys found…');
+  assert.equal(model.chatStatus({ waiting: true, jobs, needs: [] }), 'Looking through Overleaf…');
+  assert.equal(model.chatStatus({ waiting: true, jobs: [{ ...jobs[2], status: 'waiting' }], needs: [{}] }), 'Waiting for your sign-in…');
+  assert.equal(model.chatStatus({ jobs }), '', 'nothing while it waits on nothing');
+  assert.equal(model.needView({ app: 'ChatGPT', kind: 'signin' }).hint, 'Opens in your browser · read-only');
 });

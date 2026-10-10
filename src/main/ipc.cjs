@@ -24,6 +24,7 @@ const { inspectPdf } = require('./context/pdf-kind.cjs');
 const { TOOL_NAMES } = require('./tools/requirements.cjs');
 const archive = require('./store/archive.cjs');
 const onboarding = require('./store/onboarding.cjs');
+const gettingStarted = require('./store/getting-started.cjs');
 const { buildChoices } = require('./bart/models.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
 const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
@@ -441,12 +442,17 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const folder = value.folder === 'existing' ? 'existing' : 'new';
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
     const imported = optStr(value.connect, 'import id', 64);
-    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context }).then(async (made) => {
+    const welcome = value.onboarding === true; // a new user's onboarding, not + Project: the Welcome walkthrough
+    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context, ...(welcome ? { workspaceName: 'Welcome' } : {}) }).then(async (made) => {
       // A folder Engelbart made gets its Build repository and first commit now, in the background, once the tool check
       // has found Git (build/manager.cjs prepareDefault): the first Build never meets a folder without a history.
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
-      // Connect your library's notes, held until there was a project (connect/session.cjs attachProject), go into this one.
-      if (imported && connect) made.importedNotes = await connect.attachProject(ctx, imported, made.project.id).catch(() => 0);
+      // Connect your library's notes, held until there was a project (connect/session.cjs attachProject), go into this one,
+      // and what it brought into the library joins the Welcome workspace's context, now and as more comes in.
+      if (imported && connect) made.importedNotes = await connect.attachProject(ctx, imported, made.project.id, made.workspaceId).catch(() => 0);
+      if (welcome) made.gettingStarted = gettingStarted.startGettingStarted(ctx, made.project.id, { workspaceId: made.workspaceId });
+      // A new user's onboarding is the guided setup: it is not offered to them afterwards.
+      if (welcome) { try { gettingStarted.markGuidedOffer(ctx, 'onboarded'); } catch { /* offered once more at worst */ } }
       return made;
     });
   }), { project: (_args, out) => out && out.project && out.project.id, library: true });
@@ -506,6 +512,18 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     fs.mkdirSync(path.dirname(offerFile(ctx)), { recursive: true, mode: 0o700 });
     fs.writeFileSync(offerFile(ctx), JSON.stringify({ seen: true, how: how === 'started' ? 'started' : 'dismissed', at: new Date().toISOString() }), { mode: 0o600 });
     return true;
+  }));
+  // The guided setup's one-time offer to someone with projects (./store/getting-started.cjs guidedOfferDue).
+  // ENGELBART_CONNECT_OFFER=off never shows it, as it never showed Connect your library's popup it replaced (the smokes).
+  handle('guided-offer', withCtx((ctx) => ({ show: process.env.ENGELBART_CONNECT_OFFER !== 'off' && gettingStarted.guidedOfferDue(ctx) })));
+  handle('guided-offer-seen', withCtx((ctx, how) => gettingStarted.markGuidedOffer(ctx, typeof how === 'string' ? how : 'dismissed')));
+  // The Welcome walkthrough (2026-10-09, ./store/getting-started.cjs): its state, and the steps the window ticked (or a
+  // circle unticked by hand) and Hide.
+  handle('getting-started', withCtx((ctx, pid) => gettingStarted.readGettingStarted(ctx, str(pid, 'project id', 64))));
+  handle('set-getting-started', withCtx((ctx, pid, input) => {
+    const value = plainObject(input, 'change');
+    const steps = (list) => (Array.isArray(list) ? list.slice(0, gettingStarted.STEPS) : []);
+    return gettingStarted.setGettingStarted(ctx, str(pid, 'project id', 64), { tick: steps(value.tick), untick: steps(value.untick), hidden: value.hidden === true });
   }));
   // MEMORY.md (./connect/memory.cjs): whether there is one in this data root, for the window to name and reveal.
   handle('connect-memory', withCtx((ctx) => { const file = path.join(ctx.dataRoot, 'MEMORY.md'); try { const stat = fs.statSync(file); return { exists: true, path: file, updated: stat.mtime.toISOString(), bytes: stat.size }; } catch { return { exists: false, path: file }; } }));

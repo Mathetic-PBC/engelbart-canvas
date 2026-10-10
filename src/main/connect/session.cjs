@@ -203,7 +203,7 @@ function shownOf(input) {
  * change; `openBridge` (../sandbox/local-tools.cjs openToolBridge); `browser` the agents' browser (./browser.cjs, null
  * where there is none); `connectors` (./connectors.cjs); `appleNotes` (./apple-notes.cjs).
  */
-function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, now = () => new Date().toISOString() }) {
+function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, now = () => new Date().toISOString() }) {
   const sessions = new Map();
   const readyNow = () => { try { return (ready() || []).filter((provider) => PROVIDERS.includes(provider)); } catch { return [...PROVIDERS]; } };
   const choiceFor = (provider) => connectChoice(provider, (() => { try { return models(); } catch { return null; } })());
@@ -228,7 +228,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
         ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped], skippedSources: [...s.skippedSources],
-        suspended: !!s.suspended, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles })),
+        suspended: !!s.suspended, rows: [...s.rows], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles })),
       }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
   }
@@ -484,6 +484,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       session, context, zotero, github, deps, env, kind: job.kind, page, appleNotes,
       needs: { ask: (request) => askPerson(s, job, request), wait: () => waitAgain(s, job) },
       recall: (app, text) => keepRecall(s, app, text),
+      kept: (row) => keepRow(s, row),
       log: (text) => logAction(s, job, text),
       added: (kind, n, title) => { job[kind === 'notes' ? 'notes' : 'items'] += n; if (title && job.titles.length < 80) job.titles.push(String(title).slice(0, 120)); emit(s, { soon: true }); },
     }) : null;
@@ -832,7 +833,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       picked: { folders: {}, exports: {} }, chat: [], thinking: true, activity: 'Looking at what you picked…', done: false, finished: false, minimized: false, dismissed: false, error: '',
       jobs: [], seq: 0, needs: [], log: [], controllers: new Set(), interviewSession: null, interviewController: null, found: {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
-      skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(),
+      skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(), rows: new Set(), workspaceId: null, placing: Promise.resolve(),
     };
     sessions.set(id, s);
     s.dirs = dirsOf(s);
@@ -1161,14 +1162,43 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   /** Onboarding made the project: the staged notes go into it, and later ones straight there. → how many went in */
-  async function attachProject(ctx, id, projectId) {
+  async function attachProject(ctx, id, projectId, workspaceId = null) {
     const s = sessions.get(id);
     if (!s || s.dataRoot !== ctx.dataRoot) return 0;
     s.projectId = projectId;
     try { s.projectDir = require('../store/projects.cjs').findProject(ctx, projectId).dir; } catch { s.projectDir = null; }
     const written = await notes.flushStaged(ctx, s.dir, projectId, { projects: require('../store/projects.cjs') });
+    if (typeof workspaceId === 'string' && ID_RE.test(workspaceId)) {
+      s.workspaceId = workspaceId;
+      await placeRows(s, [...s.rows]);
+    }
     emit(s);
     return written.length;
+  }
+
+  // What the session brought into the library, or found already there (2026-10-10). Library rows belong to no project,
+  // so no agent of the project onboarding opened was told of them (store/projects.cjs `holds`): once the session knows
+  // the Welcome workspace (attachProject), each joins its context, those that come in later too, so that workspace's
+  // sidebar, @brainstorm and @discover see the person's library. One placing at a time: each reads the context it adds to.
+  function keepRow(s, row) {
+    if (!row || typeof row.id !== 'string' || !ID_RE.test(row.id) || s.rows.has(row.id)) return;
+    s.rows.add(row.id);
+    if (s.workspaceId) void placeRows(s, [row.id]);
+  }
+  function placeRows(s, ids) {
+    if (!ids.length || !s.projectId || !s.workspaceId) return s.placing;
+    s.placing = s.placing.then(async () => {
+      const projects = require('../store/projects.cjs');
+      const ctx = await context();
+      if (ctx.dataRoot !== s.dataRoot) return;
+      const { workspace } = projects.findWorkspace(ctx, s.projectId, s.workspaceId);
+      // A workspace holds 500 entries at most (projects.cjs MAX_TREE_ENTRIES): past that, the rest stay in the library alone.
+      const fresh = ids.filter((row) => !workspace.context.includes(row) && !(workspace.removed || []).includes(row)).slice(0, Math.max(0, 500 - workspace.context.length));
+      if (!fresh.length) return;
+      await projects.setWorkspaceContext(ctx, s.projectId, s.workspaceId, [...workspace.context, ...fresh]);
+      placed(s.projectId);
+    }).catch(() => {}); // the workspace gone, or the library closed: what came in stays in the library
+    return s.placing;
   }
 
   /* ------------------------------------------------------------------------------------------ quitting and resuming */
@@ -1247,6 +1277,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       waitingForSurvey: !!saved.waiting, surveyNews: [], recalls: keptRecalls(dir), memory: kept ? { ...saved.memory } : { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: kept, memoryDraft: null,
       skipped: new Set((Array.isArray(saved.skipped) ? saved.skipped : []).filter((app) => typeof app === 'string')),
       skippedSources: new Set((Array.isArray(saved.skippedSources) ? saved.skippedSources : []).filter((id) => sourceOf(id))), suspended: false, held: new Map(),
+      rows: new Set((Array.isArray(saved.rows) ? saved.rows : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
+      workspaceId: projectId && typeof saved.workspaceId === 'string' && ID_RE.test(saved.workspaceId) ? saved.workspaceId : null, placing: Promise.resolve(),
     };
     // Closed before the librarian's first word, with only the opening line said: the opening again.
     if (s.chat.every((entry) => entry.opener)) s.chat = [];

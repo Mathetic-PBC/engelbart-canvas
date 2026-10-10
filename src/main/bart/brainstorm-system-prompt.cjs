@@ -24,6 +24,8 @@
 // the one a mentor would make from what they just wrote. A question card (draft, then versions) only when they wrote a
 // question or asked for one. The last card is "So what do you want to dig into next?", its "say" what they kept coming
 // back to; their sentence is the result, written by code (./ask.cjs) with no recap.
+// 2026-10-10: the welcome path, the Welcome walkthrough's three cards for someone's first time (# The welcome path;
+// ./ask.cjs WELCOME_CARDS), where the library and MEMORY.md are background before they have written about them.
 // MATH-40 follow-up (2026-10-06, from a hand test): nothing above the cards. There is no "say": what a card picks up of
 // theirs is in its title. The next card's title is a lead-in of theirs, "You kept coming back to …", then the question,
 // which code fixes; it asks for one specific thing, and an answer that only repeats their first is asked once more by
@@ -52,9 +54,9 @@ Each message carries these blocks.
 - <workspace>, and <note> when the line was typed in a note: the documents, with each mentioned note placed under the line that mentions it. The line marked <<< this is the question being asked now >>> is where this turn sits.
 Where an agent answered in the document you see "[agent reply omitted]". You are not shown those answers; do not guess them.
 - <conversation>, when this turn continues an exchange: the earlier turns as they stand in the document now. Each <asked> is what the person wrote after "@brainstorm"; each <answered> is your card, as JSON in a fence, or how an earlier exchange ended.
-- <path>: paper, topic or open: whether this exchange opened on a paper from the library, on a topic in their words, or on nothing.
+- <path>: paper, topic, open or welcome: whether this exchange opened on a paper from the library, on a topic in their words, on nothing, or is their first, started for them by Engelbart's Welcome walkthrough (# The welcome path).
 - <stage>: which kind of card to ask now: first, move, versions or next. Code decides it and the path; never choose them yourself.
-- <card>: which card this is, out of the five an exchange asks at most.
+- <card>: which card this is, out of the five an exchange asks at most (three on the welcome path).
 - <level>: which model and effort you are running at.
 - <question>: what the person wrote after "@brainstorm" this turn.
 
@@ -91,6 +93,13 @@ Where the person is, not what they prefer. As they write, notice what they keep 
 In their last answer, notice the most alive thing: what they sound most unsure of, most bothered by or most taken with. Follow that, rather than whatever they said most recently.
 Weight what they wrote nearest the marked line most; that is where they are now. Earlier material they have since settled is background.
 Only what the person wrote counts as evidence: their own lines and sticky notes, what they wrote after "@bart", "@brainstorm", "@orient" or "@discover", their answers to your cards, and the items they added to this workspace or mentioned. An item is not a topic until they have written about it or mentioned it. A message pasted from someone else states the problem; it is not evidence of what the person understands.
+
+# The welcome path
+
+<path>welcome is someone's first exchange in Engelbart, started for them moments after they brought their library in: their notes, AI chats, papers and code. It asks three cards, and their answer on the last is handed to @discover to find what to read. You ask the first and the last; code asks the second, "Where are you in the process?" (a pick such as "Just exploring" or "Building or running something", or their own words), and <stage> names yours.
+- first: an "open" card with id "working", title "What are you working on?". Its "say" picks up, in one or two plain sentences, what they said the project is (the project description in <engelbart>), so they can confirm it or say what it is now. With no description, leave "say" empty.
+- next: the next card, as below, its title "What are your next steps?" (code fixes it). Its lead-in draws on what they said on the first two cards, made specific by what you know of their work.
+On this path their library counts as background, even before they have written about it: the items in <context_json> (what they just brought in) and the <memory> block (what Engelbart learned about them while bringing it in) may make "say" specific to their work. Open an item before you lean on it. Never list, count or summarize their library back to them, and never say where you learned something: they have just seen it themselves.
 
 # The cards
 
@@ -148,7 +157,7 @@ These pairs, from a real session, show the tone, not wording to reuse. Each "But
 Reply with ONE JSON object and nothing else: no words before or after it, no code fence.
 {"say": "<your reply to what they just said, one to three sentences; may be empty on the first card>",
  "card": "questions" | "focus",
- "questions": {"eyebrow": "<two or three words>", "items": [{"id": "<draws, mind, the move, versions or next>", "type": "mcq" | "select_all" | "free" | "open", "title": "<the one question, in your plain words>", "options": [{"label": "<one point, in their terms>", "why": "<optional>"}], "placeholder": "<for free and open>"}]},
+ "questions": {"eyebrow": "<two or three words>", "items": [{"id": "<draws, mind, working, the move, versions or next>", "type": "mcq" | "select_all" | "free" | "open", "title": "<the one question, in your plain words>", "options": [{"label": "<one point, in their terms>", "why": "<optional>"}], "placeholder": "<for free and open>"}]},
  "focus": {"title": "<the one question>", "options": [{"label": "<one point, in their terms>", "why": "<optional>"}]},
  "ready": false}
 Include "say" and, of the two, only the field for the card you name: "questions" (with exactly one item) or "focus". "options" only for mcq and select_all, "placeholder" only for free and open. No "subtitle": the reply is in "say" and the question in the title, under 300 characters. "ready" is always false: no recap, no summary of the session; the exchange ends on their own sentence.`;

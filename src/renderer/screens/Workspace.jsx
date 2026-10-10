@@ -5,6 +5,8 @@ import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
 import { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
 import DocPane from '../workspace/DocPane.jsx';
+import GettingStarted from '../workspace/GettingStarted.jsx';
+import { EMPTY_HINT, discoverPapers, stepsHere } from '../model/getting-started.js';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
 import { kindOf, Expand, Collapse } from '../ui/Icons.jsx';
 import { PanelCloseIcon, PanelOpenIcon } from '../ui/SidebarIcons.jsx';
@@ -414,6 +416,31 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     for (const key of held) flushRef.current(key);
   }, []);
 
+  /* ------------------------------------------------------ the Welcome walkthrough */
+
+  // A new user's first project (2026-10-09, workspace/GettingStarted.jsx; main's store/getting-started.cjs): steps 1 and 2
+  // under the title of the Welcome workspace, 3 to 5 under the one picked at step 2. A step is ticked here when it is done:
+  // the Library opened (1), @brainstorm (3) and @discover (4) sent, a question asked about a highlight (5).
+  const [walk, setWalk] = React.useState(null);
+  const walkRef = React.useRef(null);
+  walkRef.current = walk;
+  React.useEffect(() => {
+    let alive = true;
+    setWalk(null);
+    api.gettingStarted(project.id).then((value) => { if (alive) setWalk(value || null); }).catch(() => {});
+    return () => { alive = false; };
+  }, [project.id]);
+  const changeWalk = React.useCallback((change) => {
+    const now = walkRef.current;
+    if (!now || now.hidden) return;
+    const tick = (change.tick || []).filter((n) => !now.ticked.includes(n));
+    const untick = (change.untick || []).filter((n) => now.ticked.includes(n));
+    if (!tick.length && !untick.length && !change.hidden) return;
+    setWalk({ ...now, ticked: [...now.ticked, ...tick].filter((n) => !untick.includes(n)).sort((a, b) => a - b), hidden: !!change.hidden });
+    api.setGettingStarted(project.id, { tick, untick, hidden: !!change.hidden }).then((next) => { if (next) setWalk(next); }).catch(() => {});
+  }, [project.id]);
+  const tickWalk = React.useCallback((n) => changeWalk({ tick: [n] }), [changeWalk]);
+
   /* ----------------------------------------------------------------- @bart */
 
   // A question leaves the editor as { askId, text } with a pending line `bart~> <askId>` already under it. The agent reads
@@ -519,6 +546,19 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, [project.id, dropPaperAsk, failPaperAsk]);
   const pendingPaperAsks = React.useMemo(() => Object.values(paperAsks), [paperAsks]);
 
+  // The editor showing the document `key` asks @discover on its last brainstorm result, once the result is in it (the
+  // document reaches the editor a render after `place`): tried again a few times until it is.
+  const handOff = React.useCallback((key, askId) => {
+    let tries = 0;
+    const attempt = () => {
+      const editor = editorRefs.current.map((ref) => ref && ref.current).find((held) => held && held.props && held.props.docKey === key);
+      if (editor && editor.discoverLastResult && editor.discoverLastResult(askId)) return;
+      tries += 1;
+      if (tries < 30) setTimeout(attempt, 100);
+    };
+    setTimeout(attempt, 0);
+  }, []);
+
   const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent }) => {
     if (!key || !ref || !topic) return;
     const place = (lines) => {
@@ -529,6 +569,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     };
     const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
     setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: agent || 'bart' } }));
+    if (agent === 'brainstorm') tickWalk(2);
+    if (agent === 'discover') tickWalk(3);
     // `@bart --build <request>` (2026-10-02): not a question. A full Build of only what follows the flag starts, and its
     // card takes the pending line's place, under the request.
     const build = buildRequestOf({ agent, text }, bartModels || await api.bartModels().catch(() => null));
@@ -554,12 +596,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? [] : out.lines);
+      // The Welcome walkthrough's last card answered (main's ask.cjs, the welcome path): Discover starts on their next steps.
+      if (out.welcome === 'result') handOff(key, askId);
     } catch (error) {
       place([`bart> **No answer.** ${errorMessage(error)}`]);
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
-  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow]);
+  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow, tickWalk, handOff]);
 
   /* ----------------------------------------------------------------- Build */
 
@@ -1628,6 +1672,45 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     onTryRepo: tryGuideRepo,
     onError,
   };
+  // The walkthrough's card, above the document of a workspace that shows steps (model/getting-started.js stepsHere), and
+  // "Write your thoughts…" on an empty last line there.
+  const [libraryRequest, setLibraryRequest] = React.useState(null); // { n, chip }: the walkthrough's step 1 opens Library on a tab
+  const walkSteps = topic && activeTab === 'ws' ? stepsHere(walk, topic.id) : [];
+  const writeWalk = () => {
+    const editor = editorRefAt(0).current;
+    if (editor && editor.focusEnd) editor.focusEnd();
+  };
+  // Step 2 (2026-10-10): @brainstorm typed at the end of the document and run, so nobody has to learn the @ syntax first.
+  // One already running there is not started again.
+  const brainstormWalk = () => {
+    const editor = editorRefAt(0).current;
+    const running = Object.values(asks).some((ask) => ask.agent === 'brainstorm' && ask.docKey === paneDocs[0].key);
+    if (!editor || running || !editor.startAgent || !editor.startAgent('brainstorm')) writeWalk();
+  };
+  // Step 3 (MATH-141): @discover on the brainstorm's result when it has not been asked yet, else @discover from the
+  // workspace at the end of the document; one already running there is not started again.
+  const discoverWalk = () => {
+    const editor = editorRefAt(0).current;
+    const running = Object.values(asks).some((ask) => ask.agent === 'discover' && ask.docKey === paneDocs[0].key);
+    if (!editor || running || !editor.discoverLastResult) { writeWalk(); return; }
+    if (!editor.discoverLastResult() && !editor.startAgent('discover')) writeWalk();
+  };
+  const walkCard = walkSteps.length ? (
+    <GettingStarted
+      state={walk}
+      steps={walkSteps}
+      library={findable}
+      papers={paneDocs[0].key ? discoverPapers(docs[paneDocs[0].key]) : []}
+      onTick={(n, on) => changeWalk(on ? { tick: [n] } : { untick: [n] })}
+      onHide={() => changeWalk({ hidden: true })}
+      onOpenLibrary={(chip) => { setLibraryRequest((now) => ({ n: (now ? now.n : 0) + 1, chip })); tickWalk(1); }}
+      onWrite={writeWalk}
+      onBrainstorm={brainstormWalk}
+      onDiscover={discoverWalk}
+      onOpenPaper={(paper) => openLink(paper.address)}
+    />
+  ) : null;
+
   const footer = (
     // Copy, then (on the Workspace tab: a workspace is one Build) Build and Clear (2026-09-25). Build sits beside
     // Copy until it replaces it.
@@ -1750,6 +1833,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           postItTrash={active ? { count: postItTrash, load: () => api.postItsTrashed(project.id), restore: (id) => api.postItsRestore(project.id, id) } : null}
           postItDrag={postItDrag}
           trashRef={trashRef}
+          libraryRequest={libraryRequest}
+          onPanel={(kind) => { if (kind === 'library') tickWalk(1); }}
         />
 
         {railShown && <Separator bare onDown={railDown} onMove={railMove} onUp={pointerUp} onReset={() => setRailWidth(300)} />}
@@ -1792,6 +1877,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   viewOf: pane ? noView : viewOf,
                   onView: pane ? null : recordPosition,
                   footer: pane ? null : footer,
+                  above: pane ? null : walkCard,
+                  emptyHint: !pane && walkCard && !doc.archive ? EMPTY_HINT : null,
                 }}
               />
             );

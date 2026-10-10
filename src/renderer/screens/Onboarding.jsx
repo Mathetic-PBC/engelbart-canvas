@@ -11,7 +11,7 @@ import { rowOf } from '../model/tools.js';
 import { useGithubStatus } from '../workspace/useGithubStatus.js';
 import ImportSignins from '../workspace/ImportSignins.jsx';
 import GithubRepos from '../workspace/GithubRepos.jsx';
-import ConnectLibrary, { CHOOSE_WIDTH } from './ConnectLibrary.jsx';
+import ConnectLibrary from './ConnectLibrary.jsx';
 import welcomePng from '../../../design/assets/welcome-field.png';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
@@ -215,15 +215,16 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     try { await api.setInstructions(instr); advance(); } catch (failure) { setError(errorMessage(failure)); }
   };
 
-  // Continue (and Skip) on the create screen: the next part, or on a new user's last part the project itself, opened with
-  // no context (2026-10-09: the new flow has no Project context screen). A folder picked under the name is checked first.
+  // Continue (and Skip) on the create screen: the next part, or on a new user's last part the project itself (2026-10-09:
+  // the new flow has no Project context screen), its Welcome workspace holding what this onboarding added (2026-10-10:
+  // the repositories picked; Connect's imports join it in main). A folder picked under the name is checked first.
   const createNext = async () => {
     const part = SUBS.create[sub];
     if (part === 'name' && !name.trim()) return;
     if (part === 'name' && folder === 'existing') {
       try { await api.checkFolder(folderPath); } catch (failure) { setError(errorMessage(failure)); return; }
     }
-    if (createButtons(sub, { name, desc, folder, folderPath }, { mode: flowMode }).opens) { openProject([]); return; }
+    if (createButtons(sub, { name, desc, folder, folderPath }, { mode: flowMode }).opens) { openProject(added.filter((item) => byId.has(item.id)).map((item) => item.id)); return; }
     advance();
   };
 
@@ -237,7 +238,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     const back = step === 'context' ? { step: 'context', sub: 0, detour: false } : { step: 'create', sub: SUBS.create.length - 1, detour: false };
     go({ step: 'open', sub: 0 });
     try {
-      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids, ...(connectId ? { connect: connectId } : {}) });
+      const made = await api.startProject({ name: name.trim(), description: desc.trim(), folder, directory: folder === 'existing' ? folderPath : '', context: ids, ...(connectId ? { connect: connectId } : {}), ...(flowMode === 'new' ? { onboarding: true } : {}) });
       await onDone(made, { stageLinks: [...stageLinks.current] });
     } catch (failure) {
       setPlace(back);
@@ -484,27 +485,23 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
       <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
         {onBack && <button type="button" className="hov-ink" onClick={onBack} title="All projects" style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
       </div>
-      {/* Connect your library: a page across the window (2026-10-08: "more horizontal … not a popup"), Skip for now under it. */}
+      {/* Connect your library: a page across the window (2026-10-08: "more horizontal … not a popup"). Its foot is its own
+          (2026-10-09, David's mockup): Skip for now, then the pager and "Bring these in"; in the chat how far the work is,
+          the pager and "Skip the rest". Leaving with a session puts it away: it goes on in the background, the chip in the
+          top right following it. Skipping it counts as the one-time offer seen: the project about to open does not ask again. */}
       {step === 'connect' && (
-        <div data-screen-label="03 Connect library" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 14 }}>
-          <ConnectLibrary mode="onboarding" onSession={(id) => { setConnectId(id); api.connectOfferSeen('started').catch(() => {}); }} onContinue={advance} onSkip={advance} onAdded={(row) => take(row, 'github', true)} />
-          <div style={{ flex: 'none', width: connectId ? 'min(1080px, 100%)' : `min(${CHOOSE_WIDTH}px, 100%)`, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
-            {/* Leaving with a session puts it away: it goes on in the background, the chip in the top right following it.
-                Skipping it counts as the one-time offer seen: the project about to open does not ask again. */}
-            {/* One clear Continue once a session has started (2026-10-09): filled, at the right by the pager; before, Skip for now. */}
-            <div style={{ display: 'flex' }}>
-              {!connectId && <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={() => { api.connectOfferSeen('dismissed').catch(() => {}); advance(); }} style={skipStyle}>Skip for now</button>}
-            </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-              {pager && (
-                <>
-                  <Pager count={pager.count} index={pager.index} />
-                  <div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div>
-                </>
-              )}
-              {connectId && <span data-onboarding-continue="1"><Button variant="filled" go onClick={() => { api.connectMinimize(connectId, true).catch(() => {}); advance(); }}>Continue</Button></span>}
-            </div>
-          </div>
+        <div data-screen-label="03 Connect library" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <ConnectLibrary mode="onboarding"
+            pager={pager && (
+              <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 16 }}>
+                <Pager count={pager.count} index={pager.index} />
+                <div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div>
+              </div>
+            )}
+            onSession={(id) => { setConnectId(id); api.connectOfferSeen('started').catch(() => {}); }}
+            onContinue={advance}
+            onSkip={() => { api.connectOfferSeen('dismissed').catch(() => {}); advance(); }}
+            onAdded={(row) => take(row, 'github', true)} />
         </div>
       )}
       {/* No card (2026-09-28): the same 800 × 600 at most, drawn on nothing, so lists inside still scroll and the page never does. */}
