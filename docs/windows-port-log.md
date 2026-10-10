@@ -17,6 +17,12 @@ installer, latest.yml, install.ps1, SHA256SUMS-windows.txt and index.html. No re
 
 ### Status
 
+- 2026-10-10, **released** by the person: `npm run upload:win 486d806` (run 38087893503's installer). Without a commit
+  it had refused, as it should: HEAD was the `[skip ci]` log commit 1d8305c, which has no CI run. One part of the
+  installer (21/27) hit a TLS read error (`bad record mac`) and was sent again; the stored installer then matched
+  latest.yml's sha512, and latest.yml went last. Checked live afterwards (read only): latest.yml version 0.1.15 at the
+  r2.dev URL and mathetic.com/engelbart; Engelbart-0.1.15-x64.exe 136797891 bytes; SHA256SUMS-windows.txt as built
+  (exe f460f50e…, install.ps1 6214d526…); the page names Engelbart-0.1.15-x64.exe beside the Mac's 0.1.15 dmg.
 - 2026-10-10, **done on 486d806** (the merge itself; contains a32399a; package.json 0.1.15): run
   https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38087893503 passed on all three. macos-latest: npm test
   1497 tests, 1493 pass, 4 skipped; build; `npm run package`. windows-latest: npm test 1501 tests, 1459 pass, 42
