@@ -17,6 +17,18 @@ installer, latest.yml, install.ps1, SHA256SUMS-windows.txt and index.html. No re
 
 ### Status
 
+- 2026-10-10, **done on 486d806** (the merge itself; contains a32399a; package.json 0.1.15): run
+  https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38087893503 passed on all three. macos-latest: npm test
+  1497 tests, 1493 pass, 4 skipped; build; `npm run package`. windows-latest: npm test 1501 tests, 1459 pass, 42
+  skipped, 0 failed (the same 42 as "Catch-up to 0.1.13": none added); installer; smoke-windows (window, PowerShell 7
+  echo, Git at C:\Program Files\Git\mingw64\bin\git.exe, clean quit); the one-line install put Engelbart 0.1.15 in
+  %LOCALAPPDATA%\Programs\Engelbart and its smoke passed too. ubuntu-latest: npm test 1497 tests, 1483 pass, 14
+  skipped; AppImage, smoke and install (sandbox off without the AppArmor profile, as before). No Windows fixes were
+  needed.
+  `UPLOAD_DRY_RUN=1 CLOUDFLARE_ACCOUNT_ID=… npm run upload:win` (nothing sent) took run 38087893503's installer and
+  listed: Engelbart-0.1.15-x64.exe (136797891 bytes), its .blockmap, index.html, install.ps1, SHA256SUMS-windows.txt,
+  then latest.yml (version 0.1.15); the live Windows feed is still 0.1.10. The page it writes is the live one (Mac
+  0.1.15 already there) with its Windows section set to 0.1.15. Real upload not run: handed over.
 - 2026-10-10: merged a32399a (4 commits since 6bb60b6; 34 files). No conflicts; scripts/smoke-windows.cjs (the
   packaged-Windows smoke test here, the old multi-window one there) is not among the files that branch changed.
   package.json: 0.1.15. Review of the new code for Windows:
@@ -32,6 +44,7 @@ installer, latest.yml, install.ps1, SHA256SUMS-windows.txt and index.html. No re
 
 | Commit | Run | macOS | Windows | Linux | Notes |
 |---|---|---|---|---|---|
+| 486d806 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38087893503 | ✓ | ✓ installer, smoke, install | ✓ | **the merge; green on all three, contains a32399a: the done commit** |
 
 ## Catch-up to 0.1.13
 
