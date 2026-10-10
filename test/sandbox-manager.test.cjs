@@ -568,53 +568,81 @@ test('touch puts a ready sandbox\'s sleep 10 minutes away, marks it opened, and 
   assert.equal(f.starts.length, 1, 'no worker for a ping');
 });
 
-test('someone using the app keeps every ready sandbox awake for 10 minutes more, each once a minute at most (2026-10-04)', async (t) => {
-  let clock = Date.parse('2026-10-04T12:00:00Z');
-  const calls = [];
-  let answer = null;
-  const Sandbox = { async connect(id, options) { calls.push({ id, timeoutMs: options.timeoutMs, key: options.apiKey }); if (answer) throw answer; }, async setTimeout() {} };
-  const f = await fixture(t, { Sandbox, now: () => clock });
-  await f.manager.wakeAll(f.ctx);
-  assert.equal(calls.length, 0, 'no runs');
-  const { run, worker } = await readyRun(f);
+// E2B as the manager's own calls see it (touch's; every other call is a worker's): a sandbox's sleep `ms` away from each
+// setTimeout, asleep once that passes, and then unknown to setTimeout. Every call is kept, whatever its name, so that
+// one that would wake a sandbox (connect, resume) shows.
+function fakeE2b(clock) {
+  const sleepAt = new Map(), calls = [];
+  const asleep = (id) => clock() >= sleepAt.get(id);
+  const sandbox = new Proxy({}, { get: (_target, name) => async (id, ...rest) => {
+    calls.push({ name, id, at: clock() });
+    if (name !== 'setTimeout') return undefined;
+    if (asleep(id)) throw Object.assign(new Error(`Sandbox ${id} not found`), { name: 'SandboxNotFoundError' });
+    sleepAt.set(id, clock() + rest[0]);
+    return undefined;
+  } });
+  return { Sandbox: sandbox, calls, asleep, ready(id) { sleepAt.set(id, clock() + 600_000); } }; // worker.cjs's sleepWhenIdle
+}
+
+test('using Engelbart elsewhere wakes no sandbox: nothing in main watches typing or clicks for it (2026-10-09)', async (t) => {
+  // wakeAll kept every ready repository's sandbox running while anyone typed or clicked anywhere in the app. It is gone,
+  // and main wires no input to the sandboxes: only the preview or terminal in front pings (touch).
+  const main = fs.readFileSync(path.join(__dirname, '../src/main/index.cjs'), 'utf8');
+  assert.doesNotMatch(main, /wakeAll|watchActivity|sandbox\/activity/);
+  assert.ok(!fs.existsSync(path.join(__dirname, '../src/main/sandbox/activity.cjs')));
+  let clock = Date.parse('2026-10-09T09:00:00Z');
+  const e2b = fakeE2b(() => clock);
+  const f = await fixture(t, { Sandbox: e2b.Sandbox, now: () => clock });
+  assert.equal(f.manager.wakeAll, undefined);
+  await readyRun(f, f.repo, 'sb-shown');
+  e2b.ready('sb-shown');
   const other = await anotherRepo(f);
-  await f.manager.start(f.ctx, other.id); // still building: not woken
+  const { run: elsewhere, worker } = await readyRun(f, other, 'sb-elsewhere');
+  e2b.ready('sb-elsewhere');
+  // The other repository's sandbox goes to sleep 10 minutes on, with only the shown preview pinged.
+  for (let minute = 0; minute < 11; minute += 1) { await f.manager.touch(f.ctx, f.repo.id); clock += 60_000; }
+  assert.ok(e2b.asleep('sb-elsewhere'));
   f.setProbe({ state: 'paused' });
   await worker.receive({ event: 'paused' });
   worker.finish();
   await worker.done;
-  assert.equal(f.events.filter((event) => event.run.id === run.id).at(-1).sandbox, 'asleep');
-  await f.manager.wakeAll(f.ctx);
-  assert.deepEqual(calls, [{ id: 'sb-sleepy', timeoutMs: 600_000, key: 'e2b_signed_in' }]);
-  assert.equal(f.events.filter((event) => event.run.id === run.id).at(-1).sandbox, 'running', 'the bell hears it woke');
-  assert.equal((await f.store.get(run.id)).last_opened_at ?? null, null, 'waking is not opening: the 7-day sweep still counts');
-  clock += 30_000;
-  await f.manager.wakeAll(f.ctx);
-  assert.equal(calls.length, 1, 'once a minute at most');
-  clock += 31_000;
-  answer = Object.assign(new Error('not found'), { name: 'SandboxNotFoundError' });
-  await f.manager.wakeAll(f.ctx);
-  assert.equal(calls.length, 2, 'running or not, its sleep is put 10 minutes off again');
-  assert.equal((await f.store.get(run.id)).status, 'ready', 'gone is for the next poll to say');
-  assert.equal(f.starts.length, 2, 'no worker for a wake');
+  // An hour of writing documents, chatting with Bart and using the library: the window's pings stop with the preview
+  // out of sight, and the 15-second checks only look (a probe sees a paused sandbox without waking it).
+  for (let quarter = 0; quarter < 240; quarter += 1) { clock += 15_000; await f.manager.poll(); }
+  assert.ok(e2b.calls.every((call) => call.name === 'setTimeout' && call.id === 'sb-shown'), 'no call for the other sandbox, and none that wakes one');
+  assert.ok(!f.controls.some((request) => ['kill', 'pause'].includes(request.command)));
+  assert.equal((await f.store.get(elsewhere.id)).status, 'ready', 'asleep, still ready to wake when opened');
+  assert.equal(f.events.filter((event) => event.run.id === elsewhere.id).at(-1).sandbox, 'asleep');
+  assert.equal(f.starts.length, 2, 'no new sandbox either');
 });
 
-test('activity: any input in any web contents, later ones too, at most once a minute', () => {
-  const { watchActivity } = require('../src/main/sandbox/activity.cjs');
-  const { EventEmitter } = require('node:events');
-  let clock = 0, active = 0;
-  const first = new EventEmitter(), app = new EventEmitter();
-  watchActivity({ app, webContents: { getAllWebContents: () => [first] }, onActive: () => { active += 1; }, now: () => clock });
-  first.emit('input-event', {}, { type: 'mouseMove' });
-  assert.equal(active, 1);
-  clock += 59_000;
-  first.emit('input-event', {}, { type: 'keyDown' });
-  assert.equal(active, 1);
-  const stage = new EventEmitter();
-  app.emit('web-contents-created', {}, stage);
-  clock += 2_000;
-  stage.emit('input-event', {}, { type: 'mouseWheel' });
-  assert.equal(active, 2, 'a Stage page made later counts');
+test('the preview in front stays awake while it is pinged, sleeps 10 minutes after the pings stop, and a late ping does not wake it', async (t) => {
+  let clock = Date.parse('2026-10-09T09:00:00Z');
+  const e2b = fakeE2b(() => clock);
+  const f = await fixture(t, { Sandbox: e2b.Sandbox, now: () => clock });
+  const { run } = await readyRun(f, f.repo, 'sb-preview');
+  e2b.ready('sb-preview');
+  // Three hours with the preview in front of a focused window: the Stage pings once a minute (SandboxProgress.jsx).
+  for (let minute = 0; minute < 180; minute += 1) {
+    await f.manager.touch(f.ctx, f.repo.id);
+    clock += 60_000;
+    assert.ok(!e2b.asleep('sb-preview'), `awake at minute ${minute + 1}`);
+  }
+  assert.equal(e2b.calls.length, 180);
+  assert.ok(e2b.calls.every((call) => call.name === 'setTimeout' && call.id === 'sb-preview'));
+  assert.equal((await f.store.get(run.id)).last_opened_at, new Date(clock - 60_000).toISOString(), 'opened as of the last ping');
+  assert.equal(f.events.filter((event) => event.run.id === run.id).at(-1).sandbox, 'running');
+  // Another tab in front, or the window left: no pings. Asleep 10 minutes after the last one, not before.
+  clock += 8 * 60_000;
+  assert.ok(!e2b.asleep('sb-preview'));
+  clock += 2 * 60_000;
+  assert.ok(e2b.asleep('sb-preview'));
+  // Back to the preview: its ping finds it asleep and leaves it be (the page's own request wakes it); the run stays ready.
+  await f.manager.touch(f.ctx, f.repo.id);
+  assert.equal(e2b.calls.at(-1).name, 'setTimeout');
+  assert.ok(e2b.asleep('sb-preview'));
+  assert.equal((await f.store.get(run.id)).status, 'ready');
+  assert.ok(!f.controls.some((request) => request.command === 'kill'));
 });
 
 test('quitting puts ready previews to sleep instead of killing them, and still stops one being set up', async (t) => {

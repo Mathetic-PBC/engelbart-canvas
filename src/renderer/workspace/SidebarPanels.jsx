@@ -426,7 +426,7 @@ function LibraryChips({ chip, counts, onPick, chipsRef }) {
  * the keyboard; before anything is typed, what was worked on last. A press opens a row; its + brings it into this
  * workspace; an address or a path typed is added. Hovering one peeks at it. "Open full library" goes to the projects screen.
  */
-export function LibraryPanel({ anchor, projectId, library, inRail, onOpen, onLink, onAddInput, onOpenFull, onOpenWorkspace, onClose, ignore }) {
+export function LibraryPanel({ anchor, chip: openOn = 'all', projectId, library, inRail, onOpen, onLink, onAddInput, onOpenFull, onOpenWorkspace, onClose, ignore }) {
   const [q, setQ] = React.useState('');
   const [idx, setIdx] = React.useState(0);
   const [found, setFound] = React.useState(null);
@@ -447,8 +447,9 @@ export function LibraryPanel({ anchor, projectId, library, inRail, onOpen, onLin
   const answer = addable && found && found.query === typed ? found.result : undefined;
   const bodies = useBodies(projectId, true);
   const counts = React.useMemo(() => libraryCounts(library), [library]); // a pasted picture is its document's: under no chip
-  // Which kind is shown: kept while the panel is open, All again each time it opens; a chip emptied meanwhile is All.
-  const [picked, setPicked] = React.useState('all');
+  // Which kind is shown: kept while the panel is open, All again each time it opens (or the tab the Welcome walkthrough's
+  // step 1 opened it on, `chip`); a chip emptied meanwhile is All.
+  const [picked, setPicked] = React.useState(openOn || 'all');
   const chip = counts[picked] > 0 ? picked : 'all';
   const chipNoun = (LIBRARY_CHIPS.find((one) => one.id === chip) || {}).noun || '';
   const inputRef = React.useRef(null);

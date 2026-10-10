@@ -13,8 +13,6 @@ const GITHUB_LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
 // than TOUCH_EVERY change nothing.
 const IDLE_MS = 10 * 60_000;
 const TOUCH_EVERY = 30_000;
-// Someone using the app keeps every ready sandbox awake (wakeAll); more than once per WAKE_EVERY changes nothing.
-const WAKE_EVERY = 60_000;
 const ASLEEP = 'Paused after 10 minutes unused';
 const TERMINAL_READY = 'Terminal ready';
 const QUIT_ASLEEP = 'Paused when Engelbart quit';
@@ -31,7 +29,7 @@ const notFound = (error) => error?.name === 'NotFoundError' || error?.name === '
 // (local-claude.cjs's prepareLocalClaude). Every new run's setup is Claude Code's (there is no API-key fallback since
 // 2026-10-03), so on a new Mac, where onboarding saves a repository before Claude Code is installed and signed in, the
 // run waits for it as it waits for the E2B key.
-// `Sandbox`: E2B's, for touch's and wakeAll's calls from this process (every other E2B call is a worker's, or a sandbox
+// `Sandbox`: E2B's, for touch's calls from this process (every other E2B call is a worker's, or a sandbox
 // terminal's: pty.cjs).
 // `terminals` (terminals.cjs): the shells open in ready sandboxes, { open(spec) → session, close(libraryId),
 // closeAll() }. A run's go when its sandbox is stopped, replaced or released.
@@ -42,7 +40,6 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
   const messages = new Map();
   const prepared = new Set();
   const touched = new Map();
-  const woken = new Map(); // run id → when wakeAll last woke it (or kept it awake)
   // Each ready run's sandbox as last seen, 'asleep' or 'running' (2026-10-04, the bell's status): from every probe, the
   // Stage's ping, and its going to sleep. Waking is no event (any request to its preview wakes it): the next probe, at
   // most 15 seconds on, or ping says so.
@@ -338,10 +335,12 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     for (const run of runs) publish(ctx, run);
     return runs.map((run) => ({ run, message: messages.get(run.id) || run.build_log?.at(-1)?.message || '', sandbox: awake.get(run.id) || null }));
   }
-  // The preview in front of a focused window (the Stage's ping, about once a minute): its sandbox's sleep goes back to
-  // 10 minutes away, by one call from here rather than a worker, and the run is marked opened for the sweep. Pings closer
-  // than 30 seconds apart change nothing. Asleep or gone, E2B says it was not found, and the next poll tells which; a ping
-  // never wakes it.
+  // The preview or sandbox terminal in front of a focused window (the Stage's or terminal pane's ping, about once a
+  // minute): its sandbox's sleep goes back to 10 minutes away, by one call from here rather than a worker, and the run is
+  // marked opened for the sweep. Pings closer than 30 seconds apart change nothing. Asleep or gone, E2B says it was not
+  // found, and the next poll tells which; a ping never wakes it. This is the only thing in the app that keeps a sandbox
+  // awake (2026-10-09): using Engelbart elsewhere wakes none, as wakeAll did, which kept every repository's 8-vCPU
+  // sandbox running all the time anyone used the app.
   async function touch(ctx, libraryId) {
     const run = await runStore(ctx.libraryDb).active(libraryId);
     if (run?.status !== 'ready' || !run.sandbox_id) return;
@@ -354,23 +353,6 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
     try { await (Sandbox || require('e2b').Sandbox).setTimeout(run.sandbox_id, IDLE_MS, { apiKey: env.E2B_API_KEY, requestTimeoutMs: 10_000 }); }
     catch (error) { if (!notFound(error)) throw error; return; }
     seen(ctx, run, 'ready'); // its sleep put off: it is running
-  }
-  // Someone using the app, anywhere in it (2026-10-04; index.cjs's watchActivity, about once a minute while they do):
-  // every ready repository's sandbox is woken, or kept awake, for 10 minutes more, so that any preview opens at once
-  // instead of after E2B's few seconds (or more) of resuming. Ten minutes without anyone using the app, they sleep.
-  // Each at most once per WAKE_EVERY. It is not an opening: the 7-day sweep still counts from the last real one.
-  async function wakeAll(ctx) {
-    const at = now();
-    const runs = (await runStore(ctx.libraryDb).latest()).filter((run) => run.status === 'ready' && run.sandbox_id && at - (woken.get(run.id) || 0) >= WAKE_EVERY);
-    if (!runs.length) return;
-    let env;
-    try { env = await environmentFor(ctx); } catch { return; } // signed out: each wakes when it is opened
-    for (const run of runs) woken.set(run.id, at);
-    await Promise.all(runs.map(async (run) => {
-      try { await (Sandbox || require('e2b').Sandbox).connect(run.sandbox_id, { apiKey: env.E2B_API_KEY, timeoutMs: IDLE_MS, requestTimeoutMs: 30_000 }); }
-      catch { return; } // gone (the next poll ends its run), or E2B unreachable: tried again on the next activity after WAKE_EVERY
-      seen(ctx, run, 'ready');
-    }));
   }
   // The sweep (pollOnce): a ready preview asleep and not opened for 7 days ends, marked so that opening it builds it again.
   const unopened = (run) => now() - Date.parse(run.last_opened_at || run.created_at) > EXPIRE_MS;
@@ -443,7 +425,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
           else if (['starting', 'ready'].includes(run.status)) await stopRun(ctx, run.id);
         }
       }
-      contexts.clear(); messages.clear(); prepared.clear(); touched.clear(); woken.clear(); awake.clear();
+      contexts.clear(); messages.clear(); prepared.clear(); touched.clear(); awake.clear();
     } finally { closing = false; }
   }
   // Quitting puts a ready preview to sleep, to wake when it is next opened. One that cannot be put to sleep now (offline,
@@ -509,7 +491,7 @@ function createSandboxManager({ notify, launch = launchWorker, readEnv = readSan
       });
     });
   }
-  return { start, list, stop, touch, wakeAll, terminal, environment, saveEnvironment, restart, release, signedOut, close, poll, dispose: async () => { clearInterval(timer); await close(); } };
+  return { start, list, stop, touch, terminal, environment, saveEnvironment, restart, release, signedOut, close, poll, dispose: async () => { clearInterval(timer); await close(); } };
 }
 
 // A ready event's terminal ({ cwd, hint }, local-tools.cjs's terminal_ready), checked again here: a path inside the

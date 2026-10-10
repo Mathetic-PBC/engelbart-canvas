@@ -128,6 +128,11 @@ const mentionBeside = (text, at, before) => {
 const newTabClick = (e) => e.metaKey || (e.ctrlKey && !/^(darwin|mac)/i.test(document.documentElement.dataset.platform || navigator.platform || ''));
 
 const RISE_CSS = '@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes thinking{0%,100%{opacity:.25}50%{opacity:1}}';
+// The hint on a document's last line while it is empty (2026-10-09, the Welcome walkthrough's "Write your thoughts…"):
+// drawn by CSS where the line's <br> is, so it is never in the text and the caret stays put.
+const cssString = (text) => `"${String(text).replace(/["\\]/g, '\\$&').replace(/[\n\r]+/g, ' ')}"`;
+const emptyHintCss = (text) => `[data-editor][data-empty-hint]{position:relative}[data-editor][data-empty-hint] > div[data-line]:last-child > span.t:has(> br:only-child)::before{content:${cssString(text)};position:absolute;left:0;right:0;color:#b5b5b5;pointer-events:none;user-select:none}`;
+
 // The answer card's controls. They are drawn as strings inside the editor, so what hover does lives here: an icon washes
 // grey and turns ink (Delete turns red) and shows its name under it; the chip's border goes one grey darker, never ink.
 const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;cursor:pointer;color:#4d4d4d}'
@@ -906,6 +911,46 @@ export default class DocEditor extends React.Component {
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
     this.props.onAsk({ askId, text: query, turns: [], agent });
+  }
+  // The walkthrough's Brainstorm (2026-10-10, "when i click the brainstorming button it automatically types and runs
+  // it"): "@<agent>" on a line of its own at the end of the document, after a blank line so that it starts a thread of its
+  // own, and asked at once, as Enter on it would. Blank lines it ended on go first. → whether it was asked
+  startAgent(agent) {
+    if (!this.props.onAsk || !oneModel(agent)) return false;
+    const ls = this.lines();
+    let end = ls.length;
+    while (end > 0 && !ls[end - 1].trim()) end -= 1;
+    const askId = newAskId(), add = [...(end ? [''] : []), `@${agent}`, `bart~> ${askId}`, ''];
+    const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
+    this.setLines((x) => [...x.slice(0, end), ...add]);
+    this.setState({ activeLine: null, mention: null });
+    this.props.onAsk({ askId, text: '', turns: [], agent });
+    this.showEnd(); // the button is above the document: its run, at the end, is brought into view
+    return true;
+  }
+  // The Welcome walkthrough's handoff (2026-10-10, "make the handoff to discover seamless"): @discover asked on the
+  // sentence of the document's last @brainstorm result, as its offer line's @discover would, unless an @discover was asked
+  // after it already. Not while `askId`, the brainstorm turn that wrote it, is still pending here: its result is not in yet.
+  // → whether it was asked
+  discoverLastResult(askId = null) {
+    if (!this.props.onAsk) return false;
+    const ls = this.lines();
+    if (askId && ls.includes(`bart~> ${askId}`)) return false;
+    const all = threads(ls);
+    for (let n = all.length - 1; n >= 0; n -= 1) {
+      if (agentOf(parseLine(ls[all[n].from])) === 'discover') return false;
+      const turn = all[n].turns[all[n].turns.length - 1];
+      if (!turn || !turn.answered || turn.pending) continue;
+      const found = resultParts(turnText(ls, turn).answer);
+      if (!found) continue;
+      this.discoverLook(turn.q, found.sentence);
+      this.showEnd();
+      return true;
+    }
+    return false;
+  }
+  showEnd() {
+    setTimeout(() => { const box = this.scrollRef.current; if (box && box.scrollTo) box.scrollTo({ top: box.scrollHeight, behavior: 'smooth' }); }, 0);
   }
   // @discover or @bart on a result's offer line (MATH-40): the sentence above it, read from the turn line `i` is in.
   askResult(i, agent) {
@@ -2530,12 +2575,15 @@ export default class DocEditor extends React.Component {
     return (
       <>
         <style>{RISE_CSS + CARD_CSS}</style>
+        {this.props.emptyHint && <style>{emptyHintCss(this.props.emptyHint)}</style>}
         {/* Past the last line the page keeps going for about half a window (2026-09-22), so the end of a document can be read and written mid-screen. */}
         <div ref={this.scrollRef} onClick={this.docClick} onScroll={this.onScroll} onWheel={this.stopSettling} onPointerDown={this.stopSettling} onKeyDown={this.stopSettling} style={compact ? { flex: 'none', overflow: 'visible', padding: '0 0 2px', cursor: 'grab' } : { flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) max(120px, calc(50vh - 40px))', cursor: 'text' }}>
           <div style={{ maxWidth: compact ? 'none' : '65ch', marginInline: 'auto', paddingInline: compact ? 0 : 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
             {this.props.header}
+            {this.props.above}
             <div
               data-editor="1"
+              data-empty-hint={this.props.emptyHint ? '1' : undefined}
               ref={this.edRef}
               contentEditable={!this.props.readOnly}
               suppressContentEditableWarning

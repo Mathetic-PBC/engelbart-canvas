@@ -1119,7 +1119,7 @@ test('@brainstorm\'s system prompt says what the harness relies on, and a file r
     '"(wrap up)", alone or after an answer as "; (wrap up)": they are done for now. <stage> is next: ask the last card.',
     // MATH-40: what they want to dig into next, in their own words; a research question is one outcome, never the target.
     'You help them figure out what they want to dig into next, and at the end they write it in their own words. A research question is one possible outcome, never the target. You ask and they write. You never explain the topic, summarise a paper, suggest a direction, correct them or grade an answer.',
-    '- <path>: paper, topic or open', '- <stage>: which kind of card to ask now: first, move, versions or next. Code decides it and the path; never choose them yourself.', '- <card>: which card this is, out of the five an exchange asks at most.', 'carrying only <path>, <stage>, <card>, <level> and <question>',
+    '- <path>: paper, topic, open or welcome', '- <stage>: which kind of card to ask now: first, move, versions or next. Code decides it and the path; never choose them yourself.', '- <card>: which card this is, out of the five an exchange asks at most (three on the welcome path).', '# The welcome path', 'carrying only <path>, <stage>, <card>, <level> and <question>',
     '"@orient" is an older name for you.',
     '# The subject', '<question> on the first turn names the subject: a topic in their words, a mentioned paper ("mentioned": true in <context_json>), or both, where the topic says which part of the paper they care about.', 'After an exchange has ended, a new "@brainstorm" line opens a new one the same way.',
     'When there is a paper, open it from its path before the first card and keep what it says to yourself. A summary is not the paper. If you cannot open it, go on from the topic alone.',
@@ -1586,6 +1586,71 @@ test('the next card always reads the same: on the next stage, or when the agent 
   assert.deepEqual(card.resultParts(card.resultText('Read the logs.')), { sentence: 'Read the logs.' });
   for (const text of [card.LEFT_OPEN, card.RESULT_OFFER, 'What you know: a\nYour question: b', '']) assert.equal(card.resultParts(text), null, text);
   assert.equal(card.cardOfAnswer(card.resultText('Read the logs.')), null, 'a result asks nothing');
+});
+
+test('the Welcome walkthrough\'s @brainstorm, run in its workspace: three cards, the second with no model run, and a result that says to start Discover; hidden, or another workspace, the regular exchange (2026-10-10)', async () => {
+  const { startGettingStarted, setGettingStarted } = require('../src/main/store/getting-started.cjs');
+  const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
+  const proj = await projects.createProject(ctx, 'Welcome Brainstorm');
+  const space = await projects.createWorkspace(ctx, proj.id, { name: 'Welcome' });
+  const other = await projects.createWorkspace(ctx, proj.id, { name: 'Other' });
+  startGettingStarted(ctx, proj.id, { workspaceId: space.id });
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  const exchange = async (workspaceId, answers) => {
+    const ref = { kind: 'workspace', workspaceId };
+    let doc = ['@brainstorm'];
+    const outs = [], shown = [];
+    for (let n = 0; n <= answers.length; n += 1) {
+      const thread = model.threads(doc).at(-1);
+      const turns = thread.turns.filter((turn) => turn.answered).map((turn) => model.turnText(doc, turn));
+      const p = model.parseLine(doc[doc.length - 1]);
+      const out = await bart.ask(ctx, proj.id, { askId: `w${n}`, ref, workspaceId, text: p.text, turns, agent: 'brainstorm' });
+      outs.push(out);
+      doc = [...doc, ...out.lines];
+      const last = model.threads(doc).at(-1);
+      shown.push(card.cardOfAnswer(model.turnText(doc, last.turns[last.turns.length - 1]).answer));
+      if (n < answers.length) doc.push(`@brainstorm ${answers[n](shown[n])}`);
+    }
+    return { doc, outs, shown };
+  };
+  const write = (text) => (c) => card.answerLine(c, { text });
+  const pick = (n) => (c) => card.answerLine(c, { picks: [card.questionOf(c).options[n].label] });
+  const welcome = await exchange(space.id, [write('A tutor that traces how students debug.'), pick(1), write('Find studies of novice debugging.')]);
+  assert.deepEqual(welcome.shown.map((c) => c && [card.questionOf(c).id, card.questionOf(c).title]), [['working', 'What are you working on?'], ['stage', 'Where are you in the process?'], ['next', 'What are your next steps?'], null]);
+  assert.deepEqual(welcome.outs.map((out) => out.welcome), [undefined, undefined, undefined, 'result'], 'only the result says so');
+  assert.deepEqual(welcome.outs[3].lines.slice(0, 2), ['bart> Find studies of novice debugging.', `bart> ${card.RESULT_OFFER}`]);
+  // Another workspace, or the walkthrough hidden: the regular first card, and no welcome result.
+  const elsewhere = await exchange(other.id, []);
+  assert.notEqual(card.questionOf(elsewhere.shown[0]) && card.questionOf(elsewhere.shown[0]).id, 'working');
+  setGettingStarted(ctx, proj.id, { hidden: true });
+  const hidden = await exchange(space.id, []);
+  assert.notEqual(hidden.shown[0].card === 'focus' ? 'mind' : card.questionOf(hidden.shown[0]).id, 'working');
+});
+
+test('@brainstorm on the Welcome walkthrough, opened with nothing typed: what they are working on, where they are (written with no model run), their next steps, and the result flagged for Discover (2026-10-10)', () => {
+  const welcomePlan = (text, turns = []) => turnPlan({ agent: 'brainstorm', text, turns, entries: ENTRIES, welcome: true }, DEFAULTS);
+  const first = welcomePlan('');
+  assert.deepEqual([first.path, first.stage, first.welcome, first.written, first.extra], ['welcome', 'first', true, null, '<path>welcome</path>\n<stage>first</stage>\n<card>1 of 3</card>']);
+  const working = [{ question: '', answer: card.cardBody(brainstormReply(opened('draws'), 'first', true)).body }];
+  assert.deepEqual(card.questionOf(card.cardOfAnswer(working[0].answer)), { id: 'working', type: 'open', title: 'What are you working on?', placeholder: 'In your own words…', options: [], eyebrow: 'to start' });
+  const second = welcomePlan('A tutor that traces how students debug.', working);
+  assert.equal(second.stage, 'stage', 'the second card is where they are');
+  const asked = card.questionOf(card.cardOfAnswer(second.written));
+  assert.deepEqual([asked.id, asked.type, asked.title, asked.options.map((o) => o.label)], ['stage', 'mcq', 'Where are you in the process?', ['Just exploring', 'Reading what’s out there', 'I have a question I want to answer', 'Building or running something', 'Writing it up']]);
+  const staged = [...working, { question: 'A tutor that traces how students debug.', answer: second.written }];
+  const third = welcomePlan('picked "Reading what’s out there"', staged);
+  assert.deepEqual([third.stage, third.written, third.extra.endsWith('<card>3 of 3</card>')], ['next', null, true]);
+  assert.match(brainstormReply(opened('x'), 'next', true), /"title":"What are your next steps\?"/);
+  assert.match(brainstormReply(opened('x'), 'next'), /"title":"What do you want to look into next\?"|"id":"next"/, 'the regular next card is unchanged');
+  const nexted = [...staged, { question: 'picked "Reading what’s out there"', answer: card.cardBody(brainstormReply(opened('x'), 'next', true)).body }];
+  const done = welcomePlan('Find studies of novice debugging.', nexted);
+  assert.deepEqual([done.stage, done.result, done.welcome], ['result', `Find studies of novice debugging.\n${card.RESULT_OFFER}`, true]);
+  assert.equal(welcomePlan('A tutor that traces how students debug.', nexted).stage, 'result', 'repeating the first answer: no again card on the welcome path');
+  assert.equal(welcomePlan('(wrap up)', working).stage, 'next', 'Wrap up on the first card: their next steps');
+  // Not the welcome path: something typed, or not the walkthrough's workspace.
+  assert.deepEqual([welcomePlan('corrigibility').path, welcomePlan('corrigibility').welcome], ['topic', false]);
+  assert.deepEqual([brainstormPlan('').path, brainstormPlan('').welcome], ['open', false]);
+  assert.equal(brainstormPlan('words', [{ question: '', answer: opened('draws') }]).stage, 'move', 'the regular exchange still goes on to five');
 });
 
 test('Wrap up is "(wrap up)", alone or after an answer: read off what the answer was, counted only for what was said, and written after answerLine (round 6)', () => {

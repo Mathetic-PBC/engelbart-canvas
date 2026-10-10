@@ -68,9 +68,10 @@ function existingFolder(ctx, value) {
 /**
  * The project the Create screen describes → createProjectWithWelcome's answer. `folder` is 'new' (made now, under the
  * home directory, never an existing one) or 'existing' (`directory`). `context` holds library ids; rows the library does
- * not have, and notes (they belong to their own project), are left out.
+ * not have, and notes (they belong to their own project), are left out. A new user's first project calls its first
+ * workspace "Welcome" (`workspaceName`, 2026-10-09: the walkthrough's title).
  */
-async function startProject(ctx, { name, description = '', folder = 'new', directory = '', context = [] } = {}) {
+async function startProject(ctx, { name, description = '', folder = 'new', directory = '', context = [], workspaceName = 'Getting started' } = {}) {
   let dir;
   if (folder === 'new') {
     dir = freeFolder(ctx, name).path;
@@ -82,7 +83,7 @@ async function startProject(ctx, { name, description = '', folder = 'new', direc
   const known = new Map(rows.map((row) => [row.id, row]));
   const chosen = [...new Set((Array.isArray(context) ? context : []).filter((id) => typeof id === 'string' && UUID_RE.test(id)))]
     .filter((id) => known.has(id) && !known.get(id).tags.includes('note'));
-  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName: 'Getting started', context: chosen });
+  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName, context: chosen });
 }
 
 /**

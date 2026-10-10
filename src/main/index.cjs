@@ -16,7 +16,6 @@ const {
   session: electronSession,
   shell: electronShell,
   WebContentsView,
-  webContents,
 } = require('electron');
 const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
@@ -56,7 +55,6 @@ const { createOverleafStage } = require('./overleaf/stage.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
 const { createSandboxPty } = require('./sandbox/pty.cjs');
 const { createSandboxTerminals } = require('./sandbox/terminals.cjs');
-const { watchActivity } = require('./sandbox/activity.cjs');
 const { prepareLocalClaude } = require('./sandbox/local-claude.cjs');
 const { createRepoIdentifier, createRemoteFileLister, createDescriber } = require('./store/page-meta.cjs');
 const { createConnect } = require('./connect/session.cjs');
@@ -894,9 +892,6 @@ if (!hasSingleInstanceLock) {
         ...(githubWeb ? { api: process.env.ENGELBART_GITHUB_API || githubWeb } : {}),
       }),
     });
-    // While someone uses the app, anywhere in it, every ready repository's sandbox stays awake; ten minutes without, they
-    // sleep (sandbox/activity.cjs, the manager's wakeAll).
-    if (sandbox) watchActivity({ app, webContents, onActive: () => { store.context().then((ctx) => sandbox?.wakeAll(ctx)).catch(() => {}); } });
     // The Overleaf projects open in the Stage (MATH-65): each one's copy is downloaded with the Stage's own session, the
     // sign-in the person made there, so no cookie leaves it.
     const overleafStage = createOverleafStage({ copies: createOverleafCopies({ fetch: (url, init) => electronSession.fromPartition(BROWSER_PARTITION).fetch(url, init) }) });
@@ -975,6 +970,8 @@ if (!hasSingleInstanceLock) {
       github: { status: () => github.status(), repos: () => github.repos() },
       deps: { describe: createDescriber(), identifyRepo: createRepoIdentifier({ auth: github.authHeaders }), inspectPdf, onAdded: libraryChanged, onPdf: pdfAdded },
       notify: (snapshot) => sendToWindow('engelbart:connect', snapshot),
+      // What came in joined the Welcome workspace (connect/session.cjs placeRows): its sidebar reads it again.
+      placed: (projectId) => sendToWindow('engelbart:project-changed', { projectId }),
       openBridge: openToolBridge,
       browser: agentBrowser,
       connectors,

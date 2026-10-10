@@ -325,3 +325,54 @@ test('the @ menu no longer offers Orient: the editor, the rail model and the wor
   m.editor.pickMention({ id: 'brainstorm', name: 'brainstorm' });
   assert.equal(m.lines()[0], '@Brainstorm ');
 });
+
+test('the walkthrough\'s Brainstorm types @brainstorm at the end of the document, on a thread of its own, and runs it (2026-10-10)', () => {
+  const ID = /^bart~> [a-z0-9]+-[a-z0-9]+$/;
+  // After the person's writing: one blank line between, the line, its pending line, an empty last line.
+  const m = mounted(['Welcome!', 'My notes on retries', '', '']);
+  assert.equal(m.editor.startAgent('brainstorm'), true);
+  const ls = m.lines();
+  assert.deepEqual(ls.slice(0, 4), ['Welcome!', 'My notes on retries', '', '@brainstorm']);
+  assert.match(ls[4], ID);
+  assert.deepEqual(ls.slice(5), ['']);
+  assert.equal(m.asks.length, 1);
+  assert.deepEqual({ ...m.asks[0], askId: undefined }, { askId: undefined, text: '', turns: [], agent: 'brainstorm' }, 'asked as Enter on an empty @brainstorm line is: from the workspace, with no earlier turns');
+  assert.equal(ls[4], `bart~> ${m.asks[0].askId}`);
+  // An empty document: the line first, with nothing above it.
+  const empty = mounted(['']);
+  empty.editor.startAgent('brainstorm');
+  assert.equal(empty.lines()[0], '@brainstorm');
+  assert.match(empty.lines()[1], ID);
+  // A document ending on an answered card: the new line starts a thread of its own after it.
+  const after = mounted(['Notes', '@brainstorm', ...answer(FREE)]);
+  const before = after.lines().length;
+  after.editor.startAgent('brainstorm');
+  assert.deepEqual(after.lines().slice(before, before + 2), ['', '@brainstorm']);
+  // @bart needs words: it is never started this way.
+  const bart = mounted(['Notes']);
+  assert.equal(bart.editor.startAgent('bart'), false);
+  assert.deepEqual(bart.lines(), ['Notes']);
+  assert.equal(bart.asks.length, 0);
+});
+
+test('the walkthrough\'s handoff asks @discover on the last brainstorm result, once, and not while that brainstorm is still pending (2026-10-10)', async () => {
+  const SENTENCE = 'Find studies of novice debugging.';
+  const NEXT = { say: '', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: 'What are your next steps?' }] }, ready: false };
+  const result = replyLines(card.resultText(SENTENCE), { level: { name: '', effort: '' }, trail: [], ms: 0 }, { model: false });
+  const lines = ['Welcome!', '', '@brainstorm', ...answer(NEXT), `@brainstorm ${SENTENCE}`, ...result, ''];
+  // The pending brainstorm line is still there: nothing yet.
+  const waiting = mounted(['Welcome!', '', '@brainstorm', 'bart~> ab-cd', '']);
+  assert.equal(waiting.editor.discoverLastResult('ab-cd'), false);
+  assert.equal(waiting.asks.length, 0);
+  const m = mounted(lines);
+  assert.equal(m.editor.discoverLastResult('ab-cd'), true);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns], ['discover', SENTENCE, []]);
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  assert.deepEqual(model.threads(m.lines()).map((t) => m.lines()[t.from]), ['@brainstorm', `@discover ${SENTENCE}`], 'a thread of its own after the brainstorm');
+  // Asked once: an @discover after the result stops a second.
+  assert.equal(m.editor.discoverLastResult(), false);
+  assert.equal(m.asks.length, 1);
+  // No result in the document: nothing.
+  const none = mounted(['Welcome!', '@brainstorm', ...answer(NEXT), '']);
+  assert.equal(none.editor.discoverLastResult(), false);
+});

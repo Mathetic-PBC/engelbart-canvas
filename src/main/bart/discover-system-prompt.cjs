@@ -55,6 +55,8 @@ Never ask what a file says or what exists; you can read that. A card is ONE JSON
 
 After the answer, or a skip, trace. Starting points the person named come first, then papers from their library that bear on the problem in their setting, and only then your own picks.
 
+When an @brainstorm exchange just above the line says where they are in the process, fit the kind of reading to it: just exploring, overviews and surveys; reading what's out there, the papers the field keeps citing; a question they want to answer, work on that question; building or running something, methods, tools and code; writing it up, the related work they should cite.
+
 # Then, trace
 
 Papers. Work from the citation graph, not from keywords: keyword search returns what is most cited, not what is closest.

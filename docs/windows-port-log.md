@@ -3,6 +3,36 @@
 The run that follows docs/windows-port.md, on branch `windows-port` (cut from `hudsons-feedback` at 22d738c).
 Newest status first; the sections below are kept current.
 
+## Catch-up to 0.1.15
+
+Goal (2026-10-10): bring windows-port up to origin/david-onboarding-revisions a32399a (Release 0.1.15: 0.1.14's quieter
+Refine button and starting view without each agent's activity, 1420675; then 378015a: Connect's imports join the
+Welcome workspace's context, the Welcome walkthrough's Brainstorm asks three cards and hands off to @discover, a
+one-time "New: a guided setup" popup and Settings ▸ Guided setup, and the sandbox's wakeAll removed), keeping the
+Windows port and every change from that branch, then make what the new code needs work on Windows
+(docs/windows-port.md). package.json says 0.1.15. Done when one commit containing a32399a passes CI on windows-latest
+and macos-latest (Linux may fail) and `UPLOAD_DRY_RUN=1 CLOUDFLARE_ACCOUNT_ID=… npm run upload:win` lists the 0.1.15
+installer, latest.yml, install.ps1, SHA256SUMS-windows.txt and index.html. No real upload: the command is handed over.
+(The goal as pasted was cut off after "lists"; read as the same list and hand-over as "Catch-up to 0.1.13".)
+
+### Status
+
+- 2026-10-10: merged a32399a (4 commits since 6bb60b6; 34 files). No conflicts; scripts/smoke-windows.cjs (the
+  packaged-Windows smoke test here, the old multi-window one there) is not among the files that branch changed.
+  package.json: 0.1.15. Review of the new code for Windows:
+  - `<dataRoot>/.guided-setup.json` and `<project>/.context/getting-started.json` (src/main/store/getting-started.cjs):
+    named with path.join and written with projects.writeTextAtomic, as the rest of the store; a dot file's name is
+    fine on Windows.
+  - src/main/sandbox/activity.cjs deleted: nothing on this branch used it (the port never touched it).
+  - The rest (Connect's session and tools, ask.cjs, ipc.cjs, index.cjs, the sandbox manager) adds no paths built with
+    `/`, shell commands, file modes or Mac locations; the remaining changes are the renderer's.
+  Mac `npm ci` and `npm test`: 1497 tests, 1494 pass, 3 skipped, 0 failed. Pushed for the first CI run.
+
+### CI runs
+
+| Commit | Run | macOS | Windows | Linux | Notes |
+|---|---|---|---|---|---|
+
 ## Catch-up to 0.1.13
 
 Goal (2026-10-09): bring windows-port up to origin/david-onboarding-revisions 6bb60b6 (Release 0.1.13: Hudson's 0.1.11

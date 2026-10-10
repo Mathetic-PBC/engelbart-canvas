@@ -138,6 +138,9 @@ export function subOf(sourceId, state) {
 }
 const reposCount = (state) => { const n = localPicked(state).length; return `${n} local repo${n === 1 ? '' : 's'}`; };
 
+/** What a row says when it needs a sign-in before it can be read (2026-10-09, board "Now-3a-Fix"). */
+export const NEEDS_SIGN_IN = 'Needs sign-in';
+
 /**
  * What a row says at its right, from how its app is reached and where it stands → { text, tone: 'muted' | 'busy' |
  * 'error' | '' }. `connectors`: app → { connected, pending } (main's connectors); `notes`: the Apple Notes prompt's state
@@ -152,7 +155,7 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
     const status = connectors[app] || {};
     if (status.connected) return { text: 'signed in', tone: '' };
     if (status.pending) return { text: `Waiting for ${app} sign-in…`, tone: 'busy' };
-    return { text: `Opens ${app} in your browser to sign in`, tone: 'muted' };
+    return { text: NEEDS_SIGN_IN, tone: 'muted' };
   }
   if (spec.reach === 'automation') {
     if (notes === 'allowed') return { text: 'allowed', tone: '' };
@@ -161,14 +164,14 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
   }
   if (spec.reach === 'web') {
     if (seen.signedIn) return { text: 'signed in to Engelbart', tone: '' };
-    return seen.found ? { text: 'Sign in to add', tone: 'muted' } : { text: 'Not found', tone: 'muted' };
+    return seen.found ? { text: NEEDS_SIGN_IN, tone: 'muted' } : { text: 'Not found', tone: 'muted' };
   }
+  if (seen.found && seen.where === 'Sign in to add') return { text: NEEDS_SIGN_IN, tone: 'muted' }; // the scan's words for a web app found, not signed in
   return seen.found ? { text: seen.where || '', tone: '' } : { text: 'Not found', tone: 'muted' };
 }
 
-/** The line under a row's name, when it needs one: an assistant is read and asked; macOS asks before Apple Notes. */
+/** The line under a row's name, when it needs one: macOS asks before Apple Notes. (What asking an assistant what it remembers is, the refine chat says.) */
 export function rowSub(app) {
-  if (MEMORY_APPS.includes(app)) return 'Chats about your question · asks what it remembers, for a head start';
   if (app === 'Apple Notes') return 'macOS will ask';
   return '';
 }
@@ -260,6 +263,38 @@ export const allEnded = (jobs) => (jobs || []).every((job) => statusOf(job).done
 export const workJobs = (jobs) => (jobs || []).filter((job) => job.kind !== 'memory' && job.kind !== 'redact');
 
 /** The jobs still going first (2026-10-08: "show the ones still running at the top"), running before queued, then the ended, each group in its order. */
+// What each source is, under a row of onboarding's "Bringing everything in" when its label says nothing more.
+const WORK_SUBS = { notes: 'Notes', transcripts: 'Meeting transcripts', chats: 'AI chats', sites: 'Pages from your browser history', papers: 'Papers', code: 'Repositories' };
+const andList = (items) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
+
+/**
+ * A row of onboarding's "Bringing everything in" (2026-10-09, David's mockup): the apps it reads ("Google Meet and Zoom"),
+ * under them what it brings in (the label after its colon, else what the source is), and at its right where it stands:
+ * "Adding · 65 so far", "Adding…", "Queued", "✓ 11 added". → { title, sub, status: { text, done, failed, waiting, going } }
+ */
+export function workRow(job) {
+  const label = String(job.label || '');
+  const at = label.indexOf(':');
+  const head = (at >= 0 ? label.slice(0, at) : label).trim();
+  const tail = at >= 0 ? label.slice(at + 1).trim() : '';
+  const apps = (job.apps || []).filter(Boolean);
+  const title = apps.length ? andList(apps) : head || label;
+  const own = tail && tail !== apps.join(', ') && tail !== title ? tail : '';
+  const kindSub = job.kind === 'survey' ? 'Looking through it' : job.kind === 'recall' ? 'What it remembers about you' : WORK_SUBS[job.source] || '';
+  const sub = own ? own[0].toUpperCase() + own.slice(1) : kindSub !== title ? kindSub : '';
+  const n = (job.notes || 0) + (job.items || 0);
+  const going = job.status === 'running';
+  let status;
+  if (job.skipped) status = { text: 'Skipped', done: true };
+  else if (job.status === 'done') status = { text: job.kind === 'import' ? `✓ ${n} added` : job.kind === 'recall' ? '✓ Remembered' : '✓ Looked', done: true };
+  else if (job.status === 'failed') status = { text: n ? `Stopped after ${n}` : 'Failed', done: true, failed: true };
+  else if (job.status === 'stopped') status = { text: n ? `Stopped · ${n} added` : 'Stopped', done: true };
+  else if (job.status === 'waiting') status = { text: 'Needs you', done: false, waiting: true };
+  else if (going) status = { text: job.kind === 'import' ? (n ? `Adding · ${n} so far` : 'Adding…') : job.kind === 'recall' ? 'Asking…' : 'Looking…', done: false };
+  else status = { text: 'Queued', done: false };
+  return { title, sub, status: { done: false, failed: false, waiting: false, ...status, going } };
+}
+
 export function runningFirst(jobs) {
   const rank = (job) => { const status = statusOf(job); return status.done ? 2 : job.status === 'queued' ? 1 : 0; };
   return (jobs || []).map((job, i) => ({ job, i })).sort((a, b) => rank(a.job) - rank(b.job) || a.i - b.i).map((entry) => entry.job);
@@ -280,16 +315,47 @@ export function workLine(session, tick = 0) {
   return { lead, agent: job ? { id: job.id, label: job.label, doing: job.status === 'waiting' ? 'needs you' : job.activity || statusOf(job).text, place: busy.length > 1 ? `${at + 1} of ${busy.length}` : '', waiting: job.status === 'waiting' } : null };
 }
 
-/** What a step the agents hand the person asks of them, and the button that does it. */
+/**
+ * The line at the foot of onboarding's chat and progress (2026-10-09, David's mockup): "Bringing in 2 sources · 3 of 10 ·
+ * 2 need you". How many imports are still going, how many of the work's jobs have ended, and the steps waiting on the
+ * person. '' before anything was dispatched.
+ */
+export function footLine(session) {
+  if (!session) return '';
+  const jobs = workJobs(session.jobs);
+  const importing = jobs.filter((job) => job.kind === 'import' && !statusOf(job).done).length;
+  const ended = jobs.filter((job) => statusOf(job).done).length;
+  const needs = (session.needs || []).length;
+  const lead = importing ? `Bringing in ${importing} source${importing === 1 ? '' : 's'}` : ended < jobs.length ? 'Looking through your apps' : jobs.length ? 'Everything looked at' : '';
+  return [lead, jobs.length ? `${ended} of ${jobs.length}` : '', needs ? `${needs} need${needs === 1 ? 's' : ''} you` : ''].filter(Boolean).join(' · ');
+}
+
+/**
+ * What the chat says under its last message while the person waits (the mockup's "••• Looking at your Overleaf
+ * projects…"): what the librarian is doing, else the survey (or other work) it waits on, else the sign-in it waits on;
+ * '' when it waits on nothing.
+ */
+export function chatStatus(session) {
+  if (!session) return '';
+  if (session.thinking) return `${session.activity || 'Thinking'}…`.replace(/……$/, '…');
+  if (!session.waiting) return '';
+  const going = workJobs(session.jobs).filter((job) => !statusOf(job).done && !statusOf(job).waiting);
+  const survey = going.find((job) => job.kind === 'survey') || going[0];
+  if (survey) return `${survey.label}…`;
+  return (session.needs || []).length ? 'Waiting for your sign-in…' : 'Looking…';
+}
+
+/** What a step the agents hand the person asks of them, the button that does it, and how (`hint`, the row's line under its app). */
 export function needView(need) {
   const kind = need && need.kind;
-  if (kind === 'connector') return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: '' };
-  if (kind === 'permission') return { title: `${need.app} needs your permission`, action: 'Allow', hint: '' };
-  if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: '' };
+  if (kind === 'connector') return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
+  if (kind === 'permission') return { title: `${need.app} needs your permission`, action: 'Allow', hint: 'macOS will ask' };
+  if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
   // One button and Skip (2026-10-08: "It should just be one login button on the right ... or skip"): a sign-in opens in the
   // default browser and is brought over (main's connect/web-signin.cjs); a code or a captcha, the agent's own window.
   const what = { signin: 'sign in', '2fa': 'enter a code', password: 'sign in', captcha: 'prove you are not a robot', confirm: 'confirm something' }[kind] || 'sign in';
-  return { title: `${need ? need.app : 'An app'} needs you to ${what}`, action: kind === 'signin' || kind === 'password' ? 'Log in' : 'Open', hint: '' };
+  const signs = kind === 'signin' || kind === 'password';
+  return { title: `${need ? need.app : 'An app'} needs you to ${what}`, action: signs ? 'Log in' : 'Open', hint: signs ? 'Opens in your browser · read-only' : `Opens its window to ${what}` };
 }
 
 /** MEMORY.md's line in the progress list. */

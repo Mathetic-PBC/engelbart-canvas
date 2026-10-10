@@ -10,11 +10,14 @@ import Workspace from './screens/Workspace.jsx';
 import ToolSetup from './ui/ToolSetup.jsx';
 import UpdateBanner from './ui/UpdateBanner.jsx';
 import { useConnectSessions, ConnectChip, ConnectPopup } from './ui/ConnectDock.jsx';
+import { GuidedSetupOffer, START_GUIDED_SETUP } from './ui/GuidedSetup.jsx';
 import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
 // onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. Onboarding ends in the project
-// it made (the welcome tour that followed it was taken out on 2026-10-01). "Engelbart" in the header (or Escape) shows
+// it made (the welcome tour that followed it was taken out on 2026-10-01). The guided setup (ui/GuidedSetup.jsx, 2026-10-10)
+// runs all of it for someone who has projects: offered once over their workspace, and from Settings. "Engelbart" in the
+// header (or Escape) shows
 // all projects. A project whose project.json has no code directory yet is held
 // behind a modal until one is chosen (2026-09-18).
 // Several windows (2026-10-03, src/main/windows.cjs): each opens where main says (its place before a reload or a
@@ -73,6 +76,10 @@ export default function App() {
   const lastTools = React.useRef(null);
   // Connect your library (2026-10-07): its popup ({ sessionId } from the chip, { projectId } the one-time offer).
   const [connectPopup, setConnectPopup] = React.useState(null);
+  // The guided setup (ui/GuidedSetup.jsx): a new user's onboarding run for someone with projects, while `guided`; its
+  // one-time offer over the workspace while `guidedOffer`.
+  const [guided, setGuided] = React.useState(false);
+  const [guidedOffer, setGuidedOffer] = React.useState(false);
 
   const fail = (candidate) => setError(errorMessage(candidate));
 
@@ -121,7 +128,7 @@ export default function App() {
   // A new install's onboarding asks on a screen of its own (2026-09-28), so the dialog waits until it is over. Its
   // Install all leaves 'after': once the installs end, the dialog asks only what is left (signing in, a failure). Its
   // Skip for now asks nothing more until the next launch.
-  const onboardingNew = phase === 'boot' || (phase === 'create' && !projects.length);
+  const onboardingNew = phase === 'boot' || (phase === 'create' && (!projects.length || guided));
   React.useEffect(() => {
     if (!launchAsk || onboardingNew || !tools) return;
     if (launchAsk === 'after') {
@@ -172,6 +179,7 @@ export default function App() {
   // goes where main says this window belongs, when it says (the projects screen, or a workspace).
   const firstStart = React.useRef(true);
   const start = React.useCallback(async () => {
+    setGuided(false);
     const list = await loadHome();
     const first = firstStart.current;
     firstStart.current = false;
@@ -216,22 +224,37 @@ export default function App() {
     document.title = phase === 'workspace' && projectName ? `${projectName} — Engelbart` : 'Engelbart';
   }, [phase, projectName]);
 
-  // Connect your library for someone who has projects: offered once, as a popup over the workspace they are in. In every
-  // library, test mode's or not (2026-10-08), each with its own sessions and its own offer.
+  // Connect your library's sessions in this data root (each library its own, 2026-10-08), for the chip and the Inbox.
   const connectSessions = useConnectSessions(!!config, config ? config.dataRoot : '');
+  // The guided setup offered once to someone who has projects, over the workspace they are in (2026-10-10: it took the
+  // place of Connect your library's one-time popup; Connect is the setup's second screen). Seen once it has been shown.
   const openProjectId = phase === 'workspace' && tree ? tree.project.id : null;
   React.useEffect(() => {
     if (!openProjectId) return undefined;
     let alive = true;
     const timer = setTimeout(() => {
-      api.connectOffer().then((offer) => {
+      api.guidedOffer().then((offer) => {
         if (!alive || !offer || !offer.show) return;
-        setConnectPopup((now) => now || { projectId: openProjectId });
-        api.connectOfferSeen('shown').catch(() => {});
+        setGuidedOffer(true);
+        api.guidedOfferSeen('shown').catch(() => {});
       }).catch(() => {});
     }, 1200); // after the workspace has drawn itself
     return () => { alive = false; clearTimeout(timer); };
   }, [openProjectId]);
+  // Start (the offer's, or Settings ▸ Guided setup's): onboarding from its first screen, as a new user has it.
+  const startGuided = React.useCallback(() => {
+    setGuidedOffer(false);
+    setConnectPopup(null);
+    setTree(null);
+    setEntry(null);
+    setGuided(true);
+    setRun((n) => n + 1);
+    setPhase('create');
+  }, []);
+  React.useEffect(() => {
+    window.addEventListener(START_GUIDED_SETUP, startGuided);
+    return () => window.removeEventListener(START_GUIDED_SETUP, startGuided);
+  }, [startGuided]);
 
   // Another window saved something here: this project's tree (a workspace or note made, renamed, linked; a document
   // cleared) is read again, or, on the projects screen, the projects. A project another window deleted is left for the
@@ -307,11 +330,13 @@ export default function App() {
   }
 
   // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open, and
-  // the sites its sign-in import said to sign in to again on the Stage.
+  // the sites its sign-in import said to sign in to again on the Stage. A new user's (made.gettingStarted, 2026-10-09)
+  // lands on its Welcome workspace's own document instead, under the walkthrough; the note is in its sidebar.
   async function onboarded(made, { stageLinks = [] } = {}) {
     setError('');
+    setGuided(false);
     await loadHome();
-    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
+    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: made.gettingStarted ? null : { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
   }
 
   async function goHome() {
@@ -366,7 +391,7 @@ export default function App() {
 
   if (!config || phase === 'boot') return <div style={{ position: 'absolute', inset: 0, background: '#fff' }} />;
   const returning = projects.length > 0 || trashed.length > 0; // someone whose projects are all in the trash is not new
-  const onboardMode = returning ? 'existing' : 'new';
+  const onboardMode = guided || !returning ? 'new' : 'existing'; // the guided setup is a new user's onboarding
 
   return (
     <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree}>
@@ -377,7 +402,7 @@ export default function App() {
           trashed={trashed}
           library={shownLibrary}
           error={error}
-          onCreateScreen={() => setPhase('create')}
+          onCreateScreen={() => { setGuided(false); setPhase('create'); }}
           onOpenWorkspace={(id, workspaceId, stage) => openProject(id, workspaceId || stage ? { workspaceId, stage } : null).catch(fail)}
           // a library row no project holds opens on the Stage of the project last open (else the first)
           onOpenOnStage={async (row) => {
@@ -396,7 +421,7 @@ export default function App() {
         />
       )}
       {phase === 'create' && (
-        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? goHome : null} />
+        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? () => { setGuided(false); goHome(); } : null} />
       )}
       {phase === 'workspace' && tree && (
         <Workspace
@@ -415,7 +440,7 @@ export default function App() {
           // the sidebar's project menu (2026-10-07): another project, opened where it was left; or a new one, made as
           // + Project makes it
           onOpenProject={(id, workspaceId) => openProject(id, workspaceId ? { workspaceId } : null).catch(fail)}
-          onNewProject={() => { leaveProject(); setPhase('create'); }}
+          onNewProject={() => { leaveProject(); setGuided(false); setPhase('create'); }}
           onVisit={onVisit}
           onError={fail}
           // Connect your library's sessions, for the sidebar's Inbox: one that needs you or has finished, opened in its popup
@@ -447,6 +472,9 @@ export default function App() {
         <ConnectChip sessions={connectSessions} onOpen={(id) => setConnectPopup({ sessionId: id })} />
         {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
+      {guidedOffer && phase === 'workspace' && (
+        <GuidedSetupOffer onStart={() => { api.guidedOfferSeen('started').catch(() => {}); startGuided(); }} onDismiss={() => { setGuidedOffer(false); api.guidedOfferSeen('dismissed').catch(() => {}); }} />
+      )}
       {connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>
     </SandboxProgress>

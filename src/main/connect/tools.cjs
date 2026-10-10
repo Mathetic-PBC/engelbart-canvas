@@ -204,13 +204,14 @@ const looksSignedOut = (file, type) => {
 /**
  * The tools of one import. `session`: { dataRoot, homeDir, dir (its folder), downloads (where downloads and unpacked zips
  * go), projectId() (null until onboarding makes the project), exports (app → the export chosen), folders (app → folder) };
- * `context()` the store's context now; `added(kind, n, what)` counts what this import added ('notes' | 'items');
+ * `context()` the store's context now; `added(kind, n, what)` counts what this import added ('notes' | 'items'); `kept(row)`
+ * each library row it added or found already there (session.cjs keepRow);
  * `zotero` { root(), download? }; `github` (its repos()); `library` deps { describe, identifyRepo, inspectPdf, onAdded,
  * onPdf }; `kind` 'import' | 'survey' | 'recall'; `page` the job's browser (./browser.cjs tools), null where there is
  * none; `needs` { ask({ kind, reason }), wait() }; `recall(app, text)` keeps an assistant's answer; `appleNotes`
  * (./apple-notes.cjs); `log(text)` the action log. → call(name, args)
  */
-function createImportTools({ session, context, added = () => {}, zotero = null, github = null, deps = {}, env = process.env, kind = 'import', page = null, needs = null, recall = null, appleNotes = null, log = () => {} }) {
+function createImportTools({ session, context, added = () => {}, kept = () => {}, zotero = null, github = null, deps = {}, env = process.env, kind = 'import', page = null, needs = null, recall = null, appleNotes = null, log = () => {} }) {
   const library = require('../store/library.cjs');
   const mirror = require('../zotero/mirror.cjs');
   const imported = createImported(session.dataRoot);
@@ -245,6 +246,7 @@ function createImportTools({ session, context, added = () => {}, zotero = null, 
     const ctx = await ctxNow();
     const row = await notes.writeFile(ctx, { title, body, images }, { library });
     if (deps.onAdded) deps.onAdded(row);
+    kept(row);
     if (source) imported.add(source);
     added('notes', 1, title);
   }
@@ -255,10 +257,11 @@ function createImportTools({ session, context, added = () => {}, zotero = null, 
       const row = await library.addItem(ctx, input, { describe: describe ? deps.describe : undefined, identifyRepo: deps.identifyRepo, inspectPdf: deps.inspectPdf, name: name || null });
       if (row.type === 'pdf' && deps.onPdf) deps.onPdf();
       if (deps.onAdded) deps.onAdded(row);
+      kept(row);
       added('items', 1, row.name);
       return { added: true, id: row.id, name: row.name, type: row.type, tags: row.tags };
     } catch (error) {
-      if (error && error.code === 'EXISTS') return { added: false, already: error.row ? error.row.name : true };
+      if (error && error.code === 'EXISTS') { kept(error.row); return { added: false, already: error.row ? error.row.name : true }; }
       throw error;
     }
   }
@@ -274,10 +277,11 @@ function createImportTools({ session, context, added = () => {}, zotero = null, 
       const row = await library.addFileCopy(ctx, { bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), mime, name, url }, { inspectPdf: deps.inspectPdf });
       if (mime === 'application/pdf' && deps.onPdf) deps.onPdf();
       if (deps.onAdded) deps.onAdded(row);
+      kept(row);
       added('items', 1, row.name);
       return { added: true, id: row.id, name: row.name, type: row.type };
     } catch (error) {
-      if (error && error.code === 'EXISTS') return { added: false, already: error.row ? error.row.name : true };
+      if (error && error.code === 'EXISTS') { kept(error.row); return { added: false, already: error.row ? error.row.name : true }; }
       throw error;
     }
   }

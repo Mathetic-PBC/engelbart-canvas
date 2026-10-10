@@ -449,6 +449,7 @@ export default function Rail({
   library = [], inRail = () => false, onOpenRow, onRenameRow, onRemoveRow, onLinkRow, onOpenHeld, onDropItems,
   onAddInput, onPickDisk, onNewNote, onNewSticky, onPickRepo, onOpenLink,
   postItsHidden = false, onTogglePostIts, postItTrash = null, workspaceTrash = null, trashFull = false, postItDrag = null, trashRef,
+  libraryRequest = null, onPanel = () => {}, // the Welcome walkthrough (2026-10-09): a new { n, chip } opens Library on that tab; onPanel(kind) when one opens
 }) {
   const [opened, setOpened] = useOpen();
   const [panel, setPanel] = React.useState(null); // { kind, anchor, key? }: one beside the sidebar at a time
@@ -477,6 +478,13 @@ export default function Rail({
     setPanel((now) => (now && now.kind === kind && now.key === key ? null : { kind, key, anchor: kind === 'project' ? rectOf(element) : anchorOf(element) }));
   };
   const close = React.useCallback(() => setPanel(null), []);
+  const panelKind = panel ? panel.kind : null;
+  React.useEffect(() => { if (panelKind) onPanel(panelKind); }, [panelKind]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    if (!libraryRequest || hidden) return;
+    const row = asideRef.current && asideRef.current.querySelector('[data-sb-trigger="library"]');
+    if (row) { peek.drop(); setPanel({ kind: 'library', key: null, anchor: anchorOf(row), chip: libraryRequest.chip || 'all' }); }
+  }, [libraryRequest]); // eslint-disable-line react-hooks/exhaustive-deps
   const closeAdd = React.useCallback(() => { if (!addBusy.current) setPanel(null); }, []);
   const onAddBusy = React.useCallback((value) => { addBusy.current = value; }, []);
   const ignore = (kind, key) => `[data-sb-trigger="${key ? `${kind}:${key}` : kind}"]`;
@@ -786,7 +794,7 @@ export default function Rail({
       }} onClose={close} ignore={ignore('inbox')} />}
       {panel && panel.kind === 'agents' && <AgentsPanel anchor={panel.anchor} groups={agentList} nameOf={nameOf} onGo={goAgent} onClose={close} ignore={ignore('agents')} />}
       {panel && panel.kind === 'connections' && <ConnectionsPanel anchor={panel.anchor} onOverleaf={() => onOpenLink(OVERLEAF_URL)} onClose={close} ignore={ignore('connections')} />}
-      {panel && panel.kind === 'library' && <LibraryPanel anchor={panel.anchor} projectId={project.id} library={library} inRail={inRail} onOpen={(row) => onOpenRow(row)} onLink={onLinkRow} onAddInput={onAddInput} onOpenFull={onAllProjects} onOpenWorkspace={onOpenHeld} onClose={close} ignore={ignore('library')} />}
+      {panel && panel.kind === 'library' && <LibraryPanel key={panel.chip || 'all'} anchor={panel.anchor} chip={panel.chip} projectId={project.id} library={library} inRail={inRail} onOpen={(row) => onOpenRow(row)} onLink={onLinkRow} onAddInput={onAddInput} onOpenFull={onAllProjects} onOpenWorkspace={onOpenHeld} onClose={close} ignore={ignore('library')} />}
       {panel && panel.kind === 'add' && (
         <Floating anchor={panel.anchor} width={300} cap={620} label="Add sources" onClose={closeAdd} ignore={ignore('add')} data-sb-panel="add" data-rail-add-menu="1" style={{ padding: 8, overflowY: 'auto' }}>
           <AddMenuBody projectId={project.id} search={false} onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewSticky={onNewSticky} onPickRepo={onPickRepo} library={library} inRail={inRail} onDone={() => setPanel(null)} onBusy={onAddBusy} />
