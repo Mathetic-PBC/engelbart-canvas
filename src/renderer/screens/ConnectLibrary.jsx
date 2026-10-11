@@ -118,7 +118,8 @@ const LABEL_COLOR = { muted: '#c9c9c9', busy: '#a35200', error: '#e70022', '': '
  * A row's name and, only when the person has to do something or would be surprised, one grey line under it (2026-10-09,
  * board "Now-3a-Fix"): "Needs sign-in", "macOS will ask", "Not found", or what is happening while it acts (busy and error
  * tones). The plain words (a folder, "signed in", "6 on this Mac") are the row's tooltip only. The right edge is only the
- * checkboxes. A row not found is dimmed whole (`dim`).
+ * checkboxes. A row not found is dimmed whole (`dim`): only an app read from this Mac that is not on it, never one in the
+ * cloud, which says "Needs sign-in" instead (MATH-144, model/connect.js rowLabel).
  */
 function RowText({ name, on, sub, label, dim = false, tip: extra = '', onRetry = null }) {
   const tone = (label && label.text && label.tone) || '';
@@ -140,6 +141,8 @@ function RowText({ name, on, sub, label, dim = false, tip: extra = '', onRetry =
   );
 }
 
+// A row dimmed: rowLabel says "Not found" only for an app read from this Mac that is not on it (Cursor, Codex, a folder
+// app), or for Websites with no browser and Local repos with none; a web app or Zotero is "Needs sign-in" (MATH-144).
 const notFound = (label) => !!label && label.text === 'Not found';
 
 // `name` is the app's id (its logo, data-connect-app); the row shows the name the person knows it by (shownName). A

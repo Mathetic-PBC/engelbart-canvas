@@ -1167,7 +1167,13 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   assert.deepEqual(model.rowLabel('Cursor', { found: seen, folder: '~/Work' }), { text: '~/Work', tone: '' });
   assert.deepEqual(model.rowLabel('ChatGPT', { found: seen }), { text: 'signed in to Engelbart', tone: '' });
   assert.deepEqual(model.rowLabel('Perplexity', { found: seen }), { text: 'Needs sign-in', tone: 'muted' });
-  assert.deepEqual(model.rowLabel('Evernote', { found: seen }), { text: 'Not found', tone: 'muted' });
+  // MATH-144: an app in the cloud is never "Not found" (a web app, Zotero); one read from this Mac still is (Cursor)
+  assert.deepEqual(model.rowLabel('Evernote', { found: seen }), { text: 'Needs sign-in', tone: 'muted' }, 'a web app not found, not signed in');
+  assert.deepEqual(model.rowLabel('Notion', { found: seen }), { text: 'Needs sign-in', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Zotero', { found: seen }), { text: 'Needs sign-in', tone: 'muted' }, 'Zotero not connected, no ~/Zotero');
+  assert.deepEqual(model.rowLabel('Zotero', { found: { apps: { Zotero: { found: true, where: '~/Zotero (sign in to read it)' } } } }), { text: '~/Zotero (sign in to read it)', tone: '' });
+  assert.deepEqual(model.rowLabel('Codex', { found: seen }), { text: 'Not found', tone: 'muted' }, 'an app read from this Mac, not on it');
+  assert.equal(model.foundRow(seen, 'notes', 'Evernote'), false, 'what starts ticked is unchanged: a web app not found starts unticked');
   assert.deepEqual(model.rowLabel('Granola', { found: seen }), { text: 'Needs sign-in', tone: 'muted' });
   assert.deepEqual(model.rowLabel('Granola', { found: seen, connectors: { Granola: { pending: true } } }), { text: 'Waiting for Granola sign-in…', tone: 'busy' });
   assert.deepEqual(model.rowLabel('Notion', { found: seen, connectors: { Notion: { connected: true } } }), { text: 'signed in', tone: '' });

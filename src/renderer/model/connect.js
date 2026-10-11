@@ -157,6 +157,11 @@ export const NEEDS_SIGN_IN = 'Needs sign-in';
  * What a row says at its right, from how its app is reached and where it stands → { text, tone: 'muted' | 'busy' |
  * 'error' | '' }. `connectors`: app → { connected, pending } (main's connectors); `notes`: the Apple Notes prompt's state
  * ('' | 'asking' | 'allowed' | why not); `folder`: one the person picked for it.
+ *
+ * "Not found" is only for an app read from this Mac (reach 'local': Cursor, Codex, Claude Code…) that is not on it
+ * (MATH-144, 2026-10-11). An app in the cloud (reach 'web', and Zotero's own sign-in) is "Needs sign-in" whether or not
+ * the Mac has its desktop app or a ~/Zotero: that says nothing about whether the person uses it, and ticking it still
+ * works (a web app's sign-in is checked when ticked; Zotero signs in itself). What starts ticked is unchanged (foundRow).
  */
 export function rowLabel(app, { found = null, connectors = {}, notes = '', folder = '', signIn = null } = {}) {
   const spec = APPS[app];
@@ -178,10 +183,11 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
     const said = signInLabel(signIn);
     if (said) return said;
     if (seen.signedIn) return { text: 'signed in to Engelbart', tone: '' };
-    return seen.found ? { text: NEEDS_SIGN_IN, tone: 'muted' } : { text: 'Not found', tone: 'muted' };
+    return { text: NEEDS_SIGN_IN, tone: 'muted' }; // found or not: it is in the cloud (MATH-144)
   }
   if (seen.found && seen.where === 'Sign in to add') return { text: NEEDS_SIGN_IN, tone: 'muted' }; // the scan's words for a web app found, not signed in
-  return seen.found ? { text: seen.where || '', tone: '' } : { text: 'Not found', tone: 'muted' };
+  if (seen.found) return { text: seen.where || '', tone: '' };
+  return spec.reach === 'signin' ? { text: NEEDS_SIGN_IN, tone: 'muted' } : { text: 'Not found', tone: 'muted' }; // Zotero not connected; else only on this Mac
 }
 
 /**
