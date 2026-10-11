@@ -16,7 +16,6 @@ import TrashPanel from '../post-its/TrashPanel.jsx';
 import { openSettings } from '../ui/Settings.jsx';
 import { useBuildNotifications } from '../ui/SandboxNotifications.jsx';
 import * as I from '../ui/SidebarIcons.jsx';
-import LibraryModal from './LibraryModal.jsx';
 import {
   AgentsPanel, ConnectionsPanel, ContextMenu, Floating, InboxPanel, LibraryPanel, NewWorkspaceDialog, OVERLEAF_URL, PeekCard,
   ProjectMenu, RenameField, RowAction, SearchDialog, SourcesPanel, WorkspacesPanel, panelEdge, text, usePeek,
@@ -450,13 +449,11 @@ export default function Rail({
   library = [], inRail = () => false, onOpenRow, onRenameRow, onRemoveRow, onLinkRow, onOpenHeld, onDropItems,
   onAddInput, onPickDisk, onNewNote, onNewSticky, onPickRepo, onOpenLink,
   postItsHidden = false, onTogglePostIts, postItTrash = null, workspaceTrash = null, trashFull = false, postItDrag = null, trashRef,
-  onLibraryChanged = () => {}, // the Library window added to or removed from the project: the workspace reloads
   libraryRequest = null, onPanel = () => {}, // the Welcome walkthrough (2026-10-09): a new { n, chip } opens Library on that tab; onPanel(kind) when one opens
 }) {
   const [opened, setOpened] = useOpen();
   const [panel, setPanel] = React.useState(null); // { kind, anchor, key? }: one beside the sidebar at a time
   const [searching, setSearching] = React.useState(false);
-  const [fullLibrary, setFullLibrary] = React.useState(false); // the Library window (LibraryModal.jsx), from "Open full library"
   const [creating, setCreating] = React.useState(null); // { parent } while a new workspace is being named
   const [menu, setMenu] = React.useState(null); // { at, items }: a right click's
   const [renaming, setRenaming] = React.useState(null); // 'project', or the id of a workspace or a source being renamed
@@ -797,7 +794,7 @@ export default function Rail({
       }} onClose={close} ignore={ignore('inbox')} />}
       {panel && panel.kind === 'agents' && <AgentsPanel anchor={panel.anchor} groups={agentList} nameOf={nameOf} onGo={goAgent} onClose={close} ignore={ignore('agents')} />}
       {panel && panel.kind === 'connections' && <ConnectionsPanel anchor={panel.anchor} onOverleaf={() => onOpenLink(OVERLEAF_URL)} onClose={close} ignore={ignore('connections')} />}
-      {panel && panel.kind === 'library' && <LibraryPanel key={panel.chip || 'all'} anchor={panel.anchor} chip={panel.chip} projectId={project.id} library={library} inRail={inRail} onOpen={(row) => onOpenRow(row)} onLink={onLinkRow} onAddInput={onAddInput} onOpenFull={() => setFullLibrary(true)} onOpenWorkspace={onOpenHeld} onClose={close} ignore={ignore('library')} />}
+      {panel && panel.kind === 'library' && <LibraryPanel key={panel.chip || 'all'} anchor={panel.anchor} chip={panel.chip} projectId={project.id} library={library} inRail={inRail} onOpen={(row) => onOpenRow(row)} onLink={onLinkRow} onAddInput={onAddInput} onOpenFull={onAllProjects} onOpenWorkspace={onOpenHeld} onClose={close} ignore={ignore('library')} />}
       {panel && panel.kind === 'add' && (
         <Floating anchor={panel.anchor} width={300} cap={620} label="Add sources" onClose={closeAdd} ignore={ignore('add')} data-sb-panel="add" data-rail-add-menu="1" style={{ padding: 8, overflowY: 'auto' }}>
           <AddMenuBody projectId={project.id} search={false} onAdd={onAddInput} onPickDisk={onPickDisk} onNewNote={onNewNote} onNewSticky={onNewSticky} onPickRepo={onPickRepo} library={library} inRail={inRail} onDone={() => setPanel(null)} onBusy={onAddBusy} />
@@ -810,7 +807,6 @@ export default function Rail({
       })()}
       {panel && panel.kind === 'trash' && (postItTrash || workspaceTrash) && <TrashPanel anchor={panel.anchor} trash={postItTrash} workspaces={workspaceTrash} onClose={close} />}
 
-      {fullLibrary && <LibraryModal project={project} workspaceId={hereId} library={library} onOpenRow={(row) => onOpenRow(row)} onChanged={onLibraryChanged} onClose={() => setFullLibrary(false)} />}
       {searching && <SearchDialog projectId={project.id} workspaces={flatWorkspaces(roots)} rows={rows} library={library} inRail={inRail} onGoWorkspace={onSelectWorkspace} onOpen={(row) => onOpenRow(row)} onLink={onLinkRow} onAddInput={onAddInput} onClose={() => setSearching(false)} />}
       {creating && <NewWorkspaceDialog parent={creating.parent} onCreate={(name) => onCreateWorkspace({ name, parentId: creating.parent ? creating.parent.id : null })} onClose={() => setCreating(null)} />}
       {menu && <ContextMenu at={menu.at} items={menu.items} onClose={() => setMenu(null)} />}
