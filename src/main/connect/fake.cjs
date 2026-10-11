@@ -8,10 +8,13 @@
 // Claude Code chats or one note per web app through the real tools, so the progress, the staging and the project's notes
 // are real; the memory agent drafts MEMORY.md with two planted secrets and the secrets check takes out one of them (the
 // shape check takes the other). ENGELBART_CONNECT_FAKE_NEEDS=<app> makes that app's survey ask the person to sign in,
-// unless they signed in on the card shown before the run.
+// unless they signed in on the card shown before the run. A search for an app's folder (MATH-117) finds it when the test
+// home holds one: a vault (a folder with .obsidian), a Zoom folder of meeting folders with transcripts, folders of PDFs.
 // Same shape as ./agents.cjs turn().
 
-const { shownName } = require('../../shared/connect-sources.cjs');
+const fs = require('node:fs');
+const path = require('node:path');
+const { shownName, LOCAL_PDFS } = require('../../shared/connect-sources.cjs');
 
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
   const timer = setTimeout(resolve, ms);
@@ -51,9 +54,46 @@ function interviewReply(s, message) {
   return { say: dispatch.length ? `Bringing in ${dispatch[0].label} now. That's everything.` : 'That\'s everything.', ask: null, authorize: null, dispatch, waiting: false, done: true };
 }
 
+/** The folders under `home`, breadth first, Library and hidden folders passed over, at most a few levels down. */
+function foldersUnder(home, depth = 5) {
+  const out = [];
+  let level = [home];
+  for (let n = 0; n < depth && level.length; n += 1) {
+    const next = [];
+    for (const dir of level) {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'Library' || entry.name === 'node_modules') continue;
+        const full = path.join(dir, entry.name);
+        out.push(full);
+        next.push(full);
+      }
+    }
+    level = next;
+  }
+  return out;
+}
+
+const names = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
+
+function findRun(s, app) {
+  const all = foldersUnder(s.homeDir);
+  const searched = 'every folder of the home folder but Library and the hidden ones';
+  if (app === LOCAL_PDFS) {
+    const folders = all.filter((dir) => names(dir).some((entry) => entry.isFile() && /\.pdf$/i.test(entry.name)));
+    return { app, signedIn: true, summary: folders.length ? `PDFs in ${folders.length} folders.` : 'No PDFs found.', items: [], folders, searched };
+  }
+  const folder = app === 'Obsidian'
+    ? all.find((dir) => names(dir).some((entry) => entry.isDirectory() && entry.name === '.obsidian'))
+    : all.find((dir) => /^zoom$/i.test(path.basename(dir)) && names(dir).some((entry) => entry.isDirectory() && names(path.join(dir, entry.name)).some((file) => file.isFile() && /\.(vtt|txt)$/i.test(file.name))));
+  return { app, signedIn: true, summary: folder ? `Found the ${shownName(app)} folder.` : `No ${shownName(app)} folder found.`, items: [], folder: folder || null, searched, notes: !folder && app === 'Zoom' ? 'No recordings on this Mac; cloud recordings at zoom.us/recording.' : null };
+}
+
 async function surveyRun({ session: s, job, callTool }, delayMs, signal) {
   const app = job.apps[0];
   await sleep(delayMs, signal);
+  if (job.find) return JSON.stringify(findRun(s, app));
   // Signed in on the card shown before the run (session.cjs signInsFirst): nothing to ask again.
   const signedInFirst = !!(s && s.needs.some((need) => need.app === app && need.upfront && need.outcome === 'done'));
   if (!signedInFirst && String(process.env.ENGELBART_CONNECT_FAKE_NEEDS || '').split(',').includes(app)) {

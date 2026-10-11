@@ -311,6 +311,12 @@ test('the librarian\'s reply as it is read: one-line options with their why, but
   const survey = readSurvey('{"app":"Google Docs","signedIn":true,"summary":"40 docs in 6 folders.","total":40,"items":[{"id":"1abcDEF_ghij","label":"Thesis draft","kind":"doc","date":"2026-10-01","why":"research"},{"label":""}]}');
   assert.deepEqual(survey.items.map((item) => [item.id, item.label]), [['1abcDEF_ghij', 'Thesis draft']]);
   assert.equal(readSurvey('not json').summary, 'not json');
+  // A search for a folder (MATH-117): only folders inside the home folder that are there are kept.
+  const report = JSON.stringify({ app: LOCAL_PDFS, summary: 'PDFs in 2 folders.', items: [], folders: ['~/Vault', vault, '/tmp', `${homeDir}/nowhere`, 'Vault', 7], searched: 'Documents and Desktop' });
+  assert.deepEqual(readSurvey(report, homeDir).folders, [vault]);
+  assert.equal(readSurvey(report, homeDir).searched, 'Documents and Desktop');
+  assert.deepEqual(readSurvey(report).folders, [], 'no home folder given, no folder kept');
+  assert.deepEqual(readSurvey(JSON.stringify({ folder: path.join(homeDir, '..') }), homeDir).folders, []);
   assert.equal(importToolLabel('import_note_files', { files: ['a', 'b'] }), 'Bringing in 2 notes');
   assert.equal(importToolLabel('browser_open', { url: 'https://www.overleaf.com/project' }), 'Opening overleaf.com');
   assert.equal(importToolLabel('import_google_files', { items: [{}] }), 'Bringing in 1 Google Drive file');
@@ -542,7 +548,8 @@ test('a session with the fake agents: a folder button, a question card, imports 
   const before = (await mdFiles()).length;
   const earlier = new Set((await mdFiles()).map((row) => row.id));
   await assert.rejects(connect.start({ sources: {} }), /Pick at least one source/);
-  const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, sites: { on: true } }, provider: 'openai' });
+  // The agents may not read the files on this Mac: no agent looks for the vault, the button comes at once (MATH-117).
+  const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, sites: { on: true } }, provider: 'openai', computer: false });
   assert.deepEqual(started.choice, { provider: 'openai', name: 'Codex', modelName: 'Sol', effort: 'high' }, 'only the provider was chosen; its model is pinned');
   let now = await until(state(started.id), (s) => !s.thinking && s.chat.length, 'the first turn');
   assert.equal(now.chat[0].opener, true, 'a first line at once, before the librarian');
@@ -594,6 +601,120 @@ test('a session with the fake agents: a folder button, a question card, imports 
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
 });
 
+/* MATH-117: an app on this Mac whose folder the scan did not find is looked for by an agent before the button. */
+
+const savedOf = (id) => JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', id, 'session.json'), 'utf8'));
+const findJobs = (s, app) => s.jobs.filter((job) => job.kind === 'survey' && job.label === `Looking for your ${app} folder`);
+
+test('a Zoom folder moved out of Documents is looked for and found: its at-a-glance, no button (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'zoom-found-'));
+  const meeting = path.join(fresh, 'Movies', 'Zoom', '2026-03-04 10.00.00 Lab meeting');
+  fs.mkdirSync(meeting, { recursive: true });
+  fs.writeFileSync(path.join(meeting, 'meeting_saved_closed_caption.txt'), 'Alex: shall we start?\n');
+  fs.writeFileSync(path.join(meeting, 'closed_caption.vtt'), 'WEBVTT\n');
+  const { connect, state } = fakeConnect({ home: fresh });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { transcripts: { on: true, apps: ['Zoom'] } } });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the transcripts question');
+    assert.deepEqual(findJobs(now, 'Zoom').map((job) => job.status), ['done'], 'one search, finished');
+    assert.ok(now.log.some((entry) => entry.text === 'Found your Zoom folder at ~/Movies/Zoom'), JSON.stringify(now.log.map((entry) => entry.text)));
+    assert.equal(now.chat.some((entry) => entry.authorize), false, 'no button was offered');
+    const saved = savedOf(started.id);
+    assert.equal(saved.picked.folders.Zoom, path.join(fresh, 'Movies', 'Zoom'));
+    const zoom = saved.found.transcripts.Zoom;
+    assert.equal(zoom.needs, undefined);
+    assert.equal(zoom.looking, undefined);
+    assert.equal(zoom.folder, '~/Movies/Zoom', 'the scan\'s at-a-glance of the folder found');
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a Zoom folder that is nowhere: the search says where it looked, then the button (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'zoom-none-'));
+  fs.mkdirSync(path.join(fresh, 'Movies'), { recursive: true });
+  const seen = []; // copies: a snapshot's chat is the session's own
+  const { connect, state } = fakeConnect({ home: fresh, notify: (snapshot) => seen.push(JSON.parse(JSON.stringify({ chat: snapshot.chat, jobs: snapshot.jobs }))) });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { transcripts: { on: true, apps: ['Zoom'] } } });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the Zoom folder button');
+    assert.deepEqual(findJobs(now, 'Zoom').map((job) => job.status), ['done']);
+    const button = now.chat.findIndex((entry) => entry.authorize);
+    assert.deepEqual(now.chat[button].authorize, { source: 'transcripts', app: 'Zoom', kind: 'folder', label: 'Choose your Zoom folder…' });
+    assert.ok(now.chat.slice(1, button).some((entry) => entry.role === 'agent' && /Looking through/.test(entry.text)), 'the librarian waited for the search first');
+    assert.ok(seen.some((snapshot) => snapshot.jobs.some((job) => job.label === 'Looking for your Zoom folder' && job.status === 'running')), 'it was seen looking');
+    assert.ok(seen.every((snapshot) => !snapshot.chat.some((entry) => entry.authorize) || findJobs(snapshot, 'Zoom').every((job) => job.status === 'done')), 'no button while it looked');
+    const zoom = savedOf(started.id).found.transcripts.Zoom;
+    assert.equal(zoom.needs, 'folder');
+    assert.match(zoom.searched, /home folder/);
+    assert.match(zoom.cloud, /zoom\.us/);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('the files on this Mac not allowed: no search, the folder button at once (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'zoom-off-'));
+  fs.mkdirSync(path.join(fresh, 'Movies', 'Zoom', '2026-03-04 Lab meeting'), { recursive: true });
+  fs.writeFileSync(path.join(fresh, 'Movies', 'Zoom', '2026-03-04 Lab meeting', 'closed_caption.vtt'), 'WEBVTT\n');
+  const { connect, state } = fakeConnect({ home: fresh });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { transcripts: { on: true, apps: ['Zoom'] } }, computer: false });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.length > 1, 'the first turn');
+    assert.deepEqual(findJobs(now, 'Zoom'), []);
+    assert.deepEqual(now.chat[1].authorize, { source: 'transcripts', app: 'Zoom', kind: 'folder', label: 'Choose your Zoom folder…' });
+    assert.equal(savedOf(started.id).found.transcripts.Zoom.searched, undefined);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('an Obsidian vault Obsidian does not list is found by its .obsidian folder (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'vault-found-'));
+  fs.cpSync(vault, path.join(fresh, 'Documents', 'Research vault'), { recursive: true });
+  const { connect, state } = fakeConnect({ home: fresh });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } } });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
+    assert.deepEqual(findJobs(now, 'Obsidian').map((job) => job.status), ['done']);
+    assert.equal(now.chat.some((entry) => entry.authorize), false);
+    const saved = savedOf(started.id);
+    assert.equal(saved.picked.folders.Obsidian, path.join(fresh, 'Documents', 'Research vault'));
+    assert.equal(saved.found.notes.Obsidian.vaults.length, 1, 'the vault\'s at-a-glance');
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('an app\'s folder is looked for once a session, however often the scan runs again (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'find-once-'));
+  const { connect, state } = fakeConnect({ home: fresh });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, transcripts: { on: true, apps: ['Zoom'] } } });
+    let now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the Obsidian folder button');
+    assert.equal(now.chat.find((entry) => entry.authorize).authorize.app, 'Obsidian');
+    await until(state(started.id), (s) => findJobs(s, 'Zoom').every((job) => job.status === 'done'), 'the Zoom search');
+    // Both turn up now; choosing the vault scans the notes again, and Zoom's folder is not looked for a second time.
+    fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
+    fs.mkdirSync(path.join(fresh, 'Movies', 'Zoom', '2026-03-04 Lab meeting'), { recursive: true });
+    fs.writeFileSync(path.join(fresh, 'Movies', 'Zoom', '2026-03-04 Lab meeting', 'closed_caption.vtt'), 'WEBVTT\n');
+    await connect.authorize(started.id, { app: 'Obsidian', kind: 'folder', path: '~/Vault' });
+    now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
+    assert.equal(findJobs(now, 'Zoom').length, 1);
+    assert.equal(findJobs(now, 'Obsidian').length, 1);
+    const zoom = savedOf(started.id).found.transcripts.Zoom;
+    assert.equal(zoom.needs, 'folder', 'still the button for Zoom');
+    assert.match(zoom.searched, /home folder/, 'where it looked is kept through the scan');
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
 test('an import started from a project and a workspace lands in both; a row removed from the project is not brought back (2026-10-11)', async () => {
   const fresh = fs.mkdtempSync(path.join(homeDir, 'placed-'));
   fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
@@ -601,8 +722,7 @@ test('an import started from a project and a workspace lands in both; a row remo
   const { connect, state } = fakeConnect({ home: fresh });
   const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } }, provider: 'openai', projectId: project.id, workspaceId });
   assert.equal(started.mode, 'existing');
-  await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the folder button');
-  await connect.authorize(started.id, { app: 'Obsidian', kind: 'folder', path: '~/Vault' });
+  // Obsidian does not list ~/Vault: the search for it finds it (MATH-117).
   await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
   connect.answer(started.id, { picked: ['Everything'] });
   await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the notes import');

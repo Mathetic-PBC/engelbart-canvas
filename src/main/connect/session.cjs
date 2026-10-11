@@ -69,6 +69,9 @@ const SIGNIN_APPS = new Set(['Zotero', 'GitHub']);
 const PRIORITY = Object.freeze({ survey: 0, recall: 1, import: 2, memory: 3, redact: 4 });
 const WORK = new Set(['survey', 'recall', 'import']);
 const ENDED = new Set(['done', 'failed', 'stopped']);
+// The apps on this Mac whose folder an agent looks for when the scan did not find it where it usually is (MATH-117).
+const FIND_APPS = new Set(['Obsidian', 'Zoom', LOCAL_PDFS]);
+const folderName = (app) => (app === LOCAL_PDFS ? 'folders of PDFs' : `${shownName(app)} folder`);
 // "change the default model for the context brainstorming and for the background subagents to sonnet high/sol high, and
 // do not even allow mke to change model or effort, only provider": not in model-effort-inline-question.json, so not editable.
 const CONNECT_MODELS = Object.freeze({ anthropic: Object.freeze({ model: 'sonnet', effort: 'high' }), openai: Object.freeze({ model: 'sol', effort: 'high' }) });
@@ -228,16 +231,28 @@ function readReply(text, choices) {
   return { say: clip(typeof value.say === 'string' ? value.say : '', 2000), ask, authorize, dispatch, waiting: value.waiting === true && !ask && !authorize, done: value.done === true };
 }
 
-/** A survey agent's report made safe → { signedIn, summary, total, items: [{ id, label, kind, date, where, why }], notes }. */
-function readSurvey(text) {
+/**
+ * A survey agent's report made safe → { signedIn, summary, total, items: [{ id, label, kind, date, where, why }], notes,
+ * folders, searched }. A search for an app's folder (MATH-117) also says "folder" (or, for PDFs, "folders"): only folders
+ * inside `homeDir` that are there are kept.
+ */
+function readSurvey(text, homeDir = null) {
   const raw = String(text || '').trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   const start = raw.indexOf('{'), end = raw.lastIndexOf('}');
   let value = null;
   if (start >= 0 && end > start) { try { value = JSON.parse(raw.slice(start, end + 1)); } catch { value = null; } }
-  if (!value || typeof value !== 'object') return { signedIn: null, summary: line(raw, 600), total: null, items: [], notes: null };
+  if (!value || typeof value !== 'object') return { signedIn: null, summary: line(raw, 600), total: null, items: [], notes: null, folders: [], searched: null };
   const items = (Array.isArray(value.items) ? value.items : []).filter((item) => item && typeof item === 'object' && (item.id || item.label)).slice(0, 40)
     .map((item) => ({ id: line(item.id, 300), label: line(item.label, 160), kind: line(item.kind, 20), date: line(item.date, 20) || null, where: line(item.where, 120) || null, why: line(item.why, 120) || null }));
-  return { signedIn: typeof value.signedIn === 'boolean' ? value.signedIn : null, summary: line(value.summary, 600), total: Number.isFinite(value.total) ? value.total : null, items, notes: value.notes ? line(value.notes, 600) : null };
+  const home = homeDir ? path.resolve(homeDir) : null;
+  const inHome = (folder) => {
+    if (!home || typeof folder !== 'string' || !folder.trim()) return null;
+    const full = readers.expandPath(home, folder);
+    if (!full || !full.startsWith(home + path.sep)) return null;
+    try { return fs.statSync(full).isDirectory() ? full : null; } catch { return null; }
+  };
+  const folders = [...new Set([value.folder, ...(Array.isArray(value.folders) ? value.folders : [])].map(inHome).filter(Boolean))].slice(0, 12);
+  return { signedIn: typeof value.signedIn === 'boolean' ? value.signedIn : null, summary: line(value.summary, 600), total: Number.isFinite(value.total) ? value.total : null, items, notes: value.notes ? line(value.notes, 600) : null, folders, searched: value.searched ? line(value.searched, 300) : null };
 }
 
 /** What the person did, as the librarian is told it. */
@@ -300,7 +315,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
         ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped], skippedSources: [...s.skippedSources],
-        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles })),
+        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles, ...(job.find ? { find: true } : {}) })),
       }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
   }
@@ -474,18 +489,18 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /* --------------------------------------------------------------------------------------------- the priority queue */
 
   /** A job queued: started when a place is free, the most urgent kind first. The same kind, source and apps go once. */
-  function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null }) {
+  function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null, find = false }) {
     if (kind === 'import' && s.skippedSources.has(source)) return null; // the person skipped it: nothing of it comes in
     const apps = kind === 'import' && given.length ? given.filter((app) => !s.skipped.has(app)) : given;
     if (given.length && !apps.length) return null;
-    const key = `${kind}:${source}:${[...apps].sort().join(',')}`;
+    const key = `${find ? 'find' : kind}:${source}:${[...apps].sort().join(',')}`;
     if (s.jobs.some((job) => job.key === key) || s.jobs.length >= MAX_JOBS) return null;
     if (apps.length && apps.every((app) => s.skipped.has(app))) return null; // the person skipped them for this run
     if (kind === 'import' && apps.length && s.jobs.some((job) => job.kind === 'import' && job.source === source && !job.apps.length)) return null; // the whole source went already
     s.seq += 1;
-    const job = { id: randomUUID(), key, kind, priority: PRIORITY[kind], seq: s.seq, source, apps, label, plan, extra, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null };
+    const job = { id: randomUUID(), key, kind, priority: PRIORITY[kind], seq: s.seq, source, apps, label, plan, extra, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null, ...(find ? { find: true } : {}) };
     s.jobs.push(job);
-    logAction(s, job, kind === 'survey' ? `Will look through ${apps.map(shownName).join(', ')}` : kind === 'recall' ? `Will ask ${apps.map(shownName).join(', ')} what it remembers` : kind === 'import' ? 'Queued' : 'Queued');
+    logAction(s, job, find ? `Will look for your ${folderName(apps[0])}` : kind === 'survey' ? `Will look through ${apps.map(shownName).join(', ')}` : kind === 'recall' ? `Will ask ${apps.map(shownName).join(', ')} what it remembers` : kind === 'import' ? 'Queued' : 'Queued');
     pump(s);
     return job;
   }
@@ -511,6 +526,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const apps = job.apps.length ? job.apps : choice.apps || [];
     const found = (s.found || {})[job.source] || {};
     const period = periodBlock(s.choices);
+    if (job.kind === 'survey' && job.find) return findMessage(s, job);
     if (job.kind === 'survey') {
       return [engelbartBlock(s), projectBlock(s.choices), period, `<source>${job.source}</source>`, `<app>${apps[0]}</app>`, skillsFor({ source: job.source, apps }, s.dataRoot), `<found>\n${JSON.stringify(found[apps[0]] || {}, null, 1)}\n</found>`, `Look at what they have in ${apps[0]} now, and report.`].filter(Boolean).join('\n\n');
     }
@@ -529,6 +545,26 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.choices.custom ? `<import_instructions note="What the person typed on the choose screen for this import.">\n${s.choices.custom}\n</import_instructions>` : '',
       custom ? `<custom_instructions>\n${custom}\n</custom_instructions>` : '',
       'Do the import now.',
+    ].filter(Boolean).join('\n\n');
+  }
+
+  /**
+   * A search for an app's folder the scan did not find where it usually is (MATH-117): what to look for, and how. Its reply
+   * is a survey's, with "folder" (or "folders") and "searched".
+   */
+  function findMessage(s, job) {
+    const app = job.apps[0];
+    const what = {
+      Zoom: 'Find their folder of Zoom recordings. Zoom keeps each meeting in a folder named by its date and topic ("2026-03-04 10.00.00 Lab meeting"), holding its transcript (a .vtt or .txt file), audio and video. People move that folder, or point Zoom\'s recording setting elsewhere: look under ~/Movies, ~/Desktop, ~/Downloads, ~/Documents, Dropbox, Google Drive and iCloud Drive (~/Library/Mobile Documents/com~apple~CloudDocs) first. "folder" is the folder that holds the meeting folders. When there is none on this Mac, say so in "notes": the cloud recordings at zoom.us/recording are what an import agent reads instead.',
+      Obsidian: 'Find their Obsidian vault: a folder holding a .obsidian folder (Glob for **/.obsidian). When there are several, "folder" is the one they most likely work in: the most notes, changed most recently.',
+      [LOCAL_PDFS]: 'Find the folders that hold their PDFs, papers mostly: use folder_overview and list_pdfs on the folders Glob finds them in. "folders" lists them, the most PDFs first, at most 6.',
+    }[app] || `Find their ${shownName(app)} folder.`;
+    const reply = app === LOCAL_PDFS ? '"folders": ["<absolute path>", ...] (empty when you found none)' : '"folder": "<absolute path, or null when you found none>"';
+    return [
+      engelbartBlock(s), projectBlock(s.choices), `<source>${job.source}</source>`, `<app>${app}</app>`,
+      `Engelbart did not find ${app === LOCAL_PDFS ? 'any folder of PDFs' : `their ${shownName(app)} folder`} where it usually is. ${what}`,
+      `Look with Glob, Grep and Read, inside their home folder (${homeDir}) only. Skip ~/Library (iCloud Drive aside) and hidden folders (a vault's .obsidian aside). Spend a few minutes at most. Never call needs_you to ask them for a folder: when you find nothing, say so, and they are offered a button to choose one.`,
+      `Reply with the survey's JSON object, with two more fields: ${reply}, and "searched": "<where you looked, in a few words>".`,
     ].filter(Boolean).join('\n\n');
   }
 
@@ -579,17 +615,17 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const dirs = job.kind === 'memory' ? [s.dir, path.join(s.dataRoot, 'assets', 'md'), ...(s.projectDir ? [s.projectDir] : [])].filter((dir) => fs.existsSync(dir)) : job.kind === 'redact' ? [] : s.dirs;
       const message = job.kind === 'memory' ? await memoryMessage(s) : job.kind === 'redact' ? `<memory_md>\n${s.memoryDraft}\n</memory_md>` : jobMessage(s, job);
       const out = await agents.turn({ choice, kind: job.kind, system: systemOf(s, job.kind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: connectorsNow, onUpdate, meta: { kind: job.kind, session: s, job, callTool } });
-      if (job.kind === 'survey') surveyed(s, job, out.text);
+      if (job.kind === 'survey') await surveyed(s, job, out.text);
       else if (job.kind === 'memory') drafted(s, out.text);
       else if (job.kind === 'redact') await finishMemory(s, out.text);
       job.summary = job.kind === 'memory' || job.kind === 'redact' ? '' : line(job.kind === 'survey' ? (readSurvey(out.text).summary || out.text) : out.text, 500);
       job.status = 'done';
-      logAction(s, job, job.kind === 'import' ? `Finished: ${job.summary}` : job.kind === 'survey' ? `Looked: ${job.summary}` : job.kind === 'recall' ? (s.recalls[job.apps[0]] ? 'Kept what it remembers' : `Finished: ${job.summary}`) : 'Finished');
+      logAction(s, job, job.kind === 'import' ? `Finished: ${job.summary}` : job.kind === 'survey' ? `${job.find ? 'Looked for it' : 'Looked'}: ${job.summary}` : job.kind === 'recall' ? (s.recalls[job.apps[0]] ? 'Kept what it remembers' : `Finished: ${job.summary}`) : 'Finished');
     } catch (error) {
       job.status = error && error.kind === 'stopped' ? 'stopped' : 'failed';
       job.error = job.status === 'failed' ? line(error && error.message ? error.message : 'The import failed', 300) : '';
       logAction(s, job, job.status === 'stopped' ? 'Stopped' : `Failed: ${job.error}`);
-      if (job.kind === 'survey') surveyed(s, job, null, job.error || 'stopped');
+      if (job.kind === 'survey') await surveyed(s, job, null, job.error || 'stopped');
       if (job.kind === 'memory' || job.kind === 'redact') { s.memory = { ...s.memory, status: job.status === 'stopped' ? 'stopped' : 'failed', error: job.error }; }
     } finally {
       s.controllers.delete(controller);
@@ -608,13 +644,65 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /* ------------------------------------------------------------------------------------------------------- surveys */
 
   /** A survey's report goes into what was found, for the librarian; it is woken if it said it was waiting. */
-  function surveyed(s, job, text, error = '') {
+  async function surveyed(s, job, text, error = '') {
+    if (job.find) return lookedFor(s, job, text, error);
     const app = job.apps[0];
     const report = text != null ? readSurvey(text) : { error: error || 'The survey did not finish' };
     s.found[job.source] = { ...(s.found[job.source] || {}), [app]: { ...((s.found[job.source] || {})[app] || {}), survey: report } };
     s.newFound = { ...(s.newFound || {}), [job.source]: { ...((s.newFound || {})[job.source] || {}), [app]: s.found[job.source][app] } };
     s.surveyNews.push(app);
     if (s.waitingForSurvey && !s.thinking) wake(s);
+  }
+
+  /**
+   * The search for an app's folder ended (MATH-117). A folder found is the app's, as if the person had chosen it: the scan
+   * reads it again, so the librarian gets its at-a-glance. None found: the app needs its folder, with where the agent
+   * looked, and the librarian offers the button. A search stopped by Engelbart quitting runs again when it resumes.
+   */
+  async function lookedFor(s, job, text, error) {
+    const app = job.apps[0], source = job.source;
+    if (text == null && (s.suspended || s.stopped)) return;
+    const report = text != null ? readSurvey(text, homeDir) : { folders: [], searched: null, notes: null, error: error || 'The search did not finish' };
+    const reach = appOf(app) ? appOf(app).reach : 'local';
+    const put = (entry) => {
+      s.found[source] = { ...(s.found[source] || {}), [app]: entry };
+      s.newFound = { ...(s.newFound || {}), [source]: { ...((s.newFound || {})[source] || {}), [app]: entry } };
+    };
+    const missing = () => put({ reach, needs: 'folder', searched: report.searched || report.notes || (report.error ? `the search failed: ${report.error}` : 'their home folder'), ...(app === 'Zoom' ? { cloud: 'Cloud recordings can be read at zoom.us in Engelbart\'s browser.' } : {}) });
+    const [folder, ...more] = report.folders;
+    if (folder) {
+      s.picked.folders[app] = folder;
+      const choice = s.choices.sources[source];
+      if (app === LOCAL_PDFS && choice && more.length) choice.folders = [...new Set([...(choice.folders || []), ...more])].slice(0, 12);
+      logAction(s, job, `Found your ${folderName(app)} at ${[folder, ...more].slice(0, 3).map((one) => readers.shownPath(homeDir, one)).join(', ')}`);
+      put({ reach }); // no survey: the scan's at-a-glance takes its place
+      try { await rescan(s, [source]); } catch { missing(); }
+    } else missing();
+    s.dirs = dirsOf(s);
+    s.surveyNews.push(app);
+    save(s);
+    if (s.waitingForSurvey && !s.thinking) wake(s);
+  }
+
+  /**
+   * An app on this Mac whose folder the scan did not find, looked for by an agent before the person is asked to choose it
+   * (MATH-117): only when they let the agents read the files on this Mac, once a session for each app.
+   */
+  function lookForFolders(s) {
+    if (!s.choices.computer || s.stopped || s.suspended || s.finished) return;
+    for (const [source, apps] of Object.entries(s.found || {})) {
+      const choice = s.choices.sources[source];
+      if (!choice || !choice.on || !apps || typeof apps !== 'object') continue;
+      for (const [app, value] of Object.entries(apps)) {
+        if (!value || value.needs !== 'folder' || !FIND_APPS.has(app) || !choice.apps.includes(app) || s.skipped.has(app) || s.picked.folders[app]) continue;
+        if (s.jobs.some((job) => job.find && job.apps.includes(app))) continue; // looked for once already
+        const entry = { reach: value.reach || 'local', survey: 'running', looking: 'for its folder' };
+        s.found[source] = { ...s.found[source], [app]: entry };
+        const job = dispatch(s, { kind: 'survey', find: true, source, apps: [app], label: `Looking for your ${folderName(app)}` });
+        if (!job) { s.found[source] = { ...s.found[source], [app]: value }; continue; }
+        s.newFound = { ...(s.newFound || {}), [source]: { ...((s.newFound || {})[source] || {}), [app]: entry } };
+      }
+    }
   }
 
   /**
@@ -969,11 +1057,16 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     for (const [source, apps] of Object.entries(fresh)) {
       // What a survey found is kept: the scan does not know it.
       const merged = { ...(s.found[source] || {}) };
-      for (const [app, value] of Object.entries(apps)) merged[app] = merged[app] && merged[app].survey && value && value.reach ? merged[app] : value;
+      for (const [app, value] of Object.entries(apps)) {
+        const before = merged[app];
+        // Where the search for its folder looked is kept while the folder is still missing (MATH-117).
+        merged[app] = before && before.survey && value && value.reach ? before : before && before.searched && value && value.needs === 'folder' ? { ...value, searched: before.searched } : value;
+      }
       s.found[source] = merged;
       s.newFound = { ...(s.newFound || {}), [source]: merged };
     }
     s.dirs = dirsOf(s);
+    lookForFolders(s);
   }
 
   /** The choose screen sent: the session, the scan, the first surveys, and the librarian's first turn. → snapshot */
@@ -1029,6 +1122,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const checked = await signInsFirst(s);
     if (s.stopped || s.suspended) return;
     startWork(s, new Set([...checked.signedOut, ...checked.refused.keys()]));
+    lookForFolders(s);
     for (const app of checked.signedOut) if (s.held.has(app)) upfrontNeed(s, app);
     // An app whose browser macOS refused gets no card that can't succeed (2026-10-10): it is skipped for this run.
     for (const [app, name] of checked.refused) {
@@ -1176,7 +1270,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         if (reach === 'web') return s.choices.permissions.browser;
         if (reach === 'connector') return !!(connectors && connectors.status(app).connected);
         if (reach === 'automation') return s.choices.permissions.notes;
-        return !(found && found.needs);
+        return !(found && (found.needs || found.looking));
       };
       const apps = choice.apps.filter((app) => !covered.has(app) && !s.skipped.has(app) && reachable(app));
       if (sent.length && !apps.length) continue;
@@ -1485,8 +1579,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const again = !ENDED.has(job.status);
       const apps = (Array.isArray(job.apps) ? job.apps : []).filter((app) => typeof app === 'string' && (APPS[app] || app === 'GitHub'));
       s.seq += 1;
+      const find = job.kind === 'survey' && (job.find === true || (typeof job.key === 'string' && job.key.startsWith('find:')));
       s.jobs.push({
-        id: typeof job.id === 'string' && ID_RE.test(job.id) ? job.id : randomUUID(), key: typeof job.key === 'string' ? job.key : `${job.kind}:${job.source}:${[...apps].sort().join(',')}`,
+        ...(find ? { find: true } : {}),
+        id: typeof job.id === 'string' && ID_RE.test(job.id) ? job.id : randomUUID(), key: typeof job.key === 'string' ? job.key : `${find ? 'find' : job.kind}:${job.source}:${[...apps].sort().join(',')}`,
         kind: job.kind, priority: PRIORITY[job.kind], seq: s.seq, source: String(job.source || ''), apps, label: line(job.label, 120), plan: typeof job.plan === 'string' ? clip(job.plan, 8000) : '', extra: null,
         status: again ? 'queued' : job.status, skipped: !!job.skipped, notes: Number(job.notes) || 0, items: Number(job.items) || 0, titles: (Array.isArray(job.titles) ? job.titles : []).slice(0, 80).map((title) => line(title, 120)),
         activity: '', summary: again ? '' : line(job.summary, 500), error: again ? '' : line(job.error, 300), started: again ? null : job.started || null, ended: again ? null : job.ended || null,
