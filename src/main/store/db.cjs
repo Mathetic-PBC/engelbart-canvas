@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { PGlite } = require('@electric-sql/pglite');
 const { collectBuildMilestones } = require('../../shared/build-history.cjs');
+const { ITEM_SOURCES, ITEM_CATEGORIES } = require('../../shared/connect-sources.cjs');
 
 // `type` is what a row is, read off the thing itself and never guessed: a file's format, or
 // `folder`, `website`, `image` for the three that are not a file with an extension. What a row is
@@ -57,6 +58,22 @@ create unique index if not exists library_github_id on library (github_id) where
 -- change of rules without anyone adding its items again.
 alter table library add column if not exists tags text[] not null default '{}';
 alter table library add column if not exists categorized integer;
+-- What a row knows about itself (Library Phase B, 2026-10-11), each null when unknown. source: where it came from
+-- (shared/connect-sources.cjs ITEM_SOURCES: an app, or engelbart, mac, web, github). category: what it is to the person
+-- (ITEM_CATEGORIES), beside its type. item_date: 'YYYY' or 'YYYY-MM-DD', when the thing itself is from (a chat's day, a
+-- thread's last message, a paper's year), not when it was added. origin_url: where an imported copy lives in its app (a
+-- Drive document, an Overleaf project); never in url, which sameAs matches on. place: where it sat in its app (a Zotero
+-- collection, an Obsidian folder, a chat's project). messages: a chat's turns, a thread's messages. minutes: a meeting's
+-- length. titled: the version of the title rules applied (library.cjs TITLE_RULES), which is also when the fields above
+-- were filled in from an older row's file (library.cjs describeRows).
+alter table library add column if not exists source text;
+alter table library add column if not exists category text;
+alter table library add column if not exists item_date text;
+alter table library add column if not exists origin_url text;
+alter table library add column if not exists place text;
+alter table library add column if not exists messages integer;
+alter table library add column if not exists minutes integer;
+alter table library add column if not exists titled integer;
 -- Databases from before 2026-09-21 typed a row by what it was for (note, paper, git_repo, dataset;
 -- website also meant an html file). Each becomes its format plus the tag that says the rest. This
 -- is only what SQL can tell from the old type: categorized stays null, so library.recategorize
@@ -196,6 +213,51 @@ function requireTags(value, type) {
   return tags;
 }
 
+/** A row's source: one of ITEM_SOURCES, or null. Anything else is refused, naming what is allowed. */
+function optionalSource(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string' || !ITEM_SOURCES.includes(value)) throw new TypeError(`Unknown library source: ${String(value).slice(0, 60)} (one of ${ITEM_SOURCES.join(', ')})`);
+  return value;
+}
+
+function optionalCategory(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string' || !ITEM_CATEGORIES.includes(value)) throw new TypeError(`Unknown library category: ${String(value).slice(0, 60)} (one of ${ITEM_CATEGORIES.join(', ')})`);
+  return value;
+}
+
+function optionalItemDate(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || !/^\d{4}(?:-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\d|3[01]))?$/.test(value)) throw new TypeError('item date must be YYYY or YYYY-MM-DD');
+  return value;
+}
+
+function optionalOriginUrl(value) {
+  if (value == null || value === '') return null;
+  if (typeof value !== 'string' || value.length > 8192 || !/^https?:\/\//i.test(value)) throw new TypeError('origin url must be an http(s) address');
+  return value;
+}
+
+function optionalPlace(value) {
+  if (value == null) return null;
+  if (typeof value !== 'string') throw new TypeError('place must be text');
+  return value.replace(/\s+/g, ' ').trim().slice(0, 512) || null;
+}
+
+/** The about fields of a row (source … minutes), checked; a field left out is null. */
+function aboutFields(row) {
+  return {
+    source: optionalSource(row.source),
+    category: optionalCategory(row.category),
+    item_date: optionalItemDate(row.item_date),
+    origin_url: optionalOriginUrl(row.origin_url),
+    place: optionalPlace(row.place),
+    messages: row.messages == null ? null : requireCount(row.messages),
+    minutes: row.minutes == null ? null : requireCount(row.minutes),
+  };
+}
+const ABOUT_COLUMNS = Object.freeze(['source', 'category', 'item_date', 'origin_url', 'place', 'messages', 'minutes']);
+
 function requireCount(value) {
   if (!Number.isInteger(value) || value < 0 || value > 2_000_000_000) throw new TypeError('count must be a non-negative integer');
   return value;
@@ -270,9 +332,10 @@ async function openLibraryDb(testRoot) {
     async insert(row) {
       const type = requireText(row.type, 'type');
       if (!LIBRARY_TYPES.includes(type)) throw new TypeError(`Unknown library type: ${type}`);
+      const about = aboutFields(row);
       const result = await db.query(
-        `insert into library (id, name, type, path, url, folder_path, project_id, github_id, tags, categorized)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) returning *`,
+        `insert into library (id, name, type, path, url, folder_path, project_id, github_id, tags, categorized, ${ABOUT_COLUMNS.join(', ')}, titled)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) returning *`,
         [
           requireText(row.id, 'id', { max: 64 }),
           requireText(row.name, 'name', { max: 512 }),
@@ -284,6 +347,8 @@ async function openLibraryDb(testRoot) {
           optionalGithubId(row.github_id),
           requireTags(row.tags, type),
           row.categorized == null ? null : requireCount(row.categorized),
+          ...ABOUT_COLUMNS.map((column) => about[column]),
+          row.titled == null ? null : requireCount(row.titled),
         ],
       );
       return plain(result.rows[0]);
@@ -356,6 +421,32 @@ async function openLibraryDb(testRoot) {
     async settleUninferable(rules) {
       const result = await db.query("update library set categorized = $1 where (categorized is null or categorized < $1) and (type = 'image' or 'note' = any(tags))", [requireCount(rules)]);
       return result.affectedRows || 0;
+    },
+    // Rows behind the title rules (library.cjs TITLE_RULES): made before them, or a pdf that was not there to read.
+    async untitled(rules) {
+      const result = await db.query('select * from library where titled is null or titled < $1 order by created, name', [requireCount(rules)]);
+      return result.rows.map(plain);
+    },
+    // What the title rules make of a row: its `name` (null: kept as it is) and `rules`, the version applied (null: the
+    // row stays due). Not an edit: it writes these two columns only, never last_edited or the summary.
+    async setTitle(id, name, rules) {
+      const result = await db.query(
+        'update library set name = coalesce($2, name), titled = coalesce($3, titled) where id = $1 returning *',
+        [requireText(id, 'id', { max: 64 }), name == null ? null : requireText(name, 'name', { max: 512 }), rules == null ? null : requireCount(rules)],
+      );
+      if (!result.rows.length) throw new Error('Unknown library item');
+      return plain(result.rows[0]);
+    },
+    // What an older row's file says about it (library.cjs describeRows): each field is written only where the row has
+    // none, so nothing recorded at import is overwritten. Not an edit: last_edited stays.
+    async fillAbout(id, fields) {
+      const about = aboutFields(fields);
+      const result = await db.query(
+        `update library set ${ABOUT_COLUMNS.map((column, at) => `${column} = coalesce(${column}, $${at + 2})`).join(', ')} where id = $1 returning *`,
+        [requireText(id, 'id', { max: 64 }), ...ABOUT_COLUMNS.map((column) => about[column])],
+      );
+      if (!result.rows.length) throw new Error('Unknown library item');
+      return plain(result.rows[0]);
     },
     // What is known about a repository, all on its one row: its GitHub id, its address, its clone on
     // disk, the name GitHub gives it. Every value is the one to store. Learning one is not an edit:
@@ -539,4 +630,4 @@ function postItValues(row) {
   return values;
 }
 
-module.exports = { LIBRARY_TYPES, LIBRARY_TAGS, openLibraryDb, openNotesDb, closeDb, closeAll };
+module.exports = { LIBRARY_TYPES, LIBRARY_TAGS, ITEM_SOURCES, ITEM_CATEGORIES, openLibraryDb, openNotesDb, closeDb, closeAll };

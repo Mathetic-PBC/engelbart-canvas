@@ -15,6 +15,7 @@ const { fileURLToPath, pathToFileURL } = require('node:url');
 const { DIR_MODE } = require('./home.cjs');
 const projects = require('./projects.cjs');
 const { LIBRARY_TAGS } = require('./db.cjs');
+const { CHAT_APPS, categoryOfApp } = require('../../shared/connect-sources.cjs');
 const { reading } = require('../stage/files.cjs');
 const { readHtmlMeta } = require('./page-meta.cjs');
 const { WEB, withAsk } = require('../../shared/mark-answers.cjs');
@@ -575,6 +576,37 @@ const plainPage = (found) => found.type === 'website' && !found.tags.length;
 // the rules once more on its next open, and nothing else about its rows is touched.
 const CATEGORY_RULES = 1;
 
+// The title rules (Library Phase B, 2026-10-11): a row still called by its file's stem is named by what the file says —
+// a pdf by its metadata Title, else its first line; an md by its first `# ` heading. Bump the number when a rule changes:
+// describeRows applies them once per row per version. A name anyone gave is never replaced.
+const TITLE_RULES = 1;
+
+/**
+ * What a caller knows about a thing it adds, in the row's columns: { source, category, itemDate, originUrl, place,
+ * messages, minutes } → { source, category, item_date, origin_url, place, messages, minutes }. `source` left out (not
+ * null) is `fallback`'s, what the add itself tells (a path is mac, an address web). db.cjs checks every value.
+ */
+function aboutRow(about, fallback = {}) {
+  const given = about && typeof about === 'object' ? about : {};
+  const has = (key) => Object.hasOwn(given, key) && given[key] !== undefined;
+  return {
+    source: has('source') ? given.source : (fallback.source ?? null),
+    category: has('category') ? given.category : (fallback.category ?? null),
+    item_date: given.itemDate ?? null,
+    origin_url: given.originUrl ?? null,
+    place: given.place ?? null,
+    messages: given.messages ?? null,
+    minutes: given.minutes ?? null,
+  };
+}
+
+/** Where a thing the app was handed came from, by what it is: a repository is github, a file or folder mac, an address web. */
+function sourceOfFound(found) {
+  if (tagged(found, 'git')) return 'github';
+  if (found.path || found.folder_path) return 'mac';
+  return found.url ? 'web' : null;
+}
+
 /** What an address says by itself: arXiv and DOI are papers, a GitHub repository is a repository. */
 function addressTags(url) {
   const value = String(url || '');
@@ -706,9 +738,10 @@ async function lookupItem(ctx, input) {
  * is (`identifyRepo`), both best effort; the description becomes the row's summary. A pdf is read
  * for whether it is a paper (`inspectPdf`, which answers with its tags); one that cannot be read is
  * added all the same and left due for recategorize. `name`, when given, is what the row is called
- * (the Browser's Save card lets the person name the page).
+ * (the Browser's Save card lets the person name the page). `about`: what an import knows of it (aboutRow); without
+ * one, its source is what it is (a repository github, a path mac, an address web).
  */
-async function addItem(ctx, input, { describe, identifyRepo, inspectPdf, name: given = null } = {}) {
+async function addItem(ctx, input, { describe, identifyRepo, inspectPdf, name: given = null, about: knows = null } = {}) {
   const found = resolveAddition(input, { homeDir: ctx.homeDir });
   const rows = await ctx.libraryDb.list();
   let about = null, who = null;
@@ -733,7 +766,7 @@ async function addItem(ctx, input, { describe, identifyRepo, inspectPdf, name: g
   const title = about && typeof about.title === 'string' ? about.title.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
   const named = typeof given === 'string' ? given.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
   // Everything but a pdf is fully categorized by the resolver; a pdf is once it has been read.
-  let row = await ctx.libraryDb.insert({ id: randomUUID(), name: named || (page && title ? title : found.name), type: found.type, tags: found.tags, path: found.path || null, url: found.url || null, folder_path: found.folder_path || null, project_id: null, github_id: found.github_id || null, categorized: found.type === 'pdf' ? null : CATEGORY_RULES });
+  let row = await ctx.libraryDb.insert({ id: randomUUID(), name: named || (page && title ? title : found.name), type: found.type, tags: found.tags, path: found.path || null, url: found.url || null, folder_path: found.folder_path || null, project_id: null, github_id: found.github_id || null, categorized: found.type === 'pdf' ? null : CATEGORY_RULES, ...aboutRow(knows, { source: sourceOfFound(found), category: tagged(found, 'git') ? 'repo' : null }) });
   if (inspectPdf && row.type === 'pdf') {
     try { row = await ctx.libraryDb.setCategory(row.id, { type: row.type, tags: await inspectPdf(row.path) }, CATEGORY_RULES); } catch { /* not readable now: recategorize tries again */ }
   }
@@ -766,7 +799,7 @@ function writePdfCopy(ctx, id, bytes) {
  * whose `url` is where it came from (an arXiv or DOI address as the library spells it, `paper` kept). Something the
  * library already holds by that address throws EXISTS, as addItem does. Ink drawn before saving comes along.
  */
-async function addPdfCopy(ctx, input, bytes, { inspectPdf, name: given = null } = {}) {
+async function addPdfCopy(ctx, input, bytes, { inspectPdf, name: given = null, about = null } = {}) {
   if (typeof input !== 'string' || !/^https?:\/\//i.test(input.trim())) throw new TypeError('Only a pdf from the web is saved as a copy');
   if (!isPdfBytes(bytes)) throw new TypeError('That is not a pdf');
   if (bytes.byteLength > MAX_PDF_BYTES) throw new Error('The pdf is larger than 200 MB');
@@ -780,7 +813,7 @@ async function addPdfCopy(ctx, input, bytes, { inspectPdf, name: given = null } 
   const named = typeof given === 'string' ? given.replace(/\s+/g, ' ').trim().slice(0, 200) : '';
   let row;
   try {
-    row = await ctx.libraryDb.insert({ id, name: named || fromAddress.slice(0, 200) || found.name, type: 'pdf', tags: found.tags, path: file, url: found.url, folder_path: null, project_id: null, github_id: null, categorized: null });
+    row = await ctx.libraryDb.insert({ id, name: named || fromAddress.slice(0, 200) || found.name, type: 'pdf', tags: found.tags, path: file, url: found.url, folder_path: null, project_id: null, github_id: null, categorized: null, ...aboutRow(about, { source: 'web' }) });
   } catch (error) {
     fs.rmSync(file, { force: true });
     throw error;
@@ -802,7 +835,7 @@ async function addPdfCopy(ctx, input, bytes, { inspectPdf, name: given = null } 
  * EXISTS before anything is written; a save that fails, a tab that has moved to another page, or a row that cannot be
  * written leaves no folder. Named `name`, else the page's title, else its address. Ink drawn before saving comes along.
  */
-async function addPageCopy(ctx, input, save, { name: given = null } = {}) {
+async function addPageCopy(ctx, input, save, { name: given = null, about = null } = {}) {
   if (typeof input !== 'string' || !/^https?:\/\//i.test(input.trim())) throw new TypeError('Only a page from the web is saved as a copy');
   const found = resolveAddition(input, { homeDir: ctx.homeDir });
   if (!plainPage(found)) throw new TypeError('Only a plain web page is saved as a copy');
@@ -821,7 +854,7 @@ async function addPageCopy(ctx, input, save, { name: given = null } = {}) {
     if (!saved || addressKey(saved.url) !== addressKey(found.url)) throw new Error('The page changed before it was saved. Save it again.');
     if (!fileThere(file)) throw new Error('The page was not saved');
     const clean = (value) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, 200) : '');
-    row = await ctx.libraryDb.insert({ id, name: clean(given) || clean(saved.title) || found.name, type: 'html', tags: [], path: file, url: found.url, folder_path: null, project_id: null, github_id: null, categorized: CATEGORY_RULES });
+    row = await ctx.libraryDb.insert({ id, name: clean(given) || clean(saved.title) || found.name, type: 'html', tags: [], path: file, url: found.url, folder_path: null, project_id: null, github_id: null, categorized: CATEGORY_RULES, ...aboutRow(about, { source: 'web' }) });
   } catch (error) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw error;
@@ -838,9 +871,10 @@ async function addPageCopy(ctx, input, save, { name: given = null } = {}) {
  * A Markdown text kept as a file of the library's own (2026-10-08, Connect your library: "save the imported content not as
  * notes but as md files ... saved as files in the engelbart assets folder"): <data root>/assets/md/<id>/<name>.md, its
  * pictures beside it, and a row of type `md` with no `note` tag and no project. `pictures` [{ file, name }] are copied in
- * as `name` (the text links them by that name). A row that cannot be written leaves no folder. → the row
+ * as `name` (the text links them by that name). `about`: what the import knows of it (aboutRow); its name was given, so
+ * the title rules leave it as it is. A row that cannot be written leaves no folder. → the row
  */
-async function addMarkdownCopy(ctx, { name, text, pictures = [] } = {}) {
+async function addMarkdownCopy(ctx, { name, text, pictures = [], about = null } = {}) {
   const title = String(name == null ? '' : name).replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled';
   const stem = title.replace(/[/\\:]/g, '-').replace(/^\.+/, '').trim() || 'Untitled';
   const id = randomUUID();
@@ -853,7 +887,7 @@ async function addMarkdownCopy(ctx, { name, text, pictures = [] } = {}) {
   try {
     for (const picture of pictures) fs.copyFileSync(picture.file, path.join(dir, path.basename(picture.name)));
     fs.writeFileSync(file, String(text == null ? '' : text), { mode: 0o600 });
-    return await ctx.libraryDb.insert({ id, name: title, type: 'md', tags: [], path: file, url: null, folder_path: null, project_id: null, github_id: null, categorized: CATEGORY_RULES });
+    return await ctx.libraryDb.insert({ id, name: title, type: 'md', tags: [], path: file, url: null, folder_path: null, project_id: null, github_id: null, categorized: CATEGORY_RULES, ...aboutRow(about), titled: TITLE_RULES });
   } catch (error) {
     fs.rmSync(dir, { recursive: true, force: true });
     throw error;
@@ -920,7 +954,7 @@ function lastSegment(url) {
  * library already holds by that address throws EXISTS, as addItem does. Named `name`, else after the address's last
  * part, else "Image" (a pdf with neither: the name its address would get). A row that cannot be written leaves no file.
  */
-async function addFileCopy(ctx, { bytes, mime, name: given = null, url = null } = {}, { inspectPdf } = {}) {
+async function addFileCopy(ctx, { bytes, mime, name: given = null, url = null, about = null } = {}, { inspectPdf } = {}) {
   if (!(bytes instanceof Uint8Array) || !bytes.byteLength) throw new TypeError('The file is empty');
   const said = mimeOf(mime);
   const pdf = PDF_MIMES.has(said);
@@ -949,7 +983,7 @@ async function addFileCopy(ctx, { bytes, mime, name: given = null, url = null } 
   const tags = found ? found.tags : [];
   let row;
   try {
-    row = await ctx.libraryDb.insert({ id, name: named, type: pdf ? 'pdf' : 'image', tags, path: file, url: found ? found.url : null, folder_path: null, project_id: null, github_id: null, categorized: pdf ? null : CATEGORY_RULES });
+    row = await ctx.libraryDb.insert({ id, name: named, type: pdf ? 'pdf' : 'image', tags, path: file, url: found ? found.url : null, folder_path: null, project_id: null, github_id: null, categorized: pdf ? null : CATEGORY_RULES, ...aboutRow(about, { source: found ? 'web' : 'mac', category: pdf ? null : 'image' }) });
   } catch (error) {
     fs.rmSync(file, { force: true });
     throw error;
@@ -1068,6 +1102,160 @@ async function recategorize(ctx, { inspectPdf = null, inspectTimeoutMs = 15_000 
   return report;
 }
 
+/* ------------------------------------------------- what a row says about itself */
+
+// Before 2026-10-08 onboarding kept what it imported as notes written into the project (projects.createNote, tagged
+// note); from then on as files of the library's own (addMarkdownCopy). A note from before that begins with an import's
+// head line is that import; one from after is the person's own, whatever it begins with.
+const NOTES_WERE_IMPORTS_UNTIL = Date.parse('2026-10-08T00:00:00Z');
+const MAX_HEAD_BYTES = 8 * 1024;
+const MAX_COUNTED_BYTES = 4 * 1024 * 1024;
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+// a kept chat's turns: a paragraph that opens with **You:** or the assistant's name (connect/tools.cjs chatNote)
+const TURN_RE = /(?:^|\n\n)\*\*(?:You|ChatGPT|Codex|Cursor|Claude):\*\* /g;
+
+/** The first `bytes` of a file as text, or null when it cannot be read. */
+function readHead(file, bytes) {
+  let fd = null;
+  try {
+    fd = fs.openSync(file, 'r');
+    const buffer = Buffer.alloc(bytes);
+    const read = fs.readSync(fd, buffer, 0, bytes, 0);
+    return buffer.subarray(0, read).toString('utf8');
+  } catch { return null; } finally { if (fd != null) try { fs.closeSync(fd); } catch { /* closed */ } }
+}
+
+/** A date as a day, YYYY-MM-DD, from anything Date.parse reads ("Mon, Oct 6, 2025 at 3:14 PM"); null otherwise. */
+function dayOf(text) {
+  const value = String(text || '').replace(/\s+at\s+/i, ' ').replace(/\s+/g, ' ').trim();
+  if (!value) return null;
+  if (DAY_RE.test(value.slice(0, 10)) && Number.isFinite(Date.parse(value.slice(0, 10)))) return value.slice(0, 10);
+  const time = Date.parse(value);
+  if (!Number.isFinite(time)) return null;
+  const at = new Date(time);
+  const two = (n) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}`;
+}
+
+/**
+ * What an import's head line says, the first line of an md it kept: `*<App> · <YYYY-MM-DD> · <project>*` (a chat, App
+ * one of the chat apps), `*Gmail · <dates> · <people>*`, `*Google Drive · <link>*`, `*Overleaf · <link>*`. → the about
+ * fields (db.cjs columns) it gives, or null when the line is none of them. `text` is the whole file, for a chat's turns.
+ */
+function headAbout(text) {
+  const first = String(text || '').replace(/^﻿/, '').split('\n', 1)[0].trim();
+  const head = first.match(/^\*([^*\n]+)\*$/);
+  if (!head) return null;
+  const parts = head[1].split(' · ').map((part) => part.trim());
+  const app = parts[0];
+  if (CHAT_APPS.includes(app)) {
+    const day = parts[1] && DAY_RE.test(parts[1]) ? parts[1] : null;
+    const project = parts.slice(day ? 2 : 1).join(' · ') || null;
+    const turns = String(text).slice(0, MAX_COUNTED_BYTES).match(TURN_RE);
+    return { source: app, category: 'chat', item_date: day, place: project, messages: turns ? turns.length : null };
+  }
+  if (app === 'Gmail') {
+    // the dates are one ("Oct 6, 2025, 3:14 PM") or a span joined by an en dash; the people never parse as a date
+    const day = parts.length > 1 ? dayOf(parts[1].split('–').pop()) : null;
+    return { source: 'Gmail', category: categoryOfApp('Gmail'), item_date: day };
+  }
+  const link = parts[1] && /^https?:\/\/\S+$/.test(parts[1]) ? parts[1] : null;
+  if (app === 'Google Drive' && link) return { source: 'Google Docs', category: categoryOfApp('Google Docs'), origin_url: link };
+  if (app === 'Overleaf' && link) return { source: 'Overleaf', category: categoryOfApp('Overleaf'), origin_url: link };
+  return null;
+}
+
+/**
+ * Where a row from before Library Phase B came from, as far as it can be told: an import's head line (headAbout), else
+ * what the row is — a note written here is engelbart; a repository github; a pdf or page saved from the web (a copy in
+ * <data root>/assets with an address) or an address alone web; a file or folder outside <data root>/assets mac.
+ * → { about, marked } (about null: unknown; marked: it came from a head line).
+ */
+function rowAbout(ctx, row) {
+  const assets = path.join(ctx.dataRoot, 'assets');
+  let real = assets;
+  try { real = fs.realpathSync(assets); } catch { /* no assets folder yet */ }
+  const where = row.path || row.folder_path || null;
+  const inAssets = !!where && (inside(where, assets) || inside(where, real));
+  if (row.type === 'md' && row.path) {
+    const note = tagged(row, 'note');
+    if (!note || Date.parse(row.created) < NOTES_WERE_IMPORTS_UNTIL) {
+      const head = readHead(row.path, MAX_HEAD_BYTES);
+      let about = head == null ? null : headAbout(head);
+      // a chat's turns are counted over the whole file, not its first 8 KB
+      if (about && about.category === 'chat') { const whole = readHead(row.path, MAX_COUNTED_BYTES); if (whole) about = headAbout(whole); }
+      if (about) return { about, marked: true };
+    }
+    if (note) return { about: { source: 'engelbart', category: 'note' }, marked: false };
+  }
+  if (tagged(row, 'note')) return { about: { source: 'engelbart', category: 'note' }, marked: false };
+  if (tagged(row, 'git')) return { about: { source: 'github', category: 'repo' }, marked: false };
+  if (row.url && (!where || inAssets)) return { about: { source: 'web' }, marked: false };
+  if (where && !inAssets) return { about: { source: 'mac' }, marked: false };
+  return { about: null, marked: false };
+}
+
+/** A stem's name test: a row whose name is its file's name, with or without the extension, was never named by anyone. */
+function namedByFile(row) {
+  if (!row.path) return false;
+  const base = path.basename(row.path);
+  return row.name === base || row.name === path.basename(base, path.extname(base));
+}
+
+/** An md's first `# ` heading outside a code block, among its first 8 KB; '' when it has none. */
+function mdHeading(file) {
+  const head = readHead(file, MAX_HEAD_BYTES);
+  if (head == null) return null;
+  let fenced = false;
+  for (const line of head.split('\n')) {
+    if (/^\s*(?:```|~~~)/.test(line)) { fenced = !fenced; continue; }
+    const match = !fenced && line.match(/^#\s+(.+?)\s*#*\s*$/);
+    if (match) return match[1];
+  }
+  return '';
+}
+
+const cleanTitle = (value) => String(value || '').replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 200);
+
+/**
+ * Brings every row behind TITLE_RULES up to them, once per row per version, as recategorize does for the category rules.
+ *
+ * First, a row with no source (made before Library Phase B) is told what its file and its kind say (rowAbout): an import's
+ * head line gives its app, category, date, project, turns or link; otherwise a note is engelbart, a repository github, an
+ * address web, a file on this Mac mac. Only empty columns are filled (db fillAbout).
+ *
+ * Then its name: only a row still called by its file (namedByFile), and never a note written here (its name is its file's,
+ * renamed together) or an import with a head line (its app named it). A pdf takes its metadata Title, else its first line
+ * (`pdfTitle`, context/pdf-kind.cjs, within `timeoutMs` as recategorize waits for inspectPdf); an md its first `# `
+ * heading. A pdf or md that is not there now, or a pdf with nobody here to read it, stays due; one that cannot be read or
+ * does not answer in time is settled with its name as it was. Writes `name` and `titled` only (db setTitle): no summary,
+ * no last_edited. → { renamed: [{ id, from, to }], described, due }
+ */
+async function describeRows(ctx, { pdfTitle = null, timeoutMs = 15_000 } = {}) {
+  const report = { renamed: [], described: 0, due: 0 };
+  for (let row of await ctx.libraryDb.untitled(TITLE_RULES)) {
+    let marked = false;
+    if (row.source == null) {
+      const told = rowAbout(ctx, row);
+      marked = told.marked;
+      if (told.about) { row = await ctx.libraryDb.fillAbout(row.id, told.about); report.described += 1; }
+    } else if (row.type === 'md' && row.path && !tagged(row, 'note')) {
+      marked = !!headAbout(readHead(row.path, MAX_HEAD_BYTES) || '');
+    }
+    let name = null, settled = true;
+    if (!marked && !tagged(row, 'note') && namedByFile(row) && (row.type === 'pdf' || row.type === 'md')) {
+      if (!fs.existsSync(row.path) || (row.type === 'pdf' && !pdfTitle)) settled = false;
+      else if (row.type === 'md') name = cleanTitle(mdHeading(row.path));
+      else { try { name = cleanTitle(await within(pdfTitle(row.path), timeoutMs)); } catch { /* not readable as a pdf */ } }
+    }
+    const renaming = name && name !== row.name ? name : null;
+    await ctx.libraryDb.setTitle(row.id, renaming, settled ? TITLE_RULES : null);
+    if (renaming) report.renamed.push({ id: row.id, from: row.name, to: renaming });
+    if (!settled) report.due += 1;
+  }
+  return report;
+}
+
 /* ------------------------------------------------------------------ the peek */
 
 const PEEK_CHARS = 6000;
@@ -1124,4 +1312,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, addMarkdownCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, previewItem, FILE_TYPES, PEEK_SKIP };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, addMarkdownCopy, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, describeRows, headAbout, dayOf, TITLE_RULES, aboutRow, previewItem, FILE_TYPES, PEEK_SKIP };

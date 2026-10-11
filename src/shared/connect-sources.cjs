@@ -78,6 +78,18 @@ const sourceOf = (id) => SOURCES.find((source) => source.id === id) || null;
 const appOf = (name) => (Object.hasOwn(APPS, name) ? APPS[name] : null);
 /** The source an app is listed under ('notes' for Obsidian), or null. GitHub is Code's. */
 const sourceOfApp = (name) => (name === 'GitHub' ? 'code' : (SOURCES.find((source) => source.apps.includes(name)) || {}).id || null);
+// What a library row knows about where it came from (Library Phase B, 2026-10-11). `source`: an app above (GitHub excepted:
+// a repository's source is `github`), or one of the four ways something reaches the library without an import:
+// `engelbart` (written here), `mac` (a file or folder on this Mac), `web` (an address, or a copy of one), `github` (a
+// repository). Null is unknown. `category`: what the row is to the person, whatever its file type; an import's default is
+// its group's (GROUP_CATEGORIES), other groups (sites, code) have none.
+const ITEM_SOURCES = Object.freeze([...new Set([...SOURCES.flatMap((source) => source.apps), ...Object.keys(APPS).filter((app) => app !== 'GitHub')]), 'engelbart', 'mac', 'web', 'github']);
+const ITEM_CATEGORIES = Object.freeze(['chat', 'meeting', 'email', 'note', 'paper', 'repo', 'web', 'data', 'document', 'image', 'file']);
+const GROUP_CATEGORIES = Object.freeze({ transcripts: 'meeting', chats: 'chat', email: 'email', notes: 'note', papers: 'paper' });
+/** The category an import from `app` gets unless it knows better: its group's ('chat' for Claude), else null. */
+const categoryOfApp = (app) => GROUP_CATEGORIES[sourceOfApp(app)] || null;
+/** The chat apps (the `chats` group), whose kept chats begin with a `*<App> · <date> · <project>*` line. */
+const CHAT_APPS = Object.freeze(sourceOf('chats').apps.slice());
 /** The AI assistants an agent can ask for what they remember, of `apps`. */
 const recallApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => appOf(app) && appOf(app).memory);
 /** The apps reached on the web, of `apps`. */
@@ -94,4 +106,4 @@ const cleanDays = (value) => (value === 182 || value === 365 ? value : null);
 /** "the past year" for 365, "the past 6 months" for 182, "all time" otherwise. */
 const periodName = (days) => (PERIODS.find((period) => period.days === cleanDays(days)) || PERIODS[2]).label;
 
-module.exports = { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, SIGN_IN_SITES, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };
+module.exports = { SOURCES, APPS, LOCAL_PDFS, ITEM_SOURCES, ITEM_CATEGORIES, GROUP_CATEGORIES, CHAT_APPS, categoryOfApp, READABLE_NAMES, SIGN_IN_SITES, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };

@@ -20,7 +20,7 @@ const {
 const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
 const { createSweeper } = require('./context/sweeper.cjs');
-const { inspectPdf } = require('./context/pdf-kind.cjs');
+const { inspectPdf, pdfTitle } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
 const { rememberChoice } = require('./bart/choices.cjs');
@@ -583,7 +583,7 @@ if (!hasSingleInstanceLock) {
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
       : (ctx, { again = false } = {}) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: () => { libraryChanged(); pdfAdded(); }, log: (line) => console.warn(`[engelbart] ${line}`), again });
     // Test mode only in a developer's copy: run from a checkout, or packaged by `npm run relaunch` (./developer.cjs).
-    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }), zotero: () => zoteroLibrary });
+    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, pdfTitle, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }), zotero: () => zoteroLibrary });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
     // config.json → tools; installed, updated and signed in to from the setup dialog. The Git that comes with
     // Engelbart stands in when the Mac has none of its own (tools/bundled-git.cjs), and on a Mac with neither agent

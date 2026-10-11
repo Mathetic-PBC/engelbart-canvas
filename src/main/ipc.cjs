@@ -134,7 +134,7 @@ function projectInput(value) {
 // that is open, as `afterOpen(ctx, { again: true })`, when a row it would act on has just been added (2026-10-02).
 // `testMode`: whether this copy has test mode at all (./developer.cjs). Without it config.json's `testMode` is read as
 // off but never rewritten, so a developer's copy sharing the file keeps its setting.
-function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, afterOpen = null, testMode: available = false, zotero = null }) {
+function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, pdfTitle: readTitle = null, afterOpen = null, testMode: available = false, zotero = null }) {
   const layout = home.ensureHome(homeDir, rootDir, { test: available });
   const contexts = new Map();
 
@@ -166,6 +166,9 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
       // rules) is brought up to them before anyone reads it: about 30 ms a pdf, once. Summaries are
       // not touched. A failure leaves the rows due for the next launch; the library still opens.
       try { await library.recategorize(next, { inspectPdf: readPdf }); } catch { /* still due */ }
+      // The same, once per row per version of the title rules: a row from before Library Phase B is told where it came
+      // from (an import's head line, or what it is), and a row still named by its file takes the name the file gives.
+      try { await library.describeRows(next, { pdfTitle: readTitle }); } catch { /* still due */ }
       if (afterOpen) setTimeout(() => { Promise.resolve().then(() => afterOpen(next)).catch(() => {}); }, 0);
       return next;
     })();

@@ -402,4 +402,4 @@ function pointerLine(root) {
   return lines.join('\n');
 }
 
-module.exports = { KEPT, mirrorDir, defaultStorage, hasMirror, readItems, itemOf, authorsOf, listLevel, listLibraries, librariesOf, libraryName, libraryRoot, groupDir, groupIds, parseRef, refOf, openableOf, localFile, resolveAttachment, resolvePdf, pageOf, openTarget, itemBlock, mentionBlock, pointerLine, SLASH, KEY_RE, GROUP_RE, MY_LIBRARY };
+module.exports = { KEPT, mirrorDir, defaultStorage, hasMirror, readItems, itemOf, collectionNames, authorsOf, listLevel, listLibraries, librariesOf, libraryName, libraryRoot, groupDir, groupIds, parseRef, refOf, openableOf, localFile, resolveAttachment, resolvePdf, pageOf, openTarget, itemBlock, mentionBlock, pointerLine, SLASH, KEY_RE, GROUP_RE, MY_LIBRARY };

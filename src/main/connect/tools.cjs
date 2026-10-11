@@ -34,6 +34,7 @@ const { readZip, safeName } = require('../overleaf/copy.cjs');
 const { mcpContent } = require('../sandbox/local-tools.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
 const { sanitizeName } = require('../store/home.cjs');
+const { ITEM_SOURCES, GROUP_CATEGORIES, LOCAL_PDFS, categoryOfApp } = require('../../shared/connect-sources.cjs');
 
 const str = { type: 'string' };
 const num = { type: 'number' };
@@ -260,20 +261,45 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
     return page;
   };
 
-  /** A note, chat or document in: a Markdown file of the library's own in <data root>/assets/md, its pictures beside it. */
-  async function putNote({ title, body, images = [], source }) {
+  // What a row an import brings in knows about itself (Library Phase B, 2026-10-11): which app it is from — `app` when the
+  // tool names one, else the app whose chosen folder holds `file`, else the job's only app — and that app's category
+  // (its group's, else the job's group's). A field nobody can tell is left out, so the library tells it from the add
+  // itself (an address is web, a path mac). `more`: { itemDate, originUrl, place, messages, minutes }, those known.
+  const appFor = (file = null) => {
+    if (file) for (const [app, dir] of Object.entries(session.folders || {})) if (typeof dir === 'string' && dir && (file === dir || file.startsWith(dir + path.sep))) return app;
+    const apps = Array.isArray(session.apps) ? session.apps : [];
+    return apps.length === 1 ? apps[0] : null;
+  };
+  const knows = (app, more = {}) => {
+    const source = app === 'GitHub' ? 'github' : (ITEM_SOURCES.includes(app) ? app : null);
+    const category = (app && categoryOfApp(app)) || (!app && GROUP_CATEGORIES[session.group]) || null;
+    const out = { ...(source ? { source } : {}), ...(category ? { category } : {}) };
+    for (const [key, value] of Object.entries(more)) if (value != null && value !== '') out[key] = value;
+    return out;
+  };
+  // A day as the library keeps it: a date's first ten characters when they are one (a chat's ISO date), else null.
+  const dayOf = (value) => { const day = String(value || '').slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) ? day : null; };
+  // Where a note file sat under the folder it was brought in from: "Vault" or "Vault/Projects/Transfer".
+  const placeOf = (file, root) => {
+    if (!root || !(file.startsWith(root + path.sep))) return null;
+    const rel = path.relative(root, path.dirname(file));
+    return [path.basename(root), ...(rel ? rel.split(path.sep) : [])].join('/');
+  };
+
+  /** A note, chat or document in: a Markdown file of the library's own in <data root>/assets/md, its pictures beside it. `about`: what it knows (knows). */
+  async function putNote({ title, body, images = [], source, about = null }) {
     const ctx = await ctxNow();
-    const row = await notes.writeFile(ctx, { title, body, images }, { library });
+    const row = await notes.writeFile(ctx, { title, body, images, about }, { library });
     if (deps.onAdded) deps.onAdded(row);
     kept(row);
     if (source) imported.add(source);
     added('notes', 1, title);
   }
 
-  async function addRow(input, name, { describe = true } = {}) {
+  async function addRow(input, name, { describe = true, about = null } = {}) {
     const ctx = await ctxNow();
     try {
-      const row = await library.addItem(ctx, input, { describe: describe ? deps.describe : undefined, identifyRepo: deps.identifyRepo, inspectPdf: deps.inspectPdf, name: name || null });
+      const row = await library.addItem(ctx, input, { describe: describe ? deps.describe : undefined, identifyRepo: deps.identifyRepo, inspectPdf: deps.inspectPdf, name: name || null, about });
       if (row.type === 'pdf' && deps.onPdf) deps.onPdf();
       if (deps.onAdded) deps.onAdded(row);
       kept(row);
@@ -286,14 +312,14 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   }
 
   /** A downloaded pdf or picture copied into the library (assets/), else the file added where it is. */
-  async function addFile(file, name, url = null) {
+  async function addFile(file, name, url = null, about = null) {
     const ext = path.extname(file).toLowerCase();
     const mime = ext === '.pdf' ? 'application/pdf' : { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }[ext];
-    if (!mime) return addRow(file, name, { describe: false });
+    if (!mime) return addRow(file, name, { describe: false, about });
     const ctx = await ctxNow();
     const bytes = fs.readFileSync(file);
     try {
-      const row = await library.addFileCopy(ctx, { bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), mime, name, url }, { inspectPdf: deps.inspectPdf });
+      const row = await library.addFileCopy(ctx, { bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), mime, name, url, about }, { inspectPdf: deps.inspectPdf });
       if (mime === 'application/pdf' && deps.onPdf) deps.onPdf();
       if (deps.onAdded) deps.onAdded(row);
       kept(row);
@@ -348,7 +374,8 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         try { stat = fs.statSync(file); } catch { skipped.push({ file: given, why: 'not there' }); continue; }
         if (!stat.isFile() || stat.size > notes.MAX_NOTE_BYTES) { skipped.push({ file: given, why: stat.isFile() ? 'larger than 5 MB' : 'not a file' }); continue; }
         const { body, images } = notes.convertMarkdown(fs.readFileSync(file, 'utf8'), { sourcePath: file, root: base || path.dirname(file), index });
-        await putNote({ title: path.basename(file, path.extname(file)), body, images, source: key });
+        const from = appFor(file);
+        await putNote({ title: path.basename(file, path.extname(file)), body, images, source: key, about: knows(from, { place: placeOf(file, base || (from && session.folders && session.folders[from]) || '') }) });
         count += 1;
       }
       if (count) log(`Brought in ${count} note${count === 1 ? '' : 's'}`);
@@ -359,11 +386,11 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       const key = source ? `note:${source}` : '';
       if (key && imported.has(key)) return { added: false, why: 'brought in before' };
       const { body, images } = notes.convertMarkdown(markdown, { root: session.downloads || '' });
-      await putNote({ title: sanitizeName(title), body, images, source: key });
+      await putNote({ title: sanitizeName(title), body, images, source: key, about: knows(appFor()) });
       log(`Wrote “${String(title).slice(0, 60)}”`);
       return { added: true };
     },
-    add_to_library: ({ input, name }) => addRow(input, name),
+    add_to_library: ({ input, name }) => addRow(input, name, { about: knows(appFor()) }),
     list_pdfs: async ({ folder, include, exclude, days, query, kind, limit, check }) => {
       const out = readers.pdfFiles(where(folder, 'folder'), { include, exclude, days: within(days), query, kind, limit: Math.min(1000, Math.max(1, Math.round(limit || 300))) });
       if (check && deps.inspectPdf) {
@@ -390,7 +417,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         try { file = where(given); } catch (error) { skipped.push({ file: given, why: error.message }); continue; }
         const stat = (() => { try { return fs.statSync(file); } catch { return null; } })();
         if (!stat || !stat.isFile() || !/\.pdf$/i.test(file)) { skipped.push({ file: given, why: stat ? 'not a pdf' : 'not there' }); continue; }
-        const out = await addRow(file, null, { describe: false });
+        const out = await addRow(file, null, { describe: false, about: knows(LOCAL_PDFS) });
         if (out.added) count += 1;
         else skipped.push({ file: given, why: 'in the library already' });
       }
@@ -425,7 +452,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         let chat;
         try { chat = readLocal(app, id); } catch (error) { skipped.push({ id, why: error.message }); continue; }
         if (!chat.turns.length) { skipped.push({ id, why: 'no turns of text' }); continue; }
-        await putNote({ title: chat.title || `${app} chat`, body: chatNote(app, chat), images: [], source: key });
+        await putNote({ title: chat.title || `${app} chat`, body: chatNote(app, chat), images: [], source: key, about: knows(app, { itemDate: dayOf(chat.date), place: chat.project, messages: chat.turns.length }) });
         count += 1;
       }
       if (count) log(`Brought in ${count} ${app} chat${count === 1 ? '' : 's'}`);
@@ -452,7 +479,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         let chat;
         try { chat = await readWebChat(browser(), app, id); } catch (error) { if (error.code === 'SIGNED_OUT') throw error; skipped.push({ id, why: error.message }); continue; }
         if (!chat.turns.length) { skipped.push({ id, why: 'no turns of text' }); continue; }
-        await putNote({ title: chat.title, body: chatNote(app, chat), images: [], source: key });
+        await putNote({ title: chat.title, body: chatNote(app, chat), images: [], source: key, about: knows(app, { itemDate: dayOf(chat.date), place: chat.project, messages: chat.turns.length }) });
         count += 1;
       }
       if (count) log(`Brought in ${count} ${app} chat${count === 1 ? '' : 's'}`);
@@ -496,7 +523,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
             const markdown = kindOf === 'doc' ? googleMarkdown(text, downloads('google')) : kindOf === 'sheet' ? csvTable(text) : text.trim();
             const title = named || (markdown.match(/^#\s+(.+)$/m) || [])[1] || `Google ${kindOf} ${id.slice(0, 8)}`;
             const { body, images } = notes.convertMarkdown(markdown, { root: downloads('google') });
-            await putNote({ title: sanitizeName(title), body: `*Google Drive · https://drive.google.com/open?id=${id}*\n\n${body}`, images, source: key });
+            await putNote({ title: sanitizeName(title), body: `*Google Drive · https://drive.google.com/open?id=${id}*\n\n${body}`, images, source: key, about: knows('Google Docs', { originUrl: `https://drive.google.com/open?id=${id}` }) });
           } else {
             let got = await pageNow.download(`https://drive.google.com/uc?export=download&id=${id}`, downloads('google'), { name: named, quiet: true });
             if (/html/i.test(got.type)) { // a large file's virus-scan warning, or a sign-in page
@@ -507,9 +534,9 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
             const ext = path.extname(got.path).toLowerCase();
             if (readers.NOTE_EXT.has(ext)) {
               const { body, images } = notes.convertMarkdown(fs.readFileSync(got.path, 'utf8'), { sourcePath: got.path, root: path.dirname(got.path) });
-              await putNote({ title: sanitizeName(named || path.basename(got.path, ext)), body, images, source: key });
+              await putNote({ title: sanitizeName(named || path.basename(got.path, ext)), body, images, source: key, about: knows('Google Docs', { originUrl: `https://drive.google.com/open?id=${id}` }) });
             } else {
-              const out = await addFile(got.path, named || path.basename(got.path, ext), null);
+              const out = await addFile(got.path, named || path.basename(got.path, ext), null, knows('Google Docs', { originUrl: `https://drive.google.com/open?id=${id}` }));
               if (!out.added) { imported.add(key); skipped.push({ id, why: 'in the library already' }); continue; }
               imported.add(key);
             }
@@ -595,7 +622,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
           if (!/html/i.test(got.type || '') || !gmail.isThreadPage(got.url, html)) throw new Error('Gmail sent no thread');
           const read = gmail.readThread(html);
           const title = String(thread.subject || '').trim() || read.subject || 'Gmail thread';
-          await putNote({ title: sanitizeName(title), body: clipMiddle(gmail.gmailThreadNote(read), MAX_NOTE_CHARS), images: [], source: key });
+          await putNote({ title: sanitizeName(title), body: clipMiddle(gmail.gmailThreadNote(read), MAX_NOTE_CHARS), images: [], source: key, about: knows('Gmail', { messages: read.messages.length, itemDate: gmail.lastDay(read) }) });
           session.gmailThreads = (Number(session.gmailThreads) || 0) + 1;
           count += 1;
         } catch (error) {
@@ -636,10 +663,11 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
           if (buffer.length < 4 || buffer.readUInt32LE(0) !== 0x04034b50) throw Object.assign(new Error('Overleaf sent no project: not signed in to Overleaf in Engelbart\'s browser. Call needs_you with kind "signin", then try again.'), { code: 'SIGNED_OUT' });
           const name = sanitizeName(path.basename(got.path, '.zip')) || `Overleaf ${id.slice(0, 6)}`;
           const { folder } = unzipInto(buffer, downloads(path.join('overleaf', name)));
-          await addRow(folder, `${name} (Overleaf)`, { describe: false });
+          const overleaf = knows('Overleaf', { originUrl: `https://www.overleaf.com/project/${id}`, place: name });
+          await addRow(folder, `${name} (Overleaf)`, { describe: false, about: overleaf });
           const main = findMainTex(folder);
-          if (main) await putNote({ title: sanitizeName(`${name} (main.tex)`), body: `*Overleaf · https://www.overleaf.com/project/${id}*\n\n\`\`\`latex\n${clipMiddle(fs.readFileSync(main, 'utf8'), 150_000)}\n\`\`\`\n`, images: [], source: `${key}:main` });
-          for (const pdf of fs.readdirSync(folder).filter((file) => /\.pdf$/i.test(file)).slice(0, 3)) await addFile(path.join(folder, pdf), `${name}: ${path.basename(pdf, '.pdf')}`);
+          if (main) await putNote({ title: sanitizeName(`${name} (main.tex)`), body: `*Overleaf · https://www.overleaf.com/project/${id}*\n\n\`\`\`latex\n${clipMiddle(fs.readFileSync(main, 'utf8'), 150_000)}\n\`\`\`\n`, images: [], source: `${key}:main`, about: overleaf });
+          for (const pdf of fs.readdirSync(folder).filter((file) => /\.pdf$/i.test(file)).slice(0, 3)) await addFile(path.join(folder, pdf), `${name}: ${path.basename(pdf, '.pdf')}`, null, overleaf);
           imported.add(key);
           count += 1;
         } catch (error) {
@@ -660,7 +688,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       for (const note of read) {
         if (note.error) { skipped.push({ id: note.id, why: String(note.error).slice(0, 120) }); continue; }
         const { body, images } = notes.convertMarkdown(note.markdown, { root: downloads('apple-notes') });
-        await putNote({ title: sanitizeName(note.name), body, images, source: `apple-notes:${note.id}` });
+        await putNote({ title: sanitizeName(note.name), body, images, source: `apple-notes:${note.id}`, about: knows('Apple Notes', { place: note.folder, itemDate: dayOf(note.modified) }) });
         count += 1;
       }
       if (count) log(`Brought in ${count} Apple Note${count === 1 ? '' : 's'}`);
@@ -692,16 +720,21 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         const source = `zotero:${key}`;
         if (imported.has(source)) { already += 1; continue; }
         const title = String(item.title || '').slice(0, 200);
+        // its collections ("Transfer", "Reading/2024"), and its date: a full one when Zotero has it, else its year
+        let place = null;
+        try { place = mirror.collectionNames(root, item).join(', ') || null; } catch { place = null; }
+        const year = /^\d{4}$/.test(String(item.year || '')) ? String(item.year) : null;
+        const about = knows('Zotero', { place, itemDate: dayOf(item.date) || year });
         let out = null;
         try {
           const attachment = mirror.openableOf(item);
           const here = attachment && attachment.contentType === 'application/pdf' ? mirror.localFile(root, attachment) : null;
-          if (here && here.source !== 'downloaded') out = await addRow(here.path, title, { describe: false });
+          if (here && here.source !== 'downloaded') out = await addRow(here.path, title, { describe: false, about });
           else if (here || (attachment && attachment.contentType === 'application/pdf' && zotero && zotero.download)) {
             const file = here ? here.path : await zotero.download(attachment.key, attachment.filename);
-            out = await addFile(file, title, item.doi ? `https://doi.org/${item.doi}` : (item.url || null));
-          } else if (item.doi) out = await addRow(`https://doi.org/${item.doi}`, title, { describe: false });
-          else if (item.url) out = await addRow(item.url, title, { describe: false });
+            out = await addFile(file, title, item.doi ? `https://doi.org/${item.doi}` : (item.url || null), about);
+          } else if (item.doi) out = await addRow(`https://doi.org/${item.doi}`, title, { describe: false, about });
+          else if (item.url) out = await addRow(item.url, title, { describe: false, about });
           else { skipped.push({ key, why: 'no pdf, DOI or link' }); continue; }
         } catch (error) { skipped.push({ key, why: error.message }); continue; }
         imported.add(source);

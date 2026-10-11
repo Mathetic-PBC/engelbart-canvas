@@ -73,4 +73,27 @@ async function inspectPdf(file) {
   return isPaper(await paperSignals(file)) ? ['paper'] : [];
 }
 
-module.exports = { paperSignals, isPaper, inspectPdf };
+// A Title that only names the file it was made from, or says nothing ("untitled", "Microsoft Word - draft.docx").
+const NO_TITLE = /^(?:untitled|title|document|unknown|none|slide ?\d*|microsoft (?:word|powerpoint) - .*|.*\.(?:docx?|pptx?|pdf|tex|dvi|ps|indd|rtf|odt|pages|key|txt|md|html?))$/i;
+
+/**
+ * What a pdf calls itself, for a row still named by its file (store/library.cjs describeRows): its metadata Title, else
+ * the first line of text on page 1 (pdf-text's lines, as paperSignals reads them). '' when it has neither. Throws when
+ * the file cannot be read as a pdf.
+ */
+async function pdfTitle(file) {
+  if (fs.statSync(file).size > MAX_BYTES) throw new Error('The pdf is too large to look into');
+  const { doc, close } = await openPdf(file);
+  const usable = (value) => { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length >= 3 && text.length <= 300 && /\p{L}{2}/u.test(text) && !NO_TITLE.test(text) ? text : ''; };
+  try {
+    let title = '';
+    try { const { info } = await doc.getMetadata(); title = usable(info && info.Title); } catch { title = ''; }
+    if (title || !doc.numPages) return title;
+    for (const line of await pageLines(doc, 1)) { const text = usable(line.text); if (text) return text; }
+    return '';
+  } finally {
+    await close();
+  }
+}
+
+module.exports = { paperSignals, isPaper, inspectPdf, pdfTitle };

@@ -548,6 +548,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const page = bridged && browser && s.choices.permissions.browser && sitesOf(covered).length ? browser.tools({ id: job.id, label: job.label, sites: sitesOf(covered) }) : null;
     const session = {
       dataRoot: s.dataRoot, homeDir, dir: s.dir, downloads: s.downloads, projectId: () => s.projectId,
+      // the apps the job covers and its source group, for what each row it brings in knows about itself (Library Phase B)
+      apps: covered, group: job.source,
       get exports() { return s.picked.exports; },
       get folders() { return s.picked.folders; },
       get days() { return s.choices.days || null; }, // the period picked (2026-10-10): the listing tools hold to it

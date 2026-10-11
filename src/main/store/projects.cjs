@@ -775,15 +775,20 @@ async function addToProject(ctx, projectId, ids, { workspaceId = null } = {}) {
 }
 
 /**
- * Off the project's list, onto its `removed`, and out of every workspace. A row made in the project (a note written
- * here) is refused: that is the trash's, not a removal. → { removed }
+ * Off the project's list, onto its `removed`, and out of every workspace. A row written in the project (a note or a
+ * pasted picture: made here, its source engelbart, or unknown) is refused: that is the trash's, not a removal. A row
+ * made in the project by an import (a chat onboarding kept as a note before 2026-10-08: its source is the app, from
+ * library.describeRows) is removed like any other import. → { removed }
  */
 async function removeFromProject(ctx, projectId, ids) {
   const going = projectChange(ids);
   const project = findProject(ctx, projectId);
   const made = [];
-  for (const id of going) { const row = await ctx.libraryDb.get(id); if (row && row.project_id === project.id) made.push(row.name); }
-  if (made.length) throw new Error(`Made in this project, so it goes to the trash instead of being removed: ${made.join(', ')}`);
+  for (const id of going) {
+    const row = await ctx.libraryDb.get(id);
+    if (row && row.project_id === project.id && (row.source == null || row.source === 'engelbart')) made.push(row.name);
+  }
+  if (made.length) throw new Error(`Made in this project, so it goes to the trash instead of being removed (only what was brought in from elsewhere can be removed): ${made.join(', ')}`);
   patchProjectMeta(project, { library: project.library.filter((id) => !going.includes(id)), removed: [...project.removed.filter((id) => !going.includes(id)), ...going] });
   for (const workspace of flattenWorkspaces(project.dir)) await unlinkFromWorkspace(ctx, projectId, workspace.id, going);
   return { removed: going.length };
@@ -831,7 +836,7 @@ async function createNote(ctx, projectId, { name, workspaceId, text } = {}) {
   const id = randomUUID();
   const notesDb = await db.openNotesDb(project.dir);
   const row = await notesDb.insert({ id, name: stem, path: `${stem}.md`, goal_id: null, topic_id: workspaceId || null });
-  await ctx.libraryDb.insert({ id, name: stem, type: 'md', tags: ['note'], path: file, project_id: projectId });
+  await ctx.libraryDb.insert({ id, name: stem, type: 'md', tags: ['note'], path: file, project_id: projectId, source: 'engelbart', category: 'note' });
   await ctx.libraryDb.setCharCount(id, typeof text === 'string' ? text.length : 0);
   return publicNote(row);
 }
@@ -868,7 +873,7 @@ async function saveImage(ctx, projectId, { bytes, mime, name } = {}) {
   const file = path.join(dir, `${id}.${extension}`);
   fs.writeFileSync(file, buffer, { mode: 0o600 });
   const label = sanitizeName(typeof name === 'string' && name.trim() ? name : 'Attachment');
-  return ctx.libraryDb.insert({ id, name: label, type: 'image', path: file, project_id: projectId });
+  return ctx.libraryDb.insert({ id, name: label, type: 'image', path: file, project_id: projectId, source: 'engelbart', category: 'image' });
 }
 
 async function readImage(ctx, id) {

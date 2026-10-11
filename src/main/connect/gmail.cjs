@@ -202,6 +202,15 @@ function readThread(html) {
   return { subject, messages, people, attachments };
 }
 
+/** The day of a thread's last message that has a date Date.parse reads, YYYY-MM-DD in this Mac's time zone; null when none has. */
+function lastDay(thread) {
+  const times = (thread && Array.isArray(thread.messages) ? thread.messages : []).map((message) => dateOf(message.date)).filter((time) => time !== null);
+  if (!times.length) return null;
+  const at = new Date(Math.max(...times));
+  const two = (n) => String(n).padStart(2, '0');
+  return `${at.getFullYear()}-${two(at.getMonth() + 1)}-${two(at.getDate())}`;
+}
+
 /** Whether a downloaded print view is Google's sign-in page in its place. */
 function gmailSignedOut(html) {
   const head = String(html || '').slice(0, 20000);
@@ -235,5 +244,5 @@ function gmailThreadNote(thread) {
 
 module.exports = {
   THREAD_ID_RE, IK_RE, MAX_ACCOUNTS, MAX_SEARCH, MAX_THREADS_A_CALL, MAX_THREADS_A_SESSION,
-  accountIndex, gmailPeriod, inboxUrl, searchUrl, printUrl, ACCOUNT_SCRIPT, SEARCH_SCRIPT, htmlText, readThread, gmailSignedOut, isThreadPage, gmailThreadNote,
+  accountIndex, gmailPeriod, inboxUrl, searchUrl, printUrl, ACCOUNT_SCRIPT, SEARCH_SCRIPT, htmlText, readThread, lastDay, gmailSignedOut, isThreadPage, gmailThreadNote,
 };

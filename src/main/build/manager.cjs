@@ -392,7 +392,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     return serial(`library:${at}`, async () => {
       const held = await rowAt(ctx, folder);
       if (held) return held;
-      const row = await ctx.libraryDb.insert({ id: randomUUID(), name: name || path.basename(folder), type: 'folder', tags: ['git'], folder_path: folder, project_id: projectId });
+      const row = await ctx.libraryDb.insert({ id: randomUUID(), name: name || path.basename(folder), type: 'folder', tags: ['git'], folder_path: folder, project_id: projectId, source: 'engelbart', category: 'repo' });
       libraryChanged();
       return row;
     });
