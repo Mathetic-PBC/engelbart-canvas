@@ -3,6 +3,40 @@
 The run that follows docs/windows-port.md, on branch `windows-port` (cut from `hudsons-feedback` at 22d738c).
 Newest status first; the sections below are kept current.
 
+## Catch-up to 0.1.16
+
+Goal (2026-10-10): merge origin/david-onboarding-revisions f2cf948 (Release 0.1.16) into windows-port, so package.json
+is 0.1.16. The one change since 0.1.15 is 95a0d7b: the guided setup, started inside a project, skips Create and adds a
+Welcome workspace to that project (App.jsx, screens/Onboarding.jsx, model/onboarding.js, ipc.cjs welcome-workspace,
+store/onboarding.cjs addWelcomeWorkspace, preload, tests). Keep the Windows changes, npm test, push, CI green on all
+three; log here in a `[skip ci]` commit; an upload:win dry run on the merge commit; the upload command handed over with
+that commit's hash (not HEAD, the log commit). No real upload.
+
+### Status
+
+- 2026-10-10, **done on 360abfa** (the merge; contains f2cf948; package.json 0.1.16): run
+  https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38111754450 passed on all three. macos-latest: npm test
+  1498 tests, 1494 pass, 4 skipped. windows-latest: 1502 tests, 1460 pass, 42 skipped, 0 failed (the same 42 as
+  before: none added); installer, smoke and one-line install as before. ubuntu-latest: 1498 tests, 1484 pass, 14
+  skipped.
+  `UPLOAD_DRY_RUN=1 CLOUDFLARE_ACCOUNT_ID=… npm run upload:win 360abfa` (nothing sent) took run 38111754450's installer
+  and listed: Engelbart-0.1.16-x64.exe (136801046 bytes), its .blockmap, index.html, install.ps1,
+  SHA256SUMS-windows.txt, then latest.yml (version 0.1.16); live Windows feed still 0.1.15. The page it writes names
+  Engelbart-0.1.16-x64.exe beside the Mac's 0.1.16 dmgs (arm64 and x64, already live). Real upload not run: handed
+  over as `CLOUDFLARE_ACCOUNT_ID=… npm run upload:win 360abfa`.
+- 2026-10-10: merged f2cf948 (95a0d7b and the release; 13 files). No conflicts. Review for Windows: the new
+  `addWelcomeWorkspace` and ipc `welcome-workspace` go through projects.createWorkspace / setWorkspaceContext and
+  getting-started's existing files, with no new paths, shell commands or file modes; the rest is the renderer's. The new
+  test's regex with a literal `\n` over App.jsx holds on Windows because `.gitattributes` checks out LF; its
+  `/tmp/guided-paper.pdf` is only a stored library path, as in test/db.test.cjs. No Windows fixes needed.
+  Mac `npm ci` and `npm test`: 1498 tests, 1495 pass, 3 skipped, 0 failed.
+
+### CI runs
+
+| Commit | Run | macOS | Windows | Linux | Notes |
+|---|---|---|---|---|---|
+| 360abfa | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38111754450 | ✓ | ✓ installer, smoke, install | ✓ | **the merge; green on all three, contains f2cf948: the done commit** |
+
 ## Catch-up to 0.1.15
 
 Goal (2026-10-10): bring windows-port up to origin/david-onboarding-revisions a32399a (Release 0.1.15: 0.1.14's quieter
