@@ -74,4 +74,12 @@ const webApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => appO
 /** The browsers a web app's sign-in is brought over from (main/connect/web-signin.cjs), as the person is told when they have none of them. */
 const READABLE_NAMES = 'Chrome, Brave, Edge, Arc or Firefox';
 
-module.exports = { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, SIGN_IN_SITES, SOURCE_IDS, sourceOf, appOf, sourceOfApp, recallApps, webApps };
+// How far back an import looks (2026-10-10): picked on Connect your library, kept in the session's choices. null: all time.
+const PERIODS = Object.freeze([{ days: 182, label: 'the past 6 months' }, { days: 365, label: 'the past year' }, { days: null, label: 'all time' }]);
+const DEFAULT_PERIOD_DAYS = 365;
+/** 182 or 365 as they are; anything else is all time (null). */
+const cleanDays = (value) => (value === 182 || value === 365 ? value : null);
+/** "the past year" for 365, "the past 6 months" for 182, "all time" otherwise. */
+const periodName = (days) => (PERIODS.find((period) => period.days === cleanDays(days)) || PERIODS[2]).label;
+
+module.exports = { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, SIGN_IN_SITES, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };

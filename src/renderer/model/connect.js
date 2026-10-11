@@ -3,9 +3,9 @@
 // (src/main/connect), how an import's progress reads, what a step the agents hand the person says, and what the dock
 // shows. The sources and apps are src/shared/connect-sources.cjs.
 
-import { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, recallApps, webApps } from '../../shared/connect-sources.cjs';
+import { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, PERIODS, DEFAULT_PERIOD_DAYS, recallApps, webApps, cleanDays, periodName } from '../../shared/connect-sources.cjs';
 
-export { SOURCES, APPS, LOCAL_PDFS };
+export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName };
 
 // MATH-114 (2026-10-09): the choose screen as the mockup's grouped list. Each source is a group whose header ticks its
 // rows (tri-state); a row says at its right how the app is reached and where it stands; ticking is the consent (a
@@ -292,9 +292,10 @@ export function projectOf(project) {
 /**
  * What `connect-start` is sent: each source on or off with its apps, folders and repositories; the instructions; the
  * permissions; the provider; the project an existing user's notes go into (`projectId`); and what the project is
- * (`project` { name, description }, 2026-10-10), which onboarding sends without an id.
+ * (`project` { name, description }, 2026-10-10), which onboarding sends without an id; and how far back to look (`days`
+ * 182 or 365, null for all time, 2026-10-10), always sent.
  */
-export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', permissions = {}, provider = null, projectId = null, project = null }) {
+export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', permissions = {}, provider = null, projectId = null, project = null, days = null }) {
   const sources = {};
   for (const source of SOURCES) {
     sources[source.id] = {
@@ -305,7 +306,7 @@ export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', 
     };
   }
   const allowed = { files: permissions.files !== false, browser: permissions.browser !== false, recall: permissions.recall !== false, notes: permissions.notes === true };
-  return { sources, custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}), ...(projectOf(project) ? { project: projectOf(project) } : {}) };
+  return { sources, custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, days: cleanDays(days), ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}), ...(projectOf(project) ? { project: projectOf(project) } : {}) };
 }
 
 /**

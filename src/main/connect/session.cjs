@@ -42,7 +42,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps } = require('../../shared/connect-sources.cjs');
+const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName } = require('../../shared/connect-sources.cjs');
 const prompts = require('./prompts.cjs');
 const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
@@ -139,6 +139,7 @@ function cleanChoices(input, homeDir) {
     computer,
     permissions: { files: computer, browser: allowed.browser !== false, recall: allowed.recall !== false, notes: allowed.notes === true },
     project: cleanProject(given.project),
+    days: cleanDays(given.days), // how far back to look (2026-10-10): 182, 365, or null for all time
   };
 }
 
@@ -147,6 +148,12 @@ function projectBlock(choices) {
   const project = projectFor(choices);
   if (!project) return '';
   return `<project note="What the person is working on: the project this library is being connected for.">\n${project.name ? `Name: ${project.name}\n` : ''}Description: ${project.description}\n</project>`;
+}
+
+/** The <period> block surveys and imports are given (2026-10-10): how far back the person chose to look. */
+function periodBlock(choices) {
+  const days = (choices && choices.days) || null;
+  return `<period days="${days || 'all'}">${days ? `Only ${periodName(days)}: things changed or written in the last ${days} days. The listing tools hold to it. Older items come in only when <plan> names them (by path for PDFs).` : 'All time: no limit on how far back.'}</period>`;
 }
 
 /** One option of a question: a label and, when given, a few words of why → { label, why } or null. */
@@ -351,7 +358,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const parts = [
       engelbartBlock(s),
       projectBlock(s.choices),
-      `<choices>\n${JSON.stringify({ ...s.choices.sources, customInstructionsForThisImport: s.choices.custom || null, permissions: s.choices.permissions }, null, 1)}\n</choices>`,
+      `<choices>\n${JSON.stringify({ ...s.choices.sources, customInstructionsForThisImport: s.choices.custom || null, permissions: s.choices.permissions, period: periodName(s.choices.days), days: s.choices.days || null }, null, 1)}\n</choices>`,
       `<found>\n${JSON.stringify(s.found, null, 1)}\n</found>`,
       `<library>${JSON.stringify(await libraryCounts(ctx))}</library>`,
       custom ? `<custom_instructions>\n${custom}\n</custom_instructions>` : '',
@@ -474,8 +481,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const choice = s.choices.sources[job.source] || {};
     const apps = job.apps.length ? job.apps : choice.apps || [];
     const found = (s.found || {})[job.source] || {};
+    const period = periodBlock(s.choices);
     if (job.kind === 'survey') {
-      return [engelbartBlock(s), projectBlock(s.choices), `<source>${job.source}</source>`, `<app>${apps[0]}</app>`, skillsFor({ source: job.source, apps }, s.dataRoot), `<found>\n${JSON.stringify(found[apps[0]] || {}, null, 1)}\n</found>`, `Look at what they have in ${apps[0]} now, and report.`].filter(Boolean).join('\n\n');
+      return [engelbartBlock(s), projectBlock(s.choices), period, `<source>${job.source}</source>`, `<app>${apps[0]}</app>`, skillsFor({ source: job.source, apps }, s.dataRoot), `<found>\n${JSON.stringify(found[apps[0]] || {}, null, 1)}\n</found>`, `Look at what they have in ${apps[0]} now, and report.`].filter(Boolean).join('\n\n');
     }
     if (job.kind === 'recall') {
       return [engelbartBlock(s), `<app>${apps[0]}</app>`, skillsFor({ source: job.source, apps }, s.dataRoot), `<prompt>\n${prompts.RECALL_PROMPT}\n</prompt>`, `Ask ${apps[0]} now, and save its answer with save_memory.`].join('\n\n');
@@ -484,6 +492,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       engelbartBlock(s),
       projectBlock(s.choices),
       `<source>${JSON.stringify({ source: job.source, apps, label: job.label, foldersPicked: choice.folders || [], repositoriesPicked: choice.repos || [], foldersChosen: s.picked.folders, downloadsGoTo: s.downloads })}</source>`,
+      period,
       `<plan>\n${job.plan}\n</plan>`,
       `<chat>\n${clipMiddle(conversationText(s), 30000)}\n</chat>`,
       `<found>\n${clipMiddle(JSON.stringify(found, null, 1), 40000)}\n</found>`,
@@ -517,6 +526,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       dataRoot: s.dataRoot, homeDir, dir: s.dir, downloads: s.downloads, projectId: () => s.projectId,
       get exports() { return s.picked.exports; },
       get folders() { return s.picked.folders; },
+      get days() { return s.choices.days || null; }, // the period picked (2026-10-10): the listing tools hold to it
     };
     const callTool = bridged ? createImportTools({
       session, context, zotero, github, deps, env, kind: job.kind, page, appleNotes,
@@ -919,7 +929,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /* -------------------------------------------------------------------------------------------------------- start */
 
   async function rescan(s, sourceIds) {
-    const only = { sources: Object.fromEntries(Object.entries(s.choices.sources).filter(([id]) => sourceIds.includes(id))), project: projectFor(s.choices) };
+    const only = { sources: Object.fromEntries(Object.entries(s.choices.sources).filter(([id]) => sourceIds.includes(id))), project: projectFor(s.choices), days: s.choices.days || null };
     const fresh = await scanFor(only, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null });
     for (const [source, apps] of Object.entries(fresh)) {
       // What a survey found is kept: the scan does not know it.
@@ -1005,7 +1015,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         if (Array.isArray(value.vaults) && value.vaults.length) parts.push(`${plural(value.vaults.length, `${app} vault`)}`);
         else if (Array.isArray(value.folders) && value.folders.length && typeof value.pdfs === 'number') {
           const where = value.folders.slice(0, 2).map((folder) => folder.folder).filter(Boolean);
-          parts.push(`${plural(value.pdfs, 'PDF')}${where.length ? ` in ${where.join(' and ')}` : ''}`);
+          parts.push(`${plural(value.pdfs, 'PDF')}${s.choices.days ? ` from ${periodName(s.choices.days)}` : ''}${where.length ? ` in ${where.join(' and ')}` : ''}`);
         } else if (typeof value.chats === 'number' && value.chats) parts.push(`your ${app} chats`);
         else if (value.signedIn && typeof value.items === 'number') parts.push(`${plural(value.items, `${app} item`)}`);
         else if (Array.isArray(value.repos) && value.repos.length) parts.push(`${plural(value.repos.length, `${app} repository`, `${app} repositories`)}`);

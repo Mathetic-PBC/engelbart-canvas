@@ -1230,6 +1230,164 @@ test('PDFs on this Mac with a project: each folder\'s examples begin with the PD
   for (const prompt of [prompts.INTERVIEW_SYSTEM_PROMPT, prompts.IMPORT_SYSTEM_PROMPT, prompts.SURVEY_SYSTEM_PROMPT]) assert.match(prompt, /- <project>, when there is one: what the person is working on/);
 });
 
+// The period picked on Connect your library (2026-10-10): the past 6 months, the past year or all time.
+const DAY = 86_400_000;
+const agePdf = (file, days) => { const at = new Date(Date.now() - days * DAY); fs.utimesSync(file, at, at); };
+const periodHome = () => {
+  const home = pdfHome();
+  agePdf(path.join(home, 'Downloads', '2310.01234v2.pdf'), 800); // bears on the project, older than a year
+  agePdf(path.join(home, 'Documents', 'Research', 'HCI', 'mark2004.pdf'), 800); // older, and bears on nothing
+  const receipt = path.join(home, 'Downloads', 'Receipt debugging tutor.pdf'); // personal, shares the project's words
+  fs.writeFileSync(receipt, '%PDF-1.4\n%%EOF\n');
+  agePdf(receipt, 800);
+  return home;
+};
+const tutor = { name: 'Debugging tutor', description: 'How novices debug their code with scaffolding from an LLM' };
+
+test('the period: choicesOf sends it, cleanChoices keeps 182 or 365, and PDFs are counted only in it, older related ones named apart', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  assert.deepEqual(model.PERIODS.map((period) => [period.days, period.label]), [[182, 'the past 6 months'], [365, 'the past year'], [null, 'all time']]);
+  assert.equal(model.DEFAULT_PERIOD_DAYS, 365);
+  assert.equal(model.choicesOf({ picks: {}, apps: {}, days: 365 }).days, 365);
+  assert.equal(model.choicesOf({ picks: {}, apps: {}, days: 182 }).days, 182);
+  const allTime = model.choicesOf({ picks: {}, apps: {}, days: null });
+  assert.ok('days' in allTime && allTime.days === null, 'all time is sent as null');
+  assert.deepEqual([182, 365, null, undefined, 90, 0, '365', -1, 10000].map((days) => cleanChoices({ sources: {}, days }, homeDir).days), [182, 365, null, null, null, null, null, null, null]);
+
+  const home = periodHome();
+  const roots = [path.join(home, 'Downloads'), path.join(home, 'Documents')];
+  const asToday = readers.pdfFolders(roots, { homeDir: home, project: tutor });
+  assert.deepEqual(readers.pdfFolders(roots, { homeDir: home, project: tutor, days: null }), asToday, 'all time: as before');
+  assert.equal(asToday.pdfs, 7);
+  assert.equal('olderRelated' in asToday || asToday.folders.some((entry) => 'olderLeftOut' in entry), false);
+
+  const year = readers.pdfFolders(roots, { homeDir: home, project: tutor, days: 365 });
+  assert.equal(year.pdfs, 4, 'only the PDFs changed in the past year are counted');
+  assert.equal(year.olderLeftOut, 3);
+  assert.deepEqual(year.folders.map((entry) => [entry.folder, entry.pdfs, entry.kinds, entry.relatedToProject, entry.olderLeftOut]), [
+    ['~/Documents/Research/HCI', 2, { paper: 1, book: 1 }, 0, 1],
+    ['~/Downloads', 2, { personal: 1, unclear: 1 }, 0, 2],
+  ]);
+  const examples = year.folders.flatMap((entry) => entry.examples).join('\n');
+  assert.ok(!/2310\.01234v2|mark2004|Receipt/.test(examples), `older PDFs are not examples: ${examples}`);
+  assert.deepEqual(year.olderRelated, [{ name: '2310.01234v2.pdf', title: 'Scaffolding novice debugging', path: path.join(home, 'Downloads', '2310.01234v2.pdf'), changed: new Date(fs.statSync(path.join(home, 'Downloads', '2310.01234v2.pdf')).mtimeMs).toISOString() }], 'the older paper that bears on the project, by path; never the personal one, nor one that bears on nothing');
+  assert.deepEqual(readers.pdfFolders(roots, { homeDir: home, days: 365 }).olderRelated, [], 'no project: nothing older is named');
+
+  // The scan passes the period from the choices; the chats count what is in it.
+  const scanned = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project: tutor, days: 365 }, { homeDir: home })).papers[LOCAL_PDFS];
+  assert.deepEqual([scanned.pdfs, scanned.olderLeftOut, scanned.olderRelated.map((pdf) => pdf.name)], [4, 3, ['2310.01234v2.pdf']]);
+  assert.match(scanned.period, /the past year/);
+  const allScanned = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project: tutor }, { homeDir: home })).papers[LOCAL_PDFS];
+  assert.deepEqual([allScanned.pdfs, 'olderLeftOut' in allScanned, 'olderRelated' in allScanned, 'period' in allScanned], [7, false, false, false]);
+  const chats = (days) => scanFor({ sources: { chats: { on: true, apps: ['Claude Code'] } }, days }, { homeDir, env: {} }).then((found) => found.chats['Claude Code']);
+  const inYear = await chats(365);
+  assert.equal(typeof inYear.inPeriod, 'number');
+  assert.ok(inYear.inPeriod <= inYear.total);
+  assert.equal('inPeriod' in (await chats(null)), false);
+
+  // The librarian, the import agents and the surveys are told to hold to it.
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /Only offer and bring in things from the period in <choices>\. Say the period in your first message/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /Items in olderRelated may be offered by title: say they are older than the period and ask first\. When the person agrees, the plan passes their paths to import_pdfs directly/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /everything from the period in <choices> \(the default/);
+  assert.match(prompts.IMPORT_SYSTEM_PROMPT, /- <period>: how far back the person chose to look/);
+  assert.match(prompts.SURVEY_SYSTEM_PROMPT, /- <period>: how far back the person chose to look/);
+});
+
+test('the period goes to the librarian in <choices>, to surveys and imports as <period>, is kept through a quit, and a folder chosen in the chat is scanned with it', async () => {
+  const home = periodHome();
+  const seen = [];
+  const watched = (delayMs) => { const inner = createFakeConnectAgents({ delayMs }); return { ...inner, turn: (input) => { seen.push({ kind: input.kind, message: input.message }); return inner.turn(input); } }; };
+  const first = fakeConnect({ home, agents: watched(10) });
+  const started = await first.connect.start({ sources: { papers: { on: true, apps: [LOCAL_PDFS] } }, permissions: { files: false, recall: false }, project: tutor, days: 365 });
+  await until(first.state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the folder button');
+  const opening = seen.find((entry) => entry.kind === 'interview').message;
+  const choices = JSON.parse(opening.match(/<choices>\n([\s\S]*?)\n<\/choices>/)[1]);
+  assert.deepEqual([choices.period, choices.days], ['the past year', 365]);
+  first.connect.suspendAll();
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.equal(saved.choices.days, 365, 'kept in session.json');
+
+  // Picked up again after the quit, the period holds: the folder chosen in the chat is scanned with it.
+  seen.length = 0;
+  const second = fakeConnect({ home, agents: watched(10) });
+  second.connect.resume(ctx);
+  await second.connect.authorize(started.id, { app: LOCAL_PDFS, kind: 'folder', path: '~/Downloads' });
+  await until(() => seen, (list) => list.some((one) => one.kind === 'interview'), 'the librarian told of the folder');
+  const told = seen.find((one) => one.kind === 'interview').message;
+  const found = JSON.parse(told.match(/<found[^>]*>\n([\s\S]*?)\n<\/found>/)[1]);
+  const pdfs = (found.papers || found)[LOCAL_PDFS];
+  assert.deepEqual([pdfs.pdfs, pdfs.olderLeftOut, pdfs.olderRelated.map((pdf) => pdf.path)], [2, 2, [path.join(home, 'Downloads', '2310.01234v2.pdf')]], 'only the past year is counted; the older related paper named apart');
+  for (const one of second.connect.list(ctx.dataRoot)) second.connect.stop(one.id);
+
+  // Imports and surveys carry <period>.
+  seen.length = 0;
+  const third = fakeConnect({ agents: watched(10) });
+  const chats = await third.connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } }, permissions: { recall: false }, days: 182 });
+  await until(third.state(chats.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the chats question');
+  third.connect.answer(chats.id, { picked: ['Everything'] });
+  await until(third.state(chats.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'running'), 'the import running');
+  for (const kind of ['survey', 'import']) assert.match((seen.find((one) => one.kind === kind) || {}).message || '', /<period days="182">Only the past 6 months/, `the ${kind} is told the period`);
+  third.connect.stop(chats.id);
+
+  // All time: said so, with days null.
+  seen.length = 0;
+  const fourth = fakeConnect({ agents: watched(5) });
+  const all = await fourth.connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } }, permissions: { recall: false } });
+  await until(fourth.state(all.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the chats question');
+  const allChoices = JSON.parse(seen.find((one) => one.kind === 'interview').message.match(/<choices>\n([\s\S]*?)\n<\/choices>/)[1]);
+  assert.deepEqual([allChoices.period, allChoices.days], ['all time', null]);
+  fourth.connect.stop(all.id);
+});
+
+test('the listing tools hold to the session\'s period: left out, it is used; longer, cut to it; shorter, kept; import_pdfs by path is not held to it', async () => {
+  const got = {};
+  const spies = {
+    noteFiles: (dir, options) => { got.list_note_files = options.days; return []; },
+    pdfFiles: (dir, options) => { got.list_pdfs = options.days; return { total: 0, pdfs: [] }; },
+    localChats: (app, options) => { got.list_chats = options.days; return []; },
+    profileOf: () => ({ browser: 'Chrome', name: 'Default', dir: '/nowhere' }),
+    browserHistory: async (dir, options) => { got.browser_history = options.days; return []; },
+  };
+  const real = {};
+  for (const [name, spy] of Object.entries(spies)) { real[name] = readers[name]; readers[name] = spy; }
+  const page = { ensure: async () => {}, evaluate: async () => ({ signedIn: true, items: [10, 100, 300, 500].map((age, i) => ({ id: `chat-00${i}`, title: `Chat ${i}`, updated: Date.now() - age * DAY })) }) };
+  const appleNotes = { list: async (options) => { got.apple_notes_list = options.days; return []; } };
+  const toolsWith = (period, home = homeDir) => createImportTools({ session: { dataRoot: ctx.dataRoot, homeDir: home, dir: path.join(ctx.dataRoot, '.connect', 'period-test'), projectId: () => null, exports: {}, folders: {}, get days() { return period; } }, context: async () => ({ ...ctx, homeDir: home }), env: {}, page, appleNotes });
+  const run = async (period, days) => {
+    for (const key of Object.keys(got)) delete got[key];
+    const call = toolsWith(period);
+    const asked = days === undefined ? {} : { days };
+    await call('list_note_files', { folder: '~', ...asked });
+    await call('list_pdfs', { folder: '~', ...asked });
+    await call('list_chats', { app: 'Claude Code', ...asked });
+    await call('apple_notes_list', { ...asked });
+    await call('browser_history', { ...asked });
+    const web = await call('web_chats', { app: 'ChatGPT', ...asked });
+    return { ...got, web_chats: web.chats.length };
+  };
+  const each = (days, browser, web) => ({ list_note_files: days, list_pdfs: days, list_chats: days, apple_notes_list: days, browser_history: browser, web_chats: web });
+  try {
+    assert.deepEqual(await run(365), each(365, 90, 3), 'no days: the period (browser history keeps its shorter 90)');
+    assert.deepEqual(await run(365, 1000), each(365, 365, 3), 'a longer days: cut to the period');
+    assert.deepEqual(await run(365, 30), each(30, 30, 1), 'a shorter days: kept');
+    assert.deepEqual(await run(182), each(182, 90, 2));
+    assert.deepEqual(await run(182, 120), each(120, 120, 2));
+    assert.deepEqual(await run(null), each(null, 90, 4), 'no period: as before');
+    assert.deepEqual(await run(null, 1000), each(1000, 1000, 4));
+  } finally {
+    for (const [name, fn] of Object.entries(real)) readers[name] = fn;
+  }
+
+  // An older paper the person agreed to comes in by path, though list_pdfs leaves it out.
+  const home = periodHome();
+  const call = toolsWith(365, home);
+  const old = path.join(home, 'Downloads', '2310.01234v2.pdf');
+  assert.ok(!(await call('list_pdfs', { folder: '~/Downloads' })).pdfs.some((pdf) => pdf.path === old), 'not listed: older than the period');
+  const brought = await call('import_pdfs', { files: [old] });
+  assert.equal(brought.added, 1);
+  assert.ok((await ctx.libraryDb.list()).some((row) => row.path === old), 'in the library');
+});
+
 test('Skip on the librarian\'s question brings nothing of it in: the source is left out, and Import does not hand it over', async () => {
   const { connect, state } = fakeConnect();
   const started = await connect.start({ sources: { sites: { on: true }, code: { on: true } }, permissions: { browser: false, recall: false } });

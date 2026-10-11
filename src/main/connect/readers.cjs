@@ -270,10 +270,11 @@ function localChats(app, { homeDir = os.homedir(), env = process.env, days = nul
 }
 
 /** How many sessions an app has, how many in the last 30 and 180 days, and in which folders (most first). */
-function localChatCounts(app, { homeDir = os.homedir(), env = process.env } = {}) {
+function localChatCounts(app, { homeDir = os.homedir(), env = process.env, days = null } = {}) {
   const files = app === 'Codex' ? codexFiles(homeDir, env) : claudeCodeFiles(homeDir);
-  const d30 = cutoff(30), d180 = cutoff(180);
-  return { total: files.length, last30Days: files.filter((entry) => entry.mtime >= d30).length, last180Days: files.filter((entry) => entry.mtime >= d180).length, newest: iso(files[0] && files[0].mtime) };
+  const d30 = cutoff(30), d180 = cutoff(180), since = cutoff(days);
+  // `inPeriod` (2026-10-10): the sessions changed in the period picked on Connect your library, when there is one.
+  return { total: files.length, last30Days: files.filter((entry) => entry.mtime >= d30).length, last180Days: files.filter((entry) => entry.mtime >= d180).length, ...(since ? { inPeriod: files.filter((entry) => entry.mtime >= since).length } : {}), newest: iso(files[0] && files[0].mtime) };
 }
 
 /** The file a local session's id names, or null (ids are only ever the shapes the listing gives). */
@@ -674,21 +675,23 @@ function sharedWords(projectWords, text) {
  * `project` { name, description } (2026-10-10): each folder's examples are first the PDFs whose name or title shares
  * words with it (up to `related`, most shared first, `relatedToProject` counting them all), then the newest; the folders
  * holding such PDFs come first. Titles are read for the newest `matchTitles` PDFs to match them. With no project, as before.
+ * `days` (2026-10-10, the period picked on Connect your library): the counts, kinds, relatedToProject and examples cover
+ * only the PDFs changed in the last n days, each folder saying how many it left out (`olderLeftOut`, also in all), and a
+ * folder with none in the period is not listed. The project is matched before the period: up to `olderRelatedMax` older
+ * PDFs that share its words (never personal ones) come back as `olderRelated` [{ name, title, path, changed }], kept out
+ * of the counts, for the librarian to offer by title. With no `days`, as before.
  */
-function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titles = 150, max = 40000, project = null, related = 10, matchTitles = 300 } = {}) {
+function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titles = 150, max = 40000, project = null, related = 10, matchTitles = 300, days = null, olderRelatedMax = 5 } = {}) {
   const byFolder = new Map();
-  let total = 0, truncated = false;
+  let truncated = false;
   // A folder inside another one looked through is not looked through twice.
   const sorted = [...new Set(roots.map((root) => path.resolve(root)))].sort((a, b) => a.length - b.length);
   const seen = sorted.filter((dir, i) => !sorted.slice(0, i).some((outer) => dir.startsWith(outer + path.sep)));
   for (const dir of seen) {
     truncated = walkPdfs(dir, { max }, (file, name) => {
-      total += 1;
       const folder = path.dirname(file);
       const stat = statOf(file);
-      const entry = byFolder.get(folder) || { path: folder, pdfs: 0, newest: 0, files: [] };
-      entry.pdfs += 1;
-      entry.newest = Math.max(entry.newest, stat ? stat.mtimeMs : 0);
+      const entry = byFolder.get(folder) || { path: folder, files: [] };
       entry.files.push({ file, name, mtime: stat ? stat.mtimeMs : 0 });
       byFolder.set(folder, entry);
     }) || truncated;
@@ -698,7 +701,7 @@ function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titl
   const readTitle = (file) => { if (!titleOf.has(file)) titleOf.set(file, pdfTitle(file)); return titleOf.get(file); };
   const projectWords = project ? [...new Set(wordsOf(`${project.name || ''} ${project.description || ''}`))] : [];
   if (projectWords.length) {
-    // Matched by name, and by title for the newest of them all (titles cost a read each).
+    // Matched by name, and by title for the newest of them all (titles cost a read each), older ones included.
     const everyFile = [...byFolder.values()].flatMap((entry) => entry.files).filter((each) => pdfGuess(each.name) !== 'personal');
     everyFile.sort((a, b) => b.mtime - a.mtime).slice(0, matchTitles).forEach((each) => readTitle(each.file));
     for (const entry of byFolder.values()) {
@@ -706,10 +709,22 @@ function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titl
         const title = titleOf.get(each.file) || '';
         each.shared = pdfGuess(each.name, title) === 'personal' ? 0 : sharedWords(projectWords, `${each.name} ${title}`);
       }
-      entry.related = entry.files.filter((each) => each.shared > 0).length;
     }
   }
-  const list = [...byFolder.values()].sort((a, b) => (projectWords.length ? (b.related > 0) - (a.related > 0) : 0) || b.pdfs - a.pdfs || b.newest - a.newest);
+  // Then the period: what is older is left out of the counts and examples.
+  const since = cutoff(days);
+  const older = [];
+  for (const entry of byFolder.values()) {
+    const inPeriod = since ? entry.files.filter((each) => each.mtime >= since) : entry.files;
+    if (since) older.push(...entry.files.filter((each) => each.mtime < since));
+    entry.olderLeftOut = entry.files.length - inPeriod.length;
+    entry.files = inPeriod;
+    entry.pdfs = inPeriod.length;
+    entry.newest = Math.max(0, ...inPeriod.map((each) => each.mtime));
+    entry.related = inPeriod.filter((each) => each.shared > 0).length;
+  }
+  const total = [...byFolder.values()].reduce((n, entry) => n + entry.pdfs, 0);
+  const list = [...byFolder.values()].filter((entry) => entry.pdfs > 0).sort((a, b) => (projectWords.length ? (b.related > 0) - (a.related > 0) : 0) || b.pdfs - a.pdfs || b.newest - a.newest);
   const shown = (each) => { const title = titleOf.has(each.file) || budget-- > 0 ? readTitle(each.file) : ''; return title && title !== each.name.replace(/\.pdf$/i, '') ? `${each.name} — ${title}` : each.name; };
   const folders = list.slice(0, top).map((entry) => {
     const kinds = { paper: 0, personal: 0, book: 0, unclear: 0 };
@@ -718,9 +733,14 @@ function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titl
     const matched = projectWords.length ? sorted.filter((each) => each.shared > 0).sort((a, b) => b.shared - a.shared || b.mtime - a.mtime).slice(0, related) : [];
     const newest = sorted.filter((each) => !matched.includes(each)).slice(0, samples);
     const examples = [...matched, ...newest].map(shown);
-    return { folder: shownPath(homeDir, entry.path), path: entry.path, pdfs: entry.pdfs, newest: iso(entry.newest), kinds: Object.fromEntries(Object.entries(kinds).filter(([, n]) => n)), ...(projectWords.length ? { relatedToProject: entry.related } : {}), examples };
+    return { folder: shownPath(homeDir, entry.path), path: entry.path, pdfs: entry.pdfs, newest: iso(entry.newest), kinds: Object.fromEntries(Object.entries(kinds).filter(([, n]) => n)), ...(projectWords.length ? { relatedToProject: entry.related } : {}), ...(since ? { olderLeftOut: entry.olderLeftOut } : {}), examples };
   });
-  return { roots: [...seen].map((dir) => shownPath(homeDir, dir)), pdfs: total, folders, moreFolders: Math.max(0, list.length - top), truncated };
+  const out = { roots: [...seen].map((dir) => shownPath(homeDir, dir)), pdfs: total, folders, moreFolders: Math.max(0, list.length - top), truncated };
+  if (!since) return out;
+  const olderRelated = older.filter((each) => each.shared > 0 && pdfGuess(each.name, titleOf.get(each.file) || '') !== 'personal')
+    .sort((a, b) => b.shared - a.shared || b.mtime - a.mtime).slice(0, olderRelatedMax)
+    .map((each) => ({ name: each.name, title: readTitle(each.file) || null, path: each.file, changed: iso(each.mtime) }));
+  return { ...out, olderLeftOut: older.length, olderRelated };
 }
 
 /**

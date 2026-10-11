@@ -11,7 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readers = require('./readers.cjs');
 const { cursorDb, cursorChats } = require('./cursor.cjs');
-const { APPS, LOCAL_PDFS, sourceOf } = require('../../shared/connect-sources.cjs');
+const { APPS, LOCAL_PDFS, sourceOf, periodName } = require('../../shared/connect-sources.cjs');
 
 const exists = (file) => { try { fs.accessSync(file); return true; } catch { return false; } };
 
@@ -122,12 +122,16 @@ function localRepos({ homeDir, env = process.env, limit = 2000, max = 40 } = {})
 const safely = (work) => { try { return work(); } catch (error) { return { error: error.message }; } };
 const safelyAsync = async (work) => { try { return await work(); } catch (error) { return { error: error.message }; } };
 
-/** A chat app on this Mac at a glance: counts, and the most recent titles (runs a program started left out). */
-function chatsAtAGlance(app, { homeDir, env }) {
+/**
+ * A chat app on this Mac at a glance: counts, and the most recent titles (runs a program started left out). `days`
+ * (2026-10-10): the period picked on Connect your library; `inPeriod` counts the chats in it.
+ */
+function chatsAtAGlance(app, { homeDir, env, days = null }) {
   if (app === 'Cursor') {
     return safely(() => {
       const recent = cursorChats(homeDir, { limit: 400 });
-      return { reach: 'local', chats: recent.length >= 400 ? '400+' : recent.length, recent: recent.slice(0, 20).map((chat) => `${chat.date ? chat.date.slice(0, 10) : ''} ${chat.title}`) };
+      const inPeriod = days ? cursorChats(homeDir, { days, limit: 400 }).length : null;
+      return { reach: 'local', chats: recent.length >= 400 ? '400+' : recent.length, ...(days ? { inPeriod: inPeriod >= 400 ? '400+' : inPeriod } : {}), recent: recent.slice(0, 20).map((chat) => `${chat.date ? chat.date.slice(0, 10) : ''} ${chat.title}`) };
     });
   }
   return safely(() => {
@@ -136,7 +140,7 @@ function chatsAtAGlance(app, { homeDir, env }) {
     for (const chat of recent) byProject.set(chat.project || '(no folder)', (byProject.get(chat.project || '(no folder)') || 0) + 1);
     return {
       reach: 'local',
-      ...readers.localChatCounts(app, { homeDir, env }),
+      ...readers.localChatCounts(app, { homeDir, env, days }),
       typedByYou: recent.length >= 400 ? '400+' : recent.length,
       folders: [...byProject].sort((a, b) => b[1] - a[1]).slice(0, 15).map(([folder, n]) => `${folder} (${n})`),
       recent: recent.slice(0, 20).map((chat) => `${chat.date ? chat.date.slice(0, 10) : ''} ${chat.title}`),
@@ -156,20 +160,23 @@ function folderAtAGlance(dir, homeDir) {
  * The PDFs on this Mac at a glance, by folder, for the librarian to ask about folders and kinds of papers: the chosen
  * folders, and the usual places (Downloads, Documents, Desktop, iCloud Drive…) when the person let the agents read their
  * home folder. With a `project` (2026-10-10) each folder's examples begin with the PDFs that share words with it, for the
- * librarian to offer by title. → evidence, or { needs: 'folder' } when there is nowhere it may look.
+ * librarian to offer by title. With `days` (2026-10-10) the counts and examples cover only the PDFs changed in that period;
+ * `olderLeftOut` says how many were not, and `olderRelated` names the older ones that bear on the project.
+ * → evidence, or { needs: 'folder' } when there is nowhere it may look.
  */
-function pdfsAtAGlance(chosen, { homeDir, everywhere, project = null }) {
+function pdfsAtAGlance(chosen, { homeDir, everywhere, project = null, days = null }) {
   const roots = [...chosen, ...(everywhere ? readers.pdfRoots(homeDir) : [])];
   if (!roots.length) return { reach: 'local', needs: 'folder' };
   return safely(() => {
-    const found = readers.pdfFolders(roots, { homeDir, project });
-    return { reach: 'local', lookedIn: found.roots, pdfs: found.pdfs, folders: found.folders, moreFolders: found.moreFolders, truncated: found.truncated, ...(project ? { examplesFirst: 'Each folder\'s examples begin with the PDFs whose name or title shares words with the project (relatedToProject counts them), then the newest.' } : {}), kinds: 'A guess from each file\'s name: paper, book (books, slides, lecture notes), personal (receipts, statements, tickets: never offered or brought in), unclear (judge from the titles).' };
+    const found = readers.pdfFolders(roots, { homeDir, project, days });
+    const period = days ? { period: `Counts and examples cover only the PDFs changed in ${periodName(days)}; olderLeftOut says how many older ones were left out.`, olderLeftOut: found.olderLeftOut, ...(found.olderRelated.length ? { olderRelated: found.olderRelated, olderRelatedAre: 'Older than the period, sharing words with the project: offer them by title, say they are older, and ask first.' } : {}) } : {};
+    return { reach: 'local', lookedIn: found.roots, pdfs: found.pdfs, folders: found.folders, moreFolders: found.moreFolders, truncated: found.truncated, ...period, ...(project ? { examplesFirst: 'Each folder\'s examples begin with the PDFs whose name or title shares words with the project (relatedToProject counts them), then the newest.' } : {}), kinds: 'A guess from each file\'s name: paper, book (books, slides, lecture notes), personal (receipts, statements, tickets: never offered or brought in), unclear (judge from the titles).' };
   });
 }
 
 /**
  * What the librarian is shown about each app the person picked → { [source]: { [app]: evidence } }. `choices`:
- * { sources: { [id]: { on, apps: [names], folders: [paths] } }, project: { name, description } or null }; `picked` { folders: { app: path } } from the chat's
+ * { sources: { [id]: { on, apps: [names], folders: [paths] } }, project: { name, description } or null, days: 182 | 365 | null }; `picked` { folders: { app: path } } from the chat's
  * buttons; `zotero` { status(), root() }, `github` { status(), repos() }; `appleNotes` (./apple-notes.cjs) once the person
  * let Engelbart read Apple Notes, else null. An app on the web or behind a connector is only named here: its survey reads it.
  */
@@ -192,12 +199,12 @@ async function scanFor(choices, { homeDir, env = process.env, picked = {}, zoter
         else if (!root) here[app] = { reach, signedIn: true, syncing: true };
         else here[app] = safely(() => { const c = readers.zoteroCollections(root); return { reach, signedIn: true, items: c.items, unfiled: c.unfiled, collections: c.collections.slice(0, 60).map((entry) => `${entry.path} (${entry.items}) [key ${entry.key}]`), moreCollections: Math.max(0, c.collections.length - 60) }; });
       } else if (app === 'Claude Code' || app === 'Codex' || app === 'Cursor') {
-        here[app] = chatsAtAGlance(app, { homeDir, env });
+        here[app] = chatsAtAGlance(app, { homeDir, env, days: choices.days || null });
       } else if (app === 'Zoom') {
         const dir = folders.Zoom || path.join(homeDir, 'Documents', 'Zoom');
         here[app] = exists(dir) ? { reach, ...folderAtAGlance(dir, homeDir), cloud: 'Cloud recordings can be read at zoom.us in Engelbart\'s browser.' } : { reach, needs: 'folder', cloud: 'Cloud recordings can be read at zoom.us in Engelbart\'s browser.' };
       } else if (app === LOCAL_PDFS) {
-        here[app] = pdfsAtAGlance([...(choice.folders || []), folders[LOCAL_PDFS]].filter(Boolean), { homeDir, everywhere: !!(choices.permissions && choices.permissions.files), project: choices.project || null });
+        here[app] = pdfsAtAGlance([...(choice.folders || []), folders[LOCAL_PDFS]].filter(Boolean), { homeDir, everywhere: !!(choices.permissions && choices.permissions.files), project: choices.project || null, days: choices.days || null });
       } else if (reach === 'automation') {
         here[app] = appleNotes ? await safelyAsync(async () => ({ reach, folders: ((await appleNotes.folders()) || []).slice(0, 40).map((folder) => `${folder.name} (${folder.count})${folder.account && folder.account !== 'iCloud' ? ` · ${folder.account}` : ''} [id ${folder.id}]`) })) : { reach, needs: 'permission' };
       } else {
@@ -216,7 +223,7 @@ async function scanFor(choices, { homeDir, env = process.env, picked = {}, zoter
       if (vaults.length) here.linksInObsidian = vaults.slice(0, 2).map((vault) => ({ vault: vault.shown, links: safely(() => readers.linksIn(vault.path, { limit: 400 }).length) }));
       if (folders.sites) here.folder = folderAtAGlance(folders.sites, homeDir);
     }
-    if (id === 'papers' && (choice.folders || []).length && !(choice.apps || []).includes(LOCAL_PDFS)) here.folders = pdfsAtAGlance(choice.folders, { homeDir, everywhere: false, project: (choices && choices.project) || null });
+    if (id === 'papers' && (choice.folders || []).length && !(choice.apps || []).includes(LOCAL_PDFS)) here.folders = pdfsAtAGlance(choice.folders, { homeDir, everywhere: false, project: (choices && choices.project) || null, days: (choices && choices.days) || null });
     if (id === 'code') {
       const status = github.status ? github.status() : null;
       if (status && status.connected && github.repos) here.github = await github.repos().then((value) => ({ signedIn: true, repos: (value.repos || []).slice(0, 60).map((repo) => repo.fullName) })).catch((error) => ({ error: error.message }));

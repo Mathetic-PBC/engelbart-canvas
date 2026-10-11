@@ -86,7 +86,7 @@ const IMPORT_TOOLS = [
   { name: 'apple_notes_folders', description: 'Apple Notes\' folders (id, name, account, how many notes), asked through macOS Automation.', inputSchema: schema({}) },
   { name: 'apple_notes_list', description: 'Apple Notes\' notes, newest first: id, name, folder, modified. folder: an id or name; days; query: words in the name or folder; limit (default 500).', inputSchema: schema({ folder: str, days: num, query: str, limit: num }) },
   { name: 'import_apple_notes', description: 'Bring Apple Notes in by id, each as its own Markdown file with its pictures. Up to 200 a call; a note brought in before is skipped.', inputSchema: schema({ ids: strs }, ['ids']) },
-  { name: 'browser_history', description: 'The most visited sites (by "site", the default) or pages (by "page") in a Chromium browser on this Mac (Chrome, Arc, Brave, Edge, Chromium, Vivaldi). browser and profile pick one (default: the one used last). days: how far back (default 90). exclude: hosts to leave out. limit: at most (default 50).', inputSchema: schema({ browser: str, profile: str, days: num, by: str, exclude: strs, limit: num }) },
+  { name: 'browser_history', description: 'The most visited sites (by "site", the default) or pages (by "page") in a Chromium browser on this Mac (Chrome, Arc, Brave, Edge, Chromium, Vivaldi). browser and profile pick one (default: the one used last). days: how far back (default 90, or the period picked when shorter). exclude: hosts to leave out. limit: at most (default 50).', inputSchema: schema({ browser: str, profile: str, days: num, by: str, exclude: strs, limit: num }) },
   { name: 'browser_bookmarks', description: 'A Chromium browser profile\'s bookmarks: title, link and folder. browser and profile as browser_history.', inputSchema: schema({ browser: str, profile: str }) },
   { name: 'links_in_notes', description: 'The web links written in the notes under a folder, most used first, with the notes they are in.', inputSchema: schema({ folder: str, limit: num }, ['folder']) },
   { name: 'zotero_collections', description: 'The collections of the person\'s Zotero library (as Engelbart keeps a copy of it) with how many items each holds.', inputSchema: schema({}) },
@@ -203,7 +203,8 @@ const looksSignedOut = (file, type) => {
 
 /**
  * The tools of one import. `session`: { dataRoot, homeDir, dir (its folder), downloads (where downloads and unpacked zips
- * go), projectId() (null until onboarding makes the project), exports (app → the export chosen), folders (app → folder) };
+ * go), projectId() (null until onboarding makes the project), exports (app → the export chosen), folders (app → folder),
+ * days (the period picked on Connect your library: 182, 365, or null for all time) };
  * `context()` the store's context now; `added(kind, n, what)` counts what this import added ('notes' | 'items'); `kept(row)`
  * each library row it added or found already there (session.cjs keepRow);
  * `zotero` { root(), download? }; `github` (its repos()); `library` deps { describe, identifyRepo, inspectPdf, onAdded,
@@ -219,6 +220,15 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   const homeDir = session.homeDir;
   const allowed = new Set(TOOLS_FOR[kind] || TOOLS_FOR.import);
   const downloads = (part) => path.join(session.downloads || path.join(session.dir, 'downloads'), part);
+  // The period (2026-10-10): the listing tools use the session's when `days` is left out, and cut a longer one down to it;
+  // a shorter one is kept. import_pdfs by path is not held to it, so an older paper the person agreed to still comes in.
+  // TODO: GitHub, Zotero and Google Drive have no period here; only the prompts' rule holds them to it.
+  const within = (days, fallback = null) => {
+    const period = Number.isFinite(session.days) && session.days > 0 ? session.days : null;
+    const asked = Number.isFinite(days) && days > 0 ? days : fallback;
+    if (!period) return days ?? fallback;
+    return asked && asked < period ? asked : period;
+  };
 
   async function ctxNow() {
     const ctx = await context();
@@ -311,7 +321,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   const call = {
     folder_overview: ({ path: dir }) => readers.folderOverview(where(dir), { homeDir }),
     list_note_files: ({ folder, include, exclude, days }) => {
-      const files = readers.noteFiles(where(folder, 'folder'), { include, exclude, days, max: 5000 });
+      const files = readers.noteFiles(where(folder, 'folder'), { include, exclude, days: within(days), max: 5000 });
       return { total: files.length, files: files.slice(0, 2000), more: Math.max(0, files.length - 2000) };
     },
     import_note_files: async ({ files, root }) => {
@@ -346,7 +356,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
     },
     add_to_library: ({ input, name }) => addRow(input, name),
     list_pdfs: async ({ folder, include, exclude, days, query, kind, limit, check }) => {
-      const out = readers.pdfFiles(where(folder, 'folder'), { include, exclude, days, query, kind, limit: Math.min(1000, Math.max(1, Math.round(limit || 300))) });
+      const out = readers.pdfFiles(where(folder, 'folder'), { include, exclude, days: within(days), query, kind, limit: Math.min(1000, Math.max(1, Math.round(limit || 300))) });
       if (check && deps.inspectPdf) {
         const started = Date.now();
         let checked = 0;
@@ -388,7 +398,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
     list_chats: ({ app, days, project, query, limit = 200, automated = false }) => {
       chatApp(app);
       const cap = Math.min(Math.max(1, Math.round(limit)), 1000);
-      return listLocal(app, { days, project, query, limit: cap, automated }).map((chat) => ({ ...chat, imported: imported.has(`chat:${app}:${chat.id}`) }));
+      return listLocal(app, { days: within(days), project, query, limit: cap, automated }).map((chat) => ({ ...chat, imported: imported.has(`chat:${app}:${chat.id}`) }));
     },
     read_chat: ({ app, id, max_chars: max = 6000 }) => {
       chatApp(app);
@@ -413,7 +423,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length };
     },
     web_chats: async ({ app, days, query, project, limit = 200 }) => {
-      const out = await listWebChats(browser(), app, { days, query, project, limit });
+      const out = await listWebChats(browser(), app, { days: within(days), query, project, limit });
       log(`Listed ${out.chats.length} ${app} chat${out.chats.length === 1 ? '' : 's'}`);
       return { ...out, chats: out.chats.map((chat) => ({ ...chat, imported: imported.has(`chat:${app}:${chat.id}`) })) };
     },
@@ -549,7 +559,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, ...(left.length ? { left } : {}) };
     },
     apple_notes_folders: async () => { const notesApp = appleNotesOf(); const out = await notesApp.folders(); log('Read Apple Notes\' folders'); return out; },
-    apple_notes_list: async ({ folder = '', days, query = '', limit = 500 }) => appleNotesOf().list({ folder, days, query, limit }),
+    apple_notes_list: async ({ folder = '', days, query = '', limit = 500 }) => appleNotesOf().list({ folder, days: within(days), query, limit }),
     import_apple_notes: async ({ ids }) => {
       const wanted = ids.slice(0, 200).filter((id) => !imported.has(`apple-notes:${id}`));
       const read = await appleNotesOf().read(wanted, { pictureDir: downloads('apple-notes') });
@@ -564,11 +574,11 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       if (count) log(`Brought in ${count} Apple Note${count === 1 ? '' : 's'}`);
       return { added: count, skipped: skipped.slice(0, 30) };
     },
-    browser_history: async ({ browser: which, profile, days = 90, by = 'site', exclude = [], limit = 50 }) => {
+    browser_history: async ({ browser: which, profile, days, by = 'site', exclude = [], limit = 50 }) => {
       const found = readers.profileOf(homeDir, { browser: which, profile });
       if (!found) throw new Error('No Chromium browser profile with a history was found on this Mac');
       log(`Read ${found.browser}'s history`);
-      return { browser: found.browser, profile: found.name, entries: await readers.browserHistory(found.dir, { days, by: by === 'page' ? 'page' : 'site', exclude, limit: Math.min(Math.max(1, Math.round(limit)), 500) }) };
+      return { browser: found.browser, profile: found.name, entries: await readers.browserHistory(found.dir, { days: within(days, 90), by: by === 'page' ? 'page' : 'site', exclude, limit: Math.min(Math.max(1, Math.round(limit)), 500) }) };
     },
     browser_bookmarks: ({ browser: which, profile }) => {
       const found = readers.profileOf(homeDir, { browser: which, profile });

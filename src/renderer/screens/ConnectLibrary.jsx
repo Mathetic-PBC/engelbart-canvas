@@ -5,7 +5,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -238,6 +238,40 @@ function ProviderPick({ providers, provider, onPick }) {
         {usable.length > 1 && <span style={{ display: 'inline-flex', color: '#8f8f8f' }}>{CARET_DOWN}</span>}
       </button>
       {open && <ProviderMenu providers={providers} provider={provider} onPick={(next) => { setOpen(false); onPick(next); }} at={{ left: 0, top: 'calc(100% + 6px)' }} />}
+    </span>
+  );
+}
+
+/**
+ * How far back the import looks, named inside the words "From [the past year ⌄]" in the sources' header (2026-10-10):
+ * the past 6 months, the past year or all time. Built like ProviderPick; a click outside closes it.
+ */
+function PeriodPick({ days, onPick }) {
+  const [open, setOpen] = React.useState(false);
+  const box = React.useRef(null);
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const away = (event) => { if (box.current && !box.current.contains(event.target)) setOpen(false); };
+    document.addEventListener('mousedown', away);
+    return () => document.removeEventListener('mousedown', away);
+  }, [open]);
+  return (
+    <span ref={box} style={{ position: 'relative', display: 'inline-flex', verticalAlign: 'baseline' }}>
+      <button type="button" className="hov-wash" data-connect-period={days || 'all'} onClick={(event) => { event.stopPropagation(); setOpen((now) => !now); }} title="How far back to look"
+        style={{ display: 'inline-flex', alignItems: 'center', gap: 4, margin: '-2px 1px', padding: '1px 6px 1px 8px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', cursor: 'pointer', font: 'inherit', color: '#171717' }}>
+        <span>{periodName(days)}</span>
+        <span style={{ display: 'inline-flex', color: '#8f8f8f' }}>{CARET_DOWN}</span>
+      </button>
+      {open && (
+        <div data-overlay="1" data-connect-periods="1" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 5, width: 180, padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.08)', animation: `rise 140ms ${EASE}` }}>
+          {PERIODS.map((period) => (
+            <button key={period.label} type="button" className="hov-wash" data-connect-period-option={period.days || 'all'} onClick={(event) => { event.stopPropagation(); setOpen(false); onPick(period.days); }} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', padding: '8px 10px', border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
+              <span style={{ width: 12, color: '#0070f3', display: 'flex' }}>{period.days === days ? CHECK : null}</span>
+              <span style={{ font: '13px/1.3 var(--font-sans)', color: '#171717' }}>{period.label}</span>
+            </button>
+          ))}
+        </div>
+      )}
     </span>
   );
 }
@@ -590,6 +624,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [picks, setPicks] = React.useState(null); // { picks, apps, open }
   const [folders, setFolders] = React.useState({ papers: [], code: [] });
   const [consent, setConsent] = React.useState(true); // "Use my … subscription to read these": files and the browser
+  const [days, setDays] = React.useState(DEFAULT_PERIOD_DAYS); // how far back to look: 182, 365 or null (all time)
   const [appFolders, setAppFolders] = React.useState({}); // app → the folder picked for a local app not found
   const [extraRepos, setExtraRepos] = React.useState([]); // folders picked for Code that were not among the repositories found
   const [repoCount, setRepoCount] = React.useState(null); // GitHub's repositories, for its row
@@ -805,7 +840,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     else if (appFolders[LOCAL_PDFS]) chosen.papers = [...new Set([...chosen.papers, appFolders[LOCAL_PDFS]])];
     try {
       const permissions = permissionsOf(picks, { consent, notes: notesState === 'allowed' });
-      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), permissions, provider, projectId, project }));
+      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), permissions, provider, projectId, project, days }));
       begin(snapshot);
       setView('chat');
       setTimeout(() => draftRef.current && draftRef.current.focus(), 60);
@@ -942,6 +977,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
           <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', margin: '0 -8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 8px', font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>
               Sources<span style={{ fontSize: 9 }}>▾</span><span style={{ flex: 1 }} />
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, marginRight: 8 }}>From <PeriodPick days={days} onPick={setDays} /></span>
               <button type="button" className="bart-text" data-connect-all="1" onClick={() => toggleAll(!allOn)}>{allOn ? 'Clear' : 'Select all'}</button>
             </div>
             {SOURCES.map((source) => {
