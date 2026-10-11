@@ -42,7 +42,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName } = require('../../shared/connect-sources.cjs');
+const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName } = require('../../shared/connect-sources.cjs');
 const prompts = require('./prompts.cjs');
 const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
@@ -191,7 +191,7 @@ function readReply(text, choices) {
     const reach = appOf(a.app) ? appOf(a.app).reach : 'signin';
     const fits = a.kind === 'signin' ? SIGNIN_APPS.has(a.app) : a.kind === 'connector' ? reach === 'connector' : a.kind === 'permission' ? reach === 'automation' : reach === 'local';
     if (fits) {
-      const label = line(a.label, 60) || (a.kind === 'permission' ? `Allow Engelbart to read ${a.app}` : a.kind === 'folder' ? (a.app === LOCAL_PDFS ? 'Choose a folder of PDFs…' : `Choose your ${a.app} folder…`) : `Sign in to ${a.app}`);
+      const label = line(a.label, 60) || (a.kind === 'permission' ? `Allow Engelbart to read ${shownName(a.app)}` : a.kind === 'folder' ? (a.app === LOCAL_PDFS ? 'Choose a folder of PDFs…' : `Choose your ${shownName(a.app)} folder…`) : `Sign in to ${shownName(a.app)}`);
       authorize = { source: sourceOf(a.source) ? a.source : sourceOfApp(a.app), app: a.app, kind: a.kind, label };
     }
   }
@@ -228,7 +228,7 @@ function shownOf(input) {
   if (input.skipped) return 'Skip';
   if (input.importNow) return 'Import now';
   if (Array.isArray(input.picked) && input.picked.length) return [input.picked.map((label) => line(label, 160)).join(', '), input.text ? clip(input.text, 2000) : ''].filter(Boolean).join(' — ');
-  if (input.authorized) return input.authorized.kind === 'permission' ? `Allowed ${input.authorized.app}` : `Signed in to ${input.authorized.app}`;
+  if (input.authorized) return input.authorized.kind === 'permission' ? `Allowed ${shownName(input.authorized.app)}` : `Signed in to ${shownName(input.authorized.app)}`;
   if (input.chose) return `${input.chose.shown}`;
   return clip(input.text, 4000);
 }
@@ -456,7 +456,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     s.seq += 1;
     const job = { id: randomUUID(), key, kind, priority: PRIORITY[kind], seq: s.seq, source, apps, label, plan, extra, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null };
     s.jobs.push(job);
-    logAction(s, job, kind === 'survey' ? `Will look through ${apps.join(', ')}` : kind === 'recall' ? `Will ask ${apps.join(', ')} what it remembers` : kind === 'import' ? 'Queued' : 'Queued');
+    logAction(s, job, kind === 'survey' ? `Will look through ${apps.map(shownName).join(', ')}` : kind === 'recall' ? `Will ask ${apps.map(shownName).join(', ')} what it remembers` : kind === 'import' ? 'Queued' : 'Queued');
     pump(s);
     return job;
   }
@@ -600,18 +600,18 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
             continue;
           }
           s.found[source] = { ...(s.found[source] || {}), [app]: { reach, survey: 'running' } };
-          dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${app}` });
+          dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${shownName(app)}` });
         } else if (reach === 'connector') {
           const connected = connectors ? connectors.status(app).connected : false;
           s.found[source] = { ...(s.found[source] || {}), [app]: connected ? { reach, survey: 'running' } : { reach, needs: 'connector' } };
-          if (connected) dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${app}` });
+          if (connected) dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${shownName(app)}` });
         }
       }
     }
     if (s.choices.permissions.recall && s.choices.permissions.browser) {
       for (const app of recallApps((s.choices.sources.chats || {}).on ? s.choices.sources.chats.apps : [])) {
         if (s.held.has(app)) s.held.get(app).recall = true;
-        else dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${app} what it remembers` });
+        else dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
       }
     }
   }
@@ -632,8 +632,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       return;
     }
     s.found[held.source] = { ...rest, [app]: { ...entry, survey: s.finished ? 'not run: Import was pressed first' : 'running' } };
-    if (!s.finished) dispatch(s, { kind: 'survey', source: held.source, apps: [app], label: `Looking through ${app}` });
-    if (held.recall) dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${app} what it remembers` });
+    if (!s.finished) dispatch(s, { kind: 'survey', source: held.source, apps: [app], label: `Looking through ${shownName(app)}` });
+    if (held.recall) dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
   }
 
   /** A sign-in check's answer (webSignIn.signInQuiet) as the choose screen shows it → { status, browser, browserId }. */
@@ -713,7 +713,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const result = results.get(app);
       if (result && result.status === 'signed-in') {
         out.signedIn.set(app, result.browser);
-        logAction(s, null, result.browser ? `Signed in to ${app} from ${result.browser}` : `Signed in to ${app} already`);
+        logAction(s, null, result.browser ? `Signed in to ${shownName(app)} from ${result.browser}` : `Signed in to ${shownName(app)} already`);
       } else if (result && result.status === 'refused') out.refused.set(app, result.browser);
       else out.signedOut.add(app);
     }
@@ -731,11 +731,11 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   /** "Skipped ChatGPT and Claude: macOS didn't allow Chrome's sign-ins. You can add them later from Add sources." */
-  const skippedLine = (name, apps) => `Skipped ${listed(apps)}: macOS didn't allow ${name || 'your browser'}'s sign-ins. You can add ${apps.length === 1 ? 'it' : 'them'} later from Add sources.`;
+  const skippedLine = (name, apps) => `Skipped ${listed(apps.map(shownName))}: macOS didn't allow ${name || 'your browser'}'s sign-ins. You can add ${apps.length === 1 ? 'it' : 'them'} later from Add sources.`;
 
   /** What the opener says of the sign-ins brought over and the apps macOS refused, in plain lines, or ''. */
   function signInLines({ signedIn, refused }) {
-    const lines = byBrowser(signedIn).map(([name, apps]) => `Using your ${name} sign-ins for ${listed(apps)}.`);
+    const lines = byBrowser(signedIn).map(([name, apps]) => `Using your ${name} sign-ins for ${listed(apps.map(shownName))}.`);
     const skipped = new Map();
     for (const [app, name] of refused) skipped.set(name || '', [...(skipped.get(name || '') || []), app]);
     for (const [name, apps] of skipped) lines.push(skippedLine(name, apps));
@@ -744,7 +744,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /** A sign-in card shown before the run asks for it: no agent waits on it; the app's survey does (releaseHeld). */
   function upfrontNeed(s, app) {
-    const reason = `Sign in to ${app}`;
+    const reason = `Sign in to ${shownName(app)}`;
     s.needs.push({ id: randomUUID(), app, kind: 'signin', reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, 'signin'), closed: false, upfront: true, at: now() });
     logAction(s, null, `Needs you: ${reason}`);
   }
@@ -762,7 +762,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const app = job.apps[0] || job.label;
     // Skip holds for the whole run (2026-10-08: "hitting skip should skip it permanently for this run, right now it tries
     // again"): an app the person skipped is never put to them again; the agent hears at once that it was skipped.
-    if (s.skipped.has(app)) return Promise.resolve({ status: 'skipped', note: `The person skipped ${app} for this run. Do not ask again: finish without it.` });
+    if (s.skipped.has(app)) return Promise.resolve({ status: 'skipped', note: `The person skipped ${shownName(app)} for this run. Do not ask again: finish without it.` });
     let need = s.needs.find((entry) => !entry.closed && entry.app === app && entry.kind === kind);
     if (!need) {
       need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, kind), closed: false, at: now() };
@@ -994,7 +994,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     for (const [app, name] of checked.refused) {
       skipApp(s, app);
       releaseHeld(s, app, 'skip');
-      logAction(s, null, `Skipped ${app}: macOS didn't allow ${name || 'your browser'}'s sign-ins`);
+      logAction(s, null, `Skipped ${shownName(app)}: macOS didn't allow ${name || 'your browser'}'s sign-ins`);
     }
     const lines = signInLines(checked);
     if (lines) opener.text = `${opener.text}\n\n${lines}`;
@@ -1012,13 +1012,13 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const before = parts.length;
       for (const [app, value] of Object.entries(apps)) {
         if (!value || typeof value !== 'object') continue;
-        if (Array.isArray(value.vaults) && value.vaults.length) parts.push(`${plural(value.vaults.length, `${app} vault`)}`);
+        if (Array.isArray(value.vaults) && value.vaults.length) parts.push(`${plural(value.vaults.length, `${shownName(app)} vault`)}`);
         else if (Array.isArray(value.folders) && value.folders.length && typeof value.pdfs === 'number') {
           const where = value.folders.slice(0, 2).map((folder) => folder.folder).filter(Boolean);
           parts.push(`${plural(value.pdfs, 'PDF')}${s.choices.days ? ` from ${periodName(s.choices.days)}` : ''}${where.length ? ` in ${where.join(' and ')}` : ''}`);
-        } else if (typeof value.chats === 'number' && value.chats) parts.push(`your ${app} chats`);
-        else if (value.signedIn && typeof value.items === 'number') parts.push(`${plural(value.items, `${app} item`)}`);
-        else if (Array.isArray(value.repos) && value.repos.length) parts.push(`${plural(value.repos.length, `${app} repository`, `${app} repositories`)}`);
+        } else if (typeof value.chats === 'number' && value.chats) parts.push(`your ${shownName(app)} chats`);
+        else if (value.signedIn && typeof value.items === 'number') parts.push(`${plural(value.items, `${shownName(app)} item`)}`);
+        else if (Array.isArray(value.repos) && value.repos.length) parts.push(`${plural(value.repos.length, `${shownName(app)} repository`, `${shownName(app)} repositories`)}`);
       }
       if (parts.length > before) firstSource.push(source);
     }
@@ -1072,8 +1072,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const source = sourceOfApp(app);
     let clean;
     if (kind === 'connector') {
-      if (!connectors) throw new Error(`${app} cannot be signed in to here`);
-      s.activity = `Waiting for you to sign in to ${app} in your browser`;
+      if (!connectors) throw new Error(`${shownName(app)} cannot be signed in to here`);
+      s.activity = `Waiting for you to sign in to ${shownName(app)} in your browser`;
       s.thinking = true;
       emit(s);
       try { await connectors.signIn(app); } catch (error) { s.thinking = false; s.activity = ''; emit(s); throw error; }
@@ -1081,9 +1081,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.activity = '';
       clean = { authorized: { app, kind } };
       s.found[source] = { ...(s.found[source] || {}), [app]: { reach: 'connector', survey: 'running' } };
-      dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${app}` });
+      dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${shownName(app)}` });
     } else if (kind === 'permission') {
-      if (!appleNotes) throw new Error(`${app} cannot be read here`);
+      if (!appleNotes) throw new Error(`${shownName(app)} cannot be read here`);
       const out = await appleNotes.permission();
       if (!out.allowed) throw new Error(out.error || 'macOS did not allow it');
       s.choices.permissions.notes = true;
@@ -1143,7 +1143,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (choice.apps.length && !apps.length && !choice.folders.length && !choice.repos.length) continue; // nothing of it can be reached
       const label = sourceOf(source).label;
       const where = [apps.length ? `from ${apps.join(', ')}` : '', choice.folders.length ? `folders ${choice.folders.join(', ')}` : '', choice.repos.length ? `repositories ${choice.repos.join(', ')} (already in the library)` : ''].filter(Boolean).join('; ');
-      dispatch(s, { kind: 'import', source, apps, label: apps.length ? `${label}: ${apps.join(', ')}` : label, plan: `Bring in ${label.toLowerCase()} ${where} as the person picked and said in the chat. They pressed Import before this source was talked through, so use sensible defaults: leave out daily notes, personal folders and journals; tools used every day (mail, calendar, social media); runs a program started; anything older than about six months when there is a lot.` });
+      dispatch(s, { kind: 'import', source, apps, label: apps.length ? `${label}: ${apps.map(shownName).join(', ')}` : label, plan: `Bring in ${label.toLowerCase()} ${where} as the person picked and said in the chat. They pressed Import before this source was talked through, so use sensible defaults: leave out daily notes, personal folders and journals; tools used every day (mail, calendar, social media); runs a program started; anything older than about six months when there is a lot.` });
     }
     s.chat.push({ role: 'user', text: 'Import now', at: now() });
     s.done = true;
@@ -1185,14 +1185,14 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       found.busy = true;
       found.cancel = () => controller.abort();
       emit(s);
-      const opened = (name) => { found.opened = true; found.browser = name; logAction(s, null, `Opened ${found.app}'s sign-in in ${name}`, 'You'); emit(s); };
+      const opened = (name) => { found.opened = true; found.browser = name; logAction(s, null, `Opened ${shownName(found.app)}'s sign-in in ${name}`, 'You'); emit(s); };
       webSignIn.signIn(found.app, { signal: controller.signal, onOpened: opened }).catch((error) => ({ status: 'failed', error: error.message })).then((out) => {
         found.busy = false;
         found.cancel = null;
         found.note = noteFor(found.app, found.kind); // macOS has been asked now, or will be by the next browser
         if (out.browser) found.browser = out.browser; // the browser it used, not the default it may have passed over
         if (found.closed || out.status === 'cancelled') return;
-        if (out.status === 'signed-in') { logAction(s, null, `Signed in to ${found.app} from ${out.browser}`, 'You'); closeNeed(s, found, 'done'); return; }
+        if (out.status === 'signed-in') { logAction(s, null, `Signed in to ${shownName(found.app)} from ${out.browser}`, 'You'); closeNeed(s, found, 'done'); return; }
         if (out.status === 'unsupported') { showWindow(s, found, `${out.browser}'s sign-ins can't be brought into Engelbart: sign in here instead.`); return; }
         // macOS refused: a card that asks again can't succeed (2026-10-10), so the app is skipped and the chat says so.
         // TODO: offer a sign-in window in Engelbart's own browser instead (not in this build).
@@ -1203,8 +1203,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
           emit(s);
           return;
         }
-        found.error = out.status === 'no-browser' ? `Signing in to ${found.app} needs ${READABLE_NAMES}.`
-          : out.status === 'timeout' ? `Still not signed in to ${found.app} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
+        found.error = out.status === 'no-browser' ? `Signing in to ${shownName(found.app)} needs ${READABLE_NAMES}.`
+          : out.status === 'timeout' ? `Still not signed in to ${shownName(found.app)} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
         emit(s);
       });
       return snapshot(s);
@@ -1251,7 +1251,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         if (found.closed) return;
         if (yes) { closeNeed(s, found, 'done'); return; }
         found.opened = false;
-        found.error = `Not signed in to ${found.app} yet.`;
+        found.error = `Not signed in to ${shownName(found.app)} yet.`;
         emit(s);
       });
     }
@@ -1446,7 +1446,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         s.found[source] = { ...s.found[source], [app]: entry };
         if (!s.jobs.some((job) => job.kind === 'survey' && job.apps.includes(app))) {
           s.seq += 1;
-          s.jobs.push({ id: randomUUID(), key: `survey:${source}:${app}`, kind: 'survey', priority: PRIORITY.survey, seq: s.seq, source, apps: [app], label: `Looking through ${app}`, plan: '', extra: null, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null });
+          s.jobs.push({ id: randomUUID(), key: `survey:${source}:${app}`, kind: 'survey', priority: PRIORITY.survey, seq: s.seq, source, apps: [app], label: `Looking through ${shownName(app)}`, plan: '', extra: null, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null });
         }
       }
     }

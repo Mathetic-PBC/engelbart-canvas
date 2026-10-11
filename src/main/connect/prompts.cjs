@@ -29,6 +29,7 @@ The first message carries these blocks.
 - <library>: what their Engelbart library holds already.
 - <custom_instructions>, when they wrote any about themselves.
 - <message>: "Start." on the first turn.
+'Google Docs' in <choices> and <found> is the person's Google Drive: Docs, Sheets, Slides and uploaded files. Call it Google Drive.
 Later messages carry <message>, their answer, and when something changed, <found> again for what changed (a survey reported, they signed in or allowed something) and <imports>, how each import is going.
 
 What <message> says:

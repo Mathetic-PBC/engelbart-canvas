@@ -37,6 +37,7 @@ const SKILLS = {
 - A Microsoft sign-in may ask which account: that is the person's choice, so call needs_you.`,
 
   'Google Docs': `# Google Drive and Docs
+- The person knows this app as Google Drive: call it that in anything they read (needs_you reasons, your summary).
 - ${BROWSER}
 - To see what is there: browser_open https://drive.google.com/drive/recent (recent files), https://drive.google.com/drive/my-drive (folders), or https://drive.google.com/drive/search?q=<words>. Each file row in browser_read carries its Drive id (id) and its name; the row's label says its kind (Google Docs, Google Sheets, Google Slides, PDF, folder). Open a folder by browser_open https://drive.google.com/drive/folders/<id>.
 - To bring files in: import_google_files with items [{ id, kind, name }], kind doc, sheet, slides or file (a pdf or any uploaded file). Docs become notes (exported as Markdown), Sheets notes of their first sheet as a table, Slides notes of their text, pdfs and other files go into the library. Never open files one by one to copy their text.

@@ -3,9 +3,9 @@
 // (src/main/connect), how an import's progress reads, what a step the agents hand the person says, and what the dock
 // shows. The sources and apps are src/shared/connect-sources.cjs.
 
-import { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, PERIODS, DEFAULT_PERIOD_DAYS, recallApps, webApps, cleanDays, periodName } from '../../shared/connect-sources.cjs';
+import { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, PERIODS, DEFAULT_PERIOD_DAYS, recallApps, webApps, cleanDays, periodName, shownName } from '../../shared/connect-sources.cjs';
 
-export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName };
+export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName, shownName };
 
 // MATH-114 (2026-10-09): the choose screen as the mockup's grouped list. Each source is a group whose header ticks its
 // rows (tri-state); a row says at its right how the app is reached and where it stands; ticking is the consent (a
@@ -131,9 +131,9 @@ export function pickedApps(picks, apps) {
   return SOURCES.filter((source) => picks[source.id]).flatMap((source) => appsOf(source.id, apps));
 }
 
-/** What a group's header says after its name: the rows ticked ("Obsidian, Google Docs"; "GitHub, 2 local repos"), or "nothing picked". */
+/** What a group's header says after its name: the rows ticked, as the person sees them ("Obsidian, Google Drive"; "GitHub, 2 local repos"), or "nothing picked". */
 export function subOf(sourceId, state) {
-  const names = rowsOf(sourceId).filter((row) => ticked(state, sourceId, row)).map((row) => (sourceId === 'code' && row === LOCAL_REPOS ? reposCount(state) : row));
+  const names = rowsOf(sourceId).filter((row) => ticked(state, sourceId, row)).map((row) => (sourceId === 'code' && row === LOCAL_REPOS ? reposCount(state) : shownName(row)));
   return names.length ? names.join(', ') : 'nothing picked';
 }
 const reposCount = (state) => { const n = localPicked(state).length; return `${n} local repo${n === 1 ? '' : 's'}`; };
@@ -154,7 +154,7 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
   if (spec.reach === 'connector') {
     const status = connectors[app] || {};
     if (status.connected) return { text: 'signed in', tone: '' };
-    if (status.pending) return { text: `Waiting for ${app} sign-in…`, tone: 'busy' };
+    if (status.pending) return { text: `Waiting for ${shownName(app)} sign-in…`, tone: 'busy' };
     return { text: NEEDS_SIGN_IN, tone: 'muted' };
   }
   if (spec.reach === 'automation') {
@@ -220,7 +220,7 @@ const listed = (names) => (names.length < 2 ? names.join('') : `${names.slice(0,
 export function signInPanel(state, browser, rows = []) {
   const still = rows.filter((row) => ticked(state, row.id, row.app));
   if (!still.length) return null;
-  const apps = still.map((row) => row.app);
+  const apps = still.map((row) => shownName(row.app));
   return {
     browser,
     rows: still,
@@ -233,10 +233,19 @@ export function signInPanel(state, browser, rows = []) {
   };
 }
 
-/** The line under a row's name, when it needs one: macOS asks before Apple Notes. (What asking an assistant what it remembers is, the refine chat says.) */
+/**
+ * The line under a row's name, when it needs one: macOS asks before Apple Notes. (What asking an assistant what it
+ * remembers is, the refine chat says.) Rows have no such line for web apps, so Google Drive's "Docs, Sheets, Slides and
+ * files" (2026-10-10) is its row's tooltip (rowTip), not a line.
+ */
 export function rowSub(app) {
   if (app === 'Apple Notes') return 'macOS will ask';
   return '';
+}
+
+/** What a row's tooltip adds about what the app brings in, or ''. */
+export function rowTip(app) {
+  return app === 'Google Docs' ? 'Docs, Sheets, Slides and files' : '';
 }
 
 /**
@@ -365,9 +374,11 @@ export function workRow(job) {
   const at = label.indexOf(':');
   const head = (at >= 0 ? label.slice(0, at) : label).trim();
   const tail = at >= 0 ? label.slice(at + 1).trim() : '';
-  const apps = (job.apps || []).filter(Boolean);
+  const ids = (job.apps || []).filter(Boolean);
+  const apps = ids.map(shownName);
   const title = apps.length ? andList(apps) : head || label;
-  const own = tail && tail !== apps.join(', ') && tail !== title ? tail : '';
+  // The label's tail names the apps again (main writes them shown; a session saved before 2026-10-10, by their ids).
+  const own = tail && tail !== apps.join(', ') && tail !== ids.join(', ') && tail !== title ? tail : '';
   const kindSub = job.kind === 'survey' ? 'Looking through it' : job.kind === 'recall' ? 'What it remembers about you' : WORK_SUBS[job.source] || '';
   const sub = own ? own[0].toUpperCase() + own.slice(1) : kindSub !== title ? kindSub : '';
   const n = (job.notes || 0) + (job.items || 0);
@@ -436,14 +447,15 @@ export function chatStatus(session) {
 /** What a step the agents hand the person asks of them, the button that does it, and how (`hint`, the row's line under its app). */
 export function needView(need) {
   const kind = need && need.kind;
-  if (kind === 'connector') return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
-  if (kind === 'permission') return { title: `${need.app} needs your permission`, action: 'Allow', hint: 'macOS will ask' };
-  if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
+  const app = need ? shownName(need.app) : '';
+  if (kind === 'connector') return { title: `${app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
+  if (kind === 'permission') return { title: `${app} needs your permission`, action: 'Allow', hint: 'macOS will ask' };
+  if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
   // One button and Skip (2026-10-08: "It should just be one login button on the right ... or skip"): a sign-in opens in the
   // default browser and is brought over (main's connect/web-signin.cjs); a code or a captcha, the agent's own window.
   const what = { signin: 'sign in', '2fa': 'enter a code', password: 'sign in', captcha: 'prove you are not a robot', confirm: 'confirm something' }[kind] || 'sign in';
   const signs = kind === 'signin' || kind === 'password';
-  return { title: `${need ? need.app : 'An app'} needs you to ${what}`, action: signs ? 'Log in' : 'Open', hint: signs ? 'Opens in your browser · read-only' : `Opens its window to ${what}` };
+  return { title: `${app || 'An app'} needs you to ${what}`, action: signs ? 'Log in' : 'Open', hint: signs ? 'Opens in your browser · read-only' : `Opens its window to ${what}` };
 }
 
 /** MEMORY.md's line in the progress list. */

@@ -61,6 +61,14 @@ const APPS = Object.freeze({
 // Where a sign-in may take a page on its way back to an app (an agent's browser only goes where its apps' `sites` are).
 const SIGN_IN_SITES = Object.freeze(['accounts.google.com', 'appleid.apple.com', 'idmsa.apple.com', 'login.microsoftonline.com', 'login.live.com', 'auth.openai.com', 'auth0.openai.com', 'accounts.x.ai', 'github.com', 'okta.com', 'auth0.com']);
 
+// What the person is shown for an app whose id says less than it reaches (2026-10-10): 'Google Docs' opens their whole
+// Drive (its agent starts at drive.google.com, import_google_files brings in Docs, Sheets, Slides and any file), so it is
+// shown as Google Drive. The id stays a key everywhere (APPS, the groups, sign-ins, the scan, skills, logos, picks, saved
+// sessions); only what is drawn or said to the person goes through shownName.
+const SHOWN_NAMES = Object.freeze({ 'Google Docs': 'Google Drive' });
+/** The name the person sees for an app: 'Google Drive' for 'Google Docs', any other app its own. */
+const shownName = (app) => (Object.hasOwn(SHOWN_NAMES, app) ? SHOWN_NAMES[app] : app);
+
 const SOURCE_IDS = Object.freeze(SOURCES.map((source) => source.id));
 const sourceOf = (id) => SOURCES.find((source) => source.id === id) || null;
 const appOf = (name) => (Object.hasOwn(APPS, name) ? APPS[name] : null);
@@ -82,4 +90,4 @@ const cleanDays = (value) => (value === 182 || value === 365 ? value : null);
 /** "the past year" for 365, "the past 6 months" for 182, "all time" otherwise. */
 const periodName = (days) => (PERIODS.find((period) => period.days === cleanDays(days)) || PERIODS[2]).label;
 
-module.exports = { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, SIGN_IN_SITES, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };
+module.exports = { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, SIGN_IN_SITES, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };

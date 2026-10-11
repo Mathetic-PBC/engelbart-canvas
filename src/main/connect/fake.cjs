@@ -10,6 +10,8 @@
 // unless they signed in on the card shown before the run.
 // Same shape as ./agents.cjs turn().
 
+const { shownName } = require('../../shared/connect-sources.cjs');
+
 const sleep = (ms, signal) => new Promise((resolve, reject) => {
   const timer = setTimeout(resolve, ms);
   if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); const error = new Error('Stopped.'); error.kind = 'stopped'; reject(error); }, { once: true });
@@ -52,11 +54,11 @@ async function surveyRun({ session: s, job, callTool }, delayMs, signal) {
   // Signed in on the card shown before the run (session.cjs signInsFirst): nothing to ask again.
   const signedInFirst = !!(s && s.needs.some((need) => need.app === app && need.upfront && need.outcome === 'done'));
   if (!signedInFirst && String(process.env.ENGELBART_CONNECT_FAKE_NEEDS || '').split(',').includes(app)) {
-    let out = await callTool('needs_you', { kind: 'signin', reason: `Sign in to ${app}` });
+    let out = await callTool('needs_you', { kind: 'signin', reason: `Sign in to ${shownName(app)}` });
     for (let n = 0; n < 10 && out.status === 'waiting'; n += 1) out = await callTool('wait_for_you', {});
-    if (out.status === 'skipped') return JSON.stringify({ app, signedIn: false, summary: `${app} was skipped.`, items: [] });
+    if (out.status === 'skipped') return JSON.stringify({ app, signedIn: false, summary: `${shownName(app)} was skipped.`, items: [] });
   }
-  return JSON.stringify({ app, signedIn: true, summary: `3 things in ${app}.`, total: 3, items: [1, 2, 3].map((n) => ({ id: `${app.toLowerCase().replace(/\W+/g, '-')}-${n}`, label: `${app} item ${n}`, kind: 'doc', date: '2026-10-0' + n, where: null, why: n === 1 ? 'research' : null })) });
+  return JSON.stringify({ app, signedIn: true, summary: `3 things in ${shownName(app)}.`, total: 3, items: [1, 2, 3].map((n) => ({ id: `${app.toLowerCase().replace(/\W+/g, '-')}-${n}`, label: `${shownName(app)} item ${n}`, kind: 'doc', date: '2026-10-0' + n, where: null, why: n === 1 ? 'research' : null })) });
 }
 
 async function importRun({ session: s, job, callTool }, delayMs, signal) {
@@ -78,7 +80,7 @@ async function importRun({ session: s, job, callTool }, delayMs, signal) {
   }
   const webApps = (job.apps.length ? job.apps : (s.choices.sources[job.source] || {}).apps || []).filter((app) => app !== 'Obsidian' && app !== 'Claude Code');
   let n = 0;
-  for (const app of webApps) { const out = await callTool('add_note', { title: `${app}: fake note`, markdown: `A note the fake agent brought in from ${app}.`, source: `fake:${app}` }); if (out.added) n += 1; }
+  for (const app of webApps) { const out = await callTool('add_note', { title: `${shownName(app)}: fake note`, markdown: `A note the fake agent brought in from ${shownName(app)}.`, source: `fake:${app}` }); if (out.added) n += 1; }
   await sleep(delayMs, signal);
   return n ? `Brought in ${n} notes.` : 'Nothing to bring in from the fake agent.';
 }

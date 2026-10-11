@@ -5,14 +5,14 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
 import onenote from '../../../design/assets/logos/microsoft-onenote.svg';
 import zotero from '../../../design/assets/logos/zotero.svg';
 import overleaf from '../../../design/assets/logos/overleaf.svg';
-import googledocs from '../../../design/assets/logos/googledocs.svg';
+import googledrive from '../../../design/assets/logos/google-drive.svg';
 import evernote from '../../../design/assets/logos/evernote.svg';
 import granola from '../../../design/assets/logos/granola-light.svg';
 import meet from '../../../design/assets/logos/google-meet.svg';
@@ -50,7 +50,8 @@ import github from '../../../design/assets/logos/github.svg';
 // person's own subscription, over a box that says where it all goes. Code: GitHub, and the repositories on this Mac that
 // Claude Code and Codex were run in (src/main/connect/scan.cjs localRepos).
 
-const LOGOS = { Obsidian: obsidian, Notion: notion, 'Apple Notes': apple, OneNote: onenote, Zotero: zotero, Overleaf: overleaf, 'Google Docs': googledocs, Evernote: evernote, Granola: granola, 'Google Meet': meet, Zoom: zoom, ChatGPT: openai, Codex: codex, Claude: claude, 'Claude Code': claude, Grok: grok, Gemini: gemini, Perplexity: perplexity, Cursor: cursor, GitHub: github };
+// Keyed by app id: 'Google Docs' is the person's whole Drive (shown as Google Drive, connect-sources shownName), so its logo is Drive's.
+export const LOGOS = { Obsidian: obsidian, Notion: notion, 'Apple Notes': apple, OneNote: onenote, Zotero: zotero, Overleaf: overleaf, 'Google Docs': googledrive, Evernote: evernote, Granola: granola, 'Google Meet': meet, Zoom: zoom, ChatGPT: openai, Codex: codex, Claude: claude, 'Claude Code': claude, Grok: grok, Gemini: gemini, Perplexity: perplexity, Cursor: cursor, GitHub: github };
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 /** The choose screen's column in onboarding (2026-10-09); Onboarding.jsx lines Skip for now up with it. */
 export const CHOOSE_WIDTH = 600;
@@ -127,12 +128,15 @@ function RowText({ name, on, sub, label, dim = false, tip: extra = '', onRetry =
 
 const notFound = (label) => !!label && label.text === 'Not found';
 
+// `name` is the app's id (its logo, data-connect-app); the row shows the name the person knows it by (shownName). A
+// repository's row (`data` its own) shows the repository's name as it is.
 function AppRow({ name, on, onToggle, label, sub = '', tip = '', icon = null, data = name, onRetry = null }) {
   const dim = notFound(label);
+  const text = data === name ? shownName(name) : name;
   return (
     <button type="button" className="hov-wash" data-connect-app={data} data-connect-not-found={dim ? '1' : undefined} onClick={onToggle} style={subRow}>
       <span style={{ margin: '0 1px', display: 'flex', color: '#4d4d4d', opacity: dim ? 0.45 : 1 }}>{icon || logoOf(name) || (name === LOCAL_PDFS ? FOLDER : <span style={{ width: 14 }} />)}</span>
-      <RowText name={name} on={on} sub={sub} label={label} dim={dim} tip={tip} onRetry={onRetry} />
+      <RowText name={text} on={on} sub={sub} label={label} dim={dim} tip={tip} onRetry={onRetry} />
       <Box on={on} dim={dim} />
     </button>
   );
@@ -142,10 +146,10 @@ function AppRow({ name, on, onToggle, label, sub = '', tip = '', icon = null, da
 function ExpandRow({ name, on, some = false, open, onOpen, onToggle, label, icon }) {
   return (
     <div className="hov-wash" data-connect-app={name} style={{ ...subRow, padding: '5px 8px 5px 4px', cursor: 'default' }}>
-      <button type="button" data-connect-row-open={name} aria-expanded={open ? 'true' : 'false'} aria-label={open ? `Close ${name}` : `Open ${name}`} onClick={onOpen} style={{ flex: 'none', width: 12, display: 'flex', justifyContent: 'center', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: '#8f8f8f', transform: `rotate(${open ? 90 : 0}deg)`, transition: 'transform 140ms' }}>{CARET_RIGHT}</button>
+      <button type="button" data-connect-row-open={name} aria-expanded={open ? 'true' : 'false'} aria-label={open ? `Close ${shownName(name)}` : `Open ${shownName(name)}`} onClick={onOpen} style={{ flex: 'none', width: 12, display: 'flex', justifyContent: 'center', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: '#8f8f8f', transform: `rotate(${open ? 90 : 0}deg)`, transition: 'transform 140ms' }}>{CARET_RIGHT}</button>
       <button type="button" onClick={onToggle} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 10, padding: 0, border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left' }}>
         <span style={{ margin: '0 1px', display: 'flex', color: '#4d4d4d', opacity: notFound(label) ? 0.45 : 1 }}>{icon || logoOf(name)}</span>
-        <RowText name={name} on={on || some} label={label} dim={notFound(label)} />
+        <RowText name={shownName(name)} on={on || some} label={label} dim={notFound(label)} />
         <Box on={on} some={some} dim={notFound(label)} />
       </button>
     </div>
@@ -318,7 +322,7 @@ function NeedsCard({ needs, onOpen, onSkip }) {
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}>{logoOf(need.app) || ALERT}</span>
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  <span title={view.title} style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{need.app}</span>
+                  <span title={view.title} style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{shownName(need.app)}</span>
                   <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{need.busy && need.browser ? `Finish in ${need.browser}…` : view.hint}</span>
                   {need.note && !need.error && <span data-connect-need-note="1" style={{ font: '12px/1.45 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{need.note}</span>}
                 </span>
@@ -409,7 +413,7 @@ function AuthorizeCard({ authorize, live, busy, onUse, onSkip, onCancel }) {
     <div data-connect-authorize={authorize.kind} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
       <button type="button" className="cx-btn" data-connect-button={authorize.kind} disabled={!live || busy} onClick={() => onUse(authorize)}>
         {LOGOS[authorize.app] && <span aria-hidden="true" style={{ width: 14, height: 14, background: `url(${LOGOS[authorize.app]}) center / contain no-repeat`, filter: 'brightness(0) invert(1)' }} />}
-        {busy ? (authorize.kind === 'connector' ? `Finish signing in to ${authorize.app} in your browser…` : 'Waiting…') : authorize.label}
+        {busy ? (authorize.kind === 'connector' ? `Finish signing in to ${shownName(authorize.app)} in your browser…` : 'Waiting…') : authorize.label}
       </button>
       {live && busy && authorize.kind === 'connector' && <button type="button" className="bart-text" onClick={() => onCancel(authorize)}>Cancel</button>}
       {live && !busy && <button type="button" className="bart-text" data-connect-skip="1" onClick={onSkip}>Skip</button>}
@@ -996,7 +1000,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                   {open && (
                     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 1, padding: '1px 0 6px 26px' }}>
                       <span style={{ position: 'absolute', left: 33, top: 2, bottom: 8, width: 1, background: '#eaeaea' }} />
-                      {source.apps.map((app) => <AppRow key={app} name={app} label={label(app, source.id)} sub={rowSub(app)} on={ticked(picks, source.id, app)} onToggle={() => toggleApp(source.id, app)} onRetry={() => retrySignIn(source.id, app)} />)}
+                      {source.apps.map((app) => <AppRow key={app} name={app} label={label(app, source.id)} sub={rowSub(app)} tip={rowTip(app)} on={ticked(picks, source.id, app)} onToggle={() => toggleApp(source.id, app)} onRetry={() => retrySignIn(source.id, app)} />)}
                       {source.id === 'sites' && <AppRow name={BROWSER_ROW} icon={GLOBE} label={found && found.sites && found.sites.found ? { text: found.sites.where, tone: '' } : { text: 'Not found', tone: 'muted' }} on={ticked(picks, 'sites', BROWSER_ROW)} onToggle={() => setRow('sites', BROWSER_ROW, !ticked(picks, 'sites', BROWSER_ROW))} />}
                       {source.id === 'papers' && (folders.papers.length
                         ? folders.papers.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, papers: [] }))} />)

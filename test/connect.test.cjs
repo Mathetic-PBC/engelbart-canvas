@@ -838,6 +838,31 @@ test('a whole source handed over still reaches its apps: its import gets the age
   connect.stop(started.id);
 });
 
+// Google Docs is shown as Google Drive (2026-10-10): its id is what is picked, sent, saved and resumed; what the person reads says Drive.
+test('Google Docs is picked, saved and resumed by its id, and every line the person reads during the run says Google Drive', async () => {
+  const home = fs.mkdtempSync(path.join(homeDir, 'drive-')); // no Obsidian vault: the notes import reads Google Drive alone
+  const first = fakeConnect({ home, delayMs: 30 });
+  const started = await first.connect.start({ sources: { notes: { on: true, apps: ['Google Docs'] } }, permissions: { recall: false } });
+  await until(first.state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
+  first.connect.answer(started.id, { picked: ['Everything'] });
+  const going = await until(first.state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'running'), 'the import running');
+  const survey = going.jobs.find((job) => job.kind === 'survey');
+  assert.deepEqual([survey.apps, survey.label], [['Google Docs'], 'Looking through Google Drive']);
+  const shown = (s) => JSON.stringify({ jobs: s.jobs.map((job) => [job.label, job.activity, job.error]), needs: s.needs.map((need) => [need.reason, need.note, need.error]), log: s.log.map((entry) => entry.text) });
+  assert.doesNotMatch(shown(going), /Google Docs/, shown(going));
+  first.connect.suspendAll();
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.deepEqual(saved.choices.sources.notes.apps, ['Google Docs'], 'saved by its id');
+
+  const second = fakeConnect({ home, delayMs: 5 });
+  second.connect.resume(ctx);
+  assert.ok(second.connect.has(started.id));
+  const done = await until(second.state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the import finished after the restart', 1500);
+  assert.deepEqual(done.jobs.find((job) => job.kind === 'survey').apps, ['Google Docs'], 'resumed by its id');
+  assert.doesNotMatch(shown(done), /Google Docs/, shown(done));
+  for (const one of second.connect.list(ctx.dataRoot)) second.connect.stop(one.id);
+});
+
 test('an existing user\'s session belongs to their project; Stop ends every agent and MEMORY.md is not written', async () => {
   const { project } = await projects.createProjectWithWelcome(ctx, { name: 'Existing' });
   const { connect, state } = fakeConnect({ delayMs: 60 });
