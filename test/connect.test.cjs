@@ -16,9 +16,11 @@ const http = require('node:http');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
+const { randomUUID } = require('node:crypto');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
+const library = require('../src/main/store/library.cjs');
 const readers = require('../src/main/connect/readers.cjs');
 const notes = require('../src/main/connect/notes.cjs');
 const { createImportTools, validateImportTool, chatNote, toolsFor, googleMarkdown, csvTable, IMPORT_TOOLS } = require('../src/main/connect/tools.cjs');
@@ -590,6 +592,60 @@ test('a session with the fake agents: a folder button, a question card, imports 
   connect.dismiss(started.id);
   assert.equal(connect.list(ctx.dataRoot).some((s) => s.id === started.id), false);
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
+});
+
+test('an import started from a project and a workspace lands in both; a row removed from the project is not brought back (2026-10-11)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'placed-'));
+  fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
+  const { project, workspaceId } = await projects.createProjectWithWelcome(ctx, { name: 'Imported into' });
+  const { connect, state } = fakeConnect({ home: fresh });
+  const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } }, provider: 'openai', projectId: project.id, workspaceId });
+  assert.equal(started.mode, 'existing');
+  await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the folder button');
+  await connect.authorize(started.id, { app: 'Obsidian', kind: 'folder', path: '~/Vault' });
+  await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
+  connect.answer(started.id, { picked: ['Everything'] });
+  await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the notes import');
+  const listed = () => projects.findProject(ctx, project.id).library;
+  await until(() => connect.state(started.id).placed, (placed) => placed.project === 5 && placed.workspace === 5, 'the five placed');
+  assert.equal(listed().length, 5, 'on the project\'s own list');
+  const context = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
+  assert.deepEqual(listed().filter((id) => !context.includes(id)), [], 'and in the workspace it was started from');
+  assert.deepEqual((await library.libraryForProject(ctx, project.id)).map((row) => row.id).filter((id) => listed().includes(id)).sort(), [...listed()].sort(), 'the project holds them');
+
+  // Taken out of the project, then the session places what it brought again (as a resumed or repeated import does).
+  const [gone] = listed();
+  await projects.removeFromProject(ctx, project.id, [gone]);
+  await connect.attachProject(ctx, started.id, project.id, workspaceId);
+  assert.ok(!listed().includes(gone), 'not back on the project\'s list');
+  assert.ok(!projects.findWorkspace(ctx, project.id, workspaceId).workspace.context.includes(gone), 'nor in the workspace');
+  assert.ok(!(await library.libraryForProject(ctx, project.id)).some((row) => row.id === gone));
+  // Only an add brings it back.
+  await projects.addToProject(ctx, project.id, [gone]);
+  assert.ok(listed().includes(gone));
+
+  // A workspace that is not the project's is left out: what comes in is the project's alone.
+  const other = await projects.createProjectWithWelcome(ctx, { name: 'Someone else' });
+  const second = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } }, provider: 'openai', projectId: project.id, workspaceId: other.workspaceId });
+  const savedAt = path.join(ctx.dataRoot, '.connect', second.id, 'session.json');
+  await until(() => fs.existsSync(savedAt), Boolean, 'the second session saved');
+  assert.equal(JSON.parse(fs.readFileSync(savedAt, 'utf8')).workspaceId, null);
+  connect.stop(second.id);
+  connect.dismiss(started.id);
+  connect.dismiss(second.id);
+});
+
+test('Connect sends the open workspace with its project, and says where what came in went', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const pid = randomUUID(), wid = randomUUID();
+  assert.equal(model.choicesOf({ picks: {}, apps: {}, projectId: pid, workspaceId: wid }).workspaceId, wid);
+  assert.equal('workspaceId' in model.choicesOf({ picks: {}, apps: {}, workspaceId: wid }), false, 'no project, no workspace');
+  const line = (project, workspace) => model.placedLine({ projectId: pid, placed: { project, workspace } });
+  assert.equal(line(742, 500), '742 added to the project. The first 500 are also in this workspace.');
+  assert.equal(line(3, 3), '3 added to the project. They are also in this workspace.');
+  assert.equal(line(4, 0), '4 added to the project.');
+  assert.equal(line(0, 0), '');
+  assert.equal(model.placedLine({ projectId: null, placed: { project: 3, workspace: 0 } }), '', 'onboarding before its project');
 });
 
 /**

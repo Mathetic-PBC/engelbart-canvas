@@ -273,6 +273,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       provider: s.choice.provider, choice: { provider: s.choice.provider, name: PROVIDER_NAMES[s.choice.provider], modelName: s.choice.modelName, effort: s.choice.effort },
       permissions: s.choices.permissions, projectId: s.projectId, staged: s.projectId ? 0 : notes.stagedCount(s.dir), memory: { ...s.memory }, created: s.created,
       counts: { notes: s.jobs.reduce((n, job) => n + job.notes, 0), items: s.jobs.reduce((n, job) => n + job.items, 0) },
+      placed: { project: s.inProject.size, workspace: s.inWorkspace.size },
     };
   }
   // What session.json keeps is enough to pick the session up again after Engelbart quits (resume): the chat, the choices,
@@ -284,7 +285,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
         ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped], skippedSources: [...s.skippedSources],
-        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, rows: [...s.rows], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles })),
+        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles })),
       }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
   }
@@ -969,12 +970,17 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (input && typeof input.projectId === 'string' && ID_RE.test(input.projectId)) {
       try { const project = require('../store/projects.cjs').findProject(ctx, input.projectId); projectId = project.id; projectDir = project.dir; } catch { projectId = null; }
     }
+    // The workspace it was started from (2026-10-11): what comes in joins its context too (placeRows), when it is one of the project's.
+    let workspaceId = null;
+    if (projectId && typeof input.workspaceId === 'string' && ID_RE.test(input.workspaceId)) {
+      try { workspaceId = require('../store/projects.cjs').findWorkspace(ctx, projectId, input.workspaceId).workspace.id; } catch { workspaceId = null; }
+    }
     const s = {
       id, mode: projectId ? 'existing' : 'onboarding', dataRoot: ctx.dataRoot, homeDir, dir: path.join(ctx.dataRoot, '.connect', id), downloads: path.join(ctx.dataRoot, 'imports', id), created: now(), choices, choice: choiceFor(provider), redactChoice: null,
       picked: { folders: {}, exports: {} }, chat: [], thinking: true, activity: 'Looking at what you picked…', done: false, finished: false, minimized: false, dismissed: false, error: '',
       jobs: [], seq: 0, needs: [], log: [], controllers: new Set(), interviewSession: null, interviewController: null, found: {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
-      skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(), rows: new Set(), workspaceId: null, placing: Promise.resolve(),
+      skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(), rows: new Set(), inProject: new Set(), inWorkspace: new Set(), workspaceId, placing: Promise.resolve(),
     };
     sessions.set(id, s);
     s.dirs = dirsOf(s);
@@ -1325,36 +1331,47 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     s.projectId = projectId;
     try { s.projectDir = require('../store/projects.cjs').findProject(ctx, projectId).dir; } catch { s.projectDir = null; }
     const written = await notes.flushStaged(ctx, s.dir, projectId, { projects: require('../store/projects.cjs') });
-    if (typeof workspaceId === 'string' && ID_RE.test(workspaceId)) {
-      s.workspaceId = workspaceId;
-      await placeRows(s, [...s.rows]);
-    }
+    if (typeof workspaceId === 'string' && ID_RE.test(workspaceId)) s.workspaceId = workspaceId;
+    await placeRows(s, [...s.rows]);
     emit(s);
     return written.length;
   }
 
   // What the session brought into the library, or found already there (2026-10-10). Library rows belong to no project,
-  // so no agent of the project onboarding opened was told of them (store/projects.cjs `holds`): once the session knows
-  // the Welcome workspace (attachProject), each joins its context, those that come in later too, so that workspace's
-  // sidebar, @brainstorm and @discover see the person's library. One placing at a time: each reads the context it adds to.
+  // so no agent of the project was told of them (shared/project-holds.cjs): once the session knows its project (started
+  // from it, or onboarding's attachProject), each goes on the project's own list (project.json `library`, 2026-10-11), and
+  // with a workspace (the one it was started from, or the Welcome workspace) joins its context too, those that come in
+  // later as well, so the project's agents and that workspace's sidebar see the person's library. Never a row taken out of
+  // the project before (project.json `removed`): only adding it again brings it back. One placing at a time: each reads
+  // what it adds to.
   function keepRow(s, row) {
     if (!row || typeof row.id !== 'string' || !ID_RE.test(row.id) || s.rows.has(row.id)) return;
     s.rows.add(row.id);
-    if (s.workspaceId) void placeRows(s, [row.id]);
+    if (s.projectId) void placeRows(s, [row.id]);
   }
   function placeRows(s, ids) {
-    if (!ids.length || !s.projectId || !s.workspaceId) return s.placing;
+    if (!ids.length || !s.projectId) return s.placing;
     s.placing = s.placing.then(async () => {
       const projects = require('../store/projects.cjs');
       const ctx = await context();
       if (ctx.dataRoot !== s.dataRoot) return;
-      const { workspace } = projects.findWorkspace(ctx, s.projectId, s.workspaceId);
-      // A workspace holds 500 entries at most (projects.cjs MAX_TREE_ENTRIES): past that, the rest stay in the library alone.
-      const fresh = ids.filter((row) => !workspace.context.includes(row) && !(workspace.removed || []).includes(row)).slice(0, Math.max(0, 500 - workspace.context.length));
-      if (!fresh.length) return;
-      await projects.setWorkspaceContext(ctx, s.projectId, s.workspaceId, [...workspace.context, ...fresh]);
-      placed(s.projectId);
-    }).catch(() => {}); // the workspace gone, or the library closed: what came in stays in the library
+      const listed = projects.keepInProject(ctx, s.projectId, ids);
+      const { removed } = projects.findProject(ctx, s.projectId);
+      const kept = ids.filter((row) => !removed.includes(row));
+      for (const row of kept) s.inProject.add(row);
+      let fresh = [];
+      if (s.workspaceId) {
+        try {
+          const { workspace } = projects.findWorkspace(ctx, s.projectId, s.workspaceId);
+          for (const row of kept) if (workspace.context.includes(row)) s.inWorkspace.add(row);
+          // A workspace holds 500 entries at most (projects.cjs MAX_TREE_ENTRIES): past that, the rest are the project's alone.
+          fresh = kept.filter((row) => !workspace.context.includes(row) && !(workspace.removed || []).includes(row)).slice(0, Math.max(0, 500 - workspace.context.length));
+          if (fresh.length) await projects.setWorkspaceContext(ctx, s.projectId, s.workspaceId, [...workspace.context, ...fresh]);
+          for (const row of fresh) s.inWorkspace.add(row);
+        } catch { fresh = []; } // the workspace gone: what came in is the project's
+      }
+      if (listed.length || fresh.length) placed(s.projectId);
+    }).catch(() => {}); // the project gone, or the library closed: what came in stays in the library
     return s.placing;
   }
 
@@ -1435,6 +1452,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       skipped: new Set((Array.isArray(saved.skipped) ? saved.skipped : []).filter((app) => typeof app === 'string')),
       skippedSources: new Set((Array.isArray(saved.skippedSources) ? saved.skippedSources : []).filter((id) => sourceOf(id))), suspended: false, held: new Map(),
       rows: new Set((Array.isArray(saved.rows) ? saved.rows : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
+      inProject: new Set((Array.isArray(saved.inProject) ? saved.inProject : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
+      inWorkspace: new Set((Array.isArray(saved.inWorkspace) ? saved.inWorkspace : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
       workspaceId: projectId && typeof saved.workspaceId === 'string' && ID_RE.test(saved.workspaceId) ? saved.workspaceId : null, placing: Promise.resolve(),
       gmailThreads: Number.isInteger(saved.gmailThreads) && saved.gmailThreads > 0 ? saved.gmailThreads : 0,
     };

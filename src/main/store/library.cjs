@@ -371,10 +371,10 @@ function writeJson(file, value) {
 
 /* ------------------------------------------------------------ who holds what */
 
-// Attachments live in each workspace's meta.json (`context`), and `library.project_id` is only
-// where a row was made, so both directions are derived by scanning the workspaces. The rule is
-// projects.holds, the one the catalog uses: an item belongs to a project that made it or that
-// has it in a workspace's context.
+// Attachments live in each workspace's meta.json (`context`), a project's own list in project.json (`library`,
+// `removed`), and `library.project_id` is only where a row was made, so both directions are derived by scanning. The rule
+// is projects.holder (shared/project-holds.cjs), the one the catalog uses: an item belongs to a project that made it,
+// lists it, or has it in a workspace's context, and was not removed from it.
 
 /** Every project that holds the item: `origin` when it was made there, `workspaces` that have it in context. */
 async function projectsForLibraryItem(ctx, itemId) {
@@ -383,9 +383,11 @@ async function projectsForLibraryItem(ctx, itemId) {
   if (!row) throw new Error('Unknown library item');
   const out = [];
   for (const project of projects.projectRecords(ctx)) {
-    const workspaces = projects.flattenWorkspaces(project.dir).filter((workspace) => workspace.context.includes(row.id));
+    const all = projects.flattenWorkspaces(project.dir);
+    if (!projects.holder(project, all, await projects.notesMadeIn(project.dir, all))(row)) continue;
+    const workspaces = all.filter((workspace) => workspace.context.includes(row.id));
     const origin = row.project_id === project.id;
-    if (origin || workspaces.length) out.push({ id: project.id, name: project.name, origin, workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, path: workspace.path })) });
+    out.push({ id: project.id, name: project.name, origin, workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, path: workspace.path })) });
   }
   return out;
 }
@@ -393,9 +395,10 @@ async function projectsForLibraryItem(ctx, itemId) {
 /** Every library row the project holds, each with `origin` and the paths of the workspaces that have it in context. */
 async function libraryForProject(ctx, projectId) {
   const project = projects.findProject(ctx, projectId);
-  const refs = projects.referencedBy(projects.flattenWorkspaces(project.dir));
+  const workspaces = projects.flattenWorkspaces(project.dir);
+  const refs = projects.referencedBy(workspaces);
   return (await ctx.libraryDb.list())
-    .filter((row) => projects.holds(project, refs, row))
+    .filter(projects.holder(project, workspaces, await projects.notesMadeIn(project.dir, workspaces)))
     .map((row) => ({ ...row, origin: row.project_id === project.id, workspaces: refs.get(row.id) || [] }));
 }
 

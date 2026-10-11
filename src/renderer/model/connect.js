@@ -316,7 +316,7 @@ export function projectOf(project) {
  * (`project` { name, description }, 2026-10-10), which onboarding sends without an id; and how far back to look (`days`
  * 182 or 365, null for all time, 2026-10-10), always sent.
  */
-export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', permissions = {}, provider = null, projectId = null, project = null, days = null }) {
+export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', permissions = {}, provider = null, projectId = null, workspaceId = null, project = null, days = null }) {
   const sources = {};
   for (const source of SOURCES) {
     sources[source.id] = {
@@ -327,7 +327,7 @@ export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', 
     };
   }
   const allowed = { files: permissions.files !== false, browser: permissions.browser !== false, recall: permissions.recall !== false, notes: permissions.notes === true };
-  return { sources, custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, days: cleanDays(days), ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}), ...(projectOf(project) ? { project: projectOf(project) } : {}) };
+  return { sources, custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, days: cleanDays(days), ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}), ...(projectId && workspaceId ? { workspaceId } : {}), ...(projectOf(project) ? { project: projectOf(project) } : {}) };
 }
 
 /**
@@ -336,6 +336,18 @@ export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', 
  */
 export function resumable(list) {
   return (list || []).find((entry) => entry.mode === 'onboarding' && !entry.projectId && !entry.stopped && !entry.dismissed) || null;
+}
+
+/**
+ * Where what came in went (2026-10-11), for a session started from a project: `placed` { project, workspace }, the rows
+ * on the project's own list and those also in the workspace it was started from. '' before anything went in.
+ */
+export function placedLine(session) {
+  const placed = session && session.projectId && session.placed;
+  if (!placed || !placed.project) return '';
+  const head = `${placed.project} added to the project.`;
+  if (!placed.workspace) return head;
+  return placed.workspace < placed.project ? `${head} The first ${placed.workspace} are also in this workspace.` : `${head} ${placed.project === 1 ? 'It is' : 'They are'} also in this workspace.`;
 }
 
 /** An import's place in the progress list: its words, whether it is finished, failed, or waits on the person. */

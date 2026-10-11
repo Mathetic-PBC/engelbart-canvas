@@ -5,7 +5,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, gmailConsent } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, gmailConsent, placedLine } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -615,13 +615,14 @@ const engelbartSignIn = (app) => (app === 'Zotero' ? waitFor(api.zoteroConnect, 
 
 /**
  * `mode` 'onboarding' (a step: `onContinue` moves on, the work going on in the background) or 'popup' (`onClose` puts it
- * away). `sessionId`: a session to show again (the dock's). `projectId`: the project an existing user's notes go into.
+ * away). `sessionId`: a session to show again (the dock's). `projectId`: the project an existing user's notes go into;
+ * `workspaceId` the workspace open there, which what comes in joins too (2026-10-11).
  * `project` { name, description }: what the librarian is told the project is (onboarding sends it without an id, so its
  * session stays an onboarding one, picked up again after a quit).
  * `onSession(id)` when a session begins; `onAdded(row)` for a library row added here (a GitHub repository); `onSkip`: Skip
  * for now / Not now before anything began.
  */
-export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, projectId = null, project = null, pager = null, onSession = () => {}, onContinue = () => {}, onClose = () => {}, onSkip = () => {}, onAdded = () => {} }) {
+export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, projectId = null, workspaceId = null, project = null, pager = null, onSession = () => {}, onContinue = () => {}, onClose = () => {}, onSkip = () => {}, onAdded = () => {} }) {
   const popup = mode === 'popup';
   const page = !popup; // onboarding: a page of the window, not a box on it
   const [found, setFound] = React.useState(null);
@@ -845,7 +846,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     else if (appFolders[LOCAL_PDFS]) chosen.papers = [...new Set([...chosen.papers, appFolders[LOCAL_PDFS]])];
     try {
       const permissions = permissionsOf(picks, { consent, notes: notesState === 'allowed' });
-      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), permissions, provider, projectId, project, days }));
+      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), permissions, provider, projectId, workspaceId, project, days }));
       begin(snapshot);
       setView('chat');
       setTimeout(() => draftRef.current && draftRef.current.focus(), 60);
@@ -1214,6 +1215,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
           {header(session.stopped ? 'Stopped' : running || (session.memory && !memoryLine(session.memory).done) ? 'Bringing everything in' : 'Your library is connected', { lead: <span style={{ flex: 'none', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#171717', color: '#fff' }}>{CHECK}</span> })}
           <div data-connect-progress="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, padding: `14px ${gutter} 16px` }}>
             <span style={{ font: '12.5px/1.55 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{session.stopped ? 'Everything was stopped. What came in stays in your library.' : 'This keeps going in the background, and your Inbox says when it needs you or is done.'}</span>
+            {placedLine(session) && <span data-connect-placed="1" style={{ font: '12.5px/1.55 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{placedLine(session)}</span>}
             {needs.map((need) => <NeedCard key={need.id} need={need} onOpen={openNeed} onSkip={needSkip} />)}
             <div style={{ display: 'flex', flexDirection: 'column' }}>
               {runningFirst(jobs).map((job) => <JobRow key={job.id} job={job} onStop={stopJob} />)}

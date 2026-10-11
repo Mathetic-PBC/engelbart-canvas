@@ -1937,8 +1937,11 @@ test('@brainstorm\'s context: this workspace\'s library and mentions only, other
   const rows = await ctx.libraryDb.list();
   for (const agent of ['bart', 'discover']) {
     const c = await ask(agent);
-    assert.equal(c.contextJson, `<context_json>\n${JSON.stringify(catalogEntries(c.project, rows, new Set([mentioned.id])), null, 1)}\n</context_json>`, `${agent}: the whole project's library, as before`);
+    const madeIn = await projects.notesMadeIn(c.project.dir);
+    assert.equal(c.contextJson, `<context_json>\n${JSON.stringify(catalogEntries(c.project, rows, new Set([mentioned.id]), { agent, madeIn }), null, 1)}\n</context_json>`, `${agent}: the whole project's library, as before`);
     assert.ok(names(c).some(([name]) => name === 'TutorTrace'));
+    // A note every workspace let go of is out of every agent's context (2026-10-11, shared/project-holds.cjs).
+    assert.ok(!names(c).some(([name]) => name === 'Thrown away'), `${agent}: not the note thrown away`);
     assert.match(c.documents, /@bart why\?\nbart> because TutorTrace\n@brainstorm/, `${agent}: the document as it stands`);
   }
   assert.equal((await ask('bart')).documents, `${(await ask('discover')).documents}\n\n<stage>none</stage>`);

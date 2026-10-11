@@ -32,6 +32,8 @@ const db = require('./db.cjs');
 const { migrateProjectDir } = require('./migrate.cjs');
 const buildStore = require('../build/store.cjs');
 const { addressKey } = require('../../shared/address-key.cjs');
+const { holder } = require('../../shared/project-holds.cjs');
+const { mentionedIds } = require('../../shared/mentions.cjs');
 
 // A workspace's meta.json `status` is no longer shown or changed (2026-09-25: the todo / in progress / done marks were
 // deleted). It stays on disk only as the mark that a folder is a workspace and not an older layout's goal (migrate.cjs).
@@ -187,7 +189,13 @@ function projectRecord(dir) {
   const defaultTarget = targetOrNull(meta.defaultTarget);
   // Before defaultTarget: the folder the default repo was made as, in `directory`; read once, to convert it (build/manager.cjs).
   const defaultRepo = typeof meta.defaultRepo === 'string' && /^[^/\\\0]{1,255}$/.test(meta.defaultRepo) && !['.', '..'].includes(meta.defaultRepo) ? meta.defaultRepo : null;
-  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description, defaultTarget, defaultRepo };
+  // The project's own list (2026-10-11): `library` the rows it holds by being added to it, `removed` those taken out of it.
+  return { id: meta.id, name, slug: path.basename(dir), dir, created: meta.created || null, directory: exists ? saved : null, directoryMissing: saved && !exists ? saved : null, description, defaultTarget, defaultRepo, library: idList(meta.library), removed: idList(meta.removed) };
+}
+
+/** A project.json list of library ids, as it is kept: the ids alone, once each; anything else is left out. */
+function idList(value) {
+  return Array.isArray(value) ? [...new Set(value.filter((id) => typeof id === 'string' && UUID_RE.test(id)))] : [];
 }
 
 function projectRecords(ctx) {
@@ -233,17 +241,18 @@ function recentWorkspaces(projectDir, workspaces, limit = RECENT_WORKSPACES) {
 // and the ids of the library rows it holds.
 async function listProjects(ctx) {
   const rows = await ctx.libraryDb.list();
-  return projectRecords(ctx)
-    .map((project) => {
-      const workspaces = flattenWorkspaces(project.dir);
-      const refs = referencedBy(workspaces);
-      return publicProject(project, {
-        workspaceCount: workspaces.length,
-        lastEdited: latestMtime(project.dir) || project.created,
-        recent: recentWorkspaces(project.dir, workspaces),
-        libraryIds: rows.filter((row) => holds(project, refs, row)).map((row) => row.id),
-      });
-    })
+  const listed = [];
+  for (const project of projectRecords(ctx)) {
+    const workspaces = flattenWorkspaces(project.dir);
+    const held = holder(project, workspaces, await notesMadeIn(project.dir, workspaces));
+    listed.push(publicProject(project, {
+      workspaceCount: workspaces.length,
+      lastEdited: latestMtime(project.dir) || project.created,
+      recent: recentWorkspaces(project.dir, workspaces),
+      libraryIds: rows.filter(held).map((row) => row.id),
+    }));
+  }
+  return listed
     .sort((a, b) => String(b.lastEdited || '').localeCompare(String(a.lastEdited || '')));
 }
 
@@ -541,7 +550,7 @@ function flattenWorkspaces(projectDir, prefix = '', depth = 0, out = []) {
   if (depth > 32) return out;
   for (const workspace of workspaceRecords(depth === 0 ? projectDir : path.join(projectDir, prefix))) {
     const at = prefix ? `${prefix}/${workspace.name}` : workspace.name;
-    out.push({ id: workspace.id, name: workspace.name, path: at, context: workspace.context, chars: workspace.chars });
+    out.push({ id: workspace.id, name: workspace.name, path: at, context: workspace.context, removed: workspace.removed || [], chars: workspace.chars });
     flattenWorkspaces(projectDir, at, depth + 1, out);
   }
   return out;
@@ -556,8 +565,15 @@ function referencedBy(workspaces) {
   return refs;
 }
 
-/** What a project holds: the rows made in it (`project_id`, the origin) and the rows one of its workspaces has in context. */
-const holds = (project, refs, row) => row.project_id === project.id || refs.has(row.id);
+/**
+ * The project's notes → the workspace each was made in (notes.pglite `topic_id`), null for none: what holder needs to
+ * leave out a note let go of. With the project's `workspaces`, notes.pglite is not opened when none of them trashed
+ * anything, as no note can be let go of then (every project is asked, for the all-projects cards and the catalogs).
+ */
+async function notesMadeIn(projectDir, workspaces = null) {
+  if (workspaces && !workspaces.some((workspace) => (workspace.removed || []).length)) return new Map();
+  return new Map((await (await db.openNotesDb(projectDir)).list()).map((note) => [note.id, note.topic_id || null]));
+}
 
 // A workspace.md written from outside the app (an agent in a terminal): the stored count follows
 // the file. Workspaces that never had a count are left alone; reading one measures the file.
@@ -706,13 +722,96 @@ async function linkToWorkspace(ctx, projectId, workspaceId, ids, { picked = fals
 
 // `unmentioned` (MATH-57): the document's last mention of an item the @ menu linked went, and the item goes with it. Only
 // such an item, and it is not remembered as thrown away: mentioned again, it is on the rail as any mention is.
+// `id` one library id, or several (removeFromProject's, one write of meta.json).
 async function unlinkFromWorkspace(ctx, projectId, workspaceId, id, { unmentioned = false } = {}) {
   const { workspace } = findWorkspace(ctx, projectId, workspaceId);
-  const gone = assertId(id, 'library');
-  const context = workspace.context.filter((held) => held !== gone), picked = workspace.picked.filter((held) => held !== gone);
-  if (unmentioned) return workspace.picked.includes(gone) ? patchWorkspaceMeta(workspace, { context, picked }) : publicWorkspace(workspace);
-  const removed = [...workspace.removed.filter((held) => held !== gone), gone].slice(-MAX_REMOVED);
+  const going = (Array.isArray(id) ? id : [id]).map((one) => assertId(one, 'library'));
+  const context = workspace.context.filter((held) => !going.includes(held)), picked = workspace.picked.filter((held) => !going.includes(held));
+  if (unmentioned) return going.some((one) => workspace.picked.includes(one)) ? patchWorkspaceMeta(workspace, { context, picked }) : publicWorkspace(workspace);
+  const removed = [...workspace.removed.filter((held) => !going.includes(held)), ...going].slice(-MAX_REMOVED);
   return patchWorkspaceMeta(workspace, { context, removed, picked });
+}
+
+// The project's own list (2026-10-11, the Library's Phase A). An import started from a project, or an add from the
+// Library, puts rows on project.json `library`, so the project holds them though no workspace has them in context (only
+// MAX_TREE_ENTRIES fit in one). Removing takes a row off it, onto `removed`, and out of every workspace (each remembers
+// it in its own `removed`): removed wins over every other way a project holds a row (shared/project-holds.cjs). Nothing
+// is deleted, the library keeps the row; adding it again is the only thing that takes it off `removed`.
+const MAX_PROJECT_CHANGE = 200;
+
+/** The ids one add or remove may take: at most MAX_PROJECT_CHANGE, refused past that (the Library sends them in batches). */
+function projectChange(ids) {
+  const list = Array.isArray(ids) ? ids : [ids];
+  if (list.length > MAX_PROJECT_CHANGE) throw new RangeError(`At most ${MAX_PROJECT_CHANGE} items can be added or removed at once; ${list.length} were sent.`);
+  return [...new Set(list.map((id) => assertId(id, 'library')))];
+}
+
+function patchProjectMeta(project, patch) {
+  const file = path.join(project.dir, 'project.json');
+  writeJson(file, { ...(readJson(file) || {}), ...patch });
+}
+
+async function knownRows(ctx, ids) {
+  const missing = [];
+  for (const id of ids) if (!(await ctx.libraryDb.get(id))) missing.push(id);
+  if (missing.length) throw new Error(`Not in the library: ${missing.join(', ')}`);
+}
+
+/**
+ * Onto the project's list and off its `removed`; with `workspaceId`, into that workspace's context too, as many as it
+ * has room for (MAX_TREE_ENTRIES). → { added, inWorkspace }
+ */
+async function addToProject(ctx, projectId, ids, { workspaceId = null } = {}) {
+  const adding = projectChange(ids);
+  const project = findProject(ctx, projectId);
+  const workspace = workspaceId != null ? findWorkspace(ctx, projectId, workspaceId).workspace : null;
+  await knownRows(ctx, adding);
+  patchProjectMeta(project, { library: [...project.library, ...adding.filter((id) => !project.library.includes(id))], removed: project.removed.filter((id) => !adding.includes(id)) });
+  if (!workspace) return { added: adding.length, inWorkspace: 0 };
+  const fits = adding.filter((id) => !workspace.context.includes(id)).slice(0, Math.max(0, MAX_TREE_ENTRIES - workspace.context.length));
+  const linking = adding.filter((id) => workspace.context.includes(id) || fits.includes(id));
+  if (linking.length) await linkToWorkspace(ctx, projectId, workspace.id, linking);
+  return { added: adding.length, inWorkspace: linking.length };
+}
+
+/**
+ * Off the project's list, onto its `removed`, and out of every workspace. A row made in the project (a note written
+ * here) is refused: that is the trash's, not a removal. → { removed }
+ */
+async function removeFromProject(ctx, projectId, ids) {
+  const going = projectChange(ids);
+  const project = findProject(ctx, projectId);
+  const made = [];
+  for (const id of going) { const row = await ctx.libraryDb.get(id); if (row && row.project_id === project.id) made.push(row.name); }
+  if (made.length) throw new Error(`Made in this project, so it goes to the trash instead of being removed: ${made.join(', ')}`);
+  patchProjectMeta(project, { library: project.library.filter((id) => !going.includes(id)), removed: [...project.removed.filter((id) => !going.includes(id)), ...going] });
+  for (const workspace of flattenWorkspaces(project.dir)) await unlinkFromWorkspace(ctx, projectId, workspace.id, going);
+  return { removed: going.length };
+}
+
+/**
+ * Rows an import brought in, onto the project's list: not one on `removed` (only addToProject takes it off). No cap: an
+ * import keeps each row it brings. → the ids that went on
+ */
+function keepInProject(ctx, projectId, ids) {
+  const project = findProject(ctx, projectId);
+  const fresh = [...new Set(ids)].filter((id) => typeof id === 'string' && UUID_RE.test(id) && !project.library.includes(id) && !project.removed.includes(id));
+  if (fresh.length) patchProjectMeta(project, { library: [...project.library, ...fresh] });
+  return fresh;
+}
+
+/** The workspaces whose document mentions the item (shared/mentions.cjs, the rail's grammar). → [{ id, name, path }] */
+async function projectItemMentions(ctx, projectId, id) {
+  const project = findProject(ctx, projectId);
+  const row = await ctx.libraryDb.get(assertId(id, 'library'));
+  if (!row) throw new Error('Unknown library item');
+  const out = [];
+  for (const workspace of flattenWorkspaces(project.dir)) {
+    let text = '';
+    try { text = fs.readFileSync(path.join(project.dir, workspace.path, 'workspace.md'), 'utf8'); } catch { text = ''; }
+    if (mentionedIds(text, [row]).has(row.id)) out.push({ id: workspace.id, name: workspace.name, path: workspace.path });
+  }
+  return out;
 }
 
 /* --------------------------------------------------------------------- notes */
@@ -1310,6 +1409,14 @@ module.exports = {
   findProject,
   flattenWorkspaces,
   referencedBy,
-  holds,
+  notesMadeIn,
+  addToProject,
+  removeFromProject,
+  keepInProject,
+  projectItemMentions,
+  MAX_PROJECT_CHANGE,
+  // What a project holds (shared/project-holds.cjs): made in it, on its `library`, or in a workspace's context; never
+  // what was removed from it, nor a note every workspace let go of. (project, workspaces, notesMadeIn) → (row) => boolean
+  holder,
   recountWorkspaces,
 };

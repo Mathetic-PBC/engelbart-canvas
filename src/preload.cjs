@@ -251,6 +251,11 @@ const engelbartAPI = Object.freeze({
   pickLibraryPaths: invoke('pick-library-paths'),
   linkToWorkspace: invoke('link-to-workspace'),
   unlinkFromWorkspace: invoke('unlink-from-workspace'),
+  // The project's own list (2026-10-11): (projectId, ids, { workspaceId? }) → { added, inWorkspace }; (projectId, ids) →
+  // { removed }; (projectId, id) → the workspaces whose document mentions it. At most 200 ids a call.
+  addToProject: invoke('add-to-project'),
+  removeFromProject: invoke('remove-from-project'),
+  projectItemMentions: invoke('project-item-mentions'),
   // E2B previews of saved GitHub repositories (src/main/sandbox). Adding or linking one starts it, and the answer carries
   // `sandbox_error` when it could not start. onSandboxProgress: { dataRoot, run, message, notification? } per change.
   sandboxRuns: invoke('sandbox-runs'),

@@ -605,6 +605,33 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const entry = str(id, 'library id', 64), unmentioned = !!(opts && opts.unmentioned === true);
     return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.unlinkFromWorkspace(ctx, projectId, workspaceId, entry, { unmentioned }));
   }, { project: first });
+  // The project's own list (2026-10-11, the Library): add rows to it (and to the open workspace), remove them from it and
+  // from every workspace, and which workspaces still mention one. At most projects.MAX_PROJECT_CHANGE ids a call; more is
+  // refused, not cut short. Queued with the workspace changes, which they write too.
+  const projectIds = (ids) => {
+    if (!Array.isArray(ids)) throw new TypeError('ids must be a list');
+    if (ids.length > projects.MAX_PROJECT_CHANGE) throw new RangeError(`At most ${projects.MAX_PROJECT_CHANGE} items can be added or removed at once; ${ids.length} were sent.`);
+    return ids.map((id) => str(id, 'library id', 64));
+  };
+  saving('add-to-project', (pid, ids, opts) => {
+    const projectId = str(pid, 'project id', 64), adding = projectIds(ids);
+    const workspaceId = opts && opts.workspaceId != null ? str(opts.workspaceId, 'workspace id', 64) : null;
+    return queued(async () => {
+      const ctx = await store.context();
+      const before = workspaceId ? new Set(projects.findWorkspace(ctx, projectId, workspaceId).workspace.context) : null;
+      const out = await projects.addToProject(ctx, projectId, adding, { workspaceId });
+      if (workspaceId) {
+        const linked = await startLinked(ctx, before, projects.findWorkspace(ctx, projectId, workspaceId).workspace);
+        if (linked.sandbox_error) return { ...out, sandbox_error: linked.sandbox_error };
+      }
+      return out;
+    });
+  }, { project: first });
+  saving('remove-from-project', (pid, ids) => {
+    const projectId = str(pid, 'project id', 64), going = projectIds(ids);
+    return queued(async () => projects.removeFromProject(await store.context(), projectId, going));
+  }, { project: first });
+  handle('project-item-mentions', withCtx((ctx, pid, id) => projects.projectItemMentions(ctx, str(pid, 'project id', 64), str(id, 'library id', 64))));
 
   saving('create-note', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
