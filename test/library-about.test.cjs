@@ -206,7 +206,7 @@ test('the backfill reads each import\'s head line once: a chat with a project, G
   assert.ok(!(await ctx.libraryDb.untitled(library.TITLE_RULES)).some((row) => row.id === chat.id));
 });
 
-test('the retitle pass renames only a row still named by its file: a pdf by its Title or first line, an md by its first # heading', async () => {
+test('the retitle pass renames only a row still named by its file: a pdf by its metadata Title, an md by its first # heading', async () => {
   const pdfWithTitle = write('Papers/smith2020.pdf', '');
   fs.writeFileSync(pdfWithTitle, makePdf(['Some first line'], { Title: 'Learning to Learn' }));
   const pdfFirstLine = write('Papers/scan_0042.pdf', '');
@@ -216,8 +216,11 @@ test('the retitle pass renames only a row still named by its file: a pdf by its 
   const given = write('Papers/given.pdf', '');
   fs.writeFileSync(given, makePdf(['Ignored'], { Title: 'Ignored too' }));
   assert.equal(await pdfTitle(pdfWithTitle), 'Learning to Learn');
-  assert.equal(await pdfTitle(pdfFirstLine), 'A Study of Transfer');
-  assert.equal(await pdfTitle(pdfWordTitle), 'Real Heading Here', 'a Title that only names its file is no title');
+  assert.equal(await pdfTitle(pdfFirstLine), '', 'no Title: its first line is not taken (a running header or a sentence as often as a title)');
+  assert.equal(await pdfTitle(pdfWordTitle), '', 'a Title that only names its file is no title');
+  const pdfTemplate = write('Papers/neurips.pdf', '');
+  fs.writeFileSync(pdfTemplate, makePdf(['IDETrace'], { Title: 'Formatting Instructions For NeurIPS 2026' }));
+  assert.equal(await pdfTitle(pdfTemplate), '', 'a template\'s Title is no title');
 
   const add = (file, name = null) => library.addItem(ctx, file, name ? { name } : {});
   const a = await add(pdfWithTitle);
@@ -242,8 +245,8 @@ test('the retitle pass renames only a row still named by its file: a pdf by its 
   const report = await library.describeRows(ctx, { pdfTitle });
   const name = async (row) => (await ctx.libraryDb.get(typeof row === 'string' ? row : row.id)).name;
   assert.equal(await name(a), 'Learning to Learn');
-  assert.equal(await name(b), 'A Study of Transfer');
-  assert.equal(await name(c), 'Real Heading Here');
+  assert.equal(await name(b), 'scan_0042', 'no Title: kept');
+  assert.equal(await name(c), 'draft3');
   assert.equal(await name(d), 'The name I gave', 'a name someone gave is kept');
   assert.equal(await name(md), 'Kickoff with Ana', 'the first # heading outside a code block');
   assert.equal(await name(mdNone), 'scratch.md', 'no heading: kept');

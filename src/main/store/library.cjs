@@ -577,7 +577,7 @@ const plainPage = (found) => found.type === 'website' && !found.tags.length;
 const CATEGORY_RULES = 1;
 
 // The title rules (Library Phase B, 2026-10-11): a row still called by its file's stem is named by what the file says —
-// a pdf by its metadata Title, else its first line; an md by its first `# ` heading. Bump the number when a rule changes:
+// a pdf by its metadata Title (not a template's); an md by its first `# ` heading. Bump the number when a rule changes:
 // describeRows applies them once per row per version. A name anyone gave is never replaced.
 const TITLE_RULES = 1;
 
@@ -1225,7 +1225,7 @@ const cleanTitle = (value) => String(value || '').replace(/[\x00-\x1f\x7f]/g, ' 
  * address web, a file on this Mac mac. Only empty columns are filled (db fillAbout).
  *
  * Then its name: only a row still called by its file (namedByFile), and never a note written here (its name is its file's,
- * renamed together) or an import with a head line (its app named it). A pdf takes its metadata Title, else its first line
+ * renamed together) or an import with a head line (its app named it). A pdf takes its metadata Title
  * (`pdfTitle`, context/pdf-kind.cjs, within `timeoutMs` as recategorize waits for inspectPdf); an md its first `# `
  * heading. A pdf or md that is not there now, or a pdf with nobody here to read it, stays due; one that cannot be read or
  * does not answer in time is settled with its name as it was. Writes `name` and `titled` only (db setTitle): no summary,

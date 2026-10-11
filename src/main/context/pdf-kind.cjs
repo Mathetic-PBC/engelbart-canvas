@@ -74,23 +74,24 @@ async function inspectPdf(file) {
 }
 
 // A Title that only names the file it was made from, or says nothing ("untitled", "Microsoft Word - draft.docx").
-const NO_TITLE = /^(?:untitled|title|document|unknown|none|slide ?\d*|microsoft (?:word|powerpoint) - .*|.*\.(?:docx?|pptx?|pdf|tex|dvi|ps|indd|rtf|odt|pages|key|txt|md|html?))$/i;
+const NO_TITLE = /^(?:untitled|title|document|unknown|none|slide ?\d*|microsoft (?:word|powerpoint) - .*|.*\.(?:docx?|pptx?|pdf|tex|dvi|ps|indd|rtf|odt|pages|key|txt|md|html?|eps|png|jpe?g|svg|tiff?|ai))$/i;
+// A Title left by the venue's template, not the paper's ("Formatting Instructions For NeurIPS 2026", 2026-10-11).
+const TEMPLATE_TITLE = /\b(?:formatting instructions|instructions for (?:authors|\w+ proceedings)|author(?:s'?)? (?:guidelines|kit)|submission (?:template|format)|preparation of papers|paper title|your (?:paper )?title|insert (?:your )?title|template|style ?(?:file|guide)|sample (?:paper|document)|latex class|class file|acmart)\b/i;
+// A Title that is an identifier, an address or the publisher ("PII: S0003-6870(97)00022-7", "Science Journals — AAAS"),
+// or one word ("CSUR4702-31").
+const NOT_A_NAME = /^(?:pii|doi|issn|isbn|arxiv)\b|^https?:|\b(?:journals|elsevier|springer|sciencedirect|ieee xplore|aaas)\b|^\S+$/i;
 
 /**
- * What a pdf calls itself, for a row still named by its file (store/library.cjs describeRows): its metadata Title, else
- * the first line of text on page 1 (pdf-text's lines, as paperSignals reads them). '' when it has neither. Throws when
- * the file cannot be read as a pdf.
+ * What a pdf calls itself, for a row still named by its file (store/library.cjs describeRows): its metadata Title, unless
+ * it says nothing or is its template's. '' when it has none. Not the first line of page 1: on a user's own library that
+ * was a running header or a sentence as often as a title (2026-10-11). Throws when the file cannot be read as a pdf.
  */
 async function pdfTitle(file) {
   if (fs.statSync(file).size > MAX_BYTES) throw new Error('The pdf is too large to look into');
   const { doc, close } = await openPdf(file);
-  const usable = (value) => { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length >= 3 && text.length <= 300 && /\p{L}{2}/u.test(text) && !NO_TITLE.test(text) ? text : ''; };
+  const usable = (value) => { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length >= 3 && text.length <= 300 && /\p{L}{2}/u.test(text) && !NO_TITLE.test(text) && !TEMPLATE_TITLE.test(text) && !NOT_A_NAME.test(text) ? text : ''; };
   try {
-    let title = '';
-    try { const { info } = await doc.getMetadata(); title = usable(info && info.Title); } catch { title = ''; }
-    if (title || !doc.numPages) return title;
-    for (const line of await pageLines(doc, 1)) { const text = usable(line.text); if (text) return text; }
-    return '';
+    try { const { info } = await doc.getMetadata(); return usable(info && info.Title); } catch { return ''; }
   } finally {
     await close();
   }
