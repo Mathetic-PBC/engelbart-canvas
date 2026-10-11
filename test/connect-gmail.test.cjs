@@ -45,18 +45,20 @@ const PRINT = `<html><head><title>Gmail - Pilot protocol</title><style>body{font
 const IK = 'cd6f0fe68b';
 const thread = (n) => `thread-f:18400000000${String(n).padStart(6, '0')}`;
 
-// A fake browser page: what Gmail's search page answers, and its print views (downloads) recorded.
-function fakePage({ rows = [], signedIn = true, html = PRINT } = {}) {
-  const page = { opened: [], scripts: [], downloads: [] };
+// A fake browser page: what Gmail's search page answers, and its print views (downloads, with their options) recorded.
+// `finalUrl`: where a download ended up after redirects (a function of the url asked for), else that url.
+function fakePage({ rows = [], signedIn = true, html = PRINT, finalUrl = null } = {}) {
+  const page = { opened: [], scripts: [], downloads: [], options: [] };
   page.open = async (url) => { page.opened.push(url); return { url: signedIn ? url : 'https://accounts.google.com/ServiceLogin?service=mail', title: 'Gmail' }; };
   page.ensure = page.open;
   page.evaluate = async (script) => { page.scripts.push(script); return { signedIn, ik: IK, threads: rows }; };
-  page.download = async (url, dir, { name }) => {
+  page.download = async (url, dir, options) => {
     page.downloads.push(url);
+    page.options.push(options);
     fs.mkdirSync(dir, { recursive: true });
-    const file = path.join(dir, name);
+    const file = path.join(dir, options.name);
     fs.writeFileSync(file, typeof html === 'function' ? html(url) : html);
-    return { path: file, bytes: 1, type: 'text/html' };
+    return { path: file, bytes: 1, type: 'text/html', url: finalUrl ? finalUrl(url) : url };
   };
   return page;
 }
@@ -107,14 +109,31 @@ test('Gmail is never ticked to start with, even when found; ticking it adds its 
   assert.equal(m.gmailConsent(start, 'Claude Code'), '');
   const ticked = m.tickRow(m.initialPicks({ apps: { Gmail: { found: true } } }), 'email', 'Gmail', true);
   assert.deepEqual(Object.entries(ticked.apps).flatMap(([id, rows]) => Object.entries(rows).filter(([, on]) => on).map(([row]) => `${id}:${row}`)), ['email:Gmail'], 'ticking Gmail ticks nothing else');
-  assert.equal(m.gmailConsent(ticked, 'Claude Code'), 'Gmail: the threads you approve, including what other people wrote in them, are read by Claude Code to sort and bring them in.');
+  assert.equal(m.gmailConsent(ticked, 'Claude Code'), 'Gmail: Engelbart searches your Gmail for threads about your project. Their subjects and senders, and the threads you approve (including what other people wrote), are read by Claude Code.');
   assert.ok(m.consentFor(ticked).includes('Gmail'));
   assert.deepEqual(m.choicesOf({ picks: ticked.picks, apps: ticked.apps }).sources.email, { on: true, apps: ['Gmail'], folders: [], repos: [] });
 });
 
+test('Select all and the Email group\'s header never tick Gmail: only its own row does; Clear unticks it', async () => {
+  const m = await model();
+  const found = { apps: { Gmail: { found: true }, 'Google Docs': { found: true } } };
+  const none = m.tickAll(m.initialPicks(found), found, false);
+  const all = m.tickAll(none, found, true);
+  assert.equal(all.apps.email.Gmail, false, 'Select all leaves Gmail');
+  assert.equal(all.apps.notes['Google Docs'], true);
+  assert.equal(m.allPicked(all, found), true, 'every row Select all ticks is ticked: it says Clear');
+  const header = m.tickGroup(none, 'email', found);
+  assert.equal(header.apps.email.Gmail, false, 'the Email header does not tick it');
+  assert.equal(header.open.email, true, 'the group opens instead, for its own row');
+  const own = m.tickRow(all, 'email', 'Gmail', true);
+  assert.equal(own.apps.email.Gmail, true);
+  assert.equal(m.tickAll(own, found, false).apps.email.Gmail, false, 'Clear unticks it');
+  assert.equal(m.tickGroup(own, 'email', found).apps.email.Gmail, false, 'the header unticks it');
+});
+
 test('gmail_search: the period from the session as newer_than (1y, 6m, none), at most 50 threads, ids without their "#"', async () => {
   const rows = Array.from({ length: 60 }, (_, i) => ({ id: `#${thread(i)}`, subject: `Thread ${i}`, people: 'Dr. Lee, me', date: 'Mar 2' }));
-  for (const [days, words] of [[365, 'pilot protocol newer_than:1y'], [182, 'pilot protocol newer_than:6m'], [null, 'pilot protocol']]) {
+  for (const [days, words] of [[365, '(pilot protocol) newer_than:1y'], [182, '(pilot protocol) newer_than:6m'], [null, '(pilot protocol)']]) {
     const { call, page } = toolsWith({ days, page: fakePage({ rows }) });
     const out = await call('gmail_search', { n: 1, query: 'pilot protocol' });
     assert.equal(page.opened[0], `https://mail.google.com/mail/u/1/#search/${encodeURIComponent(words)}`);
@@ -131,6 +150,12 @@ test('gmail_search: the period from the session as newer_than (1y, 6m, none), at
   await assert.rejects(call('gmail_search', { n: 0, query: 'newer_than:1y' }), /never an empty search/);
   await assert.rejects(call('gmail_search', { n: 1.5, query: 'irb' }), /n must be/);
   await assert.rejects(toolsWith({ page: fakePage({ signedIn: false }) }).call('gmail_search', { n: 0, query: 'irb' }), (error) => error.code === 'SIGNED_OUT');
+});
+
+test('gmail_search: the words in parentheses, so the period holds for all of them ("pilot OR" keeps newer_than)', async () => {
+  const { call, page } = toolsWith({ days: 365, page: fakePage() });
+  await call('gmail_search', { n: 0, query: 'pilot OR' });
+  assert.equal(page.opened[0], `https://mail.google.com/mail/u/0/#search/${encodeURIComponent('(pilot OR) newer_than:1y')}`);
 });
 
 test('gmail_accounts: each place in the sign-in order until a sign-in page or an address seen before', async () => {
@@ -153,6 +178,7 @@ test('import_gmail_threads: the exact print view, one note a thread (subject, pe
   const out = await call('import_gmail_threads', { n: 1, ik: IK, threads: [{ id: thread(7), subject: 'Pilot protocol' }] });
   assert.equal(out.added, 1);
   assert.deepEqual(page.downloads, [`https://mail.google.com/mail/u/1/?ik=${IK}&view=pt&search=all&permthid=${thread(7)}`]);
+  assert.equal(page.options[0].maxBytes, 5 * 1024 * 1024, 'at most 5 MB a print view');
   assert.deepEqual(titles, ['Pilot protocol']);
   assert.equal(session.gmailThreads, 1, 'counted on the session');
   const written = mdFiles().filter((file) => !before.has(file));
@@ -194,7 +220,36 @@ test('import_gmail_threads refuses bad ids and keys, more than 50 a call, past 3
   await assert.rejects(toolsWith({ page: fakePage({ html: signIn }) }).call('import_gmail_threads', { n: 0, ik: IK, threads: [{ id: thread(500), subject: 'x' }] }), (error) => error.code === 'SIGNED_OUT');
 });
 
-test('a print view whose messages cannot be found is kept whole; one that mentions Google\'s sign-in in a message is not a sign-in page', () => {
+test('import_gmail_threads keeps only a thread: a 404 or any page without a message table fails that thread, a sign-in page stops the call; neither is saved or marked imported', async () => {
+  const notFound = '<html><head><title>Error 404 (Not Found)!!1</title></head><body><p>404. That\u2019s an error.</p></body></html>';
+  const signIn = '<html><head><title>Sign in - Google Accounts</title></head><body><form><input id="identifierId"></form></body></html>';
+  const cases = [
+    { why: 'a 404 page', page: fakePage({ html: notFound }), id: thread(600), throws: false },
+    { why: 'a thread\'s look-alike from another host', page: fakePage({ finalUrl: () => 'https://www.google.com/sorry/index' }), id: thread(601), throws: false },
+    { why: 'a sign-in page', page: fakePage({ html: signIn }), id: thread(602), throws: true },
+    { why: 'a print view sent on to accounts.google.com', page: fakePage({ html: notFound, finalUrl: () => 'https://accounts.google.com/v3/signin/identifier?continue=x' }), id: thread(603), throws: true },
+  ];
+  for (const { why, page, id, throws } of cases) {
+    const before = new Set(mdFiles());
+    const { call, session } = toolsWith({ page });
+    const going = call('import_gmail_threads', { n: 0, ik: IK, threads: [{ id, subject: 'Not a thread' }] });
+    if (throws) await assert.rejects(going, (error) => error.code === 'SIGNED_OUT', why);
+    else {
+      const out = await going;
+      assert.equal(out.added, 0, why);
+      assert.deepEqual(out.skipped, [{ id, why: 'Gmail sent no thread' }], why);
+    }
+    assert.deepEqual(mdFiles().filter((file) => !before.has(file)), [], `${why}: no note`);
+    assert.equal(session.gmailThreads, 0, `${why}: not counted`);
+    const search = await toolsWith({ page: fakePage({ rows: [{ id: `#${id}`, subject: 'Not a thread' }] }) }).call('gmail_search', { n: 0, query: 'pilot' });
+    assert.equal(search.threads[0].imported, false, `${why}: not marked imported`);
+  }
+  assert.equal(gmail.isThreadPage('https://mail.google.com/mail/u/0/?view=pt', PRINT), true);
+  assert.equal(gmail.isThreadPage('https://mail.google.com.evil.example/', PRINT), false);
+  assert.equal(gmail.isThreadPage('https://mail.google.com/mail/u/0/?view=pt', notFound), false);
+});
+
+test('readThread keeps a print view whose messages cannot be found whole (import_gmail_threads refuses such a page); one that mentions Google\'s sign-in in a message is not a sign-in page', () => {
   const plain = gmail.readThread('<html><title>Gmail - Odd</title><body><p>First line<br>second line</p><p>Report.docx</p></body></html>');
   assert.equal(plain.subject, 'Odd');
   assert.deepEqual(plain.messages, [{ sender: '', date: '', text: 'First line\nsecond line\n\nReport.docx' }]);

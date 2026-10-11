@@ -664,15 +664,17 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /**
    * What to tell the person before a ticked web app's check asks macOS for a browser's sign-ins → { browser, note }; note ''
-   * when macOS will not be asked (held already, Firefox, asked once already, or a browser it refused).
+   * when macOS will not be asked (held already, no browser holding it, Firefox, asked once already, or a browser it
+   * refused). Only a browser holding the app's sign-in is named (2026-10-11): the check opens no sign-in page, so where one
+   * would open (the Log in card's note, noteFor) is never promised here.
    */
   async function signInNote(app) {
     if (!webSignIn || !webSignIn.supports(app) || !webSignIn.keychainTarget) return { browser: '', note: '' };
     if (await webSignIn.signedIn(app).catch(() => false)) return { browser: '', note: '' };
     let target = null;
-    try { target = webSignIn.keychainTarget(app); } catch { target = null; }
+    try { target = webSignIn.keychainTarget(app, { holdersOnly: true }); } catch { target = null; }
     if (!target || signInDenied.has(target.id)) return { browser: target ? target.name : '', note: '' };
-    return { browser: target.name, note: webSignIn.keychainNote(app) || '' };
+    return { browser: target.name, note: webSignIn.keychainNote(app, { holdersOnly: true }) || '' };
   }
 
   /**

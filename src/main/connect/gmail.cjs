@@ -209,6 +209,16 @@ function gmailSignedOut(html) {
   return /ServiceLogin|accounts\.google\.com\/(?:v3\/)?signin|identifierId|Sign in - Google Accounts|<title>[^<]*Sign in/i.test(head);
 }
 
+/**
+ * Whether a downloaded print view is a thread (2026-10-11 review): it came from mail.google.com (`finalUrl`, after any
+ * redirects) and holds a message table. A 404, an error page or any other page is not, and is never kept as a note.
+ */
+function isThreadPage(finalUrl, html) {
+  let host = '';
+  try { host = new URL(String(finalUrl || '')).hostname; } catch { return false; }
+  return host === 'mail.google.com' && /<table\b[^>]*class=["']?message\b/i.test(String(html || ''));
+}
+
 /** A thread as the note that keeps it: a header (Gmail, its dates, its people), then each message, then its attachments' names. */
 function gmailThreadNote(thread) {
   const dates = thread.messages.map((message) => message.date).filter(Boolean);
@@ -225,5 +235,5 @@ function gmailThreadNote(thread) {
 
 module.exports = {
   THREAD_ID_RE, IK_RE, MAX_ACCOUNTS, MAX_SEARCH, MAX_THREADS_A_CALL, MAX_THREADS_A_SESSION,
-  accountIndex, gmailPeriod, inboxUrl, searchUrl, printUrl, ACCOUNT_SCRIPT, SEARCH_SCRIPT, htmlText, readThread, gmailSignedOut, gmailThreadNote,
+  accountIndex, gmailPeriod, inboxUrl, searchUrl, printUrl, ACCOUNT_SCRIPT, SEARCH_SCRIPT, htmlText, readThread, gmailSignedOut, isThreadPage, gmailThreadNote,
 };

@@ -159,6 +159,10 @@ test('keychainTarget: the browser macOS will be asked about, until it has been',
   assert.deepEqual(chrome.web.keychainTarget('ChatGPT'), { id: 'chrome', name: 'Chrome' });
   await chrome.web.signInQuiet('ChatGPT');
   assert.equal(chrome.web.keychainTarget('ChatGPT'), null, 'asked once this run');
+  const none = machine({ browsers: { chrome: {} } });
+  assert.deepEqual(none.web.keychainTarget('ChatGPT'), { id: 'chrome', name: 'Chrome' }, 'held by none: where its sign-in page opens');
+  assert.equal(none.web.keychainTarget('ChatGPT', { holdersOnly: true }), null, 'holdersOnly: no browser holds it, none named');
+  assert.equal(none.web.keychainNote('ChatGPT', { holdersOnly: true }), '');
 });
 
 test('the line before macOS is first asked for a browser\'s sign-ins, gone once it has been', async () => {

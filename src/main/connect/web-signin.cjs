@@ -212,18 +212,20 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   /**
    * The browser macOS will be asked about to bring the app's sign-in over, when it has not been yet while Engelbart runs →
    * { id, name } | null: the first holding it, else where its sign-in page would open; Firefox needs no Keychain.
+   * `holdersOnly` (the choose screen's check when an app is ticked, 2026-10-11): only a browser holding the sign-in, since
+   * the check opens nothing, so with none macOS is not asked and there is no browser to name.
    */
-  function keychainTarget(app) {
+  function keychainTarget(app, { holdersOnly = false } = {}) {
     if (!supports(app) || !cookieImport) return null;
     const sources = readable();
-    const target = sources.find((source) => holders(app, source).length) || opener(sources);
+    const target = sources.find((source) => holders(app, source).length) || (holdersOnly ? null : opener(sources));
     if (!target || target.family !== 'chromium' || asked.has(target.id)) return null;
     return { id: target.id, name: target.name };
   }
 
-  /** What to tell the person before Log in first asks macOS for a browser's sign-ins this run, or ''. */
-  function keychainNote(app) {
-    const target = keychainTarget(app);
+  /** What to tell the person before Log in first asks macOS for a browser's sign-ins this run, or ''. `options` as keychainTarget's. */
+  function keychainNote(app, options) {
+    const target = keychainTarget(app, options);
     return target ? `macOS will ask to use ${target.name}'s sign-ins. Choose Always Allow so it doesn't ask again.` : '';
   }
 

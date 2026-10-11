@@ -5,7 +5,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, gmailConsent, placedLine } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, signInsToCheck, waitingWhile, gmailConsent, placedLine } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -630,6 +630,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [picks, setPicks] = React.useState(null); // { picks, apps, open }
   const [folders, setFolders] = React.useState({ papers: [], code: [] });
   const [consent, setConsent] = React.useState(true); // "Use my … subscription to read these": files and the browser
+  const consentRef = React.useRef(consent); // read after an await: a check started before the consent went off stops there
+  consentRef.current = consent;
   const [days, setDays] = React.useState(DEFAULT_PERIOD_DAYS); // how far back to look: 182, 365 or null (all time)
   const [appFolders, setAppFolders] = React.useState({}); // app → the folder picked for a local app not found
   const [extraRepos, setExtraRepos] = React.useState([]); // folders picked for Code that were not among the repositories found
@@ -766,8 +768,9 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     }).catch(() => { setSignIns((now) => { const next = { ...now }; delete next[app]; return next; }); });
   };
   const checkTicked = async (rows) => {
-    if (!consent || !rows.length) return;
+    if (!signInsToCheck(consent, rows).length) return;
     const said = await Promise.all(rows.map((row) => api.connectSignInNote(row.app).then((out) => ({ ...row, ...(out || {}) })).catch(() => ({ ...row, note: '' }))));
+    if (!consentRef.current) return; // turned off meanwhile: no panel, no check
     const ask = said.filter((row) => row.note && row.browser);
     if (ask.length) setWaitingYes((now) => waitForYes(now, ask));
     said.filter((row) => !(row.note && row.browser)).forEach((row) => checkSignIn(row));
@@ -784,7 +787,10 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     setWaitingYes((now) => { const next = { ...now }; delete next[browser]; return next; });
     setPicks((now) => rows.reduce((next, row) => tickRow(next, row.id, row.app, false), now));
   };
-  const retrySignIn = (id, app) => { setRow(id, app, true); checkSignIn({ id, app }, true); };
+  // Try again: ticked again, and checked again only with the consent on (off, the run asks for its sign-in after it starts).
+  const retrySignIn = (id, app) => { setRow(id, app, true); signInsToCheck(consent, [{ id, app }]).forEach((row) => checkSignIn(row, true)); };
+  // The consent turned off: no sign-in is checked, and the panels waiting for a yes go (2026-10-11 review).
+  const toggleConsent = () => { const on = !consent; setConsent(on); setWaitingYes((now) => waitingWhile(on, now)); };
   const pickPapers = async () => {
     const chosen = await pickDir();
     if (!chosen) return;
@@ -838,8 +844,9 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     if (!anyOn) { setError('Pick at least one source.'); return; }
     if (!provider) { setError('Sign in to Claude Code or Codex first.'); return; }
     setError('');
-    // A panel still waiting counts as Continue: its checks start, and the run waits for them (main's signInsFirst).
-    for (const browser of Object.keys(waitingYes)) allowSignIns(browser);
+    // A panel still waiting counts as Continue: its checks start, and the run waits for them (main's signInsFirst). With the
+    // consent off there is none (toggleConsent cleared them), and none is checked.
+    for (const browser of Object.keys(waitingWhile(consent, waitingYes))) allowSignIns(browser);
     const chosen = { papers: [...folders.papers], code: localPicked(picks) };
     for (const source of SOURCES) for (const app of source.apps) if (appFolders[app] && ticked(picks, source.id, app) && app !== LOCAL_PDFS) chosen[source.id] = [...(chosen[source.id] || []), appFolders[app]];
     if (!ticked(picks, 'papers', LOCAL_PDFS)) chosen.papers = [];
@@ -945,7 +952,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
         // A web app's check is said while it is ticked; signed in and refused (unticked, with Try again) also when it is not.
         const signInOf = (id, app) => { const seen = signIns[app]; return seen && (ticked(picks, id, app) || seen.status === 'signed-in' || seen.status === 'refused') ? seen : null; };
         const label = (app, id = '') => rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' });
-        const panels = Object.keys(waitingYes).map((browser) => signInPanel(picks, browser, waitingYes[browser])).filter(Boolean);
+        const shownYes = waitingWhile(consent, waitingYes); // none while the consent is off
+        const panels = Object.keys(shownYes).map((browser) => signInPanel(picks, browser, shownYes[browser])).filter(Boolean);
         const signInPanels = panels.length > 0 && (
           <div data-connect-signin-panels="1" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             {panels.map((panel) => (
@@ -1051,7 +1059,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             {reads.length > 0 ? (
               // The agent is chosen inside its words on the page (2026-10-09, David's mockup: "Use my [Claude Code ⌄]
               // subscription"); the popup keeps it on its Refine chip.
-              <div role="checkbox" tabIndex={0} aria-checked={consent ? 'true' : 'false'} data-connect-permission="consent" onClick={() => setConsent((now) => !now)} onKeyDown={(event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); setConsent((now) => !now); } }} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', boxSizing: 'border-box', cursor: 'pointer', textAlign: 'left' }}>
+              <div role="checkbox" tabIndex={0} aria-checked={consent ? 'true' : 'false'} data-connect-permission="consent" onClick={toggleConsent} onKeyDown={(event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); toggleConsent(); } }} style={{ display: 'flex', alignItems: 'flex-start', gap: 10, width: '100%', boxSizing: 'border-box', cursor: 'pointer', textAlign: 'left' }}>
                 <span style={{ paddingTop: 2.5 }}><Box on={consent} /></span>
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 4 }}>
                   <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Use my {page ? <ProviderPick providers={providers} provider={provider} onPick={pickProvider} /> : targetName} subscription to read these</span>

@@ -51,6 +51,8 @@ const MAX_GOOGLE_A_CALL = 25;
 const MAX_WEB_CHATS_A_CALL = 40;
 const CALL_BUDGET_MS = 170_000; // a call answers within the bridge's four minutes: what is left is said, for another call
 const MAX_NOTE_CHARS = 200_000;
+const GMAIL_MAX_BYTES = 5 * 1024 * 1024; // a thread's print view: plain HTML, its attachments left out
+const hostOf = (url) => { try { return new URL(String(url || '')).hostname; } catch { return ''; } };
 const GOOGLE_ID_RE = /^[\w-]{10,120}$/;
 const OVERLEAF_ID_RE = /^[0-9a-f]{24}$/;
 const NEEDS_KINDS = ['signin', '2fa', 'password', 'captcha', 'permission', 'connector', 'confirm'];
@@ -550,7 +552,8 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       if (!words || /^(?:(?:newer_than|older_than|after|before):\S+\s*)+$/i.test(words)) throw new Error('Search with words from the project, people or the plan: never an empty search, or the period alone.');
       const cap = Math.min(Math.max(1, Math.round(limit) || gmail.MAX_SEARCH), gmail.MAX_SEARCH);
       const pageNow = browser();
-      const opened = await pageNow.open(gmail.searchUrl(n, words + gmail.gmailPeriod(within(null))));
+      // The words in parentheses, so the period holds for all of them: "pilot OR" would otherwise read "pilot OR newer_than:1y".
+      const opened = await pageNow.open(gmail.searchUrl(n, `(${words})${gmail.gmailPeriod(within(null))}`));
       if (!/^https:\/\/mail\.google\.com\//.test(String((opened && opened.url) || ''))) throw gmailSignedOut();
       const out = await pageNow.evaluate(gmail.SEARCH_SCRIPT(cap));
       if (!out || !out.signedIn) throw gmailSignedOut();
@@ -584,11 +587,12 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         const key = `gmail:${ik}:${decimal}`;
         if (imported.has(key)) { skipped.push({ id, why: 'brought in before' }); continue; }
         try {
-          const got = await pageNow.download(gmail.printUrl(n, ik, id), downloads('gmail'), { name: `${decimal}.html`, quiet: true });
+          const got = await pageNow.download(gmail.printUrl(n, ik, id), downloads('gmail'), { name: `${decimal}.html`, quiet: true, maxBytes: GMAIL_MAX_BYTES });
           const html = fs.readFileSync(got.path, 'utf8');
           fs.rmSync(got.path, { force: true });
-          if (gmail.gmailSignedOut(html)) throw gmailSignedOut();
-          if (!/html/i.test(got.type || '')) throw new Error('Gmail sent no thread');
+          // Only a thread is kept: a sign-in page stops the call (as import_google_files does), any other page is that thread failed.
+          if (gmail.gmailSignedOut(html) || /(^|\.)accounts\.google\.com$/.test(hostOf(got.url))) throw gmailSignedOut();
+          if (!/html/i.test(got.type || '') || !gmail.isThreadPage(got.url, html)) throw new Error('Gmail sent no thread');
           const read = gmail.readThread(html);
           const title = String(thread.subject || '').trim() || read.subject || 'Gmail thread';
           await putNote({ title: sanitizeName(title), body: clipMiddle(gmail.gmailThreadNote(read), MAX_NOTE_CHARS), images: [], source: key });

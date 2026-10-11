@@ -306,8 +306,8 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
   }
 
   /**
-   * A file fetched with the session's sign-ins (not through the page), saved in `dir` → { path, bytes, type }. `expect`:
-   * a check of the first bytes (a zip, a pdf) so a sign-in page sent in its place is caught.
+   * A file fetched with the session's sign-ins (not through the page), saved in `dir` → { path, bytes, type, url }, `url`
+   * the address it came from after any redirects (a sign-in page sent in its place answers from another host).
    */
   async function download(job, url, dir, { name = '', maxBytes = MAX_DOWNLOAD_BYTES, quiet = false } = {}) {
     if (!hostAllowed(url, hostsFor(job.sites))) throw new Error(`${hostOf(url) || url} is not one of the sites this import may open`);
@@ -321,7 +321,7 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
     const file = freePath(dir, String(name || '').replace(/[/\\:\0]/g, '-').trim() || fileNameOf(response, url));
     fs.writeFileSync(file, bytes, { mode: 0o600 });
     if (!quiet) log(job.id, `Downloaded ${path.basename(file)}`);
-    return { path: file, bytes: bytes.length, type: String(response.headers.get('content-type') || '').split(';')[0] };
+    return { path: file, bytes: bytes.length, type: String(response.headers.get('content-type') || '').split(';')[0], url: response.url || url };
   }
 
   function show(jobId, { title = '' } = {}) {

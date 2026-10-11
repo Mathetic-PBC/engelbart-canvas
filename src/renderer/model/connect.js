@@ -92,26 +92,30 @@ export function groupState(state, sourceId) {
 
 /**
  * A group's header clicked: with anything ticked, everything goes off; with nothing, its found rows come on (Local repos:
- * every repository found). A group with nothing found opens instead, for the person to pick its rows.
+ * every repository found), except Gmail (NEVER_TICKED: ticked only on its own row). A group with none of those opens
+ * instead, for the person to pick its rows.
  */
 export function tickGroup(state, sourceId, found) {
   const rows = rowsOf(sourceId);
   const repos = ((found && found.localRepos) || []).map((repo) => repo.path);
   if (groupState(state, sourceId) !== 'none') return rows.reduce((next, row) => tickRow(next, sourceId, row, false), state);
-  const on = rows.filter((row) => foundRow(found, sourceId, row));
+  const on = rows.filter((row) => foundRow(found, sourceId, row) && !NEVER_TICKED.includes(row));
   if (!on.length) return { ...state, open: { ...state.open, [sourceId]: true } };
   return on.reduce((next, row) => tickRow(next, sourceId, row, true, repos), state);
 }
 
-/** Select all: every found row of every group; `false`: nothing. */
+// What Select all and a group's header tick: a found row, but never Gmail (NEVER_TICKED: ticked only on its own row).
+const selectable = (found, sourceId, row) => foundRow(found, sourceId, row) && !NEVER_TICKED.includes(row);
+
+/** Select all: every found row of every group but Gmail; `false`: nothing (Gmail too). */
 export function tickAll(state, found, on = true) {
   const repos = ((found && found.localRepos) || []).map((repo) => repo.path);
-  return SOURCES.reduce((next, source) => rowsOf(source.id).reduce((acc, row) => (on ? (foundRow(found, source.id, row) ? tickRow(acc, source.id, row, true, repos) : acc) : tickRow(acc, source.id, row, false)), next), state);
+  return SOURCES.reduce((next, source) => rowsOf(source.id).reduce((acc, row) => (on ? (selectable(found, source.id, row) ? tickRow(acc, source.id, row, true, repos) : acc) : tickRow(acc, source.id, row, false)), next), state);
 }
 
-/** Whether every found row is ticked (Select all's button then says Clear). */
+/** Whether every row Select all ticks is ticked (its button then says Clear). */
 export function allPicked(state, found) {
-  const rows = SOURCES.flatMap((source) => rowsOf(source.id).filter((row) => foundRow(found, source.id, row)).map((row) => [source.id, row]));
+  const rows = SOURCES.flatMap((source) => rowsOf(source.id).filter((row) => selectable(found, source.id, row)).map((row) => [source.id, row]));
   return rows.length > 0 && rows.every(([id, row]) => ticked(state, id, row));
 }
 
@@ -216,6 +220,19 @@ export function waitForYes(waiting, rows) {
 const listed = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
 
 /**
+ * The rows whose sign-in may be checked now: none while the "Use my … subscription" consent is off (2026-10-11 review),
+ * since a check copies a browser's sign-ins. `rows`: [{ id, app }].
+ */
+export function signInsToCheck(consent, rows) {
+  return consent ? rows || [] : [];
+}
+
+/** The panels waiting for a yes (waitForYes's), kept while the consent is on; turning it off takes them away. */
+export function waitingWhile(consent, waiting) {
+  return consent ? waiting || {} : {};
+}
+
+/**
  * The panel shown above the permissions before a browser's sign-ins are first used (2026-10-10: say why macOS will ask
  * before it does), naming every ticked app waiting on it → { browser, rows, title, body } | null when none is still ticked.
  */
@@ -252,12 +269,13 @@ export function rowTip(app) {
 }
 
 /**
- * What the permissions card adds when Gmail is ticked (2026-10-11): the threads hold what other people wrote, and the
- * agent's provider reads them. `name`: the provider as the card names it ("Claude Code"). '' when Gmail is not ticked.
+ * What the permissions card adds when Gmail is ticked (2026-10-11): the search's subjects and senders, and the threads
+ * approved, which hold what other people wrote, are read by the agent's provider. `name`: the provider as the card names
+ * it ("Claude Code"). '' when Gmail is not ticked.
  */
 export function gmailConsent(state, name) {
   if (!ticked(state, 'email', 'Gmail')) return '';
-  return `Gmail: the threads you approve, including what other people wrote in them, are read by ${name || 'your AI provider'} to sort and bring them in.`;
+  return `Gmail: Engelbart searches your Gmail for threads about your project. Their subjects and senders, and the threads you approve (including what other people wrote), are read by ${name || 'your AI provider'}.`;
 }
 
 /**

@@ -814,6 +814,16 @@ test('a check when ticked waits on macOS as long as the person takes; the run wa
   }
 });
 
+test('no panel for an app no browser holds: the check opens nothing, so macOS is not promised; the Log in card still names where it opens', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['Claude'] } } }); // Chrome would open ChatGPT's sign-in page, but holds none
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
+  assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '' }, 'no browser holds it: no panel');
+  assert.equal(fake.webSignIn.keychainNote('ChatGPT'), 'macOS will ask to use Chrome\'s sign-ins. Choose Always Allow so it doesn\'t ask again.', 'the Log in card\'s note keeps the opener');
+  assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-out', browser: '' }, 'straight to "You\'ll sign in after you start"');
+  assert.deepEqual(fake.calls.keychain, [], 'macOS was not asked');
+  assert.deepEqual((await connect.signInNote('Claude')).browser, 'Chrome', 'one it holds still has its panel');
+});
+
 test('a refusal when ticked: the browser is not asked again, until Try again', async () => {
   const fake = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT', 'Claude'], deny: true } } });
   const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
@@ -1107,6 +1117,14 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   const notNow = waiting.Chrome.reduce((next, row) => model.tickRow(next, row.id, row.app, false), all);
   assert.equal(model.signInPanel(notNow, 'Chrome', waiting.Chrome), null);
   assert.deepEqual([model.ticked(notNow, 'chats', 'ChatGPT'), model.ticked(notNow, 'chats', 'Claude'), model.ticked(notNow, 'chats', 'Claude Code')], [false, false, true]);
+
+  // "Use my … subscription" off: no sign-in is checked (ticked, Try again, or a panel's Continue at start) and no panel shows.
+  const ticking = model.newlyTickedWeb(start, one);
+  assert.deepEqual(model.signInsToCheck(true, ticking), ticking);
+  assert.deepEqual(model.signInsToCheck(false, ticking), [], 'consent off: nothing checked');
+  assert.deepEqual(model.waitingWhile(true, waiting), waiting);
+  assert.deepEqual(model.waitingWhile(false, waiting), {}, 'consent off: the panels go, and start has none to allow');
+  assert.deepEqual(Object.keys(model.waitingWhile(false, waiting)).map((browser) => model.signInPanel(all, browser, waiting[browser])), [], 'no panel shown');
 });
 
 test('the window\'s model, and the onboarding flow with Connect your library in place of Add to your library and Custom instructions', async () => {

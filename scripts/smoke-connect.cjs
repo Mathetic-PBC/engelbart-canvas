@@ -4,15 +4,16 @@
 // Runs the real app, hidden, against disposable data in the normal library (test mode off, as the app people download
 // runs it: Connect left test mode on 2026-10-08) with Connect your library's fake agents
 // (ENGELBART_CONNECT_FAKE), and walks a new user's onboarding through it (src/renderer/screens/ConnectLibrary.jsx,
-// src/main/connect): no tools screen (both agents signed in), Connect in place of Add to your library and Custom
-// instructions, and no Project context ("2 of 3", 2026-10-09); the choose screen starts with Notes ticked (a vault
+// src/main/connect): no tools screen (both agents signed in), Create before Connect (2026-10-10: its name and description
+// filled first, no folder part), Connect in place of Add to your library and Custom instructions, and no Project context
+// (welcome, create, connect: Connect "3 of 3"); the choose screen starts with Notes ticked (a vault
 // Obsidian knows), ChatGPT ticked by hand, the permissions card naming it; Refine opens the chat, its first line said at
 // once, whose question is a card with one option per line; ChatGPT, signed in nowhere this disposable home can read, gets
 // its sign-in card before its survey starts, in the strip above Reply and not in the chat; Done gives it back and the
 // survey runs; the librarian waits for it, then offers what it found; the connect step's Continue is a filled button once
 // the session has started; Import lights up once nothing is left to ask; the working view follows every import, MEMORY.md
-// is saved without its planted secrets, Continue moves on, Create has no folder part and its Skip opens the project, which
-// holds the vault's notes, with the chip in the top right saying the library is connected. ENGELBART_CONNECT_SHOTS=<dir>
+// is saved without its planted secrets, and Continue ends onboarding: the project is made then, after Connect, and holds the
+// vault's notes, with the chip in the top right saying the library is connected. ENGELBART_CONNECT_SHOTS=<dir>
 // saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -85,13 +86,28 @@ app.whenReady().then(async () => {
     wc.setBackgroundThrottling(false);
     await until(() => js(wc, '!!document.querySelector("[data-onboarding=new]")').catch(() => false), 'a new user\'s onboarding');
     await press(wc, '[data-onboarding-continue] button');
-    await until(async () => (await step(wc)) === 'connect', 'Connect your library, after the welcome (test mode off, both agents signed in)');
+    await until(async () => (await step(wc)) === 'create', 'Create a new project, after the welcome (test mode off, both agents signed in)');
+
+    /* ------------------------------------------------ Create, before Connect: a name, then a description; no project yet */
+    // No folder part: ~/<name> by default, "Use an existing folder…" under the name for another; no Project context.
+    await until(() => has(wc, '[data-onboarding-name]'), 'the project\'s name');
+    assert.match(await text(wc, '[data-onboarding-step-of]'), /^2 of 3$/, 'welcome, create, connect');
+    assert.match(await text(wc, '[data-onboarding-use-folder]'), /^Use an existing folder…$/);
+    assert.equal(await has(wc, '[data-onboarding-folder]'), false, 'no folder part');
+    await fill(wc, '[data-onboarding-name]', 'Connect smoke');
+    await press(wc, '[data-onboarding-continue] button');
+    await until(() => has(wc, '[data-onboarding-desc]'), 'the description');
+    assert.match(await text(wc, '[data-onboarding-continue] button'), /^Continue›?$/, 'Continue, not Open project: the project is made after Connect');
+    await fill(wc, '[data-onboarding-desc]', 'How novices ask for help with tutoring tools.');
+    await press(wc, '[data-onboarding-continue] button');
+    await until(async () => (await step(wc)) === 'connect', 'Connect your library, after Create');
+    assert.deepEqual(await js(wc, 'window.engelbartAPI.listProjects().then((list)=>list.length)'), 0, 'no project until the end of onboarding');
 
     /* ------------------------------------------------ choose: Notes ticked where Obsidian was found, ChatGPT by hand */
     await until(() => has(wc, '[data-connect-library="choose"] [data-connect-app="Obsidian"]'), 'the choose screen, Notes open');
     assert.equal(await attr(wc, '[data-connect-app=Obsidian] [role=checkbox]', 'aria-checked'), 'true', 'Obsidian ticked: its vault was found');
     assert.equal(await attr(wc, '[data-connect-source=papers] [role=checkbox]', 'aria-checked'), 'false', 'nothing found for papers');
-    assert.match(await text(wc, '[data-onboarding-step-of]'), /^2 of 3$/, 'welcome, connect, create: Add to your library, Custom instructions and Project context are gone');
+    assert.match(await text(wc, '[data-onboarding-step-of]'), /^3 of 3$/, 'welcome, create, connect: Add to your library, Custom instructions and Project context are gone');
     assert.ok(await has(wc, '[data-onboarding-skip]'), 'Skip for now before a session');
     assert.equal(await has(wc, '[data-onboarding-continue]'), false, 'no Continue before a session');
     // David's mockup (2026-10-09): the agent picked inside the consent line, "Bring these in" by the pager, no Refine chip.
@@ -99,7 +115,7 @@ app.whenReady().then(async () => {
     assert.ok(await has(wc, '[data-connect-permission] [data-connect-pick-provider]'), 'the agent, inside "Use my … subscription"');
     assert.equal(await has(wc, '[data-connect-library="choose"] [data-connect-chip]'), false, 'no Refine chip');
     assert.match(await text(wc, '[data-connect-foot] [data-connect-bring]'), /^Bring these in$/);
-    assert.match(await text(wc, '[data-connect-foot]'), /Skip for now[\s\S]*2 of 3[\s\S]*Bring these in/);
+    assert.match(await text(wc, '[data-connect-foot]'), /Skip for now[\s\S]*3 of 3[\s\S]*Bring these in/);
     await press(wc, '[data-connect-source="chats"] button[aria-expanded]');
     await press(wc, '[data-connect-app="ChatGPT"]');
     assert.equal(await attr(wc, '[data-connect-app=ChatGPT] [role=checkbox]', 'aria-checked'), 'true');
@@ -195,18 +211,10 @@ app.whenReady().then(async () => {
     assert.doesNotMatch(memoryFile, /hunter2|sk-test/, 'MEMORY.md without its secrets');
     await shot(wc, '5-working');
     await press(wc, '[data-connect-done]');
-    await until(async () => (await step(wc)) === 'create', 'Create a new project next');
 
-    /* ------------------------------------------------ the rest of onboarding: what came in is the library's files, the chip */
-    // No folder part: ~/<name> by default, "Use an existing folder…" under the name for another; no Project context.
-    assert.match(await text(wc, '[data-onboarding-use-folder]'), /^Use an existing folder…$/);
-    assert.equal(await has(wc, '[data-onboarding-folder]'), false, 'no folder part');
-    await fill(wc, '[data-onboarding-name]', 'Connect smoke');
-    await press(wc, '[data-onboarding-continue] button');
-    await until(() => has(wc, '[data-onboarding-desc]'), 'the description');
-    assert.match(await text(wc, '[data-onboarding-continue] button'), /Open project/);
-    await press(wc, '[data-onboarding-skip]');
-    await until(() => js(wc, '!document.querySelector("[data-onboarding]")'), 'the project open', 400);
+    /* ------------------------------------------------ the end of onboarding: the project made, what came in is the library's files, the chip */
+    await until(() => js(wc, '!document.querySelector("[data-onboarding]")'), 'the project made and open, after Connect', 400);
+    assert.deepEqual(await js(wc, 'window.engelbartAPI.listProjects().then((list)=>list.map((p)=>p.name))'), ['Connect smoke'], 'the project Create named');
     const names = await js(wc, `window.engelbartAPI.library().then((rows)=>rows.filter((row)=>row.type==='md'&&!row.project_id&&/[\\/]assets[\\/]md[\\/]/.test(row.path||'')).map((row)=>row.name).sort())`);
     assert.deepEqual(names, ['2026-10-01', 'ChatGPT fake note', 'Help-seeking', 'Tools for thought', 'Tutoring'], 'Markdown files of the library, in assets/md');
     await until(() => has(wc, '[data-connect-dock="done"]'), 'the chip: the library is connected');

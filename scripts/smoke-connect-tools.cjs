@@ -4,7 +4,8 @@
 // "signing into claude code and/or codex must be done before this step": the real app, hidden, in test mode on disposable
 // data, on a pretend Mac (ENGELBART_TOOLS_FAKE) where Claude Code is installed but signed out and Codex is missing. The
 // tools screen comes before Connect your library, each agent's row with its own Sign in or Install; Continue waits; Claude
-// Code's Sign in (the fake's, which ends by itself) makes it ready; Continue goes on to Connect, "3 of 4".
+// Code's Sign in (the fake's, which ends by itself) makes it ready; Continue goes on to Create (2026-10-10: before Connect),
+// whose name and description are filled, and then to Connect, "4 of 4".
 // ENGELBART_CONNECT_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -41,6 +42,8 @@ const press = async (wc, selector) => {
   wc.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, x, y });
   await pause(150);
 };
+// A field's value set as typing would set it.
+const fill = (wc, selector, value) => js(wc, `(()=>{const el=document.querySelector(${JSON.stringify(selector)});const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,'value').set.call(el,${JSON.stringify(value)});el.dispatchEvent(new Event('input',{bubbles:true}));return el.value})()`);
 const step = (wc) => js(wc, 'document.querySelector("[data-onboarding]") && document.querySelector("[data-onboarding]").dataset.step');
 const SHOTS = process.env.ENGELBART_CONNECT_SHOTS;
 async function shot(wc, name) {
@@ -62,15 +65,23 @@ app.whenReady().then(async () => {
     await until(() => js(wc, '!!document.querySelector("[data-tool-row=claude] [data-tool-action=sign-in]")'), 'Claude Code\'s Sign in');
     assert.equal(await js(wc, '!!document.querySelector("[data-tool-row=codex] [data-tool-action=install]")'), true, 'Codex\'s Install');
     assert.equal(await js(wc, 'document.querySelector("[data-onboarding-continue] button").disabled'), true, 'Continue waits for an agent');
-    assert.equal(await js(wc, 'document.querySelector("[data-onboarding-step-of]").textContent'), '2 of 4', 'welcome, tools, connect, create');
+    assert.equal(await js(wc, 'document.querySelector("[data-onboarding-step-of]").textContent'), '2 of 4', 'welcome, tools, create, connect');
     await shot(wc, 'tools-1-signed-out');
     await press(wc, '[data-tool-row=claude] [data-tool-action=sign-in] button');
     await until(() => js(wc, '!document.querySelector("[data-onboarding-continue] button").disabled'), 'Claude Code signed in: Continue', 400);
     await shot(wc, 'tools-2-ready');
     await press(wc, '[data-onboarding-continue] button');
-    await until(async () => (await step(wc)) === 'connect', 'Connect your library next');
-    await until(() => js(wc, '!!document.querySelector("[data-connect-library=choose]")'), 'its choose screen');
+    await until(async () => (await step(wc)) === 'create', 'Create a new project next');
+    await until(() => js(wc, '!!document.querySelector("[data-onboarding-name]")'), 'the project\'s name');
     assert.equal(await js(wc, 'document.querySelector("[data-onboarding-step-of]").textContent'), '3 of 4');
+    await fill(wc, '[data-onboarding-name]', 'Tools smoke');
+    await press(wc, '[data-onboarding-continue] button');
+    await until(() => js(wc, '!!document.querySelector("[data-onboarding-desc]")'), 'the description');
+    await fill(wc, '[data-onboarding-desc]', 'A project to check the tools screen.');
+    await press(wc, '[data-onboarding-continue] button');
+    await until(async () => (await step(wc)) === 'connect', 'Connect your library, after Create');
+    await until(() => js(wc, '!!document.querySelector("[data-connect-library=choose]")'), 'its choose screen');
+    assert.equal(await js(wc, 'document.querySelector("[data-onboarding-step-of]").textContent'), '4 of 4');
     assert.equal(await js(wc, '!!document.querySelector("[data-connect-agent-setup]")'), false, 'an agent is ready: nothing to sign in to here');
     console.log(`Connect tools smoke passed. Data: ${root}`);
     app.exit(0);
