@@ -116,6 +116,19 @@ function cleanProject(input) {
 const projectFor = (choices) => (choices && choices.project && choices.project.description ? choices.project : null);
 
 /**
+ * What MEMORY.md's agent is told came in: the imports (label, how many, titles) and the surveys that finished. Never an
+ * email job (2026-10-11): Gmail's threads hold what other people wrote, so neither their subjects nor a survey's account
+ * of an inbox goes near the person's memory.
+ */
+function memoryJobs(s) {
+  const appsOf = (job) => (job.apps.length ? job.apps : (((s.choices.sources || {})[job.source] || {}).apps || []));
+  const email = (job) => job.source === 'email' || appsOf(job).includes('Gmail');
+  const imports = s.jobs.filter((job) => job.kind === 'import' && !email(job)).map((job) => ({ label: job.label, status: job.status, notes: job.notes, items: job.items, said: job.summary || job.error, titles: job.titles.slice(0, 40) }));
+  const surveys = s.jobs.filter((job) => job.kind === 'survey' && job.status === 'done' && !email(job)).map((job) => ({ app: job.apps[0], said: job.summary }));
+  return { imports, surveys };
+}
+
+/**
  * The choose screen's answer made safe → { sources: { id: { on, apps, folders, repos } }, custom, computer, permissions,
  * project }. `project` { name, description } (or null) is what the person is working on; it is kept in session.json with
  * the rest, so a session picked up again after a quit still knows it.
@@ -271,7 +284,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
         ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped], skippedSources: [...s.skippedSources],
-        suspended: !!s.suspended, rows: [...s.rows], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles })),
+        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, rows: [...s.rows], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles })),
       }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
   }
@@ -527,6 +540,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       get exports() { return s.picked.exports; },
       get folders() { return s.picked.folders; },
       get days() { return s.choices.days || null; }, // the period picked (2026-10-10): the listing tools hold to it
+      // The Gmail threads this session brought in (2026-10-11), held to import_gmail_threads' cap across its jobs.
+      get gmailThreads() { return s.gmailThreads || 0; },
+      set gmailThreads(n) { s.gmailThreads = Math.max(0, Number(n) || 0); save(s); },
     };
     const callTool = bridged ? createImportTools({
       session, context, zotero, github, deps, env, kind: job.kind, page, appleNotes,
@@ -888,8 +904,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   async function memoryMessage(s) {
     const recalls = Object.entries(s.recalls).map(([app, text]) => `## ${app} (asked ${s.created.slice(0, 10)})\n${clipMiddle(text, 12000)}`);
     const local = memory.localMemories(homeDir, env).map((entry) => `## ${entry.app} (${entry.file})\n${entry.text}`);
-    const imports = s.jobs.filter((job) => job.kind === 'import').map((job) => ({ label: job.label, status: job.status, notes: job.notes, items: job.items, said: job.summary || job.error, titles: job.titles.slice(0, 40) }));
-    const surveys = s.jobs.filter((job) => job.kind === 'survey' && job.status === 'done').map((job) => ({ app: job.apps[0], said: job.summary }));
+    const { imports, surveys } = memoryJobs(s);
     const existing = memory.readMemory(s.dataRoot);
     const custom = instructionsText(s.dataRoot);
     return [
@@ -1421,6 +1436,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       skippedSources: new Set((Array.isArray(saved.skippedSources) ? saved.skippedSources : []).filter((id) => sourceOf(id))), suspended: false, held: new Map(),
       rows: new Set((Array.isArray(saved.rows) ? saved.rows : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
       workspaceId: projectId && typeof saved.workspaceId === 'string' && ID_RE.test(saved.workspaceId) ? saved.workspaceId : null, placing: Promise.resolve(),
+      gmailThreads: Number.isInteger(saved.gmailThreads) && saved.gmailThreads > 0 ? saved.gmailThreads : 0,
     };
     // Closed before the librarian's first word, with only the opening line said: the opening again.
     if (s.chat.every((entry) => entry.opener)) s.chat = [];
@@ -1519,4 +1535,4 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   };
 }
 
-module.exports = { createConnect, cleanChoices, projectBlock, readReply, readSurvey, messageOf, shownOf, connectChoice, CONNECT_MODELS, PROVIDER_NAMES, PRIORITY, MAX_RUNNING };
+module.exports = { createConnect, cleanChoices, memoryJobs, projectBlock, readReply, readSurvey, messageOf, shownOf, connectChoice, CONNECT_MODELS, PROVIDER_NAMES, PRIORITY, MAX_RUNNING };

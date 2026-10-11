@@ -15,6 +15,8 @@ export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName, sh
 
 /** The AI assistants that remember the person (connect-sources' `memory`): found, they still start unticked. */
 export const MEMORY_APPS = Object.freeze(recallApps(Object.keys(APPS)));
+/** Apps that start unticked even when found (2026-10-11): Gmail holds what other people wrote, so ticking it is its own yes. */
+export const NEVER_TICKED = Object.freeze(['Gmail']);
 /** Websites' one row, and Code's second (the first is GitHub). */
 export const BROWSER_ROW = 'Browser history';
 export const LOCAL_REPOS = 'Local repos';
@@ -52,14 +54,14 @@ function derive(state) {
 /**
  * Where the choose screen starts, from what main found (`connect-detect`): a row is ticked when it was found (on this Mac,
  * signed in to in Engelbart's browser, connected; Websites: a browser; Code: a GitHub sign-in), except the assistants that
- * remember the person (asking them is its own consent) and the repositories on this Mac. Nothing is open but the first
+ * remember the person (asking them is its own consent), Gmail (NEVER_TICKED) and the repositories on this Mac. Nothing is open but the first
  * ticked source.
  */
 export function initialPicks(found) {
   const apps = {};
   for (const source of SOURCES) {
     apps[source.id] = {};
-    for (const row of rowsOf(source.id)) if (!(source.id === 'code' && row === LOCAL_REPOS)) apps[source.id][row] = foundRow(found, source.id, row) && !MEMORY_APPS.includes(row);
+    for (const row of rowsOf(source.id)) if (!(source.id === 'code' && row === LOCAL_REPOS)) apps[source.id][row] = foundRow(found, source.id, row) && !MEMORY_APPS.includes(row) && !NEVER_TICKED.includes(row);
   }
   const state = derive({ apps, local: {}, open: {} });
   const first = SOURCES.find((source) => state.picks[source.id] && source.apps.length);
@@ -245,7 +247,17 @@ export function rowSub(app) {
 
 /** What a row's tooltip adds about what the app brings in, or ''. */
 export function rowTip(app) {
+  if (app === 'Gmail') return 'Only the threads you approve';
   return app === 'Google Docs' ? 'Docs, Sheets, Slides and files' : '';
+}
+
+/**
+ * What the permissions card adds when Gmail is ticked (2026-10-11): the threads hold what other people wrote, and the
+ * agent's provider reads them. `name`: the provider as the card names it ("Claude Code"). '' when Gmail is not ticked.
+ */
+export function gmailConsent(state, name) {
+  if (!ticked(state, 'email', 'Gmail')) return '';
+  return `Gmail: the threads you approve, including what other people wrote in them, are read by ${name || 'your AI provider'} to sort and bring them in.`;
 }
 
 /**
@@ -361,7 +373,7 @@ export const workJobs = (jobs) => (jobs || []).filter((job) => job.kind !== 'mem
 
 /** The jobs still going first (2026-10-08: "show the ones still running at the top"), running before queued, then the ended, each group in its order. */
 // What each source is, under a row of onboarding's "Bringing everything in" when its label says nothing more.
-const WORK_SUBS = { notes: 'Notes', transcripts: 'Meeting transcripts', chats: 'AI chats', sites: 'Pages from your browser history', papers: 'Papers', code: 'Repositories' };
+const WORK_SUBS = { notes: 'Notes', transcripts: 'Meeting transcripts', email: 'Email threads', chats: 'AI chats', sites: 'Pages from your browser history', papers: 'Papers', code: 'Repositories' };
 const andList = (items) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
 
 /**

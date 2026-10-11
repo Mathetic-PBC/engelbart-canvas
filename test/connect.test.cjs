@@ -1057,7 +1057,7 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const found = { apps: { Obsidian: { found: true }, 'Claude Code': { found: true }, ChatGPT: { found: true } }, sites: { found: true }, github: { found: false } };
   const start = model.initialPicks(found);
-  assert.deepEqual(start.picks, { notes: true, transcripts: false, chats: true, sites: true, papers: false, code: false });
+  assert.deepEqual(start.picks, { notes: true, transcripts: false, email: false, chats: true, sites: true, papers: false, code: false });
   assert.deepEqual(start.open, { notes: true });
   // MATH-114: an assistant that remembers the person starts unticked even when found; the rest found start ticked
   assert.deepEqual([start.apps.chats.ChatGPT, start.apps.chats['Claude Code'], start.apps.notes.Obsidian, start.apps.sites[model.BROWSER_ROW]], [false, true, true, true]);

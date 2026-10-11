@@ -44,6 +44,13 @@ const SKILLS = {
 - ${SIGN_IN} Google refuses some embedded sign-ins; needs_you lets the person sign in or bring their Chrome sign-in over.
 - Leave out by default: files shared with the person that they never opened, forms, and anything older than the plan's time range.`,
 
+  Gmail: `# Gmail
+- Gmail is never brought in whole: it is searched, the person approves threads by name, and only those come in. Use the Gmail tools, not browser_open or browser_read, to look at mail.
+- First gmail_accounts: the accounts signed in to in Engelbart's browser, each with its n (its place in the browser's sign-in order) and address. Never assume n 0. If it says to sign in, call needs_you with kind "signin" and reason "Sign in to Google".
+- A survey: with one account, search it; with more than one, search each and say which account (by address) each thread is in, and give every account's n, address and ik in "notes" ("account 1 lee@uni.edu, ik cd6f0fe68b"): the librarian asks the person which one to look in. Build each gmail_search from words in <project> (its topic, methods, names of studies) and the people it names, a few searches of two or three words each, such as "protocol pilot" or from:lee; never an empty search or the period alone (gmail_search adds the period itself). Report each thread as an item: id its thread id (thread-f:…), label its subject, kind thread, date, where its people.
+- An import: the plan gives the account's n and ik and the thread ids the person approved. Call import_gmail_threads with exactly those (threads [{ id, subject }], up to 50 a call), nothing else; a thread brought in before is skipped. If the plan has no n and ik and gmail_accounts finds more than one account, do not guess: bring nothing in and say so.
+- Never open threads one by one to copy them, never search for more to bring in than the plan names, and never download attachments: their names are listed in each note.`,
+
   Evernote: `# Evernote
 - ${BROWSER}
 - Start at https://www.evernote.com/client/web. The Notes list shows titles; open each note the plan wants, browser_read its text and add_note it (title, markdown, source = the note's address). Notebooks are in the sidebar under Notebooks. ${SIGN_IN}`,

@@ -26,6 +26,7 @@ const LOCAL_PDFS = 'PDFs on this Mac';
 const SOURCES = Object.freeze([
   { id: 'notes', label: 'Notes', apps: ['Obsidian', 'Notion', 'Apple Notes', 'OneNote', 'Google Docs', 'Evernote'] },
   { id: 'transcripts', label: 'Meeting transcripts', apps: ['Granola', 'Google Meet', 'Zoom'] },
+  { id: 'email', label: 'Email', apps: ['Gmail'] },
   { id: 'chats', label: 'AI chats', apps: ['ChatGPT', 'Codex', 'Claude', 'Claude Code', 'Grok', 'Gemini', 'Perplexity', 'Cursor'] },
   { id: 'sites', label: 'Websites', apps: [] },
   { id: 'papers', label: 'Papers', apps: ['Zotero', 'Overleaf', LOCAL_PDFS] },
@@ -44,6 +45,9 @@ const APPS = Object.freeze({
   Granola: { reach: 'connector', mcp: 'https://mcp.granola.ai/mcp' },
   'Google Meet': { reach: 'web', sites: [...GOOGLE, 'meet.google.com'], start: 'https://drive.google.com/drive/search?q=type:document%20Meet%20Recordings' },
   Zoom: { reach: 'local', pick: 'folder', sites: ['zoom.us'] },
+  // Gmail (2026-10-11): the same Google sign-in as Google Docs. Never brought in whole: the librarian searches it, lists
+  // the threads, and only the ones the person approves come in (main/connect/tools.cjs gmail_*).
+  Gmail: { reach: 'web', sites: [...GOOGLE, 'mail.google.com'], start: 'https://mail.google.com/mail/' },
   ChatGPT: { reach: 'web', sites: ['chatgpt.com', 'chat.openai.com', 'openai.com'], start: 'https://chatgpt.com/', memory: true },
   Codex: { reach: 'local' },
   Claude: { reach: 'web', sites: ['claude.ai', 'claude.com', 'anthropic.com'], start: 'https://claude.ai/recents', memory: true },

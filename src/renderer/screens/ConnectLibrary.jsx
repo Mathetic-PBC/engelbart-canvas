@@ -5,7 +5,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, gmailConsent } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -16,6 +16,7 @@ import googledrive from '../../../design/assets/logos/google-drive.svg';
 import evernote from '../../../design/assets/logos/evernote.svg';
 import granola from '../../../design/assets/logos/granola-light.svg';
 import meet from '../../../design/assets/logos/google-meet.svg';
+import gmail from '../../../design/assets/logos/gmail.svg';
 import zoom from '../../../design/assets/logos/zoom.svg';
 import openai from '../../../design/assets/logos/openai.svg';
 import codex from '../../../design/assets/logos/codex_light.svg';
@@ -51,7 +52,7 @@ import github from '../../../design/assets/logos/github.svg';
 // Claude Code and Codex were run in (src/main/connect/scan.cjs localRepos).
 
 // Keyed by app id: 'Google Docs' is the person's whole Drive (shown as Google Drive, connect-sources shownName), so its logo is Drive's.
-export const LOGOS = { Obsidian: obsidian, Notion: notion, 'Apple Notes': apple, OneNote: onenote, Zotero: zotero, Overleaf: overleaf, 'Google Docs': googledrive, Evernote: evernote, Granola: granola, 'Google Meet': meet, Zoom: zoom, ChatGPT: openai, Codex: codex, Claude: claude, 'Claude Code': claude, Grok: grok, Gemini: gemini, Perplexity: perplexity, Cursor: cursor, GitHub: github };
+export const LOGOS = { Obsidian: obsidian, Notion: notion, 'Apple Notes': apple, OneNote: onenote, Zotero: zotero, Overleaf: overleaf, 'Google Docs': googledrive, Evernote: evernote, Granola: granola, 'Google Meet': meet, Zoom: zoom, Gmail: gmail, ChatGPT: openai, Codex: codex, Claude: claude, 'Claude Code': claude, Grok: grok, Gemini: gemini, Perplexity: perplexity, Cursor: cursor, GitHub: github };
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 /** The choose screen's column in onboarding (2026-10-09); Onboarding.jsx lines Skip for now up with it. */
 export const CHOOSE_WIDTH = 600;
@@ -1057,6 +1058,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                 </span>
               </div>
             ) : reassure}
+            {/* Gmail ticked (2026-10-11): its threads hold what other people wrote, and the provider reads them. */}
+            {picks && gmailConsent(picks, targetName) && <span data-connect-gmail-consent="1" style={{ paddingLeft: reads.length > 0 ? 24 : 0, font: '12.5px/1.5 var(--font-sans)', color: '#525252' }}>{gmailConsent(picks, targetName)}</span>}
             {leaves && <span data-connect-leaves-text="1" style={{ paddingLeft: reads.length > 0 ? 24 : 0, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>What the agents read is sent to {company} through your own {targetName} account, the way any {targetName} session is, to be turned into notes. The notes, and everything Engelbart keeps, stay in ~/.engelbart on this Mac. Nothing goes to Mathetic.</span>}
           </div>
         );

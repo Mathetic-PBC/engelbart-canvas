@@ -28,6 +28,7 @@ const path = require('node:path');
 const readers = require('./readers.cjs');
 const notes = require('./notes.cjs');
 const { listWebChats, readWebChat, WEB_CHAT_APPS } = require('./web-chats.cjs');
+const gmail = require('./gmail.cjs');
 const { cursorChats, cursorTranscript } = require('./cursor.cjs');
 const { readZip, safeName } = require('../overleaf/copy.cjs');
 const { mcpContent } = require('../sandbox/local-tools.cjs');
@@ -81,6 +82,9 @@ const IMPORT_TOOLS = [
   { name: 'browser_eval', description: 'Run a script in the page (an async function body: use await and return a value that is JSON). For what the page itself can ask its own site for (fetch with its sign-in). Never to type passwords or change anything in the account.', inputSchema: schema({ script: str }, ['script']) },
   { name: 'browser_download', description: 'Download a file with the person\'s sign-in (an export, a zip, a pdf) into Engelbart\'s imports. Returns its path, to unpack or bring in.', inputSchema: schema({ url: str, name: str }, ['url']) },
   { name: 'import_google_files', description: `Bring Google Drive files in by id, with the person's Google sign-in: items [{ id, kind, name }], kind doc (a Google Doc: a Markdown file with its pictures), sheet (a Markdown file with its first sheet as a table), slides (a Markdown file of its text), or file / pdf (a file in Drive: into the library). Up to ${MAX_GOOGLE_A_CALL} a call; a file brought in before is skipped.`, inputSchema: schema({ items: objs }, ['items']) },
+  { name: 'gmail_accounts', description: `The Gmail accounts signed in to in Engelbart's browser: [{ n, address }], n being the account's place in that browser's sign-in order (never assume 0). Says when the person must sign in.`, inputSchema: schema({}) },
+  { name: 'gmail_search', description: `Search one Gmail account (n from gmail_accounts) with Gmail's own search words (from:lee protocol, subject:"IRB", "exact words"); the period picked is added. Returns { n, ik, threads: [{ id, subject, people, date, imported }] }, the threads that match, newest first, without opening any. limit: at most (default and most ${gmail.MAX_SEARCH}).`, inputSchema: schema({ n: num, query: str, limit: num }, ['n', 'query']) },
+  { name: 'import_gmail_threads', description: `Bring in the Gmail threads the person approved, one note a thread (its messages in order, the names of its attachments, never the attachments): n and ik as gmail_search returned them, threads [{ id, subject }], up to ${gmail.MAX_THREADS_A_CALL} a call and ${gmail.MAX_THREADS_A_SESSION} a session. A thread brought in before is skipped.`, inputSchema: schema({ n: num, ik: str, threads: objs }, ['n', 'ik', 'threads']) },
   { name: 'overleaf_projects', description: 'The person\'s Overleaf projects (id, name, last updated, owner, archived), read from their signed-in project page.', inputSchema: schema({}) },
   { name: 'import_overleaf_projects', description: 'Bring Overleaf projects in by id (up to 20 a call; what did not fit in the time is returned as left): each is downloaded as its source zip with the person\'s sign-in, unpacked into Engelbart\'s imports and kept in the library as a folder, with its main .tex as a Markdown file and its compiled pdf.', inputSchema: schema({ ids: strs }, ['ids']) },
   { name: 'apple_notes_folders', description: 'Apple Notes\' folders (id, name, account, how many notes), asked through macOS Automation.', inputSchema: schema({}) },
@@ -99,13 +103,13 @@ const IMPORT_TOOLS = [
 ];
 
 // What each kind of agent may call: a survey looks, a recall asks and saves its answer, an import brings things in.
-const LOOK = ['folder_overview', 'list_note_files', 'list_pdfs', 'list_chats', 'read_chat', 'web_chats', 'web_chat_read', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'browser_eval', 'overleaf_projects', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
+const LOOK = ['folder_overview', 'list_note_files', 'list_pdfs', 'list_chats', 'read_chat', 'web_chats', 'web_chat_read', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'browser_eval', 'overleaf_projects', 'gmail_accounts', 'gmail_search', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
 const TOOLS_FOR = Object.freeze({
   survey: LOOK,
   recall: ['browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'needs_you', 'wait_for_you', 'save_memory'],
   import: IMPORT_TOOLS.map((tool) => tool.name).filter((name) => name !== 'save_memory'),
 });
-const WRITING = new Set(['import_note_files', 'import_pdfs', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
+const WRITING = new Set(['import_note_files', 'import_pdfs', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_gmail_threads', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
 
 /** The tool definitions an agent of `kind` is served. */
 const toolsFor = (kind) => { const names = new Set(TOOLS_FOR[kind] || TOOLS_FOR.import); return IMPORT_TOOLS.filter((tool) => names.has(tool.name)); };
@@ -200,11 +204,13 @@ const looksSignedOut = (file, type) => {
   if (!/html/i.test(type || '')) return false;
   try { const head = fs.readFileSync(file, 'utf8').slice(0, 4000); return /accounts\.google\.com|ServiceLogin|Sign in|<form/i.test(head); } catch { return true; }
 };
+const gmailSignedOut = () => Object.assign(new Error('Not signed in to Google in Engelbart\'s browser. Call needs_you with kind "signin", then try again.'), { code: 'SIGNED_OUT' });
 
 /**
  * The tools of one import. `session`: { dataRoot, homeDir, dir (its folder), downloads (where downloads and unpacked zips
  * go), projectId() (null until onboarding makes the project), exports (app → the export chosen), folders (app → folder),
- * days (the period picked on Connect your library: 182, 365, or null for all time) };
+ * days (the period picked on Connect your library: 182, 365, or null for all time), gmailThreads (the Gmail threads this
+ * session brought in, counted against its cap) };
  * `context()` the store's context now; `added(kind, n, what)` counts what this import added ('notes' | 'items'); `kept(row)`
  * each library row it added or found already there (session.cjs keepRow);
  * `zotero` { root(), download? }; `github` (its repos()); `library` deps { describe, identifyRepo, inspectPdf, onAdded,
@@ -222,6 +228,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   const downloads = (part) => path.join(session.downloads || path.join(session.dir, 'downloads'), part);
   // The period (2026-10-10): the listing tools use the session's when `days` is left out, and cut a longer one down to it;
   // a shorter one is kept. import_pdfs by path is not held to it, so an older paper the person agreed to still comes in.
+  // Gmail's comes from its own search words: gmail_search adds newer_than:1y / newer_than:6m (./gmail.cjs gmailPeriod).
   // TODO: GitHub, Zotero and Google Drive have no period here; only the prompts' rule holds them to it.
   const within = (days, fallback = null) => {
     const period = Number.isFinite(session.days) && session.days > 0 ? session.days : null;
@@ -512,6 +519,87 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         }
       }
       if (count) log(`Brought in ${count} Google Drive file${count === 1 ? '' : 's'}`);
+      return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, ...(left.length ? { left } : {}) };
+    },
+    gmail_accounts: async () => {
+      const pageNow = browser();
+      const accounts = [], seen = new Set();
+      const deadline = Date.now() + CALL_BUDGET_MS;
+      for (let n = 0; n < gmail.MAX_ACCOUNTS; n += 1) {
+        if (Date.now() > deadline) return { accounts, more: true };
+        const opened = await pageNow.open(gmail.inboxUrl(n));
+        const at = String((opened && opened.url) || '');
+        if (!/^https:\/\/mail\.google\.com\//.test(at)) { if (!n) throw gmailSignedOut(); break; } // a sign-in page: no account here
+        const placed = at.match(/\/mail\/u\/(\d+)\//);
+        if (placed && Number(placed[1]) !== n) break; // Gmail sent this place to another account's: none here
+        const out = await pageNow.evaluate(gmail.ACCOUNT_SCRIPT);
+        if (!out || !out.signedIn) { if (!n) throw gmailSignedOut(); break; }
+        const address = String(out.address || '').slice(0, 200), ik = gmail.IK_RE.test(String(out.ik || '')) ? out.ik : '';
+        const key = address.toLowerCase() || ik;
+        if (!key || seen.has(address.toLowerCase()) || (ik && seen.has(ik))) break; // the same account again: the list has ended
+        if (address) seen.add(address.toLowerCase());
+        if (ik) seen.add(ik);
+        accounts.push({ n, address });
+      }
+      log(`Found ${accounts.length} Gmail account${accounts.length === 1 ? '' : 's'}`);
+      return { accounts };
+    },
+    gmail_search: async ({ n, query, limit = gmail.MAX_SEARCH }) => {
+      gmail.accountIndex(n);
+      const words = String(query || '').replace(/\s+/g, ' ').trim();
+      if (!words || /^(?:(?:newer_than|older_than|after|before):\S+\s*)+$/i.test(words)) throw new Error('Search with words from the project, people or the plan: never an empty search, or the period alone.');
+      const cap = Math.min(Math.max(1, Math.round(limit) || gmail.MAX_SEARCH), gmail.MAX_SEARCH);
+      const pageNow = browser();
+      const opened = await pageNow.open(gmail.searchUrl(n, words + gmail.gmailPeriod(within(null))));
+      if (!/^https:\/\/mail\.google\.com\//.test(String((opened && opened.url) || ''))) throw gmailSignedOut();
+      const out = await pageNow.evaluate(gmail.SEARCH_SCRIPT(cap));
+      if (!out || !out.signedIn) throw gmailSignedOut();
+      const ik = gmail.IK_RE.test(String(out.ik || '')) ? out.ik : '';
+      const clip = (value, max) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+      const threads = [];
+      for (const row of out.threads || []) {
+        const id = String((row && row.id) || '').replace(/^#/, '');
+        if (!gmail.THREAD_ID_RE.test(id) || threads.some((thread) => thread.id === id)) continue;
+        threads.push({ id, subject: clip(row.subject, 300) || '(no subject)', people: clip(row.people, 300), date: clip(row.date, 80), imported: !!ik && imported.has(`gmail:${ik}:${id.slice('thread-f:'.length)}`) });
+      }
+      log(`Searched Gmail: ${threads.length} thread${threads.length === 1 ? '' : 's'}`);
+      return { n, ik, threads: threads.slice(0, cap), ...(threads.length > cap ? { more: true } : {}) };
+    },
+    import_gmail_threads: async ({ n, ik, threads }) => {
+      gmail.accountIndex(n);
+      if (!gmail.IK_RE.test(ik)) throw new Error('ik must be the account key gmail_search returned');
+      if (threads.length > gmail.MAX_THREADS_A_CALL) throw new Error(`At most ${gmail.MAX_THREADS_A_CALL} threads a call`);
+      const fresh = threads.filter((thread) => gmail.THREAD_ID_RE.test(String(thread.id || '')) && !imported.has(`gmail:${ik}:${String(thread.id).slice('thread-f:'.length)}`));
+      const before = Number(session.gmailThreads) || 0;
+      if (before + fresh.length > gmail.MAX_THREADS_A_SESSION) throw new Error(`At most ${gmail.MAX_THREADS_A_SESSION} Gmail threads a session, and ${before} came in already: bring in ${Math.max(0, gmail.MAX_THREADS_A_SESSION - before)} more at most. Tell the person, and leave the rest for another session.`);
+      const pageNow = browser();
+      let count = 0;
+      const skipped = [], left = [];
+      const deadline = Date.now() + CALL_BUDGET_MS;
+      for (const thread of threads) {
+        const id = String(thread.id || '');
+        if (!gmail.THREAD_ID_RE.test(id)) { skipped.push({ id, why: 'not a Gmail thread id' }); continue; }
+        if (Date.now() > deadline) { left.push(id); continue; }
+        const decimal = id.slice('thread-f:'.length);
+        const key = `gmail:${ik}:${decimal}`;
+        if (imported.has(key)) { skipped.push({ id, why: 'brought in before' }); continue; }
+        try {
+          const got = await pageNow.download(gmail.printUrl(n, ik, id), downloads('gmail'), { name: `${decimal}.html`, quiet: true });
+          const html = fs.readFileSync(got.path, 'utf8');
+          fs.rmSync(got.path, { force: true });
+          if (gmail.gmailSignedOut(html)) throw gmailSignedOut();
+          if (!/html/i.test(got.type || '')) throw new Error('Gmail sent no thread');
+          const read = gmail.readThread(html);
+          const title = String(thread.subject || '').trim() || read.subject || 'Gmail thread';
+          await putNote({ title: sanitizeName(title), body: clipMiddle(gmail.gmailThreadNote(read), MAX_NOTE_CHARS), images: [], source: key });
+          session.gmailThreads = (Number(session.gmailThreads) || 0) + 1;
+          count += 1;
+        } catch (error) {
+          if (error.code === 'SIGNED_OUT') throw error;
+          skipped.push({ id, why: String(error.message).slice(0, 200) });
+        }
+      }
+      if (count) log(`Brought in ${count} Gmail thread${count === 1 ? '' : 's'}`);
       return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, ...(left.length ? { left } : {}) };
     },
     overleaf_projects: async () => {

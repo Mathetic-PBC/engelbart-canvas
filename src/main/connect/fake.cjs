@@ -17,7 +17,7 @@ const sleep = (ms, signal) => new Promise((resolve, reject) => {
   if (signal) signal.addEventListener('abort', () => { clearTimeout(timer); const error = new Error('Stopped.'); error.kind = 'stopped'; reject(error); }, { once: true });
 });
 
-const LABELS = { notes: 'Notes', transcripts: 'Meeting transcripts', chats: 'AI chats', sites: 'Websites', papers: 'Papers', code: 'Code' };
+const LABELS = { notes: 'Notes', transcripts: 'Meeting transcripts', email: 'Email', chats: 'AI chats', sites: 'Websites', papers: 'Papers', code: 'Code' };
 
 function interviewReply(s, message) {
   const state = s.fakeState || (s.fakeState = { asked: [], offered: [] });

@@ -112,6 +112,9 @@ function importToolLabel(tool, input = {}) {
     case 'browser_eval': return 'Asking the page';
     case 'browser_download': return `Downloading from ${host(input.url)}`;
     case 'import_google_files': return `Bringing in ${n(input.items)} Google Drive file${n(input.items) === 1 ? '' : 's'}`;
+    case 'gmail_accounts': return 'Finding your Gmail accounts';
+    case 'gmail_search': return 'Searching your Gmail';
+    case 'import_gmail_threads': return `Bringing in ${n(input.threads)} email thread${n(input.threads) === 1 ? '' : 's'}`;
     case 'overleaf_projects': return 'Listing your Overleaf projects';
     case 'import_overleaf_projects': return `Bringing in ${n(input.ids)} Overleaf project${n(input.ids) === 1 ? '' : 's'}`;
     case 'apple_notes_folders': return 'Reading Apple Notes\' folders';

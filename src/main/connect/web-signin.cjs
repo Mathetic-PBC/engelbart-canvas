@@ -26,6 +26,7 @@ const SIGN_IN_COOKIES = Object.freeze({
   Claude: ['claude.ai', /^sessionKey$/],
   'Google Docs': ['google.com', /^(__Secure-1PSID|SID)$/],
   'Google Meet': ['google.com', /^(__Secure-1PSID|SID)$/],
+  Gmail: ['google.com', /^(__Secure-1PSID|SID)$/],
   Gemini: ['google.com', /^(__Secure-1PSID|SID)$/],
   Overleaf: ['overleaf.com', /^overleaf_session/],
   Perplexity: ['perplexity.ai', /session-token/],
@@ -39,6 +40,7 @@ const SIGN_IN_PAGES = Object.freeze({
   Claude: 'https://claude.ai/login',
   'Google Docs': 'https://accounts.google.com/',
   'Google Meet': 'https://accounts.google.com/',
+  Gmail: 'https://accounts.google.com/',
   Gemini: 'https://accounts.google.com/',
   Overleaf: 'https://www.overleaf.com/login',
 });

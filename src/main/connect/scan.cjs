@@ -49,6 +49,9 @@ function detect({ homeDir, env = process.env, zotero = () => null, github = () =
   const drives = googleDrives(homeDir);
   set('Google Docs', drives.length || web.has('Google Docs') || has('Google Docs'), web.has('Google Docs') ? 'signed in to Engelbart' : 'Sign in to add');
   apps['Google Docs'].signedIn = web.has('Google Docs');
+  // Gmail: the same Google sign-in, read only in Engelbart's browser (no desktop app, no Drive folders).
+  set('Gmail', web.has('Gmail'), web.has('Gmail') ? 'signed in to Engelbart' : 'Sign in to add');
+  apps.Gmail.signedIn = web.has('Gmail');
   const zs = zotero() || {};
   set('Zotero', zs.connected || exists(path.join(homeDir, 'Zotero')), zs.connected ? `signed in${zs.username ? ` as ${zs.username}` : ''}` : (exists(path.join(homeDir, 'Zotero')) ? '~/Zotero (sign in to read it)' : ''));
   // Only whether the folders are there: reading inside Downloads or Documents is left to the scan, after the person picked.
