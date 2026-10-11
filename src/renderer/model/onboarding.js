@@ -15,7 +15,14 @@ import { launchRows, installable } from './tools.js';
  * A new user's flow ends on Create (2026-10-09, "fewer create screens"): its last part opens the project, with no Project
  * context screen; + Project keeps create → context.
  */
-export const FLOWS = { new: ['welcome', 'tools', 'connect', 'import', 'instructions', 'create'], existing: ['create', 'context'] };
+export const FLOWS = { new: ['welcome', 'tools', 'connect', 'import', 'instructions', 'create'], existing: ['create', 'context'], guided: ['welcome', 'tools', 'connect', 'import', 'instructions'] };
+
+/**
+ * The guided setup started inside a project (2026-10-10, "guided setup shouldn't create a new project"): a new user's
+ * screens without Create, its last screen adding a Welcome workspace to that project ('open' after it, as after Create).
+ * From the all-projects screen it is mode 'new' and ends in a new project.
+ */
+export const isFresh = (mode) => mode === 'new' || mode === 'guided'; // a new user's screens: Connect, the tools screen's agents
 
 export function flowOf(mode, { tools = true, connect = false } = {}) {
   const flow = FLOWS[mode] || FLOWS.new;

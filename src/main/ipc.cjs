@@ -456,6 +456,20 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       return made;
     });
   }), { project: (_args, out) => out && out.project && out.project.id, library: true });
+  // The guided setup started inside a project (2026-10-10): start-project's end without the project. That project gets a
+  // Welcome workspace (another one on every run; nothing already there is removed) with what the setup added in its
+  // context, the walkthrough, and Connect your library's session attached as start-project attaches it.
+  saving('welcome-workspace', withCtx((ctx, pid, input) => {
+    const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
+    const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
+    const imported = optStr(value.connect, 'import id', 64);
+    return onboarding.addWelcomeWorkspace(ctx, str(pid, 'project id', 64), { context }).then(async (made) => {
+      if (imported && connect) made.importedNotes = await connect.attachProject(ctx, imported, made.project.id, made.workspaceId).catch(() => 0);
+      made.gettingStarted = gettingStarted.startGettingStarted(ctx, made.project.id, { workspaceId: made.workspaceId });
+      try { gettingStarted.markGuidedOffer(ctx, 'onboarded'); } catch { /* offered once more at worst */ }
+      return made;
+    });
+  }), { project: first, library: true });
   // Connect your library (./connect, 2026-10-07): the chat that brings the person's notes, chats, papers, sites and code
   // into the library, in onboarding and, once, as a popup for someone who has projects already. In every library since
   // 2026-10-08 ("migrate the agent onboarding features to non-testing, too"); it was test mode's only until then, and

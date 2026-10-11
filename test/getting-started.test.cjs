@@ -9,6 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
+const { randomUUID } = require('node:crypto');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
@@ -123,17 +124,61 @@ test('the guided setup is offered once in a data root: shown, started or dismiss
   assert.match(ipc, /handle\('guided-offer', withCtx\(\(ctx\) => \(\{ show: process\.env\.ENGELBART_CONNECT_OFFER !== 'off' && gettingStarted\.guidedOfferDue\(ctx\) \}\)\)\);/);
 });
 
-test('the guided setup runs a new user\'s onboarding for someone with projects: from the offer over their workspace (in place of Connect your library\'s popup) or from Settings; back leaves it for their projects (2026-10-10)', () => {
+test('the guided setup inside a project: a Welcome workspace added there with what it brought in, no new project, another on each run (2026-10-10)', async () => {
+  const made = await projects.createProjectWithWelcome(ctx, { name: 'Already here' });
+  const before = (await projects.listProjects(ctx)).length;
+  const paper = await ctx.libraryDb.insert({ id: randomUUID(), name: 'A paper', type: 'pdf', tags: ['paper'], path: '/tmp/guided-paper.pdf' });
+  const site = await ctx.libraryDb.insert({ id: randomUUID(), name: 'A site', type: 'website', tags: [], url: 'https://example.org/guided' });
+  const first = await onboarding.addWelcomeWorkspace(ctx, made.project.id, { context: [paper.id, made.noteId, 'not-an-id', site.id, paper.id] });
+  assert.equal(first.project.id, made.project.id);
+  assert.equal((await projects.listProjects(ctx)).length, before, 'no project is made');
+  let tree = await projects.loadProject(ctx, made.project.id);
+  assert.deepEqual(tree.workspaces.map((workspace) => workspace.name), ['Getting started', 'Welcome']);
+  const welcome = tree.workspaces.find((workspace) => workspace.id === first.workspaceId);
+  assert.deepEqual(welcome.context, [paper.id, site.id], 'what the setup added, notes and unknown ids left out');
+  const kept = tree.workspaces.find((workspace) => workspace.id === made.workspaceId);
+  assert.deepEqual(kept.context, [made.noteId], 'the workspace already there is untouched');
+  // A second run: another Welcome workspace; the first stays as it was.
+  const second = await onboarding.addWelcomeWorkspace(ctx, made.project.id, {});
+  tree = await projects.loadProject(ctx, made.project.id);
+  assert.equal(tree.workspaces.length, 3);
+  assert.notEqual(second.workspaceId, first.workspaceId);
+  assert.match(tree.workspaces.find((workspace) => workspace.id === second.workspaceId).name, /^Welcome/);
+  assert.deepEqual(tree.workspaces.find((workspace) => workspace.id === first.workspaceId).context, [paper.id, site.id]);
+  assert.equal((await projects.listProjects(ctx)).length, before);
+  await assert.rejects(onboarding.addWelcomeWorkspace(ctx, '00000000-0000-4000-8000-000000000000', {}), /Unknown project/);
+  // Main (ipc welcome-workspace) finishes it as start-project does: Connect's session attached, the walkthrough, the offer.
+  const ipc = fs.readFileSync(path.join(__dirname, '../src/main/ipc.cjs'), 'utf8');
+  const handler = ipc.slice(ipc.indexOf("saving('welcome-workspace'"), ipc.indexOf("}), { project: first, library: true });"));
+  assert.ok(handler.length > 0);
+  assert.match(handler, /onboarding\.addWelcomeWorkspace\(ctx, str\(pid, 'project id', 64\), \{ context \}\)/);
+  assert.match(handler, /connect\.attachProject\(ctx, imported, made\.project\.id, made\.workspaceId\)/);
+  assert.match(handler, /gettingStarted\.startGettingStarted\(ctx, made\.project\.id, \{ workspaceId: made\.workspaceId \}\)/);
+  assert.match(handler, /gettingStarted\.markGuidedOffer\(ctx, 'onboarded'\)/);
+  assert.doesNotMatch(handler, /startProject|createProject/, 'no project is made');
+  assert.match(fs.readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8'), /welcomeWorkspace: invoke\('welcome-workspace'\)/);
+});
+
+test('the guided setup runs a new user\'s onboarding for someone with projects: from the offer over their workspace (in place of Connect your library\'s popup) or from Settings; back goes where it was started (2026-10-10)', () => {
   const app = fs.readFileSync(path.join(__dirname, '../src/renderer/App.jsx'), 'utf8');
-  assert.match(app, /const onboardMode = guided \|\| !returning \? 'new' : 'existing';/, 'all of onboarding, not + Project\'s last two screens');
+  assert.match(app, /const onboardMode = guidedFrom \? 'guided' : guided \|\| !returning \? 'new' : 'existing';/, 'a new user\'s screens (inside a project without Create), not + Project\'s last two');
+  assert.match(app, /const here = now\.phase === 'workspace' && now\.tree \? now\.tree\.project\.id : null;/, 'started inside a project, it remembers which');
+  assert.match(app, /setGuided\(from \|\| true\);/, 'from all projects: today\'s guided setup, ending in a new project');
+  assert.match(app, /into=\{guidedFrom \? guidedFrom\.projectId : null\}/);
   assert.match(app, /api\.guidedOffer\(\)\.then/);
   assert.doesNotMatch(app, /api\.connectOffer\(\)/, 'Connect your library\'s one-time popup is no longer opened by itself');
   assert.match(app, /window\.addEventListener\(START_GUIDED_SETUP, startGuided\)/, 'Settings asks for it by the event');
-  assert.match(app, /onBack=\{returning \? \(\) => \{ setGuided\(false\); goHome\(\); \} : null\}/);
+  assert.match(app, /onBack=\{returning \? leaveOnboarding : null\}/);
+  assert.match(app, /if \(guidedFrom\) openProject\(guidedFrom\.projectId, guidedFrom\.workspaceId \? \{ workspaceId: guidedFrom\.workspaceId \} : null\)\.catch\(\(\) => goHome\(\)\);\n    else goHome\(\);/, '"Engelbart" goes back to the workspace it was started in, else all projects');
   assert.match(app, /phase === 'create' && \(!projects\.length \|\| guided\)/, 'the tool dialog waits until it is over, as for a new user');
   assert.match(app, /onDismiss=\{\(\) => \{ setGuidedOffer\(false\); api\.guidedOfferSeen\('dismissed'\)/);
   const settings = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
   assert.match(settings, /onClick=\{\(\) => \{ close\(\); startGuidedSetup\(\); \}\}/);
+  assert.ok(settings.includes('in a Welcome workspace added to the project you’re in, or in a new project when started from All projects. Nothing you have is removed.'));
+  assert.ok(!settings.includes('Discover in a new project. Nothing'), 'no longer always a new project');
+  const screen = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Onboarding.jsx'), 'utf8');
+  assert.match(screen, /if \(flowMode === 'guided' && next\.step === 'open'\) \{ addWelcome\(\); return; \}/, 'past the last screen: the Welcome workspace, not Create');
+  assert.match(screen, /api\.welcomeWorkspace\(into, \{ context: added\.filter/);
   const offer = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/GuidedSetup.jsx'), 'utf8');
   for (const words of ['New: a guided setup', 'Walk through it to bring in your library and try Brainstorm and Discover.', '>Not now<', '>Start<']) assert.ok(offer.includes(words), words);
 });
