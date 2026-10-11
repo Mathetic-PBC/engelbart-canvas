@@ -1,9 +1,11 @@
 import React from 'react';
 import Button from './Button.jsx';
 
-// The guided setup (2026-10-10): a new user's onboarding (screens/Onboarding.jsx, mode 'new'), run for someone who has
-// projects already, over what they have. It ends in a new project whose Welcome workspace shows the walkthrough; nothing
-// they had is removed. Offered once by GuidedSetupOffer (App.jsx, in place of Connect your library's one-time popup), and
+// The guided setup (2026-10-10): a new user's onboarding (screens/Onboarding.jsx), run for someone who has projects
+// already, over what they have. Started inside a project (mode 'guided') its screens have no Create, and after the last one
+// that project gets a Welcome workspace showing the walkthrough, with what the setup added as its context; running it again
+// adds another. Started from all projects (mode 'new') it ends in a new project whose Welcome workspace shows the
+// walkthrough. Either way nothing they had is removed, and "Engelbart" in its top left goes back where it was started. Offered once by GuidedSetupOffer (App.jsx, in place of Connect your library's one-time popup), and
 // at any time from Settings ▸ Guided setup, which asks for it by this event.
 export const START_GUIDED_SETUP = 'engelbart:guided-setup';
 export const startGuidedSetup = () => window.dispatchEvent(new CustomEvent(START_GUIDED_SETUP));

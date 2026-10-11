@@ -119,6 +119,7 @@ const engelbartAPI = Object.freeze({
   freeFolder: invoke('free-folder'),
   checkFolder: invoke('check-folder'),
   startProject: invoke('start-project'),
+  welcomeWorkspace: invoke('welcome-workspace'), // the guided setup's end inside a project (2026-10-10)
   discardLibraryItem: invoke('discard-library-item'),
   // Connect your library (src/main/connect; onboarding and a one-time popup, in every library): connectStart(choices) → the
   // session's snapshot, then every change of it on onConnect. connectNeed(id, needId, 'open' | 'done' | 'skip'): a step an

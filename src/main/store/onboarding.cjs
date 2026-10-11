@@ -8,7 +8,9 @@
 //   - the custom instructions, `<dataRoot>/instructions.md`, read by @bart and Build (`instructionsBlock`);
 //   - the project (`startProject`): its folder, made under the home directory when Engelbart is asked to make one,
 //     a "Getting started" workspace whose document starts with the description, the "Welcome!" note, and the chosen library
-//     rows in the workspace's context.
+//     rows in the workspace's context;
+//   - the guided setup started inside a project (`addWelcomeWorkspace`, 2026-10-10): no project, a "Welcome" workspace in
+//     that one, with what the setup added in its context.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -79,11 +81,29 @@ async function startProject(ctx, { name, description = '', folder = 'new', direc
   } else {
     dir = existingFolder(ctx, directory);
   }
+  const chosen = await contextIds(ctx, context);
+  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName, context: chosen });
+}
+
+/** Library ids a workspace can be given: rows the library has, notes left out (they belong to their own project). */
+async function contextIds(ctx, context) {
   const rows = await ctx.libraryDb.list();
   const known = new Map(rows.map((row) => [row.id, row]));
-  const chosen = [...new Set((Array.isArray(context) ? context : []).filter((id) => typeof id === 'string' && UUID_RE.test(id)))]
+  return [...new Set((Array.isArray(context) ? context : []).filter((id) => typeof id === 'string' && UUID_RE.test(id)))]
     .filter((id) => known.has(id) && !known.get(id).tags.includes('note'));
-  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName, context: chosen });
+}
+
+/**
+ * The guided setup started inside a project (2026-10-10, "guided setup shouldn't create a new project"): no project is
+ * made; this one gets a workspace named "Welcome" (createWorkspace makes the name unique: a second run's is "Welcome 2")
+ * holding `context` as startProject's does. Nothing the project had is touched. → { project, workspaceId }
+ */
+async function addWelcomeWorkspace(ctx, projectId, { context = [] } = {}) {
+  const project = projects.findProject(ctx, projectId);
+  const chosen = await contextIds(ctx, context);
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Welcome' });
+  if (chosen.length) await projects.setWorkspaceContext(ctx, project.id, workspace.id, chosen);
+  return { project: { id: project.id, name: project.name }, workspaceId: workspace.id };
 }
 
 /**
@@ -100,4 +120,4 @@ async function discardItem(ctx, id, { release = null } = {}) {
   return ctx.libraryDb.remove(id);
 }
 
-module.exports = { INSTRUCTIONS_FILE, readInstructions, writeInstructions, instructionsBlock, freeFolder, existingFolder, startProject, discardItem };
+module.exports = { INSTRUCTIONS_FILE, readInstructions, writeInstructions, instructionsBlock, freeFolder, existingFolder, startProject, addWelcomeWorkspace, discardItem };

@@ -114,11 +114,11 @@ function TestData({ test, close }) {
 }
 
 // Guided setup (2026-10-10): a new user's onboarding again, at any time, over what they have (ui/GuidedSetup.jsx). Start
-// closes the window and opens its first screen.
+// closes the window and opens its first screen; inside a project it ends in a Welcome workspace there, not a new project.
 function GuidedSetupPage({ close }) {
   return (
     <Group title="Onboarding" data-guided-setup="1">
-      <Row label="Walk through setup again" hint="Bring in your library and try Brainstorm and Discover in a new project. Nothing you have is removed.">
+      <Row label="Walk through setup again" hint="Bring in your library and try Brainstorm and Discover in a Welcome workspace added to the project you’re in, or in a new project when started from All projects. Nothing you have is removed.">
         <button type="button" className="hov-bd2" data-settings-item="guided-setup" onClick={() => { close(); startGuidedSetup(); }} style={BUTTON}>Start</button>
       </Row>
     </Group>

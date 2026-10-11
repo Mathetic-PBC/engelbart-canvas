@@ -6,7 +6,7 @@ import Pager from '../ui/Pager.jsx';
 import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { GH, GLOBE, PDF } from '../ui/Icons.jsx';
 import { heldRow } from '../model/github.js';
-import { SUBS, forward, pagerOf, importButtons, createButtons, rowWhy, contextRows, toolsWanted, toolsStep, agentReady, TOOL_WHY, PROFILE_PROMPT } from '../model/onboarding.js';
+import { SUBS, isFresh, forward, pagerOf, importButtons, createButtons, rowWhy, contextRows, toolsWanted, toolsStep, agentReady, TOOL_WHY, PROFILE_PROMPT } from '../model/onboarding.js';
 import { rowOf } from '../model/tools.js';
 import { useGithubStatus } from '../workspace/useGithubStatus.js';
 import ImportSignins from '../workspace/ImportSignins.jsx';
@@ -18,8 +18,9 @@ const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platfor
 
 // Onboarding (2026-09-28): port of Claude Design "Onboarding.dc.html", Hudson's tweaks in design/onboarding/TWEAKS.md.
 // mode 'new' (first launch: welcome → tools → add to library → custom instructions → create → context) or 'existing'
-// (+ Project: create → context). Everything is real: library rows are added as they are picked, the instructions are
-// saved on Continue, and "Open project" makes the project (src/main/store/onboarding.cjs) and opens its Getting started workspace.
+// (+ Project: create → context), or 'guided' (the guided setup started inside a project, 2026-10-10: a new user's screens
+// without Create; after the last one `into`, that project, gets a Welcome workspace and opens on it). Everything is real:
+// library rows are added as they are picked, the instructions are saved on Continue, and "Open project" makes the project (src/main/store/onboarding.cjs) and opens its Getting started workspace.
 // The window is white and the content sits on it, centred, with no card or grey boxes; one Continue per screen walks
 // its parts (Hudson, 2026-09-28). The tools screen installs Git, Claude Code and Codex in the background (App.jsx
 // holds the setup dialog back until onboarding is over).
@@ -67,10 +68,13 @@ function Footer({ showSkip, onSkip, continueDisabled, onContinue, label = 'Conti
 
 /**
  * `tools`: the tool check's snapshot (App.jsx). `onTools('install' | 'skip')`: what the tools screen was answered with.
- * A new user's flow has Connect your library (2026-10-07; in every library, not test mode's only, since 2026-10-08).
+ * A new user's flow has Connect your library (2026-10-07; in every library, not test mode's only, since 2026-10-08), and
+ * so does the guided setup's. `into`: the project mode 'guided' adds its Welcome workspace to. `backTitle`: where
+ * "Engelbart" in the top left goes (all projects, or the project the guided setup was started in).
  */
-export default function Onboarding({ mode = 'new', tools = null, onTools = () => {}, onDone, onBack }) {
-  const flowMode = mode === 'existing' ? 'existing' : 'new';
+export default function Onboarding({ mode = 'new', into = null, tools = null, onTools = () => {}, onDone, onBack, backTitle = 'All projects' }) {
+  const flowMode = mode === 'existing' ? 'existing' : mode === 'guided' && into ? 'guided' : 'new';
+  const fresh = isFresh(flowMode);
   const [place, setPlace] = React.useState({ step: flowMode === 'existing' ? 'create' : 'welcome', sub: 0, detour: false });
   const { step, sub } = place;
   const [library, setLibrary] = React.useState([]);
@@ -93,7 +97,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   // Connect your library needs Claude Code or Codex: skipping the tools screen without one takes it out of the flow, and
   // Add to your library and Custom instructions come back in its place.
   const [connectDropped, setConnectDropped] = React.useState(false);
-  const connectMode = flowMode === 'new' && !connectDropped;
+  const connectMode = fresh && !connectDropped;
   // Its "Sign in again" sites (2026-10-06): there is no Stage until the project opens, so they open on it then (App.jsx).
   const stageLinks = React.useRef([]);
   const [ghStatus] = useGithubStatus();
@@ -117,12 +121,18 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
 
   // Whether the tools screen is in the flow: decided by the first check that answers, then kept, so the pager does not
   // change under the person while the installs it started run. While it is undecided the screen is there, checking.
-  const [withTools, setWithTools] = React.useState(() => toolsWanted(tools, { connect: flowMode === 'new' }));
-  React.useEffect(() => { if (withTools === null) { const wanted = toolsWanted(tools, { connect: flowMode === 'new' }); if (wanted !== null) setWithTools(wanted); } }, [tools, withTools]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [withTools, setWithTools] = React.useState(() => toolsWanted(tools, { connect: fresh }));
+  React.useEffect(() => { if (withTools === null) { const wanted = toolsWanted(tools, { connect: fresh }); if (wanted !== null) setWithTools(wanted); } }, [tools, withTools]); // eslint-disable-line react-hooks/exhaustive-deps
   const flowOptions = { tools: withTools !== false, connect: connectMode };
 
   const go = (next) => { setPlace((now) => ({ ...now, ...next })); setEntry(''); setEntryErr(''); setError(''); };
-  const advance = () => go(forward(flowMode, place, flowOptions));
+  // Forward from here; past the guided setup's last screen, the Welcome workspace (there is no Create to end on).
+  const goForward = (options = flowOptions) => {
+    const next = forward(flowMode, place, options);
+    if (flowMode === 'guided' && next.step === 'open') { addWelcome(); return; }
+    go(next);
+  };
+  const advance = () => goForward();
 
   // The check answered with nothing to install while the tools screen was showing: on to the next one.
   React.useEffect(() => { if (step === 'tools' && withTools === false) advance(); }, [step, withTools]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -247,6 +257,21 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
   };
   const open = () => openProject(contextRows(library).filter((row) => sel[row.id]).map((row) => row.id));
 
+  // The guided setup's end inside a project (ipc welcome-workspace): a Welcome workspace in `into` holding what this
+  // setup added, with the walkthrough and Connect's session; nothing the project had is touched. A failure goes back to
+  // the last screen, saying so.
+  const addWelcome = async () => {
+    const back = { ...place, detour: false };
+    go({ step: 'open', sub: 0 });
+    try {
+      const made = await api.welcomeWorkspace(into, { context: added.filter((item) => byId.has(item.id)).map((item) => item.id), ...(connectId ? { connect: connectId } : {}) });
+      await onDone(made, { stageLinks: [...stageLinks.current] });
+    } catch (failure) {
+      setPlace(back);
+      setError(errorMessage(failure));
+    }
+  };
+
   const pager = pagerOf(flowMode, step, flowOptions);
   const errorLine = error ? <span data-onboarding-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', textAlign: 'center', overflowWrap: 'anywhere' }}>{error}</span> : null;
   const projName = name.trim() || 'your project';
@@ -276,7 +301,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     };
     const skip = () => {
       onTools('skip');
-      if (connectMode && !agentReady(tools)) { setConnectDropped(true); go(forward(flowMode, place, { ...flowOptions, connect: false })); return; }
+      if (connectMode && !agentReady(tools)) { setConnectDropped(true); goForward({ ...flowOptions, connect: false }); return; }
       advance();
     };
     const act = (id, row) => {
@@ -477,13 +502,13 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
     // Drawn outside the 800 × 600 window below: it is wider, side by side, and the chat needs the height.
     body = null;
   } else if (step === 'open') {
-    body = <div data-screen-label="08 Opening" style={{ width: '100%', display: 'flex', justifyContent: 'center' }}><ThinkingDots label="opening Getting started" /></div>;
+    body = <div data-screen-label="08 Opening" style={{ width: '100%', display: 'flex', justifyContent: 'center' }}><ThinkingDots label={flowMode === 'guided' ? 'opening Welcome' : 'opening Getting started'} /></div>;
   }
 
   return (
     <div data-screen-label="Onboarding" data-onboarding={flowMode} data-step={step} style={{ position: 'absolute', inset: 0, overflow: 'auto', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '54px 24px 24px', background: '#fff', color: '#171717', fontFamily: 'var(--font-sans)' }}>
       <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
-        {onBack && <button type="button" className="hov-ink" onClick={onBack} title="All projects" style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
+        {onBack && <button type="button" className="hov-ink" onClick={onBack} title={backTitle} style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
       </div>
       {/* Connect your library: a page across the window (2026-10-08: "more horizontal … not a popup"). Its foot is its own
           (2026-10-09, David's mockup): Skip for now, then the pager and "Bring these in"; in the chat how far the work is,
@@ -491,7 +516,8 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
           top right following it. Skipping it counts as the one-time offer seen: the project about to open does not ask again. */}
       {step === 'connect' && (
         <div data-screen-label="03 Connect library" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
-          <ConnectLibrary mode="onboarding"
+          {/* sessionId: back here after the guided setup's Welcome workspace could not be added, the session it began */}
+          <ConnectLibrary mode="onboarding" sessionId={connectId}
             pager={pager && (
               <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 16 }}>
                 <Pager count={pager.count} index={pager.index} />
@@ -502,6 +528,7 @@ export default function Onboarding({ mode = 'new', tools = null, onTools = () =>
             onContinue={advance}
             onSkip={() => { api.connectOfferSeen('dismissed').catch(() => {}); advance(); }}
             onAdded={(row) => take(row, 'github', true)} />
+          {errorLine}
         </div>
       )}
       {/* No card (2026-09-28): the same 800 × 600 at most, drawn on nothing, so lists inside still scroll and the page never does. */}

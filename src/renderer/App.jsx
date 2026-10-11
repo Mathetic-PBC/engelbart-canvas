@@ -16,10 +16,10 @@ import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
 // onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. Onboarding ends in the project
 // it made (the welcome tour that followed it was taken out on 2026-10-01). The guided setup (ui/GuidedSetup.jsx, 2026-10-10)
-// runs all of it for someone who has projects: offered once over their workspace, and from Settings. "Engelbart" in the
-// header (or Escape) shows
-// all projects. A project whose project.json has no code directory yet is held
-// behind a modal until one is chosen (2026-09-18).
+// runs a new user's screens for someone who has projects: offered once over their workspace, and from Settings. Started
+// inside a project it has no Create and ends in a Welcome workspace added to that project; from all projects it ends in a
+// new project. "Engelbart" in the header (or Escape) shows all projects (in the guided setup, the workspace it was started
+// in). A project whose project.json has no code directory yet is held behind a modal until one is chosen (2026-09-18).
 // Several windows (2026-10-03, src/main/windows.cjs): each opens where main says (its place before a reload or a
 // relaunch, the workspace it was opened from, or the projects screen) and tells main where it goes. What another window
 // saves arrives as an announcement: the project's tree or the projects are read again, the library too.
@@ -76,9 +76,11 @@ export default function App() {
   const lastTools = React.useRef(null);
   // Connect your library (2026-10-07): its popup ({ sessionId } from the chip, { projectId } the one-time offer).
   const [connectPopup, setConnectPopup] = React.useState(null);
-  // The guided setup (ui/GuidedSetup.jsx): a new user's onboarding run for someone with projects, while `guided`; its
-  // one-time offer over the workspace while `guidedOffer`.
+  // The guided setup (ui/GuidedSetup.jsx): a new user's onboarding run for someone with projects, while `guided` (false;
+  // true, started from all projects; or { projectId, workspaceId }, the workspace it was started in); its one-time offer
+  // over the workspace while `guidedOffer`.
   const [guided, setGuided] = React.useState(false);
+  const visited = React.useRef(null); // { projectId, workspaceId }: the workspace on screen now (onVisit)
   const [guidedOffer, setGuidedOffer] = React.useState(false);
 
   const fail = (candidate) => setError(errorMessage(candidate));
@@ -241,13 +243,20 @@ export default function App() {
     }, 1200); // after the workspace has drawn itself
     return () => { alive = false; clearTimeout(timer); };
   }, [openProjectId]);
-  // Start (the offer's, or Settings ▸ Guided setup's): onboarding from its first screen, as a new user has it.
+  // Start (the offer's, or Settings ▸ Guided setup's): onboarding from its first screen, as a new user has it. Inside a
+  // project (2026-10-10, "guided setup shouldn't create a new project") it remembers the workspace it left: its screens
+  // have no Create, and it ends in a Welcome workspace added there. Started again during the setup, it keeps where it was from.
   const startGuided = React.useCallback(() => {
+    const now = latest.current;
+    const here = now.phase === 'workspace' && now.tree ? now.tree.project.id : null;
+    const from = here
+      ? { projectId: here, workspaceId: visited.current && visited.current.projectId === here ? visited.current.workspaceId : (now.entry && now.entry.workspaceId) || null }
+      : (now.phase === 'create' && now.guided && now.guided.projectId ? now.guided : null);
     setGuidedOffer(false);
     setConnectPopup(null);
     setTree(null);
     setEntry(null);
-    setGuided(true);
+    setGuided(from || true);
     setRun((n) => n + 1);
     setPhase('create');
   }, []);
@@ -261,7 +270,7 @@ export default function App() {
   // projects screen. Another window switched the data root (test mode): this one starts over on it, as the window that
   // switched it does.
   const latest = React.useRef({});
-  latest.current = { phase, tree, reload, loadHome, start };
+  latest.current = { phase, tree, entry, guided, reload, loadHome, start };
   React.useEffect(() => {
     let timer = null;
     const offProject = api.onProjectChanged(({ projectId, trashed: gone } = {}) => {
@@ -331,7 +340,8 @@ export default function App() {
 
   // Onboarding made the project (api.startProject): land in its Getting started workspace with the Welcome! note open, and
   // the sites its sign-in import said to sign in to again on the Stage. A new user's (made.gettingStarted, 2026-10-09)
-  // lands on its Welcome workspace's own document instead, under the walkthrough; the note is in its sidebar.
+  // lands on its Welcome workspace's own document instead, under the walkthrough; the note is in its sidebar. The guided
+  // setup started inside a project (api.welcomeWorkspace) lands the same way on the Welcome workspace it added there.
   async function onboarded(made, { stageLinks = [] } = {}) {
     setError('');
     setGuided(false);
@@ -374,6 +384,7 @@ export default function App() {
 
   const onVisit = React.useCallback((workspaceId) => {
     if (!tree) return;
+    visited.current = { projectId: tree.project.id, workspaceId };
     api.setLastOpen({ projectId: tree.project.id, workspaceId }).catch(() => {});
     api.reportPlace({ projectId: tree.project.id, workspaceId });
   }, [tree]);
@@ -391,7 +402,15 @@ export default function App() {
 
   if (!config || phase === 'boot') return <div style={{ position: 'absolute', inset: 0, background: '#fff' }} />;
   const returning = projects.length > 0 || trashed.length > 0; // someone whose projects are all in the trash is not new
-  const onboardMode = guided || !returning ? 'new' : 'existing'; // the guided setup is a new user's onboarding
+  // The guided setup is a new user's onboarding; started inside a project, without Create ('guided', model/onboarding.js).
+  const guidedFrom = guided && guided.projectId ? guided : null;
+  const onboardMode = guidedFrom ? 'guided' : guided || !returning ? 'new' : 'existing';
+  // "Engelbart" in onboarding's top left: back to the workspace the guided setup was started in, else all projects.
+  const leaveOnboarding = () => {
+    setGuided(false);
+    if (guidedFrom) openProject(guidedFrom.projectId, guidedFrom.workspaceId ? { workspaceId: guidedFrom.workspaceId } : null).catch(() => goHome());
+    else goHome();
+  };
 
   return (
     <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree}>
@@ -421,7 +440,7 @@ export default function App() {
         />
       )}
       {phase === 'create' && (
-        <Onboarding key={run} mode={onboardMode} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? () => { setGuided(false); goHome(); } : null} />
+        <Onboarding key={run} mode={onboardMode} into={guidedFrom ? guidedFrom.projectId : null} tools={tools} onTools={onboardingTools} onDone={onboarded} onBack={returning ? leaveOnboarding : null} backTitle={guidedFrom ? 'Back to your project' : 'All projects'} />
       )}
       {phase === 'workspace' && tree && (
         <Workspace

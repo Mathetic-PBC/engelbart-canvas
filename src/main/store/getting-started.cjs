@@ -2,7 +2,8 @@
 
 // The Welcome walkthrough (2026-10-09, remade from 21384b3's Getting started panel in the "Suggested steps" look of
 // design/onboarding-brainstorm/6-workspace.dc.html): three steps under the title of the "Welcome" workspace of a project
-// a new user's onboarding made (never one made with + Project): see what came in (the Library's tabs), @brainstorm, and
+// a new user's onboarding made (never one made with + Project), or of the Welcome workspace the guided setup added to a
+// project it was started in (2026-10-10; the newest one when it ran more than once): see what came in (the Library's tabs), @brainstorm, and
 // @discover. The window ticks a step when the person does it (opens the Library, runs @brainstorm or @discover), or by
 // hand. Kept in <project>/.context/getting-started.json: { workspaceId, ticked: [1..3], hidden }. A project without the
 // file has no walkthrough.
@@ -38,7 +39,7 @@ function writeFile(ctx, projectId, value) {
   return state;
 }
 
-/** Onboarding made the project (ipc start-project): its walkthrough, nothing ticked. */
+/** Onboarding made the project (ipc start-project), or added a Welcome workspace to it (ipc welcome-workspace): its walkthrough, nothing ticked. */
 function startGettingStarted(ctx, projectId, { workspaceId }) {
   return writeFile(ctx, projectId, { workspaceId, ticked: [], hidden: false });
 }

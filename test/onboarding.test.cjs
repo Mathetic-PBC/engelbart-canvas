@@ -86,7 +86,7 @@ test('discardItem removes a row only while nothing holds it', async () => {
   assert.ok(await ctx.libraryDb.get(held.id));
 });
 
-test('the order: parts before screens, a new user\'s flow opening the project after Create, + Project ending on context, the pager only on the flow', async () => {
+test('the order: parts before screens, a new user\'s flow opening the project after Create, the guided setup in a project without it, + Project ending on context, the pager only on the flow', async () => {
   const { pathToFileURL } = require('node:url');
   const flow = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/onboarding.js')).href);
   const walk = (mode, from, options) => { const out = []; let at = from; for (let i = 0; i < 20 && at.step !== 'open'; i += 1) { at = flow.forward(mode, at, options); out.push(at.sub ? `${at.step}.${at.sub}` : at.step); } return out; };
@@ -102,6 +102,23 @@ test('the order: parts before screens, a new user\'s flow opening the project af
   assert.equal(flow.pagerOf('new', 'context'), null);
   assert.deepEqual(flow.pagerOf('existing', 'context'), { count: 2, index: 1 });
   assert.equal(flow.pagerOf('existing', 'import'), null);
+
+  // The guided setup inside a project (2026-10-10): a new user's screens without Create, 'open' (its Welcome workspace)
+  // after the last one, and the pager one fewer.
+  assert.deepEqual(flow.flowOf('guided'), ['welcome', 'tools', 'import', 'instructions']);
+  assert.deepEqual(flow.flowOf('guided', { connect: true }), ['welcome', 'tools', 'connect']);
+  assert.ok(!flow.flowOf('guided', { tools: false, connect: true }).includes('create'));
+  assert.deepEqual(walk('guided', { step: 'welcome', sub: 0 }), ['tools', 'import', 'import.1', 'import.2', 'instructions', 'open']);
+  assert.deepEqual(walk('guided', { step: 'welcome', sub: 0 }, { connect: true }), ['tools', 'connect', 'open'], 'Connect last: its Continue opens the project');
+  assert.deepEqual(walk('guided', { step: 'welcome', sub: 0 }, { tools: false, connect: true }), ['connect', 'open']);
+  assert.deepEqual(flow.forward('guided', { step: 'tools', sub: 0 }, { connect: false }), { step: 'import', sub: 0 }, 'Connect dropped: its screens come back');
+  assert.deepEqual(flow.pagerOf('guided', 'welcome', { connect: true }), { count: 3, index: 0 });
+  assert.deepEqual(flow.pagerOf('guided', 'connect', { connect: true }), { count: flow.pagerOf('new', 'connect', { connect: true }).count - 1, index: 2 });
+  assert.deepEqual(flow.pagerOf('guided', 'instructions'), { count: 4, index: 3 });
+  assert.equal(flow.pagerOf('guided', 'create'), null);
+  assert.equal(flow.isFresh('guided'), true);
+  assert.equal(flow.isFresh('new'), true);
+  assert.equal(flow.isFresh('existing'), false);
 
   // Nothing to install: the tools screen is left out, and one showing when that is found out moves on.
   assert.deepEqual(flow.forward('new', { step: 'welcome', sub: 0 }, { tools: false }), { step: 'import', sub: 0 });
