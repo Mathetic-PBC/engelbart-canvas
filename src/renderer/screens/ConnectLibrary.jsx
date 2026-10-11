@@ -105,10 +105,18 @@ const ALERT = <Svg size={14} width={1.8}><path d="M12 9v4" /><path d="M12 17h.01
 const shown = (dir) => String(dir || '').replace(/^\/Users\/[^/]+/, '~');
 const logoOf = (name) => (LOGOS[name] ? <span aria-hidden="true" style={{ flex: 'none', display: 'block', width: 14, height: 14, background: `url(${LOGOS[name]}) center / contain no-repeat` }} /> : null);
 
-/** A tick: on, off, or (a group's header with some of its rows ticked) `some`. */
+/**
+ * A tick: on, off, or (a group's header with some of its rows ticked) `some`. Only a real tick is black (MATH-143,
+ * 2026-10-11): `some` is the unticked box with a short grey bar in it, so a screen that opens partly ticked reads light.
+ */
 function Box({ on, some = false, size = 14, dim = false }) {
   const full = on && !some;
-  return <span role="checkbox" aria-checked={some ? 'mixed' : on ? 'true' : 'false'} style={{ flex: 'none', width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4, boxSizing: 'border-box', background: on || some ? '#171717' : '#fff', border: on || some ? 0 : `1.5px solid ${dim ? '#e3e3e3' : '#c9c9c9'}`, color: '#fff', font: '600 9px/1 var(--font-sans)', cursor: 'pointer' }}>{some ? '–' : full ? '✓' : ''}</span>;
+  const bar = size * 1.5 / 14;
+  return (
+    <span role="checkbox" aria-checked={some ? 'mixed' : on ? 'true' : 'false'} style={{ flex: 'none', width: size, height: size, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4, boxSizing: 'border-box', background: full ? '#171717' : '#fff', border: full ? 0 : `1.5px solid ${dim ? '#e3e3e3' : '#c9c9c9'}`, color: '#fff', font: '600 9px/1 var(--font-sans)', cursor: 'pointer' }}>
+      {some ? <span aria-hidden="true" data-connect-box-mixed="1" style={{ display: 'block', width: size / 2, height: bar, borderRadius: bar / 2, background: '#8f8f8f' }} /> : full ? '✓' : ''}
+    </span>
+  );
 }
 
 const subRow = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', minHeight: 30, padding: '5px 8px 5px 18px', border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', textAlign: 'left', boxSizing: 'border-box' };
