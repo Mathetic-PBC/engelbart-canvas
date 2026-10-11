@@ -88,13 +88,13 @@ export function Floating({ anchor, side = 'right', gap = 8, cap = 560, width = 3
 }
 
 /** A dialog in the middle of the window, over a faint veil (Search, a new workspace). */
-function Centered({ onClose, label, width = 560, top = '14vh', children, ...rest }) {
+export function Centered({ onClose, label, width = 560, top = '14vh', maxHeight = 'calc(100vh - 28vh)', children, ...rest }) {
   const layer = useLayer();
   const ref = React.useRef(null);
   useDismiss(ref, onClose, { layer });
   return createPortal(
     <div data-overlay="1" data-sb-layer={layer} style={{ position: 'fixed', inset: 0, zIndex: 90, background: 'rgba(23,23,23,.12)', display: 'flex', justifyContent: 'center', alignItems: 'flex-start', paddingTop: top }}>
-      <div ref={ref} role="dialog" aria-modal="true" aria-label={label} {...rest} style={{ width: `min(${width}px, calc(100vw - 32px))`, maxHeight: 'calc(100vh - 28vh)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #e2e2e2', borderRadius: 12, boxShadow: '0 16px 48px rgba(0,0,0,.16)', overflow: 'hidden', animation: `rise 140ms ${EASE}` }}>
+      <div ref={ref} role="dialog" aria-modal="true" aria-label={label} {...rest} style={{ width: `min(${width}px, calc(100vw - 32px))`, maxHeight, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #e2e2e2', borderRadius: 12, boxShadow: '0 16px 48px rgba(0,0,0,.16)', overflow: 'hidden', animation: `rise 140ms ${EASE}` }}>
         {children}
       </div>
     </div>,
@@ -424,7 +424,8 @@ function LibraryChips({ chip, counts, onPick, chipsRef }) {
 /**
  * Library (Sidebar brainstorming: "a modal … search, recent and current-context items, Open full Library"): the search has
  * the keyboard; before anything is typed, what was worked on last. A press opens a row; its + brings it into this
- * workspace; an address or a path typed is added. Hovering one peeks at it. "Open full library" goes to the projects screen.
+ * workspace; an address or a path typed is added. Hovering one peeks at it. "Open full library" opens the Library window
+ * (LibraryModal.jsx).
  */
 export function LibraryPanel({ anchor, chip: openOn = 'all', projectId, library, inRail, onOpen, onLink, onAddInput, onOpenFull, onOpenWorkspace, onClose, ignore }) {
   const [q, setQ] = React.useState('');

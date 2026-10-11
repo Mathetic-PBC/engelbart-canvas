@@ -1818,6 +1818,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onRenameRow={renameRow}
           onRemoveRow={trashRow}
           onLinkRow={(row) => linkIds([row.id]).catch(onError)}
+          onLibraryChanged={() => { Promise.resolve(reload()).catch(onError); }}
           onOpenHeld={(projectId, workspaceId) => { if (projectId === project.id && workspaceId && index.has(workspaceId)) selectTopic(workspaceId); }}
           onDropItems={addDroppedHere}
           onAddInput={(input) => addInput(input)}
