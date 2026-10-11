@@ -24,7 +24,7 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
   const [status, setStatus] = useGithubStatus();
   const [starting, setStarting] = React.useState(false);
   const [problem, setProblem] = React.useState('');
-  const [list, setList] = React.useState(null); // { repos, accounts } | null while it loads
+  const [list, setList] = React.useState(null); // { repos, accounts, missingOrgs } | null while it loads
   const [q, setQ] = React.useState('');
   const [idx, setIdx] = React.useState(0);
   const fieldRef = React.useRef(null);
@@ -130,6 +130,21 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
               <span style={{ ...text(13, 'inherit') }}>Choose repositories in browser…</span>
             </button>
           )}
+          {status.installUrl && list && (list.missingOrgs || []).length > 0 && (
+            <div data-github-missing="1" style={{ margin: '2px 0 0' }}>
+              {list.missingOrgs.map((org) => (
+                <div key={org.login} data-github-missing-org={org.login} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 8px' }}>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(13) }}>
+                    {org.login}
+                    {(org.repos || []).length > 0 && <span style={{ marginLeft: 8, ...text(12, '#8f8f8f') }}>{org.repos.length === 1 ? '1 repo on this Mac' : `${org.repos.length} repos on this Mac`}</span>}
+                  </span>
+                  <button type="button" className="hov-ink" data-github-add-org={org.login} onClick={() => api.githubOpen('install', org.installUrl).catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plainButton, flex: 'none', ...text(12, '#171717', 500) }}>Add on GitHub</button>
+                </div>
+              ))}
+              <div style={{ padding: '0 8px', ...text(11.5, '#8f8f8f') }}>An organization’s owner has to approve it.</div>
+            </div>
+          )}
+          {status.installHint && <div data-github-install-hint="1" style={{ marginTop: 6, ...text(12, '#4d4d4d') }}>On GitHub, pick each organization you work in and its repositories.</div>}
           {error && <div data-github-error="1" style={{ marginTop: 6, ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}
           {status && status.connected && status.persisted === false && <div style={{ marginTop: 6, ...text(11.5, '#8f8f8f') }}>Signed in until Engelbart quits: no keychain.</div>}
         </>

@@ -180,7 +180,7 @@ function pdfsAtAGlance(chosen, { homeDir, everywhere, project = null, days = nul
 /**
  * What the librarian is shown about each app the person picked → { [source]: { [app]: evidence } }. `choices`:
  * { sources: { [id]: { on, apps: [names], folders: [paths] } }, project: { name, description } or null, days: 182 | 365 | null }; `picked` { folders: { app: path } } from the chat's
- * buttons; `zotero` { status(), root() }, `github` { status(), repos() }; `appleNotes` (./apple-notes.cjs) once the person
+ * buttons; `zotero` { status(), root() }, `github` { status(), repos({ dirs }) }; `appleNotes` (./apple-notes.cjs) once the person
  * let Engelbart read Apple Notes, else null. An app on the web or behind a connector is only named here: its survey reads it.
  */
 async function scanFor(choices, { homeDir, env = process.env, picked = {}, zotero = {}, github = {}, appleNotes = null } = {}) {
@@ -229,10 +229,18 @@ async function scanFor(choices, { homeDir, env = process.env, picked = {}, zoter
     if (id === 'papers' && (choice.folders || []).length && !(choice.apps || []).includes(LOCAL_PDFS)) here.folders = pdfsAtAGlance(choice.folders, { homeDir, everywhere: false, project: (choices && choices.project) || null, days: (choices && choices.days) || null });
     if (id === 'code') {
       const status = github.status ? github.status() : null;
-      if (status && status.connected && github.repos) here.github = await github.repos().then((value) => ({ signedIn: true, repos: (value.repos || []).slice(0, 60).map((repo) => repo.fullName) })).catch((error) => ({ error: error.message }));
+      const picked = (choice.folders || []).map((dir) => ({ dir, repos: gitFolders(dir) }));
+      // MATH-111: the organizations GitHub cannot show yet (the App is not installed there), with how many of the
+      // repositories on this Mac (found, and picked here) are theirs.
+      const shaped = (value) => ({
+        signedIn: true,
+        repos: (value.repos || []).slice(0, 60).map((repo) => repo.fullName),
+        missingOrgs: (value.missingOrgs || []).slice(0, 12).map((org) => ({ login: org.login, repos: (org.repos || []).length })),
+      });
+      if (status && status.connected && github.repos) here.github = await github.repos({ dirs: picked.flatMap((entry) => entry.repos) }).then(shaped).catch((error) => ({ error: error.message }));
       else here.github = { needs: 'signin' };
       if (Array.isArray(choice.repos) && choice.repos.length) here.picked = choice.repos;
-      if ((choice.folders || []).length) here.folders = choice.folders.map((dir) => ({ folder: readers.shownPath(homeDir, dir), repositories: gitFolders(dir).map((repo) => readers.shownPath(homeDir, repo)) }));
+      if (picked.length) here.folders = picked.map((entry) => ({ folder: readers.shownPath(homeDir, entry.dir), repositories: entry.repos.map((repo) => readers.shownPath(homeDir, repo)) }));
     }
     out[id] = here;
   }

@@ -27,11 +27,12 @@ export default function GithubRepos({ held, onToggle, busyId }) {
   const [starting, setStarting] = React.useState(false);
   const [problem, setProblem] = React.useState('');
   const [list, setList] = React.useState(null);
+  const [missing, setMissing] = React.useState([]); // the organizations the App is not installed on (MATH-111)
   const [q, setQ] = React.useState('');
   const connected = !!(status && status.connected);
 
   const load = React.useCallback(() => {
-    api.githubRepos().then((value) => { setList(value.repos || []); setProblem(''); }).catch((error) => { setList([]); setProblem(errorMessage(error)); });
+    api.githubRepos().then((value) => { setList(value.repos || []); setMissing(value.missingOrgs || []); setProblem(''); }).catch((error) => { setList([]); setProblem(errorMessage(error)); });
   }, []);
   React.useEffect(() => {
     if (!connected) { setList(null); return undefined; }
@@ -96,6 +97,21 @@ export default function GithubRepos({ held, onToggle, busyId }) {
           );
         })}
         {list && !rows.length && <span style={{ padding: 10, ...faint }}>no repositories match…</span>}
+        {status.installUrl && missing.length > 0 && (
+          <div data-github-missing="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', paddingTop: 6 }}>
+            {missing.map((org) => (
+              <div key={org.login} data-github-missing-org={org.login} style={{ display: 'flex', alignItems: 'baseline', gap: 10, padding: '7px 10px' }}>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13.5px/1.4 var(--font-sans)', color: '#171717' }}>
+                  {org.login}
+                  {(org.repos || []).length > 0 && <span style={{ marginLeft: 8, font: '12.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{org.repos.length === 1 ? '1 repo on this Mac' : `${org.repos.length} repos on this Mac`}</span>}
+                </span>
+                <button type="button" className="hov-ink" data-github-add-org={org.login} onClick={() => api.githubOpen('install', org.installUrl).catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plain, flex: 'none', font: '500 12.5px/1.4 var(--font-sans)', color: '#171717' }}>Add on GitHub</button>
+              </div>
+            ))}
+            <span style={{ padding: '0 10px', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f' }}>An organization’s owner has to approve it.</span>
+          </div>
+        )}
+        {status.installHint && <span data-github-install-hint="1" style={{ padding: '6px 10px', font: '12.5px/1.5 var(--font-sans)', color: '#4d4d4d' }}>On GitHub, pick each organization you work in and its repositories.</span>}
         {error && <span style={{ padding: '6px 10px', font: '12.5px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</span>}
       </div>
     </div>

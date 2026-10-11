@@ -1688,3 +1688,19 @@ test('the foot of onboarding\'s chat and what the chat says while it waits (2026
   assert.equal(model.chatStatus({ jobs }), '', 'nothing while it waits on nothing');
   assert.equal(model.needView({ app: 'ChatGPT', kind: 'signin' }).hint, 'Opens in your browser · read-only');
 });
+
+test('MATH-111: the code source\'s github says which organizations GitHub cannot show yet, with how many of their repositories are on this Mac', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-missing-orgs-'));
+  const picked = path.join(home, 'work');
+  fs.mkdirSync(path.join(picked, 'study', '.git'), { recursive: true });
+  const asked = [];
+  const github = {
+    status: () => ({ connected: true }),
+    repos: async (options) => { asked.push(options); return { repos: [{ fullName: 'lab-a/tutor' }], accounts: [{ login: 'lab-a' }], missingOrgs: [{ login: 'lab-b', id: '22', repos: ['/r/b1', '/r/b2'], installUrl: 'https://github.com/apps/x/installations/new/permissions?target_id=22' }, { login: 'lab-c', id: '33', repos: [], installUrl: 'u' }] }; },
+  };
+  const found = await scanFor({ sources: { code: { on: true, apps: [], folders: [picked] } } }, { homeDir: home, github });
+  assert.deepEqual(asked, [{ dirs: [path.join(picked, 'study')] }], 'the picked folders\' repositories count too');
+  assert.deepEqual(found.code.github, { signedIn: true, repos: ['lab-a/tutor'], missingOrgs: [{ login: 'lab-b', repos: 2 }, { login: 'lab-c', repos: 0 }] });
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /has missingOrgs[\s\S]*"Add on GitHub" row in the GitHub list/);
+  fs.rmSync(home, { recursive: true, force: true });
+});

@@ -76,7 +76,8 @@ const engelbartAPI = Object.freeze({
   onDocChanged: (callback) => subscribe('doc:changed', callback),
   onProjectChanged: (callback) => subscribe('engelbart:project-changed', callback),
   onDataRootChanged: (callback) => subscribe('engelbart:data-root-changed', callback),
-  // GitHub: the device-flow sign-in (status { configured, connected, login, pending: { userCode, verificationUri }, error, installUrl }) and the App's repositories.
+  // GitHub: the device-flow sign-in (status { configured, connected, login, pending: { userCode, verificationUri }, error, installUrl, installHint }) and the App's
+  // repositories ({ repos, accounts, missingOrgs: [{ login, id, repos, installUrl }] }); githubOpen('install', url) opens one organization's install page.
   githubStatus: invoke('github-status'),
   githubConnect: invoke('github-connect'),
   githubCancel: invoke('github-cancel'),

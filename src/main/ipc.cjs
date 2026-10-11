@@ -350,16 +350,23 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   // GitHub (src/main/github/connection.cjs): signing in through the default browser, and the repositories the App can read.
   // Every change of the sign-in is announced on `engelbart:github` with the status. `github-open` shows GitHub's device
-  // authorization page again, or the App's install page, in the default browser.
+  // authorization page again, or the App's install page, in the default browser: 'install' with a url opens that one, an
+  // organization's install page from github-repos's missingOrgs (MATH-111), only when it is the App's install page.
   const gh = () => { if (!github) throw new Error('GitHub is not available'); return github; };
   handle('github-status', () => (github ? github.status() : { configured: false, connected: false, pending: null, error: '', installUrl: '' }));
   handle('github-connect', () => gh().connect());
   handle('github-cancel', () => gh().cancel());
   handle('github-disconnect', () => gh().disconnect());
   handle('github-repos', () => gh().repos());
-  handle('github-open', async (which) => {
+  handle('github-open', async (which, page) => {
     const status = gh().status();
-    const url = which === 'install' ? status.installUrl : status.pending && status.pending.verificationUri;
+    let url = which === 'install' ? status.installUrl : status.pending && status.pending.verificationUri;
+    if (which === 'install' && page != null) {
+      const asked = str(page, 'install page', 2048);
+      const base = status.installUrl;
+      if (!base || !(asked === base || asked.startsWith(`${base}/`) || asked.startsWith(`${base}?`))) throw new Error('Not the GitHub App\'s install page');
+      url = asked;
+    }
     if (!url) throw new Error(which === 'install' ? 'The GitHub App has no slug in ~/.engelbart/config.json (github.appSlug).' : 'No sign-in is waiting');
     await openGithubPage(url);
     return true;

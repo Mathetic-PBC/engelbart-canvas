@@ -7,6 +7,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { missingOrgs, installUrlFor } = require('./orgs.cjs');
 
 const WEB = 'https://github.com';
 const API = 'https://api.github.com';
@@ -57,6 +58,10 @@ function createGithub({
   browserAuth = () => null,
   onConnected = () => {},
   onChange = () => {},
+  // MATH-111: the organizations this Mac's repositories belong to ({ login, dirs } → [{ login, repos }], ./orgs.cjs
+  // macOrgs), and how the App's install page is opened in the default browser right after a fresh sign-in (none: never).
+  localOrgs = () => [],
+  openInstall = null,
   now = Date.now,
   sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }),
   web = WEB,
@@ -69,6 +74,8 @@ function createGithub({
   let refreshing = null;
   let starting = null;
   let generation = 0;
+  let installHint = false; // the install page was opened at sign-in, and something is still missing
+  const owners = new Map(); // login lowercased → { id, type } | { gone: true }: GitHub's answer for an account, kept
 
   const clientId = () => String((settings() || {}).clientId || '');
   const appSlug = () => String((settings() || {}).appSlug || '');
@@ -135,6 +142,7 @@ function createGithub({
 
   function forget(reason = '') {
     saved = null;
+    installHint = false;
     refreshing = null;
     const at = fileNow();
     if (at) { try { fs.rmSync(at, { force: true }); } catch { /* already gone */ } }
@@ -166,6 +174,7 @@ function createGithub({
       pending: pending ? { kind: pending.kind || 'device', ...(pending.userCode ? { userCode: pending.userCode } : {}), verificationUri: pending.verificationUri, expiresAt: pending.expiresAt } : null,
       error: problem,
       installUrl: appSlug() ? `${web}/apps/${appSlug()}/installations/new` : '',
+      installHint: !!account && installHint,
     };
   }
 
@@ -194,7 +203,7 @@ function createGithub({
         if (pending !== flow) return;
         await accept(data, () => pending === flow, 'browser');
         if (pending !== flow) return;
-        pending = null; problem = ''; changed(); onConnected();
+        pending = null; problem = ''; changed(); onConnected(); void askToInstall();
       }).catch(error => {
         if (pending !== flow) return;
         pending = null; problem = error.message; changed();
@@ -249,7 +258,7 @@ function createGithub({
         if (pending === flow) pending = null;
         closeVerification();
         changed();
-        if (saved) onConnected();
+        if (saved) { onConnected(); void askToInstall(); }
         return;
       }
       if (data.error === 'authorization_pending') continue;
@@ -346,23 +355,61 @@ function createGithub({
     return answer;
   }
 
+  /** Every page of a list: `key` names it in the answer, or none when the answer is the list. */
   async function pages(url, key) {
     const out = [];
     for (let page = 1; page <= MAX_PAGES; page += 1) {
       const answer = await signedGet(`${url}${url.includes('?') ? '&' : '?'}per_page=${PER_PAGE}&page=${page}`);
-      const items = Array.isArray(answer.data && answer.data[key]) ? answer.data[key] : [];
+      const list = key ? answer.data && answer.data[key] : answer.data;
+      const items = Array.isArray(list) ? list : [];
       out.push(...items);
       if (items.length < PER_PAGE || !/rel="next"/.test(answer.link)) break;
     }
     return out;
   }
 
+  /** GitHub's id and type for an account (an organization's id is what its install page is opened with), kept. */
+  async function ownerOf(login) {
+    const key = login.toLowerCase();
+    if (owners.has(key)) return owners.get(key);
+    let answer;
+    try { answer = await call(`${api}/users/${encodeURIComponent(login)}`, { token: await token() }); } catch { return null; }
+    if (answer.status === 404) { owners.set(key, { gone: true }); return owners.get(key); }
+    if (!answer.ok || !answer.data || answer.data.id == null) return null; // asked again next time
+    owners.set(key, { id: String(answer.data.id), type: String(answer.data.type || '') });
+    return owners.get(key);
+  }
+
   /**
-   * The repositories the App can read for the person, most recently pushed first, and the accounts it is installed on
-   * ({ login, type, all }: `all` when every repository of the account is included). An account the App is not
-   * installed on shows nothing: installing it there is `installUrl`.
+   * The organizations the person works in that the App is not installed on (MATH-111) → [{ login, id, repos, installUrl }]:
+   * GitHub's /user/orgs and this Mac's remotes (`localOrgs`, with `dirs` the caller found too), less the installed
+   * `accounts`. A login GitHub calls a user (a clone of someone else's repository) or does not know is left out. /user/orgs
+   * failing leaves the remotes alone, and says nothing.
    */
-  async function repos() {
+  async function missingFor(accounts, dirs) {
+    const login = (load() || {}).login || '';
+    let fromGithub = [];
+    try { fromGithub = (await pages(`${api}/user/orgs`, null)).map((org) => ({ login: org && org.login, id: org && org.id })); } catch { fromGithub = []; }
+    let fromMac = [];
+    try { fromMac = (await localOrgs({ login, dirs })) || []; } catch { fromMac = []; }
+    const base = status().installUrl;
+    const found = missingOrgs({ accounts, fromGithub, fromMac, login, base }).slice(0, 20);
+    const known = await Promise.all(found.map((org) => (org.id ? null : ownerOf(org.login))));
+    return found.flatMap((org, i) => {
+      const who = known[i];
+      if (who && (who.gone || who.type === 'User')) return [];
+      const id = org.id || (who && who.id) || null;
+      return [{ ...org, id, installUrl: installUrlFor(base, id) }];
+    });
+  }
+
+  /**
+   * The repositories the App can read for the person, most recently pushed first, the accounts it is installed on
+   * ({ login, type, all }: `all` when every repository of the account is included), and the organizations the person
+   * works in that it is not installed on (`missingOrgs`, each with the install page to open for it). `dirs`: more
+   * repository folders on this Mac whose remotes count (Connect's picked folders).
+   */
+  async function repos({ dirs = [] } = {}) {
     const installations = await pages(`${api}/user/installations`, 'installations');
     const seen = new Set();
     const list = [];
@@ -377,7 +424,24 @@ function createGithub({
     const accounts = installations
       .filter((installation) => installation && installation.account && typeof installation.account.login === 'string')
       .map((installation) => ({ login: installation.account.login, type: String(installation.account.type || ''), all: installation.repository_selection === 'all' }));
-    return { repos: list, accounts };
+    const missing = await missingFor(accounts, dirs);
+    if (installHint && accounts.length && !missing.length) { installHint = false; changed(); }
+    return { repos: list, accounts, missingOrgs: missing };
+  }
+
+  /**
+   * Right after a fresh sign-in (never a refresh, nor a launch with a saved one): when the App is installed nowhere, or an
+   * organization the person works in is missing, GitHub's install page opens in the default browser, once, and the
+   * GitHub lists say what to do there (`installHint`) until nothing is missing.
+   */
+  async function askToInstall() {
+    if (!openInstall || !status().installUrl) return;
+    let found;
+    try { found = await repos(); } catch { return; }
+    if (found.accounts.length && !found.missingOrgs.length) return;
+    installHint = true;
+    changed();
+    try { await openInstall(status().installUrl); } catch { /* the lists' Add on GitHub rows open it too */ }
   }
 
   return { status, connect, cancel, disconnect, token, authHeaders, repos };

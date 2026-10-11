@@ -43,6 +43,8 @@ const { stagePartition, createBrowserViews, registerBrowserIpc, cleanUserAgent }
 const { execFile } = require('node:child_process');
 const { createCookieImport, keychainRunner, bundleOf } = require('./browser/import-cookies.cjs');
 const { createGithub } = require('./github/connection.cjs');
+const { macOrgs } = require('./github/orgs.cjs');
+const { localRepos } = require('./connect/scan.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createE2bKey } = require('./github/e2b-key.cjs');
 const { createRepoAccess } = require('./github/repo-access.cjs');
@@ -767,6 +769,19 @@ if (!hasSingleInstanceLock) {
     // An unpackaged copy may run sandboxes on the developer's own E2B_API_KEY (the process environment only, never a
     // file); a release never does.
     const devE2bKey = app.isPackaged ? null : process.env.E2B_API_KEY || null;
+    // MATH-111: the repositories on this Mac whose GitHub remotes name the organizations the person works in, as Connect
+    // finds them before anything is picked (connect/scan.cjs localRepos), read again at most every five minutes. One under
+    // ~/Desktop, ~/Documents or ~/Downloads is left out: signing in never makes macOS ask for those folders (Connect's
+    // scan adds the ones the person picked).
+    let macRepos = { at: 0, dirs: [] };
+    const macRepoDirs = () => {
+      if (Date.now() - macRepos.at > 5 * 60_000) {
+        let dirs = [];
+        try { dirs = localRepos({ homeDir }).filter((repo) => repo.checked).map((repo) => repo.path); } catch { dirs = []; }
+        macRepos = { at: Date.now(), dirs };
+      }
+      return macRepos.dirs;
+    };
     const github = createGithub({
       settings: () => {
         const chosen = store.config().github || {};
@@ -781,6 +796,9 @@ if (!hasSingleInstanceLock) {
         decrypt: (text) => safeStorage.decryptString(Buffer.from(text, 'base64')),
       },
       openVerification: openGithubPage,
+      // Right after a fresh sign-in, the App's install page, for the organizations it cannot see yet.
+      openInstall: openGithubPage,
+      localOrgs: ({ login, dirs = [] }) => macOrgs([...macRepoDirs(), ...dirs], { login }),
       browserAuth: () => (process.env.ENGELBART_GITHUB_CLIENT_ID || (store.config().github || {}).clientId) === GITHUB_CLIENT_ID ? githubBrowserAuth : null,
       onConnected: () => {
         void e2bKey.get().catch(() => {}); // early, so the first sandbox need not wait; it asks again if this failed
@@ -968,7 +986,7 @@ if (!hasSingleInstanceLock) {
         root: () => (zotero.status().connected ? zoteroLibrary.root() : null),
         download: (key, filename) => zoteroLibrary.download(key, filename),
       },
-      github: { status: () => github.status(), repos: () => github.repos() },
+      github: { status: () => github.status(), repos: (options) => github.repos(options) },
       deps: { describe: createDescriber(), identifyRepo: createRepoIdentifier({ auth: github.authHeaders }), inspectPdf, onAdded: libraryChanged, onPdf: pdfAdded },
       notify: (snapshot) => sendToWindow('engelbart:connect', snapshot),
       // What came in joined the Welcome workspace (connect/session.cjs placeRows): its sidebar reads it again.

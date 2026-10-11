@@ -187,6 +187,84 @@ test('repositories: every installation, every page, once each, most recently pus
   assert.ok(calls.filter((call) => call.url.includes('/user/installations')).every((call) => call.auth === 'Bearer ghu_first'));
 });
 
+test('MATH-111: the organizations the App is missing, from /user/orgs and this Mac\'s remotes, case-insensitively, each with its install page', async () => {
+  const base = 'https://github.com/apps/engelbart-mathetic/installations/new';
+  const asked = [];
+  const script = (orgs) => ({ url }) => {
+    if (url.endsWith('/device/code')) return reply(200, { device_code: 'd', user_code: 'AAAA-BBBB', expires_in: 900, interval: 5 });
+    if (url.endsWith('/access_token')) return reply(200, { access_token: 'ghu_first' });
+    if (url.endsWith('/user')) return user;
+    if (url.includes('/user/installations?')) return reply(200, { installations: [{ id: 11, account: { login: 'lab-a', type: 'Organization' }, repository_selection: 'all' }, { id: 12, account: { login: 'hudsonmp', type: 'User' }, repository_selection: 'all' }] });
+    if (url.includes('/repositories')) return reply(200, { repositories: [] });
+    if (url.includes('/user/orgs?')) return orgs();
+    if (url.endsWith('/users/karpathy')) return reply(200, { id: 5, login: 'karpathy', type: 'User' });
+    if (url.endsWith('/users/lab-d')) return reply(200, { id: 44, login: 'lab-d', type: 'Organization' });
+    if (url.endsWith('/users/lab-b')) return reply(500, {});
+    return reply(404, {});
+  };
+  const localOrgs = ({ login, dirs }) => { asked.push({ login, dirs }); return [{ login: 'Lab-A', repos: ['/r/a'] }, { login: 'lab-b', repos: ['/r/b1', '/r/b2'] }, { login: 'karpathy', repos: ['/r/k'] }, { login: 'lab-d', repos: ['/r/d'] }, { login: 'nobody-here', repos: ['/r/n'] }]; };
+  const f = setup(script(() => reply(200, [{ login: 'LAB-B', id: 22 }, { login: 'lab-c', id: 33 }, { login: 'lab-a', id: 11 }])), { localOrgs });
+  await f.github.connect();
+  await until(() => f.github.status().connected);
+  const { accounts, missingOrgs } = await f.github.repos({ dirs: ['/picked/repo'] });
+  assert.deepEqual(accounts.map((account) => account.login), ['lab-a', 'hudsonmp']);
+  assert.deepEqual(missingOrgs, [
+    { login: 'LAB-B', id: '22', repos: ['/r/b1', '/r/b2'], installUrl: `${base}/permissions?target_id=22` },
+    { login: 'lab-c', id: '33', repos: [], installUrl: `${base}/permissions?target_id=33` },
+    { login: 'lab-d', id: '44', repos: ['/r/d'], installUrl: `${base}/permissions?target_id=44` },
+  ], 'installed lab-a (any case) is not missing; a person (karpathy) and an unknown login are left out');
+  assert.deepEqual(asked.at(-1), { login: 'hudsonmp', dirs: ['/picked/repo'] });
+  assert.ok(f.calls.filter((call) => call.url.includes('/user/orgs')).every((call) => call.auth === 'Bearer ghu_first'));
+  const lookups = f.calls.filter((call) => call.url.includes('/users/')).length;
+  await f.github.repos();
+  assert.equal(f.calls.filter((call) => call.url.includes('/users/')).length, lookups, 'an owner is looked up once (a login GitHub does not know too)');
+
+  const failing = setup(script(() => reply(500, { message: 'down' })), { localOrgs });
+  await failing.github.connect();
+  await until(() => failing.github.status().connected);
+  const got = await failing.github.repos();
+  assert.deepEqual(got.missingOrgs.map((org) => org.login), ['lab-b', 'lab-d'], '/user/orgs failing leaves the remotes alone');
+  assert.equal(got.missingOrgs[0].installUrl, base, 'no id known for lab-b: the page that lets them pick');
+  assert.equal(failing.github.status().connected, true);
+});
+
+test('MATH-111: a fresh sign-in with nothing installed opens the install page once; a saved sign-in at launch does not', async () => {
+  let installed = false;
+  const script = ({ url }) => {
+    if (url.endsWith('/device/code')) return reply(200, { device_code: 'd', user_code: 'AAAA-BBBB', expires_in: 900, interval: 5 });
+    if (url.endsWith('/access_token')) return reply(200, { access_token: 'ghu_first', expires_in: 28800, refresh_token: 'ghr_first', refresh_token_expires_in: 15897600 });
+    if (url.endsWith('/user')) return user;
+    if (url.includes('/user/installations?')) return reply(200, { installations: installed ? [{ id: 11, account: { login: 'hudsonmp', type: 'User' }, repository_selection: 'all' }] : [] });
+    if (url.includes('/repositories')) return reply(200, { repositories: [] });
+    if (url.includes('/user/orgs?')) return reply(200, []);
+    return reply(404, {});
+  };
+  const installs = [];
+  const f = setup(script, { openInstall: (url) => installs.push(url) });
+  assert.equal(f.github.status().installHint, false);
+  await f.github.connect();
+  await until(() => installs.length === 1);
+  assert.deepEqual(installs, ['https://github.com/apps/engelbart-mathetic/installations/new']);
+  assert.equal(f.github.status().installHint, true, 'the lists say what to pick on GitHub');
+  assert.equal(f.changes.at(-1).installHint, true);
+  installed = true;
+  await f.github.repos();
+  assert.equal(f.github.status().installHint, false, 'once it is installed and nothing is missing, the hint goes');
+  f.clock.t += 9 * 3600 * 1000;
+  await f.github.token();
+  await settle(); await settle();
+  assert.equal(installs.length, 1, 'a token refresh opens nothing');
+
+  installed = false;
+  const relaunched = [];
+  const again = createGithub({ fetch: f.fetch, settings: () => ({ clientId: CLIENT, appSlug: 'engelbart-mathetic' }), file: f.file, crypt, openInstall: (url) => relaunched.push(url), now: () => f.clock.t });
+  assert.equal(again.status().connected, true);
+  await again.repos();
+  await settle(); await settle();
+  assert.deepEqual([relaunched.length, again.status().installHint], [0, false], 'a launch with a saved sign-in opens nothing');
+  fs.rmSync(f.dir, { recursive: true, force: true });
+});
+
 test('without a keychain the sign-in lasts as long as the app runs; a sign-out forgets it', async () => {
   const { github, file } = setup(({ url }) => {
     if (url.endsWith('/device/code')) return reply(200, { device_code: 'd', user_code: 'AAAA-BBBB', expires_in: 900, interval: 5 });
