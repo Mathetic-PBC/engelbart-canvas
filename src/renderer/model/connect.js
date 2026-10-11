@@ -244,12 +244,36 @@ export function signInPanel(state, browser, rows = []) {
     browser,
     rows: still,
     title: `Use your ${browser} sign-ins for ${listed(apps)}?`,
+    // The line that matters most first, in bold (2026-10-11: the modal before macOS asks).
+    lead: 'macOS will ask for your Mac password next. Choose Always Allow so it only asks once.',
     body: [
-      `Engelbart can reuse the sign-ins ${browser} already has, so you don't log in again.`,
-      'macOS will ask for your Mac password next. Choose Always Allow so it only asks once.',
-      `Engelbart copies only the sign-ins for the apps you tick, and only reads from them. If you don't allow it, ${apps.length === 1 ? 'this app is' : 'these apps are'} skipped for now.`,
+      `Engelbart copies only ${apps.length === 1 ? 'this app\'s sign-in' : 'these apps\' sign-ins'} from ${browser}, and only reads from ${apps.length === 1 ? 'it' : 'them'}, so you don't log in again. Not now leaves ${apps.length === 1 ? 'it' : 'them'} out.`,
     ],
   };
+}
+
+/**
+ * The modal after Continue (2026-10-11): how the check of each app it named went, from `signIns` (app → { status, browser },
+ * the choose screen's). → { done, title, lines, tone } — `done` false while macOS is still being asked; `tone` 'ok' when
+ * every app came over, 'warn' when some did not, 'refused' when macOS said no to all.
+ */
+export function keychainOutcome(browser, rows, signIns) {
+  // An app with no answer at all: its check failed and was cleared (checkSignIn), so it counts as not brought over.
+  const of = (row) => (signIns && signIns[row.app]) || { status: 'signed-out' };
+  if ((rows || []).some((row) => of(row).status === 'checking')) {
+    return { done: false, title: 'Waiting for macOS…', lines: ['Enter your Mac password in the macOS window, then choose Always Allow.'], tone: 'busy' };
+  }
+  const names = (status) => rows.filter((row) => of(row).status === status).map((row) => shownName(row.app));
+  const signedIn = names('signed-in'), refused = names('refused');
+  const missing = rows.filter((row) => !['signed-in', 'refused'].includes(of(row).status)).map((row) => shownName(row.app));
+  const lines = [];
+  if (refused.length) lines.push(`macOS didn't allow it, so ${listed(refused)} ${refused.length === 1 ? 'was' : 'were'} unticked. Try again on ${refused.length === 1 ? 'its row' : 'their rows'} to be asked again.`);
+  if (missing.length) lines.push(`${browser} isn't signed in to ${listed(missing)}. The import will ask you to log in once it starts.`);
+  if (signedIn.length) {
+    const title = `Signed in to ${listed(signedIn)}`;
+    return { done: true, title, lines: [`Brought over from ${browser}. You won't need to log in again.`, ...lines], tone: lines.length ? 'warn' : 'ok' };
+  }
+  return { done: true, title: refused.length ? 'Not allowed' : 'Nothing to bring over', lines, tone: refused.length ? 'refused' : 'warn' };
 }
 
 /**

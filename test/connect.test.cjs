@@ -1105,14 +1105,22 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   assert.deepEqual(waiting, { Chrome: [{ id: 'chats', app: 'ChatGPT' }, { id: 'chats', app: 'Claude' }] });
   const panel = model.signInPanel(all, 'Chrome', waiting.Chrome);
   assert.equal(panel.title, 'Use your Chrome sign-ins for ChatGPT and Claude?');
-  assert.deepEqual(panel.body, [
-    'Engelbart can reuse the sign-ins Chrome already has, so you don\'t log in again.',
-    'macOS will ask for your Mac password next. Choose Always Allow so it only asks once.',
-    'Engelbart copies only the sign-ins for the apps you tick, and only reads from them. If you don\'t allow it, these apps are skipped for now.',
-  ]);
+  assert.equal(panel.lead, 'macOS will ask for your Mac password next. Choose Always Allow so it only asks once.', 'the macOS line leads');
+  assert.deepEqual(panel.body, ['Engelbart copies only these apps\' sign-ins from Chrome, and only reads from them, so you don\'t log in again. Not now leaves them out.']);
   const claudeOff = model.tickRow(all, 'chats', 'Claude', false);
   assert.equal(model.signInPanel(claudeOff, 'Chrome', waiting.Chrome).title, 'Use your Chrome sign-ins for ChatGPT?', 'an app unticked meanwhile leaves the panel');
-  assert.match(model.signInPanel(claudeOff, 'Chrome', waiting.Chrome).body[2], /this app is skipped for now\.$/);
+  assert.match(model.signInPanel(claudeOff, 'Chrome', waiting.Chrome).body[0], /this app's sign-in from Chrome.*Not now leaves it out\.$/);
+
+  // After Continue, the modal says how it went (2026-10-11): waiting while macOS asks, then signed in, refused, or not there.
+  const rows = waiting.Chrome;
+  const outcome = (chatgpt, claude) => model.keychainOutcome('Chrome', rows, { ...(chatgpt ? { ChatGPT: { status: chatgpt } } : {}), ...(claude ? { Claude: { status: claude } } : {}) });
+  assert.deepEqual(outcome('checking', 'signed-in'), { done: false, title: 'Waiting for macOS…', lines: ['Enter your Mac password in the macOS window, then choose Always Allow.'], tone: 'busy' });
+  assert.deepEqual(outcome('signed-in', 'signed-in'), { done: true, title: 'Signed in to ChatGPT and Claude', lines: ['Brought over from Chrome. You won\'t need to log in again.'], tone: 'ok' });
+  const mixed = outcome('signed-in', 'signed-out');
+  assert.equal(mixed.tone, 'warn');
+  assert.deepEqual(mixed.lines.slice(1), ['Chrome isn\'t signed in to Claude. The import will ask you to log in once it starts.']);
+  assert.deepEqual(outcome('refused', 'refused'), { done: true, title: 'Not allowed', lines: ['macOS didn\'t allow it, so ChatGPT and Claude were unticked. Try again on their rows to be asked again.'], tone: 'refused' });
+  assert.equal(outcome('signed-in', null).tone, 'warn', 'a check that failed and was cleared counts as not brought over, never waits forever');
   // Not now unticks them: no panel is left.
   const notNow = waiting.Chrome.reduce((next, row) => model.tickRow(next, row.id, row.app, false), all);
   assert.equal(model.signInPanel(notNow, 'Chrome', waiting.Chrome), null);

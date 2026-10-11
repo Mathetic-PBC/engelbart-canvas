@@ -67,7 +67,8 @@ export function ConnectChip({ sessions, onOpen }) {
  */
 export function ConnectPopup({ request, onClose }) {
   React.useEffect(() => {
-    const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } };
+    // The Keychain modal open over it (ConnectLibrary.jsx KeychainModal) takes Escape for itself.
+    const onKey = (event) => { if (event.key === 'Escape' && !document.querySelector('[data-connect-keychain]')) { event.preventDefault(); event.stopPropagation(); onClose(); } };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);

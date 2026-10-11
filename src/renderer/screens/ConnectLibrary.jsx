@@ -1,11 +1,12 @@
 import React from 'react';
+import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import GithubRepos from '../workspace/GithubRepos.jsx';
 import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, signInsToCheck, waitingWhile, gmailConsent, placedLine } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -288,6 +289,63 @@ function Dots() {
       <style>{'@keyframes eng-pulse{0%,70%,100%{opacity:.15}35%{opacity:1}}'}</style>
       {[0, 1, 2].map((i) => <span key={i} style={{ width: 5, height: 5, borderRadius: '50%', background: '#4d4d4d', opacity: 0.15, animation: 'eng-pulse 1.1s ease-in-out infinite', animationDelay: `${i * 140}ms` }} />)}
     </span>
+  );
+}
+
+const KEY = <Svg size={18} width={1.8}><path d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z" /><circle cx="16.5" cy="7.5" r=".5" fill="currentColor" /></Svg>;
+const KEYCHAIN_TONES = {
+  ask: { background: '#f2f2f2', color: '#171717' },
+  busy: { background: '#f2f2f2', color: '#171717' },
+  ok: { background: '#e8f6ee', color: '#1f9d55' },
+  warn: { background: '#fff4e0', color: '#a35200' },
+  refused: { background: '#fff4e0', color: '#a35200' },
+};
+
+/**
+ * Before macOS asks for a browser's sign-ins (2026-10-11, David: the inline panel under the sources was easy to miss, and
+ * the macOS prompt then came out of nowhere): a modal over everything, at most once a browser, since one Always Allow
+ * covers every app from it. `panel` (signInPanel's) asks: Continue checks the apps, Not now unticks them. After Continue,
+ * `outcome` (keychainOutcome's) says how it went: waiting while macOS asks, then signed in, or not and why. Escape is Not
+ * now while it asks, and closes it after. In a portal: the window's own rise animation would hold a fixed layer inside it.
+ */
+function KeychainModal({ panel, outcome, onContinue, onNotNow, onClose }) {
+  const phase = outcome ? (outcome.done ? 'done' : 'waiting') : 'ask';
+  const primary = React.useRef(null);
+  React.useEffect(() => { if (primary.current) primary.current.focus(); }, [phase]);
+  React.useEffect(() => {
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (phase === 'ask') onNotNow(); else onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [phase, onNotNow, onClose]);
+  const tone = KEYCHAIN_TONES[phase === 'ask' ? 'ask' : outcome.tone] || KEYCHAIN_TONES.busy;
+  const title = phase === 'ask' ? panel.title : outcome.title;
+  const icon = phase === 'done' && outcome.tone === 'ok' ? <Svg size={18} width={2.4}><path d="M20 6 9 17l-5-5" /></Svg> : KEY;
+  return createPortal(
+    <div data-overlay="1" data-cover="1" data-connect-keychain={phase} style={{ position: 'fixed', inset: 0, zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: 'rgba(23,23,23,.28)' }}>
+      <div role="dialog" aria-modal="true" aria-label={title} style={{ width: 'min(420px, 100%)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 10, padding: '22px 22px 18px', background: '#fff', borderRadius: 12, boxShadow: '0 16px 48px #00000029', animation: `rise 160ms ${EASE}` }}>
+        <span aria-hidden="true" style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', ...tone }}>{icon}</span>
+        <span style={{ font: '600 16px/1.35 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{title}</span>
+        {phase === 'ask' && <span data-connect-keychain-lead="1" style={{ font: '600 13.5px/1.5 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{panel.lead}</span>}
+        {(phase === 'ask' ? panel.body : outcome.lines).map((text) => <span key={text} style={{ font: '13px/1.5 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{text}</span>)}
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 16, paddingTop: 8 }}>
+          {phase === 'ask' && <>
+            <button type="button" className="hov-ink" data-connect-signin-not-now={panel.browser} onClick={onNotNow} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Not now</button>
+            <button type="button" ref={primary} data-connect-signin-continue={panel.browser} onClick={onContinue} style={{ padding: '9px 16px', border: 0, borderRadius: 8, background: '#171717', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#fff' }}>Continue</button>
+          </>}
+          {phase === 'waiting' && <>
+            <span style={{ flex: 1, display: 'flex', alignItems: 'center' }}><Dots /></span>
+            <button type="button" className="hov-ink" data-connect-keychain-hide="1" onClick={onClose} title="Close this; the row still says how it goes" style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Hide</button>
+          </>}
+          {phase === 'done' && <button type="button" ref={primary} data-connect-keychain-done="1" onClick={onClose} style={{ padding: '9px 16px', border: 0, borderRadius: 8, background: '#171717', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#fff' }}>Done</button>}
+        </span>
+      </div>
+    </div>,
+    document.body,
   );
 }
 
@@ -641,7 +699,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [notesState, setNotesState] = React.useState(''); // '' | 'asking' | 'allowed' | <why not>
   const [connectorStatus, setConnectorStatus] = React.useState({}); // app → { connected, pending }
   const [signIns, setSignIns] = React.useState({}); // web app → its sign-in as checked when ticked: { status, browser }
-  const [waitingYes, setWaitingYes] = React.useState({}); // browser → [{ id, app }] ticked, waiting on its panel's Continue
+  const [waitingYes, setWaitingYes] = React.useState({}); // browser → [{ id, app }] ticked, waiting on its modal's Continue
+  const [keychainRun, setKeychainRun] = React.useState(null); // { browser, rows } after Continue: the modal says how it went
   const [providers, setProviders] = React.useState(null);
   const [provider, setProvider] = React.useState(null);
   const [toolSnap, setToolSnap] = React.useState(null);
@@ -779,7 +838,9 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const allowSignIns = (browser) => {
     const panel = signInPanel(picks, browser, waitingYes[browser]);
     setWaitingYes((now) => { const next = { ...now }; delete next[browser]; return next; });
-    if (panel) panel.rows.forEach((row) => checkSignIn(row));
+    if (!panel) return;
+    setKeychainRun({ browser, rows: panel.rows });
+    panel.rows.forEach((row) => checkSignIn(row));
   };
   // Not now: the apps waiting on that browser are unticked.
   const declineSignIns = (browser) => {
@@ -788,7 +849,14 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     setPicks((now) => rows.reduce((next, row) => tickRow(next, row.id, row.app, false), now));
   };
   // Try again: ticked again, and checked again only with the consent on (off, the run asks for its sign-in after it starts).
-  const retrySignIn = (id, app) => { setRow(id, app, true); signInsToCheck(consent, [{ id, app }]).forEach((row) => checkSignIn(row, true)); };
+  const retrySignIn = (id, app) => {
+    setRow(id, app, true);
+    const rows = signInsToCheck(consent, [{ id, app }]);
+    // macOS refused it before, so it asks again: the modal follows it, as after Continue.
+    const was = signIns[app];
+    if (rows.length && was && was.status === 'refused' && was.browser) setKeychainRun({ browser: was.browser, rows });
+    rows.forEach((row) => checkSignIn(row, true));
+  };
   // The consent turned off: no sign-in is checked, and the panels waiting for a yes go (2026-10-11 review).
   const toggleConsent = () => { const on = !consent; setConsent(on); setWaitingYes((now) => waitingWhile(on, now)); };
   const pickPapers = async () => {
@@ -844,9 +912,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     if (!anyOn) { setError('Pick at least one source.'); return; }
     if (!provider) { setError('Sign in to Claude Code or Codex first.'); return; }
     setError('');
-    // A panel still waiting counts as Continue: its checks start, and the run waits for them (main's signInsFirst). With the
-    // consent off there is none (toggleConsent cleared them), and none is checked.
-    for (const browser of Object.keys(waitingWhile(consent, waitingYes))) allowSignIns(browser);
+    // No sign-in waits on the person here: the modal covers the screen until Continue or Not now (2026-10-11), and checks
+    // already going are waited for by main (signInsFirst).
     const chosen = { papers: [...folders.papers], code: localPicked(picks) };
     for (const source of SOURCES) for (const app of source.apps) if (appFolders[app] && ticked(picks, source.id, app) && app !== LOCAL_PDFS) chosen[source.id] = [...(chosen[source.id] || []), appFolders[app]];
     if (!ticked(picks, 'papers', LOCAL_PDFS)) chosen.papers = [];
@@ -953,21 +1020,11 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
         const signInOf = (id, app) => { const seen = signIns[app]; return seen && (ticked(picks, id, app) || seen.status === 'signed-in' || seen.status === 'refused') ? seen : null; };
         const label = (app, id = '') => rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' });
         const shownYes = waitingWhile(consent, waitingYes); // none while the consent is off
-        const panels = Object.keys(shownYes).map((browser) => signInPanel(picks, browser, shownYes[browser])).filter(Boolean);
-        const signInPanels = panels.length > 0 && (
-          <div data-connect-signin-panels="1" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {panels.map((panel) => (
-              <div key={panel.browser} data-connect-signin-panel={panel.browser} role="group" aria-label={panel.title} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '14px 16px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fff' }}>
-                <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{panel.title}</span>
-                {panel.body.map((text) => <span key={text} style={{ font: '12.5px/1.5 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{text}</span>)}
-                <span style={{ display: 'flex', alignItems: 'center', gap: 14, paddingTop: 4 }}>
-                  <button type="button" data-connect-signin-continue={panel.browser} onClick={() => allowSignIns(panel.browser)} style={{ padding: '7px 14px', border: 0, borderRadius: 999, background: '#171717', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#fff' }}>Continue</button>
-                  <button type="button" className="hov-ink" data-connect-signin-not-now={panel.browser} onClick={() => declineSignIns(panel.browser)} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Not now</button>
-                </span>
-              </div>
-            ))}
-          </div>
-        );
+        // One browser's modal at a time: the one after Continue first, until it is closed, then the next asking.
+        const asking = Object.keys(shownYes).map((browser) => signInPanel(picks, browser, shownYes[browser])).find(Boolean) || null;
+        const keychainModal = keychainRun
+          ? <KeychainModal outcome={keychainOutcome(keychainRun.browser, keychainRun.rows, signIns)} onClose={() => setKeychainRun(null)} onContinue={() => {}} onNotNow={() => setKeychainRun(null)} />
+          : asking && <KeychainModal panel={asking} onContinue={() => allowSignIns(asking.browser)} onNotNow={() => declineSignIns(asking.browser)} onClose={() => declineSignIns(asking.browser)} />;
         const github = (found && found.github) || {};
         const githubLabel = github.found ? { text: `${github.where || 'signed in'}${repoCount != null ? ` · ${repoCount} repo${repoCount === 1 ? '' : 's'}` : ''}`, tone: '' } : { text: NEEDS_SIGN_IN, tone: 'muted' };
         const reposOn = localPicked(picks).length;
@@ -1092,7 +1149,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                 {/* Right under the sources, after Code (2026-10-09, David: "should be under Sources (specifically under
                     code)"), scrolling with them rather than pinned above the foot. */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 18 }}>
-                  {signInPanels}
+                  {keychainModal}
                   {permissionsBox}
                   {!ready && <AgentSetup snapshot={toolSnap} />}
                 </div>
@@ -1108,7 +1165,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             {header('What should go in your library?')}
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: '4px 20px 16px' }}>
               {sourcesList}
-              {signInPanels}
+              {keychainModal}
               {permissionsBox}
               {!ready && <AgentSetup snapshot={toolSnap} />}
             </div>
