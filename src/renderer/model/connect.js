@@ -486,19 +486,40 @@ export function workLine(session, tick = 0) {
   return { lead, agent: job ? { id: job.id, label: job.label, doing: job.status === 'waiting' ? 'needs you' : job.activity || statusOf(job).text, place: busy.length > 1 ? `${at + 1} of ${busy.length}` : '', waiting: job.status === 'waiting' } : null };
 }
 
+/** What an import brings in, as the foot names it: its own label (the librarian's, "Zotero papers"), without a "Bringing in" it already starts with; else its apps, else its source. */
+function importName(job) {
+  const label = String(job.label || '').trim().replace(/^bringing in\s+/i, '').trim();
+  if (label) return label;
+  const apps = (job.apps || []).filter(Boolean).map(shownName);
+  if (apps.length) return andList(apps);
+  const source = SOURCES.find((entry) => entry.id === job.source);
+  return source ? source.label : String(job.source || 'a source');
+}
+
+/** "A", "A and B", "A and 2 more" (MATH-146). */
+const fewNames = (names) => (names.length < 3 ? names.join(' and ') : `${names[0]} and ${names.length - 1} more`);
+
 /**
- * The line at the foot of onboarding's chat and progress (2026-10-09, David's mockup): "Bringing in 2 sources · 3 of 10 ·
- * 2 need you". How many imports are still going, how many of the work's jobs have ended, and the steps waiting on the
- * person. '' before anything was dispatched.
+ * The line at the foot of onboarding's chat and progress (2026-10-09, David's mockup; MATH-146: it names what is coming
+ * in and counts nothing, since "Bringing in 1 source · 5 of 6" counted two different things). The imports still going,
+ * in runningFirst's order ("Bringing in Zotero papers and AI chats", "Bringing in Notes and 2 more"); with none, "Looking
+ * through your apps" while other work goes on, "Everything's in" once it has all ended. Then the steps waiting on the
+ * person, by app ("Google Drive needs you", "Zotero and GitHub need you", "Zotero and 2 more need you"), or counted when
+ * a step names no app ("2 steps need you"). '' before anything was dispatched.
  */
 export function footLine(session) {
   if (!session) return '';
   const jobs = workJobs(session.jobs);
-  const importing = jobs.filter((job) => job.kind === 'import' && !statusOf(job).done).length;
-  const ended = jobs.filter((job) => statusOf(job).done).length;
-  const needs = (session.needs || []).length;
-  const lead = importing ? `Bringing in ${importing} source${importing === 1 ? '' : 's'}` : ended < jobs.length ? 'Looking through your apps' : jobs.length ? 'Everything looked at' : '';
-  return [lead, jobs.length ? `${ended} of ${jobs.length}` : '', needs ? `${needs} need${needs === 1 ? 's' : ''} you` : ''].filter(Boolean).join(' · ');
+  const importing = runningFirst(jobs).filter((job) => job.kind === 'import' && !statusOf(job).done).map(importName);
+  const lead = importing.length ? `Bringing in ${fewNames(importing)}` : jobs.some((job) => !statusOf(job).done) ? 'Looking through your apps' : jobs.length ? 'Everything\'s in' : '';
+  const needs = (session.needs || []).filter((need) => need && !need.closed);
+  let waiting = '';
+  if (needs.length) {
+    const apps = [...new Set(needs.map((need) => (need.app ? shownName(need.app) : '')))];
+    if (apps.every(Boolean)) waiting = `${fewNames(apps)} need${apps.length === 1 ? 's' : ''} you`;
+    else waiting = needs.length === 1 ? '1 step needs you' : `${needs.length} steps need you`;
+  }
+  return [lead, waiting].filter(Boolean).join(' · ');
 }
 
 /**

@@ -1538,10 +1538,23 @@ test('the foot of onboarding\'s chat and what the chat says while it waits (2026
     { kind: 'survey', label: 'Looking through Notion', status: 'done', notes: 0, items: 0 },
     { kind: 'memory', label: 'MEMORY.md', status: 'queued', notes: 0, items: 0 },
   ];
-  assert.equal(model.footLine({ jobs, needs: [{}, {}] }), 'Bringing in 2 sources · 1 of 4 · 2 need you');
-  assert.equal(model.footLine({ jobs: jobs.slice(2), needs: [{}] }), 'Looking through your apps · 1 of 2 · 1 needs you');
-  assert.equal(model.footLine({ jobs: [jobs[3]], needs: [] }), 'Everything looked at · 1 of 1');
+  // MATH-146: it names what is coming in, in runningFirst's order, and counts no jobs.
+  const imp = (label, status = 'running', more = {}) => ({ kind: 'import', label, status, notes: 0, items: 0, ...more });
+  assert.equal(model.footLine({ jobs, needs: [] }), 'Bringing in Notes: Obsidian and AI chats');
+  assert.equal(model.footLine({ jobs: [imp('Zotero papers')], needs: [] }), 'Bringing in Zotero papers');
+  assert.equal(model.footLine({ jobs: [imp('AI chats', 'queued'), imp('Zotero papers'), imp('Websites', 'done')], needs: [] }), 'Bringing in Zotero papers and AI chats', 'running before queued; ended imports left out');
+  assert.equal(model.footLine({ jobs: [imp('Zotero papers'), imp('AI chats'), imp('Websites', 'queued'), imp('Meeting transcripts', 'waiting')], needs: [] }), 'Bringing in Zotero papers and 3 more');
+  assert.equal(model.footLine({ jobs: [imp('Bringing in your Obsidian notes')], needs: [] }), 'Bringing in your Obsidian notes', 'no "Bringing in Bringing in"');
+  assert.equal(model.footLine({ jobs: [imp('', 'running', { apps: ['Google Docs'] })], needs: [] }), 'Bringing in Google Drive', 'no label: its apps, as shown');
+  assert.equal(model.footLine({ jobs: [imp(undefined, 'running', { source: 'papers' })], needs: [] }), 'Bringing in Papers', 'no label nor apps: its source');
+  assert.equal(model.footLine({ jobs: jobs.slice(2), needs: [] }), 'Looking through your apps');
+  assert.equal(model.footLine({ jobs: [jobs[3], imp('Zotero papers', 'done'), jobs[4]], needs: [] }), 'Everything\'s in', 'MEMORY.md is not work');
   assert.equal(model.footLine({ jobs: [], needs: [] }), '');
+  assert.equal(model.footLine({ jobs: [imp('Zotero papers')], needs: [{ app: 'Google Docs', kind: 'connector' }] }), 'Bringing in Zotero papers · Google Drive needs you');
+  assert.equal(model.footLine({ jobs: jobs.slice(2), needs: [{ app: 'Zotero' }, { app: 'GitHub' }, { app: 'Zotero', kind: 'permission' }] }), 'Looking through your apps · Zotero and GitHub need you', 'one app, named once');
+  assert.equal(model.footLine({ jobs: [jobs[3]], needs: [{ app: 'Zotero' }, { app: 'GitHub' }, { app: 'Notion' }, { app: 'Gmail', closed: true }] }), 'Everything\'s in · Zotero and 2 more need you', 'a closed step is not waiting');
+  assert.equal(model.footLine({ jobs: [jobs[3]], needs: [{}] }), 'Everything\'s in · 1 step needs you');
+  assert.equal(model.footLine({ jobs: [jobs[3]], needs: [{}, { app: 'Zotero' }] }), 'Everything\'s in · 2 steps need you');
   assert.equal(model.chatStatus({ thinking: true, activity: 'Reading what the surveys found', jobs }), 'Reading what the surveys found…');
   assert.equal(model.chatStatus({ waiting: true, jobs, needs: [] }), 'Looking through Overleaf…');
   assert.equal(model.chatStatus({ waiting: true, jobs: [{ ...jobs[2], status: 'waiting' }], needs: [{}] }), 'Waiting for your sign-in…');

@@ -707,7 +707,7 @@ function Foot({ left, pager, button }) {
   );
 }
 
-/** "• Bringing in 2 sources · 3 of 10 · 2 need you" (model/connect.js footLine), the dot blue while work goes on. */
+/** "• Bringing in Zotero papers and AI chats · Google Drive needs you" (model/connect.js footLine), the dot blue while work goes on. */
 function FootStatus({ session }) {
   const text = footLine(session);
   if (!text) return null;
