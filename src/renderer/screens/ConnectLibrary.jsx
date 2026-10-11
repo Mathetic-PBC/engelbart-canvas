@@ -67,6 +67,17 @@ const CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:cen
   + '.bs-mark{flex:none;box-sizing:border-box;width:14px;height:14px;margin-top:3px;border:1.5px solid #c9c9c9;border-radius:50%;background:#fff}.bs-mark[data-square]{border-radius:4px}'
   + '[aria-checked="true"]>.bs-mark{border-color:#0070f3;background:#0070f3;box-shadow:inset 0 0 0 2.5px #fff}'
   + '.bs-why{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:#8f8f8f}'
+  // Connect's compact options (2026-10-11): the why on the label's line, cut with an ellipsis; an ⓘ at the right when the
+  // option has a detail (or something was cut), its popover a real element. Modifiers, so @brainstorm's cards stay as they are.
+  + '.cx-opts{display:flex;flex-direction:column;gap:4px}.cx-opt-row{position:relative}'
+  + '.bs-opt.cx-opt{align-items:center;padding:6px 12px;font:14px/1.4 var(--font-sans)}.bs-opt.cx-opt[data-info]{padding-right:38px}.cx-opt>.bs-mark{margin-top:0}'
+  + '.cx-opt-text{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px;white-space:nowrap}'
+  + '.cx-opt-label{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}'
+  + '.cx-opt-why{flex:0 1000 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:#8f8f8f}'
+  + '.cx-info{position:absolute;top:50%;right:8px;margin-top:-11px;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:6px;background:none;color:#8f8f8f;cursor:help}'
+  + '.cx-info:hover,.cx-info[aria-expanded="true"]{background:#f2f2f2;color:#4d4d4d}.cx-info:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
+  + '.cx-pop{position:fixed;z-index:1000;box-sizing:border-box;width:max-content;max-width:min(340px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;padding:9px 12px;border:1px solid #eaeaea;border-radius:8px;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.08);font:12.5px/1.5 var(--font-sans);color:#171717;text-align:left;overflow-wrap:anywhere;cursor:default}'
+  + '.cx-pop-label{font-weight:500}.cx-pop-why{color:#4d4d4d}.cx-pop-detail{white-space:pre-line}.cx-pop>*+*{margin-top:4px}'
   + '.bs-field{display:block;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;outline:none;resize:none;font:14px/1.5 var(--font-sans);color:#171717}.bs-field:focus{border-color:#c9c9c9}.bs-field::placeholder{color:#8f8f8f}'
   + '.bs-submit{padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;transition:opacity 120ms}.bs-submit:hover{opacity:.86}.bs-submit:disabled{background:#eaeaea;color:#8f8f8f;cursor:default;opacity:1}'
   + '.cx-btn{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border:1px solid #171717;border-radius:8px;background:#171717;color:#fff;cursor:pointer;font:500 12.5px/1 var(--font-sans);white-space:nowrap}.cx-btn:hover{opacity:.88}.cx-btn:disabled{opacity:.5;cursor:default}'
@@ -81,6 +92,7 @@ const ARROW_UP = <Svg size={13} width={2.2}><path d="M12 19V5" /><path d="m5 12 
 const BACK = <Svg size={16} width={1.5}><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></Svg>;
 const DOWNLOAD = <Svg size={14} width={1.8}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" /></Svg>;
 const CHECK = <Svg size={12} width={2.5}><path d="M20 6 9 17l-5-5" /></Svg>;
+const INFO = <Svg size={14} width={1.6}><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></Svg>;
 const MINUS = <Svg size={16} width={1.6}><path d="M5 12h14" /></Svg>;
 const CLOSE = <Svg size={15} width={1.6}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Svg>;
 const FILE = <Svg size={14} width={1.6}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M10 13h4" /><path d="M10 17h4" /></Svg>;
@@ -353,7 +365,7 @@ function KeychainModal({ panel, outcome, onContinue, onNotNow, onClose }) {
  * A question already answered, folded to one line, "✓ Which Overleaf projects should come in?" (2026-10-09, David's
  * mockup): the answer is the bubble under it. A click opens the card as it was answered.
  */
-function AnsweredAsk({ ask, children }) {
+export function AnsweredAsk({ ask, children }) {
   const [open, setOpen] = React.useState(false);
   if (open) return <div data-connect-answered="open" onDoubleClick={() => setOpen(false)}>{children}</div>;
   return (
@@ -399,6 +411,13 @@ function NeedsCard({ needs, onOpen, onSkip }) {
 }
 
 /**
+ * A live card's Skip and Submit (2026-10-11): pinned to the bottom of the chat's scroll area while the card runs past
+ * it, on white with a hairline over it, so Submit is there without scrolling; at the card's end it sits under the last
+ * option, never over it (the chat's scroll-padding keeps a focused option clear of it too).
+ */
+const CARD_ACTIONS = { position: 'sticky', bottom: 0, zIndex: 1, display: 'flex', alignItems: 'center', gap: 8, margin: '12px -16px -14px', padding: '10px 16px 14px', borderTop: '1px solid #eaeaea', borderRadius: '0 0 10px 10px', background: '#fff' };
+
+/**
  * The librarian asking which GitHub repositories: the GitHub list onboarding and the choose screen use, with its search
  * and sign-in (2026-10-08: "when asking me which repositories it should use our existing nice github ui"); Submit sends
  * the ticked ones as "owner/name".
@@ -414,7 +433,7 @@ function ReposCard({ ask, live, onAnswer }) {
           <div data-connect-repos="1" style={{ height: 340, display: 'flex', flexDirection: 'column', marginTop: 10 }}>
             <GithubRepos held={(repo) => picks.includes(repo.fullName)} onToggle={toggle} busyId="" />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+          <div data-connect-card-actions="1" style={CARD_ACTIONS}>
             <button type="button" className="bart-text" data-connect-skip="1" onClick={() => onAnswer({ skipped: true })} style={{ paddingLeft: 0 }}>Skip</button>
             <span style={{ flex: 1 }} />
             {picks.length > 0 && <span style={{ font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>{picks.length} selected</span>}
@@ -426,8 +445,105 @@ function ReposCard({ ask, live, onAnswer }) {
   );
 }
 
-/** The librarian's question as a card: one option per line (round mark: one; square: several), its why under it. */
-function QuestionCard({ ask, live, onAnswer }) {
+/**
+ * Where an option's popover goes (2026-10-11): under its ⓘ, its right edge on the ⓘ's, or above it when there is more
+ * room there; always inside the window, 8px from its edges. `anchor` is the ⓘ's box, `size` the popover's, both in
+ * window coordinates → { left, top, side }.
+ */
+export function popPlace(anchor, size, viewport, gap = 6, margin = 8) {
+  const below = viewport.height - anchor.bottom - gap - margin;
+  const above = anchor.top - gap - margin;
+  const side = size.height <= below || below >= above ? 'below' : 'above';
+  const top = side === 'below' ? anchor.bottom + gap : anchor.top - gap - size.height;
+  const left = anchor.right - size.width;
+  const clamp = (value, low, high) => Math.max(low, Math.min(value, Math.max(low, high)));
+  return { left: clamp(left, margin, viewport.width - margin - size.width), top: clamp(top, margin, viewport.height - margin - size.height), side };
+}
+
+/**
+ * An option's ⓘ and what it covers (2026-10-11): hovering it or focusing it opens a popover in the card (not a native
+ * tooltip), placed by popPlace; Escape, leaving it, scrolling or blur closes it. A sibling of the option's button, so a
+ * click on it never ticks the option nor submits, and it works on an answered card, whose options are disabled.
+ */
+function OptionInfo({ option, showLabel, showWhy }) {
+  const [open, setOpen] = React.useState(false);
+  const [place, setPlace] = React.useState(null);
+  const iconRef = React.useRef(null);
+  const popRef = React.useRef(null);
+  const timer = React.useRef(null);
+  const id = React.useId();
+  const show = () => { clearTimeout(timer.current); setOpen(true); };
+  const hide = (delay = 0) => { clearTimeout(timer.current); if (delay) timer.current = setTimeout(() => setOpen(false), delay); else setOpen(false); };
+  React.useEffect(() => () => clearTimeout(timer.current), []);
+  React.useLayoutEffect(() => {
+    if (!open) { setPlace(null); return; }
+    const icon = iconRef.current, pop = popRef.current;
+    if (!icon || !pop) return;
+    // Drawn hidden at 0,0 first: where that lands is the origin its `fixed` is measured from (an ancestor with a transform moves it).
+    const origin = pop.getBoundingClientRect();
+    const at = popPlace(icon.getBoundingClientRect(), { width: origin.width, height: origin.height }, { width: window.innerWidth, height: window.innerHeight });
+    setPlace({ left: at.left - origin.left, top: at.top - origin.top, side: at.side });
+  }, [open]);
+  React.useEffect(() => {
+    if (!open) return undefined;
+    const key = (event) => { if (event.key === 'Escape') { event.stopPropagation(); hide(); } };
+    const away = () => hide();
+    document.addEventListener('keydown', key, true);
+    window.addEventListener('scroll', away, true);
+    window.addEventListener('resize', away);
+    return () => { document.removeEventListener('keydown', key, true); window.removeEventListener('scroll', away, true); window.removeEventListener('resize', away); };
+  }, [open]);
+  const stop = (event) => { event.preventDefault(); event.stopPropagation(); };
+  return (
+    <span onMouseEnter={show} onMouseLeave={() => hide(120)}>
+      <button ref={iconRef} type="button" className="cx-info" data-connect-option-info={option.label} aria-label={`What ${option.label} covers`} aria-expanded={open ? 'true' : 'false'} aria-describedby={open ? id : undefined}
+        onFocus={show} onBlur={() => hide()} onClick={(event) => { stop(event); show(); }} onDoubleClick={stop} onMouseDown={(event) => event.stopPropagation()}>{INFO}</button>
+      {open && (
+        <span ref={popRef} id={id} role="tooltip" className="cx-pop" data-connect-option-detail={option.label} data-side={place ? place.side : undefined}
+          onClick={stop} onDoubleClick={stop} style={place ? { left: place.left, top: place.top } : { left: 0, top: 0, visibility: 'hidden' }}>
+          {showLabel && <span className="cx-pop-label" style={{ display: 'block' }}>{option.label}</span>}
+          {showWhy && option.why && <span className="cx-pop-why" style={{ display: 'block' }}>{option.why}</span>}
+          {option.detail && <span className="cx-pop-detail" style={{ display: 'block' }}>{option.detail}</span>}
+        </span>
+      )}
+    </span>
+  );
+}
+
+/**
+ * One option on one line (2026-10-11): its mark, its label, then its why in grey, cut with an ellipsis when it does not
+ * fit. The ⓘ shows when it has a detail, or when its label or why was cut (the popover then holds them in full).
+ */
+function ConnectOption({ option, many, on, live, onPick, onSubmitOne }) {
+  const labelRef = React.useRef(null);
+  const whyRef = React.useRef(null);
+  const [cut, setCut] = React.useState({ label: false, why: false });
+  React.useLayoutEffect(() => {
+    const over = (el) => !!el && el.scrollWidth > el.clientWidth + 1;
+    const measure = () => { const next = { label: over(labelRef.current), why: over(whyRef.current) }; setCut((now) => (now.label === next.label && now.why === next.why ? now : next)); };
+    measure();
+    if (typeof ResizeObserver === 'undefined' || !labelRef.current) return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(labelRef.current.parentNode);
+    return () => observer.disconnect();
+  }, [option.label, option.why]);
+  const info = !!option.detail || cut.label || cut.why;
+  return (
+    <div className="cx-opt-row">
+      <button type="button" className="bs-opt cx-opt" disabled={!live} data-connect-option={option.label} data-info={info ? '1' : undefined} role={many ? 'checkbox' : 'radio'} aria-checked={on ? 'true' : 'false'} onClick={() => onPick(option.label)} onDoubleClick={() => { if (!many && live) onSubmitOne(option.label); }}>
+        <span className="bs-mark" data-square={many ? '1' : undefined} />
+        <span className="cx-opt-text">
+          <span ref={labelRef} className="cx-opt-label">{option.label}</span>
+          {option.why ? <span ref={whyRef} className="cx-opt-why" data-connect-option-why="1">{option.why}</span> : null}
+        </span>
+      </button>
+      {info && <OptionInfo option={option} showLabel={cut.label} showWhy={!!option.why} />}
+    </div>
+  );
+}
+
+/** The librarian's question as a card: one option per line (round mark: one; square: several), its why after it. */
+export function QuestionCard({ ask, live, onAnswer }) {
   const [picks, setPicks] = React.useState([]);
   const [note, setNote] = React.useState('');
   const many = ask.kind === 'multi';
@@ -440,23 +556,15 @@ function QuestionCard({ ask, live, onAnswer }) {
       <div style={{ font: '600 15px/1.45 var(--font-sans)', color: '#171717' }}>{ask.title}</div>
       {many && <div style={{ marginTop: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f' }}>Select all that apply.</div>}
       {!open && ask.options.length > 0 && (
-        <div role={many ? 'group' : 'radiogroup'} aria-label={ask.title} style={{ marginTop: 12 }}>
-          {ask.options.map((option) => {
-            const on = picks.includes(option.label);
-            return (
-              <button key={option.label} type="button" className="bs-opt" disabled={!live} data-connect-option={option.label} role={many ? 'checkbox' : 'radio'} aria-checked={on ? 'true' : 'false'} onClick={() => pick(option.label)} onDoubleClick={() => { if (!many && live) submit([option.label]); }}>
-                <span className="bs-mark" data-square={many ? '1' : undefined} />
-                <span style={{ flex: 1, minWidth: 0 }}>{option.label}{option.why ? <span className="bs-why">{option.why}</span> : null}</span>
-              </button>
-            );
-          })}
+        <div role={many ? 'group' : 'radiogroup'} aria-label={ask.title} className="cx-opts" style={{ marginTop: 12 }}>
+          {ask.options.map((option) => <ConnectOption key={option.label} option={option} many={many} on={picks.includes(option.label)} live={live} onPick={pick} onSubmitOne={(label) => submit([label])} />)}
         </div>
       )}
       {live && (open
         ? <textarea data-connect-card-field="1" value={note} onChange={(event) => setNote(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); submit(); } }} rows={2} placeholder={ask.placeholder || 'In a sentence or two…'} className="bs-field" spellCheck={false} style={{ marginTop: 12 }} />
         : <input data-connect-card-field="1" value={note} onChange={(event) => setNote(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); submit(); } }} placeholder="Or say it in your own words…" className="bs-field" spellCheck={false} style={{ marginTop: 10 }} />)}
       {live && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 12 }}>
+        <div data-connect-card-actions="1" style={CARD_ACTIONS}>
           <button type="button" className="bart-text" data-connect-skip="1" onClick={() => onAnswer({ skipped: true })} style={{ paddingLeft: 0 }}>Skip</button>
           <span style={{ flex: 1 }} />
           <button type="button" className="bs-submit" data-connect-submit="1" disabled={!ready} onClick={() => submit()}>Submit</button>
@@ -578,6 +686,15 @@ function WorkLine({ session }) {
 
 /** The page's main button, as onboarding's own Continue: filled black, a caret after its words. */
 const FOOT_BUTTON = { flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px 0 16px', border: '1px solid #171717', borderRadius: 8, background: '#171717', color: '#fff', cursor: 'pointer', font: '500 13.5px/1 var(--font-sans)', whiteSpace: 'nowrap' };
+
+/**
+ * The chat's foot button (2026-10-11): while the librarian still has questions it reads "Skip the rest" and stays quiet,
+ * as the popup's Import does (white, a hairline, grey words), so Submit is the loudest thing on the screen; once it
+ * reads "Bring these in" it is the page's main button.
+ */
+export function importFootStyle(done) {
+  return done ? FOOT_BUTTON : { ...FOOT_BUTTON, border: '1px solid #eaeaea', background: '#fff', color: '#4d4d4d' };
+}
 
 /** The foot of onboarding's page: something at the left, then onboarding's pager (`pager`, its dots and "2 of 3") and the one button. */
 function Foot({ left, pager, button }) {
@@ -1177,7 +1294,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       {view === 'chat' && session && (
         <>
           {header(`Refine with ${targetName}`, { backButton: true })}
-          <div ref={chatRef} data-connect-chat="1" style={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: `18px ${gutter}` }}>
+          <div ref={chatRef} data-connect-chat="1" style={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: `18px ${gutter}`, scrollPaddingBottom: 64 }}>
             {/* The opening line ("Found 2 Obsidian vaults…") is not shown (2026-10-09): until the librarian says something,
                 the dots used everywhere else, in the middle. */}
             {!session.chat.some((item) => !item.opener) && !session.error && !error && (
@@ -1223,7 +1340,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
           {page && (
             <div style={{ flex: 'none', padding: `0 ${gutter} 4px` }}>
               <Foot pager={pager} left={<FootStatus session={session} />}
-                button={<button type="button" data-connect-import="1" data-ready={done ? '1' : '0'} onClick={importNow} style={FOOT_BUTTON}>{done ? 'Bring these in' : 'Skip the rest'}<span style={{ display: 'inline-flex' }}>{CARET_RIGHT}</span></button>} />
+                button={<button type="button" data-connect-import="1" data-ready={done ? '1' : '0'} onClick={importNow} style={importFootStyle(done)}>{done ? 'Bring these in' : 'Skip the rest'}<span style={{ display: 'inline-flex' }}>{CARET_RIGHT}</span></button>} />
             </div>
           )}
         </>

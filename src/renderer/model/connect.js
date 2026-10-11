@@ -17,6 +17,12 @@ export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName, sh
 export const MEMORY_APPS = Object.freeze(recallApps(Object.keys(APPS)));
 /** Apps that start unticked even when found (2026-10-11): Gmail holds what other people wrote, so ticking it is its own yes. */
 export const NEVER_TICKED = Object.freeze(['Gmail']);
+/**
+ * Apps that start unticked even when found (2026-10-11): Gmail, and Google Drive ('Google Docs'), which is the person's
+ * whole Drive and as personal as their mail, so they choose it themselves. Unlike Gmail, Drive is still ticked by its
+ * group's header and Select all (it is not NEVER_TICKED); its row still says it is signed in.
+ */
+export const START_UNTICKED = Object.freeze([...NEVER_TICKED, 'Google Docs']);
 /** Websites' one row, and Code's second (the first is GitHub). */
 export const BROWSER_ROW = 'Browser history';
 export const LOCAL_REPOS = 'Local repos';
@@ -54,14 +60,14 @@ function derive(state) {
 /**
  * Where the choose screen starts, from what main found (`connect-detect`): a row is ticked when it was found (on this Mac,
  * signed in to in Engelbart's browser, connected; Websites: a browser; Code: a GitHub sign-in), except the assistants that
- * remember the person (asking them is its own consent), Gmail (NEVER_TICKED) and the repositories on this Mac. Nothing is open but the first
+ * remember the person (asking them is its own consent), Gmail and Google Drive (START_UNTICKED) and the repositories on this Mac. Nothing is open but the first
  * ticked source.
  */
 export function initialPicks(found) {
   const apps = {};
   for (const source of SOURCES) {
     apps[source.id] = {};
-    for (const row of rowsOf(source.id)) if (!(source.id === 'code' && row === LOCAL_REPOS)) apps[source.id][row] = foundRow(found, source.id, row) && !MEMORY_APPS.includes(row) && !NEVER_TICKED.includes(row);
+    for (const row of rowsOf(source.id)) if (!(source.id === 'code' && row === LOCAL_REPOS)) apps[source.id][row] = foundRow(found, source.id, row) && !MEMORY_APPS.includes(row) && !START_UNTICKED.includes(row);
   }
   const state = derive({ apps, local: {}, open: {} });
   const first = SOURCES.find((source) => state.picks[source.id] && source.apps.length);

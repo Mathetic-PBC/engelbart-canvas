@@ -41,7 +41,7 @@ function interviewReply(s, message) {
     const label = LABELS[source];
     const surveyed = choice.apps.map((app) => found[app] && found[app].survey && found[app].survey.items).find((items) => Array.isArray(items) && items.length);
     state.asked.push({ source, label });
-    const options = surveyed ? [{ label: 'Everything', why: '' }, ...surveyed.map((item) => ({ label: item.label, why: item.why || '' }))] : [{ label: 'Everything', why: 'all of it' }, { label: 'Only the last 30 days', why: '' }, { label: 'Leave it out', why: '' }];
+    const options = surveyed ? [{ label: 'Everything', why: '', detail: surveyed.map((item) => [item.label, item.date, item.where].filter(Boolean).join(' · ')).join('\n') }, ...surveyed.map((item) => ({ label: item.label, why: item.why || '' }))] : [{ label: 'Everything', why: 'all of it' }, { label: 'Only the last 30 days', why: '' }, { label: 'Leave it out', why: '' }];
     return { say: dispatch.length ? `Bringing in ${dispatch[0].label} now.` : 'Let me check a few things.', ask: { source, kind: surveyed ? 'multi' : 'single', title: `What from ${label.toLowerCase()}?`, options }, authorize: null, dispatch, waiting: false, done: false };
   }
   if (waitFor) return { say: `${dispatch.length ? `Bringing in ${dispatch[0].label} now. ` : ''}Looking through your ${LABELS[waitFor].toLowerCase()} now.`, ask: null, authorize: null, dispatch, waiting: true, done: false };

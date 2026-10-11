@@ -169,11 +169,21 @@ function periodBlock(choices) {
   return `<period days="${days || 'all'}">${days ? `Only ${periodName(days)}: things changed or written in the last ${days} days. The listing tools hold to it. Older items come in only when <plan> names them (by path for PDFs).` : 'All time: no limit on how far back.'}</period>`;
 }
 
-/** One option of a question: a label and, when given, a few words of why → { label, why } or null. */
+/**
+ * What an option covers (2026-10-11), shown in its ⓘ: the real titles with their dates and places. Its line breaks are
+ * kept (at most 10 lines, blank ones dropped, spaces in a line folded), up to 600 characters; anything not a string is ''.
+ */
+function detailOf(value) {
+  if (typeof value !== 'string') return '';
+  const lines = value.replace(/\r\n?/g, '\n').split('\n').map((text) => text.replace(/\s+/g, ' ').trim()).filter(Boolean).slice(0, 10);
+  return clip(lines.join('\n'), 600);
+}
+
+/** One option of a question: a label and, when given, a few words of why and what it covers → { label, why, detail } or null. */
 function optionOf(option) {
-  if (option && typeof option === 'object') { const label = line(option.label, 160); return label ? { label, why: line(option.why, 140) } : null; }
+  if (option && typeof option === 'object') { const label = line(option.label, 160); return label ? { label, why: line(option.why, 140), detail: detailOf(option.detail) } : null; }
   const label = line(option, 160);
-  return label ? { label, why: '' } : null;
+  return label ? { label, why: '', detail: '' } : null;
 }
 
 /**
@@ -1556,4 +1566,4 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   };
 }
 
-module.exports = { createConnect, cleanChoices, memoryJobs, projectBlock, readReply, readSurvey, messageOf, shownOf, connectChoice, CONNECT_MODELS, PROVIDER_NAMES, PRIORITY, MAX_RUNNING };
+module.exports = { createConnect, cleanChoices, memoryJobs, projectBlock, optionOf, readReply, readSurvey, messageOf, shownOf, connectChoice, CONNECT_MODELS, PROVIDER_NAMES, PRIORITY, MAX_RUNNING };

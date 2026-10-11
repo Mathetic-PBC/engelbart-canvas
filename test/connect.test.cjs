@@ -295,7 +295,7 @@ test('the librarian\'s reply as it is read: one-line options with their why, but
   assert.deepEqual(choices.sources.notes, { on: true, apps: ['Obsidian'], folders: [vault], repos: [] });
   assert.deepEqual(choices.permissions, { files: true, browser: false, recall: true, notes: false });
   const reply = readReply('```json\n{"say":"Found it.","ask":{"source":"notes","kind":"multi","title":"Which folders?","options":["Research",{"label":"Essays","why":"12 notes"},{"label":"Essays"}]},"authorize":{"app":"Zotero","kind":"signin"},"dispatch":[{"source":"notes","apps":["Obsidian"],"label":"Obsidian","plan":"Research only"},{"source":"papers","plan":"all"}],"done":false}\n```', choices);
-  assert.deepEqual(reply.ask, { source: 'notes', kind: 'multi', title: 'Which folders?', options: [{ label: 'Research', why: '' }, { label: 'Essays', why: '12 notes' }], placeholder: '' });
+  assert.deepEqual(reply.ask, { source: 'notes', kind: 'multi', title: 'Which folders?', options: [{ label: 'Research', why: '', detail: '' }, { label: 'Essays', why: '12 notes', detail: '' }], placeholder: '' });
   assert.equal(reply.authorize, null, 'one thing at a time: the question wins');
   assert.deepEqual(reply.dispatch.map((entry) => entry.source), ['notes'], 'papers was not picked');
   assert.deepEqual(readReply('{"say":"","authorize":{"app":"Zotero","kind":"signin"}}', choices).authorize, { source: 'papers', app: 'Zotero', kind: 'signin', label: 'Sign in to Zotero' });
@@ -554,7 +554,7 @@ test('a session with the fake agents: a folder button, a question card, imports 
   await connect.authorize(started.id, { app: 'Obsidian', kind: 'folder', path: '~/Vault' });
   now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
   assert.deepEqual(now.chat.map((entry) => entry.role), ['agent', 'agent', 'user', 'agent']);
-  assert.deepEqual(now.chat[3].ask.options[0], { label: 'Everything', why: 'all of it' });
+  assert.deepEqual(now.chat[3].ask.options[0], { label: 'Everything', why: 'all of it', detail: '' });
   assert.throws(() => connect.answer(started.id, {}), /Say something first/);
   connect.answer(started.id, { picked: ['Everything'], text: 'but not Personal' });
   assert.equal(connect.state(started.id).chat[4].text, 'Everything — but not Personal');

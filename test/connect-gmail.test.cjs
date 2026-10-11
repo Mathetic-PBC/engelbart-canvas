@@ -103,7 +103,7 @@ test('Gmail is never ticked to start with, even when found; ticking it adds its 
   const found = { apps: { Gmail: { found: true }, 'Google Docs': { found: true } } };
   const start = m.initialPicks(found);
   assert.equal(start.apps.email.Gmail, false);
-  assert.equal(start.apps.notes['Google Docs'], true, 'Drive, found, is ticked as before');
+  assert.equal(start.apps.notes['Google Docs'], false, 'Drive, found, starts unticked too (2026-10-11)');
   assert.equal(start.picks.email, false);
   assert.ok(m.NEVER_TICKED.includes('Gmail'));
   assert.equal(m.gmailConsent(start, 'Claude Code'), '');
@@ -308,4 +308,27 @@ test('the search page\'s script reads each shown row: its id without "#", subjec
   ] });
   const account = await new AsyncFunction('document', 'location', 'window', gmail.ACCOUNT_SCRIPT)(document, { hostname: 'mail.google.com', pathname: '/mail/u/1/' }, { GLOBALS: [0, 1, 2, 3, 4, 5, 6, 7, 8, IK] });
   assert.deepEqual(account, { signedIn: true, address: 'sam@uni.edu', ik: IK, path: '/mail/u/1/' });
+});
+
+// Google Drive starts unticked (2026-10-11): the person's whole Drive is as personal as their mail. Unlike Gmail, its row,
+// the Notes group's header and Select all all tick it; its row still says it is signed in.
+test('Google Drive starts unticked when found; its row, the Notes header and Select all tick it; Gmail still stays out of them', async () => {
+  const m = await model();
+  const found = { apps: { Gmail: { found: true, signedIn: true }, 'Google Docs': { found: true, signedIn: true }, Obsidian: { found: true } } };
+  const start = m.initialPicks(found);
+  assert.deepEqual([start.apps.notes['Google Docs'], start.apps.notes.Obsidian, start.apps.email.Gmail], [false, true, false]);
+  assert.ok(m.START_UNTICKED.includes('Google Docs') && m.START_UNTICKED.includes('Gmail'));
+  assert.deepEqual([...m.NEVER_TICKED], ['Gmail'], 'NEVER_TICKED is as it was');
+  assert.equal(m.tickRow(start, 'notes', 'Google Docs', true).apps.notes['Google Docs'], true, 'its own row');
+  const cleared = m.tickGroup(start, 'notes', found);
+  assert.equal(m.groupState(cleared, 'notes'), 'none');
+  const header = m.tickGroup(cleared, 'notes', found);
+  assert.deepEqual([header.apps.notes['Google Docs'], header.apps.notes.Obsidian], [true, true], 'the Notes header');
+  const all = m.tickAll(start, found, true);
+  assert.equal(all.apps.notes['Google Docs'], true, 'Select all');
+  assert.equal(all.apps.email.Gmail, false, 'Select all still leaves Gmail');
+  assert.equal(m.tickGroup(m.tickAll(start, found, false), 'email', found).apps.email.Gmail, false, 'and the Email header');
+  assert.equal(m.allPicked(start, found), false, 'Drive unticked: Select all, not Clear');
+  assert.equal(m.allPicked(all, found), true);
+  assert.deepEqual(m.rowLabel('Google Docs', { found: true, signedIn: true, signIn: { status: 'signed-in' } }), { text: '✓ Signed in', tone: 'ok' }, 'unticked, its row still says it is signed in (the label never reads the tick)');
 });

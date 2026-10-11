@@ -161,12 +161,13 @@ app.whenReady().then(async () => {
       assert.equal(await has(wc, '[data-connect-starting-now]'), false, 'not what each agent is doing');
       await shot(wc, '1c-starting');
     } else assert.doesNotMatch(await text(wc, '[data-connect-chat]'), /Looking at what you picked|Found \d/, 'no opening line in the chat');
-    // One button by the pager once a session exists (2026-10-09, David's mockup): "Skip the rest", filled; Skip for now gone.
+    // One button by the pager once a session exists (2026-10-09, David's mockup): "Skip the rest"; Skip for now gone.
+    // Quiet while it says so (2026-10-11): white, a hairline, grey words, so Submit is the loudest thing on the screen.
     await until(() => has(wc, '[data-connect-foot] [data-connect-import]'), 'the chat\'s button by the pager');
     assert.match(await text(wc, '[data-connect-import]'), /^Skip the rest$/);
     assert.equal(await has(wc, '[data-onboarding-skip]'), false, 'no Skip for now with a session');
-    const filled = await js(wc, '(()=>{const b=document.querySelector("[data-connect-import]");const c=getComputedStyle(b).backgroundColor;return c!=="rgba(0, 0, 0, 0)"&&c!=="transparent"&&c!=="rgb(255, 255, 255)"})()');
-    assert.equal(filled, true, 'a filled button');
+    const footLook = () => js(wc, '(()=>{const s=getComputedStyle(document.querySelector("[data-connect-import]"));return [s.backgroundColor,s.borderTopColor,s.color].join(" | ")})()');
+    assert.equal(await footLook(), 'rgb(255, 255, 255) | rgb(234, 234, 234) | rgb(77, 77, 77)', 'Skip the rest stays quiet');
     // ChatGPT's sign-in, sorted before its survey: one card in the chat, each app a row, what Skip means under it.
     await until(() => has(wc, '[data-connect-chat] [data-connect-needs] [data-connect-need="signin"]'), 'ChatGPT\'s sign-in card, before the run asks');
     assert.match(await text(wc, '[data-connect-needs]'), /Skipping one leaves it out\. You can add it later from Add sources\./);
@@ -187,10 +188,30 @@ app.whenReady().then(async () => {
     await until(() => has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]'), 'the survey\'s findings, one per line', 400);
     assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'role'), 'checkbox', 'several can be picked');
     await pause(400); // the chat scrolls to its newest message first
+    // What an option covers (2026-10-11): an ⓘ on "Everything" (its detail lists what the survey found), none on an
+    // option without one; hovering opens a popover in the card, inside the window; a click on it ticks nothing; Escape closes it.
+    const info = '[data-connect-card="live"] [data-connect-option-info="Everything"]';
+    assert.equal(await has(wc, info), true, 'an ⓘ on the option with a detail');
+    assert.equal(await has(wc, '[data-connect-card="live"] [data-connect-option-info="ChatGPT item 2"]'), false, 'no ⓘ without a detail');
+    const infoAt = await until(() => spot(wc, info), info);
+    wc.sendInputEvent({ type: 'mouseMove', x: infoAt.x, y: infoAt.y });
+    await until(() => js(wc, '(()=>{const p=document.querySelector("[data-connect-card=\\"live\\"] [data-connect-option-detail=\\"Everything\\"]");return !!p&&getComputedStyle(p).visibility==="visible"})()'), 'the popover, on hover');
+    assert.match(await text(wc, '[data-connect-option-detail="Everything"]'), /ChatGPT item 1 · 2026-10-01[\s\S]*ChatGPT item 3 · 2026-10-03/);
+    const inside = await js(wc, '(()=>{const r=document.querySelector("[data-connect-option-detail]").getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&r.width>0})()');
+    assert.equal(inside, true, 'the popover is inside the window');
+    await shot(wc, '3b-option-detail');
+    await click(wc, infoAt);
+    assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="Everything"]', 'aria-checked'), 'false', 'clicking the ⓘ ticks nothing');
+    assert.equal(await has(wc, '[data-connect-card="live"]'), true, 'nor submits');
+    await js(wc, 'document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
+    await until(async () => !(await has(wc, '[data-connect-option-detail]')), 'Escape closes it');
+    // Skip and Submit pinned to the bottom of the chat while the card is live.
+    assert.equal(await js(wc, 'getComputedStyle(document.querySelector("[data-connect-card=\\"live\\"] [data-connect-card-actions]")).position'), 'sticky');
     await press(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]');
     await press(wc, '[data-connect-card="live"] [data-connect-submit]');
     await until(async () => (await attr(wc, '[data-connect-import]', 'data-ready')) === '1', 'nothing more to ask', 400);
     assert.match(await text(wc, '[data-connect-import]'), /^Bring these in$/);
+    assert.equal(await footLook(), 'rgb(23, 23, 23) | rgb(23, 23, 23) | rgb(255, 255, 255)', 'Bring these in is the main button');
     assert.match(await text(wc, '[data-connect-foot-status]'), /\d+ of \d+/, 'how far the work is, at the foot');
     await pause(500); // the button's colour fades in
     await shot(wc, '4-chat-done');
