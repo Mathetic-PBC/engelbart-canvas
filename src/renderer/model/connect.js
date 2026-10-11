@@ -3,7 +3,7 @@
 // (src/main/connect), how an import's progress reads, what a step the agents hand the person says, and what the dock
 // shows. The sources and apps are src/shared/connect-sources.cjs.
 
-import { SOURCES, APPS, LOCAL_PDFS, recallApps, webApps } from '../../shared/connect-sources.cjs';
+import { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, recallApps, webApps } from '../../shared/connect-sources.cjs';
 
 export { SOURCES, APPS, LOCAL_PDFS };
 
@@ -146,7 +146,7 @@ export const NEEDS_SIGN_IN = 'Needs sign-in';
  * 'error' | '' }. `connectors`: app → { connected, pending } (main's connectors); `notes`: the Apple Notes prompt's state
  * ('' | 'asking' | 'allowed' | why not); `folder`: one the person picked for it.
  */
-export function rowLabel(app, { found = null, connectors = {}, notes = '', folder = '' } = {}) {
+export function rowLabel(app, { found = null, connectors = {}, notes = '', folder = '', signIn = null } = {}) {
   const spec = APPS[app];
   const seen = (found && found.apps && found.apps[app]) || {};
   if (folder) return { text: folder, tone: '' };
@@ -163,11 +163,74 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
     return notes ? { text: notes, tone: 'error' } : { text: '', tone: '' };
   }
   if (spec.reach === 'web') {
+    const said = signInLabel(signIn);
+    if (said) return said;
     if (seen.signedIn) return { text: 'signed in to Engelbart', tone: '' };
     return seen.found ? { text: NEEDS_SIGN_IN, tone: 'muted' } : { text: 'Not found', tone: 'muted' };
   }
   if (seen.found && seen.where === 'Sign in to add') return { text: NEEDS_SIGN_IN, tone: 'muted' }; // the scan's words for a web app found, not signed in
   return seen.found ? { text: seen.where || '', tone: '' } : { text: 'Not found', tone: 'muted' };
+}
+
+/**
+ * A web app's sign-in as checked when it was ticked (2026-10-10, main's connect-signin-check): { status: 'checking' |
+ * 'signed-in' | 'refused' | 'signed-out' | 'no-browser', browser } → its label, or null. A refused one offers Try again.
+ */
+function signInLabel(signIn) {
+  if (!signIn || !signIn.status) return null;
+  if (signIn.status === 'checking') return { text: 'Waiting for macOS…', tone: 'busy' };
+  if (signIn.status === 'signed-in') return { text: signIn.browser ? `✓ Signed in from ${signIn.browser}` : '✓ Signed in', tone: 'ok' };
+  if (signIn.status === 'signed-out') return { text: "You'll sign in after you start", tone: 'muted' };
+  if (signIn.status === 'refused') return { text: "macOS didn't allow it", tone: 'error', retry: true };
+  if (signIn.status === 'no-browser') return { text: `Needs ${READABLE_NAMES}`, tone: 'muted' };
+  return null;
+}
+
+/**
+ * The web apps ticked in `after` that were not in `before` (a row, a group's header, Select all) → [{ id, app }]: each one's
+ * sign-in is checked when it is ticked (2026-10-10), not when the run starts.
+ */
+export function newlyTickedWeb(before, after) {
+  const out = [];
+  for (const source of SOURCES) {
+    for (const app of source.apps) {
+      if ((APPS[app] || {}).reach !== 'web') continue;
+      if (ticked(after, source.id, app) && !ticked(before, source.id, app)) out.push({ id: source.id, app });
+    }
+  }
+  return out;
+}
+
+/** Rows waiting for the person's yes before macOS is asked, by browser ({ [browser]: [{ id, app }] }), with `rows` ({ id, app, browser }) added. */
+export function waitForYes(waiting, rows) {
+  const out = { ...waiting };
+  for (const { id, app, browser } of rows) {
+    const list = out[browser] || [];
+    if (!list.some((row) => row.app === app)) out[browser] = [...list, { id, app }];
+  }
+  return out;
+}
+
+const listed = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+
+/**
+ * The panel shown above the permissions before a browser's sign-ins are first used (2026-10-10: say why macOS will ask
+ * before it does), naming every ticked app waiting on it → { browser, rows, title, body } | null when none is still ticked.
+ */
+export function signInPanel(state, browser, rows = []) {
+  const still = rows.filter((row) => ticked(state, row.id, row.app));
+  if (!still.length) return null;
+  const apps = still.map((row) => row.app);
+  return {
+    browser,
+    rows: still,
+    title: `Use your ${browser} sign-ins for ${listed(apps)}?`,
+    body: [
+      `Engelbart can reuse the sign-ins ${browser} already has, so you don't log in again.`,
+      'macOS will ask for your Mac password next. Choose Always Allow so it only asks once.',
+      `Engelbart copies only the sign-ins for the apps you tick, and only reads from them. If you don't allow it, ${apps.length === 1 ? 'this app is' : 'these apps are'} skipped for now.`,
+    ],
+  };
 }
 
 /** The line under a row's name, when it needs one: macOS asks before Apple Notes. (What asking an assistant what it remembers is, the refine chat says.) */

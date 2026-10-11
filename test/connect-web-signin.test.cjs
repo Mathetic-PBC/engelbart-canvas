@@ -88,7 +88,7 @@ test('a sign-in never made times out; Skip cancels; a Keychain refusal is said',
   const pending = fixture({ after: 1e9 }).web.signIn('ChatGPT', { signal: controller.signal, onOpened: () => controller.abort() });
   assert.deepEqual(await pending, { status: 'cancelled' });
   const refused = fixture({ deny: true });
-  assert.deepEqual(await refused.web.signIn('ChatGPT'), { status: 'denied', browser: 'Chrome' });
+  assert.deepEqual(await refused.web.signIn('ChatGPT'), { status: 'denied', browser: 'Chrome', browserId: 'chrome' });
   assert.deepEqual(refused.calls.opened, [], 'no page opened once macOS said no');
 });
 
@@ -121,7 +121,7 @@ test('Safari only: no browser whose sign-ins can be read, and nothing opened', a
   const { web, calls } = machine({ browsers: {} });
   assert.deepEqual(await web.signIn('ChatGPT'), { status: 'no-browser' });
   assert.deepEqual([calls.opened, calls.openedIn], [[], []]);
-  assert.deepEqual(await web.signInQuiet('ChatGPT'), { signedIn: false, browser: '', refused: '' });
+  assert.deepEqual(await web.signInQuiet('ChatGPT'), { signedIn: false, browser: '', noBrowser: true });
 });
 
 test('Chrome refused by macOS, Firefox signed in: the sign-in comes from Firefox', async () => {
@@ -134,13 +134,31 @@ test('Chrome refused by macOS, Firefox signed in: the sign-in comes from Firefox
 test('signInQuiet never opens a page, and one round asks macOS once per browser', async () => {
   const { web, calls } = machine({ browsers: { chrome: { signedIn: true, deny: true } } });
   const denied = new Set();
-  assert.deepEqual(await web.signInQuiet('ChatGPT', { denied }), { signedIn: false, browser: '', refused: 'Chrome' });
-  assert.deepEqual(await web.signInQuiet('ChatGPT', { denied }), { signedIn: false, browser: '', refused: '' });
+  assert.deepEqual(await web.signInQuiet('ChatGPT', { denied }), { signedIn: false, browser: '', refused: 'Chrome', refusedId: 'chrome' });
+  assert.deepEqual(await web.signInQuiet('ChatGPT', { denied }), { signedIn: false, browser: '', refused: 'Chrome', refusedId: 'chrome' }, 'refused before: still named, macOS not asked');
   assert.deepEqual(calls.keychain, ['chrome']);
   assert.deepEqual([calls.opened, calls.openedIn], [[], []]);
   const fine = machine({ browsers: { chrome: { signedIn: true } } });
   assert.deepEqual(await fine.web.signInQuiet('ChatGPT'), { signedIn: true, browser: 'Chrome' });
   assert.deepEqual(await fine.web.signInQuiet('ChatGPT'), { signedIn: true, browser: '' }, 'held already');
+});
+
+test('signIn when the sign-in is held already (a check at tick time brought it over): signed in, nothing imported', async () => {
+  const { web, calls } = fixture();
+  assert.deepEqual(await web.signInQuiet('ChatGPT'), { signedIn: true, browser: 'Chrome' });
+  calls.imports.length = 0;
+  calls.names = 0;
+  assert.deepEqual(await web.signIn('ChatGPT'), { status: 'signed-in', browser: '', opened: false });
+  assert.deepEqual([calls.imports, calls.names, calls.opened], [[], 0, []], 'no import, no look at the browser, nothing opened');
+});
+
+test('keychainTarget: the browser macOS will be asked about, until it has been', async () => {
+  const { web } = machine({ browsers: { firefox: { signedIn: true }, chrome: {} } });
+  assert.deepEqual(web.keychainTarget('ChatGPT'), null, 'Firefox holds it: no Keychain');
+  const chrome = machine({ browsers: { chrome: { signedIn: true } } });
+  assert.deepEqual(chrome.web.keychainTarget('ChatGPT'), { id: 'chrome', name: 'Chrome' });
+  await chrome.web.signInQuiet('ChatGPT');
+  assert.equal(chrome.web.keychainTarget('ChatGPT'), null, 'asked once this run');
 });
 
 test('the line before macOS is first asked for a browser\'s sign-ins, gone once it has been', async () => {

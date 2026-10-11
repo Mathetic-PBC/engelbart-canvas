@@ -682,14 +682,15 @@ function keychainFailure(error) {
 
 /**
  * The default Keychain runner (CK-05): `security find-generic-password -w -s "<name>"`, through `run` (execFile; a fake in
- * the tests). A missing key rejects with `notFound`, a denial with `denied`, anything else with neither.
+ * the tests). A missing key rejects with `notFound`, a denial with `denied`, anything else with neither. `timeoutMs` how
+ * long macOS's prompt may wait for an answer (a minute; Connect's checks, which the person was told about, longer).
  */
-function keychainRunner(serviceName, run = execFile) {
+function keychainRunner(serviceName, run = execFile, { timeoutMs = 60000 } = {}) {
   return new Promise((resolve, reject) => {
-    run('/usr/bin/security', ['find-generic-password', '-w', '-s', serviceName], { timeout: 60000 }, (error, stdout) => {
+    run('/usr/bin/security', ['find-generic-password', '-w', '-s', serviceName], { timeout: timeoutMs }, (error, stdout) => {
       if (error) {
         const notFound = error.code === KEYCHAIN_NOT_FOUND;
-        // No answer within the minute it waits (the prompt left on screen, execFile's timeout kills it) counts as a no.
+        // No answer within the time it waits (the prompt left on screen, execFile's timeout kills it) counts as a no.
         const timedOut = !notFound && !!error.killed;
         const denied = !notFound && (timedOut || KEYCHAIN_DENIED.has(error.code) || /denied|user (?:name|interaction)|cancel/i.test(error.message || ''));
         const failure = new Error(notFound ? 'The Keychain has no such key' : denied ? 'Keychain access was denied' : 'The Keychain key could not be read');

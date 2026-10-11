@@ -496,6 +496,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('connect-authorize', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
   handle('connect-chose', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
   handle('connect-cancel-sign-in', (id, app) => cx().cancelSignIn(importId(id), appName(app)));
+  // A web app ticked on the choose screen (2026-10-10): what to say before macOS is asked for a browser's sign-ins
+  // ({ browser, note }, note '' when it won't be), then the check that brings the sign-in over, however long macOS's prompt
+  // waits ({ status: 'signed-in' | 'refused' | 'signed-out' | 'no-browser' | '' (can't be checked), browser }); `retry` is Try
+  // again after a refusal.
+  handle('connect-signin-note', (app) => cx().signInNote(appName(app)));
+  handle('connect-signin-check', (app, retry) => cx().signInCheck(appName(app), { retry: retry === true }));
   handle('connect-need', (id, needId, action) => cx().need(importId(id), str(needId, 'request id', 64), str(action, 'action', 8)));
   handle('connect-import', (id) => cx().importNow(importId(id)));
   handle('connect-stop', (id) => cx().stop(importId(id)));

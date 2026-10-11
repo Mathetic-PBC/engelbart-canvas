@@ -71,4 +71,7 @@ const recallApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => a
 /** The apps reached on the web, of `apps`. */
 const webApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => appOf(app) && appOf(app).reach === 'web');
 
-module.exports = { SOURCES, APPS, LOCAL_PDFS, SIGN_IN_SITES, SOURCE_IDS, sourceOf, appOf, sourceOfApp, recallApps, webApps };
+/** The browsers a web app's sign-in is brought over from (main/connect/web-signin.cjs), as the person is told when they have none of them. */
+const READABLE_NAMES = 'Chrome, Brave, Edge, Arc or Firefox';
+
+module.exports = { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, SIGN_IN_SITES, SOURCE_IDS, sourceOf, appOf, sourceOfApp, recallApps, webApps };

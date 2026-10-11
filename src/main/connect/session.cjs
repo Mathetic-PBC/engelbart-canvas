@@ -237,6 +237,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   const sessions = new Map();
   const readyNow = () => { try { return (ready() || []).filter((provider) => PROVIDERS.includes(provider)); } catch { return [...PROVIDERS]; } };
   const choiceFor = (provider) => connectChoice(provider, (() => { try { return models(); } catch { return null; } })());
+  // The web apps' sign-ins checked when they were ticked on the choose screen (2026-10-10, signInCheck), kept while Engelbart
+  // runs: the browsers macOS refused (not asked again until Try again), each app's last answer { status, browser, browserId },
+  // and the checks still waiting on macOS.
+  const signInDenied = new Set();
+  const signInChecked = new Map();
+  const signInChecking = new Map();
 
   const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended });
   const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, browser: need.browser || '', error: need.error, note: need.note || '', at: need.at });
@@ -620,32 +626,110 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (held.recall) dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${app} what it remembers` });
   }
 
+  /** A sign-in check's answer (webSignIn.signInQuiet) as the choose screen shows it → { status, browser, browserId }. */
+  function checkedAs(app, result) {
+    const was = signInChecked.get(app);
+    if (result && result.signedIn) return { status: 'signed-in', browser: result.browser || (was && was.status === 'signed-in' ? was.browser : ''), browserId: '' };
+    if (result && result.refused) return { status: 'refused', browser: result.refused, browserId: result.refusedId || '' };
+    if (result && result.noBrowser) return { status: 'no-browser', browser: '', browserId: '' };
+    return { status: 'signed-out', browser: '', browserId: '' };
+  }
+
   /**
-   * The ticked web apps' sign-ins, looked at before any survey starts (2026-10-09): each brought over from a browser that
-   * holds it, all together, at most SIGN_IN_CHECK_MS. A refusal from macOS, or no answer in time, counts as signed out, and
-   * one browser is asked once. → the apps still signed out
+   * What to tell the person before a ticked web app's check asks macOS for a browser's sign-ins → { browser, note }; note ''
+   * when macOS will not be asked (held already, Firefox, asked once already, or a browser it refused).
+   */
+  async function signInNote(app) {
+    if (!webSignIn || !webSignIn.supports(app) || !webSignIn.keychainTarget) return { browser: '', note: '' };
+    if (await webSignIn.signedIn(app).catch(() => false)) return { browser: '', note: '' };
+    let target = null;
+    try { target = webSignIn.keychainTarget(app); } catch { target = null; }
+    if (!target || signInDenied.has(target.id)) return { browser: target ? target.name : '', note: '' };
+    return { browser: target.name, note: webSignIn.keychainNote(app) || '' };
+  }
+
+  /**
+   * A web app ticked on the choose screen: its sign-in brought over from a browser holding it, however long macOS's prompt
+   * waits for the person (2026-10-10: they were told it would ask). → { status: 'signed-in'|'refused'|'signed-out'|
+   * 'no-browser', browser } (status '' for an app whose sign-in can't be checked), kept for the run's signInsFirst. `retry` (Try again) asks macOS again about the browser that
+   * refused it.
+   */
+  function signInCheck(app, { retry = false } = {}) {
+    if (!webSignIn || !webSignIn.supports(app)) return Promise.resolve({ status: '', browser: '' }); // not one it can check
+    if (signInChecking.has(app)) return signInChecking.get(app);
+    if (retry) { const was = signInChecked.get(app); if (was && was.browserId) signInDenied.delete(was.browserId); }
+    const checking = webSignIn.signInQuiet(app, { denied: signInDenied }).catch(() => ({ signedIn: false, browser: '' })).then((result) => {
+      const out = checkedAs(app, result);
+      signInChecked.set(app, out);
+      signInChecking.delete(app);
+      return { status: out.status, browser: out.browser };
+    });
+    signInChecking.set(app, checking);
+    return checking;
+  }
+
+  /**
+   * The ticked web apps' sign-ins, looked at before any survey starts (2026-10-09). One checked when it was ticked keeps
+   * that answer (a check still waiting on macOS is waited for); any other is brought over from a browser that holds it, all
+   * together, at most SIGN_IN_CHECK_MS, no answer counting as signed out. A browser macOS refused is not asked again.
+   * → { signedOut: Set, refused: Map(app → browser), signedIn: Map(app → browser, '' when held already) }
    */
   async function signInsFirst(s) {
-    const out = new Set();
+    const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map() };
     if (!webSignIn || !s.choices.permissions.browser) return out;
     const apps = Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps)
       .filter((app) => appOf(app) && appOf(app).reach === 'web' && webSignIn.supports(app));
     if (!apps.length) return out;
-    const denied = new Set();
     const results = new Map();
+    const waiting = [];
+    const quiet = [];
+    for (const app of apps) {
+      const known = signInChecked.get(app);
+      if (signInChecking.has(app)) waiting.push(signInChecking.get(app).then(() => { results.set(app, signInChecked.get(app)); }));
+      else if (known && known.status !== 'no-browser') results.set(app, known);
+      else quiet.push(app);
+    }
     let timer = null;
     const limit = new Promise((resolve) => { timer = setTimeout(resolve, deps.signInCheckMs || SIGN_IN_CHECK_MS); if (timer.unref) timer.unref(); });
-    await Promise.race([
-      Promise.all(apps.map((app) => webSignIn.signInQuiet(app, { denied }).catch(() => ({ signedIn: false })).then((result) => { results.set(app, result); }))),
-      limit,
+    await Promise.all([
+      Promise.all(waiting),
+      quiet.length ? Promise.race([
+        Promise.all(quiet.map((app) => webSignIn.signInQuiet(app, { denied: signInDenied }).catch(() => ({ signedIn: false })).then((result) => { results.set(app, checkedAs(app, result)); }))),
+        limit,
+      ]) : null,
     ]);
     clearTimeout(timer);
     for (const app of apps) {
       const result = results.get(app);
-      if (result && result.signedIn) logAction(s, null, result.browser ? `Signed in to ${app} from ${result.browser}` : `Signed in to ${app} already`);
-      else out.add(app);
+      if (result && result.status === 'signed-in') {
+        out.signedIn.set(app, result.browser);
+        logAction(s, null, result.browser ? `Signed in to ${app} from ${result.browser}` : `Signed in to ${app} already`);
+      } else if (result && result.status === 'refused') out.refused.set(app, result.browser);
+      else out.signedOut.add(app);
     }
     return out;
+  }
+
+  /** "ChatGPT", "ChatGPT and Claude", "ChatGPT, Claude and Gemini". */
+  const listed = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+
+  /** The apps grouped by the browser named for each, '' left out → [[browser, apps]]. */
+  function byBrowser(map) {
+    const out = new Map();
+    for (const [app, name] of map) if (name) out.set(name, [...(out.get(name) || []), app]);
+    return [...out];
+  }
+
+  /** "Skipped ChatGPT and Claude: macOS didn't allow Chrome's sign-ins. You can add them later from Add sources." */
+  const skippedLine = (name, apps) => `Skipped ${listed(apps)}: macOS didn't allow ${name || 'your browser'}'s sign-ins. You can add ${apps.length === 1 ? 'it' : 'them'} later from Add sources.`;
+
+  /** What the opener says of the sign-ins brought over and the apps macOS refused, in plain lines, or ''. */
+  function signInLines({ signedIn, refused }) {
+    const lines = byBrowser(signedIn).map(([name, apps]) => `Using your ${name} sign-ins for ${listed(apps)}.`);
+    const skipped = new Map();
+    for (const [app, name] of refused) skipped.set(name || '', [...(skipped.get(name || '') || []), app]);
+    for (const [name, apps] of skipped) lines.push(skippedLine(name, apps));
+    return lines.join('\n');
   }
 
   /** A sign-in card shown before the run asks for it: no agent waits on it; the app's survey does (releaseHeld). */
@@ -892,10 +976,18 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     opener.text = foundSentence(s);
     s.dirs = dirsOf(s);
     emit(s);
-    const signedOut = await signInsFirst(s);
+    const checked = await signInsFirst(s);
     if (s.stopped || s.suspended) return;
-    startWork(s, signedOut);
-    for (const app of signedOut) if (s.held.has(app)) upfrontNeed(s, app);
+    startWork(s, new Set([...checked.signedOut, ...checked.refused.keys()]));
+    for (const app of checked.signedOut) if (s.held.has(app)) upfrontNeed(s, app);
+    // An app whose browser macOS refused gets no card that can't succeed (2026-10-10): it is skipped for this run.
+    for (const [app, name] of checked.refused) {
+      skipApp(s, app);
+      releaseHeld(s, app, 'skip');
+      logAction(s, null, `Skipped ${app}: macOS didn't allow ${name || 'your browser'}'s sign-ins`);
+    }
+    const lines = signInLines(checked);
+    if (lines) opener.text = `${opener.text}\n\n${lines}`;
     emit(s);
     await interviewTurn(s, 'Start.');
   }
@@ -1092,9 +1184,17 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         if (found.closed || out.status === 'cancelled') return;
         if (out.status === 'signed-in') { logAction(s, null, `Signed in to ${found.app} from ${out.browser}`, 'You'); closeNeed(s, found, 'done'); return; }
         if (out.status === 'unsupported') { showWindow(s, found, `${out.browser}'s sign-ins can't be brought into Engelbart: sign in here instead.`); return; }
+        // macOS refused: a card that asks again can't succeed (2026-10-10), so the app is skipped and the chat says so.
+        // TODO: offer a sign-in window in Engelbart's own browser instead (not in this build).
+        if (out.status === 'denied') {
+          if (out.browserId) signInDenied.add(out.browserId);
+          closeNeed(s, found, 'skip');
+          s.chat.push({ role: 'agent', text: skippedLine(out.browser, [found.app]), ask: null, authorize: null, at: now() });
+          emit(s);
+          return;
+        }
         found.error = out.status === 'no-browser' ? `Signing in to ${found.app} needs ${READABLE_NAMES}.`
-          : out.status === 'denied' ? `macOS didn't let Engelbart use ${out.browser}'s sign-ins. Log in to ask again, or Skip.`
-            : out.status === 'timeout' ? `Still not signed in to ${found.app} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
+          : out.status === 'timeout' ? `Still not signed in to ${found.app} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
         emit(s);
       });
       return snapshot(s);
@@ -1401,7 +1501,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   return {
-    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn,
+    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck,
     setProvider: (id, provider) => { const s = get(id); setProvider(s, provider); emit(s); return snapshot(s); },
     // the first build's name for authorize
     connected: (id, input) => authorize(id, input),

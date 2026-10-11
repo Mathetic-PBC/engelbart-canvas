@@ -925,7 +925,8 @@ if (!hasSingleInstanceLock) {
     const appleNotes = createAppleNotes();
     // A web app's sign-in in the person's default browser, brought over into the Stage's session the agents use
     // (./connect/web-signin.cjs). Its own importer remembers a browser's Keychain key while Engelbart runs, so macOS asks once
-    // however often it looks again.
+    // however often it looks again. The person was told macOS would ask (the choose screen's panel, 2026-10-10), so its
+    // prompt waits ten minutes for them rather than one.
     const keychainKeys = new Map();
     const webSignIn = createWebSignIn({
       cookieImport: process.platform === 'darwin' ? createCookieImport({
@@ -934,7 +935,7 @@ if (!hasSingleInstanceLock) {
         userDataDir: app.getPath('userData'),
         getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
         keychain: (name) => {
-          if (!keychainKeys.has(name)) keychainKeys.set(name, keychainRunner(name).catch((error) => { keychainKeys.delete(name); throw error; }));
+          if (!keychainKeys.has(name)) keychainKeys.set(name, keychainRunner(name, undefined, { timeoutMs: 10 * 60_000 }).catch((error) => { keychainKeys.delete(name); throw error; }));
           return keychainKeys.get(name);
         },
       }) : null,

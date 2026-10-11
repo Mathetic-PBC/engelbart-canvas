@@ -5,7 +5,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, NEEDS_SIGN_IN, consentFor, permissionsOf } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -105,7 +105,7 @@ const LABEL_COLOR = { muted: '#c9c9c9', busy: '#a35200', error: '#e70022', '': '
  * tones). The plain words (a folder, "signed in", "6 on this Mac") are the row's tooltip only. The right edge is only the
  * checkboxes. A row not found is dimmed whole (`dim`).
  */
-function RowText({ name, on, sub, label, dim = false, tip: extra = '' }) {
+function RowText({ name, on, sub, label, dim = false, tip: extra = '', onRetry = null }) {
   const tone = (label && label.text && label.tone) || '';
   const shown = label && label.text && tone ? label.text : ''; // muted ("Needs sign-in", "Not found"), busy, error
   const line = [shown, sub].filter(Boolean).join(' · ');
@@ -114,19 +114,25 @@ function RowText({ name, on, sub, label, dim = false, tip: extra = '' }) {
   return (
     <span title={tip} style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
       <span style={{ font: '13px/1.2 var(--font-sans)', color: dim ? '#8f8f8f' : on ? '#171717' : '#4d4d4d', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{name}</span>
-      {line && <span data-connect-row-label={shown ? tone : undefined} data-connect-row-sub={sub ? '1' : undefined} style={{ font: '11.5px/1.35 var(--font-sans)', color, overflowWrap: 'anywhere' }}>{line}</span>}
+      {line && (
+        <span data-connect-row-label={shown ? tone : undefined} data-connect-row-sub={sub ? '1' : undefined} style={{ font: '11.5px/1.35 var(--font-sans)', color, overflowWrap: 'anywhere' }}>
+          {line}
+          {/* macOS refused a browser's sign-ins (2026-10-10): asks it again. A link in the row's button, not a button in it. */}
+          {label && label.retry && onRetry && <> · <span role="link" tabIndex={0} data-connect-retry={name} onClick={(event) => { event.stopPropagation(); onRetry(); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onRetry(); } }} style={{ color: '#171717', textDecoration: 'underline', cursor: 'pointer' }}>Try again</span></>}
+        </span>
+      )}
     </span>
   );
 }
 
 const notFound = (label) => !!label && label.text === 'Not found';
 
-function AppRow({ name, on, onToggle, label, sub = '', tip = '', icon = null, data = name }) {
+function AppRow({ name, on, onToggle, label, sub = '', tip = '', icon = null, data = name, onRetry = null }) {
   const dim = notFound(label);
   return (
     <button type="button" className="hov-wash" data-connect-app={data} data-connect-not-found={dim ? '1' : undefined} onClick={onToggle} style={subRow}>
       <span style={{ margin: '0 1px', display: 'flex', color: '#4d4d4d', opacity: dim ? 0.45 : 1 }}>{icon || logoOf(name) || (name === LOCAL_PDFS ? FOLDER : <span style={{ width: 14 }} />)}</span>
-      <RowText name={name} on={on} sub={sub} label={label} dim={dim} tip={tip} />
+      <RowText name={name} on={on} sub={sub} label={label} dim={dim} tip={tip} onRetry={onRetry} />
       <Box on={on} dim={dim} />
     </button>
   );
@@ -591,6 +597,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [leaves, setLeaves] = React.useState(false); // "What leaves my Mac?" opened
   const [notesState, setNotesState] = React.useState(''); // '' | 'asking' | 'allowed' | <why not>
   const [connectorStatus, setConnectorStatus] = React.useState({}); // app → { connected, pending }
+  const [signIns, setSignIns] = React.useState({}); // web app → its sign-in as checked when ticked: { status, browser }
+  const [waitingYes, setWaitingYes] = React.useState({}); // browser → [{ id, app }] ticked, waiting on its panel's Continue
   const [providers, setProviders] = React.useState(null);
   const [provider, setProvider] = React.useState(null);
   const [toolSnap, setToolSnap] = React.useState(null);
@@ -673,7 +681,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const localRepos = found && Array.isArray(found.localRepos) ? found.localRepos : [];
   const repoPaths = () => [...localRepos.map((repo) => repo.path), ...extraRepos];
   const setRow = (id, row, on) => setPicks((now) => tickRow(now, id, row, on, repoPaths()));
-  const toggleGroup = (id) => setPicks((now) => tickGroup(now, id, found));
+  const toggleGroup = (id) => { const next = tickGroup(picks, id, found); setPicks(next); checkTicked(newlyTickedWeb(picks, next)); };
+  const toggleAll = (on) => { const next = tickAll(picks, found, on); setPicks(next); checkTicked(newlyTickedWeb(picks, next)); };
   const expand = (id) => setPicks((now) => ({ ...now, open: { ...now.open, [id]: !now.open[id] } }));
   const pickDir = () => window.terminalAPI.pickDirectory(undefined).catch(() => null);
   const toggleApp = async (id, app) => {
@@ -701,8 +710,40 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       if (done) setFound((now) => ({ ...now, apps: { ...now.apps, [app]: { ...((now.apps || {})[app] || {}), found: true, where: 'signed in' } } }));
       else setRow(id, app, false);
     }
-    // A web app not signed in stays ticked: the run asks for its sign-in in Engelbart's browser (a need), as the Stage does.
+    else if (spec.reach === 'web') checkTicked([{ id, app }]);
+    // A web app not signed in stays ticked: the run asks for its sign-in after it starts (a card), as the Stage does.
   };
+  // A web app ticked (with "Use my … subscription" on): its sign-in is brought over from the person's browser now
+  // (2026-10-10), and the row says how it went. When macOS would ask for that browser's sign-ins, a panel says so first and
+  // the check waits for its Continue; otherwise it starts at once. Rows ticked from the start are checked when the run is.
+  const checkSignIn = ({ id, app }, retry = false) => {
+    setSignIns((now) => ({ ...now, [app]: { status: 'checking', browser: '' } }));
+    return api.connectSignInCheck(app, retry).then((out) => {
+      if (!out || !out.status) { setSignIns((now) => { const next = { ...now }; delete next[app]; return next; }); return; }
+      setSignIns((now) => ({ ...now, [app]: out }));
+      if (out.status === 'refused') setRow(id, app, false); // macOS said no: unticked, with Try again
+    }).catch(() => { setSignIns((now) => { const next = { ...now }; delete next[app]; return next; }); });
+  };
+  const checkTicked = async (rows) => {
+    if (!consent || !rows.length) return;
+    const said = await Promise.all(rows.map((row) => api.connectSignInNote(row.app).then((out) => ({ ...row, ...(out || {}) })).catch(() => ({ ...row, note: '' }))));
+    const ask = said.filter((row) => row.note && row.browser);
+    if (ask.length) setWaitingYes((now) => waitForYes(now, ask));
+    said.filter((row) => !(row.note && row.browser)).forEach((row) => checkSignIn(row));
+  };
+  // Continue: one macOS prompt for the browser (main asks once and remembers its answer); the apps waiting on it are checked.
+  const allowSignIns = (browser) => {
+    const panel = signInPanel(picks, browser, waitingYes[browser]);
+    setWaitingYes((now) => { const next = { ...now }; delete next[browser]; return next; });
+    if (panel) panel.rows.forEach((row) => checkSignIn(row));
+  };
+  // Not now: the apps waiting on that browser are unticked.
+  const declineSignIns = (browser) => {
+    const rows = waitingYes[browser] || [];
+    setWaitingYes((now) => { const next = { ...now }; delete next[browser]; return next; });
+    setPicks((now) => rows.reduce((next, row) => tickRow(next, row.id, row.app, false), now));
+  };
+  const retrySignIn = (id, app) => { setRow(id, app, true); checkSignIn({ id, app }, true); };
   const pickPapers = async () => {
     const chosen = await pickDir();
     if (!chosen) return;
@@ -756,6 +797,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     if (!anyOn) { setError('Pick at least one source.'); return; }
     if (!provider) { setError('Sign in to Claude Code or Codex first.'); return; }
     setError('');
+    // A panel still waiting counts as Continue: its checks start, and the run waits for them (main's signInsFirst).
+    for (const browser of Object.keys(waitingYes)) allowSignIns(browser);
     const chosen = { papers: [...folders.papers], code: localPicked(picks) };
     for (const source of SOURCES) for (const app of source.apps) if (appFolders[app] && ticked(picks, source.id, app) && app !== LOCAL_PDFS) chosen[source.id] = [...(chosen[source.id] || []), appFolders[app]];
     if (!ticked(picks, 'papers', LOCAL_PDFS)) chosen.papers = [];
@@ -858,7 +901,24 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       <style>{CSS}</style>
 
       {view === 'choose' && (() => {
-        const label = (app) => rowLabel(app, { found, connectors: connectorStatus, notes: notesState, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' });
+        // A web app's check is said while it is ticked; signed in and refused (unticked, with Try again) also when it is not.
+        const signInOf = (id, app) => { const seen = signIns[app]; return seen && (ticked(picks, id, app) || seen.status === 'signed-in' || seen.status === 'refused') ? seen : null; };
+        const label = (app, id = '') => rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' });
+        const panels = Object.keys(waitingYes).map((browser) => signInPanel(picks, browser, waitingYes[browser])).filter(Boolean);
+        const signInPanels = panels.length > 0 && (
+          <div data-connect-signin-panels="1" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {panels.map((panel) => (
+              <div key={panel.browser} data-connect-signin-panel={panel.browser} role="group" aria-label={panel.title} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '14px 16px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fff' }}>
+                <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{panel.title}</span>
+                {panel.body.map((text) => <span key={text} style={{ font: '12.5px/1.5 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{text}</span>)}
+                <span style={{ display: 'flex', alignItems: 'center', gap: 14, paddingTop: 4 }}>
+                  <button type="button" data-connect-signin-continue={panel.browser} onClick={() => allowSignIns(panel.browser)} style={{ padding: '7px 14px', border: 0, borderRadius: 999, background: '#171717', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#fff' }}>Continue</button>
+                  <button type="button" className="hov-ink" data-connect-signin-not-now={panel.browser} onClick={() => declineSignIns(panel.browser)} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Not now</button>
+                </span>
+              </div>
+            ))}
+          </div>
+        );
         const github = (found && found.github) || {};
         const githubLabel = github.found ? { text: `${github.where || 'signed in'}${repoCount != null ? ` · ${repoCount} repo${repoCount === 1 ? '' : 's'}` : ''}`, tone: '' } : { text: NEEDS_SIGN_IN, tone: 'muted' };
         const reposOn = localPicked(picks).length;
@@ -882,7 +942,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
           <div style={{ flex: 'none', display: 'flex', flexDirection: 'column', margin: '0 -8px' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 6, height: 28, padding: '0 8px', font: '12.5px/1 var(--font-sans)', color: '#8f8f8f' }}>
               Sources<span style={{ fontSize: 9 }}>▾</span><span style={{ flex: 1 }} />
-              <button type="button" className="bart-text" data-connect-all="1" onClick={() => setPicks((now) => tickAll(now, found, !allOn))}>{allOn ? 'Clear' : 'Select all'}</button>
+              <button type="button" className="bart-text" data-connect-all="1" onClick={() => toggleAll(!allOn)}>{allOn ? 'Clear' : 'Select all'}</button>
             </div>
             {SOURCES.map((source) => {
               const state = groupState(picks, source.id);
@@ -900,7 +960,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                   {open && (
                     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 1, padding: '1px 0 6px 26px' }}>
                       <span style={{ position: 'absolute', left: 33, top: 2, bottom: 8, width: 1, background: '#eaeaea' }} />
-                      {source.apps.map((app) => <AppRow key={app} name={app} label={label(app)} sub={rowSub(app)} on={ticked(picks, source.id, app)} onToggle={() => toggleApp(source.id, app)} />)}
+                      {source.apps.map((app) => <AppRow key={app} name={app} label={label(app, source.id)} sub={rowSub(app)} on={ticked(picks, source.id, app)} onToggle={() => toggleApp(source.id, app)} onRetry={() => retrySignIn(source.id, app)} />)}
                       {source.id === 'sites' && <AppRow name={BROWSER_ROW} icon={GLOBE} label={found && found.sites && found.sites.found ? { text: found.sites.where, tone: '' } : { text: 'Not found', tone: 'muted' }} on={ticked(picks, 'sites', BROWSER_ROW)} onToggle={() => setRow('sites', BROWSER_ROW, !ticked(picks, 'sites', BROWSER_ROW))} />}
                       {source.id === 'papers' && (folders.papers.length
                         ? folders.papers.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, papers: [] }))} />)
@@ -980,6 +1040,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                 {/* Right under the sources, after Code (2026-10-09, David: "should be under Sources (specifically under
                     code)"), scrolling with them rather than pinned above the foot. */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 18 }}>
+                  {signInPanels}
                   {permissionsBox}
                   {!ready && <AgentSetup snapshot={toolSnap} />}
                 </div>
@@ -995,6 +1056,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             {header('What should go in your library?')}
             <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: '4px 20px 16px' }}>
               {sourcesList}
+              {signInPanels}
               {permissionsBox}
               {!ready && <AgentSetup snapshot={toolSnap} />}
             </div>

@@ -15,9 +15,10 @@
 // can be read is used instead — one already holding the app's sign-in, else Chrome, else the first one found — with the page
 // opened there (`openIn`, `open -b <bundle id>`). With none installed, 'no-browser': the caller says which browsers it needs.
 // A Keychain refusal on one browser goes on to the next that holds the sign-in (Firefox needs no Keychain); only when none is
-// left is it 'denied'. `signInQuiet` is the same without ever opening a page: the check made before the survey starts.
+// left is it 'denied'. `signInQuiet` is the same without ever opening a page: the check made when a web app is ticked on the
+// choose screen (2026-10-10, after `keychainTarget` says which browser macOS will be asked about) or before the survey starts.
 
-const { appOf } = require('../../shared/connect-sources.cjs');
+const { appOf, READABLE_NAMES } = require('../../shared/connect-sources.cjs');
 
 // The cookie that holds each app's sign-in: the registrable domain it is on, and its name.
 const SIGN_IN_COOKIES = Object.freeze({
@@ -65,14 +66,11 @@ function browserIdOf(name) {
   return hit ? hit[1] : null;
 }
 
-/** The browsers a sign-in is brought over from, as the person is told when they have none of them. */
-const READABLE_NAMES = 'Chrome, Brave, Edge, Arc or Firefox';
-
 /**
  * `cookieImport` the importer (createCookieImport, or null off macOS); `defaultBrowser()` macOS's name for the default
  * browser; `openExternal(url)` opens a page there; `openIn(browserId, url)` opens one in another installed browser;
  * `getSession()` the Stage's session (where the agents' sign-ins are).
- * → { supports, signedIn, browserName, signIn, signInQuiet, keychainNote }
+ * → { supports, signedIn, browserName, signIn, signInQuiet, keychainTarget, keychainNote }
  */
 function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal, openIn = null, getSession, pollMs = POLL_MS, timeoutMs = TIMEOUT_MS, sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }) }) {
   // The Chromium browsers whose Keychain key has been asked for while Engelbart runs (keychainNote).
@@ -131,16 +129,18 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   }
 
   /**
-   * The app's sign-in from the first browser holding it, brought into Engelbart's browser → { browser } | { refused } | {}.
-   * A browser in `denied` is not asked again; one that refuses is added to it and the next is tried.
+   * The app's sign-in from the first browser holding it, brought into Engelbart's browser → { browser } | { refused,
+   * refusedId } | {}. A browser in `denied` is not asked again; one that refuses is added to it and the next is tried. A
+   * browser holding the sign-in that macOS refused, now or before, is the one named when none other had it.
    */
   async function bringOver(app, sources, denied) {
     const domains = domainsOf(app);
-    let refused = '';
+    let refused = null;
     let failure = null;
     for (const source of sources) {
-      if (denied.has(source.id)) continue;
-      for (const profile of holders(app, source)) {
+      const holding = holders(app, source);
+      if (denied.has(source.id)) { if (holding.length) refused = refused || source; continue; }
+      for (const profile of holding) {
         try {
           await oneAtATime(source.id, () => {
             if (denied.has(source.id)) throw Object.assign(new Error('Keychain access was denied'), { denied: true });
@@ -148,31 +148,33 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
             return cookieImport.import({ browser: source.id, profile: profile.id, domains, quiet: true });
           });
         } catch (error) {
-          if (error && error.denied) { if (!denied.has(source.id)) refused = refused || source.name; denied.add(source.id); break; }
+          if (error && error.denied) { refused = refused || source; denied.add(source.id); break; }
           failure = failure || error;
           continue;
         }
         if (await signedIn(app)) return { browser: source.name };
       }
     }
-    if (refused) return { refused };
+    if (refused) return { refused: refused.name, refusedId: refused.id };
     if (failure) throw failure;
     return {};
   }
 
   /**
    * Sign in to `app` → { status: 'signed-in', browser, opened } | { status: 'timeout', browser } | { status: 'cancelled' } |
-   * { status: 'denied', browser } (macOS refused every browser holding it) | { status: 'no-browser' } (none can be read) |
-   * { status: 'unsupported', browser } (no known sign-in cookie). `onOpened(browser)` once the sign-in page is open there.
+   * { status: 'denied', browser, browserId } (macOS refused every browser holding it) | { status: 'no-browser' } (none can
+   * be read) | { status: 'unsupported', browser } (no known sign-in cookie). `onOpened(browser)` once the sign-in page is
+   * open there. Held already (a check when it was ticked brought it over): signed in, and macOS is not asked.
    */
   async function signIn(app, { signal = null, onOpened = () => {} } = {}) {
+    if (await signedIn(app)) return { status: 'signed-in', browser: '', opened: false };
     if (!supports(app) || !cookieImport) return { status: 'unsupported', browser: browserName() };
     const sources = readable();
     if (!sources.length) return { status: 'no-browser' };
     const denied = new Set();
     const first = await bringOver(app, sources, denied);
     if (first.browser) return { status: 'signed-in', browser: first.browser, opened: false };
-    if (first.refused) return { status: 'denied', browser: first.refused };
+    if (first.refused) return { status: 'denied', browser: first.refused, browserId: first.refusedId };
     if (signal && signal.aborted) return { status: 'cancelled' };
     const target = opener(sources);
     if (!target) return { status: 'no-browser' };
@@ -186,32 +188,44 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
       if (signal && signal.aborted) return { status: 'cancelled' };
       const found = await bringOver(app, sources, denied);
       if (found.browser) return { status: 'signed-in', browser: found.browser, opened: true };
-      if (found.refused) return { status: 'denied', browser: found.refused };
+      if (found.refused) return { status: 'denied', browser: found.refused, browserId: found.refusedId };
     }
     return { status: 'timeout', browser: target.name };
   }
 
   /**
    * Whether the app's sign-in is in Engelbart's browser or can be brought over without opening anything → { signedIn,
-   * browser, refused }. `denied` is shared across one round of checks, so macOS is never asked twice about one browser.
+   * browser, refused, refusedId, noBrowser }. `denied` is shared across checks (the choose screen's lasts while Engelbart
+   * runs), so macOS is never asked twice about one browser; `noBrowser` when no browser's cookies can be read.
    */
   async function signInQuiet(app, { denied = new Set() } = {}) {
     if (!supports(app) || !cookieImport) return { signedIn: false, browser: '' };
     if (await signedIn(app)) return { signedIn: true, browser: '' };
-    const found = await bringOver(app, readable(), denied).catch(() => ({}));
-    return found.browser ? { signedIn: true, browser: found.browser } : { signedIn: false, browser: '', refused: found.refused || '' };
+    const sources = readable();
+    if (!sources.length) return { signedIn: false, browser: '', noBrowser: true };
+    const found = await bringOver(app, sources, denied).catch(() => ({}));
+    return found.browser ? { signedIn: true, browser: found.browser } : { signedIn: false, browser: '', refused: found.refused || '', refusedId: found.refusedId || '' };
+  }
+
+  /**
+   * The browser macOS will be asked about to bring the app's sign-in over, when it has not been yet while Engelbart runs →
+   * { id, name } | null: the first holding it, else where its sign-in page would open; Firefox needs no Keychain.
+   */
+  function keychainTarget(app) {
+    if (!supports(app) || !cookieImport) return null;
+    const sources = readable();
+    const target = sources.find((source) => holders(app, source).length) || opener(sources);
+    if (!target || target.family !== 'chromium' || asked.has(target.id)) return null;
+    return { id: target.id, name: target.name };
   }
 
   /** What to tell the person before Log in first asks macOS for a browser's sign-ins this run, or ''. */
   function keychainNote(app) {
-    if (!supports(app) || !cookieImport) return '';
-    const sources = readable();
-    const target = sources.find((source) => holders(app, source).length) || opener(sources);
-    if (!target || target.family !== 'chromium' || asked.has(target.id)) return '';
-    return `macOS will ask to use ${target.name}'s sign-ins. Choose Always Allow so it doesn't ask again.`;
+    const target = keychainTarget(app);
+    return target ? `macOS will ask to use ${target.name}'s sign-ins. Choose Always Allow so it doesn't ask again.` : '';
   }
 
-  return { supports, signedIn, browserName, signIn, signInQuiet, keychainNote };
+  return { supports, signedIn, browserName, signIn, signInQuiet, keychainTarget, keychainNote };
 }
 
 module.exports = { createWebSignIn, SIGN_IN_COOKIES, SIGN_IN_PAGES, READABLE_NAMES, domainsOf, browserIdOf };
