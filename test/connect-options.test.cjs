@@ -50,7 +50,7 @@ test('optionOf keeps an option\'s detail with its line breaks, cut at 600 charac
 });
 
 test('the librarian is asked for an option\'s detail, from <found> only', () => {
-  assert.match(INTERVIEW_SYSTEM_PROMPT, /"options": \[\{"label": "<short>", "why": "<optional, a few words>", "detail": "<optional, from <found> only:[^"]*>"\}\]/, 'the ask format');
+  assert.match(INTERVIEW_SYSTEM_PROMPT, /"options": \[\{"label": "<short>", "why": "<optional, a few words>", "detail": "<optional, from <found> only:[^"]*>", "checked": true \| false \(multi only[^)]*\)\}\]/, 'the ask format');
   const rule = INTERVIEW_SYSTEM_PROMPT.split('\n').find((text) => text.startsWith('- Fill an option\'s "detail"'));
   assert.ok(rule, 'a question rule about detail');
   assert.match(rule, /from <found> only, never invent/);
@@ -59,6 +59,60 @@ test('the librarian is asked for an option\'s detail, from <found> only', () => 
   assert.match(rule, /up to about 8, then "and N more"/);
   assert.match(rule, /For a single item: its title, its kind, its date and where it is/);
   assert.match(rule, /Leave "detail" out when the label says it all/);
+});
+
+test('optionOf keeps "checked" as a boolean on a "multi" and drops it on a "single" (MATH-122)', () => {
+  assert.deepEqual(optionOf({ label: 'Research', why: '48 notes', checked: true }, true), { label: 'Research', why: '48 notes', detail: '', checked: true });
+  assert.equal(optionOf({ label: 'Daily', checked: false }, true).checked, false);
+  for (const value of [undefined, 'yes', 1, null]) assert.equal(optionOf({ label: 'Daily', checked: value }, true).checked, false, `${JSON.stringify(value)} is not checked`);
+  assert.equal(optionOf('Just a label', true).checked, false);
+  assert.equal('checked' in optionOf({ label: 'Code only', checked: true }), false, 'a single has no checked');
+  assert.equal('checked' in optionOf({ label: 'Code only', checked: true }, false), false);
+  const choices = { sources: { notes: { on: true, apps: ['Obsidian'] } } };
+  const options = [{ label: 'Research', checked: true }, { label: 'Essays', checked: true }, { label: 'Daily', checked: false }];
+  assert.deepEqual(readReply(JSON.stringify({ ask: { source: 'notes', kind: 'multi', title: 'Which folders?', options } }), choices).ask.options.map((option) => option.checked), [true, true, false]);
+  assert.ok(readReply(JSON.stringify({ ask: { source: 'notes', kind: 'single', title: 'Which account?', options } }), choices).ask.options.every((option) => !('checked' in option)));
+});
+
+test('the librarian asks "multi" by default, with its recommendation checked and no "Everything" beside the parts', () => {
+  const rule = INTERVIEW_SYSTEM_PROMPT.split('\n').find((text) => text.startsWith('- Prefer options'));
+  assert.match(rule, /"multi" \(pick any\) is the default/);
+  assert.match(rule, /"single" \(pick one\) only when the answers exclude each other/);
+  assert.match(rule, /is always "multi"/);
+  const checked = INTERVIEW_SYSTEM_PROMPT.split('\n').find((text) => text.startsWith('- In a "multi", set "checked": true'));
+  assert.ok(checked, 'a rule about checked');
+  assert.match(checked, /No "Everything" or "Everything but…" option next to the parts/);
+  assert.doesNotMatch(INTERVIEW_SYSTEM_PROMPT, /make it the first option \("Everything but/);
+  assert.doesNotMatch(INTERVIEW_SYSTEM_PROMPT, /multiple choice/);
+});
+
+const pickedOn = (html) => [...html.matchAll(/data-connect-option="([^"]*)"[^>]*aria-checked="true"/g)].map((match) => match[1]);
+
+test('a "multi" with two checked options starts with both ticked and sends both on Submit, without a click', () => {
+  const recommended = { source: 'notes', kind: 'multi', title: 'Which folders?', options: [
+    { label: 'Research', why: '48 notes', detail: '', checked: true },
+    { label: 'Daily', why: '180 notes', detail: '', checked: false },
+    { label: 'Essays', why: '12 notes', detail: '', checked: true },
+  ] };
+  const answers = [];
+  const html = render({ ask: recommended, live: true, onAnswer: (answer) => answers.push(answer) });
+  assert.deepEqual(pickedOn(html), ['Research', 'Essays']);
+  const submit = elements.find((element) => element.type === 'button' && element.props['data-connect-submit'] === '1');
+  assert.equal(submit.props.disabled, false, 'Submit is ready at once');
+  submit.props.onClick();
+  assert.deepEqual(answers, [{ picked: ['Research', 'Essays'] }]);
+  // With nothing checked, Submit waits for a pick as before.
+  render({ ask: { ...recommended, options: recommended.options.map((option) => ({ ...option, checked: false })) }, live: true, onAnswer: () => {} });
+  assert.equal(elements.find((element) => element.type === 'button' && element.props['data-connect-submit'] === '1').props.disabled, true);
+});
+
+test('a "single"\'s options and an answered card\'s options never come checked', () => {
+  const single = { source: 'email', kind: 'single', title: 'Which account?', options: [{ label: 'a@x.edu', why: '', detail: '', checked: true }, { label: 'b@y.com', why: '', detail: '' }] };
+  const html = render({ ask: single, live: true, onAnswer: () => {} });
+  assert.deepEqual(pickedOn(html), []);
+  assert.equal(elements.find((element) => element.type === 'button' && element.props['data-connect-submit'] === '1').props.disabled, true);
+  const answered = { source: 'notes', kind: 'multi', title: 'Which folders?', options: [{ label: 'Research', why: '', detail: '', checked: true }] };
+  assert.deepEqual(pickedOn(render({ ask: answered, live: false, onAnswer: () => {} })), []);
 });
 
 test('the foot button: quiet while it says "Skip the rest", the page\'s main button once it says "Bring these in"', () => {

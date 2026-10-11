@@ -553,11 +553,15 @@ function ConnectOption({ option, many, on, live, onPick, onSubmitOne }) {
   );
 }
 
-/** The librarian's question as a card: one option per line (round mark: one; square: several), its why after it. */
+/**
+ * The librarian's question as a card: one option per line (round mark: one; square: several), its why after it. A live
+ * "multi" starts with the options the librarian recommends ticked (`checked`, MATH-122), so Submit is ready at once; an
+ * answered card and a "single" start with none.
+ */
 export function QuestionCard({ ask, live, onAnswer }) {
-  const [picks, setPicks] = React.useState([]);
-  const [note, setNote] = React.useState('');
   const many = ask.kind === 'multi';
+  const [picks, setPicks] = React.useState(() => (live && many ? ask.options.filter((option) => option.checked === true).map((option) => option.label) : []));
+  const [note, setNote] = React.useState('');
   const open = ask.kind === 'open';
   const ready = open ? !!note.trim() : picks.length > 0 || !!note.trim();
   const submit = (labels = picks) => { if (!live) return; if (open) { if (note.trim()) onAnswer({ text: note.trim() }); return; } if (labels.length) onAnswer({ picked: labels, ...(note.trim() ? { text: note.trim() } : {}) }); else if (note.trim()) onAnswer({ text: note.trim() }); };

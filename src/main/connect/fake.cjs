@@ -2,7 +2,8 @@
 
 // Connect your library's agents without a model (ENGELBART_CONNECT_FAKE=1, or ENGELBART_BART_FAKE=1), for scripted runs
 // and tests: the librarian offers the button an app still needs, waits for a survey when nothing else is left, and asks
-// one question per picked source (each option on its own line, with a why), handing the source over once answered; a
+// one question per picked source (each option on its own line, with a why; a survey's items as a "multi" with the first
+// ticked), handing the source over once answered; a
 // survey reports three items; a recall saves a short profile; an import brings in a few notes from the vault, a few
 // Claude Code chats or one note per web app through the real tools, so the progress, the staging and the project's notes
 // are real; the memory agent drafts MEMORY.md with two planted secrets and the secrets check takes out one of them (the
@@ -41,7 +42,9 @@ function interviewReply(s, message) {
     const label = LABELS[source];
     const surveyed = choice.apps.map((app) => found[app] && found[app].survey && found[app].survey.items).find((items) => Array.isArray(items) && items.length);
     state.asked.push({ source, label });
-    const options = surveyed ? [{ label: 'Everything', why: '', detail: surveyed.map((item) => [item.label, item.date, item.where].filter(Boolean).join(' · ')).join('\n') }, ...surveyed.map((item) => ({ label: item.label, why: item.why || '' }))] : [{ label: 'Everything', why: 'all of it' }, { label: 'Only the last 30 days', why: '' }, { label: 'Leave it out', why: '' }];
+    // A survey's items come as a "multi" with the first ticked (the librarian's recommendation, MATH-122); otherwise a
+    // "single" whose first option is the recommended one.
+    const options = surveyed ? surveyed.map((item, i) => ({ label: item.label, why: item.why || '', checked: i === 0 })) : [{ label: 'Everything', why: 'all of it' }, { label: 'Only the last 30 days', why: '' }, { label: 'Leave it out', why: '' }];
     return { say: dispatch.length ? `Bringing in ${dispatch[0].label} now.` : 'Let me check a few things.', ask: { source, kind: surveyed ? 'multi' : 'single', title: `What from ${label.toLowerCase()}?`, options }, authorize: null, dispatch, waiting: false, done: false };
   }
   if (waitFor) return { say: `${dispatch.length ? `Bringing in ${dispatch[0].label} now. ` : ''}Looking through your ${LABELS[waitFor].toLowerCase()} now.`, ask: null, authorize: null, dispatch, waiting: true, done: false };

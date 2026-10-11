@@ -179,11 +179,16 @@ function detailOf(value) {
   return clip(lines.join('\n'), 600);
 }
 
-/** One option of a question: a label and, when given, a few words of why and what it covers → { label, why, detail } or null. */
-function optionOf(option) {
-  if (option && typeof option === 'object') { const label = line(option.label, 160); return label ? { label, why: line(option.why, 140), detail: detailOf(option.detail) } : null; }
+/**
+ * One option of a question: a label and, when given, a few words of why and what it covers → { label, why, detail } or null.
+ * In a "multi" (`multi` true) it also keeps whether the librarian recommends it, `checked` (MATH-122, 2026-10-11): the card
+ * starts with those ticked, so one Submit takes the recommendation. A "single" has no such field.
+ */
+function optionOf(option, multi = false) {
+  const checked = multi ? { checked: !!(option && typeof option === 'object' && option.checked === true) } : {};
+  if (option && typeof option === 'object') { const label = line(option.label, 160); return label ? { label, why: line(option.why, 140), detail: detailOf(option.detail), ...checked } : null; }
   const label = line(option, 160);
-  return label ? { label, why: '', detail: '' } : null;
+  return label ? { label, why: '', detail: '', ...checked } : null;
 }
 
 /**
@@ -203,7 +208,7 @@ function readReply(text, choices) {
   if (reposAsk && value.ask.title.trim()) {
     ask = { source: 'code', kind: 'repos', title: line(value.ask.title, 300), options: [], placeholder: '' };
   } else if (value.ask && typeof value.ask === 'object' && ASK_KINDS.has(value.ask.kind) && value.ask.kind !== 'repos' && typeof value.ask.title === 'string' && value.ask.title.trim()) {
-    const options = (Array.isArray(value.ask.options) ? value.ask.options : []).map(optionOf).filter(Boolean).filter((option, i, all) => all.findIndex((other) => other.label === option.label) === i).slice(0, 10);
+    const options = (Array.isArray(value.ask.options) ? value.ask.options : []).map((option) => optionOf(option, value.ask.kind === 'multi')).filter(Boolean).filter((option, i, all) => all.findIndex((other) => other.label === option.label) === i).slice(0, 10);
     const source = sourceOf(value.ask.source) ? value.ask.source : null;
     const apps = source && Array.isArray(value.ask.apps) ? [...new Set(value.ask.apps.filter((app) => sourceOf(source).apps.includes(app)))] : [];
     if (value.ask.kind === 'open' || options.length) ask = { source, ...(apps.length ? { apps } : {}), kind: value.ask.kind, title: line(value.ask.title, 300), options: value.ask.kind === 'open' ? [] : options, placeholder: value.ask.kind === 'open' ? line(value.ask.placeholder, 120) : '' };

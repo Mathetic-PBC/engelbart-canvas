@@ -295,7 +295,7 @@ test('the librarian\'s reply as it is read: one-line options with their why, but
   assert.deepEqual(choices.sources.notes, { on: true, apps: ['Obsidian'], folders: [vault], repos: [] });
   assert.deepEqual(choices.permissions, { files: true, browser: false, recall: true, notes: false });
   const reply = readReply('```json\n{"say":"Found it.","ask":{"source":"notes","kind":"multi","title":"Which folders?","options":["Research",{"label":"Essays","why":"12 notes"},{"label":"Essays"}]},"authorize":{"app":"Zotero","kind":"signin"},"dispatch":[{"source":"notes","apps":["Obsidian"],"label":"Obsidian","plan":"Research only"},{"source":"papers","plan":"all"}],"done":false}\n```', choices);
-  assert.deepEqual(reply.ask, { source: 'notes', kind: 'multi', title: 'Which folders?', options: [{ label: 'Research', why: '', detail: '' }, { label: 'Essays', why: '12 notes', detail: '' }], placeholder: '' });
+  assert.deepEqual(reply.ask, { source: 'notes', kind: 'multi', title: 'Which folders?', options: [{ label: 'Research', why: '', detail: '', checked: false }, { label: 'Essays', why: '12 notes', detail: '', checked: false }], placeholder: '' });
   assert.equal(reply.authorize, null, 'one thing at a time: the question wins');
   assert.deepEqual(reply.dispatch.map((entry) => entry.source), ['notes'], 'papers was not picked');
   assert.deepEqual(readReply('{"say":"","authorize":{"app":"Zotero","kind":"signin"}}', choices).authorize, { source: 'papers', app: 'Zotero', kind: 'signin', label: 'Sign in to Zotero' });
@@ -877,8 +877,9 @@ test('the priority queue: surveys first, then the recalls, three at a time, MEMO
     assert.deepEqual(order.slice(0, 4).map((entry) => entry.split(':')[0]), ['survey', 'survey', 'survey', 'survey'], 'no recall before the surveys have their places');
     // The librarian waited for the surveys, then asks about what they found, one item per line.
     const card = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask && entry.ask.kind === 'multi'), 'the chats question');
-    assert.deepEqual(card.chat.find((entry) => entry.ask).ask.options.slice(0, 2).map((option) => option.label), ['Everything', 'ChatGPT item 1']);
-    connect.answer(started.id, { picked: ['Everything'] });
+    const chatsAsk = card.chat.find((entry) => entry.ask).ask;
+    assert.deepEqual(chatsAsk.options.slice(0, 2).map((option) => [option.label, option.checked]), [['ChatGPT item 1', true], ['ChatGPT item 2', false]], 'no "Everything" beside the parts; the recommendation comes ticked');
+    connect.answer(started.id, { picked: chatsAsk.options.filter((option) => option.checked).map((option) => option.label) });
     const ended = await until(state(started.id), (s) => s.memory.status === 'saved', 'MEMORY.md', 2000);
     const memoryAt = order.indexOf('memory:');
     assert.ok(memoryAt > order.lastIndexOf('import:') && memoryAt > order.lastIndexOf('recall:Grok'), `MEMORY.md waits for every import and recall: ${order.join(' ')}`);
