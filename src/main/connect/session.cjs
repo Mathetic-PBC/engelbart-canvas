@@ -97,7 +97,29 @@ function connectChoice(provider, models) {
   return { provider: at, model: pin.model, modelId: model.id, modelName: model.name || FALLBACK_IDS[pin.model].name, effort: pin.effort };
 }
 
-/** The choose screen's answer made safe → { sources: { id: { on, apps, folders, repos } }, custom, computer, permissions }. */
+// As store/projects.cjs clips them: a project's name to 200 characters, its description to MAX_DESCRIPTION.
+const MAX_PROJECT_NAME = 200;
+const MAX_DESCRIPTION = 4000;
+
+/** What the project is, as the choose screen sent it ({ name, description }, 2026-10-10) → the same, trimmed, or null. */
+function cleanProject(input) {
+  if (!input || typeof input !== 'object') return null;
+  const name = typeof input.name === 'string' ? input.name.trim().slice(0, MAX_PROJECT_NAME) : '';
+  const description = typeof input.description === 'string' ? input.description.trim().slice(0, MAX_DESCRIPTION) : '';
+  return name || description ? { name, description } : null;
+}
+
+/**
+ * The project the agents are told about: only one with a description (with none, Connect works as it did before
+ * 2026-10-10, when it was never told).
+ */
+const projectFor = (choices) => (choices && choices.project && choices.project.description ? choices.project : null);
+
+/**
+ * The choose screen's answer made safe → { sources: { id: { on, apps, folders, repos } }, custom, computer, permissions,
+ * project }. `project` { name, description } (or null) is what the person is working on; it is kept in session.json with
+ * the rest, so a session picked up again after a quit still knows it.
+ */
 function cleanChoices(input, homeDir) {
   const given = input && typeof input === 'object' ? input : {};
   const sources = {};
@@ -116,7 +138,15 @@ function cleanChoices(input, homeDir) {
     custom: typeof given.custom === 'string' ? given.custom.trim().slice(0, 4000) : '',
     computer,
     permissions: { files: computer, browser: allowed.browser !== false, recall: allowed.recall !== false, notes: allowed.notes === true },
+    project: cleanProject(given.project),
   };
+}
+
+/** The <project> block every agent is given when there is a project with a description, else nothing. */
+function projectBlock(choices) {
+  const project = projectFor(choices);
+  if (!project) return '';
+  return `<project note="What the person is working on: the project this library is being connected for.">\n${project.name ? `Name: ${project.name}\n` : ''}Description: ${project.description}\n</project>`;
 }
 
 /** One option of a question: a label and, when given, a few words of why → { label, why } or null. */
@@ -314,6 +344,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const custom = instructionsText(s.dataRoot);
     const parts = [
       engelbartBlock(s),
+      projectBlock(s.choices),
       `<choices>\n${JSON.stringify({ ...s.choices.sources, customInstructionsForThisImport: s.choices.custom || null, permissions: s.choices.permissions }, null, 1)}\n</choices>`,
       `<found>\n${JSON.stringify(s.found, null, 1)}\n</found>`,
       `<library>${JSON.stringify(await libraryCounts(ctx))}</library>`,
@@ -438,13 +469,14 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const apps = job.apps.length ? job.apps : choice.apps || [];
     const found = (s.found || {})[job.source] || {};
     if (job.kind === 'survey') {
-      return [engelbartBlock(s), `<source>${job.source}</source>`, `<app>${apps[0]}</app>`, skillsFor({ source: job.source, apps }, s.dataRoot), `<found>\n${JSON.stringify(found[apps[0]] || {}, null, 1)}\n</found>`, `Look at what they have in ${apps[0]} now, and report.`].filter(Boolean).join('\n\n');
+      return [engelbartBlock(s), projectBlock(s.choices), `<source>${job.source}</source>`, `<app>${apps[0]}</app>`, skillsFor({ source: job.source, apps }, s.dataRoot), `<found>\n${JSON.stringify(found[apps[0]] || {}, null, 1)}\n</found>`, `Look at what they have in ${apps[0]} now, and report.`].filter(Boolean).join('\n\n');
     }
     if (job.kind === 'recall') {
       return [engelbartBlock(s), `<app>${apps[0]}</app>`, skillsFor({ source: job.source, apps }, s.dataRoot), `<prompt>\n${prompts.RECALL_PROMPT}\n</prompt>`, `Ask ${apps[0]} now, and save its answer with save_memory.`].join('\n\n');
     }
     return [
       engelbartBlock(s),
+      projectBlock(s.choices),
       `<source>${JSON.stringify({ source: job.source, apps, label: job.label, foldersPicked: choice.folders || [], repositoriesPicked: choice.repos || [], foldersChosen: s.picked.folders, downloadsGoTo: s.downloads })}</source>`,
       `<plan>\n${job.plan}\n</plan>`,
       `<chat>\n${clipMiddle(conversationText(s), 30000)}\n</chat>`,
@@ -803,7 +835,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /* -------------------------------------------------------------------------------------------------------- start */
 
   async function rescan(s, sourceIds) {
-    const only = { sources: Object.fromEntries(Object.entries(s.choices.sources).filter(([id]) => sourceIds.includes(id))) };
+    const only = { sources: Object.fromEntries(Object.entries(s.choices.sources).filter(([id]) => sourceIds.includes(id))), project: projectFor(s.choices) };
     const fresh = await scanFor(only, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null });
     for (const [source, apps] of Object.entries(fresh)) {
       // What a survey found is kept: the scan does not know it.
@@ -855,7 +887,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.chat.push(opener);
       emit(s);
     }
-    try { s.found = await scanFor(s.choices, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null }); } catch (error) { s.found = { error: error.message }; }
+    try { s.found = await scanFor({ ...s.choices, project: projectFor(s.choices) }, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null }); } catch (error) { s.found = { error: error.message }; }
     if (s.stopped || s.suspended) return;
     opener.text = foundSentence(s);
     s.dirs = dirsOf(s);
@@ -1377,4 +1409,4 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   };
 }
 
-module.exports = { createConnect, cleanChoices, readReply, readSurvey, messageOf, shownOf, connectChoice, CONNECT_MODELS, PROVIDER_NAMES, PRIORITY, MAX_RUNNING };
+module.exports = { createConnect, cleanChoices, projectBlock, readReply, readSurvey, messageOf, shownOf, connectChoice, CONNECT_MODELS, PROVIDER_NAMES, PRIORITY, MAX_RUNNING };

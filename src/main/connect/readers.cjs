@@ -642,11 +642,40 @@ function pdfGuess(name, title = '') {
   return 'unclear';
 }
 
+// Words too common to say a PDF is about a project: English glue, and what any research description says.
+const COMMON_WORDS = new Set(('the and for are but not you all can our its how why who use new one two any via per out own way '
+  + 'this that with from what which their about into will would could should have been being were they them these those there '
+  + 'where when while more most also such than then some only other over under each using used based study studying studies '
+  + 'research project projects paper papers work works done look looks like make makes help helps does want need between '
+  + 'through across toward towards your mine them want what whether among within without many much very well just even still '
+  + 'first second third done goal goals aim aims learn more less part parts thing things time year years final draft notes').split(/\s+/));
+
+/** A text's words for matching: lower case, letters and digits, the common ones left out. */
+function wordsOf(text) {
+  return String(text || '').toLowerCase().replace(/\.pdf$/, '').split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 3 && !COMMON_WORDS.has(word) && !/^\d+$/.test(word));
+}
+
+/**
+ * How many of a project's words a PDF's name and title share (a word counts when it is the same, or when one of five or
+ * more letters begins the other: "debug" and "debugging").
+ */
+function sharedWords(projectWords, text) {
+  const here = wordsOf(text);
+  let n = 0;
+  for (const word of projectWords) {
+    if (here.some((other) => other === word || (Math.min(word.length, other.length) >= 5 && (other.startsWith(word) || word.startsWith(other))))) n += 1;
+  }
+  return n;
+}
+
 /**
  * The folders under `roots` that hold PDFs, most first: how many, the newest, how many of each kind (pdfGuess), and the
  * names and titles of a few of the newest. → { roots, pdfs, folders: [...], moreFolders, truncated }. Only reads.
+ * `project` { name, description } (2026-10-10): each folder's examples are first the PDFs whose name or title shares
+ * words with it (up to `related`, most shared first, `relatedToProject` counting them all), then the newest; the folders
+ * holding such PDFs come first. Titles are read for the newest `matchTitles` PDFs to match them. With no project, as before.
  */
-function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titles = 150, max = 40000 } = {}) {
+function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titles = 150, max = 40000, project = null, related = 10, matchTitles = 300 } = {}) {
   const byFolder = new Map();
   let total = 0, truncated = false;
   // A folder inside another one looked through is not looked through twice.
@@ -665,13 +694,31 @@ function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titl
     }) || truncated;
   }
   let budget = titles;
-  const list = [...byFolder.values()].sort((a, b) => b.pdfs - a.pdfs || b.newest - a.newest);
+  const titleOf = new Map(); // file → its title, each read once
+  const readTitle = (file) => { if (!titleOf.has(file)) titleOf.set(file, pdfTitle(file)); return titleOf.get(file); };
+  const projectWords = project ? [...new Set(wordsOf(`${project.name || ''} ${project.description || ''}`))] : [];
+  if (projectWords.length) {
+    // Matched by name, and by title for the newest of them all (titles cost a read each).
+    const everyFile = [...byFolder.values()].flatMap((entry) => entry.files).filter((each) => pdfGuess(each.name) !== 'personal');
+    everyFile.sort((a, b) => b.mtime - a.mtime).slice(0, matchTitles).forEach((each) => readTitle(each.file));
+    for (const entry of byFolder.values()) {
+      for (const each of entry.files) {
+        const title = titleOf.get(each.file) || '';
+        each.shared = pdfGuess(each.name, title) === 'personal' ? 0 : sharedWords(projectWords, `${each.name} ${title}`);
+      }
+      entry.related = entry.files.filter((each) => each.shared > 0).length;
+    }
+  }
+  const list = [...byFolder.values()].sort((a, b) => (projectWords.length ? (b.related > 0) - (a.related > 0) : 0) || b.pdfs - a.pdfs || b.newest - a.newest);
+  const shown = (each) => { const title = titleOf.has(each.file) || budget-- > 0 ? readTitle(each.file) : ''; return title && title !== each.name.replace(/\.pdf$/i, '') ? `${each.name} — ${title}` : each.name; };
   const folders = list.slice(0, top).map((entry) => {
     const kinds = { paper: 0, personal: 0, book: 0, unclear: 0 };
     for (const each of entry.files) kinds[pdfGuess(each.name)] += 1;
-    const newest = entry.files.sort((a, b) => b.mtime - a.mtime).filter((each) => pdfGuess(each.name) !== 'personal').slice(0, samples);
-    const examples = newest.map((each) => { const title = budget-- > 0 ? pdfTitle(each.file) : ''; return title && title !== each.name.replace(/\.pdf$/i, '') ? `${each.name} — ${title}` : each.name; });
-    return { folder: shownPath(homeDir, entry.path), path: entry.path, pdfs: entry.pdfs, newest: iso(entry.newest), kinds: Object.fromEntries(Object.entries(kinds).filter(([, n]) => n)), examples };
+    const sorted = entry.files.sort((a, b) => b.mtime - a.mtime).filter((each) => pdfGuess(each.name) !== 'personal');
+    const matched = projectWords.length ? sorted.filter((each) => each.shared > 0).sort((a, b) => b.shared - a.shared || b.mtime - a.mtime).slice(0, related) : [];
+    const newest = sorted.filter((each) => !matched.includes(each)).slice(0, samples);
+    const examples = [...matched, ...newest].map(shown);
+    return { folder: shownPath(homeDir, entry.path), path: entry.path, pdfs: entry.pdfs, newest: iso(entry.newest), kinds: Object.fromEntries(Object.entries(kinds).filter(([, n]) => n)), ...(projectWords.length ? { relatedToProject: entry.related } : {}), examples };
   });
   return { roots: [...seen].map((dir) => shownPath(homeDir, dir)), pdfs: total, folders, moreFolders: Math.max(0, list.length - top), truncated };
 }

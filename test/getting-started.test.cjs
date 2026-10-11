@@ -177,7 +177,12 @@ test('the guided setup runs a new user\'s onboarding for someone with projects: 
   assert.ok(settings.includes('in a Welcome workspace added to the project you’re in, or in a new project when started from All projects. Nothing you have is removed.'));
   assert.ok(!settings.includes('Discover in a new project. Nothing'), 'no longer always a new project');
   const screen = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Onboarding.jsx'), 'utf8');
-  assert.match(screen, /if \(flowMode === 'guided' && next\.step === 'open'\) \{ addWelcome\(\); return; \}/, 'past the last screen: the Welcome workspace, not Create');
+  assert.match(screen, /const end = endOf\(flowMode, next\);\n    if \(end === 'project'\) \{ openProject\(added\.filter\(\(item\) => byId\.has\(item\.id\)\)\.map\(\(item\) => item\.id\)\); return; \}\n    if \(end === 'welcome'\) \{ addWelcome\(\); return; \}/, 'past the last screen: the Welcome workspace, not Create; a new user\'s project made there (2026-10-10)');
+  // 2026-10-10: the librarian is told the project, the guided setup's own, with no id (its session stays an onboarding one).
+  assert.match(screen, /api\.loadProject\(into\)\.then\(\(tree\) => \{ if \(live && tree && tree\.project\) setIntoProject\(\{ name: tree\.project\.name \|\| '', description: tree\.project\.description \|\| '' \}\); \}\)/);
+  assert.match(screen, /<ConnectLibrary mode="onboarding" sessionId=\{connectId\} project=\{flowMode === 'guided' \? intoProject : \{ name, description: desc \}\}/);
+  assert.doesNotMatch(screen, /<ConnectLibrary[^>]*projectId=/, 'onboarding never sends a project id');
+  assert.doesNotMatch(screen, /\.opens\b/, 'Create makes no project');
   assert.match(screen, /api\.welcomeWorkspace\(into, \{ context: added\.filter/);
   const offer = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/GuidedSetup.jsx'), 'utf8');
   for (const words of ['New: a guided setup', 'Walk through it to bring in your library and try Brainstorm and Discover.', '>Not now<', '>Start<']) assert.ok(offer.includes(words), words);

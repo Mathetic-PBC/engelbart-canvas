@@ -22,7 +22,7 @@ const projects = require('../src/main/store/projects.cjs');
 const readers = require('../src/main/connect/readers.cjs');
 const notes = require('../src/main/connect/notes.cjs');
 const { createImportTools, validateImportTool, chatNote, toolsFor, googleMarkdown, csvTable, IMPORT_TOOLS } = require('../src/main/connect/tools.cjs');
-const { createConnect, readReply, readSurvey, cleanChoices, connectChoice } = require('../src/main/connect/session.cjs');
+const { createConnect, readReply, readSurvey, cleanChoices, projectBlock, connectChoice } = require('../src/main/connect/session.cjs');
 const { createFakeConnectAgents } = require('../src/main/connect/fake.cjs');
 const { createWebSignIn } = require('../src/main/connect/web-signin.cjs');
 const { detect, scanFor, localRepos } = require('../src/main/connect/scan.cjs');
@@ -833,6 +833,61 @@ test('a session still going when Engelbart quits is picked up again when the lib
   for (const s of third.connect.list(ctx.dataRoot)) third.connect.stop(s.id);
 });
 
+// Ask about the project before Connect your library, and give it to the librarian (2026-10-10).
+test('the project goes to the librarian, its surveys and its imports, and is kept through a quit; onboarding sends no project id, so its session is found again', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const long = `  ${'d'.repeat(5000)}  `;
+  const sent = model.choicesOf({ picks: {}, apps: {}, project: { name: '  Teachable agents  ', description: long } });
+  assert.deepEqual([sent.project.name, sent.project.description.length, 'projectId' in sent], ['Teachable agents', 4000, false], 'trimmed, capped like MAX_DESCRIPTION, and no id');
+  assert.equal('project' in model.choicesOf({ picks: {}, apps: {}, project: { name: ' ', description: '' } }), false);
+  assert.equal('project' in model.choicesOf({ picks: {}, apps: {} }), false);
+  assert.deepEqual(cleanChoices({ sources: {}, project: { name: ' A ', description: ` ${'x'.repeat(4100)}`, extra: 1 } }, homeDir).project, { name: 'A', description: 'x'.repeat(4000) }, 'main keeps it, cleaned');
+  assert.equal(cleanChoices({ sources: {} }, homeDir).project, null);
+  assert.equal(projectBlock({ project: { name: 'A', description: '' } }), '', 'no description: told nothing, as before');
+  assert.equal(projectBlock({ project: null }), '');
+
+  const seen = [];
+  const watched = (delayMs) => { const inner = createFakeConnectAgents({ delayMs }); return { ...inner, turn: (input) => { seen.push({ kind: input.kind, message: input.message }); return inner.turn(input); } }; };
+  const first = fakeConnect({ agents: watched(30) });
+  const project = { name: 'Teachable agents', description: 'How novices debug code with an LLM tutor' };
+  // What the guided setup sends: the project's name and description, never its id.
+  const started = await first.connect.start(model.choicesOf({ picks: { chats: true }, apps: { chats: { ChatGPT: true } }, permissions: { recall: false }, project }));
+  assert.equal(started.mode, 'onboarding', 'no project id: still an onboarding session');
+  assert.equal(started.projectId, null);
+  await until(first.state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the chats question');
+  first.connect.answer(started.id, { picked: ['Everything'] });
+  await until(first.state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'running'), 'the import running');
+  const block = '<project note="What the person is working on: the project this library is being connected for.">\nName: Teachable agents\nDescription: How novices debug code with an LLM tutor\n</project>';
+  for (const kind of ['interview', 'survey', 'import']) {
+    const message = (seen.find((entry) => entry.kind === kind) || {}).message || '';
+    assert.ok(message.includes(block), `the ${kind} is told the project: ${message.slice(0, 300)}`);
+  }
+  assert.ok(seen.find((entry) => entry.kind === 'interview').message.indexOf('<project') < seen.find((entry) => entry.kind === 'interview').message.indexOf('<choices>'), 'before what was picked');
+
+  // Engelbart quits mid-setup: the session is kept with its project, picked up again, and the onboarding screen finds it.
+  first.connect.suspendAll();
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.deepEqual(saved.choices.project, project);
+  seen.length = 0;
+  const second = fakeConnect({ agents: watched(5) });
+  second.connect.resume(ctx);
+  assert.ok(second.connect.has(started.id));
+  const entry = second.connect.list(ctx.dataRoot).find((one) => one.id === started.id);
+  assert.equal(model.resumable([entry]), entry, 'ConnectLibrary\'s resume lookup takes it');
+  assert.equal(model.resumable([{ ...entry, projectId: 'p1' }]), null, 'it would not with an id');
+  await until(() => seen, (list) => list.some((one) => one.kind === 'import'), 'the import queued again');
+  assert.ok(seen.every((one) => one.message.includes(block)), 'still told the project after the restart');
+  for (const one of second.connect.list(ctx.dataRoot)) second.connect.stop(one.id);
+
+  // With no description, the agents are told nothing of it, as before.
+  seen.length = 0;
+  const third = fakeConnect({ agents: watched(5) });
+  const plain = await third.connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } }, permissions: { recall: false }, project: { name: 'Untitled', description: '' } });
+  await until(third.state(plain.id), (s) => !s.thinking && s.chat.some((one) => one.ask), 'the chats question');
+  assert.ok(seen.length && seen.every((one) => !one.message.includes('<project')), 'no <project> block');
+  third.connect.stop(plain.id);
+});
+
 test('the window\'s model, and the onboarding flow with Connect your library in place of Add to your library and Custom instructions', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const found = { apps: { Obsidian: { found: true }, 'Claude Code': { found: true }, ChatGPT: { found: true } }, sites: { found: true }, github: { found: false } };
@@ -929,13 +984,14 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
 
   const flow = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/onboarding.js')).href);
   // "replace steps 3 and 4 with this, since it will essentially be the same"
-  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'connect', 'create']);
-  assert.deepEqual(flow.flowOf('new', { connect: true, tools: false }), ['welcome', 'connect', 'create']);
-  assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'import', 'instructions', 'create'], 'without Connect (the tools screen skipped with no agent): as before, ending on Create');
-  assert.deepEqual(flow.forward('new', { step: 'tools', sub: 0 }, { connect: true }), { step: 'connect', sub: 0 });
-  assert.deepEqual(flow.forward('new', { step: 'connect', sub: 0 }, { connect: true }), { step: 'create', sub: 0 });
-  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 4, index: 2 });
-  assert.deepEqual(flow.forward('new', { step: 'create', sub: 1 }, { connect: true }), { step: 'open', sub: 0 }, 'the project opens after Create');
+  // 2026-10-10: Create before Connect, so the librarian is told what the project is; the project is made after Connect.
+  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'create', 'connect']);
+  assert.deepEqual(flow.flowOf('new', { connect: true, tools: false }), ['welcome', 'create', 'connect']);
+  assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'create', 'import', 'instructions'], 'without Connect (the tools screen skipped with no agent): Create, then its screens');
+  assert.deepEqual(flow.forward('new', { step: 'tools', sub: 0 }, { connect: true }), { step: 'create', sub: 0 });
+  assert.deepEqual(flow.forward('new', { step: 'create', sub: 1 }, { connect: true }), { step: 'connect', sub: 0 });
+  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 4, index: 3 });
+  assert.deepEqual(flow.forward('new', { step: 'connect', sub: 0 }, { connect: true }), { step: 'open', sub: 0 }, 'the project is made after Connect');
   assert.equal(flow.pagerOf('new', 'import', { connect: true }), null);
   // "signing into claude code and/or codex must be done before this step"
   const tool = (status, extra = {}) => ({ status, installed: status !== 'missing', ...extra });
@@ -1002,6 +1058,36 @@ test('PDFs on this Mac: the folders that hold them with counts, kinds and titles
   assert.deepEqual(rows.map((row) => [row.type, path.basename(row.path)]).sort(), [['pdf', '142750.142767.pdf'], ['pdf', 'mark2004.pdf']], 'kept where they are');
   assert.equal(importToolLabel('import_pdfs', { files: ['a', 'b'] }), 'Bringing in 2 PDFs');
   assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /folders and kinds of papers, never about single files/);
+});
+
+test('PDFs on this Mac with a project: each folder\'s examples begin with the PDFs that share words with it, and those folders come first; without one, the newest as before', async () => {
+  const home = pdfHome();
+  const old = new Date('2020-01-01T00:00:00Z');
+  fs.utimesSync(path.join(home, 'Downloads', '2310.01234v2.pdf'), old, old); // the matching paper is the oldest in Downloads
+  const roots = [path.join(home, 'Downloads'), path.join(home, 'Documents')];
+  const before = readers.pdfFolders(roots, { homeDir: home });
+  assert.deepEqual(before.folders.map((entry) => entry.folder), ['~/Documents/Research/HCI', '~/Downloads'], 'most PDFs first, as before');
+  const downloads = before.folders[1];
+  assert.equal(downloads.examples[downloads.examples.length - 1], '2310.01234v2.pdf — Scaffolding novice debugging', 'the newest first: it comes last');
+  assert.equal('relatedToProject' in downloads, false);
+  const project = { name: 'Debugging tutor', description: 'How novices debug their code with scaffolding from an LLM' };
+  const after = readers.pdfFolders(roots, { homeDir: home, project });
+  assert.deepEqual(after.folders.map((entry) => [entry.folder, entry.relatedToProject]), [['~/Downloads', 1], ['~/Documents/Research/HCI', 0]], 'the folder holding a match first');
+  assert.equal(after.folders[0].examples[0], '2310.01234v2.pdf — Scaffolding novice debugging', 'matched by its title, listed first');
+  assert.deepEqual(after.folders[0].examples.slice(1).sort(), downloads.examples.slice(0, -1).sort(), 'then the newest, without it twice');
+  assert.ok(!after.folders[0].examples.some((line) => /Invoice/.test(line)), 'personal PDFs still never shown');
+  // The scan passes the project from the choices.
+  const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project }, { homeDir: home });
+  assert.equal(scanned.papers[LOCAL_PDFS].folders[0].examples[0], '2310.01234v2.pdf — Scaffolding novice debugging');
+  assert.match(scanned.papers[LOCAL_PDFS].examplesFirst, /shares words with the project/);
+  assert.equal('examplesFirst' in (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home })).papers[LOCAL_PDFS], false);
+  // The librarian offers them by title, with folders and kinds of paper as the fallback.
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /offer up to ten of the papers among them that bear on the project, by title/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /When there is no project, or nothing in <found> bears on it, ask about folders and kinds of papers, never about single files/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /recommend first the items that bear on it: by their real titles/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /\("and 61 others in Downloads"\)/);
+  assert.match(prompts.SURVEY_SYSTEM_PROMPT, /those related to the project in <project> first when there is one .*then research-looking, then the most recent/);
+  for (const prompt of [prompts.INTERVIEW_SYSTEM_PROMPT, prompts.IMPORT_SYSTEM_PROMPT, prompts.SURVEY_SYSTEM_PROMPT]) assert.match(prompt, /- <project>, when there is one: what the person is working on/);
 });
 
 test('Skip on the librarian\'s question brings nothing of it in: the source is left out, and Import does not hand it over', async () => {

@@ -214,8 +214,24 @@ export function permissionsFor(apps) {
   };
 }
 
-/** What `connect-start` is sent: each source on or off with its apps, folders and repositories; the instructions; the permissions; the provider. */
-export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', permissions = {}, provider = null, projectId = null }) {
+// As store/projects.cjs clips them: a project's name to 200 characters, its description to MAX_DESCRIPTION.
+const MAX_NAME = 200;
+const MAX_DESCRIPTION = 4000;
+
+/** The project Connect's librarian is told about: { name, description } trimmed and clipped, or null when both are empty. */
+export function projectOf(project) {
+  if (!project) return null;
+  const name = String(project.name || '').trim().slice(0, MAX_NAME);
+  const description = String(project.description || '').trim().slice(0, MAX_DESCRIPTION);
+  return name || description ? { name, description } : null;
+}
+
+/**
+ * What `connect-start` is sent: each source on or off with its apps, folders and repositories; the instructions; the
+ * permissions; the provider; the project an existing user's notes go into (`projectId`); and what the project is
+ * (`project` { name, description }, 2026-10-10), which onboarding sends without an id.
+ */
+export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', permissions = {}, provider = null, projectId = null, project = null }) {
   const sources = {};
   for (const source of SOURCES) {
     sources[source.id] = {
@@ -226,7 +242,15 @@ export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', 
     };
   }
   const allowed = { files: permissions.files !== false, browser: permissions.browser !== false, recall: permissions.recall !== false, notes: permissions.notes === true };
-  return { sources, custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}) };
+  return { sources, custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}), ...(projectOf(project) ? { project: projectOf(project) } : {}) };
+}
+
+/**
+ * The onboarding session to pick up again when onboarding opens after a quit: one begun from onboarding, with no project
+ * id (an id makes a session an existing user's), not stopped or put away.
+ */
+export function resumable(list) {
+  return (list || []).find((entry) => entry.mode === 'onboarding' && !entry.projectId && !entry.stopped && !entry.dismissed) || null;
 }
 
 /** An import's place in the progress list: its words, whether it is finished, failed, or waits on the person. */

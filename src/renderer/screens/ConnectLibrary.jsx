@@ -5,7 +5,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, NEEDS_SIGN_IN, consentFor, permissionsOf } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, NEEDS_SIGN_IN, consentFor, permissionsOf } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -571,10 +571,12 @@ const engelbartSignIn = (app) => (app === 'Zotero' ? waitFor(api.zoteroConnect, 
 /**
  * `mode` 'onboarding' (a step: `onContinue` moves on, the work going on in the background) or 'popup' (`onClose` puts it
  * away). `sessionId`: a session to show again (the dock's). `projectId`: the project an existing user's notes go into.
+ * `project` { name, description }: what the librarian is told the project is (onboarding sends it without an id, so its
+ * session stays an onboarding one, picked up again after a quit).
  * `onSession(id)` when a session begins; `onAdded(row)` for a library row added here (a GitHub repository); `onSkip`: Skip
  * for now / Not now before anything began.
  */
-export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, projectId = null, pager = null, onSession = () => {}, onContinue = () => {}, onClose = () => {}, onSkip = () => {}, onAdded = () => {} }) {
+export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, projectId = null, project = null, pager = null, onSession = () => {}, onContinue = () => {}, onClose = () => {}, onSkip = () => {}, onAdded = () => {} }) {
   const popup = mode === 'popup';
   const page = !popup; // onboarding: a page of the window, not a box on it
   const [found, setFound] = React.useState(null);
@@ -631,7 +633,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       // Onboarding again after Engelbart closed in the middle of it: the session that picked up where it was (main's
       // resume) is shown, not a new one.
       api.connectList().then((list) => {
-        const going = (list || []).find((entry) => entry.mode === 'onboarding' && !entry.projectId && !entry.stopped && !entry.dismissed);
+        const going = resumable(list);
         if (going) { show(going); onSession(going.id); } else choose();
       }).catch(choose);
     } else {
@@ -760,7 +762,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     else if (appFolders[LOCAL_PDFS]) chosen.papers = [...new Set([...chosen.papers, appFolders[LOCAL_PDFS]])];
     try {
       const permissions = permissionsOf(picks, { consent, notes: notesState === 'allowed' });
-      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), permissions, provider, projectId }));
+      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), permissions, provider, projectId, project }));
       begin(snapshot);
       setView('chat');
       setTimeout(() => draftRef.current && draftRef.current.focus(), 60);

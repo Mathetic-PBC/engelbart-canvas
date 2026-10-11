@@ -12,10 +12,12 @@ import { launchRows, installable } from './tools.js';
  * skipped with no agent to run it), and then it takes the place of Add to your library and Custom instructions
  * ("replace steps 3 and 4 with this, since it will essentially be the same": its agents bring the papers, sites and code
  * in, and MEMORY.md, made from what the person's AI assistants remember, does what the custom instructions did).
- * A new user's flow ends on Create (2026-10-09, "fewer create screens"): its last part opens the project, with no Project
- * context screen; + Project keeps create → context.
+ * A new user's flow has no Project context screen (2026-10-09, "fewer create screens"); + Project keeps create → context.
+ * Create comes before Connect (2026-10-10): the librarian is told what the project is, so it recommends the person's own
+ * files and papers about it rather than "75 PDFs in your Downloads". The project itself is made at the end of the flow
+ * ('open', see endOf), so what Connect brings in still lands in it.
  */
-export const FLOWS = { new: ['welcome', 'tools', 'connect', 'import', 'instructions', 'create'], existing: ['create', 'context'], guided: ['welcome', 'tools', 'connect', 'import', 'instructions'] };
+export const FLOWS = { new: ['welcome', 'tools', 'create', 'connect', 'import', 'instructions'], existing: ['create', 'context'], guided: ['welcome', 'tools', 'connect', 'import', 'instructions'] };
 
 /**
  * The guided setup started inside a project (2026-10-10, "guided setup shouldn't create a new project"): a new user's
@@ -122,18 +124,44 @@ export function importButtons(sub, n, { signedIn = false } = {}) {
 
 /**
  * The create screen's: Skip only on an empty description; Continue (next part, then the next screen) greyed on an empty
- * name, an empty description, and an existing folder not yet named. On a new user's last part both open the project
- * (`opens`), and Continue reads "Open project".
+ * name, an empty description, and an existing folder not yet named. Neither makes the project (2026-10-10: Create is
+ * before Connect, and the project is made when the flow reaches 'open').
  */
-export function createButtons(sub, { name, desc, folder = 'new', folderPath = '' }, { mode = 'existing' } = {}) {
+export function createButtons(sub, { name, desc, folder = 'new', folderPath = '' }) {
   const part = SUBS.create[sub];
   const empty = (value) => !String(value || '').trim();
-  const opens = mode === 'new' && sub === SUBS.create.length - 1;
   return {
     showSkip: part === 'desc' && empty(desc),
     continueDisabled: (part === 'name' && (empty(name) || (folder === 'existing' && empty(folderPath)))) || (part === 'desc' && empty(desc)),
-    label: opens ? 'Open project' : 'Continue',
-    opens,
+    label: 'Continue',
+  };
+}
+
+/**
+ * What a forward move that lands on 'open' does: a new user's flow makes its project ('project'), the guided setup adds a
+ * Welcome workspace to the project it was started in ('welcome'); + Project opens from its context screen, and any other
+ * move does nothing more (null).
+ */
+export function endOf(mode, next) {
+  if (!next || next.step !== 'open') return null;
+  if (mode === 'new') return 'project';
+  if (mode === 'guided') return 'welcome';
+  return null;
+}
+
+/**
+ * What a new user's project is made with (ipc start-project), from Create's state: the rows this onboarding added go into
+ * its Getting started workspace, and Connect's session (`connectId`) puts its notes into it.
+ */
+export function projectInput({ name, desc, folder = 'new', folderPath = '', ids = [], connectId = null, mode = 'new' }) {
+  return {
+    name: String(name || '').trim(),
+    description: String(desc || '').trim(),
+    folder,
+    directory: folder === 'existing' ? folderPath : '',
+    context: ids,
+    ...(connectId ? { connect: connectId } : {}),
+    ...(mode === 'new' ? { onboarding: true } : {}),
   };
 }
 
