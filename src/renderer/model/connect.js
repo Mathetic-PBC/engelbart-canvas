@@ -436,16 +436,23 @@ export function signInPanel(state, browser, rows = [], chosen = 0) {
 export const FOLDER_ACCESS_TIP = 'macOS only asks once. You can change it later in System Settings → Privacy & Security → Files and Folders.';
 
 /**
- * The panel before macOS asks to let Engelbart read its protected folders (MATH-110) → { title, lead, folders, tip } | null.
- * `folders`: main's connect-folders-needed, [{ id, name }], only folders that are on this Mac and never asked about.
+ * The panel before macOS asks to let Engelbart read its protected folders (MATH-110) → { title, lead, names, note, ask,
+ * folders, tip } | null, drawn to David's mockup (2026-10-12): the folders as tiles (`names`), then `note` (bold) and
+ * `ask`. `folders`: main's connect-folders-needed, [{ id, name }], only folders that are on this Mac and never asked about.
  * `papers`: PDFs on this Mac is why (else a repository under one of them).
  */
 export function folderPanel(folders, { papers = true } = {}) {
   const names = (folders || []).map((folder) => folder && folder.name).filter(Boolean);
   if (!names.length) return null;
+  const one = names.length === 1;
   return {
-    title: `Let Engelbart read your ${names.length === 1 ? names[0] : 'folders'}?`,
-    lead: `macOS will ask to let Engelbart read your ${listed(names)}. Choose Allow so it can look for your ${papers ? 'papers' : 'repositories'} there.`,
+    title: `Let Engelbart read your ${one ? names[0] : 'folders'}?`,
+    lead: papers
+      ? 'Engelbart looks here for papers, documents and repos related to your project. Without this, files saved on your Mac are left out.'
+      : `Engelbart looks here for repos related to your project. Without this, repos saved in ${one ? 'it' : 'these folders'} are left out.`,
+    names,
+    note: one ? 'macOS will ask once.' : 'macOS will ask once for each folder.',
+    ask: one ? 'Choose Allow.' : 'Choose Allow on each.',
     folders: listed(names),
     tip: FOLDER_ACCESS_TIP,
   };

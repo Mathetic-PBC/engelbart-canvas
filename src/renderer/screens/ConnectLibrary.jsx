@@ -92,6 +92,9 @@ const CHECK = <Svg size={12} width={2.5}><path d="M20 6 9 17l-5-5" /></Svg>;
 const MINUS = <Svg size={16} width={1.6}><path d="M5 12h14" /></Svg>;
 const CLOSE = <Svg size={15} width={1.6}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Svg>;
 const FILE = <Svg size={14} width={1.6}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M10 13h4" /><path d="M10 17h4" /></Svg>;
+// The folder modal's tiles (MATH-110, David's mockup): a filled Finder-blue folder, and a cloud for iCloud Drive and the drives.
+const FOLDER_FILLED = <svg width="14" height="12" viewBox="0 0 14 12" aria-hidden="true"><path d="M1.5 0.5h3.6l1.4 1.5h6a1 1 0 0 1 1 1v7.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-9a1 1 0 0 1 1-1z" fill="#70a8f5" stroke="#5395ea" strokeWidth="0.8" /></svg>;
+const CLOUD_FILLED = <svg width="15" height="11" viewBox="0 0 15 11" aria-hidden="true"><path d="M4 10.5a3.5 3.5 0 0 1-.5-6.96A4.5 4.5 0 0 1 12 4.1a3.2 3.2 0 0 1-.3 6.4z" fill="#70a8f5" stroke="#5395ea" strokeWidth="0.8" /></svg>;
 const GLOBE = <Svg size={14} width={1.5}><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></Svg>;
 /** "a, b and c". */
 const listOf = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
@@ -409,7 +412,7 @@ function KeychainModal({ panel, outcome, onContinue, onNotNow, onClose, onChoose
 
 /**
  * Before macOS asks to let Engelbart read its protected folders (MATH-110): one modal naming them all, so the prompts that
- * follow are expected, and come before the run instead of in the middle of it. Continue reads each folder in turn (macOS
+ * follow are expected, and come before the run instead of in the middle of it. Ask macOS reads each folder in turn (macOS
  * asks about each); Not now leaves them out of this run, the row still ticked. Escape is Not now. In a portal, as
  * KeychainModal is.
  */
@@ -428,14 +431,21 @@ function FolderAccessModal({ panel, onContinue, onNotNow }) {
   }, [onNotNow]);
   return createPortal(
     <div data-overlay="1" data-cover="1" data-connect-folders="ask" style={{ position: 'fixed', inset: 0, zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: 'rgba(23,23,23,.28)' }}>
-      <div role="dialog" aria-modal="true" aria-label={panel.title} style={{ width: 'min(420px, 100%)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 10, padding: '22px 22px 18px', background: '#fff', borderRadius: 12, boxShadow: '0 16px 48px #00000029', animation: `rise 160ms ${EASE}` }}>
-        <span aria-hidden="true" style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', ...KEYCHAIN_TONES.ask }}>{FOLDER}</span>
-        <span style={{ font: '600 16px/1.35 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{panel.title}</span>
-        <span data-connect-folders-lead="1" style={{ font: '600 13.5px/1.5 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{panel.lead}</span>
-        <span data-connect-folders-tip="1" style={{ font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{panel.tip}</span>
-        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 16, paddingTop: 8 }}>
-          <button type="button" className="hov-ink" data-connect-folders-not-now="1" onClick={onNotNow} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Not now</button>
-          <button type="button" ref={primary} data-connect-folders-continue="1" onClick={onContinue} style={{ padding: '9px 16px', border: 0, borderRadius: 8, background: '#171717', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#fff' }}>Continue</button>
+      <div role="dialog" aria-modal="true" aria-label={panel.title} style={{ width: 'min(490px, 100%)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', padding: '23px 26px 26px', background: '#fff', borderRadius: 12, boxShadow: '0 16px 48px #00000029', animation: `rise 160ms ${EASE}` }}>
+        <span style={{ font: '600 19px/24px var(--font-sans)', letterSpacing: -0.2, color: '#171717', textWrap: 'pretty' }}>{panel.title}</span>
+        <span data-connect-folders-lead="1" style={{ marginTop: 19, font: '16px/23.5px var(--font-sans)', letterSpacing: -0.25, color: '#6b6f76' }}>{panel.lead}</span>
+        <span data-connect-folders-names="1" style={{ marginTop: 17, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          {panel.names.map((name) => (
+            <span key={name} data-connect-folders-name={name} style={{ minWidth: 0, height: 36, boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 12, padding: '0 12px 0 13px', border: '1px solid #eaeaea', borderRadius: 8 }}>
+              <span aria-hidden="true" style={{ flex: 'none', display: 'flex' }}>{/drive/i.test(name) || /^(Dropbox|OneDrive|Box)/.test(name) ? CLOUD_FILLED : FOLDER_FILLED}</span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '500 15px/1 var(--font-sans)', color: '#171717' }}>{name}</span>
+            </span>
+          ))}
+        </span>
+        <span data-connect-folders-tip="1" title={panel.tip} style={{ marginTop: 18, font: '15px/22px var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}><b style={{ fontWeight: 600, color: '#171717' }}>{panel.note}</b> {panel.ask}</span>
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 22, marginTop: 22 }}>
+          <button type="button" className="hov-ink" data-connect-folders-not-now="1" onClick={onNotNow} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 15px/1 var(--font-sans)', color: '#8f8f8f' }}>Not now</button>
+          <button type="button" ref={primary} data-connect-folders-continue="1" onClick={onContinue} style={{ height: 37, padding: '0 17px', border: 0, borderRadius: 8, background: '#171717', cursor: 'pointer', font: '600 15px/1 var(--font-sans)', color: '#fff' }}>Ask macOS</button>
         </span>
       </div>
     </div>,
