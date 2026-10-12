@@ -6,7 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, afterSignInWindowClosed, signInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, placedLine, unsignedWeb, signInGate, shownSignIn, signInChain, signInWindows, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, afterSignInWindowClosed, signInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, placedLine, unsignedWeb, signInGate, shownSignIn, signInChain, signInWindows, opensSignIn, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -998,39 +998,48 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       else setRow(id, app, false);
     }
     else if (spec.reach === 'web') checkTicked([{ id, app }]);
-    // A web app not signed in stays ticked, with Sign in on its row; Bring these in asks for it before the run starts.
+    // A web app not signed in opens its sign-in by itself once checked (checkSignIn, 2026-10-12): ticking is the consent.
+    // Its popup closed without signing in, it is unticked; one a stopped chain skipped keeps its tick and Sign in, and Bring
+    // these in asks for it before the run starts.
   };
   // A web app ticked (with "Use my … subscription" on): its sign-in is brought over from the person's browser now
   // (2026-10-10), and the row says how it went. When macOS would ask for that browser's sign-ins, a panel says so first and
   // the check waits for its Continue; otherwise it starts at once. Rows ticked from the start are checked when the run is.
-  const checkSignIn = ({ id, app }, retry = false) => {
+  // `open` (2026-10-12): a row just ticked (checkTicked, and Continue after it) that no browser signs in, still ticked with
+  // the consent on, gets its sign-in opened by itself, in the chain (turnedDown); Try again and the run's checks never do.
+  const checkSignIn = ({ id, app }, { retry = false, open = false } = {}) => {
     setSignIns((now) => ({ ...now, [app]: { status: 'checking', browser: '' } }));
     return api.connectSignInCheck(app, retry).then((out) => {
       if (!out || !out.status) { setSignIns((now) => { const next = { ...now }; delete next[app]; return next; }); return; }
       setSignIns((now) => ({ ...now, [app]: out })); // macOS said no: still ticked, with Try again and Sign in (2026-10-12)
-      if (out.status === 'refused') void turnedDown([{ id, app }]); // and Engelbart's window opens for it (2026-10-12, second run)
+      // and its sign-in opens by itself (2026-10-12, second run), as it does for a row just ticked that is not signed in
+      if (opensSignIn(out.status, { fresh: open, consent: consentRef.current, still: ticked(picksRef.current, id, app) })) void turnedDown([{ id, app }]);
     }).catch(() => { setSignIns((now) => { const next = { ...now }; delete next[app]; return next; }); });
   };
   const checkTicked = async (ticks) => {
-    // One already signed in (by another app sharing its sign-in, or before it was unticked) is ✓ at once, not checked again.
-    const rows = ticks.filter((row) => (signIns[row.app] || {}).status !== 'signed-in');
+    // One already signed in (by another app sharing its sign-in, or before it was unticked) is ✓ at once, not checked again;
+    // one whose sign-in is open already (its window, or a wait in the browser) shows that wait instead.
+    const rows = ticks.filter((row) => !['signed-in', 'signing', 'browser'].includes((signIns[row.app] || {}).status));
     if (!signInsToCheck(consent, rows).length) return;
     const said = await Promise.all(rows.map((row) => api.connectSignInNote(row.app).then((out) => ({ ...row, ...(out || {}) })).catch(() => ({ ...row, note: '' }))));
     if (!consentRef.current) return; // turned off meanwhile: no panel, no check
     const ask = said.filter(asksFirst);
     if (ask.length) setWaitingYes((now) => waitForYes(now, ask));
-    said.filter((row) => !asksFirst(row)).forEach((row) => checkSignIn(row));
+    said.filter((row) => !asksFirst(row)).forEach((row) => checkSignIn(row, { open: true }));
   };
   // The modal comes first when macOS will be asked, or when more than one profile holds the sign-in (2026-10-12).
   const asksFirst = (row) => !!((row.note && row.browser) || (row.browser && row.profiles && row.profiles.length > 1));
   // Continue: one macOS prompt for the browser (main asks once and remembers its answer); the apps waiting on it are checked.
   // The profile chosen in its list is remembered first (main tries it first from then on). Google's rows asked for from
   // Sign in (route 'browser', 2026-10-12) go on to its sign-in in the person's browser, the row saying so, not the modal.
+  // A sign-in of the chain waiting on this modal (signInInBrowser) goes on with the answer: 'browser' once Google's page is
+  // opening in the browser, 'declined' when macOS refused (that group's window comes next).
   const allowSignIns = async (browser) => {
     const panel = signInPanel(picks, browser, waitingYes[browser], profileChoice[browser] || 0);
+    const waiting = waitingYes[browser] || [];
     setWaitingYes((now) => { const next = { ...now }; delete next[browser]; return next; });
     setProfileChoice((now) => { const next = { ...now }; delete next[browser]; return next; });
-    if (!panel) return;
+    if (!panel) { answerChain(waiting, 'dropped'); return; }
     const pick = panel.chosen >= 0 ? panel.profiles[panel.chosen] : null;
     if (pick) {
       const holds = (row) => (row.profiles || []).some((profile) => profile.browserId === pick.browserId && profile.profileId === pick.profileId);
@@ -1040,7 +1049,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     const viaBrowser = panel.rows.filter((row) => row.route === 'browser');
     const from = pick ? pick.browser : browser;
     if (panel.lead && (checked.length || viaBrowser.length)) setKeychainRun({ browser: from, rows: [...checked, ...viaBrowser] });
-    checked.forEach((row) => checkSignIn(row));
+    checked.forEach((row) => checkSignIn(row, { open: true }));
     if (!viaBrowser.length) return;
     // Google's Sign in (2026-10-12): macOS asked now, while the modal says why ("Waiting for macOS…"), not minutes later
     // when the sign-in shows up in the browser. Allowed: its page opens there, and the copy then asks nothing. Refused:
@@ -1054,6 +1063,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       if (out && out.status === 'refused') {
         setSignIns((now) => { const next = { ...now }; for (const other of group) next[other] = { status: 'refused', browser: out.browser || from }; return next; });
         void turnedDown(viaBrowser);
+        answerChain(viaBrowser, 'declined');
         return;
       }
       // Allowed: the modal leaves these rows to the row's own waiting line.
@@ -1063,7 +1073,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
         return rows.length ? { ...now, rows } : null;
       });
     }
-    viaBrowser.forEach((row) => { void browserSignIn(row.id, row.app); });
+    viaBrowser.forEach((row) => { void browserSignIn(row.id, row.app, '', true); });
+    answerChain(viaBrowser, 'browser');
   };
   // Use another account (2026-10-12): Google's add-an-account page in the browser the sign-in is waited for in; the wait goes
   // on, and copies whichever account signs in there.
@@ -1080,24 +1091,35 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       return next;
     });
     void turnedDown(rows);
+    answerChain(rows, 'declined');
   };
-  // Turned down (2026-10-12, second test run): after Not now, or Deny at macOS's prompt for a check or for Continue's unlock,
-  // Engelbart's sign-in window opens by itself for the first app turned down, and once it signs in or closes itself, for the
-  // next (one window per sign-in group: Gmail and Google Drive share one), until none is left. The person closing a window
-  // without signing in stops it there: that window's sign-in group is unticked (signInWindowHere), and the rows still
-  // waiting their turn keep their tick and Sign in. Nothing opens while the consent is off. Apps turned down while a window
-  // is open wait their turn.
+  // The sign-in chain (turnedDown, 2026-10-12): a web app just ticked and not signed in (checkSignIn), and one turned down
+  // (Not now, or Deny at macOS's prompt for a check or for Continue's unlock), gets its sign-in opened by itself, through
+  // signInHere: Engelbart's window, or on the Mac Google's route (the Keychain modal first when macOS will be asked or
+  // several profiles hold it, else its sign-in in the person's browser). One at a time, one per sign-in group (Gmail and
+  // Google Drive share one): the chain waits for a window's answer and for a modal's, not for a sign-in waiting in the
+  // browser. The person closing a window without signing in stops it there: that window's sign-in group is unticked
+  // (signInWindowHere), and the rows still waiting their turn keep their tick and Sign in. Nothing opens while the consent
+  // is off. Apps ticked or turned down while one is open wait their turn.
   const signInsRef = React.useRef(signIns);
   signInsRef.current = signIns;
   const picksRef = React.useRef(picks);
   picksRef.current = picks;
-  const windowHere = React.useRef(null);
+  const hereRef = React.useRef(null);
+  const modalAnswer = React.useRef(null); // { group, resolve }: the chain's sign-in waiting on the Keychain modal
+  const answerChain = (rows, out) => {
+    const wait = modalAnswer.current;
+    if (!wait || !(rows || []).some((row) => row && wait.group.includes(row.app))) return;
+    modalAnswer.current = null;
+    wait.resolve(out);
+  };
   const chain = React.useRef(null);
   if (!chain.current) {
+    // a tick before and after: the rows rendered, so signInHere and the next pick read them
+    const rendered = () => new Promise((resolve) => setTimeout(resolve, 0));
     chain.current = signInWindows({
       pick: (rows) => signInChain(rows, { signIns: signInsRef.current, state: picksRef.current, consent: consentRef.current }),
-      // after it, a tick: the sign-in's rows rendered, so the next pick reads them
-      open: async (row) => { const out = await windowHere.current(row.id, row.app); await new Promise((resolve) => setTimeout(resolve, 0)); return out; },
+      open: async (row) => { await rendered(); const out = await hereRef.current(row.id, row.app, true); await rendered(); return out; },
     });
   }
   const turnedDown = (rows) => chain.current(rows);
@@ -1110,18 +1132,20 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     // macOS refused it before, so it asks again: the modal follows it, as after Continue.
     const was = signIns[app];
     if (rows.length && was && was.status === 'refused' && was.browser) setKeychainRun({ browser: was.browser, rows });
-    rows.forEach((row) => checkSignIn(row, true));
+    rows.forEach((row) => checkSignIn(row, { retry: true }));
   };
   // Sign in (2026-10-11): the app's sign-in page in Engelbart's own browser, for one no browser of the person's could sign
   // in. Google's first Sign in on the Mac (signsInViaBrowser, 2026-10-12) waits in the person's browser instead, until they
   // turn its sign-ins down (Not now, Deny) or there is no browser to read; off the Mac, every Sign in is the window.
-  const signInHere = (id, app) => (signsInViaBrowser(app, signIns[app], found && found.platform) ? signInInBrowser(id, app) : signInWindowHere(id, app));
+  // `chained`: opened by the chain, which gets the answer of what holds it (signInInBrowser).
+  const signInHere = (id, app, chained = false) => (signsInViaBrowser(app, signIns[app], found && found.platform) ? signInInBrowser(id, app, chained) : signInWindowHere(id, app));
+  hereRef.current = signInHere;
   // Engelbart's sign-in window (2026-10-11). Signed in, the app and every app sharing that sign-in (Google Drive and Gmail)
   // read ✓, and its row is ticked; Google turning it away (2026-10-12), they read "Google refused this sign-in" with Try
   // again, still ticked; the person closing it first is a no (2026-10-12, third run): the row and every ticked row sharing
   // its sign-in are unticked, their sign-in put back with nothing stale (signInWindowClosed), and ticking one again starts
-  // its sign-in again. A window replaced by another app's (one window at a time) answers closed too, but that was not a no:
-  // its row only gets its sign-in back, still ticked. → 'signed-in' | 'rejected' | 'closed'
+  // its sign-in again. A window replaced by another app's (one window at a time) was not a no: its row only gets its sign-in
+  // back, still ticked. → 'signed-in' | 'rejected' | 'replaced' | 'closed'
   const lastWindow = React.useRef(null);
   const signInWindowHere = async (id, app) => {
     // A row that was waiting on the browser ("Sign in here instead") goes back to what it was before that wait, not to it.
@@ -1142,13 +1166,12 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     }
     if (lastWindow.current !== ours) {
       setSignIns((now) => { const next = { ...now }; const back = afterSignInWindowClosed((now[app] || {}).was); if (back) next[app] = back; else delete next[app]; return next; });
-      return 'closed';
+      return 'replaced';
     }
     setPicks((now) => signInWindowClosed(now, app).state);
     setSignIns((now) => signInWindowClosed(null, app, now).signIns);
     return 'closed';
   };
-  windowHere.current = signInWindowHere;
   // "Sign in here instead" (2026-10-12), beside a row waiting on the browser: that wait ends, and Engelbart's window opens.
   const hereInstead = (id, app) => {
     setSignIns((now) => { const next = { ...now }; for (const other of sharesSignIn(app)) if (other !== app && next[other] && next[other].status === 'browser') { if (next[other].was) next[other] = next[other].was; else delete next[other]; } return next; });
@@ -1158,19 +1181,25 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   // Google's Sign in (2026-10-12): its sign-in page opens in the person's browser and the sign-in is copied over once it is
   // made there, with no time limit. The modal first when macOS will be asked or more than one profile holds it (its
   // Continue comes back to browserSignIn). No browser Engelbart can read (Safari only): Engelbart's window at once, no
-  // modal. → 'signed-in' | 'asked' | 'rejected' | 'closed'
-  const signInInBrowser = async (id, app) => {
+  // modal. → 'signed-in' | 'asked' | 'refused' | 'closed', and the window's answers. `chained` (the chain, 2026-10-12): the
+  // modal is waited for (allowSignIns and declineSignIns answer it: 'browser' | 'declined', or 'dropped' when it goes
+  // unanswered), and the wait in the browser is not ('browser').
+  const signInInBrowser = async (id, app, chained = false) => {
     const said = (await api.connectSignInNote(app, 'browser').catch(() => null)) || {};
     if (!said.opens) return signInWindowHere(id, app);
     if (asksFirst(said)) {
+      const answer = chained ? new Promise((resolve) => { modalAnswer.current = { group: sharesSignIn(app), resolve }; }) : 'asked';
       setRow(id, app, true);
       setWaitingYes((now) => waitForYes(now, [{ id, app, browser: said.browser, note: said.note, profiles: said.profiles, route: 'browser' }]));
-      return 'asked';
+      return answer;
     }
-    return browserSignIn(id, app, said.opens || '');
+    if (!chained) return browserSignIn(id, app, said.opens || '');
+    void browserSignIn(id, app, said.opens || '', true);
+    return 'browser';
   };
   // Every ticked Google row waits on the one sign-in, and turns ✓ with it; one unticked meanwhile is left as it was.
-  const browserSignIn = async (id, app, opens = '') => {
+  // `chained`: macOS refusing it sends the row to the chain, for Engelbart's window, as a check's refusal does.
+  const browserSignIn = async (id, app, opens = '', chained = false) => {
     const group = sharesSignIn(app);
     if (!opens) opens = ((await api.connectSignInNote(app, 'browser').catch(() => null)) || {}).opens || '';
     setRow(id, app, true);
@@ -1188,7 +1217,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     if (status === 'refused') {
       // macOS said no: still ticked, with Try again (as a check's refusal) and Sign in, Engelbart's window (2026-10-12).
       setSignIns((now) => { const next = { ...now }; for (const other of group) next[other] = { status: 'refused', browser: out.browser || '' }; return next; });
-      return 'closed';
+      if (chained) void turnedDown([{ id, app }]);
+      return 'refused';
     }
     // None of the person's browsers could be read after all (Safari only): Engelbart's window at once.
     if (status === 'no-browser') {
@@ -1201,13 +1231,21 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   // Every row of the apps sharing `app`'s sign-in → [{ id, app }].
   const groupRows = (app) => SOURCES.flatMap((source) => source.apps.filter((other) => sharesSignIn(app).includes(other)).map((other) => ({ id: source.id, app: other })));
   // The wait in the browser ends once no row of its sign-in is ticked (unticked, a group or Select all off, Leave out).
+  // So does the chain's wait on a modal for a sign-in group no longer ticked.
   React.useEffect(() => {
     if (!picks) return;
     const waiting = Object.keys(signIns).filter((app) => signIns[app] && signIns[app].status === 'browser');
     for (const app of waiting) if (!groupRows(app).some((row) => ticked(picks, row.id, row.app))) api.connectSignInBrowserCancel(app).catch(() => {});
+    const wait = modalAnswer.current;
+    if (wait && !groupRows(wait.group[0]).some((row) => ticked(picks, row.id, row.app))) answerChain(groupRows(wait.group[0]), 'dropped');
   }, [picks]); // eslint-disable-line react-hooks/exhaustive-deps
   // The consent turned off: no sign-in is checked, and the panels waiting for a yes go (2026-10-11 review).
-  const toggleConsent = () => { const on = !consent; setConsent(on); setWaitingYes((now) => waitingWhile(on, now)); };
+  const toggleConsent = () => {
+    const on = !consent;
+    setConsent(on);
+    setWaitingYes((now) => waitingWhile(on, now));
+    if (!on && modalAnswer.current) answerChain(groupRows(modalAnswer.current.group[0]), 'dropped');
+  };
   const pickPapers = async () => {
     const chosen = await pickDir();
     if (!chosen) return;
@@ -1447,9 +1485,11 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
 
       {view === 'choose' && (() => {
         const signInOf = (id, app) => shownSignIn(picks, id, app, signIns);
+        // A check is "Waiting for macOS…" only when the Keychain modal's Continue started it; otherwise "Checking…".
+        const keychainApps = keychainRun ? keychainRun.rows.flatMap((row) => sharesSignIn(row.app)) : [];
         // MATH-110: while and after macOS is asked for the folders, the PDFs row says so.
         const accessLabel = folderRun && ticked(picks, 'papers', LOCAL_PDFS) ? folderAccessLabel(folderRun) : null;
-        const label = (app, id = '') => (app === LOCAL_PDFS && accessLabel ? accessLabel : rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' }));
+        const label = (app, id = '') => (app === LOCAL_PDFS && accessLabel ? accessLabel : rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, keychain: keychainApps.includes(app), folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' }));
         const shownYes = waitingWhile(consent, waitingYes); // none while the consent is off
         const gateNow = gate && gate !== 'leave' ? signInGate(unsignedWeb(picks, signIns, found, consent), signIns, found && found.platform) : null;
         const inBrowser = Object.keys(signIns).find((app) => signIns[app] && signIns[app].status === 'browser');

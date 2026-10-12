@@ -125,11 +125,11 @@ test('a window that fails to open counts as closed', async () => {
   assert.deepEqual(opened, ['Claude']);
 });
 
-test('the screen opens the chain after Not now, after Deny at a check, and after Deny at Continue\'s unlock, and nowhere else', () => {
+test('the screen opens the chain after a new tick not signed in, Not now, Deny at a check, at Continue\'s unlock and at the browser route, and nowhere else', () => {
   const calls = [...screen.matchAll(/void turnedDown\(([^)]*)\)/g)].map((match) => match[1]);
-  assert.deepEqual(calls, ['[{ id, app }]', 'viaBrowser', 'rows'], 'checkSignIn\'s refusal, allowSignIns\' refused unlock, declineSignIns');
-  assert.match(screen, /if \(out\.status === 'refused'\) void turnedDown\(\[\{ id, app \}\]\)/);
-  assert.match(screen, /const declineSignIns = [\s\S]*?void turnedDown\(rows\);\n  \};/);
+  assert.deepEqual(calls, ['[{ id, app }]', 'viaBrowser', 'rows', '[{ id, app }]'], 'checkSignIn\'s refusal or new tick not signed in (opensSignIn), allowSignIns\' refused unlock, declineSignIns, browserSignIn\'s refusal in the chain');
+  assert.match(screen, /if \(opensSignIn\(out\.status, \{ fresh: open, consent: consentRef\.current, still: ticked\(picksRef\.current, id, app\) \}\)\) void turnedDown\(\[\{ id, app \}\]\)/);
+  assert.match(screen, /const declineSignIns = [\s\S]*?void turnedDown\(rows\);\n    answerChain\(rows, 'declined'\);\n  \};/);
   assert.match(screen, /if \(out && out\.status === 'refused'\) \{\n[^\n]*status: 'refused'[^\n]*\n\s*void turnedDown\(viaBrowser\);/);
   assert.match(screen, /consent: consentRef\.current/, 'the chain reads the consent as it is when each window would open');
 });

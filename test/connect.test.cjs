@@ -1581,7 +1581,8 @@ test('the sign-in window closed without signing in: the row, unticked, is plain 
 test('the choose screen\'s sign-in checks: each row state, the web apps a tick starts checks for, the panel and Not now (the apps stay ticked, with Sign in)', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const label = (signIn) => model.rowLabel('ChatGPT', { found: { apps: { ChatGPT: { found: true } } }, signIn });
-  assert.deepEqual(label({ status: 'checking', browser: '' }), { text: 'Waiting for macOS…', tone: 'busy' });
+  assert.deepEqual(label({ status: 'checking', browser: '' }), { text: 'Checking…', tone: 'busy' }, 'no Keychain modal before it: macOS is not asked');
+  assert.deepEqual(model.rowLabel('ChatGPT', { found: { apps: { ChatGPT: { found: true } } }, signIn: { status: 'checking', browser: '' }, keychain: true }), { text: 'Waiting for macOS…', tone: 'busy' }, 'started by the modal\'s Continue');
   assert.deepEqual(label({ status: 'signed-in', browser: 'Chrome' }), { text: '✓ Signed in from Chrome', tone: 'ok' });
   assert.deepEqual(label({ status: 'signed-in', browser: '' }), { text: '✓ Signed in', tone: 'ok' });
   // No browser of the person's signed it in (2026-10-11): Sign in, in Engelbart's own browser, not "after you start".
