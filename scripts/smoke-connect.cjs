@@ -381,7 +381,7 @@ app.whenReady().then(async () => {
     const chip = await js(wc, 'JSON.stringify(document.querySelector("[data-connect-dock]").getBoundingClientRect())');
     assert.ok(JSON.parse(chip).width < 170, `the chip stays small beside the bell: ${chip}`);
     assert.equal(await has(wc, '[data-connect-popup]'), false, 'no offer: this person connected their library in onboarding');
-    assert.equal(await has(wc, '[data-guided-offer]'), false, 'nor the guided setup\'s: their onboarding was it');
+    assert.equal(await has(wc, '[data-import-offer]'), false, 'nor Import Context: their library is imported (MEMORY.md)');
     assert.equal(await text(wc, '[data-sb-count="inbox"]'), '1', 'the sidebar\'s Inbox says the library is connected');
     await shot(wc, '6-project');
     await press(wc, '[data-connect-dock-open]');

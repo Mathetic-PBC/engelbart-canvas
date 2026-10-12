@@ -7,9 +7,9 @@ import { dockLine } from '../model/connect.js';
 // Connect your library in the background (2026-10-07: "Once the questions are done they should be able to minimize/close
 // and it goes in the background"). A session put away keeps running in main; the chip in the top-right controls (beside
 // the sandbox bell, so it is never under a native view: the Stage's pages and the post-its) says how it goes, amber when
-// an agent needs the person (a few words; the whole line is its tooltip), and opens it again as a popup. The same popup is the one-time offer to someone who has
-// projects already ("Existing users should see a popup to do this once, but not as an onboarding flow just like a popup
-// they can dismiss"), its notes going into the project open then. In every library since 2026-10-08, as all of Connect.
+// an agent needs the person (a few words; the whole line is its tooltip), and opens it again as a popup. The same popup is
+// what "Import Context"'s Import opens (2026-10-12, ui/GuidedSetup.jsx ImportContextOffer): the tick-and-import screen,
+// its notes going into the project open then. In every library since 2026-10-08, as all of Connect.
 
 /** The sessions main holds for this data root, kept current from its announcements. */
 export function useConnectSessions(enabled, dataRoot = '') {
@@ -63,7 +63,9 @@ export function ConnectChip({ sessions, onOpen }) {
 
 /**
  * The popup: a session again (`request.sessionId`, from the chip), or a new one for the project open (`request.projectId`,
- * the one-time offer; `request.workspaceId`, the workspace open, which what comes in joins too). Closing it puts a session away (it goes on); "Not now" before anything began dismisses the offer.
+ * Import Context's Import; `request.workspaceId`, the workspace open, which what comes in joins too). Closing it puts a
+ * session away (it goes on); closed before anything began, it is only closed: the offer comes back on a later launch
+ * until its Not now dismisses it.
  */
 export function ConnectPopup({ request, onClose }) {
   React.useEffect(() => {
@@ -83,7 +85,6 @@ export function ConnectPopup({ request, onClose }) {
         onClose={onClose}
         onSkip={onClose}
       />
-      {!request.sessionId && <span style={{ font: '12px/1.4 var(--font-sans)', color: '#4d4d4d', textShadow: '0 0 6px #fff' }}>Shown once. Close it to dismiss.</span>}
     </div>
   );
 }

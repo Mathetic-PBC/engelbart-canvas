@@ -90,7 +90,7 @@ app.whenReady().then(async () => {
     /* ------------------------------------------------ the gear opens the window at Model */
     await press(wc, GEAR);
     await until(() => has(wc, `${DIALOG} [data-level="anthropic:quick"]`), 'the window, at Model');
-    assert.deepEqual(await js(wc, `[...document.querySelectorAll('${DIALOG} [data-settings-page]')].map((b)=>b.textContent)`), ['Model', 'Connections', 'Guided setup'], 'test mode is off: Model, Connections, Guided setup');
+    assert.deepEqual(await js(wc, `[...document.querySelectorAll('${DIALOG} [data-settings-page]')].map((b)=>b.textContent)`), ['Model', 'Connections'], 'test mode is off: Model, Connections');
     await shot(wc, '2-levels');
     await choose(wc, '[data-level="anthropic:quick"] [data-level-field="model"]', 'opus');
     await until(() => (file(MODELS_FILE) || {}).discover && file(MODELS_FILE).discover.providers.anthropic.quick.model === 'opus', 'Quick on Opus saved');

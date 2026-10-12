@@ -163,6 +163,7 @@ const engelbartAPI = Object.freeze({
   connectOfferSeen: invoke('connect-offer-seen'),
   guidedOffer: invoke('guided-offer'),
   guidedOfferSeen: invoke('guided-offer-seen'),
+  contextImported: invoke('context-imported'),
   connectMemory: invoke('connect-memory'),
   onConnect: (callback) => subscribe('engelbart:connect', callback),
   onConnectors: (callback) => subscribe('engelbart:connectors', callback),

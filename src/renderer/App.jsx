@@ -10,7 +10,7 @@ import Workspace from './screens/Workspace.jsx';
 import ToolSetup from './ui/ToolSetup.jsx';
 import UpdateBanner from './ui/UpdateBanner.jsx';
 import { useConnectSessions, ConnectChip, ConnectPopup } from './ui/ConnectDock.jsx';
-import { GuidedSetupOffer, START_GUIDED_SETUP } from './ui/GuidedSetup.jsx';
+import { ImportContextOffer, START_GUIDED_SETUP } from './ui/GuidedSetup.jsx';
 import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
@@ -74,14 +74,17 @@ export default function App() {
   const [launchAsk, setLaunchAsk] = React.useState(null); // what the launch check asks about, until the dialog can open
   const askedAtLaunch = React.useRef(false);
   const lastTools = React.useRef(null);
-  // Connect your library (2026-10-07): its popup ({ sessionId } from the chip, { projectId } the one-time offer).
+  // Connect your library (2026-10-07): its popup ({ sessionId } from the chip, { projectId, workspaceId } from Import
+  // Context's Import).
   const [connectPopup, setConnectPopup] = React.useState(null);
   // The guided setup (ui/GuidedSetup.jsx): a new user's onboarding run for someone with projects, while `guided` (false;
-  // true, started from all projects; or { projectId, workspaceId }, the workspace it was started in); its one-time offer
-  // over the workspace while `guidedOffer`.
+  // true, started from all projects; or { projectId, workspaceId }, the workspace it was started in). Nothing in the window
+  // starts it since 2026-10-12. "Import Context" (ui/GuidedSetup.jsx ImportContextOffer) is over the workspace while
+  // `guidedOffer`; `offeredIn` is the data root it was offered in this launch (it is offered once a launch).
   const [guided, setGuided] = React.useState(false);
   const visited = React.useRef(null); // { projectId, workspaceId }: the workspace on screen now (onVisit)
   const [guidedOffer, setGuidedOffer] = React.useState(false);
+  const offeredIn = React.useRef(null);
 
   const fail = (candidate) => setError(errorMessage(candidate));
 
@@ -228,22 +231,37 @@ export default function App() {
 
   // Connect your library's sessions in this data root (each library its own, 2026-10-08), for the chip and the Inbox.
   const connectSessions = useConnectSessions(!!config, config ? config.dataRoot : '');
-  // The guided setup offered once to someone who has projects, over the workspace they are in (2026-10-10: it took the
-  // place of Connect your library's one-time popup; Connect is the setup's second screen). Seen once it has been shown.
+  // "Import Context" (2026-10-12, in place of the guided setup's offer), over the workspace someone opens while this
+  // library's context has not been imported and the offer has not been dismissed (main's guided-offer: ./connect/imported.cjs
+  // importOfferDue). Once a launch: shown, it is not offered again until Engelbart opens again (or the data root changes).
   const openProjectId = phase === 'workspace' && tree ? tree.project.id : null;
+  const dataRoot = config ? config.dataRoot : '';
   React.useEffect(() => {
-    if (!openProjectId) return undefined;
+    if (!openProjectId || offeredIn.current === dataRoot) return undefined;
     let alive = true;
     const timer = setTimeout(() => {
       api.guidedOffer().then((offer) => {
-        if (!alive || !offer || !offer.show) return;
+        if (!alive || !offer || !offer.show || offeredIn.current === dataRoot) return;
+        offeredIn.current = dataRoot;
         setGuidedOffer(true);
         api.guidedOfferSeen('shown').catch(() => {});
       }).catch(() => {});
     }, 1200); // after the workspace has drawn itself
     return () => { alive = false; clearTimeout(timer); };
-  }, [openProjectId]);
-  // Start (the offer's, or Settings ▸ Guided setup's): onboarding from its first screen, as a new user has it. Inside a
+  }, [openProjectId, dataRoot]);
+  // Import: Connect your library's tick-and-import screen over the workspace, for the project and workspace open (what
+  // comes in joins them). Nothing else opens: no onboarding, no welcome screen, no Welcome workspace. Closing it before an
+  // import begins is Not now for this launch only; Not now on the offer is for good.
+  const importContext = React.useCallback(() => {
+    const now = latest.current;
+    const projectId = now.phase === 'workspace' && now.tree ? now.tree.project.id : null;
+    setGuidedOffer(false);
+    api.guidedOfferSeen('started').catch(() => {});
+    if (!projectId) return;
+    const workspaceId = visited.current && visited.current.projectId === projectId ? visited.current.workspaceId : (now.entry && now.entry.workspaceId) || null;
+    setConnectPopup({ projectId, workspaceId });
+  }, []);
+  // The guided setup, started by START_GUIDED_SETUP (nothing in the window sends it since 2026-10-12): onboarding from its first screen, as a new user has it. Inside a
   // project (2026-10-10, "guided setup shouldn't create a new project") it remembers the workspace it left: its screens
   // have no Create, and it ends in a Welcome workspace added there. Started again during the setup, it keeps where it was from.
   const startGuided = React.useCallback(() => {
@@ -492,7 +510,7 @@ export default function App() {
         {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
       {guidedOffer && phase === 'workspace' && (
-        <GuidedSetupOffer onStart={() => { api.guidedOfferSeen('started').catch(() => {}); startGuided(); }} onDismiss={() => { setGuidedOffer(false); api.guidedOfferSeen('dismissed').catch(() => {}); }} />
+        <ImportContextOffer onImport={importContext} onDismiss={() => { setGuidedOffer(false); api.guidedOfferSeen('dismissed').catch(() => {}); }} />
       )}
       {connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>

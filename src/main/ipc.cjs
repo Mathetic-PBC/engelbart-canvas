@@ -30,6 +30,7 @@ const { githubRepo } = require('./sandbox/runs.cjs');
 const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
 const { detect: detectSources } = require('./connect/scan.cjs');
 const folderAccess = require('./connect/folder-access.cjs');
+const { contextImported, importOfferDue } = require('./connect/imported.cjs');
 
 const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
 const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
@@ -566,9 +567,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     fs.writeFileSync(offerFile(ctx), JSON.stringify({ seen: true, how: how === 'started' ? 'started' : 'dismissed', at: new Date().toISOString() }), { mode: 0o600 });
     return true;
   }));
-  // The guided setup's one-time offer to someone with projects (./store/getting-started.cjs guidedOfferDue).
-  // ENGELBART_CONNECT_OFFER=off never shows it, as it never showed Connect your library's popup it replaced (the smokes).
-  handle('guided-offer', withCtx((ctx) => ({ show: process.env.ENGELBART_CONNECT_OFFER !== 'off' && gettingStarted.guidedOfferDue(ctx) })));
+  // Whether this library's context has been imported: MEMORY.md, or a Connect session that finished (./connect/imported.cjs).
+  handle('context-imported', withCtx((ctx) => ({ imported: contextImported(ctx.dataRoot) })));
+  // The "Import Context" offer over the workspace (2026-10-12, in place of the guided setup's): shown until it is dismissed
+  // or the context is imported (./connect/imported.cjs importOfferDue). ENGELBART_CONNECT_OFFER=off never shows it (the smokes).
+  handle('guided-offer', withCtx((ctx) => ({ show: importOfferDue(ctx) })));
   handle('guided-offer-seen', withCtx((ctx, how) => gettingStarted.markGuidedOffer(ctx, typeof how === 'string' ? how : 'dismissed')));
   // The Welcome walkthrough (2026-10-09, ./store/getting-started.cjs): its state, and the steps the window ticked (or a
   // circle unticked by hand) and Hide.
