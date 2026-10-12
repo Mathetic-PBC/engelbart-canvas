@@ -170,10 +170,10 @@ function folderAtAGlance(dir, homeDir) {
  * → evidence, or { needs: 'folder' } when there is nowhere it may look. `access` (MATH-110, ./folder-access.cjs guard): a
  * protected folder (Desktop, Documents, Downloads, iCloud Drive, the drives) is looked in only once macOS let Engelbart
  * read it, or when the person picked it; with none given, the chosen folders are taken as picked and nothing else
- * protected is read. `notAllowed` names the usual places left out.
+ * protected is read (on the Mac: `platform`). `notAllowed` names the usual places left out.
  */
-function pdfsAtAGlance(chosen, { homeDir, everywhere, project = null, days = null, access = null }) {
-  const guard = access || folderAccess.guard({ homeDir, answers: {}, picked: chosen });
+function pdfsAtAGlance(chosen, { homeDir, everywhere, project = null, days = null, access = null, platform = process.platform }) {
+  const guard = access || folderAccess.guard({ homeDir, answers: {}, picked: chosen, platform });
   const roots = [...chosen.filter((dir) => guard.readable(dir)), ...(everywhere ? readers.pdfRoots(homeDir, { readable: guard.readable }) : [])];
   const notAllowed = everywhere ? guard.blocked.map((folder) => folder.name) : [];
   const left = notAllowed.length ? { notAllowed, notAllowedAre: 'macOS has not let Engelbart read these folders: they were not looked in. The person can allow them in System Settings → Privacy & Security → Files and Folders.' } : {};
@@ -191,12 +191,12 @@ function pdfsAtAGlance(chosen, { homeDir, everywhere, project = null, days = nul
  * buttons; `zotero` { status(), root() }, `github` { status(), repos({ dirs }) }; `appleNotes` (./apple-notes.cjs) once the person
  * let Engelbart read Apple Notes, else null. An app on the web or behind a connector is only named here: its survey reads it.
  * `access` (MATH-110, ./folder-access.cjs guard): what in the protected folders may be read; with none, only the folders
- * the person picked (`choices.picked`).
+ * the person picked (`choices.picked`) on the Mac (`platform`; elsewhere nothing is protected).
  */
-async function scanFor(choices, { homeDir, env = process.env, picked = {}, zotero = {}, github = {}, appleNotes = null, access = null } = {}) {
+async function scanFor(choices, { homeDir, env = process.env, picked = {}, zotero = {}, github = {}, appleNotes = null, access = null, platform = process.platform } = {}) {
   const out = {};
   const folders = picked.folders || {};
-  const guard = access || folderAccess.guard({ homeDir, answers: {}, picked: (choices && choices.picked) || [] });
+  const guard = access || folderAccess.guard({ homeDir, answers: {}, picked: (choices && choices.picked) || [], platform });
   for (const [id, choice] of Object.entries((choices && choices.sources) || {})) {
     if (!choice || !choice.on || !sourceOf(id)) continue;
     const here = {};

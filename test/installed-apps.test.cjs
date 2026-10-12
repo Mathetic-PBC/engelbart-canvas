@@ -10,15 +10,20 @@ const { createInstalledApps, installedApp, plistNames } = require('../src/main/b
 
 const plist = (id) => `<?xml version="1.0"?><plist><dict><key>CFBundleIdentifier</key>\n\t<string>${id}</string></dict></plist>`;
 
-/** A fake file system: `apps` { '/Applications/Google Chrome.app': 'com.google.Chrome' | null (binary plist) }. */
+/**
+ * A fake file system: `apps` { '/Applications/Google Chrome.app': 'com.google.Chrome' | null (binary plist) }. The paths
+ * it is asked about are taken with `/` (path.join gives `\` on Windows, where the tests run too).
+ */
 function fakeFs(apps) {
   const reads = [];
+  const slashed = (p) => String(p).split(path.sep).join('/');
   return {
     reads,
     fsx: {
-      exists: (p) => Object.hasOwn(apps, p),
-      readdir: (dir) => Object.keys(apps).filter((p) => path.dirname(p) === dir).map((p) => path.basename(p)),
-      readFile: (file) => {
+      exists: (p) => Object.hasOwn(apps, slashed(p)),
+      readdir: (dir) => Object.keys(apps).filter((p) => path.posix.dirname(p) === slashed(dir)).map((p) => path.posix.basename(p)),
+      readFile: (raw) => {
+        const file = slashed(raw);
         reads.push(file);
         const app = file.replace(/\/Contents\/Info\.plist$/, '');
         if (!Object.hasOwn(apps, app)) throw new Error('ENOENT');

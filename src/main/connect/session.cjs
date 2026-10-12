@@ -288,9 +288,10 @@ function shownOf(input) {
  * whose CLI can run now; `context()` the store's context; `zotero` { status(), root(), download? }; `github` { status(),
  * repos() }; `deps` for the library (describe, identifyRepo, inspectPdf, onAdded, onPdf); `notify(snapshot)` on every
  * change; `openBridge` (../sandbox/local-tools.cjs openToolBridge); `browser` the agents' browser (./browser.cjs, null
- * where there is none); `connectors` (./connectors.cjs); `appleNotes` (./apple-notes.cjs).
+ * where there is none); `connectors` (./connectors.cjs); `appleNotes` (./apple-notes.cjs); `platform` whose folder access
+ * applies (./folder-access.cjs: macOS's alone).
  */
-function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, signInWindow = null, now = () => new Date().toISOString() }) {
+function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, signInWindow = null, now = () => new Date().toISOString(), platform = process.platform }) {
   const sessions = new Map();
   const readyNow = () => { try { return (ready() || []).filter((provider) => PROVIDERS.includes(provider)); } catch { return [...PROVIDERS]; } };
   const choiceFor = (provider) => connectChoice(provider, (() => { try { return models(); } catch { return null; } })());
@@ -361,7 +362,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       ...(on('Obsidian') || (s.choices.sources.sites && s.choices.sources.sites.on) ? readers.obsidianVaults(homeDir).map((vault) => vault.path) : []),
       ...(on('Zoom') ? [path.join(homeDir, 'Documents', 'Zoom')] : []),
     ];
-    return folderAccess.guard({ homeDir, dataRoot: s.dataRoot, picked: [...(s.choices.picked || []), ...places] });
+    return folderAccess.guard({ homeDir, dataRoot: s.dataRoot, picked: [...(s.choices.picked || []), ...places], platform });
   }
 
   /**
@@ -582,12 +583,14 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   function findMessage(s, job) {
     const app = job.apps[0];
     // MATH-110: the protected folders macOS did not let Engelbart read are kept out of the search, so it never asks
-    // mid-run; ~/Pictures, ~/Music and ~/Movies too (their own prompts). `allowed` are the ones it may look in.
+    // mid-run; ~/Pictures, ~/Music and ~/Movies too (their own prompts). `allowed` are the ones it may look in. Off the Mac
+    // nothing is protected (./folder-access.cjs): every folder of the home folder may be looked in but Windows' AppData.
+    const mac = folderAccess.guards(platform);
     const access = accessOf(s);
     const shown = (dir) => readers.shownPath(homeDir, dir);
     const allowed = access.allowed.map((folder) => `${folder.name} (${shown(folder.path)})`);
     const allowedTop = new Set(access.allowed.map((folder) => folder.id));
-    const skipped = ['Desktop', 'Documents', 'Downloads', 'Library', 'Pictures', 'Music', 'Movies'].filter((name) => !allowedTop.has(name));
+    const skipped = mac ? ['Desktop', 'Documents', 'Downloads', 'Library', 'Pictures', 'Music', 'Movies'].filter((name) => !allowedTop.has(name)) : ['AppData'];
     const insideLibrary = access.allowed.filter((folder) => folder.id.startsWith(`Library${path.sep}`)).map((folder) => shown(folder.path));
     const tops = (() => { try { return fs.readdirSync(homeDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !skipped.includes(entry.name)).map((entry) => `~/${entry.name}`).sort().slice(0, 60); } catch { return []; } })();
     const lookIn = [...tops, ...insideLibrary];
@@ -601,8 +604,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return [
       engelbartBlock(s), projectBlock(s.choices), `<source>${job.source}</source>`, `<app>${app}</app>`,
       `Engelbart did not find ${app === LOCAL_PDFS ? 'any folder of PDFs' : `their ${shownName(app)} folder`} where it usually is. ${what}`,
-      `Look with Glob, Grep and Read, inside their home folder (${homeDir}) only. Never look in ${skipped.map((name) => `~/${name}`).join(', ')}${insideLibrary.length ? ` (${insideLibrary.join(' and ')} aside)` : ''}: macOS has not let Engelbart read ${skipped.length > 1 ? 'them' : 'it'}, and looking there makes it stop the person with a prompt. Skip hidden folders too (a vault's .obsidian aside). Never Glob from the home folder itself (a pattern like ${homeDir}/**/x walks into the folders to skip): Glob inside each folder you may look in instead.`,
-      `<folders_allowed note="Protected folders macOS let Engelbart read">${allowed.length ? allowed.join(', ') : 'none'}</folders_allowed>`,
+      mac
+        ? `Look with Glob, Grep and Read, inside their home folder (${homeDir}) only. Never look in ${skipped.map((name) => `~/${name}`).join(', ')}${insideLibrary.length ? ` (${insideLibrary.join(' and ')} aside)` : ''}: macOS has not let Engelbart read ${skipped.length > 1 ? 'them' : 'it'}, and looking there makes it stop the person with a prompt. Skip hidden folders too (a vault's .obsidian aside). Never Glob from the home folder itself (a pattern like ${homeDir}/**/x walks into the folders to skip): Glob inside each folder you may look in instead.`
+        : `Look with Glob, Grep and Read, inside their home folder (${homeDir}) only. Skip hidden folders (a vault's .obsidian aside) and ~/AppData. Never Glob from the home folder itself (a pattern like ${homeDir}/**/x walks into every folder at once): Glob inside each folder you may look in instead.`,
+      mac ? `<folders_allowed note="Protected folders macOS let Engelbart read">${allowed.length ? allowed.join(', ') : 'none'}</folders_allowed>` : '',
       `<look_in note="The folders of their home folder you may look in">${lookIn.length ? lookIn.join(', ') : 'none'}</look_in>`,
       'Spend a few minutes at most. Never call needs_you to ask them for a folder: when you find nothing, say so, and they are offered a button to choose one.',
       `Reply with the survey's JSON object, with two more fields: ${reply}, and "searched": "<where you looked, in a few words>".`,

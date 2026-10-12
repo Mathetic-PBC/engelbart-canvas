@@ -13,6 +13,8 @@
 //   guard(...)        readable(dir): false inside a protected folder that was not allowed, unless inside a folder the
 //                     person picked themselves (macOS lets a program read what was picked in its folder picker)
 // Nothing here reads inside a protected folder except ask().
+// Off the Mac (Windows, Linux: docs/windows-port-log.md "Catch-up to 0.1.18") no folder is protected: none is asked about,
+// and everything may be read, as before MATH-110.
 
 const nodeFs = require('node:fs');
 const path = require('node:path');
@@ -22,6 +24,7 @@ const ICLOUD = path.join('Library', 'Mobile Documents', 'com~apple~CloudDocs');
 const CLOUD = path.join('Library', 'CloudStorage');
 const FILE = 'folders.json';
 
+const guards = (platform) => platform === 'darwin';
 const inside = (dir, folder) => dir === folder || dir.startsWith(folder + path.sep);
 const isDir = (fs, dir) => { try { return fs.statSync(dir).isDirectory(); } catch { return false; } };
 
@@ -39,8 +42,9 @@ function driveName(name) {
  * `covers` what macOS guards along with it (iCloud Drive guards all of ~/Library/Mobile Documents). Reading
  * ~/Library/CloudStorage itself is not inside a drive, so no prompt comes of listing it.
  */
-function protectedFolders({ homeDir, fs = nodeFs } = {}) {
+function protectedFolders({ homeDir, fs = nodeFs, platform = process.platform } = {}) {
   const out = [];
+  if (!guards(platform)) return out;
   for (const [id, name] of [['Desktop', 'Desktop'], ['Documents', 'Documents'], ['Downloads', 'Downloads'], [ICLOUD, 'iCloud Drive']]) {
     const full = path.join(homeDir, id);
     if (isDir(fs, full)) out.push({ id, path: full, name, covers: id === ICLOUD ? path.join(homeDir, 'Library', 'Mobile Documents') : full });
@@ -90,15 +94,15 @@ function writeAnswers(dataRoot, answers, { fs = nodeFs, now = () => new Date() }
  * `picked` (folders the person chose in the folder picker) or is a protected folder's parent (the home folder).
  * `allowed` and `blocked` are the protected folders by answer, a folder never asked about counting as blocked.
  */
-function guard({ homeDir, dataRoot = null, answers = null, picked = [], fs = nodeFs } = {}) {
+function guard({ homeDir, dataRoot = null, answers = null, picked = [], fs = nodeFs, platform = process.platform } = {}) {
   const said = answers || readAnswers(dataRoot, { fs });
-  const all = protectedFolders({ homeDir, fs });
+  const all = protectedFolders({ homeDir, fs, platform });
   const allowed = all.filter((folder) => said[folder.id] === 'allowed');
   const blocked = all.filter((folder) => said[folder.id] !== 'allowed');
   // A drive that is not there yet, or one this list missed, is guarded all the same.
   const guarded = [...blocked.map((folder) => folder.covers), ...['Desktop', 'Documents', 'Downloads', path.join('Library', 'Mobile Documents'), CLOUD]
     .filter((id) => !all.some((folder) => folder.id === id || (id === path.join('Library', 'Mobile Documents') && folder.id === ICLOUD)))
-    .map((id) => path.join(homeDir, id))];
+    .map((id) => path.join(homeDir, id))].filter(() => guards(platform));
   const free = [...allowed.map((folder) => folder.covers), ...picked.filter(Boolean).map((dir) => path.resolve(dir))];
   const readable = (dir) => {
     if (!dir) return false;
@@ -119,8 +123,8 @@ const folderOf = (folders, dir) => folders.find((folder) => inside(path.resolve(
  * all of them when PDFs on this Mac is ticked with file access on; the one above each ticked local repo; else none.
  * `choices` as the renderer sends them (choicesOf) or as cleanChoices keeps them.
  */
-function needed(choices, { homeDir, dataRoot = null, fs = nodeFs } = {}) {
-  const all = protectedFolders({ homeDir, fs });
+function needed(choices, { homeDir, dataRoot = null, fs = nodeFs, platform = process.platform } = {}) {
+  const all = protectedFolders({ homeDir, fs, platform });
   const said = readAnswers(dataRoot, { fs });
   const want = new Set();
   const sources = (choices && choices.sources) || {};
@@ -146,8 +150,8 @@ function needed(choices, { homeDir, dataRoot = null, fs = nodeFs } = {}) {
  * Reads each of `ids` in turn, so that macOS asks about them one after another → { [id]: 'allowed' | 'denied' }, and
  * writes the answers to folders.json. A folder that is not there is left out.
  */
-async function ask(ids, { homeDir, dataRoot = null, fs = nodeFs, now } = {}) {
-  const all = protectedFolders({ homeDir, fs });
+async function ask(ids, { homeDir, dataRoot = null, fs = nodeFs, now, platform = process.platform } = {}) {
+  const all = protectedFolders({ homeDir, fs, platform });
   const answers = {};
   for (const id of Array.isArray(ids) ? ids : []) {
     const folder = all.find((each) => each.id === id);
@@ -164,4 +168,4 @@ async function ask(ids, { homeDir, dataRoot = null, fs = nodeFs, now } = {}) {
   return answers;
 }
 
-module.exports = { protectedFolders, readAnswers, writeAnswers, guard, needed, ask, driveName, folderOf, ICLOUD, CLOUD };
+module.exports = { guards, protectedFolders, readAnswers, writeAnswers, guard, needed, ask, driveName, folderOf, ICLOUD, CLOUD };
