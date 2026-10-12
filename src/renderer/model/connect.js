@@ -186,7 +186,7 @@ export const NEEDS_SIGN_IN = 'Needs sign-in';
  * the Mac has its desktop app or a ~/Zotero: that says nothing about whether the person uses it, and ticking it still
  * works (a web app's sign-in is checked when ticked; Zotero signs in itself). What starts ticked is unchanged (foundRow).
  */
-export function rowLabel(app, { found = null, connectors = {}, notes = '', folder = '', signIn = null } = {}) {
+export function rowLabel(app, { found = null, connectors = {}, notes = '', folder = '', signIn = null, keychain = false } = {}) {
   const spec = APPS[app];
   const seen = (found && found.apps && found.apps[app]) || {};
   if (folder) return { text: folder, tone: '' };
@@ -203,7 +203,7 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
     return notes ? { text: notes, tone: 'error' } : { text: '', tone: '' };
   }
   if (spec.reach === 'web') {
-    const said = signInLabel(signIn, app);
+    const said = signInLabel(signIn, app, keychain);
     if (said) return said;
     if (seen.signedIn) return { text: 'signed in to Engelbart', tone: '' };
     return { text: NEEDS_SIGN_IN, tone: 'muted' }; // found or not: it is in the cloud (MATH-144)
@@ -228,12 +228,14 @@ export const waitingIn = (name, browser) => `Sign in to ${name || 'it'} in ${bro
  * ('signing' while that window is open), Google's too since 2026-10-12. A refused one also offers Try again (macOS asked
  * again). Google's first Sign in waits in the person's browser ('browser'), with "Use another account" and "Sign in here
  * instead" beside it; Google turning the window's sign-in away ('rejected') offers Try again (the window again).
- * Signed in from a browser with several profiles, the profile too: "✓ Signed in from Chrome · Work".
+ * Signed in from a browser with several profiles, the profile too: "✓ Signed in from Chrome · Work". While it is checked:
+ * "Checking…", or "Waiting for macOS…" when the Keychain modal's Continue started the check (`keychain`, 2026-10-12): only
+ * then is macOS asking; a check of an app no browser holds asks nothing.
  */
-function signInLabel(signIn, app = '') {
+function signInLabel(signIn, app = '', keychain = false) {
   if (!signIn || !signIn.status) return null;
   const google = signsInThroughBrowser(app);
-  if (signIn.status === 'checking') return { text: 'Waiting for macOS…', tone: 'busy' };
+  if (signIn.status === 'checking') return { text: keychain ? 'Waiting for macOS…' : 'Checking…', tone: 'busy' };
   if (signIn.status === 'signing') return { text: 'Signing in…', tone: 'busy' };
   if (signIn.status === 'browser') return { text: waitingIn(signInName(app), signIn.browser), tone: 'busy', here: true, ...(google ? { another: true } : {}) };
   if (signIn.status === 'signed-in') return { text: signIn.browser ? `✓ Signed in from ${signIn.browser}${signIn.profile ? ` · ${signIn.profile}` : ''}` : '✓ Signed in', tone: 'ok' };
@@ -283,9 +285,21 @@ export function shownSignIn(state, id, app, signIns = {}) {
 }
 
 /**
- * The sign-in windows to open, in turn, for the apps whose sign-in a browser was turned down for (2026-10-12, second test
- * run: Not now, or Deny at macOS's prompt) → [{ id, app }]: one per sign-in group (Gmail and Google Drive share one), in
- * the order given, leaving out a row no longer ticked and one whose group is signed in. None while the consent is off.
+ * Whether a web app's sign-in check opens its sign-in by itself, in signInWindows' chain (2026-10-12) → boolean. macOS
+ * refusing it ('refused') does, as since the second test run. Not signed in ('signed-out', or 'no-browser': no browser of
+ * the person's holds it) does for a row just ticked (`fresh`: ticking is the consent) that is still ticked with the consent
+ * on; never for Try again or the run's own checks. Signed in, or a check that failed or was cleared, opens nothing.
+ */
+export function opensSignIn(status, { fresh = false, consent = true, still = true } = {}) {
+  if (status === 'refused') return true;
+  return !!fresh && !!consent && !!still && ['signed-out', 'no-browser'].includes(status);
+}
+
+/**
+ * The sign-ins to open, in turn (signInWindows), for the web apps just ticked and not signed in, and those whose sign-in a
+ * browser was turned down for (2026-10-12: Not now, or Deny at macOS's prompt) → [{ id, app }]: one per sign-in group
+ * (Gmail and Google Drive share one), in the order given, leaving out a row no longer ticked, one whose group is signed
+ * in and one whose group's sign-in is open already (its window, or a wait in the browser). None while the consent is off.
  */
 export function signInChain(rows, { signIns = {}, state = null, consent = true } = {}) {
   if (!consent) return [];
@@ -293,6 +307,7 @@ export function signInChain(rows, { signIns = {}, state = null, consent = true }
   for (const row of rows || []) {
     if (!row || !row.app || (state && !ticked(state, row.id, row.app))) continue;
     if (sharesSignIn(row.app).some((other) => (signIns[other] || {}).status === 'signed-in')) continue;
+    if (sharesSignIn(row.app).some((other) => ['browser', 'signing'].includes((signIns[other] || {}).status))) continue; // already open
     if (out.some((each) => signInGroup(each.app) === signInGroup(row.app))) continue;
     out.push({ id: row.id, app: row.app });
   }
@@ -300,12 +315,18 @@ export function signInChain(rows, { signIns = {}, state = null, consent = true }
 }
 
 /**
- * Engelbart's sign-in windows opened one after another for the apps turned down (2026-10-12, second test run) →
- * turnedDown(rows), called with each Not now or Deny. `pick(rows)` is signInChain on the screen as it is now; `open(row)`
- * opens the window → 'signed-in' | 'rejected' | 'closed'. Signed in or turned away by the site, the next opens; closed by
- * the person, the chain stops and forgets the rest (their rows keep their tick and Sign in; the closed window's sign-in
- * group is unticked, signInWindowClosed). Rows turned down while a window is open wait
- * their turn, those of the open window's sign-in aside.
+ * The sign-ins opened one after another (2026-10-12): for each web app just ticked that is not signed in, and each one
+ * turned down (Not now, or Deny at macOS's prompt) → turnedDown(rows). `pick(rows)` is signInChain on the screen as it is
+ * now; `open(row)` starts the row's sign-in (the screen's signInHere) and answers once nothing of it is open any more:
+ * - 'signed-in' | 'rejected': Engelbart's window signed in, or the site turned it away;
+ * - 'browser': Google's sign-in left waiting in the person's browser, which does not hold the chain;
+ * - 'declined': the Keychain modal's Not now, or Deny at macOS's prompt after its Continue: the row comes back first, once,
+ *   and its sign-in group gets Engelbart's window;
+ * - 'replaced' | 'dropped': the window replaced by another app's, or the row's modal gone without an answer (unticked,
+ *   consent off);
+ * - 'closed': the person closed Engelbart's window without signing in. Only this stops the chain, which forgets the rest
+ *   (their rows keep their tick and Sign in; the closed window's sign-in group is unticked, signInWindowClosed).
+ * One sign-in at a time: rows sent while one is open wait their turn, those of its own sign-in group aside.
  */
 export function signInWindows({ pick, open }) {
   let rows = [];
@@ -313,12 +334,14 @@ export function signInWindows({ pick, open }) {
   return async function turnedDown(more = []) {
     rows = [...rows, ...more.filter((row) => row && !(opened && sharesSignIn(opened).includes(row.app)))];
     if (opened) return;
+    const again = new Set();
     for (let [row] = pick(rows); row; [row] = pick(rows)) {
       rows = rows.filter((each) => !sharesSignIn(row.app).includes(each.app));
       opened = row.app;
       let out = 'closed';
       try { out = await open(row); } catch { out = 'closed'; } finally { opened = ''; }
       if (out === 'closed') break;
+      if (out === 'declined' && !again.has(signInGroup(row.app))) { again.add(signInGroup(row.app)); rows = [row, ...rows]; }
     }
     rows = [];
   };

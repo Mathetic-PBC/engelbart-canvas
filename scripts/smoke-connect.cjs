@@ -8,9 +8,9 @@
 // filled first, no folder part), Connect in place of Add to your library and Custom instructions, and no Project context
 // (welcome, create, connect: Connect "3 of 3"); the choose screen starts with Notes ticked (a vault
 // Obsidian knows), ChatGPT ticked by hand, the permissions card naming it; Refine opens the chat, its first line said at
-// once, whose question is a card with one option per line; ChatGPT, signed in nowhere this disposable home can read, has
-// Sign in on its row (2026-10-11); Google Drive and Gmail, with no browser here whose sign-ins Engelbart can read (as with
-// Safari only), offer Sign in too, and it opens Engelbart's own sign-in window straight away, with no Keychain modal;
+// once, whose question is a card with one option per line; Google Drive, ticked with no browser here whose sign-ins
+// Engelbart can read (as with Safari only), opens Engelbart's own sign-in window on the tick (2026-10-12), with no Keychain
+// modal; ChatGPT and Gmail ticked meanwhile wait their turn, and closing the window stops the chain, ChatGPT keeping Sign in;
 // Bring these in asks for ChatGPT's sign-in in a modal first, so the refine chat has no sign-in card; its survey runs, the
 // librarian waits for it, then offers what it found; the connect step's Continue is a filled button once
 // the session has started; Import lights up once nothing is left to ask; the working view follows every import, MEMORY.md
@@ -144,37 +144,41 @@ app.whenReady().then(async () => {
     assert.equal(await has(wc, '[data-connect-library="choose"] [data-connect-chip]'), false, 'no Refine chip');
     assert.match(await text(wc, '[data-connect-foot] [data-connect-bring]'), /^Bring these in$/);
     assert.match(await text(wc, '[data-connect-foot]'), /Skip for now[\s\S]*4 of 4[\s\S]*Bring these in/);
+    // Ticked and not signed in, a web app's sign-in opens by itself (2026-10-12): no Sign in to click. Google Drive first. No
+    // browser whose sign-ins can be read is installed here (as with Safari only), so its check finds no sign-in and Engelbart's
+    // own window opens on the tick: no Keychain modal, no waiting line. (The browser hand-off opens a real browser and reaches
+    // Google, so it is test/connect.test.cjs's and test/connect-web-signin.test.cjs's, on fixtures.)
+    assert.equal(BrowserWindow.getAllWindows().length, 1, 'no sign-in window before a tick');
+    await press(wc, '[data-connect-app="Google Docs"]');
+    const googleWindow = await until(() => BrowserWindow.getAllWindows().find((other) => other !== win), 'Engelbart\'s sign-in window, for Google, on the tick');
+    assert.equal(await has(wc, '[data-connect-keychain]'), false, 'no Keychain modal');
+    assert.equal(await has(wc, '[data-connect-here]'), false, 'no browser waited on, so no "Sign in here instead"');
+    // ChatGPT and Gmail ticked while it is open: one popup at a time, and Gmail shares Google's.
     await press(wc, '[data-connect-source="chats"] button[aria-expanded]');
     await press(wc, '[data-connect-app="ChatGPT"]');
     assert.equal(await attr(wc, '[data-connect-app=ChatGPT] [role=checkbox]', 'aria-checked'), 'true');
-    // No browser here holds its sign-in (2026-10-11): Sign in on its row, not "You'll sign in after you start".
-    await until(() => has(wc, '[data-connect-signin="ChatGPT"]'), 'ChatGPT\'s Sign in');
-    assert.doesNotMatch(await text(wc, '[data-connect-app=ChatGPT]'), /after you start|Needs Chrome/);
-    // Google Drive and Gmail share one Google sign-in. No browser whose sign-ins can be read is installed here (as with Safari
-    // only), so both rows offer Sign in, and it opens Engelbart's own window straight away: no Keychain modal, no waiting
-    // line (2026-10-12). (The browser hand-off opens a real browser and reaches Google, so it is test/connect.test.cjs's and
-    // test/connect-web-signin.test.cjs's, on fixtures.)
-    await press(wc, '[data-connect-app="Google Docs"]');
     await press(wc, '[data-connect-source="email"] button[aria-expanded]');
     await press(wc, '[data-connect-app="Gmail"]');
-    await until(async () => (await has(wc, '[data-connect-signin="Google Docs"]')) && has(wc, '[data-connect-signin="Gmail"]'), 'Sign in on both Google rows');
+    await until(() => has(wc, '[data-connect-signin="ChatGPT"]'), 'ChatGPT checked: not signed in, waiting its turn');
+    assert.doesNotMatch(await text(wc, '[data-connect-app=ChatGPT]'), /after you start|Needs Chrome/);
     assert.equal(await has(wc, '[data-connect-gmail-consent]'), false, 'no Gmail line with Gmail ticked (2026-10-12, second test run)');
     assert.doesNotMatch(await text(wc, '[data-connect-library="choose"]'), /Engelbart searches your Gmail/);
     assert.doesNotMatch(await text(wc, '[data-connect-app="Google Docs"]'), /Google needs|Chrome, Brave or Firefox/);
-    assert.equal(BrowserWindow.getAllWindows().length, 1, 'no sign-in window yet');
-    await press(wc, '[data-connect-signin="Google Docs"]');
-    const googleWindow = await until(() => BrowserWindow.getAllWindows().find((other) => other !== win), 'Engelbart\'s sign-in window, for Google');
-    assert.equal(await has(wc, '[data-connect-keychain]'), false, 'no Keychain modal');
-    assert.equal(await has(wc, '[data-connect-here]'), false, 'no browser waited on, so no "Sign in here instead"');
+    await pause(400);
+    assert.equal(BrowserWindow.getAllWindows().length, 2, 'one sign-in window at a time: ChatGPT waits, Gmail has Google\'s');
     await shot(wc, '1-sign-in-rows');
     // Closed without signing in (2026-10-12, third run): a no, so Google Drive and Gmail, which share its sign-in, are
-    // unticked, and say nothing of it; not left ticked with a Sign in that Bring these in would ask for again.
+    // unticked, and say nothing of it; not left ticked with a Sign in that Bring these in would ask for again. The chain
+    // stops there: ChatGPT's window never opens, and ChatGPT keeps its tick and Sign in.
     googleWindow.close();
     await until(async () => (await attr(wc, '[data-connect-app="Google Docs"] [role=checkbox]', 'aria-checked')) === 'false', 'Google Drive unticked, after the window is closed');
     assert.equal(await attr(wc, '[data-connect-app="Gmail"] [role=checkbox]', 'aria-checked'), 'false', 'Gmail, sharing its sign-in, unticked too');
     assert.equal(await has(wc, '[data-connect-signin="Google Docs"]'), false, 'no Sign in on an unticked row');
     assert.equal(await has(wc, '[data-connect-signin="Gmail"]'), false);
+    await pause(500);
+    assert.equal(BrowserWindow.getAllWindows().length, 1, 'the chain stopped: no window for ChatGPT');
     assert.equal(await attr(wc, '[data-connect-app=ChatGPT] [role=checkbox]', 'aria-checked'), 'true', 'ChatGPT, another sign-in, keeps its tick');
+    assert.ok(await has(wc, '[data-connect-signin="ChatGPT"]'), 'and its Sign in');
     const agentsBrowser = electronSession.fromPartition(stagePartition(false));
 
     /* ------------------------------------------------ turned down: Engelbart's sign-in windows open by themselves, in turn */
