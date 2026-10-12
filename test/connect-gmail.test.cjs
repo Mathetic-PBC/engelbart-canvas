@@ -98,7 +98,7 @@ test('Gmail uses Google Drive\'s sign-in (the same cookie and page), and the sca
   assert.deepEqual([signedIn.apps.Gmail.found, signedIn.apps.Gmail.where, signedIn.apps.Gmail.signedIn], [true, 'signed in to Engelbart', true]);
 });
 
-test('Gmail is never ticked to start with, even when found; ticking it adds its consent line and nothing else', async () => {
+test('Gmail is never ticked to start with, even when found; ticking it ticks nothing else, and it has no consent line of its own (2026-10-12)', async () => {
   const m = await model();
   const found = { apps: { Gmail: { found: true }, 'Google Docs': { found: true } } };
   const start = m.initialPicks(found);
@@ -106,10 +106,9 @@ test('Gmail is never ticked to start with, even when found; ticking it adds its 
   assert.equal(start.apps.notes['Google Docs'], false, 'Drive, found, starts unticked too (2026-10-11)');
   assert.equal(start.picks.email, false);
   assert.ok(m.NEVER_TICKED.includes('Gmail'));
-  assert.equal(m.gmailConsent(start, 'Claude Code'), '');
+  assert.equal(m.gmailConsent, undefined, 'the Gmail line is gone (2026-10-12, second test run)');
   const ticked = m.tickRow(m.initialPicks({ apps: { Gmail: { found: true } } }), 'email', 'Gmail', true);
   assert.deepEqual(Object.entries(ticked.apps).flatMap(([id, rows]) => Object.entries(rows).filter(([, on]) => on).map(([row]) => `${id}:${row}`)), ['email:Gmail'], 'ticking Gmail ticks nothing else');
-  assert.equal(m.gmailConsent(ticked, 'Claude Code'), 'Gmail: Engelbart searches your Gmail for threads about your project. Their subjects and senders, and the threads you approve (including what other people wrote), are read by Claude Code.');
   assert.ok(m.consentFor(ticked).includes('Gmail'));
   assert.deepEqual(m.choicesOf({ picks: ticked.picks, apps: ticked.apps }).sources.email, { on: true, apps: ['Gmail'], folders: [], repos: [] });
 });

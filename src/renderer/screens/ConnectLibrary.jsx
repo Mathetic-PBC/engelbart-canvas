@@ -6,7 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, startingLines, STARTING_LINE_MS, afterSignInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, afterSignInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, placedLine, unsignedWeb, signInGate, shownSignIn, signInChain, signInWindows, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -770,62 +770,19 @@ function FootStatus({ session }) {
   );
 }
 
-/** Whether the person asked for less motion (macOS's Reduce motion). */
-function useReducedMotion() {
-  const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
-  const [reduced, setReduced] = React.useState(() => !!(query && query.matches));
-  React.useEffect(() => {
-    if (!query || typeof query.addEventListener !== 'function') return undefined;
-    const change = () => setReduced(query.matches);
-    query.addEventListener('change', change);
-    return () => query.removeEventListener('change', change);
-  }, [query]);
-  return reduced;
-}
-
-const LINE_FADE_MS = 280;
-
-/**
- * One line that moves through `lines` every STARTING_LINE_MS (2026-10-12), fading out and in between them; with reduced
- * motion it changes without a fade.
- */
-export function CyclingLine({ lines, reduced = false }) {
-  const [at, setAt] = React.useState(0);
-  const [shown, setShown] = React.useState(true);
-  const key = lines.join('\n');
-  React.useEffect(() => {
-    if (lines.length < 2) return undefined;
-    let fade = null;
-    const timer = setInterval(() => {
-      if (reduced) { setAt((n) => n + 1); return; }
-      setShown(false);
-      fade = setTimeout(() => { setAt((n) => n + 1); setShown(true); }, LINE_FADE_MS);
-    }, STARTING_LINE_MS);
-    return () => { clearInterval(timer); clearTimeout(fade); setShown(true); };
-  }, [key, reduced]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (!lines.length) return null;
-  const line = lines[at % lines.length];
-  return (
-    // aria-hidden: read out every 2.5 s it would drown the count, which the status region does say.
-    <div data-connect-starting-line={line} aria-hidden="true" style={{ minHeight: 19, font: '13.5px/1.4 var(--font-sans)', color: '#4d4d4d', textAlign: 'center', opacity: shown ? 1 : 0, transition: reduced ? 'none' : `opacity ${LINE_FADE_MS}ms ${EASE}` }}>{line}</div>
-  );
-}
-
 /**
  * Until the librarian says something (2026-10-09: "make the loading icon better and have some status to it"): the dots,
- * bigger, under them a line moving through what is happening (2026-10-12: the jobs' labels, "Looking through ChatGPT",
- * "Asking Claude what it remembers"…), and how many sources have been looked at.
+ * bigger, and how many sources have been looked at. (2026-10-12, second test run: the line that moved through the jobs'
+ * labels under the title is gone.)
  */
 function Starting({ session }) {
   const jobs = workJobs(session.jobs);
   const ended = jobs.filter((entry) => statusOf(entry).done).length;
-  const reduced = useReducedMotion();
   return (
     <div data-connect-starting="1" role="status" aria-live="polite" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, paddingBottom: 40, animation: `rise 260ms ${EASE}` }}>
       <ThinkingDots label="" size={7} />
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
         <div style={{ font: '500 16px/1.3 var(--font-sans)', letterSpacing: '-0.1px', color: '#171717' }}>Getting to know your library</div>
-        <CyclingLine lines={startingLines(session.jobs)} reduced={reduced} />
         {jobs.length > 0 && <div data-connect-starting-count="1" style={{ font: '12.5px/1 var(--font-sans)', color: '#8f8f8f', fontVariantNumeric: 'tabular-nums' }}>{`${ended} of ${jobs.length} looked at`}</div>}
       </div>
     </div>
@@ -1041,9 +998,12 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     return api.connectSignInCheck(app, retry).then((out) => {
       if (!out || !out.status) { setSignIns((now) => { const next = { ...now }; delete next[app]; return next; }); return; }
       setSignIns((now) => ({ ...now, [app]: out })); // macOS said no: still ticked, with Try again and Sign in (2026-10-12)
+      if (out.status === 'refused') void turnedDown([{ id, app }]); // and Engelbart's window opens for it (2026-10-12, second run)
     }).catch(() => { setSignIns((now) => { const next = { ...now }; delete next[app]; return next; }); });
   };
-  const checkTicked = async (rows) => {
+  const checkTicked = async (ticks) => {
+    // One already signed in (by another app sharing its sign-in, or before it was unticked) is ✓ at once, not checked again.
+    const rows = ticks.filter((row) => (signIns[row.app] || {}).status !== 'signed-in');
     if (!signInsToCheck(consent, rows).length) return;
     const said = await Promise.all(rows.map((row) => api.connectSignInNote(row.app).then((out) => ({ ...row, ...(out || {}) })).catch(() => ({ ...row, note: '' }))));
     if (!consentRef.current) return; // turned off meanwhile: no panel, no check
@@ -1083,6 +1043,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       const out = await api.connectSignInUnlock(first.app).catch(() => ({ status: 'allowed', browser: '' }));
       if (out && out.status === 'refused') {
         setSignIns((now) => { const next = { ...now }; for (const other of group) next[other] = { status: 'refused', browser: out.browser || from }; return next; });
+        void turnedDown(viaBrowser);
         return;
       }
       // Allowed: the modal leaves these rows to the row's own waiting line.
@@ -1108,7 +1069,27 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       for (const row of rows) for (const other of sharesSignIn(row.app)) if (!next[other] || next[other].status !== 'signed-in') next[other] = { status: 'declined', browser: '' };
       return next;
     });
+    void turnedDown(rows);
   };
+  // Turned down (2026-10-12, second test run): after Not now, or Deny at macOS's prompt for a check or for Continue's unlock,
+  // Engelbart's sign-in window opens by itself for the first app turned down, and once it signs in or closes itself, for the
+  // next (one window per sign-in group: Gmail and Google Drive share one), until none is left. The person closing a window
+  // without signing in stops it there, and the rows keep their Sign in. Nothing opens while the consent is off. Apps turned
+  // down while a window is open wait their turn.
+  const signInsRef = React.useRef(signIns);
+  signInsRef.current = signIns;
+  const picksRef = React.useRef(picks);
+  picksRef.current = picks;
+  const windowHere = React.useRef(null);
+  const chain = React.useRef(null);
+  if (!chain.current) {
+    chain.current = signInWindows({
+      pick: (rows) => signInChain(rows, { signIns: signInsRef.current, state: picksRef.current, consent: consentRef.current }),
+      // after it, a tick: the sign-in's rows rendered, so the next pick reads them
+      open: async (row) => { const out = await windowHere.current(row.id, row.app); await new Promise((resolve) => setTimeout(resolve, 0)); return out; },
+    });
+  }
+  const turnedDown = (rows) => chain.current(rows);
   // Try again: ticked again, and checked again only with the consent on (off, the run asks for its sign-in after it starts).
   // Google having turned the window's sign-in away, Try again is the window again.
   const retrySignIn = (id, app) => {
@@ -1145,6 +1126,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     setSignIns((now) => { const next = { ...now }; const back = afterSignInWindowClosed((now[app] || {}).was); if (back) next[app] = back; else delete next[app]; return next; });
     return 'closed';
   };
+  windowHere.current = signInWindowHere;
   // "Sign in here instead" (2026-10-12), beside a row waiting on the browser: that wait ends, and Engelbart's window opens.
   const hereInstead = (id, app) => {
     setSignIns((now) => { const next = { ...now }; for (const other of sharesSignIn(app)) if (other !== app && next[other] && next[other].status === 'browser') { if (next[other].was) next[other] = next[other].was; else delete next[other]; } return next; });
@@ -1442,8 +1424,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       <style>{CSS}</style>
 
       {view === 'choose' && (() => {
-        // A web app's check is said while it is ticked; signed in, signing in and refused (unticked, with Try again and Sign in) also when it is not.
-        const signInOf = (id, app) => { const seen = signIns[app]; return seen && (ticked(picks, id, app) || ['signed-in', 'refused', 'signing'].includes(seen.status)) ? seen : null; };
+        const signInOf = (id, app) => shownSignIn(picks, id, app, signIns);
         // MATH-110: while and after macOS is asked for the folders, the PDFs row says so.
         const accessLabel = folderRun && ticked(picks, 'papers', LOCAL_PDFS) ? folderAccessLabel(folderRun) : null;
         const label = (app, id = '') => (app === LOCAL_PDFS && accessLabel ? accessLabel : rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' }));
@@ -1559,12 +1540,11 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
               </div>
             ) : reassure}
             {/* Gmail ticked (2026-10-11): its threads hold what other people wrote, and the provider reads them. */}
-            {picks && gmailConsent(picks, targetName) && <span data-connect-gmail-consent="1" style={{ paddingLeft: reads.length > 0 ? 24 : 0, font: '12.5px/1.5 var(--font-sans)', color: '#525252' }}>{gmailConsent(picks, targetName)}</span>}
             {leaves && <span data-connect-leaves-text="1" style={{ paddingLeft: reads.length > 0 ? 24 : 0, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>What the agents read is sent to {company} through your own {targetName} account, the way any {targetName} session is, to be turned into notes. The notes, and everything Engelbart keeps, stay in ~/.engelbart on this Mac. Nothing goes to Mathetic.</span>}
           </div>
         );
-        // Onboarding's page asks for the consent (2026-10-11, David's mockup) in one card, under the sources since 2026-10-12
-        // (above them before), just above the foot: the agent's logo,
+        // Onboarding's page asks for the consent (2026-10-11, David's mockup) in one card, directly under the Code row inside
+        // the scrolling list since the second test run of 2026-10-12 (pinned above the foot before that): the agent's logo,
         // "Read with your [Claude Code ⌄] subscription" over what that means, and a switch. Why Engelbart asks, and where the
         // data goes, was the screen before (screens/ConnectIntro.jsx), so this says it in a line.
         const consentCard = (
@@ -1581,7 +1561,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
               </span>
               <Toggle on={consent} />
             </div>
-            {picks && gmailConsent(picks, targetName) && <span data-connect-gmail-consent="1" style={{ paddingLeft: 44, font: '12.5px/1.5 var(--font-sans)', color: '#525252' }}>{gmailConsent(picks, targetName)}</span>}
             {leaves && <span data-connect-leaves-text="1" style={{ paddingLeft: 44, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>What the agents read is sent to {company} through your own {targetName} account, the way any {targetName} session is, to be turned into notes. The notes, and everything Engelbart keeps, stay in ~/.engelbart on this Mac. Nothing goes to Mathetic.</span>}
           </div>
         );
@@ -1592,8 +1571,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
           </div>
         );
         // Onboarding draws it as a page of its own, one column stacked as David's mockup has it (2026-10-09, in place of the
-        // side by side of 2026-10-08): the sources scrolling in their own box, the consent card under them (2026-10-12;
-        // above them from 2026-10-11), then Skip for now, the pager and "Bring these in", which starts the run.
+        // side by side of 2026-10-08): the sources scrolling in their own box, the consent card the last thing in it, right
+        // after the Code row (2026-10-12), then Skip for now, the pager and "Bring these in", which starts the run.
         // No custom instructions box.
         if (page) {
           const go = anyOn && !!provider;
@@ -1602,6 +1581,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
               <h1 style={{ flex: 'none', margin: '40px 0 22px', textAlign: 'center', font: '500 28px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>What should go in your library?</h1>
               <div data-connect-sources-box="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '0 8px 16px' }}>
                 {sourcesList}
+                <div data-connect-consent-at="after-code" style={{ flex: 'none', paddingTop: 10 }}>{consentCard}</div>
                 {(keychainModal || !ready) && (
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 18 }}>
                     {keychainModal}
@@ -1609,7 +1589,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                   </div>
                 )}
               </div>
-              <div style={{ flex: 'none', padding: '0 8px' }}>{consentCard}</div>
               {error && <span data-connect-error="1" style={{ flex: 'none', padding: '10px 8px 0', font: '12.5px/1.4 var(--font-sans)', color: '#e70022' }}>{error}</span>}
               <Foot pager={pager} left={<button type="button" className="hov-ink" data-onboarding-skip="1" onClick={onSkip} style={{ padding: '10px 12px', marginLeft: -12, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Skip for now</button>}
                 button={<button type="button" data-connect-bring="1" data-ready={go ? '1' : '0'} onClick={() => { void start(); }} style={{ ...FOOT_BUTTON, opacity: go ? 1 : 0.4, cursor: go ? 'pointer' : 'default' }}>Bring these in<span style={{ display: 'inline-flex' }}>{CARET_RIGHT}</span></button>} />

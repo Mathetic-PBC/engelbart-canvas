@@ -46,6 +46,16 @@ write('Notes/Research/Tutoring.md', 'VanLehn 2011.\n');
 write('Notes/Essays/Tools for thought.md', 'A draft.\n');
 write('Notes/Daily/2026-10-01.md', 'standup\n');
 write('Library/Application Support/obsidian/obsidian.json', JSON.stringify({ vaults: { v: { path: path.join(root, 'Notes'), ts: Date.now(), open: true } } }));
+// Stand-ins for some of main's answers to the renderer, for the turned-down part below (2026-10-12): a channel with a
+// stand-in that answers something other than undefined answers that; otherwise main does.
+const { ipcMain } = require('electron');
+const standIns = {};
+const realHandle = ipcMain.handle.bind(ipcMain);
+ipcMain.handle = (channel, fn) => realHandle(channel, (event, ...args) => {
+  const standIn = standIns[channel.replace(/^engelbart:/, '')];
+  const out = standIn ? standIn(...args) : undefined;
+  return out !== undefined ? out : fn(event, ...args);
+});
 require('../src/main/index.cjs');
 const { stagePartition } = require('../src/main/browser/views.cjs');
 
@@ -148,6 +158,8 @@ app.whenReady().then(async () => {
     await press(wc, '[data-connect-source="email"] button[aria-expanded]');
     await press(wc, '[data-connect-app="Gmail"]');
     await until(async () => (await has(wc, '[data-connect-signin="Google Docs"]')) && has(wc, '[data-connect-signin="Gmail"]'), 'Sign in on both Google rows');
+    assert.equal(await has(wc, '[data-connect-gmail-consent]'), false, 'no Gmail line with Gmail ticked (2026-10-12, second test run)');
+    assert.doesNotMatch(await text(wc, '[data-connect-library="choose"]'), /Engelbart searches your Gmail/);
     assert.doesNotMatch(await text(wc, '[data-connect-app="Google Docs"]'), /Google needs|Chrome, Brave or Firefox/);
     assert.equal(BrowserWindow.getAllWindows().length, 1, 'no sign-in window yet');
     await press(wc, '[data-connect-signin="Google Docs"]');
@@ -161,7 +173,59 @@ app.whenReady().then(async () => {
     const agentsBrowser = electronSession.fromPartition(stagePartition(false));
     await press(wc, '[data-connect-app="Google Docs"]');
     await press(wc, '[data-connect-app="Gmail"]');
+
+    /* ------------------------------------------------ turned down: Engelbart's sign-in windows open by themselves, in turn */
+    // 2026-10-12, second test run. macOS would ask for Chrome's sign-ins for Claude and Google Drive (main's answers stood
+    // in for: no browser is installed here), so the Keychain modal asks; Not now opens Engelbart's window for Claude by
+    // itself, then, once it signs in, Google's. Signed in, Google Drive is ✓ and Gmail, unticked, says nothing of it until
+    // ticked. Then Deny at macOS's prompt for Perplexity's and Grok's checks: Perplexity's window opens by itself, and closed
+    // without signing in, the chain stops there: Grok's never opens, and both rows keep Sign in.
+    const windows = [];
+    standIns['connect-signin-note'] = (app) => (['Claude', 'Google Docs'].includes(app) ? { browser: 'Chrome', note: 'macOS will ask for Chrome\'s sign-ins.', profiles: [] } : ['Perplexity', 'Grok'].includes(app) ? { browser: '', note: '', profiles: [] } : undefined);
+    standIns['connect-signin-check'] = (app) => (['Perplexity', 'Grok'].includes(app) ? { status: 'refused', browser: 'Chrome' } : undefined);
+    standIns['connect-signin-window'] = (app) => new Promise((resolve) => windows.push({ app, resolve }));
+    const tickNow = (app) => js(wc, `document.querySelector(${JSON.stringify(`[data-connect-app="${app}"]`)}).click()`); // through the Keychain modal's cover
+    const signedInText = /✓ Signed in/;
+    await tickNow('Claude');
+    await tickNow('Google Docs');
+    await until(() => has(wc, '[data-connect-signin-not-now="Chrome"]'), 'the Keychain modal, Not now');
+    await pause(300);
+    assert.equal(windows.length, 0, 'no window before Not now');
+    await press(wc, '[data-connect-signin-not-now="Chrome"]');
+    await until(() => windows.length === 1, 'Claude\'s window, by itself');
+    assert.equal(windows[0].app, 'Claude');
+    await pause(300);
+    assert.equal(windows.length, 1, 'one window at a time');
+    windows[0].resolve({ status: 'signed-in' });
+    await until(() => windows.length === 2, 'the next window, for Google, by itself');
+    assert.equal(windows[1].app, 'Google Docs');
+    assert.match(await text(wc, '[data-connect-app="Claude"]'), signedInText);
+    windows[1].resolve({ status: 'signed-in' });
+    await until(async () => signedInText.test(await text(wc, '[data-connect-app="Google Docs"]')), 'Google Drive ✓');
+    await pause(300);
+    assert.equal(windows.length, 2, 'none left: no more windows');
+    await until(() => has(wc, '[data-connect-app="Gmail"]'), 'Gmail\'s row (Email still open)');
+    assert.equal(await attr(wc, '[data-connect-app=Gmail] [role=checkbox]', 'aria-checked'), 'false');
+    assert.doesNotMatch(await text(wc, '[data-connect-app="Gmail"]'), /Signed in|Sign in/, 'unticked Gmail says nothing of Google\'s sign-in');
+    await tickNow('Gmail');
+    await until(async () => signedInText.test(await text(wc, '[data-connect-app="Gmail"]')), 'ticked, Gmail ✓ at once (the sign-in was kept)');
+    await tickNow('Gmail');
+    await until(async () => !/Signed in/.test(await text(wc, '[data-connect-app="Gmail"]')), 'unticked again, no ✓');
     await press(wc, '[data-connect-source="email"] button[aria-expanded]');
+    await tickNow('Perplexity');
+    await until(() => windows.length === 3, 'Perplexity\'s window, by itself after macOS\'s Deny');
+    assert.equal(windows[2].app, 'Perplexity');
+    await tickNow('Grok');
+    await pause(400);
+    assert.equal(windows.length, 3, 'Grok waits its turn');
+    windows[2].resolve({ status: 'closed' });
+    await until(() => has(wc, '[data-connect-signin="Perplexity"]'), 'Perplexity keeps its Sign in');
+    await pause(400);
+    assert.equal(windows.length, 3, 'closed without signing in: the chain stops, Grok\'s window never opens');
+    assert.ok(await has(wc, '[data-connect-signin="Grok"]'), 'Grok keeps its Sign in');
+    for (const app of ['Claude', 'Google Docs', 'Perplexity', 'Grok']) await tickNow(app);
+    for (const name of Object.keys(standIns)) delete standIns[name];
+    for (const app of ['Claude', 'Google Docs', 'Perplexity', 'Grok']) assert.equal(await attr(wc, `[data-connect-app="${app}"] [role=checkbox]`, 'aria-checked'), 'false', `${app} unticked again`);
     // MATH-114: asking ChatGPT what it remembers is ticking it; one checkbox, naming the provider, for the rest.
     assert.doesNotMatch(await text(wc, '[data-connect-app=ChatGPT]'), /asks what it remembers/, 'that is for the refine chat');
     // Now-3a-Fix: no summary beside a section's name, and a line under an app only when it needs something.
@@ -170,10 +234,14 @@ app.whenReady().then(async () => {
     assert.ok(await js(wc, '!!document.querySelector("[data-connect-app=Obsidian] [title]") && /~/.test(document.querySelector("[data-connect-app=Obsidian] [title]").title)'), 'the folder is in its tooltip');
     assert.match(await text(wc, '[data-connect-app=Notion]'), /Needs sign-in$/);
     assert.equal(await js(wc, 'document.querySelectorAll("[data-connect-permission]").length'), 1, 'one consent checkbox');
-    assert.equal(await js(wc, '!!document.querySelector("[data-connect-sources-box] [data-connect-permissions]")'), false, 'the consent card is not in the sources\' scrolling box');
-    assert.equal(await js(wc, 'document.querySelector("[data-connect-sources-box]").compareDocumentPosition(document.querySelector("[data-connect-permissions]")) & Node.DOCUMENT_POSITION_FOLLOWING'), 4, 'the consent card under the sources (2026-10-12)');
-    assert.equal(await js(wc, 'document.querySelector("[data-connect-permissions]").compareDocumentPosition(document.querySelector("[data-connect-bring]")) & Node.DOCUMENT_POSITION_FOLLOWING'), 4, 'above the foot');
-    assert.equal(await js(wc, '(()=>{const c=document.querySelector("[data-connect-permissions]").getBoundingClientRect();const b=document.querySelector("[data-connect-sources-box]").getBoundingClientRect();const f=document.querySelector("[data-connect-bring]").getBoundingClientRect();return c.top>=b.bottom-1&&c.bottom<=f.top+1})()'), true, 'drawn between them');
+    // The consent card directly under the Code row, inside the sources' scrolling list (2026-10-12, second test run), not
+    // pinned above the foot: no source row after it.
+    assert.equal(await js(wc, '!!document.querySelector("[data-connect-sources-box] [data-connect-permissions]")'), true, 'the consent card is in the sources\' scrolling box');
+    const after = (a, b) => js(wc, `!!(document.querySelector(${JSON.stringify(a)}).compareDocumentPosition(document.querySelector(${JSON.stringify(b)})) & Node.DOCUMENT_POSITION_FOLLOWING)`);
+    assert.equal(await after('[data-connect-source="code"]', '[data-connect-permissions]'), true, 'after the Code row');
+    assert.equal(await js(wc, '[...document.querySelectorAll("[data-connect-source]")].pop().dataset.connectSource'), 'code', 'Code is the last source');
+    assert.equal(await js(wc, '[...document.querySelectorAll("[data-connect-source],[data-connect-app]")].some((el)=>!!(document.querySelector("[data-connect-permissions]").compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING))'), false, 'no source or row under it');
+    assert.equal(await js(wc, '(()=>{const c=document.querySelector("[data-connect-permissions]").getBoundingClientRect();const r=[...document.querySelectorAll("[data-connect-source]")].pop().getBoundingClientRect();return c.top>=r.bottom-1&&c.top-r.bottom<40})()'), true, 'drawn just under the Code row');
     assert.equal(await attr(wc, '[data-connect-permission]', 'role'), 'switch');
     assert.match(await text(wc, '[data-connect-permission]'), /^Read with your Claude Code subscription/);
     assert.match(await text(wc, '[data-connect-permission]'), /What leaves my Mac\?$/, 'one card: the reassurance under the words');
@@ -191,6 +259,7 @@ app.whenReady().then(async () => {
     assert.ok(await has(wc, '[data-connect-app="Local repos"]'), 'Local repos under Code');
     await press(wc, '[data-connect-row-open="GitHub"]');
     await until(() => has(wc, '[data-connect-github]'), 'the repository list under Code');
+    assert.equal(await after('[data-connect-github]', '[data-connect-permissions]'), true, 'Code open: the card after its rows');
     const github = JSON.parse(await js(wc, 'JSON.stringify(document.querySelector("[data-connect-github]").getBoundingClientRect())'));
     assert.ok(github.height >= 300, `the repository list has room: ${github.height}`);
     await js(wc, 'document.querySelector("[data-connect-permissions]").scrollIntoView({block:"center"})');
@@ -214,6 +283,7 @@ app.whenReady().then(async () => {
       // The starting view: the dots and how far (2026-10-09), and the line under the chat waits for it to go.
       assert.match(await text(wc, '[data-connect-starting]'), /Getting to know your library/);
       assert.equal(await has(wc, '[data-connect-starting-now]'), false, 'not what each agent is doing');
+      assert.equal(await has(wc, '[data-connect-starting-line]'), false, 'no line moving through the jobs (2026-10-12, second test run)');
       await shot(wc, '1c-starting');
     } else assert.doesNotMatch(await text(wc, '[data-connect-chat]'), /Looking at what you picked|Found \d/, 'no opening line in the chat');
     // One button by the pager once a session exists (2026-10-09, David's mockup): "Skip the rest"; Skip for now gone.

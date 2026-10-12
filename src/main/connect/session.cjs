@@ -645,6 +645,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       session, context, zotero, github, deps, env, kind: job.kind, page, appleNotes,
       needs: { ask: (request) => askPerson(s, job, request), wait: () => waitAgain(s, job) },
       recall: (app, text) => keepRecall(s, app, text),
+      // the chat the memory question opened (2026-10-12), deleted by the tools once its answer is kept
+      asked: (app, id) => { job.asked = { app, id }; }, question: prompts.RECALL_PROMPT,
       kept: (row) => keepRow(s, row),
       log: (text) => logAction(s, job, text),
       added: (kind, n, title) => { job[kind === 'notes' ? 'notes' : 'items'] += n; if (title && job.titles.length < 80) job.titles.push(String(title).slice(0, 120)); emit(s, { soon: true }); },

@@ -255,6 +255,56 @@ export function afterSignInWindowClosed(was) {
 }
 
 /**
+ * The sign-in a row says (2026-10-12, second test run): only while the row is ticked. A Google Drive sign-in signs in Gmail,
+ * Google Meet and Gemini too, and kept that way, so ticking one later says ✓ at once; unticked, the row says what it would
+ * with no sign-in.
+ */
+export function shownSignIn(state, id, app, signIns = {}) {
+  return (state && ticked(state, id, app) && signIns && signIns[app]) || null;
+}
+
+/**
+ * The sign-in windows to open, in turn, for the apps whose sign-in a browser was turned down for (2026-10-12, second test
+ * run: Not now, or Deny at macOS's prompt) → [{ id, app }]: one per sign-in group (Gmail and Google Drive share one), in
+ * the order given, leaving out a row no longer ticked and one whose group is signed in. None while the consent is off.
+ */
+export function signInChain(rows, { signIns = {}, state = null, consent = true } = {}) {
+  if (!consent) return [];
+  const out = [];
+  for (const row of rows || []) {
+    if (!row || !row.app || (state && !ticked(state, row.id, row.app))) continue;
+    if (sharesSignIn(row.app).some((other) => (signIns[other] || {}).status === 'signed-in')) continue;
+    if (out.some((each) => signInGroup(each.app) === signInGroup(row.app))) continue;
+    out.push({ id: row.id, app: row.app });
+  }
+  return out;
+}
+
+/**
+ * Engelbart's sign-in windows opened one after another for the apps turned down (2026-10-12, second test run) →
+ * turnedDown(rows), called with each Not now or Deny. `pick(rows)` is signInChain on the screen as it is now; `open(row)`
+ * opens the window → 'signed-in' | 'rejected' | 'closed'. Signed in or turned away by the site, the next opens; closed by
+ * the person, the chain stops and forgets the rest (their rows keep Sign in). Rows turned down while a window is open wait
+ * their turn, those of the open window's sign-in aside.
+ */
+export function signInWindows({ pick, open }) {
+  let rows = [];
+  let opened = '';
+  return async function turnedDown(more = []) {
+    rows = [...rows, ...more.filter((row) => row && !(opened && sharesSignIn(opened).includes(row.app)))];
+    if (opened) return;
+    for (let [row] = pick(rows); row; [row] = pick(rows)) {
+      rows = rows.filter((each) => !sharesSignIn(row.app).includes(each.app));
+      opened = row.app;
+      let out = 'closed';
+      try { out = await open(row); } catch { out = 'closed'; } finally { opened = ''; }
+      if (out === 'closed') break;
+    }
+    rows = [];
+  };
+}
+
+/**
  * The ticked web apps not signed in yet, before Bring these in (2026-10-11) → [{ id, app }]: each one whose sign-in Engelbart
  * can make in its own browser (SIGN_IN_COOKIES), not ticked from the start signed in (`found`), and not checked as signed
  * in (`signIns`). One still being checked is left to main, which waits for it. None while the consent is off: web apps are
@@ -461,16 +511,6 @@ export function rowTip(app) {
 }
 
 /**
- * What the permissions card adds when Gmail is ticked (2026-10-11): the search's subjects and senders, and the threads
- * approved, which hold what other people wrote, are read by the agent's provider. `name`: the provider as the card names
- * it ("Claude Code"). '' when Gmail is not ticked.
- */
-export function gmailConsent(state, name) {
-  if (!ticked(state, 'email', 'Gmail')) return '';
-  return `Gmail: Engelbart searches your Gmail for threads about your project. Their subjects and senders, and the threads you approve (including what other people wrote), are read by ${name || 'your AI provider'}.`;
-}
-
-/**
  * What the one checkbox ("Use my … subscription to read these") covers of what is ticked: the apps read on this Mac, in
  * Engelbart's browser and through Engelbart's own sign-ins, the browser's history, and the repositories. Connectors, Apple
  * Notes and asking an assistant what it remembers each have their own consent, and are left out.
@@ -593,20 +633,6 @@ export const allEnded = (jobs) => (jobs || []).every((job) => statusOf(job).done
 
 /** The jobs the progress list shows: the work, without MEMORY.md's own (it has a row of its own). */
 export const workJobs = (jobs) => (jobs || []).filter((job) => job.kind !== 'memory' && job.kind !== 'redact');
-
-/** How often the starting screen's line moves on to the next thing happening (2026-10-12). */
-export const STARTING_LINE_MS = 2500;
-
-/**
- * What the starting screen says is happening (2026-10-12): the labels of the jobs not yet done ("Looking through ChatGPT",
- * "Asking Claude what it remembers"), each once, in the jobs' order; all of them once every job is done, so the line
- * never goes blank while the librarian takes its first turn.
- */
-export function startingLines(jobs) {
-  const work = workJobs(jobs).filter((job) => job.label);
-  const going = work.filter((job) => !statusOf(job).done);
-  return [...new Set((going.length ? going : work).map((job) => job.label))];
-}
 
 /** The jobs still going first (2026-10-08: "show the ones still running at the top"), running before queued, then the ended, each group in its order. */
 // What each source is, under a row of onboarding's "Bringing everything in" when its label says nothing more.

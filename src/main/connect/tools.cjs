@@ -27,7 +27,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readers = require('./readers.cjs');
 const notes = require('./notes.cjs');
-const { listWebChats, readWebChat, WEB_CHAT_APPS } = require('./web-chats.cjs');
+const { listWebChats, readWebChat, deleteWebChat, chatIdOf, WEB_CHAT_APPS } = require('./web-chats.cjs');
 const gmail = require('./gmail.cjs');
 const { cursorChats, cursorTranscript } = require('./cursor.cjs');
 const { readZip, safeName } = require('../overleaf/copy.cjs');
@@ -221,7 +221,7 @@ const gmailSignedOut = () => Object.assign(new Error('Not signed in to Google in
  * none; `needs` { ask({ kind, reason }), wait() }; `recall(app, text)` keeps an assistant's answer; `appleNotes`
  * (./apple-notes.cjs); `log(text)` the action log. → call(name, args)
  */
-function createImportTools({ session, context, added = () => {}, kept = () => {}, zotero = null, github = null, deps = {}, env = process.env, kind = 'import', page = null, needs = null, recall = null, appleNotes = null, log = () => {} }) {
+function createImportTools({ session, context, added = () => {}, kept = () => {}, zotero = null, github = null, deps = {}, env = process.env, kind = 'import', page = null, needs = null, recall = null, asked = () => {}, question = '', appleNotes = null, log = () => {} }) {
   const library = require('../store/library.cjs');
   const mirror = require('../zotero/mirror.cjs');
   const imported = createImported(session.dataRoot);
@@ -771,9 +771,38 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       if (value.length < 20) throw new Error('That answer is too short to keep: read the whole answer first');
       await recall(app, value);
       log(`Kept what ${app} remembers (${value.length.toLocaleString('en-US')} characters)`);
+      await forgetQuestion(app);
       return { saved: true, chars: value.length };
     },
   };
+
+  // The memory question (2026-10-12): asking ChatGPT or Claude what it remembers leaves a "Research profile" chat in the
+  // person's account. The chat the question opened is noted once it is sent (its id from the page's address, kept on the
+  // job through `asked`), and once the answer is kept Engelbart deletes that one chat itself, never left to the agent and
+  // never another (./web-chats.cjs deleteWebChat checks its first message is the question). A failure is logged and
+  // nothing else: the answer is kept either way.
+  let sent = false;
+  let chat = null; // { app, id }
+  const SENDS = new Set(['browser_type', 'browser_press', 'browser_click']);
+  const noteChat = () => {
+    if (kind !== 'recall' || !page || chat || !sent) return;
+    for (const app of WEB_CHAT_APPS) {
+      const id = chatIdOf(app, page.url());
+      if (id) { chat = { app, id }; asked(app, id); return; }
+    }
+  };
+  async function forgetQuestion(app) {
+    noteChat();
+    if (!chat || chat.app !== app || chat.done) return;
+    const { id } = chat;
+    chat = { app, id, done: true };
+    try {
+      await deleteWebChat(browser(), app, id, { question });
+      log(`Deleted the question from ${app}'s chats`);
+    } catch (error) {
+      log(`Couldn't delete the question from ${app}'s chats: ${error && error.message ? error.message : error}`);
+    }
+  }
 
   function appleNotesOf() {
     if (!appleNotes) throw new Error('Apple Notes cannot be read here');
@@ -789,7 +818,12 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   return async function callTool(name, args) {
     validateImportTool(name, args || {});
     if (!allowed.has(name)) throw new Error(kind === 'survey' && WRITING.has(name) ? 'A survey brings nothing in: report what you found instead.' : `${name} is not one of this agent's tools`);
-    return call[name](args || {});
+    if (kind !== 'recall' || !name.startsWith('browser_')) return call[name](args || {});
+    try { return await call[name](args || {}); }
+    finally {
+      if (SENDS.has(name) && (name !== 'browser_type' || (args || {}).submit) && (name !== 'browser_press' || (args || {}).key === 'Enter')) sent = true;
+      try { noteChat(); } catch { /* the window is gone */ }
+    }
   };
 }
 

@@ -216,7 +216,7 @@ ${TOOLS_BLOCK}
 2. browser_read, find the message box (a textbox or editor), browser_type the prompt into it with submit true. If submit did not send it, click the send button.
 3. browser_wait with stable true (and up to 120 seconds) until the answer stops growing; browser_read the answer. If it is long, read it in parts with offset.
 4. save_memory with app and the answer's text exactly as written (its Markdown), without the prompt and without the page's buttons and labels.
-Send the prompt once. Never change settings, delete the chat or send anything else. If the assistant refuses or has no memory of the person, save what it said anyway.
+Send the prompt once, in a new chat. Never delete, rename, archive or change anything in the account (not this chat either: Engelbart deletes it itself once its answer is saved), never change settings and never send anything else. If the assistant refuses or has no memory of the person, save what it said anyway.
 
 # Your reply
 
