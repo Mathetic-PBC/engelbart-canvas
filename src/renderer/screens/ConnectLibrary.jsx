@@ -339,7 +339,7 @@ const KEYCHAIN_TONES = {
 
 /**
  * Before macOS asks for a browser's sign-ins (2026-10-11, David: the inline panel under the sources was easy to miss, and
- * the macOS prompt then came out of nowhere): a modal over everything, at most once a browser, since one Always Allow
+ * the macOS prompt then came out of nowhere): a modal over everything, at most once a browser, since one Allow
  * covers every app from it. `panel` (signInPanel's) asks: Continue checks the apps, Not now unticks them. After Continue,
  * `outcome` (keychainOutcome's) says how it went: waiting while macOS asks, then signed in, or not and why. Escape is Not
  * now while it asks, and closes it after. In a portal: the window's own rise animation would hold a fixed layer inside it.

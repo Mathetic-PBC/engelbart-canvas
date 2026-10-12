@@ -299,7 +299,7 @@ export function signInPanel(state, browser, rows = []) {
     rows: still,
     title: `Use your ${browser} sign-ins for ${listed(apps)}?`,
     // The line that matters most first, in bold (2026-10-11: the modal before macOS asks).
-    lead: 'macOS will ask for your Mac password next. Choose Always Allow so it only asks once.',
+    lead: 'macOS will ask for your Mac password next. Choose Allow.',
     body: [
       `Engelbart copies only ${apps.length === 1 ? 'this app\'s sign-in' : 'these apps\' sign-ins'} from ${browser}, and only reads from ${apps.length === 1 ? 'it' : 'them'}, so you don't log in again. Not now leaves ${apps.length === 1 ? 'it' : 'them'} out.`,
     ],
@@ -351,7 +351,7 @@ export function keychainOutcome(browser, rows, signIns) {
   // An app with no answer at all: its check failed and was cleared (checkSignIn), so it counts as not brought over.
   const of = (row) => (signIns && signIns[row.app]) || { status: 'signed-out' };
   if ((rows || []).some((row) => of(row).status === 'checking')) {
-    return { done: false, title: 'Waiting for macOS…', lines: ['Enter your Mac password in the macOS window, then choose Always Allow.'], tone: 'busy' };
+    return { done: false, title: 'Waiting for macOS…', lines: ['Enter your Mac password in the macOS window, then choose Allow.'], tone: 'busy' };
   }
   const names = (status) => rows.filter((row) => of(row).status === status).map((row) => shownName(row.app));
   const signedIn = names('signed-in'), refused = names('refused');

@@ -998,7 +998,7 @@ test('checked when ticked: the run uses that answer without looking again; the o
   const { connect, state } = fakeConnect({ webSignIn });
   let started = null;
   try {
-    assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: 'Chrome', note: 'macOS will ask to use Chrome\'s sign-ins. Choose Always Allow so it doesn\'t ask again.' });
+    assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: 'Chrome', note: 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.' });
     assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-in', browser: 'Chrome' });
     assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '' }, 'held now: macOS will not be asked');
     // Ticked again: signInQuiet answers browser '' (held already); the browser it came from is remembered.
@@ -1038,7 +1038,7 @@ test('no panel for an app no browser holds: the check opens nothing, so macOS is
   const fake = fakeSignIn({ browsers: { chrome: { apps: ['Claude'] } } }); // Chrome would open ChatGPT's sign-in page, but holds none
   const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
   assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '' }, 'no browser holds it: no panel');
-  assert.equal(fake.webSignIn.keychainNote('ChatGPT'), 'macOS will ask to use Chrome\'s sign-ins. Choose Always Allow so it doesn\'t ask again.', 'the Log in card\'s note keeps the opener');
+  assert.equal(fake.webSignIn.keychainNote('ChatGPT'), 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.', 'the Log in card\'s note keeps the opener');
   assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-out', browser: '' }, 'straight to the row\'s Sign in');
   assert.deepEqual(fake.calls.keychain, [], 'macOS was not asked');
   assert.deepEqual((await connect.signInNote('Claude')).browser, 'Chrome', 'one it holds still has its panel');
@@ -1331,7 +1331,7 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   assert.deepEqual(waiting, { Chrome: [{ id: 'chats', app: 'ChatGPT' }, { id: 'chats', app: 'Claude' }] });
   const panel = model.signInPanel(all, 'Chrome', waiting.Chrome);
   assert.equal(panel.title, 'Use your Chrome sign-ins for ChatGPT and Claude?');
-  assert.equal(panel.lead, 'macOS will ask for your Mac password next. Choose Always Allow so it only asks once.', 'the macOS line leads');
+  assert.equal(panel.lead, 'macOS will ask for your Mac password next. Choose Allow.', 'the macOS line leads');
   assert.deepEqual(panel.body, ['Engelbart copies only these apps\' sign-ins from Chrome, and only reads from them, so you don\'t log in again. Not now leaves them out.']);
   const claudeOff = model.tickRow(all, 'chats', 'Claude', false);
   assert.equal(model.signInPanel(claudeOff, 'Chrome', waiting.Chrome).title, 'Use your Chrome sign-ins for ChatGPT?', 'an app unticked meanwhile leaves the panel');
@@ -1340,7 +1340,7 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   // After Continue, the modal says how it went (2026-10-11): waiting while macOS asks, then signed in, refused, or not there.
   const rows = waiting.Chrome;
   const outcome = (chatgpt, claude) => model.keychainOutcome('Chrome', rows, { ...(chatgpt ? { ChatGPT: { status: chatgpt } } : {}), ...(claude ? { Claude: { status: claude } } : {}) });
-  assert.deepEqual(outcome('checking', 'signed-in'), { done: false, title: 'Waiting for macOS…', lines: ['Enter your Mac password in the macOS window, then choose Always Allow.'], tone: 'busy' });
+  assert.deepEqual(outcome('checking', 'signed-in'), { done: false, title: 'Waiting for macOS…', lines: ['Enter your Mac password in the macOS window, then choose Allow.'], tone: 'busy' });
   assert.deepEqual(outcome('signed-in', 'signed-in'), { done: true, title: 'Signed in to ChatGPT and Claude', lines: ['Brought over from Chrome. You won\'t need to log in again.'], tone: 'ok' });
   const mixed = outcome('signed-in', 'signed-out');
   assert.equal(mixed.tone, 'warn');

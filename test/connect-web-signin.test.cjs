@@ -167,7 +167,7 @@ test('keychainTarget: the browser macOS will be asked about, until it has been',
 
 test('the line before macOS is first asked for a browser\'s sign-ins, gone once it has been', async () => {
   const { web } = machine({ browsers: { chrome: {} }, later: { chrome: 1 } });
-  assert.equal(web.keychainNote('ChatGPT'), 'macOS will ask to use Chrome\'s sign-ins. Choose Always Allow so it doesn\'t ask again.');
+  assert.equal(web.keychainNote('ChatGPT'), 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.');
   await web.signIn('ChatGPT');
   assert.equal(web.keychainNote('ChatGPT'), '');
   assert.equal(machine({ browsers: { firefox: {} } }).web.keychainNote('ChatGPT'), '', 'Firefox needs no Keychain');

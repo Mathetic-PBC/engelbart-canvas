@@ -212,7 +212,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   /** What to tell the person before Log in first asks macOS for a browser's sign-ins this run, or ''. `options` as keychainTarget's. */
   function keychainNote(app, options) {
     const target = keychainTarget(app, options);
-    return target ? `macOS will ask to use ${target.name}'s sign-ins. Choose Always Allow so it doesn't ask again.` : '';
+    return target ? `macOS will ask to use ${target.name}'s sign-ins. Choose Allow.` : '';
   }
 
   return { supports, signedIn, browserName, signIn, signInQuiet, keychainTarget, keychainNote };
