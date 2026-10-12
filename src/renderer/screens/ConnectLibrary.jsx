@@ -6,7 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, afterSignInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, placedLine, unsignedWeb, signInGate, shownSignIn, signInChain, signInWindows, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, afterSignInWindowClosed, signInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, placedLine, unsignedWeb, signInGate, shownSignIn, signInChain, signInWindows, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -1084,8 +1084,9 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   // Turned down (2026-10-12, second test run): after Not now, or Deny at macOS's prompt for a check or for Continue's unlock,
   // Engelbart's sign-in window opens by itself for the first app turned down, and once it signs in or closes itself, for the
   // next (one window per sign-in group: Gmail and Google Drive share one), until none is left. The person closing a window
-  // without signing in stops it there, and the rows keep their Sign in. Nothing opens while the consent is off. Apps turned
-  // down while a window is open wait their turn.
+  // without signing in stops it there: that window's sign-in group is unticked (signInWindowHere), and the rows still
+  // waiting their turn keep their tick and Sign in. Nothing opens while the consent is off. Apps turned down while a window
+  // is open wait their turn.
   const signInsRef = React.useRef(signIns);
   signInsRef.current = signIns;
   const picksRef = React.useRef(picks);
@@ -1117,13 +1118,19 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const signInHere = (id, app) => (signsInViaBrowser(app, signIns[app], found && found.platform) ? signInInBrowser(id, app) : signInWindowHere(id, app));
   // Engelbart's sign-in window (2026-10-11). Signed in, the app and every app sharing that sign-in (Google Drive and Gmail)
   // read ✓, and its row is ticked; Google turning it away (2026-10-12), they read "Google refused this sign-in" with Try
-  // again; the window closed first, the row is as it was, but plain Sign in after an old "macOS didn't allow it" (2026-10-12,
-  // afterSignInWindowClosed). → 'signed-in' | 'rejected' | 'closed'
+  // again, still ticked; the person closing it first is a no (2026-10-12, third run): the row and every ticked row sharing
+  // its sign-in are unticked, their sign-in put back with nothing stale (signInWindowClosed), and ticking one again starts
+  // its sign-in again. A window replaced by another app's (one window at a time) answers closed too, but that was not a no:
+  // its row only gets its sign-in back, still ticked. → 'signed-in' | 'rejected' | 'closed'
+  const lastWindow = React.useRef(null);
   const signInWindowHere = async (id, app) => {
     // A row that was waiting on the browser ("Sign in here instead") goes back to what it was before that wait, not to it.
     const before = (seen) => (seen && !['signing', 'browser'].includes(seen.status) ? seen : (seen || {}).was);
     setSignIns((now) => ({ ...now, [app]: { status: 'signing', browser: '', was: before(now[app]) } }));
     setRow(id, app, true);
+    // Another open() for the same sign-in shares the window (and its answer); another app's replaces it.
+    if (!(lastWindow.current && lastWindow.current.group.includes(app))) lastWindow.current = { group: sharesSignIn(app) };
+    const ours = lastWindow.current;
     const out = await api.connectSignInWindow(app).catch(() => null);
     if (out && out.status === 'signed-in') {
       setSignIns((now) => { const next = { ...now }; for (const other of sharesSignIn(app)) next[other] = { status: 'signed-in', browser: '' }; return next; });
@@ -1133,7 +1140,12 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       setSignIns((now) => { const next = { ...now }; for (const other of sharesSignIn(app)) if (!next[other] || next[other].status !== 'signed-in') next[other] = { status: 'rejected', browser: '' }; return next; });
       return 'rejected';
     }
-    setSignIns((now) => { const next = { ...now }; const back = afterSignInWindowClosed((now[app] || {}).was); if (back) next[app] = back; else delete next[app]; return next; });
+    if (lastWindow.current !== ours) {
+      setSignIns((now) => { const next = { ...now }; const back = afterSignInWindowClosed((now[app] || {}).was); if (back) next[app] = back; else delete next[app]; return next; });
+      return 'closed';
+    }
+    setPicks((now) => signInWindowClosed(now, app).state);
+    setSignIns((now) => signInWindowClosed(null, app, now).signIns);
     return 'closed';
   };
   windowHere.current = signInWindowHere;

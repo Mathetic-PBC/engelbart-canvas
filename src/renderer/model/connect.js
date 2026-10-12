@@ -255,6 +255,25 @@ export function afterSignInWindowClosed(was) {
 }
 
 /**
+ * Engelbart's sign-in window for `app` closed by the person without signing in (2026-10-12, third run) → { state, signIns }:
+ * a no, so `app` and every ticked app sharing its sign-in (Gmail with Google Drive) are unticked, instead of left ticked
+ * with a Sign in that Bring these in would ask for again. Ticked again, a row starts its sign-in again. Its sign-in goes
+ * back as afterSignInWindowClosed says, and the others' old failures to plain Sign in, so nothing stale shows when ticked.
+ * Other rows (those still waiting their turn in signInWindows' chain) keep their tick.
+ */
+export function signInWindowClosed(state, app, signIns = {}) {
+  const group = sharesSignIn(app);
+  let next = state;
+  if (state) for (const source of SOURCES) for (const other of source.apps) if (group.includes(other) && ticked(next, source.id, other)) next = tickRow(next, source.id, other, false);
+  const after = { ...signIns };
+  for (const other of group) {
+    const back = afterSignInWindowClosed(other === app ? (signIns[app] || {}).was : signIns[other]);
+    if (back) after[other] = back; else if (other === app) delete after[other];
+  }
+  return { state: next, signIns: after };
+}
+
+/**
  * The sign-in a row says (2026-10-12, second test run): only while the row is ticked. A Google Drive sign-in signs in Gmail,
  * Google Meet and Gemini too, and kept that way, so ticking one later says ✓ at once; unticked, the row says what it would
  * with no sign-in.
@@ -284,7 +303,8 @@ export function signInChain(rows, { signIns = {}, state = null, consent = true }
  * Engelbart's sign-in windows opened one after another for the apps turned down (2026-10-12, second test run) →
  * turnedDown(rows), called with each Not now or Deny. `pick(rows)` is signInChain on the screen as it is now; `open(row)`
  * opens the window → 'signed-in' | 'rejected' | 'closed'. Signed in or turned away by the site, the next opens; closed by
- * the person, the chain stops and forgets the rest (their rows keep Sign in). Rows turned down while a window is open wait
+ * the person, the chain stops and forgets the rest (their rows keep their tick and Sign in; the closed window's sign-in
+ * group is unticked, signInWindowClosed). Rows turned down while a window is open wait
  * their turn, those of the open window's sign-in aside.
  */
 export function signInWindows({ pick, open }) {

@@ -137,7 +137,7 @@ test('the sign-in window loads any https page, opens an https pop-up as its chil
   assert.equal(win.destroyed, true);
 });
 
-test('a pop-up still open when the person closes the sign-in window closes with it; the row is plain Sign in again', async () => {
+test('a pop-up still open when the person closes the sign-in window closes with it; open() answers closed (the choose screen unticks the row)', async () => {
   const { signIn, windows } = fakes();
   const result = signIn.open('Claude');
   const [win] = windows;

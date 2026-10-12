@@ -175,3 +175,95 @@ test('the starting screen: the dots, the title and the count, no line moving thr
   assert.match(starting, /Getting to know your library/);
   assert.match(starting, /looked at/);
 });
+
+// Engelbart's sign-in window closed without signing in (2026-10-12, third run): a no. The app and every ticked app
+// sharing its sign-in are unticked, not left ticked with a Sign in that Bring these in asks for again; the rest keep theirs.
+// src/renderer/model/connect.js signInWindowClosed; src/renderer/screens/ConnectLibrary.jsx signInWindowHere.
+
+test('closed without signing in: the window\'s app and every ticked app sharing its sign-in are unticked, the others not', async () => {
+  const m = await model();
+  const state = await picksWith(m, [['notes', 'Google Docs'], ['email', 'Gmail'], ['chats', 'Gemini'], ['chats', 'Claude']]);
+  const signIns = {
+    'Google Docs': { status: 'signing', browser: '', was: { status: 'refused', browser: 'Chrome' } },
+    Gmail: { status: 'refused', browser: 'Chrome' },
+    Gemini: { status: 'declined', browser: '' },
+    Claude: { status: 'declined', browser: '' },
+  };
+  const out = m.signInWindowClosed(state, 'Google Docs', signIns);
+  for (const [id, app] of [['notes', 'Google Docs'], ['email', 'Gmail'], ['chats', 'Gemini']]) assert.equal(m.ticked(out.state, id, app), false, `${app} unticked`);
+  assert.equal(m.ticked(out.state, 'chats', 'Claude'), true, 'another sign-in keeps its tick');
+  assert.equal(m.ticked(out.state, 'transcripts', 'Google Meet'), false, 'one not ticked stays unticked');
+  // Nothing stale: the window's row goes back as afterSignInWindowClosed says, the others' old failures to plain Sign in.
+  assert.deepEqual(out.signIns['Google Docs'], { status: 'signed-out', browser: '' }, 'not "macOS didn\'t allow it"');
+  assert.deepEqual(out.signIns.Gmail, { status: 'signed-out', browser: '' });
+  assert.deepEqual(out.signIns.Gemini, signIns.Gemini);
+  assert.deepEqual(out.signIns.Claude, signIns.Claude, 'another sign-in\'s state is its own');
+  for (const [id, app] of [['notes', 'Google Docs'], ['email', 'Gmail']]) assert.equal(m.shownSignIn(out.state, id, app, out.signIns), null, `${app} unticked says nothing`);
+  assert.deepEqual(state, await picksWith(m, [['notes', 'Google Docs'], ['email', 'Gmail'], ['chats', 'Gemini'], ['chats', 'Claude']]), 'the state given is not changed');
+  // Nothing before the window: no sign-in left for it.
+  const fresh = m.signInWindowClosed(await picksWith(m, [['chats', 'ChatGPT']]), 'ChatGPT', { ChatGPT: { status: 'signing', browser: '' } });
+  assert.equal(fresh.signIns.ChatGPT, undefined);
+  assert.equal(m.ticked(fresh.state, 'chats', 'ChatGPT'), false);
+});
+
+test('ticked again after the window was closed: its sign-in starts again, and the row says plain Sign in meanwhile', async () => {
+  const m = await model();
+  const state = await picksWith(m, [['chats', 'Perplexity']]);
+  const out = m.signInWindowClosed(state, 'Perplexity', { Perplexity: { status: 'signing', browser: '', was: { status: 'refused', browser: 'Chrome' } } });
+  const again = m.tickRow(out.state, 'chats', 'Perplexity', true);
+  assert.deepEqual(m.newlyTickedWeb(out.state, again), [{ id: 'chats', app: 'Perplexity' }], 'a newly ticked web app: the screen checks its sign-in, as any tick does');
+  assert.deepEqual(m.signInsToCheck(true, m.newlyTickedWeb(out.state, again)), [{ id: 'chats', app: 'Perplexity' }]);
+  const label = m.rowLabel('Perplexity', { found: { apps: { Perplexity: { found: true } } }, signIn: m.shownSignIn(again, 'chats', 'Perplexity', out.signIns) });
+  assert.deepEqual(label, { text: '', tone: '', signIn: true }, 'Sign in, not "macOS didn\'t allow it"');
+  // The screen: ticking a web app checks it (toggleApp), and a check refused opens the window again (checkSignIn).
+  assert.match(screen, /const toggleApp = [\s\S]*?else if \(spec\.reach === 'web'\) checkTicked\(\[\{ id, app \}\]\);/);
+});
+
+test('the chain: a closed window unticks its own sign-in group only; apps waiting their turn keep their tick and Sign in', async () => {
+  const m = await model();
+  const rows = [{ id: 'notes', app: 'Google Docs' }, { id: 'email', app: 'Gmail' }, { id: 'chats', app: 'Grok' }, { id: 'chats', app: 'ChatGPT' }];
+  let state = await picksWith(m, rows.map((row) => [row.id, row.app]));
+  let signIns = Object.fromEntries(rows.map((row) => [row.app, { status: 'declined', browser: '' }]));
+  const opened = [];
+  let close;
+  // As the screen's window does: 'signing' while open; closed, signInWindowClosed.
+  const turnedDown = m.signInWindows({
+    pick: (more) => m.signInChain(more, { signIns, state }),
+    open: (row) => new Promise((resolve) => {
+      opened.push(row.app);
+      signIns = { ...signIns, [row.app]: { status: 'signing', browser: '', was: signIns[row.app] } };
+      close = () => { ({ state, signIns } = m.signInWindowClosed(state, row.app, signIns)); resolve('closed'); };
+    }),
+  });
+  const done = turnedDown(rows);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(opened, ['Google Docs']);
+  close();
+  await done;
+  assert.deepEqual(opened, ['Google Docs'], 'the chain still stops at a closed window');
+  assert.equal(m.ticked(state, 'notes', 'Google Docs'), false);
+  assert.equal(m.ticked(state, 'email', 'Gmail'), false, 'Gmail shares the window\'s sign-in: unticked with it');
+  const found = { apps: Object.fromEntries(rows.map((row) => [row.app, { found: true }])) };
+  for (const app of ['Grok', 'ChatGPT']) {
+    assert.equal(m.ticked(state, 'chats', app), true, `${app}, waiting its turn, keeps its tick`);
+    assert.deepEqual(m.rowLabel(app, { found, signIn: m.shownSignIn(state, 'chats', app, signIns) }), { text: '', tone: '', signIn: true }, `${app} keeps Sign in`);
+  }
+});
+
+test('signed in stays ticked with ✓, and Google refusing the sign-in stays ticked with Try again: only closed unticks', async () => {
+  const m = await model();
+  const found = { apps: { Gmail: { found: true }, 'Google Docs': { found: true } } };
+  const state = await picksWith(m, [['notes', 'Google Docs'], ['email', 'Gmail']]);
+  const signedIn = Object.fromEntries(m.sharesSignIn('Google Docs').map((app) => [app, { status: 'signed-in', browser: '' }]));
+  assert.deepEqual(m.rowLabel('Gmail', { found, signIn: m.shownSignIn(state, 'email', 'Gmail', signedIn) }), { text: '✓ Signed in', tone: 'ok' });
+  const rejected = Object.fromEntries(m.sharesSignIn('Google Docs').map((app) => [app, { status: 'rejected', browser: '' }]));
+  assert.deepEqual(m.rowLabel('Google Docs', { found, signIn: m.shownSignIn(state, 'notes', 'Google Docs', rejected) }), { text: 'Google refused this sign-in', tone: 'error', retry: true });
+  // The screen's window: signed in and rejected return, ticked, before the closed branch's unticking.
+  const here = screen.match(/const signInWindowHere = async \(id, app\) => \{[\s\S]*?\n  \};/)[0];
+  const at = (pattern) => here.search(pattern);
+  assert.ok(at(/setRow\(id, app, true\);/) >= 0, 'opening it ticks the row');
+  assert.ok(at(/return 'signed-in';/) >= 0 && at(/return 'rejected';/) >= 0);
+  assert.ok(at(/return 'signed-in';/) < at(/signInWindowClosed\(/) && at(/return 'rejected';/) < at(/signInWindowClosed\(/), 'signed in and rejected never reach the unticking');
+  assert.equal((here.match(/setPicks\(/g) || []).length, 1, 'one place unticks: the person closing the window');
+  assert.match(here, /setPicks\(\(now\) => signInWindowClosed\(now, app\)\.state\);\n\s*setSignIns\(\(now\) => signInWindowClosed\(null, app, now\)\.signIns\);\n\s*return 'closed';/);
+});

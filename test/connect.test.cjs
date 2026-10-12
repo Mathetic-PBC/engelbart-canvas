@@ -1538,7 +1538,7 @@ test('the project goes to the librarian, its surveys and its imports, and is kep
   third.connect.stop(plain.id);
 });
 
-test('the sign-in window closed without signing in: the row is plain Sign in, not an old "macOS didn\'t allow it" (2026-10-12)', async () => {
+test('the sign-in window closed without signing in: the row, unticked, is plain Sign in when ticked again, not an old "macOS didn\'t allow it" (2026-10-12)', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const label = (signIn) => model.rowLabel('ChatGPT', { found: { apps: { ChatGPT: { found: true } } }, signIn });
   const closed = (was) => label(model.afterSignInWindowClosed(was));

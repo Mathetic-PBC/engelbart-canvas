@@ -166,20 +166,24 @@ app.whenReady().then(async () => {
     const googleWindow = await until(() => BrowserWindow.getAllWindows().find((other) => other !== win), 'Engelbart\'s sign-in window, for Google');
     assert.equal(await has(wc, '[data-connect-keychain]'), false, 'no Keychain modal');
     assert.equal(await has(wc, '[data-connect-here]'), false, 'no browser waited on, so no "Sign in here instead"');
-    googleWindow.close();
-    await until(() => has(wc, '[data-connect-signin="Google Docs"]'), 'Sign in again, after the window is closed');
-    assert.equal(await attr(wc, '[data-connect-app="Google Docs"] [role=checkbox]', 'aria-checked'), 'true', 'still ticked');
     await shot(wc, '1-sign-in-rows');
+    // Closed without signing in (2026-10-12, third run): a no, so Google Drive and Gmail, which share its sign-in, are
+    // unticked, and say nothing of it; not left ticked with a Sign in that Bring these in would ask for again.
+    googleWindow.close();
+    await until(async () => (await attr(wc, '[data-connect-app="Google Docs"] [role=checkbox]', 'aria-checked')) === 'false', 'Google Drive unticked, after the window is closed');
+    assert.equal(await attr(wc, '[data-connect-app="Gmail"] [role=checkbox]', 'aria-checked'), 'false', 'Gmail, sharing its sign-in, unticked too');
+    assert.equal(await has(wc, '[data-connect-signin="Google Docs"]'), false, 'no Sign in on an unticked row');
+    assert.equal(await has(wc, '[data-connect-signin="Gmail"]'), false);
+    assert.equal(await attr(wc, '[data-connect-app=ChatGPT] [role=checkbox]', 'aria-checked'), 'true', 'ChatGPT, another sign-in, keeps its tick');
     const agentsBrowser = electronSession.fromPartition(stagePartition(false));
-    await press(wc, '[data-connect-app="Google Docs"]');
-    await press(wc, '[data-connect-app="Gmail"]');
 
     /* ------------------------------------------------ turned down: Engelbart's sign-in windows open by themselves, in turn */
     // 2026-10-12, second test run. macOS would ask for Chrome's sign-ins for Claude and Google Drive (main's answers stood
     // in for: no browser is installed here), so the Keychain modal asks; Not now opens Engelbart's window for Claude by
     // itself, then, once it signs in, Google's. Signed in, Google Drive is ✓ and Gmail, unticked, says nothing of it until
     // ticked. Then Deny at macOS's prompt for Perplexity's and Grok's checks: Perplexity's window opens by itself, and closed
-    // without signing in, the chain stops there: Grok's never opens, and both rows keep Sign in.
+    // without signing in, the chain stops there: Perplexity is unticked (2026-10-12, third run), Grok's window never opens
+    // and Grok keeps its tick and Sign in. Ticked again, Perplexity's sign-in starts again.
     const windows = [];
     standIns['connect-signin-note'] = (app) => (['Claude', 'Google Docs'].includes(app) ? { browser: 'Chrome', note: 'macOS will ask for Chrome\'s sign-ins.', profiles: [] } : ['Perplexity', 'Grok'].includes(app) ? { browser: '', note: '', profiles: [] } : undefined);
     standIns['connect-signin-check'] = (app) => (['Perplexity', 'Grok'].includes(app) ? { status: 'refused', browser: 'Chrome' } : undefined);
@@ -219,11 +223,19 @@ app.whenReady().then(async () => {
     await pause(400);
     assert.equal(windows.length, 3, 'Grok waits its turn');
     windows[2].resolve({ status: 'closed' });
-    await until(() => has(wc, '[data-connect-signin="Perplexity"]'), 'Perplexity keeps its Sign in');
+    await until(async () => (await attr(wc, '[data-connect-app="Perplexity"] [role=checkbox]', 'aria-checked')) === 'false', 'Perplexity unticked: its window was closed');
+    assert.equal(await has(wc, '[data-connect-signin="Perplexity"]'), false, 'no Sign in on its unticked row');
     await pause(400);
     assert.equal(windows.length, 3, 'closed without signing in: the chain stops, Grok\'s window never opens');
+    assert.equal(await attr(wc, '[data-connect-app="Grok"] [role=checkbox]', 'aria-checked'), 'true', 'Grok, waiting its turn, keeps its tick');
     assert.ok(await has(wc, '[data-connect-signin="Grok"]'), 'Grok keeps its Sign in');
-    for (const app of ['Claude', 'Google Docs', 'Perplexity', 'Grok']) await tickNow(app);
+    assert.match(await text(wc, '[data-connect-app="Claude"]'), signedInText, 'signed in: still ticked, with ✓');
+    await tickNow('Perplexity');
+    await until(() => windows.length === 4, 'ticked again, Perplexity\'s sign-in starts again (Deny, then its window)');
+    assert.equal(windows[3].app, 'Perplexity');
+    windows[3].resolve({ status: 'closed' });
+    await until(async () => (await attr(wc, '[data-connect-app="Perplexity"] [role=checkbox]', 'aria-checked')) === 'false', 'closed again: unticked again');
+    for (const app of ['Claude', 'Google Docs', 'Grok']) await tickNow(app);
     for (const name of Object.keys(standIns)) delete standIns[name];
     for (const app of ['Claude', 'Google Docs', 'Perplexity', 'Grok']) assert.equal(await attr(wc, `[data-connect-app="${app}"] [role=checkbox]`, 'aria-checked'), 'false', `${app} unticked again`);
     // MATH-114: asking ChatGPT what it remembers is ticking it; one checkbox, naming the provider, for the rest.
