@@ -306,6 +306,42 @@ export function signInPanel(state, browser, rows = []) {
   };
 }
 
+/* MATH-110: macOS's folder access (Desktop, Documents, Downloads, iCloud Drive, the drives), asked for once, before a run. */
+
+export const FOLDER_ACCESS_TIP = 'macOS only asks once. You can change it later in System Settings → Privacy & Security → Files and Folders.';
+
+/**
+ * The panel before macOS asks to let Engelbart read its protected folders (MATH-110) → { title, lead, folders, tip } | null.
+ * `folders`: main's connect-folders-needed, [{ id, name }], only folders that are on this Mac and never asked about.
+ * `papers`: PDFs on this Mac is why (else a repository under one of them).
+ */
+export function folderPanel(folders, { papers = true } = {}) {
+  const names = (folders || []).map((folder) => folder && folder.name).filter(Boolean);
+  if (!names.length) return null;
+  return {
+    title: `Let Engelbart read your ${names.length === 1 ? names[0] : 'folders'}?`,
+    lead: `macOS will ask to let Engelbart read your ${listed(names)}. Choose Allow so it can look for your ${papers ? 'papers' : 'repositories'} there.`,
+    folders: listed(names),
+    tip: FOLDER_ACCESS_TIP,
+  };
+}
+
+/**
+ * The PDFs row's label while and after macOS is asked (MATH-110) → { text, tone } | null: 'Waiting for macOS…' while it
+ * asks; then "✓ Desktop, Documents, Downloads" for the folders allowed and "Downloads not allowed" for any denied.
+ * `answers` { [id]: 'allowed' | 'denied' }, `folders` [{ id, name }] the panel named.
+ */
+export function folderAccessLabel({ asking = false, answers = null, folders = [] } = {}) {
+  if (asking) return { text: 'Waiting for macOS…', tone: 'busy' };
+  if (!answers) return null;
+  const named = (folders || []).filter((folder) => answers[folder.id]);
+  if (!named.length) return null;
+  const allowed = named.filter((folder) => answers[folder.id] === 'allowed').map((folder) => folder.name);
+  const denied = named.filter((folder) => answers[folder.id] !== 'allowed').map((folder) => folder.name);
+  const parts = [allowed.length ? `✓ ${allowed.join(', ')}` : '', denied.length ? `${listed(denied)} not allowed` : ''].filter(Boolean);
+  return { text: parts.join(' · '), tone: allowed.length ? 'ok' : 'muted' };
+}
+
 /**
  * The modal after Continue (2026-10-11): how the check of each app it named went, from `signIns` (app → { status, browser },
  * the choose screen's). → { done, title, lines, tone } — `done` false while macOS is still being asked; `tone` 'ok' when
@@ -343,6 +379,7 @@ export function rowSub(app) {
 /** What a row's tooltip adds about what the app brings in, or ''. */
 export function rowTip(app) {
   if (app === 'Gmail') return 'Only the threads you approve';
+  if (app === LOCAL_PDFS) return FOLDER_ACCESS_TIP;
   return app === 'Google Docs' ? 'Docs, Sheets, Slides and files' : '';
 }
 
@@ -412,7 +449,7 @@ export function projectOf(project) {
  * (`project` { name, description }, 2026-10-10), which onboarding sends without an id; and how far back to look (`days`
  * 182 or 365, null for all time, 2026-10-10), always sent.
  */
-export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', permissions = {}, provider = null, projectId = null, workspaceId = null, project = null, days = null }) {
+export function choicesOf({ picks, apps, folders = {}, repos = [], picked = [], custom = '', permissions = {}, provider = null, projectId = null, workspaceId = null, project = null, days = null }) {
   const sources = {};
   for (const source of SOURCES) {
     sources[source.id] = {
@@ -423,7 +460,8 @@ export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', 
     };
   }
   const allowed = { files: permissions.files !== false, browser: permissions.browser !== false, recall: permissions.recall !== false, notes: permissions.notes === true };
-  return { sources, custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, days: cleanDays(days), ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}), ...(projectId && workspaceId ? { workspaceId } : {}), ...(projectOf(project) ? { project: projectOf(project) } : {}) };
+  // `picked` (MATH-110): the folders chosen in the folder picker, which macOS lets Engelbart read wherever they are.
+  return { sources, ...(picked.length ? { picked: [...new Set(picked)] } : {}), custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, days: cleanDays(days), ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}), ...(projectId && workspaceId ? { workspaceId } : {}), ...(projectOf(project) ? { project: projectOf(project) } : {}) };
 }
 
 /**

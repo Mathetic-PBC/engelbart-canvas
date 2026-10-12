@@ -46,6 +46,7 @@ const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cle
 const prompts = require('./prompts.cjs');
 const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
+const folderAccess = require('./folder-access.cjs');
 const notes = require('./notes.cjs');
 const { createImportTools } = require('./tools.cjs');
 const { skillsFor } = require('./skills.cjs');
@@ -136,7 +137,7 @@ function memoryJobs(s) {
  * project }. `project` { name, description } (or null) is what the person is working on; it is kept in session.json with
  * the rest, so a session picked up again after a quit still knows it.
  */
-function cleanChoices(input, homeDir) {
+function cleanChoices(input, homeDir, { alsoPicked = [] } = {}) {
   const given = input && typeof input === 'object' ? input : {};
   const sources = {};
   for (const source of SOURCES) {
@@ -149,8 +150,13 @@ function cleanChoices(input, homeDir) {
   }
   const allowed = given.permissions && typeof given.permissions === 'object' ? given.permissions : {};
   const computer = given.computer !== false && allowed.files !== false;
+  // The folders the person chose in the folder picker (MATH-110): macOS lets Engelbart read them even inside a protected
+  // folder it was not let to read. Only those among the sources' folders count.
+  const chosen = new Set([...Object.values(sources).flatMap((source) => source.folders), ...alsoPicked]);
+  const picked = [...new Set((Array.isArray(given.picked) ? given.picked : []).map((dir) => readers.expandPath(homeDir, dir)).filter((dir) => dir && chosen.has(dir)))].slice(0, 40);
   return {
     sources,
+    picked,
     custom: typeof given.custom === 'string' ? given.custom.trim().slice(0, 4000) : '',
     computer,
     permissions: { files: computer, browser: allowed.browser !== false, recall: allowed.recall !== false, notes: allowed.notes === true },
@@ -343,11 +349,31 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return s;
   }
 
-  /** The folders the agents' file tools may read: what the sources need, or the whole home folder when allowed. */
+  /**
+   * What macOS let Engelbart read of its protected folders (MATH-110, ./folder-access.cjs): those allowed on the choose
+   * screen, the folders the person picked themselves, and the places of the apps they ticked that Engelbart knows from the
+   * app itself (Obsidian's vaults, ~/Documents/Zoom), which the choose screen does not ask about: read as before.
+   */
+  function accessOf(s) {
+    const on = (app) => Object.values(s.choices.sources).some((choice) => choice.on && choice.apps.includes(app));
+    const places = [
+      ...(on('Obsidian') || (s.choices.sources.sites && s.choices.sources.sites.on) ? readers.obsidianVaults(homeDir).map((vault) => vault.path) : []),
+      ...(on('Zoom') ? [path.join(homeDir, 'Documents', 'Zoom')] : []),
+    ];
+    return folderAccess.guard({ homeDir, dataRoot: s.dataRoot, picked: [...(s.choices.picked || []), ...places] });
+  }
+
+  /**
+   * The folders the agents' file tools may read: what the sources need, or the whole home folder when allowed. A folder
+   * inside a protected one macOS did not let Engelbart read is not given (MATH-110); the home folder still is, the find
+   * search being told to keep out of those (findMessage) and the file tools refusing them (./tools.cjs).
+   */
   function dirsOf(s) {
     const dirs = new Set();
-    const add = (dir) => { if (dir && fs.existsSync(dir)) dirs.add(path.resolve(dir)); };
-    if (s.choices.computer) add(homeDir);
+    const access = accessOf(s);
+    const grant = (dir) => { if (dir && fs.existsSync(dir)) dirs.add(path.resolve(dir)); };
+    const add = (dir) => { if (dir && access.readable(dir)) grant(dir); };
+    if (s.choices.computer) grant(homeDir);
     for (const [id, choice] of Object.entries(s.choices.sources)) {
       if (!choice.on) continue;
       for (const dir of choice.folders) add(dir);
@@ -361,7 +387,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (id === 'sites') for (const vault of readers.obsidianVaults(homeDir).slice(0, 2)) add(vault.path);
     }
     for (const file of [...Object.values(s.picked.folders), ...Object.values(s.picked.exports)]) add(fs.existsSync(file) && fs.statSync(file).isDirectory() ? file : path.dirname(file));
-    add(s.downloads);
+    grant(s.downloads);
     // The narrowest set: a folder inside another granted one adds nothing.
     const list = [...dirs].sort((a, b) => a.length - b.length);
     return list.filter((dir, i) => !list.slice(0, i).some((outer) => dir.startsWith(outer + path.sep)));
@@ -554,16 +580,30 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    */
   function findMessage(s, job) {
     const app = job.apps[0];
+    // MATH-110: the protected folders macOS did not let Engelbart read are kept out of the search, so it never asks
+    // mid-run; ~/Pictures, ~/Music and ~/Movies too (their own prompts). `allowed` are the ones it may look in.
+    const access = accessOf(s);
+    const shown = (dir) => readers.shownPath(homeDir, dir);
+    const allowed = access.allowed.map((folder) => `${folder.name} (${shown(folder.path)})`);
+    const allowedTop = new Set(access.allowed.map((folder) => folder.id));
+    const skipped = ['Desktop', 'Documents', 'Downloads', 'Library', 'Pictures', 'Music', 'Movies'].filter((name) => !allowedTop.has(name));
+    const insideLibrary = access.allowed.filter((folder) => folder.id.startsWith(`Library${path.sep}`)).map((folder) => shown(folder.path));
+    const tops = (() => { try { return fs.readdirSync(homeDir, { withFileTypes: true }).filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && !skipped.includes(entry.name)).map((entry) => `~/${entry.name}`).sort().slice(0, 60); } catch { return []; } })();
+    const lookIn = [...tops, ...insideLibrary];
+    const usual = [fs.existsSync(path.join(homeDir, 'Dropbox')) ? '~/Dropbox' : '', ...allowed].filter(Boolean);
     const what = {
-      Zoom: 'Find their folder of Zoom recordings. Zoom keeps each meeting in a folder named by its date and topic ("2026-03-04 10.00.00 Lab meeting"), holding its transcript (a .vtt or .txt file), audio and video. People move that folder, or point Zoom\'s recording setting elsewhere: look under ~/Movies, ~/Desktop, ~/Downloads, ~/Documents, Dropbox, Google Drive and iCloud Drive (~/Library/Mobile Documents/com~apple~CloudDocs) first. "folder" is the folder that holds the meeting folders. When there is none on this Mac, say so in "notes": the cloud recordings at zoom.us/recording are what an import agent reads instead.',
-      Obsidian: 'Find their Obsidian vault: a folder holding a .obsidian folder (Glob for **/.obsidian). When there are several, "folder" is the one they most likely work in: the most notes, changed most recently.',
+      Zoom: `Find their folder of Zoom recordings. Zoom keeps each meeting in a folder named by its date and topic ("2026-03-04 10.00.00 Lab meeting"), holding its transcript (a .vtt or .txt file), audio and video. People move that folder, or point Zoom's recording setting elsewhere${usual.length ? `: look under ${usual.join(', ')} first` : ''}. "folder" is the folder that holds the meeting folders. When there is none on this Mac, say so in "notes": the cloud recordings at zoom.us/recording are what an import agent reads instead.`,
+      Obsidian: 'Find their Obsidian vault: a folder holding a .obsidian folder (Glob for **/.obsidian inside each folder you may look in, one at a time). When there are several, "folder" is the one they most likely work in: the most notes, changed most recently.',
       [LOCAL_PDFS]: 'Find the folders that hold their PDFs, papers mostly: use folder_overview and list_pdfs on the folders Glob finds them in. "folders" lists them, the most PDFs first, at most 6.',
     }[app] || `Find their ${shownName(app)} folder.`;
     const reply = app === LOCAL_PDFS ? '"folders": ["<absolute path>", ...] (empty when you found none)' : '"folder": "<absolute path, or null when you found none>"';
     return [
       engelbartBlock(s), projectBlock(s.choices), `<source>${job.source}</source>`, `<app>${app}</app>`,
       `Engelbart did not find ${app === LOCAL_PDFS ? 'any folder of PDFs' : `their ${shownName(app)} folder`} where it usually is. ${what}`,
-      `Look with Glob, Grep and Read, inside their home folder (${homeDir}) only. Skip ~/Library (iCloud Drive aside) and hidden folders (a vault's .obsidian aside). Spend a few minutes at most. Never call needs_you to ask them for a folder: when you find nothing, say so, and they are offered a button to choose one.`,
+      `Look with Glob, Grep and Read, inside their home folder (${homeDir}) only. Never look in ${skipped.map((name) => `~/${name}`).join(', ')}${insideLibrary.length ? ` (${insideLibrary.join(' and ')} aside)` : ''}: macOS has not let Engelbart read ${skipped.length > 1 ? 'them' : 'it'}, and looking there makes it stop the person with a prompt. Skip hidden folders too (a vault's .obsidian aside). Never Glob from the home folder itself (a pattern like ${homeDir}/**/x walks into the folders to skip): Glob inside each folder you may look in instead.`,
+      `<folders_allowed note="Protected folders macOS let Engelbart read">${allowed.length ? allowed.join(', ') : 'none'}</folders_allowed>`,
+      `<look_in note="The folders of their home folder you may look in">${lookIn.length ? lookIn.join(', ') : 'none'}</look_in>`,
+      'Spend a few minutes at most. Never call needs_you to ask them for a folder: when you find nothing, say so, and they are offered a button to choose one.',
       `Reply with the survey's JSON object, with two more fields: ${reply}, and "searched": "<where you looked, in a few words>".`,
     ].filter(Boolean).join('\n\n');
   }
@@ -589,6 +629,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const page = bridged && browser && s.choices.permissions.browser && sitesOf(covered).length ? browser.tools({ id: job.id, label: job.label, sites: sitesOf(covered) }) : null;
     const session = {
       dataRoot: s.dataRoot, homeDir, dir: s.dir, downloads: s.downloads, projectId: () => s.projectId,
+      // what macOS let Engelbart read of its protected folders (MATH-110): the file tools keep out of the rest
+      readable: (dir) => accessOf(s).readable(dir),
       // the apps the job covers and its source group, for what each row it brings in knows about itself (Library Phase B)
       apps: covered, group: job.source,
       get exports() { return s.picked.exports; },
@@ -663,6 +705,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const app = job.apps[0], source = job.source;
     if (text == null && (s.suspended || s.stopped)) return;
     const report = text != null ? readSurvey(text, homeDir) : { folders: [], searched: null, notes: null, error: error || 'The search did not finish' };
+    // A folder inside a protected one macOS did not let Engelbart read is not taken (MATH-110).
+    const access = accessOf(s);
+    report.folders = report.folders.filter((dir) => access.readable(dir));
     const reach = appOf(app) ? appOf(app).reach : 'local';
     const put = (entry) => {
       s.found[source] = { ...(s.found[source] || {}), [app]: entry };
@@ -1069,7 +1114,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   async function rescan(s, sourceIds) {
     const only = { sources: Object.fromEntries(Object.entries(s.choices.sources).filter(([id]) => sourceIds.includes(id))), project: projectFor(s.choices), days: s.choices.days || null };
-    const fresh = await scanFor(only, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null });
+    const fresh = await scanFor(only, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null, access: accessOf(s) });
     for (const [source, apps] of Object.entries(fresh)) {
       // What a survey found is kept: the scan does not know it.
       const merged = { ...(s.found[source] || {}) };
@@ -1130,7 +1175,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.chat.push(opener);
       emit(s);
     }
-    try { s.found = await scanFor({ ...s.choices, project: projectFor(s.choices) }, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null }); } catch (error) { s.found = { error: error.message }; }
+    try { s.found = await scanFor({ ...s.choices, project: projectFor(s.choices) }, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null, access: accessOf(s) }); } catch (error) { s.found = { error: error.message }; }
     if (s.stopped || s.suspended) return;
     opener.text = foundSentence(s);
     s.dirs = dirsOf(s);
@@ -1251,6 +1296,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const file = readers.expandPath(homeDir, input.path);
       if (!file || !file.startsWith(homeDir + path.sep) || !fs.existsSync(file)) throw new Error('Choose something inside your home folder');
       s.picked.folders[app] = file;
+      // Chosen in the folder picker: macOS lets Engelbart read it, protected folder or not (MATH-110).
+      s.choices.picked = [...new Set([...(s.choices.picked || []), fs.statSync(file).isDirectory() ? file : path.dirname(file)])].slice(-40);
       clean = { chose: { app, kind: 'folder', shown: readers.shownPath(homeDir, file) } };
     }
     s.chat.push({ role: 'user', text: shownOf(clean), at: now() });
@@ -1578,7 +1625,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
     const kept = saved.memory && saved.memory.status === 'saved';
     const s = {
-      id, mode: saved.mode === 'existing' && projectId ? 'existing' : 'onboarding', dataRoot: ctx.dataRoot, homeDir, dir, downloads: path.join(ctx.dataRoot, 'imports', id), created: saved.created, choices: cleanChoices(saved.choices, homeDir), choice: choiceFor(provider), redactChoice: null,
+      id, mode: saved.mode === 'existing' && projectId ? 'existing' : 'onboarding', dataRoot: ctx.dataRoot, homeDir, dir, downloads: path.join(ctx.dataRoot, 'imports', id), created: saved.created, choices: cleanChoices(saved.choices, homeDir, { alsoPicked: Object.values(keptPaths(saved.picked && saved.picked.folders)).map((file) => (fs.statSync(file).isDirectory() ? file : path.dirname(file))) }), choice: choiceFor(provider), redactChoice: null,
       picked: { folders: keptPaths(saved.picked && saved.picked.folders), exports: keptPaths(saved.picked && saved.picked.exports) },
       chat: (Array.isArray(saved.chat) ? saved.chat : []).filter((entry) => entry && (entry.role === 'agent' || entry.role === 'user')), thinking: false, activity: '', done: !!saved.done, finished: !!saved.finished, minimized: true, dismissed: false, error: '',
       jobs: [], seq: 0, needs: [], log: (Array.isArray(saved.log) ? saved.log : []).slice(-MAX_LOG), controllers: new Set(), interviewSession: typeof saved.interviewSession === 'string' ? saved.interviewSession : null, interviewController: null,

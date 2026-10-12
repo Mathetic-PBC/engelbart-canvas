@@ -249,8 +249,11 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
     const file = readers.expandPath(homeDir, value);
     if (!file) throw new Error(`${what} must be absolute or start with ~/`);
     if (file !== homeDir && !file.startsWith(homeDir + path.sep)) throw new Error('Only files inside the home directory can be read');
+    // MATH-110: a protected folder (Desktop, Documents, Downloads, iCloud Drive, a cloud drive) macOS did not let Engelbart read.
+    if (session.readable && !session.readable(file)) throw new Error(`macOS has not let Engelbart read ${readers.shownPath(homeDir, file)}: leave it out, and say so in your reply.`);
     return file;
   };
+  const readable = session.readable || null;
   const exportOf = (app) => {
     const file = session.exports && session.exports[app];
     if (!file) throw new Error(`There is no ${app} export on this Mac; use web_chats for ${app}.`);
@@ -354,9 +357,9 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   let waiting = null; // the step needs_you handed over, while the person has not answered
 
   const call = {
-    folder_overview: ({ path: dir }) => readers.folderOverview(where(dir), { homeDir }),
+    folder_overview: ({ path: dir }) => readers.folderOverview(where(dir), { homeDir, readable }),
     list_note_files: ({ folder, include, exclude, days }) => {
-      const files = readers.noteFiles(where(folder, 'folder'), { include, exclude, days: within(days), max: 5000 });
+      const files = readers.noteFiles(where(folder, 'folder'), { include, exclude, days: within(days), max: 5000, readable });
       return { total: files.length, files: files.slice(0, 2000), more: Math.max(0, files.length - 2000) };
     },
     import_note_files: async ({ files, root }) => {
@@ -392,7 +395,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
     },
     add_to_library: ({ input, name }) => addRow(input, name, { about: knows(appFor()) }),
     list_pdfs: async ({ folder, include, exclude, days, query, kind, limit, check }) => {
-      const out = readers.pdfFiles(where(folder, 'folder'), { include, exclude, days: within(days), query, kind, limit: Math.min(1000, Math.max(1, Math.round(limit || 300))) });
+      const out = readers.pdfFiles(where(folder, 'folder'), { include, exclude, days: within(days), query, kind, limit: Math.min(1000, Math.max(1, Math.round(limit || 300))), readable });
       if (check && deps.inspectPdf) {
         const started = Date.now();
         let checked = 0;

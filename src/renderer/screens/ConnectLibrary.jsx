@@ -6,7 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -378,6 +378,42 @@ function KeychainModal({ panel, outcome, onContinue, onNotNow, onClose }) {
             <button type="button" className="hov-ink" data-connect-keychain-hide="1" onClick={onClose} title="Close this; the row still says how it goes" style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Hide</button>
           </>}
           {phase === 'done' && <button type="button" ref={primary} data-connect-keychain-done="1" onClick={onClose} style={{ padding: '9px 16px', border: 0, borderRadius: 8, background: '#171717', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#fff' }}>Done</button>}
+        </span>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * Before macOS asks to let Engelbart read its protected folders (MATH-110): one modal naming them all, so the prompts that
+ * follow are expected, and come before the run instead of in the middle of it. Continue reads each folder in turn (macOS
+ * asks about each); Not now leaves them out of this run, the row still ticked. Escape is Not now. In a portal, as
+ * KeychainModal is.
+ */
+function FolderAccessModal({ panel, onContinue, onNotNow }) {
+  const primary = React.useRef(null);
+  React.useEffect(() => { if (primary.current) primary.current.focus(); }, []);
+  React.useEffect(() => {
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onNotNow();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onNotNow]);
+  return createPortal(
+    <div data-overlay="1" data-cover="1" data-connect-folders="ask" style={{ position: 'fixed', inset: 0, zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: 'rgba(23,23,23,.28)' }}>
+      <div role="dialog" aria-modal="true" aria-label={panel.title} style={{ width: 'min(420px, 100%)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 10, padding: '22px 22px 18px', background: '#fff', borderRadius: 12, boxShadow: '0 16px 48px #00000029', animation: `rise 160ms ${EASE}` }}>
+        <span aria-hidden="true" style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', ...KEYCHAIN_TONES.ask }}>{FOLDER}</span>
+        <span style={{ font: '600 16px/1.35 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{panel.title}</span>
+        <span data-connect-folders-lead="1" style={{ font: '600 13.5px/1.5 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{panel.lead}</span>
+        <span data-connect-folders-tip="1" style={{ font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{panel.tip}</span>
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 16, paddingTop: 8 }}>
+          <button type="button" className="hov-ink" data-connect-folders-not-now="1" onClick={onNotNow} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Not now</button>
+          <button type="button" ref={primary} data-connect-folders-continue="1" onClick={onContinue} style={{ padding: '9px 16px', border: 0, borderRadius: 8, background: '#171717', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#fff' }}>Continue</button>
         </span>
       </div>
     </div>,
@@ -883,6 +919,11 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [waitingYes, setWaitingYes] = React.useState({}); // browser → [{ id, app }] ticked, waiting on its modal's Continue
   const [keychainRun, setKeychainRun] = React.useState(null); // { browser, rows } after Continue: the modal says how it went
   const [gate, setGate] = React.useState(null); // Bring these in with apps not signed in: 'ask' | 'signing' | 'leave' (its modal), or null
+  // MATH-110: macOS's folder access. folderAsk: the modal ({ folders, papers, then: 'start' | null }); folderRun: the folders
+  // it named and macOS's answers ({ folders, asking, answers }), for the PDFs row; foldersDeclined: Not now, this screen.
+  const [folderAsk, setFolderAsk] = React.useState(null);
+  const [folderRun, setFolderRun] = React.useState(null);
+  const foldersDeclined = React.useRef(false);
   const [providers, setProviders] = React.useState(null);
   const [provider, setProvider] = React.useState(null);
   const [toolSnap, setToolSnap] = React.useState(null);
@@ -1103,12 +1144,66 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     }
   };
 
+  // The folders of each source the run gets, and the choices main is sent (connect-start, connect-folders-needed).
+  const chosenOf = (state) => {
+    const chosen = { papers: [...folders.papers], code: localPicked(state) };
+    for (const source of SOURCES) for (const app of source.apps) if (appFolders[app] && ticked(state, source.id, app) && app !== LOCAL_PDFS) chosen[source.id] = [...(chosen[source.id] || []), appFolders[app]];
+    if (!ticked(state, 'papers', LOCAL_PDFS)) chosen.papers = [];
+    else if (appFolders[LOCAL_PDFS]) chosen.papers = [...new Set([...chosen.papers, appFolders[LOCAL_PDFS]])];
+    return chosen;
+  };
+  // The folders chosen in the folder picker (MATH-110): macOS lets Engelbart read them, protected folder or not.
+  const pickedDirs = () => [...folders.papers, ...Object.values(appFolders), ...extraRepos].filter(Boolean);
+  const choicesFor = (state) => {
+    const permissions = permissionsOf(state, { consent, notes: notesState === 'allowed' });
+    return choicesOf({ picks: state.picks, apps: state.apps, folders: chosenOf(state), repos: reposTicked(), picked: pickedDirs(), permissions, provider, projectId, workspaceId, project, days });
+  };
+  // MATH-110: the protected folders (Desktop, Documents, Downloads, iCloud Drive, the drives) a run with these picks would
+  // read and macOS was never asked about: one modal says so first. Not now, once, holds for this screen. → shown or not
+  const askFolders = async (state, then = null) => {
+    if (!state || foldersDeclined.current) return false;
+    const list = await api.connectFoldersNeeded(choicesFor(state)).catch(() => []);
+    if (!Array.isArray(list) || !list.length || foldersDeclined.current) return false;
+    setFolderAsk({ folders: list, papers: ticked(state, 'papers', LOCAL_PDFS) && consent, then });
+    return true;
+  };
+  // Continue: each folder read in turn, so macOS asks about them one after another; the PDFs row says how it went.
+  const allowFolders = async () => {
+    const asked = folderAsk;
+    if (!asked) return;
+    setFolderAsk(null);
+    setFolderRun({ folders: asked.folders, asking: true, answers: null });
+    const answers = await api.connectFoldersAsk(asked.folders.map((folder) => folder.id)).catch((failure) => { setError(errorMessage(failure)); return {}; });
+    setFolderRun({ folders: asked.folders, asking: false, answers: answers || {} });
+    if (asked.then === 'start') start({ foldersDone: true });
+  };
+  // Not now: the row stays ticked; the run reads only the PDF folders macOS does not guard (~/Papers, ~/Research…).
+  const declineFolders = () => {
+    const asked = folderAsk;
+    foldersDeclined.current = true;
+    setFolderAsk(null);
+    if (asked && asked.then === 'start') start({ foldersDone: true });
+  };
+  // Ticking PDFs on this Mac (or a repository under a protected folder, or the consent that lets the agents read files)
+  // shows the modal; rows ticked from the start wait for Bring these in, as sign-ins do.
+  const folderKey = picks ? JSON.stringify([ticked(picks, 'papers', LOCAL_PDFS) && consent, localPicked(picks)]) : null;
+  const lastFolderKey = React.useRef(undefined);
+  React.useEffect(() => {
+    if (folderKey === null || view !== 'choose') return;
+    if (lastFolderKey.current === undefined) { lastFolderKey.current = folderKey; return; }
+    if (lastFolderKey.current === folderKey) return;
+    lastFolderKey.current = folderKey;
+    if (!folderAsk && !(folderRun && folderRun.asking)) void askFolders(picks);
+  }, [folderKey]); // eslint-disable-line react-hooks/exhaustive-deps
+
   // Bring these in: ticked web apps not signed in yet get one modal first (2026-10-11), so the refine screen never shows
   // a sign-in card for an app the person picked. With the consent off, web apps are left out as before.
-  const start = () => {
+  const start = async ({ foldersDone = false } = {}) => {
     const anyOn = picks && SOURCES.some((source) => picks.picks[source.id]);
     if (!anyOn) { setError('Pick at least one source.'); return; }
     if (!provider) { setError('Sign in to Claude Code or Codex first.'); return; }
+    // MATH-110: macOS's folder prompts come here, all together and explained, never in the middle of the run.
+    if (!foldersDone && !folderRun?.asking && await askFolders(picks, 'start')) return;
     if (unsignedWeb(picks, signIns, found, consent).length) { setGate('ask'); return; }
     launch();
   };
@@ -1140,13 +1235,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     setError('');
     // No sign-in waits on the person here: the modals cover the screen until they are answered (2026-10-11), and checks
     // already going are waited for by main (signInsFirst).
-    const chosen = { papers: [...folders.papers], code: localPicked(picks) };
-    for (const source of SOURCES) for (const app of source.apps) if (appFolders[app] && ticked(picks, source.id, app) && app !== LOCAL_PDFS) chosen[source.id] = [...(chosen[source.id] || []), appFolders[app]];
-    if (!ticked(picks, 'papers', LOCAL_PDFS)) chosen.papers = [];
-    else if (appFolders[LOCAL_PDFS]) chosen.papers = [...new Set([...chosen.papers, appFolders[LOCAL_PDFS]])];
     try {
-      const permissions = permissionsOf(picks, { consent, notes: notesState === 'allowed' });
-      const snapshot = await api.connectStart(choicesOf({ picks: picks.picks, apps: picks.apps, folders: chosen, repos: reposTicked(), permissions, provider, projectId, workspaceId, project, days }));
+      const snapshot = await api.connectStart(choicesFor(picks));
       begin(snapshot);
       setView('chat');
       setTimeout(() => draftRef.current && draftRef.current.focus(), 60);
@@ -1244,12 +1334,17 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       {view === 'choose' && (() => {
         // A web app's check is said while it is ticked; signed in, signing in and refused (unticked, with Try again and Sign in) also when it is not.
         const signInOf = (id, app) => { const seen = signIns[app]; return seen && (ticked(picks, id, app) || ['signed-in', 'refused', 'signing'].includes(seen.status)) ? seen : null; };
-        const label = (app, id = '') => rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' });
+        // MATH-110: while and after macOS is asked for the folders, the PDFs row says so.
+        const accessLabel = folderRun && ticked(picks, 'papers', LOCAL_PDFS) ? folderAccessLabel(folderRun) : null;
+        const label = (app, id = '') => (app === LOCAL_PDFS && accessLabel ? accessLabel : rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' }));
         const shownYes = waitingWhile(consent, waitingYes); // none while the consent is off
         const gateNow = gate && gate !== 'leave' ? signInGate(unsignedWeb(picks, signIns, found, consent)) : null;
         // One browser's modal at a time: the one after Continue first, until it is closed, then the next asking.
         const asking = Object.keys(shownYes).map((browser) => signInPanel(picks, browser, shownYes[browser])).find(Boolean) || null;
-        const keychainModal = keychainRun
+        const folderShown = folderAsk ? folderPanel(folderAsk.folders, { papers: folderAsk.papers }) : null;
+        const keychainModal = folderShown
+          ? <FolderAccessModal panel={folderShown} onContinue={allowFolders} onNotNow={declineFolders} />
+          : keychainRun
           ? <KeychainModal outcome={keychainOutcome(keychainRun.browser, keychainRun.rows, signIns)} onClose={() => setKeychainRun(null)} onContinue={() => {}} onNotNow={() => setKeychainRun(null)} />
           : asking ? <KeychainModal panel={asking} onContinue={() => allowSignIns(asking.browser)} onNotNow={() => declineSignIns(asking.browser)} onClose={() => declineSignIns(asking.browser)} />
           : gateNow && <SignInGateModal gate={gateNow} signing={gate === 'signing'} onSignIn={gateSignIn} onLeave={gateLeave} onClose={() => { api.connectSignInWindowClose().catch(() => {}); setGate(null); }} />;
@@ -1405,7 +1500,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
               </div>
               {error && <span data-connect-error="1" style={{ flex: 'none', padding: '10px 8px 0', font: '12.5px/1.4 var(--font-sans)', color: '#e70022' }}>{error}</span>}
               <Foot pager={pager} left={<button type="button" className="hov-ink" data-onboarding-skip="1" onClick={onSkip} style={{ padding: '10px 12px', marginLeft: -12, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Skip for now</button>}
-                button={<button type="button" data-connect-bring="1" data-ready={go ? '1' : '0'} onClick={start} style={{ ...FOOT_BUTTON, opacity: go ? 1 : 0.4, cursor: go ? 'pointer' : 'default' }}>Bring these in<span style={{ display: 'inline-flex' }}>{CARET_RIGHT}</span></button>} />
+                button={<button type="button" data-connect-bring="1" data-ready={go ? '1' : '0'} onClick={() => { void start(); }} style={{ ...FOOT_BUTTON, opacity: go ? 1 : 0.4, cursor: go ? 'pointer' : 'default' }}>Bring these in<span style={{ display: 'inline-flex' }}>{CARET_RIGHT}</span></button>} />
             </div>
           );
         }

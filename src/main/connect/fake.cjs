@@ -56,7 +56,7 @@ function interviewReply(s, message) {
 }
 
 /** The folders under `home`, breadth first, Library and hidden folders passed over, at most a few levels down. */
-function foldersUnder(home, depth = 5) {
+function foldersUnder(home, depth = 5, readable = null) {
   const out = [];
   let level = [home];
   for (let n = 0; n < depth && level.length; n += 1) {
@@ -67,6 +67,7 @@ function foldersUnder(home, depth = 5) {
       for (const entry of entries) {
         if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'Library' || entry.name === 'node_modules') continue;
         const full = path.join(dir, entry.name);
+        if (readable && !readable(full)) continue; // a protected folder macOS did not let Engelbart read (MATH-110)
         out.push(full);
         next.push(full);
       }
@@ -79,7 +80,7 @@ function foldersUnder(home, depth = 5) {
 const names = (dir) => { try { return fs.readdirSync(dir, { withFileTypes: true }); } catch { return []; } };
 
 function findRun(s, app) {
-  const all = foldersUnder(s.homeDir);
+  const all = foldersUnder(s.homeDir, 5, s.readable);
   const searched = 'every folder of the home folder but Library and the hidden ones';
   if (app === LOCAL_PDFS) {
     const folders = all.filter((dir) => names(dir).some((entry) => entry.isFile() && /\.pdf$/i.test(entry.name)));

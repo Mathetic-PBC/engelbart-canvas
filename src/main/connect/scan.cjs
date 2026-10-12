@@ -10,6 +10,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const readers = require('./readers.cjs');
+const folderAccess = require('./folder-access.cjs');
 const { cursorDb, cursorChats } = require('./cursor.cjs');
 const { APPS, LOCAL_PDFS, sourceOf, periodName } = require('../../shared/connect-sources.cjs');
 
@@ -32,7 +33,7 @@ function installed(homeDir, app, roots) {
  * holds a sign-in for (index.cjs reads the Stage's cookies), which count as found too. `connectors(app)`: whether Engelbart
  * is signed in to an app's connector.
  */
-function detect({ homeDir, env = process.env, zotero = () => null, github = () => null, signedIn = [], connectors = () => false, applications = ['/Applications', path.join(homeDir || '', 'Applications')] } = {}) {
+function detect({ homeDir, env = process.env, zotero = () => null, github = () => null, signedIn = [], connectors = () => false, applications = ['/Applications', path.join(homeDir || '', 'Applications')], access = null } = {}) {
   const apps = {};
   const set = (app, found, where = '') => { apps[app] = { found: !!found, where }; };
   const has = (app) => installed(homeDir, app, applications);
@@ -73,7 +74,7 @@ function detect({ homeDir, env = process.env, zotero = () => null, github = () =
     apps,
     sites: { found: profiles.length > 0, where: [...new Set(profiles.map((profile) => profile.browser))].join(', ') },
     github: { found: !!gs.connected, where: gs.connected ? `signed in${gs.login ? ` as ${gs.login}` : ''}` : '' },
-    localRepos: safely(() => localRepos({ homeDir, env })),
+    localRepos: safely(() => localRepos({ homeDir, env, access })),
   };
 }
 
@@ -87,9 +88,10 @@ const PROTECTED = ['Documents', 'Desktop', 'Downloads', path.join('Library', 'Mo
  * macOS does not protect is kept only when it, or a folder above it in the home folder, holds a .git (and is then named by
  * that one); one under ~/Documents, ~/Desktop or ~/Downloads is listed unchecked (`checked: false`), its .git looked for
  * by gitFolders once the person continues. Engelbart's own folders (~/.engelbart and the like) and temporary ones are left
- * out. → [{ path, shown, name, sessions, checked }], most sessions first.
+ * out. → [{ path, shown, name, sessions, checked }], most sessions first. `access` (MATH-110, ./folder-access.cjs guard):
+ * one under a protected folder macOS let Engelbart read is looked into like any other.
  */
-function localRepos({ homeDir, env = process.env, limit = 2000, max = 40 } = {}) {
+function localRepos({ homeDir, env = process.env, limit = 2000, max = 40, access = null } = {}) {
   const home = path.resolve(homeDir);
   const inside = (dir, root) => dir === root || dir.startsWith(root + path.sep);
   const guarded = PROTECTED.map((name) => path.join(home, name));
@@ -105,7 +107,7 @@ function localRepos({ homeDir, env = process.env, limit = 2000, max = 40 } = {})
     if (inside(dir, home) ? dir === home || path.relative(home, dir).startsWith('.') : /^\/(private|tmp|var)(\/|$)/.test(dir)) continue;
     let root = null;
     let checked = true;
-    if (guarded.some((top) => inside(dir, top))) {
+    if (guarded.some((top) => inside(dir, top)) && !(access && access.readable(dir))) {
       if (guarded.includes(dir)) continue; // ~/Desktop itself is not a repository
       root = dir;
       checked = false;
@@ -165,15 +167,21 @@ function folderAtAGlance(dir, homeDir) {
  * home folder. With a `project` (2026-10-10) each folder's examples begin with the PDFs that share words with it, for the
  * librarian to offer by title. With `days` (2026-10-10) the counts and examples cover only the PDFs changed in that period;
  * `olderLeftOut` says how many were not, and `olderRelated` names the older ones that bear on the project.
- * → evidence, or { needs: 'folder' } when there is nowhere it may look.
+ * → evidence, or { needs: 'folder' } when there is nowhere it may look. `access` (MATH-110, ./folder-access.cjs guard): a
+ * protected folder (Desktop, Documents, Downloads, iCloud Drive, the drives) is looked in only once macOS let Engelbart
+ * read it, or when the person picked it; with none given, the chosen folders are taken as picked and nothing else
+ * protected is read. `notAllowed` names the usual places left out.
  */
-function pdfsAtAGlance(chosen, { homeDir, everywhere, project = null, days = null }) {
-  const roots = [...chosen, ...(everywhere ? readers.pdfRoots(homeDir) : [])];
-  if (!roots.length) return { reach: 'local', needs: 'folder' };
+function pdfsAtAGlance(chosen, { homeDir, everywhere, project = null, days = null, access = null }) {
+  const guard = access || folderAccess.guard({ homeDir, answers: {}, picked: chosen });
+  const roots = [...chosen.filter((dir) => guard.readable(dir)), ...(everywhere ? readers.pdfRoots(homeDir, { readable: guard.readable }) : [])];
+  const notAllowed = everywhere ? guard.blocked.map((folder) => folder.name) : [];
+  const left = notAllowed.length ? { notAllowed, notAllowedAre: 'macOS has not let Engelbart read these folders: they were not looked in. The person can allow them in System Settings → Privacy & Security → Files and Folders.' } : {};
+  if (!roots.length) return { reach: 'local', needs: 'folder', ...left };
   return safely(() => {
-    const found = readers.pdfFolders(roots, { homeDir, project, days });
+    const found = readers.pdfFolders(roots, { homeDir, project, days, readable: guard.readable });
     const period = days ? { period: `Counts and examples cover only the PDFs changed in ${periodName(days)}; olderLeftOut says how many older ones were left out.`, olderLeftOut: found.olderLeftOut, ...(found.olderRelated.length ? { olderRelated: found.olderRelated, olderRelatedAre: 'Older than the period, sharing words with the project: offer them by title, say they are older, and ask first.' } : {}) } : {};
-    return { reach: 'local', lookedIn: found.roots, pdfs: found.pdfs, folders: found.folders, moreFolders: found.moreFolders, truncated: found.truncated, ...period, ...(project ? { examplesFirst: 'Each folder\'s examples begin with the PDFs whose name or title shares words with the project (relatedToProject counts them), then the newest.' } : {}), kinds: 'A guess from each file\'s name: paper, book (books, slides, lecture notes), personal (receipts, statements, tickets: never offered or brought in), unclear (judge from the titles).' };
+    return { reach: 'local', lookedIn: found.roots, pdfs: found.pdfs, folders: found.folders, moreFolders: found.moreFolders, truncated: found.truncated, ...left, ...period, ...(project ? { examplesFirst: 'Each folder\'s examples begin with the PDFs whose name or title shares words with the project (relatedToProject counts them), then the newest.' } : {}), kinds: 'A guess from each file\'s name: paper, book (books, slides, lecture notes), personal (receipts, statements, tickets: never offered or brought in), unclear (judge from the titles).' };
   });
 }
 
@@ -182,10 +190,13 @@ function pdfsAtAGlance(chosen, { homeDir, everywhere, project = null, days = nul
  * { sources: { [id]: { on, apps: [names], folders: [paths] } }, project: { name, description } or null, days: 182 | 365 | null }; `picked` { folders: { app: path } } from the chat's
  * buttons; `zotero` { status(), root() }, `github` { status(), repos({ dirs }) }; `appleNotes` (./apple-notes.cjs) once the person
  * let Engelbart read Apple Notes, else null. An app on the web or behind a connector is only named here: its survey reads it.
+ * `access` (MATH-110, ./folder-access.cjs guard): what in the protected folders may be read; with none, only the folders
+ * the person picked (`choices.picked`).
  */
-async function scanFor(choices, { homeDir, env = process.env, picked = {}, zotero = {}, github = {}, appleNotes = null } = {}) {
+async function scanFor(choices, { homeDir, env = process.env, picked = {}, zotero = {}, github = {}, appleNotes = null, access = null } = {}) {
   const out = {};
   const folders = picked.folders || {};
+  const guard = access || folderAccess.guard({ homeDir, answers: {}, picked: (choices && choices.picked) || [] });
   for (const [id, choice] of Object.entries((choices && choices.sources) || {})) {
     if (!choice || !choice.on || !sourceOf(id)) continue;
     const here = {};
@@ -207,7 +218,7 @@ async function scanFor(choices, { homeDir, env = process.env, picked = {}, zoter
         const dir = folders.Zoom || path.join(homeDir, 'Documents', 'Zoom');
         here[app] = exists(dir) ? { reach, ...folderAtAGlance(dir, homeDir), cloud: 'Cloud recordings can be read at zoom.us in Engelbart\'s browser.' } : { reach, needs: 'folder', cloud: 'Cloud recordings can be read at zoom.us in Engelbart\'s browser.' };
       } else if (app === LOCAL_PDFS) {
-        here[app] = pdfsAtAGlance([...(choice.folders || []), folders[LOCAL_PDFS]].filter(Boolean), { homeDir, everywhere: !!(choices.permissions && choices.permissions.files), project: choices.project || null, days: choices.days || null });
+        here[app] = pdfsAtAGlance([...(choice.folders || []), folders[LOCAL_PDFS]].filter(Boolean), { homeDir, everywhere: !!(choices.permissions && choices.permissions.files), project: choices.project || null, days: choices.days || null, access: guard });
       } else if (reach === 'automation') {
         here[app] = appleNotes ? await safelyAsync(async () => ({ reach, folders: ((await appleNotes.folders()) || []).slice(0, 40).map((folder) => `${folder.name} (${folder.count})${folder.account && folder.account !== 'iCloud' ? ` · ${folder.account}` : ''} [id ${folder.id}]`) })) : { reach, needs: 'permission' };
       } else {
@@ -226,10 +237,11 @@ async function scanFor(choices, { homeDir, env = process.env, picked = {}, zoter
       if (vaults.length) here.linksInObsidian = vaults.slice(0, 2).map((vault) => ({ vault: vault.shown, links: safely(() => readers.linksIn(vault.path, { limit: 400 }).length) }));
       if (folders.sites) here.folder = folderAtAGlance(folders.sites, homeDir);
     }
-    if (id === 'papers' && (choice.folders || []).length && !(choice.apps || []).includes(LOCAL_PDFS)) here.folders = pdfsAtAGlance(choice.folders, { homeDir, everywhere: false, project: (choices && choices.project) || null, days: (choices && choices.days) || null });
+    if (id === 'papers' && (choice.folders || []).length && !(choice.apps || []).includes(LOCAL_PDFS)) here.folders = pdfsAtAGlance(choice.folders, { homeDir, everywhere: false, project: (choices && choices.project) || null, days: (choices && choices.days) || null, access: guard });
     if (id === 'code') {
       const status = github.status ? github.status() : null;
-      const picked = (choice.folders || []).map((dir) => ({ dir, repos: gitFolders(dir) }));
+      // MATH-110: a repository under a protected folder macOS did not let Engelbart read is not looked into.
+      const picked = (choice.folders || []).map((dir) => (guard.readable(dir) ? { dir, repos: gitFolders(dir) } : { dir, repos: [], notAllowed: true }));
       // MATH-111: the organizations GitHub cannot show yet (the App is not installed there), with how many of the
       // repositories on this Mac (found, and picked here) are theirs.
       const shaped = (value) => ({
@@ -240,7 +252,7 @@ async function scanFor(choices, { homeDir, env = process.env, picked = {}, zoter
       if (status && status.connected && github.repos) here.github = await github.repos({ dirs: picked.flatMap((entry) => entry.repos) }).then(shaped).catch((error) => ({ error: error.message }));
       else here.github = { needs: 'signin' };
       if (Array.isArray(choice.repos) && choice.repos.length) here.picked = choice.repos;
-      if (picked.length) here.folders = picked.map((entry) => ({ folder: readers.shownPath(homeDir, entry.dir), repositories: entry.repos.map((repo) => readers.shownPath(homeDir, repo)) }));
+      if (picked.length) here.folders = picked.map((entry) => ({ folder: readers.shownPath(homeDir, entry.dir), repositories: entry.repos.map((repo) => readers.shownPath(homeDir, repo)), ...(entry.notAllowed ? { notAllowed: 'macOS has not let Engelbart read the folder this is in, so it was not looked into.' } : {}) }));
     }
     out[id] = here;
   }

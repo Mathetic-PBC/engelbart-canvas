@@ -29,6 +29,7 @@ const { buildChoices } = require('./bart/models.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
 const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
 const { detect: detectSources } = require('./connect/scan.cjs');
+const folderAccess = require('./connect/folder-access.cjs');
 
 const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
 const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
@@ -498,7 +499,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   const importId = (value) => str(value, 'import id', 64);
   const plainObject = (value, what) => { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${what} is invalid`); return value; };
   const appName = (value) => str(value, 'app', 64);
-  handle('connect-detect', withCtx(async (ctx) => { cx(); return detectSources({ homeDir: ctx.homeDir, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }); }));
+  handle('connect-detect', withCtx(async (ctx) => { cx(); return detectSources({ homeDir: ctx.homeDir, access: folderAccess.guard({ homeDir: ctx.homeDir, dataRoot: ctx.dataRoot }), zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }); }));
   handle('connect-providers', () => cx().providers());
   handle('connect-start', (input) => cx().start(plainObject(input, 'choices')));
   handle('connect-answer', (id, input) => cx().answer(importId(id), plainObject(input, 'answer')));
@@ -511,6 +512,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // waits ({ status: 'signed-in' | 'refused' | 'signed-out' | 'no-browser' | '' (can't be checked), browser }); `retry` is Try
   // again after a refusal.
   handle('connect-signin-note', (app) => cx().signInNote(appName(app)));
+  // MATH-110: macOS's folder access, asked for once on the choose screen. connect-folders-needed: the protected folders
+  // (Desktop, Documents, Downloads, iCloud Drive, the drives) these choices would read and never asked about → [{ id, name }];
+  // connect-folders-ask: reads each in turn so macOS asks, → { [id]: 'allowed' | 'denied' }, kept in .connect/folders.json.
+  handle('connect-folders-needed', withCtx((ctx, choices) => folderAccess.needed(plainObject(choices, 'choices'), { homeDir: ctx.homeDir, dataRoot: ctx.dataRoot })));
+  handle('connect-folders-ask', withCtx((ctx, ids) => {
+    if (!Array.isArray(ids) || ids.length > 40 || !ids.every((id) => typeof id === 'string' && id.length < 400)) throw new Error('ids must be a list of folder ids');
+    return folderAccess.ask(ids, { homeDir: ctx.homeDir, dataRoot: ctx.dataRoot });
+  }));
   handle('connect-signin-check', (app, retry) => cx().signInCheck(appName(app), { retry: retry === true }));
   handle('connect-signin-window', (app) => cx().signInWindowOpen(appName(app)));
   handle('connect-signin-window-close', () => cx().signInWindowClose());

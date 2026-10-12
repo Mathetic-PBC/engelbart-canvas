@@ -27,7 +27,8 @@ const { createImportTools, validateImportTool, chatNote, toolsFor, googleMarkdow
 const { createConnect, readReply, readSurvey, cleanChoices, projectBlock, connectChoice } = require('../src/main/connect/session.cjs');
 const { createFakeConnectAgents } = require('../src/main/connect/fake.cjs');
 const { createWebSignIn } = require('../src/main/connect/web-signin.cjs');
-const { detect, scanFor, localRepos } = require('../src/main/connect/scan.cjs');
+const { detect, scanFor, localRepos, pdfsAtAGlance } = require('../src/main/connect/scan.cjs');
+const folderAccess = require('../src/main/connect/folder-access.cjs');
 const { importToolLabel, writeImportConfig, claudeServers, claudeToolsFor } = require('../src/main/connect/agents.cjs');
 const { hostAllowed, hostsFor, fileNameOf } = require('../src/main/connect/browser.cjs');
 const { listWebChats, readWebChat } = require('../src/main/connect/web-chats.cjs');
@@ -677,6 +678,9 @@ test('an Obsidian vault Obsidian does not list is found by its .obsidian folder 
   fs.cpSync(vault, path.join(fresh, 'Documents', 'Research vault'), { recursive: true });
   const { connect, state } = fakeConnect({ home: fresh });
   let started = null;
+  // MATH-110: the vault is in ~/Documents, which macOS let Engelbart read on the choose screen.
+  const answers = path.join(ctx.dataRoot, '.connect', 'folders.json');
+  folderAccess.writeAnswers(ctx.dataRoot, { Documents: 'allowed' });
   try {
     started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } } });
     const now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
@@ -687,6 +691,52 @@ test('an Obsidian vault Obsidian does not list is found by its .obsidian folder 
     assert.equal(saved.found.notes.Obsidian.vaults.length, 1, 'the vault\'s at-a-glance');
   } finally {
     if (started) connect.stop(started.id);
+    fs.rmSync(answers, { force: true });
+  }
+});
+
+test('MATH-110: the folder search keeps out of the protected folders macOS did not let Engelbart read, and is told which it may', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'find-skip-'));
+  for (const dir of ['Desktop', 'Documents', 'Downloads', 'Movies', 'Projects', 'Library/CloudStorage/GoogleDrive-ada@lab.org']) fs.mkdirSync(path.join(fresh, dir), { recursive: true });
+  // A vault in ~/Documents, never asked about: the search does not find it, and the agents are not given the folder.
+  fs.cpSync(vault, path.join(fresh, 'Documents', 'Research vault'), { recursive: true });
+  const fake = createFakeConnectAgents({ delayMs: 5 });
+  const asked = [];
+  const agents = { turn: (args) => { if (args.meta && args.meta.job && args.meta.job.find) asked.push({ message: args.message, dirs: args.dirs }); return fake.turn(args); } };
+  const answers = path.join(ctx.dataRoot, '.connect', 'folders.json');
+  folderAccess.writeAnswers(ctx.dataRoot, { Desktop: 'allowed', Documents: 'denied' });
+  const { connect, state } = fakeConnect({ home: fresh, agents });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } } });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the Obsidian folder button');
+    assert.deepEqual(findJobs(now, 'Obsidian').map((job) => job.status), ['done']);
+    assert.equal(asked.length, 1);
+    const { message } = asked[0];
+    const look = message.match(/<look_in[^>]*>([^<]*)<\/look_in>/)[1].split(', ');
+    assert.deepEqual(look, ['~/Desktop', '~/Projects'], 'Desktop allowed; Documents, Downloads, Library and Movies left out');
+    assert.match(message, /Never look in ~\/Documents, ~\/Downloads, ~\/Library, ~\/Pictures, ~\/Music, ~\/Movies:/, 'the folders to skip, Desktop not among them');
+    assert.match(message, /<folders_allowed[^>]*>Desktop \(~\/Desktop\)<\/folders_allowed>/);
+    assert.match(message, /Never Glob from the home folder itself/);
+    assert.doesNotMatch(message, /look under[^.]*Documents/, 'the usual places name no folder not allowed');
+    assert.equal(savedOf(started.id).picked.folders.Obsidian, undefined, 'the vault in ~/Documents was not taken');
+  } finally {
+    if (started) connect.stop(started.id);
+    fs.rmSync(answers, { force: true });
+  }
+  // Zoom's usual places: Dropbox as a plain folder and what was allowed, never ~/Movies or ~/Documents.
+  folderAccess.writeAnswers(ctx.dataRoot, { Downloads: 'allowed' });
+  fs.mkdirSync(path.join(fresh, 'Dropbox'));
+  const zoom = fakeConnect({ home: fresh, agents });
+  try {
+    started = await zoom.connect.start({ sources: { transcripts: { on: true, apps: ['Zoom'] } } });
+    await until(zoom.state(started.id), (s) => findJobs(s, 'Zoom').every((job) => job.status === 'done') && findJobs(s, 'Zoom').length, 'the Zoom search');
+    const message = asked[asked.length - 1].message;
+    assert.match(message, /look under ~\/Dropbox, Downloads \(~\/Downloads\) first/);
+    assert.match(message, /Never look in ~\/Desktop, ~\/Documents, ~\/Library, ~\/Pictures, ~\/Music, ~\/Movies:/);
+  } finally {
+    if (started) zoom.connect.stop(started.id);
+    fs.rmSync(answers, { force: true });
   }
 });
 
@@ -1474,6 +1524,9 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
 
 // Papers on this Mac (2026-10-08, "Agent onboarding": "add capability to search local papers ... the questions for this
 // should center around folders and genres of papers rather than individual ones").
+// MATH-110: macOS let Engelbart read every protected folder of `home` (Desktop, Documents, Downloads…), as after Continue.
+const allowAll = (home) => folderAccess.guard({ homeDir: home, answers: Object.fromEntries(folderAccess.protectedFolders({ homeDir: home }).map((folder) => [folder.id, 'allowed'])) });
+
 const pdfHome = () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(homeDir, 'pdfs-')));
   const put = (rel, text) => { const file = path.join(home, rel); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `%PDF-1.4\n${text}\n%%EOF\n`); return file; };
@@ -1504,11 +1557,16 @@ test('PDFs on this Mac: the folders that hold them with counts, kinds and titles
   assert.ok(glance.folders[1].examples.some((line) => line === 'scan.pdf — Working Spheres in Information Work'), JSON.stringify(glance.folders[1].examples));
   assert.ok(!glance.folders[1].examples.some((line) => /Invoice/.test(line)), 'personal PDFs are never shown as examples');
   // The librarian's first look: everywhere when the person let the agents read their home folder, else a folder button.
-  const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home });
+  const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home, access: allowAll(home) });
   assert.equal(scanned.papers[LOCAL_PDFS].pdfs, 6);
+  // MATH-110: macOS never asked (or Not now): nothing in Downloads or Documents is read, and the librarian is told why.
+  const unasked = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home })).papers[LOCAL_PDFS];
+  assert.equal(unasked.needs, 'folder');
+  assert.deepEqual(unasked.notAllowed, ['Documents', 'Downloads']);
   const narrow = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: false } }, { homeDir: home });
   assert.deepEqual(narrow.papers[LOCAL_PDFS], { reach: 'local', needs: 'folder' });
-  const chosen = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [path.join(home, 'Documents')] } }, permissions: { files: false } }, { homeDir: home });
+  // Picked in the folder picker: macOS lets Engelbart read it, asked about or not (MATH-110).
+  const chosen = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [path.join(home, 'Documents')] } }, picked: [path.join(home, 'Documents')], permissions: { files: false } }, { homeDir: home });
   assert.deepEqual(chosen.papers[LOCAL_PDFS].lookedIn, ['~/Documents']);
   // The import agent's tools: list by kind and words, bring in by path, nothing twice.
   const call = createImportTools({ session: { dataRoot: ctx.dataRoot, homeDir: home, dir: path.join(ctx.dataRoot, '.connect', 'pdf-test'), projectId: () => null, exports: {}, folders: {} }, context: async () => ({ ...ctx, homeDir: home }), env: {} });
@@ -1543,10 +1601,10 @@ test('PDFs on this Mac with a project: each folder\'s examples begin with the PD
   assert.deepEqual(after.folders[0].examples.slice(1).sort(), downloads.examples.slice(0, -1).sort(), 'then the newest, without it twice');
   assert.ok(!after.folders[0].examples.some((line) => /Invoice/.test(line)), 'personal PDFs still never shown');
   // The scan passes the project from the choices.
-  const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project }, { homeDir: home });
+  const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project }, { homeDir: home, access: allowAll(home) });
   assert.equal(scanned.papers[LOCAL_PDFS].folders[0].examples[0], '2310.01234v2.pdf — Scaffolding novice debugging');
   assert.match(scanned.papers[LOCAL_PDFS].examplesFirst, /shares words with the project/);
-  assert.equal('examplesFirst' in (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home })).papers[LOCAL_PDFS], false);
+  assert.equal('examplesFirst' in (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home, access: allowAll(home) })).papers[LOCAL_PDFS], false);
   // The librarian offers them by title, with folders and kinds of paper as the fallback.
   assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /offer up to ten of the papers among them that bear on the project, by title/);
   assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /When there is no project, or nothing in <found> bears on it, ask about folders and kinds of papers, never about single files/);
@@ -1600,10 +1658,10 @@ test('the period: choicesOf sends it, cleanChoices keeps 182 or 365, and PDFs ar
   assert.deepEqual(readers.pdfFolders(roots, { homeDir: home, days: 365 }).olderRelated, [], 'no project: nothing older is named');
 
   // The scan passes the period from the choices; the chats count what is in it.
-  const scanned = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project: tutor, days: 365 }, { homeDir: home })).papers[LOCAL_PDFS];
+  const scanned = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project: tutor, days: 365 }, { homeDir: home, access: allowAll(home) })).papers[LOCAL_PDFS];
   assert.deepEqual([scanned.pdfs, scanned.olderLeftOut, scanned.olderRelated.map((pdf) => pdf.name)], [4, 3, ['2310.01234v2.pdf']]);
   assert.match(scanned.period, /the past year/);
-  const allScanned = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project: tutor }, { homeDir: home })).papers[LOCAL_PDFS];
+  const allScanned = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project: tutor }, { homeDir: home, access: allowAll(home) })).papers[LOCAL_PDFS];
   assert.deepEqual([allScanned.pdfs, 'olderLeftOut' in allScanned, 'olderRelated' in allScanned, 'period' in allScanned], [7, false, false, false]);
   const chats = (days) => scanFor({ sources: { chats: { on: true, apps: ['Claude Code'] } }, days }, { homeDir, env: {} }).then((found) => found.chats['Claude Code']);
   const inYear = await chats(365);
