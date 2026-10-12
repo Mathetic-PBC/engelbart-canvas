@@ -6,7 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, afterSignInWindowClosed, signInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, placedLine, unsignedWeb, signInGate, shownSignIn, signInChain, signInWindows, opensSignIn, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, afterSignInWindowClosed, signInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, placedLine, unsignedWeb, signInGate, shownSignIn, stillBringingIn, putAwayLabel, signInChain, signInWindows, opensSignIn, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -1462,6 +1462,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const last = session ? session.chat.length - 1 : -1;
   const running = jobs.filter((job) => !statusOf(job).done).length;
   const done = !!(session && session.done);
+  // Still bringing things in: the working view's header and Stop all, and what its footer button and the header's minus say.
+  const bringingIn = stillBringingIn(session);
   const wide = view !== 'choose';
   // On the page the chat and the progress read in a column of their own width, centred; their scrollbars at the edge.
   const gutter = page ? 'max(20px, calc((100% - 760px) / 2))' : '20px';
@@ -1470,7 +1472,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       {backButton && <button type="button" className="bart-ic" onClick={back} aria-label="Back" title="Back">{BACK}</button>}
       {lead}
       <div style={{ flex: 1, minWidth: 0, font: '500 15px/1.4 var(--font-sans)', color: '#171717' }}>{title}</div>
-      {session && (done || session.finished) && <button type="button" className="bart-ic" data-connect-minimize="1" onClick={putAway} aria-label="Run in the background" title="Run in the background">{MINUS}</button>}
+      {session && (done || session.finished) && <button type="button" className="bart-ic" data-connect-minimize="1" onClick={putAway} aria-label={bringingIn ? 'Run in the background' : 'Close'} title={bringingIn ? 'Run in the background' : 'Close'}>{MINUS}</button>}
       {popup && <button type="button" className="bart-ic" data-connect-close="1" onClick={() => (session ? putAway() : onSkip())} aria-label="Close" title={session ? 'Close: it goes on in the background' : 'Not now'}>{CLOSE}</button>}
     </div>
   );
@@ -1774,7 +1776,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
 
       {view === 'working' && session && !page && (
         <>
-          {header(session.stopped ? 'Stopped' : running || (session.memory && !memoryLine(session.memory).done) ? 'Bringing everything in' : 'Your library is connected', { lead: <span style={{ flex: 'none', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#171717', color: '#fff' }}>{CHECK}</span> })}
+          {header(session.stopped ? 'Stopped' : bringingIn ? 'Bringing everything in' : 'Your library is connected', { lead: <span style={{ flex: 'none', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: '#171717', color: '#fff' }}>{CHECK}</span> })}
           <div data-connect-progress="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 12, padding: `14px ${gutter} 16px` }}>
             <span style={{ font: '12.5px/1.55 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{session.stopped ? 'Everything was stopped. What came in stays in your library.' : 'This keeps going in the background, and your Inbox says when it needs you or is done.'}</span>
             {placedLine(session) && <span data-connect-placed="1" style={{ font: '12.5px/1.55 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{placedLine(session)}</span>}
@@ -1798,9 +1800,9 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             {error && <span data-connect-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</span>}
           </div>
             <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: `12px ${gutter}`, borderTop: '1px solid #eaeaea' }}>
-              {!session.stopped && (running > 0 || (session.memory && !memoryLine(session.memory).done)) && <button type="button" className="cx-ghost" data-connect-stop-all="1" onClick={stopAll}>Stop all</button>}
+              {bringingIn && <button type="button" className="cx-ghost" data-connect-stop-all="1" onClick={stopAll}>Stop all</button>}
               <span style={{ flex: 1 }} />
-              <button type="button" data-connect-done="1" onClick={putAway} style={{ flex: 'none', whiteSpace: 'nowrap', height: 34, padding: '0 16px', border: '1px solid #171717', borderRadius: 8, background: '#171717', color: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)' }}>Run in background</button>
+              <button type="button" data-connect-done="1" onClick={putAway} style={{ flex: 'none', whiteSpace: 'nowrap', height: 34, padding: '0 16px', border: '1px solid #171717', borderRadius: 8, background: '#171717', color: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)' }}>{putAwayLabel(session)}</button>
             </div>
         </>
       )}

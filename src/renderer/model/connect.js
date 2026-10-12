@@ -817,6 +817,18 @@ export function memoryLine(memory) {
 }
 
 /**
+ * Whether a session is still bringing things in (2026-10-12): not stopped, and an import still going or MEMORY.md not yet
+ * written. The progress view's "Bringing everything in", its Stop all, and what its footer button and minus say.
+ */
+export function stillBringingIn(session) {
+  if (!session || session.stopped) return false;
+  return workJobs(session.jobs).some((job) => !statusOf(job).done) || !!(session.memory && !memoryLine(session.memory).done);
+}
+
+/** The progress view's footer button: "Run in background" while work goes on, "Done" once it has finished or was stopped. */
+export const putAwayLabel = (session) => (stillBringingIn(session) ? 'Run in background' : 'Done');
+
+/**
  * The dock's line for a session in the background: what needs the person first, else how far it is. `short` is what the
  * chip in the top-right controls says (it shares the row with the bell and the pane tabs, so a few words); `text` the
  * whole line, its tooltip.
