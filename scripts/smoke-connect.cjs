@@ -123,7 +123,7 @@ app.whenReady().then(async () => {
     await pause(250); // the screen rises in
     const intro = JSON.parse(await js(wc, `JSON.stringify((()=>{const r=(q)=>document.querySelector(q).getBoundingClientRect();const area=r('[data-connect-intro-scroll]'),block=r('[data-connect-intro-block]'),foot=r('[data-connect-intro] [data-connect-foot]');return {area:{top:area.top,bottom:area.bottom},block:{top:block.top,bottom:block.bottom},foot:{bottom:foot.bottom},win:innerHeight,gap:getComputedStyle(document.querySelector('[data-connect-intro-block]')).rowGap}})())`));
     assert.ok(intro.area.bottom - intro.area.top > intro.block.bottom - intro.block.top, `the block fits: ${JSON.stringify(intro)}`);
-    assert.ok(Math.abs((intro.block.top - intro.area.top - 24) - (intro.area.bottom - intro.block.bottom - 64)) <= 2, `centered in its height: ${JSON.stringify(intro)}`);
+    assert.ok(Math.abs((intro.block.top - intro.area.top) - (intro.area.bottom - intro.block.bottom - 40)) <= 2, `centered in its height: ${JSON.stringify(intro)}`);
     assert.ok(intro.block.top - intro.area.top > 40, `not at the top: ${JSON.stringify(intro)}`);
     assert.ok(intro.win - intro.foot.bottom < 60, `the foot at the bottom of the window: ${JSON.stringify(intro)}`);
     await shot(wc, '0-intro');

@@ -23,16 +23,16 @@ finally { if (previousWindow === undefined) delete global.window; else global.wi
 const { default: ConnectIntro, introLead, introQuestions, worksWith, INTRO_WIDTH } = compiled.exports;
 
 test('the lead says project in a new user\'s flow and research in the guided setup, which has no project of theirs', () => {
-  assert.equal(introLead(false), 'Bring in your work once, so you never have to re-explain your project again.');
-  assert.equal(introLead(true), 'Bring in your work once, so you never have to re-explain your research again.');
+  assert.equal(introLead(false), 'Bring in your work once, so you never have to re\u2011explain your project again.');
+  assert.equal(introLead(true), 'Bring in your work once, so you never have to re\u2011explain your research again.');
 });
 
-test('three questions, the first open: where the data goes, whether Mathetic sees it, taking things out', () => {
-  assert.deepEqual(introQuestions().map((item) => item.q), ['Where does my data go?', 'Does Mathetic see any of it?', 'Can I take things out later?']);
+test('three questions, the first open: where the data goes, whether anyone else sees it, taking things out', () => {
+  assert.deepEqual(introQuestions().map((item) => item.q), ['Where does my data go?', 'Does anyone else see it?', 'Can I take things out later?']);
   const html = renderToStaticMarkup(React.createElement(ConnectIntro, { onContinue() {}, onSkip() {} }));
   assert.match(html, /<h1[^>]*>All your context in one place<\/h1>/);
   assert.match(html, /data-connect-intro-a="where"/, 'the first answer shows');
-  assert.doesNotMatch(html, /data-connect-intro-a="(mathetic|later)"/, 'the others are closed');
+  assert.doesNotMatch(html, /data-connect-intro-a="(others|later)"/, 'the others are closed');
   assert.match(html, /It’s saved only on this Mac\./);
   assert.equal((html.match(/aria-expanded="true"/g) || []).length, 1);
 });
@@ -52,11 +52,11 @@ test('"Works with": eight apps, each named once for screen readers, then a tile 
   assert.match(html, /data-onboarding-continue="1"><button[^>]*>Continue/);
 });
 
-test('drawn to the mockup: a 612px column, the heading at 32px, the questions in a card of 56px rows', () => {
+test('drawn to the K6 design: a 640px column, the heading at 34px, the questions in a card of 16px rows', () => {
   const html = renderToStaticMarkup(React.createElement(ConnectIntro, { onContinue() {}, onSkip() {} }));
-  assert.equal(INTRO_WIDTH, 612);
-  assert.match(html, /width:min\(612px, 100%\)/);
-  assert.match(html, /<h1 style="[^"]*font:500 32px\/38px/);
-  assert.match(html, /data-connect-intro-card="1" style="[^"]*border:1px solid #eaeaea;border-radius:12px/);
-  assert.match(html, /\.cx-faq\{[^}]*height:56px/);
+  assert.equal(INTRO_WIDTH, 640);
+  assert.match(html, /width:min\(640px, 100%\)/);
+  assert.match(html, /<h1 style="[^"]*font:500 34px\/1.2/);
+  assert.match(html, /data-connect-intro-card="1" style="[^"]*border:1px solid #eaeaea;border-radius:14px/);
+  assert.match(html, /\.cx-faq\{[^}]*padding:20px 0;[^}]*font:500 16px/);
 });
