@@ -146,7 +146,9 @@ async function main() {
     console.log(`ok: the login shell's script found Git ${git.version} at ${git.path}`);
 
     // 4. The app quits cleanly when its window closes (on a Mac, where an app outlives its windows, when it is told to).
-    await page.send('Runtime.evaluate', { expression: 'window.close()' }).catch(() => {});
+    // Not waited for alone (0.1.19, run 38313878122): an app quitting before DevTools answers left Node waiting on
+    // nothing, so it ended with exit code 1 and no message.
+    await Promise.race([page.send('Runtime.evaluate', { expression: 'window.close()' }).catch(() => {}), exited, pause(5000)]);
     page.close();
     if (process.platform === 'darwin') {
       const browser = await devtools(/DevTools listening on (ws:\/\/\S+)/.exec(output)?.[1] || `ws://127.0.0.1:${port}${activePort()[1]}`);
