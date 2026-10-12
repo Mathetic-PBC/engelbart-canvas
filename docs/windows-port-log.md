@@ -3,6 +3,77 @@
 The run that follows docs/windows-port.md, on branch `windows-port` (cut from `hudsons-feedback` at 22d738c).
 Newest status first; the sections below are kept current.
 
+## Catch-up to 0.1.19
+
+Goal (2026-10-12): merge origin/david-onboarding-revisions a215457 (Release 0.1.19) into windows-port, keeping the port
+and every change from that branch. The one new change since 0.1.18 is 302efea: on Connect your library's choose screen,
+ticking a web app that is not signed in opens its sign-in by itself (opensSignIn and the sign-in chain in
+model/connect.js and ConnectLibrary.jsx). Off the Mac every sign-in goes through Engelbart's own sign-in window (no
+Keychain modal, no browser hand-off), and nothing crashes or waits forever. Done when one commit is green on all three.
+Then release 0.1.19 for Windows and Linux, one upload at a time, each after its dry run: upload:win, check latest.yml;
+upload:linux, check latest-linux.yml. The Mac release (latest-mac.yml, the 0.1.19 Mac files, live since 2026-10-12
+21:41Z) is not touched; the page ends up offering all three, and install.sh keeps its Linux hand-off.
+
+### Status
+
+- 2026-10-12, **released** 0.1.19 for Windows, then Linux, one upload at a time, each after its dry run
+  (`UPLOAD_DRY_RUN=1`). The real uploads were run by David at the prompt (`!`): Claude Code's auto mode turned them away
+  from Claude as a production deploy.
+  - **Windows from run 38313878122 (4e35a38)**, at David's asking, before e8cff4c's run had finished: that run's
+    windows-latest and macos-latest jobs passed (Windows: npm test 1687 tests, 1645 pass, 42 skipped, 0 failed;
+    installer; smoke; one-line install), and the app's code is the same as e8cff4c's (only scripts/smoke-windows.cjs and
+    two tests changed since). `npm run upload:win 4e35a38`: the installer's 27 parts (5 resent after TLS `bad record
+    mac`), its sha512 checked as stored, latest.yml last. The page written: the live Mac 0.1.19 page with the Windows
+    section added. Checked live: latest.yml 0.1.19, Engelbart-0.1.19-x64.exe 136880602 bytes; latest-mac.yml and
+    install.sh byte for byte as before.
+  - **Linux from run 38318669008 (e8cff4c)**, the done commit. `npm run upload:linux e8cff4c`: the AppImage's parts (2
+    resent after the same TLS error), its sha512 checked as stored, latest-linux.yml last. The page with the Linux
+    section added; install.sh as it was live (the Mac's 0.1.19, which had no hand-off) plus the `>>> linux` hand-off,
+    which is scripts/install-mac.sh as built; SHA256SUMS.txt with only install.sh's line changed.
+  - Checked live afterwards: latest-mac.yml byte for byte as before the uploads (0.1.19, releaseDate
+    2026-10-12T21:41:49Z), the Mac's four files at their sizes and times (the zips 167906795 and 159284855 bytes, the
+    dmgs 168314368 and 159763439, all 21:49–21:54Z); latest.yml 0.1.19; latest-linux.yml 0.1.19
+    (Engelbart-0.1.19-x86_64.AppImage, 162468350 bytes); the page (r2 index.html; mathetic.com/engelbart/ itself is the
+    Vercel landing page) offers Mac, Windows and Linux, all 0.1.19; index.html, install.sh, install-linux.sh,
+    install.ps1 and SHA256SUMS.txt as built. The live `curl -fsSL https://mathetic.com/engelbart/install.sh | bash`, run
+    on this Mac with ENGELBART_INSTALL_DIR (a scratch folder) and ENGELBART_NO_OPEN=1, installed Engelbart 0.1.19 for
+    Apple silicon, its signature verifying. On Linux the same bytes passed CI's one-line install (run 38318669008).
+- 2026-10-12, **done on e8cff4c**: run https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38318669008
+  passed on all three. macos-latest: npm test 1683 tests, 1679 pass, 4 skipped; build; `npm run package`.
+  windows-latest: npm test 1687 tests, 1645 pass, 42 skipped, 0 failed (the same 42: none added); installer;
+  smoke-windows (window, PowerShell 7 echo, Git 2.55.0 at C:\Program Files\Git\mingw64\bin\git.exe, clean quit); the
+  one-line install put 0.1.19 in %LOCALAPPDATA%\Programs\Engelbart, its smoke passed, and a second run stopped as up to
+  date. ubuntu-latest: npm test 1683 tests, 1669 pass, 14 skipped; AppImage; smoke-linux (window, terminal, Git, clean
+  quit); the one-line install, then again with the AppArmor profile, sandbox on, smoke passed.
+- 2026-10-12: merged a215457 (302efea and the version) as d9be06c, no conflicts. package.json 0.1.19.
+- What the new code does off the Mac: the chain opens each sign-in through signInHere, which takes the browser route only
+  where signsInViaBrowser says so, and that needs copiesSignIns(platform): the Mac only. Off the Mac main's signInCheck
+  answers from Engelbart's own session ('signed-out' when it holds no sign-in, nothing to copy from), so a fresh tick
+  opens Engelbart's window (opensSignIn), and signInNote gives no note, so the Keychain modal never shows. The chain's
+  only waits are on that window (it answers when signed in, turned away, replaced or closed) and on the Keychain modal,
+  which cannot open there. Added to test/connect-auto-signin.test.cjs: on win32 and linux, Google Drive, Gmail and
+  ChatGPT ticked together open one window (Drive and Gmail share it), never the browser, and that window closed ends the
+  chain with nothing left waiting. Mac `npm test` on the merge: 1682 tests, 1679 pass, 3 skipped; the file's 11 tests
+  with the new one pass. Pushed as 4e35a38.
+- Run 1 (4e35a38): Windows ✓, macOS ✓, Linux: smoke-linux ended with exit code 1 and no message after its Git check.
+  Its window.close() was awaited alone: the app quit before DevTools answered, so Node had nothing left to wait on and
+  ended with the exit code set at the start. Now raced with the app's exit and 5 s (scripts/smoke-windows.cjs, which
+  smoke-linux runs). Pushed as 3a02b89.
+- Run 2 (3a02b89): Linux ✓, macOS ✓, Windows: npm test 2 failed, both fixtures that race on Windows (both passed in run
+  1): check-app-modules.test.cjs read an asar right after @electron/asar's createPackage, which resolves at its stream's
+  end() before the files are written (Windows read NULs), so the fixture now waits until the archive is as long as its
+  header and files; the period test's Downloads and HCI PDFs, two each in the past year, are ordered by their newest,
+  and those written together could tie (the in-period Downloads ones are now a day older). Mac `npm test`: 1683 tests,
+  1680 pass, 3 skipped. Pushed as e8cff4c.
+
+### CI runs
+
+| Commit | Run | macOS | Windows | Linux | Notes |
+|---|---|---|---|---|---|
+| 4e35a38 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38313878122 | ✓ | ✓ installer, smoke, install | ✗ smoke (silent exit 1) | the merge and the off-Mac chain test; **Windows released from it** |
+| 3a02b89 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38316094828 | ✓ | ✗ npm test (2) | ✓ | smoke's window.close not awaited alone |
+| e8cff4c | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38318669008 | ✓ | ✓ installer, smoke, install | ✓ smoke, install | **fixtures: the done commit; Linux released from it** |
+
 ## Catch-up to 0.1.18
 
 Goal (2026-10-12): merge origin/david-onboarding-revisions 66ca1f0 (Release 0.1.18) into windows-port, keeping the
