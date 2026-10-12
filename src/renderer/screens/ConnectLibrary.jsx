@@ -6,7 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn, folderPanel, folderAccessLabel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn, signsInThroughBrowser, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -337,6 +337,9 @@ const KEYCHAIN_TONES = {
   refused: { background: '#fff4e0', color: '#a35200' },
 };
 
+// A profile to pick, in the Keychain modal: ImportSignins' profile-step row.
+const PROFILE_ROW = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', boxSizing: 'border-box', padding: '9px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: 'pointer', textAlign: 'left', font: '13.5px/1.4 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' };
+
 /**
  * Before macOS asks for a browser's sign-ins (2026-10-11, David: the inline panel under the sources was easy to miss, and
  * the macOS prompt then came out of nowhere): a modal over everything, at most once a browser, since one Allow
@@ -344,7 +347,7 @@ const KEYCHAIN_TONES = {
  * `outcome` (keychainOutcome's) says how it went: waiting while macOS asks, then signed in, or not and why. Escape is Not
  * now while it asks, and closes it after. In a portal: the window's own rise animation would hold a fixed layer inside it.
  */
-function KeychainModal({ panel, outcome, onContinue, onNotNow, onClose }) {
+function KeychainModal({ panel, outcome, onContinue, onNotNow, onClose, onChoose }) {
   const phase = outcome ? (outcome.done ? 'done' : 'waiting') : 'ask';
   const primary = React.useRef(null);
   React.useEffect(() => { if (primary.current) primary.current.focus(); }, [phase]);
@@ -366,8 +369,25 @@ function KeychainModal({ panel, outcome, onContinue, onNotNow, onClose }) {
       <div role="dialog" aria-modal="true" aria-label={title} style={{ width: 'min(420px, 100%)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 10, padding: '22px 22px 18px', background: '#fff', borderRadius: 12, boxShadow: '0 16px 48px #00000029', animation: `rise 160ms ${EASE}` }}>
         <span aria-hidden="true" style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', ...tone }}>{icon}</span>
         <span style={{ font: '600 16px/1.35 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{title}</span>
-        {phase === 'ask' && <span data-connect-keychain-lead="1" style={{ font: '600 13.5px/1.5 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{panel.lead}</span>}
+        {phase === 'ask' && panel.lead && <span data-connect-keychain-lead="1" style={{ font: '600 13.5px/1.5 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{panel.lead}</span>}
         {(phase === 'ask' ? panel.body : outcome.lines).map((text) => <span key={text} style={{ font: '13px/1.5 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{text}</span>)}
+        {phase === 'ask' && panel.profiles && panel.profiles.length > 1 && (
+          // Which profile (2026-10-12): as ImportSignins' profile step lists them, the one chosen marked.
+          <span role="radiogroup" aria-label="Profile" style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+            {panel.profiles.map((profile, index) => {
+              const on = index === panel.chosen;
+              return (
+                <button key={`${profile.browserId}/${profile.profileId}`} type="button" role="radio" aria-checked={on} className="hov-bd2" data-connect-signin-profile={profile.profileId} data-chosen={on ? '1' : undefined} onClick={() => onChoose && onChoose(index)} style={{ ...PROFILE_ROW, borderColor: on ? '#171717' : '#eaeaea' }}>
+                  <span style={{ flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
+                    <span>{panel.profiles.some((other) => other.browser !== profile.browser) ? `${profile.browser} · ${profile.name}` : profile.name}</span>
+                    {profile.email && <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{profile.email}</span>}
+                  </span>
+                  <span style={{ color: on ? '#171717' : '#c9c9c9' }}>{on ? '✓' : ''}</span>
+                </button>
+              );
+            })}
+          </span>
+        )}
         <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 16, paddingTop: 8 }}>
           {phase === 'ask' && <>
             <button type="button" className="hov-ink" data-connect-signin-not-now={panel.browser} onClick={onNotNow} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Not now</button>
@@ -423,10 +443,11 @@ function FolderAccessModal({ panel, onContinue, onNotNow }) {
 
 /**
  * Bring these in with ticked web apps no browser could sign in (2026-10-11): one modal, the apps grouped by the sign-in
- * they share. Sign in opens the first one's sign-in page in Engelbart's own browser; once every app is signed in, the run
- * starts. Leave them out unticks them and starts. Escape closes it, starting nothing. In a portal, as KeychainModal is.
+ * they share. Sign in opens the first one's sign-in page in Engelbart's own browser (Google's in the person's browser,
+ * `waiting` saying so, 2026-10-12); once every app is signed in, the run starts. Leave them out unticks them and starts.
+ * Escape closes it, starting nothing. In a portal, as KeychainModal is.
  */
-function SignInGateModal({ gate, signing, onSignIn, onLeave, onClose }) {
+function SignInGateModal({ gate, signing, waiting = '', canSignIn = true, onSignIn, onLeave, onClose }) {
   const primary = React.useRef(null);
   React.useEffect(() => { if (primary.current && !signing) primary.current.focus(); }, [signing]);
   React.useEffect(() => {
@@ -445,11 +466,12 @@ function SignInGateModal({ gate, signing, onSignIn, onLeave, onClose }) {
         <span aria-hidden="true" style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', ...KEYCHAIN_TONES.ask }}>{KEY}</span>
         <span style={{ font: '600 16px/1.35 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{gate.title}</span>
         {gate.lines.map((text) => <span key={text} style={{ font: '13px/1.5 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{text}</span>)}
-        <span style={{ font: '13px/1.5 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{signing ? 'Finish signing in in the window that opened.' : gate.body}</span>
+        <span style={{ font: '13px/1.5 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{signing && !waiting ? 'Finish signing in in the window that opened.' : gate.body}</span>
+        {waiting && <span data-connect-signin-waiting="1" style={{ font: '600 13px/1.5 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{waiting}</span>}
         <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 16, paddingTop: 8 }}>
-          {signing && <span style={{ flex: 1, display: 'flex', alignItems: 'center' }}><Dots /></span>}
+          {(signing || waiting) && <span style={{ flex: 1, display: 'flex', alignItems: 'center' }}><Dots /></span>}
           <button type="button" className="hov-ink" data-connect-signin-leave="1" onClick={onLeave} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Leave {gate.groups.flat().length === 1 ? 'it' : 'them'} out</button>
-          <button type="button" ref={primary} data-connect-signin-go="1" disabled={signing} onClick={onSignIn} style={{ padding: '9px 16px', border: 0, borderRadius: 8, background: '#171717', cursor: signing ? 'default' : 'pointer', opacity: signing ? 0.5 : 1, font: '500 13px/1 var(--font-sans)', color: '#fff' }}>{signing ? 'Signing in…' : 'Sign in'}</button>
+          {(canSignIn || signing) && <button type="button" ref={primary} data-connect-signin-go="1" disabled={signing} onClick={onSignIn} style={{ padding: '9px 16px', border: 0, borderRadius: 8, background: '#171717', cursor: signing ? 'default' : 'pointer', opacity: signing ? 0.5 : 1, font: '500 13px/1 var(--font-sans)', color: '#fff' }}>{signing ? (waiting ? 'Waiting…' : 'Signing in…') : 'Sign in'}</button>}
         </span>
       </div>
     </div>,
@@ -490,7 +512,7 @@ function NeedsCard({ needs, onOpen, onSkip }) {
                 <span style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}>{logoOf(need.app) || ALERT}</span>
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
                   <span title={view.title} style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{shownName(need.app)}</span>
-                  <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{need.busy && need.browser ? `Finish in ${need.browser}…` : view.hint}</span>
+                  <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{need.busy && need.browser ? waitingIn(need.browser) : view.hint}</span>
                   {need.note && !need.error && <span data-connect-need-note="1" style={{ font: '12px/1.45 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{need.note}</span>}
                 </span>
                 <button type="button" className="bart-text" data-connect-need-skip="1" onClick={() => onSkip(need)}>Skip</button>
@@ -701,10 +723,12 @@ function NeedCard({ need, onOpen, onSkip }) {
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
           <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{view.title}</span>
           {need.reason && need.reason !== view.title && <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{need.reason}</span>}
-          {need.note && !need.error && <span data-connect-need-note="1" style={{ font: '12px/1.45 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{need.note}</span>}
+          {need.busy && need.browser
+            ? <span data-connect-need-wait="1" style={{ font: '12px/1.45 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{waitingIn(need.browser)}</span>
+            : need.note && !need.error && <span data-connect-need-note="1" style={{ font: '12px/1.45 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{need.note}</span>}
         </span>
         <button type="button" className="bart-text" data-connect-need-skip="1" onClick={() => onSkip(need)}>Skip</button>
-        <button type="button" className="cx-btn" data-connect-need-open="1" disabled={need.busy} onClick={() => onOpen(need)}>{need.busy ? (need.browser ? `Finish in ${need.browser}…` : 'Waiting…') : view.action}</button>
+        <button type="button" className="cx-btn" data-connect-need-open="1" disabled={need.busy} onClick={() => onOpen(need)}>{need.busy ? 'Waiting…' : view.action}</button>
       </div>
       {need.error && <div style={{ font: '12px/1.5 var(--font-sans)', color: '#e70022' }}>{need.error}</div>}
     </div>
@@ -917,6 +941,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [connectorStatus, setConnectorStatus] = React.useState({}); // app → { connected, pending }
   const [signIns, setSignIns] = React.useState({}); // web app → its sign-in as checked when ticked: { status, browser }
   const [waitingYes, setWaitingYes] = React.useState({}); // browser → [{ id, app }] ticked, waiting on its modal's Continue
+  const [profileChoice, setProfileChoice] = React.useState({}); // browser → the profile chosen in its modal's list (an index)
   const [keychainRun, setKeychainRun] = React.useState(null); // { browser, rows } after Continue: the modal says how it went
   const [gate, setGate] = React.useState(null); // Bring these in with apps not signed in: 'ask' | 'signing' | 'leave' (its modal), or null
   // MATH-110: macOS's folder access. folderAsk: the modal ({ folders, papers, then: 'start' | null }); folderRun: the folders
@@ -1053,22 +1078,35 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     if (!signInsToCheck(consent, rows).length) return;
     const said = await Promise.all(rows.map((row) => api.connectSignInNote(row.app).then((out) => ({ ...row, ...(out || {}) })).catch(() => ({ ...row, note: '' }))));
     if (!consentRef.current) return; // turned off meanwhile: no panel, no check
-    const ask = said.filter((row) => row.note && row.browser);
+    const ask = said.filter(asksFirst);
     if (ask.length) setWaitingYes((now) => waitForYes(now, ask));
-    said.filter((row) => !(row.note && row.browser)).forEach((row) => checkSignIn(row));
+    said.filter((row) => !asksFirst(row)).forEach((row) => checkSignIn(row));
   };
+  // The modal comes first when macOS will be asked, or when more than one profile holds the sign-in (2026-10-12).
+  const asksFirst = (row) => !!((row.note && row.browser) || (row.browser && row.profiles && row.profiles.length > 1));
   // Continue: one macOS prompt for the browser (main asks once and remembers its answer); the apps waiting on it are checked.
-  const allowSignIns = (browser) => {
-    const panel = signInPanel(picks, browser, waitingYes[browser]);
+  // The profile chosen in its list is remembered first (main tries it first from then on). Google's rows asked for from
+  // Sign in (route 'browser', 2026-10-12) go on to its sign-in in the person's browser, the row saying so, not the modal.
+  const allowSignIns = async (browser) => {
+    const panel = signInPanel(picks, browser, waitingYes[browser], profileChoice[browser] || 0);
     setWaitingYes((now) => { const next = { ...now }; delete next[browser]; return next; });
+    setProfileChoice((now) => { const next = { ...now }; delete next[browser]; return next; });
     if (!panel) return;
-    setKeychainRun({ browser, rows: panel.rows });
-    panel.rows.forEach((row) => checkSignIn(row));
+    const pick = panel.chosen >= 0 ? panel.profiles[panel.chosen] : null;
+    if (pick) {
+      const holds = (row) => (row.profiles || []).some((profile) => profile.browserId === pick.browserId && profile.profileId === pick.profileId);
+      await Promise.all(panel.rows.filter(holds).map((row) => api.connectSignInPick(row.app, { browser: pick.browserId, profile: pick.profileId }).catch(() => false)));
+    }
+    const checked = panel.rows.filter((row) => row.route !== 'browser');
+    if (checked.length && panel.lead) setKeychainRun({ browser: pick ? pick.browser : browser, rows: checked });
+    checked.forEach((row) => checkSignIn(row));
+    panel.rows.filter((row) => row.route === 'browser').forEach((row) => { void browserSignIn(row.id, row.app); });
   };
   // Not now: the apps waiting on that browser are unticked.
   const declineSignIns = (browser) => {
     const rows = waitingYes[browser] || [];
     setWaitingYes((now) => { const next = { ...now }; delete next[browser]; return next; });
+    setProfileChoice((now) => { const next = { ...now }; delete next[browser]; return next; });
     setPicks((now) => rows.reduce((next, row) => tickRow(next, row.id, row.app, false), now));
   };
   // Try again: ticked again, and checked again only with the consent on (off, the run asks for its sign-in after it starts).
@@ -1084,6 +1122,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   // in. Signed in, it and every app sharing that sign-in (Google Drive and Gmail) read ✓, and its row is ticked (a refused
   // one was unticked); the window closed first, the row is as it was. → 'signed-in' | 'closed'
   const signInHere = async (id, app) => {
+    if (signsInThroughBrowser(app)) return signInInBrowser(id, app);
     setSignIns((now) => ({ ...now, [app]: { status: 'signing', browser: '', was: now[app] && now[app].status !== 'signing' ? now[app] : (now[app] || {}).was } }));
     const out = await api.connectSignInWindow(app).catch(() => null);
     if (out && out.status === 'signed-in') {
@@ -1094,6 +1133,55 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     setSignIns((now) => { const next = { ...now }; const was = (now[app] || {}).was; if (was) next[app] = was; else delete next[app]; return next; });
     return 'closed';
   };
+  // Google's Sign in (2026-10-12): Google refuses Engelbart's window, so its sign-in page opens in the person's browser and
+  // the sign-in is copied over once it is made there, with no time limit. The modal first when macOS will be asked or more
+  // than one profile holds it (its Continue comes back to browserSignIn). → 'signed-in' | 'asked' | 'closed'
+  const signInInBrowser = async (id, app) => {
+    const said = (await api.connectSignInNote(app, 'browser').catch(() => null)) || {};
+    if (asksFirst(said)) {
+      setRow(id, app, true);
+      setWaitingYes((now) => waitForYes(now, [{ id, app, browser: said.browser, note: said.note, profiles: said.profiles, route: 'browser' }]));
+      return 'asked';
+    }
+    return browserSignIn(id, app, said.opens || '');
+  };
+  // Every ticked Google row waits on the one sign-in, and turns ✓ with it; one unticked meanwhile is left as it was.
+  const browserSignIn = async (id, app, opens = '') => {
+    const group = sharesSignIn(app);
+    if (!opens) opens = ((await api.connectSignInNote(app, 'browser').catch(() => null)) || {}).opens || '';
+    setRow(id, app, true);
+    setSignIns((now) => {
+      const next = { ...now };
+      for (const other of group) next[other] = { status: 'browser', browser: opens, was: now[other] && now[other].status !== 'browser' ? now[other] : (now[other] || {}).was };
+      return next;
+    });
+    const out = await api.connectSignInBrowser(app).catch(() => null);
+    const status = out && out.status;
+    if (status === 'signed-in') {
+      setSignIns((now) => { const next = { ...now }; for (const other of group) next[other] = { status: 'signed-in', browser: out.browser || '', ...(out.profile ? { profile: out.profile } : {}) }; return next; });
+      return 'signed-in';
+    }
+    if (status === 'refused') {
+      // macOS said no: unticked, with Try again (as a check's refusal), and never Engelbart's window.
+      setSignIns((now) => { const next = { ...now }; for (const other of group) next[other] = { status: 'refused', browser: out.browser || '' }; return next; });
+      setPicks((now) => groupRows(app).reduce((next, row) => tickRow(next, row.id, row.app, false), now));
+      return 'closed';
+    }
+    if (status === 'no-browser') {
+      setSignIns((now) => { const next = { ...now }; for (const other of group) next[other] = { status: 'no-browser', browser: '' }; return next; });
+      return 'closed';
+    }
+    setSignIns((now) => { const next = { ...now }; for (const other of group) { if ((now[other] || {}).status !== 'browser') continue; const was = now[other].was; if (was) next[other] = was; else delete next[other]; } return next; });
+    return 'closed';
+  };
+  // Every row of the apps sharing `app`'s sign-in → [{ id, app }].
+  const groupRows = (app) => SOURCES.flatMap((source) => source.apps.filter((other) => sharesSignIn(app).includes(other)).map((other) => ({ id: source.id, app: other })));
+  // The wait in the browser ends once no row of its sign-in is ticked (unticked, a group or Select all off, Leave out).
+  React.useEffect(() => {
+    if (!picks) return;
+    const waiting = Object.keys(signIns).filter((app) => signIns[app] && signIns[app].status === 'browser');
+    for (const app of waiting) if (!groupRows(app).some((row) => ticked(picks, row.id, row.app))) api.connectSignInBrowserCancel(app).catch(() => {});
+  }, [picks]); // eslint-disable-line react-hooks/exhaustive-deps
   // The consent turned off: no sign-in is checked, and the panels waiting for a yes go (2026-10-11 review).
   const toggleConsent = () => { const on = !consent; setConsent(on); setWaitingYes((now) => waitingWhile(on, now)); };
   const pickPapers = async () => {
@@ -1208,8 +1296,10 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     launch();
   };
   // The gate's Sign in: the first app still not signed in; once none is left (the effect below), the run starts.
+  // Google's waits in the person's browser, and Google with no browser that can be read can't sign in (2026-10-12).
+  const gateNext = () => unsignedWeb(picks, signIns, found, consent).find((row) => !['browser', 'no-browser'].includes((signIns[row.app] || {}).status) || !signsInThroughBrowser(row.app));
   const gateSignIn = async () => {
-    const [first] = unsignedWeb(picks, signIns, found, consent);
+    const first = gateNext();
     if (!first) return;
     setGate('signing');
     await signInHere(first.id, first.app);
@@ -1226,8 +1316,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     if (!gate || gate === 'signing') return;
     if (gate === 'leave' || !unsignedWeb(picks, signIns, found, consent).length) { setGate(null); launch(); }
   }, [gate, picks, signIns]); // eslint-disable-line react-hooks/exhaustive-deps
-  // The sign-in window goes with the choose screen.
-  React.useEffect(() => (view === 'choose' ? () => { api.connectSignInWindowClose().catch(() => {}); } : undefined), [view]);
+  // The sign-in window goes with the choose screen, and so does a wait for a sign-in in the person's browser.
+  React.useEffect(() => (view === 'choose' ? () => { api.connectSignInWindowClose().catch(() => {}); api.connectSignInBrowserCancel().catch(() => {}); } : undefined), [view]);
   const launch = async () => {
     const anyOn = picks && SOURCES.some((source) => picks.picks[source.id]);
     if (!anyOn) { setError('Pick at least one source.'); return; }
@@ -1338,16 +1428,17 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
         const accessLabel = folderRun && ticked(picks, 'papers', LOCAL_PDFS) ? folderAccessLabel(folderRun) : null;
         const label = (app, id = '') => (app === LOCAL_PDFS && accessLabel ? accessLabel : rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' }));
         const shownYes = waitingWhile(consent, waitingYes); // none while the consent is off
-        const gateNow = gate && gate !== 'leave' ? signInGate(unsignedWeb(picks, signIns, found, consent)) : null;
+        const gateNow = gate && gate !== 'leave' ? signInGate(unsignedWeb(picks, signIns, found, consent), signIns) : null;
+        const inBrowser = Object.values(signIns).find((seen) => seen && seen.status === 'browser');
         // One browser's modal at a time: the one after Continue first, until it is closed, then the next asking.
-        const asking = Object.keys(shownYes).map((browser) => signInPanel(picks, browser, shownYes[browser])).find(Boolean) || null;
+        const asking = Object.keys(shownYes).map((browser) => signInPanel(picks, browser, shownYes[browser], profileChoice[browser] || 0)).find(Boolean) || null;
         const folderShown = folderAsk ? folderPanel(folderAsk.folders, { papers: folderAsk.papers }) : null;
         const keychainModal = folderShown
           ? <FolderAccessModal panel={folderShown} onContinue={allowFolders} onNotNow={declineFolders} />
           : keychainRun
           ? <KeychainModal outcome={keychainOutcome(keychainRun.browser, keychainRun.rows, signIns)} onClose={() => setKeychainRun(null)} onContinue={() => {}} onNotNow={() => setKeychainRun(null)} />
-          : asking ? <KeychainModal panel={asking} onContinue={() => allowSignIns(asking.browser)} onNotNow={() => declineSignIns(asking.browser)} onClose={() => declineSignIns(asking.browser)} />
-          : gateNow && <SignInGateModal gate={gateNow} signing={gate === 'signing'} onSignIn={gateSignIn} onLeave={gateLeave} onClose={() => { api.connectSignInWindowClose().catch(() => {}); setGate(null); }} />;
+          : asking ? <KeychainModal panel={asking} onChoose={(index) => setProfileChoice((now) => ({ ...now, [asking.browser]: index }))} onContinue={() => { void allowSignIns(asking.browser); }} onNotNow={() => declineSignIns(asking.browser)} onClose={() => declineSignIns(asking.browser)} />
+          : gateNow && <SignInGateModal gate={gateNow} signing={gate === 'signing'} waiting={inBrowser ? waitingIn(inBrowser.browser) : ''} canSignIn={gateNow.canSignIn && !!gateNext()} onSignIn={gateSignIn} onLeave={gateLeave} onClose={() => { api.connectSignInWindowClose().catch(() => {}); setGate(null); }} />;
         const github = (found && found.github) || {};
         const githubLabel = github.found ? { text: `${github.where || 'signed in'}${repoCount != null ? ` · ${repoCount} repo${repoCount === 1 ? '' : 's'}` : ''}`, tone: '' } : { text: NEEDS_SIGN_IN, tone: 'muted' };
         const reposOn = localPicked(picks).length;

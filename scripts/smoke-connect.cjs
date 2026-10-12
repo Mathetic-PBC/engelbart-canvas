@@ -9,7 +9,8 @@
 // (welcome, create, connect: Connect "3 of 3"); the choose screen starts with Notes ticked (a vault
 // Obsidian knows), ChatGPT ticked by hand, the permissions card naming it; Refine opens the chat, its first line said at
 // once, whose question is a card with one option per line; ChatGPT, signed in nowhere this disposable home can read, has
-// Sign in on its row (2026-10-11), as Google Drive and Gmail do, whose one sign-in in Engelbart's own window ticks both ✓;
+// Sign in on its row (2026-10-11); Google Drive and Gmail, whose sign-in is made in the person's browser, say Google needs
+// Chrome, Brave or Firefox (none here), and never offer Engelbart's window;
 // Bring these in asks for ChatGPT's sign-in in a modal first, so the refine chat has no sign-in card; its survey runs, the
 // librarian waits for it, then offers what it found; the connect step's Continue is a filled button once
 // the session has started; Import lights up once nothing is left to ask; the working view follows every import, MEMORY.md
@@ -33,6 +34,7 @@ process.env.ENGELBART_CONNECT_FAKE = '1';
 process.env.ENGELBART_CONNECT_FAKE_MS = '150';
 process.env.ENGELBART_CONNECT_APPLICATIONS = ''; // this Mac's /Applications is not the disposable one's
 process.env.ENGELBART_HEADLESS = '1';
+process.env.ENGELBART_INSTALLED_BROWSERS = ''; // no browser installed: this Mac's apps are never asked about or opened
 
 // Test mode off, and a vault Obsidian knows, in the disposable home.
 const home = require('../src/main/store/home.cjs');
@@ -131,20 +133,20 @@ app.whenReady().then(async () => {
     // No browser here holds its sign-in (2026-10-11): Sign in on its row, not "You'll sign in after you start".
     await until(() => has(wc, '[data-connect-signin="ChatGPT"]'), 'ChatGPT\'s Sign in');
     assert.doesNotMatch(await text(wc, '[data-connect-app=ChatGPT]'), /after you start|Needs Chrome/);
-    // Google Drive and Gmail share one Google sign-in: made once in Engelbart's own window (hidden here; the sign-in is
-    // its cookie set in the agents' browser), both rows read ✓.
+    // Google Drive and Gmail share one Google sign-in, made in the person's browser (2026-10-12: Google refuses Engelbart's
+    // window). No browser whose sign-ins can be read is installed here (as with Safari only), so both rows say what Google
+    // needs, with no Sign in and never Engelbart's window. (The hand-off itself opens a real browser and reaches Google, so
+    // it is test/connect.test.cjs's and test/connect-web-signin.test.cjs's, on fixtures.)
     await press(wc, '[data-connect-app="Google Docs"]');
     await press(wc, '[data-connect-source="email"] button[aria-expanded]');
     await press(wc, '[data-connect-app="Gmail"]');
-    await until(async () => (await has(wc, '[data-connect-signin="Google Docs"]')) && has(wc, '[data-connect-signin="Gmail"]'), 'Sign in on Google Drive and Gmail');
+    const googleNeeds = /Google needs Chrome, Brave or Firefox\./;
+    await until(async () => googleNeeds.test(await text(wc, '[data-connect-app="Google Docs"]')) && googleNeeds.test(await text(wc, '[data-connect-app="Gmail"]')), 'what Google needs, on both rows');
+    assert.equal(await has(wc, '[data-connect-signin="Google Docs"]'), false, 'no Sign in on Google Drive: its window is not offered');
+    assert.equal(await has(wc, '[data-connect-signin="Gmail"]'), false, 'no Sign in on Gmail');
+    assert.equal(BrowserWindow.getAllWindows().length, 1, 'no sign-in window');
     await shot(wc, '1-sign-in-rows');
-    await press(wc, '[data-connect-signin="Google Docs"]');
-    await until(async () => /Signing in…/.test(await text(wc, '[data-connect-app="Google Docs"]')), 'Signing in…');
     const agentsBrowser = electronSession.fromPartition(stagePartition(false));
-    await agentsBrowser.cookies.set({ url: 'https://accounts.google.com/', domain: '.google.com', name: 'SID', value: 'smoke', secure: true });
-    await until(async () => /✓ Signed in/.test(await text(wc, '[data-connect-app="Google Docs"]')) && /✓ Signed in/.test(await text(wc, '[data-connect-app="Gmail"]')), 'both ✓ from one sign-in', 200);
-    assert.equal(await has(wc, '[data-connect-signin="Gmail"]'), false, 'no Sign in left on Gmail');
-    await shot(wc, '1-signed-in-rows');
     await press(wc, '[data-connect-app="Google Docs"]');
     await press(wc, '[data-connect-app="Gmail"]');
     await press(wc, '[data-connect-source="email"] button[aria-expanded]');

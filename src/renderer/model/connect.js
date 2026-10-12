@@ -3,9 +3,9 @@
 // (src/main/connect), how an import's progress reads, what a step the agents hand the person says, and what the dock
 // shows. The sources and apps are src/shared/connect-sources.cjs.
 
-import { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, recallApps, webApps, cleanDays, periodName, shownName, SIGN_IN_COOKIES, signInGroup, sharesSignIn } from '../../shared/connect-sources.cjs';
+import { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, recallApps, webApps, cleanDays, periodName, shownName, SIGN_IN_COOKIES, signInGroup, sharesSignIn, signsInThroughBrowser, READABLE_NAMES } from '../../shared/connect-sources.cjs';
 
-export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName, shownName, sharesSignIn };
+export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName, shownName, sharesSignIn, signsInThroughBrowser };
 
 // MATH-114 (2026-10-09): the choose screen as the mockup's grouped list. Each source is a group whose header ticks its
 // rows (tri-state); a row says at its right how the app is reached and where it stands; ticking is the consent (a
@@ -180,7 +180,7 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
     return notes ? { text: notes, tone: 'error' } : { text: '', tone: '' };
   }
   if (spec.reach === 'web') {
-    const said = signInLabel(signIn);
+    const said = signInLabel(signIn, app);
     if (said) return said;
     if (seen.signedIn) return { text: 'signed in to Engelbart', tone: '' };
     return { text: NEEDS_SIGN_IN, tone: 'muted' }; // found or not: it is in the cloud (MATH-144)
@@ -190,19 +190,31 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
   return spec.reach === 'signin' ? { text: NEEDS_SIGN_IN, tone: 'muted' } : { text: 'Not found', tone: 'muted' }; // Zotero not connected; else only on this Mac
 }
 
+/** What a row and a Log in card say while a sign-in is waited for in the person's browser (2026-10-12). */
+export const waitingIn = (browser) => `Finish in ${browser || 'your browser'}. It can take up to a minute to show up here.`;
+
+/** What Google's row says with no browser whose sign-ins can be read (Safari only, 2026-10-12). */
+export const GOOGLE_NEEDS = `Google needs ${READABLE_NAMES}.`;
+
 /**
  * A web app's sign-in as checked when it was ticked (2026-10-10, main's connect-signin-check): { status: 'checking' |
- * 'signing' | 'signed-in' | 'refused' | 'signed-out' | 'no-browser', browser } → its label, or null. One no browser of the
- * person's could sign in (signed out there, Safari only, or macOS refused) offers Sign in (2026-10-11): its sign-in page in
- * Engelbart's own browser ('signing' while that window is open). A refused one also offers Try again.
+ * 'signing' | 'browser' | 'signed-in' | 'refused' | 'signed-out' | 'no-browser', browser, profile? } → its label, or null.
+ * One no browser of the person's could sign in (signed out there, Safari only, or macOS refused) offers Sign in
+ * (2026-10-11): its sign-in page in Engelbart's own browser ('signing' while that window is open). A refused one also
+ * offers Try again. Google's (signsInThroughBrowser, 2026-10-12) signs in in the person's browser ('browser' while it is
+ * waited for there), so it is never offered Engelbart's window: refused, Try again alone; no browser, which it needs.
+ * Signed in from a browser with several profiles, the profile too: "✓ Signed in from Chrome · Work".
  */
-function signInLabel(signIn) {
+function signInLabel(signIn, app = '') {
   if (!signIn || !signIn.status) return null;
+  const google = signsInThroughBrowser(app);
   if (signIn.status === 'checking') return { text: 'Waiting for macOS…', tone: 'busy' };
   if (signIn.status === 'signing') return { text: 'Signing in…', tone: 'busy' };
-  if (signIn.status === 'signed-in') return { text: signIn.browser ? `✓ Signed in from ${signIn.browser}` : '✓ Signed in', tone: 'ok' };
+  if (signIn.status === 'browser') return { text: waitingIn(signIn.browser), tone: 'busy' };
+  if (signIn.status === 'signed-in') return { text: signIn.browser ? `✓ Signed in from ${signIn.browser}${signIn.profile ? ` · ${signIn.profile}` : ''}` : '✓ Signed in', tone: 'ok' };
+  if (signIn.status === 'no-browser' && google) return { text: GOOGLE_NEEDS, tone: 'error' };
   if (signIn.status === 'signed-out' || signIn.status === 'no-browser') return { text: '', tone: '', signIn: true };
-  if (signIn.status === 'refused') return { text: "macOS didn't allow it", tone: 'error', retry: true, signIn: true };
+  if (signIn.status === 'refused') return google ? { text: "macOS didn't allow it", tone: 'error', retry: true } : { text: "macOS didn't allow it", tone: 'error', retry: true, signIn: true };
   return null;
 }
 
@@ -231,7 +243,7 @@ export function unsignedWeb(state, signIns = {}, found = null, consent = true) {
  * The modal before a run with apps still not signed in → { title, groups: [[{ id, app }]] } | null, the apps grouped by the
  * sign-in they share ("Google Drive and Gmail need you to sign in": one Google sign-in signs in both).
  */
-export function signInGate(rows) {
+export function signInGate(rows, signIns = {}) {
   if (!rows || !rows.length) return null;
   const groups = [];
   for (const row of rows) {
@@ -243,7 +255,20 @@ export function signInGate(rows) {
   const lines = groups.length > 1
     ? groups.map((list) => (list.length > 1 ? `${listed(list.map((row) => shownName(row.app)))}: one sign-in.` : `${shownName(list[0].app)}.`))
     : [];
-  return { title, groups, lines, body: `Sign in opens ${groups.length === 1 ? 'its' : 'each'} sign-in page in a small window here. Leave ${names.length === 1 ? 'it' : 'them'} out to start without ${names.length === 1 ? 'it' : 'them'}.` };
+  // Google's sign-in opens in the person's browser (2026-10-12); with no browser that can be read, it can't be made.
+  const google = groups.filter((list) => signsInThroughBrowser(list[0].app));
+  const blocked = google.filter((list) => list.every((row) => (signIns[row.app] || {}).status === 'no-browser'));
+  const where = !google.length ? `${groups.length === 1 ? 'its' : 'each'} sign-in page in a small window here`
+    : google.length === groups.length ? 'Google\'s sign-in in your browser'
+      : 'Google\'s sign-in in your browser, and the others in a small window here';
+  const them = names.length === 1 ? 'it' : 'them';
+  return {
+    title,
+    groups,
+    lines: blocked.length ? [...lines, GOOGLE_NEEDS] : lines,
+    canSignIn: blocked.length < groups.length,
+    body: `Sign in opens ${where}. Leave ${them} out to start without ${them}.`,
+  };
 }
 
 /**
@@ -261,12 +286,17 @@ export function newlyTickedWeb(before, after) {
   return out;
 }
 
-/** Rows waiting for the person's yes before macOS is asked, by browser ({ [browser]: [{ id, app }] }), with `rows` ({ id, app, browser }) added. */
+/**
+ * Rows waiting for the person's yes before macOS is asked, by browser ({ [browser]: [{ id, app }] }), with `rows` ({ id,
+ * app, browser, note?, profiles?, route? }) added. `note` macOS will be asked; `profiles` the ones to pick from
+ * (2026-10-12, more than one holds the sign-in); `route` 'browser' when Continue goes on to Google's Sign in.
+ */
 export function waitForYes(waiting, rows) {
   const out = { ...waiting };
-  for (const { id, app, browser } of rows) {
+  for (const { id, app, browser, note, profiles, route } of rows) {
     const list = out[browser] || [];
-    if (!list.some((row) => row.app === app)) out[browser] = [...list, { id, app }];
+    const row = { id, app, ...(note ? { note } : {}), ...(profiles && profiles.length > 1 ? { profiles } : {}), ...(route ? { route } : {}) };
+    if (!list.some((each) => each.app === app)) out[browser] = [...list, row];
   }
   return out;
 }
@@ -290,18 +320,27 @@ export function waitingWhile(consent, waiting) {
  * The panel shown above the permissions before a browser's sign-ins are first used (2026-10-10: say why macOS will ask
  * before it does), naming every ticked app waiting on it → { browser, rows, title, body } | null when none is still ticked.
  */
-export function signInPanel(state, browser, rows = []) {
+export function signInPanel(state, browser, rows = [], chosen = 0) {
   const still = rows.filter((row) => ticked(state, row.id, row.app));
   if (!still.length) return null;
   const apps = still.map((row) => shownName(row.app));
+  // Several profiles holding the sign-in (2026-10-12): which one, as a list; the browser named is the one chosen.
+  const profiles = (still.find((row) => row.profiles && row.profiles.length > 1) || {}).profiles || [];
+  const pick = profiles.length ? profiles[Math.min(Math.max(0, chosen), profiles.length - 1)] : null;
+  const from = pick ? pick.browser : browser;
+  // macOS asks only for a Chromium browser not asked yet (Firefox needs no Keychain): the line before it, only then. With no
+  // profile list, the panel is there because macOS will ask.
+  const keychain = pick ? !!pick.keychain : true;
   return {
     browser,
     rows: still,
-    title: `Use your ${browser} sign-ins for ${listed(apps)}?`,
+    profiles,
+    chosen: pick ? profiles.indexOf(pick) : -1,
+    title: `Use your ${from} sign-ins for ${listed(apps)}?`,
     // The line that matters most first, in bold (2026-10-11: the modal before macOS asks).
-    lead: 'macOS will ask for your Mac password next. Choose Allow.',
+    lead: keychain ? 'macOS will ask for your Mac password next. Choose Allow.' : '',
     body: [
-      `Engelbart copies only ${apps.length === 1 ? 'this app\'s sign-in' : 'these apps\' sign-ins'} from ${browser}, and only reads from ${apps.length === 1 ? 'it' : 'them'}, so you don't log in again. Not now leaves ${apps.length === 1 ? 'it' : 'them'} out.`,
+      `${profiles.length ? `More than one ${profiles.every((profile) => profile.browser === profiles[0].browser) ? `${profiles[0].browser} profile` : 'browser profile'} is signed in. Pick the one to use; Engelbart remembers it. ` : ''}Engelbart copies only ${apps.length === 1 ? 'this app\'s sign-in' : 'these apps\' sign-ins'} from ${from}, and only reads from ${apps.length === 1 ? 'it' : 'them'}, so you don't log in again. Not now leaves ${apps.length === 1 ? 'it' : 'them'} out.`,
     ],
   };
 }
@@ -357,8 +396,10 @@ export function keychainOutcome(browser, rows, signIns) {
   const signedIn = names('signed-in'), refused = names('refused');
   const missing = rows.filter((row) => !['signed-in', 'refused'].includes(of(row).status)).map((row) => shownName(row.app));
   const lines = [];
-  if (refused.length) lines.push(`macOS didn't allow it, so ${listed(refused)} ${refused.length === 1 ? 'was' : 'were'} unticked. Try again on ${refused.length === 1 ? 'its row' : 'their rows'} to be asked again, or Sign in to sign in here.`);
-  if (missing.length) lines.push(`${browser} isn't signed in to ${listed(missing)}. Sign in on ${missing.length === 1 ? 'its row' : 'their rows'} to sign in here.`);
+  // Google's Sign in is in the person's browser, never here (2026-10-12).
+  const here = (list) => (rows.filter((row) => list.includes(shownName(row.app))).every((row) => signsInThroughBrowser(row.app)) ? `in ${browser}` : 'here');
+  if (refused.length) lines.push(`macOS didn't allow it, so ${listed(refused)} ${refused.length === 1 ? 'was' : 'were'} unticked. Try again on ${refused.length === 1 ? 'its row' : 'their rows'} to be asked again${here(refused) === 'here' ? ', or Sign in to sign in here' : ''}.`);
+  if (missing.length) lines.push(`${browser} isn't signed in to ${listed(missing)}. Sign in on ${missing.length === 1 ? 'its row' : 'their rows'} to sign in ${here(missing)}.`);
   if (signedIn.length) {
     const title = `Signed in to ${listed(signedIn)}`;
     return { done: true, title, lines: [`Brought over from ${browser}. You won't need to log in again.`, ...lines], tone: lines.length ? 'warn' : 'ok' };

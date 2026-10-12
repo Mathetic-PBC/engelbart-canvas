@@ -42,7 +42,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName, sharesSignIn } = require('../../shared/connect-sources.cjs');
+const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName, sharesSignIn, signInGroup, signsInThroughBrowser } = require('../../shared/connect-sources.cjs');
 const prompts = require('./prompts.cjs');
 const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
@@ -803,10 +803,18 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (held.recall) dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
   }
 
-  /** A sign-in check's answer (webSignIn.signInQuiet) as the choose screen shows it → { status, browser, browserId }. */
+  /**
+   * A sign-in check's answer (webSignIn.signInQuiet) as the choose screen shows it → { status, browser, browserId, profile?,
+   * unchecked? }: `profile` the browser profile it came from when that browser has several, `unchecked` when the site's
+   * check page gave no answer (counted as signed in, 2026-10-12).
+   */
   function checkedAs(app, result) {
     const was = signInChecked.get(app);
-    if (result && result.signedIn) return { status: 'signed-in', browser: result.browser || (was && was.status === 'signed-in' ? was.browser : ''), browserId: '' };
+    if (result && result.signedIn) {
+      const kept = !result.browser && was && was.status === 'signed-in' ? was : null;
+      const profile = result.browser ? result.profile || '' : (kept && kept.profile) || '';
+      return { status: 'signed-in', browser: result.browser || (kept ? kept.browser : ''), browserId: '', ...(profile ? { profile } : {}), ...(result.unchecked ? { unchecked: true } : {}) };
+    }
     if (result && result.refused) return { status: 'refused', browser: result.refused, browserId: result.refusedId || '' };
     if (result && result.noBrowser) return { status: 'no-browser', browser: '', browserId: '' };
     return { status: 'signed-out', browser: '', browserId: '' };
@@ -818,13 +826,40 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * refused). Only a browser holding the app's sign-in is named (2026-10-11): the check opens no sign-in page, so where one
    * would open (the Log in card's note, noteFor) is never promised here.
    */
-  async function signInNote(app) {
-    if (!webSignIn || !webSignIn.supports(app) || !webSignIn.keychainTarget) return { browser: '', note: '' };
-    if (await webSignIn.signedIn(app).catch(() => false)) return { browser: '', note: '' };
+  async function signInNote(app, { route = '' } = {}) {
+    if (!webSignIn || !webSignIn.supports(app) || !webSignIn.keychainTarget) return { browser: '', note: '', profiles: [], opens: '' };
+    // Google's Sign in (2026-10-12) opens its page in the person's browser: the browser it opens in is the one named.
+    const browserRoute = route === 'browser';
+    const opens = browserRoute && webSignIn.opensIn ? webSignIn.opensIn(app) : '';
+    if (!browserRoute && await webSignIn.signedIn(app).catch(() => false)) return { browser: '', note: '', profiles: [], opens };
+    const profiles = profilesToAsk(app);
     let target = null;
-    try { target = webSignIn.keychainTarget(app, { holdersOnly: true }); } catch { target = null; }
-    if (!target || signInDenied.has(target.id)) return { browser: target ? target.name : '', note: '' };
-    return { browser: target.name, note: webSignIn.keychainNote(app, { holdersOnly: true }) || '' };
+    try { target = webSignIn.keychainTarget(app, { holdersOnly: !browserRoute }); } catch { target = null; }
+    const browser = target ? target.name : profiles.length ? profiles[0].browser : '';
+    if (!target || signInDenied.has(target.id)) return { browser, note: '', profiles, opens };
+    return { browser: target.name, note: webSignIn.keychainNote(app, { holdersOnly: !browserRoute }) || '', profiles, opens };
+  }
+
+  /**
+   * The profiles to ask the person to pick from for an app's sign-in (2026-10-12) → [{ browserId, browser, profileId, name,
+   * email, keychain }]: every one holding it, when more than one does and none was picked before (or the one picked no
+   * longer holds it); else none, and no question.
+   */
+  function profilesToAsk(app) {
+    if (!webSignIn || !webSignIn.holdersOf) return [];
+    let list = [];
+    try { list = webSignIn.holdersOf(app) || []; } catch { list = []; }
+    list = list.filter((profile) => !signInDenied.has(profile.browserId));
+    if (list.length < 2) return [];
+    const pick = webSignIn.picked ? webSignIn.picked(app) : null;
+    if (pick && list.some((profile) => profile.browserId === pick.browser && profile.profileId === pick.profile)) return [];
+    return list;
+  }
+
+  /** The profile picked for an app's sign-in ({ browser, profile }, ids), remembered for every app sharing it. */
+  function signInPick(app, pick) {
+    if (!webSignIn || !webSignIn.choose || !webSignIn.supports(app)) return false;
+    return webSignIn.choose(app, pick);
   }
 
   /**
@@ -841,7 +876,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const out = checkedAs(app, result);
       signInChecked.set(app, out);
       signInChecking.delete(app);
-      return { status: out.status, browser: out.browser };
+      return { status: out.status, browser: out.browser, ...(out.profile ? { profile: out.profile } : {}) };
     });
     signInChecking.set(app, checking);
     return checking;
@@ -862,6 +897,47 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return { status: 'closed' };
   }
 
+  // Google's Sign in on the choose screen, waited for in the person's browser (2026-10-12): one wait per sign-in (every
+  // Google app shares it), with the controller that ends it.
+  const browserWaits = new Map();
+
+  /**
+   * "Sign in" for an app whose sign-in goes through the person's browser (signsInThroughBrowser: Google's, which refuses
+   * Engelbart's window, 2026-10-12): its sign-in page opened in their default browser (Chrome when that is Safari), then
+   * waited for with no time limit until it comes over, or until signInBrowserCancel (the row unticked, Leave out, the choose
+   * screen gone). → { status: 'signed-in', browser, profile? } | { status: 'refused', browser } | { status: 'no-browser' } |
+   * { status: 'cancelled' }. Signed in, every app sharing the sign-in is kept as signed in. Never Engelbart's window.
+   */
+  function signInBrowser(app) {
+    if (!webSignIn || !webSignIn.supports(app)) return Promise.resolve({ status: 'no-browser' });
+    const key = signInGroup(app);
+    if (browserWaits.has(key)) return browserWaits.get(key).done;
+    const controller = new AbortController();
+    const done = webSignIn.signIn(app, { signal: controller.signal, timeoutMs: Infinity }).catch(() => ({ status: 'cancelled' })).then((out) => {
+      browserWaits.delete(key);
+      if (out.status === 'signed-in') {
+        const kept = { status: 'signed-in', browser: out.browser || '', browserId: '', ...(out.profile ? { profile: out.profile } : {}) };
+        for (const other of sharesSignIn(app)) signInChecked.set(other, kept);
+        return { status: 'signed-in', browser: kept.browser, ...(out.profile ? { profile: out.profile } : {}) };
+      }
+      if (out.status === 'denied') {
+        if (out.browserId) signInDenied.add(out.browserId);
+        for (const other of sharesSignIn(app)) signInChecked.set(other, { status: 'refused', browser: out.browser, browserId: out.browserId || '' });
+        return { status: 'refused', browser: out.browser };
+      }
+      if (out.status === 'no-browser') return { status: 'no-browser' };
+      return { status: 'cancelled' };
+    });
+    browserWaits.set(key, { controller, done });
+    return done;
+  }
+
+  /** Ends the wait for `app`'s sign-in in the person's browser (any app sharing it), or every wait when `app` is ''. */
+  function signInBrowserCancel(app = '') {
+    for (const [key, wait] of browserWaits) if (!app || key === signInGroup(app)) wait.controller.abort();
+    return true;
+  }
+
   /** Closes the sign-in window, if one is open (Leave out, or the choose screen gone). */
   function signInWindowClose() {
     if (signInWindow) signInWindow.close();
@@ -871,11 +947,13 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /**
    * The ticked web apps' sign-ins, looked at before any survey starts (2026-10-09). One checked when it was ticked keeps
    * that answer (a check still waiting on macOS is waited for); any other is brought over from a browser that holds it, all
-   * together, at most SIGN_IN_CHECK_MS, no answer counting as signed out. A browser macOS refused is not asked again.
-   * → { signedOut: Set, refused: Map(app → browser), signedIn: Map(app → browser, '' when held already) }
+   * together, at most SIGN_IN_CHECK_MS. One with no answer by then is still checking (2026-10-12), not signed out: its
+   * answer, when it comes, is lateSignIn's. A browser macOS refused is not asked again.
+   * → { signedOut: Set, refused: Map(app → browser), signedIn: Map(app → browser, '' when held already),
+   *     checking: Map(app → Promise of its answer) }
    */
   async function signInsFirst(s) {
-    const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map() };
+    const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map(), checking: new Map() };
     if (!webSignIn || !s.choices.permissions.browser) return out;
     const apps = Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps)
       .filter((app) => appOf(app) && appOf(app).reach === 'web' && webSignIn.supports(app));
@@ -891,23 +969,58 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
     let timer = null;
     const limit = new Promise((resolve) => { timer = setTimeout(resolve, deps.signInCheckMs || SIGN_IN_CHECK_MS); if (timer.unref) timer.unref(); });
+    const answers = new Map(quiet.map((app) => [app, webSignIn.signInQuiet(app, { denied: signInDenied }).catch(() => ({ signedIn: false })).then((result) => {
+      const answer = checkedAs(app, result);
+      results.set(app, answer);
+      return answer;
+    })]));
     await Promise.all([
       Promise.all(waiting),
-      quiet.length ? Promise.race([
-        Promise.all(quiet.map((app) => webSignIn.signInQuiet(app, { denied: signInDenied }).catch(() => ({ signedIn: false })).then((result) => { results.set(app, checkedAs(app, result)); }))),
-        limit,
-      ]) : null,
+      quiet.length ? Promise.race([Promise.all(answers.values()), limit]) : null,
     ]);
     clearTimeout(timer);
     for (const app of apps) {
       const result = results.get(app);
+      if (!result && answers.has(app)) { out.checking.set(app, answers.get(app)); continue; }
       if (result && result.status === 'signed-in') {
         out.signedIn.set(app, result.browser);
         logAction(s, null, result.browser ? `Signed in to ${shownName(app)} from ${result.browser}` : `Signed in to ${shownName(app)} already`);
+        if (result.unchecked) logAction(s, null, `Couldn't check the ${shownName(app)} sign-in (no answer): counted as signed in`);
       } else if (result && result.status === 'refused') out.refused.set(app, result.browser);
       else out.signedOut.add(app);
     }
     return out;
+  }
+
+  /**
+   * A sign-in still being checked when the surveys started (signInsFirst's `checking`, 2026-10-12): its app is held, and
+   * joins the run when the answer is signed in, as after a Log in; signed out, it gets the usual Log in card; refused by
+   * macOS, it is skipped as at the start.
+   */
+  function lateSignIn(s, app, answer) {
+    logAction(s, null, `Still checking the ${shownName(app)} sign-in`);
+    answer.then((result) => {
+      if (s.stopped || !s.held.has(app)) return;
+      if (result && result.status === 'signed-in') {
+        logAction(s, null, result.browser ? `Signed in to ${shownName(app)} from ${result.browser}` : `Signed in to ${shownName(app)}`);
+        if (result.unchecked) logAction(s, null, `Couldn't check the ${shownName(app)} sign-in (no answer): counted as signed in`);
+        releaseHeld(s, app, 'done');
+        emit(s);
+        return;
+      }
+      if (result && result.status === 'refused') {
+        skipApp(s, app);
+        releaseHeld(s, app, 'skip');
+        s.chat.push({ role: 'agent', text: skippedLine(result.browser, [app]), ask: null, authorize: null, at: now() });
+        emit(s);
+        return;
+      }
+      if (s.needs.some((entry) => !entry.closed && entry.app === app && entry.kind === 'signin')) return;
+      const reason = `Sign in to ${shownName(app)}`;
+      s.needs.push({ id: randomUUID(), app, kind: 'signin', reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, 'signin'), closed: false, held: true, at: now() });
+      logAction(s, null, `Needs you: ${reason}`);
+      emit(s);
+    });
   }
 
   /** "ChatGPT", "ChatGPT and Claude", "ChatGPT, Claude and Gemini". */
@@ -982,6 +1095,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     need.outcome = how;
     if (need.cancel) need.cancel(); // a sign-in still waited for in the default browser
     if (how === 'skip' && !s.stopped) skipApp(s, need.app, need.jobs);
+    // A sign-in that came back signed out after the run started (lateSignIn): Log in done lets it join, Skip leaves it out.
+    if (need.held) releaseHeld(s, need.app, how === 'skip' ? 'skip' : 'done');
     for (const [jobId, resolve] of need.waiters) { resolve({ status: how === 'skip' ? 'skipped' : 'done' }); if (browser) browser.hide(jobId); }
     need.waiters.clear();
     for (const jobId of need.jobs) if (browser) browser.hide(jobId);
@@ -1182,7 +1297,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     emit(s);
     const checked = await signInsFirst(s);
     if (s.stopped || s.suspended) return;
-    startWork(s, new Set([...checked.signedOut, ...checked.refused.keys()]));
+    startWork(s, new Set([...checked.signedOut, ...checked.refused.keys(), ...checked.checking.keys()]));
+    for (const [app, answer] of checked.checking) if (s.held.has(app)) lateSignIn(s, app, answer);
     lookForFolders(s);
     // A ticked web app still signed out (the choose screen signs each in before it starts, so a race, or a session resumed
     // after a quit) gets no card on this screen (2026-10-11): it is left out, and the opener says where to add it.
@@ -1406,7 +1522,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
           emit(s);
           return;
         }
-        found.error = out.status === 'no-browser' ? `Signing in to ${shownName(found.app)} needs ${READABLE_NAMES}.`
+        found.error = out.status === 'no-browser' ? (signsInThroughBrowser(found.app) ? `Google needs ${READABLE_NAMES}.` : `Signing in to ${shownName(found.app)} needs ${READABLE_NAMES}.`)
           : out.status === 'timeout' ? `Still not signed in to ${shownName(found.app)} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
         emit(s);
       });
@@ -1730,7 +1846,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   return {
-    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose,
+    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose, signInBrowser, signInBrowserCancel, signInPick,
     setProvider: (id, provider) => { const s = get(id); setProvider(s, provider); emit(s); return snapshot(s); },
     // the first build's name for authorize
     connected: (id, input) => authorize(id, input),

@@ -375,7 +375,63 @@ test('sources lists installed browsers and their profiles, values untouched', ()
   const firefox = sources.find((s) => s.id === 'firefox');
   assert.ok(brave && firefox, 'Brave and Firefox are found');
   assert.deepEqual(brave.profiles, [{ id: 'Default', name: 'Personal' }]);
-  assert.equal(firefox.profiles[0].name, 'default-release');
+  assert.equal(firefox.profiles[0].name, 'abcd.default-release', 'no profiles.ini: the folder\'s name');
+});
+
+test('Firefox profiles by their profiles.ini Name=, else the folder; no email (2026-10-12)', () => {
+  const { support, userData } = makeMachine();
+  const ffRoot = path.join(support, 'Firefox');
+  fs.mkdirSync(path.join(ffRoot, 'Profiles', 'wxyz.work'), { recursive: true });
+  makeFirefoxDb(path.join(ffRoot, 'Profiles', 'wxyz.work', 'cookies.sqlite'), []);
+  fs.mkdirSync(path.join(ffRoot, 'Profiles', 'nnnn.other'), { recursive: true });
+  makeFirefoxDb(path.join(ffRoot, 'Profiles', 'nnnn.other', 'cookies.sqlite'), []);
+  fs.writeFileSync(path.join(ffRoot, 'profiles.ini'), '[Install123]\nDefault=Profiles/abcd.default-release\n\n[Profile1]\nName=Work stuff\nIsRelative=1\nPath=Profiles/wxyz.work\n\n[Profile0]\nName=default-release\nIsRelative=1\nPath=Profiles/abcd.default-release\nDefault=1\n\n[General]\nVersion=2\n');
+  const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), keychain: async () => PASSWORD });
+  const firefox = importer.sources().find((s) => s.id === 'firefox');
+  assert.deepEqual(firefox.profiles.sort((a, b) => a.id.localeCompare(b.id)), [{ id: 'abcd.default-release', name: 'default-release' }, { id: 'nnnn.other', name: 'nnnn.other' }, { id: 'wxyz.work', name: 'Work stuff' }]);
+});
+
+test('a browser counts only with its app installed: profiles left behind by one in the Trash are never listed or read (2026-10-12)', async () => {
+  const { support, userData } = makeMachine();
+  const asked = [];
+  const installed = (bundle) => { asked.push(bundle); return bundle === 'org.mozilla.firefox'; };
+  const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), keychain: async () => { throw new Error('never asked'); }, installed });
+  assert.deepEqual(importer.sources().map((s) => s.id), ['firefox'], 'Brave\'s folder is there, its app is not');
+  assert.ok(asked.includes('com.brave.Browser'));
+  assert.throws(() => importer.cookieNames('brave', 'Default', ['google.com']), /not installed/);
+  await assert.rejects(importer.import({ browser: 'brave', profile: 'Default', domains: ['google.com'] }), /not installed/);
+});
+
+test('installedApp: Spotlight\'s answer, an app in the Trash not counted, Spotlight failing not taken as uninstalled', () => {
+  const run = (out) => (file, args) => { assert.equal(file, '/usr/bin/mdfind'); assert.deepEqual(args, ["kMDItemCFBundleIdentifier == 'com.google.Chrome'"]); if (out instanceof Error) throw out; return out; };
+  const exists = () => true;
+  assert.equal(mod.installedApp('com.google.Chrome', { run: run('/Applications/Google Chrome.app\n'), exists }), true);
+  assert.equal(mod.installedApp('com.google.Chrome', { run: run('/Users/me/.Trash/Google Chrome.app\n'), exists }), false, 'dragged to the Trash');
+  assert.equal(mod.installedApp('com.google.Chrome', { run: run(''), exists }), false, 'none');
+  assert.equal(mod.installedApp('com.google.Chrome', { run: run('/Applications/Google Chrome.app\n'), exists: () => false }), false, 'gone since Spotlight looked');
+  assert.equal(mod.installedApp('com.google.Chrome', { run: run(new Error('mdfind failed')), exists }), true);
+  assert.equal(mod.installedApp("x' || true", { run: () => { throw new Error('not run'); }, exists }), false, 'never a quote into the query');
+});
+
+test('a Chromium profile\'s Chrome account (info_cache user_name) comes with its name, when there is one (2026-10-12)', () => {
+  const { support, userData } = makeMachine();
+  const braveRoot = path.join(support, 'BraveSoftware/Brave-Browser');
+  fs.mkdirSync(path.join(braveRoot, 'Profile 1', 'Network'), { recursive: true });
+  makeChromiumDb(path.join(braveRoot, 'Profile 1', 'Network', 'Cookies'), 24, []);
+  fs.writeFileSync(path.join(braveRoot, 'Local State'), JSON.stringify({ profile: { info_cache: { Default: { name: 'Personal', user_name: '' }, 'Profile 1': { name: 'Work', user_name: 'me@work.example' } } } }));
+  const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), keychain: async () => PASSWORD });
+  const brave = importer.sources().find((s) => s.id === 'brave');
+  assert.deepEqual(brave.profiles.sort((a, b) => a.id.localeCompare(b.id)), [{ id: 'Default', name: 'Personal' }, { id: 'Profile 1', name: 'Work', email: 'me@work.example' }]);
+});
+
+test('check(domain): the check page alone, over the Stage\'s session: signed in, signed out, no answer, none known (2026-10-12)', async () => {
+  const { support, userData } = makeMachine();
+  const make = (script) => mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), request: fakeRequest(script), keychain: async () => { throw new Error('no Keychain for a check'); }, checkTimeoutMs: 50 });
+  assert.equal(await make({ 'https://myaccount.google.com/': 200 }).check('google.com'), true);
+  assert.equal(await make({ 'https://myaccount.google.com/': { status: 302, location: 'https://accounts.google.com/ServiceLogin' } }).check('google.com'), false);
+  assert.equal(await make({ 'https://myaccount.google.com/': 'hang' }).check('google.com'), null, 'timed out');
+  assert.equal(await make({}).check('google.com'), null, 'offline');
+  assert.equal(await make({}).check('chatgpt.com'), null, 'no check page');
 });
 
 test('domains lists domain and count only, with the pre-ticked defaults, and no Keychain', () => {

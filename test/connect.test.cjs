@@ -998,9 +998,9 @@ test('checked when ticked: the run uses that answer without looking again; the o
   const { connect, state } = fakeConnect({ webSignIn });
   let started = null;
   try {
-    assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: 'Chrome', note: 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.' });
+    assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: 'Chrome', note: 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.', profiles: [], opens: '' });
     assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-in', browser: 'Chrome' });
-    assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '' }, 'held now: macOS will not be asked');
+    assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '', profiles: [], opens: '' }, 'held now: macOS will not be asked');
     // Ticked again: signInQuiet answers browser '' (held already); the browser it came from is remembered.
     assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-in', browser: 'Chrome' });
     assert.deepEqual(await connect.signInCheck('Claude'), { status: 'signed-out', browser: '' });
@@ -1016,7 +1016,7 @@ test('checked when ticked: the run uses that answer without looking again; the o
   }
 });
 
-test('a check when ticked waits on macOS as long as the person takes; the run waits for it too; no check keeps the 10 s limit', async () => {
+test('a check when ticked waits on macOS as long as the person takes; the run waits for it too; one past the limit is still checking, and joins when signed in', async () => {
   const fake = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT', 'Claude'] } } });
   const { webSignIn, quiet } = countedSignIn(fake, { slowMs: 80 });
   const { connect, state } = fakeConnect({ webSignIn, deps: { signInCheckMs: 20 } });
@@ -1027,8 +1027,50 @@ test('a check when ticked waits on macOS as long as the person takes; the run wa
     assert.deepEqual(await checking, { status: 'signed-in', browser: 'Chrome' });
     const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
     assert.deepEqual(quiet, ['ChatGPT', 'Claude']);
-    assert.deepEqual(now.needs, [], 'Claude, not checked when ticked, ran out of the limit: signed out, left out');
-    assert.match(now.chat[0].text, /Using your Chrome sign-ins for ChatGPT\.\nLeft out Claude: not signed in\. You can add it from Add sources\.$/, 'ChatGPT, still being checked when the run started, ended signed in');
+    assert.match(now.chat[0].text, /Using your Chrome sign-ins for ChatGPT\.$/, 'ChatGPT, still being checked when the run started, ended signed in');
+    assert.doesNotMatch(now.chat[0].text, /Left out Claude/, 'Claude, past the limit, is still checking: not left out (2026-10-12)');
+    assert.ok(now.log.some((entry) => entry.text === 'Still checking the Claude sign-in'));
+    const joined = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'Claude'), 'Claude joins once its answer comes');
+    assert.ok(joined.log.some((entry) => entry.text === 'Signed in to Claude from Chrome'));
+    assert.deepEqual(joined.needs, []);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a late answer that is signed out: the usual Log in card, and Log in lets the app join the run (2026-10-12)', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: [] } }, later: { Claude: 1 } });
+  const { webSignIn } = countedSignIn(fake, { slowMs: 60 });
+  const { connect, state } = fakeConnect({ webSignIn, deps: { signInCheckMs: 10 } });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['Claude'] } } });
+    const first = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.doesNotMatch(first.chat[0].text, /Left out Claude/);
+    const asked = await until(state(started.id), (s) => s.needs.length === 1, 'Claude\'s Log in card');
+    assert.deepEqual([asked.needs[0].app, asked.needs[0].kind, asked.needs[0].reason], ['Claude', 'signin', 'Sign in to Claude']);
+    assert.equal(asked.jobs.some((job) => job.apps.includes('Claude')), false, 'held until it is signed in');
+    await connect.need(started.id, asked.needs[0].id, 'open');
+    const now = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'Claude'), 'Claude joins after Log in');
+    assert.deepEqual(now.needs, []);
+    assert.deepEqual(fake.calls.openedIn, [['chrome', 'https://claude.ai/login']]);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a late answer skipped on its card: left out for the run', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: [] } } });
+  const { webSignIn } = countedSignIn(fake, { slowMs: 40 });
+  const { connect, state } = fakeConnect({ webSignIn, deps: { signInCheckMs: 5 } });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['Claude'] } } });
+    const asked = await until(state(started.id), (s) => s.needs.length === 1, 'Claude\'s Log in card');
+    await connect.need(started.id, asked.needs[0].id, 'skip');
+    const now = await until(state(started.id), (s) => s.needs.length === 0, 'the card closed');
+    assert.equal(now.jobs.some((job) => job.apps.includes('Claude')), false);
+    assert.ok(now.log.some((entry) => entry.text === 'Skipped: Sign in to Claude'));
   } finally {
     if (started) connect.stop(started.id);
   }
@@ -1037,11 +1079,123 @@ test('a check when ticked waits on macOS as long as the person takes; the run wa
 test('no panel for an app no browser holds: the check opens nothing, so macOS is not promised; the Log in card still names where it opens', async () => {
   const fake = fakeSignIn({ browsers: { chrome: { apps: ['Claude'] } } }); // Chrome would open ChatGPT's sign-in page, but holds none
   const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
-  assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '' }, 'no browser holds it: no panel');
+  assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '', profiles: [], opens: '' }, 'no browser holds it: no panel');
   assert.equal(fake.webSignIn.keychainNote('ChatGPT'), 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.', 'the Log in card\'s note keeps the opener');
   assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-out', browser: '' }, 'straight to the row\'s Sign in');
   assert.deepEqual(fake.calls.keychain, [], 'macOS was not asked');
   assert.deepEqual((await connect.signInNote('Claude')).browser, 'Chrome', 'one it holds still has its panel');
+});
+
+/**
+ * Google's sign-in on a fake Mac (2026-10-12): `defaultName` the default browser; `browsers` { id: { profiles: [{ id, name,
+ * email, signedIn }], deny } }; `checks` Google's check page's answers in turn (true when none is left). Fixtures only.
+ */
+function fakeGoogle({ defaultName = 'Safari', browsers = {}, checks = [], picks = {} } = {}) {
+  const NAMES = { chrome: ['Chrome', 'chromium', 'com.google.Chrome'], brave: ['Brave', 'chromium', 'com.brave.Browser'], firefox: ['Firefox', 'firefox', 'org.mozilla.firefox'] };
+  let jar = [];
+  const answers = [...checks];
+  const calls = { keychain: [], opened: [], openedIn: [], imports: [] };
+  const cookieImport = {
+    sources: () => Object.keys(browsers).map((id) => ({ id, name: NAMES[id][0], family: NAMES[id][1], bundle: NAMES[id][2], profiles: browsers[id].profiles.map(({ id: pid, name, email }) => ({ id: pid, name, ...(email ? { email } : {}) })) })),
+    cookieNames: (id, profileId) => (browsers[id].profiles.find((each) => each.id === profileId) || {}).signedIn ? [{ domain: 'google.com', name: 'SID', stamp: 1 }] : [],
+    check: async () => (answers.length ? answers.shift() : true),
+    import: async ({ browser: id, profile }) => {
+      if (NAMES[id][1] === 'chromium') calls.keychain.push(id);
+      if (browsers[id].deny) throw Object.assign(new Error('Keychain access was denied'), { denied: true });
+      calls.imports.push(`${id}/${profile}`);
+      jar = [{ domain: '.google.com', name: 'SID', path: '/', secure: true }];
+    },
+  };
+  const stored = { ...picks };
+  const webSignIn = createWebSignIn({
+    cookieImport, defaultBrowser: () => defaultName, pollMs: 1, timeoutMs: 50, sleep: () => new Promise((resolve) => setImmediate(resolve)),
+    getSession: () => ({ cookies: { get: async ({ domain }) => jar.filter((cookie) => cookie.domain.endsWith(domain)), remove: async (url, name) => { jar = jar.filter((cookie) => cookie.name !== name); } } }),
+    openExternal: async (url) => { calls.opened.push(url); }, openIn: async (id, url) => { calls.openedIn.push([id, url]); },
+    picks: { get: (key) => stored[key] || null, set: (key, pick) => { stored[key] = pick; } },
+  });
+  return { webSignIn, calls, stored, browsers };
+}
+
+test('Google\'s Sign in goes through the person\'s browser: Chrome opens with Safari the default, no time limit, every Google app signed in together', async () => {
+  const fake = fakeGoogle({ browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: false }] } } });
+  const win = fakeWindow('signed-in');
+  const { connect, state } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  let started = null;
+  try {
+    assert.deepEqual(await connect.signInNote('Google Docs', { route: 'browser' }), { browser: 'Chrome', note: 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.', profiles: [], opens: 'Chrome' }, 'the browser it opens in, and the Keychain modal first');
+    const waiting = connect.signInBrowser('Google Docs');
+    assert.equal(connect.signInBrowser('Gmail'), waiting, 'one wait for the one Google sign-in');
+    await new Promise((resolve) => { setTimeout(resolve, 120); }); // past the 50 ms a Log in card would wait
+    assert.deepEqual(fake.calls.openedIn, [['chrome', 'https://accounts.google.com/']]);
+    fake.browsers.chrome.profiles[0].signedIn = true; // signed in in Chrome
+    assert.deepEqual(await waiting, { status: 'signed-in', browser: 'Chrome' });
+    assert.deepEqual(win.opened, [], 'never Engelbart\'s window');
+    for (const app of ['Google Docs', 'Gmail', 'Google Meet', 'Gemini']) assert.deepEqual(await connect.signInCheck(app), { status: 'signed-in', browser: 'Chrome' }, app);
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Google Docs'] }, email: { on: true, apps: ['Gmail'] } } });
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.deepEqual(now.jobs.filter((job) => job.kind === 'survey').map((job) => job.apps[0]).sort(), ['Gmail', 'Google Docs']);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('Google\'s Sign in waits until cancelled (the row unticked, Leave out, the choose screen gone)', async () => {
+  const fake = fakeGoogle({ defaultName: 'Google Chrome', browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: false }] } } });
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
+  const waiting = connect.signInBrowser('Gmail');
+  await new Promise((resolve) => { setTimeout(resolve, 80); });
+  assert.equal(connect.signInBrowserCancel('Gemini'), true, 'any app sharing the sign-in ends it');
+  assert.deepEqual(await waiting, { status: 'cancelled' });
+  assert.deepEqual(fake.calls.opened, ['https://accounts.google.com/'], 'Chrome the default: opened as itself');
+});
+
+test('Google\'s Sign in refused by macOS: "refused" for every Google app, and no Engelbart window', async () => {
+  const fake = fakeGoogle({ browsers: { chrome: { deny: true, profiles: [{ id: 'Default', name: 'Me', signedIn: true }] } } });
+  const win = fakeWindow('signed-in');
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  assert.deepEqual(await connect.signInBrowser('Gmail'), { status: 'refused', browser: 'Chrome' });
+  assert.deepEqual(win.opened, []);
+  assert.deepEqual(fake.calls.openedIn, [], 'nothing opened once macOS said no');
+  assert.equal((await connect.signInNote('Google Docs')).note, '', 'not asked again until Try again');
+});
+
+test('Google with Safari only: no browser, nothing opened, no window', async () => {
+  const fake = fakeGoogle({ browsers: {} });
+  const win = fakeWindow('signed-in');
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  assert.deepEqual(await connect.signInBrowser('Gmail'), { status: 'no-browser' });
+  assert.equal((await connect.signInNote('Gmail', { route: 'browser' })).opens, '');
+  assert.deepEqual(await connect.signInCheck('Gmail'), { status: 'no-browser', browser: '' });
+  assert.deepEqual([win.opened, fake.calls.opened, fake.calls.openedIn], [[], [], []]);
+});
+
+test('two profiles holding Google: asked which, the pick remembered and used, the row naming it; one profile: no question', async () => {
+  const fake = fakeGoogle({ defaultName: 'Google Chrome', browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }, { id: 'Profile 1', name: 'Work', email: 'me@work.example', signedIn: true }] } } });
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
+  const note = await connect.signInNote('Gmail');
+  assert.equal(note.browser, 'Chrome');
+  assert.deepEqual(note.profiles.map(({ browserId, profileId, name, email }) => [browserId, profileId, name, email]), [['chrome', 'Default', 'Me', ''], ['chrome', 'Profile 1', 'Work', 'me@work.example']]);
+  assert.equal(connect.signInPick('Gmail', { browser: 'chrome', profile: 'Profile 1' }), true);
+  assert.deepEqual(fake.stored, { 'google.com': { browser: 'chrome', profile: 'Profile 1' } });
+  assert.deepEqual((await connect.signInNote('Google Docs')).profiles, [], 'picked: not asked again, for any Google app');
+  assert.deepEqual(await connect.signInCheck('Gmail'), { status: 'signed-in', browser: 'Chrome', profile: 'Work' });
+  assert.deepEqual(fake.calls.imports, ['chrome/Profile 1']);
+  const one = fakeGoogle({ defaultName: 'Google Chrome', browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }, { id: 'Profile 1', name: 'Work', signedIn: false }] } } });
+  const lone = fakeConnect({ webSignIn: one.webSignIn });
+  assert.deepEqual((await lone.connect.signInNote('Gmail')).profiles, [], 'one holds it: no question');
+  // Chrome and Firefox both holding it: the question spans both.
+  const both = fakeGoogle({ defaultName: 'Firefox', browsers: { firefox: { profiles: [{ id: 'x.default-release', name: 'default-release', signedIn: true }] }, chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }] } } });
+  const across = fakeConnect({ webSignIn: both.webSignIn });
+  assert.deepEqual((await across.connect.signInNote('Gmail')).profiles.map((profile) => [profile.browser, profile.name, profile.keychain]), [['Firefox', 'default-release', false], ['Chrome', 'Me', true]]);
+});
+
+test('a dead Google copy at tick time: copied again from Chrome and good; dead there too: signed out', async () => {
+  const fake = fakeGoogle({ defaultName: 'Google Chrome', checks: [false, true], browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }, { id: 'Profile 1', name: 'Work', signedIn: true }] } } });
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
+  assert.deepEqual(await connect.signInCheck('Gmail'), { status: 'signed-in', browser: 'Chrome', profile: 'Work' }, 'Me\'s copy dead, Work\'s good');
+  const dead = fakeGoogle({ defaultName: 'Google Chrome', checks: [false], browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }] } } });
+  const other = fakeConnect({ webSignIn: dead.webSignIn });
+  assert.deepEqual(await other.connect.signInCheck('Gmail'), { status: 'signed-out', browser: '' });
 });
 
 test('a refusal when ticked: the browser is not asked again, until Try again', async () => {
@@ -1071,7 +1225,7 @@ test('no browser whose sign-ins can be read (Safari only): a Log in card asked m
     const asked = await until(state(started.id), (s) => s.needs.length === 1, 'ChatGPT\'s card');
     await connect.need(started.id, asked.needs[0].id, 'open');
     const now = await until(state(started.id), (s) => s.needs[0] && s.needs[0].error, 'the error');
-    assert.equal(now.needs[0].error, 'Signing in to ChatGPT needs Chrome, Brave, Edge, Arc or Firefox.');
+    assert.equal(now.needs[0].error, 'Signing in to ChatGPT needs Chrome, Brave or Firefox.');
     assert.deepEqual([shown, calls.openedIn], [[], []], 'no window of Engelbart\'s, nothing opened');
   } finally {
     if (started) connect.stop(started.id);
@@ -1361,6 +1515,50 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   assert.deepEqual(Object.keys(model.waitingWhile(false, waiting)).map((browser) => model.signInPanel(all, browser, waiting[browser])), [], 'no panel shown');
 });
 
+test('the choose screen with Google signing in in the browser and two profiles: the rows, the waiting line and the profile list', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const found = { apps: { 'Google Docs': { found: true }, Gmail: { found: true }, ChatGPT: { found: true } }, sites: { found: false }, github: { found: false } };
+  const label = (app, signIn) => model.rowLabel(app, { found, signIn });
+  // Google's Sign in waits in the person's browser, and says how long it takes; never Engelbart's window.
+  assert.equal(model.signsInThroughBrowser('Gmail'), true);
+  assert.equal(model.signsInThroughBrowser('ChatGPT'), false);
+  assert.deepEqual(label('Gmail', { status: 'browser', browser: 'Chrome' }), { text: 'Finish in Chrome. It can take up to a minute to show up here.', tone: 'busy' });
+  assert.equal(model.waitingIn('Brave'), 'Finish in Brave. It can take up to a minute to show up here.');
+  assert.deepEqual(label('Gmail', { status: 'no-browser', browser: '' }), { text: 'Google needs Chrome, Brave or Firefox.', tone: 'error' }, 'Safari only');
+  assert.deepEqual(label('Gmail', { status: 'refused', browser: 'Chrome' }), { text: 'macOS didn\'t allow it', tone: 'error', retry: true }, 'Try again, no window');
+  assert.deepEqual(label('Gmail', { status: 'signed-out', browser: '' }), { text: '', tone: '', signIn: true });
+  // Several profiles: the row names the one the sign-in came from.
+  assert.deepEqual(label('ChatGPT', { status: 'signed-in', browser: 'Chrome', profile: 'Work' }), { text: '✓ Signed in from Chrome · Work', tone: 'ok' });
+  const refused = model.keychainOutcome('Chrome', [{ id: 'email', app: 'Gmail' }], { Gmail: { status: 'refused' } });
+  assert.deepEqual(refused.lines, ['macOS didn\'t allow it, so Gmail was unticked. Try again on its row to be asked again.']);
+  assert.deepEqual(model.keychainOutcome('Chrome', [{ id: 'email', app: 'Gmail' }], { Gmail: { status: 'signed-out' } }).lines, ['Chrome isn\'t signed in to Gmail. Sign in on its row to sign in in Chrome.']);
+
+  // Two profiles hold the sign-in: the modal lists them (name, email), the one chosen named in its title.
+  const profiles = [
+    { browserId: 'chrome', browser: 'Chrome', profileId: 'Default', name: 'Me', email: 'me@example.com', keychain: true },
+    { browserId: 'chrome', browser: 'Chrome', profileId: 'Profile 1', name: 'Work', email: '', keychain: true },
+  ];
+  const waiting = model.waitForYes({}, [{ id: 'chats', app: 'ChatGPT', browser: 'Chrome', note: 'macOS will ask', profiles, route: '' }]);
+  assert.deepEqual(waiting.Chrome, [{ id: 'chats', app: 'ChatGPT', note: 'macOS will ask', profiles }]);
+  const picks = model.tickRow(model.initialPicks(found), 'chats', 'ChatGPT', true);
+  const panel = model.signInPanel(picks, 'Chrome', waiting.Chrome, 1);
+  assert.deepEqual(panel.profiles.map((profile) => profile.name), ['Me', 'Work']);
+  assert.equal(panel.chosen, 1);
+  assert.equal(panel.title, 'Use your Chrome sign-ins for ChatGPT?');
+  assert.match(panel.body[0], /^More than one Chrome profile is signed in\. Pick the one to use; Engelbart remembers it\. /);
+  assert.equal(model.signInPanel(picks, 'Chrome', waiting.Chrome).chosen, 0, 'the first, until another is chosen');
+  // Firefox has no Keychain: no macOS line when its profile is the one chosen.
+  const fox = [{ ...profiles[0], browserId: 'firefox', browser: 'Firefox', profileId: 'abcd.default-release', name: 'default-release', email: '', keychain: false }, profiles[1]];
+  const mixed = model.signInPanel(picks, 'Firefox', model.waitForYes({}, [{ id: 'chats', app: 'ChatGPT', browser: 'Firefox', profiles: fox }]).Firefox, 0);
+  assert.equal(mixed.lead, '');
+  assert.equal(mixed.title, 'Use your Firefox sign-ins for ChatGPT?');
+  assert.match(mixed.body[0], /^More than one browser profile is signed in\./);
+  assert.equal(model.signInPanel(picks, 'Firefox', model.waitForYes({}, [{ id: 'chats', app: 'ChatGPT', browser: 'Firefox', profiles: fox }]).Firefox, 1).lead, 'macOS will ask for your Mac password next. Choose Allow.');
+  // One profile: no list.
+  const single = model.waitForYes({}, [{ id: 'chats', app: 'ChatGPT', browser: 'Chrome', note: 'macOS will ask', profiles: [profiles[0]] }]);
+  assert.deepEqual(model.signInPanel(picks, 'Chrome', single.Chrome).profiles, []);
+});
+
 test('Bring these in with ticked web apps not signed in: one modal, grouped by the sign-in they share; Leave them out unticks them', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const found = { apps: { Obsidian: { found: true }, ChatGPT: { found: true, signedIn: true } }, sites: { found: false }, github: { found: false } };
@@ -1377,11 +1575,21 @@ test('Bring these in with ticked web apps not signed in: one modal, grouped by t
   assert.equal(gate.title, 'Google Drive and Gmail need you to sign in');
   assert.deepEqual(gate.groups, [[{ id: 'notes', app: 'Google Docs' }, { id: 'email', app: 'Gmail' }]], 'one Google sign-in');
   assert.deepEqual(gate.lines, []);
-  assert.match(gate.body, /^Sign in opens its sign-in page in a small window here\. Leave them out to start without them\.$/);
+  // Google's sign-in opens in the person's browser (2026-10-12), never Engelbart's window.
+  assert.match(gate.body, /^Sign in opens Google's sign-in in your browser\. Leave them out to start without them\.$/);
+  assert.equal(gate.canSignIn, true);
+  assert.match(model.signInGate([{ id: 'chats', app: 'Perplexity' }]).body, /^Sign in opens its sign-in page in a small window here\. Leave it out/);
   // Two sign-ins: a line each.
   const two = model.signInGate([...unsigned, { id: 'chats', app: 'Perplexity' }]);
   assert.equal(two.title, 'Google Drive, Gmail and Perplexity need you to sign in');
   assert.deepEqual(two.lines, ['Google Drive and Gmail: one sign-in.', 'Perplexity.']);
+  assert.match(two.body, /^Sign in opens Google's sign-in in your browser, and the others in a small window here\./);
+  // No browser that can be read (Safari only): Google can't sign in, and the gate says what it needs.
+  const safari = { 'Google Docs': { status: 'no-browser' }, Gmail: { status: 'no-browser' } };
+  const blocked = model.signInGate(unsigned, safari);
+  assert.deepEqual(blocked.lines, ['Google needs Chrome, Brave or Firefox.']);
+  assert.equal(blocked.canSignIn, false);
+  assert.equal(model.signInGate([...unsigned, { id: 'chats', app: 'Perplexity' }], safari).canSignIn, true, 'Perplexity still can');
   assert.equal(model.signInGate([{ id: 'chats', app: 'Perplexity' }]).title, 'Perplexity needs you to sign in');
   // Leave them out: unticked, so nothing is left to sign in, and the run starts with the rest.
   const left = unsigned.reduce((next, row) => model.tickRow(next, row.id, row.app, false), picks);

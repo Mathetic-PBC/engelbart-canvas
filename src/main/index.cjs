@@ -41,7 +41,7 @@ const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cj
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { stagePartition, createBrowserViews, registerBrowserIpc, cleanUserAgent } = require('./browser/views.cjs');
 const { execFile } = require('node:child_process');
-const { createCookieImport, keychainRunner, bundleOf } = require('./browser/import-cookies.cjs');
+const { createCookieImport, keychainRunner, bundleOf, installedApp } = require('./browser/import-cookies.cjs');
 const { createGithub } = require('./github/connection.cjs');
 const { macOrgs } = require('./github/orgs.cjs');
 const { localRepos } = require('./connect/scan.cjs');
@@ -68,6 +68,7 @@ const { createConnectors } = require('./connect/connectors.cjs');
 const { createWebSignIn, SIGN_IN_COOKIES } = require('./connect/web-signin.cjs');
 const { createAppleNotes } = require('./connect/apple-notes.cjs');
 const { createSignInWindow } = require('./connect/signin-window.cjs');
+const { createSigninProfiles } = require('./connect/signin-profiles.cjs');
 const { APPS: CONNECT_APPS } = require('../shared/connect-sources.cjs');
 const { openToolBridge } = require('./sandbox/local-tools.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
@@ -755,12 +756,25 @@ if (!hasSingleInstanceLock) {
     // Importing sign-ins from the person's browsers into the Stage (MATH-18): macOS only, and into the one shared
     // Stage session every window's tabs read. Cookie values stay here — the handlers return domains and counts. The sign-in
     // checks go through net.request, which (unlike net.fetch) says where a redirect was going (import-cookies.cjs).
+    // A browser counts only while its app is installed (2026-10-12: one dragged to the Trash leaves its profiles behind):
+    // macOS's answer by bundle id, kept a minute. ENGELBART_INSTALLED_BROWSERS (bundle ids, comma-separated) stands in for
+    // it in scripted runs, so they never depend on this Mac's apps.
+    const installedBrowsers = new Map();
+    const browserInstalled = (bundle) => {
+      if (process.env.ENGELBART_INSTALLED_BROWSERS != null) return process.env.ENGELBART_INSTALLED_BROWSERS.split(',').map((id) => id.trim()).includes(bundle);
+      const known = installedBrowsers.get(bundle);
+      if (known && Date.now() - known.at < 60_000) return known.yes;
+      const yes = installedApp(bundle);
+      installedBrowsers.set(bundle, { at: Date.now(), yes });
+      return yes;
+    };
     const cookieImport = process.platform === 'darwin' ? createCookieImport({
       supportDir: path.join(app.getPath('home'), 'Library', 'Application Support'),
       userDataDir: app.getPath('userData'),
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
       request: (options) => net.request(options),
       keychain: keychainRunner,
+      installed: browserInstalled,
     }) : null;
     registerBrowserIpc({ ipcMain, trustedHandler, viewsFor: (event) => { const ctx = windows.of(event.sender); return ctx ? ctx.browserViews : null; }, cookieImport });
     // GitHub (src/main/github): default-browser sign-in with an automatic loopback return, and the token
@@ -955,6 +969,9 @@ if (!hasSingleInstanceLock) {
         supportDir: path.join(homeDir, 'Library', 'Application Support'),
         userDataDir: app.getPath('userData'),
         getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+        // A copy is checked before it counts (2026-10-12): Google's check page over the Stage's session.
+        request: (options) => net.request(options),
+        installed: browserInstalled,
         keychain: (name) => {
           if (!keychainKeys.has(name)) keychainKeys.set(name, keychainRunner(name, undefined, { timeoutMs: 10 * 60_000 }).catch((error) => { keychainKeys.delete(name); throw error; }));
           return keychainKeys.get(name);
@@ -969,6 +986,9 @@ if (!hasSingleInstanceLock) {
         execFile('open', ['-b', bundle, parseExternalUrl(url).href], (error) => (error ? reject(error) : resolve()));
       }),
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+      // The profile picked when several hold a sign-in, in <dataRoot>/.connect/signin-profiles.json (ids only).
+      picks: createSigninProfiles({ dataRoot: () => store.config().dataRoot }),
+      log: (text) => { console.warn(`[connect] ${text}`); },
     });
     // A sign-in made in Engelbart's own browser (the choose screen's "Sign in", ./connect/signin-window.cjs), when no
     // browser of the person's holds one to bring over.

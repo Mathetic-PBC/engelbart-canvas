@@ -218,6 +218,8 @@ function readChromiumDb(file) {
         persistent: cols.has('is_persistent') ? !!num(row.is_persistent) : true,
         hasExpires: cols.has('has_expires') ? !!num(row.has_expires) : true,
         topFrameSiteKey: cols.has('top_frame_site_key') ? String(row.top_frame_site_key || '') : '',
+        // When the cookie was last set (a new sign-in sets it again): last_update_utc where the schema has it, else its creation.
+        stamp: num(cols.has('last_update_utc') ? row.last_update_utc : row.creation_utc),
       })),
     };
   } finally {
@@ -262,6 +264,7 @@ function readFirefoxDb(file) {
         httpOnly: !!num(row.isHttpOnly),
         samesite: cols.has('sameSite') ? num(row.sameSite) : 0,
         originAttributes: cols.has('originAttributes') ? String(row.originAttributes || '') : '',
+        stamp: num(row.creationTime),
       })),
     };
   } finally {
@@ -480,7 +483,10 @@ function chromiumProfiles(root) {
   for (const dir of dirs) {
     const file = chromiumCookieFile(path.join(root, dir));
     if (!file) continue;
-    profiles.push({ id: dir, name: (info[dir] && info[dir].name) || dir, cookieFile: file });
+    // The account a profile is signed in to Chrome with (user_name), when it has one: shown under the profile's name where
+    // Connect asks which profile to use (2026-10-12). Chrome's own record, not checked against the cookies.
+    const email = info[dir] && typeof info[dir].user_name === 'string' ? info[dir].user_name.trim() : '';
+    profiles.push({ id: dir, name: (info[dir] && info[dir].name) || dir, ...(email ? { email } : {}), cookieFile: file });
   }
   return profiles;
 }
@@ -489,13 +495,31 @@ function chromiumProfiles(root) {
 function firefoxProfiles(root) {
   const base = path.join(root, 'Profiles');
   if (!existsDir(base)) return [];
+  const names = firefoxNames(root);
   const profiles = [];
   for (const dir of fs.readdirSync(base)) {
     const file = path.join(base, dir, 'cookies.sqlite');
     if (!existsFile(file)) continue;
-    profiles.push({ id: dir, name: dir.replace(/^[^.]*\./, '') || dir, cookieFile: file });
+    profiles.push({ id: dir, name: names.get(dir) || dir, cookieFile: file });
   }
   return profiles;
+}
+
+/**
+ * Each Firefox profile folder's own name, from profiles.ini (2026-10-12): a [Profile…] section's Name= for its Path= →
+ * Map(folder → name). Where Connect asks which profile to use, the name the person gave it, else the folder's.
+ */
+function firefoxNames(root) {
+  const names = new Map();
+  let text = '';
+  try { text = fs.readFileSync(path.join(root, 'profiles.ini'), 'utf8'); } catch { return names; }
+  for (const section of text.split(/^\s*\[/m)) {
+    if (!/^Profile/i.test(section)) continue;
+    const name = (section.match(/^Name=(.*)$/m) || [])[1];
+    const where = (section.match(/^Path=(.*)$/m) || [])[1];
+    if (name && where) names.set(path.basename(where.trim().replace(/\\/g, '/')), name.trim());
+  }
+  return names;
 }
 
 function profilesFor(browser, supportDir) {
@@ -516,8 +540,11 @@ function profilesFor(browser, supportDir) {
  *  - `keychain(serviceName)`: the Keychain password for a Chromium browser, or a thrown denial or miss (CK-05).
  *  - `now()`       : the time written into the record, and what an expired cookie is expired by.
  *  - `checkTimeoutMs`: how long a sign-in check may take (CHECK_TIMEOUT_MS).
+ *  - `installed(bundleId)`: whether macOS has that browser's app (installedApp). A browser dragged to the Trash leaves its
+ *    profiles behind, so without its app it is never listed, read, copied from or opened (2026-10-12). A browser with no
+ *    confirmed bundle id is then left out too. Without `installed`, every browser whose folder is there is listed.
  */
-function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), getSession, request = null, keychain, now = () => new Date(), checkTimeoutMs = CHECK_TIMEOUT_MS }) {
+function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), getSession, request = null, keychain, now = () => new Date(), checkTimeoutMs = CHECK_TIMEOUT_MS, installed = null }) {
   const importsFile = path.join(userDataDir || '.', 'browser-imports.json');
   const unixNow = () => Math.floor(now().getTime() / 1000);
 
@@ -525,15 +552,24 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
   function sources() {
     const out = [];
     for (const browser of BY_ID.values()) {
+      if (!has(browser)) continue;
       const profiles = profilesFor(browser, supportDir);
-      if (profiles.length) out.push({ id: browser.id, name: browser.name, family: browser.family, bundle: browser.bundle || null, profiles: profiles.map((p) => ({ id: p.id, name: p.name })) });
+      if (profiles.length) out.push({ id: browser.id, name: browser.name, family: browser.family, bundle: browser.bundle || null, profiles: profiles.map((p) => ({ id: p.id, name: p.name, ...(p.email ? { email: p.email } : {}) })) });
     }
     return out;
+  }
+
+  /** Whether the browser's app is installed (`installed`), or no check was given. */
+  function has(browser) {
+    if (typeof installed !== 'function') return true;
+    if (!browser.bundle) return false;
+    try { return !!installed(browser.bundle); } catch { return false; }
   }
 
   function resolveProfile(browserId, profileId) {
     const browser = BY_ID.get(browserId);
     if (!browser) throw new Error('That browser is not one Engelbart can import from.');
+    if (!has(browser)) throw new Error(`${browser.name} is not installed.`);
     const profile = profilesFor(browser, supportDir).find((p) => p.id === profileId);
     if (!profile) throw new Error('That browser profile is no longer there.');
     return { browser, profile };
@@ -566,9 +602,10 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
   }
 
   /**
-   * The names of the live cookies a profile holds for `wanted` registrable domains → [{ domain, name }]. No Keychain and no
-   * values, as domains(): enough to tell whether a site's sign-in cookie is there before anything is decrypted or written
-   * (Connect your library's sign-in in the default browser, ../connect/web-signin.cjs).
+   * The names of the live cookies a profile holds for `wanted` registrable domains → [{ domain, name, stamp }]. No Keychain
+   * and no values, as domains(): enough to tell whether a site's sign-in cookie is there before anything is decrypted or
+   * written (Connect your library's sign-in in the default browser, ../connect/web-signin.cjs). `stamp` is when the cookie
+   * was last set, so a copy found signed out is not copied again until the browser signs in anew (2026-10-12).
    */
   function cookieNames(browserId, profileId, wanted) {
     const { browser, profile } = resolveProfile(browserId, profileId);
@@ -580,7 +617,7 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     const out = [];
     for (const row of read.rows) {
       const domain = registrableDomain(row.host);
-      if (want.has(domain) && kept(row, at)) out.push({ domain, name: row.name });
+      if (want.has(domain) && kept(row, at)) out.push({ domain, name: row.name, stamp: row.stamp || 0 });
     }
     return out;
   }
@@ -594,6 +631,18 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
       const response = lacksSession(check, held) || !request ? null : await probe(request, session, check.url, checkTimeoutMs);
       return { site: check.site, domain: check.domain, url: check.url, signedIn: checkResult(check, response, held) };
     }));
+  }
+
+  /**
+   * Whether the Stage's sign-in for `domain` works, by its check page alone (no import) → true signed in, false signed out,
+   * null when it has no check page or the check could not answer (offline, timed out). Connect asks this after copying a
+   * sign-in over (2026-10-12): a cookie that is there can still belong to a sign-in Google has ended.
+   */
+  async function check(domain) {
+    const known = CHECK_BY_DOMAIN.get(String(domain || '').toLowerCase());
+    if (!known) return null;
+    const [result] = await runChecks(getSession(), [known.domain]);
+    return result ? result.signedIn : null;
   }
 
   /**
@@ -660,7 +709,23 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     return { browser: browser.id, profile: profile.name, imported, skipped, sessionOnly, checks };
   }
 
-  return { sources, domains, cookieNames, import: run };
+  return { sources, domains, cookieNames, check, import: run };
+}
+
+/**
+ * Whether macOS has an app with `bundleId` installed, outside the Trash (2026-10-12): Spotlight's index of bundle ids
+ * (`mdfind "kMDItemCFBundleIdentifier == '<id>'"`, through `run`, execFileSync or a fake), each path it gives still there.
+ * A Spotlight that cannot answer (indexing off, an error) is not taken as "not installed": the browser counts.
+ */
+function installedApp(bundleId, { run = require('node:child_process').execFileSync, exists = (p) => existsDir(p) } = {}) {
+  if (!/^[\w.-]+$/.test(String(bundleId || ''))) return false;
+  let out = '';
+  try {
+    out = String(run('/usr/bin/mdfind', [`kMDItemCFBundleIdentifier == '${bundleId}'`], { encoding: 'utf8', timeout: 5000 }) || '');
+  } catch {
+    return true;
+  }
+  return out.split('\n').map((line) => line.trim()).filter(Boolean).some((found) => /\.app$/i.test(found) && !/\/\.Trash\//.test(found) && exists(found));
 }
 
 // `security` exits with the low byte of the Keychain's OSStatus (2026-10-06): 44 is errSecItemNotFound (-25300), no key of
@@ -706,6 +771,7 @@ function keychainRunner(serviceName, run = execFile, { timeoutMs = 60000 } = {})
 }
 
 module.exports = {
+  installedApp,
   CHROMIUM,
   FIREFOX,
   bundleOf,

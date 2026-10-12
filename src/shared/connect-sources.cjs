@@ -86,6 +86,11 @@ const signInGroup = (app) => {
 };
 /** The apps signed in by the one sign-in `app` makes, itself first. */
 const sharesSignIn = (app) => [app, ...Object.keys(SIGN_IN_COOKIES).filter((other) => other !== app && signInGroup(other) === signInGroup(app))];
+/**
+ * Whether an app's Sign in goes through the person's own browser rather than Engelbart's window (2026-10-12): Google's
+ * sign-in group (Google Drive, Gmail, Google Meet, Gemini), since Google refuses to sign in inside Engelbart's window.
+ */
+const signsInThroughBrowser = (app) => Object.hasOwn(SIGN_IN_COOKIES, app) && signInGroup(app) === signInGroup('Gmail');
 
 // What the person is shown for an app whose id says less than it reaches (2026-10-10): 'Google Docs' opens their whole
 // Drive (its agent starts at drive.google.com, import_google_files brings in Docs, Sheets, Slides and any file), so it is
@@ -118,7 +123,7 @@ const recallApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => a
 const webApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => appOf(app) && appOf(app).reach === 'web');
 
 /** The browsers a web app's sign-in is brought over from (main/connect/web-signin.cjs), as the person is told when they have none of them. */
-const READABLE_NAMES = 'Chrome, Brave, Edge, Arc or Firefox';
+const READABLE_NAMES = 'Chrome, Brave or Firefox';
 
 // How far back an import looks (2026-10-10): picked on Connect your library, kept in the session's choices. null: all time.
 const PERIODS = Object.freeze([{ days: 182, label: 'the past 6 months' }, { days: 365, label: 'the past year' }, { days: null, label: 'all time' }]);
@@ -128,4 +133,4 @@ const cleanDays = (value) => (value === 182 || value === 365 ? value : null);
 /** "the past year" for 365, "the past 6 months" for 182, "all time" otherwise. */
 const periodName = (days) => (PERIODS.find((period) => period.days === cleanDays(days)) || PERIODS[2]).label;
 
-module.exports = { SOURCES, APPS, LOCAL_PDFS, ITEM_SOURCES, ITEM_CATEGORIES, GROUP_CATEGORIES, CHAT_APPS, categoryOfApp, READABLE_NAMES, SIGN_IN_SITES, SIGN_IN_COOKIES, signInGroup, sharesSignIn, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };
+module.exports = { SOURCES, APPS, LOCAL_PDFS, ITEM_SOURCES, ITEM_CATEGORIES, GROUP_CATEGORIES, CHAT_APPS, categoryOfApp, READABLE_NAMES, SIGN_IN_SITES, SIGN_IN_COOKIES, signInGroup, sharesSignIn, signsInThroughBrowser, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };

@@ -511,7 +511,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // ({ browser, note }, note '' when it won't be), then the check that brings the sign-in over, however long macOS's prompt
   // waits ({ status: 'signed-in' | 'refused' | 'signed-out' | 'no-browser' | '' (can't be checked), browser }); `retry` is Try
   // again after a refusal.
-  handle('connect-signin-note', (app) => cx().signInNote(appName(app)));
+  // `route` 'browser' (Google's Sign in, 2026-10-12): the browser its page opens in too ({ …, opens }). `profiles`: the
+  // profiles to pick from when several hold the sign-in and none was picked before.
+  handle('connect-signin-note', (app, route) => cx().signInNote(appName(app), { route: route === 'browser' ? 'browser' : '' }));
+  // The profile picked ({ browser, profile }, ids), remembered for the sign-in.
+  handle('connect-signin-pick', (app, pick) => { const value = plainObject(pick, 'pick'); return cx().signInPick(appName(app), { browser: str(value.browser, 'browser', 64), profile: str(value.profile, 'profile', 120) }); });
+  // Google's Sign in in the person's browser, waited for until signed in or cancelled (no time limit).
+  handle('connect-signin-browser', (app) => cx().signInBrowser(appName(app)));
+  handle('connect-signin-browser-cancel', (app) => cx().signInBrowserCancel(app == null ? '' : appName(app)));
   // MATH-110: macOS's folder access, asked for once on the choose screen. connect-folders-needed: the protected folders
   // (Desktop, Documents, Downloads, iCloud Drive, the drives) these choices would read and never asked about → [{ id, name }];
   // connect-folders-ask: reads each in turn so macOS asks, → { [id]: 'allowed' | 'denied' }, kept in .connect/folders.json.

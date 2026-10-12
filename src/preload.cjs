@@ -132,7 +132,10 @@ const engelbartAPI = Object.freeze({
   connectAuthorize: invoke('connect-authorize'),
   connectChose: invoke('connect-chose'),
   connectCancelSignIn: invoke('connect-cancel-sign-in'),
-  connectSignInNote: invoke('connect-signin-note'), // (app) → { browser, note }
+  connectSignInNote: invoke('connect-signin-note'), // (app, route?) → { browser, note, profiles, opens }
+  connectSignInPick: invoke('connect-signin-pick'), // (app, { browser, profile }) → remembered for that sign-in
+  connectSignInBrowser: invoke('connect-signin-browser'), // (app) → { status: 'signed-in' | 'refused' | 'no-browser' | 'cancelled', browser, profile? }
+  connectSignInBrowserCancel: invoke('connect-signin-browser-cancel'), // (app?) ends that wait (every wait without an app)
   connectSignInCheck: invoke('connect-signin-check'), // (app, retry?) → { status, browser }
   connectFoldersNeeded: invoke('connect-folders-needed'), // (choices) → [{ id, name }] protected folders not asked about yet (MATH-110)
   connectFoldersAsk: invoke('connect-folders-ask'), // (ids) → { [id]: 'allowed' | 'denied' }, macOS asking for each in turn
