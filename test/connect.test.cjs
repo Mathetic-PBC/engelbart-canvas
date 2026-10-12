@@ -1099,7 +1099,8 @@ function fakeGoogle({ defaultName = 'Safari', browsers = {}, checks = [], picks 
     openExternal: async (url) => { calls.opened.push(url); }, openIn: async (id, url) => { calls.openedIn.push([id, url]); },
     picks: { get: (key) => stored[key] || null, set: (key, pick) => { stored[key] = pick; } },
   });
-  return { webSignIn, calls, stored, browsers };
+  // hold(): Google's sign-in made in Engelbart's own window, in its session.
+  return { webSignIn, calls, stored, browsers, hold: () => { jar = [{ domain: '.google.com', name: 'SID', path: '/', secure: true }]; } };
 }
 
 test('Google\'s Sign in goes through the person\'s browser: Chrome opens with Safari the default, no time limit, every Google app signed in together', async () => {
@@ -1436,7 +1437,7 @@ test('the project goes to the librarian, its surveys and its imports, and is kep
   third.connect.stop(plain.id);
 });
 
-test('the choose screen\'s sign-in checks: each row state, the web apps a tick starts checks for, the panel and Not now', async () => {
+test('the choose screen\'s sign-in checks: each row state, the web apps a tick starts checks for, the panel and Not now (the apps stay ticked, with Sign in)', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const label = (signIn) => model.rowLabel('ChatGPT', { found: { apps: { ChatGPT: { found: true } } }, signIn });
   assert.deepEqual(label({ status: 'checking', browser: '' }), { text: 'Waiting for macOS…', tone: 'busy' });
@@ -1447,6 +1448,7 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   assert.deepEqual(label({ status: 'no-browser', browser: '' }), { text: '', tone: '', signIn: true }, 'no "Needs Chrome…": the window needs no browser');
   assert.deepEqual(label({ status: 'refused', browser: 'Chrome' }), { text: 'macOS didn\'t allow it', tone: 'error', retry: true, signIn: true }, 'Try again and Sign in');
   assert.deepEqual(label({ status: 'signing', browser: '' }), { text: 'Signing in…', tone: 'busy' });
+  assert.deepEqual(label({ status: 'declined', browser: '' }), { text: '', tone: '', signIn: true }, 'Not now on the Keychain modal: Sign in, Engelbart\'s window');
   assert.deepEqual(label(null), { text: 'Needs sign-in', tone: 'muted' }, 'not checked: as before');
   assert.deepEqual(model.rowLabel('Granola', { signIn: { status: 'signed-in', browser: 'Chrome' } }), { text: 'Needs sign-in', tone: 'muted' }, 'only web apps');
 
@@ -1470,10 +1472,10 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   const panel = model.signInPanel(all, 'Chrome', waiting.Chrome);
   assert.equal(panel.title, 'Use your Chrome sign-ins for ChatGPT and Claude?');
   assert.equal(panel.lead, 'macOS will ask for your Mac password next. Choose Allow.', 'the macOS line leads');
-  assert.deepEqual(panel.body, ['Engelbart copies only these apps\' sign-ins from Chrome, and only reads from them, so you don\'t log in again. Not now leaves them out.']);
+  assert.deepEqual(panel.body, ['Engelbart copies only these apps\' sign-ins from Chrome, and only reads from them, so you don\'t log in again. Not now lets you sign in to them here instead.']);
   const claudeOff = model.tickRow(all, 'chats', 'Claude', false);
   assert.equal(model.signInPanel(claudeOff, 'Chrome', waiting.Chrome).title, 'Use your Chrome sign-ins for ChatGPT?', 'an app unticked meanwhile leaves the panel');
-  assert.match(model.signInPanel(claudeOff, 'Chrome', waiting.Chrome).body[0], /this app's sign-in from Chrome.*Not now leaves it out\.$/);
+  assert.match(model.signInPanel(claudeOff, 'Chrome', waiting.Chrome).body[0], /this app's sign-in from Chrome.*Not now lets you sign in to it here instead\.$/);
 
   // After Continue, the modal says how it went (2026-10-11): waiting while macOS asks, then signed in, refused, or not there.
   const rows = waiting.Chrome;
@@ -1483,12 +1485,19 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   const mixed = outcome('signed-in', 'signed-out');
   assert.equal(mixed.tone, 'warn');
   assert.deepEqual(mixed.lines.slice(1), ['Chrome isn\'t signed in to Claude. Sign in on its row to sign in here.']);
-  assert.deepEqual(outcome('refused', 'refused'), { done: true, title: 'Not allowed', lines: ['macOS didn\'t allow it, so ChatGPT and Claude were unticked. Try again on their rows to be asked again, or Sign in to sign in here.'], tone: 'refused' });
+  assert.deepEqual(outcome('refused', 'refused'), { done: true, title: 'Not allowed', lines: ['macOS didn\'t allow it, so ChatGPT and Claude weren\'t brought over. Try again on their rows to be asked again, or Sign in to sign in here.'], tone: 'refused' });
   assert.equal(outcome('signed-in', null).tone, 'warn', 'a check that failed and was cleared counts as not brought over, never waits forever');
-  // Not now unticks them: no panel is left.
-  const notNow = waiting.Chrome.reduce((next, row) => model.tickRow(next, row.id, row.app, false), all);
-  assert.equal(model.signInPanel(notNow, 'Chrome', waiting.Chrome), null);
-  assert.deepEqual([model.ticked(notNow, 'chats', 'ChatGPT'), model.ticked(notNow, 'chats', 'Claude'), model.ticked(notNow, 'chats', 'Claude Code')], [false, false, true]);
+  // Not now (2026-10-12): the apps stay ticked, their rows 'declined', offering Sign in in Engelbart's window, so they are
+  // still to be signed in before the run (the gate), and that Sign in is the window, Google's too.
+  const declined = { ChatGPT: { status: 'declined', browser: '' }, Claude: { status: 'declined', browser: '' } };
+  assert.deepEqual([model.ticked(all, 'chats', 'ChatGPT'), model.ticked(all, 'chats', 'Claude')], [true, true]);
+  assert.deepEqual(model.unsignedWeb(all, declined, found, true).map((row) => row.app), ['ChatGPT', 'Claude']);
+  assert.equal(model.signsInViaBrowser('Gmail', { status: 'declined' }), false, 'Google\'s Sign in after Not now: the window');
+  assert.equal(model.signsInViaBrowser('Gmail', { status: 'refused', browser: 'Chrome' }), false, 'after Deny on a check or at Continue: the window');
+  assert.equal(model.signsInViaBrowser('Gmail', { status: 'no-browser' }), false, 'Safari only: the window');
+  assert.equal(model.signsInViaBrowser('Gmail', { status: 'signed-out' }), true, 'otherwise the browser first');
+  assert.equal(model.signsInViaBrowser('Gmail', null), true);
+  assert.equal(model.signsInViaBrowser('ChatGPT', null), false, 'every other app: the window');
 
   // "Use my … subscription" off: no sign-in is checked (ticked, Try again, or a panel's Continue at start) and no panel shows.
   const ticking = model.newlyTickedWeb(start, one);
@@ -1503,19 +1512,26 @@ test('the choose screen with Google signing in in the browser and two profiles: 
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const found = { apps: { 'Google Docs': { found: true }, Gmail: { found: true }, ChatGPT: { found: true } }, sites: { found: false }, github: { found: false } };
   const label = (app, signIn) => model.rowLabel(app, { found, signIn });
-  // Google's Sign in waits in the person's browser, and says how long it takes; never Engelbart's window.
+  // Google's Sign in waits in the person's browser first, and says how long it takes, with Use another account and Sign in
+  // here instead (Engelbart's window) beside it.
   assert.equal(model.signsInThroughBrowser('Gmail'), true);
   assert.equal(model.signsInThroughBrowser('ChatGPT'), false);
-  assert.deepEqual(label('Gmail', { status: 'browser', browser: 'Chrome' }), { text: 'Finish in Chrome. It can take up to a minute to show up here.', tone: 'busy', another: true }, 'with Use another account (2026-10-12)');
-  assert.deepEqual(label('ChatGPT', { status: 'browser', browser: 'Chrome' }), { text: 'Finish in Chrome. It can take up to a minute to show up here.', tone: 'busy' }, 'Google\'s rows only');
-  assert.equal(model.waitingIn('Brave'), 'Finish in Brave. It can take up to a minute to show up here.');
-  assert.deepEqual(label('Gmail', { status: 'no-browser', browser: '' }), { text: 'Google needs Chrome, Brave or Firefox.', tone: 'error' }, 'Safari only');
-  assert.deepEqual(label('Gmail', { status: 'refused', browser: 'Chrome' }), { text: 'macOS didn\'t allow it', tone: 'error', retry: true }, 'Try again, no window');
+  assert.deepEqual(label('Gmail', { status: 'browser', browser: 'Chrome' }), { text: 'Sign in to Google in Chrome. It can take a minute to appear here.', tone: 'busy', here: true, another: true }, 'with Use another account and Sign in here instead');
+  assert.deepEqual(label('ChatGPT', { status: 'browser', browser: 'Chrome' }), { text: 'Sign in to ChatGPT in Chrome. It can take a minute to appear here.', tone: 'busy', here: true }, 'Use another account on Google\'s rows only');
+  assert.equal(model.waitingIn('Google', 'Brave'), 'Sign in to Google in Brave. It can take a minute to appear here.');
+  assert.deepEqual([model.signInName('Google Docs'), model.signInName('Gemini'), model.signInName('Claude')], ['Google', 'Google', 'Claude']);
+  // No browser to read (Safari only), macOS's Deny, Not now: Sign in, in Engelbart's window, Google's too (2026-10-12).
+  assert.deepEqual(label('Gmail', { status: 'no-browser', browser: '' }), { text: '', tone: '', signIn: true }, 'Safari only: Sign in, no "Google needs…"');
+  assert.deepEqual(label('Gmail', { status: 'refused', browser: 'Chrome' }), { text: 'macOS didn\'t allow it', tone: 'error', retry: true, signIn: true }, 'Try again and Sign in');
+  assert.deepEqual(label('Gmail', { status: 'declined', browser: '' }), { text: '', tone: '', signIn: true });
   assert.deepEqual(label('Gmail', { status: 'signed-out', browser: '' }), { text: '', tone: '', signIn: true });
+  // Google turned the window's sign-in away: Try again.
+  assert.deepEqual(label('Gmail', { status: 'rejected', browser: '' }), { text: 'Google refused this sign-in', tone: 'error', retry: true });
+  assert.deepEqual(label('Google Docs', { status: 'rejected', browser: '' }).text, 'Google refused this sign-in');
   // Several profiles: the row names the one the sign-in came from.
   assert.deepEqual(label('ChatGPT', { status: 'signed-in', browser: 'Chrome', profile: 'Work' }), { text: '✓ Signed in from Chrome · Work', tone: 'ok' });
   const refused = model.keychainOutcome('Chrome', [{ id: 'email', app: 'Gmail' }], { Gmail: { status: 'refused' } });
-  assert.deepEqual(refused.lines, ['macOS didn\'t allow it, so Gmail was unticked. Try again on its row to be asked again.']);
+  assert.deepEqual(refused.lines, ['macOS didn\'t allow it, so Gmail wasn\'t brought over. Try again on its row to be asked again, or Sign in to sign in here.']);
   assert.deepEqual(model.keychainOutcome('Chrome', [{ id: 'email', app: 'Gmail' }], { Gmail: { status: 'signed-out' } }).lines, ['Chrome isn\'t signed in to Gmail. Sign in on its row to sign in in Chrome.']);
 
   // Two profiles hold the sign-in: the modal lists them (name, email), the one chosen named in its title.
@@ -1560,7 +1576,7 @@ test('Bring these in with ticked web apps not signed in: one modal, grouped by t
   assert.equal(gate.title, 'Google Drive and Gmail need you to sign in');
   assert.deepEqual(gate.groups, [[{ id: 'notes', app: 'Google Docs' }, { id: 'email', app: 'Gmail' }]], 'one Google sign-in');
   assert.deepEqual(gate.lines, []);
-  // Google's sign-in opens in the person's browser (2026-10-12), never Engelbart's window.
+  // Google's sign-in opens in the person's browser first (2026-10-12).
   assert.match(gate.body, /^Sign in opens Google's sign-in in your browser\. Leave them out to start without them\.$/);
   assert.equal(gate.canSignIn, true);
   assert.match(model.signInGate([{ id: 'chats', app: 'Perplexity' }]).body, /^Sign in opens its sign-in page in a small window here\. Leave it out/);
@@ -1569,12 +1585,16 @@ test('Bring these in with ticked web apps not signed in: one modal, grouped by t
   assert.equal(two.title, 'Google Drive, Gmail and Perplexity need you to sign in');
   assert.deepEqual(two.lines, ['Google Drive and Gmail: one sign-in.', 'Perplexity.']);
   assert.match(two.body, /^Sign in opens Google's sign-in in your browser, and the others in a small window here\./);
-  // No browser that can be read (Safari only): Google can't sign in, and the gate says what it needs.
-  const safari = { 'Google Docs': { status: 'no-browser' }, Gmail: { status: 'no-browser' } };
-  const blocked = model.signInGate(unsigned, safari);
-  assert.deepEqual(blocked.lines, ['Google needs Chrome, Brave or Firefox.']);
-  assert.equal(blocked.canSignIn, false);
-  assert.equal(model.signInGate([...unsigned, { id: 'chats', app: 'Perplexity' }], safari).canSignIn, true, 'Perplexity still can');
+  // No browser that can be read (Safari only), or Not now, or Deny: Google signs in in Engelbart's window (2026-10-12).
+  for (const status of ['no-browser', 'declined', 'refused']) {
+    const window = model.signInGate(unsigned, { 'Google Docs': { status }, Gmail: { status } });
+    assert.deepEqual(window.lines, [], status);
+    assert.equal(window.canSignIn, true, status);
+    assert.match(window.body, /^Sign in opens its sign-in page in a small window here\. Leave them out/, status);
+  }
+  // Off the Mac, every sign-in is the window.
+  assert.match(model.signInGate(unsigned, {}, 'win32').body, /^Sign in opens its sign-in page in a small window here\./);
+  assert.match(model.signInGate([...unsigned, { id: 'chats', app: 'Perplexity' }], {}, 'linux').body, /^Sign in opens each sign-in page in a small window here\./);
   assert.equal(model.signInGate([{ id: 'chats', app: 'Perplexity' }]).title, 'Perplexity needs you to sign in');
   // Leave them out: unticked, so nothing is left to sign in, and the run starts with the rest.
   const left = unsigned.reduce((next, row) => model.tickRow(next, row.id, row.app, false), picks);
@@ -2048,30 +2068,30 @@ test('MATH-111: the code source\'s github says which organizations GitHub cannot
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-test('off the Mac, web apps\' rows read "Not on Windows yet" (Linux too) and can\'t be ticked (2026-10-12)', async () => {
+test('off the Mac, a web app can be ticked, and its Sign in is Engelbart\'s window (2026-10-12)', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const apps = { 'Google Docs': { found: true }, Gmail: { found: true }, ChatGPT: { found: true, signedIn: true }, Cursor: { found: true } };
   const windows = { platform: 'win32', apps, sites: { found: false }, github: { found: false } };
-  assert.equal(model.notOnYet('win32'), 'Not on Windows yet');
-  assert.equal(model.notOnYet('linux'), 'Not on Linux yet');
-  assert.equal(model.notOnYet('darwin'), '');
-  for (const signIn of [null, { status: 'signed-out' }, { status: 'no-browser' }, { status: 'refused', browser: 'Chrome' }]) {
-    assert.deepEqual(model.rowLabel('ChatGPT', { found: windows, signIn }), { text: 'Not on Windows yet', tone: 'muted', unavailable: true }, 'no Sign in');
-    assert.deepEqual(model.rowLabel('Gmail', { found: windows, signIn }), { text: 'Not on Windows yet', tone: 'muted', unavailable: true }, 'no "Google needs…"');
-  }
-  assert.equal(model.rowLabel('Gmail', { found: { ...windows, platform: 'linux' } }).text, 'Not on Linux yet');
-  assert.equal(model.rowLabel('Cursor', { found: windows }).unavailable, undefined, 'apps read from this computer are not affected');
-  // Never ticked: not from the start, not by a group's header or Select all, and never asked about.
+  assert.equal(model.notOnYet, undefined, 'no "Not on Windows yet"');
+  assert.equal(model.webUnavailable, undefined);
+  assert.equal(model.copiesSignIns('win32'), false);
+  assert.equal(model.copiesSignIns('linux'), false);
+  assert.equal(model.copiesSignIns('darwin'), true);
+  assert.equal(model.copiesSignIns(undefined), true, 'none given counts as the Mac');
+  assert.equal(model.rowLabel('ChatGPT', { found: windows }).text, 'signed in to Engelbart');
+  assert.deepEqual(model.rowLabel('Gmail', { found: windows }), { text: 'Needs sign-in', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Gmail', { found: windows, signIn: { status: 'signed-out' } }), { text: '', tone: '', signIn: true }, 'Sign in');
+  // Ticked like any app: from the start when found, by a group's header and by Select all.
   const picks = model.initialPicks(windows);
-  assert.equal(model.ticked(picks, 'chats', 'ChatGPT'), false);
   const all = model.tickAll(picks, windows);
-  for (const [id, app] of [['chats', 'ChatGPT'], ['notes', 'Google Docs'], ['email', 'Gmail']]) assert.equal(model.ticked(all, id, app), false, `${app} not ticked`);
-  assert.equal(model.foundRow(windows, 'chats', 'ChatGPT'), false);
-  assert.deepEqual(model.unsignedWeb(model.tickRow(picks, 'chats', 'ChatGPT', true), {}, windows), [], 'no sign-in asked for');
-  // On the Mac: as before.
-  const mac = { ...windows, platform: 'darwin' };
-  assert.equal(model.rowLabel('ChatGPT', { found: mac }).text, 'signed in to Engelbart');
-  assert.equal(model.foundRow(mac, 'chats', 'ChatGPT'), true);
+  assert.equal(model.ticked(all, 'notes', 'Google Docs'), true, 'Google Drive ticked by Select all (Gmail never is: NEVER_TICKED)');
+  assert.equal(model.foundRow(windows, 'notes', 'Google Docs'), true);
+  const gmail = model.tickRow(picks, 'email', 'Gmail', true);
+  assert.equal(model.ticked(gmail, 'email', 'Gmail'), true, 'its own row ticks it');
+  assert.deepEqual(model.unsignedWeb(gmail, { Gmail: { status: 'signed-out' } }, windows).map((row) => row.app), ['Gmail'], 'asked for before the run');
+  // Sign in: Engelbart's window, Google's too, never the browser.
+  for (const status of [undefined, 'signed-out']) assert.equal(model.signsInViaBrowser('Gmail', status ? { status } : null, 'win32'), false);
+  assert.equal(model.signsInViaBrowser('Gmail', null, 'darwin'), true, 'on the Mac, Google\'s first Sign in is the browser');
 });
 
 test('Continue on Google\'s Sign in asks macOS before anything opens: refused, nothing opens and the browser is not asked again', async () => {
@@ -2095,4 +2115,43 @@ test('Continue on Google\'s Sign in asks macOS before anything opens: refused, n
   assert.deepEqual(await connect.signInAnotherAccount('Google Meet'), { opened: true, browser: 'Chrome' });
   await waiting;
   assert.deepEqual(calls.slice(1), [['signIn', 'Gmail', ['chrome']], ['another', 'Google Meet']]);
+});
+
+test('Sign in here instead: Engelbart\'s window signs Google in, ends the browser wait, and nothing is copied from Chrome after', async () => {
+  const fake = fakeGoogle({ browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: false }] } } });
+  const win = fakeWindow('signed-in');
+  const open = win.signInWindow.open;
+  win.signInWindow.open = async (app) => { fake.hold(); return open(app); }; // signed in there: the window closes once it is held
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  const waiting = connect.signInBrowser('Google Docs');
+  await new Promise((resolve) => { setTimeout(resolve, 60); });
+  assert.deepEqual(await connect.signInWindowOpen('Gmail'), { status: 'signed-in' });
+  assert.deepEqual(win.opened, ['Gmail'], 'Google in Engelbart\'s window');
+  assert.deepEqual(await waiting, { status: 'cancelled' }, 'the browser wait is over');
+  assert.equal(fake.webSignIn.isHere('Google Docs'), true, 'one Google sign-in');
+  fake.browsers.chrome.profiles[0].signedIn = true; // Chrome signed in later: never read for Google again this run
+  const before = fake.calls.keychain.length;
+  for (const app of ['Google Docs', 'Gmail', 'Gemini']) assert.equal((await connect.signInCheck(app)).status, 'signed-in', app);
+  assert.equal(fake.calls.keychain.length, before, 'macOS not asked about Chrome');
+});
+
+test('Google refuses Engelbart\'s window: rejected, and nothing marked signed in', async () => {
+  const fake = fakeGoogle({ browsers: {} });
+  const win = fakeWindow('rejected');
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  assert.deepEqual(await connect.signInWindowOpen('Gmail'), { status: 'rejected' });
+  assert.equal(fake.webSignIn.isHere('Gmail'), false);
+  assert.notEqual((await connect.signInCheck('Gmail')).status, 'signed-in');
+});
+
+test('off the Mac (no importer): Sign in opens Engelbart\'s window, and its check reads Engelbart\'s session', async () => {
+  const jar = [];
+  const webSignIn = createWebSignIn({ cookieImport: null, getSession: () => ({ cookies: { get: async ({ domain }) => jar.filter((cookie) => cookie.domain.endsWith(domain)) } }), openExternal: async () => {}, pollMs: 1, timeoutMs: 50, sleep: () => new Promise((resolve) => setImmediate(resolve)) });
+  const win = fakeWindow('signed-in');
+  const { connect } = fakeConnect({ webSignIn, signInWindow: win.signInWindow });
+  assert.equal((await connect.signInCheck('ChatGPT')).status, 'signed-out', 'checked, not given up on');
+  jar.push({ domain: '.chatgpt.com', name: '__Secure-next-auth.session-token' });
+  assert.equal((await connect.signInCheck('ChatGPT')).status, 'signed-in');
+  assert.deepEqual(await connect.signInWindowOpen('Google Docs'), { status: 'signed-in' });
+  assert.deepEqual(win.opened, ['Google Docs'], 'Google too');
 });

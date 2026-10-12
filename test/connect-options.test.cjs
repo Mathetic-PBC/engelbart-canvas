@@ -74,7 +74,7 @@ test('optionOf keeps "checked" as a boolean on a "multi" and drops it on a "sing
   assert.ok(readReply(JSON.stringify({ ask: { source: 'notes', kind: 'single', title: 'Which account?', options } }), choices).ask.options.every((option) => !('checked' in option)));
 });
 
-test('the librarian asks "multi" by default, with its recommendation checked and no "Everything" beside the parts', () => {
+test('the librarian asks "multi" by default, with its recommendation checked (shown as a tag) and no "Everything" beside the parts', () => {
   const rule = INTERVIEW_SYSTEM_PROMPT.split('\n').find((text) => text.startsWith('- Prefer options'));
   assert.match(rule, /"multi" \(pick any\) is the default/);
   assert.match(rule, /"single" \(pick one\) only when the answers exclude each other/);
@@ -82,28 +82,30 @@ test('the librarian asks "multi" by default, with its recommendation checked and
   const checked = INTERVIEW_SYSTEM_PROMPT.split('\n').find((text) => text.startsWith('- In a "multi", set "checked": true'));
   assert.ok(checked, 'a rule about checked');
   assert.match(checked, /No "Everything" or "Everything but…" option next to the parts/);
+  assert.match(checked, /"Recommended" tag/);
+  assert.doesNotMatch(checked, /one Submit takes your recommendation/);
   assert.doesNotMatch(INTERVIEW_SYSTEM_PROMPT, /make it the first option \("Everything but/);
   assert.doesNotMatch(INTERVIEW_SYSTEM_PROMPT, /multiple choice/);
 });
 
 const pickedOn = (html) => [...html.matchAll(/data-connect-option="([^"]*)"[^>]*aria-checked="true"/g)].map((match) => match[1]);
 
-test('a "multi" with two checked options starts with both ticked and sends both on Submit, without a click', () => {
+test('a "multi" starts with nothing ticked: its recommended options carry a "Recommended" tag, and Submit waits for a tick (2026-10-12)', () => {
   const recommended = { source: 'notes', kind: 'multi', title: 'Which folders?', options: [
     { label: 'Research', why: '48 notes', detail: '', checked: true },
     { label: 'Daily', why: '180 notes', detail: '', checked: false },
     { label: 'Essays', why: '12 notes', detail: '', checked: true },
   ] };
-  const answers = [];
-  const html = render({ ask: recommended, live: true, onAnswer: (answer) => answers.push(answer) });
-  assert.deepEqual(pickedOn(html), ['Research', 'Essays']);
+  const html = render({ ask: recommended, live: true, onAnswer: () => {} });
+  assert.deepEqual(pickedOn(html), [], 'nothing ticked');
+  const tagged = [...html.matchAll(/data-connect-option="([^"]*)"((?:(?!data-connect-option=")[\s\S])*?)data-connect-option-recommended="1"[^>]*>Recommended</g)].map((match) => match[1]);
+  assert.deepEqual(tagged, ['Research', 'Essays'], 'the recommended ones are tagged');
+  assert.equal((html.match(/>Recommended</g) || []).length, 2);
   const submit = elements.find((element) => element.type === 'button' && element.props['data-connect-submit'] === '1');
-  assert.equal(submit.props.disabled, false, 'Submit is ready at once');
-  submit.props.onClick();
-  assert.deepEqual(answers, [{ picked: ['Research', 'Essays'] }]);
-  // With nothing checked, Submit waits for a pick as before.
-  render({ ask: { ...recommended, options: recommended.options.map((option) => ({ ...option, checked: false })) }, live: true, onAnswer: () => {} });
-  assert.equal(elements.find((element) => element.type === 'button' && element.props['data-connect-submit'] === '1').props.disabled, true);
+  assert.equal(submit.props.disabled, true, 'Submit waits for a tick');
+  assert.ok(elements.some((element) => element.type === 'button' && element.props['data-connect-skip'] === '1'), 'Skip is always there');
+  // A "single" has no tag, even with checked set; neither does an answered card.
+  assert.doesNotMatch(render({ ask: { ...recommended, kind: 'single' }, live: true, onAnswer: () => {} }), />Recommended</);
 });
 
 test('a "single"\'s options and an answered card\'s options never come checked', () => {

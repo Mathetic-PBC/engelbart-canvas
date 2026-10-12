@@ -9,8 +9,8 @@
 // (welcome, create, connect: Connect "3 of 3"); the choose screen starts with Notes ticked (a vault
 // Obsidian knows), ChatGPT ticked by hand, the permissions card naming it; Refine opens the chat, its first line said at
 // once, whose question is a card with one option per line; ChatGPT, signed in nowhere this disposable home can read, has
-// Sign in on its row (2026-10-11); Google Drive and Gmail, whose sign-in is made in the person's browser, say Google needs
-// Chrome, Brave or Firefox (none here), and never offer Engelbart's window;
+// Sign in on its row (2026-10-11); Google Drive and Gmail, with no browser here whose sign-ins Engelbart can read (as with
+// Safari only), offer Sign in too, and it opens Engelbart's own sign-in window straight away, with no Keychain modal;
 // Bring these in asks for ChatGPT's sign-in in a modal first, so the refine chat has no sign-in card; its survey runs, the
 // librarian waits for it, then offers what it found; the connect step's Continue is a filled button once
 // the session has started; Import lights up once nothing is left to ask; the working view follows every import, MEMORY.md
@@ -133,18 +133,23 @@ app.whenReady().then(async () => {
     // No browser here holds its sign-in (2026-10-11): Sign in on its row, not "You'll sign in after you start".
     await until(() => has(wc, '[data-connect-signin="ChatGPT"]'), 'ChatGPT\'s Sign in');
     assert.doesNotMatch(await text(wc, '[data-connect-app=ChatGPT]'), /after you start|Needs Chrome/);
-    // Google Drive and Gmail share one Google sign-in, made in the person's browser (2026-10-12: Google refuses Engelbart's
-    // window). No browser whose sign-ins can be read is installed here (as with Safari only), so both rows say what Google
-    // needs, with no Sign in and never Engelbart's window. (The hand-off itself opens a real browser and reaches Google, so
-    // it is test/connect.test.cjs's and test/connect-web-signin.test.cjs's, on fixtures.)
+    // Google Drive and Gmail share one Google sign-in. No browser whose sign-ins can be read is installed here (as with Safari
+    // only), so both rows offer Sign in, and it opens Engelbart's own window straight away: no Keychain modal, no waiting
+    // line (2026-10-12). (The browser hand-off opens a real browser and reaches Google, so it is test/connect.test.cjs's and
+    // test/connect-web-signin.test.cjs's, on fixtures.)
     await press(wc, '[data-connect-app="Google Docs"]');
     await press(wc, '[data-connect-source="email"] button[aria-expanded]');
     await press(wc, '[data-connect-app="Gmail"]');
-    const googleNeeds = /Google needs Chrome, Brave or Firefox\./;
-    await until(async () => googleNeeds.test(await text(wc, '[data-connect-app="Google Docs"]')) && googleNeeds.test(await text(wc, '[data-connect-app="Gmail"]')), 'what Google needs, on both rows');
-    assert.equal(await has(wc, '[data-connect-signin="Google Docs"]'), false, 'no Sign in on Google Drive: its window is not offered');
-    assert.equal(await has(wc, '[data-connect-signin="Gmail"]'), false, 'no Sign in on Gmail');
-    assert.equal(BrowserWindow.getAllWindows().length, 1, 'no sign-in window');
+    await until(async () => (await has(wc, '[data-connect-signin="Google Docs"]')) && has(wc, '[data-connect-signin="Gmail"]'), 'Sign in on both Google rows');
+    assert.doesNotMatch(await text(wc, '[data-connect-app="Google Docs"]'), /Google needs|Chrome, Brave or Firefox/);
+    assert.equal(BrowserWindow.getAllWindows().length, 1, 'no sign-in window yet');
+    await press(wc, '[data-connect-signin="Google Docs"]');
+    const googleWindow = await until(() => BrowserWindow.getAllWindows().find((other) => other !== win), 'Engelbart\'s sign-in window, for Google');
+    assert.equal(await has(wc, '[data-connect-keychain]'), false, 'no Keychain modal');
+    assert.equal(await has(wc, '[data-connect-here]'), false, 'no browser waited on, so no "Sign in here instead"');
+    googleWindow.close();
+    await until(() => has(wc, '[data-connect-signin="Google Docs"]'), 'Sign in again, after the window is closed');
+    assert.equal(await attr(wc, '[data-connect-app="Google Docs"] [role=checkbox]', 'aria-checked'), 'true', 'still ticked');
     await shot(wc, '1-sign-in-rows');
     const agentsBrowser = electronSession.fromPartition(stagePartition(false));
     await press(wc, '[data-connect-app="Google Docs"]');
@@ -238,12 +243,19 @@ app.whenReady().then(async () => {
     assert.equal(inside, true, 'the popover is inside the window');
     await shot(wc, '3b-option-detail');
     await click(wc, infoAt);
-    assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'aria-checked'), 'true', 'the recommendation comes ticked, and clicking its ⓘ leaves it so');
+    // Nothing comes ticked (2026-10-12): the recommendation carries a "Recommended" tag, and Submit waits for a tick.
+    assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'aria-checked'), 'false', 'the recommendation comes unticked, and clicking its ⓘ leaves it so');
+    assert.equal(await has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"] [data-connect-option-recommended]'), true, 'the recommendation is tagged');
+    assert.equal(await has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 2"] [data-connect-option-recommended]'), false, 'only the recommendation');
+    assert.equal(await js(wc, 'document.querySelector("[data-connect-card=\\"live\\"] [data-connect-submit]").disabled'), true, 'Submit waits for a tick');
     assert.equal(await has(wc, '[data-connect-card="live"]'), true, 'nor submits');
     await js(wc, 'document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
     await until(async () => !(await has(wc, '[data-connect-option-detail]')), 'Escape closes it');
     // Skip and Submit pinned to the bottom of the chat while the card is live.
     assert.equal(await js(wc, 'getComputedStyle(document.querySelector("[data-connect-card=\\"live\\"] [data-connect-card-actions]")).position'), 'sticky');
+    await press(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]');
+    assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'aria-checked'), 'true', 'the recommendation ticked');
+    assert.equal(await js(wc, 'document.querySelector("[data-connect-card=\\"live\\"] [data-connect-submit]").disabled'), false, 'Submit ready once one is ticked');
     await press(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 2"]');
     assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 2"]', 'aria-checked'), 'true', 'a second one ticked beside it');
     await press(wc, '[data-connect-card="live"] [data-connect-submit]');

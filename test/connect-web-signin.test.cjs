@@ -471,3 +471,28 @@ test('signInQuiet askedOnly: a browser macOS was never asked about this run is p
   await web.unlock('Gmail');
   assert.deepEqual(await web.signInQuiet('Gmail', { askedOnly: true }), { signedIn: true, browser: 'Chrome' });
 });
+
+test('off the Mac (no importer): nothing can be copied, but a web app can still be signed in, in Engelbart\'s window', async () => {
+  const held = [];
+  const web = createWebSignIn({ cookieImport: null, getSession: () => ({ cookies: { get: async ({ domain }) => held.filter((cookie) => cookie.domain.endsWith(domain)) } }), openExternal: async () => { throw new Error('nothing opens'); }, pollMs: 1, timeoutMs: 50, sleep: () => new Promise((resolve) => setImmediate(resolve)) });
+  assert.equal(web.supports('ChatGPT'), false, 'no browser to copy from');
+  assert.equal(web.canSignIn('ChatGPT'), true);
+  assert.equal(web.canSignIn('Gmail'), true, 'Google too');
+  assert.equal(web.canSignIn('Obsidian'), false, 'not a web app');
+  assert.deepEqual(await web.signInQuiet('ChatGPT'), { signedIn: false, browser: '' });
+  assert.equal((await web.signIn('ChatGPT')).status, 'unsupported', 'no browser hand-off');
+  held.push({ domain: '.chatgpt.com', name: '__Secure-next-auth.session-token' });
+  assert.deepEqual(await web.signInQuiet('ChatGPT'), { signedIn: true, browser: '' }, 'held in Engelbart\'s session');
+});
+
+test('signed in through Engelbart\'s window: never copied over from a browser again this run', async () => {
+  const { web, calls } = machine({ defaultName: 'Google Chrome', browsers: { chrome: { signedIn: true } } });
+  assert.equal(web.isHere('ChatGPT'), false);
+  web.signedInHere('ChatGPT');
+  assert.equal(web.isHere('ChatGPT'), true);
+  assert.deepEqual(await web.signInQuiet('ChatGPT'), { signedIn: false, browser: '', here: true }, 'its own session only: Chrome is not read');
+  assert.deepEqual(await web.signInQuiet('ChatGPT', { fresh: true }), { signedIn: false, browser: '', here: true }, 'signInAgain neither');
+  assert.equal((await web.signIn('ChatGPT')).status, 'unsupported', 'no hand-off to the browser');
+  assert.deepEqual(web.holdersOf('ChatGPT'), [], 'no profile list');
+  assert.deepEqual([calls.keychain, calls.imports, calls.opened, calls.openedIn], [[], [], [], []], 'macOS never asked, nothing imported or opened');
+});

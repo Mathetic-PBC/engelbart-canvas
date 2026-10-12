@@ -42,7 +42,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName, sharesSignIn, signInGroup, signsInThroughBrowser } = require('../../shared/connect-sources.cjs');
+const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName, sharesSignIn, signInGroup } = require('../../shared/connect-sources.cjs');
 const prompts = require('./prompts.cjs');
 const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
@@ -52,7 +52,6 @@ const { createImportTools } = require('./tools.cjs');
 const { skillsFor } = require('./skills.cjs');
 const memory = require('./memory.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
-const { READABLE_NAMES } = require('./web-signin.cjs');
 
 const MAX_RUNNING = 3;
 const MAX_JOBS = 40;
@@ -193,7 +192,7 @@ function detailOf(value) {
 /**
  * One option of a question: a label and, when given, a few words of why and what it covers → { label, why, detail } or null.
  * In a "multi" (`multi` true) it also keeps whether the librarian recommends it, `checked` (MATH-122, 2026-10-11): the card
- * starts with those ticked, so one Submit takes the recommendation. A "single" has no such field.
+ * shows a "Recommended" tag on those (2026-10-12; nothing starts ticked). A "single" has no such field.
  */
 function optionOf(option, multi = false) {
   const checked = multi ? { checked: !!(option && typeof option === 'object' && option.checked === true) } : {};
@@ -868,10 +867,11 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * A web app ticked on the choose screen: its sign-in brought over from a browser holding it, however long macOS's prompt
    * waits for the person (2026-10-10: they were told it would ask). → { status: 'signed-in'|'refused'|'signed-out'|
    * 'no-browser', browser } (status '' for an app whose sign-in can't be checked), kept for the run's signInsFirst. `retry` (Try again) asks macOS again about the browser that
-   * refused it.
+   * refused it. Off the Mac (2026-10-12), nothing is copied: whether Engelbart's own session holds the sign-in, signed in or
+   * signed out.
    */
   function signInCheck(app, { retry = false } = {}) {
-    if (!webSignIn || !webSignIn.supports(app)) return Promise.resolve({ status: '', browser: '' }); // not one it can check
+    if (!webSignIn || !signsInAtAll(app)) return Promise.resolve({ status: '', browser: '' }); // not one it can check
     if (signInChecking.has(app)) return signInChecking.get(app);
     if (retry) { const was = signInChecked.get(app); if (was && was.browserId) signInDenied.delete(was.browserId); }
     const checking = webSignIn.signInQuiet(app, { denied: signInDenied }).catch(() => ({ signedIn: false, browser: '' })).then((result) => {
@@ -886,17 +886,29 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /**
    * "Sign in" on the choose screen (2026-10-11): the app's sign-in page in Engelbart's own browser (./signin-window.cjs), for
-   * an app no browser of the person's could sign in. → { status: 'signed-in' | 'closed' }. Signed in, it is kept as signed
-   * in for every app sharing that sign-in (Google Drive, Gmail, Google Meet and Gemini are one), so the run counts them all.
+   * an app no browser of the person's could sign in, one whose browser sign-ins they turned down, and every app off the Mac
+   * (2026-10-12). → { status: 'signed-in' | 'rejected' | 'closed' }. Signed in, it is kept as signed in for every app sharing
+   * that sign-in (Google Drive, Gmail, Google Meet and Gemini are one), so the run counts them all, and never copied over
+   * from a browser again this run; a wait for it in the person's browser ends. 'rejected': Google turned it away (the window
+   * cleared what Google left, so Try again can work).
    */
   async function signInWindowOpen(app) {
-    if (!signInWindow || !webSignIn || !webSignIn.supports(app)) return { status: 'closed' };
+    if (!signInWindow || !webSignIn || !signsInAtAll(app)) return { status: 'closed' };
     const out = await signInWindow.open(app).catch(() => ({ status: 'closed' }));
     if (out && out.status === 'signed-in') {
+      if (typeof webSignIn.signedInHere === 'function') webSignIn.signedInHere(app);
       for (const other of sharesSignIn(app)) signInChecked.set(other, { status: 'signed-in', browser: '', browserId: '' });
+      signInBrowserCancel(app);
       return { status: 'signed-in' };
     }
+    if (out && out.status === 'rejected') return { status: 'rejected' };
     return { status: 'closed' };
+  }
+
+  /** Whether `app`'s sign-in can be made at all: in Engelbart's window, wherever it runs (webSignIn.canSignIn). */
+  function signsInAtAll(app) {
+    if (!webSignIn) return false;
+    return typeof webSignIn.canSignIn === 'function' ? webSignIn.canSignIn(app) : webSignIn.supports(app);
   }
 
   // Google's Sign in on the choose screen, waited for in the person's browser (2026-10-12): one wait per sign-in (every
@@ -908,7 +920,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * Engelbart's window, 2026-10-12): its sign-in page opened in their default browser (Chrome when that is Safari), then
    * waited for with no time limit until it comes over, or until signInBrowserCancel (the row unticked, Leave out, the choose
    * screen gone). → { status: 'signed-in', browser, profile? } | { status: 'refused', browser } | { status: 'no-browser' } |
-   * { status: 'cancelled' }. Signed in, every app sharing the sign-in is kept as signed in. Never Engelbart's window.
+   * { status: 'cancelled' }. Signed in, every app sharing the sign-in is kept as signed in. "Sign in here instead" ends it
+   * (signInBrowserCancel) for Engelbart's window (signInWindowOpen).
    */
   function signInBrowser(app) {
     if (!webSignIn || !webSignIn.supports(app)) return Promise.resolve({ status: 'no-browser' });
@@ -981,7 +994,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map(), checking: new Map() };
     if (!webSignIn || !s.choices.permissions.browser) return out;
     const apps = Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps)
-      .filter((app) => appOf(app) && appOf(app).reach === 'web' && webSignIn.supports(app));
+      .filter((app) => appOf(app) && appOf(app).reach === 'web' && signsInAtAll(app));
     if (!apps.length) return out;
     const results = new Map();
     const waiting = [];
@@ -1093,7 +1106,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (s.skipped.has(app)) return Promise.resolve({ status: 'skipped', note: `The person skipped ${shownName(app)} for this run. Do not ask again: finish without it.` });
     // A web app's sign-in lost partway through (2026-10-12): settled here, with no card (Zotero's and GitHub's sign-ins,
     // connectors and folder choices keep theirs).
-    if ((kind === 'signin' || kind === 'password') && webSignIn && webSignIn.supports(app) && appOf(app) && appOf(app).reach === 'web') return signInAgain(s, job, app);
+    if ((kind === 'signin' || kind === 'password') && webSignIn && signsInAtAll(app) && appOf(app) && appOf(app).reach === 'web') return signInAgain(s, job, app);
     let need = s.needs.find((entry) => !entry.closed && entry.app === app && entry.kind === kind);
     if (!need) {
       need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, kind), closed: false, at: now() };
@@ -1584,7 +1597,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         if (out.browser) found.browser = out.browser; // the browser it used, not the default it may have passed over
         if (found.closed || out.status === 'cancelled') return;
         if (out.status === 'signed-in') { logAction(s, null, `Signed in to ${shownName(found.app)} from ${out.browser}`, 'You'); closeNeed(s, found, 'done'); return; }
-        if (out.status === 'unsupported') { showWindow(s, found, `${out.browser}'s sign-ins can't be brought into Engelbart: sign in here instead.`); return; }
+        if (out.status === 'unsupported' || out.status === 'no-browser') { showWindow(s, found, out.status === 'no-browser' ? 'Sign in here.' : `${out.browser}'s sign-ins can't be brought into Engelbart: sign in here instead.`); return; }
         // macOS refused: a card that asks again can't succeed (2026-10-10), so the app is skipped and the chat says so.
         if (out.status === 'denied') {
           if (out.browserId) signInDenied.add(out.browserId);
@@ -1593,8 +1606,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
           emit(s);
           return;
         }
-        found.error = out.status === 'no-browser' ? (signsInThroughBrowser(found.app) ? `Google needs ${READABLE_NAMES}.` : `Signing in to ${shownName(found.app)} needs ${READABLE_NAMES}.`)
-          : out.status === 'timeout' ? `Still not signed in to ${shownName(found.app)} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
+        found.error = out.status === 'timeout' ? `Still not signed in to ${shownName(found.app)} in ${out.browser}. Log in to keep waiting, or skip it.` : line(out.error, 200);
         emit(s);
       });
       return snapshot(s);

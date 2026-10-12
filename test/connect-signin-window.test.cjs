@@ -34,11 +34,19 @@ function fakes({ held = new Set() } = {}) {
   const ticks = new Set();
   const timers = { setInterval: (fn) => { ticks.add(fn); return fn; }, clearInterval: (fn) => { ticks.delete(fn); } };
   const tick = async () => { for (const fn of [...ticks]) await fn(); await new Promise((resolve) => setImmediate(resolve)); };
-  const session = { name: 'persist:browser' };
+  const jar = [];
+  const removed = [];
+  const session = {
+    name: 'persist:browser',
+    cookies: {
+      get: async ({ domain }) => jar.filter((cookie) => cookie.domain.replace(/^\./, '').endsWith(domain)),
+      remove: async (url, name) => { removed.push([url, name]); const at = jar.findIndex((cookie) => cookie.name === name && url.includes(cookie.domain.replace(/^\./, ''))); if (at >= 0) jar.splice(at, 1); },
+    },
+  };
   const looked = [];
   const signedIn = async (app) => { looked.push(app); return held.has(app); };
   const signIn = createSignInWindow({ BrowserWindow, getSession: () => session, userAgent: (ua) => ua.replace(/ Electron\/\S+/, ''), signedIn, timers, headless: true });
-  return { signIn, windows, tick, ticks, held, session, looked };
+  return { signIn, windows, tick, ticks, held, session, looked, jar, removed };
 }
 
 test('the sign-in window: on the agents\' session, a normal user agent, the app\'s sign-in page; signed in, it closes itself', async () => {
@@ -106,5 +114,38 @@ test('the sign-in window loads any https page, opens popups in itself, and block
   assert.equal(navigate('https://login.microsoftonline.com/'), false);
   assert.equal(navigate('http://example.com/'), true);
   assert.equal(navigate('javascript:alert(1)'), true);
+  signIn.close();
+});
+
+test('Google refuses the sign-in: its stale cookies are cleared, the window closes, and open() answers rejected', async () => {
+  const { signIn, windows, ticks, jar, removed } = fakes();
+  jar.push(
+    { domain: '.google.com', path: '/', name: '__Secure-1PSIDTS' },
+    { domain: '.google.com', path: '/', name: 'NID' },
+    { domain: 'accounts.google.com', path: '/', name: '__Host-GAPS' },
+    { domain: 'accounts.google.com', path: '/', name: 'OTZ' },
+    { domain: 'mail.google.com', path: '/mail', name: '__Host-GMAIL_SCH' },
+    { domain: '.google.com', path: '/', name: 'AEC' },
+    { domain: 'drive.google.com', path: '/', name: '__Secure-ENID' },
+  );
+  const result = signIn.open('Gmail');
+  const [win] = windows;
+  win.webContents.emit('did-navigate', {}, 'https://accounts.google.com/v3/signin/identifier?flowName=GlifWebSignIn');
+  assert.equal(win.destroyed, false, 'an ordinary sign-in page');
+  win.webContents.emit('did-navigate', {}, 'https://accounts.google.com/v3/signin/rejected?continue=x');
+  assert.deepEqual(await result, { status: 'rejected' });
+  assert.equal(win.destroyed, true, 'closed');
+  assert.equal(ticks.size, 0);
+  assert.deepEqual(removed.map(([url, name]) => `${url} ${name}`).sort(), [
+    'https://accounts.google.com/ OTZ',
+    'https://accounts.google.com/ __Host-GAPS',
+    'https://google.com/ NID',
+    'https://google.com/ __Secure-1PSIDTS',
+    'https://mail.google.com/mail __Host-GMAIL_SCH',
+  ]);
+  assert.deepEqual(jar.map((cookie) => cookie.name).sort(), ['AEC', '__Secure-ENID'], 'other cookies, and other Google hosts, are kept');
+  // The next try opens a new window.
+  void signIn.open('Gmail');
+  assert.equal(windows.length, 2);
   signIn.close();
 });

@@ -951,7 +951,7 @@ if (!hasSingleInstanceLock) {
     const agentBrowser = createAgentBrowser({
       BrowserWindow,
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
-      userAgent: (ua) => cleanUserAgent(ua, app.getName()),
+      userAgent: (ua) => cleanUserAgent(ua),
       log: (jobId, text) => { if (connect) connect.logJob(jobId, text); },
       onClosed: (jobId) => { if (connect) connect.windowClosed(jobId); },
       headless: process.env.ENGELBART_HEADLESS === '1',
@@ -990,13 +990,13 @@ if (!hasSingleInstanceLock) {
       picks: createSigninProfiles({ dataRoot: () => store.config().dataRoot }),
       log: (text) => { console.warn(`[connect] ${text}`); },
     });
-    // A sign-in made in Engelbart's own browser (the choose screen's "Sign in", ./connect/signin-window.cjs), when no
-    // browser of the person's holds one to bring over.
+    // A sign-in made in Engelbart's own browser (the choose screen's "Sign in", ./connect/signin-window.cjs): on the Mac when
+    // no browser of the person's holds one to bring over or they turned its sign-ins down, and every sign-in elsewhere.
     const signInWindow = createSignInWindow({
       BrowserWindow,
       getParent: dialogWindow,
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
-      userAgent: (ua) => cleanUserAgent(ua, app.getName()),
+      userAgent: (ua) => cleanUserAgent(ua),
       signedIn: (name) => webSignIn.signedIn(name),
       headless: process.env.ENGELBART_HEADLESS === '1',
     });
