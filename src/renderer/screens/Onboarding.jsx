@@ -12,12 +12,13 @@ import { useGithubStatus } from '../workspace/useGithubStatus.js';
 import ImportSignins from '../workspace/ImportSignins.jsx';
 import GithubRepos from '../workspace/GithubRepos.jsx';
 import ConnectLibrary from './ConnectLibrary.jsx';
+import ConnectIntro from './ConnectIntro.jsx';
 import welcomePng from '../../../design/assets/welcome-field.png';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
 
 // Onboarding (2026-09-28): port of Claude Design "Onboarding.dc.html", Hudson's tweaks in design/onboarding/TWEAKS.md.
-// mode 'new' (first launch: welcome → tools → create → connect your library, or add to library → custom instructions)
+// mode 'new' (first launch: welcome → tools → create → intro → connect your library, or add to library → custom instructions)
 // or 'existing' (+ Project: create → context), or 'guided' (the guided setup started inside a project, 2026-10-10: a new
 // user's screens without Create; after the last one `into`, that project, gets a Welcome workspace and opens on it).
 // Everything is real: library rows are added as they are picked, the instructions are saved on Continue, and a new
@@ -146,6 +147,16 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
     go(next);
   };
   const advance = () => goForward();
+  // Skip for now on the intro or on Connect: Connect is left for later (the one-time offer counts as seen), and the flow
+  // goes on from past Connect, so the intro's Skip skips both.
+  const skipConnect = () => {
+    api.connectOfferSeen('dismissed').catch(() => {});
+    const next = forward(flowMode, { step: 'connect', sub: 0 }, flowOptions);
+    const end = endOf(flowMode, next);
+    if (end === 'project') { openProject(added.filter((item) => byId.has(item.id)).map((item) => item.id)); return; }
+    if (end === 'welcome') { addWelcome(); return; }
+    go(next);
+  };
 
   // The check answered with nothing to install while the tools screen was showing: on to the next one.
   React.useEffect(() => { if (step === 'tools' && withTools === false) advance(); }, [step, withTools]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -287,6 +298,13 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
   };
 
   const pager = pagerOf(flowMode, step, flowOptions);
+  // The intro's and Connect's pages draw the pager in their own foot, beside their button.
+  const pagePager = pager && (
+    <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 16 }}>
+      <Pager count={pager.count} index={pager.index} />
+      <div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div>
+    </div>
+  );
   const errorLine = error ? <span data-onboarding-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', textAlign: 'center', overflowWrap: 'anywhere' }}>{error}</span> : null;
   const projName = name.trim() || 'your project';
 
@@ -512,8 +530,9 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
         </div>
       </div>
     );
-  } else if (step === 'connect') {
-    // Drawn outside the 800 × 600 window below: it is wider, side by side, and the chat needs the height.
+  } else if (step === 'intro' || step === 'connect') {
+    // Drawn outside the 800 × 600 window below, as pages of their own: Connect is wider and its chat needs the height, and
+    // the intro before it shares its column and foot.
     body = null;
   } else if (step === 'open') {
     body = <div data-screen-label="08 Opening" style={{ width: '100%', display: 'flex', justifyContent: 'center' }}><ThinkingDots label={flowMode === 'guided' ? 'opening Welcome' : 'opening Getting started'} /></div>;
@@ -528,16 +547,19 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
           (2026-10-09, David's mockup): Skip for now, then the pager and "Bring these in"; in the chat how far the work is,
           the pager and "Skip the rest". Leaving with a session puts it away: it goes on in the background, the chip in the
           top right following it. Skipping it counts as the one-time offer seen: the project about to open does not ask again. */}
+      {/* Why Engelbart asks for their tools, and where the data goes (2026-10-11, David's mockup; MATH-142), right before
+          Connect. Its Skip for now skips Connect too. */}
+      {step === 'intro' && (
+        <div data-screen-label="03 Connect intro" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+          <ConnectIntro guided={flowMode === 'guided'} pager={pagePager} onContinue={advance} onSkip={skipConnect} />
+          {errorLine}
+        </div>
+      )}
       {step === 'connect' && (
         <div data-screen-label="03 Connect library" style={{ flex: 'none', width: '100%', height: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
           {/* sessionId: back here after the guided setup's Welcome workspace could not be added, the session it began */}
           <ConnectLibrary mode="onboarding" sessionId={connectId} project={flowMode === 'guided' ? intoProject : { name, description: desc }}
-            pager={pager && (
-              <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 16 }}>
-                <Pager count={pager.count} index={pager.index} />
-                <div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div>
-              </div>
-            )}
+            pager={pagePager}
             onSession={(id) => { setConnectId(id); api.connectOfferSeen('started').catch(() => {}); }}
             onContinue={advance}
             onSkip={() => { api.connectOfferSeen('dismissed').catch(() => {}); advance(); }}
@@ -546,7 +568,7 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
         </div>
       )}
       {/* No card (2026-09-28): the same 800 × 600 at most, drawn on nothing, so lists inside still scroll and the page never does. */}
-      {step !== 'connect' && <div data-screen-label="Onboarding window" style={{ flex: 'none', display: 'flex', flexDirection: 'column', width: 'min(800px, 100%)', height: 'min(600px, 100%)', overflow: 'hidden' }}>
+      {step !== 'intro' && step !== 'connect' && <div data-screen-label="Onboarding window" style={{ flex: 'none', display: 'flex', flexDirection: 'column', width: 'min(800px, 100%)', height: 'min(600px, 100%)', overflow: 'hidden' }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'safe center', gap: 24, padding: '40px 32px 28px' }}>
           {body}
           {pager && !place.detour && (

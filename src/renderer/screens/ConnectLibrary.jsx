@@ -149,6 +149,15 @@ function RowText({ name, on, sub, label, dim = false, tip: extra = '', onRetry =
   );
 }
 
+/** An on/off switch (2026-10-11, David's mockup: the consent card's, at the top of the choose screen). */
+function Toggle({ on }) {
+  return (
+    <span aria-hidden="true" style={{ flex: 'none', position: 'relative', width: 32, height: 18, borderRadius: 9, background: on ? '#171717' : '#d9d9d9', transition: `background 140ms ${EASE}` }}>
+      <span style={{ position: 'absolute', top: 2, left: on ? 16 : 2, width: 14, height: 14, borderRadius: '50%', background: '#fff', boxShadow: '0 1px 2px rgba(0,0,0,.2)', transition: `left 140ms ${EASE}` }} />
+    </span>
+  );
+}
+
 // A row dimmed: rowLabel says "Not found" only for an app read from this Mac that is not on it (Cursor, Codex, a folder
 // app), or for Websites with no browser and Local repos with none; a web app or Zotero is "Needs sign-in" (MATH-144).
 const notFound = (label) => !!label && label.text === 'Not found';
@@ -740,7 +749,7 @@ function WorkLine({ session }) {
 }
 
 /** The page's main button, as onboarding's own Continue: filled black, a caret after its words. */
-const FOOT_BUTTON = { flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px 0 16px', border: '1px solid #171717', borderRadius: 8, background: '#171717', color: '#fff', cursor: 'pointer', font: '500 13.5px/1 var(--font-sans)', whiteSpace: 'nowrap' };
+export const FOOT_BUTTON = { flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 6, height: 36, padding: '0 14px 0 16px', border: '1px solid #171717', borderRadius: 8, background: '#171717', color: '#fff', cursor: 'pointer', font: '500 13.5px/1 var(--font-sans)', whiteSpace: 'nowrap' };
 
 /**
  * The chat's foot button (2026-10-11): while the librarian still has questions it reads "Skip the rest" and stays quiet,
@@ -752,7 +761,7 @@ export function importFootStyle(done) {
 }
 
 /** The foot of onboarding's page: something at the left, then onboarding's pager (`pager`, its dots and "2 of 3") and the one button. */
-function Foot({ left, pager, button }) {
+export function Foot({ left, pager, button }) {
   return (
     <div data-connect-foot="1" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 16, padding: '14px 0 0' }}>
       <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center' }}>{left}</div>
@@ -1348,6 +1357,27 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             {leaves && <span data-connect-leaves-text="1" style={{ paddingLeft: reads.length > 0 ? 24 : 0, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>What the agents read is sent to {company} through your own {targetName} account, the way any {targetName} session is, to be turned into notes. The notes, and everything Engelbart keeps, stay in ~/.engelbart on this Mac. Nothing goes to Mathetic.</span>}
           </div>
         );
+        // Onboarding's page opens on the consent (2026-10-11, David's mockup): one card above the sources, the agent's logo,
+        // "Read with your [Claude Code ⌄] subscription" over what that means, and a switch. Why Engelbart asks, and where the
+        // data goes, was the screen before (screens/ConnectIntro.jsx), so this says it in a line.
+        const consentCard = (
+          <div data-connect-permissions="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', gap: 8, padding: '12px 14px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fff' }}>
+            <div role="switch" tabIndex={0} aria-checked={consent ? 'true' : 'false'} data-connect-permission="consent" onClick={toggleConsent} onKeyDown={(event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); toggleConsent(); } }} style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer' }}>
+              <span aria-hidden="true" style={{ flex: 'none', width: 32, height: 32, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff' }}>
+                <span style={{ width: 16, height: 16, background: `url(${LOGOS[current && current.provider === 'openai' ? 'Codex' : 'Claude Code']}) center / contain no-repeat` }} />
+              </span>
+              <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
+                <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Read with your <ProviderPick providers={providers} provider={provider} onPick={pickProvider} /> subscription</span>
+                <span data-connect-reassure="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>
+                  Uses the plan you already have, so there's no API key to set up. Saved only on your Mac, and Mathetic never receives it. {leavesButton}
+                </span>
+              </span>
+              <Toggle on={consent} />
+            </div>
+            {picks && gmailConsent(picks, targetName) && <span data-connect-gmail-consent="1" style={{ paddingLeft: 44, font: '12.5px/1.5 var(--font-sans)', color: '#525252' }}>{gmailConsent(picks, targetName)}</span>}
+            {leaves && <span data-connect-leaves-text="1" style={{ paddingLeft: 44, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>What the agents read is sent to {company} through your own {targetName} account, the way any {targetName} session is, to be turned into notes. The notes, and everything Engelbart keeps, stay in ~/.engelbart on this Mac. Nothing goes to Mathetic.</span>}
+          </div>
+        );
         const send = (
           <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, ...(page ? { paddingTop: 4 } : { padding: '12px 20px', borderTop: '1px solid #eaeaea' }) }}>
             {error && <span data-connect-error="1" style={{ flex: 1, minWidth: 0, font: '12.5px/1.4 var(--font-sans)', color: '#e70022' }}>{error}</span>}
@@ -1355,23 +1385,23 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
           </div>
         );
         // Onboarding draws it as a page of its own, one column stacked as David's mockup has it (2026-10-09, in place of the
-        // side by side of 2026-10-08): the sources scrolling in their own box, the card saying what reads them (and with
-        // which agent) right after Code inside it, then Skip for now, the pager and "Bring these in", which starts the run. No custom
-        // instructions box.
+        // side by side of 2026-10-08): the consent card first, above the sources (2026-10-11, after the intro screen),
+        // the sources scrolling in their own box, then Skip for now, the pager and "Bring these in", which starts the run.
+        // No custom instructions box.
         if (page) {
           const go = anyOn && !!provider;
           return (
             <div data-connect-column="1" style={{ flex: 1, minHeight: 0, width: `min(${CHOOSE_WIDTH}px, 100%)`, alignSelf: 'center', display: 'flex', flexDirection: 'column' }}>
-              <h1 style={{ flex: 'none', margin: '40px 0 26px', textAlign: 'center', font: '500 28px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>What should go in your library?</h1>
+              <h1 style={{ flex: 'none', margin: '40px 0 22px', textAlign: 'center', font: '500 28px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>What should go in your library?</h1>
+              <div style={{ flex: 'none', padding: '0 8px 14px' }}>{consentCard}</div>
               <div data-connect-sources-box="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '0 8px 16px' }}>
                 {sourcesList}
-                {/* Right under the sources, after Code (2026-10-09, David: "should be under Sources (specifically under
-                    code)"), scrolling with them rather than pinned above the foot. */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 18 }}>
-                  {keychainModal}
-                  {permissionsBox}
-                  {!ready && <AgentSetup snapshot={toolSnap} />}
-                </div>
+                {(keychainModal || !ready) && (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 12, paddingTop: 18 }}>
+                    {keychainModal}
+                    {!ready && <AgentSetup snapshot={toolSnap} />}
+                  </div>
+                )}
               </div>
               {error && <span data-connect-error="1" style={{ flex: 'none', padding: '10px 8px 0', font: '12.5px/1.4 var(--font-sans)', color: '#e70022' }}>{error}</span>}
               <Foot pager={pager} left={<button type="button" className="hov-ink" data-onboarding-skip="1" onClick={onSkip} style={{ padding: '10px 12px', marginLeft: -12, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Skip for now</button>}

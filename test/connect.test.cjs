@@ -1450,12 +1450,13 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   const flow = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/onboarding.js')).href);
   // "replace steps 3 and 4 with this, since it will essentially be the same"
   // 2026-10-10: Create before Connect, so the librarian is told what the project is; the project is made after Connect.
-  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'create', 'connect']);
-  assert.deepEqual(flow.flowOf('new', { connect: true, tools: false }), ['welcome', 'create', 'connect']);
+  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'create', 'intro', 'connect']);
+  assert.deepEqual(flow.flowOf('new', { connect: true, tools: false }), ['welcome', 'create', 'intro', 'connect']);
   assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'create', 'import', 'instructions'], 'without Connect (the tools screen skipped with no agent): Create, then its screens');
   assert.deepEqual(flow.forward('new', { step: 'tools', sub: 0 }, { connect: true }), { step: 'create', sub: 0 });
-  assert.deepEqual(flow.forward('new', { step: 'create', sub: 1 }, { connect: true }), { step: 'connect', sub: 0 });
-  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 4, index: 3 });
+  assert.deepEqual(flow.forward('new', { step: 'create', sub: 1 }, { connect: true }), { step: 'intro', sub: 0 });
+  assert.deepEqual(flow.forward('new', { step: 'intro', sub: 0 }, { connect: true }), { step: 'connect', sub: 0 });
+  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 5, index: 4 });
   assert.deepEqual(flow.forward('new', { step: 'connect', sub: 0 }, { connect: true }), { step: 'open', sub: 0 }, 'the project is made after Connect');
   assert.equal(flow.pagerOf('new', 'import', { connect: true }), null);
   // "signing into claude code and/or codex must be done before this step"

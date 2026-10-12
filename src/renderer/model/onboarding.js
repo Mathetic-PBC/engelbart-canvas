@@ -16,8 +16,10 @@ import { launchRows, installable } from './tools.js';
  * Create comes before Connect (2026-10-10): the librarian is told what the project is, so it recommends the person's own
  * files and papers about it rather than "75 PDFs in your Downloads". The project itself is made at the end of the flow
  * ('open', see endOf), so what Connect brings in still lands in it.
+ * Intro (2026-10-11, David's mockup "All your context in one place") comes right before Connect and only with it: why
+ * Engelbart asks for their tools and where the data goes (MATH-142), so the choose screen can open on the consent.
  */
-export const FLOWS = { new: ['welcome', 'tools', 'create', 'connect', 'import', 'instructions'], existing: ['create', 'context'], guided: ['welcome', 'tools', 'connect', 'import', 'instructions'] };
+export const FLOWS = { new: ['welcome', 'tools', 'create', 'intro', 'connect', 'import', 'instructions'], existing: ['create', 'context'], guided: ['welcome', 'tools', 'intro', 'connect', 'import', 'instructions'] };
 
 /**
  * The guided setup started inside a project (2026-10-10, "guided setup shouldn't create a new project"): a new user's
@@ -28,7 +30,7 @@ export const isFresh = (mode) => mode === 'new' || mode === 'guided'; // a new u
 
 export function flowOf(mode, { tools = true, connect = false } = {}) {
   const flow = FLOWS[mode] || FLOWS.new;
-  return flow.filter((step) => (step !== 'tools' || tools) && (connect ? step !== 'import' && step !== 'instructions' : step !== 'connect'));
+  return flow.filter((step) => (step !== 'tools' || tools) && (connect ? step !== 'import' && step !== 'instructions' : step !== 'intro' && step !== 'connect'));
 }
 
 /**

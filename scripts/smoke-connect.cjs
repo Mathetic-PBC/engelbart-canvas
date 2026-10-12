@@ -92,7 +92,7 @@ app.whenReady().then(async () => {
     /* ------------------------------------------------ Create, before Connect: a name, then a description; no project yet */
     // No folder part: ~/<name> by default, "Use an existing folder…" under the name for another; no Project context.
     await until(() => has(wc, '[data-onboarding-name]'), 'the project\'s name');
-    assert.match(await text(wc, '[data-onboarding-step-of]'), /^2 of 3$/, 'welcome, create, connect');
+    assert.match(await text(wc, '[data-onboarding-step-of]'), /^2 of 4$/, 'welcome, create, intro, connect');
     assert.match(await text(wc, '[data-onboarding-use-folder]'), /^Use an existing folder…$/);
     assert.equal(await has(wc, '[data-onboarding-folder]'), false, 'no folder part');
     await fill(wc, '[data-onboarding-name]', 'Connect smoke');
@@ -101,22 +101,30 @@ app.whenReady().then(async () => {
     assert.match(await text(wc, '[data-onboarding-continue] button'), /^Continue›?$/, 'Continue, not Open project: the project is made after Connect');
     await fill(wc, '[data-onboarding-desc]', 'How novices ask for help with tutoring tools.');
     await press(wc, '[data-onboarding-continue] button');
-    await until(async () => (await step(wc)) === 'connect', 'Connect your library, after Create');
+    // The intro (2026-10-11, David's mockup): why Engelbart asks, where the data goes, the apps on a belt; then Connect.
+    await until(async () => (await step(wc)) === 'intro', 'the intro, after Create');
+    assert.match(await text(wc, '[data-connect-intro] h1'), /^All your context in one place$/);
+    assert.match(await text(wc, '[data-onboarding-step-of]'), /^3 of 4$/);
+    assert.match(await text(wc, '[data-connect-intro-a="where"]'), /^It’s saved only on this Mac\./, 'the first question open');
+    assert.ok(await has(wc, '[data-connect-intro-belt]'), 'Connects to, on a belt');
+    await shot(wc, '0-intro');
+    await press(wc, '[data-connect-intro] [data-onboarding-continue] button');
+    await until(async () => (await step(wc)) === 'connect', 'Connect your library, after the intro');
     assert.deepEqual(await js(wc, 'window.engelbartAPI.listProjects().then((list)=>list.length)'), 0, 'no project until the end of onboarding');
 
     /* ------------------------------------------------ choose: Notes ticked where Obsidian was found, ChatGPT by hand */
     await until(() => has(wc, '[data-connect-library="choose"] [data-connect-app="Obsidian"]'), 'the choose screen, Notes open');
     assert.equal(await attr(wc, '[data-connect-app=Obsidian] [role=checkbox]', 'aria-checked'), 'true', 'Obsidian ticked: its vault was found');
     assert.equal(await attr(wc, '[data-connect-source=papers] [role=checkbox]', 'aria-checked'), 'false', 'nothing found for papers');
-    assert.match(await text(wc, '[data-onboarding-step-of]'), /^3 of 3$/, 'welcome, create, connect: Add to your library, Custom instructions and Project context are gone');
+    assert.match(await text(wc, '[data-onboarding-step-of]'), /^4 of 4$/, 'welcome, create, intro, connect: Add to your library, Custom instructions and Project context are gone');
     assert.ok(await has(wc, '[data-onboarding-skip]'), 'Skip for now before a session');
     assert.equal(await has(wc, '[data-onboarding-continue]'), false, 'no Continue before a session');
     // David's mockup (2026-10-09): the agent picked inside the consent line, "Bring these in" by the pager, no Refine chip.
     assert.match(await text(wc, '[data-connect-provider]'), /^Claude Code$/);
-    assert.ok(await has(wc, '[data-connect-permission] [data-connect-pick-provider]'), 'the agent, inside "Use my … subscription"');
+    assert.ok(await has(wc, '[data-connect-permission] [data-connect-pick-provider]'), 'the agent, inside "Read with your … subscription"');
     assert.equal(await has(wc, '[data-connect-library="choose"] [data-connect-chip]'), false, 'no Refine chip');
     assert.match(await text(wc, '[data-connect-foot] [data-connect-bring]'), /^Bring these in$/);
-    assert.match(await text(wc, '[data-connect-foot]'), /Skip for now[\s\S]*3 of 3[\s\S]*Bring these in/);
+    assert.match(await text(wc, '[data-connect-foot]'), /Skip for now[\s\S]*4 of 4[\s\S]*Bring these in/);
     await press(wc, '[data-connect-source="chats"] button[aria-expanded]');
     await press(wc, '[data-connect-app="ChatGPT"]');
     assert.equal(await attr(wc, '[data-connect-app=ChatGPT] [role=checkbox]', 'aria-checked'), 'true');
@@ -148,11 +156,13 @@ app.whenReady().then(async () => {
     assert.ok(await js(wc, '!!document.querySelector("[data-connect-app=Obsidian] [title]") && /~/.test(document.querySelector("[data-connect-app=Obsidian] [title]").title)'), 'the folder is in its tooltip');
     assert.match(await text(wc, '[data-connect-app=Notion]'), /Needs sign-in$/);
     assert.equal(await js(wc, 'document.querySelectorAll("[data-connect-permission]").length'), 1, 'one consent checkbox');
-    assert.equal(await js(wc, '!!document.querySelector("[data-connect-sources-box] [data-connect-permissions]")'), true, 'the consent card is under the sources, after Code');
-    assert.match(await text(wc, '[data-connect-permission]'), /^✓?Use my Claude Code subscription to read these/);
-    assert.match(await text(wc, '[data-connect-permission]'), /What leaves my Mac\?$/, 'one box: the reassurance under the checkbox');
+    assert.equal(await js(wc, '!!document.querySelector("[data-connect-sources-box] [data-connect-permissions]")'), false, 'the consent card is above the sources now (2026-10-11), not under them');
+    assert.equal(await js(wc, 'document.querySelector("[data-connect-permissions]").compareDocumentPosition(document.querySelector("[data-connect-sources-box]")) & Node.DOCUMENT_POSITION_FOLLOWING'), 4, 'the consent first');
+    assert.equal(await attr(wc, '[data-connect-permission]', 'role'), 'switch');
+    assert.match(await text(wc, '[data-connect-permission]'), /^Read with your Claude Code subscription/);
+    assert.match(await text(wc, '[data-connect-permission]'), /What leaves my Mac\?$/, 'one card: the reassurance under the words');
     assert.doesNotMatch(await text(wc, '[data-connect-permissions]'), /what (it|they) remembers?/, 'no "Ask … remember" row');
-    assert.match(await text(wc, '[data-connect-reassure]'), /^Saved only on your Mac\. Claude Code reads them through your account, and Mathetic never sees them\. What leaves my Mac\?$/);
+    assert.match(await text(wc, '[data-connect-reassure]'), /^Uses the plan you already have, so there's no API key to set up\. Saved only on your Mac, and Mathetic never receives it\. What leaves my Mac\?$/);
     const buttons = await js(wc, 'JSON.stringify([...document.querySelectorAll("[data-connect-library=choose] button")].map((el) => el.textContent.trim()))');
     assert.equal(JSON.parse(buttons).some((label) => /^(Sign in…|Allow…)$/.test(label)), false, 'no Sign in… or Allow… buttons: ticking is the consent');
     // One column, stacked (2026-10-09): no custom instructions box.
@@ -212,31 +222,33 @@ app.whenReady().then(async () => {
     await until(() => has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]'), 'the survey\'s findings, one per line', 400);
     assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'role'), 'checkbox', 'several can be picked');
     await pause(400); // the chat scrolls to its newest message first
-    // What an option covers (2026-10-11): an ⓘ on "Everything" (its detail lists what the survey found), none on an
-    // option without one; hovering opens a popover in the card, inside the window; a click on it ticks nothing; Escape closes it.
-    const info = '[data-connect-card="live"] [data-connect-option-info="Everything"]';
+    // What an option covers (2026-10-11): an ⓘ on the recommended item (its detail: title, kind, date; MATH-122 took
+    // "Everything" away from a survey's items), none on an option without one;
+    // hovering opens a popover in the card, inside the window; a click on it changes nothing; Escape closes it.
+    const info = '[data-connect-card="live"] [data-connect-option-info="ChatGPT item 1"]';
     assert.equal(await has(wc, info), true, 'an ⓘ on the option with a detail');
     assert.equal(await has(wc, '[data-connect-card="live"] [data-connect-option-info="ChatGPT item 2"]'), false, 'no ⓘ without a detail');
     const infoAt = await until(() => spot(wc, info), info);
     wc.sendInputEvent({ type: 'mouseMove', x: infoAt.x, y: infoAt.y });
-    await until(() => js(wc, '(()=>{const p=document.querySelector("[data-connect-card=\\"live\\"] [data-connect-option-detail=\\"Everything\\"]");return !!p&&getComputedStyle(p).visibility==="visible"})()'), 'the popover, on hover');
-    assert.match(await text(wc, '[data-connect-option-detail="Everything"]'), /ChatGPT item 1 · 2026-10-01[\s\S]*ChatGPT item 3 · 2026-10-03/);
+    await until(() => js(wc, '(()=>{const p=document.querySelector("[data-connect-card=\\"live\\"] [data-connect-option-detail=\\"ChatGPT item 1\\"]");return !!p&&getComputedStyle(p).visibility==="visible"})()'), 'the popover, on hover');
+    assert.match(await text(wc, '[data-connect-option-detail="ChatGPT item 1"]'), /ChatGPT item 1 · doc · 2026-10-01/);
     const inside = await js(wc, '(()=>{const r=document.querySelector("[data-connect-option-detail]").getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&r.width>0})()');
     assert.equal(inside, true, 'the popover is inside the window');
     await shot(wc, '3b-option-detail');
     await click(wc, infoAt);
-    assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="Everything"]', 'aria-checked'), 'false', 'clicking the ⓘ ticks nothing');
+    assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'aria-checked'), 'true', 'the recommendation comes ticked, and clicking its ⓘ leaves it so');
     assert.equal(await has(wc, '[data-connect-card="live"]'), true, 'nor submits');
     await js(wc, 'document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
     await until(async () => !(await has(wc, '[data-connect-option-detail]')), 'Escape closes it');
     // Skip and Submit pinned to the bottom of the chat while the card is live.
     assert.equal(await js(wc, 'getComputedStyle(document.querySelector("[data-connect-card=\\"live\\"] [data-connect-card-actions]")).position'), 'sticky');
-    await press(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]');
+    await press(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 2"]');
+    assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 2"]', 'aria-checked'), 'true', 'a second one ticked beside it');
     await press(wc, '[data-connect-card="live"] [data-connect-submit]');
     await until(async () => (await attr(wc, '[data-connect-import]', 'data-ready')) === '1', 'nothing more to ask', 400);
     assert.match(await text(wc, '[data-connect-import]'), /^Bring these in$/);
     assert.equal(await footLook(), 'rgb(23, 23, 23) | rgb(23, 23, 23) | rgb(255, 255, 255)', 'Bring these in is the main button');
-    assert.match(await text(wc, '[data-connect-foot-status]'), /\d+ of \d+/, 'how far the work is, at the foot');
+    assert.match(await text(wc, '[data-connect-foot-status]'), /^(Bringing in .+|Looking through your apps|Everything’s in|Everything's in)/, 'what is coming in, at the foot (MATH-146: names, not a count)');
     await pause(500); // the button's colour fades in
     await shot(wc, '4-chat-done');
 
