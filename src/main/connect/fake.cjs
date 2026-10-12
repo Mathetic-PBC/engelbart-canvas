@@ -94,9 +94,7 @@ async function surveyRun({ session: s, job, callTool }, delayMs, signal) {
   const app = job.apps[0];
   await sleep(delayMs, signal);
   if (job.find) return JSON.stringify(findRun(s, app));
-  // Signed in on the card shown before the run (session.cjs signInsFirst): nothing to ask again.
-  const signedInFirst = !!(s && s.needs.some((need) => need.app === app && need.upfront && need.outcome === 'done'));
-  if (!signedInFirst && String(process.env.ENGELBART_CONNECT_FAKE_NEEDS || '').split(',').includes(app)) {
+  if (String(process.env.ENGELBART_CONNECT_FAKE_NEEDS || '').split(',').includes(app)) {
     let out = await callTool('needs_you', { kind: 'signin', reason: `Sign in to ${shownName(app)}` });
     for (let n = 0; n < 10 && out.status === 'waiting'; n += 1) out = await callTool('wait_for_you', {});
     if (out.status === 'skipped') return JSON.stringify({ app, signedIn: false, summary: `${shownName(app)} was skipped.`, items: [] });

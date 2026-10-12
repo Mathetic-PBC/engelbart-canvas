@@ -6,7 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -155,13 +155,17 @@ const notFound = (label) => !!label && label.text === 'Not found';
 
 // `name` is the app's id (its logo, data-connect-app); the row shows the name the person knows it by (shownName). A
 // repository's row (`data` its own) shows the repository's name as it is.
-function AppRow({ name, on, onToggle, label, sub = '', tip = '', icon = null, data = name, onRetry = null }) {
+function AppRow({ name, on, onToggle, label, sub = '', tip = '', icon = null, data = name, onRetry = null, onSignIn = null }) {
   const dim = notFound(label);
   const text = data === name ? shownName(name) : name;
+  const signIn = !!(label && label.signIn && onSignIn);
+  const press = (event) => { event.stopPropagation(); onSignIn(); };
   return (
     <button type="button" className="hov-wash" data-connect-app={data} data-connect-not-found={dim ? '1' : undefined} onClick={onToggle} style={subRow}>
       <span style={{ margin: '0 1px', display: 'flex', color: '#4d4d4d', opacity: dim ? 0.45 : 1 }}>{icon || logoOf(name) || (name === LOCAL_PDFS ? FOLDER : <span style={{ width: 14 }} />)}</span>
       <RowText name={text} on={on} sub={sub} label={label} dim={dim} tip={tip} onRetry={onRetry} />
+      {/* No browser of the person's could sign the app in (2026-10-11): its sign-in page in Engelbart's own browser. A link in the row's button, as Try again is. */}
+      {signIn && <span role="button" tabIndex={0} data-connect-signin={name} onClick={press} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); press(event); } }} style={{ flex: 'none', font: '12px/1 var(--font-sans)', color: '#8f8f8f', textDecoration: 'underline', cursor: 'pointer' }}>Sign in</span>}
       <Box on={on} dim={dim} />
     </button>
   );
@@ -365,6 +369,42 @@ function KeychainModal({ panel, outcome, onContinue, onNotNow, onClose }) {
             <button type="button" className="hov-ink" data-connect-keychain-hide="1" onClick={onClose} title="Close this; the row still says how it goes" style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Hide</button>
           </>}
           {phase === 'done' && <button type="button" ref={primary} data-connect-keychain-done="1" onClick={onClose} style={{ padding: '9px 16px', border: 0, borderRadius: 8, background: '#171717', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#fff' }}>Done</button>}
+        </span>
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * Bring these in with ticked web apps no browser could sign in (2026-10-11): one modal, the apps grouped by the sign-in
+ * they share. Sign in opens the first one's sign-in page in Engelbart's own browser; once every app is signed in, the run
+ * starts. Leave them out unticks them and starts. Escape closes it, starting nothing. In a portal, as KeychainModal is.
+ */
+function SignInGateModal({ gate, signing, onSignIn, onLeave, onClose }) {
+  const primary = React.useRef(null);
+  React.useEffect(() => { if (primary.current && !signing) primary.current.focus(); }, [signing]);
+  React.useEffect(() => {
+    const onKey = (event) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      event.stopPropagation();
+      onClose();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [onClose]);
+  return createPortal(
+    <div data-overlay="1" data-cover="1" data-connect-signin-gate={signing ? 'signing' : 'ask'} style={{ position: 'fixed', inset: 0, zIndex: 400, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16, background: 'rgba(23,23,23,.28)' }}>
+      <div role="dialog" aria-modal="true" aria-label={gate.title} style={{ width: 'min(420px, 100%)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 10, padding: '22px 22px 18px', background: '#fff', borderRadius: 12, boxShadow: '0 16px 48px #00000029', animation: `rise 160ms ${EASE}` }}>
+        <span aria-hidden="true" style={{ width: 36, height: 36, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', ...KEYCHAIN_TONES.ask }}>{KEY}</span>
+        <span style={{ font: '600 16px/1.35 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{gate.title}</span>
+        {gate.lines.map((text) => <span key={text} style={{ font: '13px/1.5 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{text}</span>)}
+        <span style={{ font: '13px/1.5 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{signing ? 'Finish signing in in the window that opened.' : gate.body}</span>
+        <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 16, paddingTop: 8 }}>
+          {signing && <span style={{ flex: 1, display: 'flex', alignItems: 'center' }}><Dots /></span>}
+          <button type="button" className="hov-ink" data-connect-signin-leave="1" onClick={onLeave} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Leave {gate.groups.flat().length === 1 ? 'it' : 'them'} out</button>
+          <button type="button" ref={primary} data-connect-signin-go="1" disabled={signing} onClick={onSignIn} style={{ padding: '9px 16px', border: 0, borderRadius: 8, background: '#171717', cursor: signing ? 'default' : 'pointer', opacity: signing ? 0.5 : 1, font: '500 13px/1 var(--font-sans)', color: '#fff' }}>{signing ? 'Signing in…' : 'Sign in'}</button>
         </span>
       </div>
     </div>,
@@ -833,6 +873,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const [signIns, setSignIns] = React.useState({}); // web app → its sign-in as checked when ticked: { status, browser }
   const [waitingYes, setWaitingYes] = React.useState({}); // browser → [{ id, app }] ticked, waiting on its modal's Continue
   const [keychainRun, setKeychainRun] = React.useState(null); // { browser, rows } after Continue: the modal says how it went
+  const [gate, setGate] = React.useState(null); // Bring these in with apps not signed in: 'ask' | 'signing' | 'leave' (its modal), or null
   const [providers, setProviders] = React.useState(null);
   const [provider, setProvider] = React.useState(null);
   const [toolSnap, setToolSnap] = React.useState(null);
@@ -945,7 +986,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       else setRow(id, app, false);
     }
     else if (spec.reach === 'web') checkTicked([{ id, app }]);
-    // A web app not signed in stays ticked: the run asks for its sign-in after it starts (a card), as the Stage does.
+    // A web app not signed in stays ticked, with Sign in on its row; Bring these in asks for it before the run starts.
   };
   // A web app ticked (with "Use my … subscription" on): its sign-in is brought over from the person's browser now
   // (2026-10-10), and the row says how it went. When macOS would ask for that browser's sign-ins, a panel says so first and
@@ -988,6 +1029,20 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     const was = signIns[app];
     if (rows.length && was && was.status === 'refused' && was.browser) setKeychainRun({ browser: was.browser, rows });
     rows.forEach((row) => checkSignIn(row, true));
+  };
+  // Sign in (2026-10-11): the app's sign-in page in Engelbart's own browser, for one no browser of the person's could sign
+  // in. Signed in, it and every app sharing that sign-in (Google Drive and Gmail) read ✓, and its row is ticked (a refused
+  // one was unticked); the window closed first, the row is as it was. → 'signed-in' | 'closed'
+  const signInHere = async (id, app) => {
+    setSignIns((now) => ({ ...now, [app]: { status: 'signing', browser: '', was: now[app] && now[app].status !== 'signing' ? now[app] : (now[app] || {}).was } }));
+    const out = await api.connectSignInWindow(app).catch(() => null);
+    if (out && out.status === 'signed-in') {
+      setSignIns((now) => { const next = { ...now }; for (const other of sharesSignIn(app)) next[other] = { status: 'signed-in', browser: '' }; return next; });
+      setRow(id, app, true);
+      return 'signed-in';
+    }
+    setSignIns((now) => { const next = { ...now }; const was = (now[app] || {}).was; if (was) next[app] = was; else delete next[app]; return next; });
+    return 'closed';
   };
   // The consent turned off: no sign-in is checked, and the panels waiting for a yes go (2026-10-11 review).
   const toggleConsent = () => { const on = !consent; setConsent(on); setWaitingYes((now) => waitingWhile(on, now)); };
@@ -1039,12 +1094,42 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     }
   };
 
-  const start = async () => {
+  // Bring these in: ticked web apps not signed in yet get one modal first (2026-10-11), so the refine screen never shows
+  // a sign-in card for an app the person picked. With the consent off, web apps are left out as before.
+  const start = () => {
+    const anyOn = picks && SOURCES.some((source) => picks.picks[source.id]);
+    if (!anyOn) { setError('Pick at least one source.'); return; }
+    if (!provider) { setError('Sign in to Claude Code or Codex first.'); return; }
+    if (unsignedWeb(picks, signIns, found, consent).length) { setGate('ask'); return; }
+    launch();
+  };
+  // The gate's Sign in: the first app still not signed in; once none is left (the effect below), the run starts.
+  const gateSignIn = async () => {
+    const [first] = unsignedWeb(picks, signIns, found, consent);
+    if (!first) return;
+    setGate('signing');
+    await signInHere(first.id, first.app);
+    setGate((now) => (now === 'signing' ? 'ask' : now));
+  };
+  // Leave them out: unticked, then the run starts (the effect below, once the picks are in).
+  const gateLeave = () => {
+    api.connectSignInWindowClose().catch(() => {});
+    const rows = unsignedWeb(picks, signIns, found, consent);
+    setPicks((now) => rows.reduce((next, row) => tickRow(next, row.id, row.app, false), now));
+    setGate('leave');
+  };
+  React.useEffect(() => {
+    if (!gate || gate === 'signing') return;
+    if (gate === 'leave' || !unsignedWeb(picks, signIns, found, consent).length) { setGate(null); launch(); }
+  }, [gate, picks, signIns]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The sign-in window goes with the choose screen.
+  React.useEffect(() => (view === 'choose' ? () => { api.connectSignInWindowClose().catch(() => {}); } : undefined), [view]);
+  const launch = async () => {
     const anyOn = picks && SOURCES.some((source) => picks.picks[source.id]);
     if (!anyOn) { setError('Pick at least one source.'); return; }
     if (!provider) { setError('Sign in to Claude Code or Codex first.'); return; }
     setError('');
-    // No sign-in waits on the person here: the modal covers the screen until Continue or Not now (2026-10-11), and checks
+    // No sign-in waits on the person here: the modals cover the screen until they are answered (2026-10-11), and checks
     // already going are waited for by main (signInsFirst).
     const chosen = { papers: [...folders.papers], code: localPicked(picks) };
     for (const source of SOURCES) for (const app of source.apps) if (appFolders[app] && ticked(picks, source.id, app) && app !== LOCAL_PDFS) chosen[source.id] = [...(chosen[source.id] || []), appFolders[app]];
@@ -1148,15 +1233,17 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       <style>{CSS}</style>
 
       {view === 'choose' && (() => {
-        // A web app's check is said while it is ticked; signed in and refused (unticked, with Try again) also when it is not.
-        const signInOf = (id, app) => { const seen = signIns[app]; return seen && (ticked(picks, id, app) || seen.status === 'signed-in' || seen.status === 'refused') ? seen : null; };
+        // A web app's check is said while it is ticked; signed in, signing in and refused (unticked, with Try again and Sign in) also when it is not.
+        const signInOf = (id, app) => { const seen = signIns[app]; return seen && (ticked(picks, id, app) || ['signed-in', 'refused', 'signing'].includes(seen.status)) ? seen : null; };
         const label = (app, id = '') => rowLabel(app, { found, connectors: connectorStatus, notes: notesState, signIn: id ? signInOf(id, app) : null, folder: appFolders[app] ? shown(appFolders[app]) : app === LOCAL_PDFS && folders.papers.length ? shown(folders.papers[0]) : '' });
         const shownYes = waitingWhile(consent, waitingYes); // none while the consent is off
+        const gateNow = gate && gate !== 'leave' ? signInGate(unsignedWeb(picks, signIns, found, consent)) : null;
         // One browser's modal at a time: the one after Continue first, until it is closed, then the next asking.
         const asking = Object.keys(shownYes).map((browser) => signInPanel(picks, browser, shownYes[browser])).find(Boolean) || null;
         const keychainModal = keychainRun
           ? <KeychainModal outcome={keychainOutcome(keychainRun.browser, keychainRun.rows, signIns)} onClose={() => setKeychainRun(null)} onContinue={() => {}} onNotNow={() => setKeychainRun(null)} />
-          : asking && <KeychainModal panel={asking} onContinue={() => allowSignIns(asking.browser)} onNotNow={() => declineSignIns(asking.browser)} onClose={() => declineSignIns(asking.browser)} />;
+          : asking ? <KeychainModal panel={asking} onContinue={() => allowSignIns(asking.browser)} onNotNow={() => declineSignIns(asking.browser)} onClose={() => declineSignIns(asking.browser)} />
+          : gateNow && <SignInGateModal gate={gateNow} signing={gate === 'signing'} onSignIn={gateSignIn} onLeave={gateLeave} onClose={() => { api.connectSignInWindowClose().catch(() => {}); setGate(null); }} />;
         const github = (found && found.github) || {};
         const githubLabel = github.found ? { text: `${github.where || 'signed in'}${repoCount != null ? ` · ${repoCount} repo${repoCount === 1 ? '' : 's'}` : ''}`, tone: '' } : { text: NEEDS_SIGN_IN, tone: 'muted' };
         const reposOn = localPicked(picks).length;
@@ -1199,7 +1286,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                   {open && (
                     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 1, padding: '1px 0 6px 26px' }}>
                       <span style={{ position: 'absolute', left: 33, top: 2, bottom: 8, width: 1, background: '#eaeaea' }} />
-                      {source.apps.map((app) => <AppRow key={app} name={app} label={label(app, source.id)} sub={rowSub(app)} tip={rowTip(app)} on={ticked(picks, source.id, app)} onToggle={() => toggleApp(source.id, app)} onRetry={() => retrySignIn(source.id, app)} />)}
+                      {source.apps.map((app) => <AppRow key={app} name={app} label={label(app, source.id)} sub={rowSub(app)} tip={rowTip(app)} on={ticked(picks, source.id, app)} onToggle={() => toggleApp(source.id, app)} onRetry={() => retrySignIn(source.id, app)} onSignIn={() => { void signInHere(source.id, app); }} />)}
                       {source.id === 'sites' && <AppRow name={BROWSER_ROW} icon={GLOBE} label={found && found.sites && found.sites.found ? { text: found.sites.where, tone: '' } : { text: 'Not found', tone: 'muted' }} on={ticked(picks, 'sites', BROWSER_ROW)} onToggle={() => setRow('sites', BROWSER_ROW, !ticked(picks, 'sites', BROWSER_ROW))} />}
                       {source.id === 'papers' && (folders.papers.length
                         ? folders.papers.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, papers: [] }))} />)

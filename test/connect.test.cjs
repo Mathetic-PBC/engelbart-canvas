@@ -800,29 +800,77 @@ function fakeSignIn({ browsers = {}, later = {} } = {}) {
   return { webSignIn, calls };
 }
 
-test('sign-ins sorted before the run: one signed in is surveyed, one signed out gets its card up front and its survey after', async () => {
+test('sign-ins sorted before the run: one signed in is surveyed; one still signed out gets no card, it is left out and the opener says so', async () => {
   process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'Claude';
-  const { webSignIn, calls } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } }, later: { Claude: 1 } });
+  const { webSignIn } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } } });
   const chats = [];
   const { connect, state } = fakeConnect({ webSignIn, notify: (snapshot) => chats.push(JSON.parse(JSON.stringify(snapshot.chat))) });
   let started = null;
   try {
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
     assert.deepEqual(chats.find((chat) => chat.length).map((entry) => [entry.opener, entry.text]), [[true, 'Looking at what you picked…']], 'a first line at once');
-    const asked = await until(state(started.id), (s) => s.needs.length === 1 && !s.thinking, 'Claude\'s card, before any survey asks');
-    assert.ok(asked.log.some((entry) => entry.text === 'Signed in to ChatGPT from Chrome'));
-    assert.deepEqual([asked.needs[0].app, asked.needs[0].kind, asked.needs[0].reason, asked.needs[0].error], ['Claude', 'signin', 'Sign in to Claude', '']);
-    assert.equal(asked.needs[0].note, '', 'macOS was asked for Chrome\'s sign-ins already (ChatGPT\'s)');
-    assert.deepEqual(asked.jobs.filter((job) => job.kind === 'survey').map((job) => job.apps[0]), ['ChatGPT'], 'no survey of Claude until its sign-in is done');
-    assert.deepEqual(asked.jobs.filter((job) => job.kind === 'recall').map((job) => job.apps[0]), ['ChatGPT'], 'nor its recall');
-    assert.match(asked.chat[0].text, /^(Found .*|Had a look at what you picked\.) Starting with your ai chats\.\n\nUsing your Chrome sign-ins for ChatGPT\.$/, 'the sign-in brought over is said; Claude, signed out, has its card');
-    // Log in: Safari is the default, so the page opens in Chrome; done once the sign-in is brought over.
-    await connect.need(started.id, asked.needs[0].id, 'open');
-    const after = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'Claude' && job.status === 'done'), 'Claude\'s survey, after its sign-in');
-    assert.deepEqual(calls.openedIn, [['chrome', 'https://claude.ai/login']]);
-    assert.equal(after.needs.length, 0, 'its survey did not ask again');
-    assert.ok(after.log.some((entry) => entry.text === 'Signed in to Claude from Chrome'));
-    assert.ok(after.jobs.some((job) => job.kind === 'recall' && job.apps[0] === 'Claude'), 'then its recall');
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.deepEqual(now.needs, [], 'no sign-in card on the refine screen (2026-10-11): upfrontNeed is gone');
+    assert.ok(now.log.some((entry) => entry.text === 'Signed in to ChatGPT from Chrome'));
+    assert.ok(now.log.some((entry) => entry.text === 'Left out Claude: not signed in'));
+    assert.deepEqual(now.jobs.filter((job) => job.kind === 'survey').map((job) => job.apps[0]), ['ChatGPT']);
+    assert.equal(now.jobs.some((job) => job.apps.includes('Claude')), false, 'nothing of Claude runs, nor its recall');
+    assert.match(now.chat[0].text, /^(Found .*|Had a look at what you picked\.) Starting with your ai chats\.\n\nUsing your Chrome sign-ins for ChatGPT\.\nLeft out Claude: not signed in\. You can add it from Add sources\.$/);
+    await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'ChatGPT' && job.status === 'done'), 'ChatGPT\'s survey');
+    assert.deepEqual(connect.state(started.id).needs, [], 'still no card');
+  } finally {
+    if (started) connect.stop(started.id);
+    delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
+  }
+});
+
+/** A sign-in window (main/connect/signin-window.cjs) that answers `status`, its calls in `opened`. */
+function fakeWindow(status = 'signed-in') {
+  const opened = [];
+  let closed = 0;
+  return { opened, closes: () => closed, signInWindow: { open: async (app) => { opened.push(app); return { status }; }, close: () => { closed += 1; } } };
+}
+
+test('Sign in in Engelbart\'s own browser: Google Drive signed in there signs in Gmail, Google Meet and Gemini for the run', async () => {
+  const { webSignIn } = fakeSignIn({ browsers: {} }); // Safari only: nothing to bring over
+  const google = { ...webSignIn, supports: (app) => ['Google Docs', 'Gmail', 'Google Meet', 'Gemini', 'ChatGPT', 'Claude'].includes(app) };
+  const win = fakeWindow('signed-in');
+  const { connect, state } = fakeConnect({ webSignIn: google, signInWindow: win.signInWindow });
+  let started = null;
+  try {
+    assert.deepEqual(await connect.signInWindowOpen('Google Docs'), { status: 'signed-in' });
+    assert.deepEqual(win.opened, ['Google Docs']);
+    assert.equal(connect.signInWindowClose(), true);
+    assert.equal(win.closes(), 1);
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Google Docs'] }, email: { on: true, apps: ['Gmail'] }, transcripts: { on: true, apps: ['Google Meet'] }, chats: { on: true, apps: ['Gemini', 'Claude'] } } });
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    for (const app of ['Google Drive', 'Gmail', 'Google Meet', 'Gemini']) assert.ok(now.log.some((entry) => entry.text === `Signed in to ${app} already`), app);
+    assert.deepEqual(now.jobs.filter((job) => job.kind === 'survey').map((job) => job.apps[0]).sort(), ['Gemini', 'Gmail', 'Google Docs', 'Google Meet']);
+    assert.match(now.chat[0].text, /\n\nLeft out Claude: not signed in\. You can add it from Add sources\.$/, 'another sign-in is not shared');
+    assert.deepEqual(now.needs, []);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+  // The person closed it first: nothing is marked.
+  const shut = fakeWindow('closed');
+  const other = fakeConnect({ webSignIn: google, signInWindow: shut.signInWindow });
+  assert.deepEqual(await other.connect.signInWindowOpen('Gmail'), { status: 'closed' });
+  assert.deepEqual(await other.connect.signInWindowOpen('Notion'), { status: 'closed' }, 'not one it can sign in');
+  assert.deepEqual(shut.opened, ['Gmail']);
+});
+
+test('a card an agent asks for mid-run (a sign-in that expired) still shows on the refine screen', async () => {
+  process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT';
+  const { webSignIn } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } } });
+  const { connect, state } = fakeConnect({ webSignIn });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } } });
+    const asked = await until(state(started.id), (s) => s.needs.length === 1, 'ChatGPT\'s survey asks');
+    assert.deepEqual([asked.needs[0].app, asked.needs[0].kind, asked.needs[0].reason], ['ChatGPT', 'signin', 'Sign in to ChatGPT']);
+    assert.equal(asked.jobs.find((job) => job.kind === 'survey').status, 'waiting', 'asked by its survey, not before the run');
+    await connect.need(started.id, asked.needs[0].id, 'done');
+    await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.status === 'done'), 'its survey, after');
   } finally {
     if (started) connect.stop(started.id);
     delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
@@ -846,38 +894,40 @@ test('a Keychain refusal in the check: no cards that cannot succeed, macOS asked
   }
 });
 
-test('refused is told apart from signed out: the refused app is skipped, the signed-out one keeps its card up front', async () => {
+test('refused is told apart from signed out: the refused app is skipped, the signed-out one left out, each said in the opener', async () => {
   const { webSignIn } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'], deny: true } } });
   const { connect, state } = fakeConnect({ webSignIn });
   let started = null;
   try {
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
-    const now = await until(state(started.id), (s) => s.needs.length === 1 && s.chat.length > 1 && !s.thinking, 'Claude\'s card');
-    assert.deepEqual([now.needs[0].app, now.needs[0].error], ['Claude', '']);
-    assert.match(now.chat[0].text, /\n\nSkipped ChatGPT: macOS didn't allow Chrome's sign-ins\. You can add it later from Add sources\.$/);
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.deepEqual(now.needs, []);
+    assert.match(now.chat[0].text, /\n\nSkipped ChatGPT: macOS didn't allow Chrome's sign-ins\. You can add it later from Add sources\.\nLeft out Claude: not signed in\. You can add it from Add sources\.$/);
     assert.ok(now.log.some((entry) => entry.text === 'Skipped ChatGPT: macOS didn\'t allow Chrome\'s sign-ins'));
-    assert.equal(now.jobs.some((job) => job.apps.includes('ChatGPT')), false);
+    assert.equal(now.jobs.some((job) => job.apps.includes('ChatGPT') || job.apps.includes('Claude')), false);
   } finally {
     if (started) connect.stop(started.id);
   }
 });
 
 test('Log in that macOS refuses: the card closes as skipped, and the chat says so', async () => {
+  process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT'; // signed in in Engelbart's window, then its survey finds the sign-in expired
   const { webSignIn, calls } = fakeSignIn({ browsers: { chrome: { apps: [], deny: true } }, later: { ChatGPT: 1 } });
-  const { connect, state } = fakeConnect({ webSignIn });
+  const { connect, state } = fakeConnect({ webSignIn, signInWindow: fakeWindow('signed-in').signInWindow });
   let started = null;
   try {
+    await connect.signInWindowOpen('ChatGPT');
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } } });
-    const asked = await until(state(started.id), (s) => s.needs.length === 1 && !s.thinking, 'ChatGPT\'s card (signed out, nothing to ask macOS)');
+    const asked = await until(state(started.id), (s) => s.needs.length === 1, 'ChatGPT\'s card, from its survey');
     assert.deepEqual(calls.keychain, []);
     await connect.need(started.id, asked.needs[0].id, 'open');
     const now = await until(state(started.id), (s) => s.needs.length === 0, 'the card closed');
     assert.deepEqual(calls.keychain, ['chrome'], 'macOS was asked once the sign-in was made in Chrome');
     assert.ok(now.chat.some((entry) => entry.role === 'agent' && entry.text === 'Skipped ChatGPT: macOS didn\'t allow Chrome\'s sign-ins. You can add it later from Add sources.'), 'said in the chat');
     assert.ok(now.log.some((entry) => entry.text === 'Skipped: Sign in to ChatGPT'), 'closed as skipped');
-    assert.equal(now.jobs.some((job) => job.apps.includes('ChatGPT')), false);
   } finally {
     if (started) connect.stop(started.id);
+    delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
   }
 });
 
@@ -906,10 +956,10 @@ test('checked when ticked: the run uses that answer without looking again; the o
     assert.deepEqual(await connect.signInCheck('Claude'), { status: 'signed-out', browser: '' });
     assert.deepEqual(quiet, ['ChatGPT', 'ChatGPT', 'Claude']);
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
-    const now = await until(state(started.id), (s) => s.needs.length === 1 && s.chat.length > 1 && !s.thinking, 'Claude\'s card');
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
     assert.deepEqual(quiet, ['ChatGPT', 'ChatGPT', 'Claude'], 'no signInQuiet for an app checked when ticked');
-    assert.equal(now.needs[0].app, 'Claude', 'its signed-out answer is used: its card up front');
-    assert.match(now.chat[0].text, /\n\nUsing your Chrome sign-ins for ChatGPT\.$/);
+    assert.deepEqual(now.needs, [], 'its signed-out answer is used: left out, no card');
+    assert.match(now.chat[0].text, /\n\nUsing your Chrome sign-ins for ChatGPT\.\nLeft out Claude: not signed in\. You can add it from Add sources\.$/);
     assert.ok(now.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'ChatGPT'));
   } finally {
     if (started) connect.stop(started.id);
@@ -925,10 +975,10 @@ test('a check when ticked waits on macOS as long as the person takes; the run wa
     const checking = connect.signInCheck('ChatGPT'); // macOS's prompt answered after longer than the run's limit
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
     assert.deepEqual(await checking, { status: 'signed-in', browser: 'Chrome' });
-    const now = await until(state(started.id), (s) => s.needs.length === 1 && s.chat.length > 1 && !s.thinking, 'Claude\'s card');
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
     assert.deepEqual(quiet, ['ChatGPT', 'Claude']);
-    assert.equal(now.needs[0].app, 'Claude', 'Claude, not checked when ticked, ran out of the limit: signed out, its card');
-    assert.match(now.chat[0].text, /Using your Chrome sign-ins for ChatGPT\.$/, 'ChatGPT, still being checked when the run started, ended signed in');
+    assert.deepEqual(now.needs, [], 'Claude, not checked when ticked, ran out of the limit: signed out, left out');
+    assert.match(now.chat[0].text, /Using your Chrome sign-ins for ChatGPT\.\nLeft out Claude: not signed in\. You can add it from Add sources\.$/, 'ChatGPT, still being checked when the run started, ended signed in');
   } finally {
     if (started) connect.stop(started.id);
   }
@@ -939,7 +989,7 @@ test('no panel for an app no browser holds: the check opens nothing, so macOS is
   const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
   assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '' }, 'no browser holds it: no panel');
   assert.equal(fake.webSignIn.keychainNote('ChatGPT'), 'macOS will ask to use Chrome\'s sign-ins. Choose Always Allow so it doesn\'t ask again.', 'the Log in card\'s note keeps the opener');
-  assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-out', browser: '' }, 'straight to "You\'ll sign in after you start"');
+  assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-out', browser: '' }, 'straight to the row\'s Sign in');
   assert.deepEqual(fake.calls.keychain, [], 'macOS was not asked');
   assert.deepEqual((await connect.signInNote('Claude')).browser, 'Chrome', 'one it holds still has its panel');
 });
@@ -958,21 +1008,24 @@ test('a refusal when ticked: the browser is not asked again, until Try again', a
   assert.deepEqual(await none.connect.signInCheck('ChatGPT'), { status: 'no-browser', browser: '' });
 });
 
-test('no browser whose sign-ins can be read (Safari only): the card says which it needs, and keeps Skip', async () => {
+test('no browser whose sign-ins can be read (Safari only): a Log in card asked mid-run says which it needs, and keeps Skip', async () => {
+  process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT'; // signed in in Engelbart's window, then its survey asks again
   const { webSignIn, calls } = fakeSignIn({ browsers: {} });
   const shown = [];
-  const browser = { has: () => true, show: (jobId) => { shown.push(jobId); return true; }, hide: () => {} };
-  const { connect, state } = fakeConnect({ webSignIn, browser });
+  const browser = { has: () => true, show: (jobId) => { shown.push(jobId); return true; }, hide: () => {}, close: () => {}, closeAll: () => {}, tools: () => null };
+  const { connect, state } = fakeConnect({ webSignIn, browser, signInWindow: fakeWindow('signed-in').signInWindow });
   let started = null;
   try {
+    await connect.signInWindowOpen('ChatGPT');
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } } });
-    const asked = await until(state(started.id), (s) => s.needs.length === 1 && !s.thinking, 'ChatGPT\'s card');
+    const asked = await until(state(started.id), (s) => s.needs.length === 1, 'ChatGPT\'s card');
     await connect.need(started.id, asked.needs[0].id, 'open');
     const now = await until(state(started.id), (s) => s.needs[0] && s.needs[0].error, 'the error');
     assert.equal(now.needs[0].error, 'Signing in to ChatGPT needs Chrome, Brave, Edge, Arc or Firefox.');
     assert.deepEqual([shown, calls.openedIn], [[], []], 'no window of Engelbart\'s, nothing opened');
   } finally {
     if (started) connect.stop(started.id);
+    delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
   }
 });
 
@@ -1201,9 +1254,11 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   assert.deepEqual(label({ status: 'checking', browser: '' }), { text: 'Waiting for macOS…', tone: 'busy' });
   assert.deepEqual(label({ status: 'signed-in', browser: 'Chrome' }), { text: '✓ Signed in from Chrome', tone: 'ok' });
   assert.deepEqual(label({ status: 'signed-in', browser: '' }), { text: '✓ Signed in', tone: 'ok' });
-  assert.deepEqual(label({ status: 'signed-out', browser: '' }), { text: 'You\'ll sign in after you start', tone: 'muted' });
-  assert.deepEqual(label({ status: 'refused', browser: 'Chrome' }), { text: 'macOS didn\'t allow it', tone: 'error', retry: true });
-  assert.deepEqual(label({ status: 'no-browser', browser: '' }), { text: 'Needs Chrome, Brave, Edge, Arc or Firefox', tone: 'muted' });
+  // No browser of the person's signed it in (2026-10-11): Sign in, in Engelbart's own browser, not "after you start".
+  assert.deepEqual(label({ status: 'signed-out', browser: '' }), { text: '', tone: '', signIn: true });
+  assert.deepEqual(label({ status: 'no-browser', browser: '' }), { text: '', tone: '', signIn: true }, 'no "Needs Chrome…": the window needs no browser');
+  assert.deepEqual(label({ status: 'refused', browser: 'Chrome' }), { text: 'macOS didn\'t allow it', tone: 'error', retry: true, signIn: true }, 'Try again and Sign in');
+  assert.deepEqual(label({ status: 'signing', browser: '' }), { text: 'Signing in…', tone: 'busy' });
   assert.deepEqual(label(null), { text: 'Needs sign-in', tone: 'muted' }, 'not checked: as before');
   assert.deepEqual(model.rowLabel('Granola', { signIn: { status: 'signed-in', browser: 'Chrome' } }), { text: 'Needs sign-in', tone: 'muted' }, 'only web apps');
 
@@ -1239,8 +1294,8 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   assert.deepEqual(outcome('signed-in', 'signed-in'), { done: true, title: 'Signed in to ChatGPT and Claude', lines: ['Brought over from Chrome. You won\'t need to log in again.'], tone: 'ok' });
   const mixed = outcome('signed-in', 'signed-out');
   assert.equal(mixed.tone, 'warn');
-  assert.deepEqual(mixed.lines.slice(1), ['Chrome isn\'t signed in to Claude. The import will ask you to log in once it starts.']);
-  assert.deepEqual(outcome('refused', 'refused'), { done: true, title: 'Not allowed', lines: ['macOS didn\'t allow it, so ChatGPT and Claude were unticked. Try again on their rows to be asked again.'], tone: 'refused' });
+  assert.deepEqual(mixed.lines.slice(1), ['Chrome isn\'t signed in to Claude. Sign in on its row to sign in here.']);
+  assert.deepEqual(outcome('refused', 'refused'), { done: true, title: 'Not allowed', lines: ['macOS didn\'t allow it, so ChatGPT and Claude were unticked. Try again on their rows to be asked again, or Sign in to sign in here.'], tone: 'refused' });
   assert.equal(outcome('signed-in', null).tone, 'warn', 'a check that failed and was cleared counts as not brought over, never waits forever');
   // Not now unticks them: no panel is left.
   const notNow = waiting.Chrome.reduce((next, row) => model.tickRow(next, row.id, row.app, false), all);
@@ -1254,6 +1309,42 @@ test('the choose screen\'s sign-in checks: each row state, the web apps a tick s
   assert.deepEqual(model.waitingWhile(true, waiting), waiting);
   assert.deepEqual(model.waitingWhile(false, waiting), {}, 'consent off: the panels go, and start has none to allow');
   assert.deepEqual(Object.keys(model.waitingWhile(false, waiting)).map((browser) => model.signInPanel(all, browser, waiting[browser])), [], 'no panel shown');
+});
+
+test('Bring these in with ticked web apps not signed in: one modal, grouped by the sign-in they share; Leave them out unticks them', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const found = { apps: { Obsidian: { found: true }, ChatGPT: { found: true, signedIn: true } }, sites: { found: false }, github: { found: false } };
+  let picks = model.initialPicks(found);
+  picks = model.tickRow(picks, 'notes', 'Google Docs', true);
+  picks = model.tickRow(picks, 'email', 'Gmail', true);
+  picks = model.tickRow(picks, 'chats', 'ChatGPT', true); // signed in in Engelbart's browser when the screen opened
+  picks = model.tickRow(picks, 'chats', 'Claude', true);
+  picks = model.tickRow(picks, 'notes', 'Evernote', true); // no sign-in Engelbart can make: its agent asks, as before
+  const signIns = { 'Google Docs': { status: 'signed-out' }, Gmail: { status: 'no-browser' }, Claude: { status: 'signed-in', browser: 'Chrome' } };
+  const unsigned = model.unsignedWeb(picks, signIns, found, true);
+  assert.deepEqual(unsigned, [{ id: 'notes', app: 'Google Docs' }, { id: 'email', app: 'Gmail' }]);
+  const gate = model.signInGate(unsigned);
+  assert.equal(gate.title, 'Google Drive and Gmail need you to sign in');
+  assert.deepEqual(gate.groups, [[{ id: 'notes', app: 'Google Docs' }, { id: 'email', app: 'Gmail' }]], 'one Google sign-in');
+  assert.deepEqual(gate.lines, []);
+  assert.match(gate.body, /^Sign in opens its sign-in page in a small window here\. Leave them out to start without them\.$/);
+  // Two sign-ins: a line each.
+  const two = model.signInGate([...unsigned, { id: 'chats', app: 'Perplexity' }]);
+  assert.equal(two.title, 'Google Drive, Gmail and Perplexity need you to sign in');
+  assert.deepEqual(two.lines, ['Google Drive and Gmail: one sign-in.', 'Perplexity.']);
+  assert.equal(model.signInGate([{ id: 'chats', app: 'Perplexity' }]).title, 'Perplexity needs you to sign in');
+  // Leave them out: unticked, so nothing is left to sign in, and the run starts with the rest.
+  const left = unsigned.reduce((next, row) => model.tickRow(next, row.id, row.app, false), picks);
+  assert.deepEqual(model.unsignedWeb(left, signIns, found, true), []);
+  assert.deepEqual([model.ticked(left, 'notes', 'Google Docs'), model.ticked(left, 'email', 'Gmail'), model.ticked(left, 'chats', 'Claude'), model.ticked(left, 'notes', 'Obsidian')], [false, false, true, true]);
+  // Signed in in the window: Google Drive's sign-in is Gmail's too, so nothing is left, and no modal.
+  const signedIn = { ...signIns, ...Object.fromEntries(model.sharesSignIn('Google Docs').map((app) => [app, { status: 'signed-in', browser: '' }])) };
+  assert.deepEqual(model.sharesSignIn('Google Docs'), ['Google Docs', 'Google Meet', 'Gmail', 'Gemini']);
+  assert.deepEqual(model.unsignedWeb(picks, signedIn, found, true), []);
+  assert.equal(model.signInGate([]), null, 'every ticked web app signed in: no modal');
+  // Still being checked: main waits for it. The consent off: web apps are left out as before, no modal.
+  assert.deepEqual(model.unsignedWeb(picks, { ...signedIn, Claude: { status: 'checking' } }, found, true), []);
+  assert.deepEqual(model.unsignedWeb(picks, signIns, found, false), []);
 });
 
 test('the window\'s model, and the onboarding flow with Connect your library in place of Add to your library and Custom instructions', async () => {

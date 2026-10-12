@@ -66,6 +66,7 @@ const { createAgentBrowser } = require('./connect/browser.cjs');
 const { createConnectors } = require('./connect/connectors.cjs');
 const { createWebSignIn, SIGN_IN_COOKIES } = require('./connect/web-signin.cjs');
 const { createAppleNotes } = require('./connect/apple-notes.cjs');
+const { createSignInWindow } = require('./connect/signin-window.cjs');
 const { APPS: CONNECT_APPS } = require('../shared/connect-sources.cjs');
 const { openToolBridge } = require('./sandbox/local-tools.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
@@ -967,6 +968,16 @@ if (!hasSingleInstanceLock) {
       }),
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
     });
+    // A sign-in made in Engelbart's own browser (the choose screen's "Sign in", ./connect/signin-window.cjs), when no
+    // browser of the person's holds one to bring over.
+    const signInWindow = createSignInWindow({
+      BrowserWindow,
+      getParent: dialogWindow,
+      getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+      userAgent: (ua) => cleanUserAgent(ua, app.getName()),
+      signedIn: (name) => webSignIn.signedIn(name),
+      headless: process.env.ENGELBART_HEADLESS === '1',
+    });
     // The providers whose CLI can run now (the tool check), as Connect names them; before the first check, both.
     const connectReady = () => {
       if (connectFake) return ['anthropic', 'openai'];
@@ -996,6 +1007,7 @@ if (!hasSingleInstanceLock) {
       connectors,
       appleNotes,
       webSignIn,
+      signInWindow,
     });
     // The apps Engelbart's browser holds a sign-in for (their sign-in cookie in the Stage's session): ticked on the choose
     // screen, as an app found on this Mac is.

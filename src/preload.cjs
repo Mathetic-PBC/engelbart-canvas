@@ -134,6 +134,8 @@ const engelbartAPI = Object.freeze({
   connectCancelSignIn: invoke('connect-cancel-sign-in'),
   connectSignInNote: invoke('connect-signin-note'), // (app) → { browser, note }
   connectSignInCheck: invoke('connect-signin-check'), // (app, retry?) → { status, browser }
+  connectSignInWindow: invoke('connect-signin-window'), // (app) → { status: 'signed-in' | 'closed' }: signs in in Engelbart's own browser
+  connectSignInWindowClose: invoke('connect-signin-window-close'), // closes that window
   connectNeed: invoke('connect-need'),
   connectImport: invoke('connect-import'),
   connectStop: invoke('connect-stop'),

@@ -8,14 +8,15 @@
 // filled first, no folder part), Connect in place of Add to your library and Custom instructions, and no Project context
 // (welcome, create, connect: Connect "3 of 3"); the choose screen starts with Notes ticked (a vault
 // Obsidian knows), ChatGPT ticked by hand, the permissions card naming it; Refine opens the chat, its first line said at
-// once, whose question is a card with one option per line; ChatGPT, signed in nowhere this disposable home can read, gets
-// its sign-in card before its survey starts, in the strip above Reply and not in the chat; Done gives it back and the
-// survey runs; the librarian waits for it, then offers what it found; the connect step's Continue is a filled button once
+// once, whose question is a card with one option per line; ChatGPT, signed in nowhere this disposable home can read, has
+// Sign in on its row (2026-10-11), as Google Drive and Gmail do, whose one sign-in in Engelbart's own window ticks both ✓;
+// Bring these in asks for ChatGPT's sign-in in a modal first, so the refine chat has no sign-in card; its survey runs, the
+// librarian waits for it, then offers what it found; the connect step's Continue is a filled button once
 // the session has started; Import lights up once nothing is left to ask; the working view follows every import, MEMORY.md
 // is saved without its planted secrets, and Continue ends onboarding: the project is made then, after Connect, and holds the
 // vault's notes, with the chip in the top right saying the library is connected. ENGELBART_CONNECT_SHOTS=<dir>
 // saves pictures.
-const { app, BrowserWindow } = require('electron');
+const { app, BrowserWindow, session: electronSession } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
@@ -30,7 +31,6 @@ process.env.ENGELBART_SANDBOXES = 'off';
 process.env.ENGELBART_UPDATES = 'off';
 process.env.ENGELBART_CONNECT_FAKE = '1';
 process.env.ENGELBART_CONNECT_FAKE_MS = '150';
-process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT';
 process.env.ENGELBART_CONNECT_APPLICATIONS = ''; // this Mac's /Applications is not the disposable one's
 process.env.ENGELBART_HEADLESS = '1';
 
@@ -45,6 +45,7 @@ write('Notes/Essays/Tools for thought.md', 'A draft.\n');
 write('Notes/Daily/2026-10-01.md', 'standup\n');
 write('Library/Application Support/obsidian/obsidian.json', JSON.stringify({ vaults: { v: { path: path.join(root, 'Notes'), ts: Date.now(), open: true } } }));
 require('../src/main/index.cjs');
+const { stagePartition } = require('../src/main/browser/views.cjs');
 
 const pause = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
 async function until(fn, label, tries = 300) {
@@ -119,6 +120,26 @@ app.whenReady().then(async () => {
     await press(wc, '[data-connect-source="chats"] button[aria-expanded]');
     await press(wc, '[data-connect-app="ChatGPT"]');
     assert.equal(await attr(wc, '[data-connect-app=ChatGPT] [role=checkbox]', 'aria-checked'), 'true');
+    // No browser here holds its sign-in (2026-10-11): Sign in on its row, not "You'll sign in after you start".
+    await until(() => has(wc, '[data-connect-signin="ChatGPT"]'), 'ChatGPT\'s Sign in');
+    assert.doesNotMatch(await text(wc, '[data-connect-app=ChatGPT]'), /after you start|Needs Chrome/);
+    // Google Drive and Gmail share one Google sign-in: made once in Engelbart's own window (hidden here; the sign-in is
+    // its cookie set in the agents' browser), both rows read ✓.
+    await press(wc, '[data-connect-app="Google Docs"]');
+    await press(wc, '[data-connect-source="email"] button[aria-expanded]');
+    await press(wc, '[data-connect-app="Gmail"]');
+    await until(async () => (await has(wc, '[data-connect-signin="Google Docs"]')) && has(wc, '[data-connect-signin="Gmail"]'), 'Sign in on Google Drive and Gmail');
+    await shot(wc, '1-sign-in-rows');
+    await press(wc, '[data-connect-signin="Google Docs"]');
+    await until(async () => /Signing in…/.test(await text(wc, '[data-connect-app="Google Docs"]')), 'Signing in…');
+    const agentsBrowser = electronSession.fromPartition(stagePartition(false));
+    await agentsBrowser.cookies.set({ url: 'https://accounts.google.com/', domain: '.google.com', name: 'SID', value: 'smoke', secure: true });
+    await until(async () => /✓ Signed in/.test(await text(wc, '[data-connect-app="Google Docs"]')) && /✓ Signed in/.test(await text(wc, '[data-connect-app="Gmail"]')), 'both ✓ from one sign-in', 200);
+    assert.equal(await has(wc, '[data-connect-signin="Gmail"]'), false, 'no Sign in left on Gmail');
+    await shot(wc, '1-signed-in-rows');
+    await press(wc, '[data-connect-app="Google Docs"]');
+    await press(wc, '[data-connect-app="Gmail"]');
+    await press(wc, '[data-connect-source="email"] button[aria-expanded]');
     // MATH-114: asking ChatGPT what it remembers is ticking it; one checkbox, naming the provider, for the rest.
     assert.doesNotMatch(await text(wc, '[data-connect-app=ChatGPT]'), /asks what it remembers/, 'that is for the refine chat');
     // Now-3a-Fix: no summary beside a section's name, and a line under an app only when it needs something.
@@ -151,8 +172,16 @@ app.whenReady().then(async () => {
     await shot(wc, '1b-permissions');
     await press(wc, '[data-connect-source="code"] button[aria-expanded]');
 
-    /* ------------------------------------------------ refine: a card with one option per line, the needs-you card, the survey's findings */
+    /* ------------------------------------------------ Bring these in: ChatGPT is not signed in, so a modal asks first */
     await press(wc, '[data-connect-library="choose"] [data-connect-bring]');
+    await until(() => has(wc, '[data-connect-signin-gate="ask"]'), 'the sign-in modal, before the run');
+    assert.match(await text(wc, '[data-connect-signin-gate]'), /ChatGPT needs you to sign in[\s\S]*Leave it out\s*Sign in$/);
+    await shot(wc, '1d-sign-in-first');
+    await press(wc, '[data-connect-signin-go]');
+    await until(() => has(wc, '[data-connect-signin-gate="signing"]'), 'signing in, in the window');
+    await agentsBrowser.cookies.set({ url: 'https://chatgpt.com/', domain: '.chatgpt.com', name: '__Secure-next-auth.session-token', value: 'smoke', secure: true });
+
+    /* ------------------------------------------------ refine: a card with one option per line, no sign-in card, the survey's findings */
     // No opening line (2026-10-09): the dots in the middle until the librarian says something, then never again.
     await until(async () => (await has(wc, '[data-connect-chat] [data-connect-starting]')) || has(wc, '[data-connect-chat] [data-connect-agent]'), 'the dots, or the librarian already');
     if (await has(wc, '[data-connect-chat] [data-connect-starting]')) {
@@ -168,23 +197,18 @@ app.whenReady().then(async () => {
     assert.equal(await has(wc, '[data-onboarding-skip]'), false, 'no Skip for now with a session');
     const footLook = () => js(wc, '(()=>{const s=getComputedStyle(document.querySelector("[data-connect-import]"));return [s.backgroundColor,s.borderTopColor,s.color].join(" | ")})()');
     assert.equal(await footLook(), 'rgb(255, 255, 255) | rgb(234, 234, 234) | rgb(77, 77, 77)', 'Skip the rest stays quiet');
-    // ChatGPT's sign-in, sorted before its survey: one card in the chat, each app a row, what Skip means under it.
-    await until(() => has(wc, '[data-connect-chat] [data-connect-needs] [data-connect-need="signin"]'), 'ChatGPT\'s sign-in card, before the run asks');
-    assert.match(await text(wc, '[data-connect-needs]'), /Skipping one leaves it out\. You can add it later from Add sources\./);
     await until(() => has(wc, '[data-connect-card="live"] [data-connect-option="Everything"]'), 'the notes question, as a card');
     assert.equal(await attr(wc, '[data-connect-import]', 'data-ready'), '0', 'Import is not lit while questions remain');
     await shot(wc, '2-card');
     await press(wc, '[data-connect-card="live"] [data-connect-option="Everything"]');
     await press(wc, '[data-connect-card="live"] [data-connect-submit]');
-    // One Log in button and Skip (2026-10-08). The run is hidden and no browser can be read here: Done is given through
-    // the API, as main's windowClosed would.
-    assert.match(await text(wc, '[data-connect-need="signin"]'), /ChatGPT[\s\S]*Opens in your browser · read-only[\s\S]*Skip\s*Log in/);
     await until(() => has(wc, '[data-connect-answered]'), 'the answered question, folded to one line');
     assert.match(await text(wc, '[data-connect-answered]'), /What from notes\?/);
     assert.equal(await has(wc, '[data-connect-need-done]'), false, 'no Done');
     assert.equal(await has(wc, '[data-connect-need-signins]'), false, 'nothing brought over from Chrome');
-    await shot(wc, '3-needs-you');
-    await js(wc, `window.engelbartAPI.connectList().then(async (list) => { const s = list[0]; await window.engelbartAPI.connectNeed(s.id, s.needs[0].id, 'done'); })`);
+    // Signed in before the run (2026-10-11): no sign-in card on the refine screen.
+    assert.equal(await has(wc, '[data-connect-needs]'), false, 'no sign-in card in the chat');
+    assert.equal(await js(wc, 'window.engelbartAPI.connectList().then((list) => list[0].needs.length)'), 0);
     await until(() => has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]'), 'the survey\'s findings, one per line', 400);
     assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'role'), 'checkbox', 'several can be picked');
     await pause(400); // the chat scrolls to its newest message first

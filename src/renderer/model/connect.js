@@ -3,9 +3,9 @@
 // (src/main/connect), how an import's progress reads, what a step the agents hand the person says, and what the dock
 // shows. The sources and apps are src/shared/connect-sources.cjs.
 
-import { SOURCES, APPS, LOCAL_PDFS, READABLE_NAMES, PERIODS, DEFAULT_PERIOD_DAYS, recallApps, webApps, cleanDays, periodName, shownName } from '../../shared/connect-sources.cjs';
+import { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, recallApps, webApps, cleanDays, periodName, shownName, SIGN_IN_COOKIES, signInGroup, sharesSignIn } from '../../shared/connect-sources.cjs';
 
-export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName, shownName };
+export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName, shownName, sharesSignIn };
 
 // MATH-114 (2026-10-09): the choose screen as the mockup's grouped list. Each source is a group whose header ticks its
 // rows (tri-state); a row says at its right how the app is reached and where it stands; ticking is the consent (a
@@ -192,16 +192,58 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
 
 /**
  * A web app's sign-in as checked when it was ticked (2026-10-10, main's connect-signin-check): { status: 'checking' |
- * 'signed-in' | 'refused' | 'signed-out' | 'no-browser', browser } → its label, or null. A refused one offers Try again.
+ * 'signing' | 'signed-in' | 'refused' | 'signed-out' | 'no-browser', browser } → its label, or null. One no browser of the
+ * person's could sign in (signed out there, Safari only, or macOS refused) offers Sign in (2026-10-11): its sign-in page in
+ * Engelbart's own browser ('signing' while that window is open). A refused one also offers Try again.
  */
 function signInLabel(signIn) {
   if (!signIn || !signIn.status) return null;
   if (signIn.status === 'checking') return { text: 'Waiting for macOS…', tone: 'busy' };
+  if (signIn.status === 'signing') return { text: 'Signing in…', tone: 'busy' };
   if (signIn.status === 'signed-in') return { text: signIn.browser ? `✓ Signed in from ${signIn.browser}` : '✓ Signed in', tone: 'ok' };
-  if (signIn.status === 'signed-out') return { text: "You'll sign in after you start", tone: 'muted' };
-  if (signIn.status === 'refused') return { text: "macOS didn't allow it", tone: 'error', retry: true };
-  if (signIn.status === 'no-browser') return { text: `Needs ${READABLE_NAMES}`, tone: 'muted' };
+  if (signIn.status === 'signed-out' || signIn.status === 'no-browser') return { text: '', tone: '', signIn: true };
+  if (signIn.status === 'refused') return { text: "macOS didn't allow it", tone: 'error', retry: true, signIn: true };
   return null;
+}
+
+/**
+ * The ticked web apps not signed in yet, before Bring these in (2026-10-11) → [{ id, app }]: each one whose sign-in Engelbart
+ * can make in its own browser (SIGN_IN_COOKIES), not ticked from the start signed in (`found`), and not checked as signed
+ * in (`signIns`). One still being checked is left to main, which waits for it. None while the consent is off: web apps are
+ * left out then.
+ */
+export function unsignedWeb(state, signIns = {}, found = null, consent = true) {
+  if (!consent || !state) return [];
+  const out = [];
+  for (const source of SOURCES) {
+    for (const app of source.apps) {
+      if ((APPS[app] || {}).reach !== 'web' || !Object.hasOwn(SIGN_IN_COOKIES, app) || !ticked(state, source.id, app)) continue;
+      if (found && found.apps && found.apps[app] && found.apps[app].signedIn) continue;
+      const status = (signIns[app] || {}).status;
+      if (status === 'signed-in' || status === 'checking') continue;
+      if (!out.some((row) => row.app === app)) out.push({ id: source.id, app });
+    }
+  }
+  return out;
+}
+
+/**
+ * The modal before a run with apps still not signed in → { title, groups: [[{ id, app }]] } | null, the apps grouped by the
+ * sign-in they share ("Google Drive and Gmail need you to sign in": one Google sign-in signs in both).
+ */
+export function signInGate(rows) {
+  if (!rows || !rows.length) return null;
+  const groups = [];
+  for (const row of rows) {
+    const group = groups.find((list) => signInGroup(list[0].app) === signInGroup(row.app));
+    if (group) group.push(row); else groups.push([row]);
+  }
+  const names = rows.map((row) => shownName(row.app));
+  const title = `${listed(names)} ${names.length === 1 ? 'needs' : 'need'} you to sign in`;
+  const lines = groups.length > 1
+    ? groups.map((list) => (list.length > 1 ? `${listed(list.map((row) => shownName(row.app)))}: one sign-in.` : `${shownName(list[0].app)}.`))
+    : [];
+  return { title, groups, lines, body: `Sign in opens ${groups.length === 1 ? 'its' : 'each'} sign-in page in a small window here. Leave ${names.length === 1 ? 'it' : 'them'} out to start without ${names.length === 1 ? 'it' : 'them'}.` };
 }
 
 /**
@@ -279,8 +321,8 @@ export function keychainOutcome(browser, rows, signIns) {
   const signedIn = names('signed-in'), refused = names('refused');
   const missing = rows.filter((row) => !['signed-in', 'refused'].includes(of(row).status)).map((row) => shownName(row.app));
   const lines = [];
-  if (refused.length) lines.push(`macOS didn't allow it, so ${listed(refused)} ${refused.length === 1 ? 'was' : 'were'} unticked. Try again on ${refused.length === 1 ? 'its row' : 'their rows'} to be asked again.`);
-  if (missing.length) lines.push(`${browser} isn't signed in to ${listed(missing)}. The import will ask you to log in once it starts.`);
+  if (refused.length) lines.push(`macOS didn't allow it, so ${listed(refused)} ${refused.length === 1 ? 'was' : 'were'} unticked. Try again on ${refused.length === 1 ? 'its row' : 'their rows'} to be asked again, or Sign in to sign in here.`);
+  if (missing.length) lines.push(`${browser} isn't signed in to ${listed(missing)}. Sign in on ${missing.length === 1 ? 'its row' : 'their rows'} to sign in here.`);
   if (signedIn.length) {
     const title = `Signed in to ${listed(signedIn)}`;
     return { done: true, title, lines: [`Brought over from ${browser}. You won't need to log in again.`, ...lines], tone: lines.length ? 'warn' : 'ok' };

@@ -512,6 +512,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // again after a refusal.
   handle('connect-signin-note', (app) => cx().signInNote(appName(app)));
   handle('connect-signin-check', (app, retry) => cx().signInCheck(appName(app), { retry: retry === true }));
+  handle('connect-signin-window', (app) => cx().signInWindowOpen(appName(app)));
+  handle('connect-signin-window-close', () => cx().signInWindowClose());
   handle('connect-need', (id, needId, action) => cx().need(importId(id), str(needId, 'request id', 64), str(action, 'action', 8)));
   handle('connect-import', (id) => cx().importNow(importId(id)));
   handle('connect-stop', (id) => cx().stop(importId(id)));

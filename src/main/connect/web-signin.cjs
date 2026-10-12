@@ -18,21 +18,7 @@
 // left is it 'denied'. `signInQuiet` is the same without ever opening a page: the check made when a web app is ticked on the
 // choose screen (2026-10-10, after `keychainTarget` says which browser macOS will be asked about) or before the survey starts.
 
-const { appOf, READABLE_NAMES } = require('../../shared/connect-sources.cjs');
-
-// The cookie that holds each app's sign-in: the registrable domain it is on, and its name.
-const SIGN_IN_COOKIES = Object.freeze({
-  ChatGPT: ['chatgpt.com', /session-token/],
-  Claude: ['claude.ai', /^sessionKey$/],
-  'Google Docs': ['google.com', /^(__Secure-1PSID|SID)$/],
-  'Google Meet': ['google.com', /^(__Secure-1PSID|SID)$/],
-  Gmail: ['google.com', /^(__Secure-1PSID|SID)$/],
-  Gemini: ['google.com', /^(__Secure-1PSID|SID)$/],
-  Overleaf: ['overleaf.com', /^overleaf_session/],
-  Perplexity: ['perplexity.ai', /session-token/],
-  Grok: ['grok.com', /^sso$/],
-  Notion: ['notion.so', /^token_v2$/],
-});
+const { appOf, READABLE_NAMES, SIGN_IN_COOKIES } = require('../../shared/connect-sources.cjs');
 
 // Where the default browser is sent to sign in; any other app, its start page (which asks for a sign-in when there is none).
 const SIGN_IN_PAGES = Object.freeze({

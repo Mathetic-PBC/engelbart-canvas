@@ -65,6 +65,28 @@ const APPS = Object.freeze({
 // Where a sign-in may take a page on its way back to an app (an agent's browser only goes where its apps' `sites` are).
 const SIGN_IN_SITES = Object.freeze(['accounts.google.com', 'appleid.apple.com', 'idmsa.apple.com', 'login.microsoftonline.com', 'login.live.com', 'auth.openai.com', 'auth0.openai.com', 'accounts.x.ai', 'github.com', 'okta.com', 'auth0.com']);
 
+// The cookie that holds each web app's sign-in: the registrable domain it is on, and its name (main/connect/web-signin.cjs).
+// Apps with the same entry share one sign-in: Google Drive, Gmail, Google Meet and Gemini are one Google sign-in.
+const SIGN_IN_COOKIES = Object.freeze({
+  ChatGPT: ['chatgpt.com', /session-token/],
+  Claude: ['claude.ai', /^sessionKey$/],
+  'Google Docs': ['google.com', /^(__Secure-1PSID|SID)$/],
+  'Google Meet': ['google.com', /^(__Secure-1PSID|SID)$/],
+  Gmail: ['google.com', /^(__Secure-1PSID|SID)$/],
+  Gemini: ['google.com', /^(__Secure-1PSID|SID)$/],
+  Overleaf: ['overleaf.com', /^overleaf_session/],
+  Perplexity: ['perplexity.ai', /session-token/],
+  Grok: ['grok.com', /^sso$/],
+  Notion: ['notion.so', /^token_v2$/],
+});
+/** The sign-in an app shares with others ('google.com SID…' for Gmail and Google Drive alike); an app with none, its own name. */
+const signInGroup = (app) => {
+  const entry = Object.hasOwn(SIGN_IN_COOKIES, app) ? SIGN_IN_COOKIES[app] : null;
+  return entry ? `${entry[0]} ${entry[1].source}` : String(app);
+};
+/** The apps signed in by the one sign-in `app` makes, itself first. */
+const sharesSignIn = (app) => [app, ...Object.keys(SIGN_IN_COOKIES).filter((other) => other !== app && signInGroup(other) === signInGroup(app))];
+
 // What the person is shown for an app whose id says less than it reaches (2026-10-10): 'Google Docs' opens their whole
 // Drive (its agent starts at drive.google.com, import_google_files brings in Docs, Sheets, Slides and any file), so it is
 // shown as Google Drive. The id stays a key everywhere (APPS, the groups, sign-ins, the scan, skills, logos, picks, saved
@@ -106,4 +128,4 @@ const cleanDays = (value) => (value === 182 || value === 365 ? value : null);
 /** "the past year" for 365, "the past 6 months" for 182, "all time" otherwise. */
 const periodName = (days) => (PERIODS.find((period) => period.days === cleanDays(days)) || PERIODS[2]).label;
 
-module.exports = { SOURCES, APPS, LOCAL_PDFS, ITEM_SOURCES, ITEM_CATEGORIES, GROUP_CATEGORIES, CHAT_APPS, categoryOfApp, READABLE_NAMES, SIGN_IN_SITES, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };
+module.exports = { SOURCES, APPS, LOCAL_PDFS, ITEM_SOURCES, ITEM_CATEGORIES, GROUP_CATEGORIES, CHAT_APPS, categoryOfApp, READABLE_NAMES, SIGN_IN_SITES, SIGN_IN_COOKIES, signInGroup, sharesSignIn, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };

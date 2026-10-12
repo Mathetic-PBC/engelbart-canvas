@@ -42,7 +42,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName } = require('../../shared/connect-sources.cjs');
+const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName, sharesSignIn } = require('../../shared/connect-sources.cjs');
 const prompts = require('./prompts.cjs');
 const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
@@ -283,7 +283,7 @@ function shownOf(input) {
  * change; `openBridge` (../sandbox/local-tools.cjs openToolBridge); `browser` the agents' browser (./browser.cjs, null
  * where there is none); `connectors` (./connectors.cjs); `appleNotes` (./apple-notes.cjs).
  */
-function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, now = () => new Date().toISOString() }) {
+function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, signInWindow = null, now = () => new Date().toISOString() }) {
   const sessions = new Map();
   const readyNow = () => { try { return (ready() || []).filter((provider) => PROVIDERS.includes(provider)); } catch { return [...PROVIDERS]; } };
   const choiceFor = (provider) => connectChoice(provider, (() => { try { return models(); } catch { return null; } })());
@@ -707,7 +707,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /**
    * The surveys and recalls a session starts with: every web or connector app it may reach, every assistant it may ask.
-   * An app in `held` is still signed out (signInsFirst): its survey and recall wait for its sign-in card (releaseHeld).
+   * An app in `held` is still signed out or refused (signInsFirst): its survey and recall are held, then left out (releaseHeld).
    */
   function startWork(s, held = new Set()) {
     for (const [source, choice] of Object.entries(s.choices.sources)) {
@@ -718,7 +718,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
           if (!s.choices.permissions.browser) { s.found[source] = { ...(s.found[source] || {}), [app]: { reach, left: 'They did not let the agents use their accounts, so this app is left out.' } }; continue; }
           if (held.has(app)) {
             s.held.set(app, { source, recall: false });
-            s.found[source] = { ...(s.found[source] || {}), [app]: { reach, survey: 'running', signIn: 'waiting: the person was shown a Log in card for it; its survey starts once they sign in' } };
+            s.found[source] = { ...(s.found[source] || {}), [app]: { reach, survey: 'running', signIn: 'waiting: not signed in yet' } };
             continue;
           }
           s.found[source] = { ...(s.found[source] || {}), [app]: { reach, survey: 'running' } };
@@ -738,7 +738,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
   }
 
-  /** A held app's sign-in card answered: done starts its survey and recall; skip leaves it out, and the librarian hears. */
+  /** A held app's sign-in settled: done starts its survey and recall; skip leaves it out, and the librarian hears. */
   function releaseHeld(s, app, how) {
     const held = s.held.get(app);
     if (!held) return;
@@ -803,6 +803,27 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   /**
+   * "Sign in" on the choose screen (2026-10-11): the app's sign-in page in Engelbart's own browser (./signin-window.cjs), for
+   * an app no browser of the person's could sign in. → { status: 'signed-in' | 'closed' }. Signed in, it is kept as signed
+   * in for every app sharing that sign-in (Google Drive, Gmail, Google Meet and Gemini are one), so the run counts them all.
+   */
+  async function signInWindowOpen(app) {
+    if (!signInWindow || !webSignIn || !webSignIn.supports(app)) return { status: 'closed' };
+    const out = await signInWindow.open(app).catch(() => ({ status: 'closed' }));
+    if (out && out.status === 'signed-in') {
+      for (const other of sharesSignIn(app)) signInChecked.set(other, { status: 'signed-in', browser: '', browserId: '' });
+      return { status: 'signed-in' };
+    }
+    return { status: 'closed' };
+  }
+
+  /** Closes the sign-in window, if one is open (Leave out, or the choose screen gone). */
+  function signInWindowClose() {
+    if (signInWindow) signInWindow.close();
+    return true;
+  }
+
+  /**
    * The ticked web apps' sign-ins, looked at before any survey starts (2026-10-09). One checked when it was ticked keeps
    * that answer (a check still waiting on macOS is waited for); any other is brought over from a browser that holds it, all
    * together, at most SIGN_IN_CHECK_MS, no answer counting as signed out. A browser macOS refused is not asked again.
@@ -857,6 +878,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /** "Skipped ChatGPT and Claude: macOS didn't allow Chrome's sign-ins. You can add them later from Add sources." */
   const skippedLine = (name, apps) => `Skipped ${listed(apps.map(shownName))}: macOS didn't allow ${name || 'your browser'}'s sign-ins. You can add ${apps.length === 1 ? 'it' : 'them'} later from Add sources.`;
 
+  /** "Left out Google Drive: not signed in. You can add it from Add sources." */
+  const leftOutLine = (apps) => `Left out ${listed(apps.map(shownName))}: not signed in. You can add ${apps.length === 1 ? 'it' : 'them'} from Add sources.`;
+
   /** What the opener says of the sign-ins brought over and the apps macOS refused, in plain lines, or ''. */
   function signInLines({ signedIn, refused }) {
     const lines = byBrowser(signedIn).map(([name, apps]) => `Using your ${name} sign-ins for ${listed(apps.map(shownName))}.`);
@@ -864,13 +888,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     for (const [app, name] of refused) skipped.set(name || '', [...(skipped.get(name || '') || []), app]);
     for (const [name, apps] of skipped) lines.push(skippedLine(name, apps));
     return lines.join('\n');
-  }
-
-  /** A sign-in card shown before the run asks for it: no agent waits on it; the app's survey does (releaseHeld). */
-  function upfrontNeed(s, app) {
-    const reason = `Sign in to ${shownName(app)}`;
-    s.needs.push({ id: randomUUID(), app, kind: 'signin', reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, 'signin'), closed: false, upfront: true, at: now() });
-    logAction(s, null, `Needs you: ${reason}`);
   }
 
   /** The line under a sign-in card before macOS is first asked for a browser's sign-ins this run, or ''. */
@@ -920,7 +937,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     need.outcome = how;
     if (need.cancel) need.cancel(); // a sign-in still waited for in the default browser
     if (how === 'skip' && !s.stopped) skipApp(s, need.app, need.jobs);
-    if (need.upfront) releaseHeld(s, need.app, how);
     for (const [jobId, resolve] of need.waiters) { resolve({ status: how === 'skip' ? 'skipped' : 'done' }); if (browser) browser.hide(jobId); }
     need.waiters.clear();
     for (const jobId of need.jobs) if (browser) browser.hide(jobId);
@@ -984,7 +1000,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (need.closed || !need.jobs.includes(job.id)) continue;
       need.waiters.delete(job.id);
       need.jobs = need.jobs.filter((id) => id !== job.id);
-      if (!need.jobs.length && !need.upfront) { need.closed = true; if (need.cancel) need.cancel(); }
+      if (!need.jobs.length) { need.closed = true; if (need.cancel) need.cancel(); }
     }
   }
 
@@ -1104,7 +1120,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /**
    * A session's opening: a first line at once, the scan of what was picked (said in a sentence, without the model), the
-   * web apps' sign-ins looked at, the first surveys and recalls (a signed-out app's wait for its card), the librarian's
+   * web apps' sign-ins looked at, the first surveys and recalls (a signed-out app left out), the librarian's
    * first turn.
    */
   async function opening(s) {
@@ -1123,14 +1139,21 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (s.stopped || s.suspended) return;
     startWork(s, new Set([...checked.signedOut, ...checked.refused.keys()]));
     lookForFolders(s);
-    for (const app of checked.signedOut) if (s.held.has(app)) upfrontNeed(s, app);
+    // A ticked web app still signed out (the choose screen signs each in before it starts, so a race, or a session resumed
+    // after a quit) gets no card on this screen (2026-10-11): it is left out, and the opener says where to add it.
+    const leftOut = [...checked.signedOut].filter((app) => s.held.has(app));
+    for (const app of leftOut) {
+      skipApp(s, app);
+      releaseHeld(s, app, 'skip');
+      logAction(s, null, `Left out ${shownName(app)}: not signed in`);
+    }
     // An app whose browser macOS refused gets no card that can't succeed (2026-10-10): it is skipped for this run.
     for (const [app, name] of checked.refused) {
       skipApp(s, app);
       releaseHeld(s, app, 'skip');
       logAction(s, null, `Skipped ${shownName(app)}: macOS didn't allow ${name || 'your browser'}'s sign-ins`);
     }
-    const lines = signInLines(checked);
+    const lines = [signInLines(checked), leftOut.length ? leftOutLine(leftOut) : ''].filter(Boolean).join('\n');
     if (lines) opener.text = `${opener.text}\n\n${lines}`;
     emit(s);
     await interviewTurn(s, 'Start.');
@@ -1329,7 +1352,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         if (out.status === 'signed-in') { logAction(s, null, `Signed in to ${shownName(found.app)} from ${out.browser}`, 'You'); closeNeed(s, found, 'done'); return; }
         if (out.status === 'unsupported') { showWindow(s, found, `${out.browser}'s sign-ins can't be brought into Engelbart: sign in here instead.`); return; }
         // macOS refused: a card that asks again can't succeed (2026-10-10), so the app is skipped and the chat says so.
-        // TODO: offer a sign-in window in Engelbart's own browser instead (not in this build).
         if (out.status === 'denied') {
           if (out.browserId) signInDenied.add(out.browserId);
           closeNeed(s, found, 'skip');
@@ -1661,7 +1683,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   return {
-    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck,
+    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose,
     setProvider: (id, provider) => { const s = get(id); setProvider(s, provider); emit(s); return snapshot(s); },
     // the first build's name for authorize
     connected: (id, input) => authorize(id, input),

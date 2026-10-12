@@ -1,0 +1,110 @@
+'use strict';
+
+// Connect your library's sign-in window (src/main/connect/signin-window.cjs, 2026-10-11): a web app's sign-in page in
+// Engelbart's own browser, with a fake BrowserWindow, a fake session and fake timers.
+
+const test = require('node:test');
+const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
+const { createSignInWindow } = require('../src/main/connect/signin-window.cjs');
+
+function fakes({ held = new Set() } = {}) {
+  const windows = [];
+  class BrowserWindow extends EventEmitter {
+    constructor(options) {
+      super();
+      this.options = options;
+      this.destroyed = false;
+      this.loaded = [];
+      this.focused = 0;
+      this.webContents = Object.assign(new EventEmitter(), {
+        ua: 'Mozilla/5.0 Electron/38',
+        getUserAgent: () => this.webContents.ua,
+        setUserAgent: (ua) => { this.webContents.ua = ua; },
+        setWindowOpenHandler: (fn) => { this.webContents.openHandler = fn; },
+      });
+      windows.push(this);
+    }
+    loadURL(url) { this.loaded.push(url); return Promise.resolve(); }
+    isDestroyed() { return this.destroyed; }
+    show() {}
+    focus() { this.focused += 1; }
+    close() { if (this.destroyed) return; this.destroyed = true; this.emit('closed'); }
+  }
+  const ticks = new Set();
+  const timers = { setInterval: (fn) => { ticks.add(fn); return fn; }, clearInterval: (fn) => { ticks.delete(fn); } };
+  const tick = async () => { for (const fn of [...ticks]) await fn(); await new Promise((resolve) => setImmediate(resolve)); };
+  const session = { name: 'persist:browser' };
+  const looked = [];
+  const signedIn = async (app) => { looked.push(app); return held.has(app); };
+  const signIn = createSignInWindow({ BrowserWindow, getSession: () => session, userAgent: (ua) => ua.replace(/ Electron\/\S+/, ''), signedIn, timers, headless: true });
+  return { signIn, windows, tick, ticks, held, session, looked };
+}
+
+test('the sign-in window: on the agents\' session, a normal user agent, the app\'s sign-in page; signed in, it closes itself', async () => {
+  const { signIn, windows, tick, ticks, held, session } = fakes();
+  const result = signIn.open('ChatGPT');
+  const [win] = windows;
+  assert.equal(win.options.webPreferences.session, session, 'the session webSignIn.signedIn reads');
+  assert.deepEqual([win.options.width, win.options.height, win.options.show], [460, 720, false]);
+  assert.deepEqual([win.options.webPreferences.contextIsolation, win.options.webPreferences.sandbox, win.options.webPreferences.nodeIntegration], [true, true, false]);
+  assert.equal(win.webContents.ua, 'Mozilla/5.0', 'sites see a normal browser');
+  assert.deepEqual(win.loaded, ['https://chatgpt.com/auth/login']);
+  await tick();
+  assert.equal(win.destroyed, false, 'not signed in yet: still open');
+  held.add('ChatGPT');
+  await tick();
+  assert.deepEqual(await result, { status: 'signed-in' });
+  assert.equal(win.destroyed, true, 'closed by itself');
+  assert.equal(ticks.size, 0, 'no longer looking');
+  assert.equal(signIn.isOpen(), false);
+});
+
+test('the sign-in window closed by the person first: closed', async () => {
+  const { signIn, windows, ticks } = fakes();
+  const result = signIn.open('Claude');
+  assert.deepEqual(windows[0].loaded, ['https://claude.ai/login']);
+  windows[0].close();
+  assert.deepEqual(await result, { status: 'closed' });
+  assert.equal(ticks.size, 0);
+  // close() from the choose screen (Leave out, or the screen gone) is the same.
+  const again = signIn.open('Claude');
+  signIn.close();
+  assert.deepEqual(await again, { status: 'closed' });
+  assert.equal(windows[1].destroyed, true);
+});
+
+test('one window: a second open() for an app sharing the Google sign-in focuses it and shares its answer', async () => {
+  const { signIn, windows, tick, held } = fakes();
+  const drive = signIn.open('Google Docs');
+  const gmail = signIn.open('Gmail');
+  assert.equal(windows.length, 1, 'the same window');
+  assert.equal(windows[0].focused, 1);
+  assert.deepEqual(windows[0].loaded, ['https://accounts.google.com/']);
+  held.add('Google Docs');
+  await tick();
+  assert.deepEqual(await Promise.all([drive, gmail]), [{ status: 'signed-in' }, { status: 'signed-in' }]);
+  // Another sign-in replaces it: the first answers closed.
+  const chat = signIn.open('ChatGPT');
+  const claude = signIn.open('Claude');
+  assert.equal(windows.length, 3);
+  assert.deepEqual(await chat, { status: 'closed' });
+  assert.equal(windows[1].destroyed, true);
+  signIn.close();
+  assert.deepEqual(await claude, { status: 'closed' });
+});
+
+test('the sign-in window loads any https page, opens popups in itself, and blocks anything else', async () => {
+  const { signIn, windows } = fakes();
+  void signIn.open('Overleaf');
+  const [win] = windows;
+  assert.deepEqual(win.webContents.openHandler({ url: 'https://appleid.apple.com/auth' }), { action: 'deny' });
+  assert.deepEqual(win.loaded, ['https://www.overleaf.com/login', 'https://appleid.apple.com/auth'], 'window.open loads in the same window');
+  win.webContents.openHandler({ url: 'file:///etc/passwd' });
+  assert.equal(win.loaded.length, 2);
+  const navigate = (url) => { let prevented = false; win.webContents.emit('will-navigate', { preventDefault: () => { prevented = true; } }, url); return prevented; };
+  assert.equal(navigate('https://login.microsoftonline.com/'), false);
+  assert.equal(navigate('http://example.com/'), true);
+  assert.equal(navigate('javascript:alert(1)'), true);
+  signIn.close();
+});
