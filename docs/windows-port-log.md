@@ -3,6 +3,77 @@
 The run that follows docs/windows-port.md, on branch `windows-port` (cut from `hudsons-feedback` at 22d738c).
 Newest status first; the sections below are kept current.
 
+## Catch-up to 0.1.18
+
+Goal (2026-10-12): merge origin/david-onboarding-revisions 66ca1f0 (Release 0.1.18) into windows-port, keeping the
+port and every change from that branch: Chrome sign-ins on the Mac and Engelbart's own sign-in window, sign-in windows
+opening by themselves after Not now/Deny and unticking when closed, the memory question's chat deleted once saved, the
+folder-access popup (MATH-110), the "All your context in one place" intro, and 0.1.17's Library phases (Phase C
+reverted). Make what the new code needs work on Windows and Linux; Mac-only parts (Keychain, Chrome cookie import,
+folder access, installed apps) off or explained there, never crashing. Done when one commit is green on all three. Then
+release 0.1.18 for Windows and Linux from that run, one upload at a time (dry run first): upload:win, check latest.yml;
+upload:linux, check latest-linux.yml. The Mac release (latest-mac.yml, the 0.1.18 Mac files) is not touched; the page
+ends up offering all three, and the Mac's install command installs on Linux too.
+
+### Status
+
+- 2026-10-12, **released** 0.1.18 for Windows, then Linux, from run 38261058005 (8bafd93), one upload at a time, each
+  after its dry run. `CLOUDFLARE_ACCOUNT_ID=… npm run upload:win 8bafd93`: the installer's 27 parts went up (2 resent
+  after TLS `bad record mac`), its sha512 checked as stored, latest.yml last. The page it wrote is the live Mac page
+  (0.1.18, Mac-only since the Mac upload) with the Windows section added; install.sh and SHA256SUMS.txt untouched.
+  Checked live: latest.yml 0.1.18, Engelbart-0.1.18-x64.exe 136875613 bytes. Then `npm run upload:linux 8bafd93`
+  (the AppImage's parts resent 7 times after the same TLS error, its sha512 checked as stored, latest-linux.yml last): the page with
+  the Linux section added; install.sh as it was live plus the `>>> linux` hand-off (byte for byte scripts/install-mac.sh,
+  which CI's Linux install test ran); SHA256SUMS.txt with only install.sh's line changed. Checked live afterwards:
+  latest.yml 0.1.18; latest-linux.yml 0.1.18 (Engelbart-0.1.18-x86_64.AppImage, 162464873 bytes; the first Linux
+  release to go live); latest-mac.yml byte for byte as before the uploads (0.1.18, 13:26:15Z), the four Mac files at
+  their sizes and sums; the page (r2 index.html) offers Mac, Windows and Linux, all 0.1.18; install.sh, install-linux.sh
+  and install.ps1 as built. The live `curl -fsSL https://mathetic.com/engelbart/install.sh | bash`, run on this Mac with
+  ENGELBART_INSTALL_DIR (a scratch folder) and ENGELBART_NO_OPEN=1, installed Engelbart 0.1.18 for Apple silicon, its
+  signature verifying. On Linux the same bytes passed CI's one-line install on ubuntu-latest (run 38261058005); a live
+  run in Docker was not possible here (Docker Desktop did not start).
+- 2026-10-12, **done on 8bafd93**: run https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38261058005
+  passed on all three (Linux on a re-run of its job: attempt 1's AppImage step got a 504 from GitHub downloading
+  electron-builder's AppImage tool, after its npm test passed). macos-latest: npm test 1672 tests, 1668 pass, 4 skipped;
+  build; `npm run package`. windows-latest: npm test 1676 tests, 1634 pass, 42 skipped, 0 failed (the same 42: none
+  added); installer; smoke-windows (window, PowerShell 7 echo, Git 2.55.0 at C:\Program Files\Git\mingw64\bin\git.exe,
+  clean quit); the one-line install put 0.1.18 in %LOCALAPPDATA%\Programs\Engelbart, its smoke passed, and a second run
+  stopped as up to date. ubuntu-latest: npm test 1672 tests, 1658 pass, 14 skipped; AppImage; smoke-linux (window,
+  terminal, Git, clean quit); the one-line install, then again with the AppArmor profile, sandbox on, smoke passed.
+- 2026-10-12: merged 66ca1f0 (35 commits since f2cf948; 74 files) as 51263a3. One conflict: library.cjs's exports
+  (ours adds markdownStem, theirs describeRows, headAbout, dayOf, TITLE_RULES, aboutRow): both kept. package.json 0.1.18.
+  Mac `npm test`: 1670 tests, 1667 pass, 3 skipped. Run 1 (51263a3,
+  https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38258865947): macOS ✓, Linux ✓, Windows: npm test 4
+  failed (below).
+- What the new code does off the Mac:
+  - **Chrome cookie import and the Keychain** (browser/import-cookies.cjs): created on macOS only, as before (index.cjs
+    passes null elsewhere). web-signin.cjs takes null as "no browser to bring a sign-in over from", and the renderer
+    (model/connect.js copiesSignIns, signsInViaBrowser, signInGate) sends every sign-in elsewhere to Engelbart's own
+    sign-in window (connect/signin-window.cjs, a BrowserWindow on the Stage's session): no Keychain modal, no `open -b`.
+  - **Installed apps** (browser/installed-apps.cjs: /Applications, Spotlight): made on every platform but only asked by
+    the cookie importer (null off the Mac) and warmBrowsers (darwin only), so it never looks or runs mdfind there.
+  - **Folder access (MATH-110)** was not gated: on Windows and Linux the choose screen would have shown "Let Engelbart
+    read your folders? macOS will ask…" and, until it was answered, the PDF scan and the folder search kept out of
+    Desktop, Documents and Downloads. Now connect/folder-access.cjs protects nothing off the Mac (`platform`, default
+    process.platform): needed() and ask() are empty (no popup, no folders.json), guard() reads everything; session.cjs's
+    folder search (MATH-117) is not told about macOS there and skips only hidden folders and ~/AppData. The Mac is as
+    before. Tests: connect-folder-access.test.cjs and connect.test.cjs give `platform: 'darwin'` to the Mac's checks
+    (they run on every platform), and two new tests check Windows and Linux.
+  - Left as on the Mac: the wording "PDFs on this Mac" and the PDFs row's tooltip about macOS (as in 0.1.13); the
+    sign-in window, Gmail, GitHub organizations, the Library phases, the intro and the memory chat's delete are
+    platform-neutral (Electron windows, net requests, the store).
+- Run 1's Windows failures, all fixtures: connect-folder-access.test.cjs's home `/Users/ada`, which path.resolve makes
+  `D:\Users\ada` on Windows (now resolved in the fixture); installed-apps.test.cjs's fake file system keyed by `/`
+  paths (now takes Windows' `\`); a PDF-folder order test whose files' times could tie on Windows (the Downloads files
+  are now a minute older). Mac `npm test`: 1672 tests, 1669 pass, 3 skipped. Pushed as 8bafd93.
+
+### CI runs
+
+| Commit | Run | macOS | Windows | Linux | Notes |
+|---|---|---|---|---|---|
+| 51263a3 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38258865947 | ✓ | ✗ npm test (4) | ✓ | the merge |
+| 8bafd93 | https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/38261058005 | ✓ | ✓ installer, smoke, install | ✓ (re-run: 504) | **folder access Mac-only; fixtures: the done commit, released** |
+
 ## Catch-up to 0.1.16
 
 Goal (2026-10-10): merge origin/david-onboarding-revisions f2cf948 (Release 0.1.16) into windows-port, so package.json
