@@ -102,19 +102,50 @@ test('one window: a second open() for an app sharing the Google sign-in focuses 
   assert.deepEqual(await claude, { status: 'closed' });
 });
 
-test('the sign-in window loads any https page, opens popups in itself, and blocks anything else', async () => {
-  const { signIn, windows } = fakes();
-  void signIn.open('Overleaf');
+test('the sign-in window loads any https page, opens an https pop-up as its child on the same session, and blocks anything else', async () => {
+  const { signIn, windows, session, tick, held } = fakes();
+  const result = signIn.open('Claude');
   const [win] = windows;
-  assert.deepEqual(win.webContents.openHandler({ url: 'https://appleid.apple.com/auth' }), { action: 'deny' });
-  assert.deepEqual(win.loaded, ['https://www.overleaf.com/login', 'https://appleid.apple.com/auth'], 'window.open loads in the same window');
-  win.webContents.openHandler({ url: 'file:///etc/passwd' });
-  assert.equal(win.loaded.length, 2);
-  const navigate = (url) => { let prevented = false; win.webContents.emit('will-navigate', { preventDefault: () => { prevented = true; } }, url); return prevented; };
-  assert.equal(navigate('https://login.microsoftonline.com/'), false);
-  assert.equal(navigate('http://example.com/'), true);
-  assert.equal(navigate('javascript:alert(1)'), true);
-  signIn.close();
+  // claude.ai's "Continue with Google" (2026-10-12): Google opens in a pop-up and answers through window.opener.
+  const allowed = win.webContents.openHandler({ url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x' });
+  assert.equal(allowed.action, 'allow');
+  const options = allowed.overrideBrowserWindowOptions;
+  assert.equal(options.parent, win, 'a child of the sign-in window');
+  assert.equal(options.webPreferences.session, session, 'the same session: the sign-in lands where the window looks for it');
+  assert.deepEqual([options.webPreferences.contextIsolation, options.webPreferences.sandbox, options.webPreferences.nodeIntegration, options.show], [true, true, false, false]);
+  assert.deepEqual(win.loaded, ['https://claude.ai/login'], 'the sign-in window keeps its own page (and its window.opener)');
+  assert.deepEqual(win.webContents.openHandler({ url: 'file:///etc/passwd' }), { action: 'deny' });
+  assert.deepEqual(win.webContents.openHandler({ url: 'http://example.com/' }), { action: 'deny' }, 'https only');
+  // Electron makes the pop-up (as it would for 'allow') and says so: same user agent, the same guards.
+  const BrowserWindow = win.constructor;
+  const popup = new BrowserWindow(options);
+  popup.webContents.ua = 'Mozilla/5.0 Electron/38';
+  win.webContents.emit('did-create-window', popup, { url: 'https://accounts.google.com/o/oauth2/v2/auth?client_id=x' });
+  assert.equal(popup.webContents.ua, 'Mozilla/5.0', 'the same user agent sites see');
+  assert.equal(typeof popup.webContents.openHandler, 'function', 'its own pop-ups follow the same rule');
+  assert.equal(popup.webContents.openHandler({ url: 'https://accounts.google.com/x' }).overrideBrowserWindowOptions.parent, popup);
+  const navigate = (contents, url) => { let prevented = false; contents.emit('will-navigate', { preventDefault: () => { prevented = true; } }, url); return prevented; };
+  assert.equal(navigate(win.webContents, 'https://login.microsoftonline.com/'), false);
+  assert.equal(navigate(win.webContents, 'http://example.com/'), true);
+  assert.equal(navigate(win.webContents, 'javascript:alert(1)'), true);
+  assert.equal(navigate(popup.webContents, 'http://example.com/'), true, 'the pop-up is guarded too');
+  // Google answered claude.ai through the opener: the cookie lands in the shared session and the parent's poll sees it.
+  held.add('Claude');
+  await tick();
+  assert.deepEqual(await result, { status: 'signed-in' });
+  assert.equal(popup.destroyed, true, 'closed with its parent');
+  assert.equal(win.destroyed, true);
+});
+
+test('a pop-up still open when the person closes the sign-in window closes with it; the row is plain Sign in again', async () => {
+  const { signIn, windows } = fakes();
+  const result = signIn.open('Claude');
+  const [win] = windows;
+  const popup = new win.constructor(win.webContents.openHandler({ url: 'https://accounts.google.com/x' }).overrideBrowserWindowOptions);
+  win.webContents.emit('did-create-window', popup, {});
+  win.close();
+  assert.deepEqual(await result, { status: 'closed' });
+  assert.equal(popup.destroyed, true);
 });
 
 test('Google refuses the sign-in: its stale cookies are cleared, the window closes, and open() answers rejected', async () => {

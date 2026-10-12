@@ -17,9 +17,16 @@ const WEB_CHAT_APPS = Object.freeze(Object.keys(SITES));
 const ID_RE = /^[\w-]{6,80}$/;
 const MAX_LIST = 2000;
 
+// Whether the account is signed in is told only by an answer that says so: an ok answer with no session (or no
+// organization), or a 401. A 403, a 429, a 5xx, a network error or a body that isn't JSON says nothing either way (a
+// test-mode run, 2026-10-12: one failed /api/auth/session read as "signed out" dropped ChatGPT's working sign-in), so the
+// script answers { signedIn: null } and the tool asks once more a few seconds later before it gives up, without "signed out".
 // ChatGPT: the page's own session token, then its conversation list (newest first, 100 a page) or one conversation.
 const CHATGPT_LIST = (limit) => `
-const session = await fetch('/api/auth/session', { credentials: 'include' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+const asked = await fetch('/api/auth/session', { credentials: 'include' }).then(async (r) => ({ status: r.status, body: r.ok ? await r.json().catch(() => undefined) : null })).catch(() => ({ status: 0, body: null }));
+if (asked.status === 401) return { signedIn: false };
+if (asked.status < 200 || asked.status > 299 || asked.body === undefined) return { signedIn: null, status: asked.status };
+const session = asked.body;
 if (!session || !session.accessToken) return { signedIn: false };
 const headers = { Authorization: 'Bearer ' + session.accessToken };
 const items = [], seen = new Set();
@@ -36,7 +43,10 @@ for (let offset = 0; items.length < ${limit}; ) {
 return { signedIn: true, account: (session.user && (session.user.email || session.user.name)) || '', items };`;
 
 const CHATGPT_ONE = (id) => `
-const session = await fetch('/api/auth/session', { credentials: 'include' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+const asked = await fetch('/api/auth/session', { credentials: 'include' }).then(async (r) => ({ status: r.status, body: r.ok ? await r.json().catch(() => undefined) : null })).catch(() => ({ status: 0, body: null }));
+if (asked.status === 401) return { signedIn: false };
+if (asked.status < 200 || asked.status > 299 || asked.body === undefined) return { signedIn: null, status: asked.status };
+const session = asked.body;
 if (!session || !session.accessToken) return { signedIn: false };
 const r = await fetch('/backend-api/conversation/' + ${JSON.stringify(id)}, { headers: { Authorization: 'Bearer ' + session.accessToken }, credentials: 'include' });
 if (!r.ok) return { signedIn: true, error: 'ChatGPT answered ' + r.status };
@@ -44,7 +54,10 @@ return { signedIn: true, conversation: await r.json() };`;
 
 // Claude: the organization that chats, its projects (names for the list), then its conversations or one conversation.
 const CLAUDE_ORG = `
-const orgs = await fetch('/api/organizations', { credentials: 'include' }).then((r) => (r.ok ? r.json() : null)).catch(() => null);
+const asked = await fetch('/api/organizations', { credentials: 'include' }).then(async (r) => ({ status: r.status, body: r.ok ? await r.json().catch(() => undefined) : null })).catch(() => ({ status: 0, body: null }));
+if (asked.status === 401) return { signedIn: false };
+if (asked.status < 200 || asked.status > 299 || asked.body === undefined) return { signedIn: null, status: asked.status };
+const orgs = asked.body;
 if (!Array.isArray(orgs) || !orgs.length) return { signedIn: false };
 const org = orgs.find((o) => Array.isArray(o.capabilities) && o.capabilities.includes('chat')) || orgs[0];`;
 
@@ -83,15 +96,35 @@ function signedOut(app) {
   return error;
 }
 
+const RETRY_MS = 3000;
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** The script's answer, asked once more after a pause when it couldn't tell whether the account is signed in. */
+async function ask(page, app, script, { sleep = wait, retryMs = RETRY_MS } = {}) {
+  let out = await page.evaluate(script);
+  if (out && out.signedIn === false) throw signedOut(app);
+  if (!out || out.signedIn === null || out.signedIn === undefined) {
+    await sleep(retryMs);
+    out = await page.evaluate(script);
+    if (out && out.signedIn === false) throw signedOut(app);
+    if (!out || !out.signedIn) {
+      const status = out && out.status ? ` (it answered ${out.status})` : '';
+      const error = new Error(`${app} didn't say whether you're signed in${status}, twice. This is not a sign-out: reload the page and try again, or read the page itself.`);
+      error.code = 'UNSURE';
+      throw error;
+    }
+  }
+  return out;
+}
+
 /**
  * The chats of a signed-in account, newest first → [{ id, title, date, project }], filtered by `days`, `query` (words in
  * the title or project) and `project` (part of its name). `page` is the job's browser (./browser.cjs tools).
  */
-async function listWebChats(page, app, { days = null, query = '', project = '', limit = 200 } = {}) {
+async function listWebChats(page, app, { days = null, query = '', project = '', limit = 200, sleep, retryMs } = {}) {
   check(app);
   await page.ensure(SITES[app].start);
-  const out = await page.evaluate(app === 'ChatGPT' ? CHATGPT_LIST(MAX_LIST) : CLAUDE_LIST(MAX_LIST));
-  if (!out || !out.signedIn) throw signedOut(app);
+  const out = await ask(page, app, app === 'ChatGPT' ? CHATGPT_LIST(MAX_LIST) : CLAUDE_LIST(MAX_LIST), { sleep, retryMs });
   if (out.error && !(out.items || []).length) throw new Error(`${out.error}. Fall back to reading the page.`);
   const since = Number.isFinite(days) && days > 0 ? Date.now() - days * DAY_MS : 0;
   const words = String(query || '').toLowerCase().split(/\s+/).filter(Boolean);
@@ -111,12 +144,11 @@ async function listWebChats(page, app, { days = null, query = '', project = '', 
 }
 
 /** One conversation read into turns → { id, title, date, turns: [{ role, text }] }. */
-async function readWebChat(page, app, id) {
+async function readWebChat(page, app, id, { sleep, retryMs } = {}) {
   check(app);
   if (!ID_RE.test(String(id || ''))) throw new Error('Not a conversation id');
   await page.ensure(SITES[app].start);
-  const out = await page.evaluate(app === 'ChatGPT' ? CHATGPT_ONE(id) : CLAUDE_ONE(id));
-  if (!out || !out.signedIn) throw signedOut(app);
+  const out = await ask(page, app, app === 'ChatGPT' ? CHATGPT_ONE(id) : CLAUDE_ONE(id), { sleep, retryMs });
   if (out.error || !out.conversation) throw new Error(out.error || `${app} sent no conversation`);
   const chat = exportChat(app === 'ChatGPT' ? { conversation_id: id, ...out.conversation } : { uuid: id, ...out.conversation });
   if (!chat) throw new Error(`${app}'s conversation could not be read`);

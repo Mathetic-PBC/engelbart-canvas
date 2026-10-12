@@ -6,7 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, startingLines, STARTING_LINE_MS, afterSignInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -70,14 +70,12 @@ const CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:cen
   // Connect's compact options (2026-10-11): the why on the label's line, cut with an ellipsis; an ⓘ at the right when the
   // option has a detail (or something was cut), its popover a real element. Modifiers, so @brainstorm's cards stay as they are.
   + '.cx-opts{display:flex;flex-direction:column;gap:4px}.cx-opt-row{position:relative}'
-  + '.bs-opt.cx-opt{align-items:center;padding:6px 12px;font:14px/1.4 var(--font-sans)}.bs-opt.cx-opt[data-info]{padding-right:38px}.cx-opt>.bs-mark{margin-top:0}'
-  + '.cx-opt-text{flex:1;min-width:0;display:flex;align-items:baseline;gap:8px;white-space:nowrap}'
-  + '.cx-opt-label{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis}'
-  + '.cx-opt-why{flex:0 1000 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;font-size:12.5px;color:#8f8f8f}'
-  + '.cx-info{position:absolute;top:50%;right:8px;margin-top:-11px;display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:6px;background:none;color:#8f8f8f;cursor:help}'
-  + '.cx-info:hover,.cx-info[aria-expanded="true"]{background:#f2f2f2;color:#4d4d4d}.cx-info:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
-  + '.cx-pop{position:fixed;z-index:1000;box-sizing:border-box;width:max-content;max-width:min(340px,calc(100vw - 16px));max-height:calc(100vh - 16px);overflow:auto;padding:9px 12px;border:1px solid #eaeaea;border-radius:8px;background:#fff;box-shadow:0 8px 24px rgba(0,0,0,.08);font:12.5px/1.5 var(--font-sans);color:#171717;text-align:left;overflow-wrap:anywhere;cursor:default}'
-  + '.cx-pop-label{font-weight:500}.cx-pop-why{color:#4d4d4d}.cx-pop-detail{white-space:pre-line}.cx-pop>*+*{margin-top:4px}'
+  + '.bs-opt.cx-opt{align-items:flex-start;padding:7px 12px;font:14px/1.4 var(--font-sans)}.cx-opt>.bs-mark{margin-top:3px}'
+  + '.cx-opt-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}'
+  + '.cx-opt-line{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;row-gap:1px}'
+  + '.cx-opt-label{min-width:0;overflow-wrap:anywhere}'
+  + '.cx-opt-why{min-width:0;overflow-wrap:anywhere;font-size:12.5px;color:#8f8f8f}'
+  + '.cx-opt-detail{font:12.5px/1.45 var(--font-sans);color:#8f8f8f;white-space:pre-line;overflow-wrap:anywhere}'
   + '.bs-field{display:block;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;outline:none;resize:none;font:14px/1.5 var(--font-sans);color:#171717}.bs-field:focus{border-color:#c9c9c9}.bs-field::placeholder{color:#8f8f8f}'
   + '.bs-submit{padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;transition:opacity 120ms}.bs-submit:hover{opacity:.86}.bs-submit:disabled{background:#eaeaea;color:#8f8f8f;cursor:default;opacity:1}'
   + '.cx-btn{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border:1px solid #171717;border-radius:8px;background:#171717;color:#fff;cursor:pointer;font:500 12.5px/1 var(--font-sans);white-space:nowrap}.cx-btn:hover{opacity:.88}.cx-btn:disabled{opacity:.5;cursor:default}'
@@ -92,7 +90,6 @@ const ARROW_UP = <Svg size={13} width={2.2}><path d="M12 19V5" /><path d="m5 12 
 const BACK = <Svg size={16} width={1.5}><path d="m12 19-7-7 7-7" /><path d="M19 12H5" /></Svg>;
 const DOWNLOAD = <Svg size={14} width={1.8}><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><path d="m7 10 5 5 5-5" /><path d="M12 15V3" /></Svg>;
 const CHECK = <Svg size={12} width={2.5}><path d="M20 6 9 17l-5-5" /></Svg>;
-const INFO = <Svg size={14} width={1.6}><circle cx="12" cy="12" r="10" /><path d="M12 16v-4" /><path d="M12 8h.01" /></Svg>;
 const MINUS = <Svg size={16} width={1.6}><path d="M5 12h14" /></Svg>;
 const CLOSE = <Svg size={15} width={1.6}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Svg>;
 const FILE = <Svg size={14} width={1.6}><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z" /><path d="M14 2v4a2 2 0 0 0 2 2h4" /><path d="M10 13h4" /><path d="M10 17h4" /></Svg>;
@@ -270,9 +267,10 @@ function ProviderMenu({ providers, provider, onPick, at }) {
 
 /**
  * The agent named inside the consent line, "Use my [Claude Code ⌄] subscription to read these" (2026-10-09, David's
- * mockup): a quiet box that opens the same menu as the chat's chip, under it.
+ * mockup): a quiet box that opens the same menu as the chat's chip, under it, or above it with `up` (the consent card at the
+ * foot of onboarding's page, 2026-10-12).
  */
-function ProviderPick({ providers, provider, onPick }) {
+function ProviderPick({ providers, provider, onPick, up = false }) {
   const [open, setOpen] = React.useState(false);
   const current = (providers || []).find((entry) => entry.provider === provider) || null;
   const usable = (providers || []).filter((entry) => entry.ready);
@@ -283,7 +281,7 @@ function ProviderPick({ providers, provider, onPick }) {
         <span data-connect-provider={provider || ''}>{current ? current.name : 'Claude Code'}</span>
         {usable.length > 1 && <span style={{ display: 'inline-flex', color: '#8f8f8f' }}>{CARET_DOWN}</span>}
       </button>
-      {open && <ProviderMenu providers={providers} provider={provider} onPick={(next) => { setOpen(false); onPick(next); }} at={{ left: 0, top: 'calc(100% + 6px)' }} />}
+      {open && <ProviderMenu providers={providers} provider={provider} onPick={(next) => { setOpen(false); onPick(next); }} at={up ? { left: 0, bottom: 'calc(100% + 6px)' } : { left: 0, top: 'calc(100% + 6px)' }} />}
     </span>
   );
 }
@@ -569,108 +567,31 @@ function ReposCard({ ask, live, onAnswer }) {
 }
 
 /**
- * Where an option's popover goes (2026-10-11): under its ⓘ, its right edge on the ⓘ's, or above it when there is more
- * room there; always inside the window, 8px from its edges. `anchor` is the ⓘ's box, `size` the popover's, both in
- * window coordinates → { left, top, side }.
- */
-export function popPlace(anchor, size, viewport, gap = 6, margin = 8) {
-  const below = viewport.height - anchor.bottom - gap - margin;
-  const above = anchor.top - gap - margin;
-  const side = size.height <= below || below >= above ? 'below' : 'above';
-  const top = side === 'below' ? anchor.bottom + gap : anchor.top - gap - size.height;
-  const left = anchor.right - size.width;
-  const clamp = (value, low, high) => Math.max(low, Math.min(value, Math.max(low, high)));
-  return { left: clamp(left, margin, viewport.width - margin - size.width), top: clamp(top, margin, viewport.height - margin - size.height), side };
-}
-
-/**
- * An option's ⓘ and what it covers (2026-10-11): hovering it or focusing it opens a popover in the card (not a native
- * tooltip), placed by popPlace; Escape, leaving it, scrolling or blur closes it. A sibling of the option's button, so a
- * click on it never ticks the option nor submits, and it works on an answered card, whose options are disabled.
- */
-function OptionInfo({ option, showLabel, showWhy }) {
-  const [open, setOpen] = React.useState(false);
-  const [place, setPlace] = React.useState(null);
-  const iconRef = React.useRef(null);
-  const popRef = React.useRef(null);
-  const timer = React.useRef(null);
-  const id = React.useId();
-  const show = () => { clearTimeout(timer.current); setOpen(true); };
-  const hide = (delay = 0) => { clearTimeout(timer.current); if (delay) timer.current = setTimeout(() => setOpen(false), delay); else setOpen(false); };
-  React.useEffect(() => () => clearTimeout(timer.current), []);
-  React.useLayoutEffect(() => {
-    if (!open) { setPlace(null); return; }
-    const icon = iconRef.current, pop = popRef.current;
-    if (!icon || !pop) return;
-    // Drawn hidden at 0,0 first: where that lands is the origin its `fixed` is measured from (an ancestor with a transform moves it).
-    const origin = pop.getBoundingClientRect();
-    const at = popPlace(icon.getBoundingClientRect(), { width: origin.width, height: origin.height }, { width: window.innerWidth, height: window.innerHeight });
-    setPlace({ left: at.left - origin.left, top: at.top - origin.top, side: at.side });
-  }, [open]);
-  React.useEffect(() => {
-    if (!open) return undefined;
-    const key = (event) => { if (event.key === 'Escape') { event.stopPropagation(); hide(); } };
-    const away = () => hide();
-    document.addEventListener('keydown', key, true);
-    window.addEventListener('scroll', away, true);
-    window.addEventListener('resize', away);
-    return () => { document.removeEventListener('keydown', key, true); window.removeEventListener('scroll', away, true); window.removeEventListener('resize', away); };
-  }, [open]);
-  const stop = (event) => { event.preventDefault(); event.stopPropagation(); };
-  return (
-    <span onMouseEnter={show} onMouseLeave={() => hide(120)}>
-      <button ref={iconRef} type="button" className="cx-info" data-connect-option-info={option.label} aria-label={`What ${option.label} covers`} aria-expanded={open ? 'true' : 'false'} aria-describedby={open ? id : undefined}
-        onFocus={show} onBlur={() => hide()} onClick={(event) => { stop(event); show(); }} onDoubleClick={stop} onMouseDown={(event) => event.stopPropagation()}>{INFO}</button>
-      {open && (
-        <span ref={popRef} id={id} role="tooltip" className="cx-pop" data-connect-option-detail={option.label} data-side={place ? place.side : undefined}
-          onClick={stop} onDoubleClick={stop} style={place ? { left: place.left, top: place.top } : { left: 0, top: 0, visibility: 'hidden' }}>
-          {showLabel && <span className="cx-pop-label" style={{ display: 'block' }}>{option.label}</span>}
-          {showWhy && option.why && <span className="cx-pop-why" style={{ display: 'block' }}>{option.why}</span>}
-          {option.detail && <span className="cx-pop-detail" style={{ display: 'block' }}>{option.detail}</span>}
-        </span>
-      )}
-    </span>
-  );
-}
-
-/**
- * One option on one line (2026-10-11): its mark, its label, then its why in grey, cut with an ellipsis when it does not
- * fit. The ⓘ shows when it has a detail, or when its label or why was cut (the popover then holds them in full). One the
- * librarian recommends in a "multi" (`checked`) has a small "Recommended" tag after its label (2026-10-12), not a tick.
+ * One option (2026-10-12): its mark, its label with its why after it in grey, and its detail (what it covers) on the
+ * line below, each wrapping rather than cut off. No ⓘ and no popover, and no "Recommended" tag: an option the librarian
+ * recommends in a "multi" keeps `checked` in its data, but it is not shown.
  */
 function ConnectOption({ option, many, on, live, onPick, onSubmitOne }) {
-  const labelRef = React.useRef(null);
-  const whyRef = React.useRef(null);
-  const [cut, setCut] = React.useState({ label: false, why: false });
-  React.useLayoutEffect(() => {
-    const over = (el) => !!el && el.scrollWidth > el.clientWidth + 1;
-    const measure = () => { const next = { label: over(labelRef.current), why: over(whyRef.current) }; setCut((now) => (now.label === next.label && now.why === next.why ? now : next)); };
-    measure();
-    if (typeof ResizeObserver === 'undefined' || !labelRef.current) return undefined;
-    const observer = new ResizeObserver(measure);
-    observer.observe(labelRef.current.parentNode);
-    return () => observer.disconnect();
-  }, [option.label, option.why]);
-  const info = !!option.detail || cut.label || cut.why;
   return (
     <div className="cx-opt-row">
-      <button type="button" className="bs-opt cx-opt" disabled={!live} data-connect-option={option.label} data-info={info ? '1' : undefined} role={many ? 'checkbox' : 'radio'} aria-checked={on ? 'true' : 'false'} onClick={() => onPick(option.label)} onDoubleClick={() => { if (!many && live) onSubmitOne(option.label); }}>
+      <button type="button" className="bs-opt cx-opt" disabled={!live} data-connect-option={option.label} role={many ? 'checkbox' : 'radio'} aria-checked={on ? 'true' : 'false'} onClick={() => onPick(option.label)} onDoubleClick={() => { if (!many && live) onSubmitOne(option.label); }}>
         <span className="bs-mark" data-square={many ? '1' : undefined} />
         <span className="cx-opt-text">
-          <span ref={labelRef} className="cx-opt-label">{option.label}</span>
-          {many && option.checked === true && <span className="cx-opt-tag" data-connect-option-recommended="1" style={{ flex: 'none', padding: '2px 6px', borderRadius: 4, background: '#f2f2f2', font: '500 11px/1.3 var(--font-sans)', color: '#4d4d4d' }}>Recommended</span>}
-          {option.why ? <span ref={whyRef} className="cx-opt-why" data-connect-option-why="1">{option.why}</span> : null}
+          <span className="cx-opt-line">
+            <span className="cx-opt-label">{option.label}</span>
+            {option.why ? <span className="cx-opt-why" data-connect-option-why="1">{option.why}</span> : null}
+          </span>
+          {option.detail ? <span className="cx-opt-detail" data-connect-option-detail={option.label}>{option.detail}</span> : null}
         </span>
       </button>
-      {info && <OptionInfo option={option} showLabel={cut.label} showWhy={!!option.why} />}
     </div>
   );
 }
 
 /**
  * The librarian's question as a card: one option per line (round mark: one; square: several), its why after it. Every
- * card starts with nothing ticked (2026-10-12, reversing MATH-122's pre-ticking): in a "multi" the options the librarian
- * recommends (`checked`) carry a "Recommended" tag, and Submit waits for a tick (or their own words); Skip is always there.
+ * card starts with nothing ticked (2026-10-12, reversing MATH-122's pre-ticking), and Submit waits for a tick (or their own
+ * words); Skip is always there. The options the librarian recommends (`checked`) are not marked out.
  */
 export function QuestionCard({ ask, live, onAnswer }) {
   const many = ask.kind === 'multi';
@@ -851,18 +772,62 @@ function FootStatus({ session }) {
   );
 }
 
+/** Whether the person asked for less motion (macOS's Reduce motion). */
+function useReducedMotion() {
+  const query = typeof window !== 'undefined' && typeof window.matchMedia === 'function' ? window.matchMedia('(prefers-reduced-motion: reduce)') : null;
+  const [reduced, setReduced] = React.useState(() => !!(query && query.matches));
+  React.useEffect(() => {
+    if (!query || typeof query.addEventListener !== 'function') return undefined;
+    const change = () => setReduced(query.matches);
+    query.addEventListener('change', change);
+    return () => query.removeEventListener('change', change);
+  }, [query]);
+  return reduced;
+}
+
+const LINE_FADE_MS = 280;
+
+/**
+ * One line that moves through `lines` every STARTING_LINE_MS (2026-10-12), fading out and in between them; with reduced
+ * motion it changes without a fade.
+ */
+export function CyclingLine({ lines, reduced = false }) {
+  const [at, setAt] = React.useState(0);
+  const [shown, setShown] = React.useState(true);
+  const key = lines.join('\n');
+  React.useEffect(() => {
+    if (lines.length < 2) return undefined;
+    let fade = null;
+    const timer = setInterval(() => {
+      if (reduced) { setAt((n) => n + 1); return; }
+      setShown(false);
+      fade = setTimeout(() => { setAt((n) => n + 1); setShown(true); }, LINE_FADE_MS);
+    }, STARTING_LINE_MS);
+    return () => { clearInterval(timer); clearTimeout(fade); setShown(true); };
+  }, [key, reduced]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!lines.length) return null;
+  const line = lines[at % lines.length];
+  return (
+    // aria-hidden: read out every 2.5 s it would drown the count, which the status region does say.
+    <div data-connect-starting-line={line} aria-hidden="true" style={{ minHeight: 19, font: '13.5px/1.4 var(--font-sans)', color: '#4d4d4d', textAlign: 'center', opacity: shown ? 1 : 0, transition: reduced ? 'none' : `opacity ${LINE_FADE_MS}ms ${EASE}` }}>{line}</div>
+  );
+}
+
 /**
  * Until the librarian says something (2026-10-09: "make the loading icon better and have some status to it"): the dots,
- * bigger, and how many sources have been looked at; not what each agent is doing ("get rid of this").
+ * bigger, under them a line moving through what is happening (2026-10-12: the jobs' labels, "Looking through ChatGPT",
+ * "Asking Claude what it remembers"…), and how many sources have been looked at.
  */
 function Starting({ session }) {
   const jobs = workJobs(session.jobs);
   const ended = jobs.filter((entry) => statusOf(entry).done).length;
+  const reduced = useReducedMotion();
   return (
     <div data-connect-starting="1" role="status" aria-live="polite" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, paddingBottom: 40, animation: `rise 260ms ${EASE}` }}>
       <ThinkingDots label="" size={7} />
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
         <div style={{ font: '500 16px/1.3 var(--font-sans)', letterSpacing: '-0.1px', color: '#171717' }}>Getting to know your library</div>
+        <CyclingLine lines={startingLines(session.jobs)} reduced={reduced} />
         {jobs.length > 0 && <div data-connect-starting-count="1" style={{ font: '12.5px/1 var(--font-sans)', color: '#8f8f8f', fontVariantNumeric: 'tabular-nums' }}>{`${ended} of ${jobs.length} looked at`}</div>}
       </div>
     </div>
@@ -1163,7 +1128,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const signInHere = (id, app) => (signsInViaBrowser(app, signIns[app], found && found.platform) ? signInInBrowser(id, app) : signInWindowHere(id, app));
   // Engelbart's sign-in window (2026-10-11). Signed in, the app and every app sharing that sign-in (Google Drive and Gmail)
   // read ✓, and its row is ticked; Google turning it away (2026-10-12), they read "Google refused this sign-in" with Try
-  // again; the window closed first, the row is as it was. → 'signed-in' | 'rejected' | 'closed'
+  // again; the window closed first, the row is as it was, but plain Sign in after an old "macOS didn't allow it" (2026-10-12,
+  // afterSignInWindowClosed). → 'signed-in' | 'rejected' | 'closed'
   const signInWindowHere = async (id, app) => {
     // A row that was waiting on the browser ("Sign in here instead") goes back to what it was before that wait, not to it.
     const before = (seen) => (seen && !['signing', 'browser'].includes(seen.status) ? seen : (seen || {}).was);
@@ -1178,7 +1144,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       setSignIns((now) => { const next = { ...now }; for (const other of sharesSignIn(app)) if (!next[other] || next[other].status !== 'signed-in') next[other] = { status: 'rejected', browser: '' }; return next; });
       return 'rejected';
     }
-    setSignIns((now) => { const next = { ...now }; const was = (now[app] || {}).was; if (was) next[app] = was; else delete next[app]; return next; });
+    setSignIns((now) => { const next = { ...now }; const back = afterSignInWindowClosed((now[app] || {}).was); if (back) next[app] = back; else delete next[app]; return next; });
     return 'closed';
   };
   // "Sign in here instead" (2026-10-12), beside a row waiting on the browser: that wait ends, and Engelbart's window opens.
@@ -1599,7 +1565,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             {leaves && <span data-connect-leaves-text="1" style={{ paddingLeft: reads.length > 0 ? 24 : 0, font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f' }}>What the agents read is sent to {company} through your own {targetName} account, the way any {targetName} session is, to be turned into notes. The notes, and everything Engelbart keeps, stay in ~/.engelbart on this Mac. Nothing goes to Mathetic.</span>}
           </div>
         );
-        // Onboarding's page opens on the consent (2026-10-11, David's mockup): one card above the sources, the agent's logo,
+        // Onboarding's page asks for the consent (2026-10-11, David's mockup) in one card, under the sources since 2026-10-12
+        // (above them before), just above the foot: the agent's logo,
         // "Read with your [Claude Code ⌄] subscription" over what that means, and a switch. Why Engelbart asks, and where the
         // data goes, was the screen before (screens/ConnectIntro.jsx), so this says it in a line.
         const consentCard = (
@@ -1609,7 +1576,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                 <span style={{ width: 16, height: 16, background: `url(${LOGOS[current && current.provider === 'openai' ? 'Codex' : 'Claude Code']}) center / contain no-repeat` }} />
               </span>
               <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Read with your <ProviderPick providers={providers} provider={provider} onPick={pickProvider} /> subscription</span>
+                <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>Read with your <ProviderPick providers={providers} provider={provider} onPick={pickProvider} up /> subscription</span>
                 <span data-connect-reassure="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>
                   Uses the plan you already have, so there's no API key to set up. Saved only on your Mac, and Mathetic never receives it. {leavesButton}
                 </span>
@@ -1627,15 +1594,14 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
           </div>
         );
         // Onboarding draws it as a page of its own, one column stacked as David's mockup has it (2026-10-09, in place of the
-        // side by side of 2026-10-08): the consent card first, above the sources (2026-10-11, after the intro screen),
-        // the sources scrolling in their own box, then Skip for now, the pager and "Bring these in", which starts the run.
+        // side by side of 2026-10-08): the sources scrolling in their own box, the consent card under them (2026-10-12;
+        // above them from 2026-10-11), then Skip for now, the pager and "Bring these in", which starts the run.
         // No custom instructions box.
         if (page) {
           const go = anyOn && !!provider;
           return (
             <div data-connect-column="1" style={{ flex: 1, minHeight: 0, width: `min(${CHOOSE_WIDTH}px, 100%)`, alignSelf: 'center', display: 'flex', flexDirection: 'column' }}>
               <h1 style={{ flex: 'none', margin: '40px 0 22px', textAlign: 'center', font: '500 28px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>What should go in your library?</h1>
-              <div style={{ flex: 'none', padding: '0 8px 14px' }}>{consentCard}</div>
               <div data-connect-sources-box="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '0 8px 16px' }}>
                 {sourcesList}
                 {(keychainModal || !ready) && (
@@ -1645,6 +1611,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                   </div>
                 )}
               </div>
+              <div style={{ flex: 'none', padding: '0 8px' }}>{consentCard}</div>
               {error && <span data-connect-error="1" style={{ flex: 'none', padding: '10px 8px 0', font: '12.5px/1.4 var(--font-sans)', color: '#e70022' }}>{error}</span>}
               <Foot pager={pager} left={<button type="button" className="hov-ink" data-onboarding-skip="1" onClick={onSkip} style={{ padding: '10px 12px', marginLeft: -12, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Skip for now</button>}
                 button={<button type="button" data-connect-bring="1" data-ready={go ? '1' : '0'} onClick={() => { void start(); }} style={{ ...FOOT_BUTTON, opacity: go ? 1 : 0.4, cursor: go ? 'pointer' : 'default' }}>Bring these in<span style={{ display: 'inline-flex' }}>{CARET_RIGHT}</span></button>} />

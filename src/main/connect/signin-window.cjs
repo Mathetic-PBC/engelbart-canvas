@@ -5,7 +5,11 @@
 // screen's "Sign in" opens the app's sign-in page in a small window over the app. Its session is the agents' browser's
 // (BROWSER_PARTITION, the one webSignIn.signedIn reads), so a sign-in made here is the one the agents use. Modelled on
 // ../github/window.cjs, but a sign-in hops across hosts (Google, Apple, Microsoft, the apps' own auth pages), so any https
-// page may load; anything else is blocked, and a page that opens a window opens it here instead. No Keychain, no Chrome.
+// page may load; anything else is blocked. No Keychain, no Chrome.
+// Pop-ups (2026-10-12): claude.ai's "Continue with Google" opens Google in a pop-up and expects the answer back through
+// window.opener; loading the pop-up's page in the main window instead lost that answer, so no sign-in cookie landed. An
+// https pop-up now opens as a child of the sign-in window: the same session and user agent, sandboxed, guarded the same
+// way, closed with its parent. Any other pop-up is refused.
 // Every 2 s the app's sign-in cookie is looked for, with no time limit; once it is there the window closes itself and
 // open() resolves { status: 'signed-in' }. Closed by the person first: { status: 'closed' }. One window at a time: a
 // second open() for an app sharing the sign-in (Google Drive and Gmail) focuses it and shares its answer.
@@ -74,20 +78,50 @@ function createSignInWindow({ BrowserWindow, getParent = () => null, getSession,
       webPreferences: { session: getSession(), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true },
     });
     const contents = win.webContents;
-    try { contents.setUserAgent(userAgent(contents.getUserAgent())); } catch { /* keep Electron's */ }
-    contents.setWindowOpenHandler(({ url }) => {
-      if (httpsOnly(url)) void win.loadURL(url).catch(() => {});
-      return { action: 'deny' };
-    });
-    const guard = (event, url) => { if (!httpsOnly(url)) event.preventDefault(); };
-    contents.on('will-navigate', guard);
-    contents.on('will-redirect', guard);
+    // Every pop-up opened from the window (and from its pop-ups): closed with it.
+    const children = new Set();
+    let refused = false;
+    let finish;
+    const landed = (event, url) => {
+      if (done || refused || !rejectedByGoogle(url) || !finish) return;
+      refused = true;
+      void clearGoogleRefusal(getSession()).then(() => finish('rejected'), () => finish('rejected'));
+    };
+    const guardContents = (target, owner) => {
+      try { target.setUserAgent(userAgent(target.getUserAgent())); } catch { /* keep Electron's */ }
+      target.setWindowOpenHandler(({ url }) => {
+        if (!httpsOnly(url) || owner.isDestroyed()) return { action: 'deny' };
+        return {
+          action: 'allow',
+          overrideBrowserWindowOptions: {
+            parent: owner,
+            title: 'Sign in',
+            backgroundColor: '#ffffff',
+            show: !headless,
+            autoHideMenuBar: true,
+            webPreferences: { session: getSession(), contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true },
+          },
+        };
+      });
+      target.on('did-create-window', (child) => {
+        children.add(child);
+        child.on('closed', () => children.delete(child));
+        guardContents(child.webContents, child);
+      });
+      const guard = (event, url) => { if (!httpsOnly(url)) event.preventDefault(); };
+      target.on('will-navigate', guard);
+      target.on('will-redirect', guard);
+      target.on('did-navigate', landed);
+      target.on('did-redirect-navigation', landed);
+      target.on('will-redirect', landed);
+    };
+    guardContents(contents, win);
+    const closeChildren = () => { for (const child of [...children]) { children.delete(child); if (!child.isDestroyed()) child.close(); } };
 
     let done = false;
     let looking = false;
     let timer = null;
-    let finish;
-    const entry = { group, app, win };
+    const entry = { group, app, win, children };
     entry.promise = new Promise((resolve) => {
       finish = (status) => {
         if (done) return;
@@ -95,6 +129,7 @@ function createSignInWindow({ BrowserWindow, getParent = () => null, getSession,
         if (timer) timers.clearInterval(timer);
         if (current === entry) current = null;
         resolve({ status });
+        closeChildren();
         if (status !== 'closed' && !win.isDestroyed()) win.close();
       };
     });
@@ -108,16 +143,7 @@ function createSignInWindow({ BrowserWindow, getParent = () => null, getSession,
         if (await signedIn(app)) finish('signed-in');
       } catch { /* looked at again next time */ } finally { looking = false; }
     }, pollMs);
-    let refused = false;
-    const landed = (event, url) => {
-      if (done || refused || !rejectedByGoogle(url)) return;
-      refused = true;
-      void clearGoogleRefusal(getSession()).then(() => finish('rejected'), () => finish('rejected'));
-    };
-    contents.on('did-navigate', landed);
-    contents.on('did-redirect-navigation', landed);
-    contents.on('will-redirect', landed);
-    win.on('closed', () => { if (!refused) finish('closed'); });
+    win.on('closed', () => { closeChildren(); if (!refused) finish('closed'); });
     void win.loadURL(start).catch(() => {});
     return entry.promise;
   }

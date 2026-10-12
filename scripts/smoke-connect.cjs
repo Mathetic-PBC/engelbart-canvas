@@ -109,6 +109,14 @@ app.whenReady().then(async () => {
     assert.match(await text(wc, '[data-onboarding-step-of]'), /^3 of 4$/);
     assert.match(await text(wc, '[data-connect-intro-a="where"]'), /^It’s saved only on this Mac\./, 'the first question open');
     assert.ok(await has(wc, '[data-connect-intro-belt]'), 'Connects to, on a belt');
+    // In the middle of the window's height (2026-10-12), the foot where it was; more room between its parts.
+    await pause(250); // the screen rises in
+    const intro = JSON.parse(await js(wc, `JSON.stringify((()=>{const r=(q)=>document.querySelector(q).getBoundingClientRect();const area=r('[data-connect-intro-scroll]'),block=r('[data-connect-intro-block]'),foot=r('[data-connect-intro] [data-connect-foot]');return {area:{top:area.top,bottom:area.bottom},block:{top:block.top,bottom:block.bottom},foot:{bottom:foot.bottom},win:innerHeight,gap:getComputedStyle(document.querySelector('[data-connect-intro-block]')).rowGap}})())`));
+    assert.ok(intro.area.bottom - intro.area.top > intro.block.bottom - intro.block.top, `the block fits: ${JSON.stringify(intro)}`);
+    assert.ok(Math.abs((intro.block.top - intro.area.top) - (intro.area.bottom - intro.block.bottom)) <= 2, `centered in its height: ${JSON.stringify(intro)}`);
+    assert.ok(intro.block.top - intro.area.top > 40, `not at the top: ${JSON.stringify(intro)}`);
+    assert.ok(intro.win - intro.foot.bottom < 60, `the foot at the bottom of the window: ${JSON.stringify(intro)}`);
+    assert.equal(intro.gap, '44px');
     await shot(wc, '0-intro');
     await press(wc, '[data-connect-intro] [data-onboarding-continue] button');
     await until(async () => (await step(wc)) === 'connect', 'Connect your library, after the intro');
@@ -163,8 +171,10 @@ app.whenReady().then(async () => {
     assert.ok(await js(wc, '!!document.querySelector("[data-connect-app=Obsidian] [title]") && /~/.test(document.querySelector("[data-connect-app=Obsidian] [title]").title)'), 'the folder is in its tooltip');
     assert.match(await text(wc, '[data-connect-app=Notion]'), /Needs sign-in$/);
     assert.equal(await js(wc, 'document.querySelectorAll("[data-connect-permission]").length'), 1, 'one consent checkbox');
-    assert.equal(await js(wc, '!!document.querySelector("[data-connect-sources-box] [data-connect-permissions]")'), false, 'the consent card is above the sources now (2026-10-11), not under them');
-    assert.equal(await js(wc, 'document.querySelector("[data-connect-permissions]").compareDocumentPosition(document.querySelector("[data-connect-sources-box]")) & Node.DOCUMENT_POSITION_FOLLOWING'), 4, 'the consent first');
+    assert.equal(await js(wc, '!!document.querySelector("[data-connect-sources-box] [data-connect-permissions]")'), false, 'the consent card is not in the sources\' scrolling box');
+    assert.equal(await js(wc, 'document.querySelector("[data-connect-sources-box]").compareDocumentPosition(document.querySelector("[data-connect-permissions]")) & Node.DOCUMENT_POSITION_FOLLOWING'), 4, 'the consent card under the sources (2026-10-12)');
+    assert.equal(await js(wc, 'document.querySelector("[data-connect-permissions]").compareDocumentPosition(document.querySelector("[data-connect-bring]")) & Node.DOCUMENT_POSITION_FOLLOWING'), 4, 'above the foot');
+    assert.equal(await js(wc, '(()=>{const c=document.querySelector("[data-connect-permissions]").getBoundingClientRect();const b=document.querySelector("[data-connect-sources-box]").getBoundingClientRect();const f=document.querySelector("[data-connect-bring]").getBoundingClientRect();return c.top>=b.bottom-1&&c.bottom<=f.top+1})()'), true, 'drawn between them');
     assert.equal(await attr(wc, '[data-connect-permission]', 'role'), 'switch');
     assert.match(await text(wc, '[data-connect-permission]'), /^Read with your Claude Code subscription/);
     assert.match(await text(wc, '[data-connect-permission]'), /What leaves my Mac\?$/, 'one card: the reassurance under the words');
@@ -229,28 +239,20 @@ app.whenReady().then(async () => {
     await until(() => has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]'), 'the survey\'s findings, one per line', 400);
     assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'role'), 'checkbox', 'several can be picked');
     await pause(400); // the chat scrolls to its newest message first
-    // What an option covers (2026-10-11): an ⓘ on the recommended item (its detail: title, kind, date; MATH-122 took
-    // "Everything" away from a survey's items), none on an option without one;
-    // hovering opens a popover in the card, inside the window; a click on it changes nothing; Escape closes it.
-    const info = '[data-connect-card="live"] [data-connect-option-info="ChatGPT item 1"]';
-    assert.equal(await has(wc, info), true, 'an ⓘ on the option with a detail');
-    assert.equal(await has(wc, '[data-connect-card="live"] [data-connect-option-info="ChatGPT item 2"]'), false, 'no ⓘ without a detail');
-    const infoAt = await until(() => spot(wc, info), info);
-    wc.sendInputEvent({ type: 'mouseMove', x: infoAt.x, y: infoAt.y });
-    await until(() => js(wc, '(()=>{const p=document.querySelector("[data-connect-card=\\"live\\"] [data-connect-option-detail=\\"ChatGPT item 1\\"]");return !!p&&getComputedStyle(p).visibility==="visible"})()'), 'the popover, on hover');
-    assert.match(await text(wc, '[data-connect-option-detail="ChatGPT item 1"]'), /ChatGPT item 1 · doc · 2026-10-01/);
-    const inside = await js(wc, '(()=>{const r=document.querySelector("[data-connect-option-detail]").getBoundingClientRect();return r.left>=0&&r.top>=0&&r.right<=innerWidth&&r.bottom<=innerHeight&&r.width>0})()');
-    assert.equal(inside, true, 'the popover is inside the window');
+    // What an option covers (2026-10-12): its detail on a line of its own under it, inside the window, never cut off (no ⓘ,
+    // no popover); none on an option without one. Nothing comes ticked, and no option is tagged "Recommended".
+    const detail = '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"] [data-connect-option-detail="ChatGPT item 1"]';
+    assert.equal(await has(wc, detail), true, 'the detail inside the option');
+    assert.match(await text(wc, detail), /ChatGPT item 1 · doc · 2026-10-01/);
+    assert.equal(await has(wc, '[data-connect-card="live"] [data-connect-option-detail="ChatGPT item 2"]'), false, 'no detail line without one');
+    const below = await js(wc, `(()=>{const d=document.querySelector(${JSON.stringify(detail)}).getBoundingClientRect();const l=document.querySelector('[data-connect-card="live"] [data-connect-option="ChatGPT item 1"] .cx-opt-label').getBoundingClientRect();const el=document.querySelector(${JSON.stringify(detail)});return d.top>=l.bottom-1&&d.width>0&&el.scrollWidth<=el.clientWidth+1&&getComputedStyle(el).textOverflow!=='ellipsis'})()`);
+    assert.equal(below, true, 'on its own line, under the label, not cut off');
+    assert.equal(await has(wc, '[data-connect-option-info], .cx-info, [role="tooltip"]'), false, 'no ⓘ and no popover');
+    assert.equal(await has(wc, '[data-connect-option-recommended]'), false, 'no "Recommended" tag');
+    assert.doesNotMatch(await text(wc, '[data-connect-card="live"]'), /Recommended/);
     await shot(wc, '3b-option-detail');
-    await click(wc, infoAt);
-    // Nothing comes ticked (2026-10-12): the recommendation carries a "Recommended" tag, and Submit waits for a tick.
-    assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'aria-checked'), 'false', 'the recommendation comes unticked, and clicking its ⓘ leaves it so');
-    assert.equal(await has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"] [data-connect-option-recommended]'), true, 'the recommendation is tagged');
-    assert.equal(await has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 2"] [data-connect-option-recommended]'), false, 'only the recommendation');
+    assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'aria-checked'), 'false', 'the recommendation comes unticked');
     assert.equal(await js(wc, 'document.querySelector("[data-connect-card=\\"live\\"] [data-connect-submit]").disabled'), true, 'Submit waits for a tick');
-    assert.equal(await has(wc, '[data-connect-card="live"]'), true, 'nor submits');
-    await js(wc, 'document.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}))');
-    await until(async () => !(await has(wc, '[data-connect-option-detail]')), 'Escape closes it');
     // Skip and Submit pinned to the bottom of the chat while the card is live.
     assert.equal(await js(wc, 'getComputedStyle(document.querySelector("[data-connect-card=\\"live\\"] [data-connect-card-actions]")).position'), 'sticky');
     await press(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]');

@@ -31,7 +31,7 @@ const { detect, scanFor, localRepos, pdfsAtAGlance } = require('../src/main/conn
 const folderAccess = require('../src/main/connect/folder-access.cjs');
 const { importToolLabel, writeImportConfig, claudeServers, claudeToolsFor } = require('../src/main/connect/agents.cjs');
 const { hostAllowed, hostsFor, fileNameOf } = require('../src/main/connect/browser.cjs');
-const { listWebChats, readWebChat } = require('../src/main/connect/web-chats.cjs');
+const { listWebChats, readWebChat, CHATGPT_LIST, CHATGPT_ONE, CLAUDE_LIST, CLAUDE_ONE } = require('../src/main/connect/web-chats.cjs');
 const { createAppleNotes, noteMarkdown } = require('../src/main/connect/apple-notes.cjs');
 const { cursorChats, cursorTranscript } = require('../src/main/connect/cursor.cjs');
 const { createConnectors } = require('../src/main/connect/connectors.cjs');
@@ -387,6 +387,38 @@ test('ChatGPT\'s and Claude\'s chats read from their signed-in pages, into turns
   const signedOut = { ensure: async () => {}, evaluate: async () => ({ signedIn: false }) };
   await assert.rejects(listWebChats(signedOut, 'Claude'), (error) => error.code === 'SIGNED_OUT' && /needs_you/.test(error.message));
   await assert.rejects(listWebChats(gpt, 'Gemini'), /must be one of ChatGPT, Claude/);
+});
+
+test('a failed session check is not "signed out": asked again a moment later; only an answer that says so is signed out (2026-10-12)', async () => {
+  const page = (answers) => { const asked = []; return { asked, ensure: async () => {}, evaluate: async () => { asked.push(1); return answers.shift(); } }; };
+  const paused = [];
+  const sleep = async (ms) => { paused.push(ms); };
+  const listed = { signedIn: true, account: 'me', items: [{ id: 'g-111111', title: 'Regression help', updated: '2026-10-02T00:00:00Z' }] };
+  // A 403 (or a 429, a 5xx, a network error) then an answer: read as usual, after a pause of a few seconds.
+  const flaky = page([{ signedIn: null, status: 403 }, listed]);
+  assert.deepEqual((await listWebChats(flaky, 'ChatGPT', { sleep })).chats.map((chat) => chat.id), ['g-111111']);
+  assert.equal(flaky.asked.length, 2);
+  assert.deepEqual(paused, [3000]);
+  // Twice no answer: an error that is not SIGNED_OUT, so the agent does not ask for a sign-in.
+  await assert.rejects(listWebChats(page([{ signedIn: null, status: 429 }, { signedIn: null, status: 0 }]), 'Claude', { sleep }), (error) => error.code !== 'SIGNED_OUT' && /didn't say whether you're signed in.*not a sign-out/.test(error.message));
+  await assert.rejects(readWebChat(page([null, null]), 'ChatGPT', 'g-111111', { sleep }), (error) => error.code === 'UNSURE');
+  // Signed out only when the site says so (an ok answer with no session, or a 401), and then at once.
+  const out = page([{ signedIn: false }]);
+  await assert.rejects(listWebChats(out, 'ChatGPT', { sleep }), (error) => error.code === 'SIGNED_OUT');
+  assert.equal(out.asked.length, 1, 'not asked again');
+  await assert.rejects(listWebChats(page([{ signedIn: null, status: 503 }, { signedIn: false }]), 'ChatGPT', { sleep }), (error) => error.code === 'SIGNED_OUT', 'said on the second ask');
+  // The scripts themselves: a 401 is signed out; a 403 or no answer is "couldn't tell"; an ok answer with no token is signed out.
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  const run = async (script, respond) => {
+    const fetch = async (url) => { const [status, body] = respond(url); if (status === 0) throw new TypeError('Failed to fetch'); return { ok: status >= 200 && status < 300, status, json: async () => body }; };
+    return new AsyncFunction('fetch', script)(fetch);
+  };
+  assert.deepEqual(await run(CHATGPT_LIST(5), () => [401, null]), { signedIn: false });
+  assert.deepEqual(await run(CHATGPT_LIST(5), () => [403, null]), { signedIn: null, status: 403 });
+  assert.deepEqual(await run(CHATGPT_ONE('g-111111'), () => [0, null]), { signedIn: null, status: 0 });
+  assert.deepEqual(await run(CHATGPT_LIST(5), () => [200, {}]), { signedIn: false });
+  assert.deepEqual(await run(CLAUDE_LIST(5), () => [500, null]), { signedIn: null, status: 500 });
+  assert.deepEqual(await run(CLAUDE_ONE('c-111111'), () => [200, []]), { signedIn: false });
 });
 
 test('Google Drive: a Doc\'s pictures kept out of its Markdown export, a Sheet as a table', () => {
@@ -847,7 +879,7 @@ function fakeSignIn({ browsers = {}, later = {} } = {}) {
     openExternal: async () => { throw new Error('Safari is never opened'); },
     openIn: async (id, url) => { calls.openedIn.push([id, url]); },
   });
-  return { webSignIn, calls };
+  return { webSignIn, calls, held };
 }
 
 test('sign-ins sorted before the run: one signed in is surveyed; one still signed out gets no card, it is left out and the opener says so', async () => {
@@ -913,7 +945,10 @@ test('a web app\'s sign-in lost mid-run: copied again quietly from the browser, 
   process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT';
   const fake = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } } });
   const { webSignIn, quiet } = countedSignIn(fake);
-  const { connect, state } = fakeConnect({ webSignIn });
+  // The sign-in cookie really is gone when the survey says so (one still held is believed: the test after this).
+  const base = createFakeConnectAgents({ delayMs: 5 });
+  const agents = { turn: (args) => { if (args.meta && args.meta.kind === 'survey') fake.held.length = 0; return base.turn(args); } };
+  const { connect, state } = fakeConnect({ webSignIn, agents });
   let started = null;
   try {
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } } });
@@ -927,6 +962,72 @@ test('a web app\'s sign-in lost mid-run: copied again quietly from the browser, 
   } finally {
     if (started) connect.stop(started.id);
     delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
+  }
+});
+
+/** Fake agents whose survey of `app` (or, with `kind`, whose job of that kind) calls needs_you `times` times with `reason`. */
+function claimingAgents({ app = 'ChatGPT', kind = 'survey', times = 1, reason = 'Sign in to ChatGPT' } = {}) {
+  const base = createFakeConnectAgents({ delayMs: 5 });
+  const answers = [];
+  const agents = {
+    async turn(args) {
+      const meta = args.meta;
+      if (!meta || meta.kind !== kind || (kind === 'survey' && meta.job.apps[0] !== app)) return base.turn(args);
+      for (let n = 0; n < times; n += 1) answers.push(await meta.callTool('needs_you', { kind: 'signin', reason }));
+      return { text: kind === 'survey' ? JSON.stringify({ app, signedIn: true, summary: 'Read with what it had.', items: [] }) : 'Brought in what it could.', session: null };
+    },
+  };
+  return { agents, answers };
+}
+
+test('an agent says signed out while the sign-in cookie is still held: still signed in, nothing dropped or stopped, no chat line (2026-10-12)', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } } });
+  const { webSignIn, quiet } = countedSignIn(fake);
+  const { agents, answers } = claimingAgents({ times: 2 });
+  const { connect, state } = fakeConnect({ webSignIn, agents });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } } });
+    const now = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.status === 'done'), 'its survey, finished');
+    assert.equal(answers[0].status, 'done');
+    assert.equal(answers[0].note, 'Still signed in: the page or its API failed for a moment. Reload and try again, or finish with what you have.');
+    assert.equal(answers[1].status, 'skipped', 'the same agent saying so again finishes without it');
+    assert.match(answers[1].note, /finish without it/);
+    assert.deepEqual(quiet, ['ChatGPT'], 'checked before the run only: not copied again, so nothing was dropped');
+    assert.equal(fake.held.length, 1, 'the sign-in cookie kept');
+    assert.deepEqual(now.needs, [], 'no card');
+    assert.equal(now.chat.some((entry) => /ChatGPT/.test(entry.text) && /Left out|ended/.test(entry.text)), false, 'nothing said in the chat');
+    assert.ok(now.log.some((entry) => entry.text === 'Still signed in to ChatGPT: its page or API failed for a moment'));
+    assert.ok(now.log.some((entry) => entry.text === 'Carried on without ChatGPT: it still looked signed in'));
+    const recall = now.jobs.find((job) => job.kind === 'recall' && job.apps.includes('ChatGPT'));
+    if (recall) assert.notEqual(recall.skipped, true, 'Asking ChatGPT what it remembers is not stopped');
+    // ChatGPT is not left out for the run: Import still brings it in.
+    const imported = connect.importNow(started.id);
+    assert.ok(imported.jobs.some((job) => job.kind === 'import' && job.apps.includes('ChatGPT')));
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a sign-in need from a job filed under Codex that names claude.ai goes to Claude: settled quietly, no card for Codex (2026-10-12)', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['Claude'] } } });
+  const { webSignIn, quiet } = countedSignIn(fake);
+  const { agents, answers } = claimingAgents({ kind: 'import', reason: 'Sign in to Claude (claude.ai) to read its chats' });
+  const { connect, state } = fakeConnect({ webSignIn, agents });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['Codex', 'Claude', 'Claude Code'] } }, permissions: { recall: false } });
+    await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    const imported = connect.importNow(started.id);
+    assert.deepEqual(imported.jobs.find((job) => job.kind === 'import').apps, ['Codex', 'Claude', 'Claude Code']);
+    const now = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the import');
+    assert.equal(answers[0].status, 'done');
+    assert.match(answers[0].note, /^Still signed in/);
+    assert.deepEqual(now.needs, [], 'no card for Codex');
+    assert.ok(now.log.some((entry) => entry.text === 'Still signed in to Claude: its page or API failed for a moment'));
+    assert.deepEqual(quiet, ['Claude']);
+  } finally {
+    if (started) connect.stop(started.id);
   }
 });
 
@@ -1435,6 +1536,18 @@ test('the project goes to the librarian, its surveys and its imports, and is kep
   await until(third.state(plain.id), (s) => !s.thinking && s.chat.some((one) => one.ask), 'the chats question');
   assert.ok(seen.length && seen.every((one) => !one.message.includes('<project')), 'no <project> block');
   third.connect.stop(plain.id);
+});
+
+test('the sign-in window closed without signing in: the row is plain Sign in, not an old "macOS didn\'t allow it" (2026-10-12)', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const label = (signIn) => model.rowLabel('ChatGPT', { found: { apps: { ChatGPT: { found: true } } }, signIn });
+  const closed = (was) => label(model.afterSignInWindowClosed(was));
+  assert.deepEqual(closed({ status: 'refused', browser: 'Chrome' }), { text: '', tone: '', signIn: true }, 'plain Sign in, no "macOS didn\'t allow it"');
+  assert.deepEqual(closed({ status: 'rejected', browser: '' }), { text: '', tone: '', signIn: true }, 'nor an old refusal by the site');
+  assert.deepEqual(closed({ status: 'signed-out', browser: '' }), { text: '', tone: '', signIn: true });
+  assert.deepEqual(closed({ status: 'no-browser', browser: '' }), { text: '', tone: '', signIn: true });
+  assert.equal(model.afterSignInWindowClosed(undefined), null, 'nothing before: nothing after');
+  assert.deepEqual(model.afterSignInWindowClosed({ status: 'declined', browser: 'Chrome' }), { status: 'declined', browser: 'Chrome' }, 'anything else as it was');
 });
 
 test('the choose screen\'s sign-in checks: each row state, the web apps a tick starts checks for, the panel and Not now (the apps stay ticked, with Sign in)', async () => {

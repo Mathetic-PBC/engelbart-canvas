@@ -1,8 +1,9 @@
 'use strict';
 
 // Connect your library's options (2026-10-11): an option's `detail` (what it covers, kept with its line breaks by
-// optionOf and asked for by the librarian's prompt), the ⓘ that shows it on the card (src/renderer/screens/
-// ConnectLibrary.jsx QuestionCard), where its popover goes, and the foot button that stays quiet while it says "Skip the rest".
+// optionOf and asked for by the librarian's prompt), shown on a line of its own under the option on the card (src/renderer/
+// screens/ConnectLibrary.jsx QuestionCard; 2026-10-12: no ⓘ, no popover, no "Recommended" tag), and the foot button that
+// stays quiet while it says "Skip the rest".
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -27,7 +28,7 @@ const previousWindow = global.window;
 global.window = { engelbartAPI: {} };
 try { compiled._compile(built.outputFiles[0].text, filename); }
 finally { if (previousWindow === undefined) delete global.window; else global.window = previousWindow; }
-const { QuestionCard, AnsweredAsk, importFootStyle, popPlace } = compiled.exports;
+const { QuestionCard, AnsweredAsk, importFootStyle } = compiled.exports;
 
 test('optionOf keeps an option\'s detail with its line breaks, cut at 600 characters and 10 lines; anything else is \'\'', () => {
   const detail = 'Research Chat 1 · 2026-09-14 · Drive / Research\r\nResearch Chat 2 · 2026-09-21 · Drive / Research\n\n  Research   Chat 3 · 2026-09-28  \nand 4 more';
@@ -74,7 +75,7 @@ test('optionOf keeps "checked" as a boolean on a "multi" and drops it on a "sing
   assert.ok(readReply(JSON.stringify({ ask: { source: 'notes', kind: 'single', title: 'Which account?', options } }), choices).ask.options.every((option) => !('checked' in option)));
 });
 
-test('the librarian asks "multi" by default, with its recommendation checked (shown as a tag) and no "Everything" beside the parts', () => {
+test('the librarian asks "multi" by default, with its recommendation checked (kept, not shown) and no "Everything" beside the parts', () => {
   const rule = INTERVIEW_SYSTEM_PROMPT.split('\n').find((text) => text.startsWith('- Prefer options'));
   assert.match(rule, /"multi" \(pick any\) is the default/);
   assert.match(rule, /"single" \(pick one\) only when the answers exclude each other/);
@@ -82,7 +83,8 @@ test('the librarian asks "multi" by default, with its recommendation checked (sh
   const checked = INTERVIEW_SYSTEM_PROMPT.split('\n').find((text) => text.startsWith('- In a "multi", set "checked": true'));
   assert.ok(checked, 'a rule about checked');
   assert.match(checked, /No "Everything" or "Everything but…" option next to the parts/);
-  assert.match(checked, /"Recommended" tag/);
+  assert.match(checked, /the card starts with nothing ticked/);
+  assert.doesNotMatch(checked, /"Recommended" tag/, 'the card no longer shows a tag (2026-10-12)');
   assert.doesNotMatch(checked, /one Submit takes your recommendation/);
   assert.doesNotMatch(INTERVIEW_SYSTEM_PROMPT, /make it the first option \("Everything but/);
   assert.doesNotMatch(INTERVIEW_SYSTEM_PROMPT, /multiple choice/);
@@ -90,22 +92,21 @@ test('the librarian asks "multi" by default, with its recommendation checked (sh
 
 const pickedOn = (html) => [...html.matchAll(/data-connect-option="([^"]*)"[^>]*aria-checked="true"/g)].map((match) => match[1]);
 
-test('a "multi" starts with nothing ticked: its recommended options carry a "Recommended" tag, and Submit waits for a tick (2026-10-12)', () => {
+test('a "multi" starts with nothing ticked, its recommended options not marked out: no "Recommended" tag, no ⓘ; Submit waits for a tick (2026-10-12)', () => {
   const recommended = { source: 'notes', kind: 'multi', title: 'Which folders?', options: [
-    { label: 'Research', why: '48 notes', detail: '', checked: true },
+    { label: 'Research', why: '48 notes', detail: 'Research/Thesis · 31 notes\nResearch/Lab · 17 notes', checked: true },
     { label: 'Daily', why: '180 notes', detail: '', checked: false },
     { label: 'Essays', why: '12 notes', detail: '', checked: true },
   ] };
   const html = render({ ask: recommended, live: true, onAnswer: () => {} });
   assert.deepEqual(pickedOn(html), [], 'nothing ticked');
-  const tagged = [...html.matchAll(/data-connect-option="([^"]*)"((?:(?!data-connect-option=")[\s\S])*?)data-connect-option-recommended="1"[^>]*>Recommended</g)].map((match) => match[1]);
-  assert.deepEqual(tagged, ['Research', 'Essays'], 'the recommended ones are tagged');
-  assert.equal((html.match(/>Recommended</g) || []).length, 2);
+  assert.doesNotMatch(html, /Recommended|data-connect-option-recommended/, 'no tag');
+  assert.doesNotMatch(html, /data-connect-option-info|cx-info|ⓘ|aria-label="What /, 'no ⓘ');
+  assert.equal(elements.some((element) => element.props && element.props.role === 'tooltip'), false, 'no popover');
   const submit = elements.find((element) => element.type === 'button' && element.props['data-connect-submit'] === '1');
   assert.equal(submit.props.disabled, true, 'Submit waits for a tick');
   assert.ok(elements.some((element) => element.type === 'button' && element.props['data-connect-skip'] === '1'), 'Skip is always there');
-  // A "single" has no tag, even with checked set; neither does an answered card.
-  assert.doesNotMatch(render({ ask: { ...recommended, kind: 'single' }, live: true, onAnswer: () => {} }), />Recommended</);
+  assert.equal(recommended.options[0].checked, true, 'checked is still in the data');
 });
 
 test('a "single"\'s options and an answered card\'s options never come checked', () => {
@@ -136,60 +137,30 @@ const ask = { source: 'transcripts', kind: 'multi', title: 'Which meetings?', op
 ] };
 const render = (props) => { elements.length = 0; return renderToStaticMarkup(React.createElement(QuestionCard, props)); };
 const optionButton = (label) => elements.find((element) => element.type === 'button' && element.props['data-connect-option'] === label);
-const infoButton = (label) => elements.find((element) => element.type === 'button' && element.props['data-connect-option-info'] === label);
-const within = (element, found) => { if (!element || typeof element !== 'object') return false; if (element === found) return true; const kids = element.props && element.props.children; return Array.isArray(kids) ? kids.some((kid) => within(kid, found)) : within(kids, found); };
 
-test('an option with a detail gets an ⓘ, one without gets none; the why sits on the label\'s line', () => {
+test('an option\'s why sits after its label and its detail on a line of its own, inside the option, wrapping instead of cut off', () => {
   const html = render({ ask, live: true, onAnswer: () => {} });
-  assert.ok(infoButton('Meeting transcripts'), 'an ⓘ for the option with a detail');
-  assert.equal(infoButton('Standups'), undefined, 'no ⓘ without a detail');
-  assert.equal((html.match(/data-connect-option-info=/g) || []).length, 1);
-  assert.match(html, /class="bs-opt cx-opt"[^>]*data-connect-option="Meeting transcripts"[^>]*data-info="1"/);
-  assert.match(html, /class="bs-opt cx-opt"[^>]*data-connect-option="Standups"(?![^>]*data-info)/);
-  assert.match(html, /<span class="cx-opt-text"><span class="cx-opt-label">Standups<\/span><span class="cx-opt-why" data-connect-option-why="1">12 docs<\/span><\/span>/);
-  assert.doesNotMatch(html, /title="7\/9\/26/, 'not a native tooltip');
-  assert.doesNotMatch(html, /data-connect-option-detail/, 'closed until hovered or focused');
+  assert.match(html, /<span class="cx-opt-text"><span class="cx-opt-line"><span class="cx-opt-label">Standups<\/span><span class="cx-opt-why" data-connect-option-why="1">12 docs<\/span><\/span><\/span>/, 'no detail: no second line');
+  assert.match(html, /<span class="cx-opt-line"><span class="cx-opt-label">Meeting transcripts<\/span><span class="cx-opt-why" data-connect-option-why="1">4 docs<\/span><\/span><span class="cx-opt-detail" data-connect-option-detail="Meeting transcripts">7\/9\/26 transcripts · 2026-07-09 · Drive \/ Meet Recordings\n8\/12\/26 · 2026-08-12 · Drive \/ Meet Recordings<\/span>/);
+  assert.doesNotMatch(html, /data-connect-option-info|data-info=/, 'no ⓘ');
+  assert.doesNotMatch(html, /title="7\/9\/26/, 'not a native tooltip either');
+  const css = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/screens/ConnectLibrary.jsx'), 'utf8');
+  for (const name of ['cx-opt-label', 'cx-opt-why', 'cx-opt-detail']) {
+    const rule = css.match(new RegExp(`\\.${name}\\{([^}]*)\\}`))[1];
+    assert.doesNotMatch(rule, /ellipsis|nowrap/, `${name} is never cut`);
+  }
+  assert.match(css.match(/\.cx-opt-detail\{([^}]*)\}/)[1], /white-space:pre-line/, 'the detail keeps its line breaks');
   assert.match(html, /data-connect-card-actions="1" style="position:sticky;bottom:0/, 'Skip and Submit pinned to the chat\'s bottom');
+  assert.ok(optionButton('Meeting transcripts'));
 });
 
-test('clicking the ⓘ never ticks the option nor submits: it is beside the option\'s button, not in it, and stops its click', () => {
-  const answers = [];
-  render({ ask, live: true, onAnswer: (answer) => answers.push(answer) });
-  const option = optionButton('Meeting transcripts');
-  const info = infoButton('Meeting transcripts');
-  assert.equal(within(option, info), false, 'the ⓘ is not inside the option\'s button');
-  assert.equal(info.props.type, 'button', 'never a submit button');
-  const calls = [];
-  const event = { preventDefault: () => calls.push('prevent'), stopPropagation: () => calls.push('stop') };
-  info.props.onClick(event);
-  info.props.onDoubleClick(event);
-  assert.deepEqual(calls, ['prevent', 'stop', 'prevent', 'stop']);
-  assert.deepEqual(answers, [], 'nothing answered');
-});
-
-test('the ⓘ works on an answered card: its options are disabled, the ⓘ is not', () => {
+test('an answered card shows its options disabled, with their details', () => {
   elements.length = 0;
   const card = React.createElement(QuestionCard, { ask, live: false, onAnswer: () => {} });
   renderToStaticMarkup(React.createElement(AnsweredAsk, { ask }, card));
-  // Folded first; opened, the card as it was answered.
   elements.length = 0;
   const html = renderToStaticMarkup(card);
   assert.equal(optionButton('Meeting transcripts').props.disabled, true);
-  assert.ok(infoButton('Meeting transcripts'));
-  assert.equal(infoButton('Meeting transcripts').props.disabled, undefined);
+  assert.match(html, /data-connect-option-detail="Meeting transcripts"/);
   assert.doesNotMatch(html, /data-connect-card-actions/, 'no Skip or Submit on an answered card');
-});
-
-test('the popover opens toward the room there is and never off the window', () => {
-  const viewport = { width: 800, height: 900 };
-  const size = { width: 300, height: 120 };
-  // Room below: under the ⓘ, right edges together.
-  assert.deepEqual(popPlace({ top: 100, bottom: 122, left: 700, right: 722 }, size, viewport), { left: 422, top: 128, side: 'below' });
-  // Near the bottom: above it.
-  assert.deepEqual(popPlace({ top: 840, bottom: 862, left: 700, right: 722 }, size, viewport), { left: 422, top: 714, side: 'above' });
-  // Near the left edge: pushed in, 8px from it.
-  assert.equal(popPlace({ top: 100, bottom: 122, left: 10, right: 32 }, size, viewport).left, 8);
-  // Taller than either side: kept inside the window.
-  const tall = popPlace({ top: 400, bottom: 422, left: 700, right: 722 }, { width: 300, height: 1000 }, viewport);
-  assert.equal(tall.top, 8);
 });

@@ -48,3 +48,10 @@ test('the belt names each app once for screen readers, and runs twice so it loop
   assert.match(html, /data-onboarding-skip="1"[^>]*>Skip for now</);
   assert.match(html, /data-onboarding-continue="1"><button[^>]*>Continue/);
 });
+
+test('the block sits in the middle of the window\'s height, with more room between the lead, the questions and the belt (2026-10-12)', () => {
+  const html = renderToStaticMarkup(React.createElement(ConnectIntro, { onContinue() {}, onSkip() {} }));
+  assert.match(html, /data-connect-intro-scroll="1" style="flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column/);
+  assert.match(html, /data-connect-intro-block="1" style="margin:auto 0;display:flex;flex-direction:column;gap:44px"/, 'centered by its auto margins while it fits; at the top, scrolling, when it does not');
+  assert.ok(html.indexOf('data-connect-intro-block') < html.indexOf('data-connect-foot'), 'the foot outside it, where it was');
+});

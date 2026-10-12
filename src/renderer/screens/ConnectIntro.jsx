@@ -71,15 +71,20 @@ export default function ConnectIntro({ pager = null, guided = false, onContinue,
   return (
     <div data-connect-intro="1" style={{ flex: 1, minHeight: 0, width: `min(${CHOOSE_WIDTH}px, 100%)`, alignSelf: 'center', display: 'flex', flexDirection: 'column', animation: `rise 160ms ${EASE}` }}>
       <style>{CSS}</style>
-      <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', justifyContent: 'safe center', gap: 28, padding: '32px 8px 16px' }}>
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12, textAlign: 'center' }}>
-          <h1 style={{ margin: 0, font: '500 28px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>All your context in one place</h1>
-          <p data-connect-intro-lead="1" style={{ margin: 0, maxWidth: 440, font: '14.5px/1.6 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{introLead(guided)}</p>
+      {/* The block in the middle of the window's height (2026-10-12; it sat at the top): its auto margins center it while
+          it fits and leave it at the top, scrolling, when it does not. More room between the lead, the questions and the
+          belt. The foot stays where it is. */}
+      <div data-connect-intro-scroll="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '24px 8px' }}>
+        <div data-connect-intro-block="1" style={{ margin: 'auto 0', display: 'flex', flexDirection: 'column', gap: 44 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, textAlign: 'center' }}>
+            <h1 style={{ margin: 0, font: '500 28px/1.2 var(--font-sans)', letterSpacing: '-0.4px', color: '#171717' }}>All your context in one place</h1>
+            <p data-connect-intro-lead="1" style={{ margin: 0, maxWidth: 440, font: '14.5px/1.6 var(--font-sans)', color: '#4d4d4d', textWrap: 'pretty' }}>{introLead(guided)}</p>
+          </div>
+          <div style={{ width: '100%', maxWidth: 420, alignSelf: 'center', borderBottom: '1px solid #eaeaea' }}>
+            {introQuestions().map((item) => <Question key={item.id} item={item} open={open === item.id} onToggle={() => setOpen((now) => (now === item.id ? '' : item.id))} />)}
+          </div>
+          <div style={{ width: '100%', maxWidth: 420, alignSelf: 'center' }}><Belt /></div>
         </div>
-        <div style={{ width: '100%', maxWidth: 420, alignSelf: 'center', borderBottom: '1px solid #eaeaea' }}>
-          {introQuestions().map((item) => <Question key={item.id} item={item} open={open === item.id} onToggle={() => setOpen((now) => (now === item.id ? '' : item.id))} />)}
-        </div>
-        <div style={{ width: '100%', maxWidth: 420, alignSelf: 'center' }}><Belt /></div>
       </div>
       <Foot pager={pager}
         left={<button type="button" className="hov-ink" data-onboarding-skip="1" onClick={onSkip} style={{ padding: '10px 12px', marginLeft: -12, border: 0, background: 'none', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' }}>Skip for now</button>}

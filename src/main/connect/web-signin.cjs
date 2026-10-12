@@ -99,7 +99,7 @@ const pickKey = (app) => (SIGN_IN_COOKIES[app] || [])[0] || '';
  * `picks` { get(key) → { browser, profile } | null, set(key, pick) } the profiles the person picked; `log(line)` what is
  * worth noting (a check with no answer).
  * `pollMs` / `slowPollMs` / `fastForMs` how often a wait looks again (POLL_MS…).
- * → { supports, canSignIn, signedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount,
+ * → { supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount,
  *     keychainTarget, keychainNote, holdersOf, picked, choose, opensIn }
  */
 function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal, openIn = null, getSession, picks = null, log = () => {}, pollMs = POLL_MS, slowPollMs = SLOW_POLL_MS, fastForMs = FAST_FOR_MS, timeoutMs = TIMEOUT_MS, checkCacheMs = CHECK_CACHE_MS, now = () => Date.now(), sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }) }) {
@@ -154,6 +154,17 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     });
     verdicts.set(domain, { at: now(), answer });
     return answer;
+  }
+
+  /**
+   * Whether the sign-in Engelbart's browser holds for `app` still stands, asked when an agent says it is signed out (an
+   * agent's page or API can fail for a moment and look signed out, 2026-10-12): its cookie still held, and a fresh look
+   * at its check page (where it has one) not saying signed out (no answer counts as standing).
+   */
+  async function stillSignedIn(app) {
+    if (!(await signedIn(app))) return false;
+    verdicts.delete(pickKey(app));
+    return (await works(app)) !== false;
   }
 
   /** A copy found signed out: its sign-in cookies taken out of Engelbart's browser, so nothing counts it as held. */
@@ -491,7 +502,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     return target ? `macOS will ask to use ${target.name}'s sign-ins. Choose Allow.` : '';
   }
 
-  return { supports, canSignIn, signedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount, keychainTarget, keychainNote, holdersOf, picked, choose, opensIn, readableCount: () => readable().length };
+  return { supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount, keychainTarget, keychainNote, holdersOf, picked, choose, opensIn, readableCount: () => readable().length };
 }
 
 module.exports = { createWebSignIn, SIGN_IN_COOKIES, SIGN_IN_PAGES, ANOTHER_ACCOUNT_PAGE, READABLE_NAMES, domainsOf, browserIdOf };

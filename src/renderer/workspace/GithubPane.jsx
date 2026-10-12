@@ -115,11 +115,14 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
             {rows.map((entry, i) => (
               <button key={entry.repo.id || entry.repo.url} type="button" data-github-repo={entry.repo.fullName} disabled={busy} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => { if (idx !== i) setIdx(i); }} onClick={() => pick(entry)} title={entry.repo.description || entry.repo.fullName} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: i === at ? '#f2f2f2' : 'transparent', textAlign: 'left', cursor: 'pointer' }}>
                 <GhGlyph size={13} color="#4d4d4d" />
-                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(13) }}>
-                  <span style={{ color: '#8f8f8f' }}>{entry.repo.owner}/</span>{entry.repo.fullName.slice(entry.repo.owner.length + 1)}
+                {/* The lock right after the name (2026-10-12), as in the repository picker (./GithubRepos.jsx). */}
+                <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(13) }}>
+                    <span style={{ color: '#8f8f8f' }}>{entry.repo.owner}/</span>{entry.repo.fullName.slice(entry.repo.owner.length + 1)}
+                  </span>
+                  {entry.repo.private && <span aria-label="Private" data-github-repo-lock="1" style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}>{LOCK}</span>}
                 </span>
                 {entry.typed && !entry.here && <span style={{ flex: 'none', ...text(12, '#8f8f8f') }}>Add</span>}
-                {entry.repo.private && <span aria-label="Private" style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}>{LOCK}</span>}
                 {entry.here && <span style={{ flex: 'none', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' }}>here</span>}
               </button>
             ))}

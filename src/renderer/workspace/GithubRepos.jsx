@@ -18,8 +18,25 @@ function Glyph({ children, size = 16, color = '#4d4d4d' }) {
 }
 
 /**
- * The GitHub repositories the app's own sign-in (src/main/github) can read, a tick per repository: signing in, waiting for
- * GitHub, then the list with its search. `held(repo)` says whether one is ticked, `onToggle(repo)` ticks or unticks it,
+ * One repository: a box on the right, empty until picked (2026-10-12: a mark on picked rows only left the rest looking
+ * unpickable), and a private one's lock right after its name, not at the far end by the box.
+ */
+export function RepoRow({ repo, on, busy, onToggle }) {
+  return (
+    <button type="button" className="hov-ink-wash" role="checkbox" aria-checked={on ? 'true' : 'false'} data-github-repo={repo.fullName} data-on={on ? '1' : '0'} disabled={busy} onClick={() => onToggle(repo)} title={repo.description || repo.fullName} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '7px 10px', textAlign: 'left', background: 'transparent', border: 0, borderRadius: 6, cursor: 'pointer' }}>
+      <Glyph size={14} color="#8f8f8f"><GH /></Glyph>
+      <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+        <span style={{ minWidth: 0, font: '13.5px/1.4 var(--font-sans)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ color: '#8f8f8f' }}>{repo.owner}/</span><span style={{ color: '#171717' }}>{repo.fullName.slice(repo.owner.length + 1)}</span></span>
+        {repo.private && <span aria-label="private" data-github-repo-lock="1" style={{ flex: 'none', display: 'flex', color: '#8f8f8f', opacity: 0.8 }}><svg aria-hidden="true" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="10" height="7.5" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></svg></span>}
+      </span>
+      <span aria-hidden="true" data-github-repo-box={on ? 'on' : 'off'} style={{ flex: 'none', width: 16, height: 16, boxSizing: 'border-box', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 4, background: on ? '#171717' : '#fff', border: on ? 0 : '1.5px solid #c9c9c9', color: '#fff', font: '600 10px/1 var(--font-sans)' }}>{on ? '✓' : ''}</span>
+    </button>
+  );
+}
+
+/**
+ * The GitHub repositories the app's own sign-in (src/main/github) can read, a box per repository (RepoRow): signing in,
+ * waiting for GitHub, then the list with its search. `held(repo)` says whether one is ticked, `onToggle(repo)` ticks or unticks it,
  * `busyId` the one being added or removed. Fills its parent's height (it scrolls inside).
  */
 export default function GithubRepos({ held, onToggle, busyId }) {
@@ -85,17 +102,7 @@ export default function GithubRepos({ held, onToggle, busyId }) {
       </div>
       <div data-github-repos="1" style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', padding: '0 0 4px', margin: '0 -10px' }}>
         {!list && <span style={{ padding: 10, ...faint }}>…</span>}
-        {rows.map((repo) => {
-          const on = !!held(repo);
-          return (
-            <button key={repo.id} type="button" className="hov-ink-wash" data-github-repo={repo.fullName} data-on={on ? '1' : '0'} disabled={busyId === repo.id} onClick={() => onToggle(repo)} title={repo.description || repo.fullName} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '7px 10px', textAlign: 'left', background: 'transparent', border: 0, borderRadius: 6, cursor: 'pointer' }}>
-              <Glyph size={14} color="#8f8f8f"><GH /></Glyph>
-              <span style={{ flex: 1, minWidth: 0, font: '13.5px/1.4 var(--font-sans)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><span style={{ color: '#8f8f8f' }}>{repo.owner}/</span><span style={{ color: '#171717' }}>{repo.fullName.slice(repo.owner.length + 1)}</span></span>
-              {repo.private && <span aria-label="private" style={{ flex: 'none', display: 'flex', color: '#8f8f8f', opacity: 0.8 }}><svg aria-hidden="true" width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="10" height="7.5" rx="1.5" /><path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" /></svg></span>}
-              <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%', background: on ? '#1f9d55' : 'transparent', color: '#fff', font: '600 10px/1 var(--font-sans)' }}>{on ? '✓' : ''}</span>
-            </button>
-          );
-        })}
+        {rows.map((repo) => <RepoRow key={repo.id} repo={repo} on={!!held(repo)} busy={busyId === repo.id} onToggle={onToggle} />)}
         {list && !rows.length && <span style={{ padding: 10, ...faint }}>no repositories match…</span>}
         {status.installUrl && missing.length > 0 && (
           <div data-github-missing="1" style={{ flex: 'none', display: 'flex', flexDirection: 'column', paddingTop: 6 }}>

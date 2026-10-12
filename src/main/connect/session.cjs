@@ -191,8 +191,8 @@ function detailOf(value) {
 
 /**
  * One option of a question: a label and, when given, a few words of why and what it covers → { label, why, detail } or null.
- * In a "multi" (`multi` true) it also keeps whether the librarian recommends it, `checked` (MATH-122, 2026-10-11): the card
- * shows a "Recommended" tag on those (2026-10-12; nothing starts ticked). A "single" has no such field.
+ * In a "multi" (`multi` true) it also keeps whether the librarian recommends it, `checked` (MATH-122, 2026-10-11), though the
+ * card no longer shows it (2026-10-12: no tag, nothing starts ticked). A "single" has no such field.
  */
 function optionOf(option, multi = false) {
   const checked = multi ? { checked: !!(option && typeof option === 'object' && option.checked === true) } : {};
@@ -1098,9 +1098,24 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /* ------------------------------------------------------------------------------------------------------ needs you */
 
+  /**
+   * The app a need is for: the job's first, unless that isn't a web app and the reason names the site of a web app among
+   * the job's (2026-10-12: a job filed under "Codex, Claude, Claude Code" asked to sign in to "Claude (claude.ai)", was
+   * taken as Codex's and so never reached signInAgain).
+   */
+  function needApp(job, reason) {
+    const first = job.apps[0] || job.label;
+    const web = (app) => !!(appOf(app) && appOf(app).reach === 'web');
+    if (web(first)) return first;
+    const said = String(reason || '').toLowerCase();
+    const edge = (ch) => !/[a-z0-9-]/.test(ch || '');
+    const names = (site) => { const want = site.toLowerCase(); for (let at = said.indexOf(want); at >= 0; at = said.indexOf(want, at + 1)) if (edge(said[at - 1]) && edge(said[at + want.length])) return true; return false; };
+    return job.apps.find((app) => web(app) && (appOf(app).sites || []).some(names)) || first;
+  }
+
   /** An agent hands the person a step (a sign-in, a code, a permission): one request per app and kind, then waits for it. */
   function askPerson(s, job, { kind, reason }) {
-    const app = job.apps[0] || job.label;
+    const app = needApp(job, reason);
     // Skip holds for the whole run (2026-10-08: "hitting skip should skip it permanently for this run, right now it tries
     // again"): an app the person skipped is never put to them again; the agent hears at once that it was skipped.
     if (s.skipped.has(app)) return Promise.resolve({ status: 'skipped', note: `The person skipped ${shownName(app)} for this run. Do not ask again: finish without it.` });
@@ -1118,23 +1133,57 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   /**
-   * An agent found `app` signed out partway through the run: the sign-in copied again quietly from the person's browser
-   * (signInQuiet; a browser macOS refused, or was never asked about this run, is not asked: no new Keychain prompt). Signed
-   * in now: the agent carries on. Not: the app is left out for the run, with a line in the chat. One copy per sign-in at a
-   * time: Gmail and Google Drive losing theirs together wait for the one answer.
+   * An agent found `app` signed out partway through the run. Its word is checked first (2026-10-12: one failed API answer
+   * in "Looking through ChatGPT" dropped ChatGPT's working sign-in and stopped "Asking ChatGPT what it remembers"): while
+   * Engelbart's browser still holds the sign-in cookie, and the site's check page (where it has one) doesn't say signed out,
+   * the sign-in stands and the agent is told to reload and try again; nothing is dropped, no other job stopped, nothing
+   * said in the chat. The same agent saying so again after that finishes without the app, quietly. Only a cookie that is
+   * gone, or a check that says signed out, has the sign-in copied again quietly from the person's browser (signInQuiet; a
+   * browser macOS refused, or was never asked about this run, is not asked: no new Keychain prompt). Signed in now: the
+   * agent carries on. Not: the app is left out for the run, with a line in the chat. One check and one copy per sign-in at
+   * a time: Gmail and Google Drive losing theirs together wait for the one answer.
    */
   function signInAgain(s, job, app) {
     const group = signInGroup(app);
-    // Copied again once per sign-in per run. Agents asking while that copy is made, or just after, share its answer; one
-    // asking again after it was told to carry on, or later on, found the copy did not hold: left out, so the run never
-    // loops on copies the site refuses.
     if (!s.signInsAgain) s.signInsAgain = new Map();
     let again = s.signInsAgain.get(group);
     if (!again) {
-      again = { copying: null, settledAt: 0, told: new Set() };
+      again = { checking: null, checkedAt: 0, stood: new Set(), copying: null, settledAt: 0, told: new Set() };
+      s.signInsAgain.set(group, again);
+    }
+    const skippedNote = () => ({ status: 'skipped', note: `${shownName(app)} was left out for this run. Do not ask again: finish without it.` });
+    if (again.stood.has(job.id)) {
+      logAction(s, job, `Carried on without ${shownName(app)}: it still looked signed in`);
+      emit(s);
+      return Promise.resolve({ status: 'skipped', note: `${shownName(app)} still looks signed in to Engelbart, so the trouble is on its side. Do not ask again: finish without it with what you have, and say so in your answer.` });
+    }
+    if (again.copying) return copyAgain(s, job, app, again);
+    // One look at the sign-in, shared by the agents asking within a while of it.
+    if (!again.checking || (again.checkedAt && Date.now() - again.checkedAt > SIGN_IN_AGAIN_SHARED_MS)) {
+      again.checkedAt = 0;
+      const look = typeof webSignIn.stillSignedIn === 'function' ? () => webSignIn.stillSignedIn(app) : () => webSignIn.signedIn(app);
+      again.checking = Promise.resolve().then(look).then((value) => !!value, () => false);
+      again.checking.then(() => { again.checkedAt = Date.now(); });
+    }
+    return again.checking.then((stands) => {
+      if (s.skipped.has(app)) return skippedNote();
+      if (again.copying || !stands) return copyAgain(s, job, app, again);
+      again.stood.add(job.id);
+      logAction(s, job, `Still signed in to ${shownName(app)}: its page or API failed for a moment`);
+      emit(s);
+      return { status: 'done', note: 'Still signed in: the page or its API failed for a moment. Reload and try again, or finish with what you have.' };
+    });
+  }
+
+  /**
+   * The sign-in found gone: copied again once per sign-in per run. Agents asking while that copy is made, or just after,
+   * share its answer; one asking again after it was told to carry on, or later on, found the copy did not hold: left out,
+   * so the run never loops on copies the site refuses.
+   */
+  function copyAgain(s, job, app, again) {
+    if (!again.copying) {
       again.copying = webSignIn.signInQuiet(app, { denied: signInDenied, askedOnly: true, fresh: true }).catch(() => ({ signedIn: false }));
       again.copying.then(() => { again.settledAt = Date.now(); });
-      s.signInsAgain.set(group, again);
     }
     const lost = again.told.has(job.id) || (again.settledAt && Date.now() - again.settledAt > SIGN_IN_AGAIN_SHARED_MS);
     const answer = lost ? Promise.resolve({ signedIn: false }) : again.copying;

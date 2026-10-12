@@ -244,6 +244,17 @@ function signInLabel(signIn, app = '') {
 }
 
 /**
+ * A row's sign-in once Engelbart's sign-in window was closed without signing in (2026-10-12) → the state to put back, or
+ * null for none: what it was before the window, except an old failure ("macOS didn't allow it", "Google refused this
+ * sign-in"), which read as if this sign-in had failed for that reason. Those go back to plain Sign in.
+ */
+export function afterSignInWindowClosed(was) {
+  if (!was || !was.status) return null;
+  if (was.status === 'refused' || was.status === 'rejected') return { status: 'signed-out', browser: '' };
+  return was;
+}
+
+/**
  * The ticked web apps not signed in yet, before Bring these in (2026-10-11) → [{ id, app }]: each one whose sign-in Engelbart
  * can make in its own browser (SIGN_IN_COOKIES), not ticked from the start signed in (`found`), and not checked as signed
  * in (`signIns`). One still being checked is left to main, which waits for it. None while the consent is off: web apps are
@@ -582,6 +593,20 @@ export const allEnded = (jobs) => (jobs || []).every((job) => statusOf(job).done
 
 /** The jobs the progress list shows: the work, without MEMORY.md's own (it has a row of its own). */
 export const workJobs = (jobs) => (jobs || []).filter((job) => job.kind !== 'memory' && job.kind !== 'redact');
+
+/** How often the starting screen's line moves on to the next thing happening (2026-10-12). */
+export const STARTING_LINE_MS = 2500;
+
+/**
+ * What the starting screen says is happening (2026-10-12): the labels of the jobs not yet done ("Looking through ChatGPT",
+ * "Asking Claude what it remembers"), each once, in the jobs' order; all of them once every job is done, so the line
+ * never goes blank while the librarian takes its first turn.
+ */
+export function startingLines(jobs) {
+  const work = workJobs(jobs).filter((job) => job.label);
+  const going = work.filter((job) => !statusOf(job).done);
+  return [...new Set((going.length ? going : work).map((job) => job.label))];
+}
 
 /** The jobs still going first (2026-10-08: "show the ones still running at the top"), running before queued, then the ended, each group in its order. */
 // What each source is, under a row of onboarding's "Bringing everything in" when its label says nothing more.
