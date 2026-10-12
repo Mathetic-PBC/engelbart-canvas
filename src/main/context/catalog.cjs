@@ -38,15 +38,17 @@ function entryFor(row, project, referencedBy) {
   };
 }
 
-function buildCatalog(project, workspaces, rows, generated) {
+/** `madeIn` (projects.notesMadeIn): which workspace each note was made in, so a note every workspace let go of is left out. */
+function buildCatalog(project, workspaces, rows, generated, madeIn = new Map()) {
   const referencedBy = projects.referencedBy(workspaces);
+  const held = projects.holder(project, workspaces, madeIn);
   return {
     version: 2, // 2: `type` became the format and `tags` arrived (2026-09-21)
     about: ABOUT,
     generated,
     project: { id: project.id, name: project.name, root: project.dir, directory: project.directory || null },
     workspaces: workspaces.map((workspace) => ({ id: workspace.id, name: workspace.name, path: workspace.path, document: `${workspace.path}/workspace.md`, chars: workspace.chars ?? null })),
-    entries: rows.filter((row) => projects.holds(project, referencedBy, row)).map((row) => entryFor(row, project, referencedBy)),
+    entries: rows.filter(held).map((row) => entryFor(row, project, referencedBy)),
   };
 }
 
@@ -55,7 +57,8 @@ async function writeCatalogs(ctx, { now = () => new Date() } = {}) {
   const rows = await ctx.libraryDb.list();
   const written = [];
   for (const project of projects.projectRecords(ctx)) {
-    const catalog = buildCatalog(project, projects.flattenWorkspaces(project.dir), rows, now().toISOString());
+    const workspaces = projects.flattenWorkspaces(project.dir);
+    const catalog = buildCatalog(project, workspaces, rows, now().toISOString(), await projects.notesMadeIn(project.dir, workspaces));
     const dir = path.join(project.dir, '.context');
     const file = path.join(dir, 'catalog.json');
     const previous = readJson(file);

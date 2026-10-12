@@ -40,7 +40,6 @@ const { buildCatalog } = require('../context/catalog.cjs');
 const { expandDoc } = require('../context/expand-mentions.cjs');
 const { PENDING_RE } = require('./reply.cjs');
 const { stripAgentReplies } = require('./strip.cjs');
-const db = require('../store/db.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
 const { memoryBlock } = require('../connect/memory.cjs');
 const library = require('../store/library.cjs');
@@ -99,10 +98,11 @@ const SCOPED = new Set(['brainstorm']);
 /**
  * The library's entries an agent may be shown. @brainstorm's (SCOPED): this workspace's alone, what its
  * sidebar holds (its context and the notes made in it, less what was thrown away) and whatever the document mentions.
- * Everyone else's: the whole project's. `scope` { agent, workspace, own } — `own` the ids of the notes made in it.
+ * Everyone else's: the whole project's (projects.holder: never what was removed from it, nor a note let go of). `scope`
+ * { agent, workspace, own, madeIn } — `own` the ids of the notes made in it, `madeIn` projects.notesMadeIn's.
  */
-function catalogFor(project, rows, seen, { agent = 'bart', workspace = null, own = [] } = {}) {
-  if (!SCOPED.has(agent) || !workspace) return buildCatalog(project, projects.flattenWorkspaces(project.dir), rows, null).entries;
+function catalogFor(project, rows, seen, { agent = 'bart', workspace = null, own = [], madeIn = new Map() } = {}) {
+  if (!SCOPED.has(agent) || !workspace) return buildCatalog(project, projects.flattenWorkspaces(project.dir), rows, null, madeIn).entries;
   const removed = new Set(workspace.removed || []);
   const held = new Set([...workspace.context, ...own].filter((id) => !removed.has(id)));
   for (const id of seen) held.add(id);
@@ -358,8 +358,9 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     documents.push(staged, ...(marked ? [marked] : []));
     now = `${staged}\n\n${marked || NO_HIGHLIGHTS}`;
   }
-  const own = scoped ? (await (await db.openNotesDb(project.dir)).list()).filter((note) => note.topic_id === workspace.id).map((note) => note.id) : [];
-  const scope = { agent, workspace, own };
+  const madeIn = await projects.notesMadeIn(project.dir);
+  const own = scoped ? [...madeIn].filter(([, at]) => at === workspace.id).map(([id]) => id) : [];
+  const scope = { agent, workspace, own, madeIn };
   const entries = catalogEntries(project, rows, seen, scope);
   const head = [
     '<engelbart>',

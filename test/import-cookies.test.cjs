@@ -375,7 +375,52 @@ test('sources lists installed browsers and their profiles, values untouched', ()
   const firefox = sources.find((s) => s.id === 'firefox');
   assert.ok(brave && firefox, 'Brave and Firefox are found');
   assert.deepEqual(brave.profiles, [{ id: 'Default', name: 'Personal' }]);
-  assert.equal(firefox.profiles[0].name, 'default-release');
+  assert.equal(firefox.profiles[0].name, 'abcd.default-release', 'no profiles.ini: the folder\'s name');
+});
+
+test('Firefox profiles by their profiles.ini Name=, else the folder; no email (2026-10-12)', () => {
+  const { support, userData } = makeMachine();
+  const ffRoot = path.join(support, 'Firefox');
+  fs.mkdirSync(path.join(ffRoot, 'Profiles', 'wxyz.work'), { recursive: true });
+  makeFirefoxDb(path.join(ffRoot, 'Profiles', 'wxyz.work', 'cookies.sqlite'), []);
+  fs.mkdirSync(path.join(ffRoot, 'Profiles', 'nnnn.other'), { recursive: true });
+  makeFirefoxDb(path.join(ffRoot, 'Profiles', 'nnnn.other', 'cookies.sqlite'), []);
+  fs.writeFileSync(path.join(ffRoot, 'profiles.ini'), '[Install123]\nDefault=Profiles/abcd.default-release\n\n[Profile1]\nName=Work stuff\nIsRelative=1\nPath=Profiles/wxyz.work\n\n[Profile0]\nName=default-release\nIsRelative=1\nPath=Profiles/abcd.default-release\nDefault=1\n\n[General]\nVersion=2\n');
+  const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), keychain: async () => PASSWORD });
+  const firefox = importer.sources().find((s) => s.id === 'firefox');
+  assert.deepEqual(firefox.profiles.sort((a, b) => a.id.localeCompare(b.id)), [{ id: 'abcd.default-release', name: 'default-release' }, { id: 'nnnn.other', name: 'nnnn.other' }, { id: 'wxyz.work', name: 'Work stuff' }]);
+});
+
+test('a browser counts only with its app installed: profiles left behind by one in the Trash are never listed or read (2026-10-12)', async () => {
+  const { support, userData } = makeMachine();
+  const asked = [];
+  const installed = (bundle) => { asked.push(bundle); return bundle === 'org.mozilla.firefox'; };
+  const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), keychain: async () => { throw new Error('never asked'); }, installed });
+  assert.deepEqual(importer.sources().map((s) => s.id), ['firefox'], 'Brave\'s folder is there, its app is not');
+  assert.ok(asked.includes('com.brave.Browser'));
+  assert.throws(() => importer.cookieNames('brave', 'Default', ['google.com']), /not installed/);
+  await assert.rejects(importer.import({ browser: 'brave', profile: 'Default', domains: ['google.com'] }), /not installed/);
+});
+
+test('a Chromium profile\'s Chrome account (info_cache user_name) comes with its name, when there is one (2026-10-12)', () => {
+  const { support, userData } = makeMachine();
+  const braveRoot = path.join(support, 'BraveSoftware/Brave-Browser');
+  fs.mkdirSync(path.join(braveRoot, 'Profile 1', 'Network'), { recursive: true });
+  makeChromiumDb(path.join(braveRoot, 'Profile 1', 'Network', 'Cookies'), 24, []);
+  fs.writeFileSync(path.join(braveRoot, 'Local State'), JSON.stringify({ profile: { info_cache: { Default: { name: 'Personal', user_name: '' }, 'Profile 1': { name: 'Work', user_name: 'me@work.example' } } } }));
+  const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), keychain: async () => PASSWORD });
+  const brave = importer.sources().find((s) => s.id === 'brave');
+  assert.deepEqual(brave.profiles.sort((a, b) => a.id.localeCompare(b.id)), [{ id: 'Default', name: 'Personal' }, { id: 'Profile 1', name: 'Work', email: 'me@work.example' }]);
+});
+
+test('check(domain): the check page alone, over the Stage\'s session: signed in, signed out, no answer, none known (2026-10-12)', async () => {
+  const { support, userData } = makeMachine();
+  const make = (script) => mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), request: fakeRequest(script), keychain: async () => { throw new Error('no Keychain for a check'); }, checkTimeoutMs: 50 });
+  assert.equal(await make({ 'https://myaccount.google.com/': 200 }).check('google.com'), true);
+  assert.equal(await make({ 'https://myaccount.google.com/': { status: 302, location: 'https://accounts.google.com/ServiceLogin' } }).check('google.com'), false);
+  assert.equal(await make({ 'https://myaccount.google.com/': 'hang' }).check('google.com'), null, 'timed out');
+  assert.equal(await make({}).check('google.com'), null, 'offline');
+  assert.equal(await make({}).check('chatgpt.com'), null, 'no check page');
 });
 
 test('domains lists domain and count only, with the pre-ticked defaults, and no Keychain', () => {
@@ -549,4 +594,63 @@ test('a missing Keychain key says so, by browser name, and imports nothing; a de
   assert.doesNotMatch(missing, /denied/);
   assert.match(await attempt(128), /denied/);
   assert.equal(fs.existsSync(path.join(userData, 'browser-imports.json')), false, 'no record');
+});
+
+/* 2026-10-12: Google's cookies tied to the browser that made them, unlock (macOS asked, nothing copied), and the wait for a
+   browser's install answer before macOS is asked about it. */
+
+test('Google\'s browser-bound cookies are never copied, and are counted as skipped, not failed', async () => {
+  const { support, userData } = makeMachine();
+  const chromeRoot = path.join(support, 'Google/Chrome');
+  fs.mkdirSync(path.join(chromeRoot, 'Default', 'Network'), { recursive: true });
+  const bound = [...mod.GOOGLE_BOUND_COOKIES];
+  makeChromiumDb(path.join(chromeRoot, 'Default', 'Network', 'Cookies'), 24, [
+    { host: '.google.com', name: 'SID', value: 'g-sid', secure: true, httpOnly: true },
+    { host: '.google.com', name: '__Secure-1PSID', value: 'g-1psid', secure: true, httpOnly: true },
+    ...bound.map((name) => ({ host: name === '__Secure-STRP' ? 'accounts.google.com' : '.google.com', name, value: `bound-${name}`, secure: true, httpOnly: true })),
+    // Same names on another site are that site's own: copied.
+    { host: '.example.com', name: 'SIDCC', value: 'not-google', secure: true },
+  ]);
+  const session = fakeSession();
+  const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => session, keychain: async () => PASSWORD });
+  const result = await importer.import({ browser: 'chrome', profile: 'Default', domains: ['google.com', 'example.com'], quiet: true });
+  const written = session.calls.map((c) => c.name);
+  for (const name of bound) assert.equal(written.includes(name) && session.calls.find((c) => c.name === name).value !== 'not-google', false, `${name} not copied`);
+  assert.ok(written.includes('SID') && written.includes('__Secure-1PSID'), 'the sign-in itself comes over');
+  assert.equal(session.calls.find((c) => c.name === 'SIDCC').value, 'not-google');
+  assert.deepEqual([result.imported, result.skipped], [3, bound.length]);
+  assert.deepEqual(bound, ['SIDCC', '__Secure-1PSIDCC', '__Secure-3PSIDCC', '__Secure-STRP', 'AEC']);
+  assert.equal(mod.boundToBrowser({ host: '.google.co.uk', name: 'SIDCC' }), true, 'any Google domain');
+  assert.equal(mod.boundToBrowser({ host: '.google.com', name: 'SID' }), false);
+});
+
+test('unlock asks macOS for a Chromium browser\'s key and copies nothing; Firefox has none; a refusal is said as one', async () => {
+  const { support, userData } = makeMachine();
+  const session = fakeSession();
+  const asked = [];
+  const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => session, keychain: async (name) => { asked.push(name); return PASSWORD; } });
+  assert.deepEqual(await importer.unlock('brave'), { browser: 'brave', keychain: true });
+  assert.deepEqual(await importer.unlock('firefox'), { browser: 'firefox', keychain: false });
+  assert.deepEqual(asked, ['Brave Safe Storage']);
+  assert.equal(session.calls.length, 0, 'nothing copied');
+  const refusing = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => session, keychain: async () => { throw Object.assign(new Error('Keychain access was denied'), { denied: true }); } });
+  await assert.rejects(refusing.unlock('brave'), (error) => error.denied === true && error.browser === 'Brave');
+});
+
+test('an uninstalled browser is never asked about: its install answer is waited for first', async () => {
+  const { support, userData } = makeMachine();
+  const asked = [];
+  const settledAsked = [];
+  const importer = mod.createCookieImport({
+    supportDir: support, userDataDir: userData, getSession: () => fakeSession(), keychain: async (name) => { asked.push(name); return PASSWORD; },
+    installed: () => true, // not answered yet: counts as installed
+    settled: async (bundle) => { settledAsked.push(bundle); return bundle !== 'com.brave.Browser'; },
+  });
+  assert.deepEqual(importer.sources().map((s) => s.id).sort(), ['brave', 'firefox'], 'listed until Spotlight answers');
+  assert.equal(await importer.ready('brave'), false);
+  await assert.rejects(importer.unlock('brave'), /not installed/);
+  await assert.rejects(importer.import({ browser: 'brave', profile: 'Default', domains: ['github.com'] }), /not installed/);
+  assert.deepEqual(asked, [], 'macOS never asked about Brave');
+  assert.ok(settledAsked.includes('com.brave.Browser'));
+  assert.equal(await importer.ready('firefox'), true);
 });

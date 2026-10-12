@@ -29,6 +29,7 @@ const { buildChoices } = require('./bart/models.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
 const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
 const { detect: detectSources } = require('./connect/scan.cjs');
+const folderAccess = require('./connect/folder-access.cjs');
 
 const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
 const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
@@ -134,7 +135,7 @@ function projectInput(value) {
 // that is open, as `afterOpen(ctx, { again: true })`, when a row it would act on has just been added (2026-10-02).
 // `testMode`: whether this copy has test mode at all (./developer.cjs). Without it config.json's `testMode` is read as
 // off but never rewritten, so a developer's copy sharing the file keeps its setting.
-function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, afterOpen = null, testMode: available = false, zotero = null }) {
+function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf = null, pdfTitle: readTitle = null, afterOpen = null, testMode: available = false, zotero = null }) {
   const layout = home.ensureHome(homeDir, rootDir, { test: available });
   const contexts = new Map();
 
@@ -166,6 +167,9 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
       // rules) is brought up to them before anyone reads it: about 30 ms a pdf, once. Summaries are
       // not touched. A failure leaves the rows due for the next launch; the library still opens.
       try { await library.recategorize(next, { inspectPdf: readPdf }); } catch { /* still due */ }
+      // The same, once per row per version of the title rules: a row from before Library Phase B is told where it came
+      // from (an import's head line, or what it is), and a row still named by its file takes the name the file gives.
+      try { await library.describeRows(next, { pdfTitle: readTitle }); } catch { /* still due */ }
       if (afterOpen) setTimeout(() => { Promise.resolve().then(() => afterOpen(next)).catch(() => {}); }, 0);
       return next;
     })();
@@ -221,7 +225,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [] }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -347,16 +351,23 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
 
   // GitHub (src/main/github/connection.cjs): signing in through the default browser, and the repositories the App can read.
   // Every change of the sign-in is announced on `engelbart:github` with the status. `github-open` shows GitHub's device
-  // authorization page again, or the App's install page, in the default browser.
+  // authorization page again, or the App's install page, in the default browser: 'install' with a url opens that one, an
+  // organization's install page from github-repos's missingOrgs (MATH-111), only when it is the App's install page.
   const gh = () => { if (!github) throw new Error('GitHub is not available'); return github; };
   handle('github-status', () => (github ? github.status() : { configured: false, connected: false, pending: null, error: '', installUrl: '' }));
   handle('github-connect', () => gh().connect());
   handle('github-cancel', () => gh().cancel());
   handle('github-disconnect', () => gh().disconnect());
   handle('github-repos', () => gh().repos());
-  handle('github-open', async (which) => {
+  handle('github-open', async (which, page) => {
     const status = gh().status();
-    const url = which === 'install' ? status.installUrl : status.pending && status.pending.verificationUri;
+    let url = which === 'install' ? status.installUrl : status.pending && status.pending.verificationUri;
+    if (which === 'install' && page != null) {
+      const asked = str(page, 'install page', 2048);
+      const base = status.installUrl;
+      if (!base || !(asked === base || asked.startsWith(`${base}/`) || asked.startsWith(`${base}?`))) throw new Error('Not the GitHub App\'s install page');
+      url = asked;
+    }
     if (!url) throw new Error(which === 'install' ? 'The GitHub App has no slug in ~/.engelbart/config.json (github.appSlug).' : 'No sign-in is waiting');
     await openGithubPage(url);
     return true;
@@ -488,14 +499,42 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   const importId = (value) => str(value, 'import id', 64);
   const plainObject = (value, what) => { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${what} is invalid`); return value; };
   const appName = (value) => str(value, 'app', 64);
-  handle('connect-detect', withCtx(async (ctx) => { cx(); return detectSources({ homeDir: ctx.homeDir, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }); }));
-  handle('connect-providers', () => cx().providers());
+  // Spotlight asked in the background which browsers are installed, as Connect opens (./browser/installed-apps.cjs).
+  const warm = () => { try { void Promise.resolve(warmBrowsers()).catch(() => {}); } catch { /* not asked */ } };
+  // `platform`: off the Mac, web apps' rows say "Not on Windows yet" and can't be ticked (2026-10-12, model/connect.js notOnYet).
+  handle('connect-detect', withCtx(async (ctx) => { cx(); warm(); return { platform: process.platform, ...await detectSources({ homeDir: ctx.homeDir, access: folderAccess.guard({ homeDir: ctx.homeDir, dataRoot: ctx.dataRoot }), zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }) }; }));
+  handle('connect-providers', () => { const out = cx().providers(); warm(); return out; });
   handle('connect-start', (input) => cx().start(plainObject(input, 'choices')));
   handle('connect-answer', (id, input) => cx().answer(importId(id), plainObject(input, 'answer')));
   const authorizeInput = (input) => { const value = plainObject(input, 'choice'); return { app: appName(value.app), kind: str(value.kind, 'kind', 16), path: optStr(value.path, 'path', 4096) }; };
   handle('connect-authorize', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
   handle('connect-chose', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
   handle('connect-cancel-sign-in', (id, app) => cx().cancelSignIn(importId(id), appName(app)));
+  // A web app ticked on the choose screen (2026-10-10): what to say before macOS is asked for a browser's sign-ins
+  // ({ browser, note }, note '' when it won't be), then the check that brings the sign-in over, however long macOS's prompt
+  // waits ({ status: 'signed-in' | 'refused' | 'signed-out' | 'no-browser' | '' (can't be checked), browser }); `retry` is Try
+  // again after a refusal.
+  // `route` 'browser' (Google's Sign in, 2026-10-12): the browser its page opens in too ({ …, opens }). `profiles`: the
+  // profiles to pick from when several hold the sign-in and none was picked before.
+  handle('connect-signin-note', (app, route) => cx().signInNote(appName(app), { route: route === 'browser' ? 'browser' : '' }));
+  // The profile picked ({ browser, profile }, ids), remembered for the sign-in.
+  handle('connect-signin-pick', (app, pick) => { const value = plainObject(pick, 'pick'); return cx().signInPick(appName(app), { browser: str(value.browser, 'browser', 64), profile: str(value.profile, 'profile', 120) }); });
+  // Google's Sign in in the person's browser, waited for until signed in or cancelled (no time limit).
+  handle('connect-signin-browser', (app) => cx().signInBrowser(appName(app)));
+  handle('connect-signin-unlock', (app) => cx().signInUnlock(appName(app)));
+  handle('connect-signin-another-account', (app) => cx().signInAnotherAccount(appName(app)));
+  handle('connect-signin-browser-cancel', (app) => cx().signInBrowserCancel(app == null ? '' : appName(app)));
+  // MATH-110: macOS's folder access, asked for once on the choose screen. connect-folders-needed: the protected folders
+  // (Desktop, Documents, Downloads, iCloud Drive, the drives) these choices would read and never asked about → [{ id, name }];
+  // connect-folders-ask: reads each in turn so macOS asks, → { [id]: 'allowed' | 'denied' }, kept in .connect/folders.json.
+  handle('connect-folders-needed', withCtx((ctx, choices) => folderAccess.needed(plainObject(choices, 'choices'), { homeDir: ctx.homeDir, dataRoot: ctx.dataRoot })));
+  handle('connect-folders-ask', withCtx((ctx, ids) => {
+    if (!Array.isArray(ids) || ids.length > 40 || !ids.every((id) => typeof id === 'string' && id.length < 400)) throw new Error('ids must be a list of folder ids');
+    return folderAccess.ask(ids, { homeDir: ctx.homeDir, dataRoot: ctx.dataRoot });
+  }));
+  handle('connect-signin-check', (app, retry) => cx().signInCheck(appName(app), { retry: retry === true }));
+  handle('connect-signin-window', (app) => cx().signInWindowOpen(appName(app)));
+  handle('connect-signin-window-close', () => cx().signInWindowClose());
   handle('connect-need', (id, needId, action) => cx().need(importId(id), str(needId, 'request id', 64), str(action, 'action', 8)));
   handle('connect-import', (id) => cx().importNow(importId(id)));
   handle('connect-stop', (id) => cx().stop(importId(id)));
@@ -599,6 +638,33 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const entry = str(id, 'library id', 64), unmentioned = !!(opts && opts.unmentioned === true);
     return changeWorkspaceContext(pid, wid, (ctx, projectId, workspaceId) => projects.unlinkFromWorkspace(ctx, projectId, workspaceId, entry, { unmentioned }));
   }, { project: first });
+  // The project's own list (2026-10-11, the Library): add rows to it (and to the open workspace), remove them from it and
+  // from every workspace, and which workspaces still mention one. At most projects.MAX_PROJECT_CHANGE ids a call; more is
+  // refused, not cut short. Queued with the workspace changes, which they write too.
+  const projectIds = (ids) => {
+    if (!Array.isArray(ids)) throw new TypeError('ids must be a list');
+    if (ids.length > projects.MAX_PROJECT_CHANGE) throw new RangeError(`At most ${projects.MAX_PROJECT_CHANGE} items can be added or removed at once; ${ids.length} were sent.`);
+    return ids.map((id) => str(id, 'library id', 64));
+  };
+  saving('add-to-project', (pid, ids, opts) => {
+    const projectId = str(pid, 'project id', 64), adding = projectIds(ids);
+    const workspaceId = opts && opts.workspaceId != null ? str(opts.workspaceId, 'workspace id', 64) : null;
+    return queued(async () => {
+      const ctx = await store.context();
+      const before = workspaceId ? new Set(projects.findWorkspace(ctx, projectId, workspaceId).workspace.context) : null;
+      const out = await projects.addToProject(ctx, projectId, adding, { workspaceId });
+      if (workspaceId) {
+        const linked = await startLinked(ctx, before, projects.findWorkspace(ctx, projectId, workspaceId).workspace);
+        if (linked.sandbox_error) return { ...out, sandbox_error: linked.sandbox_error };
+      }
+      return out;
+    });
+  }, { project: first });
+  saving('remove-from-project', (pid, ids) => {
+    const projectId = str(pid, 'project id', 64), going = projectIds(ids);
+    return queued(async () => projects.removeFromProject(await store.context(), projectId, going));
+  }, { project: first });
+  handle('project-item-mentions', withCtx((ctx, pid, id) => projects.projectItemMentions(ctx, str(pid, 'project id', 64), str(id, 'library id', 64))));
 
   saving('create-note', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};

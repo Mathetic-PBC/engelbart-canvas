@@ -3,9 +3,9 @@
 // (src/main/connect), how an import's progress reads, what a step the agents hand the person says, and what the dock
 // shows. The sources and apps are src/shared/connect-sources.cjs.
 
-import { SOURCES, APPS, LOCAL_PDFS, recallApps, webApps } from '../../shared/connect-sources.cjs';
+import { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, recallApps, webApps, cleanDays, periodName, shownName, SIGN_IN_COOKIES, signInGroup, sharesSignIn, signsInThroughBrowser } from '../../shared/connect-sources.cjs';
 
-export { SOURCES, APPS, LOCAL_PDFS };
+export { SOURCES, APPS, LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, periodName, shownName, sharesSignIn, signsInThroughBrowser };
 
 // MATH-114 (2026-10-09): the choose screen as the mockup's grouped list. Each source is a group whose header ticks its
 // rows (tri-state); a row says at its right how the app is reached and where it stands; ticking is the consent (a
@@ -15,6 +15,14 @@ export { SOURCES, APPS, LOCAL_PDFS };
 
 /** The AI assistants that remember the person (connect-sources' `memory`): found, they still start unticked. */
 export const MEMORY_APPS = Object.freeze(recallApps(Object.keys(APPS)));
+/** Apps that start unticked even when found (2026-10-11): Gmail holds what other people wrote, so ticking it is its own yes. */
+export const NEVER_TICKED = Object.freeze(['Gmail']);
+/**
+ * Apps that start unticked even when found (2026-10-11): Gmail, and Google Drive ('Google Docs'), which is the person's
+ * whole Drive and as personal as their mail, so they choose it themselves. Unlike Gmail, Drive is still ticked by its
+ * group's header and Select all (it is not NEVER_TICKED); its row still says it is signed in.
+ */
+export const START_UNTICKED = Object.freeze([...NEVER_TICKED, 'Google Docs']);
 /** Websites' one row, and Code's second (the first is GitHub). */
 export const BROWSER_ROW = 'Browser history';
 export const LOCAL_REPOS = 'Local repos';
@@ -25,6 +33,29 @@ export function rowsOf(sourceId) {
   if (sourceId === 'code') return ['GitHub', LOCAL_REPOS];
   const source = SOURCES.find((entry) => entry.id === sourceId);
   return source ? source.apps : [];
+}
+
+/**
+ * Whether a web app's sign-in can be copied from the person's browser here (2026-10-12): on the Mac only. Elsewhere
+ * Engelbart's own sign-in window is how every web app signs in: no Keychain modal, no profile list, no wait in a browser.
+ * `platform` is main's (connect-detect's `platform`, process.platform); none given counts as the Mac.
+ */
+export const copiesSignIns = (platform) => !platform || platform === 'darwin';
+
+/** The name a sign-in goes by: "Google" for every app sharing Google's (Gmail, Google Drive…), any other its shown name. */
+export const signInName = (app) => (signsInThroughBrowser(app) ? 'Google' : shownName(app));
+
+// Where Sign in has gone to Engelbart's window instead of the person's browser: Not now on the Keychain modal ('declined'),
+// macOS's Deny ('refused'), no browser Engelbart can read ('no-browser'), and Google turning the window's sign-in away.
+const WINDOW_NEXT = ['declined', 'refused', 'no-browser', 'rejected'];
+
+/**
+ * Whether Sign in for `app` waits for its sign-in in the person's browser (2026-10-12): Google's, on the Mac, until the
+ * person turned the browser's sign-ins down (`signIn`, its row's status: Not now, Deny) or there is none to read; every
+ * other sign-in, and any off the Mac, is made in Engelbart's own window.
+ */
+export function signsInViaBrowser(app, signIn = null, platform = 'darwin') {
+  return copiesSignIns(platform) && signsInThroughBrowser(app) && !WINDOW_NEXT.includes((signIn || {}).status);
 }
 
 /** Whether a row was found (on this Mac, signed in to, connected): what the header and Select all tick. */
@@ -52,14 +83,14 @@ function derive(state) {
 /**
  * Where the choose screen starts, from what main found (`connect-detect`): a row is ticked when it was found (on this Mac,
  * signed in to in Engelbart's browser, connected; Websites: a browser; Code: a GitHub sign-in), except the assistants that
- * remember the person (asking them is its own consent) and the repositories on this Mac. Nothing is open but the first
+ * remember the person (asking them is its own consent), Gmail and Google Drive (START_UNTICKED) and the repositories on this Mac. Nothing is open but the first
  * ticked source.
  */
 export function initialPicks(found) {
   const apps = {};
   for (const source of SOURCES) {
     apps[source.id] = {};
-    for (const row of rowsOf(source.id)) if (!(source.id === 'code' && row === LOCAL_REPOS)) apps[source.id][row] = foundRow(found, source.id, row) && !MEMORY_APPS.includes(row);
+    for (const row of rowsOf(source.id)) if (!(source.id === 'code' && row === LOCAL_REPOS)) apps[source.id][row] = foundRow(found, source.id, row) && !MEMORY_APPS.includes(row) && !START_UNTICKED.includes(row);
   }
   const state = derive({ apps, local: {}, open: {} });
   const first = SOURCES.find((source) => state.picks[source.id] && source.apps.length);
@@ -90,26 +121,30 @@ export function groupState(state, sourceId) {
 
 /**
  * A group's header clicked: with anything ticked, everything goes off; with nothing, its found rows come on (Local repos:
- * every repository found). A group with nothing found opens instead, for the person to pick its rows.
+ * every repository found), except Gmail (NEVER_TICKED: ticked only on its own row). A group with none of those opens
+ * instead, for the person to pick its rows.
  */
 export function tickGroup(state, sourceId, found) {
   const rows = rowsOf(sourceId);
   const repos = ((found && found.localRepos) || []).map((repo) => repo.path);
   if (groupState(state, sourceId) !== 'none') return rows.reduce((next, row) => tickRow(next, sourceId, row, false), state);
-  const on = rows.filter((row) => foundRow(found, sourceId, row));
+  const on = rows.filter((row) => foundRow(found, sourceId, row) && !NEVER_TICKED.includes(row));
   if (!on.length) return { ...state, open: { ...state.open, [sourceId]: true } };
   return on.reduce((next, row) => tickRow(next, sourceId, row, true, repos), state);
 }
 
-/** Select all: every found row of every group; `false`: nothing. */
+// What Select all and a group's header tick: a found row, but never Gmail (NEVER_TICKED: ticked only on its own row).
+const selectable = (found, sourceId, row) => foundRow(found, sourceId, row) && !NEVER_TICKED.includes(row);
+
+/** Select all: every found row of every group but Gmail; `false`: nothing (Gmail too). */
 export function tickAll(state, found, on = true) {
   const repos = ((found && found.localRepos) || []).map((repo) => repo.path);
-  return SOURCES.reduce((next, source) => rowsOf(source.id).reduce((acc, row) => (on ? (foundRow(found, source.id, row) ? tickRow(acc, source.id, row, true, repos) : acc) : tickRow(acc, source.id, row, false)), next), state);
+  return SOURCES.reduce((next, source) => rowsOf(source.id).reduce((acc, row) => (on ? (selectable(found, source.id, row) ? tickRow(acc, source.id, row, true, repos) : acc) : tickRow(acc, source.id, row, false)), next), state);
 }
 
-/** Whether every found row is ticked (Select all's button then says Clear). */
+/** Whether every row Select all ticks is ticked (its button then says Clear). */
 export function allPicked(state, found) {
-  const rows = SOURCES.flatMap((source) => rowsOf(source.id).filter((row) => foundRow(found, source.id, row)).map((row) => [source.id, row]));
+  const rows = SOURCES.flatMap((source) => rowsOf(source.id).filter((row) => selectable(found, source.id, row)).map((row) => [source.id, row]));
   return rows.length > 0 && rows.every(([id, row]) => ticked(state, id, row));
 }
 
@@ -131,9 +166,9 @@ export function pickedApps(picks, apps) {
   return SOURCES.filter((source) => picks[source.id]).flatMap((source) => appsOf(source.id, apps));
 }
 
-/** What a group's header says after its name: the rows ticked ("Obsidian, Google Docs"; "GitHub, 2 local repos"), or "nothing picked". */
+/** What a group's header says after its name: the rows ticked, as the person sees them ("Obsidian, Google Drive"; "GitHub, 2 local repos"), or "nothing picked". */
 export function subOf(sourceId, state) {
-  const names = rowsOf(sourceId).filter((row) => ticked(state, sourceId, row)).map((row) => (sourceId === 'code' && row === LOCAL_REPOS ? reposCount(state) : row));
+  const names = rowsOf(sourceId).filter((row) => ticked(state, sourceId, row)).map((row) => (sourceId === 'code' && row === LOCAL_REPOS ? reposCount(state) : shownName(row)));
   return names.length ? names.join(', ') : 'nothing picked';
 }
 const reposCount = (state) => { const n = localPicked(state).length; return `${n} local repo${n === 1 ? '' : 's'}`; };
@@ -145,8 +180,13 @@ export const NEEDS_SIGN_IN = 'Needs sign-in';
  * What a row says at its right, from how its app is reached and where it stands → { text, tone: 'muted' | 'busy' |
  * 'error' | '' }. `connectors`: app → { connected, pending } (main's connectors); `notes`: the Apple Notes prompt's state
  * ('' | 'asking' | 'allowed' | why not); `folder`: one the person picked for it.
+ *
+ * "Not found" is only for an app read from this Mac (reach 'local': Cursor, Codex, Claude Code…) that is not on it
+ * (MATH-144, 2026-10-11). An app in the cloud (reach 'web', and Zotero's own sign-in) is "Needs sign-in" whether or not
+ * the Mac has its desktop app or a ~/Zotero: that says nothing about whether the person uses it, and ticking it still
+ * works (a web app's sign-in is checked when ticked; Zotero signs in itself). What starts ticked is unchanged (foundRow).
  */
-export function rowLabel(app, { found = null, connectors = {}, notes = '', folder = '' } = {}) {
+export function rowLabel(app, { found = null, connectors = {}, notes = '', folder = '', signIn = null } = {}) {
   const spec = APPS[app];
   const seen = (found && found.apps && found.apps[app]) || {};
   if (folder) return { text: folder, tone: '' };
@@ -154,7 +194,7 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
   if (spec.reach === 'connector') {
     const status = connectors[app] || {};
     if (status.connected) return { text: 'signed in', tone: '' };
-    if (status.pending) return { text: `Waiting for ${app} sign-in…`, tone: 'busy' };
+    if (status.pending) return { text: `Waiting for ${shownName(app)} sign-in…`, tone: 'busy' };
     return { text: NEEDS_SIGN_IN, tone: 'muted' };
   }
   if (spec.reach === 'automation') {
@@ -163,17 +203,338 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
     return notes ? { text: notes, tone: 'error' } : { text: '', tone: '' };
   }
   if (spec.reach === 'web') {
+    const said = signInLabel(signIn, app);
+    if (said) return said;
     if (seen.signedIn) return { text: 'signed in to Engelbart', tone: '' };
-    return seen.found ? { text: NEEDS_SIGN_IN, tone: 'muted' } : { text: 'Not found', tone: 'muted' };
+    return { text: NEEDS_SIGN_IN, tone: 'muted' }; // found or not: it is in the cloud (MATH-144)
   }
   if (seen.found && seen.where === 'Sign in to add') return { text: NEEDS_SIGN_IN, tone: 'muted' }; // the scan's words for a web app found, not signed in
-  return seen.found ? { text: seen.where || '', tone: '' } : { text: 'Not found', tone: 'muted' };
+  if (seen.found) return { text: seen.where || '', tone: '' };
+  return spec.reach === 'signin' ? { text: NEEDS_SIGN_IN, tone: 'muted' } : { text: 'Not found', tone: 'muted' }; // Zotero not connected; else only on this Mac
 }
 
-/** The line under a row's name, when it needs one: macOS asks before Apple Notes. (What asking an assistant what it remembers is, the refine chat says.) */
+/**
+ * What a row, the sign-in gate and a Log in card say while a sign-in is waited for in the person's browser (2026-10-12):
+ * "Sign in to Google in Chrome. It can take a minute to appear here." `name` the sign-in's (signInName), `browser` the
+ * browser's own name.
+ */
+export const waitingIn = (name, browser) => `Sign in to ${name || 'it'} in ${browser || 'your browser'}. It can take a minute to appear here.`;
+
+/**
+ * A web app's sign-in as checked when it was ticked (2026-10-10, main's connect-signin-check): { status: 'checking' |
+ * 'signing' | 'browser' | 'signed-in' | 'refused' | 'declined' | 'rejected' | 'signed-out' | 'no-browser', browser,
+ * profile? } → its label, or null. One no browser of the person's could sign in (signed out there, Safari only, macOS
+ * refused, or Not now on the Keychain modal) offers Sign in (2026-10-11): its sign-in page in Engelbart's own browser
+ * ('signing' while that window is open), Google's too since 2026-10-12. A refused one also offers Try again (macOS asked
+ * again). Google's first Sign in waits in the person's browser ('browser'), with "Use another account" and "Sign in here
+ * instead" beside it; Google turning the window's sign-in away ('rejected') offers Try again (the window again).
+ * Signed in from a browser with several profiles, the profile too: "✓ Signed in from Chrome · Work".
+ */
+function signInLabel(signIn, app = '') {
+  if (!signIn || !signIn.status) return null;
+  const google = signsInThroughBrowser(app);
+  if (signIn.status === 'checking') return { text: 'Waiting for macOS…', tone: 'busy' };
+  if (signIn.status === 'signing') return { text: 'Signing in…', tone: 'busy' };
+  if (signIn.status === 'browser') return { text: waitingIn(signInName(app), signIn.browser), tone: 'busy', here: true, ...(google ? { another: true } : {}) };
+  if (signIn.status === 'signed-in') return { text: signIn.browser ? `✓ Signed in from ${signIn.browser}${signIn.profile ? ` · ${signIn.profile}` : ''}` : '✓ Signed in', tone: 'ok' };
+  if (signIn.status === 'rejected') return { text: `${signInName(app)} refused this sign-in`, tone: 'error', retry: true };
+  if (['signed-out', 'no-browser', 'declined'].includes(signIn.status)) return { text: '', tone: '', signIn: true };
+  if (signIn.status === 'refused') return { text: "macOS didn't allow it", tone: 'error', retry: true, signIn: true };
+  return null;
+}
+
+/**
+ * A row's sign-in once Engelbart's sign-in window was closed without signing in (2026-10-12) → the state to put back, or
+ * null for none: what it was before the window, except an old failure ("macOS didn't allow it", "Google refused this
+ * sign-in"), which read as if this sign-in had failed for that reason. Those go back to plain Sign in.
+ */
+export function afterSignInWindowClosed(was) {
+  if (!was || !was.status) return null;
+  if (was.status === 'refused' || was.status === 'rejected') return { status: 'signed-out', browser: '' };
+  return was;
+}
+
+/**
+ * Engelbart's sign-in window for `app` closed by the person without signing in (2026-10-12, third run) → { state, signIns }:
+ * a no, so `app` and every ticked app sharing its sign-in (Gmail with Google Drive) are unticked, instead of left ticked
+ * with a Sign in that Bring these in would ask for again. Ticked again, a row starts its sign-in again. Its sign-in goes
+ * back as afterSignInWindowClosed says, and the others' old failures to plain Sign in, so nothing stale shows when ticked.
+ * Other rows (those still waiting their turn in signInWindows' chain) keep their tick.
+ */
+export function signInWindowClosed(state, app, signIns = {}) {
+  const group = sharesSignIn(app);
+  let next = state;
+  if (state) for (const source of SOURCES) for (const other of source.apps) if (group.includes(other) && ticked(next, source.id, other)) next = tickRow(next, source.id, other, false);
+  const after = { ...signIns };
+  for (const other of group) {
+    const back = afterSignInWindowClosed(other === app ? (signIns[app] || {}).was : signIns[other]);
+    if (back) after[other] = back; else if (other === app) delete after[other];
+  }
+  return { state: next, signIns: after };
+}
+
+/**
+ * The sign-in a row says (2026-10-12, second test run): only while the row is ticked. A Google Drive sign-in signs in Gmail,
+ * Google Meet and Gemini too, and kept that way, so ticking one later says ✓ at once; unticked, the row says what it would
+ * with no sign-in.
+ */
+export function shownSignIn(state, id, app, signIns = {}) {
+  return (state && ticked(state, id, app) && signIns && signIns[app]) || null;
+}
+
+/**
+ * The sign-in windows to open, in turn, for the apps whose sign-in a browser was turned down for (2026-10-12, second test
+ * run: Not now, or Deny at macOS's prompt) → [{ id, app }]: one per sign-in group (Gmail and Google Drive share one), in
+ * the order given, leaving out a row no longer ticked and one whose group is signed in. None while the consent is off.
+ */
+export function signInChain(rows, { signIns = {}, state = null, consent = true } = {}) {
+  if (!consent) return [];
+  const out = [];
+  for (const row of rows || []) {
+    if (!row || !row.app || (state && !ticked(state, row.id, row.app))) continue;
+    if (sharesSignIn(row.app).some((other) => (signIns[other] || {}).status === 'signed-in')) continue;
+    if (out.some((each) => signInGroup(each.app) === signInGroup(row.app))) continue;
+    out.push({ id: row.id, app: row.app });
+  }
+  return out;
+}
+
+/**
+ * Engelbart's sign-in windows opened one after another for the apps turned down (2026-10-12, second test run) →
+ * turnedDown(rows), called with each Not now or Deny. `pick(rows)` is signInChain on the screen as it is now; `open(row)`
+ * opens the window → 'signed-in' | 'rejected' | 'closed'. Signed in or turned away by the site, the next opens; closed by
+ * the person, the chain stops and forgets the rest (their rows keep their tick and Sign in; the closed window's sign-in
+ * group is unticked, signInWindowClosed). Rows turned down while a window is open wait
+ * their turn, those of the open window's sign-in aside.
+ */
+export function signInWindows({ pick, open }) {
+  let rows = [];
+  let opened = '';
+  return async function turnedDown(more = []) {
+    rows = [...rows, ...more.filter((row) => row && !(opened && sharesSignIn(opened).includes(row.app)))];
+    if (opened) return;
+    for (let [row] = pick(rows); row; [row] = pick(rows)) {
+      rows = rows.filter((each) => !sharesSignIn(row.app).includes(each.app));
+      opened = row.app;
+      let out = 'closed';
+      try { out = await open(row); } catch { out = 'closed'; } finally { opened = ''; }
+      if (out === 'closed') break;
+    }
+    rows = [];
+  };
+}
+
+/**
+ * The ticked web apps not signed in yet, before Bring these in (2026-10-11) → [{ id, app }]: each one whose sign-in Engelbart
+ * can make in its own browser (SIGN_IN_COOKIES), not ticked from the start signed in (`found`), and not checked as signed
+ * in (`signIns`). One still being checked is left to main, which waits for it. None while the consent is off: web apps are
+ * left out then.
+ */
+export function unsignedWeb(state, signIns = {}, found = null, consent = true) {
+  if (!consent || !state) return [];
+  const out = [];
+  for (const source of SOURCES) {
+    for (const app of source.apps) {
+      if ((APPS[app] || {}).reach !== 'web' || !Object.hasOwn(SIGN_IN_COOKIES, app) || !ticked(state, source.id, app)) continue;
+      if (found && found.apps && found.apps[app] && found.apps[app].signedIn) continue;
+      const status = (signIns[app] || {}).status;
+      if (status === 'signed-in' || status === 'checking') continue;
+      if (!out.some((row) => row.app === app)) out.push({ id: source.id, app });
+    }
+  }
+  return out;
+}
+
+/**
+ * The modal before a run with apps still not signed in → { title, groups: [[{ id, app }]], lines, canSignIn, body } | null,
+ * the apps grouped by the sign-in they share ("Google Drive and Gmail need you to sign in": one Google sign-in signs in
+ * both). `platform` main's: off the Mac every sign-in is in Engelbart's window.
+ */
+export function signInGate(rows, signIns = {}, platform = 'darwin') {
+  if (!rows || !rows.length) return null;
+  const groups = [];
+  for (const row of rows) {
+    const group = groups.find((list) => signInGroup(list[0].app) === signInGroup(row.app));
+    if (group) group.push(row); else groups.push([row]);
+  }
+  const names = rows.map((row) => shownName(row.app));
+  const title = `${listed(names)} ${names.length === 1 ? 'needs' : 'need'} you to sign in`;
+  const lines = groups.length > 1
+    ? groups.map((list) => (list.length > 1 ? `${listed(list.map((row) => shownName(row.app)))}: one sign-in.` : `${shownName(list[0].app)}.`))
+    : [];
+  // Google's sign-in opens in the person's browser first (2026-10-12), on the Mac, until they turn its sign-ins down.
+  const google = groups.filter((list) => signsInViaBrowser(list[0].app, signIns[list[0].app], platform));
+  const where = !google.length ? `${groups.length === 1 ? 'its' : 'each'} sign-in page in a small window here`
+    : google.length === groups.length ? 'Google\'s sign-in in your browser'
+      : 'Google\'s sign-in in your browser, and the others in a small window here';
+  const them = names.length === 1 ? 'it' : 'them';
+  return {
+    title,
+    groups,
+    lines,
+    canSignIn: groups.length > 0,
+    body: `Sign in opens ${where}. Leave ${them} out to start without ${them}.`,
+  };
+}
+
+/**
+ * The web apps ticked in `after` that were not in `before` (a row, a group's header, Select all) → [{ id, app }]: each one's
+ * sign-in is checked when it is ticked (2026-10-10), not when the run starts.
+ */
+export function newlyTickedWeb(before, after) {
+  const out = [];
+  for (const source of SOURCES) {
+    for (const app of source.apps) {
+      if ((APPS[app] || {}).reach !== 'web') continue;
+      if (ticked(after, source.id, app) && !ticked(before, source.id, app)) out.push({ id: source.id, app });
+    }
+  }
+  return out;
+}
+
+/**
+ * Rows waiting for the person's yes before macOS is asked, by browser ({ [browser]: [{ id, app }] }), with `rows` ({ id,
+ * app, browser, note?, profiles?, route? }) added. `note` macOS will be asked; `profiles` the ones to pick from
+ * (2026-10-12, more than one holds the sign-in); `route` 'browser' when Continue goes on to Google's Sign in.
+ */
+export function waitForYes(waiting, rows) {
+  const out = { ...waiting };
+  for (const { id, app, browser, note, profiles, route } of rows) {
+    const list = out[browser] || [];
+    const row = { id, app, ...(note ? { note } : {}), ...(profiles && profiles.length > 1 ? { profiles } : {}), ...(route ? { route } : {}) };
+    if (!list.some((each) => each.app === app)) out[browser] = [...list, row];
+  }
+  return out;
+}
+
+const listed = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+
+/**
+ * The rows whose sign-in may be checked now: none while the "Use my … subscription" consent is off (2026-10-11 review),
+ * since a check copies a browser's sign-ins. `rows`: [{ id, app }].
+ */
+export function signInsToCheck(consent, rows) {
+  return consent ? rows || [] : [];
+}
+
+/** The panels waiting for a yes (waitForYes's), kept while the consent is on; turning it off takes them away. */
+export function waitingWhile(consent, waiting) {
+  return consent ? waiting || {} : {};
+}
+
+/**
+ * The panel shown above the permissions before a browser's sign-ins are first used (2026-10-10: say why macOS will ask
+ * before it does), naming every ticked app waiting on it → { browser, rows, title, body } | null when none is still ticked.
+ */
+export function signInPanel(state, browser, rows = [], chosen = 0) {
+  const still = rows.filter((row) => ticked(state, row.id, row.app));
+  if (!still.length) return null;
+  const apps = still.map((row) => shownName(row.app));
+  // Several profiles holding the sign-in (2026-10-12): which one, as a list; the browser named is the one chosen.
+  const profiles = (still.find((row) => row.profiles && row.profiles.length > 1) || {}).profiles || [];
+  const pick = profiles.length ? profiles[Math.min(Math.max(0, chosen), profiles.length - 1)] : null;
+  const from = pick ? pick.browser : browser;
+  // macOS asks only for a Chromium browser not asked yet (Firefox needs no Keychain): the line before it, only then. With no
+  // profile list, the panel is there because macOS will ask.
+  const keychain = pick ? !!pick.keychain : true;
+  return {
+    browser,
+    rows: still,
+    profiles,
+    chosen: pick ? profiles.indexOf(pick) : -1,
+    title: `Use your ${from} sign-ins for ${listed(apps)}?`,
+    // The line that matters most first, in bold (2026-10-11: the modal before macOS asks).
+    lead: keychain ? 'macOS will ask for your Mac password next. Choose Allow.' : '',
+    body: [
+      `${profiles.length ? `More than one ${profiles.every((profile) => profile.browser === profiles[0].browser) ? `${profiles[0].browser} profile` : 'browser profile'} is signed in. Pick the one to use; Engelbart remembers it. ` : ''}Engelbart copies only ${apps.length === 1 ? 'this app\'s sign-in' : 'these apps\' sign-ins'} from ${from}, and only reads from ${apps.length === 1 ? 'it' : 'them'}, so you don't log in again. Not now lets you sign in to ${apps.length === 1 ? 'it' : 'them'} here instead.`,
+    ],
+  };
+}
+
+/* MATH-110: macOS's folder access (Desktop, Documents, Downloads, iCloud Drive, the drives), asked for once, before a run. */
+
+export const FOLDER_ACCESS_TIP = 'macOS only asks once. You can change it later in System Settings → Privacy & Security → Files and Folders.';
+
+/**
+ * The panel before macOS asks to let Engelbart read its protected folders (MATH-110) → { title, lead, names, note, ask,
+ * folders, tip } | null, drawn to David's mockup (2026-10-12): the folders as tiles (`names`), then `note` (bold) and
+ * `ask`. `folders`: main's connect-folders-needed, [{ id, name }], only folders that are on this Mac and never asked about.
+ * `papers`: PDFs on this Mac is why (else a repository under one of them).
+ */
+export function folderPanel(folders, { papers = true } = {}) {
+  const names = (folders || []).map((folder) => folder && folder.name).filter(Boolean);
+  if (!names.length) return null;
+  const one = names.length === 1;
+  return {
+    title: `Let Engelbart read your ${one ? names[0] : 'folders'}?`,
+    lead: papers
+      ? 'Engelbart looks here for papers, documents and repos related to your project. Without this, files saved on your Mac are left out.'
+      : `Engelbart looks here for repos related to your project. Without this, repos saved in ${one ? 'it' : 'these folders'} are left out.`,
+    names,
+    note: one ? 'macOS will ask once.' : 'macOS will ask once for each folder.',
+    ask: one ? 'Choose Allow.' : 'Choose Allow on each.',
+    folders: listed(names),
+    tip: FOLDER_ACCESS_TIP,
+  };
+}
+
+/**
+ * The PDFs row's label while and after macOS is asked (MATH-110) → { text, tone } | null: 'Waiting for macOS…' while it
+ * asks; then "✓ Desktop, Documents, Downloads" for the folders allowed and "Downloads not allowed" for any denied.
+ * `answers` { [id]: 'allowed' | 'denied' }, `folders` [{ id, name }] the panel named.
+ */
+export function folderAccessLabel({ asking = false, answers = null, folders = [] } = {}) {
+  if (asking) return { text: 'Waiting for macOS…', tone: 'busy' };
+  if (!answers) return null;
+  const named = (folders || []).filter((folder) => answers[folder.id]);
+  if (!named.length) return null;
+  const allowed = named.filter((folder) => answers[folder.id] === 'allowed').map((folder) => folder.name);
+  const denied = named.filter((folder) => answers[folder.id] !== 'allowed').map((folder) => folder.name);
+  const parts = [allowed.length ? `✓ ${allowed.join(', ')}` : '', denied.length ? `${listed(denied)} not allowed` : ''].filter(Boolean);
+  return { text: parts.join(' · '), tone: allowed.length ? 'ok' : 'muted' };
+}
+
+/**
+ * The modal after Continue (2026-10-11): how the check of each app it named went, from `signIns` (app → { status, browser },
+ * the choose screen's). → { done, title, lines, tone } — `done` false while macOS is still being asked; `tone` 'ok' when
+ * every app came over, 'warn' when some did not, 'refused' when macOS said no to all.
+ */
+export function keychainOutcome(browser, rows, signIns) {
+  // An app with no answer at all: its check failed and was cleared (checkSignIn), so it counts as not brought over.
+  const of = (row) => (signIns && signIns[row.app]) || { status: 'signed-out' };
+  if ((rows || []).some((row) => of(row).status === 'checking')) {
+    return { done: false, title: 'Waiting for macOS…', lines: ['Enter your Mac password in the macOS window, then choose Allow.'], tone: 'busy' };
+  }
+  const names = (status) => rows.filter((row) => of(row).status === status).map((row) => shownName(row.app));
+  const signedIn = names('signed-in'), refused = names('refused');
+  const missing = rows.filter((row) => !['signed-in', 'refused'].includes(of(row).status)).map((row) => shownName(row.app));
+  const lines = [];
+  // Google's Sign in goes to the person's browser first (2026-10-12); after macOS's Deny, every Sign in is here.
+  const here = (list) => (rows.filter((row) => list.includes(shownName(row.app))).every((row) => signsInThroughBrowser(row.app)) ? `in ${browser}` : 'here');
+  if (refused.length) lines.push(`macOS didn't allow it, so ${listed(refused)} ${refused.length === 1 ? "wasn't" : "weren't"} brought over. Try again on ${refused.length === 1 ? 'its row' : 'their rows'} to be asked again, or Sign in to sign in here.`);
+  if (missing.length) lines.push(`${browser} isn't signed in to ${listed(missing)}. Sign in on ${missing.length === 1 ? 'its row' : 'their rows'} to sign in ${here(missing)}.`);
+  if (signedIn.length) {
+    const title = `Signed in to ${listed(signedIn)}`;
+    return { done: true, title, lines: [`Brought over from ${browser}. You won't need to log in again.`, ...lines], tone: lines.length ? 'warn' : 'ok' };
+  }
+  return { done: true, title: refused.length ? 'Not allowed' : 'Nothing to bring over', lines, tone: refused.length ? 'refused' : 'warn' };
+}
+
+/**
+ * The line under a row's name, when it needs one: macOS asks before Apple Notes. (What asking an assistant what it
+ * remembers is, the refine chat says.) Rows have no such line for web apps, so Google Drive's "Docs, Sheets, Slides and
+ * files" (2026-10-10) is its row's tooltip (rowTip), not a line.
+ */
 export function rowSub(app) {
   if (app === 'Apple Notes') return 'macOS will ask';
   return '';
+}
+
+/** What a row's tooltip adds about what the app brings in, or ''. */
+export function rowTip(app) {
+  if (app === 'Gmail') return 'Only the threads you approve';
+  if (app === LOCAL_PDFS) return FOLDER_ACCESS_TIP;
+  return app === 'Google Docs' ? 'Docs, Sheets, Slides and files' : '';
 }
 
 /**
@@ -214,8 +575,25 @@ export function permissionsFor(apps) {
   };
 }
 
-/** What `connect-start` is sent: each source on or off with its apps, folders and repositories; the instructions; the permissions; the provider. */
-export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', permissions = {}, provider = null, projectId = null }) {
+// As store/projects.cjs clips them: a project's name to 200 characters, its description to MAX_DESCRIPTION.
+const MAX_NAME = 200;
+const MAX_DESCRIPTION = 4000;
+
+/** The project Connect's librarian is told about: { name, description } trimmed and clipped, or null when both are empty. */
+export function projectOf(project) {
+  if (!project) return null;
+  const name = String(project.name || '').trim().slice(0, MAX_NAME);
+  const description = String(project.description || '').trim().slice(0, MAX_DESCRIPTION);
+  return name || description ? { name, description } : null;
+}
+
+/**
+ * What `connect-start` is sent: each source on or off with its apps, folders and repositories; the instructions; the
+ * permissions; the provider; the project an existing user's notes go into (`projectId`); and what the project is
+ * (`project` { name, description }, 2026-10-10), which onboarding sends without an id; and how far back to look (`days`
+ * 182 or 365, null for all time, 2026-10-10), always sent.
+ */
+export function choicesOf({ picks, apps, folders = {}, repos = [], picked = [], custom = '', permissions = {}, provider = null, projectId = null, workspaceId = null, project = null, days = null }) {
   const sources = {};
   for (const source of SOURCES) {
     sources[source.id] = {
@@ -226,7 +604,28 @@ export function choicesOf({ picks, apps, folders = {}, repos = [], custom = '', 
     };
   }
   const allowed = { files: permissions.files !== false, browser: permissions.browser !== false, recall: permissions.recall !== false, notes: permissions.notes === true };
-  return { sources, custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}) };
+  // `picked` (MATH-110): the folders chosen in the folder picker, which macOS lets Engelbart read wherever they are.
+  return { sources, ...(picked.length ? { picked: [...new Set(picked)] } : {}), custom: String(custom || '').trim(), computer: allowed.files, permissions: allowed, days: cleanDays(days), ...(provider ? { provider } : {}), ...(projectId ? { projectId } : {}), ...(projectId && workspaceId ? { workspaceId } : {}), ...(projectOf(project) ? { project: projectOf(project) } : {}) };
+}
+
+/**
+ * The onboarding session to pick up again when onboarding opens after a quit: one begun from onboarding, with no project
+ * id (an id makes a session an existing user's), not stopped or put away.
+ */
+export function resumable(list) {
+  return (list || []).find((entry) => entry.mode === 'onboarding' && !entry.projectId && !entry.stopped && !entry.dismissed) || null;
+}
+
+/**
+ * Where what came in went (2026-10-11), for a session started from a project: `placed` { project, workspace }, the rows
+ * on the project's own list and those also in the workspace it was started from. '' before anything went in.
+ */
+export function placedLine(session) {
+  const placed = session && session.projectId && session.placed;
+  if (!placed || !placed.project) return '';
+  const head = `${placed.project} added to the project.`;
+  if (!placed.workspace) return head;
+  return placed.workspace < placed.project ? `${head} The first ${placed.workspace} are also in this workspace.` : `${head} ${placed.project === 1 ? 'It is' : 'They are'} also in this workspace.`;
 }
 
 /** An import's place in the progress list: its words, whether it is finished, failed, or waits on the person. */
@@ -264,7 +663,7 @@ export const workJobs = (jobs) => (jobs || []).filter((job) => job.kind !== 'mem
 
 /** The jobs still going first (2026-10-08: "show the ones still running at the top"), running before queued, then the ended, each group in its order. */
 // What each source is, under a row of onboarding's "Bringing everything in" when its label says nothing more.
-const WORK_SUBS = { notes: 'Notes', transcripts: 'Meeting transcripts', chats: 'AI chats', sites: 'Pages from your browser history', papers: 'Papers', code: 'Repositories' };
+const WORK_SUBS = { notes: 'Notes', transcripts: 'Meeting transcripts', email: 'Email threads', chats: 'AI chats', sites: 'Pages from your browser history', papers: 'Papers', code: 'Repositories' };
 const andList = (items) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} and ${items[items.length - 1]}`);
 
 /**
@@ -277,9 +676,11 @@ export function workRow(job) {
   const at = label.indexOf(':');
   const head = (at >= 0 ? label.slice(0, at) : label).trim();
   const tail = at >= 0 ? label.slice(at + 1).trim() : '';
-  const apps = (job.apps || []).filter(Boolean);
+  const ids = (job.apps || []).filter(Boolean);
+  const apps = ids.map(shownName);
   const title = apps.length ? andList(apps) : head || label;
-  const own = tail && tail !== apps.join(', ') && tail !== title ? tail : '';
+  // The label's tail names the apps again (main writes them shown; a session saved before 2026-10-10, by their ids).
+  const own = tail && tail !== apps.join(', ') && tail !== ids.join(', ') && tail !== title ? tail : '';
   const kindSub = job.kind === 'survey' ? 'Looking through it' : job.kind === 'recall' ? 'What it remembers about you' : WORK_SUBS[job.source] || '';
   const sub = own ? own[0].toUpperCase() + own.slice(1) : kindSub !== title ? kindSub : '';
   const n = (job.notes || 0) + (job.items || 0);
@@ -315,19 +716,40 @@ export function workLine(session, tick = 0) {
   return { lead, agent: job ? { id: job.id, label: job.label, doing: job.status === 'waiting' ? 'needs you' : job.activity || statusOf(job).text, place: busy.length > 1 ? `${at + 1} of ${busy.length}` : '', waiting: job.status === 'waiting' } : null };
 }
 
+/** What an import brings in, as the foot names it: its own label (the librarian's, "Zotero papers"), without a "Bringing in" it already starts with; else its apps, else its source. */
+function importName(job) {
+  const label = String(job.label || '').trim().replace(/^bringing in\s+/i, '').trim();
+  if (label) return label;
+  const apps = (job.apps || []).filter(Boolean).map(shownName);
+  if (apps.length) return andList(apps);
+  const source = SOURCES.find((entry) => entry.id === job.source);
+  return source ? source.label : String(job.source || 'a source');
+}
+
+/** "A", "A and B", "A and 2 more" (MATH-146). */
+const fewNames = (names) => (names.length < 3 ? names.join(' and ') : `${names[0]} and ${names.length - 1} more`);
+
 /**
- * The line at the foot of onboarding's chat and progress (2026-10-09, David's mockup): "Bringing in 2 sources · 3 of 10 ·
- * 2 need you". How many imports are still going, how many of the work's jobs have ended, and the steps waiting on the
- * person. '' before anything was dispatched.
+ * The line at the foot of onboarding's chat and progress (2026-10-09, David's mockup; MATH-146: it names what is coming
+ * in and counts nothing, since "Bringing in 1 source · 5 of 6" counted two different things). The imports still going,
+ * in runningFirst's order ("Bringing in Zotero papers and AI chats", "Bringing in Notes and 2 more"); with none, "Looking
+ * through your apps" while other work goes on, "Everything's in" once it has all ended. Then the steps waiting on the
+ * person, by app ("Google Drive needs you", "Zotero and GitHub need you", "Zotero and 2 more need you"), or counted when
+ * a step names no app ("2 steps need you"). '' before anything was dispatched.
  */
 export function footLine(session) {
   if (!session) return '';
   const jobs = workJobs(session.jobs);
-  const importing = jobs.filter((job) => job.kind === 'import' && !statusOf(job).done).length;
-  const ended = jobs.filter((job) => statusOf(job).done).length;
-  const needs = (session.needs || []).length;
-  const lead = importing ? `Bringing in ${importing} source${importing === 1 ? '' : 's'}` : ended < jobs.length ? 'Looking through your apps' : jobs.length ? 'Everything looked at' : '';
-  return [lead, jobs.length ? `${ended} of ${jobs.length}` : '', needs ? `${needs} need${needs === 1 ? 's' : ''} you` : ''].filter(Boolean).join(' · ');
+  const importing = runningFirst(jobs).filter((job) => job.kind === 'import' && !statusOf(job).done).map(importName);
+  const lead = importing.length ? `Bringing in ${fewNames(importing)}` : jobs.some((job) => !statusOf(job).done) ? 'Looking through your apps' : jobs.length ? 'Everything\'s in' : '';
+  const needs = (session.needs || []).filter((need) => need && !need.closed);
+  let waiting = '';
+  if (needs.length) {
+    const apps = [...new Set(needs.map((need) => (need.app ? shownName(need.app) : '')))];
+    if (apps.every(Boolean)) waiting = `${fewNames(apps)} need${apps.length === 1 ? 's' : ''} you`;
+    else waiting = needs.length === 1 ? '1 step needs you' : `${needs.length} steps need you`;
+  }
+  return [lead, waiting].filter(Boolean).join(' · ');
 }
 
 /**
@@ -348,14 +770,15 @@ export function chatStatus(session) {
 /** What a step the agents hand the person asks of them, the button that does it, and how (`hint`, the row's line under its app). */
 export function needView(need) {
   const kind = need && need.kind;
-  if (kind === 'connector') return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
-  if (kind === 'permission') return { title: `${need.app} needs your permission`, action: 'Allow', hint: 'macOS will ask' };
-  if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${need.app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
+  const app = need ? shownName(need.app) : '';
+  if (kind === 'connector') return { title: `${app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
+  if (kind === 'permission') return { title: `${app} needs your permission`, action: 'Allow', hint: 'macOS will ask' };
+  if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
   // One button and Skip (2026-10-08: "It should just be one login button on the right ... or skip"): a sign-in opens in the
   // default browser and is brought over (main's connect/web-signin.cjs); a code or a captcha, the agent's own window.
   const what = { signin: 'sign in', '2fa': 'enter a code', password: 'sign in', captcha: 'prove you are not a robot', confirm: 'confirm something' }[kind] || 'sign in';
   const signs = kind === 'signin' || kind === 'password';
-  return { title: `${need ? need.app : 'An app'} needs you to ${what}`, action: signs ? 'Log in' : 'Open', hint: signs ? 'Opens in your browser · read-only' : `Opens its window to ${what}` };
+  return { title: `${app || 'An app'} needs you to ${what}`, action: signs ? 'Log in' : 'Open', hint: signs ? 'Opens in your browser · read-only' : `Opens its window to ${what}` };
 }
 
 /** MEMORY.md's line in the progress list. */

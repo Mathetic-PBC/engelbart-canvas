@@ -76,7 +76,8 @@ const engelbartAPI = Object.freeze({
   onDocChanged: (callback) => subscribe('doc:changed', callback),
   onProjectChanged: (callback) => subscribe('engelbart:project-changed', callback),
   onDataRootChanged: (callback) => subscribe('engelbart:data-root-changed', callback),
-  // GitHub: the device-flow sign-in (status { configured, connected, login, pending: { userCode, verificationUri }, error, installUrl }) and the App's repositories.
+  // GitHub: the device-flow sign-in (status { configured, connected, login, pending: { userCode, verificationUri }, error, installUrl, installHint }) and the App's
+  // repositories ({ repos, accounts, missingOrgs: [{ login, id, repos, installUrl }] }); githubOpen('install', url) opens one organization's install page.
   githubStatus: invoke('github-status'),
   githubConnect: invoke('github-connect'),
   githubCancel: invoke('github-cancel'),
@@ -131,6 +132,17 @@ const engelbartAPI = Object.freeze({
   connectAuthorize: invoke('connect-authorize'),
   connectChose: invoke('connect-chose'),
   connectCancelSignIn: invoke('connect-cancel-sign-in'),
+  connectSignInNote: invoke('connect-signin-note'), // (app, route?) → { browser, note, profiles, opens }
+  connectSignInPick: invoke('connect-signin-pick'), // (app, { browser, profile }) → remembered for that sign-in
+  connectSignInBrowser: invoke('connect-signin-browser'), // (app) → { status: 'signed-in' | 'refused' | 'no-browser' | 'cancelled', browser, profile? }
+  connectSignInUnlock: invoke('connect-signin-unlock'), // (app) → { status: 'allowed' | 'refused', browser }: macOS asked for the browser's sign-ins before its page opens, nothing copied
+  connectSignInAnotherAccount: invoke('connect-signin-another-account'), // (app) → { opened, browser }: Google's add-an-account page, in the browser waited on
+  connectSignInBrowserCancel: invoke('connect-signin-browser-cancel'), // (app?) ends that wait (every wait without an app)
+  connectSignInCheck: invoke('connect-signin-check'), // (app, retry?) → { status, browser }
+  connectFoldersNeeded: invoke('connect-folders-needed'), // (choices) → [{ id, name }] protected folders not asked about yet (MATH-110)
+  connectFoldersAsk: invoke('connect-folders-ask'), // (ids) → { [id]: 'allowed' | 'denied' }, macOS asking for each in turn
+  connectSignInWindow: invoke('connect-signin-window'), // (app) → { status: 'signed-in' | 'rejected' | 'closed' }: signs in in Engelbart's own browser ('rejected': Google refused it)
+  connectSignInWindowClose: invoke('connect-signin-window-close'), // closes that window
   connectNeed: invoke('connect-need'),
   connectImport: invoke('connect-import'),
   connectStop: invoke('connect-stop'),
@@ -249,6 +261,11 @@ const engelbartAPI = Object.freeze({
   pickLibraryPaths: invoke('pick-library-paths'),
   linkToWorkspace: invoke('link-to-workspace'),
   unlinkFromWorkspace: invoke('unlink-from-workspace'),
+  // The project's own list (2026-10-11): (projectId, ids, { workspaceId? }) → { added, inWorkspace }; (projectId, ids) →
+  // { removed }; (projectId, id) → the workspaces whose document mentions it. At most 200 ids a call.
+  addToProject: invoke('add-to-project'),
+  removeFromProject: invoke('remove-from-project'),
+  projectItemMentions: invoke('project-item-mentions'),
   // E2B previews of saved GitHub repositories (src/main/sandbox). Adding or linking one starts it, and the answer carries
   // `sandbox_error` when it could not start. onSandboxProgress: { dataRoot, run, message, notification? } per change.
   sandboxRuns: invoke('sandbox-runs'),

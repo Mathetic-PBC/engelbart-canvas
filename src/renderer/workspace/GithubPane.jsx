@@ -24,7 +24,7 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
   const [status, setStatus] = useGithubStatus();
   const [starting, setStarting] = React.useState(false);
   const [problem, setProblem] = React.useState('');
-  const [list, setList] = React.useState(null); // { repos, accounts } | null while it loads
+  const [list, setList] = React.useState(null); // { repos, accounts, missingOrgs } | null while it loads
   const [q, setQ] = React.useState('');
   const [idx, setIdx] = React.useState(0);
   const fieldRef = React.useRef(null);
@@ -115,11 +115,14 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
             {rows.map((entry, i) => (
               <button key={entry.repo.id || entry.repo.url} type="button" data-github-repo={entry.repo.fullName} disabled={busy} onMouseDown={(event) => event.preventDefault()} onMouseEnter={() => { if (idx !== i) setIdx(i); }} onClick={() => pick(entry)} title={entry.repo.description || entry.repo.fullName} style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', boxSizing: 'border-box', padding: '7px 10px', border: 0, borderRadius: 6, background: i === at ? '#f2f2f2' : 'transparent', textAlign: 'left', cursor: 'pointer' }}>
                 <GhGlyph size={13} color="#4d4d4d" />
-                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(13) }}>
-                  <span style={{ color: '#8f8f8f' }}>{entry.repo.owner}/</span>{entry.repo.fullName.slice(entry.repo.owner.length + 1)}
+                {/* The lock right after the name (2026-10-12), as in the repository picker (./GithubRepos.jsx). */}
+                <span style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(13) }}>
+                    <span style={{ color: '#8f8f8f' }}>{entry.repo.owner}/</span>{entry.repo.fullName.slice(entry.repo.owner.length + 1)}
+                  </span>
+                  {entry.repo.private && <span aria-label="Private" data-github-repo-lock="1" style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}>{LOCK}</span>}
                 </span>
                 {entry.typed && !entry.here && <span style={{ flex: 'none', ...text(12, '#8f8f8f') }}>Add</span>}
-                {entry.repo.private && <span aria-label="Private" style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}>{LOCK}</span>}
                 {entry.here && <span style={{ flex: 'none', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' }}>here</span>}
               </button>
             ))}
@@ -130,6 +133,21 @@ export default function GithubPane({ library, inRail, onBack, onPick, busy }) {
               <span style={{ ...text(13, 'inherit') }}>Choose repositories in browser…</span>
             </button>
           )}
+          {status.installUrl && list && (list.missingOrgs || []).length > 0 && (
+            <div data-github-missing="1" style={{ margin: '2px 0 0' }}>
+              {list.missingOrgs.map((org) => (
+                <div key={org.login} data-github-missing-org={org.login} style={{ display: 'flex', alignItems: 'baseline', gap: 8, padding: '5px 8px' }}>
+                  <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(13) }}>
+                    {org.login}
+                    {(org.repos || []).length > 0 && <span style={{ marginLeft: 8, ...text(12, '#8f8f8f') }}>{org.repos.length === 1 ? '1 repo on this Mac' : `${org.repos.length} repos on this Mac`}</span>}
+                  </span>
+                  <button type="button" className="hov-ink" data-github-add-org={org.login} onClick={() => api.githubOpen('install', org.installUrl).catch((failure) => setProblem(errorMessage(failure)))} style={{ ...plainButton, flex: 'none', ...text(12, '#171717', 500) }}>Add on GitHub</button>
+                </div>
+              ))}
+              <div style={{ padding: '0 8px', ...text(11.5, '#8f8f8f') }}>An organization’s owner has to approve it.</div>
+            </div>
+          )}
+          {status.installHint && <div data-github-install-hint="1" style={{ marginTop: 6, ...text(12, '#4d4d4d') }}>On GitHub, pick each organization you work in and its repositories.</div>}
           {error && <div data-github-error="1" style={{ marginTop: 6, ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}
           {status && status.connected && status.persisted === false && <div style={{ marginTop: 6, ...text(11.5, '#8f8f8f') }}>Signed in until Engelbart quits: no keychain.</div>}
         </>

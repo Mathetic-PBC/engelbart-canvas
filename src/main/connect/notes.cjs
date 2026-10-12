@@ -128,7 +128,7 @@ async function writeNote(ctx, projectId, { title, body, images = [] }, { project
  * its pictures copied beside it and linked by their names; one that cannot be kept is named in brackets. No project is
  * needed, so nothing waits for onboarding. → the library row
  */
-async function writeFile(ctx, { title, body, images = [] }, { library }) {
+async function writeFile(ctx, { title, body, images = [], about = null }, { library }) {
   let text = String(body || '');
   const pictures = [];
   const taken = new Set();
@@ -148,7 +148,7 @@ async function writeFile(ctx, { title, body, images = [] }, { library }) {
     } catch { /* the picture went, or cannot be read: named instead */ }
     text = text.split(`![${image.alt}](${image.token})`).join(replacement);
   }
-  return library.addMarkdownCopy(ctx, { name: sanitizeName(title), text, pictures });
+  return library.addMarkdownCopy(ctx, { name: sanitizeName(title), text, pictures, about });
 }
 
 const stagedDir = (sessionDir) => path.join(sessionDir, 'notes');

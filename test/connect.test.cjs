@@ -16,19 +16,22 @@ const http = require('node:http');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { pathToFileURL } = require('node:url');
+const { randomUUID } = require('node:crypto');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
+const library = require('../src/main/store/library.cjs');
 const readers = require('../src/main/connect/readers.cjs');
 const notes = require('../src/main/connect/notes.cjs');
 const { createImportTools, validateImportTool, chatNote, toolsFor, googleMarkdown, csvTable, IMPORT_TOOLS } = require('../src/main/connect/tools.cjs');
-const { createConnect, readReply, readSurvey, cleanChoices, connectChoice } = require('../src/main/connect/session.cjs');
+const { createConnect, readReply, readSurvey, cleanChoices, projectBlock, connectChoice } = require('../src/main/connect/session.cjs');
 const { createFakeConnectAgents } = require('../src/main/connect/fake.cjs');
 const { createWebSignIn } = require('../src/main/connect/web-signin.cjs');
-const { detect, scanFor, localRepos } = require('../src/main/connect/scan.cjs');
+const { detect, scanFor, localRepos, pdfsAtAGlance } = require('../src/main/connect/scan.cjs');
+const folderAccess = require('../src/main/connect/folder-access.cjs');
 const { importToolLabel, writeImportConfig, claudeServers, claudeToolsFor } = require('../src/main/connect/agents.cjs');
 const { hostAllowed, hostsFor, fileNameOf } = require('../src/main/connect/browser.cjs');
-const { listWebChats, readWebChat } = require('../src/main/connect/web-chats.cjs');
+const { listWebChats, readWebChat, CHATGPT_LIST, CHATGPT_ONE, CLAUDE_LIST, CLAUDE_ONE } = require('../src/main/connect/web-chats.cjs');
 const { createAppleNotes, noteMarkdown } = require('../src/main/connect/apple-notes.cjs');
 const { cursorChats, cursorTranscript } = require('../src/main/connect/cursor.cjs');
 const { createConnectors } = require('../src/main/connect/connectors.cjs');
@@ -293,7 +296,7 @@ test('the librarian\'s reply as it is read: one-line options with their why, but
   assert.deepEqual(choices.sources.notes, { on: true, apps: ['Obsidian'], folders: [vault], repos: [] });
   assert.deepEqual(choices.permissions, { files: true, browser: false, recall: true, notes: false });
   const reply = readReply('```json\n{"say":"Found it.","ask":{"source":"notes","kind":"multi","title":"Which folders?","options":["Research",{"label":"Essays","why":"12 notes"},{"label":"Essays"}]},"authorize":{"app":"Zotero","kind":"signin"},"dispatch":[{"source":"notes","apps":["Obsidian"],"label":"Obsidian","plan":"Research only"},{"source":"papers","plan":"all"}],"done":false}\n```', choices);
-  assert.deepEqual(reply.ask, { source: 'notes', kind: 'multi', title: 'Which folders?', options: [{ label: 'Research', why: '' }, { label: 'Essays', why: '12 notes' }], placeholder: '' });
+  assert.deepEqual(reply.ask, { source: 'notes', kind: 'multi', title: 'Which folders?', options: [{ label: 'Research', why: '', detail: '', checked: false }, { label: 'Essays', why: '12 notes', detail: '', checked: false }], placeholder: '' });
   assert.equal(reply.authorize, null, 'one thing at a time: the question wins');
   assert.deepEqual(reply.dispatch.map((entry) => entry.source), ['notes'], 'papers was not picked');
   assert.deepEqual(readReply('{"say":"","authorize":{"app":"Zotero","kind":"signin"}}', choices).authorize, { source: 'papers', app: 'Zotero', kind: 'signin', label: 'Sign in to Zotero' });
@@ -309,6 +312,12 @@ test('the librarian\'s reply as it is read: one-line options with their why, but
   const survey = readSurvey('{"app":"Google Docs","signedIn":true,"summary":"40 docs in 6 folders.","total":40,"items":[{"id":"1abcDEF_ghij","label":"Thesis draft","kind":"doc","date":"2026-10-01","why":"research"},{"label":""}]}');
   assert.deepEqual(survey.items.map((item) => [item.id, item.label]), [['1abcDEF_ghij', 'Thesis draft']]);
   assert.equal(readSurvey('not json').summary, 'not json');
+  // A search for a folder (MATH-117): only folders inside the home folder that are there are kept.
+  const report = JSON.stringify({ app: LOCAL_PDFS, summary: 'PDFs in 2 folders.', items: [], folders: ['~/Vault', vault, '/tmp', `${homeDir}/nowhere`, 'Vault', 7], searched: 'Documents and Desktop' });
+  assert.deepEqual(readSurvey(report, homeDir).folders, [vault]);
+  assert.equal(readSurvey(report, homeDir).searched, 'Documents and Desktop');
+  assert.deepEqual(readSurvey(report).folders, [], 'no home folder given, no folder kept');
+  assert.deepEqual(readSurvey(JSON.stringify({ folder: path.join(homeDir, '..') }), homeDir).folders, []);
   assert.equal(importToolLabel('import_note_files', { files: ['a', 'b'] }), 'Bringing in 2 notes');
   assert.equal(importToolLabel('browser_open', { url: 'https://www.overleaf.com/project' }), 'Opening overleaf.com');
   assert.equal(importToolLabel('import_google_files', { items: [{}] }), 'Bringing in 1 Google Drive file');
@@ -378,6 +387,38 @@ test('ChatGPT\'s and Claude\'s chats read from their signed-in pages, into turns
   const signedOut = { ensure: async () => {}, evaluate: async () => ({ signedIn: false }) };
   await assert.rejects(listWebChats(signedOut, 'Claude'), (error) => error.code === 'SIGNED_OUT' && /needs_you/.test(error.message));
   await assert.rejects(listWebChats(gpt, 'Gemini'), /must be one of ChatGPT, Claude/);
+});
+
+test('a failed session check is not "signed out": asked again a moment later; only an answer that says so is signed out (2026-10-12)', async () => {
+  const page = (answers) => { const asked = []; return { asked, ensure: async () => {}, evaluate: async () => { asked.push(1); return answers.shift(); } }; };
+  const paused = [];
+  const sleep = async (ms) => { paused.push(ms); };
+  const listed = { signedIn: true, account: 'me', items: [{ id: 'g-111111', title: 'Regression help', updated: '2026-10-02T00:00:00Z' }] };
+  // A 403 (or a 429, a 5xx, a network error) then an answer: read as usual, after a pause of a few seconds.
+  const flaky = page([{ signedIn: null, status: 403 }, listed]);
+  assert.deepEqual((await listWebChats(flaky, 'ChatGPT', { sleep })).chats.map((chat) => chat.id), ['g-111111']);
+  assert.equal(flaky.asked.length, 2);
+  assert.deepEqual(paused, [3000]);
+  // Twice no answer: an error that is not SIGNED_OUT, so the agent does not ask for a sign-in.
+  await assert.rejects(listWebChats(page([{ signedIn: null, status: 429 }, { signedIn: null, status: 0 }]), 'Claude', { sleep }), (error) => error.code !== 'SIGNED_OUT' && /didn't say whether you're signed in.*not a sign-out/.test(error.message));
+  await assert.rejects(readWebChat(page([null, null]), 'ChatGPT', 'g-111111', { sleep }), (error) => error.code === 'UNSURE');
+  // Signed out only when the site says so (an ok answer with no session, or a 401), and then at once.
+  const out = page([{ signedIn: false }]);
+  await assert.rejects(listWebChats(out, 'ChatGPT', { sleep }), (error) => error.code === 'SIGNED_OUT');
+  assert.equal(out.asked.length, 1, 'not asked again');
+  await assert.rejects(listWebChats(page([{ signedIn: null, status: 503 }, { signedIn: false }]), 'ChatGPT', { sleep }), (error) => error.code === 'SIGNED_OUT', 'said on the second ask');
+  // The scripts themselves: a 401 is signed out; a 403 or no answer is "couldn't tell"; an ok answer with no token is signed out.
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  const run = async (script, respond) => {
+    const fetch = async (url) => { const [status, body] = respond(url); if (status === 0) throw new TypeError('Failed to fetch'); return { ok: status >= 200 && status < 300, status, json: async () => body }; };
+    return new AsyncFunction('fetch', script)(fetch);
+  };
+  assert.deepEqual(await run(CHATGPT_LIST(5), () => [401, null]), { signedIn: false });
+  assert.deepEqual(await run(CHATGPT_LIST(5), () => [403, null]), { signedIn: null, status: 403 });
+  assert.deepEqual(await run(CHATGPT_ONE('g-111111'), () => [0, null]), { signedIn: null, status: 0 });
+  assert.deepEqual(await run(CHATGPT_LIST(5), () => [200, {}]), { signedIn: false });
+  assert.deepEqual(await run(CLAUDE_LIST(5), () => [500, null]), { signedIn: null, status: 500 });
+  assert.deepEqual(await run(CLAUDE_ONE('c-111111'), () => [200, []]), { signedIn: false });
 });
 
 test('Google Drive: a Doc\'s pictures kept out of its Markdown export, a Sheet as a table', () => {
@@ -540,7 +581,8 @@ test('a session with the fake agents: a folder button, a question card, imports 
   const before = (await mdFiles()).length;
   const earlier = new Set((await mdFiles()).map((row) => row.id));
   await assert.rejects(connect.start({ sources: {} }), /Pick at least one source/);
-  const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, sites: { on: true } }, provider: 'openai' });
+  // The agents may not read the files on this Mac: no agent looks for the vault, the button comes at once (MATH-117).
+  const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, sites: { on: true } }, provider: 'openai', computer: false });
   assert.deepEqual(started.choice, { provider: 'openai', name: 'Codex', modelName: 'Sol', effort: 'high' }, 'only the provider was chosen; its model is pinned');
   let now = await until(state(started.id), (s) => !s.thinking && s.chat.length, 'the first turn');
   assert.equal(now.chat[0].opener, true, 'a first line at once, before the librarian');
@@ -552,7 +594,7 @@ test('a session with the fake agents: a folder button, a question card, imports 
   await connect.authorize(started.id, { app: 'Obsidian', kind: 'folder', path: '~/Vault' });
   now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
   assert.deepEqual(now.chat.map((entry) => entry.role), ['agent', 'agent', 'user', 'agent']);
-  assert.deepEqual(now.chat[3].ask.options[0], { label: 'Everything', why: 'all of it' });
+  assert.deepEqual(now.chat[3].ask.options[0], { label: 'Everything', why: 'all of it', detail: '' });
   assert.throws(() => connect.answer(started.id, {}), /Say something first/);
   connect.answer(started.id, { picked: ['Everything'], text: 'but not Personal' });
   assert.equal(connect.state(started.id).chat[4].text, 'Everything — but not Personal');
@@ -592,6 +634,222 @@ test('a session with the fake agents: a folder button, a question card, imports 
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
 });
 
+/* MATH-117: an app on this Mac whose folder the scan did not find is looked for by an agent before the button. */
+
+const savedOf = (id) => JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', id, 'session.json'), 'utf8'));
+const findJobs = (s, app) => s.jobs.filter((job) => job.kind === 'survey' && job.label === `Looking for your ${app} folder`);
+
+test('a Zoom folder moved out of Documents is looked for and found: its at-a-glance, no button (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'zoom-found-'));
+  const meeting = path.join(fresh, 'Movies', 'Zoom', '2026-03-04 10.00.00 Lab meeting');
+  fs.mkdirSync(meeting, { recursive: true });
+  fs.writeFileSync(path.join(meeting, 'meeting_saved_closed_caption.txt'), 'Alex: shall we start?\n');
+  fs.writeFileSync(path.join(meeting, 'closed_caption.vtt'), 'WEBVTT\n');
+  const { connect, state } = fakeConnect({ home: fresh });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { transcripts: { on: true, apps: ['Zoom'] } } });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the transcripts question');
+    assert.deepEqual(findJobs(now, 'Zoom').map((job) => job.status), ['done'], 'one search, finished');
+    assert.ok(now.log.some((entry) => entry.text === 'Found your Zoom folder at ~/Movies/Zoom'), JSON.stringify(now.log.map((entry) => entry.text)));
+    assert.equal(now.chat.some((entry) => entry.authorize), false, 'no button was offered');
+    const saved = savedOf(started.id);
+    assert.equal(saved.picked.folders.Zoom, path.join(fresh, 'Movies', 'Zoom'));
+    const zoom = saved.found.transcripts.Zoom;
+    assert.equal(zoom.needs, undefined);
+    assert.equal(zoom.looking, undefined);
+    assert.equal(zoom.folder, '~/Movies/Zoom', 'the scan\'s at-a-glance of the folder found');
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a Zoom folder that is nowhere: the search says where it looked, then the button (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'zoom-none-'));
+  fs.mkdirSync(path.join(fresh, 'Movies'), { recursive: true });
+  const seen = []; // copies: a snapshot's chat is the session's own
+  const { connect, state } = fakeConnect({ home: fresh, notify: (snapshot) => seen.push(JSON.parse(JSON.stringify({ chat: snapshot.chat, jobs: snapshot.jobs }))) });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { transcripts: { on: true, apps: ['Zoom'] } } });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the Zoom folder button');
+    assert.deepEqual(findJobs(now, 'Zoom').map((job) => job.status), ['done']);
+    const button = now.chat.findIndex((entry) => entry.authorize);
+    assert.deepEqual(now.chat[button].authorize, { source: 'transcripts', app: 'Zoom', kind: 'folder', label: 'Choose your Zoom folder…' });
+    assert.ok(now.chat.slice(1, button).some((entry) => entry.role === 'agent' && /Looking through/.test(entry.text)), 'the librarian waited for the search first');
+    assert.ok(seen.some((snapshot) => snapshot.jobs.some((job) => job.label === 'Looking for your Zoom folder' && job.status === 'running')), 'it was seen looking');
+    assert.ok(seen.every((snapshot) => !snapshot.chat.some((entry) => entry.authorize) || findJobs(snapshot, 'Zoom').every((job) => job.status === 'done')), 'no button while it looked');
+    const zoom = savedOf(started.id).found.transcripts.Zoom;
+    assert.equal(zoom.needs, 'folder');
+    assert.match(zoom.searched, /home folder/);
+    assert.match(zoom.cloud, /zoom\.us/);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('the files on this Mac not allowed: no search, the folder button at once (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'zoom-off-'));
+  fs.mkdirSync(path.join(fresh, 'Movies', 'Zoom', '2026-03-04 Lab meeting'), { recursive: true });
+  fs.writeFileSync(path.join(fresh, 'Movies', 'Zoom', '2026-03-04 Lab meeting', 'closed_caption.vtt'), 'WEBVTT\n');
+  const { connect, state } = fakeConnect({ home: fresh });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { transcripts: { on: true, apps: ['Zoom'] } }, computer: false });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.length > 1, 'the first turn');
+    assert.deepEqual(findJobs(now, 'Zoom'), []);
+    assert.deepEqual(now.chat[1].authorize, { source: 'transcripts', app: 'Zoom', kind: 'folder', label: 'Choose your Zoom folder…' });
+    assert.equal(savedOf(started.id).found.transcripts.Zoom.searched, undefined);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('an Obsidian vault Obsidian does not list is found by its .obsidian folder (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'vault-found-'));
+  fs.cpSync(vault, path.join(fresh, 'Documents', 'Research vault'), { recursive: true });
+  const { connect, state } = fakeConnect({ home: fresh });
+  let started = null;
+  // MATH-110: the vault is in ~/Documents, which macOS let Engelbart read on the choose screen.
+  const answers = path.join(ctx.dataRoot, '.connect', 'folders.json');
+  folderAccess.writeAnswers(ctx.dataRoot, { Documents: 'allowed' });
+  try {
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } } });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
+    assert.deepEqual(findJobs(now, 'Obsidian').map((job) => job.status), ['done']);
+    assert.equal(now.chat.some((entry) => entry.authorize), false);
+    const saved = savedOf(started.id);
+    assert.equal(saved.picked.folders.Obsidian, path.join(fresh, 'Documents', 'Research vault'));
+    assert.equal(saved.found.notes.Obsidian.vaults.length, 1, 'the vault\'s at-a-glance');
+  } finally {
+    if (started) connect.stop(started.id);
+    fs.rmSync(answers, { force: true });
+  }
+});
+
+test('MATH-110: the folder search keeps out of the protected folders macOS did not let Engelbart read, and is told which it may', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'find-skip-'));
+  for (const dir of ['Desktop', 'Documents', 'Downloads', 'Movies', 'Projects', 'Library/CloudStorage/GoogleDrive-ada@lab.org']) fs.mkdirSync(path.join(fresh, dir), { recursive: true });
+  // A vault in ~/Documents, never asked about: the search does not find it, and the agents are not given the folder.
+  fs.cpSync(vault, path.join(fresh, 'Documents', 'Research vault'), { recursive: true });
+  const fake = createFakeConnectAgents({ delayMs: 5 });
+  const asked = [];
+  const agents = { turn: (args) => { if (args.meta && args.meta.job && args.meta.job.find) asked.push({ message: args.message, dirs: args.dirs }); return fake.turn(args); } };
+  const answers = path.join(ctx.dataRoot, '.connect', 'folders.json');
+  folderAccess.writeAnswers(ctx.dataRoot, { Desktop: 'allowed', Documents: 'denied' });
+  const { connect, state } = fakeConnect({ home: fresh, agents });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } } });
+    const now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the Obsidian folder button');
+    assert.deepEqual(findJobs(now, 'Obsidian').map((job) => job.status), ['done']);
+    assert.equal(asked.length, 1);
+    const { message } = asked[0];
+    const look = message.match(/<look_in[^>]*>([^<]*)<\/look_in>/)[1].split(', ');
+    assert.deepEqual(look, ['~/Desktop', '~/Projects'], 'Desktop allowed; Documents, Downloads, Library and Movies left out');
+    assert.match(message, /Never look in ~\/Documents, ~\/Downloads, ~\/Library, ~\/Pictures, ~\/Music, ~\/Movies:/, 'the folders to skip, Desktop not among them');
+    assert.match(message, /<folders_allowed[^>]*>Desktop \(~\/Desktop\)<\/folders_allowed>/);
+    assert.match(message, /Never Glob from the home folder itself/);
+    assert.doesNotMatch(message, /look under[^.]*Documents/, 'the usual places name no folder not allowed');
+    assert.equal(savedOf(started.id).picked.folders.Obsidian, undefined, 'the vault in ~/Documents was not taken');
+  } finally {
+    if (started) connect.stop(started.id);
+    fs.rmSync(answers, { force: true });
+  }
+  // Zoom's usual places: Dropbox as a plain folder and what was allowed, never ~/Movies or ~/Documents.
+  folderAccess.writeAnswers(ctx.dataRoot, { Downloads: 'allowed' });
+  fs.mkdirSync(path.join(fresh, 'Dropbox'));
+  const zoom = fakeConnect({ home: fresh, agents });
+  try {
+    started = await zoom.connect.start({ sources: { transcripts: { on: true, apps: ['Zoom'] } } });
+    await until(zoom.state(started.id), (s) => findJobs(s, 'Zoom').every((job) => job.status === 'done') && findJobs(s, 'Zoom').length, 'the Zoom search');
+    const message = asked[asked.length - 1].message;
+    assert.match(message, /look under ~\/Dropbox, Downloads \(~\/Downloads\) first/);
+    assert.match(message, /Never look in ~\/Desktop, ~\/Documents, ~\/Library, ~\/Pictures, ~\/Music, ~\/Movies:/);
+  } finally {
+    if (started) zoom.connect.stop(started.id);
+    fs.rmSync(answers, { force: true });
+  }
+});
+
+test('an app\'s folder is looked for once a session, however often the scan runs again (MATH-117)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'find-once-'));
+  const { connect, state } = fakeConnect({ home: fresh });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] }, transcripts: { on: true, apps: ['Zoom'] } } });
+    let now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the Obsidian folder button');
+    assert.equal(now.chat.find((entry) => entry.authorize).authorize.app, 'Obsidian');
+    await until(state(started.id), (s) => findJobs(s, 'Zoom').every((job) => job.status === 'done'), 'the Zoom search');
+    // Both turn up now; choosing the vault scans the notes again, and Zoom's folder is not looked for a second time.
+    fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
+    fs.mkdirSync(path.join(fresh, 'Movies', 'Zoom', '2026-03-04 Lab meeting'), { recursive: true });
+    fs.writeFileSync(path.join(fresh, 'Movies', 'Zoom', '2026-03-04 Lab meeting', 'closed_caption.vtt'), 'WEBVTT\n');
+    await connect.authorize(started.id, { app: 'Obsidian', kind: 'folder', path: '~/Vault' });
+    now = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
+    assert.equal(findJobs(now, 'Zoom').length, 1);
+    assert.equal(findJobs(now, 'Obsidian').length, 1);
+    const zoom = savedOf(started.id).found.transcripts.Zoom;
+    assert.equal(zoom.needs, 'folder', 'still the button for Zoom');
+    assert.match(zoom.searched, /home folder/, 'where it looked is kept through the scan');
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('an import started from a project and a workspace lands in both; a row removed from the project is not brought back (2026-10-11)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'placed-'));
+  fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
+  const { project, workspaceId } = await projects.createProjectWithWelcome(ctx, { name: 'Imported into' });
+  const { connect, state } = fakeConnect({ home: fresh });
+  const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } }, provider: 'openai', projectId: project.id, workspaceId });
+  assert.equal(started.mode, 'existing');
+  // Obsidian does not list ~/Vault: the search for it finds it (MATH-117).
+  await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
+  connect.answer(started.id, { picked: ['Everything'] });
+  await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the notes import');
+  const listed = () => projects.findProject(ctx, project.id).library;
+  await until(() => connect.state(started.id).placed, (placed) => placed.project === 5 && placed.workspace === 5, 'the five placed');
+  assert.equal(listed().length, 5, 'on the project\'s own list');
+  const context = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
+  assert.deepEqual(listed().filter((id) => !context.includes(id)), [], 'and in the workspace it was started from');
+  assert.deepEqual((await library.libraryForProject(ctx, project.id)).map((row) => row.id).filter((id) => listed().includes(id)).sort(), [...listed()].sort(), 'the project holds them');
+
+  // Taken out of the project, then the session places what it brought again (as a resumed or repeated import does).
+  const [gone] = listed();
+  await projects.removeFromProject(ctx, project.id, [gone]);
+  await connect.attachProject(ctx, started.id, project.id, workspaceId);
+  assert.ok(!listed().includes(gone), 'not back on the project\'s list');
+  assert.ok(!projects.findWorkspace(ctx, project.id, workspaceId).workspace.context.includes(gone), 'nor in the workspace');
+  assert.ok(!(await library.libraryForProject(ctx, project.id)).some((row) => row.id === gone));
+  // Only an add brings it back.
+  await projects.addToProject(ctx, project.id, [gone]);
+  assert.ok(listed().includes(gone));
+
+  // A workspace that is not the project's is left out: what comes in is the project's alone.
+  const other = await projects.createProjectWithWelcome(ctx, { name: 'Someone else' });
+  const second = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } }, provider: 'openai', projectId: project.id, workspaceId: other.workspaceId });
+  const savedAt = path.join(ctx.dataRoot, '.connect', second.id, 'session.json');
+  await until(() => fs.existsSync(savedAt), Boolean, 'the second session saved');
+  assert.equal(JSON.parse(fs.readFileSync(savedAt, 'utf8')).workspaceId, null);
+  connect.stop(second.id);
+  connect.dismiss(started.id);
+  connect.dismiss(second.id);
+});
+
+test('Connect sends the open workspace with its project, and says where what came in went', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const pid = randomUUID(), wid = randomUUID();
+  assert.equal(model.choicesOf({ picks: {}, apps: {}, projectId: pid, workspaceId: wid }).workspaceId, wid);
+  assert.equal('workspaceId' in model.choicesOf({ picks: {}, apps: {}, workspaceId: wid }), false, 'no project, no workspace');
+  const line = (project, workspace) => model.placedLine({ projectId: pid, placed: { project, workspace } });
+  assert.equal(line(742, 500), '742 added to the project. The first 500 are also in this workspace.');
+  assert.equal(line(3, 3), '3 added to the project. They are also in this workspace.');
+  assert.equal(line(4, 0), '4 added to the project.');
+  assert.equal(line(0, 0), '');
+  assert.equal(model.placedLine({ projectId: null, placed: { project: 3, workspace: 0 } }), '', 'onboarding before its project');
+});
+
 /**
  * The web sign-in with a fake machine (2026-10-09): Safari the default, `browsers` { id: { apps: [signed in], deny } }; a
  * sign-in made after the page opens: `later` { app: looks }. `keychain` lists each Chromium import, as macOS would be asked.
@@ -621,77 +879,443 @@ function fakeSignIn({ browsers = {}, later = {} } = {}) {
     openExternal: async () => { throw new Error('Safari is never opened'); },
     openIn: async (id, url) => { calls.openedIn.push([id, url]); },
   });
-  return { webSignIn, calls };
+  return { webSignIn, calls, held };
 }
 
-test('sign-ins sorted before the run: one signed in is surveyed, one signed out gets its card up front and its survey after', async () => {
+test('sign-ins sorted before the run: one signed in is surveyed; one still signed out gets no card, it is left out and the opener says so', async () => {
   process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'Claude';
-  const { webSignIn, calls } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } }, later: { Claude: 1 } });
+  const { webSignIn } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } } });
   const chats = [];
   const { connect, state } = fakeConnect({ webSignIn, notify: (snapshot) => chats.push(JSON.parse(JSON.stringify(snapshot.chat))) });
   let started = null;
   try {
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
     assert.deepEqual(chats.find((chat) => chat.length).map((entry) => [entry.opener, entry.text]), [[true, 'Looking at what you picked…']], 'a first line at once');
-    const asked = await until(state(started.id), (s) => s.needs.length === 1 && !s.thinking, 'Claude\'s card, before any survey asks');
-    assert.ok(asked.log.some((entry) => entry.text === 'Signed in to ChatGPT from Chrome'));
-    assert.deepEqual([asked.needs[0].app, asked.needs[0].kind, asked.needs[0].reason, asked.needs[0].error], ['Claude', 'signin', 'Sign in to Claude', '']);
-    assert.equal(asked.needs[0].note, '', 'macOS was asked for Chrome\'s sign-ins already (ChatGPT\'s)');
-    assert.deepEqual(asked.jobs.filter((job) => job.kind === 'survey').map((job) => job.apps[0]), ['ChatGPT'], 'no survey of Claude until its sign-in is done');
-    assert.deepEqual(asked.jobs.filter((job) => job.kind === 'recall').map((job) => job.apps[0]), ['ChatGPT'], 'nor its recall');
-    assert.match(asked.chat[0].text, /^(Found .*|Had a look at what you picked\.) Starting with your ai chats\.$/);
-    // Log in: Safari is the default, so the page opens in Chrome; done once the sign-in is brought over.
-    await connect.need(started.id, asked.needs[0].id, 'open');
-    const after = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'Claude' && job.status === 'done'), 'Claude\'s survey, after its sign-in');
-    assert.deepEqual(calls.openedIn, [['chrome', 'https://claude.ai/login']]);
-    assert.equal(after.needs.length, 0, 'its survey did not ask again');
-    assert.ok(after.log.some((entry) => entry.text === 'Signed in to Claude from Chrome'));
-    assert.ok(after.jobs.some((job) => job.kind === 'recall' && job.apps[0] === 'Claude'), 'then its recall');
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.deepEqual(now.needs, [], 'no sign-in card on the refine screen (2026-10-11): upfrontNeed is gone');
+    assert.ok(now.log.some((entry) => entry.text === 'Signed in to ChatGPT from Chrome'));
+    assert.ok(now.log.some((entry) => entry.text === 'Left out Claude: not signed in'));
+    assert.deepEqual(now.jobs.filter((job) => job.kind === 'survey').map((job) => job.apps[0]), ['ChatGPT']);
+    assert.equal(now.jobs.some((job) => job.apps.includes('Claude')), false, 'nothing of Claude runs, nor its recall');
+    assert.match(now.chat[0].text, /^(Found .*|Had a look at what you picked\.) Starting with your ai chats\.\n\nUsing your Chrome sign-ins for ChatGPT\.\nLeft out Claude: not signed in\. You can add it from Add sources\.$/);
+    await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'ChatGPT' && job.status === 'done'), 'ChatGPT\'s survey');
+    assert.deepEqual(connect.state(started.id).needs, [], 'still no card');
   } finally {
     if (started) connect.stop(started.id);
     delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
   }
 });
 
-test('a Keychain refusal in the check: cards with no error, macOS asked once; Skip leaves the app out; Log in names the refusal', async () => {
-  const { webSignIn, calls } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT', 'Claude'], deny: true } } });
-  const { connect, state } = fakeConnect({ webSignIn });
+/** A sign-in window (main/connect/signin-window.cjs) that answers `status`, its calls in `opened`. */
+function fakeWindow(status = 'signed-in') {
+  const opened = [];
+  let closed = 0;
+  return { opened, closes: () => closed, signInWindow: { open: async (app) => { opened.push(app); return { status }; }, close: () => { closed += 1; } } };
+}
+
+test('Sign in in Engelbart\'s own browser: Google Drive signed in there signs in Gmail, Google Meet and Gemini for the run', async () => {
+  const { webSignIn } = fakeSignIn({ browsers: {} }); // Safari only: nothing to bring over
+  const google = { ...webSignIn, supports: (app) => ['Google Docs', 'Gmail', 'Google Meet', 'Gemini', 'ChatGPT', 'Claude'].includes(app) };
+  const win = fakeWindow('signed-in');
+  const { connect, state } = fakeConnect({ webSignIn: google, signInWindow: win.signInWindow });
   let started = null;
   try {
-    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
-    const asked = await until(state(started.id), (s) => s.needs.length === 2 && !s.thinking, 'both cards');
-    assert.deepEqual(calls.keychain, ['chrome'], 'one question to macOS in the check');
-    assert.deepEqual(asked.needs.map((need) => need.error), ['', '']);
-    assert.equal(asked.jobs.filter((job) => job.kind === 'survey').length, 0);
-    const claude = asked.needs.find((need) => need.app === 'Claude');
-    const chatgpt = asked.needs.find((need) => need.app === 'ChatGPT');
-    await connect.need(started.id, claude.id, 'skip');
-    let now = connect.state(started.id);
-    assert.equal(now.jobs.some((job) => job.apps.includes('Claude')), false, 'nothing of Claude runs');
-    await connect.need(started.id, chatgpt.id, 'open');
-    now = await until(state(started.id), (s) => s.needs.length === 1 && s.needs[0].error, 'the refusal on the card');
-    assert.equal(now.needs[0].error, 'macOS didn\'t let Engelbart use Chrome\'s sign-ins. Log in to ask again, or Skip.');
-    assert.equal(calls.keychain.length, 2, 'Log in asks macOS again');
+    assert.deepEqual(await connect.signInWindowOpen('Google Docs'), { status: 'signed-in' });
+    assert.deepEqual(win.opened, ['Google Docs']);
+    assert.equal(connect.signInWindowClose(), true);
+    assert.equal(win.closes(), 1);
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Google Docs'] }, email: { on: true, apps: ['Gmail'] }, transcripts: { on: true, apps: ['Google Meet'] }, chats: { on: true, apps: ['Gemini', 'Claude'] } } });
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    for (const app of ['Google Drive', 'Gmail', 'Google Meet', 'Gemini']) assert.ok(now.log.some((entry) => entry.text === `Signed in to ${app} already`), app);
+    assert.deepEqual(now.jobs.filter((job) => job.kind === 'survey').map((job) => job.apps[0]).sort(), ['Gemini', 'Gmail', 'Google Docs', 'Google Meet']);
+    assert.match(now.chat[0].text, /\n\nLeft out Claude: not signed in\. You can add it from Add sources\.$/, 'another sign-in is not shared');
+    assert.deepEqual(now.needs, []);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+  // The person closed it first: nothing is marked.
+  const shut = fakeWindow('closed');
+  const other = fakeConnect({ webSignIn: google, signInWindow: shut.signInWindow });
+  assert.deepEqual(await other.connect.signInWindowOpen('Gmail'), { status: 'closed' });
+  assert.deepEqual(await other.connect.signInWindowOpen('Notion'), { status: 'closed' }, 'not one it can sign in');
+  assert.deepEqual(shut.opened, ['Gmail']);
+});
+
+test('a web app\'s sign-in lost mid-run: copied again quietly from the browser, no card, and the agent carries on (2026-10-12)', async () => {
+  process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT';
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } } });
+  const { webSignIn, quiet } = countedSignIn(fake);
+  // The sign-in cookie really is gone when the survey says so (one still held is believed: the test after this).
+  const base = createFakeConnectAgents({ delayMs: 5 });
+  const agents = { turn: (args) => { if (args.meta && args.meta.kind === 'survey') fake.held.length = 0; return base.turn(args); } };
+  const { connect, state } = fakeConnect({ webSignIn, agents });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } } });
+    const now = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.status === 'done'), 'its survey, carried on');
+    assert.deepEqual(now.needs, [], 'no Log in card');
+    assert.deepEqual(quiet, ['ChatGPT', 'ChatGPT'], 'checked before the run, then copied again when the survey lost it');
+    assert.deepEqual(fake.calls.keychain, ['chrome', 'chrome'], 'Chrome\'s key, asked once before the run, is used again (main keeps it: no new prompt)');
+    assert.deepEqual(fake.calls.openedIn, [], 'nothing opened');
+    assert.ok(now.log.some((entry) => entry.text === 'Copied the ChatGPT sign-in again from Chrome'));
+    assert.equal(now.chat.some((entry) => /Left out ChatGPT/.test(entry.text)), false);
+  } finally {
+    if (started) connect.stop(started.id);
+    delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
+  }
+});
+
+/** Fake agents whose survey of `app` (or, with `kind`, whose job of that kind) calls needs_you `times` times with `reason`. */
+function claimingAgents({ app = 'ChatGPT', kind = 'survey', times = 1, reason = 'Sign in to ChatGPT' } = {}) {
+  const base = createFakeConnectAgents({ delayMs: 5 });
+  const answers = [];
+  const agents = {
+    async turn(args) {
+      const meta = args.meta;
+      if (!meta || meta.kind !== kind || (kind === 'survey' && meta.job.apps[0] !== app)) return base.turn(args);
+      for (let n = 0; n < times; n += 1) answers.push(await meta.callTool('needs_you', { kind: 'signin', reason }));
+      return { text: kind === 'survey' ? JSON.stringify({ app, signedIn: true, summary: 'Read with what it had.', items: [] }) : 'Brought in what it could.', session: null };
+    },
+  };
+  return { agents, answers };
+}
+
+test('an agent says signed out while the sign-in cookie is still held: still signed in, nothing dropped or stopped, no chat line (2026-10-12)', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } } });
+  const { webSignIn, quiet } = countedSignIn(fake);
+  const { agents, answers } = claimingAgents({ times: 2 });
+  const { connect, state } = fakeConnect({ webSignIn, agents });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } } });
+    const now = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.status === 'done'), 'its survey, finished');
+    assert.equal(answers[0].status, 'done');
+    assert.equal(answers[0].note, 'Still signed in: the page or its API failed for a moment. Reload and try again, or finish with what you have.');
+    assert.equal(answers[1].status, 'skipped', 'the same agent saying so again finishes without it');
+    assert.match(answers[1].note, /finish without it/);
+    assert.deepEqual(quiet, ['ChatGPT'], 'checked before the run only: not copied again, so nothing was dropped');
+    assert.equal(fake.held.length, 1, 'the sign-in cookie kept');
+    assert.deepEqual(now.needs, [], 'no card');
+    assert.equal(now.chat.some((entry) => /ChatGPT/.test(entry.text) && /Left out|ended/.test(entry.text)), false, 'nothing said in the chat');
+    assert.ok(now.log.some((entry) => entry.text === 'Still signed in to ChatGPT: its page or API failed for a moment'));
+    assert.ok(now.log.some((entry) => entry.text === 'Carried on without ChatGPT: it still looked signed in'));
+    const recall = now.jobs.find((job) => job.kind === 'recall' && job.apps.includes('ChatGPT'));
+    if (recall) assert.notEqual(recall.skipped, true, 'Asking ChatGPT what it remembers is not stopped');
+    // ChatGPT is not left out for the run: Import still brings it in.
+    const imported = connect.importNow(started.id);
+    assert.ok(imported.jobs.some((job) => job.kind === 'import' && job.apps.includes('ChatGPT')));
   } finally {
     if (started) connect.stop(started.id);
   }
 });
 
-test('no browser whose sign-ins can be read (Safari only): the card says which it needs, and keeps Skip', async () => {
-  const { webSignIn, calls } = fakeSignIn({ browsers: {} });
-  const shown = [];
-  const browser = { has: () => true, show: (jobId) => { shown.push(jobId); return true; }, hide: () => {} };
-  const { connect, state } = fakeConnect({ webSignIn, browser });
+test('a sign-in need from a job filed under Codex that names claude.ai goes to Claude: settled quietly, no card for Codex (2026-10-12)', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['Claude'] } } });
+  const { webSignIn, quiet } = countedSignIn(fake);
+  const { agents, answers } = claimingAgents({ kind: 'import', reason: 'Sign in to Claude (claude.ai) to read its chats' });
+  const { connect, state } = fakeConnect({ webSignIn, agents });
   let started = null;
   try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['Codex', 'Claude', 'Claude Code'] } }, permissions: { recall: false } });
+    await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    const imported = connect.importNow(started.id);
+    assert.deepEqual(imported.jobs.find((job) => job.kind === 'import').apps, ['Codex', 'Claude', 'Claude Code']);
+    const now = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the import');
+    assert.equal(answers[0].status, 'done');
+    assert.match(answers[0].note, /^Still signed in/);
+    assert.deepEqual(now.needs, [], 'no card for Codex');
+    assert.ok(now.log.some((entry) => entry.text === 'Still signed in to Claude: its page or API failed for a moment'));
+    assert.deepEqual(quiet, ['Claude']);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a Keychain refusal in the check: no cards that cannot succeed, macOS asked once; both skipped and said so in the chat', async () => {
+  const { webSignIn, calls } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT', 'Claude'], deny: true } } });
+  const { connect, state } = fakeConnect({ webSignIn });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.deepEqual(calls.keychain, ['chrome'], 'one question to macOS in the check');
+    assert.deepEqual(now.needs, [], 'refused apps get no card');
+    assert.equal(now.jobs.some((job) => job.apps.includes('ChatGPT') || job.apps.includes('Claude')), false, 'nothing of either runs');
+    assert.match(now.chat[0].text, /\n\nSkipped ChatGPT and Claude: macOS didn't allow Chrome's sign-ins\. You can add them later from Add sources\.$/);
+    assert.doesNotMatch(now.chat[0].text, /Using your/);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('refused is told apart from signed out: the refused app is skipped, the signed-out one left out, each said in the opener', async () => {
+  const { webSignIn } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'], deny: true } } });
+  const { connect, state } = fakeConnect({ webSignIn });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.deepEqual(now.needs, []);
+    assert.match(now.chat[0].text, /\n\nSkipped ChatGPT: macOS didn't allow Chrome's sign-ins\. You can add it later from Add sources\.\nLeft out Claude: not signed in\. You can add it from Add sources\.$/);
+    assert.ok(now.log.some((entry) => entry.text === 'Skipped ChatGPT: macOS didn\'t allow Chrome\'s sign-ins'));
+    assert.equal(now.jobs.some((job) => job.apps.includes('ChatGPT') || job.apps.includes('Claude')), false);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a sign-in lost mid-run that can\'t be copied again: left out with a line, no card, and macOS not asked anew', async () => {
+  process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT'; // signed in in Engelbart's window, then its survey finds the sign-in expired
+  const { webSignIn, calls } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } } });
+  const { connect, state } = fakeConnect({ webSignIn, signInWindow: fakeWindow('signed-in').signInWindow });
+  let started = null;
+  try {
+    await connect.signInWindowOpen('ChatGPT');
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } } });
-    const asked = await until(state(started.id), (s) => s.needs.length === 1 && !s.thinking, 'ChatGPT\'s card');
-    await connect.need(started.id, asked.needs[0].id, 'open');
-    const now = await until(state(started.id), (s) => s.needs[0] && s.needs[0].error, 'the error');
-    assert.equal(now.needs[0].error, 'Signing in to ChatGPT needs Chrome, Brave, Edge, Arc or Firefox.');
+    const now = await until(state(started.id), (s) => s.chat.some((entry) => /its sign-in ended/.test(entry.text)), 'the line in the chat');
+    assert.deepEqual(now.needs, [], 'no card');
+    assert.deepEqual(calls.keychain, [], 'Chrome was never asked about this run: not asked now');
+    assert.deepEqual(calls.openedIn, []);
+    assert.ok(now.chat.some((entry) => entry.role === 'agent' && entry.text === 'Left out ChatGPT: its sign-in ended partway through. You can add it later from Add sources.'));
+    const ended = await until(state(started.id), (s) => s.jobs.every((job) => job.kind !== 'survey' || job.status !== 'running' && job.status !== 'waiting'), 'its survey ended');
+    assert.ok(ended.log.some((entry) => entry.text === 'Left out ChatGPT: its sign-in ended partway through'));
+  } finally {
+    if (started) connect.stop(started.id);
+    delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
+  }
+});
+
+/** The fake machine's webSignIn, with each signInQuiet counted and, with `slowMs`, answered that much later. */
+function countedSignIn(fake, { slowMs = 0 } = {}) {
+  const quiet = [];
+  const webSignIn = { ...fake.webSignIn, signInQuiet: async (app, options) => {
+    quiet.push(app);
+    if (slowMs) await new Promise((resolve) => { setTimeout(resolve, slowMs); });
+    return fake.webSignIn.signInQuiet(app, options);
+  } };
+  return { webSignIn, quiet };
+}
+
+test('checked when ticked: the run uses that answer without looking again; the opener names the browser remembered', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT'] } } });
+  const { webSignIn, quiet } = countedSignIn(fake);
+  const { connect, state } = fakeConnect({ webSignIn });
+  let started = null;
+  try {
+    assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: 'Chrome', note: 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.', profiles: [], opens: '' });
+    assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-in', browser: 'Chrome' });
+    assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '', profiles: [], opens: '' }, 'held now: macOS will not be asked');
+    // Ticked again: signInQuiet answers browser '' (held already); the browser it came from is remembered.
+    assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-in', browser: 'Chrome' });
+    assert.deepEqual(await connect.signInCheck('Claude'), { status: 'signed-out', browser: '' });
+    assert.deepEqual(quiet, ['ChatGPT', 'ChatGPT', 'Claude']);
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.deepEqual(quiet, ['ChatGPT', 'ChatGPT', 'Claude'], 'no signInQuiet for an app checked when ticked');
+    assert.deepEqual(now.needs, [], 'its signed-out answer is used: left out, no card');
+    assert.match(now.chat[0].text, /\n\nUsing your Chrome sign-ins for ChatGPT\.\nLeft out Claude: not signed in\. You can add it from Add sources\.$/);
+    assert.ok(now.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'ChatGPT'));
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a check when ticked waits on macOS as long as the person takes; the run waits for it too; one past the limit is still checking, and joins when signed in', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT', 'Claude'] } } });
+  const { webSignIn, quiet } = countedSignIn(fake, { slowMs: 80 });
+  const { connect, state } = fakeConnect({ webSignIn, deps: { signInCheckMs: 20 } });
+  let started = null;
+  try {
+    const checking = connect.signInCheck('ChatGPT'); // macOS's prompt answered after longer than the run's limit
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } } });
+    assert.deepEqual(await checking, { status: 'signed-in', browser: 'Chrome' });
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.deepEqual(quiet, ['ChatGPT', 'Claude']);
+    assert.match(now.chat[0].text, /Using your Chrome sign-ins for ChatGPT\.$/, 'ChatGPT, still being checked when the run started, ended signed in');
+    assert.doesNotMatch(now.chat[0].text, /Left out Claude/, 'Claude, past the limit, is still checking: not left out (2026-10-12)');
+    assert.ok(now.log.some((entry) => entry.text === 'Still checking the Claude sign-in'));
+    const joined = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'Claude'), 'Claude joins once its answer comes');
+    assert.ok(joined.log.some((entry) => entry.text === 'Signed in to Claude from Chrome'));
+    assert.deepEqual(joined.needs, []);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a late answer that is signed out: left out quietly with a line, no Log in card (2026-10-12)', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: [] } }, later: { Claude: 1 } });
+  const { webSignIn } = countedSignIn(fake, { slowMs: 60 });
+  const { connect, state } = fakeConnect({ webSignIn, deps: { signInCheckMs: 10 } });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['Claude'] } } });
+    const first = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.doesNotMatch(first.chat[0].text, /Left out Claude/);
+    const now = await until(state(started.id), (s) => s.chat.some((entry) => entry.text === 'Left out Claude: not signed in. You can add it from Add sources.'), 'the line');
+    await new Promise((resolve) => { setTimeout(resolve, 60); });
+    const after = connect.state(started.id);
+    assert.deepEqual(after.needs, [], 'no card');
+    assert.equal(after.jobs.some((job) => job.apps.includes('Claude')), false, 'left out for the run');
+    assert.deepEqual(fake.calls.openedIn, [], 'nothing opened');
+    assert.ok(now.log.some((entry) => entry.text === 'Still checking the Claude sign-in'));
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('no panel for an app no browser holds: the check opens nothing, so macOS is not promised; the Log in card still names where it opens', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['Claude'] } } }); // Chrome would open ChatGPT's sign-in page, but holds none
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
+  assert.deepEqual(await connect.signInNote('ChatGPT'), { browser: '', note: '', profiles: [], opens: '' }, 'no browser holds it: no panel');
+  assert.equal(fake.webSignIn.keychainNote('ChatGPT'), 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.', 'the Log in card\'s note keeps the opener');
+  assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'signed-out', browser: '' }, 'straight to the row\'s Sign in');
+  assert.deepEqual(fake.calls.keychain, [], 'macOS was not asked');
+  assert.deepEqual((await connect.signInNote('Claude')).browser, 'Chrome', 'one it holds still has its panel');
+});
+
+/**
+ * Google's sign-in on a fake Mac (2026-10-12): `defaultName` the default browser; `browsers` { id: { profiles: [{ id, name,
+ * email, signedIn }], deny } }; `checks` Google's check page's answers in turn (true when none is left). Fixtures only.
+ */
+function fakeGoogle({ defaultName = 'Safari', browsers = {}, checks = [], picks = {} } = {}) {
+  const NAMES = { chrome: ['Chrome', 'chromium', 'com.google.Chrome'], brave: ['Brave', 'chromium', 'com.brave.Browser'], firefox: ['Firefox', 'firefox', 'org.mozilla.firefox'] };
+  let jar = [];
+  const answers = [...checks];
+  const calls = { keychain: [], opened: [], openedIn: [], imports: [] };
+  const cookieImport = {
+    sources: () => Object.keys(browsers).map((id) => ({ id, name: NAMES[id][0], family: NAMES[id][1], bundle: NAMES[id][2], profiles: browsers[id].profiles.map(({ id: pid, name, email }) => ({ id: pid, name, ...(email ? { email } : {}) })) })),
+    cookieNames: (id, profileId) => (browsers[id].profiles.find((each) => each.id === profileId) || {}).signedIn ? [{ domain: 'google.com', name: 'SID', stamp: 1 }] : [],
+    check: async () => (answers.length ? answers.shift() : true),
+    import: async ({ browser: id, profile }) => {
+      if (NAMES[id][1] === 'chromium') calls.keychain.push(id);
+      if (browsers[id].deny) throw Object.assign(new Error('Keychain access was denied'), { denied: true });
+      calls.imports.push(`${id}/${profile}`);
+      jar = [{ domain: '.google.com', name: 'SID', path: '/', secure: true }];
+    },
+  };
+  const stored = { ...picks };
+  const webSignIn = createWebSignIn({
+    cookieImport, defaultBrowser: () => defaultName, pollMs: 1, timeoutMs: 50, sleep: () => new Promise((resolve) => setImmediate(resolve)),
+    getSession: () => ({ cookies: { get: async ({ domain }) => jar.filter((cookie) => cookie.domain.endsWith(domain)), remove: async (url, name) => { jar = jar.filter((cookie) => cookie.name !== name); } } }),
+    openExternal: async (url) => { calls.opened.push(url); }, openIn: async (id, url) => { calls.openedIn.push([id, url]); },
+    picks: { get: (key) => stored[key] || null, set: (key, pick) => { stored[key] = pick; } },
+  });
+  // hold(): Google's sign-in made in Engelbart's own window, in its session.
+  return { webSignIn, calls, stored, browsers, hold: () => { jar = [{ domain: '.google.com', name: 'SID', path: '/', secure: true }]; } };
+}
+
+test('Google\'s Sign in goes through the person\'s browser: Chrome opens with Safari the default, no time limit, every Google app signed in together', async () => {
+  const fake = fakeGoogle({ browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: false }] } } });
+  const win = fakeWindow('signed-in');
+  const { connect, state } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  let started = null;
+  try {
+    assert.deepEqual(await connect.signInNote('Google Docs', { route: 'browser' }), { browser: 'Chrome', note: 'macOS will ask to use Chrome\'s sign-ins. Choose Allow.', profiles: [], opens: 'Chrome' }, 'the browser it opens in, and the Keychain modal first');
+    const waiting = connect.signInBrowser('Google Docs');
+    assert.equal(connect.signInBrowser('Gmail'), waiting, 'one wait for the one Google sign-in');
+    await new Promise((resolve) => { setTimeout(resolve, 120); }); // past the 50 ms a Log in card would wait
+    assert.deepEqual(fake.calls.openedIn, [['chrome', 'https://accounts.google.com/']]);
+    fake.browsers.chrome.profiles[0].signedIn = true; // signed in in Chrome
+    assert.deepEqual(await waiting, { status: 'signed-in', browser: 'Chrome' });
+    assert.deepEqual(win.opened, [], 'never Engelbart\'s window');
+    for (const app of ['Google Docs', 'Gmail', 'Google Meet', 'Gemini']) assert.deepEqual(await connect.signInCheck(app), { status: 'signed-in', browser: 'Chrome' }, app);
+    started = await connect.start({ sources: { notes: { on: true, apps: ['Google Docs'] }, email: { on: true, apps: ['Gmail'] } } });
+    const now = await until(state(started.id), (s) => s.chat.length > 1 && !s.thinking, 'the first turn');
+    assert.deepEqual(now.jobs.filter((job) => job.kind === 'survey').map((job) => job.apps[0]).sort(), ['Gmail', 'Google Docs']);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('Google\'s Sign in waits until cancelled (the row unticked, Leave out, the choose screen gone)', async () => {
+  const fake = fakeGoogle({ defaultName: 'Google Chrome', browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: false }] } } });
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
+  const waiting = connect.signInBrowser('Gmail');
+  await new Promise((resolve) => { setTimeout(resolve, 80); });
+  assert.equal(connect.signInBrowserCancel('Gemini'), true, 'any app sharing the sign-in ends it');
+  assert.deepEqual(await waiting, { status: 'cancelled' });
+  assert.deepEqual(fake.calls.opened, ['https://accounts.google.com/'], 'Chrome the default: opened as itself');
+});
+
+test('Google\'s Sign in refused by macOS: "refused" for every Google app, and no Engelbart window', async () => {
+  const fake = fakeGoogle({ browsers: { chrome: { deny: true, profiles: [{ id: 'Default', name: 'Me', signedIn: true }] } } });
+  const win = fakeWindow('signed-in');
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  assert.deepEqual(await connect.signInBrowser('Gmail'), { status: 'refused', browser: 'Chrome' });
+  assert.deepEqual(win.opened, []);
+  assert.deepEqual(fake.calls.openedIn, [], 'nothing opened once macOS said no');
+  assert.equal((await connect.signInNote('Google Docs')).note, '', 'not asked again until Try again');
+});
+
+test('Google with Safari only: no browser, nothing opened, no window', async () => {
+  const fake = fakeGoogle({ browsers: {} });
+  const win = fakeWindow('signed-in');
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  assert.deepEqual(await connect.signInBrowser('Gmail'), { status: 'no-browser' });
+  assert.equal((await connect.signInNote('Gmail', { route: 'browser' })).opens, '');
+  assert.deepEqual(await connect.signInCheck('Gmail'), { status: 'no-browser', browser: '' });
+  assert.deepEqual([win.opened, fake.calls.opened, fake.calls.openedIn], [[], [], []]);
+});
+
+test('two profiles holding Google: asked which, the pick remembered and used, the row naming it; one profile: no question', async () => {
+  const fake = fakeGoogle({ defaultName: 'Google Chrome', browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }, { id: 'Profile 1', name: 'Work', email: 'me@work.example', signedIn: true }] } } });
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
+  const note = await connect.signInNote('Gmail');
+  assert.equal(note.browser, 'Chrome');
+  assert.deepEqual(note.profiles.map(({ browserId, profileId, name, email }) => [browserId, profileId, name, email]), [['chrome', 'Default', 'Me', ''], ['chrome', 'Profile 1', 'Work', 'me@work.example']]);
+  assert.equal(connect.signInPick('Gmail', { browser: 'chrome', profile: 'Profile 1' }), true);
+  assert.deepEqual(fake.stored, { 'google.com': { browser: 'chrome', profile: 'Profile 1' } });
+  assert.deepEqual((await connect.signInNote('Google Docs')).profiles, [], 'picked: not asked again, for any Google app');
+  assert.deepEqual(await connect.signInCheck('Gmail'), { status: 'signed-in', browser: 'Chrome', profile: 'Work' });
+  assert.deepEqual(fake.calls.imports, ['chrome/Profile 1']);
+  const one = fakeGoogle({ defaultName: 'Google Chrome', browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }, { id: 'Profile 1', name: 'Work', signedIn: false }] } } });
+  const lone = fakeConnect({ webSignIn: one.webSignIn });
+  assert.deepEqual((await lone.connect.signInNote('Gmail')).profiles, [], 'one holds it: no question');
+  // Chrome and Firefox both holding it: the question spans both.
+  const both = fakeGoogle({ defaultName: 'Firefox', browsers: { firefox: { profiles: [{ id: 'x.default-release', name: 'default-release', signedIn: true }] }, chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }] } } });
+  const across = fakeConnect({ webSignIn: both.webSignIn });
+  assert.deepEqual((await across.connect.signInNote('Gmail')).profiles.map((profile) => [profile.browser, profile.name, profile.keychain]), [['Firefox', 'default-release', false], ['Chrome', 'Me', true]]);
+});
+
+test('a dead Google copy at tick time: copied again from Chrome and good; dead there too: signed out', async () => {
+  const fake = fakeGoogle({ defaultName: 'Google Chrome', checks: [false, true], browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }, { id: 'Profile 1', name: 'Work', signedIn: true }] } } });
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
+  assert.deepEqual(await connect.signInCheck('Gmail'), { status: 'signed-in', browser: 'Chrome', profile: 'Work' }, 'Me\'s copy dead, Work\'s good');
+  const dead = fakeGoogle({ defaultName: 'Google Chrome', checks: [false], browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }] } } });
+  const other = fakeConnect({ webSignIn: dead.webSignIn });
+  assert.deepEqual(await other.connect.signInCheck('Gmail'), { status: 'signed-out', browser: '' });
+});
+
+test('a refusal when ticked: the browser is not asked again, until Try again', async () => {
+  const fake = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT', 'Claude'], deny: true } } });
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn });
+  assert.deepEqual(await connect.signInCheck('ChatGPT'), { status: 'refused', browser: 'Chrome' });
+  assert.equal((await connect.signInNote('Claude')).note, '', 'refused: no panel, macOS won\'t be asked');
+  assert.deepEqual(await connect.signInCheck('Claude'), { status: 'refused', browser: 'Chrome' });
+  assert.deepEqual(fake.calls.keychain, ['chrome'], 'Chrome is in denied: asked once');
+  assert.deepEqual(await connect.signInCheck('ChatGPT', { retry: true }), { status: 'refused', browser: 'Chrome' });
+  assert.deepEqual(fake.calls.keychain, ['chrome', 'chrome'], 'Try again asks macOS again');
+  assert.deepEqual(await connect.signInCheck('Notion'), { status: '', browser: '' }, 'a connector is not checked here');
+  const none = fakeConnect({ webSignIn: fakeSignIn({ browsers: {} }).webSignIn });
+  assert.deepEqual(await none.connect.signInCheck('ChatGPT'), { status: 'no-browser', browser: '' });
+});
+
+test('no browser whose sign-ins can be read (Safari only): a sign-in lost mid-run is left out, with no card and nothing opened', async () => {
+  process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT'; // signed in in Engelbart's window, then its survey asks again
+  const { webSignIn, calls } = fakeSignIn({ browsers: {} });
+  const shown = [];
+  const browser = { has: () => true, show: (jobId) => { shown.push(jobId); return true; }, hide: () => {}, close: () => {}, closeAll: () => {}, tools: () => null };
+  const { connect, state } = fakeConnect({ webSignIn, browser, signInWindow: fakeWindow('signed-in').signInWindow });
+  let started = null;
+  try {
+    await connect.signInWindowOpen('ChatGPT');
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } } });
+    const now = await until(state(started.id), (s) => s.chat.some((entry) => /Left out ChatGPT: its sign-in ended/.test(entry.text)), 'the line');
+    assert.deepEqual(now.needs, []);
     assert.deepEqual([shown, calls.openedIn], [[], []], 'no window of Engelbart\'s, nothing opened');
   } finally {
     if (started) connect.stop(started.id);
+    delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
   }
 });
 
@@ -716,8 +1340,9 @@ test('the priority queue: surveys first, then the recalls, three at a time, MEMO
     assert.deepEqual(order.slice(0, 4).map((entry) => entry.split(':')[0]), ['survey', 'survey', 'survey', 'survey'], 'no recall before the surveys have their places');
     // The librarian waited for the surveys, then asks about what they found, one item per line.
     const card = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask && entry.ask.kind === 'multi'), 'the chats question');
-    assert.deepEqual(card.chat.find((entry) => entry.ask).ask.options.slice(0, 2).map((option) => option.label), ['Everything', 'ChatGPT item 1']);
-    connect.answer(started.id, { picked: ['Everything'] });
+    const chatsAsk = card.chat.find((entry) => entry.ask).ask;
+    assert.deepEqual(chatsAsk.options.slice(0, 2).map((option) => [option.label, option.checked]), [['ChatGPT item 1', true], ['ChatGPT item 2', false]], 'no "Everything" beside the parts; the recommendation comes ticked');
+    connect.answer(started.id, { picked: chatsAsk.options.filter((option) => option.checked).map((option) => option.label) });
     const ended = await until(state(started.id), (s) => s.memory.status === 'saved', 'MEMORY.md', 2000);
     const memoryAt = order.indexOf('memory:');
     assert.ok(memoryAt > order.lastIndexOf('import:') && memoryAt > order.lastIndexOf('recall:Grok'), `MEMORY.md waits for every import and recall: ${order.join(' ')}`);
@@ -741,6 +1366,31 @@ test('a whole source handed over still reaches its apps: its import gets the age
   assert.deepEqual(now.jobs.find((job) => job.kind === 'import').apps, [], 'handed over whole');
   assert.deepEqual(opened.map((entry) => [entry.label, entry.sites.includes('chatgpt.com')]), [['Looking through ChatGPT', true], ['AI chats', true]]);
   connect.stop(started.id);
+});
+
+// Google Docs is shown as Google Drive (2026-10-10): its id is what is picked, sent, saved and resumed; what the person reads says Drive.
+test('Google Docs is picked, saved and resumed by its id, and every line the person reads during the run says Google Drive', async () => {
+  const home = fs.mkdtempSync(path.join(homeDir, 'drive-')); // no Obsidian vault: the notes import reads Google Drive alone
+  const first = fakeConnect({ home, delayMs: 30 });
+  const started = await first.connect.start({ sources: { notes: { on: true, apps: ['Google Docs'] } }, permissions: { recall: false } });
+  await until(first.state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the notes question');
+  first.connect.answer(started.id, { picked: ['Everything'] });
+  const going = await until(first.state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'running'), 'the import running');
+  const survey = going.jobs.find((job) => job.kind === 'survey');
+  assert.deepEqual([survey.apps, survey.label], [['Google Docs'], 'Looking through Google Drive']);
+  const shown = (s) => JSON.stringify({ jobs: s.jobs.map((job) => [job.label, job.activity, job.error]), needs: s.needs.map((need) => [need.reason, need.note, need.error]), log: s.log.map((entry) => entry.text) });
+  assert.doesNotMatch(shown(going), /Google Docs/, shown(going));
+  first.connect.suspendAll();
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.deepEqual(saved.choices.sources.notes.apps, ['Google Docs'], 'saved by its id');
+
+  const second = fakeConnect({ home, delayMs: 5 });
+  second.connect.resume(ctx);
+  assert.ok(second.connect.has(started.id));
+  const done = await until(second.state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the import finished after the restart', 1500);
+  assert.deepEqual(done.jobs.find((job) => job.kind === 'survey').apps, ['Google Docs'], 'resumed by its id');
+  assert.doesNotMatch(shown(done), /Google Docs/, shown(done));
+  for (const one of second.connect.list(ctx.dataRoot)) second.connect.stop(one.id);
 });
 
 test('an existing user\'s session belongs to their project; Stop ends every agent and MEMORY.md is not written', async () => {
@@ -833,11 +1483,251 @@ test('a session still going when Engelbart quits is picked up again when the lib
   for (const s of third.connect.list(ctx.dataRoot)) third.connect.stop(s.id);
 });
 
+// Ask about the project before Connect your library, and give it to the librarian (2026-10-10).
+test('the project goes to the librarian, its surveys and its imports, and is kept through a quit; onboarding sends no project id, so its session is found again', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const long = `  ${'d'.repeat(5000)}  `;
+  const sent = model.choicesOf({ picks: {}, apps: {}, project: { name: '  Teachable agents  ', description: long } });
+  assert.deepEqual([sent.project.name, sent.project.description.length, 'projectId' in sent], ['Teachable agents', 4000, false], 'trimmed, capped like MAX_DESCRIPTION, and no id');
+  assert.equal('project' in model.choicesOf({ picks: {}, apps: {}, project: { name: ' ', description: '' } }), false);
+  assert.equal('project' in model.choicesOf({ picks: {}, apps: {} }), false);
+  assert.deepEqual(cleanChoices({ sources: {}, project: { name: ' A ', description: ` ${'x'.repeat(4100)}`, extra: 1 } }, homeDir).project, { name: 'A', description: 'x'.repeat(4000) }, 'main keeps it, cleaned');
+  assert.equal(cleanChoices({ sources: {} }, homeDir).project, null);
+  assert.equal(projectBlock({ project: { name: 'A', description: '' } }), '', 'no description: told nothing, as before');
+  assert.equal(projectBlock({ project: null }), '');
+
+  const seen = [];
+  const watched = (delayMs) => { const inner = createFakeConnectAgents({ delayMs }); return { ...inner, turn: (input) => { seen.push({ kind: input.kind, message: input.message }); return inner.turn(input); } }; };
+  const first = fakeConnect({ agents: watched(30) });
+  const project = { name: 'Teachable agents', description: 'How novices debug code with an LLM tutor' };
+  // What the guided setup sends: the project's name and description, never its id.
+  const started = await first.connect.start(model.choicesOf({ picks: { chats: true }, apps: { chats: { ChatGPT: true } }, permissions: { recall: false }, project }));
+  assert.equal(started.mode, 'onboarding', 'no project id: still an onboarding session');
+  assert.equal(started.projectId, null);
+  await until(first.state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the chats question');
+  first.connect.answer(started.id, { picked: ['Everything'] });
+  await until(first.state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'running'), 'the import running');
+  const block = '<project note="What the person is working on: the project this library is being connected for.">\nName: Teachable agents\nDescription: How novices debug code with an LLM tutor\n</project>';
+  for (const kind of ['interview', 'survey', 'import']) {
+    const message = (seen.find((entry) => entry.kind === kind) || {}).message || '';
+    assert.ok(message.includes(block), `the ${kind} is told the project: ${message.slice(0, 300)}`);
+  }
+  assert.ok(seen.find((entry) => entry.kind === 'interview').message.indexOf('<project') < seen.find((entry) => entry.kind === 'interview').message.indexOf('<choices>'), 'before what was picked');
+
+  // Engelbart quits mid-setup: the session is kept with its project, picked up again, and the onboarding screen finds it.
+  first.connect.suspendAll();
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.deepEqual(saved.choices.project, project);
+  seen.length = 0;
+  const second = fakeConnect({ agents: watched(5) });
+  second.connect.resume(ctx);
+  assert.ok(second.connect.has(started.id));
+  const entry = second.connect.list(ctx.dataRoot).find((one) => one.id === started.id);
+  assert.equal(model.resumable([entry]), entry, 'ConnectLibrary\'s resume lookup takes it');
+  assert.equal(model.resumable([{ ...entry, projectId: 'p1' }]), null, 'it would not with an id');
+  await until(() => seen, (list) => list.some((one) => one.kind === 'import'), 'the import queued again');
+  assert.ok(seen.every((one) => one.message.includes(block)), 'still told the project after the restart');
+  for (const one of second.connect.list(ctx.dataRoot)) second.connect.stop(one.id);
+
+  // With no description, the agents are told nothing of it, as before.
+  seen.length = 0;
+  const third = fakeConnect({ agents: watched(5) });
+  const plain = await third.connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } }, permissions: { recall: false }, project: { name: 'Untitled', description: '' } });
+  await until(third.state(plain.id), (s) => !s.thinking && s.chat.some((one) => one.ask), 'the chats question');
+  assert.ok(seen.length && seen.every((one) => !one.message.includes('<project')), 'no <project> block');
+  third.connect.stop(plain.id);
+});
+
+test('the sign-in window closed without signing in: the row, unticked, is plain Sign in when ticked again, not an old "macOS didn\'t allow it" (2026-10-12)', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const label = (signIn) => model.rowLabel('ChatGPT', { found: { apps: { ChatGPT: { found: true } } }, signIn });
+  const closed = (was) => label(model.afterSignInWindowClosed(was));
+  assert.deepEqual(closed({ status: 'refused', browser: 'Chrome' }), { text: '', tone: '', signIn: true }, 'plain Sign in, no "macOS didn\'t allow it"');
+  assert.deepEqual(closed({ status: 'rejected', browser: '' }), { text: '', tone: '', signIn: true }, 'nor an old refusal by the site');
+  assert.deepEqual(closed({ status: 'signed-out', browser: '' }), { text: '', tone: '', signIn: true });
+  assert.deepEqual(closed({ status: 'no-browser', browser: '' }), { text: '', tone: '', signIn: true });
+  assert.equal(model.afterSignInWindowClosed(undefined), null, 'nothing before: nothing after');
+  assert.deepEqual(model.afterSignInWindowClosed({ status: 'declined', browser: 'Chrome' }), { status: 'declined', browser: 'Chrome' }, 'anything else as it was');
+});
+
+test('the choose screen\'s sign-in checks: each row state, the web apps a tick starts checks for, the panel and Not now (the apps stay ticked, with Sign in)', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const label = (signIn) => model.rowLabel('ChatGPT', { found: { apps: { ChatGPT: { found: true } } }, signIn });
+  assert.deepEqual(label({ status: 'checking', browser: '' }), { text: 'Waiting for macOS…', tone: 'busy' });
+  assert.deepEqual(label({ status: 'signed-in', browser: 'Chrome' }), { text: '✓ Signed in from Chrome', tone: 'ok' });
+  assert.deepEqual(label({ status: 'signed-in', browser: '' }), { text: '✓ Signed in', tone: 'ok' });
+  // No browser of the person's signed it in (2026-10-11): Sign in, in Engelbart's own browser, not "after you start".
+  assert.deepEqual(label({ status: 'signed-out', browser: '' }), { text: '', tone: '', signIn: true });
+  assert.deepEqual(label({ status: 'no-browser', browser: '' }), { text: '', tone: '', signIn: true }, 'no "Needs Chrome…": the window needs no browser');
+  assert.deepEqual(label({ status: 'refused', browser: 'Chrome' }), { text: 'macOS didn\'t allow it', tone: 'error', retry: true, signIn: true }, 'Try again and Sign in');
+  assert.deepEqual(label({ status: 'signing', browser: '' }), { text: 'Signing in…', tone: 'busy' });
+  assert.deepEqual(label({ status: 'declined', browser: '' }), { text: '', tone: '', signIn: true }, 'Not now on the Keychain modal: Sign in, Engelbart\'s window');
+  assert.deepEqual(label(null), { text: 'Needs sign-in', tone: 'muted' }, 'not checked: as before');
+  assert.deepEqual(model.rowLabel('Granola', { signIn: { status: 'signed-in', browser: 'Chrome' } }), { text: 'Needs sign-in', tone: 'muted' }, 'only web apps');
+
+  const found = { apps: { ChatGPT: { found: true }, Claude: { found: true }, 'Claude Code': { found: true }, Obsidian: { found: true } }, sites: { found: false }, github: { found: false } };
+  const start = model.initialPicks(found);
+  assert.deepEqual(model.newlyTickedWeb(null, start).map((row) => row.app).filter((app) => ['ChatGPT', 'Claude'].includes(app)), [], 'assistants that remember start unticked');
+  // A row, a group's header, Select all: each the web apps it newly ticks, and nothing else.
+  const one = model.tickRow(start, 'chats', 'ChatGPT', true);
+  assert.deepEqual(model.newlyTickedWeb(start, one), [{ id: 'chats', app: 'ChatGPT' }]);
+  const cleared = model.tickGroup(start, 'chats', found);
+  const group = model.tickGroup(cleared, 'chats', found);
+  assert.deepEqual(model.newlyTickedWeb(cleared, group), [{ id: 'chats', app: 'ChatGPT' }, { id: 'chats', app: 'Claude' }], 'the group\'s web apps, not Claude Code');
+  const all = model.tickAll(model.tickAll(start, found, false), found, true);
+  assert.deepEqual(model.newlyTickedWeb(model.tickAll(start, found, false), all), [{ id: 'chats', app: 'ChatGPT' }, { id: 'chats', app: 'Claude' }]);
+  assert.deepEqual(model.newlyTickedWeb(all, model.tickAll(all, found, false)), [], 'unticking checks nothing');
+
+  // One panel per browser, naming every app waiting on it.
+  let waiting = model.waitForYes({}, [{ id: 'chats', app: 'ChatGPT', browser: 'Chrome' }]);
+  waiting = model.waitForYes(waiting, [{ id: 'chats', app: 'Claude', browser: 'Chrome' }, { id: 'chats', app: 'ChatGPT', browser: 'Chrome' }]);
+  assert.deepEqual(waiting, { Chrome: [{ id: 'chats', app: 'ChatGPT' }, { id: 'chats', app: 'Claude' }] });
+  const panel = model.signInPanel(all, 'Chrome', waiting.Chrome);
+  assert.equal(panel.title, 'Use your Chrome sign-ins for ChatGPT and Claude?');
+  assert.equal(panel.lead, 'macOS will ask for your Mac password next. Choose Allow.', 'the macOS line leads');
+  assert.deepEqual(panel.body, ['Engelbart copies only these apps\' sign-ins from Chrome, and only reads from them, so you don\'t log in again. Not now lets you sign in to them here instead.']);
+  const claudeOff = model.tickRow(all, 'chats', 'Claude', false);
+  assert.equal(model.signInPanel(claudeOff, 'Chrome', waiting.Chrome).title, 'Use your Chrome sign-ins for ChatGPT?', 'an app unticked meanwhile leaves the panel');
+  assert.match(model.signInPanel(claudeOff, 'Chrome', waiting.Chrome).body[0], /this app's sign-in from Chrome.*Not now lets you sign in to it here instead\.$/);
+
+  // After Continue, the modal says how it went (2026-10-11): waiting while macOS asks, then signed in, refused, or not there.
+  const rows = waiting.Chrome;
+  const outcome = (chatgpt, claude) => model.keychainOutcome('Chrome', rows, { ...(chatgpt ? { ChatGPT: { status: chatgpt } } : {}), ...(claude ? { Claude: { status: claude } } : {}) });
+  assert.deepEqual(outcome('checking', 'signed-in'), { done: false, title: 'Waiting for macOS…', lines: ['Enter your Mac password in the macOS window, then choose Allow.'], tone: 'busy' });
+  assert.deepEqual(outcome('signed-in', 'signed-in'), { done: true, title: 'Signed in to ChatGPT and Claude', lines: ['Brought over from Chrome. You won\'t need to log in again.'], tone: 'ok' });
+  const mixed = outcome('signed-in', 'signed-out');
+  assert.equal(mixed.tone, 'warn');
+  assert.deepEqual(mixed.lines.slice(1), ['Chrome isn\'t signed in to Claude. Sign in on its row to sign in here.']);
+  assert.deepEqual(outcome('refused', 'refused'), { done: true, title: 'Not allowed', lines: ['macOS didn\'t allow it, so ChatGPT and Claude weren\'t brought over. Try again on their rows to be asked again, or Sign in to sign in here.'], tone: 'refused' });
+  assert.equal(outcome('signed-in', null).tone, 'warn', 'a check that failed and was cleared counts as not brought over, never waits forever');
+  // Not now (2026-10-12): the apps stay ticked, their rows 'declined', offering Sign in in Engelbart's window, so they are
+  // still to be signed in before the run (the gate), and that Sign in is the window, Google's too.
+  const declined = { ChatGPT: { status: 'declined', browser: '' }, Claude: { status: 'declined', browser: '' } };
+  assert.deepEqual([model.ticked(all, 'chats', 'ChatGPT'), model.ticked(all, 'chats', 'Claude')], [true, true]);
+  assert.deepEqual(model.unsignedWeb(all, declined, found, true).map((row) => row.app), ['ChatGPT', 'Claude']);
+  assert.equal(model.signsInViaBrowser('Gmail', { status: 'declined' }), false, 'Google\'s Sign in after Not now: the window');
+  assert.equal(model.signsInViaBrowser('Gmail', { status: 'refused', browser: 'Chrome' }), false, 'after Deny on a check or at Continue: the window');
+  assert.equal(model.signsInViaBrowser('Gmail', { status: 'no-browser' }), false, 'Safari only: the window');
+  assert.equal(model.signsInViaBrowser('Gmail', { status: 'signed-out' }), true, 'otherwise the browser first');
+  assert.equal(model.signsInViaBrowser('Gmail', null), true);
+  assert.equal(model.signsInViaBrowser('ChatGPT', null), false, 'every other app: the window');
+
+  // "Use my … subscription" off: no sign-in is checked (ticked, Try again, or a panel's Continue at start) and no panel shows.
+  const ticking = model.newlyTickedWeb(start, one);
+  assert.deepEqual(model.signInsToCheck(true, ticking), ticking);
+  assert.deepEqual(model.signInsToCheck(false, ticking), [], 'consent off: nothing checked');
+  assert.deepEqual(model.waitingWhile(true, waiting), waiting);
+  assert.deepEqual(model.waitingWhile(false, waiting), {}, 'consent off: the panels go, and start has none to allow');
+  assert.deepEqual(Object.keys(model.waitingWhile(false, waiting)).map((browser) => model.signInPanel(all, browser, waiting[browser])), [], 'no panel shown');
+});
+
+test('the choose screen with Google signing in in the browser and two profiles: the rows, the waiting line and the profile list', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const found = { apps: { 'Google Docs': { found: true }, Gmail: { found: true }, ChatGPT: { found: true } }, sites: { found: false }, github: { found: false } };
+  const label = (app, signIn) => model.rowLabel(app, { found, signIn });
+  // Google's Sign in waits in the person's browser first, and says how long it takes, with Use another account and Sign in
+  // here instead (Engelbart's window) beside it.
+  assert.equal(model.signsInThroughBrowser('Gmail'), true);
+  assert.equal(model.signsInThroughBrowser('ChatGPT'), false);
+  assert.deepEqual(label('Gmail', { status: 'browser', browser: 'Chrome' }), { text: 'Sign in to Google in Chrome. It can take a minute to appear here.', tone: 'busy', here: true, another: true }, 'with Use another account and Sign in here instead');
+  assert.deepEqual(label('ChatGPT', { status: 'browser', browser: 'Chrome' }), { text: 'Sign in to ChatGPT in Chrome. It can take a minute to appear here.', tone: 'busy', here: true }, 'Use another account on Google\'s rows only');
+  assert.equal(model.waitingIn('Google', 'Brave'), 'Sign in to Google in Brave. It can take a minute to appear here.');
+  assert.deepEqual([model.signInName('Google Docs'), model.signInName('Gemini'), model.signInName('Claude')], ['Google', 'Google', 'Claude']);
+  // No browser to read (Safari only), macOS's Deny, Not now: Sign in, in Engelbart's window, Google's too (2026-10-12).
+  assert.deepEqual(label('Gmail', { status: 'no-browser', browser: '' }), { text: '', tone: '', signIn: true }, 'Safari only: Sign in, no "Google needs…"');
+  assert.deepEqual(label('Gmail', { status: 'refused', browser: 'Chrome' }), { text: 'macOS didn\'t allow it', tone: 'error', retry: true, signIn: true }, 'Try again and Sign in');
+  assert.deepEqual(label('Gmail', { status: 'declined', browser: '' }), { text: '', tone: '', signIn: true });
+  assert.deepEqual(label('Gmail', { status: 'signed-out', browser: '' }), { text: '', tone: '', signIn: true });
+  // Google turned the window's sign-in away: Try again.
+  assert.deepEqual(label('Gmail', { status: 'rejected', browser: '' }), { text: 'Google refused this sign-in', tone: 'error', retry: true });
+  assert.deepEqual(label('Google Docs', { status: 'rejected', browser: '' }).text, 'Google refused this sign-in');
+  // Several profiles: the row names the one the sign-in came from.
+  assert.deepEqual(label('ChatGPT', { status: 'signed-in', browser: 'Chrome', profile: 'Work' }), { text: '✓ Signed in from Chrome · Work', tone: 'ok' });
+  const refused = model.keychainOutcome('Chrome', [{ id: 'email', app: 'Gmail' }], { Gmail: { status: 'refused' } });
+  assert.deepEqual(refused.lines, ['macOS didn\'t allow it, so Gmail wasn\'t brought over. Try again on its row to be asked again, or Sign in to sign in here.']);
+  assert.deepEqual(model.keychainOutcome('Chrome', [{ id: 'email', app: 'Gmail' }], { Gmail: { status: 'signed-out' } }).lines, ['Chrome isn\'t signed in to Gmail. Sign in on its row to sign in in Chrome.']);
+
+  // Two profiles hold the sign-in: the modal lists them (name, email), the one chosen named in its title.
+  const profiles = [
+    { browserId: 'chrome', browser: 'Chrome', profileId: 'Default', name: 'Me', email: 'me@example.com', keychain: true },
+    { browserId: 'chrome', browser: 'Chrome', profileId: 'Profile 1', name: 'Work', email: '', keychain: true },
+  ];
+  const waiting = model.waitForYes({}, [{ id: 'chats', app: 'ChatGPT', browser: 'Chrome', note: 'macOS will ask', profiles, route: '' }]);
+  assert.deepEqual(waiting.Chrome, [{ id: 'chats', app: 'ChatGPT', note: 'macOS will ask', profiles }]);
+  const picks = model.tickRow(model.initialPicks(found), 'chats', 'ChatGPT', true);
+  const panel = model.signInPanel(picks, 'Chrome', waiting.Chrome, 1);
+  assert.deepEqual(panel.profiles.map((profile) => profile.name), ['Me', 'Work']);
+  assert.equal(panel.chosen, 1);
+  assert.equal(panel.title, 'Use your Chrome sign-ins for ChatGPT?');
+  assert.match(panel.body[0], /^More than one Chrome profile is signed in\. Pick the one to use; Engelbart remembers it\. /);
+  assert.equal(model.signInPanel(picks, 'Chrome', waiting.Chrome).chosen, 0, 'the first, until another is chosen');
+  // Firefox has no Keychain: no macOS line when its profile is the one chosen.
+  const fox = [{ ...profiles[0], browserId: 'firefox', browser: 'Firefox', profileId: 'abcd.default-release', name: 'default-release', email: '', keychain: false }, profiles[1]];
+  const mixed = model.signInPanel(picks, 'Firefox', model.waitForYes({}, [{ id: 'chats', app: 'ChatGPT', browser: 'Firefox', profiles: fox }]).Firefox, 0);
+  assert.equal(mixed.lead, '');
+  assert.equal(mixed.title, 'Use your Firefox sign-ins for ChatGPT?');
+  assert.match(mixed.body[0], /^More than one browser profile is signed in\./);
+  assert.equal(model.signInPanel(picks, 'Firefox', model.waitForYes({}, [{ id: 'chats', app: 'ChatGPT', browser: 'Firefox', profiles: fox }]).Firefox, 1).lead, 'macOS will ask for your Mac password next. Choose Allow.');
+  // One profile: no list.
+  const single = model.waitForYes({}, [{ id: 'chats', app: 'ChatGPT', browser: 'Chrome', note: 'macOS will ask', profiles: [profiles[0]] }]);
+  assert.deepEqual(model.signInPanel(picks, 'Chrome', single.Chrome).profiles, []);
+});
+
+test('Bring these in with ticked web apps not signed in: one modal, grouped by the sign-in they share; Leave them out unticks them', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const found = { apps: { Obsidian: { found: true }, ChatGPT: { found: true, signedIn: true } }, sites: { found: false }, github: { found: false } };
+  let picks = model.initialPicks(found);
+  picks = model.tickRow(picks, 'notes', 'Google Docs', true);
+  picks = model.tickRow(picks, 'email', 'Gmail', true);
+  picks = model.tickRow(picks, 'chats', 'ChatGPT', true); // signed in in Engelbart's browser when the screen opened
+  picks = model.tickRow(picks, 'chats', 'Claude', true);
+  picks = model.tickRow(picks, 'notes', 'Evernote', true); // no sign-in Engelbart can make: its agent asks, as before
+  const signIns = { 'Google Docs': { status: 'signed-out' }, Gmail: { status: 'no-browser' }, Claude: { status: 'signed-in', browser: 'Chrome' } };
+  const unsigned = model.unsignedWeb(picks, signIns, found, true);
+  assert.deepEqual(unsigned, [{ id: 'notes', app: 'Google Docs' }, { id: 'email', app: 'Gmail' }]);
+  const gate = model.signInGate(unsigned);
+  assert.equal(gate.title, 'Google Drive and Gmail need you to sign in');
+  assert.deepEqual(gate.groups, [[{ id: 'notes', app: 'Google Docs' }, { id: 'email', app: 'Gmail' }]], 'one Google sign-in');
+  assert.deepEqual(gate.lines, []);
+  // Google's sign-in opens in the person's browser first (2026-10-12).
+  assert.match(gate.body, /^Sign in opens Google's sign-in in your browser\. Leave them out to start without them\.$/);
+  assert.equal(gate.canSignIn, true);
+  assert.match(model.signInGate([{ id: 'chats', app: 'Perplexity' }]).body, /^Sign in opens its sign-in page in a small window here\. Leave it out/);
+  // Two sign-ins: a line each.
+  const two = model.signInGate([...unsigned, { id: 'chats', app: 'Perplexity' }]);
+  assert.equal(two.title, 'Google Drive, Gmail and Perplexity need you to sign in');
+  assert.deepEqual(two.lines, ['Google Drive and Gmail: one sign-in.', 'Perplexity.']);
+  assert.match(two.body, /^Sign in opens Google's sign-in in your browser, and the others in a small window here\./);
+  // No browser that can be read (Safari only), or Not now, or Deny: Google signs in in Engelbart's window (2026-10-12).
+  for (const status of ['no-browser', 'declined', 'refused']) {
+    const window = model.signInGate(unsigned, { 'Google Docs': { status }, Gmail: { status } });
+    assert.deepEqual(window.lines, [], status);
+    assert.equal(window.canSignIn, true, status);
+    assert.match(window.body, /^Sign in opens its sign-in page in a small window here\. Leave them out/, status);
+  }
+  // Off the Mac, every sign-in is the window.
+  assert.match(model.signInGate(unsigned, {}, 'win32').body, /^Sign in opens its sign-in page in a small window here\./);
+  assert.match(model.signInGate([...unsigned, { id: 'chats', app: 'Perplexity' }], {}, 'linux').body, /^Sign in opens each sign-in page in a small window here\./);
+  assert.equal(model.signInGate([{ id: 'chats', app: 'Perplexity' }]).title, 'Perplexity needs you to sign in');
+  // Leave them out: unticked, so nothing is left to sign in, and the run starts with the rest.
+  const left = unsigned.reduce((next, row) => model.tickRow(next, row.id, row.app, false), picks);
+  assert.deepEqual(model.unsignedWeb(left, signIns, found, true), []);
+  assert.deepEqual([model.ticked(left, 'notes', 'Google Docs'), model.ticked(left, 'email', 'Gmail'), model.ticked(left, 'chats', 'Claude'), model.ticked(left, 'notes', 'Obsidian')], [false, false, true, true]);
+  // Signed in in the window: Google Drive's sign-in is Gmail's too, so nothing is left, and no modal.
+  const signedIn = { ...signIns, ...Object.fromEntries(model.sharesSignIn('Google Docs').map((app) => [app, { status: 'signed-in', browser: '' }])) };
+  assert.deepEqual(model.sharesSignIn('Google Docs'), ['Google Docs', 'Google Meet', 'Gmail', 'Gemini']);
+  assert.deepEqual(model.unsignedWeb(picks, signedIn, found, true), []);
+  assert.equal(model.signInGate([]), null, 'every ticked web app signed in: no modal');
+  // Still being checked: main waits for it. The consent off: web apps are left out as before, no modal.
+  assert.deepEqual(model.unsignedWeb(picks, { ...signedIn, Claude: { status: 'checking' } }, found, true), []);
+  assert.deepEqual(model.unsignedWeb(picks, signIns, found, false), []);
+});
+
 test('the window\'s model, and the onboarding flow with Connect your library in place of Add to your library and Custom instructions', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const found = { apps: { Obsidian: { found: true }, 'Claude Code': { found: true }, ChatGPT: { found: true } }, sites: { found: true }, github: { found: false } };
   const start = model.initialPicks(found);
-  assert.deepEqual(start.picks, { notes: true, transcripts: false, chats: true, sites: true, papers: false, code: false });
+  assert.deepEqual(start.picks, { notes: true, transcripts: false, email: false, chats: true, sites: true, papers: false, code: false });
   assert.deepEqual(start.open, { notes: true });
   // MATH-114: an assistant that remembers the person starts unticked even when found; the rest found start ticked
   assert.deepEqual([start.apps.chats.ChatGPT, start.apps.chats['Claude Code'], start.apps.notes.Obsidian, start.apps.sites[model.BROWSER_ROW]], [false, true, true, true]);
@@ -865,7 +1755,13 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   assert.deepEqual(model.rowLabel('Cursor', { found: seen, folder: '~/Work' }), { text: '~/Work', tone: '' });
   assert.deepEqual(model.rowLabel('ChatGPT', { found: seen }), { text: 'signed in to Engelbart', tone: '' });
   assert.deepEqual(model.rowLabel('Perplexity', { found: seen }), { text: 'Needs sign-in', tone: 'muted' });
-  assert.deepEqual(model.rowLabel('Evernote', { found: seen }), { text: 'Not found', tone: 'muted' });
+  // MATH-144: an app in the cloud is never "Not found" (a web app, Zotero); one read from this Mac still is (Cursor)
+  assert.deepEqual(model.rowLabel('Evernote', { found: seen }), { text: 'Needs sign-in', tone: 'muted' }, 'a web app not found, not signed in');
+  assert.deepEqual(model.rowLabel('Notion', { found: seen }), { text: 'Needs sign-in', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Zotero', { found: seen }), { text: 'Needs sign-in', tone: 'muted' }, 'Zotero not connected, no ~/Zotero');
+  assert.deepEqual(model.rowLabel('Zotero', { found: { apps: { Zotero: { found: true, where: '~/Zotero (sign in to read it)' } } } }), { text: '~/Zotero (sign in to read it)', tone: '' });
+  assert.deepEqual(model.rowLabel('Codex', { found: seen }), { text: 'Not found', tone: 'muted' }, 'an app read from this Mac, not on it');
+  assert.equal(model.foundRow(seen, 'notes', 'Evernote'), false, 'what starts ticked is unchanged: a web app not found starts unticked');
   assert.deepEqual(model.rowLabel('Granola', { found: seen }), { text: 'Needs sign-in', tone: 'muted' });
   assert.deepEqual(model.rowLabel('Granola', { found: seen, connectors: { Granola: { pending: true } } }), { text: 'Waiting for Granola sign-in…', tone: 'busy' });
   assert.deepEqual(model.rowLabel('Notion', { found: seen, connectors: { Notion: { connected: true } } }), { text: 'signed in', tone: '' });
@@ -929,13 +1825,15 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
 
   const flow = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/onboarding.js')).href);
   // "replace steps 3 and 4 with this, since it will essentially be the same"
-  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'connect', 'create']);
-  assert.deepEqual(flow.flowOf('new', { connect: true, tools: false }), ['welcome', 'connect', 'create']);
-  assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'import', 'instructions', 'create'], 'without Connect (the tools screen skipped with no agent): as before, ending on Create');
-  assert.deepEqual(flow.forward('new', { step: 'tools', sub: 0 }, { connect: true }), { step: 'connect', sub: 0 });
-  assert.deepEqual(flow.forward('new', { step: 'connect', sub: 0 }, { connect: true }), { step: 'create', sub: 0 });
-  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 4, index: 2 });
-  assert.deepEqual(flow.forward('new', { step: 'create', sub: 1 }, { connect: true }), { step: 'open', sub: 0 }, 'the project opens after Create');
+  // 2026-10-10: Create before Connect, so the librarian is told what the project is; the project is made after Connect.
+  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'create', 'intro', 'connect']);
+  assert.deepEqual(flow.flowOf('new', { connect: true, tools: false }), ['welcome', 'create', 'intro', 'connect']);
+  assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'create', 'import', 'instructions'], 'without Connect (the tools screen skipped with no agent): Create, then its screens');
+  assert.deepEqual(flow.forward('new', { step: 'tools', sub: 0 }, { connect: true }), { step: 'create', sub: 0 });
+  assert.deepEqual(flow.forward('new', { step: 'create', sub: 1 }, { connect: true }), { step: 'intro', sub: 0 });
+  assert.deepEqual(flow.forward('new', { step: 'intro', sub: 0 }, { connect: true }), { step: 'connect', sub: 0 });
+  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 5, index: 4 });
+  assert.deepEqual(flow.forward('new', { step: 'connect', sub: 0 }, { connect: true }), { step: 'open', sub: 0 }, 'the project is made after Connect');
   assert.equal(flow.pagerOf('new', 'import', { connect: true }), null);
   // "signing into claude code and/or codex must be done before this step"
   const tool = (status, extra = {}) => ({ status, installed: status !== 'missing', ...extra });
@@ -952,6 +1850,9 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
 
 // Papers on this Mac (2026-10-08, "Agent onboarding": "add capability to search local papers ... the questions for this
 // should center around folders and genres of papers rather than individual ones").
+// MATH-110: macOS let Engelbart read every protected folder of `home` (Desktop, Documents, Downloads…), as after Continue.
+const allowAll = (home) => folderAccess.guard({ homeDir: home, answers: Object.fromEntries(folderAccess.protectedFolders({ homeDir: home }).map((folder) => [folder.id, 'allowed'])) });
+
 const pdfHome = () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(homeDir, 'pdfs-')));
   const put = (rel, text) => { const file = path.join(home, rel); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, `%PDF-1.4\n${text}\n%%EOF\n`); return file; };
@@ -982,11 +1883,16 @@ test('PDFs on this Mac: the folders that hold them with counts, kinds and titles
   assert.ok(glance.folders[1].examples.some((line) => line === 'scan.pdf — Working Spheres in Information Work'), JSON.stringify(glance.folders[1].examples));
   assert.ok(!glance.folders[1].examples.some((line) => /Invoice/.test(line)), 'personal PDFs are never shown as examples');
   // The librarian's first look: everywhere when the person let the agents read their home folder, else a folder button.
-  const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home });
+  const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home, access: allowAll(home) });
   assert.equal(scanned.papers[LOCAL_PDFS].pdfs, 6);
+  // MATH-110: macOS never asked (or Not now): nothing in Downloads or Documents is read, and the librarian is told why.
+  const unasked = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home })).papers[LOCAL_PDFS];
+  assert.equal(unasked.needs, 'folder');
+  assert.deepEqual(unasked.notAllowed, ['Documents', 'Downloads']);
   const narrow = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: false } }, { homeDir: home });
   assert.deepEqual(narrow.papers[LOCAL_PDFS], { reach: 'local', needs: 'folder' });
-  const chosen = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [path.join(home, 'Documents')] } }, permissions: { files: false } }, { homeDir: home });
+  // Picked in the folder picker: macOS lets Engelbart read it, asked about or not (MATH-110).
+  const chosen = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [path.join(home, 'Documents')] } }, picked: [path.join(home, 'Documents')], permissions: { files: false } }, { homeDir: home });
   assert.deepEqual(chosen.papers[LOCAL_PDFS].lookedIn, ['~/Documents']);
   // The import agent's tools: list by kind and words, bring in by path, nothing twice.
   const call = createImportTools({ session: { dataRoot: ctx.dataRoot, homeDir: home, dir: path.join(ctx.dataRoot, '.connect', 'pdf-test'), projectId: () => null, exports: {}, folders: {} }, context: async () => ({ ...ctx, homeDir: home }), env: {} });
@@ -1002,6 +1908,194 @@ test('PDFs on this Mac: the folders that hold them with counts, kinds and titles
   assert.deepEqual(rows.map((row) => [row.type, path.basename(row.path)]).sort(), [['pdf', '142750.142767.pdf'], ['pdf', 'mark2004.pdf']], 'kept where they are');
   assert.equal(importToolLabel('import_pdfs', { files: ['a', 'b'] }), 'Bringing in 2 PDFs');
   assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /folders and kinds of papers, never about single files/);
+});
+
+test('PDFs on this Mac with a project: each folder\'s examples begin with the PDFs that share words with it, and those folders come first; without one, the newest as before', async () => {
+  const home = pdfHome();
+  const old = new Date('2020-01-01T00:00:00Z');
+  fs.utimesSync(path.join(home, 'Downloads', '2310.01234v2.pdf'), old, old); // the matching paper is the oldest in Downloads
+  const roots = [path.join(home, 'Downloads'), path.join(home, 'Documents')];
+  const before = readers.pdfFolders(roots, { homeDir: home });
+  assert.deepEqual(before.folders.map((entry) => entry.folder), ['~/Documents/Research/HCI', '~/Downloads'], 'most PDFs first, as before');
+  const downloads = before.folders[1];
+  assert.equal(downloads.examples[downloads.examples.length - 1], '2310.01234v2.pdf — Scaffolding novice debugging', 'the newest first: it comes last');
+  assert.equal('relatedToProject' in downloads, false);
+  const project = { name: 'Debugging tutor', description: 'How novices debug their code with scaffolding from an LLM' };
+  const after = readers.pdfFolders(roots, { homeDir: home, project });
+  assert.deepEqual(after.folders.map((entry) => [entry.folder, entry.relatedToProject]), [['~/Downloads', 1], ['~/Documents/Research/HCI', 0]], 'the folder holding a match first');
+  assert.equal(after.folders[0].examples[0], '2310.01234v2.pdf — Scaffolding novice debugging', 'matched by its title, listed first');
+  assert.deepEqual(after.folders[0].examples.slice(1).sort(), downloads.examples.slice(0, -1).sort(), 'then the newest, without it twice');
+  assert.ok(!after.folders[0].examples.some((line) => /Invoice/.test(line)), 'personal PDFs still never shown');
+  // The scan passes the project from the choices.
+  const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project }, { homeDir: home, access: allowAll(home) });
+  assert.equal(scanned.papers[LOCAL_PDFS].folders[0].examples[0], '2310.01234v2.pdf — Scaffolding novice debugging');
+  assert.match(scanned.papers[LOCAL_PDFS].examplesFirst, /shares words with the project/);
+  assert.equal('examplesFirst' in (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home, access: allowAll(home) })).papers[LOCAL_PDFS], false);
+  // The librarian offers them by title, with folders and kinds of paper as the fallback.
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /offer up to ten of the papers among them that bear on the project, by title/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /When there is no project, or nothing in <found> bears on it, ask about folders and kinds of papers, never about single files/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /recommend first the items that bear on it: by their real titles/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /\("and 61 others in Downloads"\)/);
+  assert.match(prompts.SURVEY_SYSTEM_PROMPT, /those related to the project in <project> first when there is one .*then research-looking, then the most recent/);
+  for (const prompt of [prompts.INTERVIEW_SYSTEM_PROMPT, prompts.IMPORT_SYSTEM_PROMPT, prompts.SURVEY_SYSTEM_PROMPT]) assert.match(prompt, /- <project>, when there is one: what the person is working on/);
+});
+
+// The period picked on Connect your library (2026-10-10): the past 6 months, the past year or all time.
+const DAY = 86_400_000;
+const agePdf = (file, days) => { const at = new Date(Date.now() - days * DAY); fs.utimesSync(file, at, at); };
+const periodHome = () => {
+  const home = pdfHome();
+  agePdf(path.join(home, 'Downloads', '2310.01234v2.pdf'), 800); // bears on the project, older than a year
+  agePdf(path.join(home, 'Documents', 'Research', 'HCI', 'mark2004.pdf'), 800); // older, and bears on nothing
+  const receipt = path.join(home, 'Downloads', 'Receipt debugging tutor.pdf'); // personal, shares the project's words
+  fs.writeFileSync(receipt, '%PDF-1.4\n%%EOF\n');
+  agePdf(receipt, 800);
+  return home;
+};
+const tutor = { name: 'Debugging tutor', description: 'How novices debug their code with scaffolding from an LLM' };
+
+test('the period: choicesOf sends it, cleanChoices keeps 182 or 365, and PDFs are counted only in it, older related ones named apart', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  assert.deepEqual(model.PERIODS.map((period) => [period.days, period.label]), [[182, 'the past 6 months'], [365, 'the past year'], [null, 'all time']]);
+  assert.equal(model.DEFAULT_PERIOD_DAYS, 365);
+  assert.equal(model.choicesOf({ picks: {}, apps: {}, days: 365 }).days, 365);
+  assert.equal(model.choicesOf({ picks: {}, apps: {}, days: 182 }).days, 182);
+  const allTime = model.choicesOf({ picks: {}, apps: {}, days: null });
+  assert.ok('days' in allTime && allTime.days === null, 'all time is sent as null');
+  assert.deepEqual([182, 365, null, undefined, 90, 0, '365', -1, 10000].map((days) => cleanChoices({ sources: {}, days }, homeDir).days), [182, 365, null, null, null, null, null, null, null]);
+
+  const home = periodHome();
+  const roots = [path.join(home, 'Downloads'), path.join(home, 'Documents')];
+  const asToday = readers.pdfFolders(roots, { homeDir: home, project: tutor });
+  assert.deepEqual(readers.pdfFolders(roots, { homeDir: home, project: tutor, days: null }), asToday, 'all time: as before');
+  assert.equal(asToday.pdfs, 7);
+  assert.equal('olderRelated' in asToday || asToday.folders.some((entry) => 'olderLeftOut' in entry), false);
+
+  const year = readers.pdfFolders(roots, { homeDir: home, project: tutor, days: 365 });
+  assert.equal(year.pdfs, 4, 'only the PDFs changed in the past year are counted');
+  assert.equal(year.olderLeftOut, 3);
+  assert.deepEqual(year.folders.map((entry) => [entry.folder, entry.pdfs, entry.kinds, entry.relatedToProject, entry.olderLeftOut]), [
+    ['~/Documents/Research/HCI', 2, { paper: 1, book: 1 }, 0, 1],
+    ['~/Downloads', 2, { personal: 1, unclear: 1 }, 0, 2],
+  ]);
+  const examples = year.folders.flatMap((entry) => entry.examples).join('\n');
+  assert.ok(!/2310\.01234v2|mark2004|Receipt/.test(examples), `older PDFs are not examples: ${examples}`);
+  assert.deepEqual(year.olderRelated, [{ name: '2310.01234v2.pdf', title: 'Scaffolding novice debugging', path: path.join(home, 'Downloads', '2310.01234v2.pdf'), changed: new Date(fs.statSync(path.join(home, 'Downloads', '2310.01234v2.pdf')).mtimeMs).toISOString() }], 'the older paper that bears on the project, by path; never the personal one, nor one that bears on nothing');
+  assert.deepEqual(readers.pdfFolders(roots, { homeDir: home, days: 365 }).olderRelated, [], 'no project: nothing older is named');
+
+  // The scan passes the period from the choices; the chats count what is in it.
+  const scanned = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project: tutor, days: 365 }, { homeDir: home, access: allowAll(home) })).papers[LOCAL_PDFS];
+  assert.deepEqual([scanned.pdfs, scanned.olderLeftOut, scanned.olderRelated.map((pdf) => pdf.name)], [4, 3, ['2310.01234v2.pdf']]);
+  assert.match(scanned.period, /the past year/);
+  const allScanned = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true }, project: tutor }, { homeDir: home, access: allowAll(home) })).papers[LOCAL_PDFS];
+  assert.deepEqual([allScanned.pdfs, 'olderLeftOut' in allScanned, 'olderRelated' in allScanned, 'period' in allScanned], [7, false, false, false]);
+  const chats = (days) => scanFor({ sources: { chats: { on: true, apps: ['Claude Code'] } }, days }, { homeDir, env: {} }).then((found) => found.chats['Claude Code']);
+  const inYear = await chats(365);
+  assert.equal(typeof inYear.inPeriod, 'number');
+  assert.ok(inYear.inPeriod <= inYear.total);
+  assert.equal('inPeriod' in (await chats(null)), false);
+
+  // The librarian, the import agents and the surveys are told to hold to it.
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /Only offer and bring in things from the period in <choices>\. Say the period in your first message/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /Items in olderRelated may be offered by title: say they are older than the period and ask first\. When the person agrees, the plan passes their paths to import_pdfs directly/);
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /everything from the period in <choices> \(the default/);
+  assert.match(prompts.IMPORT_SYSTEM_PROMPT, /- <period>: how far back the person chose to look/);
+  assert.match(prompts.SURVEY_SYSTEM_PROMPT, /- <period>: how far back the person chose to look/);
+});
+
+test('the period goes to the librarian in <choices>, to surveys and imports as <period>, is kept through a quit, and a folder chosen in the chat is scanned with it', async () => {
+  const home = periodHome();
+  const seen = [];
+  const watched = (delayMs) => { const inner = createFakeConnectAgents({ delayMs }); return { ...inner, turn: (input) => { seen.push({ kind: input.kind, message: input.message }); return inner.turn(input); } }; };
+  const first = fakeConnect({ home, agents: watched(10) });
+  const started = await first.connect.start({ sources: { papers: { on: true, apps: [LOCAL_PDFS] } }, permissions: { files: false, recall: false }, project: tutor, days: 365 });
+  await until(first.state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the folder button');
+  const opening = seen.find((entry) => entry.kind === 'interview').message;
+  const choices = JSON.parse(opening.match(/<choices>\n([\s\S]*?)\n<\/choices>/)[1]);
+  assert.deepEqual([choices.period, choices.days], ['the past year', 365]);
+  first.connect.suspendAll();
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.equal(saved.choices.days, 365, 'kept in session.json');
+
+  // Picked up again after the quit, the period holds: the folder chosen in the chat is scanned with it.
+  seen.length = 0;
+  const second = fakeConnect({ home, agents: watched(10) });
+  second.connect.resume(ctx);
+  await second.connect.authorize(started.id, { app: LOCAL_PDFS, kind: 'folder', path: '~/Downloads' });
+  await until(() => seen, (list) => list.some((one) => one.kind === 'interview'), 'the librarian told of the folder');
+  const told = seen.find((one) => one.kind === 'interview').message;
+  const found = JSON.parse(told.match(/<found[^>]*>\n([\s\S]*?)\n<\/found>/)[1]);
+  const pdfs = (found.papers || found)[LOCAL_PDFS];
+  assert.deepEqual([pdfs.pdfs, pdfs.olderLeftOut, pdfs.olderRelated.map((pdf) => pdf.path)], [2, 2, [path.join(home, 'Downloads', '2310.01234v2.pdf')]], 'only the past year is counted; the older related paper named apart');
+  for (const one of second.connect.list(ctx.dataRoot)) second.connect.stop(one.id);
+
+  // Imports and surveys carry <period>.
+  seen.length = 0;
+  const third = fakeConnect({ agents: watched(10) });
+  const chats = await third.connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } }, permissions: { recall: false }, days: 182 });
+  await until(third.state(chats.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the chats question');
+  third.connect.answer(chats.id, { picked: ['Everything'] });
+  await until(third.state(chats.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'running'), 'the import running');
+  for (const kind of ['survey', 'import']) assert.match((seen.find((one) => one.kind === kind) || {}).message || '', /<period days="182">Only the past 6 months/, `the ${kind} is told the period`);
+  third.connect.stop(chats.id);
+
+  // All time: said so, with days null.
+  seen.length = 0;
+  const fourth = fakeConnect({ agents: watched(5) });
+  const all = await fourth.connect.start({ sources: { chats: { on: true, apps: ['ChatGPT'] } }, permissions: { recall: false } });
+  await until(fourth.state(all.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask), 'the chats question');
+  const allChoices = JSON.parse(seen.find((one) => one.kind === 'interview').message.match(/<choices>\n([\s\S]*?)\n<\/choices>/)[1]);
+  assert.deepEqual([allChoices.period, allChoices.days], ['all time', null]);
+  fourth.connect.stop(all.id);
+});
+
+test('the listing tools hold to the session\'s period: left out, it is used; longer, cut to it; shorter, kept; import_pdfs by path is not held to it', async () => {
+  const got = {};
+  const spies = {
+    noteFiles: (dir, options) => { got.list_note_files = options.days; return []; },
+    pdfFiles: (dir, options) => { got.list_pdfs = options.days; return { total: 0, pdfs: [] }; },
+    localChats: (app, options) => { got.list_chats = options.days; return []; },
+    profileOf: () => ({ browser: 'Chrome', name: 'Default', dir: '/nowhere' }),
+    browserHistory: async (dir, options) => { got.browser_history = options.days; return []; },
+  };
+  const real = {};
+  for (const [name, spy] of Object.entries(spies)) { real[name] = readers[name]; readers[name] = spy; }
+  const page = { ensure: async () => {}, evaluate: async () => ({ signedIn: true, items: [10, 100, 300, 500].map((age, i) => ({ id: `chat-00${i}`, title: `Chat ${i}`, updated: Date.now() - age * DAY })) }) };
+  const appleNotes = { list: async (options) => { got.apple_notes_list = options.days; return []; } };
+  const toolsWith = (period, home = homeDir) => createImportTools({ session: { dataRoot: ctx.dataRoot, homeDir: home, dir: path.join(ctx.dataRoot, '.connect', 'period-test'), projectId: () => null, exports: {}, folders: {}, get days() { return period; } }, context: async () => ({ ...ctx, homeDir: home }), env: {}, page, appleNotes });
+  const run = async (period, days) => {
+    for (const key of Object.keys(got)) delete got[key];
+    const call = toolsWith(period);
+    const asked = days === undefined ? {} : { days };
+    await call('list_note_files', { folder: '~', ...asked });
+    await call('list_pdfs', { folder: '~', ...asked });
+    await call('list_chats', { app: 'Claude Code', ...asked });
+    await call('apple_notes_list', { ...asked });
+    await call('browser_history', { ...asked });
+    const web = await call('web_chats', { app: 'ChatGPT', ...asked });
+    return { ...got, web_chats: web.chats.length };
+  };
+  const each = (days, browser, web) => ({ list_note_files: days, list_pdfs: days, list_chats: days, apple_notes_list: days, browser_history: browser, web_chats: web });
+  try {
+    assert.deepEqual(await run(365), each(365, 90, 3), 'no days: the period (browser history keeps its shorter 90)');
+    assert.deepEqual(await run(365, 1000), each(365, 365, 3), 'a longer days: cut to the period');
+    assert.deepEqual(await run(365, 30), each(30, 30, 1), 'a shorter days: kept');
+    assert.deepEqual(await run(182), each(182, 90, 2));
+    assert.deepEqual(await run(182, 120), each(120, 120, 2));
+    assert.deepEqual(await run(null), each(null, 90, 4), 'no period: as before');
+    assert.deepEqual(await run(null, 1000), each(1000, 1000, 4));
+  } finally {
+    for (const [name, fn] of Object.entries(real)) readers[name] = fn;
+  }
+
+  // An older paper the person agreed to comes in by path, though list_pdfs leaves it out.
+  const home = periodHome();
+  const call = toolsWith(365, home);
+  const old = path.join(home, 'Downloads', '2310.01234v2.pdf');
+  assert.ok(!(await call('list_pdfs', { folder: '~/Downloads' })).pdfs.some((pdf) => pdf.path === old), 'not listed: older than the period');
+  const brought = await call('import_pdfs', { files: [old] });
+  assert.equal(brought.added, 1);
+  assert.ok((await ctx.libraryDb.list()).some((row) => row.path === old), 'in the library');
 });
 
 test('Skip on the librarian\'s question brings nothing of it in: the source is left out, and Import does not hand it over', async () => {
@@ -1047,13 +2141,130 @@ test('the foot of onboarding\'s chat and what the chat says while it waits (2026
     { kind: 'survey', label: 'Looking through Notion', status: 'done', notes: 0, items: 0 },
     { kind: 'memory', label: 'MEMORY.md', status: 'queued', notes: 0, items: 0 },
   ];
-  assert.equal(model.footLine({ jobs, needs: [{}, {}] }), 'Bringing in 2 sources · 1 of 4 · 2 need you');
-  assert.equal(model.footLine({ jobs: jobs.slice(2), needs: [{}] }), 'Looking through your apps · 1 of 2 · 1 needs you');
-  assert.equal(model.footLine({ jobs: [jobs[3]], needs: [] }), 'Everything looked at · 1 of 1');
+  // MATH-146: it names what is coming in, in runningFirst's order, and counts no jobs.
+  const imp = (label, status = 'running', more = {}) => ({ kind: 'import', label, status, notes: 0, items: 0, ...more });
+  assert.equal(model.footLine({ jobs, needs: [] }), 'Bringing in Notes: Obsidian and AI chats');
+  assert.equal(model.footLine({ jobs: [imp('Zotero papers')], needs: [] }), 'Bringing in Zotero papers');
+  assert.equal(model.footLine({ jobs: [imp('AI chats', 'queued'), imp('Zotero papers'), imp('Websites', 'done')], needs: [] }), 'Bringing in Zotero papers and AI chats', 'running before queued; ended imports left out');
+  assert.equal(model.footLine({ jobs: [imp('Zotero papers'), imp('AI chats'), imp('Websites', 'queued'), imp('Meeting transcripts', 'waiting')], needs: [] }), 'Bringing in Zotero papers and 3 more');
+  assert.equal(model.footLine({ jobs: [imp('Bringing in your Obsidian notes')], needs: [] }), 'Bringing in your Obsidian notes', 'no "Bringing in Bringing in"');
+  assert.equal(model.footLine({ jobs: [imp('', 'running', { apps: ['Google Docs'] })], needs: [] }), 'Bringing in Google Drive', 'no label: its apps, as shown');
+  assert.equal(model.footLine({ jobs: [imp(undefined, 'running', { source: 'papers' })], needs: [] }), 'Bringing in Papers', 'no label nor apps: its source');
+  assert.equal(model.footLine({ jobs: jobs.slice(2), needs: [] }), 'Looking through your apps');
+  assert.equal(model.footLine({ jobs: [jobs[3], imp('Zotero papers', 'done'), jobs[4]], needs: [] }), 'Everything\'s in', 'MEMORY.md is not work');
   assert.equal(model.footLine({ jobs: [], needs: [] }), '');
+  assert.equal(model.footLine({ jobs: [imp('Zotero papers')], needs: [{ app: 'Google Docs', kind: 'connector' }] }), 'Bringing in Zotero papers · Google Drive needs you');
+  assert.equal(model.footLine({ jobs: jobs.slice(2), needs: [{ app: 'Zotero' }, { app: 'GitHub' }, { app: 'Zotero', kind: 'permission' }] }), 'Looking through your apps · Zotero and GitHub need you', 'one app, named once');
+  assert.equal(model.footLine({ jobs: [jobs[3]], needs: [{ app: 'Zotero' }, { app: 'GitHub' }, { app: 'Notion' }, { app: 'Gmail', closed: true }] }), 'Everything\'s in · Zotero and 2 more need you', 'a closed step is not waiting');
+  assert.equal(model.footLine({ jobs: [jobs[3]], needs: [{}] }), 'Everything\'s in · 1 step needs you');
+  assert.equal(model.footLine({ jobs: [jobs[3]], needs: [{}, { app: 'Zotero' }] }), 'Everything\'s in · 2 steps need you');
   assert.equal(model.chatStatus({ thinking: true, activity: 'Reading what the surveys found', jobs }), 'Reading what the surveys found…');
   assert.equal(model.chatStatus({ waiting: true, jobs, needs: [] }), 'Looking through Overleaf…');
   assert.equal(model.chatStatus({ waiting: true, jobs: [{ ...jobs[2], status: 'waiting' }], needs: [{}] }), 'Waiting for your sign-in…');
   assert.equal(model.chatStatus({ jobs }), '', 'nothing while it waits on nothing');
   assert.equal(model.needView({ app: 'ChatGPT', kind: 'signin' }).hint, 'Opens in your browser · read-only');
+});
+
+test('MATH-111: the code source\'s github says which organizations GitHub cannot show yet, with how many of their repositories are on this Mac', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-missing-orgs-'));
+  const picked = path.join(home, 'work');
+  fs.mkdirSync(path.join(picked, 'study', '.git'), { recursive: true });
+  const asked = [];
+  const github = {
+    status: () => ({ connected: true }),
+    repos: async (options) => { asked.push(options); return { repos: [{ fullName: 'lab-a/tutor' }], accounts: [{ login: 'lab-a' }], missingOrgs: [{ login: 'lab-b', id: '22', repos: ['/r/b1', '/r/b2'], installUrl: 'https://github.com/apps/x/installations/new/permissions?target_id=22' }, { login: 'lab-c', id: '33', repos: [], installUrl: 'u' }] }; },
+  };
+  const found = await scanFor({ sources: { code: { on: true, apps: [], folders: [picked] } } }, { homeDir: home, github });
+  assert.deepEqual(asked, [{ dirs: [path.join(picked, 'study')] }], 'the picked folders\' repositories count too');
+  assert.deepEqual(found.code.github, { signedIn: true, repos: ['lab-a/tutor'], missingOrgs: [{ login: 'lab-b', repos: 2 }, { login: 'lab-c', repos: 0 }] });
+  assert.match(prompts.INTERVIEW_SYSTEM_PROMPT, /has missingOrgs[\s\S]*"Add on GitHub" row in the GitHub list/);
+  fs.rmSync(home, { recursive: true, force: true });
+});
+
+test('off the Mac, a web app can be ticked, and its Sign in is Engelbart\'s window (2026-10-12)', async () => {
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
+  const apps = { 'Google Docs': { found: true }, Gmail: { found: true }, ChatGPT: { found: true, signedIn: true }, Cursor: { found: true } };
+  const windows = { platform: 'win32', apps, sites: { found: false }, github: { found: false } };
+  assert.equal(model.notOnYet, undefined, 'no "Not on Windows yet"');
+  assert.equal(model.webUnavailable, undefined);
+  assert.equal(model.copiesSignIns('win32'), false);
+  assert.equal(model.copiesSignIns('linux'), false);
+  assert.equal(model.copiesSignIns('darwin'), true);
+  assert.equal(model.copiesSignIns(undefined), true, 'none given counts as the Mac');
+  assert.equal(model.rowLabel('ChatGPT', { found: windows }).text, 'signed in to Engelbart');
+  assert.deepEqual(model.rowLabel('Gmail', { found: windows }), { text: 'Needs sign-in', tone: 'muted' });
+  assert.deepEqual(model.rowLabel('Gmail', { found: windows, signIn: { status: 'signed-out' } }), { text: '', tone: '', signIn: true }, 'Sign in');
+  // Ticked like any app: from the start when found, by a group's header and by Select all.
+  const picks = model.initialPicks(windows);
+  const all = model.tickAll(picks, windows);
+  assert.equal(model.ticked(all, 'notes', 'Google Docs'), true, 'Google Drive ticked by Select all (Gmail never is: NEVER_TICKED)');
+  assert.equal(model.foundRow(windows, 'notes', 'Google Docs'), true);
+  const gmail = model.tickRow(picks, 'email', 'Gmail', true);
+  assert.equal(model.ticked(gmail, 'email', 'Gmail'), true, 'its own row ticks it');
+  assert.deepEqual(model.unsignedWeb(gmail, { Gmail: { status: 'signed-out' } }, windows).map((row) => row.app), ['Gmail'], 'asked for before the run');
+  // Sign in: Engelbart's window, Google's too, never the browser.
+  for (const status of [undefined, 'signed-out']) assert.equal(model.signsInViaBrowser('Gmail', status ? { status } : null, 'win32'), false);
+  assert.equal(model.signsInViaBrowser('Gmail', null, 'darwin'), true, 'on the Mac, Google\'s first Sign in is the browser');
+});
+
+test('Continue on Google\'s Sign in asks macOS before anything opens: refused, nothing opens and the browser is not asked again', async () => {
+  const calls = [];
+  const webSignIn = {
+    supports: () => true,
+    unlock: async (app, { denied }) => {
+      calls.push(['unlock', app]);
+      denied.add('chrome'); // as webSignIn.unlock does on a refusal
+      return { status: 'denied', browser: 'Chrome', browserId: 'chrome' };
+    },
+    signIn: async (app, { denied }) => { calls.push(['signIn', app, [...denied]]); return { status: 'cancelled' }; },
+    anotherAccount: async (app) => { calls.push(['another', app]); return { opened: true, browser: 'Chrome' }; },
+  };
+  const { connect } = fakeConnect({ webSignIn });
+  assert.deepEqual(await connect.signInUnlock('Gmail'), { status: 'refused', browser: 'Chrome' });
+  assert.deepEqual(calls, [['unlock', 'Gmail']], 'nothing opened');
+  assert.deepEqual(await connect.signInAnotherAccount('Gmail'), { opened: false, browser: '' }, 'nothing waited on: nothing to open');
+  // A wait started later is told Chrome was refused, so the copy never asks again this run; Use another account reaches it.
+  const waiting = connect.signInBrowser('Gmail');
+  assert.deepEqual(await connect.signInAnotherAccount('Google Meet'), { opened: true, browser: 'Chrome' });
+  await waiting;
+  assert.deepEqual(calls.slice(1), [['signIn', 'Gmail', ['chrome']], ['another', 'Google Meet']]);
+});
+
+test('Sign in here instead: Engelbart\'s window signs Google in, ends the browser wait, and nothing is copied from Chrome after', async () => {
+  const fake = fakeGoogle({ browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: false }] } } });
+  const win = fakeWindow('signed-in');
+  const open = win.signInWindow.open;
+  win.signInWindow.open = async (app) => { fake.hold(); return open(app); }; // signed in there: the window closes once it is held
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  const waiting = connect.signInBrowser('Google Docs');
+  await new Promise((resolve) => { setTimeout(resolve, 60); });
+  assert.deepEqual(await connect.signInWindowOpen('Gmail'), { status: 'signed-in' });
+  assert.deepEqual(win.opened, ['Gmail'], 'Google in Engelbart\'s window');
+  assert.deepEqual(await waiting, { status: 'cancelled' }, 'the browser wait is over');
+  assert.equal(fake.webSignIn.isHere('Google Docs'), true, 'one Google sign-in');
+  fake.browsers.chrome.profiles[0].signedIn = true; // Chrome signed in later: never read for Google again this run
+  const before = fake.calls.keychain.length;
+  for (const app of ['Google Docs', 'Gmail', 'Gemini']) assert.equal((await connect.signInCheck(app)).status, 'signed-in', app);
+  assert.equal(fake.calls.keychain.length, before, 'macOS not asked about Chrome');
+});
+
+test('Google refuses Engelbart\'s window: rejected, and nothing marked signed in', async () => {
+  const fake = fakeGoogle({ browsers: {} });
+  const win = fakeWindow('rejected');
+  const { connect } = fakeConnect({ webSignIn: fake.webSignIn, signInWindow: win.signInWindow });
+  assert.deepEqual(await connect.signInWindowOpen('Gmail'), { status: 'rejected' });
+  assert.equal(fake.webSignIn.isHere('Gmail'), false);
+  assert.notEqual((await connect.signInCheck('Gmail')).status, 'signed-in');
+});
+
+test('off the Mac (no importer): Sign in opens Engelbart\'s window, and its check reads Engelbart\'s session', async () => {
+  const jar = [];
+  const webSignIn = createWebSignIn({ cookieImport: null, getSession: () => ({ cookies: { get: async ({ domain }) => jar.filter((cookie) => cookie.domain.endsWith(domain)) } }), openExternal: async () => {}, pollMs: 1, timeoutMs: 50, sleep: () => new Promise((resolve) => setImmediate(resolve)) });
+  const win = fakeWindow('signed-in');
+  const { connect } = fakeConnect({ webSignIn, signInWindow: win.signInWindow });
+  assert.equal((await connect.signInCheck('ChatGPT')).status, 'signed-out', 'checked, not given up on');
+  jar.push({ domain: '.chatgpt.com', name: '__Secure-next-auth.session-token' });
+  assert.equal((await connect.signInCheck('ChatGPT')).status, 'signed-in');
+  assert.deepEqual(await connect.signInWindowOpen('Google Docs'), { status: 'signed-in' });
+  assert.deepEqual(win.opened, ['Google Docs'], 'Google too');
 });

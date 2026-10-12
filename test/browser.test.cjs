@@ -73,9 +73,10 @@ test('loopback, user agent and bounds helpers', () => {
   for (const host of ['localhost', 'app.localhost', '127.0.0.1', '127.8.9.1', '[::1]']) assert.equal(isLoopback(host), true, host);
   for (const host of ['192.168.1.2', 'localhost.evil.com', 'example.com', '']) assert.equal(isLoopback(host), false, host);
   assert.equal(
-    cleanUserAgent('Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Engelbart/0.1.0 Chrome/150.0.0.0 Electron/44.4.1 Safari/537.36', 'Engelbart'),
-    'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
+    cleanUserAgent('Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Engelbart/0.1.0 Chrome/150.0.0.0 Electron/44.4.1 Safari/537.36'),
+    'Mozilla/5.0 (Macintosh) AppleWebKit/537.36 (KHTML, like Gecko) Engelbart/0.1.0 Chrome/150.0.0.0 Safari/537.36',
   );
+  assert.equal(cleanUserAgent('Mozilla/5.0 Chrome/150.0.0.0 electron/44.4.1 Safari/537.36'), 'Mozilla/5.0 Chrome/150.0.0.0 Safari/537.36');
   assert.deepEqual(boundsFrom({ x: 10.4, y: 20.6, width: 300.2, height: 0 }, 1.25), { x: 13, y: 26, width: 375, height: 1 });
   assert.throws(() => boundsFrom({ x: NaN, y: 0, width: 1, height: 1 }, 1), TypeError);
 });

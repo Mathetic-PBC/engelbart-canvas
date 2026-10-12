@@ -20,7 +20,7 @@ const {
 const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
 const { createSweeper } = require('./context/sweeper.cjs');
-const { inspectPdf } = require('./context/pdf-kind.cjs');
+const { inspectPdf, pdfTitle } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
 const { rememberChoice } = require('./bart/choices.cjs');
@@ -42,7 +42,11 @@ const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { stagePartition, createBrowserViews, registerBrowserIpc, cleanUserAgent } = require('./browser/views.cjs');
 const { execFile } = require('node:child_process');
 const { createCookieImport, keychainRunner, bundleOf } = require('./browser/import-cookies.cjs');
+const { createInstalledApps } = require('./browser/installed-apps.cjs');
 const { createGithub } = require('./github/connection.cjs');
+const { macOrgs } = require('./github/orgs.cjs');
+const { localRepos } = require('./connect/scan.cjs');
+const folderAccess = require('./connect/folder-access.cjs');
 const { createBrowserAuth, CLIENT_ID: GITHUB_CLIENT_ID } = require('./github/browser-auth.cjs');
 const { createE2bKey } = require('./github/e2b-key.cjs');
 const { createRepoAccess } = require('./github/repo-access.cjs');
@@ -64,6 +68,8 @@ const { createAgentBrowser } = require('./connect/browser.cjs');
 const { createConnectors } = require('./connect/connectors.cjs');
 const { createWebSignIn, SIGN_IN_COOKIES } = require('./connect/web-signin.cjs');
 const { createAppleNotes } = require('./connect/apple-notes.cjs');
+const { createSignInWindow } = require('./connect/signin-window.cjs');
+const { createSigninProfiles } = require('./connect/signin-profiles.cjs');
 const { APPS: CONNECT_APPS } = require('../shared/connect-sources.cjs');
 const { openToolBridge } = require('./sandbox/local-tools.cjs');
 const { checkWebPdfs, readPdfResponse } = require('./store/web-pdfs.cjs');
@@ -583,7 +589,7 @@ if (!hasSingleInstanceLock) {
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
       : (ctx, { again = false } = {}) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: () => { libraryChanged(); pdfAdded(); }, log: (line) => console.warn(`[engelbart] ${line}`), again });
     // Test mode only in a developer's copy: run from a checkout, or packaged by `npm run relaunch` (./developer.cjs).
-    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }), zotero: () => zoteroLibrary });
+    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, pdfTitle, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }), zotero: () => zoteroLibrary });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
     // config.json → tools; installed, updated and signed in to from the setup dialog. The Git that comes with
     // Engelbart stands in when the Mac has none of its own (tools/bundled-git.cjs), and on a Mac with neither agent
@@ -751,12 +757,23 @@ if (!hasSingleInstanceLock) {
     // Importing sign-ins from the person's browsers into the Stage (MATH-18): macOS only, and into the one shared
     // Stage session every window's tabs read. Cookie values stay here — the handlers return domains and counts. The sign-in
     // checks go through net.request, which (unlike net.fetch) says where a redirect was going (import-cookies.cjs).
+    // A browser counts only while its app is installed (2026-10-12: one dragged to the Trash leaves its profiles behind):
+    // looked for in /Applications first, else Spotlight asked in the background and its answer kept, never synchronously
+    // (./browser/installed-apps.cjs). ENGELBART_INSTALLED_BROWSERS (bundle ids, comma-separated) stands in for it in
+    // scripted runs, so they never depend on this Mac's apps.
+    const installedApps = createInstalledApps({
+      override: process.env.ENGELBART_INSTALLED_BROWSERS != null ? process.env.ENGELBART_INSTALLED_BROWSERS.split(',').map((id) => id.trim()).filter(Boolean) : null,
+    });
+    const browserInstalled = (bundle) => installedApps.has(bundle);
+    const browserSettled = (bundle) => installedApps.settled(bundle);
     const cookieImport = process.platform === 'darwin' ? createCookieImport({
       supportDir: path.join(app.getPath('home'), 'Library', 'Application Support'),
       userDataDir: app.getPath('userData'),
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
       request: (options) => net.request(options),
       keychain: keychainRunner,
+      installed: browserInstalled,
+      settled: browserSettled,
     }) : null;
     registerBrowserIpc({ ipcMain, trustedHandler, viewsFor: (event) => { const ctx = windows.of(event.sender); return ctx ? ctx.browserViews : null; }, cookieImport });
     // GitHub (src/main/github): default-browser sign-in with an automatic loopback return, and the token
@@ -767,6 +784,20 @@ if (!hasSingleInstanceLock) {
     // An unpackaged copy may run sandboxes on the developer's own E2B_API_KEY (the process environment only, never a
     // file); a release never does.
     const devE2bKey = app.isPackaged ? null : process.env.E2B_API_KEY || null;
+    // MATH-111: the repositories on this Mac whose GitHub remotes name the organizations the person works in, as Connect
+    // finds them before anything is picked (connect/scan.cjs localRepos), read again at most every five minutes. One under
+    // ~/Desktop, ~/Documents or ~/Downloads is left out unless macOS already let Engelbart read that folder (MATH-110,
+    // asked on Connect's choose screen): signing in never makes macOS ask for those folders (Connect's scan adds the ones
+    // the person picked).
+    let macRepos = { at: 0, dirs: [] };
+    const macRepoDirs = () => {
+      if (Date.now() - macRepos.at > 5 * 60_000) {
+        let dirs = [];
+        try { dirs = localRepos({ homeDir, access: folderAccess.guard({ homeDir, dataRoot: store.config().dataRoot }) }).filter((repo) => repo.checked).map((repo) => repo.path); } catch { dirs = []; }
+        macRepos = { at: Date.now(), dirs };
+      }
+      return macRepos.dirs;
+    };
     const github = createGithub({
       settings: () => {
         const chosen = store.config().github || {};
@@ -781,6 +812,9 @@ if (!hasSingleInstanceLock) {
         decrypt: (text) => safeStorage.decryptString(Buffer.from(text, 'base64')),
       },
       openVerification: openGithubPage,
+      // Right after a fresh sign-in, the App's install page, for the organizations it cannot see yet.
+      openInstall: openGithubPage,
+      localOrgs: ({ login, dirs = [] }) => macOrgs([...macRepoDirs(), ...dirs], { login }),
       browserAuth: () => (process.env.ENGELBART_GITHUB_CLIENT_ID || (store.config().github || {}).clientId) === GITHUB_CLIENT_ID ? githubBrowserAuth : null,
       onConnected: () => {
         void e2bKey.get().catch(() => {}); // early, so the first sandbox need not wait; it asks again if this failed
@@ -917,7 +951,7 @@ if (!hasSingleInstanceLock) {
     const agentBrowser = createAgentBrowser({
       BrowserWindow,
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
-      userAgent: (ua) => cleanUserAgent(ua, app.getName()),
+      userAgent: (ua) => cleanUserAgent(ua),
       log: (jobId, text) => { if (connect) connect.logJob(jobId, text); },
       onClosed: (jobId) => { if (connect) connect.windowClosed(jobId); },
       headless: process.env.ENGELBART_HEADLESS === '1',
@@ -925,7 +959,8 @@ if (!hasSingleInstanceLock) {
     const appleNotes = createAppleNotes();
     // A web app's sign-in in the person's default browser, brought over into the Stage's session the agents use
     // (./connect/web-signin.cjs). Its own importer remembers a browser's Keychain key while Engelbart runs, so macOS asks once
-    // however often it looks again.
+    // however often it looks again. The person was told macOS would ask (the choose screen's panel, 2026-10-10), so its
+    // prompt waits ten minutes for them rather than one.
     const keychainKeys = new Map();
     const webSignIn = createWebSignIn({
       cookieImport: process.platform === 'darwin' ? createCookieImport({
@@ -933,8 +968,12 @@ if (!hasSingleInstanceLock) {
         supportDir: path.join(homeDir, 'Library', 'Application Support'),
         userDataDir: app.getPath('userData'),
         getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+        // A copy is checked before it counts (2026-10-12): Google's check page over the Stage's session.
+        request: (options) => net.request(options),
+        installed: browserInstalled,
+        settled: browserSettled,
         keychain: (name) => {
-          if (!keychainKeys.has(name)) keychainKeys.set(name, keychainRunner(name).catch((error) => { keychainKeys.delete(name); throw error; }));
+          if (!keychainKeys.has(name)) keychainKeys.set(name, keychainRunner(name, undefined, { timeoutMs: 10 * 60_000 }).catch((error) => { keychainKeys.delete(name); throw error; }));
           return keychainKeys.get(name);
         },
       }) : null,
@@ -947,6 +986,19 @@ if (!hasSingleInstanceLock) {
         execFile('open', ['-b', bundle, parseExternalUrl(url).href], (error) => (error ? reject(error) : resolve()));
       }),
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+      // The profile picked when several hold a sign-in, in <dataRoot>/.connect/signin-profiles.json (ids only).
+      picks: createSigninProfiles({ dataRoot: () => store.config().dataRoot }),
+      log: (text) => { console.warn(`[connect] ${text}`); },
+    });
+    // A sign-in made in Engelbart's own browser (the choose screen's "Sign in", ./connect/signin-window.cjs): on the Mac when
+    // no browser of the person's holds one to bring over or they turned its sign-ins down, and every sign-in elsewhere.
+    const signInWindow = createSignInWindow({
+      BrowserWindow,
+      getParent: dialogWindow,
+      getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
+      userAgent: (ua) => cleanUserAgent(ua),
+      signedIn: (name) => webSignIn.signedIn(name),
+      headless: process.env.ENGELBART_HEADLESS === '1',
     });
     // The providers whose CLI can run now (the tool check), as Connect names them; before the first check, both.
     const connectReady = () => {
@@ -967,7 +1019,7 @@ if (!hasSingleInstanceLock) {
         root: () => (zotero.status().connected ? zoteroLibrary.root() : null),
         download: (key, filename) => zoteroLibrary.download(key, filename),
       },
-      github: { status: () => github.status(), repos: () => github.repos() },
+      github: { status: () => github.status(), repos: (options) => github.repos(options) },
       deps: { describe: createDescriber(), identifyRepo: createRepoIdentifier({ auth: github.authHeaders }), inspectPdf, onAdded: libraryChanged, onPdf: pdfAdded },
       notify: (snapshot) => sendToWindow('engelbart:connect', snapshot),
       // What came in joined the Welcome workspace (connect/session.cjs placeRows): its sidebar reads it again.
@@ -977,6 +1029,7 @@ if (!hasSingleInstanceLock) {
       connectors,
       appleNotes,
       webSignIn,
+      signInWindow,
     });
     // The apps Engelbart's browser holds a sign-in for (their sign-in cookie in the Stage's session): ticked on the choose
     // screen, as an app found on this Mac is.
@@ -996,6 +1049,7 @@ if (!hasSingleInstanceLock) {
       connectors,
       appleNotes,
       connectSignedIn,
+      warmBrowsers: () => (process.platform === 'darwin' ? installedApps.ask() : undefined),
       // Made below, after this: the window's update banner asks for it when it is used.
       getUpdates: () => updates,
       github,

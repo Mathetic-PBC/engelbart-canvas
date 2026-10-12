@@ -37,11 +37,19 @@ const SKILLS = {
 - A Microsoft sign-in may ask which account: that is the person's choice, so call needs_you.`,
 
   'Google Docs': `# Google Drive and Docs
+- The person knows this app as Google Drive: call it that in anything they read (needs_you reasons, your summary).
 - ${BROWSER}
 - To see what is there: browser_open https://drive.google.com/drive/recent (recent files), https://drive.google.com/drive/my-drive (folders), or https://drive.google.com/drive/search?q=<words>. Each file row in browser_read carries its Drive id (id) and its name; the row's label says its kind (Google Docs, Google Sheets, Google Slides, PDF, folder). Open a folder by browser_open https://drive.google.com/drive/folders/<id>.
 - To bring files in: import_google_files with items [{ id, kind, name }], kind doc, sheet, slides or file (a pdf or any uploaded file). Docs become notes (exported as Markdown), Sheets notes of their first sheet as a table, Slides notes of their text, pdfs and other files go into the library. Never open files one by one to copy their text.
 - ${SIGN_IN} Google refuses some embedded sign-ins; needs_you lets the person sign in or bring their Chrome sign-in over.
 - Leave out by default: files shared with the person that they never opened, forms, and anything older than the plan's time range.`,
+
+  Gmail: `# Gmail
+- Gmail is never brought in whole: it is searched, the person approves threads by name, and only those come in. Use the Gmail tools, not browser_open or browser_read, to look at mail.
+- First gmail_accounts: the accounts signed in to in Engelbart's browser, each with its n (its place in the browser's sign-in order) and address. Never assume n 0. If it says to sign in, call needs_you with kind "signin" and reason "Sign in to Google".
+- A survey: with one account, search it; with more than one, search each and say which account (by address) each thread is in, and give every account's n, address and ik in "notes" ("account 1 lee@uni.edu, ik cd6f0fe68b"): the librarian asks the person which one to look in. Build each gmail_search from words in <project> (its topic, methods, names of studies) and the people it names, a few searches of two or three words each, such as "protocol pilot" or from:lee; never an empty search or the period alone (gmail_search adds the period itself). Report each thread as an item: id its thread id (thread-f:…), label its subject, kind thread, date, where its people.
+- An import: the plan gives the account's n and ik and the thread ids the person approved. Call import_gmail_threads with exactly those (threads [{ id, subject }], up to 50 a call), nothing else; a thread brought in before is skipped. If the plan has no n and ik and gmail_accounts finds more than one account, do not guess: bring nothing in and say so.
+- Never open threads one by one to copy them, never search for more to bring in than the plan names, and never download attachments: their names are listed in each note.`,
 
   Evernote: `# Evernote
 - ${BROWSER}
@@ -96,8 +104,9 @@ const SKILLS = {
 - zotero_collections lists the collections with keys and counts; zotero_items lists items (by collection key, words); import_zotero_items brings items in by key as papers, with their pdfs. If a tool says Zotero is not signed in, call needs_you with kind "signin" and reason "Sign in to Zotero" (Engelbart's own sign-in).`,
 
   'PDFs on this Mac': `# PDFs on this Mac
-- <found> lists the folders that hold PDFs (the chosen ones, and Downloads, Documents, Desktop and iCloud Drive when the person let the agents read their home folder), most first: how many, the newest, a guess of how many of each kind (paper, book, personal, unclear) and a few names and titles.
-- Work by folder and by kind, as the plan says: list_pdfs on a folder (kind "paper", query, days, include and exclude narrow it; check true reads the first pages to say whether each is a research paper), judge the unclear ones by their titles, then import_pdfs with their paths, up to 200 a call. A whole folder the plan wants in goes in whole, but never its personal PDFs.
+- <found> lists the folders that hold PDFs (the chosen ones, and Downloads, Documents, Desktop and iCloud Drive when the person let the agents read their home folder), most first: how many, the newest, a guess of how many of each kind (paper, book, personal, unclear) and a few names and titles (with a <project>, first those that share words with it).
+- When the plan names single papers by path, import_pdfs with those paths (list_pdfs with a query of words from the title finds one whose path is not given).
+- Otherwise work by folder and by kind, as the plan says: list_pdfs on a folder (kind "paper", query, days, include and exclude narrow it; check true reads the first pages to say whether each is a research paper), judge the unclear ones by their titles, then import_pdfs with their paths, up to 200 a call. A whole folder the plan wants in goes in whole, but never its personal PDFs.
 - Never bring in personal or administrative PDFs (receipts, invoices, bank and tax papers, tickets, forms, résumés, medical records), wherever they are. Leave out by default: what is inside ~/Zotero (Zotero's own import brings it), installers and manuals for apps.
 - Each PDF stays where it is: the library points at it, and one that reads as a research paper is tagged paper.`,
 

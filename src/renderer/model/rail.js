@@ -4,6 +4,7 @@
 
 import { kindLabel, libraryFilter } from './kind.js';
 import { findWorkspaces } from './nav.js';
+import { letGo } from '../../shared/project-holds.cjs';
 
 // A web address without its scheme (github.com, example.org/page), as the main process reads one (store/library.cjs).
 const BARE_HOST = /^(?:www\.)?(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z]{2,24}(?::\d{1,5})?(?:[/?#]\S*)?$/i;
@@ -99,21 +100,14 @@ export function libraryPanelRows({ query, library, chip = 'all', inRail, found, 
  * project's workspaces any more, neither in its context nor made in it (`notes`, the tree's, `workspaceId`) unless that
  * one threw it away too. The @ menu and the sidebar's search leave them out; the library keeps them, nothing is deleted,
  * and a mention already written still opens one. Only notes: a paper, a link or a file in no workspace is still found,
- * and so is a note never put in one (a post-it's +Note). `workspaces` is the tree's, nested. → Set of library ids.
+ * and so is a note never put in one (a post-it's +Note). `workspaces` is the tree's, nested. The rule is
+ * shared/project-holds.cjs letGo, the one the catalog an agent is shown uses. → Set of library ids.
  */
 export function letGoNotes({ workspaces = [], notes = [] }) {
   const all = [];
   const walk = (list) => { for (const workspace of list || []) { all.push(workspace); walk(workspace.children); } };
   walk(workspaces);
-  const trashed = new Set(), held = new Set();
-  const madeIn = new Map((notes || []).map((note) => [note.id, note.workspaceId]));
-  for (const workspace of all) {
-    const removed = new Set(workspace.removed || []);
-    for (const id of removed) trashed.add(id);
-    for (const id of workspace.context || []) if (!removed.has(id)) held.add(id);
-    for (const [id, at] of madeIn) if (at === workspace.id && !removed.has(id)) held.add(id);
-  }
-  return new Set([...trashed].filter((id) => madeIn.has(id) && !held.has(id)));
+  return letGo(all, new Map((notes || []).map((note) => [note.id, note.workspaceId || null])));
 }
 
 const ATTACH_RECENT = 8; // what "Add from library" lists before anything is typed
@@ -253,24 +247,8 @@ export const fieldRows = (rows) => rows.filter((row) => row && !isVerbRow(row));
 /** A name a mention can carry: `@[…]` ends at the first `]` and stays on one line. */
 export const mentionName = (value) => String(value || '').replace(/[[\]]/g, '').replace(/\s+/g, ' ').trim().slice(0, 200) || 'Untitled page';
 
-// Every mention a document holds: `@[Name]`, `@[Name](lib:<id>)`, `@[Name](ws:<id>)`, and a file in a library folder,
-// `@[Name](lib:<folderId>:<path>)` (MATH-22), and a Zotero item, `@[Title](zotero:<key>)`, which is no row.
-const MENTION_TOKEN_RE = /@\[([^\]\n]+)\](?:\((ws|lib|zotero):([\w-]+)(?::[\w.~%/-]+)?\))?/g;
-/**
- * The library rows a document mentions, by id (MATH-57): a library mention its item, a plain one every row of its name
- * (as the rail reads them, Workspace.jsx `mentioned`). A workspace is no row. A file in a folder (MATH-22) is a mention of
- * its folder, so the folder stays linked while any mention of it or of a file in it is left.
- */
-export function mentionedIds(text, library = []) {
-  const ids = new Set(), names = new Set(), body = String(text || '');
-  if (!body.includes('@[')) return ids;
-  for (const [, name, kind, id] of body.matchAll(MENTION_TOKEN_RE)) {
-    if (kind === 'lib') ids.add(id);
-    else if (!kind) names.add(name.toLowerCase());
-  }
-  if (names.size) for (const row of library) if (row && row.name && names.has(row.name.toLowerCase())) ids.add(row.id);
-  return ids;
-}
+// Which rows a document mentions: shared/mentions.cjs, the grammar main reads them by too.
+export { mentionedIds } from '../../shared/mentions.cjs';
 
 /**
  * What an edit of a workspace's document does to its links (MATH-57), from the ids mentioned `before` and `after` it:

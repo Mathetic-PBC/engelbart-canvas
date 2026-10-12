@@ -51,8 +51,12 @@ function expandPath(homeDir, value) {
   return path.isAbsolute(raw) ? path.resolve(raw) : null;
 }
 
-/** Every file under `dir` (dot folders and the folders in SKIP_DIRS passed over), breadth first, at most `max` entries. */
-function walkFiles(dir, { max = 20000 } = {}, visit) {
+/**
+ * Every file under `dir` (dot folders and the folders in SKIP_DIRS passed over), breadth first, at most `max` entries.
+ * `readable` (MATH-110): a folder it says no to is not looked into (a protected folder macOS was not let to show).
+ */
+function walkFiles(dir, { max = 20000, readable = null } = {}, visit) {
+  if (readable && !readable(dir)) return false;
   const queue = [dir];
   let seen = 0;
   while (queue.length) {
@@ -64,7 +68,7 @@ function walkFiles(dir, { max = 20000 } = {}, visit) {
       seen += 1;
       if (seen > max) return true;
       const full = path.join(here, entry.name);
-      if (entry.isDirectory()) { if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.')) queue.push(full); continue; }
+      if (entry.isDirectory()) { if (!SKIP_DIRS.has(entry.name) && !entry.name.startsWith('.') && (!readable || readable(full))) queue.push(full); continue; }
       if (entry.isFile()) visit(full, entry.name);
     }
   }
@@ -88,12 +92,12 @@ function obsidianDailyFolder(vault) {
  * first), with how many of a folder's notes are named by date (`dated`, 0–1). `dailyFolder`: Obsidian's setting, else the
  * top folder whose notes are mostly dated. `truncated` when it held more than `max` entries.
  */
-function folderOverview(dir, { homeDir = os.homedir(), max = 20000, top = 30 } = {}) {
+function folderOverview(dir, { homeDir = os.homedir(), max = 20000, top = 30, readable = null } = {}) {
   const root = path.resolve(dir);
   const totals = { files: 0, notes: 0, pdfs: 0, images: 0, newest: 0 };
   const folders = new Map();
   let rootNotes = 0;
-  const truncated = walkFiles(root, { max }, (file, name) => {
+  const truncated = walkFiles(root, { max, readable }, (file, name) => {
     const ext = path.extname(name).toLowerCase();
     const rel = path.relative(root, file);
     const head = rel.includes(path.sep) ? rel.split(path.sep)[0] : null;
@@ -122,14 +126,14 @@ function folderOverview(dir, { homeDir = os.homedir(), max = 20000, top = 30 } =
  * The note files (.md, .markdown, .txt) under `dir`: only inside `include` (folders relative to it) when given, never
  * inside `exclude`, changed since `days` ago when given. Absolute paths, at most `max`, newest first.
  */
-function noteFiles(dir, { include = [], exclude = [], days = null, max = 2000 } = {}) {
+function noteFiles(dir, { include = [], exclude = [], days = null, max = 2000, readable = null } = {}) {
   const root = path.resolve(dir);
   const norm = (list) => (Array.isArray(list) ? list : []).map((rel) => String(rel || '').replace(/^\/+|\/+$/g, '')).filter(Boolean);
   const ins = norm(include), outs = norm(exclude);
   const under = (rel, folder) => rel === folder || rel.startsWith(`${folder}/`);
   const since = cutoff(days);
   const found = [];
-  walkFiles(root, { max: 200000 }, (file, name) => {
+  walkFiles(root, { max: 200000, readable }, (file, name) => {
     if (!NOTE_EXT.has(path.extname(name).toLowerCase())) return;
     const rel = path.relative(root, file).split(path.sep).join('/');
     if (ins.length && !ins.some((folder) => under(rel, folder))) return;
@@ -279,10 +283,11 @@ function localChats(app, { homeDir = os.homedir(), env = process.env, days = nul
 }
 
 /** How many sessions an app has, how many in the last 30 and 180 days, and in which folders (most first). */
-function localChatCounts(app, { homeDir = os.homedir(), env = process.env } = {}) {
+function localChatCounts(app, { homeDir = os.homedir(), env = process.env, days = null } = {}) {
   const files = app === 'Codex' ? codexFiles(homeDir, env) : claudeCodeFiles(homeDir);
-  const d30 = cutoff(30), d180 = cutoff(180);
-  return { total: files.length, last30Days: files.filter((entry) => entry.mtime >= d30).length, last180Days: files.filter((entry) => entry.mtime >= d180).length, newest: iso(files[0] && files[0].mtime) };
+  const d30 = cutoff(30), d180 = cutoff(180), since = cutoff(days);
+  // `inPeriod` (2026-10-10): the sessions changed in the period picked on Connect your library, when there is one.
+  return { total: files.length, last30Days: files.filter((entry) => entry.mtime >= d30).length, last180Days: files.filter((entry) => entry.mtime >= d180).length, ...(since ? { inPeriod: files.filter((entry) => entry.mtime >= since).length } : {}), newest: iso(files[0] && files[0].mtime) };
 }
 
 /** The file a local session's id names, or null (ids are only ever the shapes the listing gives). */
@@ -608,14 +613,18 @@ const PDF_ROOTS = ['Downloads', 'Documents', 'Desktop', 'Papers', 'Research', 'D
 const PACKAGE_RE = /\.(?:app|bundle|framework|photoslibrary|musiclibrary|tvlibrary|xcodeproj|xcworkspace|pkg|plugin|kext|lproj)$/i;
 const PDF_SKIP = new Set(['Zotero', 'Library', 'site-packages', 'dist', 'build', 'target', 'vendor', 'Pods']);
 
-/** The folders PDFs are looked for in: those of PDF_ROOTS that are here, and Google Drive's when it syncs to this Mac. */
-function pdfRoots(homeDir = os.homedir()) {
+/**
+ * The folders PDFs are looked for in: those of PDF_ROOTS that are here, and Google Drive's when it syncs to this Mac.
+ * `readable` (MATH-110): only those it lets through, so a protected folder macOS was not let to show is left out.
+ */
+function pdfRoots(homeDir = os.homedir(), { readable = null } = {}) {
   const drives = (() => { try { return fs.readdirSync(path.join(homeDir, 'Library', 'CloudStorage')).filter((name) => /^(?:GoogleDrive|Dropbox|OneDrive)/.test(name)).map((name) => path.join(homeDir, 'Library', 'CloudStorage', name)); } catch { return []; } })();
-  return [...PDF_ROOTS.map((rel) => path.join(homeDir, rel)), ...drives].filter(isDir);
+  return [...PDF_ROOTS.map((rel) => path.join(homeDir, rel)), ...drives].filter((dir) => !readable || readable(dir)).filter(isDir);
 }
 
 /** Every PDF under `dir`, depth first to `depth` levels, packages and code folders passed over, at most `max` entries seen. */
-function walkPdfs(dir, { max = 40000, depth = 6 } = {}, visit) {
+function walkPdfs(dir, { max = 40000, depth = 6, readable = null } = {}, visit) {
+  if (readable && !readable(dir)) return false;
   let seen = 0;
   const stack = [[dir, 0]];
   while (stack.length) {
@@ -628,7 +637,7 @@ function walkPdfs(dir, { max = 40000, depth = 6 } = {}, visit) {
       if (entry.name.startsWith('.')) continue;
       const full = path.join(here, entry.name);
       if (entry.isDirectory()) {
-        if (level < depth && !SKIP_DIRS.has(entry.name) && !PDF_SKIP.has(entry.name) && !PACKAGE_RE.test(entry.name)) stack.push([full, level + 1]);
+        if (level < depth && !SKIP_DIRS.has(entry.name) && !PDF_SKIP.has(entry.name) && !PACKAGE_RE.test(entry.name) && (!readable || readable(full))) stack.push([full, level + 1]);
       } else if (entry.isFile() && /\.pdf$/i.test(entry.name)) visit(full, entry.name);
     }
   }
@@ -677,38 +686,104 @@ function pdfGuess(name, title = '') {
   return 'unclear';
 }
 
+// Words too common to say a PDF is about a project: English glue, and what any research description says.
+const COMMON_WORDS = new Set(('the and for are but not you all can our its how why who use new one two any via per out own way '
+  + 'this that with from what which their about into will would could should have been being were they them these those there '
+  + 'where when while more most also such than then some only other over under each using used based study studying studies '
+  + 'research project projects paper papers work works done look looks like make makes help helps does want need between '
+  + 'through across toward towards your mine them want what whether among within without many much very well just even still '
+  + 'first second third done goal goals aim aims learn more less part parts thing things time year years final draft notes').split(/\s+/));
+
+/** A text's words for matching: lower case, letters and digits, the common ones left out. */
+function wordsOf(text) {
+  return String(text || '').toLowerCase().replace(/\.pdf$/, '').split(/[^\p{L}\p{N}]+/u).filter((word) => word.length >= 3 && !COMMON_WORDS.has(word) && !/^\d+$/.test(word));
+}
+
+/**
+ * How many of a project's words a PDF's name and title share (a word counts when it is the same, or when one of five or
+ * more letters begins the other: "debug" and "debugging").
+ */
+function sharedWords(projectWords, text) {
+  const here = wordsOf(text);
+  let n = 0;
+  for (const word of projectWords) {
+    if (here.some((other) => other === word || (Math.min(word.length, other.length) >= 5 && (other.startsWith(word) || word.startsWith(other))))) n += 1;
+  }
+  return n;
+}
+
 /**
  * The folders under `roots` that hold PDFs, most first: how many, the newest, how many of each kind (pdfGuess), and the
  * names and titles of a few of the newest. → { roots, pdfs, folders: [...], moreFolders, truncated }. Only reads.
+ * `project` { name, description } (2026-10-10): each folder's examples are first the PDFs whose name or title shares
+ * words with it (up to `related`, most shared first, `relatedToProject` counting them all), then the newest; the folders
+ * holding such PDFs come first. Titles are read for the newest `matchTitles` PDFs to match them. With no project, as before.
+ * `days` (2026-10-10, the period picked on Connect your library): the counts, kinds, relatedToProject and examples cover
+ * only the PDFs changed in the last n days, each folder saying how many it left out (`olderLeftOut`, also in all), and a
+ * folder with none in the period is not listed. The project is matched before the period: up to `olderRelatedMax` older
+ * PDFs that share its words (never personal ones) come back as `olderRelated` [{ name, title, path, changed }], kept out
+ * of the counts, for the librarian to offer by title. With no `days`, as before.
  */
-function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titles = 150, max = 40000 } = {}) {
+function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titles = 150, max = 40000, project = null, related = 10, matchTitles = 300, days = null, olderRelatedMax = 5, readable = null } = {}) {
   const byFolder = new Map();
-  let total = 0, truncated = false;
+  let truncated = false;
   // A folder inside another one looked through is not looked through twice.
   const sorted = [...new Set(roots.map((root) => path.resolve(root)))].sort((a, b) => a.length - b.length);
   const seen = sorted.filter((dir, i) => !sorted.slice(0, i).some((outer) => dir.startsWith(outer + path.sep)));
   for (const dir of seen) {
-    truncated = walkPdfs(dir, { max }, (file, name) => {
-      total += 1;
+    truncated = walkPdfs(dir, { max, readable }, (file, name) => {
       const folder = path.dirname(file);
       const stat = statOf(file);
-      const entry = byFolder.get(folder) || { path: folder, pdfs: 0, newest: 0, files: [] };
-      entry.pdfs += 1;
-      entry.newest = Math.max(entry.newest, stat ? stat.mtimeMs : 0);
+      const entry = byFolder.get(folder) || { path: folder, files: [] };
       entry.files.push({ file, name, mtime: stat ? stat.mtimeMs : 0 });
       byFolder.set(folder, entry);
     }) || truncated;
   }
   let budget = titles;
-  const list = [...byFolder.values()].sort((a, b) => b.pdfs - a.pdfs || b.newest - a.newest);
+  const titleOf = new Map(); // file → its title, each read once
+  const readTitle = (file) => { if (!titleOf.has(file)) titleOf.set(file, pdfTitle(file)); return titleOf.get(file); };
+  const projectWords = project ? [...new Set(wordsOf(`${project.name || ''} ${project.description || ''}`))] : [];
+  if (projectWords.length) {
+    // Matched by name, and by title for the newest of them all (titles cost a read each), older ones included.
+    const everyFile = [...byFolder.values()].flatMap((entry) => entry.files).filter((each) => pdfGuess(each.name) !== 'personal');
+    everyFile.sort((a, b) => b.mtime - a.mtime).slice(0, matchTitles).forEach((each) => readTitle(each.file));
+    for (const entry of byFolder.values()) {
+      for (const each of entry.files) {
+        const title = titleOf.get(each.file) || '';
+        each.shared = pdfGuess(each.name, title) === 'personal' ? 0 : sharedWords(projectWords, `${each.name} ${title}`);
+      }
+    }
+  }
+  // Then the period: what is older is left out of the counts and examples.
+  const since = cutoff(days);
+  const older = [];
+  for (const entry of byFolder.values()) {
+    const inPeriod = since ? entry.files.filter((each) => each.mtime >= since) : entry.files;
+    if (since) older.push(...entry.files.filter((each) => each.mtime < since));
+    entry.olderLeftOut = entry.files.length - inPeriod.length;
+    entry.files = inPeriod;
+    entry.pdfs = inPeriod.length;
+    entry.newest = Math.max(0, ...inPeriod.map((each) => each.mtime));
+    entry.related = inPeriod.filter((each) => each.shared > 0).length;
+  }
+  const total = [...byFolder.values()].reduce((n, entry) => n + entry.pdfs, 0);
+  const list = [...byFolder.values()].filter((entry) => entry.pdfs > 0).sort((a, b) => (projectWords.length ? (b.related > 0) - (a.related > 0) : 0) || b.pdfs - a.pdfs || b.newest - a.newest);
+  const shown = (each) => { const title = titleOf.has(each.file) || budget-- > 0 ? readTitle(each.file) : ''; return title && title !== each.name.replace(/\.pdf$/i, '') ? `${each.name} — ${title}` : each.name; };
   const folders = list.slice(0, top).map((entry) => {
     const kinds = { paper: 0, personal: 0, book: 0, unclear: 0 };
     for (const each of entry.files) kinds[pdfGuess(each.name)] += 1;
-    const newest = entry.files.sort((a, b) => b.mtime - a.mtime).filter((each) => pdfGuess(each.name) !== 'personal').slice(0, samples);
-    const examples = newest.map((each) => { const title = budget-- > 0 ? pdfTitle(each.file) : ''; return title && title !== each.name.replace(/\.pdf$/i, '') ? `${each.name} — ${title}` : each.name; });
-    return { folder: shownPath(homeDir, entry.path), path: entry.path, pdfs: entry.pdfs, newest: iso(entry.newest), kinds: Object.fromEntries(Object.entries(kinds).filter(([, n]) => n)), examples };
+    const sorted = entry.files.sort((a, b) => b.mtime - a.mtime).filter((each) => pdfGuess(each.name) !== 'personal');
+    const matched = projectWords.length ? sorted.filter((each) => each.shared > 0).sort((a, b) => b.shared - a.shared || b.mtime - a.mtime).slice(0, related) : [];
+    const newest = sorted.filter((each) => !matched.includes(each)).slice(0, samples);
+    const examples = [...matched, ...newest].map(shown);
+    return { folder: shownPath(homeDir, entry.path), path: entry.path, pdfs: entry.pdfs, newest: iso(entry.newest), kinds: Object.fromEntries(Object.entries(kinds).filter(([, n]) => n)), ...(projectWords.length ? { relatedToProject: entry.related } : {}), ...(since ? { olderLeftOut: entry.olderLeftOut } : {}), examples };
   });
-  return { roots: [...seen].map((dir) => shownPath(homeDir, dir)), pdfs: total, folders, moreFolders: Math.max(0, list.length - top), truncated };
+  const out = { roots: [...seen].map((dir) => shownPath(homeDir, dir)), pdfs: total, folders, moreFolders: Math.max(0, list.length - top), truncated };
+  if (!since) return out;
+  const olderRelated = older.filter((each) => each.shared > 0 && pdfGuess(each.name, titleOf.get(each.file) || '') !== 'personal')
+    .sort((a, b) => b.shared - a.shared || b.mtime - a.mtime).slice(0, olderRelatedMax)
+    .map((each) => ({ name: each.name, title: readTitle(each.file) || null, path: each.file, changed: iso(each.mtime) }));
+  return { ...out, olderLeftOut: older.length, olderRelated };
 }
 
 /**
@@ -716,14 +791,14 @@ function pdfFolders(roots, { homeDir = os.homedir(), top = 40, samples = 6, titl
  * kind its name suggests. `days`: changed in the last n days; `query`: words in its name, title or folder; `kind`: only
  * that pdfGuess; `include` / `exclude`: folders relative to `dir`. At most `limit`.
  */
-function pdfFiles(dir, { days = null, query = '', kind = '', include = [], exclude = [], limit = 300, titles = true } = {}) {
+function pdfFiles(dir, { days = null, query = '', kind = '', include = [], exclude = [], limit = 300, titles = true, readable = null } = {}) {
   const root = path.resolve(dir);
   const norm = (list) => (Array.isArray(list) ? list : []).map((rel) => String(rel || '').replace(/^\/+|\/+$/g, '')).filter(Boolean);
   const ins = norm(include), outs = norm(exclude);
   const under = (rel, folder) => rel === folder || rel.startsWith(`${folder}/`);
   const since = cutoff(days);
   const found = [];
-  walkPdfs(root, { max: 200000, depth: 12 }, (file, name) => {
+  walkPdfs(root, { max: 200000, depth: 12, readable }, (file, name) => {
     const rel = path.relative(root, path.dirname(file)).split(path.sep).join('/');
     if (ins.length && !ins.some((folder) => under(rel, folder))) return;
     if (outs.some((folder) => under(rel, folder))) return;

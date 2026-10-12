@@ -63,11 +63,12 @@ export function ConnectChip({ sessions, onOpen }) {
 
 /**
  * The popup: a session again (`request.sessionId`, from the chip), or a new one for the project open (`request.projectId`,
- * the one-time offer). Closing it puts a session away (it goes on); "Not now" before anything began dismisses the offer.
+ * the one-time offer; `request.workspaceId`, the workspace open, which what comes in joins too). Closing it puts a session away (it goes on); "Not now" before anything began dismisses the offer.
  */
 export function ConnectPopup({ request, onClose }) {
   React.useEffect(() => {
-    const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } };
+    // The Keychain modal open over it (ConnectLibrary.jsx KeychainModal) takes Escape for itself.
+    const onKey = (event) => { if (event.key === 'Escape' && !document.querySelector('[data-connect-keychain]')) { event.preventDefault(); event.stopPropagation(); onClose(); } };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose]);
@@ -77,6 +78,7 @@ export function ConnectPopup({ request, onClose }) {
         mode="popup"
         sessionId={request.sessionId || null}
         projectId={request.projectId || null}
+        workspaceId={request.workspaceId || null}
         onSession={() => { api.connectOfferSeen('started').catch(() => {}); }}
         onClose={onClose}
         onSkip={onClose}

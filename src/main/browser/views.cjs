@@ -186,10 +186,13 @@ function isLoopback(hostname) {
   return host === 'localhost' || host.endsWith('.localhost') || host === '[::1]' || host === '::1' || /^127(\.\d{1,3}){3}$/.test(host);
 }
 
-/** Sites sniff "Electron/x" and the app's own token and serve a refusal; a page here is Chromium. */
-function cleanUserAgent(userAgent, appName) {
-  const names = ['Electron', appName].filter(Boolean).map((name) => String(name).replace(/[^\w.-]/g, ''));
-  return String(userAgent || '').replace(new RegExp(` (?:${names.join('|')})/\\S+`, 'gi'), '');
+/**
+ * Sites sniff "Electron/x" and serve a refusal, so it goes; the app's own token ("Engelbart/x") stays (2026-10-12). Google
+ * refuses a sign-in from a user agent shaped exactly like desktop Chrome's that is not Chrome (Orca and Otter Mail found
+ * the same): with either token kept it shows its password page.
+ */
+function cleanUserAgent(userAgent) {
+  return String(userAgent || '').replace(/ Electron\/\S+/gi, '');
 }
 
 /** An address whose path ends in .pdf. */
@@ -367,13 +370,13 @@ function decide(shared, member, contents, permission, details) {
   return shared.decided.get(key);
 }
 
-function joinSession(browsing, member, appName) {
+function joinSession(browsing, member) {
   let shared = sessions.get(browsing);
   if (!shared) {
     shared = { members: new Set(), decided: new Map() };
     sessions.set(browsing, shared);
     const ownerOf = (contents) => { for (const each of shared.members) if (each.owns(contents)) return each; return null; };
-    browsing.setUserAgent(cleanUserAgent(browsing.getUserAgent(), appName));
+    browsing.setUserAgent(cleanUserAgent(browsing.getUserAgent()));
     browsing.setPermissionRequestHandler((contents, permission, callback, details) => {
       void decide(shared, ownerOf(contents) || [...shared.members].pop() || null, contents, permission, details).then(callback, () => callback(false));
     });
@@ -433,7 +436,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   function configureSession() {
     if (configured) return;
     configured = true;
-    shared = joinSession(session.fromPartition(partition), member, appName);
+    shared = joinSession(session.fromPartition(partition), member);
   }
 
   /** GitHub's sign-in cookies in the Stage's session, gone (endedGithubSession): the next GitHub page is asked for signed out. */

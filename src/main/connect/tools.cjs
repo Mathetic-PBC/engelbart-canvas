@@ -27,12 +27,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const readers = require('./readers.cjs');
 const notes = require('./notes.cjs');
-const { listWebChats, readWebChat, WEB_CHAT_APPS } = require('./web-chats.cjs');
+const { listWebChats, readWebChat, deleteWebChat, chatIdOf, WEB_CHAT_APPS } = require('./web-chats.cjs');
+const gmail = require('./gmail.cjs');
 const { cursorChats, cursorTranscript } = require('./cursor.cjs');
 const { readZip, safeName } = require('../overleaf/copy.cjs');
 const { mcpContent } = require('../sandbox/local-tools.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
 const { sanitizeName } = require('../store/home.cjs');
+const { ITEM_SOURCES, GROUP_CATEGORIES, LOCAL_PDFS, categoryOfApp } = require('../../shared/connect-sources.cjs');
 
 const str = { type: 'string' };
 const num = { type: 'number' };
@@ -50,6 +52,8 @@ const MAX_GOOGLE_A_CALL = 25;
 const MAX_WEB_CHATS_A_CALL = 40;
 const CALL_BUDGET_MS = 170_000; // a call answers within the bridge's four minutes: what is left is said, for another call
 const MAX_NOTE_CHARS = 200_000;
+const GMAIL_MAX_BYTES = 5 * 1024 * 1024; // a thread's print view: plain HTML, its attachments left out
+const hostOf = (url) => { try { return new URL(String(url || '')).hostname; } catch { return ''; } };
 const GOOGLE_ID_RE = /^[\w-]{10,120}$/;
 const OVERLEAF_ID_RE = /^[0-9a-f]{24}$/;
 const NEEDS_KINDS = ['signin', '2fa', 'password', 'captcha', 'permission', 'connector', 'confirm'];
@@ -81,12 +85,15 @@ const IMPORT_TOOLS = [
   { name: 'browser_eval', description: 'Run a script in the page (an async function body: use await and return a value that is JSON). For what the page itself can ask its own site for (fetch with its sign-in). Never to type passwords or change anything in the account.', inputSchema: schema({ script: str }, ['script']) },
   { name: 'browser_download', description: 'Download a file with the person\'s sign-in (an export, a zip, a pdf) into Engelbart\'s imports. Returns its path, to unpack or bring in.', inputSchema: schema({ url: str, name: str }, ['url']) },
   { name: 'import_google_files', description: `Bring Google Drive files in by id, with the person's Google sign-in: items [{ id, kind, name }], kind doc (a Google Doc: a Markdown file with its pictures), sheet (a Markdown file with its first sheet as a table), slides (a Markdown file of its text), or file / pdf (a file in Drive: into the library). Up to ${MAX_GOOGLE_A_CALL} a call; a file brought in before is skipped.`, inputSchema: schema({ items: objs }, ['items']) },
+  { name: 'gmail_accounts', description: `The Gmail accounts signed in to in Engelbart's browser: [{ n, address }], n being the account's place in that browser's sign-in order (never assume 0). Says when the person must sign in.`, inputSchema: schema({}) },
+  { name: 'gmail_search', description: `Search one Gmail account (n from gmail_accounts) with Gmail's own search words (from:lee protocol, subject:"IRB", "exact words"); the period picked is added. Returns { n, ik, threads: [{ id, subject, people, date, imported }] }, the threads that match, newest first, without opening any. limit: at most (default and most ${gmail.MAX_SEARCH}).`, inputSchema: schema({ n: num, query: str, limit: num }, ['n', 'query']) },
+  { name: 'import_gmail_threads', description: `Bring in the Gmail threads the person approved, one note a thread (its messages in order, the names of its attachments, never the attachments): n and ik as gmail_search returned them, threads [{ id, subject }], up to ${gmail.MAX_THREADS_A_CALL} a call and ${gmail.MAX_THREADS_A_SESSION} a session. A thread brought in before is skipped.`, inputSchema: schema({ n: num, ik: str, threads: objs }, ['n', 'ik', 'threads']) },
   { name: 'overleaf_projects', description: 'The person\'s Overleaf projects (id, name, last updated, owner, archived), read from their signed-in project page.', inputSchema: schema({}) },
   { name: 'import_overleaf_projects', description: 'Bring Overleaf projects in by id (up to 20 a call; what did not fit in the time is returned as left): each is downloaded as its source zip with the person\'s sign-in, unpacked into Engelbart\'s imports and kept in the library as a folder, with its main .tex as a Markdown file and its compiled pdf.', inputSchema: schema({ ids: strs }, ['ids']) },
   { name: 'apple_notes_folders', description: 'Apple Notes\' folders (id, name, account, how many notes), asked through macOS Automation.', inputSchema: schema({}) },
   { name: 'apple_notes_list', description: 'Apple Notes\' notes, newest first: id, name, folder, modified. folder: an id or name; days; query: words in the name or folder; limit (default 500).', inputSchema: schema({ folder: str, days: num, query: str, limit: num }) },
   { name: 'import_apple_notes', description: 'Bring Apple Notes in by id, each as its own Markdown file with its pictures. Up to 200 a call; a note brought in before is skipped.', inputSchema: schema({ ids: strs }, ['ids']) },
-  { name: 'browser_history', description: 'The most visited sites (by "site", the default) or pages (by "page") in a Chromium browser on this Mac (Chrome, Arc, Brave, Edge, Chromium, Vivaldi). browser and profile pick one (default: the one used last). days: how far back (default 90). exclude: hosts to leave out. limit: at most (default 50).', inputSchema: schema({ browser: str, profile: str, days: num, by: str, exclude: strs, limit: num }) },
+  { name: 'browser_history', description: 'The most visited sites (by "site", the default) or pages (by "page") in a Chromium browser on this Mac (Chrome, Arc, Brave, Edge, Chromium, Vivaldi). browser and profile pick one (default: the one used last). days: how far back (default 90, or the period picked when shorter). exclude: hosts to leave out. limit: at most (default 50).', inputSchema: schema({ browser: str, profile: str, days: num, by: str, exclude: strs, limit: num }) },
   { name: 'browser_bookmarks', description: 'A Chromium browser profile\'s bookmarks: title, link and folder. browser and profile as browser_history.', inputSchema: schema({ browser: str, profile: str }) },
   { name: 'links_in_notes', description: 'The web links written in the notes under a folder, most used first, with the notes they are in.', inputSchema: schema({ folder: str, limit: num }, ['folder']) },
   { name: 'zotero_collections', description: 'The collections of the person\'s Zotero library (as Engelbart keeps a copy of it) with how many items each holds.', inputSchema: schema({}) },
@@ -99,13 +106,13 @@ const IMPORT_TOOLS = [
 ];
 
 // What each kind of agent may call: a survey looks, a recall asks and saves its answer, an import brings things in.
-const LOOK = ['folder_overview', 'list_note_files', 'list_pdfs', 'list_chats', 'read_chat', 'web_chats', 'web_chat_read', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'browser_eval', 'overleaf_projects', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
+const LOOK = ['folder_overview', 'list_note_files', 'list_pdfs', 'list_chats', 'read_chat', 'web_chats', 'web_chat_read', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'browser_eval', 'overleaf_projects', 'gmail_accounts', 'gmail_search', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
 const TOOLS_FOR = Object.freeze({
   survey: LOOK,
   recall: ['browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'needs_you', 'wait_for_you', 'save_memory'],
   import: IMPORT_TOOLS.map((tool) => tool.name).filter((name) => name !== 'save_memory'),
 });
-const WRITING = new Set(['import_note_files', 'import_pdfs', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
+const WRITING = new Set(['import_note_files', 'import_pdfs', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_gmail_threads', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
 
 /** The tool definitions an agent of `kind` is served. */
 const toolsFor = (kind) => { const names = new Set(TOOLS_FOR[kind] || TOOLS_FOR.import); return IMPORT_TOOLS.filter((tool) => names.has(tool.name)); };
@@ -200,10 +207,13 @@ const looksSignedOut = (file, type) => {
   if (!/html/i.test(type || '')) return false;
   try { const head = fs.readFileSync(file, 'utf8').slice(0, 4000); return /accounts\.google\.com|ServiceLogin|Sign in|<form/i.test(head); } catch { return true; }
 };
+const gmailSignedOut = () => Object.assign(new Error('Not signed in to Google in Engelbart\'s browser. Call needs_you with kind "signin", then try again.'), { code: 'SIGNED_OUT' });
 
 /**
  * The tools of one import. `session`: { dataRoot, homeDir, dir (its folder), downloads (where downloads and unpacked zips
- * go), projectId() (null until onboarding makes the project), exports (app → the export chosen), folders (app → folder) };
+ * go), projectId() (null until onboarding makes the project), exports (app → the export chosen), folders (app → folder),
+ * days (the period picked on Connect your library: 182, 365, or null for all time), gmailThreads (the Gmail threads this
+ * session brought in, counted against its cap) };
  * `context()` the store's context now; `added(kind, n, what)` counts what this import added ('notes' | 'items'); `kept(row)`
  * each library row it added or found already there (session.cjs keepRow);
  * `zotero` { root(), download? }; `github` (its repos()); `library` deps { describe, identifyRepo, inspectPdf, onAdded,
@@ -211,7 +221,7 @@ const looksSignedOut = (file, type) => {
  * none; `needs` { ask({ kind, reason }), wait() }; `recall(app, text)` keeps an assistant's answer; `appleNotes`
  * (./apple-notes.cjs); `log(text)` the action log. → call(name, args)
  */
-function createImportTools({ session, context, added = () => {}, kept = () => {}, zotero = null, github = null, deps = {}, env = process.env, kind = 'import', page = null, needs = null, recall = null, appleNotes = null, log = () => {} }) {
+function createImportTools({ session, context, added = () => {}, kept = () => {}, zotero = null, github = null, deps = {}, env = process.env, kind = 'import', page = null, needs = null, recall = null, asked = () => {}, question = '', appleNotes = null, log = () => {} }) {
   const library = require('../store/library.cjs');
   const mirror = require('../zotero/mirror.cjs');
   const imported = createImported(session.dataRoot);
@@ -219,6 +229,16 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   const homeDir = session.homeDir;
   const allowed = new Set(TOOLS_FOR[kind] || TOOLS_FOR.import);
   const downloads = (part) => path.join(session.downloads || path.join(session.dir, 'downloads'), part);
+  // The period (2026-10-10): the listing tools use the session's when `days` is left out, and cut a longer one down to it;
+  // a shorter one is kept. import_pdfs by path is not held to it, so an older paper the person agreed to still comes in.
+  // Gmail's comes from its own search words: gmail_search adds newer_than:1y / newer_than:6m (./gmail.cjs gmailPeriod).
+  // TODO: GitHub, Zotero and Google Drive have no period here; only the prompts' rule holds them to it.
+  const within = (days, fallback = null) => {
+    const period = Number.isFinite(session.days) && session.days > 0 ? session.days : null;
+    const asked = Number.isFinite(days) && days > 0 ? days : fallback;
+    if (!period) return days ?? fallback;
+    return asked && asked < period ? asked : period;
+  };
 
   async function ctxNow() {
     const ctx = await context();
@@ -229,8 +249,11 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
     const file = readers.expandPath(homeDir, value);
     if (!file) throw new Error(`${what} must be absolute or start with ~/`);
     if (file !== homeDir && !file.startsWith(homeDir + path.sep)) throw new Error('Only files inside the home directory can be read');
+    // MATH-110: a protected folder (Desktop, Documents, Downloads, iCloud Drive, a cloud drive) macOS did not let Engelbart read.
+    if (session.readable && !session.readable(file)) throw new Error(`macOS has not let Engelbart read ${readers.shownPath(homeDir, file)}: leave it out, and say so in your reply.`);
     return file;
   };
+  const readable = session.readable || null;
   const exportOf = (app) => {
     const file = session.exports && session.exports[app];
     if (!file) throw new Error(`There is no ${app} export on this Mac; use web_chats for ${app}.`);
@@ -241,20 +264,45 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
     return page;
   };
 
-  /** A note, chat or document in: a Markdown file of the library's own in <data root>/assets/md, its pictures beside it. */
-  async function putNote({ title, body, images = [], source }) {
+  // What a row an import brings in knows about itself (Library Phase B, 2026-10-11): which app it is from — `app` when the
+  // tool names one, else the app whose chosen folder holds `file`, else the job's only app — and that app's category
+  // (its group's, else the job's group's). A field nobody can tell is left out, so the library tells it from the add
+  // itself (an address is web, a path mac). `more`: { itemDate, originUrl, place, messages, minutes }, those known.
+  const appFor = (file = null) => {
+    if (file) for (const [app, dir] of Object.entries(session.folders || {})) if (typeof dir === 'string' && dir && (file === dir || file.startsWith(dir + path.sep))) return app;
+    const apps = Array.isArray(session.apps) ? session.apps : [];
+    return apps.length === 1 ? apps[0] : null;
+  };
+  const knows = (app, more = {}) => {
+    const source = app === 'GitHub' ? 'github' : (ITEM_SOURCES.includes(app) ? app : null);
+    const category = (app && categoryOfApp(app)) || (!app && GROUP_CATEGORIES[session.group]) || null;
+    const out = { ...(source ? { source } : {}), ...(category ? { category } : {}) };
+    for (const [key, value] of Object.entries(more)) if (value != null && value !== '') out[key] = value;
+    return out;
+  };
+  // A day as the library keeps it: a date's first ten characters when they are one (a chat's ISO date), else null.
+  const dayOf = (value) => { const day = String(value || '').slice(0, 10); return /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day)) ? day : null; };
+  // Where a note file sat under the folder it was brought in from: "Vault" or "Vault/Projects/Transfer".
+  const placeOf = (file, root) => {
+    if (!root || !(file.startsWith(root + path.sep))) return null;
+    const rel = path.relative(root, path.dirname(file));
+    return [path.basename(root), ...(rel ? rel.split(path.sep) : [])].join('/');
+  };
+
+  /** A note, chat or document in: a Markdown file of the library's own in <data root>/assets/md, its pictures beside it. `about`: what it knows (knows). */
+  async function putNote({ title, body, images = [], source, about = null }) {
     const ctx = await ctxNow();
-    const row = await notes.writeFile(ctx, { title, body, images }, { library });
+    const row = await notes.writeFile(ctx, { title, body, images, about }, { library });
     if (deps.onAdded) deps.onAdded(row);
     kept(row);
     if (source) imported.add(source);
     added('notes', 1, title);
   }
 
-  async function addRow(input, name, { describe = true } = {}) {
+  async function addRow(input, name, { describe = true, about = null } = {}) {
     const ctx = await ctxNow();
     try {
-      const row = await library.addItem(ctx, input, { describe: describe ? deps.describe : undefined, identifyRepo: deps.identifyRepo, inspectPdf: deps.inspectPdf, name: name || null });
+      const row = await library.addItem(ctx, input, { describe: describe ? deps.describe : undefined, identifyRepo: deps.identifyRepo, inspectPdf: deps.inspectPdf, name: name || null, about });
       if (row.type === 'pdf' && deps.onPdf) deps.onPdf();
       if (deps.onAdded) deps.onAdded(row);
       kept(row);
@@ -267,14 +315,14 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   }
 
   /** A downloaded pdf or picture copied into the library (assets/), else the file added where it is. */
-  async function addFile(file, name, url = null) {
+  async function addFile(file, name, url = null, about = null) {
     const ext = path.extname(file).toLowerCase();
     const mime = ext === '.pdf' ? 'application/pdf' : { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.webp': 'image/webp' }[ext];
-    if (!mime) return addRow(file, name, { describe: false });
+    if (!mime) return addRow(file, name, { describe: false, about });
     const ctx = await ctxNow();
     const bytes = fs.readFileSync(file);
     try {
-      const row = await library.addFileCopy(ctx, { bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), mime, name, url }, { inspectPdf: deps.inspectPdf });
+      const row = await library.addFileCopy(ctx, { bytes: new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength), mime, name, url, about }, { inspectPdf: deps.inspectPdf });
       if (mime === 'application/pdf' && deps.onPdf) deps.onPdf();
       if (deps.onAdded) deps.onAdded(row);
       kept(row);
@@ -309,9 +357,9 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   let waiting = null; // the step needs_you handed over, while the person has not answered
 
   const call = {
-    folder_overview: ({ path: dir }) => readers.folderOverview(where(dir), { homeDir }),
+    folder_overview: ({ path: dir }) => readers.folderOverview(where(dir), { homeDir, readable }),
     list_note_files: ({ folder, include, exclude, days }) => {
-      const files = readers.noteFiles(where(folder, 'folder'), { include, exclude, days, max: 5000 });
+      const files = readers.noteFiles(where(folder, 'folder'), { include, exclude, days: within(days), max: 5000, readable });
       return { total: files.length, files: files.slice(0, 2000), more: Math.max(0, files.length - 2000) };
     },
     import_note_files: async ({ files, root }) => {
@@ -329,7 +377,8 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         try { stat = fs.statSync(file); } catch { skipped.push({ file: given, why: 'not there' }); continue; }
         if (!stat.isFile() || stat.size > notes.MAX_NOTE_BYTES) { skipped.push({ file: given, why: stat.isFile() ? 'larger than 5 MB' : 'not a file' }); continue; }
         const { body, images } = notes.convertMarkdown(fs.readFileSync(file, 'utf8'), { sourcePath: file, root: base || path.dirname(file), index });
-        await putNote({ title: path.basename(file, path.extname(file)), body, images, source: key });
+        const from = appFor(file);
+        await putNote({ title: path.basename(file, path.extname(file)), body, images, source: key, about: knows(from, { place: placeOf(file, base || (from && session.folders && session.folders[from]) || '') }) });
         count += 1;
       }
       if (count) log(`Brought in ${count} note${count === 1 ? '' : 's'}`);
@@ -340,13 +389,13 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       const key = source ? `note:${source}` : '';
       if (key && imported.has(key)) return { added: false, why: 'brought in before' };
       const { body, images } = notes.convertMarkdown(markdown, { root: session.downloads || '' });
-      await putNote({ title: sanitizeName(title), body, images, source: key });
+      await putNote({ title: sanitizeName(title), body, images, source: key, about: knows(appFor()) });
       log(`Wrote “${String(title).slice(0, 60)}”`);
       return { added: true };
     },
-    add_to_library: ({ input, name }) => addRow(input, name),
+    add_to_library: ({ input, name }) => addRow(input, name, { about: knows(appFor()) }),
     list_pdfs: async ({ folder, include, exclude, days, query, kind, limit, check }) => {
-      const out = readers.pdfFiles(where(folder, 'folder'), { include, exclude, days, query, kind, limit: Math.min(1000, Math.max(1, Math.round(limit || 300))) });
+      const out = readers.pdfFiles(where(folder, 'folder'), { include, exclude, days: within(days), query, kind, limit: Math.min(1000, Math.max(1, Math.round(limit || 300))), readable });
       if (check && deps.inspectPdf) {
         const started = Date.now();
         let checked = 0;
@@ -371,7 +420,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         try { file = where(given); } catch (error) { skipped.push({ file: given, why: error.message }); continue; }
         const stat = (() => { try { return fs.statSync(file); } catch { return null; } })();
         if (!stat || !stat.isFile() || !/\.pdf$/i.test(file)) { skipped.push({ file: given, why: stat ? 'not a pdf' : 'not there' }); continue; }
-        const out = await addRow(file, null, { describe: false });
+        const out = await addRow(file, null, { describe: false, about: knows(LOCAL_PDFS) });
         if (out.added) count += 1;
         else skipped.push({ file: given, why: 'in the library already' });
       }
@@ -388,7 +437,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
     list_chats: ({ app, days, project, query, limit = 200, automated = false }) => {
       chatApp(app);
       const cap = Math.min(Math.max(1, Math.round(limit)), 1000);
-      return listLocal(app, { days, project, query, limit: cap, automated }).map((chat) => ({ ...chat, imported: imported.has(`chat:${app}:${chat.id}`) }));
+      return listLocal(app, { days: within(days), project, query, limit: cap, automated }).map((chat) => ({ ...chat, imported: imported.has(`chat:${app}:${chat.id}`) }));
     },
     read_chat: ({ app, id, max_chars: max = 6000 }) => {
       chatApp(app);
@@ -406,14 +455,14 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         let chat;
         try { chat = readLocal(app, id); } catch (error) { skipped.push({ id, why: error.message }); continue; }
         if (!chat.turns.length) { skipped.push({ id, why: 'no turns of text' }); continue; }
-        await putNote({ title: chat.title || `${app} chat`, body: chatNote(app, chat), images: [], source: key });
+        await putNote({ title: chat.title || `${app} chat`, body: chatNote(app, chat), images: [], source: key, about: knows(app, { itemDate: dayOf(chat.date), place: chat.project, messages: chat.turns.length }) });
         count += 1;
       }
       if (count) log(`Brought in ${count} ${app} chat${count === 1 ? '' : 's'}`);
       return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length };
     },
     web_chats: async ({ app, days, query, project, limit = 200 }) => {
-      const out = await listWebChats(browser(), app, { days, query, project, limit });
+      const out = await listWebChats(browser(), app, { days: within(days), query, project, limit });
       log(`Listed ${out.chats.length} ${app} chat${out.chats.length === 1 ? '' : 's'}`);
       return { ...out, chats: out.chats.map((chat) => ({ ...chat, imported: imported.has(`chat:${app}:${chat.id}`) })) };
     },
@@ -433,7 +482,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         let chat;
         try { chat = await readWebChat(browser(), app, id); } catch (error) { if (error.code === 'SIGNED_OUT') throw error; skipped.push({ id, why: error.message }); continue; }
         if (!chat.turns.length) { skipped.push({ id, why: 'no turns of text' }); continue; }
-        await putNote({ title: chat.title, body: chatNote(app, chat), images: [], source: key });
+        await putNote({ title: chat.title, body: chatNote(app, chat), images: [], source: key, about: knows(app, { itemDate: dayOf(chat.date), place: chat.project, messages: chat.turns.length }) });
         count += 1;
       }
       if (count) log(`Brought in ${count} ${app} chat${count === 1 ? '' : 's'}`);
@@ -477,7 +526,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
             const markdown = kindOf === 'doc' ? googleMarkdown(text, downloads('google')) : kindOf === 'sheet' ? csvTable(text) : text.trim();
             const title = named || (markdown.match(/^#\s+(.+)$/m) || [])[1] || `Google ${kindOf} ${id.slice(0, 8)}`;
             const { body, images } = notes.convertMarkdown(markdown, { root: downloads('google') });
-            await putNote({ title: sanitizeName(title), body: `*Google Drive · https://drive.google.com/open?id=${id}*\n\n${body}`, images, source: key });
+            await putNote({ title: sanitizeName(title), body: `*Google Drive · https://drive.google.com/open?id=${id}*\n\n${body}`, images, source: key, about: knows('Google Docs', { originUrl: `https://drive.google.com/open?id=${id}` }) });
           } else {
             let got = await pageNow.download(`https://drive.google.com/uc?export=download&id=${id}`, downloads('google'), { name: named, quiet: true });
             if (/html/i.test(got.type)) { // a large file's virus-scan warning, or a sign-in page
@@ -488,9 +537,9 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
             const ext = path.extname(got.path).toLowerCase();
             if (readers.NOTE_EXT.has(ext)) {
               const { body, images } = notes.convertMarkdown(fs.readFileSync(got.path, 'utf8'), { sourcePath: got.path, root: path.dirname(got.path) });
-              await putNote({ title: sanitizeName(named || path.basename(got.path, ext)), body, images, source: key });
+              await putNote({ title: sanitizeName(named || path.basename(got.path, ext)), body, images, source: key, about: knows('Google Docs', { originUrl: `https://drive.google.com/open?id=${id}` }) });
             } else {
-              const out = await addFile(got.path, named || path.basename(got.path, ext), null);
+              const out = await addFile(got.path, named || path.basename(got.path, ext), null, knows('Google Docs', { originUrl: `https://drive.google.com/open?id=${id}` }));
               if (!out.added) { imported.add(key); skipped.push({ id, why: 'in the library already' }); continue; }
               imported.add(key);
             }
@@ -502,6 +551,89 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         }
       }
       if (count) log(`Brought in ${count} Google Drive file${count === 1 ? '' : 's'}`);
+      return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, ...(left.length ? { left } : {}) };
+    },
+    gmail_accounts: async () => {
+      const pageNow = browser();
+      const accounts = [], seen = new Set();
+      const deadline = Date.now() + CALL_BUDGET_MS;
+      for (let n = 0; n < gmail.MAX_ACCOUNTS; n += 1) {
+        if (Date.now() > deadline) return { accounts, more: true };
+        const opened = await pageNow.open(gmail.inboxUrl(n));
+        const at = String((opened && opened.url) || '');
+        if (!/^https:\/\/mail\.google\.com\//.test(at)) { if (!n) throw gmailSignedOut(); break; } // a sign-in page: no account here
+        const placed = at.match(/\/mail\/u\/(\d+)\//);
+        if (placed && Number(placed[1]) !== n) break; // Gmail sent this place to another account's: none here
+        const out = await pageNow.evaluate(gmail.ACCOUNT_SCRIPT);
+        if (!out || !out.signedIn) { if (!n) throw gmailSignedOut(); break; }
+        const address = String(out.address || '').slice(0, 200), ik = gmail.IK_RE.test(String(out.ik || '')) ? out.ik : '';
+        const key = address.toLowerCase() || ik;
+        if (!key || seen.has(address.toLowerCase()) || (ik && seen.has(ik))) break; // the same account again: the list has ended
+        if (address) seen.add(address.toLowerCase());
+        if (ik) seen.add(ik);
+        accounts.push({ n, address });
+      }
+      log(`Found ${accounts.length} Gmail account${accounts.length === 1 ? '' : 's'}`);
+      return { accounts };
+    },
+    gmail_search: async ({ n, query, limit = gmail.MAX_SEARCH }) => {
+      gmail.accountIndex(n);
+      const words = String(query || '').replace(/\s+/g, ' ').trim();
+      if (!words || /^(?:(?:newer_than|older_than|after|before):\S+\s*)+$/i.test(words)) throw new Error('Search with words from the project, people or the plan: never an empty search, or the period alone.');
+      const cap = Math.min(Math.max(1, Math.round(limit) || gmail.MAX_SEARCH), gmail.MAX_SEARCH);
+      const pageNow = browser();
+      // The words in parentheses, so the period holds for all of them: "pilot OR" would otherwise read "pilot OR newer_than:1y".
+      const opened = await pageNow.open(gmail.searchUrl(n, `(${words})${gmail.gmailPeriod(within(null))}`));
+      if (!/^https:\/\/mail\.google\.com\//.test(String((opened && opened.url) || ''))) throw gmailSignedOut();
+      const out = await pageNow.evaluate(gmail.SEARCH_SCRIPT(cap));
+      if (!out || !out.signedIn) throw gmailSignedOut();
+      const ik = gmail.IK_RE.test(String(out.ik || '')) ? out.ik : '';
+      const clip = (value, max) => String(value || '').replace(/\s+/g, ' ').trim().slice(0, max);
+      const threads = [];
+      for (const row of out.threads || []) {
+        const id = String((row && row.id) || '').replace(/^#/, '');
+        if (!gmail.THREAD_ID_RE.test(id) || threads.some((thread) => thread.id === id)) continue;
+        threads.push({ id, subject: clip(row.subject, 300) || '(no subject)', people: clip(row.people, 300), date: clip(row.date, 80), imported: !!ik && imported.has(`gmail:${ik}:${id.slice('thread-f:'.length)}`) });
+      }
+      log(`Searched Gmail: ${threads.length} thread${threads.length === 1 ? '' : 's'}`);
+      return { n, ik, threads: threads.slice(0, cap), ...(threads.length > cap ? { more: true } : {}) };
+    },
+    import_gmail_threads: async ({ n, ik, threads }) => {
+      gmail.accountIndex(n);
+      if (!gmail.IK_RE.test(ik)) throw new Error('ik must be the account key gmail_search returned');
+      if (threads.length > gmail.MAX_THREADS_A_CALL) throw new Error(`At most ${gmail.MAX_THREADS_A_CALL} threads a call`);
+      const fresh = threads.filter((thread) => gmail.THREAD_ID_RE.test(String(thread.id || '')) && !imported.has(`gmail:${ik}:${String(thread.id).slice('thread-f:'.length)}`));
+      const before = Number(session.gmailThreads) || 0;
+      if (before + fresh.length > gmail.MAX_THREADS_A_SESSION) throw new Error(`At most ${gmail.MAX_THREADS_A_SESSION} Gmail threads a session, and ${before} came in already: bring in ${Math.max(0, gmail.MAX_THREADS_A_SESSION - before)} more at most. Tell the person, and leave the rest for another session.`);
+      const pageNow = browser();
+      let count = 0;
+      const skipped = [], left = [];
+      const deadline = Date.now() + CALL_BUDGET_MS;
+      for (const thread of threads) {
+        const id = String(thread.id || '');
+        if (!gmail.THREAD_ID_RE.test(id)) { skipped.push({ id, why: 'not a Gmail thread id' }); continue; }
+        if (Date.now() > deadline) { left.push(id); continue; }
+        const decimal = id.slice('thread-f:'.length);
+        const key = `gmail:${ik}:${decimal}`;
+        if (imported.has(key)) { skipped.push({ id, why: 'brought in before' }); continue; }
+        try {
+          const got = await pageNow.download(gmail.printUrl(n, ik, id), downloads('gmail'), { name: `${decimal}.html`, quiet: true, maxBytes: GMAIL_MAX_BYTES });
+          const html = fs.readFileSync(got.path, 'utf8');
+          fs.rmSync(got.path, { force: true });
+          // Only a thread is kept: a sign-in page stops the call (as import_google_files does), any other page is that thread failed.
+          if (gmail.gmailSignedOut(html) || /(^|\.)accounts\.google\.com$/.test(hostOf(got.url))) throw gmailSignedOut();
+          if (!/html/i.test(got.type || '') || !gmail.isThreadPage(got.url, html)) throw new Error('Gmail sent no thread');
+          const read = gmail.readThread(html);
+          const title = String(thread.subject || '').trim() || read.subject || 'Gmail thread';
+          await putNote({ title: sanitizeName(title), body: clipMiddle(gmail.gmailThreadNote(read), MAX_NOTE_CHARS), images: [], source: key, about: knows('Gmail', { messages: read.messages.length, itemDate: gmail.lastDay(read) }) });
+          session.gmailThreads = (Number(session.gmailThreads) || 0) + 1;
+          count += 1;
+        } catch (error) {
+          if (error.code === 'SIGNED_OUT') throw error;
+          skipped.push({ id, why: String(error.message).slice(0, 200) });
+        }
+      }
+      if (count) log(`Brought in ${count} Gmail thread${count === 1 ? '' : 's'}`);
       return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, ...(left.length ? { left } : {}) };
     },
     overleaf_projects: async () => {
@@ -534,10 +666,11 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
           if (buffer.length < 4 || buffer.readUInt32LE(0) !== 0x04034b50) throw Object.assign(new Error('Overleaf sent no project: not signed in to Overleaf in Engelbart\'s browser. Call needs_you with kind "signin", then try again.'), { code: 'SIGNED_OUT' });
           const name = sanitizeName(path.basename(got.path, '.zip')) || `Overleaf ${id.slice(0, 6)}`;
           const { folder } = unzipInto(buffer, downloads(path.join('overleaf', name)));
-          await addRow(folder, `${name} (Overleaf)`, { describe: false });
+          const overleaf = knows('Overleaf', { originUrl: `https://www.overleaf.com/project/${id}`, place: name });
+          await addRow(folder, `${name} (Overleaf)`, { describe: false, about: overleaf });
           const main = findMainTex(folder);
-          if (main) await putNote({ title: sanitizeName(`${name} (main.tex)`), body: `*Overleaf · https://www.overleaf.com/project/${id}*\n\n\`\`\`latex\n${clipMiddle(fs.readFileSync(main, 'utf8'), 150_000)}\n\`\`\`\n`, images: [], source: `${key}:main` });
-          for (const pdf of fs.readdirSync(folder).filter((file) => /\.pdf$/i.test(file)).slice(0, 3)) await addFile(path.join(folder, pdf), `${name}: ${path.basename(pdf, '.pdf')}`);
+          if (main) await putNote({ title: sanitizeName(`${name} (main.tex)`), body: `*Overleaf · https://www.overleaf.com/project/${id}*\n\n\`\`\`latex\n${clipMiddle(fs.readFileSync(main, 'utf8'), 150_000)}\n\`\`\`\n`, images: [], source: `${key}:main`, about: overleaf });
+          for (const pdf of fs.readdirSync(folder).filter((file) => /\.pdf$/i.test(file)).slice(0, 3)) await addFile(path.join(folder, pdf), `${name}: ${path.basename(pdf, '.pdf')}`, null, overleaf);
           imported.add(key);
           count += 1;
         } catch (error) {
@@ -549,7 +682,7 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, ...(left.length ? { left } : {}) };
     },
     apple_notes_folders: async () => { const notesApp = appleNotesOf(); const out = await notesApp.folders(); log('Read Apple Notes\' folders'); return out; },
-    apple_notes_list: async ({ folder = '', days, query = '', limit = 500 }) => appleNotesOf().list({ folder, days, query, limit }),
+    apple_notes_list: async ({ folder = '', days, query = '', limit = 500 }) => appleNotesOf().list({ folder, days: within(days), query, limit }),
     import_apple_notes: async ({ ids }) => {
       const wanted = ids.slice(0, 200).filter((id) => !imported.has(`apple-notes:${id}`));
       const read = await appleNotesOf().read(wanted, { pictureDir: downloads('apple-notes') });
@@ -558,17 +691,17 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       for (const note of read) {
         if (note.error) { skipped.push({ id: note.id, why: String(note.error).slice(0, 120) }); continue; }
         const { body, images } = notes.convertMarkdown(note.markdown, { root: downloads('apple-notes') });
-        await putNote({ title: sanitizeName(note.name), body, images, source: `apple-notes:${note.id}` });
+        await putNote({ title: sanitizeName(note.name), body, images, source: `apple-notes:${note.id}`, about: knows('Apple Notes', { place: note.folder, itemDate: dayOf(note.modified) }) });
         count += 1;
       }
       if (count) log(`Brought in ${count} Apple Note${count === 1 ? '' : 's'}`);
       return { added: count, skipped: skipped.slice(0, 30) };
     },
-    browser_history: async ({ browser: which, profile, days = 90, by = 'site', exclude = [], limit = 50 }) => {
+    browser_history: async ({ browser: which, profile, days, by = 'site', exclude = [], limit = 50 }) => {
       const found = readers.profileOf(homeDir, { browser: which, profile });
       if (!found) throw new Error('No Chromium browser profile with a history was found on this Mac');
       log(`Read ${found.browser}'s history`);
-      return { browser: found.browser, profile: found.name, entries: await readers.browserHistory(found.dir, { days, by: by === 'page' ? 'page' : 'site', exclude, limit: Math.min(Math.max(1, Math.round(limit)), 500) }) };
+      return { browser: found.browser, profile: found.name, entries: await readers.browserHistory(found.dir, { days: within(days, 90), by: by === 'page' ? 'page' : 'site', exclude, limit: Math.min(Math.max(1, Math.round(limit)), 500) }) };
     },
     browser_bookmarks: ({ browser: which, profile }) => {
       const found = readers.profileOf(homeDir, { browser: which, profile });
@@ -590,16 +723,21 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
         const source = `zotero:${key}`;
         if (imported.has(source)) { already += 1; continue; }
         const title = String(item.title || '').slice(0, 200);
+        // its collections ("Transfer", "Reading/2024"), and its date: a full one when Zotero has it, else its year
+        let place = null;
+        try { place = mirror.collectionNames(root, item).join(', ') || null; } catch { place = null; }
+        const year = /^\d{4}$/.test(String(item.year || '')) ? String(item.year) : null;
+        const about = knows('Zotero', { place, itemDate: dayOf(item.date) || year });
         let out = null;
         try {
           const attachment = mirror.openableOf(item);
           const here = attachment && attachment.contentType === 'application/pdf' ? mirror.localFile(root, attachment) : null;
-          if (here && here.source !== 'downloaded') out = await addRow(here.path, title, { describe: false });
+          if (here && here.source !== 'downloaded') out = await addRow(here.path, title, { describe: false, about });
           else if (here || (attachment && attachment.contentType === 'application/pdf' && zotero && zotero.download)) {
             const file = here ? here.path : await zotero.download(attachment.key, attachment.filename);
-            out = await addFile(file, title, item.doi ? `https://doi.org/${item.doi}` : (item.url || null));
-          } else if (item.doi) out = await addRow(`https://doi.org/${item.doi}`, title, { describe: false });
-          else if (item.url) out = await addRow(item.url, title, { describe: false });
+            out = await addFile(file, title, item.doi ? `https://doi.org/${item.doi}` : (item.url || null), about);
+          } else if (item.doi) out = await addRow(`https://doi.org/${item.doi}`, title, { describe: false, about });
+          else if (item.url) out = await addRow(item.url, title, { describe: false, about });
           else { skipped.push({ key, why: 'no pdf, DOI or link' }); continue; }
         } catch (error) { skipped.push({ key, why: error.message }); continue; }
         imported.add(source);
@@ -633,9 +771,38 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       if (value.length < 20) throw new Error('That answer is too short to keep: read the whole answer first');
       await recall(app, value);
       log(`Kept what ${app} remembers (${value.length.toLocaleString('en-US')} characters)`);
+      await forgetQuestion(app);
       return { saved: true, chars: value.length };
     },
   };
+
+  // The memory question (2026-10-12): asking ChatGPT or Claude what it remembers leaves a "Research profile" chat in the
+  // person's account. The chat the question opened is noted once it is sent (its id from the page's address, kept on the
+  // job through `asked`), and once the answer is kept Engelbart deletes that one chat itself, never left to the agent and
+  // never another (./web-chats.cjs deleteWebChat checks its first message is the question). A failure is logged and
+  // nothing else: the answer is kept either way.
+  let sent = false;
+  let chat = null; // { app, id }
+  const SENDS = new Set(['browser_type', 'browser_press', 'browser_click']);
+  const noteChat = () => {
+    if (kind !== 'recall' || !page || chat || !sent) return;
+    for (const app of WEB_CHAT_APPS) {
+      const id = chatIdOf(app, page.url());
+      if (id) { chat = { app, id }; asked(app, id); return; }
+    }
+  };
+  async function forgetQuestion(app) {
+    noteChat();
+    if (!chat || chat.app !== app || chat.done) return;
+    const { id } = chat;
+    chat = { app, id, done: true };
+    try {
+      await deleteWebChat(browser(), app, id, { question });
+      log(`Deleted the question from ${app}'s chats`);
+    } catch (error) {
+      log(`Couldn't delete the question from ${app}'s chats: ${error && error.message ? error.message : error}`);
+    }
+  }
 
   function appleNotesOf() {
     if (!appleNotes) throw new Error('Apple Notes cannot be read here');
@@ -651,7 +818,12 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   return async function callTool(name, args) {
     validateImportTool(name, args || {});
     if (!allowed.has(name)) throw new Error(kind === 'survey' && WRITING.has(name) ? 'A survey brings nothing in: report what you found instead.' : `${name} is not one of this agent's tools`);
-    return call[name](args || {});
+    if (kind !== 'recall' || !name.startsWith('browser_')) return call[name](args || {});
+    try { return await call[name](args || {}); }
+    finally {
+      if (SENDS.has(name) && (name !== 'browser_type' || (args || {}).submit) && (name !== 'browser_press' || (args || {}).key === 'Enter')) sent = true;
+      try { noteChat(); } catch { /* the window is gone */ }
+    }
   };
 }
 
