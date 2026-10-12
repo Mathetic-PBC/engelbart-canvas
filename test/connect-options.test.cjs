@@ -1,9 +1,9 @@
 'use strict';
 
 // Connect your library's options (2026-10-11): an option's `detail` (what it covers, kept with its line breaks by
-// optionOf and asked for by the librarian's prompt), shown on a line of its own under the option on the card (src/renderer/
-// screens/ConnectLibrary.jsx QuestionCard; 2026-10-12: no ⓘ, no popover, no "Recommended" tag), and the foot button that
-// stays quiet while it says "Skip the rest".
+// optionOf and asked for by the librarian's prompt), kept in the option's data but not shown on the card (src/renderer/
+// screens/ConnectLibrary.jsx QuestionCard; 2026-10-12: just the label and its why, no detail line, no ⓘ, no popover, no
+// "Recommended" tag), and the foot button that stays quiet while it says "Skip the rest".
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -138,29 +138,31 @@ const ask = { source: 'transcripts', kind: 'multi', title: 'Which meetings?', op
 const render = (props) => { elements.length = 0; return renderToStaticMarkup(React.createElement(QuestionCard, props)); };
 const optionButton = (label) => elements.find((element) => element.type === 'button' && element.props['data-connect-option'] === label);
 
-test('an option\'s why sits after its label and its detail on a line of its own, inside the option, wrapping instead of cut off', () => {
+test('an option shows its label and its why after it, wrapping instead of cut off; its detail is not shown', () => {
   const html = render({ ask, live: true, onAnswer: () => {} });
-  assert.match(html, /<span class="cx-opt-text"><span class="cx-opt-line"><span class="cx-opt-label">Standups<\/span><span class="cx-opt-why" data-connect-option-why="1">12 docs<\/span><\/span><\/span>/, 'no detail: no second line');
-  assert.match(html, /<span class="cx-opt-line"><span class="cx-opt-label">Meeting transcripts<\/span><span class="cx-opt-why" data-connect-option-why="1">4 docs<\/span><\/span><span class="cx-opt-detail" data-connect-option-detail="Meeting transcripts">7\/9\/26 transcripts · 2026-07-09 · Drive \/ Meet Recordings\n8\/12\/26 · 2026-08-12 · Drive \/ Meet Recordings<\/span>/);
+  assert.match(html, /<span class="cx-opt-text"><span class="cx-opt-line"><span class="cx-opt-label">Standups<\/span><span class="cx-opt-why" data-connect-option-why="1">12 docs<\/span><\/span><\/span>/);
+  assert.match(html, /<span class="cx-opt-text"><span class="cx-opt-line"><span class="cx-opt-label">Meeting transcripts<\/span><span class="cx-opt-why" data-connect-option-why="1">4 docs<\/span><\/span><\/span>/, 'no detail line, even with a detail');
+  assert.doesNotMatch(html, /data-connect-option-detail|cx-opt-detail/, 'no detail element');
+  assert.doesNotMatch(html, /7\/9\/26|Meet Recordings/, 'the detail\'s text is nowhere on the card');
   assert.doesNotMatch(html, /data-connect-option-info|data-info=/, 'no ⓘ');
-  assert.doesNotMatch(html, /title="7\/9\/26/, 'not a native tooltip either');
   const css = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/screens/ConnectLibrary.jsx'), 'utf8');
-  for (const name of ['cx-opt-label', 'cx-opt-why', 'cx-opt-detail']) {
+  for (const name of ['cx-opt-label', 'cx-opt-why']) {
     const rule = css.match(new RegExp(`\\.${name}\\{([^}]*)\\}`))[1];
     assert.doesNotMatch(rule, /ellipsis|nowrap/, `${name} is never cut`);
   }
-  assert.match(css.match(/\.cx-opt-detail\{([^}]*)\}/)[1], /white-space:pre-line/, 'the detail keeps its line breaks');
+  assert.doesNotMatch(css, /\.cx-opt-detail\{/, 'no style left for a detail line');
   assert.match(html, /data-connect-card-actions="1" style="position:sticky;bottom:0/, 'Skip and Submit pinned to the chat\'s bottom');
   assert.ok(optionButton('Meeting transcripts'));
 });
 
-test('an answered card shows its options disabled, with their details', () => {
+test('an answered card shows its options disabled, still without their details', () => {
   elements.length = 0;
   const card = React.createElement(QuestionCard, { ask, live: false, onAnswer: () => {} });
   renderToStaticMarkup(React.createElement(AnsweredAsk, { ask }, card));
   elements.length = 0;
   const html = renderToStaticMarkup(card);
   assert.equal(optionButton('Meeting transcripts').props.disabled, true);
-  assert.match(html, /data-connect-option-detail="Meeting transcripts"/);
+  assert.match(html, /<span class="cx-opt-label">Meeting transcripts<\/span>/);
+  assert.doesNotMatch(html, /data-connect-option-detail|7\/9\/26/);
   assert.doesNotMatch(html, /data-connect-card-actions/, 'no Skip or Submit on an answered card');
 });

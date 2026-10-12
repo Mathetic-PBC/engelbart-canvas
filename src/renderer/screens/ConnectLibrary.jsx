@@ -67,15 +67,14 @@ const CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:cen
   + '.bs-mark{flex:none;box-sizing:border-box;width:14px;height:14px;margin-top:3px;border:1.5px solid #c9c9c9;border-radius:50%;background:#fff}.bs-mark[data-square]{border-radius:4px}'
   + '[aria-checked="true"]>.bs-mark{border-color:#0070f3;background:#0070f3;box-shadow:inset 0 0 0 2.5px #fff}'
   + '.bs-why{display:block;margin-top:2px;font-size:12.5px;line-height:1.45;color:#8f8f8f}'
-  // Connect's compact options (2026-10-11): the why on the label's line, cut with an ellipsis; an ⓘ at the right when the
-  // option has a detail (or something was cut), its popover a real element. Modifiers, so @brainstorm's cards stay as they are.
+  // Connect's compact options (2026-10-12): the label with its why after it, both wrapping rather than cut off. An option's
+  // detail stays in its data but is not shown. Modifiers, so @brainstorm's cards stay as they are.
   + '.cx-opts{display:flex;flex-direction:column;gap:4px}.cx-opt-row{position:relative}'
   + '.bs-opt.cx-opt{align-items:flex-start;padding:7px 12px;font:14px/1.4 var(--font-sans)}.cx-opt>.bs-mark{margin-top:3px}'
   + '.cx-opt-text{flex:1;min-width:0;display:flex;flex-direction:column;gap:2px}'
   + '.cx-opt-line{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;row-gap:1px}'
   + '.cx-opt-label{min-width:0;overflow-wrap:anywhere}'
   + '.cx-opt-why{min-width:0;overflow-wrap:anywhere;font-size:12.5px;color:#8f8f8f}'
-  + '.cx-opt-detail{font:12.5px/1.45 var(--font-sans);color:#8f8f8f;white-space:pre-line;overflow-wrap:anywhere}'
   + '.bs-field{display:block;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;outline:none;resize:none;font:14px/1.5 var(--font-sans);color:#171717}.bs-field:focus{border-color:#c9c9c9}.bs-field::placeholder{color:#8f8f8f}'
   + '.bs-submit{padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;transition:opacity 120ms}.bs-submit:hover{opacity:.86}.bs-submit:disabled{background:#eaeaea;color:#8f8f8f;cursor:default;opacity:1}'
   + '.cx-btn{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border:1px solid #171717;border-radius:8px;background:#171717;color:#fff;cursor:pointer;font:500 12.5px/1 var(--font-sans);white-space:nowrap}.cx-btn:hover{opacity:.88}.cx-btn:disabled{opacity:.5;cursor:default}'
@@ -567,9 +566,9 @@ function ReposCard({ ask, live, onAnswer }) {
 }
 
 /**
- * One option (2026-10-12): its mark, its label with its why after it in grey, and its detail (what it covers) on the
- * line below, each wrapping rather than cut off. No ⓘ and no popover, and no "Recommended" tag: an option the librarian
- * recommends in a "multi" keeps `checked` in its data, but it is not shown.
+ * One option (2026-10-12): its mark and its label with its why after it in grey, wrapping rather than cut off. `checked`
+ * (the librarian's recommendation in a "multi") and `detail` (what the option covers) stay in its data but are not shown:
+ * no detail line, no ⓘ, no popover and no "Recommended" tag.
  */
 function ConnectOption({ option, many, on, live, onPick, onSubmitOne }) {
   return (
@@ -581,7 +580,6 @@ function ConnectOption({ option, many, on, live, onPick, onSubmitOne }) {
             <span className="cx-opt-label">{option.label}</span>
             {option.why ? <span className="cx-opt-why" data-connect-option-why="1">{option.why}</span> : null}
           </span>
-          {option.detail ? <span className="cx-opt-detail" data-connect-option-detail={option.label}>{option.detail}</span> : null}
         </span>
       </button>
     </div>

@@ -239,18 +239,18 @@ app.whenReady().then(async () => {
     await until(() => has(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]'), 'the survey\'s findings, one per line', 400);
     assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'role'), 'checkbox', 'several can be picked');
     await pause(400); // the chat scrolls to its newest message first
-    // What an option covers (2026-10-12): its detail on a line of its own under it, inside the window, never cut off (no ⓘ,
-    // no popover); none on an option without one. Nothing comes ticked, and no option is tagged "Recommended".
-    const detail = '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"] [data-connect-option-detail="ChatGPT item 1"]';
-    assert.equal(await has(wc, detail), true, 'the detail inside the option');
-    assert.match(await text(wc, detail), /ChatGPT item 1 · doc · 2026-10-01/);
-    assert.equal(await has(wc, '[data-connect-card="live"] [data-connect-option-detail="ChatGPT item 2"]'), false, 'no detail line without one');
-    const below = await js(wc, `(()=>{const d=document.querySelector(${JSON.stringify(detail)}).getBoundingClientRect();const l=document.querySelector('[data-connect-card="live"] [data-connect-option="ChatGPT item 1"] .cx-opt-label').getBoundingClientRect();const el=document.querySelector(${JSON.stringify(detail)});return d.top>=l.bottom-1&&d.width>0&&el.scrollWidth<=el.clientWidth+1&&getComputedStyle(el).textOverflow!=='ellipsis'})()`);
-    assert.equal(below, true, 'on its own line, under the label, not cut off');
+    // An option (2026-10-12): its label and its why, never cut off. Its detail stays in the data but is not shown (no
+    // detail line, no ⓘ, no popover). Nothing comes ticked, and no option is tagged "Recommended".
+    const item1 = '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]';
+    assert.equal(await has(wc, '[data-connect-option-detail], .cx-opt-detail'), false, 'no detail line');
+    assert.doesNotMatch(await text(wc, item1), /ChatGPT item 1 · doc · 2026-10-01/, 'the detail\'s text is not shown');
+    assert.match(await text(wc, `${item1} .cx-opt-label`), /^ChatGPT item 1$/);
+    const uncut = await js(wc, `(()=>{const el=document.querySelector(${JSON.stringify(item1 + ' .cx-opt-label')});return el.getBoundingClientRect().width>0&&el.scrollWidth<=el.clientWidth+1&&getComputedStyle(el).textOverflow!=='ellipsis'})()`);
+    assert.equal(uncut, true, 'the label is not cut off');
     assert.equal(await has(wc, '[data-connect-option-info], .cx-info, [role="tooltip"]'), false, 'no ⓘ and no popover');
     assert.equal(await has(wc, '[data-connect-option-recommended]'), false, 'no "Recommended" tag');
     assert.doesNotMatch(await text(wc, '[data-connect-card="live"]'), /Recommended/);
-    await shot(wc, '3b-option-detail');
+    await shot(wc, '3b-option');
     assert.equal(await attr(wc, '[data-connect-card="live"] [data-connect-option="ChatGPT item 1"]', 'aria-checked'), 'false', 'the recommendation comes unticked');
     assert.equal(await js(wc, 'document.querySelector("[data-connect-card=\\"live\\"] [data-connect-submit]").disabled'), true, 'Submit waits for a tick');
     // Skip and Submit pinned to the bottom of the chat while the card is live.
