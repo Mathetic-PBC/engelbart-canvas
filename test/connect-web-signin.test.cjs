@@ -197,10 +197,10 @@ test('"which repositories" is asked with the GitHub list, whatever kind the libr
  * sources() lists them; `checks` the answers Google's check page gives, in turn (true, false, null for no answer);
  * `held` a copy already in Engelbart's browser. Only fakes: no real profile, Keychain or network.
  */
-function google({ defaultName = 'Google Chrome', browsers = {}, checks = [], held: already = false, picks = {} } = {}) {
+function google({ defaultName = 'Google Chrome', browsers = {}, checks = [], held: already = false, picks = {}, openFails = [], extra = {} } = {}) {
   const NAMES = { chrome: ['Chrome', 'chromium', 'com.google.Chrome'], brave: ['Brave', 'chromium', 'com.brave.Browser'], firefox: ['Firefox', 'firefox', 'org.mozilla.firefox'] };
   let jar = already ? [{ domain: '.google.com', name: 'SID', path: '/', secure: true }] : [];
-  const calls = { checks: 0, imports: [], keychain: [], opened: [], openedIn: [], log: [], removed: 0 };
+  const calls = { checks: 0, imports: [], keychain: [], opened: [], openedIn: [], log: [], removed: 0, unlocked: [], ready: [] };
   const answers = [...checks];
   const cookieImport = {
     sources: () => Object.keys(browsers).map((id) => ({ id, name: NAMES[id][0], family: NAMES[id][1], bundle: NAMES[id][2], profiles: browsers[id].profiles.map(({ id: pid, name, email }) => ({ id: pid, name, ...(email ? { email } : {}) })) })),
@@ -220,6 +220,14 @@ function google({ defaultName = 'Google Chrome', browsers = {}, checks = [], hel
       calls.imports.push({ browser: id, profile, domains, quiet });
       jar = [...jar.filter((cookie) => cookie.name !== 'SID'), { domain: '.google.com', name: 'SID', path: '/', secure: true }];
     },
+    // macOS asked for a browser's key, nothing copied (2026-10-12: Continue).
+    unlock: async (id) => {
+      calls.unlocked.push(id);
+      if (browsers[id].deny) throw Object.assign(new Error('Keychain access was denied'), { denied: true });
+      return { browser: id, keychain: NAMES[id][1] === 'chromium' };
+    },
+    // Whether the browser is installed once macOS answered (`installed: false` is one Spotlight says is not).
+    ready: async (id) => { calls.ready.push(id); return browsers[id].installed !== false; },
   };
   const getSession = () => ({ cookies: {
     get: async ({ domain }) => jar.filter((cookie) => cookie.domain.endsWith(domain)),
@@ -228,8 +236,10 @@ function google({ defaultName = 'Google Chrome', browsers = {}, checks = [], hel
   const stored = { ...picks };
   const web = createWebSignIn({
     cookieImport, defaultBrowser: () => defaultName, getSession, pollMs: 1, timeoutMs: 200, sleep: () => new Promise((resolve) => setImmediate(resolve)),
-    openExternal: async (url) => { calls.opened.push(url); }, openIn: async (id, url) => { calls.openedIn.push([id, url]); },
+    openExternal: async (url) => { if (openFails.includes('default')) throw new Error('could not open'); calls.opened.push(url); },
+    openIn: async (id, url) => { if (openFails.includes(id)) throw new Error(`open -b failed for ${id}`); calls.openedIn.push([id, url]); },
     picks: { get: (key) => stored[key] || null, set: (key, pick) => { stored[key] = pick; } }, log: (line) => { calls.log.push(line); },
+    ...extra,
   });
   return { web, calls, stored, jar: () => jar, browsers };
 }
@@ -376,4 +386,88 @@ test('Safari only: nothing to read or open, and the browsers named are Chrome, B
   assert.deepEqual(await web.signIn('Gmail', { timeoutMs: Infinity }), { status: 'no-browser' });
   assert.deepEqual([calls.opened, calls.openedIn], [[], []]);
   assert.equal(require('../src/main/connect/web-signin.cjs').READABLE_NAMES, 'Chrome, Brave or Firefox');
+});
+
+/* "Make Chrome sign-ins dependable" follow-up (2026-10-12): Continue asks macOS first, a lighter wait, Use another account,
+   and browsers opened only once known to be installed. */
+
+const signedOut = () => ({ id: 'Default', name: 'Me', signedIn: false });
+
+test('unlock asks macOS for the browser\'s key and copies nothing; refused, nothing opens and it is not asked again', async () => {
+  const allowed = google({ browsers: { chrome: { profiles: [signedOut()] } } });
+  assert.deepEqual(await allowed.web.unlock('Gmail'), { status: 'allowed', browser: 'Chrome' });
+  assert.deepEqual([allowed.calls.unlocked, allowed.calls.imports, allowed.calls.opened, allowed.calls.openedIn], [['chrome'], [], [], []]);
+  assert.equal(allowed.web.keychainTarget('Gmail'), null, 'asked: the panel needs no line about macOS now');
+
+  const refused = google({ browsers: { chrome: { profiles: [signedOut()], deny: true } } });
+  const denied = new Set();
+  assert.deepEqual(await refused.web.unlock('Gmail', { denied }), { status: 'denied', browser: 'Chrome', browserId: 'chrome' });
+  assert.deepEqual([...denied], ['chrome']);
+  assert.deepEqual([refused.calls.opened, refused.calls.openedIn, refused.calls.imports], [[], [], []], 'nothing opens');
+  assert.deepEqual(await refused.web.unlock('Gmail', { denied }), { status: 'denied', browser: 'Chrome', browserId: 'chrome' });
+  assert.equal(refused.calls.unlocked.length, 1, 'refused this run: not asked again');
+  assert.deepEqual(refused.web.keychainTarget('Gmail'), { id: 'chrome', name: 'Chrome' }, 'Try again says macOS will ask');
+});
+
+test('unlock with Firefox: no Keychain, nothing asked', async () => {
+  const { web, calls } = google({ defaultName: 'Firefox', browsers: { firefox: { profiles: [{ id: 'x.default', name: 'default', signedIn: false }] } } });
+  assert.deepEqual(await web.unlock('Gmail'), { status: 'allowed', browser: '' });
+  assert.deepEqual(calls.unlocked, []);
+});
+
+test('the wait looks every 4 s for its first two minutes, then every 15 s', async () => {
+  const slept = [];
+  const controller = new AbortController();
+  const { web } = google({ browsers: { chrome: { profiles: [signedOut()] } }, extra: {
+    pollMs: 4000,
+    sleep: async (ms) => { slept.push(ms); if (slept.length === 40) controller.abort(); await new Promise((resolve) => setImmediate(resolve)); },
+  } });
+  assert.deepEqual(await web.signIn('Gmail', { timeoutMs: Infinity, signal: controller.signal }), { status: 'cancelled' });
+  assert.deepEqual(slept.slice(0, 30), Array(30).fill(4000), 'two minutes at 4 s');
+  assert.deepEqual(slept.slice(30), Array(10).fill(15_000), 'then 15 s');
+});
+
+test('Use another account opens Google\'s add-an-account page in the browser waited on; the wait goes on and takes that sign-in', async () => {
+  const { web, calls, browsers } = google({ defaultName: 'Safari', browsers: { chrome: { profiles: [signedOut()] } } });
+  assert.deepEqual(await web.anotherAccount('Gmail'), { opened: false, browser: '' }, 'nothing waited on yet');
+  let looks = 0;
+  let another = null;
+  const out = await web.signIn('Gmail', { timeoutMs: Infinity, signal: { get aborted() {
+    looks += 1;
+    if (looks === 2) another = web.anotherAccount('Google Meet'); // a row sharing the sign-in
+    if (looks === 4) browsers.chrome.profiles[0].signedIn = true; // the other account signs in there
+    return false;
+  } } });
+  assert.deepEqual(await another, { opened: true, browser: 'Chrome' });
+  assert.deepEqual(calls.openedIn, [['chrome', 'https://accounts.google.com/'], ['chrome', 'https://accounts.google.com/AddSession']]);
+  assert.deepEqual(out, { status: 'signed-in', browser: 'Chrome', opened: true });
+  assert.deepEqual(await web.anotherAccount('Gmail'), { opened: false, browser: '' }, 'the wait over: nothing to open');
+  assert.deepEqual(await web.anotherAccount('ChatGPT'), { opened: false, browser: '' }, 'Google\'s rows only');
+});
+
+test('a browser that fails to open is passed over for the next: Chrome failing, Brave opens', async () => {
+  const { web, calls, browsers } = google({ defaultName: 'Safari', openFails: ['chrome'], browsers: { chrome: { profiles: [signedOut()] }, brave: { profiles: [signedOut()] } } });
+  let looks = 0;
+  const out = await web.signIn('Gmail', { signal: { get aborted() { looks += 1; if (looks === 2) browsers.brave.profiles[0].signedIn = true; return false; } } });
+  assert.deepEqual(calls.openedIn, [['brave', 'https://accounts.google.com/']]);
+  assert.equal(out.status, 'signed-in');
+  assert.ok(calls.log.some((line) => /Chrome/.test(line) && /next browser/.test(line)));
+  const none = google({ defaultName: 'Safari', openFails: ['chrome', 'brave'], browsers: { chrome: { profiles: [signedOut()] }, brave: { profiles: [signedOut()] } } });
+  assert.deepEqual(await none.web.signIn('Gmail'), { status: 'no-browser' }, 'none opens: said as no browser');
+});
+
+test('a browser Spotlight says is not installed is never opened', async () => {
+  const { web, calls } = google({ defaultName: 'Safari', browsers: { chrome: { profiles: [signedOut()], installed: false }, firefox: { profiles: [{ id: 'x.default', name: 'default', signedIn: false }] } } });
+  const controller = new AbortController();
+  await web.signIn('Gmail', { timeoutMs: Infinity, signal: controller.signal, onOpened: () => controller.abort() });
+  assert.ok(calls.ready.includes('chrome'), 'its answer waited for');
+  assert.deepEqual(calls.openedIn, [['firefox', 'https://accounts.google.com/']]);
+});
+
+test('signInQuiet askedOnly: a browser macOS was never asked about this run is passed over (no new prompt)', async () => {
+  const { web, calls } = google({ browsers: { chrome: { profiles: [me()] } } });
+  assert.deepEqual(await web.signInQuiet('Gmail', { askedOnly: true }), { signedIn: false, browser: '', refused: '', refusedId: '' });
+  assert.deepEqual(calls.keychain, []);
+  await web.unlock('Gmail');
+  assert.deepEqual(await web.signInQuiet('Gmail', { askedOnly: true }), { signedIn: true, browser: 'Chrome' });
 });

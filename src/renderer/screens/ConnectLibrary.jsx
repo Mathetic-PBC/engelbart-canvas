@@ -6,7 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn, signsInThroughBrowser, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
+import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, gmailConsent, placedLine, unsignedWeb, signInGate, sharesSignIn, signsInThroughBrowser, waitingIn, webUnavailable, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
 import apple from '../../../design/assets/logos/apple.svg';
@@ -129,7 +129,7 @@ const LABEL_COLOR = { muted: '#c9c9c9', busy: '#a35200', error: '#e70022', '': '
  * checkboxes. A row not found is dimmed whole (`dim`): only an app read from this Mac that is not on it, never one in the
  * cloud, which says "Needs sign-in" instead (MATH-144, model/connect.js rowLabel).
  */
-function RowText({ name, on, sub, label, dim = false, tip: extra = '', onRetry = null }) {
+function RowText({ name, on, sub, label, dim = false, tip: extra = '', onRetry = null, onAnother = null }) {
   const tone = (label && label.text && label.tone) || '';
   const shown = label && label.text && tone ? label.text : ''; // muted ("Needs sign-in", "Not found"), busy, error
   const line = [shown, sub].filter(Boolean).join(' · ');
@@ -143,6 +143,8 @@ function RowText({ name, on, sub, label, dim = false, tip: extra = '', onRetry =
           {line}
           {/* macOS refused a browser's sign-ins (2026-10-10): asks it again. A link in the row's button, not a button in it. */}
           {label && label.retry && onRetry && <> · <span role="link" tabIndex={0} data-connect-retry={name} onClick={(event) => { event.stopPropagation(); onRetry(); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onRetry(); } }} style={{ color: '#171717', textDecoration: 'underline', cursor: 'pointer' }}>Try again</span></>}
+          {/* Google's row waiting on the browser (2026-10-12): Google's add-an-account page there; the wait goes on. */}
+          {label && label.another && onAnother && <> · <span role="link" tabIndex={0} data-connect-another={name} onClick={(event) => { event.stopPropagation(); onAnother(); }} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); event.stopPropagation(); onAnother(); } }} style={{ color: '#171717', textDecoration: 'underline', cursor: 'pointer' }}>Use another account</span></>}
         </span>
       )}
     </span>
@@ -160,19 +162,20 @@ function Toggle({ on }) {
 
 // A row dimmed: rowLabel says "Not found" only for an app read from this Mac that is not on it (Cursor, Codex, a folder
 // app), or for Websites with no browser and Local repos with none; a web app or Zotero is "Needs sign-in" (MATH-144).
-const notFound = (label) => !!label && label.text === 'Not found';
+// Off the Mac, a web app's row ("Not on Windows yet", 2026-10-12) is dimmed the same way, and can't be ticked.
+const notFound = (label) => !!label && (label.text === 'Not found' || !!label.unavailable);
 
 // `name` is the app's id (its logo, data-connect-app); the row shows the name the person knows it by (shownName). A
 // repository's row (`data` its own) shows the repository's name as it is.
-function AppRow({ name, on, onToggle, label, sub = '', tip = '', icon = null, data = name, onRetry = null, onSignIn = null }) {
+function AppRow({ name, on, onToggle, label, sub = '', tip = '', icon = null, data = name, onRetry = null, onSignIn = null, onAnother = null }) {
   const dim = notFound(label);
   const text = data === name ? shownName(name) : name;
   const signIn = !!(label && label.signIn && onSignIn);
   const press = (event) => { event.stopPropagation(); onSignIn(); };
   return (
-    <button type="button" className="hov-wash" data-connect-app={data} data-connect-not-found={dim ? '1' : undefined} onClick={onToggle} style={subRow}>
+    <button type="button" className="hov-wash" data-connect-app={data} data-connect-not-found={dim ? '1' : undefined} data-connect-unavailable={label && label.unavailable ? '1' : undefined} aria-disabled={label && label.unavailable ? 'true' : undefined} onClick={label && label.unavailable && !on ? undefined : onToggle} style={label && label.unavailable ? { ...subRow, cursor: 'default' } : subRow}>
       <span style={{ margin: '0 1px', display: 'flex', color: '#4d4d4d', opacity: dim ? 0.45 : 1 }}>{icon || logoOf(name) || (name === LOCAL_PDFS ? FOLDER : <span style={{ width: 14 }} />)}</span>
-      <RowText name={text} on={on} sub={sub} label={label} dim={dim} tip={tip} onRetry={onRetry} />
+      <RowText name={text} on={on} sub={sub} label={label} dim={dim} tip={tip} onRetry={onRetry} onAnother={onAnother} />
       {/* No browser of the person's could sign the app in (2026-10-11): its sign-in page in Engelbart's own browser. A link in the row's button, as Try again is. */}
       {signIn && <span role="button" tabIndex={0} data-connect-signin={name} onClick={press} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); press(event); } }} style={{ flex: 'none', font: '12px/1 var(--font-sans)', color: '#8f8f8f', textDecoration: 'underline', cursor: 'pointer' }}>Sign in</span>}
       <Box on={on} dim={dim} />
@@ -1045,6 +1048,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       if (spec.reach === 'connector' && (connectorStatus[app] || {}).pending) api.connectConnectorCancel(app).catch(() => {});
       return;
     }
+    if (webUnavailable(found, app)) return; // off the Mac (2026-10-12): web apps can't sign in there yet
     if (spec.reach === 'local' && !seen.found && !appFolders[app]) {
       const chosen = await pickDir();
       if (!chosen) return;
@@ -1098,10 +1102,36 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
       await Promise.all(panel.rows.filter(holds).map((row) => api.connectSignInPick(row.app, { browser: pick.browserId, profile: pick.profileId }).catch(() => false)));
     }
     const checked = panel.rows.filter((row) => row.route !== 'browser');
-    if (checked.length && panel.lead) setKeychainRun({ browser: pick ? pick.browser : browser, rows: checked });
+    const viaBrowser = panel.rows.filter((row) => row.route === 'browser');
+    const from = pick ? pick.browser : browser;
+    if (panel.lead && (checked.length || viaBrowser.length)) setKeychainRun({ browser: from, rows: [...checked, ...viaBrowser] });
     checked.forEach((row) => checkSignIn(row));
-    panel.rows.filter((row) => row.route === 'browser').forEach((row) => { void browserSignIn(row.id, row.app); });
+    if (!viaBrowser.length) return;
+    // Google's Sign in (2026-10-12): macOS asked now, while the modal says why ("Waiting for macOS…"), not minutes later
+    // when the sign-in shows up in the browser. Allowed: its page opens there, and the copy then asks nothing. Refused:
+    // nothing opens; the rows say "macOS didn't allow it" with Try again, as a check's refusal does.
+    if (panel.lead) {
+      const first = viaBrowser[0];
+      const group = sharesSignIn(first.app);
+      setSignIns((now) => { const next = { ...now }; for (const other of group) next[other] = { status: 'checking', browser: '', was: now[other] && now[other].status !== 'checking' ? now[other] : (now[other] || {}).was }; return next; });
+      const out = await api.connectSignInUnlock(first.app).catch(() => ({ status: 'allowed', browser: '' }));
+      if (out && out.status === 'refused') {
+        setSignIns((now) => { const next = { ...now }; for (const other of group) next[other] = { status: 'refused', browser: out.browser || from }; return next; });
+        setPicks((now) => groupRows(first.app).reduce((next, row) => tickRow(next, row.id, row.app, false), now));
+        return;
+      }
+      // Allowed: the modal leaves these rows to the row's own waiting line.
+      setKeychainRun((now) => {
+        if (!now) return now;
+        const rows = now.rows.filter((row) => !viaBrowser.some((each) => each.app === row.app));
+        return rows.length ? { ...now, rows } : null;
+      });
+    }
+    viaBrowser.forEach((row) => { void browserSignIn(row.id, row.app); });
   };
+  // Use another account (2026-10-12): Google's add-an-account page in the browser the sign-in is waited for in; the wait goes
+  // on, and copies whichever account signs in there.
+  const anotherAccount = (app) => { api.connectSignInAnotherAccount(app).catch(() => {}); };
   // Not now: the apps waiting on that browser are unticked.
   const declineSignIns = (browser) => {
     const rows = waitingYes[browser] || [];
@@ -1481,7 +1511,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
                   {open && (
                     <div style={{ position: 'relative', display: 'flex', flexDirection: 'column', gap: 1, padding: '1px 0 6px 26px' }}>
                       <span style={{ position: 'absolute', left: 33, top: 2, bottom: 8, width: 1, background: '#eaeaea' }} />
-                      {source.apps.map((app) => <AppRow key={app} name={app} label={label(app, source.id)} sub={rowSub(app)} tip={rowTip(app)} on={ticked(picks, source.id, app)} onToggle={() => toggleApp(source.id, app)} onRetry={() => retrySignIn(source.id, app)} onSignIn={() => { void signInHere(source.id, app); }} />)}
+                      {source.apps.map((app) => <AppRow key={app} name={app} label={label(app, source.id)} sub={rowSub(app)} tip={rowTip(app)} on={ticked(picks, source.id, app)} onToggle={() => toggleApp(source.id, app)} onRetry={() => retrySignIn(source.id, app)} onSignIn={() => { void signInHere(source.id, app); }} onAnother={() => anotherAccount(app)} />)}
                       {source.id === 'sites' && <AppRow name={BROWSER_ROW} icon={GLOBE} label={found && found.sites && found.sites.found ? { text: found.sites.where, tone: '' } : { text: 'Not found', tone: 'muted' }} on={ticked(picks, 'sites', BROWSER_ROW)} onToggle={() => setRow('sites', BROWSER_ROW, !ticked(picks, 'sites', BROWSER_ROW))} />}
                       {source.id === 'papers' && (folders.papers.length
                         ? folders.papers.map((dir) => <FolderRow key={dir} path={dir} onRemove={() => setFolders((now) => ({ ...now, papers: [] }))} />)

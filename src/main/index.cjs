@@ -41,7 +41,8 @@ const { assertTrustedRenderer, parseExternalUrl } = require('./ipc-validation.cj
 const { createStore, registerEngelbartIpc } = require('./ipc.cjs');
 const { stagePartition, createBrowserViews, registerBrowserIpc, cleanUserAgent } = require('./browser/views.cjs');
 const { execFile } = require('node:child_process');
-const { createCookieImport, keychainRunner, bundleOf, installedApp } = require('./browser/import-cookies.cjs');
+const { createCookieImport, keychainRunner, bundleOf } = require('./browser/import-cookies.cjs');
+const { createInstalledApps } = require('./browser/installed-apps.cjs');
 const { createGithub } = require('./github/connection.cjs');
 const { macOrgs } = require('./github/orgs.cjs');
 const { localRepos } = require('./connect/scan.cjs');
@@ -757,17 +758,14 @@ if (!hasSingleInstanceLock) {
     // Stage session every window's tabs read. Cookie values stay here — the handlers return domains and counts. The sign-in
     // checks go through net.request, which (unlike net.fetch) says where a redirect was going (import-cookies.cjs).
     // A browser counts only while its app is installed (2026-10-12: one dragged to the Trash leaves its profiles behind):
-    // macOS's answer by bundle id, kept a minute. ENGELBART_INSTALLED_BROWSERS (bundle ids, comma-separated) stands in for
-    // it in scripted runs, so they never depend on this Mac's apps.
-    const installedBrowsers = new Map();
-    const browserInstalled = (bundle) => {
-      if (process.env.ENGELBART_INSTALLED_BROWSERS != null) return process.env.ENGELBART_INSTALLED_BROWSERS.split(',').map((id) => id.trim()).includes(bundle);
-      const known = installedBrowsers.get(bundle);
-      if (known && Date.now() - known.at < 60_000) return known.yes;
-      const yes = installedApp(bundle);
-      installedBrowsers.set(bundle, { at: Date.now(), yes });
-      return yes;
-    };
+    // looked for in /Applications first, else Spotlight asked in the background and its answer kept, never synchronously
+    // (./browser/installed-apps.cjs). ENGELBART_INSTALLED_BROWSERS (bundle ids, comma-separated) stands in for it in
+    // scripted runs, so they never depend on this Mac's apps.
+    const installedApps = createInstalledApps({
+      override: process.env.ENGELBART_INSTALLED_BROWSERS != null ? process.env.ENGELBART_INSTALLED_BROWSERS.split(',').map((id) => id.trim()).filter(Boolean) : null,
+    });
+    const browserInstalled = (bundle) => installedApps.has(bundle);
+    const browserSettled = (bundle) => installedApps.settled(bundle);
     const cookieImport = process.platform === 'darwin' ? createCookieImport({
       supportDir: path.join(app.getPath('home'), 'Library', 'Application Support'),
       userDataDir: app.getPath('userData'),
@@ -775,6 +773,7 @@ if (!hasSingleInstanceLock) {
       request: (options) => net.request(options),
       keychain: keychainRunner,
       installed: browserInstalled,
+      settled: browserSettled,
     }) : null;
     registerBrowserIpc({ ipcMain, trustedHandler, viewsFor: (event) => { const ctx = windows.of(event.sender); return ctx ? ctx.browserViews : null; }, cookieImport });
     // GitHub (src/main/github): default-browser sign-in with an automatic loopback return, and the token
@@ -972,6 +971,7 @@ if (!hasSingleInstanceLock) {
         // A copy is checked before it counts (2026-10-12): Google's check page over the Stage's session.
         request: (options) => net.request(options),
         installed: browserInstalled,
+        settled: browserSettled,
         keychain: (name) => {
           if (!keychainKeys.has(name)) keychainKeys.set(name, keychainRunner(name, undefined, { timeoutMs: 10 * 60_000 }).catch((error) => { keychainKeys.delete(name); throw error; }));
           return keychainKeys.get(name);
@@ -1049,6 +1049,7 @@ if (!hasSingleInstanceLock) {
       connectors,
       appleNotes,
       connectSignedIn,
+      warmBrowsers: () => (process.platform === 'darwin' ? installedApps.ask() : undefined),
       // Made below, after this: the window's update banner asks for it when it is used.
       getUpdates: () => updates,
       github,

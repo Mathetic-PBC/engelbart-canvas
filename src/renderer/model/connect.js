@@ -35,9 +35,25 @@ export function rowsOf(sourceId) {
   return source ? source.apps : [];
 }
 
+/**
+ * What a web app's row says off the Mac (2026-10-12, until Engelbart's own sign-in window works there): "Not on Windows
+ * yet", "Not on Linux yet"; '' on the Mac. Web apps' sign-ins are copied from the person's browser, which only the Mac
+ * does. `platform` is main's (connect-detect's `platform`, process.platform); none given counts as the Mac.
+ */
+export function notOnYet(platform) {
+  if (!platform || platform === 'darwin') return '';
+  return `Not on ${platform === 'win32' ? 'Windows' : platform === 'linux' ? 'Linux' : 'this computer'} yet`;
+}
+
+/** Whether `app` is a web app that can't be read on this computer (notOnYet): it can't be ticked. */
+export function webUnavailable(found, app) {
+  return !!(found && notOnYet(found.platform) && APPS[app] && APPS[app].reach === 'web');
+}
+
 /** Whether a row was found (on this Mac, signed in to, connected): what the header and Select all tick. */
 export function foundRow(found, sourceId, row) {
   if (!found) return false;
+  if (webUnavailable(found, row)) return false;
   if (sourceId === 'sites') return !!(found.sites && found.sites.found);
   if (sourceId === 'code') return row === 'GitHub' ? !!(found.github && found.github.found) : (found.localRepos || []).length > 0;
   return !!(found.apps && found.apps[row] && found.apps[row].found);
@@ -180,6 +196,8 @@ export function rowLabel(app, { found = null, connectors = {}, notes = '', folde
     return notes ? { text: notes, tone: 'error' } : { text: '', tone: '' };
   }
   if (spec.reach === 'web') {
+    // Off the Mac: no Sign in, no "Google needs…", and it can't be ticked (`unavailable`).
+    if (webUnavailable(found, app)) return { text: notOnYet(found.platform), tone: 'muted', unavailable: true };
     const said = signInLabel(signIn, app);
     if (said) return said;
     if (seen.signedIn) return { text: 'signed in to Engelbart', tone: '' };
@@ -210,7 +228,8 @@ function signInLabel(signIn, app = '') {
   const google = signsInThroughBrowser(app);
   if (signIn.status === 'checking') return { text: 'Waiting for macOS…', tone: 'busy' };
   if (signIn.status === 'signing') return { text: 'Signing in…', tone: 'busy' };
-  if (signIn.status === 'browser') return { text: waitingIn(signIn.browser), tone: 'busy' };
+  // Google's, waited for in the browser: "Use another account" beside it (2026-10-12).
+  if (signIn.status === 'browser') return { text: waitingIn(signIn.browser), tone: 'busy', ...(google ? { another: true } : {}) };
   if (signIn.status === 'signed-in') return { text: signIn.browser ? `✓ Signed in from ${signIn.browser}${signIn.profile ? ` · ${signIn.profile}` : ''}` : '✓ Signed in', tone: 'ok' };
   if (signIn.status === 'no-browser' && google) return { text: GOOGLE_NEEDS, tone: 'error' };
   if (signIn.status === 'signed-out' || signIn.status === 'no-browser') return { text: '', tone: '', signIn: true };
@@ -229,7 +248,7 @@ export function unsignedWeb(state, signIns = {}, found = null, consent = true) {
   const out = [];
   for (const source of SOURCES) {
     for (const app of source.apps) {
-      if ((APPS[app] || {}).reach !== 'web' || !Object.hasOwn(SIGN_IN_COOKIES, app) || !ticked(state, source.id, app)) continue;
+      if ((APPS[app] || {}).reach !== 'web' || !Object.hasOwn(SIGN_IN_COOKIES, app) || !ticked(state, source.id, app) || webUnavailable(found, app)) continue;
       if (found && found.apps && found.apps[app] && found.apps[app].signedIn) continue;
       const status = (signIns[app] || {}).status;
       if (status === 'signed-in' || status === 'checking') continue;

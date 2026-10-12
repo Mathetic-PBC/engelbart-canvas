@@ -295,6 +295,17 @@ function registrableDomain(host) {
 //    copy would overwrite the real top-level sign-in of the same name, domain and path.
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
+// Google's cookies tied to the browser that made them (2026-10-12): rotated in that browser and checked against it, so a
+// copy goes stale and can end the sign-in it came with. Never copied, wherever Google's sign-in is (the Stage's import and
+// Connect's); counted as skipped, not failed.
+const GOOGLE_BOUND_COOKIES = new Set(['SIDCC', '__Secure-1PSIDCC', '__Secure-3PSIDCC', '__Secure-STRP', 'AEC']);
+
+/** Whether a cookie (host, name) is one of Google's bound to the browser that made it (GOOGLE_BOUND_COOKIES). */
+function boundToBrowser(cookie) {
+  const domain = registrableDomain(cookie.host || '');
+  return /^google\.[a-z.]+$/.test(domain) && GOOGLE_BOUND_COOKIES.has(String(cookie.name || ''));
+}
+
 /** Whether a Chromium row is the plain, live cookie (see above). `now` is Unix seconds. */
 function chromiumKept(row, now) {
   if (row.topFrameSiteKey) return false;
@@ -540,11 +551,14 @@ function profilesFor(browser, supportDir) {
  *  - `keychain(serviceName)`: the Keychain password for a Chromium browser, or a thrown denial or miss (CK-05).
  *  - `now()`       : the time written into the record, and what an expired cookie is expired by.
  *  - `checkTimeoutMs`: how long a sign-in check may take (CHECK_TIMEOUT_MS).
- *  - `installed(bundleId)`: whether macOS has that browser's app (installedApp). A browser dragged to the Trash leaves its
- *    profiles behind, so without its app it is never listed, read, copied from or opened (2026-10-12). A browser with no
- *    confirmed bundle id is then left out too. Without `installed`, every browser whose folder is there is listed.
+ *  - `installed(bundleId)`: whether macOS has that browser's app, answered at once (./installed-apps.cjs `has`). A browser
+ *    dragged to the Trash leaves its profiles behind, so without its app it is never listed, read, copied from or opened
+ *    (2026-10-12). A browser with no confirmed bundle id is then left out too. Without `installed`, every browser whose
+ *    folder is there is listed.
+ *  - `settled(bundleId)`: the same, once macOS has answered (at most ~2 s; ./installed-apps.cjs `settled`) → Promise<boolean>.
+ *    Waited for before macOS is asked for a browser's key (`unlock`, `import`) or a page is opened in it (`ready`).
  */
-function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), getSession, request = null, keychain, now = () => new Date(), checkTimeoutMs = CHECK_TIMEOUT_MS, installed = null }) {
+function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), getSession, request = null, keychain, now = () => new Date(), checkTimeoutMs = CHECK_TIMEOUT_MS, installed = null, settled = null }) {
   const importsFile = path.join(userDataDir || '.', 'browser-imports.json');
   const unixNow = () => Math.floor(now().getTime() / 1000);
 
@@ -564,6 +578,47 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     if (typeof installed !== 'function') return true;
     if (!browser.bundle) return false;
     try { return !!installed(browser.bundle); } catch { return false; }
+  }
+
+  /** Whether the browser is installed, once macOS has answered (`settled`), else as `has` says → Promise<boolean>. */
+  async function ready(browserId) {
+    const browser = BY_ID.get(browserId);
+    if (!browser || !has(browser)) return false;
+    if (typeof settled !== 'function' || !browser.bundle) return true;
+    try { return !!(await settled(browser.bundle)); } catch { return true; }
+  }
+
+  /** The browser's Keychain key, asked of macOS after its install answer (`ready`); a refusal thrown as `run` throws it. */
+  async function keyOf(browser) {
+    if (!(await ready(browser.id))) throw Object.assign(new Error(`${browser.name} is not installed.`), { notInstalled: true, browser: browser.name });
+    try {
+      return deriveKey(await keychain(browser.keychain));
+    } catch (error) {
+      const failure = keychainFailure(error);
+      const thrown = new Error(failure === 'not-found'
+        ? `Engelbart couldn't find ${browser.name}'s key in the Keychain, so its cookies can't be read. Nothing was imported.`
+        : failure === 'denied'
+          ? `Engelbart needs Keychain access to read ${browser.name}'s cookies, and the request was denied. Nothing was imported.`
+          : `Engelbart could not read ${browser.name}'s Keychain key. Nothing was imported.`);
+      // Which way it failed, for a caller that goes on to another browser (../connect/web-signin.cjs).
+      thrown.denied = failure === 'denied';
+      thrown.notFound = failure === 'not-found';
+      thrown.browser = browser.name;
+      throw thrown;
+    }
+  }
+
+  /**
+   * Ask macOS for a Chromium browser's Keychain key now, copying nothing (2026-10-12: Connect's Continue, so the prompt comes
+   * while the person is looking at what it is for, not minutes later) → { browser, keychain: true } | { browser, keychain:
+   * false } (Firefox, which has none). The caller's `keychain` keeps the key for the run, so a copy later needs no prompt.
+   */
+  async function unlock(browserId) {
+    const browser = BY_ID.get(browserId);
+    if (!browser) throw new Error('That browser is not one Engelbart can import from.');
+    if (browser.family !== 'chromium') return { browser: browser.id, keychain: false };
+    await keyOf(browser);
+    return { browser: browser.id, keychain: true };
   }
 
   function resolveProfile(browserId, profileId) {
@@ -655,26 +710,11 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     const want = new Set((Array.isArray(wanted) ? wanted : []).map((d) => String(d).toLowerCase()));
     if (!want.size) return { browser: browser.id, profile: profile.name, imported: 0, skipped: 0, sessionOnly: 0, checks: [] };
 
-    let key = null;
-    if (browser.family === 'chromium') {
-      try {
-        key = deriveKey(await keychain(browser.keychain));
-      } catch (error) {
-        const failure = keychainFailure(error);
-        const thrown = new Error(failure === 'not-found'
-          ? `Engelbart couldn't find ${browser.name}'s key in the Keychain, so its cookies can't be read. Nothing was imported.`
-          : failure === 'denied'
-            ? `Engelbart needs Keychain access to read ${browser.name}'s cookies, and the request was denied. Nothing was imported.`
-            : `Engelbart could not read ${browser.name}'s Keychain key. Nothing was imported.`);
-        // Which way it failed, for a caller that goes on to another browser (../connect/web-signin.cjs).
-        thrown.denied = failure === 'denied';
-        thrown.notFound = failure === 'not-found';
-        thrown.browser = browser.name;
-        throw thrown;
-      }
-    }
+    const key = browser.family === 'chromium' ? await keyOf(browser) : null;
 
-    const { cookies, skipped } = readProfile(browser, profile, key, want);
+    const read = readProfile(browser, profile, key, want);
+    const cookies = read.cookies.filter((cookie) => !boundToBrowser(cookie));
+    const skipped = read.skipped + (read.cookies.length - cookies.length);
     const session = getSession();
     const store = session.cookies;
     let imported = 0;
@@ -709,23 +749,7 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     return { browser: browser.id, profile: profile.name, imported, skipped, sessionOnly, checks };
   }
 
-  return { sources, domains, cookieNames, check, import: run };
-}
-
-/**
- * Whether macOS has an app with `bundleId` installed, outside the Trash (2026-10-12): Spotlight's index of bundle ids
- * (`mdfind "kMDItemCFBundleIdentifier == '<id>'"`, through `run`, execFileSync or a fake), each path it gives still there.
- * A Spotlight that cannot answer (indexing off, an error) is not taken as "not installed": the browser counts.
- */
-function installedApp(bundleId, { run = require('node:child_process').execFileSync, exists = (p) => existsDir(p) } = {}) {
-  if (!/^[\w.-]+$/.test(String(bundleId || ''))) return false;
-  let out = '';
-  try {
-    out = String(run('/usr/bin/mdfind', [`kMDItemCFBundleIdentifier == '${bundleId}'`], { encoding: 'utf8', timeout: 5000 }) || '');
-  } catch {
-    return true;
-  }
-  return out.split('\n').map((line) => line.trim()).filter(Boolean).some((found) => /\.app$/i.test(found) && !/\/\.Trash\//.test(found) && exists(found));
+  return { sources, domains, cookieNames, check, import: run, unlock, ready };
 }
 
 // `security` exits with the low byte of the Keychain's OSStatus (2026-10-06): 44 is errSecItemNotFound (-25300), no key of
@@ -771,7 +795,8 @@ function keychainRunner(serviceName, run = execFile, { timeoutMs = 60000 } = {})
 }
 
 module.exports = {
-  installedApp,
+  GOOGLE_BOUND_COOKIES,
+  boundToBrowser,
   CHROMIUM,
   FIREFOX,
   bundleOf,

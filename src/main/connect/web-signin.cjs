@@ -51,7 +51,15 @@ const BROWSER_NAMES = [[/chromium/i, 'chromium'], [/canary/i, null], [/chrome/i,
 // The browsers a sign-in page opens in when the default can't be read (Safari), in this order.
 const OPEN_ORDER = ['chrome', 'brave', 'firefox'];
 
+// "Use another account" on a Google row waiting on the browser (2026-10-12): Google's add-an-account page, in that browser,
+// straight to signing another account in.
+const ANOTHER_ACCOUNT_PAGE = 'https://accounts.google.com/AddSession';
+
+// A wait looks at the browser's cookies every POLL_MS for its first FAST_FOR_MS, then every SLOW_POLL_MS (2026-10-12): each
+// look copies the cookie databases, so a wait left open for an hour should not do it every few seconds.
 const POLL_MS = 4000;
+const SLOW_POLL_MS = 15_000;
+const FAST_FOR_MS = 2 * 60_000;
 const TIMEOUT_MS = 5 * 60_000;
 // How long one check's answer stands for every app on that site.
 const CHECK_CACHE_MS = 3 * 60_000;
@@ -84,9 +92,11 @@ const pickKey = (app) => (SIGN_IN_COOKIES[app] || [])[0] || '';
  * url)` opens one in another installed browser; `getSession()` the Stage's session (where the agents' sign-ins are);
  * `picks` { get(key) → { browser, profile } | null, set(key, pick) } the profiles the person picked; `log(line)` what is
  * worth noting (a check with no answer).
- * → { supports, signedIn, browserName, signIn, signInQuiet, keychainTarget, keychainNote, holdersOf, picked, choose, opensIn }
+ * `pollMs` / `slowPollMs` / `fastForMs` how often a wait looks again (POLL_MS…).
+ * → { supports, signedIn, browserName, signIn, signInQuiet, unlock, anotherAccount, keychainTarget, keychainNote, holdersOf,
+ *     picked, choose, opensIn }
  */
-function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal, openIn = null, getSession, picks = null, log = () => {}, pollMs = POLL_MS, timeoutMs = TIMEOUT_MS, checkCacheMs = CHECK_CACHE_MS, now = () => Date.now(), sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }) }) {
+function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal, openIn = null, getSession, picks = null, log = () => {}, pollMs = POLL_MS, slowPollMs = SLOW_POLL_MS, fastForMs = FAST_FOR_MS, timeoutMs = TIMEOUT_MS, checkCacheMs = CHECK_CACHE_MS, now = () => Date.now(), sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }) }) {
   // The Chromium browsers whose Keychain key has been asked for while Engelbart runs (keychainNote).
   const asked = new Set();
   // One import per browser at a time: two apps looked at together wait for the one answer macOS gives (a refusal is then
@@ -99,6 +109,8 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   };
   // Each checked site's last answer, { at, answer: Promise<true | false | null> }, shared by the apps on it.
   const verdicts = new Map();
+  // The browser each sign-in (by its cookie's site) is being waited for in, while signIn waits: "Use another account".
+  const waitingIn = new Map();
 
   /** A web app whose sign-in cookie is known: the only ones whose sign-in can be told apart, so brought over. */
   const supports = (app) => !!(cookieImport && SIGN_IN_COOKIES[app] && appOf(app) && appOf(app).reach === 'web');
@@ -211,11 +223,47 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
    * else Firefox, whichever is installed (the importer lists only installed ones), else the first that can be opened.
    */
   function opener(sources) {
+    return openers(sources)[0] || null;
+  }
+
+  /** Every browser a sign-in page can open in, in opener's order: the next is tried when one fails to open. */
+  function openers(sources) {
     const defaultId = browserIdOf(defaultBrowser());
-    return sources.find((source) => source.id === defaultId)
-      || OPEN_ORDER.map((id) => sources.find((source) => source.id === id && source.bundle)).find(Boolean)
-      || sources.find((source) => source.bundle)
-      || null;
+    const out = [];
+    const add = (source) => { if (source && !out.includes(source)) out.push(source); };
+    add(sources.find((source) => source.id === defaultId));
+    for (const id of OPEN_ORDER) add(sources.find((source) => source.id === id && source.bundle));
+    for (const source of sources) if (source.bundle) add(source);
+    return out;
+  }
+
+  /** Whether a browser counts as installed once macOS has answered (at most ~2 s), so one that is not is never opened. */
+  async function installedNow(source) {
+    if (!cookieImport || typeof cookieImport.ready !== 'function') return true;
+    try { return !!(await cookieImport.ready(source.id)); } catch { return true; }
+  }
+
+  /** Open `url` in `source`: the default browser through openExternal, any other with `open -b` (openIn). */
+  async function openPage(source, url) {
+    if (source.id === browserIdOf(defaultBrowser()) || !openIn) await openExternal(url);
+    else await openIn(source.id, url);
+  }
+
+  /**
+   * Open `url` in the first of `sources` (openers' order) that is installed and opens → the source, or null. One that fails
+   * to open (`open -b` erring) is passed over for the next (2026-10-12), not the end of the sign-in.
+   */
+  async function openFirst(sources, url) {
+    for (const source of openers(sources)) {
+      if (!(await installedNow(source))) continue;
+      try {
+        await openPage(source, url);
+        return source;
+      } catch (error) {
+        log(`Couldn't open a page in ${source.name} (${(error && error.message) || error}): trying the next browser.`);
+      }
+    }
+    return null;
   }
 
   /** The browser `app`'s sign-in page would open in (signIn), by name, or '' when none can be read. */
@@ -232,7 +280,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
    * is dropped and the next tried; `seen` (shared across a wait's looks) keeps such a profile from being copied again until
    * its browser has set the sign-in anew. `profile` is named only when the browser has more than one.
    */
-  async function bringOver(app, sources, denied, seen = new Map()) {
+  async function bringOver(app, sources, denied, seen = new Map(), { askedOnly = false } = {}) {
     const domains = domainsOf(app);
     const pick = picked(app);
     const candidates = [];
@@ -250,6 +298,8 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
       const cookie = holding(app, source, profile);
       if (!cookie) continue;
       if (denied.has(source.id)) { refused = refused || source; continue; }
+      // `askedOnly`: a Chromium browser macOS has not been asked about this run is passed over, so no prompt comes up.
+      if (askedOnly && source.family === 'chromium' && !asked.has(source.id)) continue;
       const key = `${source.id}/${profile.id}`;
       if (seen.has(key) && seen.get(key) === cookie.stamp) { dead = true; continue; }
       try {
@@ -285,32 +335,40 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
    * { status: 'no-browser' } (none can be read) | { status: 'unsupported', browser } (no known sign-in cookie).
    * `onOpened(browser)` once the sign-in page is open there. Held already and working: signed in, and macOS is not asked.
    * `timeoutMs` Infinity waits until signed in or `signal` aborts (Google's Sign in on the choose screen, 2026-10-12).
+   * `denied` the browsers macOS refused this run (not asked again; one refusing now is added).
    */
-  async function signIn(app, { signal = null, onOpened = () => {}, timeoutMs: limit = timeoutMs } = {}) {
+  async function signIn(app, { signal = null, onOpened = () => {}, timeoutMs: limit = timeoutMs, denied: deniedBefore = null } = {}) {
     const held = supports(app) ? await live(app) : { live: await signedIn(app) };
     if (held.live) return { status: 'signed-in', browser: '', opened: false, ...(held.unchecked ? { unchecked: true } : {}) };
     if (!supports(app) || !cookieImport) return { status: 'unsupported', browser: browserName() };
     const sources = readable();
     if (!sources.length) return { status: 'no-browser' };
-    const denied = new Set();
+    const denied = deniedBefore || new Set();
     const seen = new Map();
     const first = await bringOver(app, sources, denied, seen);
     if (first.browser) return { status: 'signed-in', ...from(first), opened: false };
     if (first.refused) return { status: 'denied', browser: first.refused, browserId: first.refusedId };
     if (signal && signal.aborted) return { status: 'cancelled' };
-    const target = opener(sources);
-    if (!target) return { status: 'no-browser' };
     const url = SIGN_IN_PAGES[app] || appOf(app).start;
-    if (target.id === browserIdOf(defaultBrowser()) || !openIn) await openExternal(url);
-    else await openIn(target.id, url);
+    const target = await openFirst(sources, url);
+    if (!target) return { status: 'no-browser' };
     onOpened(target.name);
-    const until = Date.now() + limit;
-    while (Date.now() < until) {
-      await sleep(pollMs);
-      if (signal && signal.aborted) return { status: 'cancelled' };
-      const found = await bringOver(app, sources, denied, seen);
-      if (found.browser) return { status: 'signed-in', ...from(found), opened: true };
-      if (found.refused) return { status: 'denied', browser: found.refused, browserId: found.refusedId };
+    const key = pickKey(app);
+    waitingIn.set(key, target);
+    try {
+      const until = Date.now() + limit;
+      let waited = 0;
+      while (Date.now() < until) {
+        const wait = waited < fastForMs ? pollMs : slowPollMs;
+        await sleep(wait);
+        waited += wait;
+        if (signal && signal.aborted) return { status: 'cancelled' };
+        const found = await bringOver(app, sources, denied, seen);
+        if (found.browser) return { status: 'signed-in', ...from(found), opened: true };
+        if (found.refused) return { status: 'denied', browser: found.refused, browserId: found.refusedId };
+      }
+    } finally {
+      if (waitingIn.get(key) === target) waitingIn.delete(key);
     }
     return { status: 'timeout', browser: target.name };
   }
@@ -319,16 +377,68 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
    * Whether the app's sign-in is in Engelbart's browser and works, or can be brought over without opening anything →
    * { signedIn, browser, profile?, unchecked?, refused, refusedId, noBrowser }. A copy held that is signed out is copied
    * again from the browser and checked again. `denied` is shared across checks (the choose screen's lasts while Engelbart
-   * runs), so macOS is never asked twice about one browser; `noBrowser` when no browser's cookies can be read.
+   * runs), so macOS is never asked twice about one browser; `noBrowser` when no browser's cookies can be read. `askedOnly`
+   * (a sign-in lost partway through a run, 2026-10-12): only browsers macOS was asked about already, so it asks nothing new;
+   * `fresh` the copy held dropped first, as an agent found it signed out.
    */
-  async function signInQuiet(app, { denied = new Set() } = {}) {
+  async function signInQuiet(app, { denied = new Set(), askedOnly = false, fresh = false } = {}) {
     if (!supports(app) || !cookieImport) return { signedIn: false, browser: '' };
-    const held = await live(app);
+    // `fresh`: the copy held is known not to work (an agent hit the app's login page): dropped, and copied anew.
+    if (fresh) await drop(app);
+    const held = fresh ? { live: false } : await live(app);
     if (held.live) return { signedIn: true, browser: '', ...(held.unchecked ? { unchecked: true } : {}) };
     const sources = readable();
     if (!sources.length) return { signedIn: false, browser: '', noBrowser: true };
-    const found = await bringOver(app, sources, denied).catch(() => ({}));
+    const found = await bringOver(app, sources, denied, new Map(), { askedOnly }).catch(() => ({}));
     return found.browser ? { signedIn: true, ...from(found) } : { signedIn: false, browser: '', refused: found.refused || '', refusedId: found.refusedId || '' };
+  }
+
+  /**
+   * "Use another account" (2026-10-12): while `app`'s sign-in (a Google one) is waited for in a browser, Google's
+   * add-an-account page opens in that same browser. The wait goes on, and copies whichever account signs in there → { opened, browser }.
+   */
+  async function anotherAccount(app) {
+    if (!supports(app) || pickKey(app) !== 'google.com') return { opened: false, browser: '' };
+    const target = waitingIn.get(pickKey(app));
+    if (!target) return { opened: false, browser: '' };
+    try {
+      await openPage(target, ANOTHER_ACCOUNT_PAGE);
+      return { opened: true, browser: target.name };
+    } catch (error) {
+      log(`Couldn't open Google's add-an-account page in ${target.name} (${(error && error.message) || error}).`);
+      return { opened: false, browser: target.name };
+    }
+  }
+
+  /**
+   * Ask macOS for the Keychain key of the browser `app`'s sign-in will be copied from, before anything opens (2026-10-12:
+   * Google's Sign in asked only once the sign-in showed up, minutes later, with nothing on screen explaining it). Copies
+   * nothing; the key is kept for the run, so the copy later needs no second prompt →
+   *   { status: 'allowed', browser } (or nothing to ask: Firefox, asked already, no browser) |
+   *   { status: 'denied', browser, browserId }.
+   * A browser in `denied` (refused this run) is not asked again.
+   */
+  async function unlock(app, { denied = null } = {}) {
+    if (!supports(app) || !cookieImport || typeof cookieImport.unlock !== 'function') return { status: 'allowed', browser: '' };
+    const target = keychainTarget(app);
+    if (!target) return { status: 'allowed', browser: '' };
+    if (denied && denied.has(target.id)) return { status: 'denied', browser: target.name, browserId: target.id };
+    try {
+      await oneAtATime(target.id, () => {
+        asked.add(target.id);
+        return cookieImport.unlock(target.id);
+      });
+      return { status: 'allowed', browser: target.name };
+    } catch (error) {
+      if (error && error.denied) {
+        if (denied) denied.add(target.id);
+        // Try again comes back here through the panel, which says macOS will ask: not counted as asked.
+        asked.delete(target.id);
+        return { status: 'denied', browser: target.name, browserId: target.id };
+      }
+      // Not installed after all, or no key yet (a browser that never stored one): nothing to ask; the copy says what it finds.
+      return { status: 'allowed', browser: target.name };
+    }
   }
 
   /**
@@ -353,7 +463,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     return target ? `macOS will ask to use ${target.name}'s sign-ins. Choose Allow.` : '';
   }
 
-  return { supports, signedIn, browserName, signIn, signInQuiet, keychainTarget, keychainNote, holdersOf, picked, choose, opensIn };
+  return { supports, signedIn, browserName, signIn, signInQuiet, unlock, anotherAccount, keychainTarget, keychainNote, holdersOf, picked, choose, opensIn };
 }
 
-module.exports = { createWebSignIn, SIGN_IN_COOKIES, SIGN_IN_PAGES, READABLE_NAMES, domainsOf, browserIdOf };
+module.exports = { createWebSignIn, SIGN_IN_COOKIES, SIGN_IN_PAGES, ANOTHER_ACCOUNT_PAGE, READABLE_NAMES, domainsOf, browserIdOf };

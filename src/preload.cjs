@@ -135,6 +135,8 @@ const engelbartAPI = Object.freeze({
   connectSignInNote: invoke('connect-signin-note'), // (app, route?) → { browser, note, profiles, opens }
   connectSignInPick: invoke('connect-signin-pick'), // (app, { browser, profile }) → remembered for that sign-in
   connectSignInBrowser: invoke('connect-signin-browser'), // (app) → { status: 'signed-in' | 'refused' | 'no-browser' | 'cancelled', browser, profile? }
+  connectSignInUnlock: invoke('connect-signin-unlock'), // (app) → { status: 'allowed' | 'refused', browser }: macOS asked for the browser's sign-ins, nothing copied
+  connectSignInAnotherAccount: invoke('connect-signin-another-account'), // (app) → { opened, browser }: Google's account chooser, in the browser waited on
   connectSignInBrowserCancel: invoke('connect-signin-browser-cancel'), // (app?) ends that wait (every wait without an app)
   connectSignInCheck: invoke('connect-signin-check'), // (app, retry?) → { status, browser }
   connectFoldersNeeded: invoke('connect-folders-needed'), // (choices) → [{ id, name }] protected folders not asked about yet (MATH-110)

@@ -59,6 +59,8 @@ const MAX_JOBS = 40;
 const MAX_LOG = 400;
 const SHOWN_LOG = 150;
 const NEED_WAIT_MS = 170_000;
+// A web app's sign-in copied again mid-run (signInAgain): another agent asking within this long of it shares its answer.
+const SIGN_IN_AGAIN_SHARED_MS = 30_000;
 const SIGN_IN_CHECK_MS = 10_000; // the sign-ins looked at before the surveys start, all together, at most this long
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ASK_KINDS = new Set(['single', 'multi', 'open', 'repos']);
@@ -913,7 +915,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const key = signInGroup(app);
     if (browserWaits.has(key)) return browserWaits.get(key).done;
     const controller = new AbortController();
-    const done = webSignIn.signIn(app, { signal: controller.signal, timeoutMs: Infinity }).catch(() => ({ status: 'cancelled' })).then((out) => {
+    const done = webSignIn.signIn(app, { signal: controller.signal, timeoutMs: Infinity, denied: signInDenied }).catch(() => ({ status: 'cancelled' })).then((out) => {
       browserWaits.delete(key);
       if (out.status === 'signed-in') {
         const kept = { status: 'signed-in', browser: out.browser || '', browserId: '', ...(out.profile ? { profile: out.profile } : {}) };
@@ -930,6 +932,29 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     });
     browserWaits.set(key, { controller, done });
     return done;
+  }
+
+  /**
+   * Continue on the Keychain panel for a sign-in through the person's browser (2026-10-12): macOS asked for that browser's
+   * sign-ins now, before its page opens, copying nothing (webSignIn.unlock; the key is kept for the run, so the copy when
+   * the sign-in shows up asks nothing). → { status: 'allowed', browser } | { status: 'refused', browser }: refused, every
+   * app sharing the sign-in is refused (Try again asks again), and nothing is opened.
+   */
+  async function signInUnlock(app) {
+    if (!webSignIn || !webSignIn.supports(app) || typeof webSignIn.unlock !== 'function') return { status: 'allowed', browser: '' };
+    const out = await webSignIn.unlock(app, { denied: signInDenied }).catch(() => ({ status: 'allowed', browser: '' }));
+    if (out.status === 'denied') {
+      if (out.browserId) signInDenied.add(out.browserId);
+      for (const other of sharesSignIn(app)) signInChecked.set(other, { status: 'refused', browser: out.browser, browserId: out.browserId || '' });
+      return { status: 'refused', browser: out.browser };
+    }
+    return { status: 'allowed', browser: out.browser || '' };
+  }
+
+  /** "Use another account" on a Google row waiting on the browser: Google's add-an-account page there; the wait goes on. */
+  async function signInAnotherAccount(app) {
+    if (!webSignIn || typeof webSignIn.anotherAccount !== 'function' || !browserWaits.has(signInGroup(app))) return { opened: false, browser: '' };
+    return webSignIn.anotherAccount(app).catch(() => ({ opened: false, browser: '' }));
   }
 
   /** Ends the wait for `app`'s sign-in in the person's browser (any app sharing it), or every wait when `app` is ''. */
@@ -994,8 +1019,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /**
    * A sign-in still being checked when the surveys started (signInsFirst's `checking`, 2026-10-12): its app is held, and
-   * joins the run when the answer is signed in, as after a Log in; signed out, it gets the usual Log in card; refused by
-   * macOS, it is skipped as at the start.
+   * joins the run when the answer is signed in; signed out, it is left out quietly with a line in the chat (no Log in card,
+   * 2026-10-12); refused by macOS, it is skipped as at the start.
    */
   function lateSignIn(s, app, answer) {
     logAction(s, null, `Still checking the ${shownName(app)} sign-in`);
@@ -1015,10 +1040,11 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         emit(s);
         return;
       }
-      if (s.needs.some((entry) => !entry.closed && entry.app === app && entry.kind === 'signin')) return;
-      const reason = `Sign in to ${shownName(app)}`;
-      s.needs.push({ id: randomUUID(), app, kind: 'signin', reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, 'signin'), closed: false, held: true, at: now() });
-      logAction(s, null, `Needs you: ${reason}`);
+      // Signed out (2026-10-12): left out quietly, as signInsFirst leaves out an app signed out at the start. Everything
+      // about a web app's sign-in is settled on the choose screen; no Log in card comes up later.
+      skipApp(s, app);
+      releaseHeld(s, app, 'skip');
+      s.chat.push({ role: 'agent', text: leftOutLine([app]), ask: null, authorize: null, at: now() });
       emit(s);
     });
   }
@@ -1035,6 +1061,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /** "Skipped ChatGPT and Claude: macOS didn't allow Chrome's sign-ins. You can add them later from Add sources." */
   const skippedLine = (name, apps) => `Skipped ${listed(apps.map(shownName))}: macOS didn't allow ${name || 'your browser'}'s sign-ins. You can add ${apps.length === 1 ? 'it' : 'them'} later from Add sources.`;
+
+  /** "Left out Gmail: its sign-in ended partway through. You can add it later from Add sources." */
+  const endedLine = (app) => `Left out ${shownName(app)}: its sign-in ended partway through. You can add it later from Add sources.`;
 
   /** "Left out Google Drive: not signed in. You can add it from Add sources." */
   const leftOutLine = (apps) => `Left out ${listed(apps.map(shownName))}: not signed in. You can add ${apps.length === 1 ? 'it' : 'them'} from Add sources.`;
@@ -1062,6 +1091,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // Skip holds for the whole run (2026-10-08: "hitting skip should skip it permanently for this run, right now it tries
     // again"): an app the person skipped is never put to them again; the agent hears at once that it was skipped.
     if (s.skipped.has(app)) return Promise.resolve({ status: 'skipped', note: `The person skipped ${shownName(app)} for this run. Do not ask again: finish without it.` });
+    // A web app's sign-in lost partway through (2026-10-12): settled here, with no card (Zotero's and GitHub's sign-ins,
+    // connectors and folder choices keep theirs).
+    if ((kind === 'signin' || kind === 'password') && webSignIn && webSignIn.supports(app) && appOf(app) && appOf(app).reach === 'web') return signInAgain(s, job, app);
     let need = s.needs.find((entry) => !entry.closed && entry.app === app && entry.kind === kind);
     if (!need) {
       need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, kind), closed: false, at: now() };
@@ -1070,6 +1102,45 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
     if (!need.jobs.includes(job.id)) need.jobs.push(job.id);
     return waitOn(s, job, need);
+  }
+
+  /**
+   * An agent found `app` signed out partway through the run: the sign-in copied again quietly from the person's browser
+   * (signInQuiet; a browser macOS refused, or was never asked about this run, is not asked: no new Keychain prompt). Signed
+   * in now: the agent carries on. Not: the app is left out for the run, with a line in the chat. One copy per sign-in at a
+   * time: Gmail and Google Drive losing theirs together wait for the one answer.
+   */
+  function signInAgain(s, job, app) {
+    const group = signInGroup(app);
+    // Copied again once per sign-in per run. Agents asking while that copy is made, or just after, share its answer; one
+    // asking again after it was told to carry on, or later on, found the copy did not hold: left out, so the run never
+    // loops on copies the site refuses.
+    if (!s.signInsAgain) s.signInsAgain = new Map();
+    let again = s.signInsAgain.get(group);
+    if (!again) {
+      again = { copying: null, settledAt: 0, told: new Set() };
+      again.copying = webSignIn.signInQuiet(app, { denied: signInDenied, askedOnly: true, fresh: true }).catch(() => ({ signedIn: false }));
+      again.copying.then(() => { again.settledAt = Date.now(); });
+      s.signInsAgain.set(group, again);
+    }
+    const lost = again.told.has(job.id) || (again.settledAt && Date.now() - again.settledAt > SIGN_IN_AGAIN_SHARED_MS);
+    const answer = lost ? Promise.resolve({ signedIn: false }) : again.copying;
+    return answer.then((result) => {
+      if (s.skipped.has(app)) return { status: 'skipped', note: `${shownName(app)} was left out for this run. Do not ask again: finish without it.` };
+      if (result && result.signedIn) {
+        again.told.add(job.id);
+        const kept = checkedAs(app, result);
+        for (const other of sharesSignIn(app)) signInChecked.set(other, kept);
+        logAction(s, job, result.browser ? `Copied the ${shownName(app)} sign-in again from ${result.browser}` : `Signed in to ${shownName(app)} again`);
+        emit(s);
+        return { status: 'done', note: `The ${shownName(app)} sign-in was copied again from the person's browser. Reload the page and carry on.` };
+      }
+      skipApp(s, app, [job.id]);
+      logAction(s, job, `Left out ${shownName(app)}: its sign-in ended partway through`);
+      s.chat.push({ role: 'agent', text: endedLine(app), ask: null, authorize: null, at: now() });
+      emit(s);
+      return { status: 'skipped', note: `${shownName(app)}'s sign-in ended and could not be brought back, so it is left out for this run. Do not ask again: finish without it and say so.` };
+    });
   }
 
   function waitAgain(s, job) {
@@ -1846,7 +1917,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   return {
-    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose, signInBrowser, signInBrowserCancel, signInPick,
+    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose, signInBrowser, signInBrowserCancel, signInUnlock, signInAnotherAccount, signInPick,
     setProvider: (id, provider) => { const s = get(id); setProvider(s, provider); emit(s); return snapshot(s); },
     // the first build's name for authorize
     connected: (id, input) => authorize(id, input),

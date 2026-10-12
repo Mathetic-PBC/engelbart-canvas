@@ -225,7 +225,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [] }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -499,8 +499,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   const importId = (value) => str(value, 'import id', 64);
   const plainObject = (value, what) => { if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError(`${what} is invalid`); return value; };
   const appName = (value) => str(value, 'app', 64);
-  handle('connect-detect', withCtx(async (ctx) => { cx(); return detectSources({ homeDir: ctx.homeDir, access: folderAccess.guard({ homeDir: ctx.homeDir, dataRoot: ctx.dataRoot }), zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }); }));
-  handle('connect-providers', () => cx().providers());
+  // Spotlight asked in the background which browsers are installed, as Connect opens (./browser/installed-apps.cjs).
+  const warm = () => { try { void Promise.resolve(warmBrowsers()).catch(() => {}); } catch { /* not asked */ } };
+  // `platform`: off the Mac, web apps' rows say "Not on Windows yet" and can't be ticked (2026-10-12, model/connect.js notOnYet).
+  handle('connect-detect', withCtx(async (ctx) => { cx(); warm(); return { platform: process.platform, ...await detectSources({ homeDir: ctx.homeDir, access: folderAccess.guard({ homeDir: ctx.homeDir, dataRoot: ctx.dataRoot }), zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }) }; }));
+  handle('connect-providers', () => { const out = cx().providers(); warm(); return out; });
   handle('connect-start', (input) => cx().start(plainObject(input, 'choices')));
   handle('connect-answer', (id, input) => cx().answer(importId(id), plainObject(input, 'answer')));
   const authorizeInput = (input) => { const value = plainObject(input, 'choice'); return { app: appName(value.app), kind: str(value.kind, 'kind', 16), path: optStr(value.path, 'path', 4096) }; };
@@ -518,6 +521,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('connect-signin-pick', (app, pick) => { const value = plainObject(pick, 'pick'); return cx().signInPick(appName(app), { browser: str(value.browser, 'browser', 64), profile: str(value.profile, 'profile', 120) }); });
   // Google's Sign in in the person's browser, waited for until signed in or cancelled (no time limit).
   handle('connect-signin-browser', (app) => cx().signInBrowser(appName(app)));
+  handle('connect-signin-unlock', (app) => cx().signInUnlock(appName(app)));
+  handle('connect-signin-another-account', (app) => cx().signInAnotherAccount(appName(app)));
   handle('connect-signin-browser-cancel', (app) => cx().signInBrowserCancel(app == null ? '' : appName(app)));
   // MATH-110: macOS's folder access, asked for once on the choose screen. connect-folders-needed: the protected folders
   // (Desktop, Documents, Downloads, iCloud Drive, the drives) these choices would read and never asked about → [{ id, name }];
