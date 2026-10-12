@@ -50,6 +50,7 @@ const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_TREE_ENTRIES = 500;
 const MAX_TREE_DEPTH = 6;
+const TOO_MANY = 'context has too many entries';
 const MAX_DESCRIPTION = 4000;
 
 const WELCOME_NOTE = [
@@ -124,7 +125,7 @@ function validateTree(entries, depth = 0, counter = { n: 0, seen: new Set() }) {
   const seen = counter.seen;
   for (const entry of entries) {
     counter.n += 1;
-    if (counter.n > MAX_TREE_ENTRIES) throw new TypeError('context has too many entries');
+    if (counter.n > MAX_TREE_ENTRIES) throw new TypeError(TOO_MANY);
     if (typeof entry === 'string') {
       assertId(entry, 'library item');
       if (seen.has(entry)) continue;
@@ -140,6 +141,20 @@ function validateTree(entries, depth = 0, counter = { n: 0, seen: new Set() }) {
       throw new TypeError('context entry must be an id or a folder');
     }
   }
+  return out;
+}
+
+// An over-long context, flattened as flatContext does: its first MAX_TREE_ENTRIES ids, unknown entries left out.
+function firstContext(entries) {
+  const out = [];
+  const walk = (list, depth) => {
+    for (const entry of Array.isArray(list) ? list : []) {
+      if (out.length >= MAX_TREE_ENTRIES) return;
+      if (typeof entry === 'string') { if (UUID_RE.test(entry) && !out.includes(entry)) out.push(entry); }
+      else if (entry && typeof entry === 'object' && depth < MAX_TREE_DEPTH) walk(entry.children, depth + 1);
+    }
+  };
+  walk(entries, 0);
   return out;
 }
 
@@ -296,12 +311,14 @@ async function createProject(ctx, input) {
 
 // First-run flow: the project, a first workspace, and a "Welcome!" note open in its context. Onboarding
 // (2026-09-28, ./onboarding.cjs) names the workspace "Getting started", starts its document with the project's
-// description, and puts the library rows chosen on its last screen in context after the note.
-async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting started', context = [] } = {}) {
+// description, and puts the library rows chosen on its last screen on the project's own list (`library`, 2026-10-12):
+// the project holds them, the workspace's sidebar is left to the note.
+async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting started', library = [] } = {}) {
   const project = await createProject(ctx, input);
   const workspace = await createWorkspace(ctx, project.id, { name: workspaceName });
   const note = await createNote(ctx, project.id, { name: 'Welcome!', workspaceId: workspace.id, text: WELCOME_NOTE });
-  await setWorkspaceContext(ctx, project.id, workspace.id, [note.id, ...context.filter((id) => id !== note.id)]);
+  await setWorkspaceContext(ctx, project.id, workspace.id, [note.id]);
+  keepInProject(ctx, project.id, library.filter((id) => id !== note.id));
   if (project.description) await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, `${project.description}\n`);
   return { project, workspaceId: workspace.id, noteId: note.id, noteName: note.name };
 }
@@ -500,8 +517,9 @@ function workspaceRecord(dir) {
   let context = [];
   try {
     context = flatContext(meta.context || []);
-  } catch {
-    context = [];
+  } catch (error) {
+    // Past MAX_TREE_ENTRIES (written before imports stopped filling it, 2026-10-12): its first ones, not an empty sidebar.
+    context = error && error.message === TOO_MANY ? firstContext(meta.context) : [];
   }
   // Kept by every save through the app; a workspace last saved before the count existed is measured.
   const chars = Number.isInteger(meta.chars) && meta.chars >= 0 ? meta.chars : docChars(dir);
@@ -717,6 +735,7 @@ async function linkToWorkspace(ctx, projectId, workspaceId, ids, { picked = fals
   // any other way, it stays when its mentions go.
   const chosen = picked ? [...workspace.picked, ...adding.filter((id) => !context.includes(id) && !workspace.picked.includes(id))] : workspace.picked.filter((id) => !adding.includes(id));
   for (const id of adding) if (!context.includes(id)) context.push(id);
+  if (context.length > MAX_TREE_ENTRIES) throw new Error(`This workspace holds ${MAX_TREE_ENTRIES} items. Remove some from its sidebar first.`);
   return patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)), picked: chosen });
 }
 

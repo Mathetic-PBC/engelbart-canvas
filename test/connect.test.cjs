@@ -622,13 +622,13 @@ test('a session with the fake agents: a folder button, a question card, imports 
   assert.equal(await connect.attachProject(ctx, started.id, project.id, workspaceId), 0, 'no notes were held for it');
   const names = (await ctx.libraryDb.list()).filter((row) => row.project_id === project.id && row.tags.includes('note')).map((row) => row.name);
   assert.deepEqual(names, ['Welcome!']);
-  // What it brought into the library joins the Welcome workspace (2026-10-10), so that workspace's agents are told of it.
+  // What it brought into the library goes on the project's own list (2026-10-12), so the project's agents are told of it;
+  // the Welcome workspace's sidebar keeps only its note.
   const brought = (await mdFiles()).filter((row) => !earlier.has(row.id)).map((row) => row.id);
   assert.equal(brought.length, 5);
-  const held = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
-  assert.equal(held[0], noteId, 'the Welcome! note first');
-  assert.deepEqual(brought.filter((id) => !held.includes(id)), [], 'every note it brought in');
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8')).rows.sort(), [...new Set(held.slice(1))].sort(), 'kept with the session, for a resume');
+  await until(() => projects.findProject(ctx, project.id).library, (listed) => brought.every((id) => listed.includes(id)), 'every note it brought in, on the project\'s list');
+  assert.deepEqual(projects.findWorkspace(ctx, project.id, workspaceId).workspace.context, [noteId], 'the workspace holds the Welcome! note only');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8')).rows.sort(), [...brought].sort(), 'kept with the session, for a resume');
   connect.dismiss(started.id);
   assert.equal(connect.list(ctx.dataRoot).some((s) => s.id === started.id), false);
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
@@ -797,7 +797,7 @@ test('an app\'s folder is looked for once a session, however often the scan runs
   }
 });
 
-test('an import started from a project and a workspace lands in both; a row removed from the project is not brought back (2026-10-11)', async () => {
+test('an import started from a project and a workspace lands on the project\'s list, not the workspace; a row removed from the project is not brought back (2026-10-12)', async () => {
   const fresh = fs.mkdtempSync(path.join(homeDir, 'placed-'));
   fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
   const { project, workspaceId } = await projects.createProjectWithWelcome(ctx, { name: 'Imported into' });
@@ -809,10 +809,11 @@ test('an import started from a project and a workspace lands in both; a row remo
   connect.answer(started.id, { picked: ['Everything'] });
   await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the notes import');
   const listed = () => projects.findProject(ctx, project.id).library;
-  await until(() => connect.state(started.id).placed, (placed) => placed.project === 5 && placed.workspace === 5, 'the five placed');
+  await until(() => connect.state(started.id).placed, (placed) => placed.project === 5, 'the five placed');
+  assert.equal(connect.state(started.id).placed.workspace, 0, 'none in the workspace');
   assert.equal(listed().length, 5, 'on the project\'s own list');
   const context = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
-  assert.deepEqual(listed().filter((id) => !context.includes(id)), [], 'and in the workspace it was started from');
+  assert.deepEqual(listed().filter((id) => context.includes(id)), [], 'and not in the workspace it was started from');
   assert.deepEqual((await library.libraryForProject(ctx, project.id)).map((row) => row.id).filter((id) => listed().includes(id)).sort(), [...listed()].sort(), 'the project holds them');
 
   // Taken out of the project, then the session places what it brought again (as a resumed or repeated import does).
@@ -837,15 +838,46 @@ test('an import started from a project and a workspace lands in both; a row remo
   connect.dismiss(second.id);
 });
 
+test('an import of 600 rows goes on the project\'s list and leaves the workspace as it was; a saved session with inWorkspace ids resumes (2026-10-12)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'six-hundred-'));
+  const { project, workspaceId, noteId } = await projects.createProjectWithWelcome(ctx, { name: 'Six hundred' });
+  const first = fakeConnect({ home: fresh });
+  const started = await first.connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } }, provider: 'openai', projectId: project.id, workspaceId });
+  const savedAt = path.join(ctx.dataRoot, '.connect', started.id, 'session.json');
+  await until(() => fs.existsSync(savedAt), Boolean, 'the session saved');
+  first.connect.suspendAll();
+  // What an import kept, 600 rows, and the workspace ids an older Engelbart placed (it filled the workspace too).
+  const rows = Array.from({ length: 600 }, () => randomUUID());
+  const older = rows.slice(0, 3);
+  fs.writeFileSync(savedAt, JSON.stringify({ ...JSON.parse(fs.readFileSync(savedAt, 'utf8')), rows, inProject: older, inWorkspace: older }));
+
+  const second = fakeConnect({ home: fresh });
+  second.connect.resume(ctx);
+  assert.ok(second.connect.has(started.id), 'the saved session is picked up again');
+  assert.equal(second.connect.state(started.id).placed.workspace, 3, 'its inWorkspace ids kept');
+  await second.connect.attachProject(ctx, started.id, project.id, workspaceId);
+  const listed = projects.findProject(ctx, project.id).library;
+  assert.equal(listed.length, 600);
+  assert.deepEqual(rows.filter((id) => !listed.includes(id)), [], 'all 600 on project.json `library`');
+  assert.deepEqual(projects.findWorkspace(ctx, project.id, workspaceId).workspace.context, [noteId], 'the workspace\'s context unchanged');
+  assert.deepEqual(second.connect.state(started.id).placed, { project: 600, workspace: 3 }, 'nothing more counted in the workspace');
+  const saved = JSON.parse(fs.readFileSync(savedAt, 'utf8'));
+  assert.deepEqual(saved.inWorkspace, older, 'saved as it was');
+  // The workspace still takes an @mention or a Save.
+  assert.deepEqual((await projects.linkToWorkspace(ctx, project.id, workspaceId, [rows[599]])).context, [noteId, rows[599]]);
+  for (const one of second.connect.list(ctx.dataRoot)) second.connect.stop(one.id);
+});
+
 test('Connect sends the open workspace with its project, and says where what came in went', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const pid = randomUUID(), wid = randomUUID();
   assert.equal(model.choicesOf({ picks: {}, apps: {}, projectId: pid, workspaceId: wid }).workspaceId, wid);
   assert.equal('workspaceId' in model.choicesOf({ picks: {}, apps: {}, workspaceId: wid }), false, 'no project, no workspace');
   const line = (project, workspace) => model.placedLine({ projectId: pid, placed: { project, workspace } });
-  assert.equal(line(742, 500), '742 added to the project. The first 500 are also in this workspace.');
-  assert.equal(line(3, 3), '3 added to the project. They are also in this workspace.');
-  assert.equal(line(4, 0), '4 added to the project.');
+  // In the project's library, never "also in this workspace" (2026-10-12): an older session's workspace count is not said.
+  assert.equal(line(742, 500), '742 added to the project\'s library.');
+  assert.equal(line(3, 3), '3 added to the project\'s library.');
+  assert.equal(line(4, 0), '4 added to the project\'s library.');
   assert.equal(line(0, 0), '');
   assert.equal(model.placedLine({ projectId: null, placed: { project: 3, workspace: 0 } }), '', 'onboarding before its project');
 });

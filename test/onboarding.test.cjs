@@ -8,6 +8,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
@@ -46,7 +47,7 @@ test('a folder made for the project sits in the home directory and never takes o
   assert.equal(onboarding.existingFolder(ctx, '~/teachable-agents'), first.path);
 });
 
-test('startProject: folder, Getting started workspace starting with the description, note first, chosen rows in context', async () => {
+test('startProject: folder, Getting started workspace starting with the description, the note in context, chosen rows on the project\'s list', async () => {
   const pdf = path.join(homeDir, 'paper.pdf');
   fs.writeFileSync(pdf, '%PDF-1.4\n%%EOF\n');
   const paper = await library.addItem(ctx, pdf);
@@ -57,7 +58,8 @@ test('startProject: folder, Getting started workspace starting with the descript
   assert.equal(made.project.description, 'How learners find what a system should do.');
   const tree = await projects.loadProject(ctx, made.project.id);
   assert.deepEqual(tree.workspaces.map((w) => w.name), ['Getting started']);
-  assert.deepEqual(tree.workspaces[0].context, [made.noteId, paper.id]);
+  assert.deepEqual(tree.workspaces[0].context, [made.noteId]);
+  assert.deepEqual(projects.findProject(ctx, made.project.id).library, [paper.id], 'the chosen row, notes and unknown ids left out');
   assert.equal(await projects.readDoc(ctx, made.project.id, { kind: 'workspace', workspaceId: made.workspaceId }), 'How learners find what a system should do.\n');
 
   // @bart sees the description and the instructions.
@@ -72,6 +74,21 @@ test('startProject: folder, Getting started workspace starting with the descript
   assert.equal(again.project.directory, made.project.directory);
   assert.equal(again.project.description, '');
   await assert.rejects(onboarding.startProject(ctx, { name: 'Third', folder: 'existing', directory: '~/missing' }), /Nothing is at/);
+});
+
+test('startProject with 500 chosen rows (the guided setup\'s most): they go on the project\'s list, the workspace holds the Welcome! note (2026-10-12)', async () => {
+  const ids = [];
+  for (let n = 0; n < 500; n += 1) ids.push((await ctx.libraryDb.insert({ id: randomUUID(), name: `Site ${n}`, type: 'website', tags: [], url: `https://example.org/five-hundred/${n}` })).id);
+  const made = await onboarding.startProject(ctx, { name: 'Five hundred', folder: 'new', context: ids, workspaceName: 'Welcome' });
+  const listed = projects.findProject(ctx, made.project.id).library;
+  assert.equal(listed.length, 500);
+  assert.deepEqual(ids.filter((id) => !listed.includes(id)), []);
+  assert.deepEqual(projects.findWorkspace(ctx, made.project.id, made.workspaceId).workspace.context, [made.noteId]);
+  // The workspace still takes an @mention or a Save.
+  assert.deepEqual((await projects.linkToWorkspace(ctx, made.project.id, made.workspaceId, [ids[0]])).context, [made.noteId, ids[0]]);
+  // The project holds them: its Library and its agents' catalog see them.
+  const held = new Set((await library.libraryForProject(ctx, made.project.id)).map((row) => row.id));
+  assert.deepEqual(ids.filter((id) => !held.has(id)), []);
 });
 
 test('discardItem removes a row only while nothing holds it', async () => {

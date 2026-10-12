@@ -459,7 +459,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       // has found Git (build/manager.cjs prepareDefault): the first Build never meets a folder without a history.
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
       // Connect your library's notes, held until there was a project (connect/session.cjs attachProject), go into this one,
-      // and what it brought into the library joins the Welcome workspace's context, now and as more comes in.
+      // and what it brought into the library goes on the project's own list, now and as more comes in.
       if (imported && connect) made.importedNotes = await connect.attachProject(ctx, imported, made.project.id, made.workspaceId).catch(() => 0);
       if (welcome) made.gettingStarted = gettingStarted.startGettingStarted(ctx, made.project.id, { workspaceId: made.workspaceId });
       // A new user's onboarding is the guided setup: it is not offered to them afterwards.
@@ -468,8 +468,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     });
   }), { project: (_args, out) => out && out.project && out.project.id, library: true });
   // The guided setup started inside a project (2026-10-10): start-project's end without the project. That project gets a
-  // Welcome workspace (another one on every run; nothing already there is removed) with what the setup added in its
-  // context, the walkthrough, and Connect your library's session attached as start-project attaches it.
+  // Welcome workspace (another one on every run; nothing already there is removed), what the setup added on the project's
+  // list, the walkthrough, and Connect your library's session attached as start-project attaches it.
   saving('welcome-workspace', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));

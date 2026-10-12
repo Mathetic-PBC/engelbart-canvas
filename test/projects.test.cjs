@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { randomUUID } = require('node:crypto');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
@@ -65,6 +66,36 @@ test('createProjectWithWelcome makes a first workspace and a Welcome! note in it
   assert.equal(tree.notes[0].workspaceId, made.workspaceId);
   assert.ok(fs.existsSync(path.join(made.project.dir, 'Getting started', 'workspace.md')));
   assert.ok(fs.existsSync(path.join(made.project.dir, 'Welcome!.md')));
+});
+
+test('createProjectWithWelcome puts `library` ids on the project\'s list, the workspace keeps the note; 500 of them fit (2026-10-12)', async () => {
+  const ids = Array.from({ length: 500 }, () => randomUUID());
+  const made = await projects.createProjectWithWelcome(ctx, { name: 'Welcome Five Hundred' }, { library: ids });
+  assert.deepEqual(projects.findProject(ctx, made.project.id).library, ids);
+  assert.deepEqual(projects.findWorkspace(ctx, made.project.id, made.workspaceId).workspace.context, [made.noteId]);
+});
+
+test('a workspace holds 500: linking past that says so in plain words; a meta.json with more reads as its first 500 (2026-10-12)', async () => {
+  const project = await projects.createProject(ctx, 'Full Workspace');
+  const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Full' });
+  const ids = Array.from({ length: 500 }, () => randomUUID());
+  await projects.setWorkspaceContext(ctx, project.id, workspace.id, ids);
+  const extra = randomUUID();
+  await assert.rejects(projects.linkToWorkspace(ctx, project.id, workspace.id, [extra]), (error) => {
+    assert.equal(error.constructor, Error, 'a plain Error, not a TypeError');
+    assert.equal(error.message, 'This workspace holds 500 items. Remove some from its sidebar first.');
+    return true;
+  });
+  assert.equal((await projects.linkToWorkspace(ctx, project.id, workspace.id, [ids[3]])).context.length, 500, 'linking what is there already still works');
+  // Written past the limit (an import before 2026-10-12): the first 500, not an empty sidebar.
+  const many = Array.from({ length: 600 }, () => randomUUID());
+  const file = path.join(project.dir, 'Full', 'meta.json');
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), context: many }));
+  assert.deepEqual(projects.findWorkspace(ctx, project.id, workspace.id).workspace.context, many.slice(0, 500));
+  assert.deepEqual((await projects.loadProject(ctx, project.id)).workspaces[0].context, many.slice(0, 500));
+  // Bad entries in a short context still read as none, as before.
+  fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(fs.readFileSync(file, 'utf8')), context: ['not-an-id'] }));
+  assert.deepEqual(projects.findWorkspace(ctx, project.id, workspace.id).workspace.context, []);
 });
 
 test('workspaces nest to any depth; docs, context and renames work at every level', async () => {

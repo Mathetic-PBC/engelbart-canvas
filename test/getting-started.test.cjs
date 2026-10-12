@@ -135,7 +135,8 @@ test('the guided setup inside a project: a Welcome workspace added there with wh
   let tree = await projects.loadProject(ctx, made.project.id);
   assert.deepEqual(tree.workspaces.map((workspace) => workspace.name), ['Getting started', 'Welcome']);
   const welcome = tree.workspaces.find((workspace) => workspace.id === first.workspaceId);
-  assert.deepEqual(welcome.context, [paper.id, site.id], 'what the setup added, notes and unknown ids left out');
+  assert.deepEqual(welcome.context, [], 'what the setup added is not in the workspace\'s context (2026-10-12)');
+  assert.deepEqual(projects.findProject(ctx, made.project.id).library, [paper.id, site.id], 'but on the project\'s list, notes and unknown ids left out');
   const kept = tree.workspaces.find((workspace) => workspace.id === made.workspaceId);
   assert.deepEqual(kept.context, [made.noteId], 'the workspace already there is untouched');
   // A second run: another Welcome workspace; the first stays as it was.
@@ -144,7 +145,8 @@ test('the guided setup inside a project: a Welcome workspace added there with wh
   assert.equal(tree.workspaces.length, 3);
   assert.notEqual(second.workspaceId, first.workspaceId);
   assert.match(tree.workspaces.find((workspace) => workspace.id === second.workspaceId).name, /^Welcome/);
-  assert.deepEqual(tree.workspaces.find((workspace) => workspace.id === first.workspaceId).context, [paper.id, site.id]);
+  assert.deepEqual(tree.workspaces.find((workspace) => workspace.id === first.workspaceId).context, []);
+  assert.deepEqual(projects.findProject(ctx, made.project.id).library, [paper.id, site.id]);
   assert.equal((await projects.listProjects(ctx)).length, before);
   await assert.rejects(onboarding.addWelcomeWorkspace(ctx, '00000000-0000-4000-8000-000000000000', {}), /Unknown project/);
   // Main (ipc welcome-workspace) finishes it as start-project does: Connect's session attached, the walkthrough, the offer.

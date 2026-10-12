@@ -640,15 +640,14 @@ export function resumable(list) {
 }
 
 /**
- * Where what came in went (2026-10-11), for a session started from a project: `placed` { project, workspace }, the rows
- * on the project's own list and those also in the workspace it was started from. '' before anything went in.
+ * Where what came in went (2026-10-11), for a session started from a project: `placed.project`, the rows on the project's
+ * own list. They go to the project's library, not the workspace's sidebar (2026-10-12); `placed.workspace` is only an
+ * older session's count and is not said. '' before anything went in.
  */
 export function placedLine(session) {
   const placed = session && session.projectId && session.placed;
   if (!placed || !placed.project) return '';
-  const head = `${placed.project} added to the project.`;
-  if (!placed.workspace) return head;
-  return placed.workspace < placed.project ? `${head} The first ${placed.workspace} are also in this workspace.` : `${head} ${placed.project === 1 ? 'It is' : 'They are'} also in this workspace.`;
+  return `${placed.project} added to the project's library.`;
 }
 
 /** An import's place in the progress list: its words, whether it is finished, failed, or waits on the person. */

@@ -1393,7 +1393,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (input && typeof input.projectId === 'string' && ID_RE.test(input.projectId)) {
       try { const project = require('../store/projects.cjs').findProject(ctx, input.projectId); projectId = project.id; projectDir = project.dir; } catch { projectId = null; }
     }
-    // The workspace it was started from (2026-10-11): what comes in joins its context too (placeRows), when it is one of the project's.
+    // The workspace it was started from (2026-10-11), when it is one of the project's: kept with the session. What comes in
+    // goes on the project's list only (placeRows, 2026-10-12), not into this workspace's context.
     let workspaceId = null;
     if (projectId && typeof input.workspaceId === 'string' && ID_RE.test(input.workspaceId)) {
       try { workspaceId = require('../store/projects.cjs').findWorkspace(ctx, projectId, input.workspaceId).workspace.id; } catch { workspaceId = null; }
@@ -1771,11 +1772,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   // What the session brought into the library, or found already there (2026-10-10). Library rows belong to no project,
   // so no agent of the project was told of them (shared/project-holds.cjs): once the session knows its project (started
-  // from it, or onboarding's attachProject), each goes on the project's own list (project.json `library`, 2026-10-11), and
-  // with a workspace (the one it was started from, or the Welcome workspace) joins its context too, those that come in
-  // later as well, so the project's agents and that workspace's sidebar see the person's library. Never a row taken out of
-  // the project before (project.json `removed`): only adding it again brings it back. One placing at a time: each reads
-  // what it adds to.
+  // from it, or onboarding's attachProject), each goes on the project's own list (project.json `library`, 2026-10-11),
+  // those that come in later as well, so the project's agents and its Library see the person's library. Not the
+  // workspace's context (2026-10-12): a workspace holds 500 at most, and an import filled it to the limit, so the next
+  // @mention or Save failed. `inWorkspace` is no longer added to; saved sessions keep theirs. Never a row taken out of the
+  // project before (project.json `removed`): only adding it again brings it back. One placing at a time: each reads what
+  // it adds to.
   function keepRow(s, row) {
     if (!row || typeof row.id !== 'string' || !ID_RE.test(row.id) || s.rows.has(row.id)) return;
     s.rows.add(row.id);
@@ -1789,20 +1791,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (ctx.dataRoot !== s.dataRoot) return;
       const listed = projects.keepInProject(ctx, s.projectId, ids);
       const { removed } = projects.findProject(ctx, s.projectId);
-      const kept = ids.filter((row) => !removed.includes(row));
-      for (const row of kept) s.inProject.add(row);
-      let fresh = [];
-      if (s.workspaceId) {
-        try {
-          const { workspace } = projects.findWorkspace(ctx, s.projectId, s.workspaceId);
-          for (const row of kept) if (workspace.context.includes(row)) s.inWorkspace.add(row);
-          // A workspace holds 500 entries at most (projects.cjs MAX_TREE_ENTRIES): past that, the rest are the project's alone.
-          fresh = kept.filter((row) => !workspace.context.includes(row) && !(workspace.removed || []).includes(row)).slice(0, Math.max(0, 500 - workspace.context.length));
-          if (fresh.length) await projects.setWorkspaceContext(ctx, s.projectId, s.workspaceId, [...workspace.context, ...fresh]);
-          for (const row of fresh) s.inWorkspace.add(row);
-        } catch { fresh = []; } // the workspace gone: what came in is the project's
-      }
-      if (listed.length || fresh.length) placed(s.projectId);
+      for (const row of ids) if (!removed.includes(row)) s.inProject.add(row);
+      if (listed.length) placed(s.projectId);
     }).catch(() => {}); // the project gone, or the library closed: what came in stays in the library
     return s.placing;
   }
