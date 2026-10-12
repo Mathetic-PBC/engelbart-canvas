@@ -103,20 +103,19 @@ app.whenReady().then(async () => {
     assert.match(await text(wc, '[data-onboarding-continue] button'), /^Continue›?$/, 'Continue, not Open project: the project is made after Connect');
     await fill(wc, '[data-onboarding-desc]', 'How novices ask for help with tutoring tools.');
     await press(wc, '[data-onboarding-continue] button');
-    // The intro (2026-10-11, David's mockup): why Engelbart asks, where the data goes, the apps on a belt; then Connect.
+    // The intro (2026-10-11, David's mockup): why Engelbart asks, where the data goes, the apps it works with; then Connect.
     await until(async () => (await step(wc)) === 'intro', 'the intro, after Create');
     assert.match(await text(wc, '[data-connect-intro] h1'), /^All your context in one place$/);
     assert.match(await text(wc, '[data-onboarding-step-of]'), /^3 of 4$/);
     assert.match(await text(wc, '[data-connect-intro-a="where"]'), /^It’s saved only on this Mac\./, 'the first question open');
-    assert.ok(await has(wc, '[data-connect-intro-belt]'), 'Connects to, on a belt');
-    // In the middle of the window's height (2026-10-12), the foot where it was; more room between its parts.
+    assert.ok(await has(wc, '[data-connect-intro-apps]'), 'Works with, and the apps');
+    // In the middle of the window's height (2026-10-12; its scroll area has 24px above and 64px below), the foot where it was.
     await pause(250); // the screen rises in
     const intro = JSON.parse(await js(wc, `JSON.stringify((()=>{const r=(q)=>document.querySelector(q).getBoundingClientRect();const area=r('[data-connect-intro-scroll]'),block=r('[data-connect-intro-block]'),foot=r('[data-connect-intro] [data-connect-foot]');return {area:{top:area.top,bottom:area.bottom},block:{top:block.top,bottom:block.bottom},foot:{bottom:foot.bottom},win:innerHeight,gap:getComputedStyle(document.querySelector('[data-connect-intro-block]')).rowGap}})())`));
     assert.ok(intro.area.bottom - intro.area.top > intro.block.bottom - intro.block.top, `the block fits: ${JSON.stringify(intro)}`);
-    assert.ok(Math.abs((intro.block.top - intro.area.top) - (intro.area.bottom - intro.block.bottom)) <= 2, `centered in its height: ${JSON.stringify(intro)}`);
+    assert.ok(Math.abs((intro.block.top - intro.area.top - 24) - (intro.area.bottom - intro.block.bottom - 64)) <= 2, `centered in its height: ${JSON.stringify(intro)}`);
     assert.ok(intro.block.top - intro.area.top > 40, `not at the top: ${JSON.stringify(intro)}`);
     assert.ok(intro.win - intro.foot.bottom < 60, `the foot at the bottom of the window: ${JSON.stringify(intro)}`);
-    assert.equal(intro.gap, '44px');
     await shot(wc, '0-intro');
     await press(wc, '[data-connect-intro] [data-onboarding-continue] button');
     await until(async () => (await step(wc)) === 'connect', 'Connect your library, after the intro');
