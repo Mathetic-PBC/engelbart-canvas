@@ -1983,6 +1983,9 @@ const periodHome = () => {
   const receipt = path.join(home, 'Downloads', 'Receipt debugging tutor.pdf'); // personal, shares the project's words
   fs.writeFileSync(receipt, '%PDF-1.4\n%%EOF\n');
   agePdf(receipt, 800);
+  // In the period, a day older than HCI's: two PDFs each, the folders go by their newest, and on Windows times written
+  // together can tie (port, 0.1.19).
+  for (const name of ['Invoice-2026-09.pdf', 'scan.pdf']) agePdf(path.join(home, 'Downloads', name), 1);
   return home;
 };
 const tutor = { name: 'Debugging tutor', description: 'How novices debug their code with scaffolding from an LLM' };
