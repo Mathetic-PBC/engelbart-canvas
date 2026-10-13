@@ -325,7 +325,7 @@ test('cards are compact: question 8px 12px (6px after an answer), foot 4px 10px 
   assert.match(html, /padding:10px 12px;margin-bottom:8px/);
 });
 
-test('the footer reads "Chat · Opus · high · 17 s", a space on both sides of each ·, routed by Bart or not', () => {
+test('the footer reads "Chat · 17 s", the agent and the time (not the model, 2026-10-13), a space on both sides of the ·, routed by Bart or not', () => {
   // The closing text as drawn: tips out, tags out. The separator after the name is its own piece that keeps its spaces
   // (white-space:pre): as the start of the next flex item it collapsed, and read "Chat· Opus".
   const footText = (html) => {
@@ -335,9 +335,9 @@ test('the footer reads "Chat · Opus · high · 17 s", a space on both sides of 
   };
   for (const [line, routed] of [['@chat why retry?', false], ['@bart why retry?', true]]) {
     const html = mounted(['bart# [chat 2026-10-12T21:41:00Z] Retry logic', line, 'bart> because', 'bart> *Chat · Opus · high · 17 s*', '']).html();
-    assert.equal(footText(html), 'Chat · Opus · high · 17 s', routed ? 'routed' : 'typed');
+    assert.equal(footText(html), 'Chat · 17 s', routed ? 'routed' : 'typed');
     assert.equal(html.includes('class="bart-who"'), routed, routed ? 'the name is the button' : 'the name is text');
-    assert.match(html, /Chat<\/span>(?:<span class="bart-tip"[^>]*>[^<]*<\/span><\/span>)?<span style="flex:none;white-space:pre"> · <\/span><span[^>]*>Opus · high · 17 s</, 'the separator keeps its spaces');
+    assert.match(html, /Chat<\/span>(?:<span class="bart-tip"[^>]*>[^<]*<\/span><\/span>)?<span style="flex:none;white-space:pre"> · <\/span><span[^>]*>17 s</, 'the separator keeps its spaces');
   }
 });
 

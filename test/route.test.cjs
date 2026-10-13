@@ -420,41 +420,37 @@ test('handoff: when routing fails the line is asked of Chat saying so (by: error
   assert.equal(picked.nodes[1].error, 'thread question must be a string of at most 400 characters');
 });
 
-test('footer: Copy, Regenerate, Edit and Build as icons with their names; the agent, model and time on the right; Build dark on grey when routed to build', () => {
+test('footer: Copy as an icon with its name; the agent and time on the right, not the model; no Regenerate, Edit or Build (2026-10-13)', () => {
   const m = mounted([...SPEC, '']);
   const html = m.editor.footHtml({ q: 0, text: 'Chat · Sonnet · high · 3 s', closes: true, edit: true });
-  for (const [act, name] of [['copybart', 'Copy'], ['regen', 'Regenerate'], ['editturn', 'Edit'], ['footbuild', 'Build']]) {
-    assert.match(html, new RegExp(`<button class="bart-ic" data-act="${act}" data-turn="0"[^>]*aria-label="${name}"[^>]*>[\\s\\S]*?</button><span class="bart-tip"[^>]*>${name}</span>`), `${name}: an icon with its tip`);
-  }
-  assert.ok(html.indexOf('data-act="copybart"') < html.indexOf('data-act="regen"') && html.indexOf('data-act="regen"') < html.indexOf('editturn') && html.indexOf('editturn') < html.indexOf('footbuild') && html.indexOf('footbuild') < html.indexOf('Sonnet'), 'Copy, Regenerate, Edit, Build, then the closing text');
-  assert.match(html, /data-act="footbuild"[^>]*><svg width="16" height="16"[^>]*><path d="m15 12-8\.373/, 'the hammer, the size of the others');
-  assert.ok(!/data-act="footbuild"[^>]*style=/.test(html), 'grey as the others when not routed to build');
-  assert.match(html, /color:#8f8f8f"><span style="flex:none">Chat<\/span><span style="flex:none;white-space:pre"> · <\/span><span[^>]*>Sonnet · high · 3 s<\/span>/, 'the separator keeps its spaces');
-  assert.ok(html.indexOf('Sonnet') < html.indexOf('data-act="fold"') && html.indexOf('data-act="fold"') < html.indexOf('dropturn'), 'then Collapse and Delete');
-  assert.match(m.editor.footHtml({ q: 0, text: 'x', busy: true }), /data-act="footbuild"[^>]* disabled>/);
-  assert.ok(!mounted(SPEC, { build: false }).editor.footHtml({ q: 0, text: 'x' }).includes('footbuild'), 'no onBuild, no button');
+  assert.match(html, /<button class="bart-ic" data-act="copybart" data-turn="0"[^>]*aria-label="Copy"[^>]*>[\s\S]*?<\/button><span class="bart-tip"[^>]*>Copy<\/span>/, 'Copy: an icon with its tip');
+  for (const act of ['regen', 'editturn', 'footbuild']) assert.ok(!html.includes(`data-act="${act}"`), `no ${act}`);
+  assert.match(html, /color:#8f8f8f"><span style="flex:none">Chat<\/span><span style="flex:none;white-space:pre"> · <\/span><span[^>]*>3 s<\/span>/, 'the agent, then the time; the separator keeps its spaces');
+  assert.ok(!/Sonnet|high/.test(html), 'no model, no effort');
+  assert.ok(html.indexOf('copybart') < html.indexOf('>3 s<') && html.indexOf('>3 s<') < html.indexOf('data-act="fold"') && html.indexOf('data-act="fold"') < html.indexOf('dropturn'), 'Copy, the closing text, then Collapse and Delete');
+  assert.ok(!m.editor.footHtml({ q: 0, text: 'Discover · Opus · high · 9 s · moved up from Sonnet high' }).includes('moved up'), 'nor what it moved up from');
 
-  // Routed by Bart: the agent's name opens the other agents; routed to build, Build is dark on grey.
+  // Routed by Bart: the agent's name opens the other agents.
   const routed = mounted(['bart# [chat build 2026-10-12T21:41:00Z] Haiku', '@bart build the haiku entry', ...SPEC.slice(1), '']);
   const foot = routed.editor.footHtml({ q: 1, text: 'Build · Sonnet · high · 3 s' });
-  assert.match(foot, /data-act="footbuild"[^>]*style="color:#171717;background:#f2f2f2"/);
   assert.match(foot, /<span class="bart-who" data-act="viabart" data-turn="1"[^>]*>Build<\/span><span class="bart-tip"[^>]*>Bart picked this\. Ask another<\/span>/);
-  assert.ok(!foot.includes('via Bart'));
+  assert.ok(!foot.includes('via Bart') && !foot.includes('footbuild'));
   const discover = mounted(['bart# [discover 2026-10-12T21:41:00Z] Tutors', '@bart papers?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '']);
   const drawn = discover.editor.editorHtml();
   assert.match(drawn, /data-act="viabart" data-turn="1"[^>]*>Discover<\/span>/);
-  assert.match(drawn.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, ''), /Discover · Opus · high · 9 s/);
+  assert.match(drawn.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/ data-raw="[^"]*"/g, '').replace(/<[^>]+>/g, ''), /Discover · 9 s/);
+  assert.ok(!drawn.replace(/ data-raw="[^"]*"/g, '').includes('Opus'), 'the model stays in the file, not on the page');
   assert.ok(!drawn.replace(/ data-raw="[^"]*"/g, '').includes('via Bart'));
-  assert.ok(!/data-act="footbuild"[^>]*style=/.test(drawn), 'not routed to build: Build is grey');
   // A line asked as typed (not routed): the name is text, no button.
   const typed = mounted(['bart# [discover 2026-10-12T21:41:00Z] Tutors', '@discover papers?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '']).editor.editorHtml();
   assert.ok(!typed.includes('data-act="viabart"'));
 
-  // An older closing line still saying "via Bart" reads as before.
-  const dark = m.editor.footHtml({ q: 0, text: 'Sonnet · 3s · via Bart · build' });
-  assert.match(dark, /footbuild[^>]*style="color:#171717;background:#f2f2f2"/);
-  assert.match(dark, /data-act="viabart"[^>]*>via Bart<\/span> · build/);
+  // An older closing line still saying "via Bart" reads as before, without its model.
+  const dark = m.editor.footHtml({ q: 0, text: 'Sonnet · 3 s · via Bart · build' });
+  assert.match(dark, /<span[^>]*>3 s · <span class="bart-text" data-act="viabart"[^>]*>via Bart<\/span> · build/);
+  assert.ok(!dark.includes('Sonnet'));
 
+  // Build is still there for the [[build]] hammer in a routed build's answer.
   assert.equal(m.editor.footBuild(0), true);
   assert.deepEqual([m.builds[0].text, m.builds[0].after, m.builds[0].afterLine], ['Add Haiku 5.5 to models.cjs.', SPEC.length - 1, SPEC[SPEC.length - 1]]);
   const pending = mounted(['@chat why', 'bart~> abc']);
@@ -463,7 +459,7 @@ test('footer: Copy, Regenerate, Edit and Build as icons with their names; the ag
 
 /* ------------------------------------------- the [[build]] line (2026-10-12) */
 
-const BUILD_LINE = 'Press [[build]] Build below this answer to build it.';
+const BUILD_LINE = 'Press [[build]] Build to build it.';
 const ROUTED_SPEC = ['bart# [chat build 2026-10-12T21:41:00Z] Haiku', '@bart build the haiku entry', 'bart> Here it is:', 'bart> ```', 'bart> Add Haiku 5.5 to models.cjs.', 'bart> ```', `bart> ${BUILD_LINE}`, 'bart> *Build · Sonnet · high · 3 s*', ''];
 
 test('a routed build run is asked to end on the [[build]] line; a plain @chat run is not', () => {
@@ -496,7 +492,7 @@ test('[[build]] draws as the footer\'s hammer, one unit that copies as typed; ou
   const ls = ROUTED_SPEC, at = ls.indexOf(`bart> ${BUILD_LINE}`);
   assert.equal(selectionMarkdown(ls, { line: at, offset: 0 }, { line: at, offset: Infinity }), BUILD_LINE);
   assert.equal(selectionMarkdown(ls, { line: at, offset: 0 }, { line: at, offset: 'Press [[build]] Build'.length }), 'Press [[build]] Build');
-  assert.equal(selectionMarkdown(ls, { line: at, offset: 'Press [[build]]'.length }, { line: at, offset: Infinity }), ' Build below this answer to build it.');
+  assert.equal(selectionMarkdown(ls, { line: at, offset: 'Press [[build]]'.length }, { line: at, offset: Infinity }), ' Build to build it.');
   assert.ok(turnText(ls, threads(ls)[0].turns[0]).answer.endsWith(BUILD_LINE));
 });
 

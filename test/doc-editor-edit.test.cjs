@@ -1,7 +1,8 @@
 'use strict';
 
 // Editing a past question in place (src/renderer/workspace/DocEditor.jsx, 2026-10-03). An answered @chat, @brainstorm or
-// @discover turn's foot has Edit, beside Regenerate: the question becomes an ordinary agent line again (lockedAt), its
+// @discover turn's foot had Edit, beside Regenerate, until 2026-10-13 (the foot is Copy, Collapse and Delete now); the
+// editturn act is still handled, and is what these tests click: the question becomes an ordinary agent line again (lockedAt), its
 // answer dimmed under it. Enter asks it again as Regenerate does, after the turns that follow it in its thread are taken
 // out; unchanged, Enter only leaves edit mode. Escape, or the caret, the keyboard or a click going elsewhere, puts it back.
 // One undo brings back the question, its answer and the turns taken out. There is no document here: the editor and its
@@ -95,27 +96,19 @@ function mounted(lines, { models = MODELS, deferred = false, readOnly = false } 
 
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
-test('Edit sits in an answered turn\'s foot next to Regenerate; never on a run at work, a Build line or a card', () => {
-  const m = mounted(THREAD);
-  const shown = m.html();
-  for (const q of [1, 5, 9]) {
-    const foot = shown.slice(shown.indexOf(`data-act="regen" data-turn="${q}"`));
-    const at = (act) => foot.indexOf(`data-act="${act}" data-turn="${q}"`);
-    assert.ok(at('editturn') > 0 && at('editturn') < at('fold'), `turn ${q}: Edit after Regenerate, before Collapse`);
+test('the foot no longer has Edit or Regenerate (2026-10-13): not on any turn, any agent, a Build line or a card', () => {
+  const docs = [
+    THREAD,
+    ['@bart --build make it', 'build> 0123456789', '', '@bart --build', 'bart> **No Build.** Write what to build after --build.', ''],
+    ['@brainstorm', ...replyLines(card.cardBody(JSON.stringify(FOCUS)).body, { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: false }), ''],
+    ['@discover retries', ...plainAnswer('## Read'), ''],
+    ['@brainstorm (wrap up)', ...plainAnswer('Where you are: x'), ''],
+  ];
+  for (const lines of docs) {
+    const html = mounted(lines).html();
+    assert.ok(html.includes('data-act="dropturn"'), `${lines[0]}: a foot is drawn`);
+    assert.ok(!html.includes('data-act="editturn"') && !html.includes('data-act="regen"'), `${lines[0]}: no Edit, no Regenerate`);
   }
-  assert.match(shown, /<button class="bart-ic" data-act="editturn" data-turn="5" aria-label="Edit"><svg[^>]*>.*?<\/svg><\/button><span class="bart-tip" style="left:0">Edit<\/span>/, 'a pencil, named Edit on hover');
-  assert.ok(!shown.includes('data-act="editturn" data-turn="13"'), 'not on the turn still at work');
-
-  // A Build line (`@chat --build`), whether it started its Build or failed to, and a card's turn.
-  const build = mounted(['@bart --build make it', 'build> 0123456789', '', '@bart --build', 'bart> **No Build.** Write what to build after --build.', '']).html();
-  assert.ok(build.includes('data-act="dropturn" data-turn="3"'), 'the failed Build has its foot');
-  assert.ok(!build.includes('data-act="editturn"'), 'but no Edit');
-  const cards = mounted(['@brainstorm', ...replyLines(card.cardBody(JSON.stringify(FOCUS)).body, { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: false }), '']).html();
-  assert.ok(cards.includes('data-act="regen" data-plain="1" data-turn="0"') && !cards.includes('data-act="editturn"'), 'an @brainstorm card\'s turn has Regenerate but no Edit');
-  // An @discover guide and a @brainstorm recap are answers like @chat's: they have it. A read-only document has none.
-  assert.ok(mounted(['@discover retries', ...plainAnswer('## Read'), '']).html().includes('data-act="editturn" data-turn="0"'));
-  assert.ok(mounted(['@brainstorm (wrap up)', ...plainAnswer('Where you are: x'), '']).html().includes('data-act="editturn" data-turn="0"'));
-  assert.ok(!mounted(THREAD, { readOnly: true }).html().includes('data-act="editturn"'));
 });
 
 test('Edit unlocks the question alone (lockedAt), caret at its end, chip and send back, its answer dimmed; one question at a time', () => {

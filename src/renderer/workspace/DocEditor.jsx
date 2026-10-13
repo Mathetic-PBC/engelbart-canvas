@@ -1513,9 +1513,10 @@ export default class DocEditor extends React.Component {
       + `<span class="bart-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span>`
       + '</span></div>';
   }
-  // The foot of one turn (Answer Card), as icons, each with its name under it on hover: Copy, Regenerate, Edit and Build on
-  // the left; on the right the closing line ("Discover · Opus · high · 9 s": the agent that answered, then the model),
-  // Collapse or Expand, and Delete. Regenerate's name shows above it, since hovering it opens the selector below.
+  // The foot of one turn (Answer Card), as icons, each with its name under it on hover: Copy on the left (2026-10-13:
+  // Regenerate, Edit and Build are no longer on it); on the right the closing line as "Chat · 9 s", the agent that
+  // answered and how long it took (the model and effort the line keeps are not shown), Collapse or Expand, and
+  // Delete. The handlers for regen, editturn and footbuild stay: the build icon in a question still asks footbuild.
   // `raw` is set when the answer's closing line is this foot; an answer without one (a run that failed) gets the same foot.
   // `plain`: an @brainstorm or @discover turn, whose Regenerate asks again on its one model, with no selector (BS-08).
   // `edit` (2026-10-03): Edit, which makes the question editable in place (startEdit).
@@ -1539,15 +1540,12 @@ export default class DocEditor extends React.Component {
     // closing line names the agent he handed it to.
     const routed = !via && !!th && (!!th.routedTo || !!name) && agentOf(this.parsedOf(ls)[q]) === 'router';
     const toBuild = via ? !!via[1] : name === 'Build' || (routed && th.build && q === th.from);
-    const builds = !!this.props.onBuild && !this.props.readOnly;
+    // Of what the line says after the agent, only how long it took is drawn: the model and effort stay in the file.
+    const time = rest.split(' · ').filter((part) => /^\d+ s$/.test(part)).join(' · ');
     const lefts = [
       wrap(`<button class="bart-ic" data-act="copybart" data-turn="${q}" aria-label="Copy" ${copied ? 'style="color:#8f8f8f"' : ''}>${ICON.copy}</button>${tip(copied ? 'Copied' : 'Copy', 'left')}`),
-      plain ? wrap(`<button class="bart-ic" data-act="regen" data-plain="1" data-turn="${q}" aria-label="Regenerate">${ICON.regenerate}</button>${tip('Regenerate', 'left')}`)
-        : `<span data-tip-up="1" style="flex:none;position:relative;display:inline-flex;">${`<button class="bart-ic" data-act="regen" data-turn="${q}" aria-label="Regenerate" aria-haspopup="dialog">${ICON.regenerate}</button>${tip('Regenerate', 'left')}`}</span>`,
-      ...(edit ? [wrap(`<button class="bart-ic" data-act="editturn" data-turn="${q}" aria-label="Edit">${ICON.edit}</button>${tip('Edit', 'left')}`)] : []),
-      ...(builds ? [wrap(`<button class="bart-ic" data-act="footbuild" data-turn="${q}" aria-label="Build"${toBuild ? ' data-on="1" style="color:#171717;background:#f2f2f2"' : ''}${busy ? ' disabled' : ''}>${ICON.hammer}</button>${tip('Build', 'left')}`)] : []),
     ];
-    const viaHtml = via ? `${rest ? ' · ' : ''}<span class="bart-text" data-act="viabart" data-turn="${q}" role="button" aria-haspopup="dialog" title="Bart picked this agent. Ask another" style="display:inline;padding:0;font:inherit;color:#0070f3;cursor:pointer">via Bart</span>${toBuild ? ' · build' : ''}` : '';
+    const viaHtml = via ? `${time ? ' · ' : ''}<span class="bart-text" data-act="viabart" data-turn="${q}" role="button" aria-haspopup="dialog" title="Bart picked this agent. Ask another" style="display:inline;padding:0;font:inherit;color:#0070f3;cursor:pointer">via Bart</span>${toBuild ? ' · build' : ''}` : '';
     const who = !name ? '' : routed
       ? `<span style="flex:none;position:relative;display:inline-flex"><span class="bart-who" data-act="viabart" data-turn="${q}" role="button" tabindex="0" aria-haspopup="dialog" aria-label="${esc(`${name}: Bart picked this. Ask another`)}">${esc(name)}</span>${tip('Bart picked this. Ask another', 'right')}</span>`
       : `<span style="flex:none">${esc(name)}</span>`;
@@ -1557,7 +1555,7 @@ export default class DocEditor extends React.Component {
       : wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`);
     return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:4px 10px 6px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? '8px' : '0'}">`
       + lefts.join('')
-      + `<span class="t" style="flex:0 1 auto;min-width:0;margin-left:auto;margin-right:8px;display:inline-flex;align-items:center;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f">${who}${name && rest ? '<span style="flex:none;white-space:pre"> · </span>' : ''}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(rest)}${viaHtml}</span></span>`
+      + `<span class="t" style="flex:0 1 auto;min-width:0;margin-left:auto;margin-right:8px;display:inline-flex;align-items:center;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f">${who}${name && time ? '<span style="flex:none;white-space:pre"> · </span>' : ''}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(time)}${viaHtml}</span></span>`
       + fold
       + wrap(`<button class="bart-ic" data-danger="1" data-act="dropturn" data-turn="${q}" aria-label="Delete">${ICON.trash}</button>${tip('Delete', 'right')}`)
       + '</div>';
