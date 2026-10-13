@@ -1,4 +1,5 @@
 // Pure document model for the Obsidian-style editor.
+import katex from 'katex';
 // Ported verbatim from design/goal-canvas/Goal Canvas.dc.html (lines 403–404, 439–456, 692–730, 801–812).
 // One markdown string per document; the caret's line shows its source, every other line renders.
 
@@ -41,8 +42,63 @@ export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 export const ATTRIBUTION_RE = /^\*[^*]+\*$/;
 export const QUOTE_RE = /^> ?(.*)$/;
 export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
-export const INLINE = /(!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`])/g;
+// Math (2026-10-12): `$…$` inline by Pandoc's rule (no space just inside either `$`, the closing `$` not followed by a
+// digit, so "$5 and $10" stays text), `$$…$$` display, and `\$` a dollar as typed. Drawn with KaTeX (renderMath).
+const MATH_SRC = String.raw`\$\$(?:[^$\n\\]|\\.)+?\$\$|\$(?=[^\s$])(?:[^$\n\\]|\\.)+?(?<!\s)\$(?!\d)|\\\$`;
+export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
+// A math token's source as a whole: `$$…$$` (display) or `$…$` (inline), the same rules as INLINE's.
+const DISPLAY_MATH_RE = /^\$\$((?:[^$\n\\]|\\.)+?)\$\$$/;
+const INLINE_MATH_RE = /^\$(?=[^\s$])((?:[^$\n\\]|\\.)+?)(?<!\s)\$$/;
+/** A math token's LaTeX and whether it is display math, or null for anything else. */
+export function mathOf(tok) {
+  const d = String(tok).match(DISPLAY_MATH_RE); if (d) return { tex: d[1], display: true };
+  const m = String(tok).match(INLINE_MATH_RE); return m ? { tex: m[1], display: false } : null;
+}
+export const isMathToken = (tok) => !!mathOf(tok);
+const CODE_LOOK = 'padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)';
+const ENTITIES = { amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: '\u00a0' };
+// What a browser's Range.toString() reads of rendered HTML, as caretAt does (zero-width spaces dropped): KaTeX writes some.
+const textOfHtml = (html) => html.replace(/<[^>]*>/g, '').replace(/&(#x[0-9a-f]+|#\d+|\w+);/gi, (all, e) => (
+  e[0] === '#' ? String.fromCodePoint(e[1] === 'x' || e[1] === 'X' ? parseInt(e.slice(2), 16) : Number(e.slice(1))) : ENTITIES[e.toLowerCase()] ?? all
+)).replace(/\u200b/g, '');
+const MATH_CACHE = new Map();
+/**
+ * LaTeX drawn by KaTeX → { html, shown } (`shown`: the text of the drawing, which is what the caret counts), or null when
+ * KaTeX cannot draw it: the source then shows as typed, in the inline-code look. Untrusted (no \\href, \\url and the
+ * like) and never throws.
+ */
+export function renderMath(tex, display) {
+  const key = (display ? 'D' : 'I') + tex;
+  if (MATH_CACHE.has(key)) return MATH_CACHE.get(key);
+  let html = null;
+  try { html = katex.renderToString(tex, { throwOnError: false, trust: false, displayMode: !!display }); } catch { html = null; }
+  const out = html && !html.includes('katex-error') ? { html, shown: textOfHtml(html) } : null;
+  if (MATH_CACHE.size >= 500) MATH_CACHE.delete(MATH_CACHE.keys().next().value);
+  MATH_CACHE.set(key, out);
+  return out;
+}
+/** A math token drawn: KaTeX's drawing, not editable (the caret's line shows its source), or its source as code. */
+export function mathTokenHtml(tok) {
+  const m = mathOf(tok), r = m && renderMath(m.tex, m.display);
+  if (!r) return `<code data-math-error="1" style="${CODE_LOOK}">${esc(tok)}</code>`;
+  return `<span data-math="1" contenteditable="false"${m.display ? ' style="display:block;text-align:center"' : ''}>${r.html}</span>`;
+}
+/**
+ * A ```math block's LaTeX drawn as display math (DocEditor, when the caret is not in the block), or null when KaTeX cannot
+ * draw it and the block shows as code.
+ */
+export function mathBlockHtml(tex) {
+  const r = String(tex).trim() ? renderMath(String(tex), true) : null;
+  return r ? `<span data-math="1" contenteditable="false" style="display:block">${r.html}</span>` : null;
+}
+/**
+ * Text as typed with only its math drawn (a brainstorm card's strings, which are otherwise plain text): everything else
+ * escaped, `\\$` a dollar.
+ */
+export function textMathHtml(text) {
+  return String(text ?? '').split(INLINE).map((tok) => (!tok ? '' : tok === '\\$' ? '$' : isMathToken(tok) ? mathTokenHtml(tok) : esc(tok))).join('');
+}
 // Another workspace of the project, mentioned (2026-09-25): `@[Name](ws:<id>)`. The id finds it after a rename (workspaces
 // are born "Untitled Workspace n" and named later); the line shows the @, the workspace icon right after it, then the name
 // (2026-09-29), so it never reads as a note of the same name. Before the plain mention in INLINE, so the id stays part of the token.
@@ -289,6 +345,10 @@ export function retypedRow(p, txt) {
  * a library mention shows its item's name now, so the offsets of what follows it match what is drawn.
  */
 export function tokShown(tok, opts) {
+  // A math token is one unit, as a mention is: `unit` (rawOffset, cutToken). Undrawable math shows as typed.
+  if (tok === '\\$') return { shown: '$', pre: 1 };
+  const math = mathOf(tok);
+  if (math) { const r = renderMath(math.tex, math.display); return r ? { shown: r.shown, pre: 1, unit: true } : { shown: tok, pre: 0 }; }
   const attachment = tok.match(ATTACH_RE); if (attachment) return { shown: `[${attachment[1] || 'Attachment'}]`, pre: 1 };
   // Bold may hold a link or a mention (an @discover guide's titles, 2026-09-30): what shows is what they show.
   if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) return { shown: tok.slice(2, -2).split(INLINE).filter(Boolean).map((inner) => tokShown(inner, opts).shown).join(''), pre: 2 };
@@ -328,7 +388,8 @@ export function rawOffset(p, fOff, line, opts) {
   let accF = 0, accR = 0;
   for (const tok of text.split(INLINE)) {
     if (!tok) continue;
-    const { shown, pre } = tokShown(tok, opts);
+    const { shown, pre, unit } = tokShown(tok, opts);
+    if (unit && fOff <= accF + shown.length) return base + accR + (fOff === accF ? 0 : tok.length); // drawn math: before or after it
     // The end of what a mention shows is the end of its source (MATH-56): a click after it lands after it, not before its
     // `]`. Bold and the rest keep their end inside the closing mark, so what is typed there continues them.
     if (fOff <= accF + shown.length) { const d = fOff - accF; return base + accR + (pre ? (d === 0 ? 0 : d === shown.length && tok.startsWith('@[') ? tok.length : Math.min(tok.length, pre + d)) : d); }
@@ -453,6 +514,8 @@ function nameHtml(name, named, trashed) {
 export function inlineHtml(text, opts) {
   return text.split(INLINE).map((p) => {
     if (!p) return '';
+    if (p === '\\$') return '$';
+    if (isMathToken(p)) return mathTokenHtml(p);
     // A pasted image inside a todo or a chat line reads as [Attachment n]; on a line of its own it renders as the image.
     const attachment = p.match(ATTACH_RE);
     if (attachment) return `<span data-attachment="${esc(attachment[2])}" style="padding:1px 6px;border-radius:4px;background:#f2f2f2;border:1px solid #eaeaea;font:.86em/1.6 var(--font-mono);color:#4d4d4d;white-space:nowrap">[${esc(attachment[1] || 'Attachment')}]</span>`;
@@ -552,7 +615,9 @@ function cutToken(tok, lo, hi, inside) {
     const part = sliceInline(inner, x, y, inside);
     return inside || !part ? part : `**${part}**`;
   }
-  const { shown, pre } = tokShown(tok); if (!pre) return tok.slice(lo, hi);
+  // Drawn math copies as its LaTeX, whole, unless the selection is within its source (shown on the caret's line).
+  const { shown, pre, unit } = tokShown(tok); if (unit) return inside ? tok.slice(lo, hi) : tok;
+  if (!pre) return tok.slice(lo, hi);
   const n = shown.length;
   if (lo >= pre + n) return lo === pre + n && hi >= tok.length ? '' : tok.slice(lo, hi);
   const x = Math.max(0, lo - pre), y = Math.max(0, Math.min(n, hi - pre));
@@ -615,6 +680,8 @@ const SAFE_HREF = /^(https?:|mailto:)/i;
 function plainHtml(text) {
   return String(text).split(INLINE).map((tok) => {
     if (!tok || ATTACH_RE.test(tok)) return '';
+    if (tok === '\\$') return '$';
+    if (isMathToken(tok)) return esc(tok); // math pastes as its LaTeX
     if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) return `<strong>${plainHtml(tok.slice(2, -2))}</strong>`;
     if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return `<code>${esc(tok.slice(1, -1))}</code>`;
     if (tok.startsWith('*') && tok.endsWith('*') && tok.length > 2) return `<em>${esc(tok.slice(1, -1))}</em>`;

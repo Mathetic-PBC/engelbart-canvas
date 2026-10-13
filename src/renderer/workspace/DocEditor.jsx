@@ -49,7 +49,7 @@
 //     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, RESULT_OFFER, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -569,6 +569,7 @@ export default class DocEditor extends React.Component {
   // shows (in the heading's font) for as long as the caret is on the line and goes away when the caret leaves (2026-09-18: hiding it
   // left an empty span the browser typed into, and those characters were lost). A mention opens only with the caret strictly
   // inside it (MATH-56): at its start or end it stays drawn, so one just picked from the @ menu shows finished at once.
+  // Math (2026-10-12) opens when the caret touches it, as bold does: the caret never stands inside a drawn formula.
   openIdx(tokens, a, b) {
     const out = []; let acc = 0;
     tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre, touched = tok.startsWith('@[') ? a < end && b > acc : a <= end && b >= acc; if (pre && touched) out.push(k); acc = end; });
@@ -618,7 +619,7 @@ export default class DocEditor extends React.Component {
     const segs = this.segs(t); if (!segs.length) return null; let accD = 0, accR = 0;
     for (const s of segs) {
       // The end of a drawn mention is the end of its source (MATH-56): a caret after it stays after it, not before its `]`.
-      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; const { pre } = tokShown(s.src); return accR + (d === 0 ? 0 : d === s.dl && s.src.startsWith('@[') ? s.rl : Math.min(s.rl, pre + d)); }
+      if (disp <= accD + s.dl) { const d = disp - accD; if (s.open) return accR + d; const { pre, unit } = tokShown(s.src); if (unit) return accR + (d === 0 ? 0 : s.rl); return accR + (d === 0 ? 0 : d === s.dl && s.src.startsWith('@[') ? s.rl : Math.min(s.rl, pre + d)); }
       accD += s.dl; accR += s.rl;
     }
     return accR;
@@ -626,7 +627,7 @@ export default class DocEditor extends React.Component {
   rawToDisplay(t, raw) {
     const segs = this.segs(t); let accD = 0, accR = 0;
     for (const s of segs) {
-      if (raw <= accR + s.rl) { const d = raw - accR; if (s.open) return accD + d; const { pre } = tokShown(s.src); return accD + Math.max(0, Math.min(s.dl, d - pre)); }
+      if (raw <= accR + s.rl) { const d = raw - accR; if (s.open) return accD + d; const { pre, unit } = tokShown(s.src); if (unit) return accD + (d <= 0 ? 0 : s.dl); return accD + Math.max(0, Math.min(s.dl, d - pre)); }
       accD += s.dl; accR += s.rl;
     }
     return accD;
@@ -764,8 +765,20 @@ export default class DocEditor extends React.Component {
   // its language and Copy, or the fence as typed while the caret is on it. The closing fence is the block's foot, a
   // strip of grey, or the fence while the caret is on it. A line of code shows its source whether or not the caret is
   // on it (display and source are the same characters), so JSON keeps its colours while it is edited.
+  // A ```math block (2026-10-12) is the equation, drawn, while the caret is outside it: its opening fence holds the
+  // drawing and Copy (the LaTeX), the rest of the block is hidden. With the caret in it, it is code like any other.
+  // Its LaTeX drawn, or null: not a math block, the caret in it, or LaTeX KaTeX cannot draw (then it shows as code).
+  mathBlock(p) {
+    if (!p.block || p.lang !== 'math') return null;
+    const a = this.state.activeLine; if (a != null && a >= p.block.open && a <= p.block.close) return null;
+    const ps = this.parsedOf(this.lines());
+    return mathBlockHtml(ps.slice(p.block.open + 1, p.block.close).map((q) => q.text).join('\n'));
+  }
   codeHtml(i, line, p, active) {
     const raw = `data-line="${i}" data-raw="${esc(line)}" data-kind="${p.type}"`, mono = 'font:14px/1.7 var(--font-mono)';
+    const math = this.mathBlock(p);
+    if (math && (p.type === 'code' || !p.open)) return `<div ${raw} data-math-block="1" style="display:none"><span class="t"></span></div>`;
+    if (math) return `<div ${raw} data-math-block="1" style="display:flex;align-items:center;gap:8px;padding:2px 6px 2px 16px;margin:2px 0"><span class="t" style="flex:1;min-width:0;overflow-x:auto;overflow-y:hidden">${math}</span>${this.copyCodeHtml(i)}</div>`;
     if (p.type === 'code') return `<div ${raw} style="padding:0 16px;background:#fafafa;${mono};color:#171717"><span class="t" style="display:block;min-height:24px;tab-size:2">${highlight(line, p.lang) || '<br>'}</span></div>`;
     if (!p.open) return `<div ${raw} style="padding:0 16px ${active ? 8 : 4}px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px"><span class="t" style="display:block;${active ? `${mono};color:#8f8f8f` : 'font:8px/1 var(--font-sans)'}">${active ? esc(line) : '<br>'}</span></div>`;
     const shown = active ? esc(line) : esc(fenceShown(p));
@@ -775,6 +788,11 @@ export default class DocEditor extends React.Component {
   // the way a block in the document is (language and Copy at its head, a fence as typed while the caret is on it).
   answerCodeHtml(i, raw, p, active, first, closes, last, alone) {
     const mono = 'font:14px/1.7 var(--font-mono)', sides = 'border-left:1px solid #eaeaea;border-right:1px solid #eaeaea';
+    const math = this.mathBlock(p), card = `padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 14 : 0}px`;
+    // A math block in an answer: the equation on the card, inside the rule; its closing fence keeps the card's foot.
+    if (math && p.code === 'body') return `<div ${raw} data-kind="code" data-math-block="1" style="display:none"><span class="t"></span></div>`;
+    if (math && p.code === 'close') return `<div ${raw} data-kind="fence" data-math-block="1" style="${card};cursor:text"><span style="display:block;padding:0 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;font:4px/1 var(--font-sans)"><br></span></span></div>`;
+    if (math) return `<div ${raw} data-kind="fence" data-math-block="1" style="${card};cursor:text"><span style="display:flex;align-items:center;gap:8px;padding:${first ? 2 : 0}px 0 0 12px;border-left:2px solid #dcdcdc"><span class="t" style="flex:1;min-width:0;overflow-x:auto;overflow-y:hidden">${math}</span>${this.copyCodeHtml(i)}</span></div>`;
     let inner;
     if (p.code === 'body') inner = `<span class="t" style="display:block;min-height:24px;padding:0 12px;background:#fff;${sides};${mono};color:#171717;tab-size:2">${highlight(p.text, p.lang) || '<br>'}</span>`;
     else if (p.code === 'close') inner = `<span class="t" style="display:block;padding:0 12px ${active ? 6 : 4}px;background:#fff;${sides};border-bottom:1px solid #eaeaea;border-radius:0 0 8px 8px;${active ? `${mono};color:#8f8f8f` : 'font:8px/1 var(--font-sans)'}">${active ? esc(p.text) : '<br>'}</span>`;
@@ -1270,10 +1288,10 @@ export default class DocEditor extends React.Component {
     const { card, turn, live, answer } = entry, q = turn.q, asked = questionOf(card), state = this.cardState.get(q) || {};
     const choice = isChoice(asked.type), many = asked.type === 'select_all';
     const picks = live ? state.picks || [] : answer ? answer.picks : [];
-    const say = card.say ? `<div data-card-say="1" style="margin:0 0 10px;color:#171717;font:400 16px/1.6 var(--font-sans);white-space:pre-wrap">${esc(card.say)}</div>` : '';
+    const say = card.say ? `<div data-card-say="1" style="margin:0 0 10px;color:#171717;font:400 16px/1.6 var(--font-sans);white-space:pre-wrap">${textMathHtml(card.say)}</div>` : '';
     const map = card.map ? MAP_GROUPS.filter((group) => card.map[group].length).map((group) => `<div data-card-map="${group}" style="margin:0 0 10px">`
       + `<div style="margin:0 0 2px;font:500 11.5px/1.4 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:#8f8f8f">${MAP_LABELS[group]}</div>`
-      + card.map[group].map((item) => `<div style="display:flex;gap:8px;font-size:15px;line-height:1.5;color:#171717"><span aria-hidden="true" style="flex:none;color:#c9c9c9">–</span><span style="flex:1;min-width:0">${esc(item.text)}${item.from ? `<span style="display:block;font-size:13px;line-height:1.45;color:#8f8f8f">${esc(item.from)}</span>` : ''}</span></div>`).join('')
+      + card.map[group].map((item) => `<div style="display:flex;gap:8px;font-size:15px;line-height:1.5;color:#171717"><span aria-hidden="true" style="flex:none;color:#c9c9c9">–</span><span style="flex:1;min-width:0">${textMathHtml(item.text)}${item.from ? `<span style="display:block;font-size:13px;line-height:1.45;color:#8f8f8f">${esc(item.from)}</span>` : ''}</span></div>`).join('')
       + '</div>').join('') : '';
     // No eyebrow over the question (2026-09-30, David): the card's own `eyebrow` ("FOCUS", "YOUR OWN RESEARCH") is kept, not drawn.
     // Nor, on a brainstorm card, its subtitle (2026-09-30, David: too much to read): the question stands alone. @discover's stays.
@@ -1282,7 +1300,7 @@ export default class DocEditor extends React.Component {
     if (choice) {
       body = `<div role="${many ? 'group' : 'radiogroup'}" aria-label="${esc(asked.title)}" style="margin-top:12px">` + asked.options.map((option, n) => {
         const on = picks.includes(option.label);
-        return `<button type="button" class="bs-opt" ${live ? `data-act="cardopt" data-turn="${q}" data-opt="${n}"` : 'disabled'} role="${many ? 'checkbox' : 'radio'}" aria-checked="${on}"><span class="bs-mark"${many ? ' data-square="1"' : ''}></span><span style="flex:1;min-width:0">${esc(option.label)}${option.why ? `<span class="bs-why">${esc(option.why)}</span>` : ''}</span></button>`;
+        return `<button type="button" class="bs-opt" ${live ? `data-act="cardopt" data-turn="${q}" data-opt="${n}"` : 'disabled'} role="${many ? 'checkbox' : 'radio'}" aria-checked="${on}"><span class="bs-mark"${many ? ' data-square="1"' : ''}></span><span style="flex:1;min-width:0">${textMathHtml(option.label)}${option.why ? `<span class="bs-why">${textMathHtml(option.why)}</span>` : ''}</span></button>`;
       }).join('') + '</div>';
       // On @brainstorm's versions card (round 7) the words typed in place of a pick are their question, rewritten.
       const own = entry.agent === 'brainstorm' && asked.id === 'versions' ? 'Or rewrite it yourself' : 'Or say it in your own words';
@@ -1307,7 +1325,7 @@ export default class DocEditor extends React.Component {
     return `<div ${raw} data-card="${q}" contenteditable="false" data-readonly="1" style="user-select:${live ? 'none' : 'text'};cursor:default;padding:12px 16px 4px;background:#fafafa;font:15px/1.5 var(--font-sans)">`
       + map
       + `<div data-card-box="${live ? 'live' : 'answered'}" style="padding:14px 16px 16px;border:1px solid #eaeaea;border-radius:10px;background:#fff">`
-      + say + `<div style="font:600 16px/1.45 var(--font-sans);color:#171717">${esc(asked.title)}</div>`
+      + say + `<div style="font:600 16px/1.45 var(--font-sans);color:#171717">${textMathHtml(asked.title)}</div>`
       + (sub ? `<div style="margin-top:8px;font-size:13.5px;color:#8f8f8f">${esc(sub)}</div>` : '')
       + body + acts + '</div></div>';
   }
@@ -1629,7 +1647,7 @@ export default class DocEditor extends React.Component {
     // or a beforeinput delete of a selection: the edit removed a range, not a character.
     const bulk = this.bulkDelete || !!(this.selRaw && (this.selRaw.multi || this.selRaw.a !== this.selRaw.b)); this.bulkDelete = false;
     const textOf = (d) => {
-      const raw = d.dataset.raw ?? ''; if (Number(d.dataset.line) !== activeId) return raw;
+      const raw = d.dataset.raw ?? ''; if (Number(d.dataset.line) !== activeId || d.dataset.mathBlock) return raw; // a drawn ```math block holds no text of its own
       const p = psOld[Number(d.dataset.line)] || parseLine(raw); if (this.lockedAt(old, Number(d.dataset.line))) return raw;
       const t = d.querySelector('.t'); let txt = t ? this.activeRaw(t) : '';
       if (p.type === 'h' && Number(d.dataset.line) !== this.state.activeLine && !/^#{1,3} /.test(txt)) txt = raw.slice(0, p.level + 1) + txt;

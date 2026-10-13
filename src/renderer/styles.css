@@ -114,3 +114,5 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 html[data-sidebar-gear] [data-window-controls] [data-settings]{display:none!important}
 /* the notification bell lives in the sidebar's Inbox while the sidebar is shown (2026-10-08) */
 html[data-sidebar-gear] [data-window-controls] .notification-control{display:none!important}
+/* Display math (2026-10-12, doc.js mathTokenHtml / mathBlockHtml): KaTeX's 1em above and below is too much in a line of the document. */
+[data-math]>.katex-display{margin:.35em 0}

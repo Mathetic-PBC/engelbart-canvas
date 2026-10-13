@@ -11,3 +11,5 @@ html,body,#root{margin:0;width:100%;height:100%;overflow:hidden;background:trans
 .post-error{position:absolute;bottom:30px;left:12px;right:12px;max-height:80px;overflow:auto;background:#fff;color:#b42318;font:12px/1.4 var(--font-sans);padding:6px}
 .moving,.moving *{cursor:grabbing!important;user-select:none!important}
 a{color:#0070f3;text-underline-offset:3px}
+/* Display math (2026-10-12, doc.js mathTokenHtml / mathBlockHtml): KaTeX's 1em above and below is too much in a line of the document. */
+[data-math]>.katex-display{margin:.35em 0}

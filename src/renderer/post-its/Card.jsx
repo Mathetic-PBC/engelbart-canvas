@@ -4,6 +4,7 @@ import DocEditor from '../workspace/DocEditor.jsx';
 import { useFit } from './face.jsx';
 import '../tokens/typography.css';
 import '@fontsource/source-code-pro/400.css';
+import 'katex/dist/katex.min.css';
 import './card.css';
 
 const api = window.postItAPI;

@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import '../tokens/typography.css';
 import '@fontsource/caveat/500.css';
+import 'katex/dist/katex.min.css';
 import { inlineHtml, noteInkHtml } from '../model/doc.js';
 import { noteQuestion, askedByNote, runningLabel } from '../pdf/canvas.js';
 
@@ -182,5 +183,7 @@ function BoxCard() {
     </div>
   );
 }
+
+export { answerHtml }; // for test/math.test.cjs
 
 createRoot(document.getElementById('root')).render(<BoxCard />);
