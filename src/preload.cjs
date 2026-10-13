@@ -189,6 +189,8 @@ const engelbartAPI = Object.freeze({
   askBart: invoke('ask-bart'),
   stopBart: invoke('stop-bart'),
   bartModels: invoke('bart-models'),
+  // A new thread's title ({ text, agent } → { title, provider, model, modelName, effort, ms, named }; bart/name-chat.cjs).
+  nameChat: invoke('name-chat'),
   // Settings › Intelligence (src/main/bart/settings.cjs): { models, choices, usable, offered, cli }; a save of the defaults
   // ({ provider, buildProvider, bart, brainstorm, discover, build }) and "Use default" ('bart' | 'build' | 'quick') answer
   // the same, and every window hears onModelsChanged after either.

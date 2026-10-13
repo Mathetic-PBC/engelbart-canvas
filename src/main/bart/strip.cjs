@@ -8,6 +8,10 @@
 // cards and recap with it. The grammar is the editor's (src/renderer/model/doc.js BART_RE, REPLY_RE, PENDING_RE),
 // restated here because main cannot import that module; test/bart.test.cjs checks the two agree.
 //
+// A conversation's title (2026-10-12, `bart# …` or `bart#+ …` above the question that starts a thread; ./name-chat.cjs)
+// is the editor's, named by a model: no agent is shown it, its own threads' included (stripTitles; ./context.cjs applies
+// it to every agent's text).
+//
 // The text is read after its mentions are placed (../context/expand-mentions.cjs): a mention on a question line puts a
 // blank line, the <file> and a blank line between the question and its replies (2026-10-04, `@brainstorm @[Paper]`). That
 // stays with the line it is under, so the replies after it are still that question's; under a reply left out, it goes too.
@@ -15,6 +19,7 @@
 const BART_RE = /^@(bart|brainstorm|orient|discover)(?:\s(.*))?$/i;
 const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 const PENDING_RE = /^bart~> ?([\w-]*)$/;
+const TITLE_RE = /^bart#(\+?) ?(.*)$/;
 const OMITTED = '[agent reply omitted]';
 // An agent a line names by another word: `@orient` is @brainstorm's.
 const SAME_AS = { orient: 'brainstorm' };
@@ -43,6 +48,7 @@ function stripAgentReplies(text, agent = 'brainstorm') {
   const ends = (n) => n >= 0 && (lines[n] === FILE_END || (FILE_RE.test(lines[n]) && CLOSED_RE.test(lines[n])));
   for (let n = 0; n < lines.length; n += 1) {
     const line = lines[n];
+    if (TITLE_RE.test(line)) continue;
     // A mention placed under an agent's line: the blank lines around it, then the file itself.
     if (owner && line === '' && (FILE_RE.test(lines[n + 1] || '') || ends(n - 1))) { if (!omitting) out.push(line); continue; }
     if (FILE_RE.test(line)) {
@@ -70,4 +76,9 @@ function stripAgentReplies(text, agent = 'brainstorm') {
   return out.join('\n');
 }
 
-module.exports = { OMITTED, BART_RE, REPLY_RE, PENDING_RE, stripAgentReplies };
+/** The text without its conversation titles. */
+function stripTitles(text) {
+  return String(text == null ? '' : text).split('\n').filter((line) => !TITLE_RE.test(line)).join('\n');
+}
+
+module.exports = { OMITTED, BART_RE, REPLY_RE, PENDING_RE, TITLE_RE, stripAgentReplies, stripTitles };

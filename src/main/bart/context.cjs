@@ -39,7 +39,7 @@ const projects = require('../store/projects.cjs');
 const { buildCatalog } = require('../context/catalog.cjs');
 const { expandDoc } = require('../context/expand-mentions.cjs');
 const { PENDING_RE } = require('./reply.cjs');
-const { stripAgentReplies } = require('./strip.cjs');
+const { stripAgentReplies, stripTitles } = require('./strip.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
 const { memoryBlock } = require('../connect/memory.cjs');
 const library = require('../store/library.cjs');
@@ -311,7 +311,8 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   // @brainstorm reads where the person is from what they wrote: other agents' answers are taken out, its own threads
   // stay (./strip.cjs).
   const scoped = SCOPED.has(agent);
-  const shown = (body) => markPlace(scoped ? stripAgentReplies(body, agent) : body, askId);
+  // A conversation's title is no agent's to read (2026-10-12, ./strip.cjs stripTitles).
+  const shown = (body) => markPlace(scoped ? stripAgentReplies(body, agent) : stripTitles(body), askId);
   let from = `the workspace "${workspace.name}"`;
   let paper = null, pointed = null;
   if (ref.kind === 'mark') {

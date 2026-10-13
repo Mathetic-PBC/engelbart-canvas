@@ -216,7 +216,9 @@ test('an @orient line is asked as @brainstorm and stays as written; its live car
   const asked = mounted(['Notes', '@orient metacognition', '']);
   asked.editor.askInline(1);
   assert.deepEqual([asked.asks[0].agent, asked.asks[0].text, asked.asks[0].turns], ['brainstorm', 'metacognition', []]);
-  assert.deepEqual(asked.lines().slice(0, 3), ['Notes', '@orient metacognition', `bart~> ${asked.asks[0].askId}`], 'the line is not rewritten');
+  // As @brainstorm, it starts a conversation: an empty title line above it, to be named (2026-10-12).
+  assert.deepEqual(asked.lines().slice(0, 4), ['Notes', 'bart# ', '@orient metacognition', `bart~> ${asked.asks[0].askId}`], 'the line is not rewritten');
+  assert.equal(asked.asks[0].name, true);
 
   const m = mounted(['Notes', '@orient metacognition', ...answer(KNOW), '']);
   assert.deepEqual([m.entry(1).live, m.entry(1).agent], [true, 'brainstorm']);

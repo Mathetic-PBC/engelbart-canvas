@@ -23,6 +23,7 @@ const { createSweeper } = require('./context/sweeper.cjs');
 const { inspectPdf, pdfTitle } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
+const { createNameChat, createFakeNameChat } = require('./bart/name-chat.cjs');
 const { rememberChoice } = require('./bart/choices.cjs');
 const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
@@ -118,6 +119,7 @@ let store = null;
 let sweeper = null;
 let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
 let bart = null;
+let nameChat = null;
 let agentMap = null; // the Agent map (./agent-map/window.cjs): developers only, one per app
 let runLog = null; // what it shows (./bart/runlog.cjs): kept only in a copy with test mode
 let builds = null;
@@ -661,6 +663,10 @@ if (!hasSingleInstanceLock) {
     bart = process.env.ENGELBART_BART_FAKE === '1'
       ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), runLog })
       : createBart({ runLog, readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), brainstormCodexHome: path.join(app.getPath('userData'), 'codex-home-brainstorm'), discoverCodexHome: path.join(app.getPath('userData'), 'codex-home-discover'), threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), tools });
+    // A new thread's title (2026-10-12, bart/name-chat.cjs): the lowest model of the provider its question runs on, low effort.
+    nameChat = process.env.ENGELBART_BART_FAKE === '1'
+      ? createFakeNameChat({ readModels: bartModels })
+      : createNameChat({ readModels: bartModels, runDirectory: path.join(app.getPath('userData'), 'name-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-name'), tools });
     sweeper.start();
     powerMonitor.on('resume', () => sweeper.sweepSoon());
     // Build (src/main/build): a workspace handed to Claude Code or Codex in a git worktree of its own, writing only there.
@@ -1098,6 +1104,7 @@ if (!hasSingleInstanceLock) {
       builds,
       sandbox,
       readModels,
+      nameChat,
       rememberModelChoice,
       modelSettings,
       tools,

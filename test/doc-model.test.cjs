@@ -632,3 +632,62 @@ test('flattenPaste: several pasted lines become one question line, one space at 
     assert.equal(agentOf(p), line.slice(1, line.indexOf(' ')));
   }
 });
+
+test('a conversation title (2026-10-12): `bart# ` above the question that starts a thread, `bart#+ ` collapsed; threads attach it', async () => {
+  const { parseLine, parseLines, threads, titleLine, TITLE_RE } = await load();
+  assert.deepEqual(parseLine('bart# Retry logic in the client'), { type: 'title', text: 'Retry logic in the client', folded: false });
+  assert.deepEqual(parseLine('bart#+ Retry logic'), { type: 'title', text: 'Retry logic', folded: true });
+  assert.deepEqual(parseLine('bart# '), { type: 'title', text: '', folded: false });
+  assert.deepEqual(parseLine('bart#'), { type: 'title', text: '', folded: false });
+  assert.equal(titleLine('A title', false), 'bart# A title');
+  assert.equal(titleLine('A title', true), 'bart#+ A title');
+  assert.ok(TITLE_RE.test(titleLine('', false)));
+  assert.equal(parseLine('# bart').type, 'h', 'a heading is still a heading');
+
+  const lines = ['Notes', 'bart# Retry logic', '@bart why retry?', 'bart> because', '@bart and timeouts?', 'bart> those too', '', '@discover old thread', 'bart> a guide', '', 'bart#+ Folded one', '@brainstorm', 'bart> {}'];
+  const [first, old, folded] = threads(lines);
+  assert.equal(first.from, 2, '`from` is still the first question');
+  assert.equal(first.titleLine, 1);
+  assert.equal(first.title, 'Retry logic');
+  assert.equal(first.folded, false);
+  assert.equal(first.agent, 'bart');
+  assert.equal(first.turns.length, 2, 'the follow-up is in the titled thread');
+  assert.equal(old.titleLine, -1, 'a thread begun before titles has none');
+  assert.equal(old.title, null);
+  assert.equal(old.agent, 'discover');
+  assert.equal(folded.titleLine, 10);
+  assert.equal(folded.folded, true);
+  assert.equal(folded.agent, 'brainstorm');
+
+  // With no question under it, a title is the text it is.
+  const alone = ['bart# Left behind', 'just a line', 'bart# Also alone'];
+  const ps = parseLines(alone);
+  assert.deepEqual(ps[0], { type: 'p', text: 'bart# Left behind' });
+  assert.deepEqual(ps[2], { type: 'p', text: 'bart# Also alone' });
+  assert.equal(threads(alone).length, 0);
+  // A title between an answer and a question of the same agent starts a new thread there.
+  const split = threads(['@bart a', 'bart> one', 'bart# New one', '@bart b', 'bart> two']);
+  assert.equal(split.length, 2);
+  assert.equal(split[1].title, 'New one');
+});
+
+test('a title fills its own conversation\'s line, found by the ask: before its answer lands or after, never another\'s (2026-10-12)', async () => {
+  const { placeTitle, placeAnswer, askedAt } = await load();
+  const doc = ['Notes', 'bart# ', '@bart why retry?', 'bart~> ask1', '', 'bart# ', '@bart other?', 'bart~> ask2', ''].join('\n');
+  // Before the answer: above the question over its pending line.
+  assert.equal(placeTitle(doc, 'ask1', 'Retry logic'), ['Notes', 'bart# Retry logic', '@bart why retry?', 'bart~> ask1', '', 'bart# ', '@bart other?', 'bart~> ask2', ''].join('\n'));
+  assert.equal(placeTitle(doc, 'ask2', 'Other'), ['Notes', 'bart# ', '@bart why retry?', 'bart~> ask1', '', 'bart# Other', '@bart other?', 'bart~> ask2', ''].join('\n'));
+  // After it: the pending line is gone, so the question where it stood when the answer landed (askedAt) finds it, even after
+  // the person typed a line above it meanwhile.
+  const near = askedAt(doc, 'ask1');
+  assert.deepEqual(near, { question: '@bart why retry?', index: 2 });
+  const answered = placeAnswer(doc, 'ask1', ['bart> because', '', 'bart> *Sonnet High · 3s*']);
+  const typed = `A line typed above\n${answered}`;
+  assert.equal(placeTitle(typed, 'ask1', 'Retry logic', near).split('\n').slice(0, 4).join('\n'), ['A line typed above', 'Notes', 'bart# Retry logic', '@bart why retry?'].join('\n'));
+  // Nothing to fill: the person wrote a title, deleted the line, or the title is empty.
+  assert.equal(placeTitle(doc.replace('bart# \n@bart why', 'bart# Mine\n@bart why'), 'ask1', 'Retry logic'), null);
+  assert.equal(placeTitle(doc.replace('bart# \n@bart why', '@bart why'), 'ask1', 'Retry logic'), null);
+  assert.equal(placeTitle(doc, 'ask1', '  '), null);
+  assert.equal(placeTitle(answered, 'ask1', 'Retry logic'), null, 'gone without a place to look: nowhere');
+  assert.equal(placeTitle(doc, 'nope', 'Retry logic'), null);
+});

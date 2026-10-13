@@ -38,6 +38,40 @@ export function placeAnswer(text, askId, lines) {
 }
 export const DRAFT_RE = /^bart\?> ?(.*)$/;
 export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
+// A conversation's title (2026-10-12): the line right above the question that starts a thread, named by a model when the
+// question was asked (src/main/bart/name-chat.cjs); `bart#+ ` is the same thread collapsed to that one row. Threads begun
+// before then have none and keep folding a turn at a time. A title with no question under it is plain text (parseLines).
+export const TITLE_RE = /^bart#(\+?) ?(.*)$/;
+export const titleLine = (text, folded) => `bart#${folded ? '+' : ''} ${text}`;
+/**
+ * Where ask `askId`'s question stands now → { question, index }: its line as written and its index, or null when its
+ * pending line is gone. Read just before the answer replaces the pending line, so the title can still find it (placeTitle).
+ */
+export function askedAt(text, askId) {
+  const all = String(text).split('\n'), at = all.indexOf(`bart~> ${askId}`);
+  return at > 0 ? { question: all[at - 1], index: at - 1 } : null;
+}
+/**
+ * `text` with the empty title line of ask `askId`'s thread filled with `title`; null when there is none to fill (the
+ * person deleted it, or wrote one). Found by the ask, never by an index kept from before: directly above the question
+ * whose pending line is `bart~> <askId>`, or, once the answer has replaced that line, above the line `near.question`
+ * (askedAt, read then) nearest to where it was.
+ */
+export function placeTitle(text, askId, title, near = null) {
+  const all = String(text).split('\n');
+  const empty = (j) => { const m = j >= 0 ? String(all[j]).match(TITLE_RE) : null; return !!m && !m[2].trim(); };
+  let at = -1;
+  const pending = all.indexOf(`bart~> ${askId}`);
+  if (pending >= 0) { if (pending >= 2 && BART_RE.test(all[pending - 1]) && empty(pending - 2)) at = pending - 2; }
+  else if (near && typeof near.question === 'string') {
+    let best = -1;
+    all.forEach((line, j) => { if (line === near.question && empty(j - 1) && (best < 0 || Math.abs(j - near.index) < Math.abs(best - near.index))) best = j; });
+    if (best >= 0) at = best - 1;
+  }
+  if (at < 0 || !String(title || '').trim()) return null;
+  all[at] = titleLine(String(title).trim(), all[at].match(TITLE_RE)[1] === '+');
+  return all.join('\n');
+}
 // The closing line of an answer: which model said it and how long it took. It is drawn as the card's foot.
 export const ATTRIBUTION_RE = /^\*[^*]+\*$/;
 export const QUOTE_RE = /^> ?(.*)$/;
@@ -214,6 +248,7 @@ export const parseLine = (l) => {
   if ((m = l.match(BART_RE))) { const agent = m[1].toLowerCase(); return agent === 'bart' ? { type: 'bart', text: m[2] || '' } : { type: 'bart', text: m[2] || '', agent }; }
   if ((m = l.match(BUILD_RE))) return { type: 'build', id: m[1], text: '' };
   if ((m = l.match(PENDING_RE))) return { type: 'pending', id: m[1], text: '' };
+  if ((m = l.match(TITLE_RE))) return { type: 'title', text: m[2], folded: m[1] === '+' };
   if ((m = l.match(DRAFT_RE))) return { type: 'reply', text: m[1], folded: false };
   if ((m = l.match(REPLY_RE))) return { type: 'reply', text: m[2], folded: m[1] === '+' };
   if ((m = l.match(QUOTE_RE))) return { type: 'quote', text: m[1] };
@@ -268,6 +303,8 @@ export function parseLines(lines) {
     }
     i = j;
   }
+  // A title belongs to the question under it; without one it is the text it is.
+  for (let i = 0; i < ps.length; i++) if (ps[i].type === 'title' && (!ps[i + 1] || ps[i + 1].type !== 'bart')) ps[i] = { type: 'p', text: String(lines[i]) };
   return ps;
 }
 
@@ -421,7 +458,10 @@ const followsIn = (p, first) => agentOf(p) === agentOf(first) && (p.agent !== 'o
  * The @bart exchanges of a document, by line index. A thread is a run of lines with nothing between them: a question,
  * what stands under it (a pending line, or the answer), then any question asked right after that answer — a follow-up,
  * which reads as one card. A follow-up asks the agent the thread's first question asked; a line for another agent
- * starts a thread of its own, with its own card and reply field (2026-10-02; followsIn). → [{ from, to, turns }], each turn
+ * starts a thread of its own, with its own card and reply field (2026-10-02; followsIn). → [{ from, to, turns, agent,
+ * title, titleLine, folded }]: `agent` the thread's ('bart', 'brainstorm' or 'discover'), and for a thread begun under a
+ * title line (2026-10-12) `title` its text, `titleLine` its index (-1 and null without one) and `folded` whether the
+ * thread is collapsed to it; `from` is always the first question's line. Each turn
  * { q, from, to, answered, pending, foot, folded } where `from..to` are the lines under the question (to === q when there
  * are none), `pending` is the id of a run still working, `foot` the closing line that says which model answered (-1
  * without one).
@@ -430,7 +470,8 @@ export function threads(lines, ps = parseLines(lines)) {
   const out = [];
   for (let i = 0; i < lines.length; i++) {
     if (ps[i].type !== 'bart') continue;
-    const thread = { from: i, to: i, turns: [] };
+    const head = i > 0 && ps[i - 1].type === 'title' ? ps[i - 1] : null;
+    const thread = { from: i, to: i, turns: [], agent: agentOf(ps[i]), title: head ? head.text : null, titleLine: head ? i - 1 : -1, folded: !!(head && head.folded) };
     for (;;) {
       const turn = { q: i, from: i + 1, to: i, answered: false, pending: null, foot: -1, folded: false };
       while (i + 1 < lines.length) {

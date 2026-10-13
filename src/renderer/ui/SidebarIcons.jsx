@@ -36,7 +36,9 @@ export function InboxIcon({ dot = false, ...rest }) {
   );
 }
 
-export const AgentsIcon = (props) => <Svg {...props}><path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.44l-1.58 6.12a.5.5 0 0 1-.95.07z" /></Svg>;
+// Its drawing is the editor's too, as a string: a collapsed agent conversation's row (DocEditor, 2026-10-12).
+export const AGENTS_PATH = 'M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.44l-1.58 6.12a.5.5 0 0 1-.95.07z';
+export const AgentsIcon = (props) => <Svg {...props}><path d={AGENTS_PATH} /></Svg>;
 export const ConnectionsIcon = (props) => <Svg {...props}><rect width="7" height="7" x="14" y="3" rx="1" /><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3" /></Svg>;
 // Three books, one fewer than Lucide's four, and drawn thicker (2026-10-08).
 export const LibraryIcon = (props) => <Svg stroke={2.8} {...props}><path d="M5 4v16" /><path d="M11.5 7v13" /><path d="m16.5 6.5 3.5 13.5" /></Svg>;

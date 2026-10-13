@@ -49,7 +49,7 @@
 //     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, RESULT_OFFER, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -65,6 +65,7 @@ import { guideTitle, guideRepo, repoOf } from '../model/guide.js';
 import { guideSections, splitTarget } from '../model/stage.js';
 import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
 import { isNote } from '../model/kind.js';
+import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -77,6 +78,8 @@ const UNDER_BART = ['pending', 'reply'];
 // them and answer with cards: every one but @bart. An @discover line's chip picks its level instead (2026-10-03). What
 // their follow-up field says, and whether it may be sent empty.
 const oneModel = (agent) => agent !== 'bart';
+// Who a collapsed conversation is with, said when its row is hovered (2026-10-12).
+const AGENT_NAMES = { bart: BART_ITEM.title, brainstorm: BRAINSTORM_ITEM.title, discover: DISCOVER_ITEM.title };
 // The ones of those on a fixed step (main/bart/models.cjs readBrainstorm): no flag is read or marked on their lines, their
 // cards have no subtitle and have Wrap up, and their recaps are drawn as sections: @brainstorm.
 const fixedStep = (agent) => agent === 'brainstorm';
@@ -141,6 +144,10 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.bart-ic:hover{background:#f2f2f2;color:#171717}.bart-ic[data-danger]:hover{color:#e70022}.bart-ic:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
   + '.bart-tip{position:absolute;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#171717;font:12px/1.2 var(--font-sans);white-space:nowrap;pointer-events:none;opacity:0;visibility:hidden;transition:opacity 120ms}'
   + '.bart-ic:hover+.bart-tip,.bart-ic:focus-visible+.bart-tip{opacity:1;visibility:visible}'
+  // A conversation's title (2026-10-12): its header's text is clicked to rename it; collapsed, the row is a link that says
+  // which agent it is with when hovered.
+  + '.bart-title{cursor:text}.bart-title:hover{color:#171717}.bart-thread{cursor:pointer}.bart-thread:hover>.bart-thread-name{text-decoration:underline}'
+  + '.bart-thread:hover+.bart-tip,.bart-thread:focus-visible+.bart-tip{opacity:1;visibility:visible}.bart-ic:disabled{cursor:default;opacity:.4}.bart-ic:disabled:hover{background:none;color:#4d4d4d}'
   + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
   + '.bart-text{padding:4px 2px;border:0;background:transparent;color:#8f8f8f;font:500 12px/1.4 var(--font-sans);cursor:pointer}.bart-text:hover{color:#171717}'
   + '[data-follow-input]::placeholder,[data-discover-input]::placeholder{color:#8f8f8f;font-style:italic;font-size:14.5px}'
@@ -185,6 +192,7 @@ const ICON = {
   regenerate: icon('<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path>'),
   edit: icon('<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path>'),
   collapse: icon('<path d="m7 20 5-5 5 5"></path><path d="m7 4 5 5 5-5"></path>'),
+  agents: icon(`<path d="${AGENTS_PATH}"></path>`, 14, 2),
   expand: icon('<path d="m7 15 5 5 5-5"></path><path d="m7 9 5-5 5 5"></path>'),
   trash: icon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
   chevron: `<span style="display:inline-flex;color:#8f8f8f">${icon('<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`,
@@ -208,6 +216,9 @@ const REPO_MARK = {
   lib: { label: 'Run', words: RUN_WORDS },
   here: { label: 'Added', words: 'In this workspace: open it from the sidebar' },
 };
+// A conversation at work, and one collapsed to its title's row (2026-10-12): never both, so a run's progress stays in view.
+const isRunning = (thread) => thread.turns.some((turn) => turn.pending);
+const isCollapsed = (thread) => thread.titleLine >= 0 && thread.folded && !isRunning(thread);
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
 // A flag the models file recognises is a little bolder than the text around it; a `--word` it does not know stays plain.
 const FLAG_LOOK = 'font-weight:500';
@@ -236,7 +247,9 @@ export default class DocEditor extends React.Component {
   discoverOpen = new Set();
   // What is being answered on a live @brainstorm card, by its question's line: { picks, text, note }. Picks are drawn
   // into the card's HTML; the typed text is not, and is put back after each redraw (restoreCards).
-  cardState = new Map(); cardCache = new WeakMap();
+  cardState = new Map(); cardCache = new WeakMap(); collapseCache = new WeakMap();
+  // The conversation title being renamed in its header (2026-10-12): { line, value }.
+  titleEdit = null;
   // A Build card's reply being typed (by Build id) and the images pasted into it ([{ n, id }]), which cards show their
   // earlier messages and their steps, where each card's diff is scrolled to, and the HTML each part of each card was last
   // drawn with (patchBuilds compares these).
@@ -263,15 +276,16 @@ export default class DocEditor extends React.Component {
     // The follow-up field is an <input> inside the editor: its keys and text are its own, not the document's. So is a
     // Build card's reply field.
     // And so are an @brainstorm card's fields, and a Send to Discover field.
-    const inFollow = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input], [data-build-input], [data-card-input], [data-discover-input]'));
+    const inFollow = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input], [data-build-input], [data-card-input], [data-discover-input], [data-title-input]'));
+    const inTitle = (e) => !!(e.target && e.target.matches && e.target.matches('[data-title-input]'));
     const inBuild = (e) => !!(e.target && e.target.matches && e.target.matches('[data-build-input]'));
     const inCard = (e) => !!(e.target && e.target.matches && e.target.matches('[data-card-input]'));
     const inDiscover = (e) => !!(e.target && e.target.matches && e.target.matches('[data-discover-input]'));
     const onPage = (e) => { const page = this.scrollRef.current; return !!(page && e.target && e.target.nodeType === 1 && page.contains(e.target) && !e.target.closest('input, textarea, select, [contenteditable="true"]')); };
     const inAsk = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input]')); // a follow-up's field alone
     this.docListeners = {
-      keydown: (e) => { if (!inEd(e)) return; this.held = false; if (this.escapeShut(e)) return; if (inBuild(e)) this.buildKey(e); else if (inCard(e)) this.cardKey(e); else if (inDiscover(e)) this.discoverKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
-      input: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildInput(e.target); else if (inCard(e)) this.cardInput(e.target); else if (inDiscover(e)) this.discoverInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
+      keydown: (e) => { if (!inEd(e)) return; this.held = false; if (inTitle(e)) { this.titleKey(e); return; } if (this.escapeShut(e)) return; if (inBuild(e)) this.buildKey(e); else if (inCard(e)) this.cardKey(e); else if (inDiscover(e)) this.discoverKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
+      input: (e) => { if (!inEd(e)) return; if (inTitle(e)) { this.titleInput(e.target); return; } if (inBuild(e)) this.buildInput(e.target); else if (inCard(e)) this.cardInput(e.target); else if (inDiscover(e)) this.discoverInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
       beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
       paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (inAsk(e)) this.followPaste(e); else if (!inFollow(e)) this.editorPaste(e); if (inFollow(e)) this.fieldPaste(e); },
       // A copy or a cut of the document is its markdown (editorCopy); in a field of its own it is the browser's, as a paste is.
@@ -311,7 +325,7 @@ export default class DocEditor extends React.Component {
       drop: (e) => { this.markDropChip(null); if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
       // Leaving it otherwise puts back a question being edited (2026-10-03).
-      focusout: (e) => { if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
+      focusout: (e) => { if (inEd(e) && inTitle(e) && document.hasFocus()) { this.commitTitle(e.target); return; } if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
       compositionstart: () => { this.composing = true; },
       compositionend: (e) => { this.composing = false; if (inEd(e) && !inFollow(e)) this.editorInput(); },
     };
@@ -509,7 +523,7 @@ export default class DocEditor extends React.Component {
   lockedAt(ls, i) {
     if (this.editing && this.editing.q === i) return false;
     const ps = this.parsedOf(ls), p = ps[i] || parseLine('');
-    if (p.type === 'build') return true;
+    if (p.type === 'build' || p.type === 'title' || this.collapsedOf(ls).has(i)) return true;
     if (p.type === 'reply') return p.folded || this.cardsOf(ls).lines.has(i) || (ATTRIBUTION_RE.test(p.text) && (ps[i + 1] || parseLine('')).type !== 'reply');
     if (p.type === 'bart') return ls[i + 1] != null && UNDER_BART.includes(ps[i + 1].type);
     return isAnswer(p.type);
@@ -521,6 +535,14 @@ export default class DocEditor extends React.Component {
   // answers, { card, turn, thread, last, live, answer }, where `last` is the card's last line before its foot, `live` that
   // it is the last turn of its thread (unfolded, in an editor that can ask), and `answer` what the line under it said
   // (main/bart/card.cjs readAnswer); `lines` holds every line a card is drawn over.
+  // The lines a collapsed conversation hides (2026-10-12): every question and answer under its title, kept per array as
+  // parsedOf is.
+  collapsedOf(ls) {
+    let held = this.collapseCache.get(ls); if (held) return held;
+    held = new Set();
+    for (const thread of threads(ls, this.parsedOf(ls))) if (isCollapsed(thread)) for (let i = thread.from; i <= thread.to; i++) held.add(i);
+    this.collapseCache.set(ls, held); return held;
+  }
   cardsOf(ls) {
     let held = this.cardCache.get(ls); if (held) return held;
     held = { byQ: new Map(), lines: new Set() };
@@ -650,6 +672,9 @@ export default class DocEditor extends React.Component {
   // `at` says where a line of an @bart card stands in it (this.layout); every other line has none.
   lineHtml(i, line, p, active, first, at, locked) {
     const raw = `data-line="${i}" data-raw="${esc(line)}"`;
+    // A collapsed conversation's lines are in the document, not on the page: its title's row stands for them.
+    if (at && at.hidden) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
+    if (p.type === 'title' && at) return this.titleHtml(i, raw, p, at);
     if (p.type === 'build') return this.buildHtml(i, line, p);
     if (p.type === 'code' || p.type === 'fence') return this.codeHtml(i, line, p, active);
     if (p.type === 'todo') {
@@ -690,7 +715,7 @@ export default class DocEditor extends React.Component {
       // Deep"), or the model and effort a flag pins it to; its menu is DiscoverLevels. @brainstorm runs on one model: no chip.
       const label = read ? `${read.steps[0].name} ${EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort}` : models && agent === 'discover' && chipped ? this.discoverLabel(i) : null;
       const chip = label ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:8px;margin:-2px -6px 0 0;padding:2px 2px 2px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:7px;height:26px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;align-items:center;justify-content:center;width:10px;height:12px;font:12px/1 var(--font-sans);color:#8f8f8f"><span style="position:relative;top:${open ? '3px' : '-3px'}">${open ? '⌃' : '⌄'}</span></span></span>${send}</span>` : `<span contenteditable="false" style="flex:none;margin-top:3px">${send}</span>`;
-      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''}${editing ? ' data-editing="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 12 : 10}px 16px ${closes ? '10px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '14px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
+      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''}${editing ? ' data-editing="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 8 : 6}px 12px ${closes ? '8px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '8px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
         + (chipped ? chip : '')
         + '</div>';
     }
@@ -721,7 +746,7 @@ export default class DocEditor extends React.Component {
         return `<span style="display:block;min-height:${text ? 22 : 10}px;padding:1px 0 1px 14px;${a.look}color:#8f8f8f;font-size:14px;line-height:1.65;${end ? 'margin-bottom:10px;' : ''}">${end ? (/<\/span><\/span>$/.test(a.content) ? a.content.replace(/<\/span><\/span>$/, `${cursor}</span></span>`) : a.content + cursor) : (a.content || '<br>')}</span>`;
       }).join('');
       const closes = !at || at.closes;
-      return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:2px 16px 12px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '14px' : '0'};color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
+      return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:2px 16px 12px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '8px' : '0'};color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
         + written
         + (open && log.length ? `<div style="margin:0 0 8px 16px;font:12px/1.7 var(--font-sans);color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '')
         + '<div style="display:flex;align-items:center;gap:10px">'
@@ -732,7 +757,7 @@ export default class DocEditor extends React.Component {
         + '</div></div>';
     }
     if (p.type === 'reply') {
-      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), edit: at.editable });
+      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), edit: at.editable, thread: at.thread });
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.card) return this.cardHtml(raw, at.card);
@@ -759,7 +784,7 @@ export default class DocEditor extends React.Component {
       const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
       const hang = cut && q.type !== 'h' ? `padding-left:calc(${q.depth * 18}px + ${MARK_COL});` : '';
       const a = this.answerLook(p.text), shut = active && this.linksShut(p), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`, shut) : this.activeHtml(tokensOf(p, line), null, null, shut)) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
-      return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
+      return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 8 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
       // The prototype's replies: read-only, as they were.
@@ -801,7 +826,7 @@ export default class DocEditor extends React.Component {
   // the way a block in the document is (language and Copy at its head, a fence as typed while the caret is on it).
   answerCodeHtml(i, raw, p, active, first, closes, last, alone) {
     const mono = 'font:14px/1.7 var(--font-mono)', sides = 'border-left:1px solid #eaeaea;border-right:1px solid #eaeaea';
-    const math = this.mathBlock(p), card = `padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 14 : 0}px`;
+    const math = this.mathBlock(p), card = `padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 8 : 0}px`;
     // A math block in an answer: the equation on the card, inside the rule; its closing fence keeps the card's foot.
     if (math && p.code === 'body') return `<div ${raw} data-kind="code" data-math-block="1" style="display:none"><span class="t"></span></div>`;
     if (math && p.code === 'close') return `<div ${raw} data-kind="fence" data-math-block="1" style="${card};cursor:text"><span style="display:block;padding:0 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;font:4px/1 var(--font-sans)"><br></span></span></div>`;
@@ -813,7 +838,7 @@ export default class DocEditor extends React.Component {
     // The space around the box is the rule's padding, not a margin: a margin would fall through the line's wrappers and
     // cut a white strip across the card.
     const above = first ? 2 : p.code === 'open' ? 6 : 0, below = last ? 2 : p.code === 'close' ? 6 : 0;
-    return `<div ${raw} data-kind="${p.code === 'body' ? 'code' : 'fence'}" style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 14 : 0}px;cursor:text"><span style="display:block;padding:${above}px 0 ${below}px 12px;border-left:2px solid #dcdcdc">${inner}</span></div>`;
+    return `<div ${raw} data-kind="${p.code === 'body' ? 'code' : 'fence'}" style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 8 : 0}px;cursor:text"><span style="display:block;padding:${above}px 0 ${below}px 12px;border-left:2px solid #dcdcdc">${inner}</span></div>`;
   }
   copyCodeHtml(i) {
     const copied = this.copied === `code${i}`;
@@ -1265,11 +1290,18 @@ export default class DocEditor extends React.Component {
   layout(ls) {
     const at = new Map(), ps = this.parsedOf(ls), cards = this.cardsOf(ls);
     for (const thread of threads(ls, ps)) {
+      // A titled conversation (2026-10-12): its title is the card's header, or, collapsed, the one row drawn for it all.
+      const titled = thread.titleLine >= 0, collapsed = isCollapsed(thread);
+      if (titled) at.set(thread.titleLine, { thread, agent: thread.agent, role: 'title', collapsed, running: isRunning(thread) });
+      if (collapsed) {
+        for (let i = thread.from; i <= thread.to; i++) at.set(i, { thread, turn: thread.turns.find((turn) => i >= turn.q && i <= turn.to), agent: thread.agent, role: 'hidden', hidden: true });
+        continue;
+      }
       const end = thread.turns[thread.turns.length - 1], endCard = cards.byQ.get(end.q);
       const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !(endCard && endCard.live);
       for (const turn of thread.turns) {
         const agent = agentOf(ps[turn.q]), card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
-        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from, closes: !turn.answered, editable });
+        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from && !titled, closes: !turn.answered, editable });
         const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end;
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
         const lastBody = (turn.foot >= 0 ? turn.foot : turn.to + 1) - (gap >= 0 ? 2 : 1);
@@ -1394,21 +1426,49 @@ export default class DocEditor extends React.Component {
     this.props.onAsk({ askId, text, turns, agent });
   }
   findTurn(ls, q) { for (const thread of threads(ls)) { const turn = thread.turns.find((t) => t.q === q); if (turn) return { thread, turn }; } return null; }
+  // A conversation's title (2026-10-12, `bart# …` above the question that starts it). Open, it is the card's header: the
+  // title, small and grey, which a click makes a field to rename it in (titleEdit), and Collapse on the right. Collapsed
+  // (`bart#+ …`), it is all that shows of the conversation: the Agents icon and the title as a link, off the card's grey,
+  // which expands it, and says who it is with when hovered. While a run is at work it cannot collapse; an empty title is
+  // still being named.
+  titleHtml(i, raw, p, at) {
+    const { thread } = at, title = p.text.trim();
+    if (at.collapsed) {
+      const name = AGENT_NAMES[thread.agent] || AGENT_NAMES.bart, shown = title || 'Untitled';
+      return `<div ${raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" style="user-select:none;cursor:default;display:flex;padding:4px 0;margin-bottom:6px">`
+        + '<span style="position:relative;display:inline-flex;min-width:0;max-width:100%">'
+        + `<span class="bart-thread" data-act="foldthread" data-row="${i}" role="button" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" style="display:inline-flex;align-items:center;gap:6px;min-width:0;color:#0070f3;font:14px/1.5 var(--font-sans)">${ICON.agents}<span class="bart-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span></span>`
+        + `<span class="bart-tip" style="left:0">${esc(name)}</span></span></div>`;
+    }
+    const editing = !!this.titleEdit && this.titleEdit.line === i;
+    const text = editing
+      ? `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:13px/1.6 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
+      : `<span class="bart-title" data-act="edittitle" data-row="${i}" title="Rename" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px/1.6 var(--font-sans);color:${title ? '#4d4d4d' : '#8f8f8f'}">${esc(title || (at.running ? 'Naming…' : 'Untitled'))}</span>`;
+    return `<div ${raw} contenteditable="false" data-readonly="1" data-title-row="${i}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:8px;padding:4px 6px 0 12px;background:#fafafa;border-radius:10px 10px 0 0">`
+      + text
+      + `<span style="flex:none;position:relative;display:inline-flex"><button class="bart-ic" data-act="foldthread" data-row="${i}" aria-label="Collapse" aria-expanded="true" style="width:24px;height:24px"${at.running ? ' disabled' : ''}>${ICON.collapse}</button><span class="bart-tip" style="right:0">${at.running ? 'Collapse once it answers' : 'Collapse'}</span></span>`
+      + '</div>';
+  }
   // The foot of one turn (Answer Card): Copy and Regenerate on the left, which model said it, Collapse or Expand, Delete.
   // Icons, each with its name under it on hover; Regenerate has none, because hovering it opens the selector instead.
   // `raw` is set when the answer's closing line is this foot; an answer without one (a run that failed) gets the same foot.
   // `plain`: an @brainstorm or @discover turn, whose Regenerate asks again on its one model, with no selector (BS-08).
   // `edit` (2026-10-03): Edit beside Regenerate, which makes the question editable in place (startEdit).
-  footHtml({ raw, q, text, folded, closes, plain = false, edit = false }) {
+  // `thread`: the turn's; in one with a title (2026-10-12) Collapse folds all of it to its title's row, once nothing in it runs.
+  footHtml({ raw, q, text, folded, closes, plain = false, edit = false, thread = null }) {
     const wrap = (inner, extra = '') => `<span style="flex:none;position:relative;display:inline-flex;${extra}">${inner}</span>`;
     const tip = (label, side) => `<span class="bart-tip" style="${side}:0">${label}</span>`;
     const copied = this.copied === `bart${q}`;
-    return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:8px 12px 10px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? '14px' : '0'}">`
+    const whole = !!thread && thread.titleLine >= 0, running = whole && isRunning(thread);
+    const fold = whole
+      ? wrap(`<button class="bart-ic" data-act="foldthread" data-row="${thread.titleLine}" aria-label="Collapse" aria-expanded="true"${running ? ' disabled' : ''}>${ICON.collapse}</button>${tip(running ? 'Collapse once it answers' : 'Collapse', 'right')}`)
+      : wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`);
+    return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:4px 10px 6px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? '8px' : '0'}">`
       + wrap(`<button class="bart-ic" data-act="copybart" data-turn="${q}" aria-label="Copy" ${copied ? 'style="color:#8f8f8f"' : ''}>${ICON.copy}</button>${tip(copied ? 'Copied' : 'Copy', 'left')}`)
       + wrap(plain ? `<button class="bart-ic" data-act="regen" data-plain="1" data-turn="${q}" aria-label="Regenerate">${ICON.regenerate}</button>${tip('Regenerate', 'left')}` : `<button class="bart-ic" data-act="regen" data-turn="${q}" aria-label="Regenerate" aria-haspopup="dialog">${ICON.regenerate}</button>`, edit ? '' : 'margin-right:auto;')
       + (edit ? wrap(`<button class="bart-ic" data-act="editturn" data-turn="${q}" aria-label="Edit">${ICON.edit}</button>${tip('Edit', 'left')}`, 'margin-right:auto;') : '')
       + `<span class="t" style="flex:0 1 auto;min-width:0;margin-right:8px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f">${esc(text || '')}</span>`
-      + wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`)
+      + fold
       + wrap(`<button class="bart-ic" data-danger="1" data-act="dropturn" data-turn="${q}" aria-label="Delete">${ICON.trash}</button>${tip('Delete', 'right')}`)
       + '</div>';
   }
@@ -1431,7 +1491,7 @@ export default class DocEditor extends React.Component {
     const agent = agentOf(parseLine(ls[thread.turns[thread.turns.length - 1].q]));
     if (FOLLOW[agent]) {
       const { placeholder, label, empty } = FOLLOW[agent];
-      const end = closes ? 'padding:22px 16px 18px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px' : 'padding:22px 16px 14px;background:#fafafa';
+      const end = closes ? 'padding:10px 12px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px' : 'padding:10px 12px;background:#fafafa';
       return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;${end}">`
         + `<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@${agent}</span>`
         + `<textarea data-follow-input="${from}" data-agent="${agent}"${empty ? ' data-empty="1"' : ''} rows="1" placeholder="${esc(placeholder)}" aria-label="${esc(label)}" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
@@ -1441,7 +1501,7 @@ export default class DocEditor extends React.Component {
     const open = !!(this.state.picker && this.state.picker.kind === 'follow' && this.state.picker.i === from);
     // A textarea one line tall that grows as it wraps, as the @bart line above it does (2026-09-22); the question is still
     // one line of the document, so Enter sends and a pasted line break becomes a space. The chip sits on the first line.
-    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;padding:22px 16px 18px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px">`
+    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;padding:10px 12px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px">`
       + '<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@bart</span>'
       + `<textarea data-follow-input="${from}" rows="1" placeholder="Respond…" aria-label="Ask a follow-up" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
       + `<span data-chip="f${from}" style="flex:none;position:relative;display:inline-flex;margin-top:-6px"><span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border:1px solid ${open ? '#c9c9c9' : '#eaeaea'};border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717">`
@@ -1490,12 +1550,12 @@ export default class DocEditor extends React.Component {
       // Under a question being edited (2026-10-03), its answer and the answer's foot are dimmed.
       const dim = !!editing && !!where && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
       out += dimmed(this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i)));
-      if (where && where.footAfter) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter, plain: oneModel(where.agent), edit: where.editable }));
+      if (where && where.footAfter) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter, plain: oneModel(where.agent), edit: where.editable, thread: where.thread }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
       // card (MATH-31; under it, not above, since 2026-10-05: the agent's own field comes first).
       const recap = !!where && where.followAfter && this.endsInRecap(ls, where.thread);
       if (where && where.followAfter) out += this.followHtml(ls, where.thread, { closes: !recap });
-      if (recap) out += `<div contenteditable="false" data-recap-discover="${where.thread.from}" style="user-select:none;padding:0 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px">${this.sendDiscoverHtml(`t${where.thread.from}`)}</div>`;
+      if (recap) out += `<div contenteditable="false" data-recap-discover="${where.thread.from}" style="user-select:none;padding:0 12px 10px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px">${this.sendDiscoverHtml(`t${where.thread.from}`)}</div>`;
       if (p.type === 'todo') group.push({ i, p });
       const next = ls[i + 1];
       if (p.type === 'todo' && (next == null || ps[i + 1].type !== 'todo')) { out += this.groupHtml(group); group = []; }
@@ -2000,6 +2060,8 @@ export default class DocEditor extends React.Component {
       if (k === 'cardskip') { this.sendCard(Number(act.dataset.turn), 'skip'); return; }
       if (k === 'cardwrap') { this.sendCard(Number(act.dataset.turn), 'wrap'); return; }
       if (k === 'fold') { this.toggleFold(Number(act.dataset.turn)); return; }
+      if (k === 'foldthread') { if (!act.disabled) this.toggleThread(i); return; }
+      if (k === 'edittitle') { this.startTitle(i); return; }
       if (k === 'dropturn') { this.closePicker(); this.deleteTurn(Number(act.dataset.turn)); return; }
       if (k === 'dropline') { this.removeLine(i); return; }
       if (k === 'copybart') {
@@ -2135,9 +2197,14 @@ export default class DocEditor extends React.Component {
     if (p.type !== 'bart' || (!p.text.trim() && !oneModel(agent)) || !this.props.onAsk || this.lockedAt(ls, i)) return;
     const askId = newAskId(), add = [`bart~> ${askId}`]; if (i + 1 >= ls.length) add.push('');
     const turns = this.turnsBefore(ls, i);
-    this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, ...add); return out; });
+    // A question that starts a conversation (2026-10-12) gets an empty title line above it, which the workspace fills in
+    // when the title comes back (Workspace askBart, main's bart/name-chat.cjs); the answer starts now, never waiting on it.
+    // Not a follow-up, not a conversation that has a title already (or began before titles: it has no line above it to
+    // take one), and not a Build, which is no conversation.
+    const name = !turns.length && !this.findTurn(ls, i)?.thread.turns.some((turn) => turn.q < i) && this.parsedOf(ls)[i - 1]?.type !== 'title' && !buildRequestOf({ agent, text: p.text });
+    this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, ...add); if (name) out.splice(i, 0, titleLine('', false)); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: p.text.trim(), turns, agent });
+    this.props.onAsk({ askId, text: p.text.trim(), turns, agent, ...(name ? { name: true } : {}) });
   }
   // The turns of the card above question `q`, as the document holds them: what a follow-up is a follow-up to.
   turnsBefore(ls, q) {
@@ -2378,21 +2445,64 @@ export default class DocEditor extends React.Component {
     this.setLines((x) => x.map((l, j) => { if (j < turn.from || j > turn.to) return l; const p = parseLine(l); return p.type === 'reply' ? replyLine(p.text, to).trimEnd() : l; }));
     this.setState({ activeLine: null, mention: null });
   }
-  // Collapse all / Expand all (2026-09-29): every answer in the document at once, folded as each card's own Collapse
-  // folds it. A run still at work is left as it is.
-  foldable(ls) { return threads(ls, this.parsedOf(ls)).flatMap((thread) => thread.turns).filter((turn) => turn.answered && !turn.pending); }
-  foldAll(to) {
-    const turns = this.foldable(this.lines()); if (!turns.length) return;
-    const under = (j) => turns.some((turn) => j >= turn.from && j <= turn.to);
-    this.setLines((x) => x.map((l, j) => { if (!under(j)) return l; const p = parseLine(l); return p.type === 'reply' && p.folded !== to ? replyLine(p.text, to).trimEnd() : l; }));
+  // A titled conversation (2026-10-12) collapses whole, to its title's row, and expands again: the fold is its title line's
+  // `bart#+`, its answers' lines stay as they are. One at work stays open.
+  toggleThread(line) {
+    const ls = this.lines(), thread = threads(ls, this.parsedOf(ls)).find((t) => t.titleLine === line); if (!thread) return;
+    if (!thread.folded && isRunning(thread)) return;
+    this.titleEdit = null;
+    this.setLines((x) => x.map((l, j) => (j === line ? titleLine(thread.title, !thread.folded).trimEnd() : l)));
     this.setState({ activeLine: null, mention: null });
+  }
+  // Collapse all / Expand all (2026-09-29): every answer in the document at once, folded as each card's own Collapse
+  // folds it: a titled conversation by its title line, whole (2026-10-12), an older one a turn at a time. A run still at
+  // work is left as it is. → [{ folded, title }] for titled conversations, [{ folded, turn }] for the turns of the rest.
+  foldable(ls) {
+    const out = [];
+    for (const thread of threads(ls, this.parsedOf(ls))) {
+      if (thread.titleLine >= 0) { if (!isRunning(thread) && thread.turns.some((turn) => turn.answered)) out.push({ title: thread.titleLine, folded: thread.folded }); continue; }
+      for (const turn of thread.turns) if (turn.answered && !turn.pending) out.push({ turn, folded: turn.folded });
+    }
+    return out;
+  }
+  foldAll(to) {
+    const items = this.foldable(this.lines()); if (!items.length) return;
+    const turns = items.filter((item) => item.turn).map((item) => item.turn), titles = new Set(items.filter((item) => item.title != null).map((item) => item.title));
+    const under = (j) => turns.some((turn) => j >= turn.from && j <= turn.to);
+    this.titleEdit = null;
+    this.setLines((x) => x.map((l, j) => {
+      if (titles.has(j)) { const p = parseLine(l); return p.type === 'title' && p.folded !== to ? titleLine(p.text, to).trimEnd() : l; }
+      if (!under(j)) return l; const p = parseLine(l); return p.type === 'reply' && p.folded !== to ? replyLine(p.text, to).trimEnd() : l;
+    }));
+    this.setState({ activeLine: null, mention: null });
+  }
+  // Renaming a conversation (2026-10-12): its header's title becomes a field holding it; Enter or leaving the field writes
+  // what it holds to the title line (an empty field changes nothing), Escape puts it back as it was.
+  startTitle(line) {
+    const p = this.parsedOf(this.lines())[line]; if (!p || p.type !== 'title' || this.props.readOnly) return;
+    this.titleEdit = { line, value: p.text.trim() }; this.lastHtml = null; this.syncEditor();
+    const input = this.editorEl() && this.editorEl().querySelector(`[data-title-input="${line}"]`);
+    if (input) { input.focus({ preventScroll: true }); input.select(); }
+  }
+  titleKey(e) {
+    if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); this.commitTitle(e.target); }
+    else if (e.key === 'Escape') { e.preventDefault(); this.titleEdit = null; this.lastHtml = null; this.syncEditor(); }
+  }
+  titleInput(input) { if (this.titleEdit) this.titleEdit.value = input.value; }
+  commitTitle(input) {
+    const held = this.titleEdit; if (!held) return; this.titleEdit = null;
+    const text = flattenPaste(input ? input.value : held.value), ls = this.lines(), p = this.parsedOf(ls)[held.line];
+    if (!text || !p || p.type !== 'title' || text === p.text.trim()) { this.lastHtml = null; this.syncEditor(); return; }
+    this.setLines((x) => x.map((l, j) => (j === held.line ? titleLine(text, p.folded) : l)));
   }
   // Delete: this turn leaves the document, its question and its answer; the turns around it stay. A run still at work is stopped.
   deleteTurn(q) {
     const ls = this.lines(), found = this.findTurn(ls, q); if (!found) return;
-    const { turn } = found, n = turn.to - turn.q + 1;
+    const { turn, thread } = found, n = turn.to - turn.q + 1;
     if (turn.pending && this.props.onStopAsk) this.props.onStopAsk(turn.pending);
-    this.setLines((x) => { const out = x.filter((_, j) => j < turn.q || j > turn.to); return out.length ? out : ['']; });
+    // The last turn of a titled conversation takes its title with it (2026-10-12): alone, the title would be plain text.
+    const from = thread.turns.length === 1 && thread.titleLine >= 0 ? thread.titleLine : turn.q;
+    this.setLines((x) => { const out = x.filter((_, j) => j < from || j > turn.to); return out.length ? out : ['']; });
     this.setState({ activeLine: null, mention: null });
   }
   // Copy: the question as asked (no flags) and the answer as written (no prefixes, no closing line).

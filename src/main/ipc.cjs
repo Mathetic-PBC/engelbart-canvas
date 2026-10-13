@@ -26,6 +26,7 @@ const archive = require('./store/archive.cjs');
 const onboarding = require('./store/onboarding.cjs');
 const gettingStarted = require('./store/getting-started.cjs');
 const { buildChoices } = require('./bart/models.cjs');
+const { providerOf, namingStep, fallbackTitle } = require('./bart/name-chat.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
 const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
 const { detect: detectSources } = require('./connect/scan.cjs');
@@ -226,7 +227,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, agentMap = null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, agentMap = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -786,6 +787,20 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       .map(({ askId, markId, page, rowId, url, source, question, progress }) => ({ ...progress, askId, markId, page, rowId, url, ...(source ? { source } : {}), question, agent: 'bart' }));
   });
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
+  // A new thread's title (2026-10-12, ./bart/name-chat.cjs): asked while its question runs, never in its way. `agent` says
+  // which line asked, so the title comes from the provider the question runs on. The fallback (the question's first six
+  // words) answers when no model can.
+  handle('name-chat', async (input) => {
+    const value = input && typeof input === 'object' ? input : {};
+    const text = str(value.text, 'question', 8000);
+    const agent = value.agent == null ? 'bart' : value.agent;
+    if (!['bart', 'brainstorm', 'discover'].includes(agent)) throw new TypeError('agent must be bart, brainstorm or discover');
+    const models = readModels('bart');
+    const provider = providerOf(text, agent, models);
+    if (nameChat) return nameChat({ text, provider });
+    const step = namingStep(models, provider);
+    return { title: fallbackTitle(text), provider: step.provider, model: step.model, modelName: step.name, effort: step.effort, ms: 0, named: false };
+  });
   // What the @bart line's selector offers and what its flags are checked against: the models file,
   // cut down to the providers config.json lists. Names and keys only; the file's prose stays here.
   // A provider's `start` is where a question without flags starts: the last model and effort picked by hand (bart/choices.cjs).

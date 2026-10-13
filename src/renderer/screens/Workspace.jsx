@@ -22,7 +22,7 @@ import { zoteroChipAction } from '../model/zotero.js';
 import { flatWorkspaces, nextPlace } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
-import { buildLine, placeAnswer } from '../model/doc.js';
+import { buildLine, placeAnswer, placeTitle, askedAt } from '../model/doc.js';
 import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
 import { addOrFind } from '../model/add-or-find.js';
@@ -559,14 +559,34 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     setTimeout(attempt, 0);
   }, []);
 
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent }) => {
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name }) => {
     if (!key || !ref || !topic) return;
+    // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
+    let answered = null;
     const place = (lines) => {
       const held = docsRef.current[key];
       if (typeof held !== 'string') return;
+      answered = askedAt(held, askId) || answered;
       const next = placeAnswer(held, askId, lines);
       if (next !== null) changeDoc(key, ref, next);
     };
+    // A question that starts a thread has an empty `bart# ` line above it (DocEditor askInline): its title is asked for
+    // alongside the answer, never waited on, and written into that line when it comes (2026-10-12, bart/name-chat.cjs).
+    // The line is found by the ask, not by an index: the answer may land first, or the person type above it meanwhile. The
+    // document reaches docsRef a render after the editor wrote the line, so a title quicker than that tries again.
+    if (name) {
+      api.nameChat({ text, agent: agent || 'bart' }).then((named) => {
+        let tries = 0;
+        const fill = () => {
+          const held = docsRef.current[key];
+          const next = typeof held === 'string' && named && named.title ? placeTitle(held, askId, named.title, answered) : null;
+          if (next !== null) { changeDoc(key, ref, next); return; }
+          tries += 1;
+          if (tries < 20) setTimeout(fill, 100);
+        };
+        fill();
+      }).catch(() => {});
+    }
     const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
     setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: agent || 'bart' } }));
     if (agent === 'brainstorm') tickWalk(2);

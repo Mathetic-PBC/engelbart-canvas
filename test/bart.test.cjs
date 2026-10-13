@@ -1912,7 +1912,7 @@ test('@brainstorm\'s context keeps an older @orient thread whole, and on the pap
 test('strip reads the document as the editor does', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
   const strip = require('../src/main/bart/strip.cjs');
-  for (const name of ['BART_RE', 'REPLY_RE', 'PENDING_RE']) assert.equal(strip[name].source, model[name].source, name);
+  for (const name of ['BART_RE', 'REPLY_RE', 'PENDING_RE', 'TITLE_RE']) assert.equal(strip[name].source, model[name].source, name);
 });
 
 test('@brainstorm\'s context: this workspace\'s library and mentions only, other agents\' replies out; @bart\'s and @discover\'s as before', async () => {
@@ -2549,4 +2549,110 @@ test('MATH-22: a folder reaches the agents with its path, and every agent is tol
   for (const prompt of [BART_SYSTEM_PROMPT, BRAINSTORM_SYSTEM_PROMPT, DISCOVER_SYSTEM_PROMPT]) assert.match(prompt, /<mentioned_files>.*the files the person pointed at; open them/);
   const none = await buildContext(ctx, project.id, { ref: { kind: 'workspace', workspaceId: workspace.id }, workspaceId: workspace.id, askId: 'x', agent: 'bart' });
   assert.equal(none.mentionedFiles, '', 'nothing pointed at, no block');
+});
+
+// ---- A conversation's title (2026-10-12): bart/name-chat.cjs, and title lines kept out of what agents read ----
+
+const nameChatModule = require('../src/main/bart/name-chat.cjs');
+
+test('title lines are kept out of what agents read, as answer lines are', async () => {
+  const { stripAgentReplies, stripTitles, TITLE_RE } = require('../src/main/bart/strip.cjs');
+  const text = ['Notes', 'bart# Retry logic', '@bart why retry?', 'bart> because', '', 'bart#+ Folded', '@brainstorm plan', 'bart> {}', 'After'].join('\n');
+  const stripped = stripAgentReplies(text);
+  assert.ok(!stripped.includes('Retry logic') && !stripped.includes('Folded'), 'no title line');
+  assert.ok(stripped.includes('Notes') && stripped.includes('After'));
+  assert.equal(stripTitles(text), ['Notes', '@bart why retry?', 'bart> because', '', '@brainstorm plan', 'bart> {}', 'After'].join('\n'));
+  assert.ok(TITLE_RE.test('bart# ') && TITLE_RE.test('bart#+ x') && !TITLE_RE.test('# bart') && !TITLE_RE.test('bart> x'));
+  // The context an agent is sent has no title line, whether it reads the other agents' answers or not.
+  const titled = await projects.createWorkspace(ctx, project.id, { name: 'Titled' });
+  const ref = { kind: 'workspace', workspaceId: titled.id };
+  await projects.writeDoc(ctx, project.id, ref, `${text}\nbart# \n@bart and now?\nbart~> t1\n`);
+  for (const agent of ['bart', 'brainstorm', 'discover']) {
+    const context = await buildContext(ctx, project.id, { ref, workspaceId: titled.id, askId: 't1', agent });
+    assert.ok(!/bart#/.test(context.documents), `${agent}: no title line in its context`);
+    assert.ok(context.documents.includes('@bart and now?'), `${agent}: the question is there`);
+  }
+});
+
+test('naming runs on the question\'s provider and its lowest model at low effort: Haiku on Claude Code, Luna on Codex', async () => {
+  const { createNameChat, providerOf, namingStep, NAME_PROMPT, NAME_TIMEOUT_MS } = nameChatModule;
+  const models = normalizeModels(null);
+  assert.equal(providerOf('why retry?', 'bart', models), 'anthropic');
+  assert.equal(providerOf('--luna why retry?', 'bart', models), 'openai', 'a Codex model flag');
+  assert.equal(providerOf('--codex retries', 'discover', models), 'openai', "@discover's provider flag");
+  assert.equal(providerOf('', 'brainstorm', { ...models, provider: 'openai' }), 'openai');
+  assert.deepEqual(namingStep(models, 'anthropic'), { provider: 'anthropic', key: Object.keys(models.providers.anthropic.models)[0], model: 'claude-haiku-5-5', name: models.providers.anthropic.models[Object.keys(models.providers.anthropic.models)[0]].name, effort: 'low' });
+  assert.equal(namingStep(models, 'openai').model, 'gpt-6-luna');
+
+  // Claude Code: one run, no tools, no session, the prompt as its system prompt, 15 s at most.
+  const calls = [];
+  const claudeRun = (shell, args, options, callback) => {
+    calls.push({ command: args[args.length - 1], env: options.env, timeout: options.timeout, system: fs.readFileSync(options.env.ENGELBART_NAME_PROMPT, 'utf8'), input: fs.readFileSync(options.env.ENGELBART_NAME_INPUT, 'utf8') });
+    callback(null, `${JSON.stringify({ type: 'result', is_error: false, result: '"**Retry logic in the client.**"' })}\n`);
+  };
+  const viaClaude = createNameChat({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'name-runs'), run: claudeRun });
+  const named = await viaClaude({ text: 'why does the @[Client](lib:abc) retry? --opus', provider: 'anthropic' });
+  assert.equal(named.title, 'Retry logic in the client');
+  assert.equal(named.model, 'claude-haiku-5-5');
+  assert.equal(named.effort, 'low');
+  assert.equal(named.named, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].env.ENGELBART_NAME_MODEL, 'claude-haiku-5-5');
+  assert.match(calls[0].command, /--effort low/);
+  assert.match(calls[0].command, /--tools ""/);
+  assert.match(calls[0].command, /--no-session-persistence/);
+  assert.equal(calls[0].timeout, NAME_TIMEOUT_MS);
+  assert.equal(NAME_TIMEOUT_MS, 15000);
+  assert.equal(calls[0].system, NAME_PROMPT);
+  assert.equal(NAME_PROMPT, 'Name this conversation in 2–6 words, sentence case, no quotes or final period.');
+  assert.match(calls[0].input, /Why does the Client retry\?/, 'the mention as its name, the flag gone');
+  assert.match(calls[0].input, /Do not answer it\. Name this conversation .* Reply with the title alone\.$/);
+  assert.deepEqual(fs.readdirSync(path.join(homeDir, 'name-runs')), [], 'its files are gone');
+
+  // Codex: Luna at low effort, reading what it wrote.
+  const authFile = path.join(homeDir, 'auth-name.json');
+  fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  const codexCalls = [];
+  const codexRun = (shell, args, options, callback) => {
+    codexCalls.push({ command: args[args.length - 1], env: options.env, timeout: options.timeout });
+    fs.writeFileSync(options.env.ENGELBART_NAME_OUTPUT, 'Retry logic\n');
+    callback(null, '');
+  };
+  const viaCodex = createNameChat({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'name-runs-codex'), codexHome: path.join(homeDir, 'codex-home-name'), codexAuthFile: authFile, run: codexRun });
+  const fromCodex = await viaCodex({ text: 'why retry?', provider: 'openai' });
+  assert.equal(fromCodex.title, 'Retry logic');
+  assert.equal(fromCodex.model, 'gpt-6-luna');
+  assert.equal(codexCalls[0].env.ENGELBART_NAME_MODEL, 'gpt-6-luna');
+  assert.match(codexCalls[0].command, /model_reasoning_effort="low"/);
+  assert.match(codexCalls[0].command, /--ephemeral/);
+  assert.equal(codexCalls[0].timeout, 15000);
+});
+
+test('when naming fails the title is the question\'s first six words; a title is 60 characters at most', async () => {
+  const { createNameChat, createFakeNameChat, fallbackTitle, capTitle, cleanTitle, MAX_TITLE } = nameChatModule;
+  const models = normalizeModels(null);
+  const failing = createNameChat({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'name-runs-fail'), run: (s, a, o, callback) => callback(Object.assign(new Error('timed out'), { killed: true }), '') });
+  const fell = await failing({ text: 'why does the client retry three times before giving up?', provider: 'anthropic' });
+  assert.equal(fell.title, 'Why does the client retry three');
+  assert.equal(fell.named, false);
+  const empty = createNameChat({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'name-runs-empty'), run: (s, a, o, callback) => callback(null, `${JSON.stringify({ type: 'result', is_error: false, result: '  ' })}\n`) });
+  assert.equal((await empty({ text: 'short one', provider: 'anthropic' })).title, 'Short one');
+  const long = createNameChat({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'name-runs-long'), run: (s, a, o, callback) => callback(null, `${JSON.stringify({ type: 'result', is_error: false, result: 'A very long title that keeps going well past what a single row of the card can show' })}\n`) });
+  const capped = await long({ text: 'one', provider: 'anthropic' });
+  assert.ok(capped.title.length <= MAX_TITLE, capped.title);
+  assert.equal(MAX_TITLE, 60);
+  assert.equal(capped.title, 'One', 'more than ten words is an answer, not a title: the fallback');
+  assert.equal(capped.named, false);
+  const wide = createNameChat({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'name-runs-wide'), run: (s, a, o, callback) => callback(null, `${JSON.stringify({ type: 'result', is_error: false, result: 'Interoperability considerations for internationalization infrastructure modernization' })}\n`) });
+  const cut = await wide({ text: 'x', provider: 'anthropic' });
+  assert.ok(cut.named && cut.title.length <= MAX_TITLE, cut.title);
+  assert.equal(cut.title, 'Interoperability considerations for internationalization');
+  assert.equal(capTitle('x'.repeat(80)).length, 60);
+  assert.equal(cleanTitle('Title: "## Retry *logic*."'), 'Retry logic');
+  assert.equal(fallbackTitle('@bart --codex **why** retry'), 'Why retry');
+  assert.equal(fallbackTitle(''), 'New conversation');
+  const fake = createFakeNameChat({ readModels: () => models });
+  const faked = await fake({ text: 'one two three four five six seven', provider: 'openai' });
+  assert.equal(faked.title, 'One two three four five six');
+  assert.equal(faked.model, 'gpt-6-luna');
 });
