@@ -234,31 +234,53 @@ test('placeNames: the project, workspace, note and paper an ask was typed in, by
 
 /* ------------------------------------------------------------- the first design, back (2026-10-13) */
 
-test('viewer: the Agent map as it was first drawn: Runs | Design, the two exports and the key legend, in one monospace font', () => {
+test('viewer: Runs | Design and the two exports, in one monospace font, and no key legend (2026-10-13)', () => {
   const html = renderToStaticMarkup(React.createElement(view.default));
   assert.match(html, />Runs</);
   assert.match(html, />Design</);
   assert.match(html, />Export run</);
   assert.match(html, />Export all</);
-  assert.match(html, /j\/k run · 1–4 section · c copy · e export \(E all\)/);
+  assert.doesNotMatch(html, /j\/k run/);
   assert.match(html, /ui-monospace/);
   assert.doesNotMatch(html, />Asks</);
 });
 
-test('viewer: the runs list names each agent, @create among them, under All | Questions | Builds', () => {
+test('viewer: the runs list shows every run, each agent named, @create among them, with no filter tabs or status dots (2026-10-13)', () => {
   const runs = [
     { id: 'c1', agent: 'create', at: 3, status: 'done', question: 'a chart of the results', projectName: 'P', model: 'claude-sonnet-5-5', effort: 'high' },
     { id: 'd1', agent: 'discover', at: 2, status: 'running', question: 'papers on X', projectName: 'P' },
-    { id: 'b1', agent: 'build', at: 1, status: 'done', buildId: 'b1', title: 'a parser', turn: 1, projectName: 'P' },
+    { id: 'b1', agent: 'build', at: 1, status: 'failed', buildId: 'b1', title: 'a parser', turn: 1, projectName: 'P' },
+    { id: 's1', agent: 'run step', at: 0, status: 'stopped', buildId: 'b1', title: 'a parser', projectName: 'P' },
   ];
-  const render = (filter) => renderToStaticMarkup(React.createElement(view.RunList, { runs, selected: 'c1', filter, onSelect() {}, onFilter() {} }));
-  const all = render('all');
-  assert.match(all, /@create/);
-  assert.match(all, /a chart of the results/);
-  assert.match(all, /@discover/);
-  assert.match(all, /@build a parser · turn 1/);
-  assert.match(render('questions'), /@create/);
-  assert.doesNotMatch(render('builds'), /@create/);
+  const html = renderToStaticMarkup(React.createElement(view.RunList, { runs, selected: 'c1', onSelect() {} }));
+  assert.match(html, /@create/);
+  assert.match(html, /a chart of the results/);
+  assert.match(html, /@discover/);
+  assert.match(html, /@build a parser · turn 1/);
+  assert.match(html, /@run step a parser/);
+  const order = ['@create', '@discover', '@build a parser', '@run step a parser'].map((label) => html.indexOf(label));
+  assert.deepEqual([...order].sort((a, b) => a - b), order, 'in the order given, newest first');
+  assert.doesNotMatch(html, />Questions</);
+  assert.doesNotMatch(html, />Builds</);
+  assert.doesNotMatch(html, />All</);
+  assert.ok(!html.includes('●') && !html.includes('○'), 'no status dots');
+  assert.match(html, /<div style="[^"]*"><b>@create<\/b>/, 'the label starts the row');
+});
+
+test('viewer: an open run has no header and no size notes beside its sections; a failed one still says why (2026-10-13)', () => {
+  const record = { id: 'r-77fa', agent: 'bart', at: 3, status: 'done', question: 'why is the sky blue?', projectName: 'Engelbart', workspaceName: 'oct-13', provider: 'anthropic-provider', system: 'SYS', context: { head: '<engelbart>' }, steps: [], written: ['bart> blue'] };
+  const html = renderToStaticMarkup(React.createElement(view.RunDetail, { record, open: null, onToggle() {} }));
+  for (const title of ['1 System prompt', '2 Context', '3 Steps', '4 Written']) assert.ok(html.includes(`<b>${title}</b></div>`), `${title} with nothing after it`);
+  assert.doesNotMatch(html, /~0 tok/);
+  assert.doesNotMatch(html, /chars ·/);
+  assert.doesNotMatch(html, /blocks ·/);
+  assert.ok(!html.includes('r-77fa'), 'no line with the id');
+  assert.ok(!html.includes('anthropic-provider'), 'no line with the provider');
+  assert.ok(!html.includes('@chat'), 'no title line');
+  const failed = renderToStaticMarkup(React.createElement(view.RunDetail, { record: { ...record, status: 'failed', error: 'the model timed out' }, open: null, onToggle() {} }));
+  assert.match(failed, /failed: the model timed out/);
+  const routed = renderToStaticMarkup(React.createElement(view.RunDetail, { record: { ...record, routedFrom: 'route-1' }, open: null, onToggle() {} }));
+  assert.match(routed, /handed over by Bart: route-1/);
 });
 
 test('viewer: a @create run\'s Written shows what it kept in the library', () => {

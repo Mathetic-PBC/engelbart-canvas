@@ -465,21 +465,42 @@ test('a Build\'s context is shown block by block, as it was sent; a run step\'s 
   assert.deepEqual(contextBlocks({ agent: 'run step', context: { prompt: 'P' } }).map((block) => [block.label, block.text]), [['prompt', 'P']]);
 });
 
-test('the Design tab draws Build and the run step beside the question agents, each with what it calls (2026-10-12)', () => {
+test('the Design tab draws one agent at a time, picked from a row of tabs, each with what it calls (2026-10-13)', () => {
   const { Design } = compile('src/renderer/screens/AgentMap.jsx', 'agent-map-design');
-  const page = renderToStaticMarkup(React.createElement(Design, { design: agentDesign({ dataRoot: tmp('design-page'), models: CLAUDE, buildModels: DEFAULTS }) }));
-  for (const name of ['Bart (classifier)', 'Chat', 'Brainstorm', 'Discover', 'Create', 'Build', 'Run step']) assert.ok(page.includes(`<b>${name}</b>`), name);
-  const order = ['Bart (classifier)', 'Chat', 'Brainstorm', 'Discover', 'Create', 'Build', 'Run step'].map((name) => page.indexOf(`<div><b>${name}</b>`));
-  assert.ok(order.every((at) => at >= 0), 'each has a heading of its own');
-  assert.deepEqual([...order].sort((a, b) => a - b), order, 'in the Viewer\'s order, Bart (classifier) first');
-  assert.ok(!/Planned, not built yet/.test(page), 'Create is built (2026-10-13)');
-  assert.match(page, /<b>Create<\/b>[^]*?Write,Edit[^]*?--permission-mode dontAsk[^]*?draft folder alone[^]*?assets\/files[^]*?calls: <span[^>]*>none/, 'Create: its tools, where it writes, where its files go, and it calls nothing');
-  assert.match(page, /rules, in order: an empty @bart → @brainstorm/);
-  assert.match(page, /a quick task&#x27;s system prompt/);
-  assert.match(page, /what codexOverrides sets/);
-  assert.match(page, /NEEDS YOU: &lt;question&gt;/);
-  assert.match(page, /slots at once: build 3 · quick 1/);
-  assert.match(page, /calls: <span><b>Chat<\/b>.*<b>Brainstorm<\/b>.*<b>Discover<\/b>.*<b>Create<\/b>.*<b>Build<\/b>/, 'Bart calls Chat, Brainstorm, Discover, Create and Build');
-  assert.match(page, /<b>Build<\/b>[^]*?calls: <span><b>Run step<\/b>/, 'Build calls the run step');
-  assert.match(page, /tools · Codex: <span[^>]*>none \(Claude Code only\)/);
+  const design = agentDesign({ dataRoot: tmp('design-page'), models: CLAUDE, buildModels: DEFAULTS });
+  const NAMES = ['Bart (classifier)', 'Chat', 'Brainstorm', 'Discover', 'Create', 'Build', 'Run step'];
+  const ids = design.agents.map((agent) => agent.agent);
+  assert.equal(ids.length, NAMES.length);
+  const render = (agent) => renderToStaticMarkup(React.createElement(Design, { design, agent, onPick() {} }));
+  const headings = (page) => NAMES.filter((name) => page.includes(`<div><b>${name}</b>`));
+
+  // No agent picked, or one the design does not have: the first, Bart (classifier), alone.
+  assert.deepEqual(headings(render(undefined)), ['Bart (classifier)']);
+  assert.deepEqual(headings(render('nobody')), ['Bart (classifier)']);
+
+  // The tab row: all seven, in the Viewer's order.
+  const tabs = [...render(undefined).matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]);
+  assert.deepEqual(tabs, NAMES);
+
+  const pages = {};
+  ids.forEach((id, i) => {
+    const page = render(id);
+    assert.deepEqual(headings(page), [NAMES[i]], `${NAMES[i]} alone`);
+    pages[NAMES[i]] = page;
+  });
+
+  const bart = pages['Bart (classifier)'];
+  assert.match(bart, /rules, in order: an empty @bart → @brainstorm/);
+  assert.match(bart, /calls: <span><b>Chat<\/b>.*<b>Brainstorm<\/b>.*<b>Discover<\/b>.*<b>Create<\/b>.*<b>Build<\/b>/, 'Bart calls Chat, Brainstorm, Discover, Create and Build');
+  const create = pages.Create;
+  assert.ok(!/Planned, not built yet/.test(create), 'Create is built (2026-10-13)');
+  assert.match(create, /<b>Create<\/b>[^]*?Write,Edit[^]*?--permission-mode dontAsk[^]*?draft folder alone[^]*?assets\/files[^]*?calls: <span[^>]*>none/, 'Create: its tools, where it writes, where its files go, and it calls nothing');
+  const build = pages.Build;
+  assert.match(build, /a quick task&#x27;s system prompt/);
+  assert.match(build, /what codexOverrides sets/);
+  assert.match(build, /NEEDS YOU: &lt;question&gt;/);
+  assert.match(build, /slots at once: build 3 · quick 1/);
+  assert.match(build, /<b>Build<\/b>[^]*?calls: <span><b>Run step<\/b>/, 'Build calls the run step');
+  assert.match(pages['Run step'], /tools · Codex: <span[^>]*>none \(Claude Code only\)/);
+  for (const name of NAMES) assert.ok(!/Planned, not built yet/.test(pages[name]), `${name} is built`);
 });

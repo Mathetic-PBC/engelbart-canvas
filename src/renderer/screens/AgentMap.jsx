@@ -1,15 +1,17 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, errorMessage } from '../api.js';
-import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, modelLabel, sectionText, exportPage, filterRuns, runLabel, agentInfo, createdLines, FILTERS, BUILD_AGENTS } from '../agent-map/runText.js';
+import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, modelLabel, sectionText, exportPage, runLabel, agentInfo, createdLines, BUILD_AGENTS } from '../agent-map/runText.js';
 
 // The Agent map (2026-10-12; src/main/agent-map): a window for developers only, the app's renderer at ?view=agent-map.
 // Its first design again (2026-10-13: the Agent Viewer's asks and pipeline sections were taken out; main's asks, reveal and
 // the run log are unchanged), with every agent there is now: @create's runs, its Design entry and the rows it kept.
 // Runs: every @bart (the router, 2026-10-12: where it sent the line), @chat, @brainstorm, @discover and @create run, each Build turn and each run step after one, newest first, live
-// (engelbart:agent-run), filtered to questions or Builds, and the one selected in sections: its system prompt, its context
+// (engelbart:agent-run), all in one list, and the one selected in sections: its system prompt, its context
 // block by block, each model step (the input, its tool calls, what it said) and what was written (a run step: its
-// runnables). Design: each agent as it is set up now, and which agents it hands work to. Plain and dense on purpose: one font, small type, thin rules.
-// Keys: j/k the next and previous run, 1–4 a section, c copies the open section, e exports the run (E every run).
+// runnables). Design: one agent at a time, picked from a row of tabs, as it is set up now and which agents it hands work to.
+// Plain and dense on purpose: one font, small type, thin rules. Less text (2026-10-13): no filter tabs, status dots, size
+// notes beside the sections, run header or key legend; a failed run still says why.
+// Keys, not shown: j/k the next and previous run, 1–4 a section, c copies the open section, e exports the run (E every run).
 
 const SECTIONS = [['system', 'System prompt'], ['context', 'Context'], ['steps', 'Steps'], ['written', 'Written']];
 const FONT = '12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace';
@@ -30,8 +32,6 @@ const S = {
   error: { color: '#a00', border: '1px solid #e6b8b8', padding: 4, margin: '6px 0' },
 };
 
-const dot = (status) => (status === 'running' ? <span title="running" style={{ color: '#1a7f37' }}>●</span> : status === 'failed' ? <span title="failed" style={{ color: '#a00' }}>●</span> : status === 'stopped' ? <span title="stopped" style={{ color: '#999' }}>○</span> : <span style={{ visibility: 'hidden' }}>●</span>);
-
 /** Text shown only once it is opened: a block of documents can be large. */
 function Expand({ label, text, open: wanted = false }) {
   const [open, setOpen] = useState(wanted);
@@ -45,10 +45,10 @@ function Expand({ label, text, open: wanted = false }) {
   );
 }
 
-function Section({ n, id, title, note, open, onToggle, children }) {
+function Section({ n, id, title, open, onToggle, children }) {
   return (
     <div>
-      <div style={S.head} onClick={() => onToggle(id)}>{open ? '▾' : '▸'} <b>{n} {title}</b> {note && <span style={S.dim}>{note}</span>}</div>
+      <div style={S.head} onClick={() => onToggle(id)}>{open ? '▾' : '▸'} <b>{n} {title}</b></div>
       {open && <div>{children}</div>}
     </div>
   );
@@ -88,24 +88,21 @@ function Step({ step, n }) {
 
 export function RunDetail({ record, open, onToggle }) {
   const blocks = contextBlocks(record);
-  const total = blocks.reduce((sum, block) => sum + block.text.length, 0);
   return (
     <div>
-      <div><b>{runLabel(record)}</b> {BUILD_AGENTS.includes(record.agent) ? null : firstWords(record.question, 30)}</div>
       {record.agent === 'router' && <div style={S.dim}>picked by {record.by === 'rule' ? `rule (${record.rule})` : 'the model'} · section {(record.sectionSize || 0).toLocaleString('en-US')} chars · spec above {record.specAbove ? 'yes' : 'no'} · threads: {(record.threads || []).map((thread) => `@${thread.agent} ${thread.up} up`).join(', ') || 'none'}{record.handedTo ? ` · handed to ${record.handedTo}` : ''}</div>}
       {record.routedFrom && <div style={S.dim}>handed over by Bart: {record.routedFrom}{record.corrected ? ` · the person picked ${record.corrected} instead` : ''}</div>}
-      <div style={S.dim}>{record.status}{record.buildId ? ` · Build ${record.buildId}` : ''}{record.ending ? ` · ended: ${record.ending}` : ''} · {record.provider} · {record.projectName}{record.workspaceName ? ` / ${record.workspaceName}` : ''} · {timeLabel(record.at)}{record.ms != null ? ` · ${msLabel(record.ms)}` : ''}{record.mode ? ` · ${record.mode}` : ''}{record.pinned ? ' · picked by hand' : ''} · {record.id}</div>
       {record.error && <div style={S.error}>{record.status}: {record.error}</div>}
-      <Section n={1} id="system" title="System prompt" note={sizeLabel(record.system)} open={open === 'system'} onToggle={onToggle}>
+      <Section n={1} id="system" title="System prompt" open={open === 'system'} onToggle={onToggle}>
         <pre style={S.pre}>{record.system}</pre>
       </Section>
-      <Section n={2} id="context" title="Context" note={`${blocks.filter((block) => block.text).length} blocks · ${total.toLocaleString('en-US')} chars · ~${Math.round(total / 4).toLocaleString('en-US')} tok`} open={open === 'context'} onToggle={onToggle}>
+      <Section n={2} id="context" title="Context" open={open === 'context'} onToggle={onToggle}>
         {blocks.map((block) => <Expand key={block.key} label={<>{block.label} <span style={S.dim}>{block.text ? sizeLabel(block.text) : 'none'}</span></>} text={block.text} />)}
       </Section>
-      <Section n={3} id="steps" title="Steps" note={`${record.steps.length}`} open={open === 'steps'} onToggle={onToggle}>
+      <Section n={3} id="steps" title="Steps" open={open === 'steps'} onToggle={onToggle}>
         {record.steps.length ? record.steps.map((step, i) => <Step key={i} step={step} n={i + 1} />) : <div style={{ ...S.sub, ...S.dim }}>no model run</div>}
       </Section>
-      <Section n={4} id="written" title="Written" note={record.written ? `${record.written.length} ${record.agent === 'run step' ? 'runnables' : 'lines'}` : record.status === 'running' ? 'running' : 'nothing'} open={open === 'written'} onToggle={onToggle}>
+      <Section n={4} id="written" title="Written" open={open === 'written'} onToggle={onToggle}>
         <pre style={S.pre}>{writtenText(record) || '(nothing)'}</pre>
         {record.agent === 'create' && <><div style={{ ...S.sub, ...S.dim }}>kept in the library</div><pre style={S.pre}>{createdLines(record)}</pre></>}
       </Section>
@@ -149,20 +146,22 @@ function DesignModels({ models }) {
   );
 }
 
-export function Design({ design }) {
+/** One agent at a time: a row of tabs, one per agent in design.agents' order, and the picked one's block (the first if none or unknown). */
+export function Design({ design, agent: picked, onPick }) {
   if (!design) return <div style={S.dim}>Loading…</div>;
+  const agent = design.agents.find((held) => held.agent === picked) || design.agents[0];
+  if (!agent) return <div style={S.dim}>No agents.</div>;
+  const info = agentInfo(agent.agent);
   return (
     <div>
-      {design.agents.map((agent) => {
-        const info = agentInfo(agent.agent);
-        return (
-          <div key={agent.agent} style={{ borderTop: RULE, padding: '6px 0 10px' }}>
-            <div><b>{info.name}</b>{info.token ? <span style={S.dim}> · {info.token}{agent.token && agent.agent !== agent.token ? ` · internally '${agent.agent}'` : ''}</span> : null}{info.inside ? <span style={S.dim}> · shown inside a Build's output</span> : null}</div>
-            {agent.planned ? <div style={{ ...S.sub, ...S.dim }}>Planned, not built yet</div> : <DesignBody agent={agent} />}
-            <div style={S.sub}>calls: {agent.calls && agent.calls.length ? agent.calls.map((call) => <span key={call.to}><b>{agentInfo(call.to).name}</b> <span style={S.dim}>({call.how})</span> </span>) : <span style={S.dim}>none</span>}</div>
-          </div>
-        );
-      })}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, paddingBottom: 4 }}>
+        {design.agents.map((held) => <button key={held.agent} type="button" style={S.tab(held.agent === agent.agent)} onClick={() => onPick && onPick(held.agent)}>{agentInfo(held.agent).name}</button>)}
+      </div>
+      <div style={{ borderTop: RULE, padding: '6px 0 10px' }}>
+        <div><b>{info.name}</b>{info.token ? <span style={S.dim}> · {info.token}{agent.token && agent.agent !== agent.token ? ` · internally '${agent.agent}'` : ''}</span> : null}{info.inside ? <span style={S.dim}> · shown inside a Build's output</span> : null}</div>
+        {agent.planned ? <div style={{ ...S.sub, ...S.dim }}>Planned, not built yet</div> : <DesignBody agent={agent} />}
+        <div style={S.sub}>calls: {agent.calls && agent.calls.length ? agent.calls.map((call) => <span key={call.to}><b>{agentInfo(call.to).name}</b> <span style={S.dim}>({call.how})</span> </span>) : <span style={S.dim}>none</span>}</div>
+      </div>
     </div>
   );
 }
@@ -191,24 +190,20 @@ function DesignBody({ agent }) {
   );
 }
 
-/** The list of runs, with its filter: All, Questions (@bart, @chat, @brainstorm, @discover, @create) or Builds (turns and run steps). */
-export function RunList({ runs, selected, filter, onSelect, onFilter }) {
-  const shown = filterRuns(runs, filter);
+/** The list of runs: every run, newest first. */
+export function RunList({ runs, selected, onSelect }) {
   return (
     <div>
-      <div style={{ display: 'flex', gap: 10, padding: '4px 10px', borderBottom: RULE }}>
-        {FILTERS.map(([id, label]) => <button key={id} type="button" style={S.tab(filter === id)} onClick={() => onFilter(id)}>{label}</button>)}
-      </div>
-      {shown.length ? shown.map((run) => {
+      {runs.length ? runs.map((run) => {
         const build = BUILD_AGENTS.includes(run.agent);
         return (
           <div key={run.id} style={S.row(run.id === selected)} onClick={() => onSelect(run.id)}>
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dot(run.status)} <b>{runLabel(run)}</b> <span style={S.dim}>{modelLabel(run)}</span>{run.toolCount ? <span style={S.dim}> · {run.toolCount}{run.toolsDropped ? `+${run.toolsDropped}` : ''} tools</span> : null}</div>
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><b>{runLabel(run)}</b> <span style={S.dim}>{modelLabel(run)}</span>{run.toolCount ? <span style={S.dim}> · {run.toolCount}{run.toolsDropped ? `+${run.toolsDropped}` : ''} tools</span> : null}</div>
             <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{build ? <span style={S.dim}>{run.kind === 'quick' ? `${firstWords(run.title)} · ` : ''}Build {run.buildId}{run.ending ? ` · ${run.ending}` : ''}</span> : firstWords(run.question)}</div>
             <div style={S.dim}>{run.projectName}{run.workspaceName ? ` / ${run.workspaceName}` : ''} · {timeLabel(run.at)}</div>
           </div>
         );
-      }) : <div style={{ padding: 10, ...S.dim }}>{runs.length ? 'None of these yet.' : 'No runs yet. Ask @bart, @chat, @brainstorm, @discover or @create, or start a Build, in any window.'}</div>}
+      }) : <div style={{ padding: 10, ...S.dim }}>No runs yet. Ask @bart, @chat, @brainstorm, @discover or @create, or start a Build, in any window.</div>}
     </div>
   );
 }
@@ -221,7 +216,7 @@ export default function AgentMap() {
   const [open, setOpen] = useState('steps');
   const [design, setDesign] = useState(null);
   const [note, setNote] = useState('');
-  const [filter, setFilter] = useState('all');
+  const [agent, setAgent] = useState(null);
   const selectedRef = useRef(null);
   const refetch = useRef(null);
   selectedRef.current = selected;
@@ -262,10 +257,9 @@ export default function AgentMap() {
   useEffect(() => {
     const onKey = (event) => {
       if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA)$/.test(event.target.tagName)) return;
-      const shown = filterRuns(runs, filter);
-      const at = shown.findIndex((run) => run.id === selected);
-      if (event.key === 'j' && shown.length) setSelected(shown[Math.min(shown.length - 1, at + 1)].id);
-      else if (event.key === 'k' && shown.length) setSelected(shown[Math.max(0, at - 1)].id);
+      const at = runs.findIndex((run) => run.id === selected);
+      if (event.key === 'j' && runs.length) setSelected(runs[Math.min(runs.length - 1, at + 1)].id);
+      else if (event.key === 'k' && runs.length) setSelected(runs[Math.max(0, at - 1)].id);
       else if (/^[1-4]$/.test(event.key)) { setTab('runs'); setOpen(SECTIONS[Number(event.key) - 1][0]); }
       else if (event.key === 'c' && record && open) {
         const text = sectionText(record, open);
@@ -276,9 +270,9 @@ export default function AgentMap() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [runs, selected, record, open, exportRuns, filter]);
+  }, [runs, selected, record, open, exportRuns]);
 
-  const list = useMemo(() => <RunList runs={runs} selected={selected} filter={filter} onSelect={setSelected} onFilter={setFilter} />, [runs, selected, filter]);
+  const list = useMemo(() => <RunList runs={runs} selected={selected} onSelect={setSelected} />, [runs, selected]);
 
   return (
     <div style={S.root}>
@@ -289,7 +283,6 @@ export default function AgentMap() {
         <span style={S.dim}>{note}</span>
         <button type="button" style={S.button} disabled={!record} onClick={() => exportRuns(false)}>Export run</button>
         <button type="button" style={S.button} disabled={!runs.length} onClick={() => exportRuns(true)}>Export all</button>
-        <span style={S.dim}>j/k run · 1–4 section · c copy · e export (E all)</span>
       </div>
       {tab === 'runs' ? (
         <div style={S.body}>
@@ -297,7 +290,7 @@ export default function AgentMap() {
           <div style={S.detail}>{record ? <RunDetail record={record} open={open} onToggle={toggle} /> : <div style={S.dim}>{runs.length ? 'Loading…' : ''}</div>}</div>
         </div>
       ) : (
-        <div style={{ ...S.detail, flex: 1 }}><Design design={design} /></div>
+        <div style={{ ...S.detail, flex: 1 }}><Design design={design} agent={agent} onPick={setAgent} /></div>
       )}
     </div>
   );

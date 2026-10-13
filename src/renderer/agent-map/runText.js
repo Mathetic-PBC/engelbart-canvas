@@ -22,20 +22,11 @@ export function agentInfo(name) {
   return AGENTS.find((held) => held.agent === key || held.routed === key) || { agent: key, routed: key, name: key || 'unknown', token: '', unknown: true };
 }
 
-// The agents a question line runs, and the ones a Build runs (the list's filter).
-export const QUESTION_AGENTS = ['router', 'bart', 'brainstorm', 'discover', 'create'];
+// The agents a Build runs: their runs are named by Build, not by a question (the list has no filter since 2026-10-13).
 export const BUILD_AGENTS = ['build', 'run step'];
-export const FILTERS = [['all', 'All'], ['questions', 'Questions'], ['builds', 'Builds']];
-
-/** The runs a filter of the list shows: 'all', 'questions' or 'builds'. */
-export function filterRuns(runs, filter) {
-  if (filter === 'questions') return runs.filter((run) => QUESTION_AGENTS.includes(run.agent));
-  if (filter === 'builds') return runs.filter((run) => BUILD_AGENTS.includes(run.agent));
-  return runs;
-}
 
 /**
- * A run's name in the list and its header: "@chat", "@bart → @discover" (agentLabel), "@build <title> · turn n",
+ * A run's name in the list and the export: "@chat", "@bart → @discover" (agentLabel), "@build <title> · turn n",
  * "@build quick", "@run step <title>".
  */
 export function runLabel(run) {
