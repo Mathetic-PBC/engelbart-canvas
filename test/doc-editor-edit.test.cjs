@@ -156,7 +156,7 @@ test('Enter on changed words: the later turns go (a run among them is stopped), 
   assert.equal(e.prevented, true);
   assert.equal(m.asks.length, 1);
   const ask = m.asks[0];
-  assert.deepEqual({ ...ask, askId: undefined }, { askId: undefined, text: 'second, reworded?', turns: [{ question: 'first?', answer: 'one' }], agent: 'bart', choice: { model: 'sonnet', effort: 'high' }, place: { line: 5, text: '@chat second, reworded?' } }, 'asked with the new words, the turn before it, and the model that answered it (ranWith)');
+  assert.deepEqual({ ...ask, askId: undefined }, { askId: undefined, text: 'second, reworded?', turns: [{ question: 'first?', answer: 'one', agent: 'bart' }], agent: 'bart', choice: { model: 'sonnet', effort: 'high' }, place: { line: 5, text: '@chat second, reworded?' } }, 'asked with the new words, the turn before it, and the model that answered it (ranWith)');
   assert.deepEqual(m.stopped, ['run4'], 'the follow-up at work is stopped');
   assert.deepEqual(m.lines(), ['Notes', '@chat first?', ...answer('one'), '@chat second, reworded?', `bart~> ${ask.askId}`, '', 'After']);
   assert.equal(m.editor.editing, null);
@@ -175,7 +175,7 @@ test('Enter on the thread\'s last turn asks it again with nothing taken out; Ent
   last.type('@chat two, again?');
   last.key('Enter');
   assert.deepEqual(last.lines(), ['@chat one?', ...answer('1'), '@chat two, again?', `bart~> ${last.asks[0].askId}`, '']);
-  assert.deepEqual(last.asks[0].turns, [{ question: 'one?', answer: '1' }]);
+  assert.deepEqual(last.asks[0].turns, [{ question: 'one?', answer: '1', agent: 'bart' }]);
 
   const first = mounted(THREAD);
   first.click('editturn', { turn: '1' });

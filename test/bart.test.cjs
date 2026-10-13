@@ -868,6 +868,20 @@ test('the fake agent follows up the same way, so a scripted run can show which p
   assert.ok(third.lines.includes('bart> - a new session, given 1 earlier turn'));
 });
 
+test('a follow-up asked of another agent than answered the turn before it starts a session of its own (2026-10-13)', async () => {
+  const threads = createThreads();
+  const bart = createFakeBart({ readModels: () => MODELS, delayMs: 5, threads });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const first = await bart.ask(ctx, project.id, { askId: 'h1', ref, workspaceId: workspace.id, text: 'why?' });
+  const said = { question: 'why?', answer: first.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n') };
+  // The document says Discover answered that turn (Bart handed it there): Chat is not resumed.
+  const other = await bart.ask(ctx, project.id, { askId: 'h2', ref, workspaceId: workspace.id, text: 'and then?', turns: [{ ...said, agent: 'discover' }] });
+  assert.ok(other.lines.includes('bart> - a new session, given 1 earlier turn'), other.lines.join('\n'));
+  // Chat's session was left where it was: a follow-up to the turn Chat answered resumes it.
+  const back = await bart.ask(ctx, project.id, { askId: 'h3', ref, workspaceId: workspace.id, text: 'and then?', turns: [{ ...said, agent: 'bart' }] });
+  assert.ok(back.lines.includes('bart> - the same session, given the question alone'), back.lines.join('\n'));
+});
+
 test('what can be resumed outlives the app, and another workspace open in between changes nothing', async () => {
   const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-threads-')), 'bart-threads.json');
   let clock = 1_000_000;

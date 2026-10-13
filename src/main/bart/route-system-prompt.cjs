@@ -26,10 +26,10 @@ Hard cases:
 
 Tie-breaks:
 - Choose chat when it could be chat.
-- A line directly under a brainstorm or discover thread keeps that agent.
+- When a current agent is given, the line follows up a conversation with it: stay with that agent unless the line clearly wants another one, and pick another only when you are at least 0.8 sure.
 - A line naming reading or papers → discover.
 
-You are given the line, the section of the document it is in (agent replies left out), the threads above it (each with its agent, the start of its question and how many lines up it is), and whether the nearest answer above holds a fenced block (a spec that could be built).
+You are given the line, the section of the document it is in (agent replies left out), the threads above it (each with its agent, the start of its question and how many lines up it is), whether the nearest answer above holds a fenced block (a spec that could be built), and, when the line follows up a thread, the agent that conversation is with now (<current>).
 
 Reply with exactly {"agent":"chat|brainstorm|discover|build","sure":0..1}, where sure is how sure you are.`;
 

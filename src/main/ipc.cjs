@@ -150,8 +150,10 @@ function stageInput(value) {
 }
 
 /** The earlier turns of an exchange, the last 40, each cut in the middle past what a turn may hold. */
+// The agents an earlier turn can say answered it (2026-10-13; bart/ask.cjs AGENTS).
+const TURN_AGENTS = ['bart', 'brainstorm', 'discover'];
 function turnsInput(value) {
-  return (Array.isArray(value) ? value : []).slice(-40).map((turn) => ({ question: clipped(turn && turn.question, 'earlier question', 8000), answer: clipped(turn && turn.answer, 'earlier answer', 40000) }));
+  return (Array.isArray(value) ? value : []).slice(-40).map((turn) => ({ question: clipped(turn && turn.question, 'earlier question', 8000), answer: clipped(turn && turn.answer, 'earlier answer', 40000), ...(turn && TURN_AGENTS.includes(turn.agent) ? { agent: turn.agent } : {}) }));
 }
 
 // What Bart, the router, can pick (bart/route.cjs PICKS), and the agents a routed ask can say the person picked instead.
@@ -834,7 +836,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       .map(({ askId, markId, page, rowId, url, source, question, progress }) => ({ ...progress, askId, markId, page, rowId, url, ...(source ? { source } : {}), question, agent: 'bart' }));
   });
   // Bart, the router (2026-10-12, bart/route.cjs): which agent an `@bart` line is for. The editor sends the line, its
-  // section, the threads above and whether a spec is above; its own rule's pick (`rule`) is only logged. Nothing here is
+  // section, the threads above, whether a spec is above and, for a follow-up, the agent its thread is with (`current`); its own rule's pick (`rule`) is only logged. Nothing here is
   // refused for its length (2026-10-12: a thread asked with a long document under it made every later line fail to route):
   // a thread's question is cut to 400 characters, its agent to 20, the line to 8,000, the workspace's name to 400 and the
   // section to its last 200,000; the router reads less of each still (bart/route.cjs). A value of the wrong type is refused.
@@ -849,6 +851,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return bart.route({
       projectId, text: cutStr(str(value.text, 'line', Infinity), 'line', 8000), place: placeOf(value.place, projectId, ref), section: tailStr(value.section, 'section', 200000) || '',
       workspaceName: cutStr(value.workspaceName, 'workspace name', 400) || '', threads, specAbove: !!value.specAbove, rule,
+      current: ['chat', 'brainstorm', 'discover'].includes(value.current) ? value.current : null,
     });
   });
   // Where a routed line went when it was not an ask: `build:<id>`, on the router's record.

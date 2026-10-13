@@ -79,13 +79,20 @@ function markPlace(text, askId) {
   }).join('\n');
 }
 
+// The agents' names, as a turn another agent answered is labelled (main/bart/reply.cjs AGENT_NAMES).
+const TURN_AGENTS = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover' };
+
 /**
  * The earlier turns of the exchange a follow-up continues, as the document holds them now: the person may have edited
- * an answer or deleted a turn since, and what stands in the document is what was said.
+ * an answer or deleted a turn since, and what stands in the document is what was said. A conversation that was not all
+ * with `agent` (2026-10-13: a follow-up Bart handed to another agent) has each turn labelled with the agent that
+ * answered it, as the document's closing lines say (turn.agent), so the agent asked now knows which answers were not its own.
  */
-function conversationBlock(turns) {
+function conversationBlock(turns, { agent = null } = {}) {
   if (!turns.length) return '';
-  const said = turns.map((turn, n) => `<turn n="${n + 1}">\n<asked>\n${turn.question}\n</asked>\n<answered>\n${turn.answer}\n</answered>\n</turn>`);
+  const mixed = turns.some((turn) => TURN_AGENTS[turn.agent] && turn.agent !== agent);
+  const label = (turn) => (mixed && TURN_AGENTS[turn.agent] ? ` agent="${TURN_AGENTS[turn.agent]}"` : '');
+  const said = turns.map((turn, n) => `<turn n="${n + 1}"${label(turn)}>\n<asked>\n${turn.question}\n</asked>\n<answered>\n${turn.answer}\n</answered>\n</turn>`);
   return `<conversation>\n${said.join('\n')}\n</conversation>`;
 }
 

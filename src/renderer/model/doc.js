@@ -503,32 +503,46 @@ export function replyRawOffset(p, fOff, opts) {
 }
 
 /**
- * Whether question line `p` may follow an answer in the thread question line `first` opened: it asks the same agent
- * (2026-10-02). An `@orient` line (2026-10-05) starts a thread of its own, as it did when it was an agent of its own,
- * unless that thread is an @orient one; the @brainstorm lines answering an @orient thread's cards go on with it.
+ * Whether question line `p` may follow an answer in the thread question line `first` opened: it asks the agent that
+ * answered the thread last (2026-10-02), or it is an `@bart` line, which goes on with any thread whatever agent Bart hands
+ * it to (2026-10-13). An `@orient` line (2026-10-05) starts a thread of its own, as it did when it was an agent of its
+ * own, unless that thread is an @orient one; the @brainstorm lines answering an @orient thread's cards go on with it.
  */
 const followsIn = (p, first, thread) => (
-  agentOf(p) === thread.agent ? p.agent !== 'orient' || first.agent === 'orient' : agentOf(p) === 'router' && !!thread.routedTo
+  agentOf(p) === 'router' || (agentOf(p) === thread.agent && (p.agent !== 'orient' || first.agent === 'orient'))
 );
+// The agents a closing line names first (main/bart/reply.cjs attribution, 2026-10-12): "Build" is Chat, asked to write
+// the Build prompt for a line Bart read as one to build.
+const FOOT_AGENTS = { Chat: 'bart', Build: 'bart', Brainstorm: 'brainstorm', Discover: 'discover' };
+const FOOT_LEAD_RE = /^\*(Chat|Brainstorm|Discover|Build)(?: · [^*]*)?\*$/;
+/** The agent a closing line says answered ('bart', 'brainstorm' or 'discover'), or null: an older one names none. */
+export const footAgent = (text) => { const m = String(text ?? '').match(FOOT_LEAD_RE); return m ? FOOT_AGENTS[m[1]] : null; };
 /**
- * The agent that answers a thread (2026-10-12): the one its title line names, where Bart's pick for an `@bart` line is
- * kept, else the one its first question line asks. 'bart' (Chat), 'brainstorm', 'discover', or 'router' for an `@bart`
- * line not handed over yet.
+ * The agent that answers a thread (2026-10-13): the one that answered its last answered turn (turn.agent, read from that
+ * turn's closing line), else the one its title line names, where Bart's first pick for an `@bart` line is kept, else the
+ * one its first question line asks. 'bart' (Chat), 'brainstorm', 'discover', or 'router' for an `@bart` line not handed
+ * over yet.
  */
-export const answeredBy = (thread) => (thread && thread.routedTo) || (thread && thread.asked) || 'bart';
+export const answeredBy = (thread) => {
+  const turns = (thread && thread.turns) || [];
+  for (let k = turns.length - 1; k >= 0; k--) if (turns[k].answered && !turns[k].pending && turns[k].agent) return turns[k].agent;
+  return (thread && thread.routedTo) || (thread && thread.asked) || 'bart';
+};
 
 /**
  * The @bart exchanges of a document, by line index. A thread is a run of lines with nothing between them: a question,
  * what stands under it (a pending line, or the answer), then any question asked right after that answer — a follow-up,
- * which reads as one card. A follow-up asks the agent the thread's first question asked; a line for another agent
- * starts a thread of its own, with its own card and reply field (2026-10-02; followsIn). → [{ from, to, turns, agent,
- * asked, routedTo, at, build, title, titleLine, folded }]: `agent` the thread's (answeredBy: 'bart', 'brainstorm' or
- * 'discover'), `asked` its first line's, `routedTo`, `at` and `build` what its title line keeps; and for a thread begun under a
- * title line (2026-10-12) `title` its text, `titleLine` its index (-1 and null without one) and `folded` whether the
- * thread is collapsed to it; `from` is always the first question's line. Each turn
- * { q, from, to, answered, pending, foot, folded } where `from..to` are the lines under the question (to === q when there
- * are none), `pending` is the id of a run still working, `foot` the closing line that says which model answered (-1
- * without one).
+ * which reads as one card. A follow-up asks the agent that answered the thread last, or is an `@bart` line, which Bart
+ * may hand to any agent (2026-10-13); a line for another agent starts a thread of its own, with its own card and reply
+ * field (2026-10-02; followsIn). → [{ from, to, turns, agent, asked, routedTo, at, build, title, titleLine, folded }]:
+ * `agent` the thread's (answeredBy: 'bart', 'brainstorm' or 'discover'), `asked` its first line's, `routedTo`, `at` and
+ * `build` what its title line keeps (Bart's first pick); and for a thread begun under a title line (2026-10-12) `title`
+ * its text, `titleLine` its index (-1 and null without one) and `folded` whether the thread is collapsed to it; `from` is
+ * always the first question's line. Each turn { q, from, to, answered, pending, foot, folded, agent } where `from..to`
+ * are the lines under the question (to === q when there are none), `pending` is the id of a run still working, `foot` the
+ * closing line that says which model answered (-1 without one), and `agent` the agent that answered it: the one its
+ * closing line names, else the one its line asks, else (an `@bart` line opening a thread) the title line's; null for an
+ * `@bart` turn none of them names (pending, or failed).
  */
 export function threads(lines, ps = parseLines(lines)) {
   const out = [];
@@ -548,7 +562,10 @@ export function threads(lines, ps = parseLines(lines)) {
       }
       turn.answered = turn.to > turn.q;
       if (turn.answered && !turn.pending) { const last = ps[turn.to]; if (last.type === 'reply' && ATTRIBUTION_RE.test(last.text)) turn.foot = turn.to; }
+      const asks = agentOf(ps[turn.q]);
+      turn.agent = (turn.foot >= 0 && footAgent(ps[turn.foot].text)) || (asks !== 'router' ? asks : turn.q === thread.from ? thread.routedTo : null);
       thread.turns.push(turn); thread.to = turn.to;
+      thread.agent = answeredBy(thread); // a line under this turn follows in with the agent that answered last
       // An `@bart` line goes on with a thread Bart's pick is kept for once it is asked (a pending line or an answer under it).
       if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || !followsIn(ps[i + 1], ps[thread.from], thread)) break;
       if (agentOf(ps[i + 1]) === 'router' && !(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply'))) break;
@@ -575,9 +592,12 @@ export function turnText(lines, turn) {
  */
 export function migrateChatLines(text) {
   const source = String(text ?? ''), lines = source.split('\n'), ps = parseLines(lines);
-  // An `@bart` line whose thread's title line keeps Bart's pick (2026-10-12) was routed, and stays as typed.
+  // An `@bart` line whose thread's title line keeps Bart's pick (2026-10-12), or whose answer's closing line names the agent
+  // that answered (2026-10-13), was routed, and stays as typed.
   const routed = new Set();
-  for (const thread of threads(lines, ps)) if (thread.routedTo) for (const turn of thread.turns) routed.add(turn.q);
+  for (const thread of threads(lines, ps)) {
+    for (const turn of thread.turns) if (thread.routedTo || (turn.foot >= 0 && footAgent(ps[turn.foot].text))) routed.add(turn.q);
+  }
   let count = 0;
   for (let i = 0; i + 1 < lines.length; i++) {
     if (ps[i].type !== 'bart' || ps[i].agent !== 'router' || routed.has(i)) continue;

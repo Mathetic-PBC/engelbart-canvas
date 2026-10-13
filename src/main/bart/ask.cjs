@@ -154,8 +154,9 @@ function levelBlock(steps, at, pinned) {
 /**
  * A turn as it is told and as its session is kept by (threadKey): trimmed, a question past 8,000 characters or an answer
  * past 20,000 cut in the middle, its start and end kept (./clip.cjs, 2026-10-06; before, an answer kept its start alone).
+ * `agent` (2026-10-13): the agent that answered it, when the document says; never part of threadKey.
  */
-const cleanTurn = (turn) => ({ question: clipMiddle(String(turn.question).trim(), 8000), answer: clipMiddle(String(turn.answer || '').trim(), 20000) });
+const cleanTurn = (turn) => ({ question: clipMiddle(String(turn.question).trim(), 8000), answer: clipMiddle(String(turn.answer || '').trim(), 20000), ...(AGENTS.includes(turn.agent) ? { agent: turn.agent } : {}) });
 
 /**
  * The earlier turns of an exchange as the renderer read them from the document, made safe: strings, bounded, no empty
@@ -165,6 +166,13 @@ function cleanTurns(turns, { keepEmpty = false } = {}) {
   return (Array.isArray(turns) ? turns : []).filter((turn) => turn && typeof turn.question === 'string' && (keepEmpty || turn.question.trim()))
     .slice(-MAX_TURNS).map(cleanTurn);
 }
+
+/**
+ * Whether a follow-up is asked of another agent than the one that answered the turn before it (2026-10-13: Bart handed it
+ * elsewhere). Such a run starts a session of its own, told the earlier turns, each labelled with who answered it
+ * (context.cjs conversationBlock), rather than resuming one.
+ */
+const switched = (prior, agent) => { const last = prior[prior.length - 1]; return !!(last && last.agent && last.agent !== agent); };
 
 /** Where an exchange stands: the document it is in and everything said in it so far. Two exchanges that read the same are the same. */
 function threadKey(projectId, ref, turns) {
@@ -222,10 +230,10 @@ async function withImagePaths(ctx, projectId, question) {
  * turn is also sent the Stage and the highlights as they are now (`context.now`, MATH-54 follow-up): what it was given
  * when the session started may be out of date.
  */
-function firstMessage({ context, prior, question, resumed, extra = '', routed = null }) {
+function firstMessage({ context, prior, question, resumed, extra = '', routed = null, agent = null }) {
   const asked = [routedBlock(routed), `<question>\n${question}\n</question>`].filter(Boolean).join('\n\n');
   if (resumed) return (level) => [extra, context.now, level, asked].filter(Boolean).join('\n\n');
-  return (level) => [context.head, context.contextJson, context.mentionedFiles, context.documents, conversationBlock(prior), extra, level, asked].filter(Boolean).join('\n\n');
+  return (level) => [context.head, context.contextJson, context.mentionedFiles, context.documents, conversationBlock(prior, { agent }), extra, level, asked].filter(Boolean).join('\n\n');
 }
 
 // A line Bart, the router (./route.cjs), read as a request to build, with no spec above it to build from (2026-10-12): it
@@ -463,7 +471,7 @@ function runRecord({ id, agent, provider, projectId, question, system, context, 
     ...(routed && routed.failed ? { routedBy: 'error', routeError: routed.failed === true ? null : routed.failed } : {}),
     // Where it was asked (2026-10-12, the Agent Viewer): { projectId, ref, line, text }, for its row's click.
     ...(place ? { place } : {}),
-    context: { head: context.head, contextJson: context.contextJson, mentionedFiles: context.mentionedFiles, documents: context.documents, now: context.now, conversation: conversationBlock(shown), extra, dirs: context.dirs },
+    context: { head: context.head, contextJson: context.contextJson, mentionedFiles: context.mentionedFiles, documents: context.documents, now: context.now, conversation: conversationBlock(shown, { agent }), extra, dirs: context.dirs },
     steps: [],
   };
 }
@@ -592,7 +600,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     if (!question && bart) throw new BartError('failed', 'There is no question on the line.');
     if (pinned && bart) remember(onPicked, steps[0]);
     const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
-    const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
+    const held = prior.length && !switched(prior, agent) ? store.take(threadKey(projectId, ref, prior), provider) : null;
     const system = loadSystemPrompt(ctx.dataRoot, agent);
     // The Agent map's record (runLog): from here every way out of the run is logged.
     const logId = askId || randomUUID(), startedAt = Date.now();
@@ -626,7 +634,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
             discover: { home: discoverCodexHome, mcp: true, timeout: mode === 'deep' ? DEEP_DISCOVER_TIMEOUT_MS : DISCOVER_TIMEOUT_MS },
           }[agent];
           cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, logId, ...only });
-          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
+          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed, agent }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
         } finally { if (cli) cli.done(); }
       };
       const cliName = TOOL_OF[provider];
@@ -870,13 +878,13 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover';
       if (pinned && question && agent === 'bart') remember(onPicked, steps[0]);
       const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
-      const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
+      const held = prior.length && !switched(prior, agent) ? store.take(threadKey(projectId, ref, prior), provider) : null;
       const logId = askId || randomUUID(), startedAt = Date.now();
       log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system: loadSystemPrompt(ctx.dataRoot, agent), context, shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned, routed, place })));
       if (routed && routed.corrected) log((runs) => markCorrected(runs, { id: routed.id, projectId, text, agent: routed.corrected }));
       const ended = (status, result, error) => log((runs) => runs.finish(logId, { status, written: result ? result.lines : null, error: error && error.message, ms: Date.now() - startedAt }));
       if (plan.written != null) { const result = resultReply(plan); ended('done', result); return result; }
-      const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed });
+      const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed, agent });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
       // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces. An

@@ -99,6 +99,8 @@ const VIA_RE = /(?:^| · )via Bart( · build)?$/;
 const LEAD_RE = /^(Chat|Brainstorm|Discover|Build)(?: · |$)/;
 // The agent a conversation is with, as its collapsed row names it: "Build" for an `@bart` line Bart read as one to build.
 const agentName = (thread) => (thread.build && thread.asked === 'router' ? 'Build' : AGENT_NAMES[thread.agent] || AGENT_NAMES.bart);
+// A turn as text (doc.js turnText) with the agent that answered it, when its lines say (doc.js turn.agent).
+const withAgent = (said, turn) => (turn && turn.agent ? { ...said, agent: turn.agent } : said);
 const FOLLOW = {
   brainstorm: { placeholder: 'Reply…', label: 'Brainstorm again', empty: true },
   discover: { placeholder: 'More like one of these, only after 2022, essays…', label: 'Ask Discover for more', empty: false },
@@ -580,7 +582,7 @@ export default class DocEditor extends React.Component {
     const ps = this.parsedOf(ls), models = this.props.models;
     for (const thread of threads(ls, ps)) {
       thread.turns.forEach((turn, n) => {
-        const agent = thread.agent;
+        const agent = this.turnAgent(thread, turn);
         if (!oneModel(agent) || !turn.answered || turn.pending) return;
         const card = cardOfAnswer(turnText(ls, turn).answer); if (!card) return;
         const next = thread.turns[n + 1], said = next ? parseLine(ls[next.q]).text : null;
@@ -1340,7 +1342,7 @@ export default class DocEditor extends React.Component {
       const end = thread.turns[thread.turns.length - 1], endCard = cards.byQ.get(end.q);
       const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !(endCard && endCard.live);
       for (const turn of thread.turns) {
-        const agent = thread.agent, card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
+        const agent = this.turnAgent(thread, turn), card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
         at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from, closes: !turn.answered, editable });
         const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end;
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
@@ -1356,6 +1358,13 @@ export default class DocEditor extends React.Component {
   }
   // Whether a turn's question can be edited in place (2026-10-03): answered and not at work, in an editor that can ask and
   // be written in; not a Build (`@bart --build`), and not a turn whose answer is a card (cardsOf).
+  // The agent a turn is with (2026-10-13): the one its closing line or its line names (doc.js turn.agent), else, for an
+  // `@bart` line at work, the one Bart handed it to (props.asks), else the thread's.
+  turnAgent(thread, turn) {
+    if (turn && turn.agent) return turn.agent;
+    const ask = turn && turn.pending && this.props.asks ? this.props.asks[turn.pending] : null;
+    return ask && (ask.agent === 'bart' || ask.agent === 'brainstorm' || ask.agent === 'discover') ? ask.agent : thread.agent;
+  }
   canEdit(p, turn, card) {
     return !!this.props.onAsk && !this.props.readOnly && turn.answered && !turn.pending && !card && !buildRequestOf({ agent: agentOf(p), text: p.text });
   }
@@ -1458,7 +1467,7 @@ export default class DocEditor extends React.Component {
     const said = wrap ? withWrap(given) : given;
     const { flags } = this.followStep(ls, thread), text = [flags, said].filter(Boolean).join(' ');
     const askId = newAskId(), add = [`@${tokenOf(agent)} ${text}`, `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
-    const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
+    const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => withAgent(turnText(ls, turn), turn));
     this.cardState.delete(q);
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
@@ -1513,7 +1522,9 @@ export default class DocEditor extends React.Component {
     const ls = this.lines(), th = thread || (this.findTurn(ls, q) || {}).thread || null;
     const said = String(text || ''), via = said.match(VIA_RE), lead = via ? null : said.match(LEAD_RE);
     const name = lead ? lead[1] : null, rest = via ? said.slice(0, via.index) : lead ? said.slice(lead[0].length) : said;
-    const routed = !via && !!th && !!th.routedTo && agentOf(this.parsedOf(ls)[q]) === 'router';
+    // An `@bart` line Bart handed over: its conversation's title line keeps his pick, or (a follow-up, 2026-10-13) its
+    // closing line names the agent he handed it to.
+    const routed = !via && !!th && (!!th.routedTo || !!name) && agentOf(this.parsedOf(ls)[q]) === 'router';
     const toBuild = via ? !!via[1] : name === 'Build' || (routed && th.build && q === th.from);
     const builds = !!this.props.onBuild && !this.props.readOnly;
     const lefts = [
@@ -2284,26 +2295,30 @@ export default class DocEditor extends React.Component {
   startsTitled(ls, i, turns, agent, text) {
     return !turns.length && !this.findTurn(ls, i)?.thread.turns.some((turn) => turn.q < i) && this.parsedOf(ls)[i - 1]?.type !== 'title' && !buildRequestOf({ agent, text });
   }
-  // Bart, the router (2026-10-12): an `@bart` line gets its pending line ("Choosing an agent…", Workspace onRoute), its
-  // agent by rule (model/route.js routeByRule) or else from the model (main/bart/route.cjs), and is handed over (handOff).
-  routeLine(i) {
-    const ls = this.lines(), p = parseLine(ls[i] || '');
+  // Bart, the router (2026-10-12): an `@bart` line gets its pending line (Workspace onRoute; it says "Thinking" as any
+  // run's does), its agent by rule (model/route.js routeByRule) or else from the model (main/bart/route.cjs), and is
+  // handed over (handOff). A follow-up (2026-10-13) tells the router which agent its thread is with (`current`), which it
+  // stays with unless the line clearly wants another. `line`: an `@bart` line to put in at `i` first (sendFollow), in the
+  // same change as its pending line.
+  routeLine(i, line = null) {
+    const now = this.lines(), ls = line == null ? now : [...now.slice(0, i), line, ...now.slice(i)], p = parseLine(ls[i] || '');
     const askId = newAskId(), add = [`bart~> ${askId}`]; if (i + 1 >= ls.length) add.push('');
-    const rule = routeByRule(p.text, { lines: ls, at: i, models: this.props.models }), inputs = routeInputs(ls, i);
-    this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, ...add); return out; });
+    const inputs = routeInputs(ls, i), current = inputs.current, rule = routeByRule(p.text, { models: this.props.models, current });
+    this.setLines((x) => { const out = [...x]; if (line != null) out.splice(i, 0, line); out.splice(i + 1, 0, ...add); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
+    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: current || 'chat', sure: 0, by: 'none' };
     const asked = this.props.onRoute
-      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, rule, place: { line: i, text: ls[i] } }))
-      : Promise.resolve(rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: 'chat', sure: 0, by: 'none' });
-    return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: 'chat', sure: 0 }));
+      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, rule, current, place: { line: i, text: ls[i] } }))
+      : Promise.resolve(fallback);
+    return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: current || 'chat', sure: 0 }));
   }
   // Where Bart's pick goes. The `@bart` line is the one over pending line `askId`, as the document holds it now (gone: the
   // line was deleted while it was being routed, and nothing is asked).
-  //   chat, brainstorm, discover: asked of that agent. The line stays as typed; the pick is kept on its conversation's
-  //     title line, `bart# [discover <when>] …` (doc.js titleLine), which a line starting one gets as an asked line does
-  //     (askInline). A line going on with a titled conversation of that agent is its next turn, the pick put on that title
-  //     line when it had none. Under an older, untitled conversation, which has nowhere to keep it, the line is written
-  //     `@<token> <text>` as before.
+  //   chat, brainstorm, discover: asked of that agent. The line stays as typed; a line starting a conversation has the pick
+  //     kept on its title line, `bart# [discover <when>] …` (doc.js titleLine), which it gets as an asked line does
+  //     (askInline). A line going on with a conversation (2026-10-13) is its next turn whatever agent answers it: the
+  //     title line keeps the first pick, and the turn's own closing line names who answered (doc.js turn.agent). A line
+  //     starting an untitled conversation, which has nowhere to keep the pick, is written `@<token> <text>` as before.
   //   build, with a spec above and sure ≥ 0.8: a Build of that fenced block as it reads now; the line stays, its card under it.
   //   build otherwise: asked of Chat, told it is wanted built (routed.build, ` build` on the title line), so it writes the
   //     Build prompt.
@@ -2320,15 +2335,14 @@ export default class DocEditor extends React.Component {
       if (spec != null && pick.sure >= 0.8 && this.props.onBuild) { this.props.onBuild({ text: spec, askId, routedFrom: id, place: typed }); return 'build'; }
     }
     const agent = pick.agent === 'brainstorm' || pick.agent === 'discover' ? pick.agent : 'bart', build = pick.agent === 'build';
-    // Read as that agent's line would be: a follow-up when it goes on with the conversation above.
-    const as = ls.map((l, j) => (j === q ? `@${tokenOf(agent)}${p.text ? ` ${p.text}` : ''}` : l)), turns = this.turnsBefore(as, q);
+    // An `@bart` line goes on with the conversation above whatever agent answers it (doc.js followsIn).
+    const turns = this.turnsBefore(ls, q);
     const above = q > 0 ? this.parsedOf(ls)[q - 1] : null, meta = { agent, at: askedNow(), build };
-    let next = as, name = false;
-    if (turns.length) {
-      const thread = this.findTurn(as, q).thread, head = thread.titleLine >= 0 ? this.parsedOf(ls)[thread.titleLine] : null;
-      if (head) next = head.agent ? ls : ls.map((l, j) => (j === thread.titleLine ? titleLine(head.text, head.folded, { agent }) : l));
-    } else if (above && above.type === 'title') next = ls.map((l, j) => (j === q - 1 ? titleLine(above.text, above.folded, meta) : l));
-    else if (this.startsTitled(as, q, turns, agent, p.text)) { next = [...ls]; next.splice(q, 0, titleLine('', false, meta)); name = true; }
+    let next = ls, name = false;
+    if (turns.length) next = ls; // a follow-up: the title line keeps the first pick, the turn's closing line names this one
+    else if (above && above.type === 'title') next = ls.map((l, j) => (j === q - 1 ? titleLine(above.text, above.folded, meta) : l));
+    else if (this.startsTitled(ls, q, turns, agent, p.text)) { next = [...ls]; next.splice(q, 0, titleLine('', false, meta)); name = true; }
+    else next = ls.map((l, j) => (j === q ? `@${tokenOf(agent)}${p.text ? ` ${p.text}` : ''}` : l));
     if (next !== ls) this.setLines(() => next);
     this.props.onAsk({ askId, text, turns, agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: name ? q + 1 : q, text: typed.text }, ...(name ? { name: true } : {}) });
     return agent;
@@ -2347,18 +2361,23 @@ export default class DocEditor extends React.Component {
     this.setState({ picker: { kind: 'via', i: q, left: null, right: r.right, top: r.top, bottom: r.bottom, choice: null } });
   }
   // Another agent for a line Bart routed: asked again of it in its place; the run says the person corrected Bart
-  // (routed.corrected), and the router's record is marked. The `@bart` line stays: the agent changes on its conversation's
-  // title line, which says who answers all of it. An older document's line, written as the agent's, is written again.
+  // (routed.corrected), and the router's record is marked. The `@bart` line stays. Its conversation's first turn changes
+  // its agent on the title line, which keeps the first pick; a follow-up (2026-10-13) is only asked of the other agent,
+  // whose closing line then names it. An older document's line, written as the agent's, is written again.
   pickVia = (agent) => {
     const pk = this.state.picker; this.closePicker(); if (!pk || pk.kind !== 'via') return;
     const ls = this.lines(), q = pk.i, p = parseLine(ls[q] || ''), found = this.findTurn(ls, q);
     if (p.type !== 'bart' || !found || found.turn.pending) return;
-    const undo = { text: ls.join('\n'), caret: null, mark: this.history.length }, { thread } = found;
-    if (agentOf(p) === 'router' && thread.routedTo) {
-      if (thread.agent === agent && !thread.build) return;
-      const head = this.parsedOf(ls)[thread.titleLine];
-      const lines = ls.map((l, j) => (j === thread.titleLine ? titleLine(head.text, head.folded, { agent, at: head.at }) : l));
-      this.regenerate(q, undefined, { lines, undo }, { corrected: tokenOf(agent) });
+    const undo = { text: ls.join('\n'), caret: null, mark: this.history.length }, { thread, turn } = found;
+    if (agentOf(p) === 'router' && (thread.routedTo || q !== thread.from)) {
+      const lead = turn.foot >= 0 ? (parseLine(ls[turn.foot]).text.replace(/^\*|\*$/g, '').match(LEAD_RE) || [])[1] : null;
+      if (this.turnAgent(thread, turn) === agent && !(q === thread.from ? thread.build : lead === 'Build')) return;
+      let lines = ls;
+      if (q === thread.from && thread.titleLine >= 0) {
+        const head = this.parsedOf(ls)[thread.titleLine];
+        lines = ls.map((l, j) => (j === thread.titleLine ? titleLine(head.text, head.folded, { agent, at: head.at }) : l));
+      }
+      this.regenerate(q, undefined, { lines, undo }, { corrected: tokenOf(agent) }, agent);
       return;
     }
     if (agentOf(p) === agent) return;
@@ -2366,9 +2385,11 @@ export default class DocEditor extends React.Component {
     this.regenerate(q, undefined, { lines, undo }, { corrected: tokenOf(agent) });
   };
   // The turns of the card above question `q`, as the document holds them: what a follow-up is a follow-up to.
+  // Each { question, answer, agent }: `agent` the one that answered it (doc.js turn.agent), so a run asked of another agent
+  // knows who said what (main's ask.cjs).
   turnsBefore(ls, q) {
     const found = this.findTurn(ls, q); if (!found) return [];
-    return found.thread.turns.filter((turn) => turn.q < q && turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
+    return found.thread.turns.filter((turn) => turn.q < q && turn.answered && !turn.pending).map((turn) => withAgent(turnText(ls, turn), turn));
   }
   // An @discover line as it would run if sent now (2026-10-03): the level and provider it names, else the ones an earlier
   // turn of its exchange carries, else Standard on the default provider; or the model and effort a flag pins it to
@@ -2379,9 +2400,10 @@ export default class DocEditor extends React.Component {
     if (read.pinned) return `${step.name} ${EFFORT_LABELS[step.effort] || step.effort}`;
     return read.provider === models.provider ? LEVEL_LABELS[read.mode] : `${models.providers[read.provider].name} · ${LEVEL_LABELS[read.mode]}`;
   }
-  // A follow-up: the question goes under the card's last answer as an @bart line of its own, with the pending line under it.
-  // It asks what the card's last turn asked: @bart, @brainstorm after a recap (which may be sent with nothing typed), or
-  // @discover after a guide.
+  // A follow-up: the question goes under the card's last answer as a line of its own, with the pending line under it.
+  // Typed (2026-10-13), it is an `@bart` line, routed as one (routeLine): Bart keeps it with the agent the card is with
+  // unless it clearly wants another, and the card goes on whichever answers. Sent empty (an @brainstorm recap's field
+  // may be), it asks what the card's last turn asked, as before.
   sendFollow(from) {
     const ls = this.lines(), thread = threads(ls).find((t) => t.from === from), typed = (this.followText.get(from) || '').trim();
     if (!thread || !this.props.onAsk) return;
@@ -2389,10 +2411,11 @@ export default class DocEditor extends React.Component {
     // A pasted image goes into the line as its [Attachment n] token stood; one whose token was deleted is not sent.
     const text = withAttachments(typed, this.followImages.get(from) || []);
     const { flags } = this.followStep(ls, thread), asked = [flags, text].filter(Boolean).join(' ');
-    const askId = newAskId(), add = [`@${tokenOf(agent)} ${asked}`.trimEnd(), `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
-    const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => turnText(ls, turn));
     this.followText.delete(from); this.followImages.delete(from);
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
+    if (typed && this.props.onRoute) { this.routeLine(thread.to + 1, `@bart ${asked}`); return; }
+    const askId = newAskId(), add = [`@${tokenOf(agent)} ${asked}`.trimEnd(), `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
+    const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => withAgent(turnText(ls, turn), turn));
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
     this.props.onAsk({ askId, text: asked, turns, agent, place: { line: thread.to + 1, text: add[0] } });
@@ -2505,15 +2528,16 @@ export default class DocEditor extends React.Component {
   // Regenerate: the answer gives way to a pending line and the question is asked again, as a follow-up to the turns above
   // it. `choice` is a model and effort for this run; the line keeps the words it was asked with. `edited` (2026-10-03): a
   // question edited in place is asked from { lines } (its new words, the turns after it gone), and undo goes to { undo }.
-  // `routed` (2026-10-12): the turn was handed over by Bart; asked again it is asked of the agent he picked, as routed,
-  // or `{ corrected }`, the agent the person picked instead (pickVia).
-  regenerate(q, choice, edited = null, routed = null) {
+  // `routed` (2026-10-12): the turn was handed over by Bart; asked again it is asked of the agent that answered it (its
+  // closing line's, 2026-10-13), as routed, or `{ corrected }` with `as`, the agent the person picked instead (pickVia).
+  regenerate(q, choice, edited = null, routed = null, as = null) {
     const ls = edited ? edited.lines : this.lines(), found = this.findTurn(ls, q); if (!found || found.turn.pending || !this.props.onAsk) return;
-    const { turn, thread } = found, p = parseLine(ls[q]), agent = agentOf(p) === 'router' ? thread.agent : agentOf(p); if (!p.text.trim() && !oneModel(agent)) return;
+    const { turn, thread } = found, p = parseLine(ls[q]), agent = agentOf(p) === 'router' ? as || this.turnAgent(thread, turn) : agentOf(p); if (!p.text.trim() && !oneModel(agent)) return;
     const was = (edited ? this.lines() : ls), oldFoot = this.findTurn(was, q), footText = oldFoot && oldFoot.turn.foot >= 0 ? parseLine(was[oldFoot.turn.foot]).text : '';
     // Handed over by Bart: an `@bart` line whose conversation's title line keeps his pick, or an older closing line's "via Bart".
     const said = String(footText).replace(/^\*|\*$/g, ''), via = said.match(VIA_RE);
-    const routing = routed || (via ? { build: !!via[1] } : agentOf(p) === 'router' && thread.routedTo ? { build: (said.match(LEAD_RE) || [])[1] === 'Build' || (thread.build && q === thread.from) } : null);
+    const lead = (said.match(LEAD_RE) || [])[1];
+    const routing = routed || (via ? { build: !!via[1] } : agentOf(p) === 'router' && (thread.routedTo || lead) ? { build: lead === 'Build' || (thread.build && q === thread.from) } : null);
     const askId = newAskId(), gone = turn.to - turn.q, turns = this.turnsBefore(ls, q);
     this.cardState.delete(q);
     const asked = (x) => { const out = [...x]; out.splice(turn.from, gone, `bart~> ${askId}`); return out; };
@@ -2561,7 +2585,7 @@ export default class DocEditor extends React.Component {
     const was = this.editing; if (!was) return;
     const ls = this.lines(), q = was.q, line = ls[q] ?? '';
     if (line === was.original) { this.cancelEdit(true); return; }
-    const p = parseLine(line), found = this.findTurn(ls, q), agent = agentOf(p) === 'router' && found ? found.thread.agent : agentOf(p);
+    const p = parseLine(line), found = this.findTurn(ls, q), agent = agentOf(p) === 'router' && found ? this.turnAgent(found.thread, found.turn) : agentOf(p);
     if (p.type !== 'bart' || agentOf(p) !== agentOf(parseLine(was.original)) || buildRequestOf({ agent: agentOf(p), text: p.text }) || (!p.text.trim() && !oneModel(agent))) return;
     if (!found || found.turn.pending || !this.props.onAsk) return;
     const later = found.thread.turns.filter((turn) => turn.q > q);
@@ -2899,7 +2923,7 @@ export default class DocEditor extends React.Component {
   overPage(node) { return this.props.compact || typeof document === 'undefined' || !document.body ? node : createPortal(node, document.body); }
   pickerView() {
     const pk = this.state.picker, models = this.props.models;
-    if (pk && pk.kind === 'via') return <AgentChoice current={(() => { const ls = this.lines(), found = this.findTurn(ls, pk.i); return found ? found.thread.agent : agentOf(parseLine(ls[pk.i] || '')); })()} anchor={pk} onPick={this.pickVia} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
+    if (pk && pk.kind === 'via') return <AgentChoice current={(() => { const ls = this.lines(), found = this.findTurn(ls, pk.i); return found ? this.turnAgent(found.thread, found.turn) : agentOf(parseLine(ls[pk.i] || '')); })()} anchor={pk} onPick={this.pickVia} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
     if (!pk || !models) return null;
     const ls = this.lines(), marked = (choice) => ({ provider: (modelOf(choice.model, models) || {}).provider, model: choice.model, effort: choice.effort });
     let current = null;

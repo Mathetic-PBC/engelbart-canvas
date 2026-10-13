@@ -127,7 +127,7 @@ test('sending writes each pasted image into the line as an image pasted on a lin
   assert.equal(asks.length, 1);
   assert.equal(asks[0].text, asked);
   assert.equal(asks[0].agent, 'bart');
-  assert.deepEqual(asks[0].turns, [{ question: 'why?', answer: 'because' }]);
+  assert.deepEqual(asks[0].turns, [{ question: 'why?', answer: 'because', agent: 'bart' }], 'each earlier turn says which agent answered it');
   const lines = changes[changes.length - 1].split('\n');
   assert.equal(lines[3], `@chat ${asked}`, 'the line under the answer holds the images as ![Attachment n](img:<id>)');
   assert.match(lines[4], /^bart~> /);

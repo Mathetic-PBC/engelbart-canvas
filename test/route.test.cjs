@@ -76,7 +76,7 @@ test('migration: an answered or pending @bart question becomes @chat; a Build re
 
 /* ------------------------------------------------------------------- rules */
 
-test('routeByRule: empty → brainstorm, --build → Build, a level → discover, a model flag → chat, under a brainstorm or discover thread → it; else the model', async () => {
+test('routeByRule: empty → brainstorm, --build → Build, a level → discover, a model flag → chat (not in a follow-up); a thread above settles nothing: the model', async () => {
   const { routeByRule } = await loadRoute();
   const models = DEFAULTS;
   assert.deepEqual(routeByRule('', {}), { agent: 'brainstorm', rule: 'empty' });
@@ -88,13 +88,11 @@ test('routeByRule: empty → brainstorm, --build → Build, a level → discover
   assert.deepEqual(routeByRule('why? --low', { models }), { agent: 'chat', rule: 'model flag' });
   assert.deepEqual(routeByRule('--opus why?', {}), { agent: 'chat', rule: 'model flag' }, 'without the models file, a model\'s word still counts');
   assert.equal(routeByRule('what does this one entail', { models }), null);
-  const lines = ['@brainstorm', 'bart> card', '@bart and what about cost?'];
-  assert.deepEqual(routeByRule('and what about cost?', { lines, at: 2, models }), { agent: 'brainstorm', rule: 'under thread' });
-  const discover = ['@discover tutors', 'bart> guide', '@bart more on this'];
-  assert.deepEqual(routeByRule('more on this', { lines: discover, at: 2 }), { agent: 'discover', rule: 'under thread' });
-  const gap = ['@discover tutors', 'bart> guide', '', '@bart more on this'];
-  assert.equal(routeByRule('more on this', { lines: gap, at: 3 }), null, 'a blank line between: not under it');
-  assert.equal(routeByRule('ok build it', { lines: [...SPEC, '@bart ok build it'], at: SPEC.length }), null, 'under a Chat spec, the model reads it');
+  // 2026-10-13: under a thread, the model decides, told which agent the conversation is with (routeInputs current).
+  assert.equal(routeByRule('and what about cost?', { models, current: 'brainstorm' }), null);
+  assert.equal(routeByRule('more on this', { current: 'discover' }), null);
+  assert.equal(routeByRule('--sol why?', { models, current: 'brainstorm' }), null, 'in a follow-up a model flag is for whichever agent answers');
+  assert.equal(routeByRule('ok build it', { models, current: 'chat' }), null, 'under a Chat spec, the model reads it');
 });
 
 test('routeInputs: the section from the heading, the threads above with their tokens, and the spec of the nearest answer', async () => {
@@ -330,12 +328,12 @@ test('a line Bart handed to @discover: its follow-up, Regenerate, the session an
   r.editor.regenerate(1);
   assert.deepEqual([r.asks[0].agent, r.asks[0].routed], ['discover', { build: false }]);
   assert.deepEqual(r.lines().slice(0, 2), [head, '@bart papers on tutors?']);
-  // An @bart line typed under it is @discover's by rule, and once handed over it is the thread's next turn, line as typed.
-  const { routeByRule } = await loadRoute();
-  assert.deepEqual(routeByRule('and more?', { lines: [...done.slice(0, 4), '@bart and more?'], at: 4 }), { agent: 'discover', rule: 'under thread' });
-  const n = mounted([...done.slice(0, 4), '@bart and more?'], { route: async (input) => ({ id: 'route-n', agent: input.rule.agent, sure: 1, by: 'rule' }) });
+  // An @bart line typed under it is routed with @discover as the agent the conversation is with (2026-10-13; no rule),
+  // and once handed over it is the thread's next turn, line as typed.
+  const n = mounted([...done.slice(0, 4), '@bart and more?'], { route: async (input) => ({ id: 'route-n', agent: input.current, sure: 0.9, by: 'model' }) });
   n.editor.askInline(4);
   await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([n.routes[0].rule, n.routes[0].current], [null, 'discover']);
   assert.equal(n.lines()[4], '@bart and more?');
   assert.equal(n.lines().filter((l) => l.startsWith('bart#')).length, 1, 'no second title');
   assert.deepEqual([n.asks[0].agent, n.asks[0].turns.length, n.asks[0].name], ['discover', 1, undefined]);
@@ -358,7 +356,7 @@ test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the sp
   unsure.editor.askInline(SPEC.length);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(unsure.builds.length, 0);
-  assert.equal(unsure.lines()[SPEC.length], '@chat ok build it');
+  assert.equal(unsure.lines()[SPEC.length], '@bart ok build it', 'a follow-up (2026-10-13) stays as typed; its closing line names who answered');
   assert.deepEqual([unsure.asks[0].agent, unsure.asks[0].routed], ['bart', { id: 'route-c', build: true }]);
 
   const noSpec = mounted(['@bart build a hello page'], { route: async () => ({ id: 'route-d', agent: 'build', sure: 0.95 }) });
@@ -561,4 +559,142 @@ test('an older document\'s "via Bart": picking another agent rewrites the line a
   const r = mounted(['@chat why?', 'bart> An answer.', 'bart> *Sonnet · high · 3s · via Bart · build*', '']);
   r.editor.regenerate(0);
   assert.deepEqual(r.asks[0].routed, { build: true });
+});
+
+/* ------------------------------------------- a conversation across agents (2026-10-13) */
+
+const CHAT_DONE = ['bart# [chat 2026-10-13T09:00:00Z] Tutors', '@bart how do tutors notice struggle?', 'bart> By watching.', 'bart> *Chat · Sonnet · high · 3 s*', ''];
+const settled = () => new Promise((resolve) => setImmediate(resolve));
+// The run with `askId` answering, as main writes it (Workspace placeAnswer): its pending line gives way to the lines.
+const answerAt = (m, askId, lines) => { m.props.text = m.lines().flatMap((line) => (line === `bart~> ${askId}` ? lines : [line])).join('\n'); };
+
+test('no "Choosing an agent…": a line Bart is routing shows the pending row every run shows ("Thinking"); "Starting a Build" stays', () => {
+  const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  assert.ok(!workspace.includes('Choosing an agent'), 'the router\'s pending line sets no activity');
+  assert.ok(workspace.includes("activity: 'Starting a Build'"));
+  const m = mounted(['@bart why?', 'bart~> r1', '']);
+  m.props.asks = { r1: { docKey: 'k', agent: 'router' } };
+  const html = m.editor.editorHtml();
+  assert.match(html, /Thinking/);
+  assert.ok(!/Choosing an agent/.test(html));
+});
+
+test('Chat → Discover → Chat: a typed follow-up is an @bart line Bart routes, told the agent the card is with; one card, each turn its own agent and footer', async () => {
+  let pick = 'discover';
+  const m = mounted(CHAT_DONE, { route: async (input) => ({ id: `route-${input.current}`, agent: pick, sure: 0.9, by: 'model' }) });
+  // The follow-up field: typed, it is routed (no "@chat" line written), the card's agent passed as `current`.
+  m.editor.followText.set(1, 'papers on this?');
+  m.editor.sendFollow(1);
+  assert.equal(m.lines()[4], '@bart papers on this?');
+  assert.match(m.lines()[5], /^bart~> /, 'the line and its pending line in one change');
+  assert.equal(m.routes.length, 1);
+  assert.deepEqual([m.routes[0].text, m.routes[0].current, m.routes[0].rule], ['papers on this?', 'chat', null]);
+  await settled();
+  assert.deepEqual([m.asks[0].agent, m.asks[0].routed.id, m.asks[0].name], ['discover', 'route-chat', undefined]);
+  assert.deepEqual(m.asks[0].turns, [{ question: 'how do tutors notice struggle?', answer: 'By watching.', agent: 'bart' }], 'the earlier turn says Chat answered it');
+  assert.equal(m.lines()[0], CHAT_DONE[0], 'the title line keeps the first pick');
+  answerAt(m, m.asks[0].askId, ['bart> A guide.', 'bart> *Discover · Opus · high · 9 s*']);
+
+  // Discover answered: the card's next follow-up is routed with Discover as `current`; Bart sends it back to Chat.
+  pick = 'chat';
+  m.editor.followText.set(1, 'which is cheapest?');
+  m.editor.sendFollow(1);
+  await settled();
+  assert.equal(m.routes[1].current, 'discover');
+  assert.equal(m.asks[1].agent, 'bart');
+  assert.deepEqual(m.asks[1].turns.map((t) => t.agent), ['bart', 'discover']);
+  answerAt(m, m.asks[1].askId, ['bart> The first.', 'bart> *Chat · Sonnet · high · 2 s*']);
+
+  const { threads, answeredBy } = await loadDoc();
+  const all = threads(m.lines());
+  assert.equal(all.length, 1, 'one card');
+  assert.deepEqual(all[0].turns.map((t) => t.agent), ['bart', 'discover', 'bart']);
+  assert.deepEqual([answeredBy(all[0]), all[0].routedTo], ['bart', 'bart']);
+  assert.equal(m.lines()[0], CHAT_DONE[0], 'still the first pick');
+  // Each turn is drawn as its own agent's, and its footer names it, as Bart's pick.
+  const at = m.editor.layout(m.lines());
+  assert.deepEqual([at.get(1).agent, at.get(4).agent, at.get(7).agent], ['bart', 'discover', 'bart']);
+  const html = m.editor.editorHtml();
+  assert.match(html, /aria-label="Discover: Bart picked this\. Ask another"/);
+  assert.equal((html.match(/aria-label="Chat: Bart picked this\. Ask another"/g) || []).length, 2);
+  // Regenerate asks each turn of the agent that answered it; another agent for a follow-up leaves the title line alone.
+  m.editor.regenerate(4);
+  assert.deepEqual([m.asks[2].agent, m.asks[2].routed], ['discover', { build: false }]);
+});
+
+test('a follow-up Bart is less than 0.8 sure wants another agent stays with the agent the conversation is with', async () => {
+  const unsure = route.decide({ agent: 'chat', sure: 0.75 }, 'discover');
+  assert.deepEqual(unsure, { agent: 'discover', sure: 0.75 });
+  assert.deepEqual(route.decide({ agent: 'chat', sure: 0.8 }, 'discover'), { agent: 'chat', sure: 0.8 }, 'sure enough: it switches');
+  assert.deepEqual(route.decide({ agent: 'discover', sure: 0.3 }, 'discover'), { agent: 'discover', sure: 0.3 }, 'the same agent, however unsure');
+  assert.deepEqual(route.decide(null, 'brainstorm'), { agent: 'brainstorm', sure: 0 }, 'an unread reply leaves it there');
+  assert.deepEqual(route.decide({ agent: 'build', sure: 0.7 }, 'chat'), { agent: 'chat', sure: 0.7 });
+  assert.deepEqual(route.decide({ agent: 'brainstorm', sure: 0.7 }), { agent: 'brainstorm', sure: 0.7 }, 'a line starting a conversation: 0.6 as before');
+  // Through the router: `current` is given the model as <current>, and a timeout leaves the line where it was.
+  const seen = {};
+  const stays = await router('{"agent":"chat","sure":0.7}', { seen }).route({ ...LINE, current: 'discover' });
+  assert.deepEqual([stays.agent, stays.sure], ['discover', 0.7]);
+  assert.match(seen.input, /<current>discover<\/current>\n\n<line>/);
+  const timedOut = await router(Object.assign(new Error('Command failed: timed out'), { killed: true, signal: 'SIGTERM' })).route({ ...LINE, current: 'brainstorm' });
+  assert.equal(timedOut.agent, 'brainstorm');
+  assert.ok(!(await router('{"agent":"chat","sure":0.9}', { seen: {} }).route(LINE)).error);
+  assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /at least 0\.8 sure/);
+  assert.equal(route.fakePick('and then?', 'discover').agent, 'discover', 'the fake router stays put too');
+  // In the editor: the router's own fallback, with no answer, is the thread's agent.
+  const m = mounted([...CHAT_DONE.slice(0, 4), '@bart and then?'], { route: async () => null });
+  m.editor.askInline(4);
+  await settled();
+  assert.equal(m.asks[0].agent, 'bart');
+  const d = mounted(['@discover tutors', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '@bart and newer?'], { route: async () => { throw new Error('down'); } });
+  d.editor.askInline(3);
+  await settled();
+  assert.equal(d.asks[0].agent, 'discover');
+  assert.equal(d.lines()[3], '@bart and newer?', 'a follow-up stays as typed');
+});
+
+test('a Brainstorm card answer is written @brainstorm and asked of Brainstorm: it is never routed', async () => {
+  const card = require('../src/main/bart/card.cjs');
+  const FREE = { say: '', card: 'questions', questions: { items: [{ id: 'q', type: 'free', title: 'What would change your mind?' }] }, ready: false };
+  const body = replyLines(card.cardBody(JSON.stringify(FREE)).body, { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: false, agent: 'brainstorm' });
+  const m = mounted(['bart# [brainstorm 2026-10-13T09:00:00Z] Aims', '@bart help me figure out what to measure', ...body, ''], { route: async () => ({ agent: 'chat', sure: 1 }) });
+  const entry = m.editor.cardsOf(m.lines()).byQ.get(1);
+  assert.deepEqual([entry.agent, entry.live], ['brainstorm', true]);
+  m.editor.sendCard(1, 'skip');
+  assert.equal(m.routes.length, 0, 'not routed');
+  assert.equal(m.asks.length, 1);
+  assert.equal(m.asks[0].agent, 'brainstorm');
+  assert.ok(m.lines().some((line) => /^@brainstorm /.test(line)), m.lines().join('\n'));
+});
+
+test('old threads read as before: untitled @chat and @discover follow-ups, "via Bart" feet, and an @discover line under Chat starting its own card', async () => {
+  const { threads, answeredBy, footAgent, migrateChatLines } = await loadDoc();
+  const chat = ['@chat why?', 'bart> because', 'bart> *Sonnet · high · 3s*', '@chat and then?', 'bart> then this', 'bart> *Sonnet · high · 2s*'];
+  const [one] = threads(chat);
+  assert.deepEqual([threads(chat).length, one.turns.length, one.turns.map((t) => t.agent), answeredBy(one)], [1, 2, ['bart', 'bart'], 'bart']);
+  const via = ['@discover papers?', 'bart> A guide.', 'bart> *Opus · high · 9s · via Bart*', '@discover more?', 'bart> More.'];
+  assert.deepEqual(threads(via).map((t) => [t.turns.length, answeredBy(t)]), [[2, 'discover']]);
+  assert.equal(footAgent('*Sonnet · high · 3s · via Bart*'), null, 'an older closing line names no agent');
+  assert.deepEqual(['*Chat · Sol · high · 41 s*', '*Build · Sonnet · high · 3 s*', '*Discover · Opus · 9 s*', '*Brainstorm*'].map(footAgent), ['bart', 'bart', 'discover', 'brainstorm']);
+  const apart = ['@chat why?', 'bart> because', '@discover papers?', 'bart> A guide.'];
+  assert.deepEqual(threads(apart).map((t) => answeredBy(t)), ['bart', 'discover'], 'an agent\'s own line for another agent still starts a card of its own');
+  // An @bart line typed under a card but not asked yet is no turn of it.
+  assert.equal(threads([...chat, '@bart next']).length, 2);
+  // An answered @bart follow-up whose closing line names its agent is not migrated to @chat; an older answered @bart is.
+  const routedFollow = [...CHAT_DONE.slice(1, 4), '@bart papers?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*'];
+  assert.equal(migrateChatLines(routedFollow.join('\n')).count, 0);
+  assert.equal(migrateChatLines(['@bart why?', 'bart> because', 'bart> *Sonnet · 2s*'].join('\n')).count, 1);
+});
+
+test('a run asked of another agent than the turn before it starts a session of its own, the earlier turns labelled with who answered', async () => {
+  const { conversationBlock } = require('../src/main/bart/context.cjs');
+  const turns = [{ question: 'why?', answer: 'because', agent: 'bart' }, { question: 'papers?', answer: 'A guide.', agent: 'discover' }];
+  assert.equal(conversationBlock(turns, { agent: 'bart' }), '<conversation>\n<turn n="1" agent="Chat">\n<asked>\nwhy?\n</asked>\n<answered>\nbecause\n</answered>\n</turn>\n<turn n="2" agent="Discover">\n<asked>\npapers?\n</asked>\n<answered>\nA guide.\n</answered>\n</turn>\n</conversation>');
+  assert.ok(!conversationBlock([turns[0]], { agent: 'bart' }).includes('agent='), 'all with the agent asked now: as before');
+  // The agent rides on the turn into main, and is no part of the session key (the session itself: bart.test.cjs).
+  const { threadKey, cleanTurns } = require('../src/main/bart/ask.cjs');
+  const { turnsInput } = require('../src/main/ipc.cjs');
+  const ref = { kind: 'workspace', workspaceId: 'w' };
+  const said = cleanTurns(turnsInput([{ question: 'why?', answer: 'because', agent: 'discover' }, { question: 'and?', answer: 'so', agent: 'nobody' }]));
+  assert.deepEqual(said.map((t) => t.agent), ['discover', undefined]);
+  assert.equal(threadKey('p', ref, said), threadKey('p', ref, cleanTurns([{ question: 'why?', answer: 'because' }, { question: 'and?', answer: 'so' }])));
 });

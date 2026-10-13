@@ -5,9 +5,11 @@
 // steps aside. The editor tries its rules first (src/renderer/model/route.js routeByRule); a line no rule settles comes
 // here, and the default provider's fastest model (Haiku on Claude Code, Luna on Codex) is asked at low effort, with no
 // tools and no session, which agent it is for. Anything that goes wrong (bad JSON, a timeout, an error) or a pick it is
-// less than 0.6 sure of goes to chat: a misrouted line costs more than a plain answer.
+// less than 0.6 sure of goes to chat: a misrouted line costs more than a plain answer. A follow-up in a thread (2026-10-13)
+// comes with `current`, the agent that answered the thread last: it stays there unless the model is at least 0.8 sure
+// the line wants another agent, and anything that goes wrong leaves it there too.
 //
-// What it is sent: the line, its section (from the nearest heading above to the line, the last 4,000 characters, agent
+// What it is sent: the line, the agent the conversation is with now (`current`, for a follow-up), its section (from the nearest heading above to the line, the last 4,000 characters, agent
 // replies left out as for @brainstorm, ./strip.cjs), the last five threads above (agent, the first 80 characters of the
 // question, how many lines up), and whether the nearest answer above holds a fenced block. Never the library,
 // context_json or a mentioned file.
@@ -32,6 +34,7 @@ const SECTION_CHARS = 4000;
 const MAX_THREADS = 5;
 const QUESTION_CHARS = 80;
 const SURE_ENOUGH = 0.6;
+const SURE_TO_SWITCH = 0.8;
 const PICKS = ['chat', 'brainstorm', 'discover', 'build'];
 const RULE_PICKS = new Set(PICKS);
 
@@ -53,15 +56,20 @@ function threadsOf(threads) {
   }));
 }
 
-/** What the model is sent: the line, its section, the threads above and whether a spec is above. Nothing else. */
-function routeInput({ text, section, workspaceName = '', threads = [], specAbove = false }) {
-  const list = threadsOf(threads);
+/** The agent a follow-up's conversation is with ('chat', 'brainstorm' or 'discover'), or null. */
+const currentOf = (current) => { const agent = String(current || '').toLowerCase().replace(/^@/, ''); return PICKS.includes(agent) && agent !== 'build' ? agent : null; };
+
+/** What the model is sent: the line, its section, the threads above, whether a spec is above and, for a follow-up, the
+ * agent the conversation is with. Nothing else. */
+function routeInput({ text, section, workspaceName = '', threads = [], specAbove = false, current = null }) {
+  const list = threadsOf(threads), now = currentOf(current);
   const threadLines = list.length ? list.map((thread) => `- @${thread.agent}, ${thread.up} line${thread.up === 1 ? '' : 's'} up: ${JSON.stringify(thread.question)}`).join('\n') : '(none)';
   return [
     workspaceName ? `<workspace>${clean(workspaceName, 200)}</workspace>` : '',
     `<section>\n${sectionText(section)}\n</section>`,
     `<threads>\n${threadLines}\n</threads>`,
     `<spec_above>${specAbove ? 'yes' : 'no'}</spec_above>`,
+    now ? `<current>${now}</current>` : '',
     `<line>\n${String(text || '').trim()}\n</line>`,
   ].filter(Boolean).join('\n\n');
 }
@@ -80,8 +88,13 @@ function parseReply(raw) {
   return null;
 }
 
-/** The pick a reply comes to: its agent when it is sure enough, else chat. */
-function decide(parsed) {
+/**
+ * The pick a reply comes to: its agent when it is sure enough, else chat. With `current` (a follow-up, 2026-10-13): that
+ * agent, unless the reply picks another and is at least 0.8 sure of it.
+ */
+function decide(parsed, current = null) {
+  const now = currentOf(current);
+  if (now) return parsed && parsed.agent !== now && parsed.sure >= SURE_TO_SWITCH ? parsed : { agent: now, sure: parsed ? parsed.sure : 0 };
   if (!parsed) return { agent: 'chat', sure: 0 };
   return parsed.sure < SURE_ENOUGH ? { agent: 'chat', sure: parsed.sure } : parsed;
 }
@@ -100,11 +113,11 @@ function routeModel(models) {
 const logTo = (runLog) => (call) => { if (!runLog) return; try { call(runLog); } catch { /* the log only */ } };
 
 /** The router's record, as the run log starts it. */
-function routerRecord({ id, provider, projectId, workspaceName, text, section, threads, specAbove, input, by, rule, place = null }) {
+function routerRecord({ id, provider, projectId, workspaceName, text, section, threads, specAbove, current = null, input, by, rule, place = null }) {
   return {
     id, agent: 'router', provider: provider || null, projectId, projectName: '', workspaceName: workspaceName || '',
     question: String(text || ''), at: Date.now(), status: 'running', system: by === 'rule' ? '' : ROUTE_SYSTEM_PROMPT, mode: null, pinned: false,
-    by, ...(rule ? { rule } : {}), sectionSize: sectionText(section).length, threads: threadsOf(threads), specAbove: !!specAbove,
+    by, ...(rule ? { rule } : {}), sectionSize: sectionText(section).length, threads: threadsOf(threads), specAbove: !!specAbove, ...(currentOf(current) ? { current: currentOf(current) } : {}),
     // Where the line was (2026-10-12, the Agent Viewer): { projectId, ref, line, text }, the line as typed.
     ...(place ? { place } : {}),
     context: { input: input || '' }, steps: [],
@@ -119,7 +132,7 @@ function markCorrected(runs, { id = null, projectId = null, text = '', agent }) 
 }
 
 /**
- * → { route, corrected, handed }. `route({ projectId, text, section, workspaceName, threads, specAbove, rule, place })` →
+ * → { route, corrected, handed }. `route({ projectId, text, section, workspaceName, threads, specAbove, current, rule, place })` →
  * { id, agent, sure, model, ms, by }: with `rule` (the editor's own pick) it is only logged.
  */
 function createRouter({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-router'), codexAuthFile, run = execFile, tools = null, runLog = null, timeout = ROUTE_TIMEOUT_MS, now = Date.now } = {}) {
@@ -188,23 +201,24 @@ function createRouter({ readModels, environment = process.env, runDirectory = pa
   } });
 }
 
-/** The router without a model (ENGELBART_BART_FAKE=1): it picks by keyword, as the model is asked to. */
-function fakePick(text) {
+/** The router without a model (ENGELBART_BART_FAKE=1): it picks by keyword, as the model is asked to; a follow-up no
+ * keyword settles stays with the agent its thread is with (`current`). */
+function fakePick(text, current = null) {
   const line = String(text || '').toLowerCase();
   if (/\bbuild it\b|\bimplement\b/.test(line)) return { agent: 'build', sure: 0.9 };
   if (/\bpapers?\b|\bread\b|\breading\b|prior work/.test(line)) return { agent: 'discover', sure: 0.9 };
   if (/\bthink\b|\bunsure\b/.test(line)) return { agent: 'brainstorm', sure: 0.9 };
-  return { agent: 'chat', sure: 0.9 };
+  return { agent: currentOf(current) || 'chat', sure: 0.9 };
 }
 
 function createFakeRouter({ runLog = null, now = Date.now } = {}) {
   const log = logTo(runLog);
-  return routerOf({ log, now, pick: async (input, text) => ({ parsed: fakePick(text), step: { provider: 'fake', key: 'fake', id: 'fake', name: 'Fake', effort: 'low' }, raw: JSON.stringify(fakePick(text)) }) });
+  return routerOf({ log, now, pick: async (input, text, current) => ({ parsed: fakePick(text, current), step: { provider: 'fake', key: 'fake', id: 'fake', name: 'Fake', effort: 'low' }, raw: JSON.stringify(fakePick(text, current)) }) });
 }
 
-/** What both routers share: the rule's or the model's pick, logged. `pick(input, text)` → { parsed, step, raw, error? }. */
+/** What both routers share: the rule's or the model's pick, logged. `pick(input, text, current)` → { parsed, step, raw, error? }. */
 function routerOf({ log, now, pick }) {
-  async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, rule = null, place = null } = {}) {
+  async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, current = null, rule = null, place = null } = {}) {
     const id = `route-${randomUUID()}`, started = now();
     if (rule && RULE_PICKS.has(rule.agent)) {
       log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, by: 'rule', rule: rule.rule || null, place })));
@@ -212,11 +226,11 @@ function routerOf({ log, now, pick }) {
       log((runs) => { runs.amend(id, { pick: out.agent, sure: 1 }); runs.finish(id, { status: 'done', written: [`@${out.agent}`], ms: out.ms }); });
       return out;
     }
-    const input = routeInput({ text, section, workspaceName, threads, specAbove });
-    log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, input, by: 'model', place })));
-    const { parsed, step, raw, error } = await pick(input, text);
+    const input = routeInput({ text, section, workspaceName, threads, specAbove, current });
+    log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, current, input, by: 'model', place })));
+    const { parsed, step, raw, error } = await pick(input, text, current);
     if (step) log((runs) => { runs.step(id, { model: step.id, name: step.name, effort: step.effort, input }); runs.output(id, { raw }); });
-    const { agent, sure } = decide(parsed);
+    const { agent, sure } = decide(parsed, current);
     const out = { id, agent, sure, model: step ? { provider: step.provider, name: step.name, id: step.id, effort: step.effort } : null, ms: now() - started, by: 'model', ...(error ? { error } : {}) };
     log((runs) => {
       runs.amend(id, { provider: step ? step.provider : null, pick: agent, sure, ...(parsed ? {} : { unread: true }) });
@@ -233,4 +247,4 @@ function routerOf({ log, now, pick }) {
   };
 }
 
-module.exports = { createRouter, createFakeRouter, routeInput, parseReply, decide, routeModel, sectionText, threadsOf, fakePick, markCorrected, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH, PICKS };
+module.exports = { createRouter, createFakeRouter, routeInput, parseReply, decide, routeModel, sectionText, threadsOf, fakePick, markCorrected, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH, SURE_TO_SWITCH, PICKS };

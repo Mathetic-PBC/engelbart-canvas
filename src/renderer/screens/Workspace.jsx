@@ -643,15 +643,17 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     }
   }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow, tickWalk, handOff, buildFrom]);
 
-  // Bart, the router (2026-10-12; main/bart/route.cjs): which agent an `@bart` line is for. Its pending line says
-  // "Choosing an agent…" until the editor hands the line over (DocEditor handOff), which asks under the same id. A rule's
-  // pick (`rule`) is only logged. Failing, the line goes to Chat (or to its rule's agent), the pick saying `by: 'error'`
-  // and why, so the run it is handed to shows the classifier failed rather than that it chose Chat (DocEditor handOff).
-  const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, rule, place = null }, ref = null) => {
-    setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: 'router', activity: 'Choosing an agent…' } }));
-    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: 'chat', sure: 0, by: 'none' };
+  // Bart, the router (2026-10-12; main/bart/route.cjs): which agent an `@bart` line is for. Its pending line says what
+  // the editor's says for any run ("Thinking", 2026-10-13) until the editor hands the line over (DocEditor handOff), which
+  // asks under the same id. A rule's pick (`rule`) is only logged. `current` is the agent a follow-up's conversation is
+  // with (route.js routeInputs), which Bart stays with unless the line clearly wants another. Failing, the line goes to
+  // that agent, else Chat (or to its rule's agent), the pick saying `by: 'error'` and why, so the run it is handed to
+  // shows the classifier failed rather than that it chose Chat (DocEditor handOff).
+  const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, rule, current = null, place = null }, ref = null) => {
+    setAsks((held) => ({ ...held, [askId]: { docKey: key, agent: 'router' } }));
+    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: current || 'chat', sure: 0, by: 'none' };
     try {
-      return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, rule, ...(ref ? { ref } : {}), ...(place ? { place } : {}) })) || fallback;
+      return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, rule, ...(current ? { current } : {}), ...(ref ? { ref } : {}), ...(place ? { place } : {}) })) || fallback;
     } catch (error) {
       console.warn('Bart could not route the line:', error);
       return { ...fallback, by: 'error', error: errorMessage(error) };
