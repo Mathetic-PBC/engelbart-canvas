@@ -447,6 +447,7 @@ export default function Rail({
   project, onOpenProject, onNewProject, onAllProjects, onRenameProject,
   roots = [], hereId = null, recent = [], agents = [], builds = [],
   onSelectWorkspace, onCreateWorkspace, onRenameWorkspace, onDeleteWorkspace, onOpenVersion, onSeenAll,
+  onRejectAgent = null, // (buildId): a Build's Reject from its Agents row. The panel closes first, as the card's confirmation opens under it
   connectSessions = [], onOpenConnect = () => {},
   rows = [], activeRowId = null, flashId = null, starred = [], onStar,
   library = [], inRail = () => false, onOpenRow, onRenameRow, onRemoveRow, onLinkRow, onOpenHeld, onDropItems,
@@ -795,7 +796,7 @@ export default function Rail({
         // a finished Connect is seen once it is cleared; one that needs you stays until it is answered
         for (const entry of connectNotes) { const session = connectSessions.find((each) => each.id === entry.sessionId); if (session && dockLine(session).tone === 'done') api.connectDismiss(entry.sessionId).catch(() => {}); }
       }} onClose={close} ignore={ignore('inbox')} />}
-      {panel && panel.kind === 'agents' && <AgentsPanel anchor={panel.anchor} groups={agentList} nameOf={nameOf} onGo={goAgent} onClose={close} ignore={ignore('agents')} />}
+      {panel && panel.kind === 'agents' && <AgentsPanel anchor={panel.anchor} groups={agentList} nameOf={nameOf} onGo={goAgent} onReject={onRejectAgent ? (id) => { close(); onRejectAgent(id); } : null} onClose={close} ignore={ignore('agents')} />}
       {panel && panel.kind === 'connections' && <ConnectionsPanel anchor={panel.anchor} onOverleaf={() => onOpenLink(OVERLEAF_URL)} onClose={close} ignore={ignore('connections')} />}
       {panel && panel.kind === 'library' && <LibraryPanel key={panel.chip || 'all'} anchor={panel.anchor} chip={panel.chip} projectId={project.id} library={library} inRail={inRail} onOpen={(row) => onOpenRow(row)} onLink={onLinkRow} onAddInput={onAddInput} onOpenFull={onAllProjects} onOpenWorkspace={onOpenHeld} onClose={close} ignore={ignore('library')} />}
       {panel && panel.kind === 'add' && (

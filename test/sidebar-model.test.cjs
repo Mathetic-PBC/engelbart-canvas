@@ -151,6 +151,20 @@ test('Agents: inline questions still running, and the Builds by where they stand
   assert.deepEqual(groups.done.map((entry) => [entry.id, entry.kind, entry.state]), [['build:b3', 'quick', 'Accepted']]);
 });
 
+test('Agents: only a Build waiting on you can be rejected from its row; not one at work, being accepted or done', async () => {
+  const { agentGroups, canReject } = await load();
+  const waitingStatuses = ['needs-you', 'review', 'stopped', 'failed', 'escalated', 'interrupted', 'conflict'];
+  const others = ['setting-up', 'queued', 'running', 'accepting', 'accepted', 'discarded'];
+  const builds = [...waitingStatuses, ...others].map((status, i) => ({ id: `b${i}`, kind: 'build', projectId: 'p', workspaceId: 'sb', title: status, status, updated: at(i) }));
+  const agents = [{ id: 'q1', kind: 'bart', projectId: 'p', workspaceId: 'sb', status: 'running', started: at(1) }];
+  const groups = agentGroups({ agents, builds, projectId: 'p' });
+  assert.deepEqual(groups.waiting.map((entry) => entry.task.status).sort(), [...waitingStatuses].sort());
+  assert.ok(groups.waiting.every(canReject), 'every Waiting row offers Reject');
+  assert.ok(![...groups.running, ...groups.done].some(canReject), 'no Running or Done row does');
+  assert.equal(canReject({ id: 'build:x', task: { id: 'x', status: 'accepting' } }), false, 'discard() refuses a Build being accepted');
+  assert.equal(canReject({ id: 'agent:q1', kind: 'bart' }), false, 'an inline ask has no Reject');
+});
+
 test('archived versions of every workspace, newest first; sinceWords', async () => {
   const { archivedVersions, sinceWords } = await load();
   const roots = [{ id: 'a', name: 'A', archives: [{ file: '1.md', title: 'First', clearedAt: at(300) }], children: [{ id: 'b', name: 'B', archives: [{ file: '2.md', title: '', clearedAt: at(10) }], children: [] }] }];

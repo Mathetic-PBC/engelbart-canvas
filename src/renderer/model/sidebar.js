@@ -224,6 +224,15 @@ export function agentGroups({ agents = [], builds = [], projectId }) {
   return { running: running.sort(newest), waiting: waiting.sort(newest), done: done.sort(newest).slice(0, DONE_SHOWN) };
 }
 
+/**
+ * Whether an Agents row can reject its Build (the X on a "Waiting on you" row): a Build that waits on you. Not one at
+ * work or being accepted (discard refuses it), not one done, and not an inline ask.
+ */
+export function canReject(entry) {
+  const status = entry && entry.task && entry.task.status;
+  return !!status && !BUILD_WORKING.has(status) && !BUILD_DONE.has(status);
+}
+
 /** How long ago, in words: "just now", "4 min ago", "2 h ago", "3 d ago"; '' for no time. */
 export function sinceWords(iso, now = Date.now()) {
   const then = time(iso);

@@ -12,7 +12,7 @@ import { isUntitled } from '../model/names.js';
 import { libraryPanelRows, looksAddable, searchRows } from '../model/rail.js';
 import { LIBRARY_CHIPS, libraryCounts } from '../model/kind.js';
 import { findWorkspaces } from '../model/nav.js';
-import { sinceWords } from '../model/sidebar.js';
+import { canReject, sinceWords } from '../model/sidebar.js';
 import { NotificationRows, useBuildNotifications } from '../ui/SandboxNotifications.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
 import { useBodies } from './useBodies.js';
@@ -300,8 +300,11 @@ export function InboxPanel({ anchor, entries, nameOf, onGo, onClear, onClose, ig
 
 /* ----------------------------------------------------------------- Agents */
 
-/** The project's agents by where they stand: running, waiting on you, done. A press goes to where each was asked. */
-export function AgentsPanel({ anchor, groups, nameOf, onGo, onClose, ignore }) {
+/**
+ * The project's agents by where they stand: running, waiting on you, done. A press goes to where each was asked; a Build
+ * waiting on you also offers Reject on its hover, which hands `onReject` its bare id (the card's Reject asks to confirm).
+ */
+export function AgentsPanel({ anchor, groups, nameOf, onGo, onReject = null, onClose, ignore }) {
   const total = groups.running.length + groups.waiting.length + groups.done.length;
   const where = (entry) => (entry.workspaceId ? nameOf(entry.workspaceId) || 'A workspace' : entry.kind === 'quick' ? 'A post-it' : '');
   const row = (entry) => (
@@ -312,6 +315,7 @@ export function AgentsPanel({ anchor, groups, nameOf, onGo, onClose, ignore }) {
       title={entry.title}
       meta={[where(entry), entry.state, sinceWords(entry.at)].filter(Boolean).join(' · ')}
       onClick={() => onGo(entry)}
+      actions={onReject && canReject(entry) ? <RowAction label="Reject" onClick={() => onReject(entry.task.id)} data-agent-reject={entry.task.id}><I.CloseIcon size={14} /></RowAction> : null}
     />
   );
   return (

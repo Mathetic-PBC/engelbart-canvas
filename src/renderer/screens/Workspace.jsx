@@ -1944,6 +1944,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onRenameWorkspace={renameWorkspace}
           onDeleteWorkspace={deleteTopic}
           onOpenVersion={(version) => { goToVersion(version.workspaceId, { file: version.file, title: version.title }).catch(onError); }}
+          onRejectAgent={(id) => { void onBuildAction(id, 'reject'); }}
           onSeenAll={(ids) => { for (const id of ids) api.seenAgents(project.id, id).catch(() => {}); }}
           connectSessions={connectSessions}
           onOpenConnect={onOpenConnect}
