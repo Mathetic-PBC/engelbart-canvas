@@ -1016,3 +1016,12 @@ test('a line being routed names, from the start, the level it would start on; th
   assert.match(workspace, /\[askId\]: askProgressed\(ask, progress\)/);
   assert.ok(workspace.includes("activity: 'Starting a Build'"));
 });
+
+test('routeInputs: a Build card under its --build line, titled or not, is no answer to route by: the spec above and no current conversation, as before (2026-10-13)', async () => {
+  const { routeInputs } = await loadRoute();
+  for (const head of [[], ['bart# [chat build 2026-10-13T09:00:00Z] X']]) {
+    const lines = [...SPEC, '', ...head, '@bart --build make X', 'build> abc0123456', '@bart build that'];
+    const got = routeInputs(lines, lines.length - 1);
+    assert.deepEqual([got.specAbove, got.spec, got.current], [true, 'Add Haiku 5.5 to models.cjs.', null], head.length ? 'titled' : 'untitled');
+  }
+});

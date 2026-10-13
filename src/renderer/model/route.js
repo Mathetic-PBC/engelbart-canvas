@@ -88,7 +88,9 @@ export function routeInputs(lines, at) {
   // The threads begun above, the one the line goes on with among them (2026-10-13: an `@bart` line asked under a thread is
   // its next turn, doc.js followsIn), each read up to the line.
   const above = threads(lines, ps).filter((thread) => thread.from < at);
-  const said = (thread) => thread.turns.filter((turn) => turn.q < at && turn.answered && !turn.pending);
+  // A Build card under its `--build` line is that turn's answer (doc.js threads, 2026-10-13), but no answer to route by:
+  // the spec above and the conversation a line goes on with are read as they were before it counted.
+  const said = (thread) => thread.turns.filter((turn) => turn.q < at && turn.answered && !turn.pending && !turn.build);
   const list = above.map((thread) => ({ agent: tokenOf(answeredBy(thread)), question: questionLine(turnText(lines, thread.turns[0]).question), up: at - thread.from }));
   let spec = null;
   const near = [...above].reverse().find((thread) => thread.from >= start && said(thread).length);
@@ -97,7 +99,8 @@ export function routeInputs(lines, at) {
     const fences = answerFences(turnText(lines, turn).answer);
     if (fences.length) spec = fences[fences.length - 1];
   }
-  const into = above.find((thread) => thread.to === at - 1 || thread.turns.some((turn) => turn.q === at));
+  const built = (thread) => !!thread.turns[thread.turns.length - 1].build;
+  const into = above.find((thread) => (thread.to === at - 1 && !built(thread)) || thread.turns.some((turn) => turn.q === at));
   const agent = into ? answeredBy(into) : null;
   const current = agent === 'bart' || agent === 'brainstorm' || agent === 'discover' ? tokenOf(agent) : null;
   const specTitle = spec != null ? questionLine(spec.split('\n').find((line) => line.trim()) || '') : '';

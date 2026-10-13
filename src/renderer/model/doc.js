@@ -553,12 +553,12 @@ export const answeredBy = (thread) => {
  * `agent` the thread's (answeredBy: 'bart', 'brainstorm' or 'discover'), `asked` its first line's, `routedTo`, `at` and
  * `build` what its title line keeps (Bart's first pick); and for a thread begun under a title line (2026-10-12) `title`
  * its text, `titleLine` its index (-1 and null without one) and `folded` whether the thread is collapsed to it; `from` is
- * always the first question's line. Each turn { q, from, to, answered, pending, foot, folded, agent } where `from..to`
+ * always the first question's line. Each turn { q, from, to, answered, pending, foot, folded, agent, build } where `from..to`
  * are the lines under the question (to === q when there are none), `pending` is the id of a run still working, `foot` the
  * closing line that says which model answered (-1 without one), `build` the id of the Build card that stands directly
- * under the question as its answer (an `@bart --build` line's; no turn follows it), and `agent` the agent that answered
- * it: the one its closing line names, else the one its line asks, else (an `@bart` line opening a thread) the title
- * line's; null for an `@bart` turn none of them names (pending, or failed).
+ * under the question as its answer (an `@bart --build` line's; no turn follows it; absent otherwise), and `agent` the agent
+ * that answered it: the one its closing line names, else the one its line asks, else (an `@bart` line opening a thread)
+ * the title line's; null for an `@bart` turn none of them names (pending, or failed).
  */
 export function threads(lines, ps = parseLines(lines)) {
   const out = [];

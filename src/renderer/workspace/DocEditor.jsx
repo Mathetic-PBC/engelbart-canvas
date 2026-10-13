@@ -572,11 +572,15 @@ export default class DocEditor extends React.Component {
   showLine(i) {
     const box = this.scrollRef.current, ed = this.editorEl(); if (!box || !ed) return false;
     // A line inside a collapsed conversation (a Build's card, 2026-10-13) is not on the page: the conversation is expanded
-    // first, and the caller asks again once it is drawn (Workspace revealAsk).
+    // first, and the caller asks again once it is drawn (Workspace revealAsk). Opened on purpose, it is no longer waited
+    // on by autoCollapse, which would fold it again when its Build's record arrives.
     const ls = this.lines();
     if (this.collapsedOf(ls).has(i)) {
       const thread = threads(ls, this.parsedOf(ls)).find((t) => t.titleLine >= 0 && t.folded && i >= t.from && i <= t.to);
-      if (thread && !this.props.readOnly) this.toggleThread(thread.titleLine);
+      if (thread && !this.props.readOnly) {
+        if (this.autoWait) thread.turns.forEach((turn) => turn.build && this.autoWait.ids.delete(turn.build));
+        this.toggleThread(thread.titleLine);
+      }
       return false;
     }
     const d = ed.querySelector(`[data-line="${i}"]`); if (!d) return false;
@@ -2639,7 +2643,8 @@ export default class DocEditor extends React.Component {
   //     line stays, its card under it.
   //   build otherwise: asked of Chat, told it is wanted built (routed.build, ` build` on the title line), so it writes the
   //     Build prompt.
-  //   `--build` on the line (a rule): a Build of the line, as `@chat --build` makes (Workspace askBart).
+  //   `--build` on the line (a rule): a Build of the line, as `@chat --build` makes (Workspace askBart); one starting a
+  //     conversation gets a title line marked a Build's (2026-10-13), and its card collapses with it.
   // A pick made because routing failed (`by: 'error'`, Workspace routeLine) says so in `routed`, for the run's record.
   handOff(askId, pick) {
     const ls = this.lines(), at = ls.indexOf(`bart~> ${askId}`), q = at - 1, p = q >= 0 ? parseLine(ls[q]) : null;
@@ -3055,7 +3060,7 @@ export default class DocEditor extends React.Component {
   // Expand all also opens the turns a follow-up collapsed in a titled conversation (sendFollow).
   foldAll(to) {
     const items = this.foldable(this.lines()); if (!items.length) return;
-    const inTitled = to ? [] : threads(this.lines(), this.parsedOf(this.lines())).filter((t) => t.titleLine >= 0).flatMap((t) => t.turns.filter((turn) => turn.answered && !turn.pending));
+    const inTitled = to ? [] : threads(this.lines(), this.parsedOf(this.lines())).filter((t) => t.titleLine >= 0).flatMap((t) => t.turns.filter((turn) => turn.answered && !turn.pending && !turn.build));
     const turns = [...items.filter((item) => item.turn).map((item) => item.turn), ...inTitled], titles = new Set(items.filter((item) => item.title != null).map((item) => item.title));
     const under = (j) => turns.some((turn) => j >= turn.from && j <= turn.to);
     this.titleEdit = null;

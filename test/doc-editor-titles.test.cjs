@@ -103,6 +103,11 @@ test('no title for a follow-up, a question under an older conversation, or one w
   assert.equal(titled.asks[0].name, undefined);
   assert.deepEqual(titled.lines().slice(0, 2), ['bart# Mine', '@chat why?']);
 
+  // A Build request gets one too (2026-10-13), marked a Build's.
+  const build = mounted(['@chat --build make it', '']);
+  build.editor.askInline(0);
+  assert.match(build.lines()[0], /^bart# \[chat build \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\] $/);
+  assert.equal(build.asks[0].name, true);
 });
 
 test('an @ line typed under an answer starts a conversation of its own: an empty line and its title line above it, in one change; the reply field still adds a follow-up (2026-10-13)', async () => {
@@ -683,4 +688,16 @@ test('revealing a line inside a collapsed conversation expands it first', () => 
   m.editor.edRef = { current: { ...m.editor.edRef.current, querySelector: () => ({}) } };
   assert.equal(m.editor.showLine(3), false, 'not on the page yet');
   assert.equal(m.lines()[1], BUILD_DOC[1], 'expanded');
+});
+
+test('a Build conversation opened from the Agents dropdown before its record loads stays open when the record arrives', () => {
+  // Folded once it finished; revealed from the dropdown, then its record arrives again: it stays open.
+  const w = mounted(['Notes', `${BUILD_DOC[1].replace('bart#', 'bart#+')}`, ...BUILD_DOC.slice(2)], { autoCollapse: true, builds: {} });
+  w.props.builds = { [BUILT]: task('review') }; w.editor.componentDidUpdate({ ...w.props, builds: {} }, w.editor.state);
+  w.editor.edRef = { current: { ...w.editor.edRef.current, querySelector: () => null } };
+  w.props.builds = { [BUILT]: task('accepted') };
+  assert.equal(w.editor.showLine(3), false);
+  assert.equal(w.lines()[1], BUILD_DOC[1], 'expanded to show it');
+  w.editor.componentDidUpdate({ ...w.props, builds: { [BUILT]: task('review') } }, w.editor.state);
+  assert.equal(w.lines()[1], BUILD_DOC[1], 'left open');
 });
