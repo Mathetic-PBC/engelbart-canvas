@@ -1,0 +1,234 @@
+'use strict';
+
+// Bart, the router (2026-10-12). An `@bart` line is no longer a question for one agent: Bart picks @chat (the agent the
+// app calls 'bart'), @brainstorm, @discover or Build, the editor rewrites the line to that agent and asks it, and Bart
+// steps aside. The editor tries its rules first (src/renderer/model/route.js routeByRule); a line no rule settles comes
+// here, and the default provider's fastest model (Haiku on Claude Code, Luna on Codex) is asked at low effort, with no
+// tools and no session, which agent it is for. Anything that goes wrong (bad JSON, a timeout, an error) or a pick it is
+// less than 0.6 sure of goes to chat: a misrouted line costs more than a plain answer.
+//
+// What it is sent: the line, its section (from the nearest heading above to the line, the last 4,000 characters, agent
+// replies left out as for @brainstorm, ./strip.cjs), the last five threads above (agent, the first 80 characters of the
+// question, how many lines up), and whether the nearest answer above holds a fenced block. Never the library,
+// context_json or a mentioned file.
+//
+// Every pick is a run in the Agent map's log (./runlog.cjs) under agent 'router', a rule's pick too (by: 'rule'); the run
+// it hands the line to names it by `routedFrom`, and a pick the person corrects is marked `corrected`.
+
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
+const { execFile } = require('node:child_process');
+const { randomUUID } = require('node:crypto');
+const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
+const { scrubAgentSession } = require('../shell-rc.cjs');
+const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
+const { TOOL_OF } = require('../tools/requirements.cjs');
+const { stripAgentReplies } = require('./strip.cjs');
+const { ROUTE_SYSTEM_PROMPT } = require('./route-system-prompt.cjs');
+
+const ROUTE_TIMEOUT_MS = 20_000;
+const SECTION_CHARS = 4000;
+const MAX_THREADS = 5;
+const QUESTION_CHARS = 80;
+const SURE_ENOUGH = 0.6;
+const PICKS = ['chat', 'brainstorm', 'discover', 'build'];
+const RULE_PICKS = new Set(PICKS);
+
+const clean = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
+
+/** The section as the model sees it: agent replies left out, the last 4,000 characters. */
+function sectionText(section) {
+  const text = stripAgentReplies(String(section || ''), 'router');
+  return text.length > SECTION_CHARS ? text.slice(text.length - SECTION_CHARS) : text;
+}
+
+/** The threads above as the model sees them: the last five, each { agent, question (80 characters), up }. */
+function threadsOf(threads) {
+  if (!Array.isArray(threads)) return [];
+  return threads.slice(-MAX_THREADS).map((thread) => ({
+    agent: clean(thread && thread.agent, 20) || 'chat',
+    question: clean(thread && thread.question, QUESTION_CHARS),
+    up: Math.max(0, Math.floor(Number(thread && thread.up) || 0)),
+  }));
+}
+
+/** What the model is sent: the line, its section, the threads above and whether a spec is above. Nothing else. */
+function routeInput({ text, section, workspaceName = '', threads = [], specAbove = false }) {
+  const list = threadsOf(threads);
+  const threadLines = list.length ? list.map((thread) => `- @${thread.agent}, ${thread.up} line${thread.up === 1 ? '' : 's'} up: ${JSON.stringify(thread.question)}`).join('\n') : '(none)';
+  return [
+    workspaceName ? `<workspace>${clean(workspaceName, 200)}</workspace>` : '',
+    `<section>\n${sectionText(section)}\n</section>`,
+    `<threads>\n${threadLines}\n</threads>`,
+    `<spec_above>${specAbove ? 'yes' : 'no'}</spec_above>`,
+    `<line>\n${String(text || '').trim()}\n</line>`,
+  ].filter(Boolean).join('\n\n');
+}
+
+/** { agent, sure } from the model's reply, or null when it holds no such object. */
+function parseReply(raw) {
+  const text = String(raw || '');
+  const found = text.match(/\{[^{}]*\}/g) || [];
+  for (const candidate of found) {
+    let value = null;
+    try { value = JSON.parse(candidate); } catch { continue; }
+    const agent = value && String(value.agent || '').toLowerCase().replace(/^@/, '');
+    const sure = Number(value && value.sure);
+    if (PICKS.includes(agent) && Number.isFinite(sure)) return { agent, sure: Math.max(0, Math.min(1, sure)) };
+  }
+  return null;
+}
+
+/** The pick a reply comes to: its agent when it is sure enough, else chat. */
+function decide(parsed) {
+  if (!parsed) return { agent: 'chat', sure: 0 };
+  return parsed.sure < SURE_ENOUGH ? { agent: 'chat', sure: parsed.sure } : parsed;
+}
+
+/** The model a line is routed on: the default provider's first model, at low effort (or its lowest). */
+function routeModel(models) {
+  const provider = models && models.provider === 'openai' ? 'openai' : 'anthropic';
+  const entry = models && models.providers && models.providers[provider];
+  const keys = entry && entry.models ? Object.keys(entry.models) : [];
+  if (!keys.length) return null;
+  const model = entry.models[keys[0]];
+  const efforts = Array.isArray(entry.efforts) ? entry.efforts : [];
+  return { provider, key: keys[0], id: model.id, name: model.name || keys[0], effort: efforts.includes('low') || !efforts.length ? 'low' : efforts[0] };
+}
+
+const logTo = (runLog) => (call) => { if (!runLog) return; try { call(runLog); } catch { /* the log only */ } };
+
+/** The router's record, as the run log starts it. */
+function routerRecord({ id, provider, projectId, workspaceName, text, section, threads, specAbove, input, by, rule }) {
+  return {
+    id, agent: 'router', provider: provider || null, projectId, projectName: '', workspaceName: workspaceName || '',
+    question: String(text || ''), at: Date.now(), status: 'running', system: by === 'rule' ? '' : ROUTE_SYSTEM_PROMPT, mode: null, pinned: false,
+    by, ...(rule ? { rule } : {}), sectionSize: sectionText(section).length, threads: threadsOf(threads), specAbove: !!specAbove,
+    context: { input: input || '' }, steps: [],
+  };
+}
+
+/** Marks a router record corrected: the person picked `agent` instead. By id, else the newest router record with this line. */
+function markCorrected(runs, { id = null, projectId = null, text = '', agent }) {
+  if (!runs || !agent) return;
+  const target = id || (runs.find ? (runs.find((record) => record.agent === 'router' && record.question === String(text || '').trim() && (!projectId || record.projectId === projectId)) || {}).id : null);
+  if (target) runs.amend(target, { corrected: agent });
+}
+
+/**
+ * → { route, corrected, handed }. `route({ projectId, text, section, workspaceName, threads, specAbove, rule })` →
+ * { id, agent, sure, model, ms, by }: with `rule` (the editor's own pick) it is only logged.
+ */
+function createRouter({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-router'), codexAuthFile, run = execFile, tools = null, runLog = null, timeout = ROUTE_TIMEOUT_MS, now = Date.now } = {}) {
+  const log = logTo(runLog);
+  const shell = resolveShell(environment);
+  const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
+  const programEnv = (name) => (tools && tools.binaryFor(name) ? { [`ENGELBART_${name.toUpperCase()}_BIN`]: tools.binaryFor(name) } : {});
+  const childEnvironment = (extra) => {
+    const base = sanitizeEnvironment(scrubAgentSession(environment));
+    for (const key of NOT_THE_SUBSCRIPTION) delete base[key];
+    return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra };
+  };
+  const execute = (command, env) => new Promise((resolve) => {
+    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout, maxBuffer: 4 * 1024 * 1024 }, (error, out) => resolve({ stdout: out, failure: error }));
+  });
+
+  // Every flag is a literal and every value arrives through the environment, as for summaries (../context/summarizer.cjs).
+  async function viaClaudeCode(step, stem) {
+    const promptFile = `${stem}.system.md`;
+    fs.writeFileSync(promptFile, ROUTE_SYSTEM_PROMPT, { mode: 0o600 });
+    try {
+      const command = `exec ${program('claude')} -p --output-format json --no-session-persistence --setting-sources "" --strict-mcp-config --tools "" --model "$ENGELBART_ROUTE_MODEL" --effort ${step.effort} --system-prompt-file "$ENGELBART_ROUTE_PROMPT" < "$ENGELBART_ROUTE_INPUT"`;
+      const { stdout, failure } = await execute(command, childEnvironment({ ...programEnv('claude'), ENGELBART_ROUTE_MODEL: step.id, ENGELBART_ROUTE_PROMPT: promptFile, ENGELBART_ROUTE_INPUT: `${stem}.input.txt` }));
+      const result = lastResultLine(stdout);
+      if (!result || result.is_error || typeof result.result !== 'string') throw new Error(result ? String(result.result || result.subtype || 'no text') : `Claude Code returned no result${failure ? ` (${failure.message.split('\n')[0]})` : ''}`);
+      return result.result;
+    } finally {
+      try { fs.unlinkSync(promptFile); } catch { /* already gone */ }
+    }
+  }
+
+  async function viaCodex(step, stem) {
+    const source = codexAuthFile || path.join(environment.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
+    if (!prepareCodexHome({ codexHome, source, instructions: ROUTE_SYSTEM_PROMPT })) throw new Error('Codex is not signed in with a ChatGPT account');
+    const outFile = `${stem}.out.txt`;
+    try {
+      const command = `exec ${program('codex')} exec --skip-git-repo-check --ephemeral -s read-only -m "$ENGELBART_ROUTE_MODEL" -c 'model_reasoning_effort="${step.effort}"' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_ROUTE_OUTPUT" - < "$ENGELBART_ROUTE_INPUT"`;
+      const { failure } = await execute(command, childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_ROUTE_MODEL: step.id, ENGELBART_ROUTE_OUTPUT: outFile, ENGELBART_ROUTE_INPUT: `${stem}.input.txt` }));
+      let text = '';
+      try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
+      if (!text.trim()) throw new Error(failure ? failure.message.split('\n')[0] : 'Codex returned no message');
+      return text;
+    } finally {
+      try { fs.unlinkSync(outFile); } catch { /* none */ }
+    }
+  }
+
+  async function ask(step, input) {
+    fs.mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
+    const stem = path.join(runDirectory, `route-${randomUUID()}`);
+    fs.writeFileSync(`${stem}.input.txt`, input, { mode: 0o600 });
+    const go = () => (step.provider === 'openai' ? viaCodex : viaClaudeCode)(step, stem);
+    try { return tools ? await tools.use(TOOL_OF[step.provider], go) : await go(); }
+    finally { try { fs.unlinkSync(`${stem}.input.txt`); } catch { /* already gone */ } }
+  }
+
+  return routerOf({ log, now, pick: async (input) => {
+    const step = routeModel(readModels ? readModels() : null);
+    if (!step) return { parsed: null, step: null, raw: '', error: 'no model to route on' };
+    try {
+      const raw = await ask(step, input);
+      return { parsed: parseReply(raw), step, raw };
+    } catch (error) {
+      return { parsed: null, step, raw: '', error: error && error.message ? error.message : String(error) };
+    }
+  } });
+}
+
+/** The router without a model (ENGELBART_BART_FAKE=1): it picks by keyword, as the model is asked to. */
+function fakePick(text) {
+  const line = String(text || '').toLowerCase();
+  if (/\bbuild it\b|\bimplement\b/.test(line)) return { agent: 'build', sure: 0.9 };
+  if (/\bpapers?\b|\bread\b|\breading\b|prior work/.test(line)) return { agent: 'discover', sure: 0.9 };
+  if (/\bthink\b|\bunsure\b/.test(line)) return { agent: 'brainstorm', sure: 0.9 };
+  return { agent: 'chat', sure: 0.9 };
+}
+
+function createFakeRouter({ runLog = null, now = Date.now } = {}) {
+  const log = logTo(runLog);
+  return routerOf({ log, now, pick: async (input, text) => ({ parsed: fakePick(text), step: { provider: 'fake', key: 'fake', id: 'fake', name: 'Fake', effort: 'low' }, raw: JSON.stringify(fakePick(text)) }) });
+}
+
+/** What both routers share: the rule's or the model's pick, logged. `pick(input, text)` → { parsed, step, raw, error? }. */
+function routerOf({ log, now, pick }) {
+  async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, rule = null } = {}) {
+    const id = `route-${randomUUID()}`, started = now();
+    if (rule && RULE_PICKS.has(rule.agent)) {
+      log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, by: 'rule', rule: rule.rule || null })));
+      const out = { id, agent: rule.agent, sure: 1, model: null, ms: now() - started, by: 'rule', rule: rule.rule || null };
+      log((runs) => { runs.amend(id, { pick: out.agent, sure: 1 }); runs.finish(id, { status: 'done', written: [`@${out.agent}`], ms: out.ms }); });
+      return out;
+    }
+    const input = routeInput({ text, section, workspaceName, threads, specAbove });
+    log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, input, by: 'model' })));
+    const { parsed, step, raw, error } = await pick(input, text);
+    if (step) log((runs) => { runs.step(id, { model: step.id, name: step.name, effort: step.effort, input }); runs.output(id, { raw }); });
+    const { agent, sure } = decide(parsed);
+    const out = { id, agent, sure, model: step ? { provider: step.provider, name: step.name, id: step.id, effort: step.effort } : null, ms: now() - started, by: 'model', ...(error ? { error } : {}) };
+    log((runs) => {
+      runs.amend(id, { provider: step ? step.provider : null, pick: agent, sure, ...(parsed ? {} : { unread: true }) });
+      runs.finish(id, { status: error ? 'failed' : 'done', written: [`@${agent}`], error: error || null, ms: out.ms });
+    });
+    return out;
+  }
+  return {
+    route,
+    /** The person picked `agent` instead of the router's pick. */
+    corrected: (target) => log((runs) => markCorrected(runs, target)),
+    /** Where the line went, when it was not an ask: a Build's id. */
+    handed: (id, to) => { if (id && to) log((runs) => runs.amend(id, { handedTo: String(to) })); },
+  };
+}
+
+module.exports = { createRouter, createFakeRouter, routeInput, parseReply, decide, routeModel, sectionText, threadsOf, fakePick, markCorrected, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH, PICKS };

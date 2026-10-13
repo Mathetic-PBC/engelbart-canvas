@@ -96,8 +96,9 @@ test('parseLine classifies headings, bart, quote, image and paragraphs', async (
   const { parseLine } = await load();
   assert.deepEqual(parseLine('## Title'), { type: 'h', level: 2, text: 'Title' });
   assert.deepEqual(parseLine('#### not a heading'), { type: 'p', text: '#### not a heading' });
-  assert.deepEqual(parseLine('@bart hi there'), { type: 'bart', text: 'hi there' });
-  assert.deepEqual(parseLine('@bart'), { type: 'bart', text: '' });
+  assert.deepEqual(parseLine('@chat hi there'), { type: 'bart', text: 'hi there' }, '@chat asks the agent called bart (2026-10-12)');
+  assert.deepEqual(parseLine('@bart hi there'), { type: 'bart', text: 'hi there', agent: 'router' }, '@bart is the router');
+  assert.deepEqual(parseLine('@bart'), { type: 'bart', text: '', agent: 'router' });
   assert.deepEqual(parseLine('> quoted'), { type: 'quote', text: 'quoted' });
   assert.deepEqual(parseLine('>tight'), { type: 'quote', text: 'tight' });
   assert.deepEqual(parseLine('![alt](https://x.y/z.png)'), { type: 'img', text: 'alt', src: 'https://x.y/z.png' });
@@ -414,15 +415,15 @@ test('the @ menu\'s query is the @ and what follows it up to the caret, on a lin
   assert.equal(mentionAt(null, 0), null);
 });
 
-test('a follow-up sent with a mention is an @bart line whose mention draws as one, under the same thread (2026-10-02)', async () => {
+test('a follow-up sent with a mention is an @chat line whose mention draws as one, under the same thread (2026-10-02)', async () => {
   const { parseLine, threads, inlineHtml, INLINE, wsMention } = await load();
   const ws = wsMention('Other place', '0a1b2c3d-0000-4000-8000-000000000000');
-  const sent = `@bart --opus --high and @[Plan] with ${ws}?`; // sendFollow's line: the agent, the flags, the field's words
+  const sent = `@chat --opus --high and @[Plan] with ${ws}?`; // sendFollow's line: the agent, the flags, the field's words
   assert.deepEqual(parseLine(sent), { type: 'bart', text: `--opus --high and @[Plan] with ${ws}?` });
   const tokens = sent.split(INLINE).filter(Boolean);
   assert.ok(tokens.includes('@[Plan]') && tokens.includes(ws));
   assert.match(inlineHtml('@[Plan]'), /^<span data-mention="Plan"/);
-  const doc = ['@bart why?', 'bart> Because.', 'bart> *Sonnet · high · 3 s*', sent, 'bart~> a2', ''];
+  const doc = ['@chat why?', 'bart> Because.', 'bart> *Sonnet · high · 3 s*', sent, 'bart~> a2', ''];
   assert.deepEqual(threads(doc).map((thread) => thread.turns.map((turn) => turn.q)), [[0, 3]], 'it joins the card it was asked under');
 });
 
@@ -443,7 +444,7 @@ test('@brainstorm is an @bart line asked of another agent: with or without words
   assert.deepEqual(parseLine('@brainstorm'), { type: 'bart', text: '', agent: 'brainstorm' });
   assert.deepEqual(parseLine('@Brainstorm what about retries?'), { type: 'bart', text: 'what about retries?', agent: 'brainstorm' }, 'what the @ menu writes');
   assert.deepEqual(parseLine('@brainstorm picked "The workspace"; note: soon'), { type: 'bart', text: 'picked "The workspace"; note: soon', agent: 'brainstorm' });
-  assert.deepEqual([agentOf(parseLine('@bart q')), agentOf(parseLine('@brainstorm')), agentOf(parseLine('plain'))], ['bart', 'brainstorm', 'bart']);
+  assert.deepEqual([agentOf(parseLine('@chat q')), agentOf(parseLine('@bart q')), agentOf(parseLine('@brainstorm')), agentOf(parseLine('plain'))], ['bart', 'router', 'brainstorm', 'bart']);
   assert.equal(parseLine('@brainstorming').type, 'p');
   assert.deepEqual('@Brainstorm here'.split(INLINE).filter(Boolean), ['@Brainstorm', ' here']);
   assert.match(inlineHtml('@brainstorm here'), /<span style="color:#0070f3;font-weight:500">@brainstorm<\/span> here/);
@@ -629,7 +630,7 @@ test('flattenPaste: several pasted lines become one question line, one space at 
     const p = parseLine(line + flattenPaste('first\n\nsecond\nthird'));
     assert.equal(p.type, 'bart', `${line.trim()} is a question line`);
     assert.equal(p.text, (line.slice(line.indexOf(' ') + 1) + 'first second third'), 'the whole paste is the question');
-    assert.equal(agentOf(p), line.slice(1, line.indexOf(' ')));
+    assert.equal(agentOf(p), line.startsWith('@bart') ? 'router' : line.slice(1, line.indexOf(' ')));
   }
 });
 
@@ -644,7 +645,7 @@ test('a conversation title (2026-10-12): `bart# ` above the question that starts
   assert.ok(TITLE_RE.test(titleLine('', false)));
   assert.equal(parseLine('# bart').type, 'h', 'a heading is still a heading');
 
-  const lines = ['Notes', 'bart# Retry logic', '@bart why retry?', 'bart> because', '@bart and timeouts?', 'bart> those too', '', '@discover old thread', 'bart> a guide', '', 'bart#+ Folded one', '@brainstorm', 'bart> {}'];
+  const lines = ['Notes', 'bart# Retry logic', '@chat why retry?', 'bart> because', '@chat and timeouts?', 'bart> those too', '', '@discover old thread', 'bart> a guide', '', 'bart#+ Folded one', '@brainstorm', 'bart> {}'];
   const [first, old, folded] = threads(lines);
   assert.equal(first.from, 2, '`from` is still the first question');
   assert.equal(first.titleLine, 1);

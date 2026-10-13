@@ -589,7 +589,9 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     const inside = path.relative(pre.top, pre.directory);
     const attach = [...new Set((Array.isArray(input.attach) ? input.attach : []).filter((value) => typeof value === 'string' && UUID_RE.test(value)))].slice(0, MAX_ATTACH);
     const task = {
-      id, kind, projectId, workspaceId, postItId: postIt && typeof input.postItId === 'string' ? input.postItId : null, postIt, ...(fromLine ? { fromLine } : {}), version: null, title,
+      id, kind, projectId, workspaceId, postItId: postIt && typeof input.postItId === 'string' ? input.postItId : null, postIt, ...(fromLine ? { fromLine } : {}),
+      // Bart, the router (2026-10-12, ../bart/route.cjs), handed an `@bart` line to this Build: its record's id.
+      ...(typeof input.routedFrom === 'string' && /^route-[\w-]{1,72}$/.test(input.routedFrom) ? { routedFrom: input.routedFrom } : {}), version: null, title,
       ...choice, sessionId: null,
       target: pre.target, source: pre.directory,
       repo: pre.top, worktree, cwd: inside && !inside.startsWith('..') ? path.join(worktree, inside) : worktree,

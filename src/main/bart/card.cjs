@@ -46,7 +46,11 @@ const OPENING = 'Start from this workspace.';
 // The last card of an exchange (MATH-40), and the line after the sentence they write on it.
 const NEXT_ID = 'next';
 const NEXT_TITLE = 'So what do you want to dig into next?';
-const RESULT_OFFER = 'Find papers on it with @discover, or ask about it with @bart.';
+const RESULT_OFFER = 'Find papers on it with @discover, or ask about it with @chat.';
+// The same line as results written before the router (2026-10-12) say it: still read as the offer.
+const OLD_RESULT_OFFER = 'Find papers on it with @discover, or ask about it with @bart.';
+/** Whether a line is a result's offer, as it is written now or was before 2026-10-12. */
+const isResultOffer = (line) => { const said = String(line == null ? '' : line).trim(); return said === RESULT_OFFER || said === OLD_RESULT_OFFER; };
 const NEXT_PLACEHOLDER = 'One thing, as specific as you can make it';
 // Asked once after the next card when their answer only repeats where they started (sameWords).
 const AGAIN_ID = 'again';
@@ -360,9 +364,9 @@ function resultText(sentence) {
 /** A reply (the text of a turn's answer) read as a result → { sentence } when its last line is the offer, else null. */
 function resultParts(text) {
   const lines = String(text == null ? '' : text).trim().split('\n');
-  if (lines.length < 2 || lines[lines.length - 1].trim() !== RESULT_OFFER) return null;
+  if (lines.length < 2 || !isResultOffer(lines[lines.length - 1])) return null;
   const sentence = lines.slice(0, -1).join(' ').replace(/\s+/g, ' ').trim();
   return sentence ? { sentence } : null;
 }
 
-module.exports = { resultText, resultParts, nextLead, nextTitle, sameWords, NEXT_ID, NEXT_TITLE, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, RESULT_OFFER, LEFT_OPEN, recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, jsonBlocks, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };
+module.exports = { resultText, resultParts, nextLead, nextTitle, sameWords, NEXT_ID, NEXT_TITLE, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, RESULT_OFFER, OLD_RESULT_OFFER, isResultOffer, LEFT_OPEN, recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, jsonBlocks, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };

@@ -12,6 +12,8 @@ const { loadSystemPrompt, AGENTS, PROMPTS, CLAUDE_TOOLS, BRAINSTORM_TOOLS, PAPER
 const { readQuestion, readBrainstorm, readDiscover, MODES } = require('../bart/models.cjs');
 const { SCOPED, ZOTERO_READERS, LIBRARY_READERS } = require('../bart/context.cjs');
 const { OMITTED } = require('../bart/strip.cjs');
+const { ROUTE_SYSTEM_PROMPT } = require('../bart/route-system-prompt.cjs');
+const { routeModel, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH } = require('../bart/route.cjs');
 const { buildChoices, resolveBuildChoice } = require('../bart/models.cjs');
 const { loadBuildPrompt } = require('../build/prompt.cjs');
 const { buildPolicy, claudeSettings } = require('../build/policy.cjs');
@@ -20,6 +22,37 @@ const { ENGELBART_TOOLS } = require('../build/engelbart-tools.cjs');
 const { RUN_TOOLS, RUN_KINDS } = require('../build/run-tools.cjs');
 const { prompt: runStepPrompt, RUNNABLE_MS, DECLARE_MS, INSTALL_MS, WIND_DOWN_MS, MAX_TURNS } = require('../build/run-step.cjs');
 const { LIMITS, TURN_MS } = require('../build/manager.cjs');
+
+// What each agent is called on a line, and above its Design entry (2026-10-12): the internal 'bart' is typed @chat and
+// titled Chat; @bart is the router.
+const TITLES = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover' };
+const TOKENS = { bart: 'chat', brainstorm: 'brainstorm', discover: 'discover' };
+
+/** Bart, the router (../bart/route.cjs): its rules, model, prompt and inputs. */
+function routerDesign(models) {
+  const providers = models && models.providers ? Object.keys(models.providers) : [];
+  const step = (provider) => { const found = routeModel({ ...models, provider }); return found ? { steps: [{ name: found.name, model: found.id, effort: found.effort }] } : { error: 'no model' }; };
+  return {
+    agent: 'router', title: 'Bart (router)', token: 'bart',
+    prompt: { text: ROUTE_SYSTEM_PROMPT, custom: false, file: null },
+    tools: { anthropic: { tools: '', allowedTools: null, papers: false }, openai: { webSearch: false, papers: false, sandbox: 'read-only' } },
+    models: { inForce: models ? models.provider : null, providers: Object.fromEntries(providers.map((provider) => [provider, step(provider)])) },
+    timeout: { route: ROUTE_TIMEOUT_MS },
+    rules: [
+      { when: 'an empty @bart', to: '@brainstorm' },
+      { when: '--build', to: 'Build' },
+      { when: '--quick, --standard or --deep', to: '@discover' },
+      { when: 'a model or effort flag', to: '@chat' },
+      { when: 'directly under a @brainstorm or @discover thread', to: 'that agent' },
+      { when: 'otherwise', to: `the model (bad JSON, a timeout, an error or sure < ${SURE_ENOUGH} → @chat)` },
+      { when: 'the model says build, a spec above and sure ≥ 0.8', to: 'Build of that fenced block' },
+      { when: 'the model says build otherwise', to: '@chat, told to write the Build prompt' },
+    ],
+    inputs: ['the line', `its section (nearest heading above to the line, the last ${SECTION_CHARS.toLocaleString('en-US')} characters, agent replies left out)`, 'the last five threads above (agent, first 80 characters, lines up)', 'whether the nearest answer above holds a fenced block', 'never the library, context_json or mentioned files'],
+    context: { blocks: [{ block: '<workspace> <section> <threads> <spec_above> <line>', note: 'one message, no session' }], resumed: ['(none: every line is routed afresh)'], dirs: 'none: no tools' },
+  };
+}
+
 
 /** The file a custom prompt is read from, and whether it holds one (loadSystemPrompt's own test: any text at all). */
 function promptOf(dataRoot, agent) {
@@ -78,13 +111,20 @@ function contextOf(agent) {
 }
 
 // Who hands work to whom, and how: { to, how }.
+// Each `to` as a line writes it (2026-10-12): @chat is the agent called 'bart'; @bart is the router.
 const CALLS = {
-  bart: [{ to: 'build', how: '--build: the line\'s request becomes a Build' }],
+  router: [
+    { to: 'chat', how: 'the router\'s pick: the line is rewritten @chat and asked' },
+    { to: 'brainstorm', how: 'the router\'s pick, or an empty @bart' },
+    { to: 'discover', how: 'the router\'s pick, or --quick, --standard or --deep' },
+    { to: 'build', how: '--build, or the router\'s pick with a spec above (else Chat writes the Build prompt)' },
+  ],
+  bart: [{ to: 'build', how: '--build: the line\'s request becomes a Build; the footer\'s Build' }],
   brainstorm: [
     { to: 'discover', how: 'its result line, the Welcome handoff, Send to Discover' },
-    { to: 'bart', how: 'its result line, the Welcome handoff' },
+    { to: 'chat', how: 'its result line, the Welcome handoff' },
   ],
-  discover: [],
+  discover: [{ to: 'build', how: 'the footer\'s Build' }],
   build: [{ to: 'run step', how: 'on review: a Build turn that ends in review' }],
   'run step': [],
 };
@@ -176,7 +216,7 @@ function buildEntry(dataRoot, buildModels) {
       { line: 'ESCALATE: <why>', means: 'a quick task that is not small: it changes nothing and is escalated' },
       { line: '(anything else)', means: 'done: the Build goes to review, and its run step starts' },
     ],
-    startedFrom: ['@bart --build on a line', 'the Build panel (a workspace\'s Build button)', 'a post-it (a quick task)'],
+    startedFrom: ['--build on an @chat or @bart line', 'Bart\'s pick, with a spec above', 'an answer\'s footer Build (its last fenced block)', 'the Build panel (a workspace\'s Build button)', 'a post-it (a quick task)'],
   };
 }
 
@@ -197,11 +237,15 @@ function runStepEntry(buildModels) {
   };
 }
 
-/** → { agents: [{ agent, prompt, tools, models, timeout, context, calls, … }] } for the open data root and the models in force. */
+/**
+ * → { agents: [{ agent, title?, token?, prompt, tools, models, timeout, context, calls, rules?, inputs?, … }] } for the
+ * open data root and the models in force; Bart, the router, first (2026-10-12).
+ */
 function agentDesign({ dataRoot, models, buildModels = models }) {
   const agents = [
+    routerDesign(models),
     ...AGENTS.map((agent) => ({
-      agent,
+      agent, title: TITLES[agent], token: TOKENS[agent],
       prompt: promptOf(dataRoot, agent),
       tools: toolsOf(agent),
       models: stepsOf(agent, models),

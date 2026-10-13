@@ -1,6 +1,6 @@
 'use strict';
 
-// Editing a past question in place (src/renderer/workspace/DocEditor.jsx, 2026-10-03). An answered @bart, @brainstorm or
+// Editing a past question in place (src/renderer/workspace/DocEditor.jsx, 2026-10-03). An answered @chat, @brainstorm or
 // @discover turn's foot has Edit, beside Regenerate: the question becomes an ordinary agent line again (lockedAt), its
 // answer dimmed under it. Enter asks it again as Regenerate does, after the turns that follow it in its thread are taken
 // out; unchanged, Enter only leaves edit mode. Escape, or the caret, the keyboard or a click going elsewhere, puts it back.
@@ -35,10 +35,10 @@ const FOCUS = { say: '', card: 'focus', focus: { title: 'Which part?', options: 
 // One thread of four turns, the last still at work, then a line of the document's own.
 const THREAD = [
   'Notes',
-  '@bart first?', ...answer('one'), //          1..4
-  '@bart second?', ...answer('two'), //         5..8
-  '@bart third?', ...answer('three', 'Opus', 'low'), // 9..12
-  '@bart fourth?', 'bart~> run4', //            13..14
+  '@chat first?', ...answer('one'), //          1..4
+  '@chat second?', ...answer('two'), //         5..8
+  '@chat third?', ...answer('three', 'Opus', 'low'), // 9..12
+  '@chat fourth?', 'bart~> run4', //            13..14
   '',
   'After',
 ];
@@ -106,13 +106,13 @@ test('Edit sits in an answered turn\'s foot next to Regenerate; never on a run a
   assert.match(shown, /<button class="bart-ic" data-act="editturn" data-turn="5" aria-label="Edit"><svg[^>]*>.*?<\/svg><\/button><span class="bart-tip" style="left:0">Edit<\/span>/, 'a pencil, named Edit on hover');
   assert.ok(!shown.includes('data-act="editturn" data-turn="13"'), 'not on the turn still at work');
 
-  // A Build line (`@bart --build`), whether it started its Build or failed to, and a card's turn.
+  // A Build line (`@chat --build`), whether it started its Build or failed to, and a card's turn.
   const build = mounted(['@bart --build make it', 'build> 0123456789', '', '@bart --build', 'bart> **No Build.** Write what to build after --build.', '']).html();
   assert.ok(build.includes('data-act="dropturn" data-turn="3"'), 'the failed Build has its foot');
   assert.ok(!build.includes('data-act="editturn"'), 'but no Edit');
   const cards = mounted(['@brainstorm', ...replyLines(card.cardBody(JSON.stringify(FOCUS)).body, { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: false }), '']).html();
   assert.ok(cards.includes('data-act="regen" data-plain="1" data-turn="0"') && !cards.includes('data-act="editturn"'), 'an @brainstorm card\'s turn has Regenerate but no Edit');
-  // An @discover guide and a @brainstorm recap are answers like @bart's: they have it. A read-only document has none.
+  // An @discover guide and a @brainstorm recap are answers like @chat's: they have it. A read-only document has none.
   assert.ok(mounted(['@discover retries', ...plainAnswer('## Read'), '']).html().includes('data-act="editturn" data-turn="0"'));
   assert.ok(mounted(['@brainstorm (wrap up)', ...plainAnswer('Where you are: x'), '']).html().includes('data-act="editturn" data-turn="0"'));
   assert.ok(!mounted(THREAD, { readOnly: true }).html().includes('data-act="editturn"'));
@@ -122,13 +122,13 @@ test('Edit unlocks the question alone (lockedAt), caret at its end, chip and sen
   const m = mounted(THREAD);
   assert.equal(m.editor.lockedAt(m.lines(), 5), true, 'an answered question is locked');
   m.click('editturn', { turn: '5' });
-  assert.deepEqual([m.editor.editing.q, m.editor.editing.original], [5, '@bart second?']);
+  assert.deepEqual([m.editor.editing.q, m.editor.editing.original], [5, '@chat second?']);
   assert.equal(m.editor.lockedAt(m.lines(), 5), false, 'not while it is edited');
   assert.equal(m.editor.lockedAt(m.lines(), 1), true, 'the others stay locked');
   assert.equal(m.editor.lockedAt(m.lines(), 9), true);
   assert.equal(m.editor.state.activeLine, 5);
-  assert.deepEqual(m.editor.caret, { line: 5, offset: '@bart second?'.length });
-  assert.equal(m.lines().join('\n'), THREAD.join('\n'), 'the line holds its @bart as it did');
+  assert.deepEqual(m.editor.caret, { line: 5, offset: '@chat second?'.length });
+  assert.equal(m.lines().join('\n'), THREAD.join('\n'), 'the line holds its @chat as it did');
 
   const shown = m.html(), line = shown.match(/<div data-line="5"[^>]*>.*?(?=<div data-dim="1" data-line="6")/s)[0];
   const open = line.match(/^<div[^>]*>/)[0];
@@ -138,10 +138,10 @@ test('Edit unlocks the question alone (lockedAt), caret at its end, chip and sen
   assert.ok(!/<div data-dim="1" data-line="(5|9|10)"/.test(shown), 'nothing else dimmed');
 
   // Edit on another turn: this one goes back, that one is edited.
-  m.type('@bart second, changed?');
+  m.type('@chat second, changed?');
   m.click('editturn', { turn: '9' });
   assert.equal(m.editor.editing.q, 9);
-  assert.equal(m.lines()[5], '@bart second?');
+  assert.equal(m.lines()[5], '@chat second?');
   assert.equal(m.editor.lockedAt(m.lines(), 5), true);
   assert.equal(m.editor.lockedAt(m.lines(), 9), false);
 });
@@ -150,15 +150,15 @@ test('Enter on changed words: the later turns go (a run among them is stopped), 
   const m = mounted(THREAD);
   m.editor.history.push({ text: 'an earlier version', caret: null }); // an edit made before: undo reaches it after
   m.click('editturn', { turn: '5' });
-  m.type('@bart second, reworded');
-  m.type('@bart second, reworded?');
+  m.type('@chat second, reworded');
+  m.type('@chat second, reworded?');
   const e = m.key('Enter');
   assert.equal(e.prevented, true);
   assert.equal(m.asks.length, 1);
   const ask = m.asks[0];
   assert.deepEqual({ ...ask, askId: undefined }, { askId: undefined, text: 'second, reworded?', turns: [{ question: 'first?', answer: 'one' }], agent: 'bart', choice: { model: 'sonnet', effort: 'high' } }, 'asked with the new words, the turn before it, and the model that answered it (ranWith)');
   assert.deepEqual(m.stopped, ['run4'], 'the follow-up at work is stopped');
-  assert.deepEqual(m.lines(), ['Notes', '@bart first?', ...answer('one'), '@bart second, reworded?', `bart~> ${ask.askId}`, '', 'After']);
+  assert.deepEqual(m.lines(), ['Notes', '@chat first?', ...answer('one'), '@chat second, reworded?', `bart~> ${ask.askId}`, '', 'After']);
   assert.equal(m.editor.editing, null);
   assert.equal(m.editor.lockedAt(m.lines(), 5), true, 'locked again, under its run');
   assert.ok(m.root.blurred > 0, 'the keyboard leaves the line, as after asking');
@@ -170,31 +170,31 @@ test('Enter on changed words: the later turns go (a run among them is stopped), 
 });
 
 test('Enter on the thread\'s last turn asks it again with nothing taken out; Enter on the first takes every other turn', () => {
-  const last = mounted(['@bart one?', ...answer('1'), '@bart two?', ...answer('2'), '']);
+  const last = mounted(['@chat one?', ...answer('1'), '@chat two?', ...answer('2'), '']);
   last.click('editturn', { turn: '4' });
-  last.type('@bart two, again?');
+  last.type('@chat two, again?');
   last.key('Enter');
-  assert.deepEqual(last.lines(), ['@bart one?', ...answer('1'), '@bart two, again?', `bart~> ${last.asks[0].askId}`, '']);
+  assert.deepEqual(last.lines(), ['@chat one?', ...answer('1'), '@chat two, again?', `bart~> ${last.asks[0].askId}`, '']);
   assert.deepEqual(last.asks[0].turns, [{ question: 'one?', answer: '1' }]);
 
   const first = mounted(THREAD);
   first.click('editturn', { turn: '1' });
-  first.type('@bart first, really?');
+  first.type('@chat first, really?');
   first.key('Enter');
-  assert.deepEqual(first.lines(), ['Notes', '@bart first, really?', `bart~> ${first.asks[0].askId}`, '', 'After']);
+  assert.deepEqual(first.lines(), ['Notes', '@chat first, really?', `bart~> ${first.asks[0].askId}`, '', 'After']);
   assert.deepEqual(first.asks[0].turns, [], 'no conversation before the first turn');
 });
 
 test('Enter with the words unchanged leaves edit mode and asks nothing; Shift+Enter adds no line', () => {
   const m = mounted(THREAD);
   m.click('editturn', { turn: '5' });
-  m.type('@bart second?!');
+  m.type('@chat second?!');
   m.caretAt(5);
   const shift = m.key('Enter', { shiftKey: true });
   assert.equal(shift.prevented, true, 'no line break');
   assert.equal(m.editor.editing.q, 5, 'still editing');
   assert.equal(m.lines().length, THREAD.length);
-  m.type('@bart second?');
+  m.type('@chat second?');
   m.key('Enter');
   assert.equal(m.editor.editing, null);
   assert.deepEqual(m.asks, []);
@@ -206,7 +206,7 @@ test('Enter with the words unchanged leaves edit mode and asks nothing; Shift+En
 test('Escape puts the question back as it was, with its answer; so does ⌘Z with nothing typed', () => {
   const m = mounted(THREAD);
   m.click('editturn', { turn: '9' });
-  m.type('@bart third, but different');
+  m.type('@chat third, but different');
   m.caretAt(9);
   assert.equal(m.key('Escape').prevented, true);
   assert.equal(m.editor.editing, null);
@@ -224,14 +224,14 @@ test('Escape puts the question back as it was, with its answer; so does ⌘Z wit
 test('the keyboard or the caret leaving the line, or a click elsewhere, puts the question back', () => {
   const blur = mounted(THREAD);
   blur.click('editturn', { turn: '5' });
-  blur.type('@bart gone?');
+  blur.type('@chat gone?');
   blur.editor.docListeners.focusout({ target: blur.root, relatedTarget: null });
   assert.equal(blur.editor.editing, null);
-  assert.equal(blur.lines()[5], '@bart second?');
+  assert.equal(blur.lines()[5], '@chat second?');
 
   const caret = mounted(THREAD);
   caret.click('editturn', { turn: '5' });
-  caret.type('@bart moved?');
+  caret.type('@chat moved?');
   const inLine = {}, below = {};
   caret.select(inLine, 5);
   assert.equal(caret.editor.editing.q, 5, 'a caret inside the line keeps it');
@@ -241,14 +241,14 @@ test('the keyboard or the caret leaving the line, or a click elsewhere, puts the
   caret.editor.held = false;
   caret.select(below, 6);
   assert.equal(caret.editor.editing, null);
-  assert.equal(caret.lines()[5], '@bart second?');
+  assert.equal(caret.lines()[5], '@chat second?');
 });
 
 test('a click on another turn\'s button puts the question back first, then acts on the document as it was, before the parent hands it back', () => {
   const m = mounted(THREAD, { deferred: true });
   m.click('editturn', { turn: '5' });
-  m.type('@bart typed, not asked'); m.hand();
-  assert.equal(m.lines()[5], '@bart typed, not asked');
+  m.type('@chat typed, not asked'); m.hand();
+  assert.equal(m.lines()[5], '@chat typed, not asked');
   m.click('dropturn', { turn: '1' }, 4);
   const ended = m.changes[m.changes.length - 1].split('\n');
   assert.deepEqual(ended, ['Notes', ...THREAD.slice(5)], 'the first turn deleted, the edited question as it was');
@@ -265,7 +265,7 @@ test('a model picked on the edited line\'s chip is what it is asked on; otherwis
   m.click('editturn', { turn: '9' });
   m.editor.state.picker = { kind: 'line', i: 9, left: null, right: 0, top: 0, bottom: 0, choice: null };
   m.editor.pickModel({ model: 'fable', effort: 'high' });
-  assert.equal(m.lines()[9], '@bart --fable --high third?');
+  assert.equal(m.lines()[9], '@chat --fable --high third?');
   m.caretAt(9);
   m.key('Enter');
   assert.equal(m.asks[0].text, '--fable --high third?');
@@ -273,7 +273,7 @@ test('a model picked on the edited line\'s chip is what it is asked on; otherwis
 
   const kept = mounted(THREAD);
   kept.click('editturn', { turn: '9' });
-  kept.type('@bart third, again?');
+  kept.type('@chat third, again?');
   kept.key('Enter');
   assert.deepEqual(kept.asks[0].choice, { model: 'opus', effort: 'low' }, 'Regenerate\'s choice: the model that answered');
 });
@@ -296,12 +296,12 @@ test('Enter waits on a line that no longer asks its agent, or asks for a Build; 
   assert.equal(m.editor.editing.q, 5, 'still editing');
   m.type('@discover second?');
   m.key('Enter');
-  m.type('@bart --build second');
+  m.type('@chat --build second');
   m.key('Enter');
   assert.deepEqual(m.asks, []);
   assert.equal(m.editor.editing.q, 5);
 
-  m.type('@bart second?');
+  m.type('@chat second?');
   m.caretAt(5, 0);
   assert.equal(m.key('Backspace').prevented, true);
   m.caretAt(5);
@@ -310,10 +310,10 @@ test('Enter waits on a line that no longer asks its agent, or asks for a Build; 
 });
 
 test('lines landing above the question being edited move it with them; when its answer is gone, edit mode ends', () => {
-  const lines = ['@bart above?', 'bart~> run0', '', '@bart below?', ...answer('b'), ''];
+  const lines = ['@chat above?', 'bart~> run0', '', '@chat below?', ...answer('b'), ''];
   const m = mounted(lines);
   m.click('editturn', { turn: '3' });
-  m.type('@bart below, changed?');
+  m.type('@chat below, changed?');
   const before = m.props.text;
   m.props.text = before.replace('bart~> run0', answer('a').join('\n')); // the run above answers: two more lines
   m.editor.componentDidUpdate({ ...m.props, text: before });
@@ -322,12 +322,12 @@ test('lines landing above the question being edited move it with them; when its 
   assert.equal(m.editor.lockedAt(m.lines(), 5), false);
   m.caretAt(5);
   m.key('Escape');
-  assert.equal(m.lines()[5], '@bart below?');
+  assert.equal(m.lines()[5], '@chat below?');
 
   const gone = mounted(lines);
   gone.click('editturn', { turn: '3' });
   const was = gone.props.text;
-  gone.props.text = '@bart above?\nbart~> run0\n';
+  gone.props.text = '@chat above?\nbart~> run0\n';
   gone.editor.componentDidUpdate({ ...gone.props, text: was });
   assert.equal(gone.editor.editing, null);
 });

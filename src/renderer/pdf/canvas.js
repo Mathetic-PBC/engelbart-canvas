@@ -271,7 +271,7 @@ export function noteQuestion(note) {
 
 /**
  * What Continue in workspace appends to the open workspace (a normal thread): the passage and where it is, then the
- * question and the answer as the document holds an asked @bart line and its answer. `paper` { name, rowId, url }.
+ * question and the answer as the document holds an asked @chat line and its answer. `paper` { name, rowId, url }.
  */
 export function continueLines({ quote, question, answer, foot, paper = {}, page }) {
   const name = String(paper.name || 'the paper').replace(/[[\]\n]/g, '').trim() || 'the paper';
@@ -279,7 +279,8 @@ export function continueLines({ quote, question, answer, foot, paper = {}, page 
   const said = String(quote || '').replace(/\s+/g, ' ').trim();
   const lines = [];
   if (said) lines.push(`“${said}” (${where}${page ? `, p. ${page}` : ''})`);
-  lines.push(`@bart ${String(question || '').replace(/\s*\n\s*/g, ' ').trim()}`);
+  // Written as Chat's (2026-10-12): it answered, and `@bart` on a line is the router now.
+  lines.push(`@chat ${String(question || '').replace(/\s*\n\s*/g, ' ').trim()}`);
   for (const line of String(answer || '').split('\n')) lines.push(`bart> ${line}`.trimEnd());
   if (foot) lines.push('bart>', `bart> *${foot}*`);
   return lines;

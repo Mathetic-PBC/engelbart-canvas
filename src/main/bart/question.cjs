@@ -205,10 +205,11 @@ function readBuildFlag(text, models = null) {
 
 /**
  * What an ask is when it is a Build (Workspace.jsx askBart): { request } (empty when nothing follows the flag), or null
- * for an ask. Only an @bart line builds; on @brainstorm and @discover lines --build is words for that agent.
+ * for an ask. Only an @chat line (agent 'bart') or an @bart line (the router, 2026-10-12) builds; on @brainstorm and
+ * @discover lines --build is words for that agent.
  */
 function buildRequestOf({ agent = 'bart', text }, models = null) {
-  if ((agent || 'bart') !== 'bart') return null;
+  if (!['bart', 'router'].includes(agent || 'bart')) return null;
   const { build, rest } = readBuildFlag(text, models);
   return build ? { request: rest } : null;
 }

@@ -19,14 +19,17 @@ const seconds = (ms) => `${Math.max(1, Math.round(ms / 1000))} s`;
 
 /**
  * "Sol · high · 41 s · moved up from Sol medium": which model said this, kept with the answer. "8 s" alone without `model`
- * (@brainstorm, 2026-10-02: its model is fixed and not shown).
+ * (@brainstorm, 2026-10-02: its model is fixed and not shown). " · via Bart" after it when the router chose the agent.
  */
-function attribution({ level, trail, ms }, { model = true } = {}) {
-  if (!model) return `*${seconds(ms)}*`;
-  const parts = [level.name, level.effort, seconds(ms)];
-  if (trail.length) parts.push(`moved up from ${trail.map((step) => `${step.name} ${step.effort}`).join(', then ')}`);
+function attribution({ level, trail, ms, routed = null }, { model = true } = {}) {
+  const parts = model ? [level.name, level.effort, seconds(ms)] : [seconds(ms)];
+  if (model && trail.length) parts.push(`moved up from ${trail.map((step) => `${step.name} ${step.effort}`).join(', then ')}`);
+  // Handed over by Bart, the router (2026-10-12): kept in the document, so the foot still says so after reopening, and
+  // "build" when Bart read the line as a request to build (the foot's Build button is then drawn highlighted).
+  if (routed) parts.push(routed.build ? `${VIA_BART} · build` : VIA_BART);
   return `*${parts.join(' · ')}*`;
 }
+const VIA_BART = 'via Bart';
 
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
 const CLOSE_RE = /^ {0,3}(`{3,}|~{3,})\s*$/;
@@ -76,4 +79,4 @@ function failureLines(message) {
   return [`${REPLY_PREFIX}**No answer.** ${String(message || 'The run failed.').replace(/\s+/g, ' ').slice(0, 300)}`];
 }
 
-module.exports = { PENDING_RE, REPLY_PREFIX, attribution, bodyLines, replyLines, answerText, failureLines };
+module.exports = { PENDING_RE, REPLY_PREFIX, VIA_BART, attribution, bodyLines, replyLines, answerText, failureLines };

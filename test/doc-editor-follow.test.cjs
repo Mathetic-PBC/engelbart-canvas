@@ -21,8 +21,8 @@ function load(file) {
 }
 
 const DocEditor = load('DocEditor.jsx').default;
-// One image already in the document, then an answered @bart question: its thread starts on line 1.
-const TEXT = 'A shot ![Attachment 1](img:first)\n@bart why?\nbart> because\n';
+// One image already in the document, then an answered @chat question: its thread starts on line 1.
+const TEXT = 'A shot ![Attachment 1](img:first)\n@chat why?\nbart> because\n';
 const FROM = 1;
 const PNG = { type: 'image/png' };
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -129,7 +129,7 @@ test('sending writes each pasted image into the line as an image pasted on a lin
   assert.equal(asks[0].agent, 'bart');
   assert.deepEqual(asks[0].turns, [{ question: 'why?', answer: 'because' }]);
   const lines = changes[changes.length - 1].split('\n');
-  assert.equal(lines[3], `@bart ${asked}`, 'the line under the answer holds the images as ![Attachment n](img:<id>)');
+  assert.equal(lines[3], `@chat ${asked}`, 'the line under the answer holds the images as ![Attachment n](img:<id>)');
   assert.match(lines[4], /^bart~> /);
   assert.ok(!lines.join('\n').includes('img-2'), 'the deleted one is not sent');
   assert.equal(editor.followImages.has(FROM), false, 'the field\'s images go with the send');
@@ -140,5 +140,5 @@ test('a follow-up with no image is sent as it always was', () => {
   const { editor, asks, changes } = mounted({ typed: 'and then?' });
   editor.sendFollow(FROM);
   assert.equal(asks[0].text, 'and then?');
-  assert.equal(changes[0].split('\n')[3], '@bart and then?');
+  assert.equal(changes[0].split('\n')[3], '@chat and then?');
 });

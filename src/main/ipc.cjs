@@ -126,6 +126,18 @@ function turnsInput(value) {
   return (Array.isArray(value) ? value : []).slice(-40).map((turn) => ({ question: clipped(turn && turn.question, 'earlier question', 8000), answer: clipped(turn && turn.answer, 'earlier answer', 40000) }));
 }
 
+// What Bart, the router, can pick (bart/route.cjs PICKS), and the agents a routed ask can say the person picked instead.
+const ROUTE_PICKS = ['chat', 'brainstorm', 'discover', 'build'];
+
+/** An ask's `routed` ({ id?, build?, corrected? }), or null for a line Bart did not hand over. */
+function routedInput(value) {
+  if (!value || typeof value !== 'object') return null;
+  const id = optStr(value.id, 'route id', 80);
+  const corrected = value.corrected == null ? null : str(value.corrected, 'corrected agent', 20);
+  if (corrected && !ROUTE_PICKS.includes(corrected)) throw new TypeError('corrected must be chat, brainstorm, discover or build');
+  return { ...(id ? { id } : {}), build: !!value.build, ...(corrected ? { corrected } : {}) };
+}
+
 function projectInput(value) {
   const input = typeof value === 'string' ? { name: value } : (value && typeof value === 'object' && !Array.isArray(value) ? value : {});
   return { name: str(input.name, 'name'), path: optStr(input.path, 'path', 200), directory: optStr(input.directory, 'directory', 4096) };
@@ -749,7 +761,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const live = stage && stage.kind === 'web' && stage.tab && stagePageFor ? stagePageFor(win, stage.tab) : null;
       // `overleaf`: this window's Overleaf tabs (MATH-65), the one in front read live and every project's copy refreshed.
       const overleaf = agent === 'bart' && overleafFor ? overleafFor(win, stage) : null;
-      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}), ...(overleaf ? { overleaf } : {}) };
+      // `routed`: Bart, the router, handed this line over (2026-10-12, bart/route.cjs): its record's id, whether it read the
+      // line as a request to build, and the agent the person picked instead of its pick.
+      const routed = routedInput(value.routed);
+      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}), ...(overleaf ? { overleaf } : {}), ...(routed ? { routed } : {}) };
       if (ref.kind === 'mark') {
         // a web page's mark has no page (MATH-54): its answer goes in the ink's "web" list
         mark = { markId: ref.id, page: ref.source === 'web' ? null : ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url, ...(ref.source === 'web' ? { source: 'web' } : {}) };
@@ -786,6 +801,21 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return [...paperAsks.values()].filter((held) => held.projectId === projectId && (!win || held.win === win))
       .map(({ askId, markId, page, rowId, url, source, question, progress }) => ({ ...progress, askId, markId, page, rowId, url, ...(source ? { source } : {}), question, agent: 'bart' }));
   });
+  // Bart, the router (2026-10-12, bart/route.cjs): which agent an `@bart` line is for. The editor sends the line, its
+  // section, the threads above and whether a spec is above; its own rule's pick (`rule`) is only logged.
+  handleFor('route-line', async (win, pid, input) => {
+    const value = input && typeof input === 'object' ? input : {};
+    const threads = (Array.isArray(value.threads) ? value.threads : []).slice(-5).map((thread) => ({
+      agent: optStr(thread && thread.agent, 'thread agent', 20) || 'chat', question: optStr(thread && thread.question, 'thread question', 400) || '', up: Math.max(0, Math.min(1e6, Math.floor(Number(thread && thread.up) || 0))),
+    }));
+    const rule = value.rule && typeof value.rule === 'object' && ROUTE_PICKS.includes(value.rule.agent) ? { agent: value.rule.agent, rule: optStr(value.rule.rule, 'rule', 40) || null } : null;
+    return bart.route({
+      projectId: str(pid, 'project id', 64), text: str(value.text, 'line', 8000), section: optStr(value.section, 'section', 200000) || '',
+      workspaceName: optStr(value.workspaceName, 'workspace name', 400) || '', threads, specAbove: !!value.specAbove, rule,
+    });
+  });
+  // Where a routed line went when it was not an ask: `build:<id>`, on the router's record.
+  handle('route-handed', (id, to) => { if (bart.routeHanded) bart.routeHanded(str(id, 'route id', 80), str(to, 'handed to', 80)); return true; });
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
   // A new thread's title (2026-10-12, ./bart/name-chat.cjs): asked while its question runs, never in its way. `agent` says
   // which line asked, so the title comes from the provider the question runs on. The fallback (the question's first six
@@ -856,6 +886,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
         postItId: optStr(value.postItId, 'post-it id', 64),
         text: optStr(value.text, 'text', 200000),
         fromLine: !!value.fromLine, // `@bart --build <request>` (Workspace.jsx askBart)
+        routedFrom: optStr(value.routedFrom, 'route id', 80), // the router's record, when Bart handed the line to Build (bart/route.cjs)
         provider: optStr(value.provider, 'provider', 24),
         model: optStr(value.model, 'model', 24),
         effort: optStr(value.effort, 'effort', 24),

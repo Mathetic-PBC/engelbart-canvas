@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, modelLabel, sectionText, exportPage, filterRuns, runLabel, FILTERS, BUILD_AGENTS } from '../agent-map/runText.js';
 
 // The Agent map (2026-10-12; src/main/agent-map): a window for developers only, the app's renderer at ?view=agent-map.
-// Runs: every @bart, @brainstorm and @discover run, each Build turn and each run step after one, newest first, live
+// Runs: every @bart (the router, 2026-10-12: where it sent the line), @chat, @brainstorm and @discover run, each Build turn and each run step after one, newest first, live
 // (engelbart:agent-run), filtered to questions or Builds, and the one selected in sections: its system prompt, its context
 // block by block, each model step (the input, its tool calls, what it said) and what was written (a run step: its
 // runnables). Design: each agent as it is set up now, and which agents it hands work to. Plain and dense on purpose: one font, small type, thin rules.
@@ -90,6 +90,8 @@ function RunDetail({ record, open, onToggle }) {
   return (
     <div>
       <div><b>{runLabel(record)}</b> {BUILD_AGENTS.includes(record.agent) ? null : firstWords(record.question, 30)}</div>
+      {record.agent === 'router' && <div style={S.dim}>picked by {record.by === 'rule' ? `rule (${record.rule})` : 'the model'} · section {(record.sectionSize || 0).toLocaleString('en-US')} chars · spec above {record.specAbove ? 'yes' : 'no'} · threads: {(record.threads || []).map((thread) => `@${thread.agent} ${thread.up} up`).join(', ') || 'none'}{record.handedTo ? ` · handed to ${record.handedTo}` : ''}</div>}
+      {record.routedFrom && <div style={S.dim}>handed over by Bart: {record.routedFrom}{record.corrected ? ` · the person picked ${record.corrected} instead` : ''}</div>}
       <div style={S.dim}>{record.status}{record.buildId ? ` · Build ${record.buildId}` : ''}{record.ending ? ` · ended: ${record.ending}` : ''} · {record.provider} · {record.projectName}{record.workspaceName ? ` / ${record.workspaceName}` : ''} · {timeLabel(record.at)}{record.ms != null ? ` · ${msLabel(record.ms)}` : ''}{record.mode ? ` · ${record.mode}` : ''}{record.pinned ? ' · picked by hand' : ''} · {record.id}</div>
       {record.error && <div style={S.error}>{record.status}: {record.error}</div>}
       <Section n={1} id="system" title="System prompt" note={sizeLabel(record.system)} open={open === 'system'} onToggle={onToggle}>
@@ -150,7 +152,9 @@ export function Design({ design }) {
     <div>
       {design.agents.map((agent) => (
         <div key={agent.agent} style={{ borderTop: RULE, padding: '6px 0 10px' }}>
-          <div><b>@{agent.agent}</b></div>
+          <div><b>{agent.title || `@${agent.agent}`}</b>{agent.token ? <span style={S.dim}> · typed @{agent.token}{agent.agent !== agent.token ? ` · internally '${agent.agent}'` : ''}</span> : null}</div>
+          {agent.rules && <div style={S.sub}>rules, in order: {agent.rules.map((rule) => `${rule.when} → ${rule.to}`).join(' · ')}</div>}
+          {agent.inputs && <div style={S.sub}>inputs: {agent.inputs.join(' · ')}</div>}
           {agent.prompt.note && <div style={{ ...S.sub, ...S.dim }}>system prompt: {agent.prompt.note}</div>}
           <Expand label={<>{agent.prompt.note ? 'prompt template' : 'system prompt'} <span style={S.dim}>{agent.prompt.note ? 'per Build' : agent.prompt.custom ? `custom (${agent.prompt.file})` : 'built-in'} · {sizeLabel(agent.prompt.text)}</span></>} text={agent.prompt.text} />
           {agent.prompt.quick && <Expand label={<>a quick task's system prompt <span style={S.dim}>{sizeLabel(agent.prompt.quick)}</span></>} text={agent.prompt.quick} />}
@@ -172,7 +176,7 @@ export function Design({ design }) {
   );
 }
 
-/** The list of runs, with its filter: All, Questions (@bart, @brainstorm, @discover) or Builds (turns and run steps). */
+/** The list of runs, with its filter: All, Questions (@bart, @chat, @brainstorm, @discover) or Builds (turns and run steps). */
 export function RunList({ runs, selected, filter, onSelect, onFilter }) {
   const shown = filterRuns(runs, filter);
   return (
@@ -189,7 +193,7 @@ export function RunList({ runs, selected, filter, onSelect, onFilter }) {
             <div style={S.dim}>{run.projectName}{run.workspaceName ? ` / ${run.workspaceName}` : ''} · {timeLabel(run.at)}</div>
           </div>
         );
-      }) : <div style={{ padding: 10, ...S.dim }}>{runs.length ? 'None of these yet.' : 'No runs yet. Ask @bart, @brainstorm or @discover, or start a Build, in any window.'}</div>}
+      }) : <div style={{ padding: 10, ...S.dim }}>{runs.length ? 'None of these yet.' : 'No runs yet. Ask @bart, @chat, @brainstorm or @discover, or start a Build, in any window.'}</div>}
     </div>
   );
 }

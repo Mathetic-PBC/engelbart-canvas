@@ -73,6 +73,7 @@ const { clipMiddle } = require('./clip.cjs');
 const { pathLabeller, claudeUpdate, codexUpdate, eventReader, createFeed } = require('./activity.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
 const { readGettingStarted } = require('../store/getting-started.cjs');
+const { createRouter, createFakeRouter, markCorrected } = require('./route.cjs');
 
 const STEP_TIMEOUT_MS = 15 * 60_000;
 const DISCOVER_TIMEOUT_MS = 30 * 60_000;
@@ -221,10 +222,22 @@ async function withImagePaths(ctx, projectId, question) {
  * turn is also sent the Stage and the highlights as they are now (`context.now`, MATH-54 follow-up): what it was given
  * when the session started may be out of date.
  */
-function firstMessage({ context, prior, question, resumed, extra = '' }) {
-  const asked = `<question>\n${question}\n</question>`;
+function firstMessage({ context, prior, question, resumed, extra = '', routed = null }) {
+  const asked = [routedBlock(routed), `<question>\n${question}\n</question>`].filter(Boolean).join('\n\n');
   if (resumed) return (level) => [extra, context.now, level, asked].filter(Boolean).join('\n\n');
   return (level) => [context.head, context.contextJson, context.mentionedFiles, context.documents, conversationBlock(prior), extra, level, asked].filter(Boolean).join('\n\n');
+}
+
+// A line Bart, the router (./route.cjs), read as a request to build, with no spec above it to build from (2026-10-12): it
+// is asked of Chat with this one block before <question>, and nothing else Chat is sent changes.
+const ROUTED_BUILD = '<routed>The person wants this built. Write the Build prompt as one fenced code block, after at most two sentences.</routed>';
+/** The block a routed turn carries before <question>: '' unless Bart routed it with build. */
+const routedBlock = (routed) => (routed && routed.build ? ROUTED_BUILD : '');
+
+/** What a routed run's meta and its record say of the routing ({ id, build, corrected }), or null when it was not routed. */
+function routedOf(value) {
+  if (!value || typeof value !== 'object') return null;
+  return { id: value.id ? String(value.id) : null, build: !!value.build, corrected: value.corrected ? String(value.corrected) : null };
 }
 
 /** Where the cards at the end of `turns` begin: after the last recap, or the last reply that was not a card. */
@@ -436,10 +449,12 @@ function logTo(runLog) {
 }
 
 /** What the run log starts a run with (./runlog.cjs): what the agent is told, block by block, before its first step. */
-function runRecord({ id, agent, provider, projectId, question, system, context, shown, extra, mode, pinned }) {
+function runRecord({ id, agent, provider, projectId, question, system, context, shown, extra, mode, pinned, routed = null }) {
   return {
     id, agent, provider, projectId, projectName: context.project ? context.project.name : '', workspaceName: context.workspaceName || '',
     question: String(question || ''), at: Date.now(), status: 'running', system, mode: mode || null, pinned: !!pinned,
+    // Handed over by the router (./route.cjs): its record's id, and the agent the person picked instead of its pick.
+    ...(routed && routed.id ? { routedFrom: routed.id } : {}), ...(routed && routed.corrected ? { corrected: routed.corrected } : {}),
     context: { head: context.head, contextJson: context.contextJson, mentionedFiles: context.mentionedFiles, documents: context.documents, now: context.now, conversation: conversationBlock(shown), extra, dirs: context.dirs },
     steps: [],
   };
@@ -464,8 +479,10 @@ async function loggedTurn(log, logId, input, turn) {
 // `papersServer`: the MCP server's script, run by `node` (Engelbart's own executable, as Node).
 // `runLog` (./runlog.cjs, optional): the Agent map's record of each run; none keeps nothing. It is told, and never changes,
 // what each run is sent and does.
-function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), brainstormCodexHome = `${codexHome}-brainstorm`, discoverCodexHome = `${codexHome}-discover`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER, runLog = null } = {}) {
+function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), routerCodexHome = `${codexHome}-router`, brainstormCodexHome = `${codexHome}-brainstorm`, discoverCodexHome = `${codexHome}-discover`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER, runLog = null } = {}) {
   const log = logTo(runLog);
+  // Bart, the router (./route.cjs, 2026-10-12): picks the agent an `@bart` line is for and steps aside.
+  const router = createRouter({ readModels, environment, runDirectory, codexHome: routerCodexHome, codexAuthFile, run, tools, runLog });
   const shell = resolveShell(environment);
   // The CLI by name, or by the full path the tool check found it at when PATH misses it (then through the environment, never quoted).
   const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
@@ -557,9 +574,9 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * web page in front's tab, asked for its selection and picture as they are now. `overleaf` (MATH-65): the window's
    * Overleaf tabs (overleaf/stage.cjs forTurn), for <stage source="overleaf"> and <overleaf_tabs>.
    */
-  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null }, { onProgress } = {}) {
+  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null }, { onProgress } = {}) {
     const models = readModels();
-    const bart = agent === 'bart';
+    const bart = agent === 'bart', routed = routedOf(routedInput);
     // The context first: @brainstorm's path is read against the library it shows (turnPlan).
     const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
     const plan = turnPlan({ agent, text, turns, choice: bart ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
@@ -571,7 +588,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     const system = loadSystemPrompt(ctx.dataRoot, agent);
     // The Agent map's record (runLog): from here every way out of the run is logged.
     const logId = askId || randomUUID(), startedAt = Date.now();
-    log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system, context, shown, extra, mode, pinned })));
+    log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system, context, shown, extra, mode, pinned, routed })));
+    if (routed && routed.corrected) log((runs) => markCorrected(runs, { id: routed.id, projectId, text, agent: routed.corrected }));
     try {
       const result = await answer();
       log((runs) => runs.finish(logId, { status: 'done', written: result.lines, ms: Date.now() - startedAt }));
@@ -600,7 +618,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
             discover: { home: discoverCodexHome, mcp: true, timeout: mode === 'deep' ? DEEP_DISCOVER_TIMEOUT_MS : DISCOVER_TIMEOUT_MS },
           }[agent];
           cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, logId, ...only });
-          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
+          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
         } finally { if (cli) cli.done(); }
       };
       const cliName = TOOL_OF[provider];
@@ -619,7 +637,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         let out;
         // A session that will not resume (its file is gone, the CLI changed) is not the person's problem: start again from the document.
         try { out = await guarded(held ? held.session : null); } catch (error) { if (!held || error.kind === 'stopped') throw error; out = await guarded(null); }
-        const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned };
+        const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned, ...(routed ? { routed } : {}) };
         // A card is written as its JSON in a fence; a reply that is not one, as it came (the editor draws it as an answer).
         // @brainstorm's next card always reads the same (brainstormReply).
         const body = replyBody(agent, plan.brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
@@ -640,7 +658,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     return !!controller;
   }
 
-  return { ask, stop, stopAll: () => { for (const controller of running.values()) controller.abort(); } };
+  return { ask, stop, stopAll: () => { for (const controller of running.values()) controller.abort(); }, route: router.route, routeHanded: router.handed };
 }
 
 /**
@@ -655,7 +673,7 @@ function ownSentence(documents, subject) {
   for (const line of String(documents || '').split('\n')) {
     if (/^<file\s/.test(line)) { if (!/\/>$/.test(line)) depth += 1; continue; }
     if (line === '</file>') { depth = Math.max(0, depth - 1); continue; }
-    if (depth || /^(?:@(?:bart|brainstorm|orient|discover)\b|bart[+?~]?>|<|\[agent reply omitted\]|#)/i.test(line)) continue;
+    if (depth || /^(?:@(?:bart|chat|brainstorm|orient|discover)\b|bart[+?~]?>|<|\[agent reply omitted\]|#)/i.test(line)) continue;
     const found = (line.match(/[^.!?]+[.!?]/g) || []).find((sentence) => sentence.toLowerCase().includes(needle));
     if (found) return found.trim();
   }
@@ -835,9 +853,10 @@ function fakeDiscover(context, plan) {
 function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {}, runLog = null }) {
   const waits = new Map();
   const log = logTo(runLog);
+  const router = createFakeRouter({ runLog });
   return {
-    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null }, { onProgress } = {}) {
-      const models = readModels();
+    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null }, { onProgress } = {}) {
+      const models = readModels(), routed = routedOf(routedInput);
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
       const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
       const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover';
@@ -845,10 +864,11 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
       const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
       const logId = askId || randomUUID(), startedAt = Date.now();
-      log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system: loadSystemPrompt(ctx.dataRoot, agent), context, shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned })));
+      log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system: loadSystemPrompt(ctx.dataRoot, agent), context, shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned, routed })));
+      if (routed && routed.corrected) log((runs) => markCorrected(runs, { id: routed.id, projectId, text, agent: routed.corrected }));
       const ended = (status, result, error) => log((runs) => runs.finish(logId, { status, written: result ? result.lines : null, error: error && error.message, ms: Date.now() - startedAt }));
       if (plan.written != null) { const result = resultReply(plan); ended('done', result); return result; }
-      const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra });
+      const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
       // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces. An
@@ -870,7 +890,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
           // highlights as well), a new one gets everything.
           turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: await act(brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
         });
-        const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned };
+        const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned, ...(routed ? { routed } : {}) };
         const body = replyBody(agent, brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
         store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent) }), meta };
@@ -883,6 +903,9 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
     },
     stop(askId) { const cancel = waits.get(askId); if (cancel) cancel(); return !!cancel; },
     stopAll() { for (const cancel of waits.values()) cancel(); },
+    // Bart, the router (./route.cjs): by keyword here.
+    route: router.route,
+    routeHanded: router.handed,
   };
 }
 

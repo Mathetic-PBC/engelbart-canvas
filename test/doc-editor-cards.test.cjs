@@ -265,7 +265,7 @@ test('a recap is drawn as sections, the paper path\'s "What you took from it" an
   }
 });
 
-test('an @brainstorm result is their sentence, then one small line whose @discover and @bart start a thread of their own on it; no Send to Discover row and no sections (MATH-40)', async () => {
+test('an @brainstorm result is their sentence, then one small line whose @discover and @chat start a thread of their own on it; no Send to Discover row and no sections (MATH-40)', async () => {
   const SENTENCE = 'Look at how often people correct an agent mid-task.';
   const NEXT = { say: 'You came back to “correct” three times.', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: card.NEXT_TITLE }] }, ready: false };
   const result = replyLines(card.resultText(SENTENCE), { level: { name: '', effort: '' }, trail: [], ms: 0 }, { model: false });
@@ -273,7 +273,7 @@ test('an @brainstorm result is their sentence, then one small line whose @discov
   const m = mounted(lines), row = (text) => m.lines().indexOf(text), offer = row(`bart> ${card.RESULT_OFFER}`);
   const drawn = await lineOf(m, offer);
   assert.match(drawn, /font-size:13px;line-height:1\.6;color:#8f8f8f/, 'small and grey');
-  assert.match(drawn, /data-act="resultask" data-agent="discover"[^>]*>@discover<\/button>, or ask about it with <button[^>]*data-act="resultask" data-agent="bart"[^>]*>@bart<\/button>/);
+  assert.match(drawn, /data-act="resultask" data-agent="discover"[^>]*>@discover<\/button>, or ask about it with <button[^>]*data-act="resultask" data-agent="bart"[^>]*>@chat<\/button>/);
   const said = await lineOf(m, row(`bart> ${SENTENCE}`));
   assert.ok(said.includes(SENTENCE) && !said.includes('<button') && !said.includes('font-weight:600'), 'their sentence as written, not a section');
   assert.ok(!m.editor.editorHtml().includes('data-recap-discover'), 'no Send to Discover row: the offer line stands in for it');
@@ -282,14 +282,14 @@ test('an @brainstorm result is their sentence, then one small line whose @discov
   assert.ok(!mid.includes('opendiscover') && !mid.includes('data-discover-input') && !mid.includes('resultask'), 'nothing under the cards in between');
   const ended = m.editor.editorHtml();
   assert.ok(!ended.includes('opendiscover') && ended.includes('resultask'), 'only the offer line under the finished result');
-  // @discover, then @bart: each a thread of its own after the brainstorm thread, on their sentence, with no earlier turns.
+  // @discover, then @chat: each a thread of its own after the brainstorm thread, on their sentence, with no earlier turns.
   const press = (agent) => m.editor.editorClick({ target: { closest: () => ({ dataset: { act: 'resultask', agent, row: String(offer) } }) }, preventDefault() {} });
   press('discover');
   assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns], ['discover', SENTENCE, []]);
   press('bart');
   assert.deepEqual([m.asks[1].agent, m.asks[1].text, m.asks[1].turns], ['bart', SENTENCE, []]);
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
-  assert.deepEqual(model.threads(m.lines()).map((t) => m.lines()[t.from]), ['@brainstorm corrigibility', `@bart ${SENTENCE}`, `@discover ${SENTENCE}`], 'each right after the brainstorm thread, the latest first');
+  assert.deepEqual(model.threads(m.lines()).map((t) => m.lines()[t.from]), ['@brainstorm corrigibility', `@chat ${SENTENCE}`, `@discover ${SENTENCE}`], 'each right after the brainstorm thread, the latest first');
   press('nope');
   assert.equal(m.asks.length, 2, 'no other agent');
   // Left open: nothing to send on, and nothing drawn as an offer.
@@ -310,7 +310,7 @@ test('Send to Discover is not drawn after @bart or @discover answers, under a re
   assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, '@bart\'s follow-up field is as it was');
 });
 
-test('the @ menu no longer offers Orient: the editor, the rail model and the workspace list Bart, Brainstorm and Discover; the rail names no Orient (M-01)', async () => {
+test('the @ menu no longer offers Orient: the editor, the rail model and the workspace list Bart, Chat, Brainstorm and Discover; the rail names no Orient (M-01)', async () => {
   assert.equal(editorModule.ORIENT_ITEM, undefined);
   const rail = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/rail.js')).href);
   assert.equal(rail.ORIENT_VERB, undefined);
@@ -318,7 +318,7 @@ test('the @ menu no longer offers Orient: the editor, the rail model and the wor
   assert.equal(rail.isVerbRow({ id: 'orient' }), false);
   const fs = require('node:fs');
   const workspaceSrc = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
-  assert.match(workspaceSrc, /\[BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, /);
+  assert.match(workspaceSrc, /\[BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, /);
   assert.ok(!/ORIENT_ITEM/.test(workspaceSrc));
   assert.ok(!/Orient asked/.test(fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Rail.jsx'), 'utf8')));
   // A row picked from an editor's own list by id: no @Orient is written.

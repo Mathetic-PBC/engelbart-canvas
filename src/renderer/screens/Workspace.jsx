@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
-import { BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
+import { BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM } from '../workspace/DocEditor.jsx';
 import DocPane from '../workspace/DocPane.jsx';
 import GettingStarted from '../workspace/GettingStarted.jsx';
 import { EMPTY_HINT, discoverPapers, stepsHere } from '../model/getting-started.js';
@@ -22,7 +22,7 @@ import { zoteroChipAction } from '../model/zotero.js';
 import { flatWorkspaces, nextPlace } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
-import { buildLine, placeAnswer, placeTitle, askedAt } from '../model/doc.js';
+import { buildLine, placeAnswer, placeTitle, askedAt, migrateChatLines } from '../model/doc.js';
 import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
 import { addOrFind } from '../model/add-or-find.js';
@@ -312,13 +312,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // Every pane's document is read once, when first shown; a read under way is not asked again while another pane is typed in.
   const reading = React.useRef(new Set()); // doc keys being read
+  const changeDocRef = React.useRef(null); // changeDoc, defined below
   React.useEffect(() => {
     for (const { key, ref } of paneDocs) {
       if (!key || !ref || docs[key] !== undefined || reading.current.has(key)) continue;
       reading.current.add(key);
       const read = ref.kind === 'archive' ? api.readArchive(project.id, ref.workspaceId, ref.file).then((got) => got.text) : api.readDoc(project.id, ref);
       read.then((text) => {
-        setDocs((current) => (current[key] === undefined ? { ...current, [key]: text } : current));
+        // A document from before the router (2026-10-12, doc.js migrateChatLines): its answered `@bart` lines become
+        // `@chat`, saved as an ordinary edit. An archived version is read as it was.
+        const moved = ref.kind === 'archive' ? { text, count: 0 } : migrateChatLines(text);
+        setDocs((current) => (current[key] === undefined ? { ...current, [key]: moved.text } : current));
+        if (moved.count) changeDocRef.current(key, ref, moved.text);
       }).catch((error) => onError(error)).finally(() => { reading.current.delete(key); });
     }
   }, [paneDocs, docs, project.id, onError]);
@@ -385,6 +390,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (previous) clearTimeout(previous.timer);
     pending.current.set(key, { ref, text, timer: setTimeout(() => flush(key), SAVE_DELAY) });
   }, [flush]);
+  changeDocRef.current = changeDoc;
 
   // Typing here makes this the workspace written in last (state.json `recent`): told at once when it was another one, then
   // at most every half minute. Only what is typed counts, not an answer landing or the editor tidying its ends.
@@ -559,7 +565,20 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     setTimeout(attempt, 0);
   }, []);
 
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name }) => {
+  // A Build started from a line (2026-10-12; was askBart's alone): `@chat --build …` and `@bart --build …`, an `@bart`
+  // line Bart, the router, handed to Build, and an answer's footer Build. Everything open is saved first; the Build is
+  // given `text` as a request typed on a line of the workspace. `routedFrom`: the router's record, told where the line went.
+  const buildFrom = React.useCallback(async (ref, text, routedFrom = null) => {
+    const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
+    await new Promise((resolve) => { setTimeout(resolve, 0); }); // the pending line (or the edit) reaches `pending` first
+    await Promise.all([...pending.current.keys()].map((held) => flush(held)));
+    const task = await api.buildStart(project.id, { workspaceId, text, fromLine: true, ...(routedFrom ? { routedFrom } : {}) });
+    setBuilds((current) => ({ ...current, [task.id]: task }));
+    if (routedFrom && api.routeHanded) api.routeHanded(routedFrom, `build:${task.id}`).catch(() => {});
+    return task;
+  }, [topic, project.id, flush]);
+
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null }) => {
     if (!key || !ref || !topic) return;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
     let answered = null;
@@ -597,10 +616,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (build) {
       try {
         if (!build.request) { place(['bart> **No Build.** Write what to build after --build.']); return; }
-        await new Promise((resolve) => { setTimeout(resolve, 0); }); // as below: the pending line is saved with the rest
-        await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-        const task = await api.buildStart(project.id, { workspaceId, text: build.request, fromLine: true });
-        setBuilds((current) => ({ ...current, [task.id]: task }));
+        const task = await buildFrom(ref, build.request, routed && routed.id);
         place([buildLine(task.id)]);
       } catch (error) {
         place([`bart> **No Build.** ${errorMessage(error)}`]);
@@ -612,7 +628,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow() });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}) });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? [] : out.lines);
@@ -623,7 +639,48 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
-  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow, tickWalk, handOff]);
+  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow, tickWalk, handOff, buildFrom]);
+
+  // Bart, the router (2026-10-12; main/bart/route.cjs): which agent an `@bart` line is for. Its pending line says
+  // "Choosing an agent…" until the editor hands the line over (DocEditor handOff), which asks under the same id. A rule's
+  // pick (`rule`) is only logged. Failing, the line goes to Chat.
+  const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, rule }) => {
+    setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: 'router', activity: 'Choosing an agent…' } }));
+    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: 'chat', sure: 0, by: 'none' };
+    try {
+      return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, rule })) || fallback;
+    } catch {
+      return fallback;
+    }
+  }, [project.id, topic]);
+  const routeGone = React.useCallback((askId) => { setAsks((current) => { const next = { ...current }; delete next[askId]; return next; }); }, []);
+
+  // A Build from the editor (2026-10-12): an `@bart` line Bart handed to Build, whose card takes its pending line's place
+  // (`askId`), or an answer's footer Build, whose card goes on a line of its own after the thread: after line `after`,
+  // found again by its words (`afterLine`) if the document moved meanwhile, else at the end.
+  const buildFromEditor = React.useCallback(async (key, ref, { text, askId = null, routedFrom = null, after = null, afterLine = null }) => {
+    if (!key || !ref || !topic) return;
+    const put = (lines) => {
+      const held = docsRef.current[key];
+      if (typeof held !== 'string') return;
+      if (askId) { const next = placeAnswer(held, askId, lines); if (next !== null) changeDoc(key, ref, next); return; }
+      const ls = held.split('\n');
+      let at = after != null && ls[after] === afterLine ? after : -1;
+      if (at < 0 && afterLine != null) ls.forEach((line, k) => { if (line === afterLine && (at < 0 || Math.abs(k - after) < Math.abs(at - after))) at = k; });
+      if (at < 0) { while (ls.length && !ls[ls.length - 1].trim()) ls.pop(); at = ls.length - 1; }
+      ls.splice(at + 1, 0, ...lines);
+      changeDoc(key, ref, ls.join('\n'));
+    };
+    if (askId) setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: 'router', activity: 'Starting a Build' } }));
+    try {
+      const task = await buildFrom(ref, text, routedFrom);
+      put([buildLine(task.id)]);
+    } catch (error) {
+      if (askId) put([`bart> **No Build.** ${errorMessage(error)}`]); else onError(error);
+    } finally {
+      if (askId) setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
+    }
+  }, [topic, buildFrom, changeDoc, onError]);
 
   /* ----------------------------------------------------------------- Build */
 
@@ -927,7 +984,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const letGo = React.useMemo(() => letGoNotes({ workspaces: tree.workspaces, notes: tree.notes }), [tree.workspaces, tree.notes]);
   const findable = React.useMemo(() => (letGo.size ? library.filter((row) => !letGo.has(row.id)) : library), [library, letGo]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map((row) => (letGo.has(row.id) ? { ...describe(row), trashed: true } : describe(row)))], [library, letGo]);
+  const mentionable = React.useMemo(() => [BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, ...library.filter((row) => row.type !== 'image').map((row) => (letGo.has(row.id) ? { ...describe(row), trashed: true } : describe(row)))], [library, letGo]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.map((row) => row.id)), [rows]);
@@ -1889,6 +1946,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   ...editorProps,
                   onChange: (value) => onDocChange(doc.key, doc.ref, value),
                   onAsk: (ask) => askBart(doc.key, doc.ref, ask),
+                  onRoute: (input) => routeLine(doc.key, input),
+                  onRouteGone: routeGone,
+                  onBuild: doc.ref && (doc.ref.kind === 'workspace' || topic) && doc.ref.kind !== 'archive' ? (input) => buildFromEditor(doc.key, doc.ref, input) : undefined,
                   onOpenBeside: openDocBeside,
                   besideLink: next && next.kind !== 'workspace' ? next.link : null,
                   besideWorkspace: next && next.kind === 'workspace' ? next.id : null,

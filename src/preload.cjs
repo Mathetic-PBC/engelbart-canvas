@@ -187,6 +187,8 @@ const engelbartAPI = Object.freeze({
   writeDoc: invoke('write-doc'),
   copyDoc: invoke('copy-doc'),
   askBart: invoke('ask-bart'),
+  routeLine: invoke('route-line'),
+  routeHanded: invoke('route-handed'),
   stopBart: invoke('stop-bart'),
   bartModels: invoke('bart-models'),
   // A new thread's title ({ text, agent } → { title, provider, model, modelName, effort, ms, named }; bart/name-chat.cjs).

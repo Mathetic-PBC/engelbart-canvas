@@ -16,13 +16,14 @@
 // blank line, the <file> and a blank line between the question and its replies (2026-10-04, `@brainstorm @[Paper]`). That
 // stays with the line it is under, so the replies after it are still that question's; under a reply left out, it goes too.
 
-const BART_RE = /^@(bart|brainstorm|orient|discover)(?:\s(.*))?$/i;
+const BART_RE = /^@(bart|chat|brainstorm|orient|discover)(?:\s(.*))?$/i;
 const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 const PENDING_RE = /^bart~> ?([\w-]*)$/;
 const TITLE_RE = /^bart#(\+?) ?(.*)$/;
 const OMITTED = '[agent reply omitted]';
-// An agent a line names by another word: `@orient` is @brainstorm's.
-const SAME_AS = { orient: 'brainstorm' };
+// An agent a line names by another word: `@orient` is @brainstorm's; `@chat` is the agent the app calls 'bart', and an
+// `@bart` line is the router's (2026-10-12, src/renderer/model/doc.js tokenOf).
+const SAME_AS = { orient: 'brainstorm', chat: 'bart', bart: 'router' };
 const FILE_RE = /^<file\s/;
 const CLOSED_RE = /\/>$/;
 const FILE_END = '</file>';

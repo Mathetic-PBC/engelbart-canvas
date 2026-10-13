@@ -72,7 +72,7 @@ function toolCallsOf(event) {
 }
 
 /**
- * → { start, step, event, output, note, finish, list, get, flush }. `file`: the JSONL file (null keeps nothing on disk);
+ * → { start, step, event, output, note, finish, amend, find, list, get, flush }. `file`: the JSONL file (null keeps nothing on disk);
  * `onChange(record)`: each change to a run, the record without its big fields (as list() gives it); `maxRuns`: how many
  * runs are kept.
  */
@@ -217,6 +217,19 @@ function createRunLog({ file = null, onChange = () => {}, maxRuns = 300, now = D
       save(record);
       changed(record);
     }),
+    /**
+     * Fields set on a run after it ended: the router's record learns where its line went (`handedTo`) and the agent the
+     * person picked instead (`corrected`). Only plain fields; a run's steps and prompt stay as they were.
+     */
+    amend: safe((id, patch = {}) => {
+      const record = runs.get(id);
+      if (!record || !isObject(patch)) return;
+      for (const [key, value] of Object.entries(patch)) if (!['id', 'steps', 'systemHash', 'system'].includes(key)) record[key] = value;
+      save(record);
+      changed(record);
+    }),
+    /** The newest run for which `test(record)` holds, without its big fields; null when none does. */
+    find: (test) => { for (const record of [...runs.values()].reverse()) { try { if (test(record)) return summary(record); } catch { /* not this one */ } } return null; },
     /** Every run, newest first, without its big fields. */
     list: () => [...runs.values()].reverse().map(summary),
     /** One run whole, its system prompt in place. */

@@ -2,7 +2,7 @@
 // one self-contained HTML file, its styles inline and the runs' data in it, sections as <details> so it needs no script.
 
 // The agents a question line runs, and the ones a Build runs (the list's filter).
-export const QUESTION_AGENTS = ['bart', 'brainstorm', 'discover'];
+export const QUESTION_AGENTS = ['router', 'bart', 'brainstorm', 'discover'];
 export const BUILD_AGENTS = ['build', 'run step'];
 export const FILTERS = [['all', 'All'], ['questions', 'Questions'], ['builds', 'Builds']];
 
@@ -13,12 +13,15 @@ export function filterRuns(runs, filter) {
   return runs;
 }
 
-/** A run's name in the list and its header: "@bart", "@build <title> · turn n", "@build quick", "@run step <title>". */
+/**
+ * A run's name in the list and its header: "@chat", "@bart → @discover" (agentLabel), "@build <title> · turn n",
+ * "@build quick", "@run step <title>".
+ */
 export function runLabel(run) {
   if (!run) return '';
-  if (run.agent === 'build') return run.kind === 'quick' ? '@build quick' : `@build ${run.title || ''} · turn ${run.turn == null ? '?' : run.turn}`;
+  if (run.agent === 'build') return `${run.kind === 'quick' ? '@build quick' : `@build ${run.title || ''} · turn ${run.turn == null ? '?' : run.turn}`}${run.routedFrom ? ' · via Bart' : ''}`;
   if (run.agent === 'run step') return `@run step ${run.title || ''}`;
-  return `@${run.agent}`;
+  return agentLabel(run);
 }
 
 const blockLabel = (key) => (key === 'prompt' ? 'prompt' : key === 'other' ? 'text outside any block' : key === 'reply' ? 'sent this turn (<reply>, or everything again)' : `<${key}>`);
@@ -37,6 +40,7 @@ export function contextBlocks(record) {
     ['conversation', '<conversation>', c.conversation],
     ['extra', 'extra (<path>, <mode>…)', c.extra],
     ['dirs', 'folders granted', Array.isArray(c.dirs) ? c.dirs.join('\n') : c.dirs],
+    ['input', 'the router\'s input (line, section, threads, spec above)', c.input],
   ].map(([key, label, text]) => ({ key, label, text: text == null ? '' : String(text) }));
 }
 
@@ -54,6 +58,18 @@ export function timeLabel(at, now = Date.now()) {
 }
 export const msLabel = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60000)} m ${Math.round((ms % 60000) / 1000)} s`);
 
+/**
+ * A run's agent as the runs list names it (2026-10-12): the internal 'bart' is @chat; a router's record says where it
+ * sent the line ("@bart → @discover", "@bart → Build"), and a run Bart handed over or the person corrected says so.
+ */
+export function agentLabel(run) {
+  const word = (agent) => (agent === 'build' ? 'Build' : `@${agent === 'bart' ? 'chat' : agent}`);
+  if (run.agent === 'router') {
+    const to = run.handedTo && /^build:/.test(run.handedTo) ? 'Build' : run.pick ? word(run.pick) : '…';
+    return `@bart → ${to}${run.corrected ? ` (corrected to ${word(run.corrected)})` : ''}${run.by === 'rule' ? ` · rule: ${run.rule || '?'}` : run.sure != null ? ` · sure ${run.sure}` : ''}`;
+  }
+  return `${word(run.agent)}${run.routedFrom ? ' · via Bart' : ''}${run.corrected ? ` · corrected from Bart` : ''}`;
+}
 /** "model · effort" for the list: the last step's, which is where it ended up. */
 export const modelLabel = (run) => [run.model, run.effort].filter(Boolean).join(' · ') || (run.status === 'running' ? 'starting' : 'no model run');
 

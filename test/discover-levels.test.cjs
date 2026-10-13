@@ -2,7 +2,7 @@
 
 // @discover's level chip (2026-10-03): an unanswered @discover line shows the level it would run at ("Standard ⌄"), or the
 // model and effort a flag pins it to, and its menu lists Quick, Standard and Deep with the model and effort of each. A
-// pick is written into the line as a flag (question.cjs withMode). @bart's chip and selector stay as they were, and
+// pick is written into the line as a flag (question.cjs withMode). @chat's chip and selector stay as they were, and
 // @brainstorm has no chip. There is no document here: the editor is mounted on stand-ins, as in doc-editor-cards.
 
 const test = require('node:test');
@@ -101,7 +101,7 @@ test('bart-models also returns @discover\'s levels per provider, cut to the prov
 
 test('the chip on an @discover line: Standard, Quick, Deep, or the model and effort a flag pins (L-03)', async () => {
   const m = mounted(['@discover how tools point a reader to a passage', '', '@discover --quick why', '', '@Discover why --deep', '', '@discover --opus --high why', '', '@discover', '', '@discover why --deep --high']);
-  assert.deepEqual(await Promise.all([0, 2, 4, 6, 8, 10].map((i) => m.chip(i))), ['Standard', 'Quick', 'Deep', 'Opus High', 'Standard', 'Sonnet High'], 'an effort alone pins the step it pairs with, as on @bart');
+  assert.deepEqual(await Promise.all([0, 2, 4, 6, 8, 10].map((i) => m.chip(i))), ['Standard', 'Quick', 'Deep', 'Opus High', 'Standard', 'Sonnet High'], 'an effort alone pins the step it pairs with, as on @chat');
   assert.match(await m.lineOf(0), /data-act="pick" data-row="0" role="button" aria-haspopup="dialog" aria-expanded="false"[^>]*>Standard<span[^>]*><span[^>]*>⌄<\/span><\/span><\/span><button contenteditable="false" data-act="ask"/, 'the chip, then send (A-01)');
   assert.equal(await mounted(['@discover why'], null).chip(0), null, 'no chip before the models load');
 });
@@ -142,13 +142,13 @@ test('picking writes the level into the line: Deep adds --deep, Standard takes i
   follow.pick(2, 'deep');
   assert.deepEqual(follow.lines()[2], '@discover more like these');
 
-  const bart = mounted(['@bart how people read']);
+  const bart = mounted(['@chat how people read']);
   bart.pick(0, 'deep');
-  assert.deepEqual(bart.lines(), ['@bart how people read'], 'an @bart line takes no level');
+  assert.deepEqual(bart.lines(), ['@chat how people read'], 'an @chat line takes no level');
 });
 
-test('the chip opens DiscoverLevels on @discover lines and BartPicker on @bart lines, unchanged; @brainstorm has no chip', async () => {
-  const m = mounted(['@discover why --deep', '', '@bart why', '', '@brainstorm', '', '@Bart --opus --high why', '', '@discover --sonnet why']);
+test('the chip opens DiscoverLevels on @discover lines and BartPicker on @chat lines, unchanged; @brainstorm has no chip', async () => {
+  const m = mounted(['@discover why --deep', '', '@chat why', '', '@brainstorm', '', '@Chat --opus --high why', '', '@discover --sonnet why']);
   const levels = m.view(0);
   assert.equal(levels.type.name, 'DiscoverLevels');
   assert.deepEqual(levels.props.current, { mode: 'deep', provider: 'anthropic', pinned: false });
@@ -161,7 +161,7 @@ test('the chip opens DiscoverLevels on @discover lines and BartPicker on @bart l
   assert.match(await m.lineOf(4), /<span contenteditable="false" style="flex:none;margin-top:3px"><button contenteditable="false" data-act="ask"/, 'only the send button');
   m.editor.state.picker = { kind: 'line', i: 6, left: null, right: 0, top: 0, bottom: 0, choice: null };
   m.editor.pickModel({ model: 'fable', effort: 'xhigh' });
-  assert.equal(m.lines()[6], '@Bart --fable --xhigh why', '@bart\'s pick still writes model and effort, its lead as written');
+  assert.equal(m.lines()[6], '@Chat --fable --xhigh why', '@chat\'s pick still writes model and effort, its lead as written');
 });
 
 test('the level menu: Quick, Standard and Deep with the model and effort of each, on Claude Code and on Codex; the level in force checked, none when pinned (L-04, A-02)', () => {
@@ -319,9 +319,9 @@ test('picking Codex › Deep writes --codex --deep and the chip reads "Codex · 
   assert.equal(await mounted(['@discover --codex --opus why']).chip(0), 'Opus High', 'a model flag still pins');
 });
 
-test('@bart\'s chip and BartPicker are unchanged by the provider flags (A-05)', async () => {
-  const m = mounted(['@bart why --codex', '', '@Bart --opus --high why']);
-  assert.equal(await m.chip(0), 'Sonnet High', '--codex is a word on an @bart line');
+test('@chat\'s chip and BartPicker are unchanged by the provider flags (A-05)', async () => {
+  const m = mounted(['@chat why --codex', '', '@Chat --opus --high why']);
+  assert.equal(await m.chip(0), 'Sonnet High', '--codex is a word on an @chat line');
   assert.doesNotMatch(await m.lineOf(0), /font-weight:500">--codex/);
   const picker = m.view(0);
   assert.equal(picker.type.name, 'BartPicker');
@@ -330,5 +330,5 @@ test('@bart\'s chip and BartPicker are unchanged by the provider flags (A-05)', 
   assert.match(html, /role="dialog" aria-label="Model and effort"[^>]*><div style="flex:1 1 0;min-width:0;padding:4px"><div style="position:relative;margin-bottom:4px"><div role="button" aria-haspopup="listbox" aria-expanded="false"[^>]*><span[^>]*>Claude Code<\/span><span[^>]*><span[^>]*>⌄<\/span><\/span><\/div><\/div><div role="listbox" aria-label="Model">/);
   m.editor.state.picker = { kind: 'line', i: 2, left: null, right: 0, top: 0, bottom: 0, choice: null };
   m.editor.pickModel({ model: 'astra', effort: 'ultra' });
-  assert.equal(m.lines()[2], '@Bart --astra --ultra why');
+  assert.equal(m.lines()[2], '@Chat --astra --ultra why');
 });

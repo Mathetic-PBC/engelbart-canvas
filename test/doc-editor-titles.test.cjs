@@ -1,7 +1,7 @@
 'use strict';
 
 // A conversation's title and Collapse (src/renderer/workspace/DocEditor.jsx, 2026-10-12). A question that starts a new
-// @bart, @brainstorm or @discover conversation gets an empty `bart# ` line above it, which the workspace fills in when
+// @chat, @brainstorm or @discover conversation gets an empty `bart# ` line above it, which the workspace fills in when
 // main's name-chat answers (src/main/bart/name-chat.cjs, test/bart.test.cjs); the answer starts at once. A titled
 // conversation has a header row and collapses whole to one row (`bart#+`); an older one, with no title line, folds a turn
 // at a time as before. There is no document here: the editor and its elements are stand-ins, as in doc-editor-edit.
@@ -59,7 +59,7 @@ function rowOf(html, i) {
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
 test('a new question gets an empty title line above it and is asked to be named; the answer is asked at once, as before', () => {
-  for (const [line, agent] of [['@bart why retry?', 'bart'], ['@brainstorm a plan', 'brainstorm'], ['@discover retries', 'discover']]) {
+  for (const [line, agent] of [['@chat why retry?', 'bart'], ['@brainstorm a plan', 'brainstorm'], ['@discover retries', 'discover']]) {
     const m = mounted(['Notes', line, 'After']);
     m.editor.askInline(1);
     const ls = m.lines();
@@ -76,7 +76,7 @@ test('a new question gets an empty title line above it and is asked to be named;
 
 test('no title for a follow-up, a question under an older conversation, one with a title already, or a Build', () => {
   // A follow-up sent from the field under an answer.
-  const follow = mounted(['bart# Retry logic', '@bart why retry?', ...answer('because'), '']);
+  const follow = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because'), '']);
   follow.editor.followText.set(1, 'and timeouts?');
   follow.editor.sendFollow(1);
   assert.equal(follow.asks.length, 1);
@@ -85,31 +85,31 @@ test('no title for a follow-up, a question under an older conversation, one with
   assert.equal(follow.lines()[0], 'bart# Retry logic', 'not renamed');
 
   // A question typed under an older conversation's answer is its next turn: no title, and none put in the old one.
-  const old = mounted(['@bart why retry?', ...answer('because'), '@bart and timeouts?']);
+  const old = mounted(['@chat why retry?', ...answer('because'), '@chat and timeouts?']);
   old.editor.askInline(4);
   assert.equal(old.asks[0].name, undefined);
   assert.ok(!old.lines().some((l) => l.startsWith('bart#')), 'an untitled conversation stays untitled');
 
   // A title the person wrote, or one left from before, is kept as it is.
-  const titled = mounted(['bart# Mine', '@bart why?']);
+  const titled = mounted(['bart# Mine', '@chat why?']);
   titled.editor.askInline(1);
   assert.equal(titled.asks[0].name, undefined);
-  assert.deepEqual(titled.lines().slice(0, 2), ['bart# Mine', '@bart why?']);
+  assert.deepEqual(titled.lines().slice(0, 2), ['bart# Mine', '@chat why?']);
 
-  const build = mounted(['@bart --build make it', '']);
+  const build = mounted(['@chat --build make it', '']);
   build.editor.askInline(0);
   assert.ok(!build.lines().some((l) => l.startsWith('bart#')));
 });
 
 test('the answer replaces its pending line with the title line above it, and the title fills in after the answer started', async () => {
   const { placeAnswer, placeTitle, askedAt } = await doc();
-  const m = mounted(['Notes', '@bart why retry?', '']);
+  const m = mounted(['Notes', '@chat why retry?', '']);
   m.editor.askInline(1);
   const { askId } = m.asks[0];
   // The answer lands first, as Workspace askBart places it, noting where its question stood.
   const near = askedAt(m.props.text, askId);
   m.props.text = placeAnswer(m.props.text, askId, answer('because'));
-  assert.deepEqual(m.props.text.split('\n').slice(0, 4), ['Notes', 'bart# ', '@bart why retry?', 'bart> because']);
+  assert.deepEqual(m.props.text.split('\n').slice(0, 4), ['Notes', 'bart# ', '@chat why retry?', 'bart> because']);
   assert.ok(!m.props.text.includes('bart~>'), 'the pending line is gone');
   // Then the title comes back and fills its line.
   m.props.text = placeTitle(m.props.text, askId, 'Retry logic', near);
@@ -117,15 +117,15 @@ test('the answer replaces its pending line with the title line above it, and the
   assert.match(m.html(), /data-title-row[\s\S]*Retry logic/);
 
   // Or the title first, while it is still running: the pending line is still the anchor.
-  const r = mounted(['@bart why retry?', '']);
+  const r = mounted(['@chat why retry?', '']);
   r.editor.askInline(0);
   r.props.text = placeTitle(r.props.text, r.asks[0].askId, 'Retry logic');
   r.props.text = placeAnswer(r.props.text, r.asks[0].askId, answer('because'));
-  assert.deepEqual(r.props.text.split('\n').slice(0, 3), ['bart# Retry logic', '@bart why retry?', 'bart> because']);
+  assert.deepEqual(r.props.text.split('\n').slice(0, 3), ['bart# Retry logic', '@chat why retry?', 'bart> because']);
 });
 
 test('an expanded titled conversation has a header: its title, and Collapse; the foot\'s Collapse folds the whole of it', () => {
-  const m = mounted(['bart# Retry logic', '@bart why retry?', ...answer('because'), '']);
+  const m = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because'), '']);
   const html = m.html(), head = rowOf(html, 0);
   assert.match(head, /data-title-row/);
   assert.match(head, /class="bart-title" data-act="edittitle" data-row="0"[^>]*font:13px[^>]*color:#4d4d4d[^>]*>Retry logic</);
@@ -136,7 +136,7 @@ test('an expanded titled conversation has a header: its title, and Collapse; the
 });
 
 test('collapsed: one row, the Agents icon and the title as a link; every line of it hidden; a click expands', () => {
-  const lines = ['Notes', 'bart#+ Retry logic', '@bart why retry?', ...answer('because'), '@bart timeouts?', ...answer('those too'), '', 'After'];
+  const lines = ['Notes', 'bart#+ Retry logic', '@chat why retry?', ...answer('because'), '@chat timeouts?', ...answer('those too'), '', 'After'];
   const m = mounted(lines);
   const html = m.html(), row = rowOf(html, 1);
   assert.match(row, /data-thread-row/);
@@ -146,7 +146,7 @@ test('collapsed: one row, the Agents icon and the title as a link; every line of
   assert.match(row, /data-act="foldthread" data-row="1"[^>]*color:#0070f3;font:14px/);
   assert.match(row, /<svg[^>]*width="14"[^>]*>/, 'the Agents icon at 14px');
   assert.match(row, />Retry logic</);
-  assert.match(row, /class="bart-tip"[^>]*>Bart</, 'hovering names the agent');
+  assert.match(row, /class="bart-tip"[^>]*>Chat</, 'hovering names the agent');
   const last = lines.indexOf('After') - 2;
   for (let i = 2; i <= last; i++) assert.match(rowOf(html, i), /^<div[^>]*display:none/, `line ${i} hidden`);
   const drawn = html.replace(/ data-raw="[^"]*"/g, '');
@@ -167,20 +167,20 @@ test('collapsed: one row, the Agents icon and the title as a link; every line of
 });
 
 test('a conversation at work cannot be collapsed: its Collapse is disabled, and `bart#+` on it is drawn open', () => {
-  const m = mounted(['bart# Retry logic', '@bart why retry?', 'bart~> run1', '']);
+  const m = mounted(['bart# Retry logic', '@chat why retry?', 'bart~> run1', '']);
   const head = rowOf(m.html(), 0);
   assert.match(head, /data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true" style="[^"]*" disabled/);
   assert.match(head, /Collapse once it answers/);
   m.editor.toggleThread(0);
   m.click('foldthread', { row: '0' }, true);
   assert.equal(m.lines()[0], 'bart# Retry logic');
-  const open = mounted(['bart#+ Retry logic', '@bart why retry?', 'bart~> run1', '']).html();
+  const open = mounted(['bart#+ Retry logic', '@chat why retry?', 'bart~> run1', '']).html();
   assert.match(rowOf(open, 0), /data-title-row/);
   assert.ok(!open.includes('data-thread-row'));
 });
 
 test('Collapse all folds titled conversations by their title line, older ones a turn at a time; Expand all opens both', () => {
-  const lines = ['bart# Retry logic', '@bart why retry?', ...answer('because'), '', '@bart old one?', ...answer('old'), ''];
+  const lines = ['bart# Retry logic', '@chat why retry?', ...answer('because'), '', '@chat old one?', ...answer('old'), ''];
   const m = mounted(lines);
   m.editor.foldAll(true);
   const ls = m.lines();
@@ -194,7 +194,7 @@ test('Collapse all folds titled conversations by their title line, older ones a 
 });
 
 test('clicking the title edits it in place: Enter writes it, Escape and an empty field change nothing', () => {
-  const m = mounted(['bart# Retry logic', '@bart why retry?', ...answer('because'), '']);
+  const m = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because'), '']);
   m.click('edittitle', { row: '0' });
   assert.match(m.html(), /<input[^>]*data-title-input="0"[^>]*value="Retry logic"/);
   const input = { value: 'Retries and backoff' };
@@ -207,7 +207,7 @@ test('clicking the title edits it in place: Enter writes it, Escape and an empty
   m.editor.commitTitle({ value: '   ' });
   assert.equal(m.lines()[0], 'bart# Retries and backoff');
   // Renaming a collapsed one keeps it collapsed.
-  const f = mounted(['bart#+ Retry logic', '@bart why retry?', ...answer('because'), '']);
+  const f = mounted(['bart#+ Retry logic', '@chat why retry?', ...answer('because'), '']);
   f.editor.titleEdit = { line: 0, value: 'Retry logic' };
   f.editor.commitTitle({ value: 'Backoff' });
   assert.equal(f.lines()[0], 'bart#+ Backoff');
@@ -217,13 +217,13 @@ test('a title with no question under it is the text it is; deleting a titled con
   const plain = mounted(['bart# Left behind', 'Notes']).html();
   assert.ok(!plain.includes('data-title-row') && !plain.includes('data-thread-row'));
   assert.match(plain, /bart# Left behind/);
-  const m = mounted(['Notes', 'bart# Retry logic', '@bart why retry?', ...answer('because'), '', 'After']);
+  const m = mounted(['Notes', 'bart# Retry logic', '@chat why retry?', ...answer('because'), '', 'After']);
   m.editor.deleteTurn(2);
   assert.deepEqual(m.lines(), ['Notes', '', 'After']);
 });
 
 test('cards are compact: question 8px 12px (6px after an answer), foot 4px 10px 6px, follow-up 10px 12px, 8px under a card', () => {
-  const html = mounted(['@bart first?', ...answer('one'), '@bart second?', ...answer('two'), '']).html();
+  const html = mounted(['@chat first?', ...answer('one'), '@chat second?', ...answer('two'), '']).html();
   assert.match(rowOf(html, 0), /padding:8px 12px/);
   assert.match(rowOf(html, 4), /padding:6px 12px/);
   assert.match(html, /padding:4px 10px 6px/);

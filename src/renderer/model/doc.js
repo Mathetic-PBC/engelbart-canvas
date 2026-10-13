@@ -16,7 +16,10 @@ export const IMG_RE = /^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\
 // `@discover` (2026-09-30) too: a card or two to refine the problem, then a reading guide, which is an answer like @bart's.
 // `@orient` (2026-10-04) was an agent of its own; since 2026-10-05 it is an older name for @brainstorm: the line is
 // still read and drawn as written, and asked as @brainstorm (agentOf).
-export const BART_RE = /^@(bart|brainstorm|orient|discover)(?:\s(.*))?$/i;
+// `@chat` (2026-10-12) asks the question-answering agent, which is still 'bart' inside the app (its settings, sessions,
+// models file and run log keep that name); `@bart` is now the router (agent 'router'), which picks Chat, Brainstorm,
+// Discover or Build for the line and steps aside. tokenOf gives the word a line is written with for each agent.
+export const BART_RE = /^@(bart|chat|brainstorm|orient|discover)(?:\s(.*))?$/i;
 // An answer under an @bart line, one prefix per line (src/main/bart/reply.cjs writes them): pending while the run with
 // that id works, then a reply. A reply is kept as it arrives (2026-09-21: no Save; Delete is the way out) and its text
 // can be edited; `bart+> ` is the same line folded away by Collapse, so a fold is in the file and survives everything
@@ -79,7 +82,7 @@ export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 // Math (2026-10-12): `$…$` inline by Pandoc's rule (no space just inside either `$`, the closing `$` not followed by a
 // digit, so "$5 and $10" stays text), `$$…$$` display, and `\$` a dollar as typed. Drawn with KaTeX (renderMath).
 const MATH_SRC = String.raw`\$\$(?:[^$\n\\]|\\.)+?\$\$|\$(?=[^\s$])(?:[^$\n\\]|\\.)+?(?<!\s)\$(?!\d)|\\\$`;
-export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
+export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Cc]hat|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // A math token's source as a whole: `$$…$$` (display) or `$…$` (inline), the same rules as INLINE's.
 const DISPLAY_MATH_RE = /^\$\$((?:[^$\n\\]|\\.)+?)\$\$$/;
@@ -230,10 +233,15 @@ const ZOTERO_ICON = svgIcon('<path d="M3 2.5h7.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1
 // A bare address, typed, pasted or written by @bart, is a link as it stands (closing punctuation is not part of it).
 const URL_RE = /^https?:\/\/\S+$/;
 
-/** Which agent a question line asks: 'bart', 'brainstorm' or 'discover'. An `@orient` line asks @brainstorm (2026-10-05). */
-export const agentOf = (p) => (p && p.agent === 'orient' ? 'brainstorm' : p && (p.agent === 'brainstorm' || p.agent === 'discover') ? p.agent : 'bart');
+/**
+ * Which agent a question line asks: 'bart' (an `@chat` line), 'router' (an `@bart` line), 'brainstorm' or 'discover'. An
+ * `@orient` line asks @brainstorm (2026-10-05).
+ */
+export const agentOf = (p) => (p && p.agent === 'orient' ? 'brainstorm' : p && (p.agent === 'brainstorm' || p.agent === 'discover' || p.agent === 'router') ? p.agent : 'bart');
+/** The word a line asking `agent` starts with (2026-10-12): Chat's is `chat`, the router's `bart`, every other its own name. */
+export const tokenOf = (agent) => (agent === 'bart' || !agent ? 'chat' : agent === 'router' ? 'bart' : agent);
 /** The token that starts a question line, as INLINE splits it out. */
-export const AGENT_TOKEN = /^@(bart|brainstorm|orient|discover)$/i;
+export const AGENT_TOKEN = /^@(bart|chat|brainstorm|orient|discover)$/i;
 /**
  * Text pasted into a question line, as one line (2026-10-02): a question is one line of the document, and a paste split
  * over several put all but its first line under the question, where it was never asked. Each line break, with the
@@ -245,7 +253,7 @@ const depthOf = (indent) => Math.min(8, Math.floor(indent.length / 2));
 
 export const parseLine = (l) => {
   let m;
-  if ((m = l.match(BART_RE))) { const agent = m[1].toLowerCase(); return agent === 'bart' ? { type: 'bart', text: m[2] || '' } : { type: 'bart', text: m[2] || '', agent }; }
+  if ((m = l.match(BART_RE))) { const agent = m[1].toLowerCase(); return agent === 'chat' ? { type: 'bart', text: m[2] || '' } : { type: 'bart', text: m[2] || '', agent: agent === 'bart' ? 'router' : agent }; }
   if ((m = l.match(BUILD_RE))) return { type: 'build', id: m[1], text: '' };
   if ((m = l.match(PENDING_RE))) return { type: 'pending', id: m[1], text: '' };
   if ((m = l.match(TITLE_RE))) return { type: 'title', text: m[2], folded: m[1] === '+' };
@@ -497,6 +505,32 @@ export function turnText(lines, turn) {
   const body = [];
   for (let i = turn.from; i <= turn.to; i++) { const p = parseLine(lines[i]); if (p.type === 'reply' && i !== turn.foot) body.push(p.text); }
   return { question: parseLine(lines[turn.q]).text.trim(), answer: body.join('\n').trim() };
+}
+
+/**
+ * A document written before the router (2026-10-12): every `@bart` line that was answered as a question (a `bart>`,
+ * `bart+>`, `bart?>` or `bart~>` line right under it) asked the agent now called Chat, so it is written `@chat`, its text
+ * and flags as they were (`@Bart` from the @ menu becomes `@Chat`). An `@bart` line with a `build>` card under it was a
+ * Build request and stays: the router sends it to Build too. Lines inside code blocks are code. Run again, it changes
+ * nothing. → { text, count }: the document, and how many lines were rewritten.
+ */
+export function migrateChatLines(text) {
+  const source = String(text ?? ''), lines = source.split('\n'), ps = parseLines(lines);
+  let count = 0;
+  for (let i = 0; i + 1 < lines.length; i++) {
+    if (ps[i].type !== 'bart' || ps[i].agent !== 'router') continue;
+    const under = ps[i + 1];
+    if (under.type !== 'reply' && under.type !== 'pending') continue;
+    lines[i] = lines[i].replace(/^@(b)art/i, (all, b) => (b === 'B' ? '@Chat' : '@chat'));
+    count += 1;
+  }
+  return { text: count ? lines.join('\n') : source, count };
+}
+
+/** The fenced code blocks of an answer's text, in order, each as the code it holds (no fences). */
+export function answerFences(answer) {
+  const lines = String(answer ?? '').split('\n');
+  return codeBlocks(lines).map((block) => lines.slice(block.open + 1, block.close).join('\n'));
 }
 
 // A mention that names nothing any more (MATH-60): the name as written, in grey, with nothing to click and no card; `why`

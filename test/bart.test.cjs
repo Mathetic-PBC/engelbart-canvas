@@ -267,13 +267,14 @@ test('an answer becomes kept lines that say which model gave it; quotes are flat
   assert.deepEqual(model.parseLine('bart> kept'), { type: 'reply', text: 'kept', folded: false });
   assert.deepEqual(model.parseLine('bart+> folded away'), { type: 'reply', text: 'folded away', folded: true });
   // What the editor reads back from the document is what the runner filed the session under: a follow-up finds it.
-  const doc = ['@bart --sol why?', ...written, '@bart and then?', 'bart~> k2'];
+  const doc = ['@chat --sol why?', ...written, '@chat and then?', 'bart~> k2'];
   const [thread] = model.threads(doc);
   assert.deepEqual(thread.turns.map((turn) => [turn.q, turn.from, turn.to, turn.foot, turn.pending]), [[0, 1, 7, 7, null], [8, 9, 9, -1, 'k2']]);
   assert.deepEqual(model.turnText(doc, thread.turns[0]), { question: '--sol why?', answer: answerText('One.\n\n\n\n## Two  \n> quoted\n- item\r\n') });
   assert.deepEqual(model.parseLine('bart~> k3-x9'), { type: 'pending', id: 'k3-x9', text: '' });
-  assert.deepEqual(model.parseLine('@bart --opus why'), { type: 'bart', text: '--opus why' });
-  assert.deepEqual(model.parseLine('@chat old'), { type: 'p', text: '@chat old' });
+  assert.deepEqual(model.parseLine('@chat --opus why'), { type: 'bart', text: '--opus why' });
+  assert.deepEqual(model.parseLine('@bart --opus why'), { type: 'bart', text: '--opus why', agent: 'router' }, '@bart is the router (2026-10-12)');
+  assert.deepEqual(model.parseLine('@chatty old'), { type: 'p', text: '@chatty old' });
   assert.ok(['quote', 'reply', 'pending'].every(model.isAnswer) && !model.isAnswer('bart'));
 });
 
@@ -1126,7 +1127,7 @@ test('@brainstorm\'s system prompt says what the harness relies on, and a file r
     '"@orient" is an older name for you.',
     '# The subject', '<question> on the first turn names the subject: a topic in their words, a mentioned paper ("mentioned": true in <context_json>), or both, where the topic says which part of the paper they care about.', 'After an exchange has ended, a new "@brainstorm" line opens a new one the same way.',
     'When there is a paper, open it from its path before the first card and keep what it says to yourself. A summary is not the paper. If you cannot open it, go on from the topic alone.',
-    'what they wrote after "@bart", "@brainstorm", "@orient" or "@discover"',
+    'what they wrote after "@bart", "@chat", "@brainstorm", "@orient" or "@discover"',
     // The cards follow the person: a loose first card, then one mentor's move on their last answer, picked by the agent.
     'The cards follow the person, not a fixed order.',
     // MATH-40 round 3: the first card asks the plain thing a person would, never what draws them to it.
@@ -1585,7 +1586,8 @@ test('the next card always reads the same: on the next stage, or when the agent 
   assert.deepEqual([card.sameWords('An agent, that lets you correct it!', 'an agent that lets you  correct it'), card.sameWords('correct it', 'an agent that lets you correct it'), card.sameWords('', '')], [true, false, false], 'the same words, not some of them');
   assert.equal(card.resultText('  Read   the logs. '), `Read the logs.\n${card.RESULT_OFFER}`);
   assert.equal(card.resultText(''), card.LEFT_OPEN);
-  assert.equal(card.RESULT_OFFER, 'Find papers on it with @discover, or ask about it with @bart.');
+  assert.equal(card.RESULT_OFFER, 'Find papers on it with @discover, or ask about it with @chat.');
+  assert.ok(card.isResultOffer('Find papers on it with @discover, or ask about it with @bart.'), 'an older result\'s offer still reads as one');
   assert.deepEqual(card.resultParts(card.resultText('Read the logs.')), { sentence: 'Read the logs.' });
   for (const text of [card.LEFT_OPEN, card.RESULT_OFFER, 'What you know: a\nYour question: b', '']) assert.equal(card.resultParts(text), null, text);
   assert.equal(card.cardOfAnswer(card.resultText('Read the logs.')), null, 'a result asks nothing');
@@ -2420,7 +2422,7 @@ test('the fake @discover asks one card (which part, in broad areas) for a line w
   assert.equal(long.lines[0], 'bart> ## Start here');
   assert.ok(long.lines.some((line) => /\(standard mode\)/.test(line)));
   const parsed = model.parseLine('@Discover why');
-  assert.deepEqual([parsed.agent, model.agentOf(parsed), model.agentOf(model.parseLine('@bart why'))], ['discover', 'discover', 'bart']);
+  assert.deepEqual([parsed.agent, model.agentOf(parsed), model.agentOf(model.parseLine('@chat why')), model.agentOf(model.parseLine('@bart why'))], ['discover', 'discover', 'bart', 'router']);
   projects.agentStarted(ctx, { id: 'dv-agent', kind: 'discover', projectId: project.id, workspaceId: workspace.id });
   projects.agentFinished(ctx, 'dv-agent');
 });

@@ -303,7 +303,7 @@ test('continueLines: the passage and where it is, then the question and the answ
   const { continueLines } = await load();
   assert.deepEqual(continueLines({ quote: 'κ was\n0.79 overall', question: 'is that good?', answer: 'Yes.\n\nSee p. 6.', foot: 'Sonnet · high · 4 s', paper: { name: 'TutorTrace', rowId: 'r1' }, page: 6 }), [
     '“κ was 0.79 overall” (@[TutorTrace], p. 6)',
-    '@bart is that good?',
+    '@chat is that good?',
     'bart> Yes.',
     'bart>',
     'bart> See p. 6.',
@@ -311,7 +311,7 @@ test('continueLines: the passage and where it is, then the question and the answ
     'bart> *Sonnet · high · 4 s*',
   ]);
   assert.equal(continueLines({ quote: 'q', question: 'why\nnow', answer: 'A', paper: { name: 'Scim', url: 'https://arxiv.org/pdf/1' }, page: 2 })[0], '“q” ([Scim](https://arxiv.org/pdf/1), p. 2)');
-  assert.equal(continueLines({ quote: 'q', question: 'why\nnow', answer: 'A', paper: { name: 'Scim', url: 'https://arxiv.org/pdf/1' }, page: 2 })[1], '@bart why now', 'the question on one line');
+  assert.equal(continueLines({ quote: 'q', question: 'why\nnow', answer: 'A', paper: { name: 'Scim', url: 'https://arxiv.org/pdf/1' }, page: 2 })[1], '@chat why now', 'the question on one line');
 });
 
 test('runningLabel: what Bart is doing, a step up, or thinking', async () => {

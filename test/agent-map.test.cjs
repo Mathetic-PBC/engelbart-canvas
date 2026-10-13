@@ -257,14 +257,19 @@ test('ask without a run log, and the fake agents with one, run as before', async
 
 /* ------------------------------------------------------------- design */
 
-test('design: the three agents, their tools and model steps, and a custom .context prompt marked custom', () => {
+test('design: the router and the three agents, the calls between them, their tools and model steps, and a custom .context prompt marked custom', () => {
   const dataRoot = tmp('design');
   fs.mkdirSync(path.join(dataRoot, '.context'));
   fs.writeFileSync(path.join(dataRoot, '.context', 'brainstorm-system-prompt.md'), 'Ask one question at a time.\n');
   fs.writeFileSync(path.join(dataRoot, '.context', 'bart-system-prompt.md'), '   \n');
   const { agents } = agentDesign({ dataRoot, models: CLAUDE });
-  assert.deepEqual(agents.map((agent) => agent.agent), ['bart', 'brainstorm', 'discover', 'build', 'run step']);
-  const [bart, brainstorm, discover] = agents;
+  assert.deepEqual(agents.map((agent) => agent.agent), ['router', 'bart', 'brainstorm', 'discover', 'build', 'run step'], 'Bart, the router, first (2026-10-12)');
+  assert.deepEqual(agents.slice(0, 4).map((agent) => agent.title), ['Bart (router)', 'Chat', 'Brainstorm', 'Discover']);
+  const [router, bart, brainstorm, discover] = agents;
+  assert.deepEqual(router.models.providers.anthropic.steps.map((step) => `${step.name} ${step.effort}`), ['Haiku low']);
+  assert.deepEqual(router.models.providers.openai.steps.map((step) => `${step.name} ${step.effort}`), ['Luna low']);
+  assert.deepEqual([router.tools.anthropic.tools, router.timeout.route, router.rules.length > 4, /You are Bart, the router/.test(router.prompt.text)], ['', 20_000, true, true]);
+  assert.ok(router.inputs.some((input) => /never the library/.test(input)));
   assert.deepEqual([bart.prompt.custom, bart.prompt.text], [false, BART_SYSTEM_PROMPT], 'a prompt file with nothing in it is not custom');
   assert.deepEqual([brainstorm.prompt.custom, brainstorm.prompt.text], [true, 'Ask one question at a time.']);
   assert.notEqual(brainstorm.prompt.text, BRAINSTORM_SYSTEM_PROMPT);
@@ -300,7 +305,8 @@ test('design: Build and the run step after it, their tools, models, time limits 
   assert.deepEqual(build.context.blocks.map((block) => block.block), ['<engelbart>', '<custom_instructions> / <memory>', '<task>', '<workspace>', '<attached>', '<history>', '<context_json>']);
   assert.match(build.context.blocks.find((block) => block.block === '<workspace>').note, /<request> instead.*<post-it>/);
   assert.deepEqual(build.ends.map((end) => end.line.split(':')[0]), ['NEEDS YOU', 'ESCALATE', '(anything else)']);
-  assert.equal(build.startedFrom.length, 3);
+  assert.equal(build.startedFrom.length, 5);
+  assert.ok(build.startedFrom.some((from) => /Bart's pick/.test(from)) && build.startedFrom.some((from) => /footer Build/.test(from)), 'the router and the footer\'s Build start one too (2026-10-12)');
   assert.match(step.prompt.note, /launch facts/);
   assert.match(step.prompt.text, /You are the run step of an Engelbart Build/);
   assert.equal(step.tools.anthropic.allowedTools, RUN_TOOLS.map((tool) => `mcp__canvas__${tool.name}`).join(','));
@@ -308,7 +314,7 @@ test('design: Build and the run step after it, their tools, models, time limits 
   assert.deepEqual([step.models.fallback.name, step.models.fallback.effort], ['Opus', 'high']);
   assert.deepEqual([step.timeout, step.maxTurns], [{ runnable: RUNNABLE_MS, declare: DECLARE_MS, install: INSTALL_MS, windDown: WIND_DOWN_MS }, MAX_TURNS]);
   const calls = Object.fromEntries(agents.map((agent) => [agent.agent, agent.calls.map((call) => call.to)]));
-  assert.deepEqual(calls, { bart: ['build'], brainstorm: ['discover', 'bart'], discover: [], build: ['run step'], 'run step': [] });
+  assert.deepEqual(calls, { router: ['chat', 'brainstorm', 'discover', 'build'], bart: ['build'], brainstorm: ['discover', 'chat'], discover: ['build'], build: ['run step'], 'run step': [] }, 'each `to` as a line writes it: @chat is bart (2026-10-12)');
   // A custom Build prompt shows as custom, its quick task's with the quick paragraph after it.
   fs.mkdirSync(path.join(dataRoot, '.context'));
   fs.writeFileSync(path.join(dataRoot, '.context', 'build-system-prompt.md'), 'Build carefully.\n');
@@ -444,19 +450,21 @@ test('the runs list: a Build turn and a run step by their own names, and the fil
     { id: 'q1:1', agent: 'build', kind: 'quick', buildId: 'q1', title: 'Fix the typo', turn: 1, status: 'done', at: 2, question: 'Fix the typo', projectName: 'P' },
     { id: 'a1', agent: 'bart', status: 'done', at: 1, question: 'what does the parser do', projectName: 'P' },
     { id: 'a2', agent: 'discover', status: 'done', at: 0, question: 'papers on parsing', projectName: 'P' },
+    { id: 'route-1', agent: 'router', by: 'model', pick: 'discover', sure: 0.9, status: 'done', at: 0, question: 'papers on parsing', projectName: 'P' },
   ];
   const html = (filter) => renderToStaticMarkup(React.createElement(RunList, { runs, selected: null, filter, onSelect: () => {}, onFilter: () => {} }));
   const all = html('all');
   assert.match(all, /@build Add a page · turn 2/);
   assert.match(all, /@build quick/);
   assert.match(all, /@run step Add a page/);
-  assert.match(all, /@bart/);
+  assert.match(all, /@chat/, 'the agent called bart is @chat (2026-10-12)');
+  assert.match(all, /@bart → @discover · sure 0.9/, 'the router says where it sent the line');
   assert.match(all, />All<.*>Questions<.*>Builds</);
   const builds = html('builds');
   assert.ok(/@build Add a page/.test(builds) && /@run step/.test(builds) && /@build quick/.test(builds));
-  assert.ok(!/@bart|@discover/.test(builds), 'Builds: no questions');
+  assert.ok(!/@chat|@bart|@discover/.test(builds), 'Builds: no questions');
   const questions = html('questions');
-  assert.ok(/@bart/.test(questions) && /@discover/.test(questions));
+  assert.ok(/@chat/.test(questions) && /@bart → /.test(questions) && /@discover/.test(questions));
   assert.ok(!/@build|@run step/.test(questions), 'Questions: no Builds');
   // A Build's context is shown block by block, as it was sent.
   assert.deepEqual(contextBlocks({ agent: 'build', context: { engelbart: '<engelbart>\nx\n</engelbart>', task: '<task>\ny\n</task>', request: '<request>\nz\n</request>' } }).map((block) => block.label), ['<engelbart>', '<task>', '<request>']);
@@ -466,11 +474,12 @@ test('the runs list: a Build turn and a run step by their own names, and the fil
 test('the Design tab draws Build and the run step beside the question agents, each with what it calls (2026-10-12)', () => {
   const { Design } = compile('src/renderer/screens/AgentMap.jsx', 'agent-map-design');
   const page = renderToStaticMarkup(React.createElement(Design, { design: agentDesign({ dataRoot: tmp('design-page'), models: CLAUDE, buildModels: DEFAULTS }) }));
-  for (const name of ['@bart', '@brainstorm', '@discover', '@build', '@run step']) assert.ok(page.includes(`<b>${name}</b>`), name);
+  for (const name of ['Bart (router)', 'Chat', 'Brainstorm', 'Discover', '@build', '@run step']) assert.ok(page.includes(`<b>${name}</b>`), name);
+  assert.match(page, /rules, in order: an empty @bart → @brainstorm/);
   assert.match(page, /a quick task&#x27;s system prompt/);
   assert.match(page, /what codexOverrides sets/);
   assert.match(page, /NEEDS YOU: &lt;question&gt;/);
   assert.match(page, /slots at once: build 3 · quick 1/);
-  assert.match(page, /calls: <span><b>@build<\/b>/);
+  assert.match(page, /calls: <span><b>@chat<\/b>.*<b>@build<\/b>/, 'Bart calls @chat first; Build is called too');
   assert.match(page, /tools · Codex: <span[^>]*>none \(Claude Code only\)/);
 });
