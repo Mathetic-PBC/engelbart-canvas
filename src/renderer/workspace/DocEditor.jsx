@@ -49,6 +49,7 @@
 //     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
 import { createPortal } from 'react-dom';
+import { HAMMER_PATHS } from '../model/hammer.js';
 import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, whenShown, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, tokenOf } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
@@ -207,7 +208,7 @@ const ICON = {
   edit: icon('<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path>'),
   collapse: icon('<path d="m7 20 5-5 5 5"></path><path d="m7 4 5 5 5-5"></path>'),
   // Build (2026-10-12): Lucide's hammer.
-  hammer: icon('<path d="m15 12-8.373 8.373a1 1 0 1 1-3-3L12 9"></path><path d="m18 15 4-4"></path><path d="m21.5 11.5-1.914-1.914A2 2 0 0 1 19 8.172V7l-2.26-2.26a6 6 0 0 0-4.202-1.756L9 2.96l.92.82A6.18 6.18 0 0 1 12 8.4V10l2 2h1.172a2 2 0 0 1 1.414.586L18.5 14.5"></path>'),
+  hammer: icon(HAMMER_PATHS),
   chevronRight: icon('<path d="m9 18 6-6-6-6"></path>'),
   expand: icon('<path d="m7 15 5 5 5-5"></path><path d="m7 9 5-5 5 5"></path>'),
   trash: icon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
@@ -321,7 +322,7 @@ export default class DocEditor extends React.Component {
         this.nearA = null;
         if (!inEd(e)) return;
         this.downOnRoot = e.target === this.editorEl();
-        if (e.target.closest('button[data-act], .bart-chip, a[data-link], [data-mention]')) { e.preventDefault(); return; }
+        if (e.target.closest('button[data-act], [data-build-icon][data-act], .bart-chip, a[data-link], [data-mention]')) { e.preventDefault(); return; }
         const near = e.button === 0 && !inFollow(e) ? this.nearLink(e.target, e.clientX, e.clientY) : null;
         if (near) { this.nearA = near; e.preventDefault(); return; }
         if (e.button === 0 && !inFollow(e)) { this.held = true; this.byMouse = true; }
@@ -813,7 +814,7 @@ export default class DocEditor extends React.Component {
       const q = active ? parseLine(p.text) : null, cut = q && (q.type === 'h' || isMarked(q.type)) ? p.text.length - q.text.length : 0;
       const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
       const hang = cut && q.type !== 'h' ? `padding-left:calc(${q.depth * 18}px + ${MARK_COL});` : '';
-      const a = this.answerLook(p.text), shut = active && this.linksShut(p), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`, shut) : this.activeHtml(tokensOf(p, line), null, null, shut)) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
+      const a = this.answerLook(p.text, at && at.turn && !isRunning(at.thread) ? at.turn.q : null), shut = active && this.linksShut(p), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`, shut) : this.activeHtml(tokensOf(p, line), null, null, shut)) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
       return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 8 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -1046,11 +1047,14 @@ export default class DocEditor extends React.Component {
     const found = turn ? resultParts(turnText(ls, turn).answer) : null;
     if (found) this.discoverLook(i, found.sentence, agent);
   }
-  answerLook(text) {
+  // `turn`: the question line of the answered turn this line is in, which the [[build]] hammer in it builds when clicked
+  // (model/doc.js inlineHtml); left out where there is nothing to build (a run still writing, a Build's messages).
+  answerLook(text, turn = null) {
     const q = parseLine(text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
-    if (q.type === 'h') return { content: ink(inlineHtml(q.text, this.mentionOpts)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
-    if (isMarked(q.type)) return { content: `<span style="display:flex;padding-left:${q.depth * 18}px"><span contenteditable="false" style="${MARK_DRAWN};color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text, this.mentionOpts))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
-    return { content: ink(inlineHtml(text, this.mentionOpts)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
+    const opts = Number.isInteger(turn) && this.props.onBuild && !this.props.readOnly ? { ...this.mentionOpts, buildTurn: turn } : this.mentionOpts;
+    if (q.type === 'h') return { content: ink(inlineHtml(q.text, opts)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
+    if (isMarked(q.type)) return { content: `<span style="display:flex;padding-left:${q.depth * 18}px"><span contenteditable="false" style="${MARK_DRAWN};color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text, opts))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
+    return { content: ink(inlineHtml(text, opts)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
   }
   /* ---------------------------------------------------------------- Build cards (2026-09-25) */
   // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends), props.buildProgress

@@ -463,6 +463,64 @@ test('footer: Copy, Regenerate, Edit and Build as icons with their names; the ag
   assert.equal(pending.editor.footBuild(0), false);
 });
 
+/* ------------------------------------------- the [[build]] line (2026-10-12) */
+
+const BUILD_LINE = 'Press [[build]] Build below this answer to build it.';
+const ROUTED_SPEC = ['bart# [chat build 2026-10-12T21:41:00Z] Haiku', '@bart build the haiku entry', 'bart> Here it is:', 'bart> ```', 'bart> Add Haiku 5.5 to models.cjs.', 'bart> ```', `bart> ${BUILD_LINE}`, 'bart> *Build · Sonnet · high · 3 s*', ''];
+
+test('a routed build run is asked to end on the [[build]] line; a plain @chat run is not', () => {
+  const { firstMessage } = require('../src/main/bart/ask.cjs');
+  const context = { head: '<engelbart/>', contextJson: '', mentionedFiles: '', documents: '', now: '' };
+  const sent = (routed, resumed = false) => firstMessage({ context, prior: [], question: 'build the haiku entry', resumed, routed })('<level/>');
+  const routed = sent({ id: 'route-1', build: true });
+  assert.ok(routed.includes(`End with one line, exactly: \`${BUILD_LINE}\``), 'the new sentence, in the routed block');
+  assert.ok(routed.indexOf('one fenced code block') < routed.indexOf(BUILD_LINE) && routed.indexOf(BUILD_LINE) < routed.indexOf('<question>'), 'after the code block\'s sentence, before the question');
+  assert.ok(sent({ build: true }, true).includes(BUILD_LINE), 'a resumed routed turn too');
+  for (const plain of [null, { id: 'route-2', build: false }, { corrected: 'chat' }]) assert.ok(!sent(plain).includes('[[build]]'), 'unrouted or not to build: no such line');
+});
+
+test('[[build]] draws as the footer\'s hammer, one unit that copies as typed; outside an answer it is only a drawing', async () => {
+  const doc = await loadDoc();
+  const { inlineHtml, tokShown, rawOffset, replyRawOffset, selectionMarkdown, parseLine, turnText, threads, BUILD_TOKEN } = doc;
+  assert.equal(BUILD_TOKEN, '[[build]]');
+  const plain = inlineHtml(BUILD_LINE);
+  assert.match(plain, /^Press <span data-build-icon="1" contenteditable="false" aria-hidden="true" style="display:inline-flex;color:#4d4d4d;vertical-align:-2px;user-select:none"><svg width="14" height="14"[^>]*><path d="m15 12-8\.373/);
+  assert.ok(!plain.includes('data-act'), 'outside an answer line: no click');
+  assert.match(inlineHtml(BUILD_LINE, { buildTurn: 3 }), /<span data-build-icon="1" contenteditable="false" data-act="footbuild" data-turn="3" role="button"/);
+  assert.deepEqual(tokShown('[[build]]'), { shown: '', pre: 1, unit: true });
+  assert.ok(!inlineHtml('[[builds]] and [[x]]').includes('data-build-icon'), 'only the exact token');
+  // A click right after "Press " lands before the token; past the icon, " Build" maps after it.
+  const p = parseLine(`bart> ${BUILD_LINE}`);
+  assert.equal(replyRawOffset(p, 6), 6);
+  assert.equal(replyRawOffset(p, 7), 'Press [[build]] '.length);
+  assert.equal(rawOffset({ type: 'p', text: BUILD_LINE }, 'Press  Build'.length, BUILD_LINE), 'Press [[build]] Build'.length);
+  // Copying: the whole line, a piece across the icon, and the answer's Copy keep `[[build]]`.
+  const ls = ROUTED_SPEC, at = ls.indexOf(`bart> ${BUILD_LINE}`);
+  assert.equal(selectionMarkdown(ls, { line: at, offset: 0 }, { line: at, offset: Infinity }), BUILD_LINE);
+  assert.equal(selectionMarkdown(ls, { line: at, offset: 0 }, { line: at, offset: 'Press [[build]] Build'.length }), 'Press [[build]] Build');
+  assert.equal(selectionMarkdown(ls, { line: at, offset: 'Press [[build]]'.length }, { line: at, offset: Infinity }), ' Build below this answer to build it.');
+  assert.ok(turnText(ls, threads(ls)[0].turns[0]).answer.endsWith(BUILD_LINE));
+});
+
+test('in an answer line, the hammer builds that turn as the footer\'s Build does; a plain @chat answer is drawn as before', () => {
+  const m = mounted(ROUTED_SPEC);
+  const html = m.editor.editorHtml();
+  assert.match(html, /<span data-build-icon="1" contenteditable="false" data-act="footbuild" data-turn="1" role="button" aria-label="Build" title="Build" style="display:inline-flex;color:#4d4d4d;vertical-align:-2px;user-select:none;cursor:pointer"><svg width="14" height="14"/);
+  assert.equal((html.match(/data-build-icon/g) || []).length, 1, 'one hammer inline, the footer\'s is its own button');
+  // A click on it: the editor's click, as the browser sends it from the svg inside.
+  const icon = { dataset: { act: 'footbuild', turn: '1' } };
+  m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? icon : null) }, preventDefault() {} });
+  const foot = mounted(ROUTED_SPEC);
+  assert.equal(foot.editor.footBuild(1), true);
+  assert.equal(m.builds.length, 1);
+  assert.deepEqual(m.builds[0], foot.builds[0], 'the same Build as the footer\'s hammer');
+  assert.equal(m.builds[0].text, 'Add Haiku 5.5 to models.cjs.', 'the code block, not the line under it');
+  // No Build to start (read only, or no onBuild), or a turn at work: a drawing.
+  assert.ok(!mounted(ROUTED_SPEC, { build: false }).editor.editorHtml().includes('data-act="footbuild" data-turn="1" role'));
+  // A plain @chat answer: no such line, no hammer.
+  assert.ok(!mounted([...SPEC, '']).editor.editorHtml().includes('data-build-icon'));
+});
+
 test('another agent for a routed line: only the title line changes, and it is asked again with the correction carried', () => {
   const m = mounted(['bart# [chat 2026-10-12T21:41:00Z] Tutors', '@bart what papers on tutors?', 'bart> An answer.', 'bart> *Chat · Sonnet · high · 3 s*', '']);
   m.editor.state.picker = { kind: 'via', i: 1 };

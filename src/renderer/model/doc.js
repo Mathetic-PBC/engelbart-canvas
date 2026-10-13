@@ -1,5 +1,6 @@
 // Pure document model for the Obsidian-style editor.
 import katex from 'katex';
+import { hammerSvg } from './hammer.js';
 // Ported verbatim from design/goal-canvas/Goal Canvas.dc.html (lines 403–404, 439–456, 692–730, 801–812).
 // One markdown string per document; the caret's line shows its source, every other line renders.
 
@@ -117,8 +118,18 @@ export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 // Math (2026-10-12): `$…$` inline by Pandoc's rule (no space just inside either `$`, the closing `$` not followed by a
 // digit, so "$5 and $10" stays text), `$$…$$` display, and `\$` a dollar as typed. Drawn with KaTeX (renderMath).
 const MATH_SRC = String.raw`\$\$(?:[^$\n\\]|\\.)+?\$\$|\$(?=[^\s$])(?:[^$\n\\]|\\.)+?(?<!\s)\$(?!\d)|\\\$`;
-export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|@(?:[Bb]art|[Cc]hat|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
+export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|\[\[build\]\]|@(?:[Bb]art|[Cc]hat|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
+// The footer's Build, named in an answer (2026-10-12): a routed build's answer ends "Press [[build]] Build below this
+// answer to build it." (main/bart/ask.cjs ROUTED_BUILD), and the token is drawn as the footer's hammer (inlineHtml). It is
+// one unit, as drawn math is (tokShown, rawOffset, cutToken), and copies as typed.
+export const BUILD_TOKEN = '[[build]]';
+// The hammer inline: 14px, the answer's grey, sitting on the text's baseline. In an answer line `turn` is the turn's
+// question line, and a click does what the footer's Build does for it (DocEditor footbuild); anywhere else it is a drawing.
+function buildIconHtml(turn) {
+  const acts = Number.isInteger(turn) ? ` data-act="footbuild" data-turn="${turn}" role="button" aria-label="Build" title="Build"` : ' aria-hidden="true"';
+  return `<span data-build-icon="1" contenteditable="false"${acts} style="display:inline-flex;color:#4d4d4d;vertical-align:-2px;user-select:none${Number.isInteger(turn) ? ';cursor:pointer' : ''}">${hammerSvg(14)}</span>`;
+}
 // A math token's source as a whole: `$$…$$` (display) or `$…$` (inline), the same rules as INLINE's.
 const DISPLAY_MATH_RE = /^\$\$((?:[^$\n\\]|\\.)+?)\$\$$/;
 const INLINE_MATH_RE = /^\$(?=[^\s$])((?:[^$\n\\]|\\.)+?)(?<!\s)\$$/;
@@ -427,6 +438,7 @@ export function retypedRow(p, txt) {
 export function tokShown(tok, opts) {
   // A math token is one unit, as a mention is: `unit` (rawOffset, cutToken). Undrawable math shows as typed.
   if (tok === '\\$') return { shown: '$', pre: 1 };
+  if (tok === BUILD_TOKEN) return { shown: '', pre: 1, unit: true }; // the hammer: a drawing, no text
   const math = mathOf(tok);
   if (math) { const r = renderMath(math.tex, math.display); return r ? { shown: r.shown, pre: 1, unit: true } : { shown: tok, pre: 0 }; }
   const attachment = tok.match(ATTACH_RE); if (attachment) return { shown: `[${attachment[1] || 'Attachment'}]`, pre: 1 };
@@ -642,15 +654,17 @@ export function holdsLink(tok) {
 
 /**
  * Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm and @discover, an older line's @orient,
- * @[mention], [link](url), bare urls). `opts.libName(id)`: a library mention's name now, or null when it is gone (libHtml).
+ * @[mention], [link](url), bare urls, the [[build]] hammer). `opts.libName(id)`: a library mention's name now, or null when it is gone (libHtml).
  * `opts.named(name)`: false when a mention by name names nothing (nameHtml). `opts.trashed(name, id)`: true for a note in
  * the trash. Any may be left out, or answer undefined when it cannot tell: the mention is then drawn as written.
+ * `opts.buildTurn`: in an answer line, its turn's question line, which a click on the hammer builds (buildIconHtml).
  */
 export function inlineHtml(text, opts) {
   return text.split(INLINE).map((p) => {
     if (!p) return '';
     if (p === '\\$') return '$';
     if (isMathToken(p)) return mathTokenHtml(p);
+    if (p === BUILD_TOKEN) return buildIconHtml(opts && opts.buildTurn);
     // A pasted image inside a todo or a chat line reads as [Attachment n]; on a line of its own it renders as the image.
     const attachment = p.match(ATTACH_RE);
     if (attachment) return `<span data-attachment="${esc(attachment[2])}" style="padding:1px 6px;border-radius:4px;background:#f2f2f2;border:1px solid #eaeaea;font:.86em/1.6 var(--font-mono);color:#4d4d4d;white-space:nowrap">[${esc(attachment[1] || 'Attachment')}]</span>`;

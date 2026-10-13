@@ -229,8 +229,9 @@ function firstMessage({ context, prior, question, resumed, extra = '', routed = 
 }
 
 // A line Bart, the router (./route.cjs), read as a request to build, with no spec above it to build from (2026-10-12): it
-// is asked of Chat with this one block before <question>, and nothing else Chat is sent changes.
-const ROUTED_BUILD = '<routed>The person wants this built. Write the Build prompt as one fenced code block, after at most two sentences.</routed>';
+// is asked of Chat with this one block before <question>, and nothing else Chat is sent changes. Its last line names the
+// footer's Build: the editor draws `[[build]]` as the hammer, and a click on it builds the turn (model/doc.js inlineHtml).
+const ROUTED_BUILD = '<routed>The person wants this built. Write the Build prompt as one fenced code block, after at most two sentences. End with one line, exactly: `Press [[build]] Build below this answer to build it.`</routed>';
 /** The block a routed turn carries before <question>: '' unless Bart routed it with build. */
 const routedBlock = (routed) => (routed && routed.build ? ROUTED_BUILD : '');
 
