@@ -207,8 +207,8 @@ test('the mention of the workspace open beside is marked by its id, not by its n
 });
 
 test('Escape in a field of the editor\'s own, or with a mention\'s card or the model selector open, is marked as used', () => {
-  const field = (selector) => ({ closest: (sel) => (sel === '[data-editor]' ? field.root : null), matches: (sel) => sel.split(',').map((one) => one.trim()).includes(selector), dataset: { cardInput: '3', discoverInput: 't', buildInput: 'b1' }, blur() { this.blurred = true; } });
-  for (const selector of ['[data-card-input]', '[data-follow-input]', '[data-discover-input]', '[data-build-input]']) {
+  const field = (selector) => ({ closest: (sel) => (sel === '[data-editor]' ? field.root : null), matches: (sel) => sel.split(',').map((one) => one.trim()).includes(selector), dataset: { discoverInput: 't', buildInput: 'b1' }, blur() { this.blurred = true; } });
+  for (const selector of ['[data-follow-input]', '[data-discover-input]', '[data-build-input]']) {
     const { editor, root } = mounted();
     field.root = root;
     const target = field(selector);

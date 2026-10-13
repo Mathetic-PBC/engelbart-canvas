@@ -1,7 +1,8 @@
 'use strict';
 
-// A live @brainstorm card's own controls (src/renderer/workspace/DocEditor.jsx, round 6): Wrap up between Skip and Submit,
-// which writes the answer given (if any) and "; (wrap up)". @discover's own cards have none. No card has the Send to
+// A live @brainstorm card (src/renderer/workspace/DocEditor.jsx): since 2026-10-13 drawn as any answer is, its options a
+// list of rows to click, answered in the follow-up field under it; Skip and Wrap up (round 6, which writes the answer given,
+// if any, and "; (wrap up)") on its foot. @discover's own cards have no Wrap up. No card has the Send to
 // Discover field under it (MATH-40 follow-up): an older recap does (MATH-31), which starts an @discover thread of its own
 // on what the person typed, after the brainstorm thread. An older document's `@orient` line (2026-10-05) is asked, drawn
 // and answered as @brainstorm's. An exchange's result (MATH-40) ends on a small line that sends their sentence on. There
@@ -50,6 +51,7 @@ function mounted(lines) {
   globalThis.document = { addEventListener() {}, removeEventListener() {}, hasFocus: () => true, activeElement: null };
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   editor.componentDidMount();
+  editor.forceUpdate = () => {};
   const entry = (q) => editor.cardsOf(editor.lines()).byQ.get(q);
   const html = (q) => editor.cardHtml('', entry(q));
   // A click on a button the card drew, as the editor's click listener gets it.
@@ -68,57 +70,6 @@ function field(target, value = '') {
 }
 
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
-
-test('a live @brainstorm card has Skip, Wrap up and Submit, in that order, and nothing under its box: no Send to Discover, no search suggested; its "say" is drawn in the box, in regular weight above the bold question (MATH31-03, MATH-40, MATH-40 round 3)', () => {
-  const { html, entry, editor, asks, typeDiscover, sendDiscover } = mounted(['Notes', '@brainstorm', ...answer(FREE), '']);
-  assert.equal(entry(1).live, true);
-  assert.equal(entry(1).card.lookFor, undefined, 'an older card\'s search is not kept');
-  const shown = html(1);
-  const at = (act) => shown.indexOf(`data-act="${act}"`);
-  assert.ok(at('cardskip') > 0 && at('cardskip') < at('cardwrap') && at('cardwrap') < at('cardsend'), 'Wrap up between Skip and Submit');
-  assert.match(shown, /<button type="button" class="bart-text" data-act="cardwrap" data-turn="1"[^>]*>Wrap up<\/button>/, 'styled as Skip is');
-  assert.ok(shown.endsWith('Submit</button></div></div></div>'), 'the box ends the card');
-  assert.ok(!shown.includes('opendiscover') && !shown.includes('data-discover-input') && !shown.includes('Send to Discover'), 'no Send to Discover under a card');
-  const said = shown.indexOf('You said “it stops when the lock frees”.');
-  assert.ok(shown.indexOf('data-card-box') < said && said < shown.indexOf('Within “Retries”'), 'its say, in the box, above the question');
-  assert.match(shown, /<div data-card-say="1" style="[^"]*font:400 16px[^"]*">You said “it stops when the lock frees”\.<\/div><div style="font:600 16px/, 'the reply in regular weight, the question in bold');
-  // A field it no longer draws sends nothing.
-  typeDiscover('c1', TYPED);
-  sendDiscover('c1');
-  assert.deepEqual(asks, []);
-  editor.editorClick({ target: { closest: () => ({ dataset: { act: 'opendiscover', target: 'c1' } }) }, preventDefault() {} });
-  assert.ok(!html(1).includes('data-discover-input'), 'nor opens');
-  assert.ok(!shown.includes(LOOK) && !shown.includes('cardlook') && !shown.includes('discoverlook'), 'no suggested search, no old button');
-  // A card with nothing said: its question first in the box. The next card: its lead-in said, then the question; its field asks for one thing.
-  const bare = mounted(['@brainstorm', ...answer({ ...FREE, say: '' }), '']).html(0);
-  assert.match(bare, /^<div [^>]*data-card="0"[^>]*><div data-card-box="live"[^>]*><div style="font:600 16px/, 'nothing above the box, nor above the question');
-  const NEXT = { say: 'You kept coming back to “correct”.', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: card.NEXT_TITLE, placeholder: card.NEXT_PLACEHOLDER }] }, ready: false };
-  const next = mounted(['@brainstorm', ...answer(NEXT), '']).html(0);
-  assert.match(next, /^<div [^>]*data-card="0"[^>]*><div data-card-box="live"[^>]*><div data-card-say="1"[^>]*>You kept coming back to “correct”\.<\/div><div [^>]*>So what do you want to dig into next\?<\/div>/, 'the lead-in, then the question, in the box');
-  assert.match(next, /placeholder="One thing, as specific as you can make it"/);
-});
-
-test('Wrap up with nothing given writes "(wrap up)" alone, and works on a choice card with a pick; the answered card says Wrapped up and shows no buttons', () => {
-  const empty = mounted(['@brainstorm', ...answer(FREE), '']);
-  empty.click('cardwrap', 0);
-  assert.equal(empty.asks[0].text, '(wrap up)');
-  assert.equal(empty.lines()[empty.lines().length - 3], '@brainstorm (wrap up)');
-
-  const picked = mounted(['@brainstorm', ...answer(FOCUS), '']);
-  picked.editor.cardState.set(0, { picks: ['Timeouts'], note: 'soon' });
-  picked.click('cardwrap', 0);
-  assert.equal(picked.asks[0].text, 'picked "Timeouts"; note: soon; (wrap up)');
-
-  // The card as it then stands: answered, its answer read back, no controls.
-  const done = mounted(['@brainstorm', ...answer(FREE), '@brainstorm I will read the logs; (wrap up)', 'bart> Where you are: x', '']);
-  const entry = done.entry(0);
-  assert.deepEqual([entry.live, entry.answer], [false, { skipped: false, picks: [], text: 'I will read the logs', note: '', wrap: true }]);
-  const shown = done.html(0);
-  assert.ok(shown.includes('I will read the logs') && shown.includes('Wrapped up'), 'the answer, then Wrapped up');
-  for (const act of ['cardskip', 'cardwrap', 'cardsend', 'senddiscover', 'opendiscover']) assert.ok(!shown.includes(`data-act="${act}"`), `no ${act} on an answered card`);
-  const alone = mounted(['@brainstorm', ...answer(FREE), '@brainstorm (wrap up)', 'bart> Where you are: x', '']).html(0);
-  assert.ok(alone.includes('Wrapped up') && !alone.includes('Skipped'), 'Wrap up alone says Wrapped up, not Skipped');
-});
 
 test('Send to Discover after an older recap: with nothing typed it does nothing; Enter sends and Shift+Enter puts in nothing; what is typed survives a redraw and goes back into the field (MATH31-03, -05)', () => {
   const RECAP = ['@brainstorm (wrap up)', 'bart> Your question: Why do retries loop?', 'bart> *3 s*'];
@@ -158,11 +109,11 @@ test('Send to Discover after an older recap: with nothing typed it does nothing;
   assert.deepEqual(done.asks, []);
 });
 
-test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap up or Send asked of one does nothing; Skip and Submit are as they were', async () => {
+test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap up or Send asked of one does nothing; Skip is on the foot, and the field under it answers it as @discover', async () => {
   const m = mounted(['@discover', ...answer({ ...FOCUS, lookFor: LOOK }), '']);
   assert.equal(m.entry(0).live, true);
-  const shown = m.html(0);
-  assert.ok(shown.includes('data-act="cardskip"') && shown.includes('data-act="cardsend"'));
+  const shown = m.editor.editorHtml();
+  assert.ok(shown.includes('data-act="cardskip"') && shown.includes('data-act="cardopt"') && />@discover<\/span><textarea data-follow-input="0" data-agent="discover"/.test(shown));
   assert.ok(!shown.includes('data-act="cardwrap"') && !shown.includes('data-act="senddiscover"') && !shown.includes('data-act="opendiscover"') && !shown.includes('data-discover-input') && !shown.includes('Wrap up'));
   m.click('cardwrap', 0);
   m.typeDiscover('c0', TYPED);
@@ -186,20 +137,20 @@ test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap
   assert.deepEqual(model.threads(recap.lines()).map((t) => model.agentOf(model.parseLine(recap.lines()[t.from]))), ['brainstorm', 'discover']);
 });
 
-test('on a live @brainstorm versions card the field under the options reads "Or rewrite it yourself…", and the rest is as on any card; elsewhere it reads as before (round 7)', () => {
+test('on a live @brainstorm versions card the field under it reads "Or rewrite it yourself…", and the rest is as on any card; elsewhere it reads as before (round 7)', () => {
   const VERSIONS = { say: '', card: 'questions', questions: { items: [{ id: 'versions', type: 'mcq', title: 'Which one is your question?', options: [{ label: 'Why do retries loop?', why: 'as you wrote it' }, { label: 'Why specifically do retries loop?', why: 'narrower' }] }] }, lookFor: LOOK, ready: false };
   const m = mounted(['@brainstorm', ...answer(VERSIONS), '']);
-  const shown = m.html(0);
-  assert.match(shown, /data-card-field="note" placeholder="Or rewrite it yourself…" aria-label="Or rewrite it yourself"/);
+  const shown = m.editor.editorHtml();
+  assert.match(shown, /placeholder="Or rewrite it yourself…" aria-label="Answer"/);
   assert.ok(!shown.includes('Or say it in your own words'));
-  for (const act of ['cardskip', 'cardwrap', 'cardsend']) assert.ok(shown.includes(`data-act="${act}"`), `it keeps ${act}`);
+  for (const act of ['cardskip', 'cardwrap', 'cardopt']) assert.ok(shown.includes(`data-act="${act}"`), `it keeps ${act}`);
   assert.ok(!shown.includes('opendiscover'), 'and has no Send to Discover');
   // A rewrite typed with nothing picked is sent as their words.
-  m.editor.cardState.set(0, { note: '  Why do retries   loop at all? ' });
-  m.click('cardsend', 0);
+  m.editor.followText.set(0, '  Why do retries   loop at all? ');
+  m.editor.sendFollow(0);
   assert.equal(m.asks[0].text, 'Why do retries loop at all?');
   for (const lines of [['@brainstorm', ...answer(FOCUS), ''], ['@discover', ...answer(VERSIONS), '']]) {
-    assert.match(mounted(lines).html(0), /placeholder="Or say it in your own words…"/, `${lines[0]}: as before`);
+    assert.match(mounted(lines).editor.editorHtml(), /placeholder="Pick one, or say it in your own words…"/, `${lines[0]}: as on any card`);
   }
   assert.equal(editorModule.BRAINSTORM_ITEM.summary, 'Think out loud about a topic, a paper or what is on your mind, then write what you want to dig into next.', 'MATH-40');
 });
@@ -212,7 +163,106 @@ const lineOf = async (m, i) => {
 };
 const KNOW = { say: '', card: 'questions', questions: { eyebrow: 'what you know', items: [{ id: 'know', type: 'open', title: 'Write what you know about “metacognition”.', subtitle: 'For a colleague.' }] }, ready: false };
 
-test('an @orient line is asked as @brainstorm and stays as written; its live card is a brainstorm card, with Skip, Wrap up and Submit, and its answers are @brainstorm lines that go on with its thread (M-02, M-08, A-06)', async () => {
+test('a live @brainstorm card is drawn as an answer: what it says, then its question, on the answer\'s grey inside its rule, with no box, field or Submit on it; Skip and Wrap up are on its foot, and the follow-up field under it answers it; no Send to Discover, no search suggested (2026-10-13; MATH31-03, MATH-40)', () => {
+  const { html, entry, editor, asks, typeDiscover, sendDiscover } = mounted(['Notes', '@brainstorm', ...answer(FREE), '']);
+  assert.equal(entry(1).live, true);
+  assert.equal(entry(1).card.lookFor, undefined, 'an older card\'s search is not kept');
+  const shown = html(1);
+  assert.match(shown, /^<div [^>]*data-card="1"[^>]*background:#fafafa;color:#4d4d4d;font-size:16px;line-height:1\.65"><span style="display:block;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">/, 'an answer\'s grey, rule and type');
+  for (const gone of ['data-card-box', 'data-card-input', 'cardsend', 'cardskip', 'cardwrap', 'Submit', 'border:1px solid', 'font:600']) assert.ok(!shown.includes(gone), `no ${gone} on the card`);
+  const said = shown.indexOf('You said “it stops when the lock frees”.');
+  assert.ok(said > 0 && said < shown.indexOf('Within “Retries”'), 'its say, then the question');
+  const page = editor.editorHtml(), foot = page.slice(page.indexOf('data-foot="1"'));
+  assert.ok(foot.indexOf('data-act="copybart"') < foot.indexOf('data-act="cardskip"') && foot.indexOf('data-act="cardskip"') < foot.indexOf('data-act="cardwrap"'), 'Copy, Skip, Wrap up on the foot');
+  assert.match(page, /data-followup="1" data-answers="1"[^>]*><span[^>]*>@brainstorm<\/span><textarea data-follow-input="1" data-agent="brainstorm" rows="1" placeholder="Respond…" aria-label="Answer"/, 'the field under it answers it, as @brainstorm');
+  assert.ok(!page.includes('opendiscover') && !page.includes('data-discover-input') && !page.includes('Send to Discover'), 'no Send to Discover under a card');
+  // A field it no longer draws sends nothing.
+  typeDiscover('c1', TYPED);
+  sendDiscover('c1');
+  assert.deepEqual(asks, []);
+  assert.ok(!shown.includes(LOOK) && !shown.includes('cardlook') && !shown.includes('discoverlook'), 'no suggested search, no old button');
+  // A card with nothing said: its question first. The next card: its lead-in said, then the question; its field asks for one thing.
+  const bare = mounted(['@brainstorm', ...answer({ ...FREE, say: '' }), '']).html(0);
+  assert.match(bare, /border-left:2px solid #dcdcdc"><span data-card-question="1"/, 'nothing above the question');
+  const NEXT = { say: 'You kept coming back to “correct”.', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: card.NEXT_TITLE, placeholder: card.NEXT_PLACEHOLDER }] }, ready: false };
+  const next = mounted(['@brainstorm', ...answer(NEXT), '']);
+  assert.match(next.html(0), /<span data-card-say="1"[^>]*>You kept coming back to “correct”\.<\/span><span [^>]*><\/span><span data-card-question="1"[^>]*>So what do you want to dig into next\?<\/span>/, 'the lead-in, then the question');
+  assert.match(next.editor.editorHtml(), /placeholder="One thing, as specific as you can make it" aria-label="Answer"/);
+});
+
+test('a free card is answered by what is typed in the field under it, sent with Enter or Send as a follow-up is, never routed; the turns before it collapse; nothing typed sends nothing (2026-10-13)', () => {
+  const m = mounted(['@brainstorm', ...answer(FREE), '']);
+  m.props.onRoute = () => { throw new Error('routed'); };
+  m.editor.sendFollow(0);
+  assert.deepEqual(m.asks, [], 'nothing typed: nothing sent');
+  m.editor.followText.set(0, '  when the lock frees  ');
+  m.editor.sendFollow(0);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['brainstorm', 'when the lock frees', 1]);
+  const ls = m.lines();
+  assert.equal(ls[ls.length - 3], '@brainstorm when the lock frees');
+  assert.ok(ls.slice(1, ls.length - 3).every((l) => l.startsWith('bart+>')), 'the card\'s turn collapsed');
+  assert.equal(m.editor.followText.get(0), undefined, 'the field emptied');
+});
+
+test('a single choice answers with the row clicked, with what is typed as a note; a select-all ticks rows and Enter sends them; the answer line reads as said (2026-10-13)', async () => {
+  const opt = (m, q, n) => m.editor.editorClick({ target: { closest: () => ({ dataset: { act: 'cardopt', turn: String(q), opt: String(n) } }) }, preventDefault() {} });
+  const one = mounted(['@brainstorm', ...answer(FOCUS), '']);
+  assert.match(one.html(0), /<button type="button" class="bs-row" data-act="cardopt" data-turn="0" data-opt="1" role="radio" aria-checked="false"><span aria-hidden="true" class="bs-mark">•<\/span><span class="bs-label">Timeouts<\/span><\/button>/, 'a list row to click');
+  assert.match(one.editor.editorHtml(), /placeholder="Pick one, or say it in your own words…"/);
+  one.editor.followText.set(0, 'soon');
+  opt(one, 0, 1);
+  assert.deepEqual([one.asks[0].agent, one.asks[0].text], ['brainstorm', 'picked "Timeouts"; note: soon']);
+
+  const MANY = { say: '', card: 'questions', questions: { items: [{ id: 'which', type: 'select_all', title: 'Which of these happen?', options: [{ label: 'Retries', why: 'you said so' }, { label: 'Timeouts' }, { label: 'Deadlocks' }] }] }, ready: false };
+  const many = mounted(['@brainstorm', ...answer(MANY), '']);
+  many.editor.forceUpdate = () => {};
+  assert.ok(many.html(0).includes('Pick any, then press Enter.'), 'says how');
+  assert.match(many.editor.editorHtml(), /data-agent="brainstorm" rows="1" placeholder="Pick any, or say it in your own words…"/, 'send grey until a row is ticked');
+  opt(many, 0, 0); opt(many, 0, 2); opt(many, 0, 1); opt(many, 0, 1);
+  assert.deepEqual(many.asks, [], 'ticking sends nothing');
+  const ticked = many.html(0);
+  assert.match(ticked, /data-opt="0" role="checkbox" aria-checked="true"><span aria-hidden="true" class="bs-mark">✓<\/span><span class="bs-label">Retries<span class="bs-why"> · you said so<\/span>/);
+  assert.match(ticked, /data-opt="1" role="checkbox" aria-checked="false"/, 'a second click unticks');
+  assert.match(many.editor.editorHtml(), /data-agent="brainstorm" data-empty="1"/, 'send blue once a row is ticked');
+  many.editor.sendFollow(0);
+  assert.equal(many.asks[0].text, 'picked "Retries", "Deadlocks"');
+
+  // Answered: the line under the card reads as said, its rows still and ticked; the line itself is as main reads it.
+  const done = mounted(['@brainstorm', ...answer(MANY), '@brainstorm picked "Retries", "Deadlocks"; note: mostly at night', 'bart> FAKE', 'bart> *3 s*', '']);
+  const row = done.lines().indexOf('@brainstorm picked "Retries", "Deadlocks"; note: mostly at night');
+  const line = await lineOf(done, row);
+  assert.ok(line.includes('<span class="t" style="flex:1;min-width:0"><span style="color:#0070f3;font-weight:500">@brainstorm</span> Retries, Deadlocks · mostly at night</span>'), 'their picks and note');
+  assert.match(line, /data-raw="@brainstorm picked &quot;Retries&quot;, &quot;Deadlocks&quot;; note: mostly at night"/, 'the line as main reads it');
+  assert.match(done.html(0), /class="bs-row" disabled role="checkbox" aria-checked="true">/, 'still, ticked');
+  const skipped = await lineOf(mounted(['@brainstorm', ...answer(FREE), '@brainstorm (skipped)', 'bart> x', '']), answer(FREE).length + 1);
+  assert.match(skipped, /color:#8f8f8f">Skipped<\/span>/);
+});
+
+test('Wrap up with nothing given writes "(wrap up)" alone, and works on a choice card with a pick; the answered card has no buttons and its answer line says Wrapped up', async () => {
+  const empty = mounted(['@brainstorm', ...answer(FREE), '']);
+  empty.click('cardwrap', 0);
+  assert.equal(empty.asks[0].text, '(wrap up)');
+  assert.equal(empty.lines()[empty.lines().length - 3], '@brainstorm (wrap up)');
+
+  const picked = mounted(['@brainstorm', ...answer(FOCUS), '']);
+  picked.editor.cardState.set(0, { picks: ['Timeouts'] });
+  picked.editor.followText.set(0, 'soon');
+  picked.click('cardwrap', 0);
+  assert.equal(picked.asks[0].text, 'picked "Timeouts"; note: soon; (wrap up)');
+
+  // The card as it then stands: answered, its answer read back, no controls.
+  const done = mounted(['@brainstorm', ...answer(FREE), '@brainstorm I will read the logs; (wrap up)', 'bart> Where you are: x', '']);
+  const entry = done.entry(0);
+  assert.deepEqual([entry.live, entry.answer], [false, { skipped: false, picks: [], text: 'I will read the logs', note: '', wrap: true }]);
+  const page = done.editor.editorHtml();
+  for (const act of ['cardskip', 'cardwrap', 'cardopt']) assert.ok(!page.includes(`data-act="${act}"`), `no ${act} once answered`);
+  const said = await lineOf(done, done.lines().indexOf('@brainstorm I will read the logs; (wrap up)'));
+  assert.ok(said.includes('I will read the logs <span style="color:#8f8f8f">· Wrapped up</span>'), 'the answer, then Wrapped up');
+  const alone = await lineOf(mounted(['@brainstorm', ...answer(FREE), '@brainstorm (wrap up)', 'bart> Where you are: x', '']), answer(FREE).length + 1);
+  assert.ok(alone.includes('>Wrapped up</span>') && !alone.includes('Skipped'), 'Wrap up alone says Wrapped up, not Skipped');
+});
+
+test('an @orient line is asked as @brainstorm and stays as written; its live card is a brainstorm card, with Skip and Wrap up, and its answers are @brainstorm lines that go on with its thread (M-02, M-08, A-06)', async () => {
   const asked = mounted(['Notes', '@orient metacognition', '']);
   asked.editor.askInline(1);
   assert.deepEqual([asked.asks[0].agent, asked.asks[0].text, asked.asks[0].turns], ['brainstorm', 'metacognition', []]);
@@ -223,10 +273,10 @@ test('an @orient line is asked as @brainstorm and stays as written; its live car
 
   const m = mounted(['Notes', '@orient metacognition', ...answer(KNOW), '']);
   assert.deepEqual([m.entry(1).live, m.entry(1).agent], [true, 'brainstorm']);
-  const shown = m.html(1);
+  const shown = m.editor.editorHtml();
   const at = (act) => shown.indexOf(`data-act="${act}"`);
-  assert.ok(at('cardskip') > 0 && at('cardskip') < at('cardwrap') && at('cardwrap') < at('cardsend') && at('opendiscover') < 0, 'Skip, Wrap up, Submit, and no Send to Discover');
-  assert.ok(!shown.includes('For a colleague.'), 'no subtitle');
+  assert.ok(at('cardskip') > 0 && at('cardskip') < at('cardwrap') && at('opendiscover') < 0, 'Skip, Wrap up, and no Send to Discover');
+  assert.ok(!m.html(1).includes('For a colleague.'), 'no subtitle');
   m.click('cardwrap', 1);
   assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['brainstorm', '(wrap up)', 1]);
   assert.equal(m.lines()[m.lines().length - 3], '@brainstorm (wrap up)');
@@ -234,8 +284,8 @@ test('an @orient line is asked as @brainstorm and stays as written; its live car
   assert.deepEqual(model.threads(m.lines()).map((t) => t.turns.length), [2], 'the answer goes on with the @orient thread');
 
   const s = mounted(['@orient', ...answer(KNOW), '']);
-  s.editor.cardState.set(0, { text: 'people overrate what they learn' });
-  s.click('cardsend', 0);
+  s.editor.followText.set(0, 'people overrate what they learn');
+  s.editor.sendFollow(0);
   assert.deepEqual([s.asks[0].agent, s.asks[0].text, s.lines()[s.lines().length - 3]], ['brainstorm', 'people overrate what they learn', '@brainstorm people overrate what they learn']);
 
   // A running one shows what it is doing, never the JSON of the card arriving.

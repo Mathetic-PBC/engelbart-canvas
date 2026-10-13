@@ -67,7 +67,7 @@ function mounted({ text = TEXT, typed = '' } = {}) {
 
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
-test('a paste goes to the field it lands in: a follow-up\'s, a Build reply\'s, a card\'s, or the document', () => {
+test('a paste goes to the field it lands in: a follow-up\'s, a Build reply\'s, or the document', () => {
   const { editor, root, paste } = mounted();
   const went = [];
   editor.followPaste = () => went.push('follow');
@@ -75,9 +75,8 @@ test('a paste goes to the field it lands in: a follow-up\'s, a Build reply\'s, a
   editor.editorPaste = () => went.push('document');
   paste(root.field);
   paste(field(root, '[data-build-input]', { buildInput: 'abc' }));
-  paste(field(root, '[data-card-input]', { cardInput: '1' }));
   paste({ closest: () => root, matches: () => false });
-  assert.deepEqual(went, ['follow', 'build', 'document'], 'a card\'s field keeps its paste to itself, as before');
+  assert.deepEqual(went, ['follow', 'build', 'document']);
 });
 
 test('an image pasted into a follow-up is saved and named [Attachment n] at the caret, numbered on from the document', async () => {

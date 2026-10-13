@@ -17,9 +17,10 @@
 //     indent and Tab indents by two spaces.
 //   * @brainstorm (2026-09-30) is an @bart line asked of another agent. An answer of its that is a card (main/bart/card.cjs:
 //     a fenced JSON block) is drawn as one card in place of its lines, as a Build is drawn from its record; the lines
-//     never take the caret. The last card of a card's thread is live: Submit or Skip writes the answer as the next
-//     `@brainstorm …` line and asks it, as a follow-up is asked. Earlier cards show what was picked. A live @brainstorm card
-//     also has Wrap up, which asks for the recap (round 6). @discover (2026-09-30)
+//     never take the caret. The last card of a card's thread is live: an answer (a row clicked, or the follow-up field
+//     under it), or Skip on its foot, writes the answer as the next `@brainstorm …` line and asks it, as a follow-up is
+//     asked. Earlier cards show what was picked. A live @brainstorm card's foot also has Wrap up, which asks for the recap
+//     (round 6). Since 2026-10-13 a card is drawn as any answer is, its options a list of rows to click. @discover (2026-09-30)
 //     asks its cards the same way, as `@discover …` lines, and answers with a reading guide drawn as an @bart answer is.
 //     @orient (2026-10-04) went into @brainstorm on 2026-10-05: an older document's `@orient …` line stays as written and
 //     is asked, drawn and answered as an @brainstorm line (model/doc.js agentOf).
@@ -179,19 +180,15 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '[data-paper-line]:hover .paper-mark:not(:disabled){color:#4d4d4d}.paper-mark:not(:disabled):hover{background:#f2f2f2}'
   + '.paper-mark:disabled{cursor:default}.paper-mark[data-save="here"]{color:#4d4d4d}.paper-mark[data-busy]{opacity:.5}'
   + '.paper-mark:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
-  // @brainstorm's card: options as rows with a round (one) or square (several) mark; the pick in blue.
-  + '.bs-opt{display:flex;align-items:flex-start;gap:10px;width:100%;box-sizing:border-box;margin:0;padding:9px 12px;border:1px solid #eaeaea;border-radius:8px;background:#fff;text-align:left;cursor:pointer;font:15px/1.45 var(--font-sans);color:#171717;transition:border-color 120ms}'
-  + '.bs-opt+.bs-opt{margin-top:6px}.bs-opt:hover{border-color:#c9c9c9}.bs-opt[aria-checked="true"]{border-color:#0070f3}'
-  + '.bs-opt:disabled{cursor:default;color:#8f8f8f}.bs-opt:disabled:hover{border-color:#eaeaea}.bs-opt:disabled[aria-checked="true"]{color:#171717;border-color:#0070f3}'
-  + '.bs-opt:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
-  + '.bs-mark{flex:none;box-sizing:border-box;width:14px;height:14px;margin-top:3px;border:1.5px solid #c9c9c9;border-radius:50%;background:#fff}.bs-mark[data-square]{border-radius:4px}'
-  + '[aria-checked="true"]>.bs-mark{border-color:#0070f3;background:#0070f3;box-shadow:inset 0 0 0 2.5px #fff}'
+  // @brainstorm's card (2026-10-13): its options are an answer's list, each row a button: blue when hovered or ticked,
+  // its mark a tick once ticked; still and plain once the card is answered.
+  + '.bs-row{display:flex;align-items:flex-start;width:100%;margin:0;padding:2px 0;border:0;border-radius:4px;background:none;text-align:left;font:inherit;color:inherit;cursor:pointer}'
+  + '.bs-mark{flex:none;min-width:1.75em;padding-right:0.25em;box-sizing:border-box;color:#8f8f8f}.bs-label{flex:1;min-width:0}.bs-why{color:#8f8f8f}' // MARK_DRAWN's column
+  + '.bs-row:not(:disabled):hover .bs-label,.bs-row[aria-checked="true"] .bs-label,.bs-row[aria-checked="true"] .bs-mark{color:#0070f3}'
+  + '.bs-row:disabled{cursor:text}.bs-row:disabled[aria-checked="true"] .bs-label{color:#171717}.bs-row:disabled[aria-checked="true"] .bs-mark{color:#4d4d4d}'
+  + '.bs-row:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
   // The answer under a question being edited (2026-10-03): its contents faded, its card's grey as it was.
   + '[data-dim]>*{opacity:.45}'
-  + '.bs-why{display:block;margin-top:2px;font-size:13px;line-height:1.45;color:#8f8f8f}'
-  + '.bs-field{display:block;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;outline:none;resize:none;font:15px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text}'
-  + '.bs-field:focus{border-color:#c9c9c9}.bs-field::placeholder{color:#8f8f8f}'
-  + '.bs-submit{padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;transition:opacity 120ms}.bs-submit:hover{opacity:.86}.bs-submit:disabled{background:#eaeaea;color:#8f8f8f;cursor:default;opacity:1}'
   // Near the bottom of the window a name goes above its icon instead (editorOver sets the mark).
   + '[data-tip-up]>.bart-tip{top:auto;bottom:100%;margin-top:0;margin-bottom:4px}'
   // The mention whose note is open in the pane beside (MATH-23, markBeside).
@@ -280,8 +277,8 @@ export default class DocEditor extends React.Component {
   discoverText = new Map();
   // The Send to Discover fields opened from their button (2026-10-05), by target: the rest show only the button.
   discoverOpen = new Set();
-  // What is being answered on a live @brainstorm card, by its question's line: { picks, text, note }. Picks are drawn
-  // into the card's HTML; the typed text is not, and is put back after each redraw (restoreCards).
+  // What is ticked on a live select-all card, by its question's line: { picks }, drawn into the card's HTML. What is typed
+  // to go with it is the follow-up field's (followText).
   cardState = new Map(); cardCache = new WeakMap(); collapseCache = new WeakMap();
   // The conversation title being renamed in its header (2026-10-12): { line, value }.
   titleEdit = null;
@@ -312,16 +309,15 @@ export default class DocEditor extends React.Component {
     // The follow-up field is an <input> inside the editor: its keys and text are its own, not the document's. So is a
     // Build card's reply field.
     // And so are an @brainstorm card's fields, and a Send to Discover field.
-    const inFollow = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input], [data-build-input], [data-card-input], [data-discover-input], [data-title-input]'));
+    const inFollow = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input], [data-build-input], [data-discover-input], [data-title-input]'));
     const inTitle = (e) => !!(e.target && e.target.matches && e.target.matches('[data-title-input]'));
     const inBuild = (e) => !!(e.target && e.target.matches && e.target.matches('[data-build-input]'));
-    const inCard = (e) => !!(e.target && e.target.matches && e.target.matches('[data-card-input]'));
     const inDiscover = (e) => !!(e.target && e.target.matches && e.target.matches('[data-discover-input]'));
     const onPage = (e) => { const page = this.scrollRef.current; return !!(page && e.target && e.target.nodeType === 1 && page.contains(e.target) && !e.target.closest('input, textarea, select, [contenteditable="true"]')); };
     const inAsk = (e) => !!(e.target && e.target.matches && e.target.matches('[data-follow-input]')); // a follow-up's field alone
     this.docListeners = {
-      keydown: (e) => { if (!inEd(e)) return; this.held = false; if (inTitle(e)) { this.titleKey(e); return; } if (this.escapeShut(e)) return; if (inBuild(e)) this.buildKey(e); else if (inCard(e)) this.cardKey(e); else if (inDiscover(e)) this.discoverKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
-      input: (e) => { if (!inEd(e)) return; if (inTitle(e)) { this.titleInput(e.target); return; } if (inBuild(e)) this.buildInput(e.target); else if (inCard(e)) this.cardInput(e.target); else if (inDiscover(e)) this.discoverInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
+      keydown: (e) => { if (!inEd(e)) return; this.held = false; if (inTitle(e)) { this.titleKey(e); return; } if (this.escapeShut(e)) return; if (inBuild(e)) this.buildKey(e); else if (inDiscover(e)) this.discoverKey(e); else if (inFollow(e)) this.followKey(e); else this.editorKey(e); },
+      input: (e) => { if (!inEd(e)) return; if (inTitle(e)) { this.titleInput(e.target); return; } if (inBuild(e)) this.buildInput(e.target); else if (inDiscover(e)) this.discoverInput(e.target); else if (inFollow(e)) this.followInput(e.target); else this.editorInput(); },
       beforeinput: (e) => { if (!inEd(e) || inFollow(e)) return; const sel = getSelection(); this.bulkDelete = /^delete/.test(e.inputType || '') && !!sel && !sel.isCollapsed; },
       paste: (e) => { if (!inEd(e)) return; if (inBuild(e)) this.buildPaste(e); else if (inAsk(e)) this.followPaste(e); else if (!inFollow(e)) this.editorPaste(e); if (inFollow(e)) this.fieldPaste(e); },
       // A copy or a cut of the document is its markdown (editorCopy); in a field of its own it is the browser's, as a paste is.
@@ -816,7 +812,8 @@ export default class DocEditor extends React.Component {
     if (p.type === 'bart') {
       if (at && at.box && at.role === 'question') return this.researchHtml(i, raw, p, at);
       const { tokens, flags } = this.bartTokens(line, p), models = this.props.models;
-      const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok, this.mentionOpts))).join('');
+      const shown = at && at.answers && !(active && !locked) ? this.answerShown(at.answers) : '';
+      const content = shown ? `${inlineHtml(leadOf(line, agentOf(p)), this.mentionOpts)} ${shown}` : active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok, this.mentionOpts))).join('');
       // @brainstorm and @discover run on one model (BS-08) and may be asked with nothing after them.
       const agent = agentOf(p), plain = oneModel(agent);
       const read = models && !plain ? readQuestion(p.text, models) : null, ready = plain || !!(read ? read.question : p.text).trim();
@@ -1406,8 +1403,9 @@ export default class DocEditor extends React.Component {
   // Where every line of an @bart card stands in it: which turn it belongs to, whether it opens or closes the card, and
   // what is drawn after it that is not a line (a foot for an answer that has no closing line; the follow-up field).
   // `agent` is the turn's; an @brainstorm answer that is a card is drawn on its first line (`card`) and the rest of its
-  // lines are `underCard`. A live card is answered on the card itself, so its thread has no follow-up field. `editable`:
-  // whether the turn's question can be edited in place (canEdit).
+  // lines are `underCard`. A live card is answered in its thread's follow-up field (answerFieldHtml); the question line of
+  // a turn that answers a card has that card (`answers`), drawn as said (answerShown). `editable`: whether the turn's
+  // question can be edited in place (canEdit).
   layout(ls) {
     const at = new Map(), ps = this.parsedOf(ls), cards = this.cardsOf(ls);
     let shut = -2; // the last line of the collapsed conversation drawn last, whose row a row right under it is ruled off from
@@ -1421,11 +1419,11 @@ export default class DocEditor extends React.Component {
         for (let i = thread.from; i <= thread.to; i++) at.set(i, { thread, turn: thread.turns.find((turn) => i >= turn.q && i <= turn.to), agent: thread.agent, role: 'hidden', hidden: true });
         continue;
       }
-      const end = thread.turns[thread.turns.length - 1], endCard = cards.byQ.get(end.q);
+      const end = thread.turns[thread.turns.length - 1];
       // A Build's card right under the conversation (2026-10-13: the one a reply was written over, or one built from it) is
       // where it goes on: the conversation has no follow-up field above it.
       const built = (ps[thread.to + 1] || {}).type === 'build';
-      const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !(endCard && endCard.live) && !built;
+      const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !built;
       // A collapsed turn (2026-10-13) is drawn bare, its question and foot on no grey: the card starts again under it.
       // An @discover research box (2026-10-13, doc.js isResearch) is a card of its own: the turn above it closes its card,
       // and its line is the box's head (researchHtml). `cut`: the turn's last row closes the card, a box coming next.
@@ -1433,7 +1431,8 @@ export default class DocEditor extends React.Component {
       thread.turns.forEach((turn, n) => {
         const agent = this.turnAgent(thread, turn), card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
         const bare = turn.answered && !turn.pending && turn.folded, box = isResearch(ps[turn.q]), next = thread.turns[n + 1], cut = !!next && isResearch(ps[next.q]);
-        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || afterBare || box, closes: !turn.answered, editable: editable && !box, bare, box });
+        const answers = n > 0 ? cards.byQ.get(thread.turns[n - 1].q) || null : null;
+        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || afterBare || box, closes: !turn.answered, editable: editable && !box, bare, box, answers });
         afterBare = bare;
         const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end, shuts = (tail && !follow) || cut;
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
@@ -1460,108 +1459,82 @@ export default class DocEditor extends React.Component {
     return !!this.props.onAsk && !this.props.readOnly && turn.answered && !turn.pending && !card && !buildRequestOf({ agent: agentOf(p), text: p.text });
   }
   /* ---------------------------------------------------------------- @brainstorm cards (2026-09-30) */
-  // One card on the answer's grey: a white box with what it says, the question, its options (a round mark for one,
-  // a square for several, each option's `why` under its label) or its field, and Skip and Submit. An answered card is
-  // drawn still, with what was picked marked; a card that is not the thread's last and has no answer under it (a turn
-  // deleted after it) is drawn still too. A map card (the first of an exchange, 2026-09-30) draws where the person seems
-  // to be above the box, live or answered: three short lists, each line with what it rests on in grey. A live @brainstorm
-  // card (round 6) adds Wrap up before Submit; on its versions card (round 7) the field under the options reads "Or
-  // rewrite it yourself…". No Send to Discover under it (MATH-40 follow-up): that is the result's offer line. What it
-  // says (`say`) is drawn in the box, in regular weight above the bold question (MATH-40 round 3: a reply to what they
-  // just said, then the question).
+  // One card, drawn as any answer is (2026-10-13, David: "the same function, but not visually different from a normal
+  // @chat thread"): on the answer's grey, inside its rule, in its type. What it says (`say`), then its question, then its
+  // options as a list whose rows are buttons: a click on one of a single choice answers with it, with what is typed in the
+  // field under the card as a note; a click on one of a select-all ticks it, and Enter in the field (or its send) answers
+  // with every row ticked. A free or open question is answered in that field. Skip and Wrap up are on the foot. The field
+  // is the thread's follow-up field (answerFieldHtml), so nothing is typed on the card itself. A map card (the first of an
+  // exchange, 2026-09-30) says where the person seems to be first, as three short sections. An answered card is drawn
+  // still, its picks ticked; what was answered is on the question line under it (answerShown). @discover's cards keep
+  // their subtitle; @brainstorm's have none.
   cardHtml(raw, entry) {
     const { card, turn, live, answer } = entry, q = turn.q, asked = questionOf(card), state = this.cardState.get(q) || {};
     const choice = isChoice(asked.type), many = asked.type === 'select_all';
     const picks = live ? state.picks || [] : answer ? answer.picks : [];
-    const say = card.say ? `<div data-card-say="1" style="margin:0 0 10px;color:#171717;font:400 16px/1.6 var(--font-sans);white-space:pre-wrap">${textMathHtml(card.say)}</div>` : '';
-    const map = card.map ? MAP_GROUPS.filter((group) => card.map[group].length).map((group) => `<div data-card-map="${group}" style="margin:0 0 10px">`
-      + `<div style="margin:0 0 2px;font:500 11.5px/1.4 var(--font-sans);letter-spacing:.04em;text-transform:uppercase;color:#8f8f8f">${MAP_LABELS[group]}</div>`
-      + card.map[group].map((item) => `<div style="display:flex;gap:8px;font-size:15px;line-height:1.5;color:#171717"><span aria-hidden="true" style="flex:none;color:#c9c9c9">–</span><span style="flex:1;min-width:0">${textMathHtml(item.text)}${item.from ? `<span style="display:block;font-size:13px;line-height:1.45;color:#8f8f8f">${esc(item.from)}</span>` : ''}</span></div>`).join('')
-      + '</div>').join('') : '';
+    const parts = [];
+    if (card.map) {
+      for (const group of MAP_GROUPS.filter((g) => card.map[g].length)) {
+        parts.push(`<span data-card-map="${group}" style="display:block">${this.recapLabelHtml(MAP_LABELS[group], true)}`
+          + card.map[group].map((item) => `<span style="display:flex"><span aria-hidden="true" style="${MARK_DRAWN};color:#8f8f8f">•</span><span style="flex:1;min-width:0">${textMathHtml(item.text)}${item.from ? `<span style="color:#8f8f8f"> · ${esc(item.from)}</span>` : ''}</span></span>`).join('')
+          + '</span>');
+      }
+    }
+    if (card.say) parts.push(`<span data-card-say="1" style="display:block;white-space:pre-wrap">${textMathHtml(card.say)}</span>`);
+    parts.push(`<span data-card-question="1" style="display:block;color:#171717">${textMathHtml(asked.title)}</span>`);
     // No eyebrow over the question (2026-09-30, David): the card's own `eyebrow` ("FOCUS", "YOUR OWN RESEARCH") is kept, not drawn.
-    // Nor, on a brainstorm card, its subtitle (2026-09-30, David: too much to read): the question stands alone. @discover's stays.
-    const sub = (fixedStep(entry.agent) ? '' : asked.subtitle) || (many ? 'Select all that apply.' : '');
-    let body = '';
+    // Nor, on a brainstorm card, its subtitle (2026-09-30, David: too much to read). @discover's stays.
+    const sub = (fixedStep(entry.agent) ? '' : asked.subtitle) || (many ? 'Pick any, then press Enter.' : '');
+    if (sub) parts.push(`<span style="display:block;font-size:14px;color:#8f8f8f">${esc(sub)}</span>`);
     if (choice) {
-      body = `<div role="${many ? 'group' : 'radiogroup'}" aria-label="${esc(asked.title)}" style="margin-top:12px">` + asked.options.map((option, n) => {
+      parts.push(`<span role="${many ? 'group' : 'radiogroup'}" aria-label="${esc(asked.title)}" style="display:block">` + asked.options.map((option, n) => {
         const on = picks.includes(option.label);
-        return `<button type="button" class="bs-opt" ${live ? `data-act="cardopt" data-turn="${q}" data-opt="${n}"` : 'disabled'} role="${many ? 'checkbox' : 'radio'}" aria-checked="${on}"><span class="bs-mark"${many ? ' data-square="1"' : ''}></span><span style="flex:1;min-width:0">${textMathHtml(option.label)}${option.why ? `<span class="bs-why">${textMathHtml(option.why)}</span>` : ''}</span></button>`;
-      }).join('') + '</div>';
-      // On @brainstorm's versions card (round 7) the words typed in place of a pick are their question, rewritten.
-      const own = entry.agent === 'brainstorm' && asked.id === 'versions' ? 'Or rewrite it yourself' : 'Or say it in your own words';
-      if (live) body += `<input data-card-input="${q}" data-card-field="note" placeholder="${card.map ? 'Anything I got wrong about where you are? (optional)' : `${own}…`}" aria-label="${card.map ? 'Add a note' : own}" spellcheck="false" autocomplete="off" class="bs-field" style="margin-top:10px">`;
-      else if (answer && answer.note) body += `<div style="margin-top:10px;font-size:14px;color:#4d4d4d"><span style="color:#8f8f8f">You added:</span> ${esc(answer.note)}</div>`;
-    } else if (live) {
-      const field = asked.type === 'open'
-        ? `<textarea data-card-input="${q}" data-card-field="text" rows="3" placeholder="${esc(asked.placeholder || 'In a sentence or two…')}" aria-label="${esc(asked.title)}" spellcheck="false" autocomplete="off" class="bs-field"></textarea>`
-        : `<input data-card-input="${q}" data-card-field="text" placeholder="${esc(asked.placeholder || 'In a few words…')}" aria-label="${esc(asked.title)}" spellcheck="false" autocomplete="off" class="bs-field">`;
-      body = `<div style="margin-top:12px">${field}</div>`;
+        return `<button type="button" class="bs-row" ${live ? `data-act="cardopt" data-turn="${q}" data-opt="${n}"` : 'disabled'} role="${many ? 'checkbox' : 'radio'}" aria-checked="${on}"><span aria-hidden="true" class="bs-mark">${on ? '✓' : '•'}</span><span class="bs-label">${textMathHtml(option.label)}${option.why ? `<span class="bs-why"> · ${textMathHtml(option.why)}</span>` : ''}</span></button>`;
+      }).join('') + '</span>');
     }
-    // What was said, then (in grey) Skipped, or Wrapped up with or without an answer before it (round 6).
-    if (!live && answer && answer.text) body += `<div style="margin-top:10px;font-size:14px;color:#171717;white-space:pre-wrap">${esc(answer.text)}</div>`;
-    if (!live && answer && (answer.skipped || answer.wrap)) body += `<div style="margin-top:10px;font-size:14px;color:#8f8f8f">${answer.wrap ? 'Wrapped up' : 'Skipped'}</div>`;
-    // A choice card can be answered in the person's own words instead of a pick (2026-09-30): the field alone is enough.
-    const ready = choice ? picks.length > 0 || !!String(state.note || '').trim() : !!String(state.text || '').trim();
-    const wraps = live && fixedStep(entry.agent);
-    const acts = live ? '<div style="display:flex;align-items:center;gap:8px;margin-top:14px">'
-      + `<button type="button" class="bart-text" data-act="cardskip" data-turn="${q}" style="user-select:none;padding-left:0">Skip</button><span style="flex:1"></span>`
-      + (wraps ? `<button type="button" class="bart-text" data-act="cardwrap" data-turn="${q}" style="user-select:none">Wrap up</button>` : '')
-      + `<button type="button" class="bs-submit" data-act="cardsend" data-turn="${q}" ${ready ? '' : 'disabled'}>Submit</button></div>` : '';
-    return `<div ${raw} data-card="${q}" contenteditable="false" data-readonly="1" style="user-select:${live ? 'none' : 'text'};cursor:default;padding:12px 16px 4px;background:#fafafa;font:15px/1.5 var(--font-sans)">`
-      + map
-      + `<div data-card-box="${live ? 'live' : 'answered'}" style="padding:14px 16px 16px;border:1px solid #eaeaea;border-radius:10px;background:#fff">`
-      + say + `<div style="font:600 16px/1.45 var(--font-sans);color:#171717">${textMathHtml(asked.title)}</div>`
-      + (sub ? `<div style="margin-top:8px;font-size:13.5px;color:#8f8f8f">${esc(sub)}</div>` : '')
-      + body + acts + '</div></div>';
+    return `<div ${raw} data-card="${q}" contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:8px 16px 0;background:#fafafa;color:#4d4d4d;font-size:16px;line-height:1.65">`
+      + `<span style="display:block;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">`
+      + parts.join('<span aria-hidden="true" style="display:block;height:10px"></span>')
+      + '</span></div>';
   }
-  // After a redraw: what was typed on a live card goes back into its fields, with the keyboard if it had it.
-  restoreCards(ed, had) {
-    for (const input of ed.querySelectorAll('[data-card-input]')) {
-      const q = Number(input.dataset.cardInput), field = input.dataset.cardField, text = (this.cardState.get(q) || {})[field] || '';
-      if (text) input.value = text;
-      if (had && had.card && had.key === input.dataset.cardInput && had.field === field) { input.focus({ preventScroll: true }); try { input.setSelectionRange(had.a, had.b); } catch { /* not a text selection */ } }
-    }
+  // A question line that answers a card (layout's `answers`), as said: the picks, a note after them, their own words,
+  // Skipped or Wrapped up. The line keeps what main reads ("picked \"a\", \"b\"; note: …").
+  answerShown(entry) {
+    const said = entry.answer; if (!said) return '';
+    const grey = (text) => `<span style="color:#8f8f8f">${esc(text)}</span>`;
+    const given = said.picks.length ? said.picks.map(esc).join(', ') + (said.note ? ` · ${esc(said.note)}` : '') : esc(said.text);
+    if (said.wrap) return given ? `${given} ${grey('· Wrapped up')}` : grey('Wrapped up');
+    return said.skipped ? grey('Skipped') : given;
   }
-  cardInput(input) {
-    const q = Number(input.dataset.cardInput), field = input.dataset.cardField;
-    const state = { ...(this.cardState.get(q) || {}), [field]: input.value };
-    this.cardState.set(q, state);
-    const send = input.closest('[data-card-box]') && input.closest('[data-card-box]').querySelector('[data-act="cardsend"]');
-    if (!send) return;
-    if (field === 'text') send.disabled = !input.value.trim();
-    else if (field === 'note') send.disabled = !(state.picks || []).length && !input.value.trim(); // own words in place of a pick
-  }
-  // Enter submits; in an open answer Shift+Enter is a new line (the answer is still one line of the document, so it is
-  // written with its lines run together).
-  cardKey(e) {
-    if (e.key === 'Enter' && !e.isComposing && !(e.shiftKey && e.target.tagName === 'TEXTAREA')) { e.preventDefault(); this.sendCard(Number(e.target.dataset.cardInput)); }
-    else if (e.key === 'Escape') { e.preventDefault(); e.target.blur(); }
-  }
-  // A choice clicked: one of a single choice (a second click takes it back), any of a select-all.
+  // A choice clicked on a live card: one of a single choice answers with it; one of a select-all is ticked, or unticked.
   pickCard(q, n) {
     const entry = this.cardsOf(this.lines()).byQ.get(q); if (!entry || !entry.live) return;
     const asked = questionOf(entry.card), option = asked.options[n]; if (!option) return;
     const state = this.cardState.get(q) || {}, held = state.picks || [], on = held.includes(option.label);
-    const picks = asked.type === 'select_all' ? asked.options.map((o) => o.label).filter((label) => (label === option.label ? !on : held.includes(label))) : on ? [] : [option.label];
+    if (asked.type !== 'select_all') { this.cardState.set(q, { ...state, picks: [option.label] }); this.sendCard(q); return; }
+    const picks = asked.options.map((o) => o.label).filter((label) => (label === option.label ? !on : held.includes(label)));
     this.cardState.set(q, { ...state, picks }); this.lastHtml = null; this.forceUpdate();
   }
-  // Submit, Skip (`how` 'skip') or Wrap up ('wrap', round 6; @brainstorm only) (BS-06): the answer goes under
-  // the card as an @brainstorm (or @discover) line of its own, with the pending line under it, and is asked as a follow-up is. Wrap up
-  // writes what was picked or typed, if anything, then "; (wrap up)", or "(wrap up)" alone. Flags of the line before carry
-  // on, as they do for @bart.
+  // An answer to the live card (BS-06): sent from the field under it (sendFollow), a single choice clicked (pickCard), Skip
+  // (`how` 'skip') or Wrap up ('wrap', round 6; @brainstorm only) on its foot. What the field holds is the answer to a free
+  // or open question, and to a choice the person's own words in place of a pick, or a note to the picks. It goes under the
+  // card as an @brainstorm (or @discover) line of its own, with the pending line under it, and is asked as a follow-up is;
+  // the turns before it collapse, as a follow-up's do (2026-10-13). Wrap up writes what was picked or typed, if anything,
+  // then "; (wrap up)", or "(wrap up)" alone. Flags of the line before carry on, as they do for @bart.
   sendCard(q, how = 'submit') {
     const ls = this.lines(), entry = this.cardsOf(ls).byQ.get(q); if (!entry || !entry.live || !this.props.onAsk) return;
     const { thread, card, agent } = entry, skip = how === 'skip', wrap = how === 'wrap';
     if (wrap && !fixedStep(agent)) return;
-    const given = skip ? SKIPPED : answerLine(card, this.cardState.get(q) || {});
-    if (how === 'submit' && given === SKIPPED) return; // nothing picked or typed yet: Submit waits
+    const typed = this.followText.get(thread.from) || '', state = this.cardState.get(q) || {};
+    const given = skip ? SKIPPED : answerLine(card, isChoice(questionOf(card).type) ? { picks: state.picks, note: typed } : { text: typed });
+    if (how === 'submit' && given === SKIPPED) return; // nothing picked or typed yet: it waits
     const said = wrap ? withWrap(given) : given;
     const { flags } = this.followStep(ls, thread), text = [flags, said].filter(Boolean).join(' ');
     const askId = newAskId(), add = [`@${tokenOf(agent)} ${text}`, `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
     const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => withAgent(turnText(ls, turn), turn));
-    this.cardState.delete(q);
+    this.cardState.delete(q); this.followText.delete(thread.from); this.followImages.delete(thread.from);
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
-    this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
+    this.setLines((x) => { const out = foldTurns(x, thread.turns); out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
     this.props.onAsk({ askId, text, turns, agent, place: { line: thread.to + 1, text: add[0] } });
   }
@@ -1633,8 +1606,12 @@ export default class DocEditor extends React.Component {
     const toBuild = via ? !!via[1] : name === 'Build' || (routed && th.build && q === th.from);
     // Of what the line says after the agent, only how long it took is drawn: the model and effort stay in the file.
     const time = rest.split(' · ').filter((part) => /^\d+ s$/.test(part)).join(' · ');
+    // A live card's Skip, and @brainstorm's Wrap up (2026-10-13: off the card, which is drawn as an answer, onto its foot).
+    const live = this.cardsOf(ls).byQ.get(q), answering = !!live && live.live;
     const lefts = [
       wrap(`<button class="bart-ic" data-act="copybart" data-turn="${q}" aria-label="Copy" ${copied ? 'style="color:#8f8f8f"' : ''}>${ICON.copy}</button>${tip(copied ? 'Copied' : 'Copy', 'left')}`),
+      ...(answering ? [`<button type="button" class="bart-text" data-act="cardskip" data-turn="${q}" style="user-select:none;flex:none;margin-left:6px">Skip</button>`] : []),
+      ...(answering && fixedStep(live.agent) ? [`<button type="button" class="bart-text" data-act="cardwrap" data-turn="${q}" style="user-select:none;flex:none;margin-left:6px">Wrap up</button>`] : []),
     ];
     const viaHtml = via ? `${time ? ' · ' : ''}<span class="bart-text" data-act="viabart" data-turn="${q}" role="button" aria-haspopup="dialog" title="Bart picked this agent. Ask another" style="display:inline;padding:0;font:inherit;color:#0070f3;cursor:pointer">via Bart</span>${toBuild ? ' · build' : ''}` : '';
     const who = !name ? '' : routed
@@ -1666,6 +1643,8 @@ export default class DocEditor extends React.Component {
   // an @discover guide it asks @discover for more, which needs words.
   // `closes: false`: a row follows it inside the card (Send to Discover after a recap), so it leaves the card's end to that.
   followHtml(ls, thread, { closes = true } = {}) {
+    const live = this.cardsOf(ls).byQ.get(thread.turns[thread.turns.length - 1].q);
+    if (live && live.live) return this.answerFieldHtml(thread, live);
     const { step } = this.followStep(ls, thread), from = thread.from;
     const agent = answeredBy(thread);
     // What is typed goes to Bart, who picks the agent (sendFollow, 2026-10-13), so the field says @bart whoever answered
@@ -1690,6 +1669,22 @@ export default class DocEditor extends React.Component {
       + (step ? `<span>${esc(step.name)} ${esc(EFFORT_LABELS[step.effort] || step.effort)}</span>${ICON.chevron}<span style="width:1px;height:14px;background:#eaeaea;margin:0 2px"></span>` : '')
       + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:#f2f2f2;color:#8f8f8f;cursor:pointer">${ICON.send}</button>`
       + '</span></span></div>';
+  }
+  // The follow-up field under a live card (2026-10-13), where it is answered (sendCard): the card's agent, no chip, and a
+  // send that is blue once something is typed, or (a select-all) once a row is ticked. A free or open question's own
+  // placeholder; on a choice, what is typed is their own words in place of a pick (on @brainstorm's versions card, round 7,
+  // their question rewritten), or a note to what is ticked.
+  answerFieldHtml(thread, entry) {
+    const from = thread.from, asked = questionOf(entry.card), many = asked.type === 'select_all';
+    const ticked = many && ((this.cardState.get(entry.turn.q) || {}).picks || []).length > 0;
+    const placeholder = !isChoice(asked.type) ? asked.placeholder || 'Respond…'
+      : entry.agent === 'brainstorm' && asked.id === 'versions' ? 'Or rewrite it yourself…'
+        : many ? 'Pick any, or say it in your own words…' : 'Pick one, or say it in your own words…';
+    return `<div contenteditable="false" data-followup="${from}" data-answers="${entry.turn.q}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;padding:10px 12px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px">`
+      + `<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@${tokenOf(entry.agent)}</span>`
+      + `<textarea data-follow-input="${from}" data-agent="${entry.agent}"${ticked ? ' data-empty="1"' : ''} rows="1" placeholder="${esc(placeholder)}" aria-label="Answer" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
+      + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:${ticked ? '#0070f3' : '#f2f2f2'};color:${ticked ? '#fff' : '#8f8f8f'};cursor:pointer">${ICON.send}</button>`
+      + '</div>';
   }
   // After a redraw: what was being typed goes back into its field, the send turns blue again, and a field that had the
   // keyboard takes it back with its selection.
@@ -1768,7 +1763,6 @@ export default class DocEditor extends React.Component {
     const html = this.editorHtml();
     const hadFocus = document.activeElement === ed || ed.contains(document.activeElement);
     const field = document.activeElement, had = field && field.matches && field.matches('[data-follow-input]') && ed.contains(field) ? { key: field.dataset.followInput, a: field.selectionStart, b: field.selectionEnd }
-      : field && field.matches && field.matches('[data-card-input]') && ed.contains(field) ? { card: true, key: field.dataset.cardInput, field: field.dataset.cardField, a: field.selectionStart, b: field.selectionEnd }
         : field && field.matches && field.matches('[data-discover-input]') && ed.contains(field) ? { discover: true, key: field.dataset.discoverInput, a: field.selectionStart, b: field.selectionEnd } : null;
     const buildField = field && field.matches && field.matches('[data-build-input]') && ed.contains(field) ? { key: field.dataset.buildInput, a: field.selectionStart, b: field.selectionEnd } : null;
     // A title being renamed (2026-10-12) keeps the keyboard through a redraw (an answer landing, its title filled in by
@@ -1787,7 +1781,7 @@ export default class DocEditor extends React.Component {
     if (c && !this.caret) this.caret = c;
     // Read before the fields are replaced: taking a focused field out of the page may blur it, which closes the menu.
     const menu = this.state.mention && this.state.mention.field != null ? this.state.mention : null;
-    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.markBeside(); this.restoreFollow(ed, had && !had.card && !had.discover ? had : null); this.restoreCards(ed, had); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
+    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.markBeside(); this.restoreFollow(ed, had && !had.discover ? had : null); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
     if (titleField) { const input = ed.querySelector(`[data-title-input="${titleField.line}"]`); if (input) { input.focus({ preventScroll: true }); try { input.setSelectionRange(titleField.a, titleField.b); } catch { /* not a text field */ } } }
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
@@ -2261,7 +2255,6 @@ export default class DocEditor extends React.Component {
       if (k === 'footbuild') { this.closePicker(); if (!act.disabled) this.footBuild(Number(act.dataset.turn)); return; }
       if (k === 'viabart') { this.openVia(act); return; }
       if (k === 'cardopt') { this.pickCard(Number(act.dataset.turn), Number(act.dataset.opt)); return; }
-      if (k === 'cardsend') { this.sendCard(Number(act.dataset.turn)); return; }
       if (k === 'cardskip') { this.sendCard(Number(act.dataset.turn), 'skip'); return; }
       if (k === 'cardwrap') { this.sendCard(Number(act.dataset.turn), 'wrap'); return; }
       if (k === 'fold') { this.toggleFold(Number(act.dataset.turn)); return; }
@@ -2621,7 +2614,10 @@ export default class DocEditor extends React.Component {
   sendFollow(from) {
     const ls = this.lines(), thread = threads(ls).find((t) => t.from === from), typed = (this.followText.get(from) || '').trim();
     if (!thread || !this.props.onAsk) return;
-    const end = thread.turns[thread.turns.length - 1], agent = answeredBy(thread); if (!end.answered || end.pending || (!typed && !(FOLLOW[agent] && FOLLOW[agent].empty))) return;
+    const end = thread.turns[thread.turns.length - 1], agent = answeredBy(thread);
+    // Under a live card, what is sent answers it (sendCard): it is never routed.
+    const live = this.cardsOf(ls).byQ.get(end.q); if (live && live.live) { this.sendCard(end.q); return; }
+    if (!end.answered || end.pending || (!typed && !(FOLLOW[agent] && FOLLOW[agent].empty))) return;
     // A pasted image goes into the line as its [Attachment n] token stood; one whose token was deleted is not sent.
     const text = withAttachments(typed, this.followImages.get(from) || []);
     const { flags } = this.followStep(ls, thread), asked = [flags, text].filter(Boolean).join(' ');
@@ -2927,8 +2923,10 @@ export default class DocEditor extends React.Component {
   // Copy: the question as asked (no flags) and the answer as written (no prefixes, no closing line).
   copyText(q) {
     const ls = this.lines(), found = this.findTurn(ls, q); if (!found) return '';
-    const { question, answer } = turnText(ls, found.turn);
-    return [this.props.models ? readFlags(question, this.props.models).rest : question, answer].filter(Boolean).join('\n\n');
+    const { question, answer } = turnText(ls, found.turn), card = cardOfAnswer(answer);
+    // A card as it reads (2026-10-13), not its JSON: what it says, its question, its options as a list.
+    const said = card ? [card.say, questionOf(card).title, questionOf(card).options.map((o) => `- ${o.label}`).join('\n')].filter(Boolean).join('\n\n') : answer;
+    return [this.props.models ? readFlags(question, this.props.models).rest : question, said].filter(Boolean).join('\n\n');
   }
   // The selector. Under an @bart line's chip a choice is written into the line as flags, so the line says what will answer
   // it and taking the flags out gives the ladder back. Under a card's follow-up chip the choice waits for the follow-up;
