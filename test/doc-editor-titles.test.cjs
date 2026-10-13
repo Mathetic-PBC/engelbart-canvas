@@ -108,6 +108,44 @@ test('no title for a follow-up, a question under an older conversation, one with
   assert.ok(!build.lines().some((l) => l.startsWith('bart#')));
 });
 
+test('an @ line typed under an answer starts a conversation of its own: an empty line and its title line above it, in one change; the reply field still adds a follow-up (2026-10-13)', async () => {
+  const { threads } = await doc();
+  const CARD = ['@chat why retry?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*'];
+  for (const [line, agent] of [['@chat new', 'chat'], ['@bart new', 'chat']]) {
+    let release; const routed = new Promise((resolve) => { release = resolve; });
+    const m = mounted([...CARD, line], { onRoute: () => routed });
+    const before = m.changes.length;
+    m.editor.askInline(3);
+    assert.equal(m.changes.length, before + 1, `${line}: one change, one undo`);
+    assert.equal(m.lines()[3], '', `${line}: the empty line goes in at once, with the pending line`);
+    release({ id: 'r', agent, sure: 0.9, by: 'model' });
+    await new Promise((resolve) => setImmediate(resolve));
+    const ls = m.lines();
+    assert.equal(ls[3], '', `${line}: an empty line under the card`);
+    assert.match(ls[4], /^bart# \[chat \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\] $/, `${line}: its title line`);
+    assert.equal(ls[5], line);
+    assert.match(ls[6], /^bart~> /);
+    assert.deepEqual([m.asks[0].turns, m.asks[0].name, m.asks[0].place], [[], true, { line: 5, text: line }]);
+    assert.deepEqual(threads(ls).map((t) => [t.from, t.turns.length]), [[0, 1], [5, 1]], `${line}: two conversations`);
+  }
+
+  // From the card's reply field, as before: the card's next turn.
+  const f = mounted([...CARD, '']);
+  f.editor.followText.set(0, 'and timeouts?');
+  f.editor.sendFollow(0);
+  assert.deepEqual(f.lines().slice(3, 5), ['@chat and timeouts?', `bart~> ${f.asks[0].askId}`]);
+  assert.deepEqual([f.asks[0].turns.length, f.asks[0].name], [1, undefined]);
+  assert.deepEqual(threads(f.lines()).map((t) => t.turns.length), [2], 'one conversation, two turns');
+
+  // Under an empty line or other text, as before: nothing put in but its title line.
+  for (const above of ['', 'Some notes']) {
+    const n = mounted([...CARD, above, '@chat new']);
+    n.editor.askInline(4);
+    assert.deepEqual([n.lines()[3], n.lines()[5]], [above, '@chat new']);
+    assert.match(n.lines()[4], /^bart# /);
+  }
+});
+
 test('the answer replaces its pending line with the title line above it, and the title fills in after the answer started', async () => {
   const { placeAnswer, placeTitle, askedAt } = await doc();
   const m = mounted(['Notes', '@chat why retry?', '']);

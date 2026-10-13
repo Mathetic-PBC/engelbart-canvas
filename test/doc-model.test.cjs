@@ -531,6 +531,22 @@ test('different agents never join one thread: a line for another agent starts it
   assert.deepEqual(threads(['@bart a', 'bart> b', '@bart c', 'bart> d', '@discover e', 'bart~> f', '@bart g']).map((t) => t.turns.map((turn) => turn.q)), [[0, 2], [4], [6]], 'a thread ends at the first line from another agent, and the first agent\'s line after it starts again');
 });
 
+test('a question line with nothing under it yet is no follow-up, whatever its agent; asked, or already in a document, it is (2026-10-13)', async () => {
+  const { threads } = await load();
+  const card = ['@chat why?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*'];
+  for (const line of ['@chat x', '@bart x', '@discover x', '@brainstorm x']) {
+    // Being typed under a Chat card: not drawn inside it.
+    assert.deepEqual(threads([...card, line]).map((t) => [t.from, t.to, t.turns.length]), [[0, 2, 1], [3, 3, 1]], `${line}: a thread of its own while it is typed`);
+  }
+  // Asked from the reply field (its pending line goes in with it), or answered already: the card's next turn.
+  assert.deepEqual(threads([...card, '@chat x', 'bart~> p1']).map((t) => t.turns.length), [2]);
+  assert.deepEqual(threads([...card, '@bart x', 'bart~> p1']).map((t) => t.turns.length), [2]);
+  const older = [...card, '@chat and then?', 'bart> then this', 'bart> *Chat · Sonnet · high · 2 s*', ''];
+  assert.deepEqual(threads(older).map((t) => [t.from, t.to, t.turns.map((turn) => turn.q)]), [[0, 5, [0, 3]]], 'a follow-up already in a document stays one conversation');
+  // An empty line between them: two conversations, however they are asked.
+  assert.deepEqual(threads([...card, '', '@chat x', 'bart~> p1']).map((t) => t.turns.length), [1, 1]);
+});
+
 // Copy and cut (2026-10-02): what a selection copies is the document's markdown, so links keep their addresses.
 const COPY_DOC = [
   '# Reading list',
