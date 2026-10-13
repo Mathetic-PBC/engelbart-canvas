@@ -149,7 +149,7 @@ test('an open titled conversation draws no title row; its question opens the car
   assert.match(open, /border-radius:10px/);
 });
 
-test('collapsed: one row, a chevron, the title, and the agent and when; every line of it hidden; a click anywhere expands', () => {
+test('collapsed: one row, the Agents pointer, the title, and the agent and when; every line of it hidden; a click anywhere expands', () => {
   const at = new Date(); at.setHours(21, 41, 0, 0);
   const lines = ['Notes', `bart#+ [discover ${at.toISOString().replace(/\.\d{3}Z$/, 'Z')}] Retry logic`, '@bart why retry?', ...answer('because'), '@bart timeouts?', ...answer('those too'), '', 'After'];
   const m = mounted(lines);
@@ -157,12 +157,13 @@ test('collapsed: one row, a chevron, the title, and the agent and when; every li
   assert.match(row, /data-thread-row/);
   assert.match(open, /data-act="foldthread" data-row="1"/, 'the whole row is the button');
   assert.match(open, /cursor:pointer/);
-  assert.match(open, /padding:6px 12px;margin-bottom:8px;background:#fafafa;border-radius:10px/, 'a grey rounded row');
+  assert.match(open, /padding:10px 14px;margin-bottom:8px;background:#fafafa;border-radius:10px/, 'a grey rounded row, the open card\'s size');
   assert.ok(!/border-top/.test(open), 'no rule over it');
-  assert.match(row, /<span style="flex:none;display:inline-flex;color:#8f8f8f"><svg[^>]*><path d="m9 18 6-6-6-6">/, 'the chevron, grey');
-  assert.match(row, /data-act="edittitle" data-row="1"[^>]*font:14px\/1\.5 var\(--font-sans\);color:#171717">Retry logic</, 'the title, which renames');
+  assert.match(row, /<span style="flex:none;display:inline-flex;color:#8f8f8f"><svg width="16"[^>]*><path d="M4\.04 4\.69/, 'the sidebar\'s Agents pointer, grey');
+  assert.equal((row.match(/<svg/g) || []).length, 1, 'no other icon: no chevron');
+  assert.match(row, /data-act="edittitle" data-row="1"[^>]*font:16px\/1\.5 var\(--font-sans\);color:#171717">Retry logic</, 'the title, at the card\'s 16px, which renames');
   assert.match(row, /text-overflow:ellipsis/);
-  assert.match(row, /font:13px\/1\.5 var\(--font-sans\);color:#8f8f8f">Discover · 9:41 PM</);
+  assert.match(row, /font:14px\/1\.5 var\(--font-sans\);color:#8f8f8f">Discover · 9:41 PM</);
   assert.ok(!row.includes('#0070f3'), 'no blue link');
   const last = lines.indexOf('After') - 2;
   for (let i = 2; i <= last; i++) assert.match(rowOf(html, i), /^<div[^>]*display:none/, `line ${i} hidden`);
@@ -340,5 +341,20 @@ test('the footer reads "Chat · Opus · high · 17 s", a space on both sides of 
     assert.equal(footText(html), 'Chat · Opus · high · 17 s', routed ? 'routed' : 'typed');
     assert.equal(html.includes('class="bart-who"'), routed, routed ? 'the name is the button' : 'the name is text');
     assert.match(html, /Chat<\/span>(?:<span class="bart-tip"[^>]*>[^<]*<\/span><\/span>)?<span style="flex:none;white-space:pre"> · <\/span><span[^>]*>Opus · high · 17 s</, 'the separator keeps its spaces');
+  }
+});
+
+test('the follow-up field says @bart whichever agent answered, since what is typed goes to Bart; with no router, that agent', () => {
+  const field = (html) => { const at = html.indexOf('data-followup='); assert.ok(at >= 0, 'a follow-up field'); return html.slice(at, html.indexOf('</div>', at)); };
+  for (const line of ['@chat why retry?', '@discover retries', '@brainstorm a plan']) {
+    const m = mounted([line, ...answer('x'), '']);
+    m.props.onRoute = () => {};
+    const routed = field(m.html());
+    assert.match(routed, /font-size:16px;line-height:24px">@bart<\/span>/, `${line}: @bart`);
+    assert.ok(!/>@(chat|discover|brainstorm)</.test(routed), `${line}: not the agent that answered`);
+    assert.match(routed, /placeholder="Respond…"/);
+    delete m.props.onRoute;
+    const token = line.split(' ')[0];
+    assert.match(field(m.html()), new RegExp(`line-height:24px">${token}</span>`), `${line}: no router, it asks ${token}`);
   }
 });

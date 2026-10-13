@@ -255,7 +255,7 @@ test('a recap is drawn as sections, the paper path\'s "What you took from it" an
     assert.match(await lineOf(m, row('bart> What draws you: the gap')), />What draws you<\/span>/, 'an older recap\'s label still draws');
     const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
     const follow = m.editor.followHtml(m.lines(), model.threads(m.lines())[0]);
-    assert.match(follow, /data-agent="brainstorm" data-empty="1" rows="1" placeholder="Reply…" aria-label="Brainstorm again"/, 'Brainstorm again, as it is today');
+    assert.match(follow, /data-agent="brainstorm" data-empty="1" rows="1" placeholder="Respond…" aria-label="Brainstorm again"/, 'Brainstorm again, as it is today');
     assert.match(follow, />@brainstorm<\/span>/);
     const page = m.editor.editorHtml();
     assert.ok(page.indexOf('data-recap-discover="0"') > page.indexOf('data-followup="0"'), 'Send to Discover, a row of its own under it');

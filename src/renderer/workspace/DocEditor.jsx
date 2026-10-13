@@ -68,6 +68,7 @@ import { guideTitle, guideRepo, repoOf } from '../model/guide.js';
 import { guideSections, splitTarget } from '../model/stage.js';
 import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
 import { isNote } from '../model/kind.js';
+import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -106,8 +107,8 @@ const agentName = (thread) => (thread.build && thread.asked === 'router' ? 'Buil
 // A turn as text (doc.js turnText) with the agent that answered it, when its lines say (doc.js turn.agent).
 const withAgent = (said, turn) => (turn && turn.agent ? { ...said, agent: turn.agent } : said);
 const FOLLOW = {
-  brainstorm: { placeholder: 'Reply…', label: 'Brainstorm again', empty: true },
-  discover: { placeholder: 'More like one of these, only after 2022, essays…', label: 'Ask Discover for more', empty: false },
+  brainstorm: { placeholder: 'Respond…', label: 'Brainstorm again', empty: true },
+  discover: { placeholder: 'Respond…', label: 'Ask a follow-up', empty: false },
 };
 // A Build's state as its card names it (main/build/store.cjs STATUSES).
 const BUILD_STATUS = { 'setting-up': 'Setting up', queued: 'Waiting for a slot', running: 'Working', 'needs-you': 'Needs you', review: 'Ready to review', stopped: 'Stopped', failed: 'Failed', escalated: 'Too big for a quick task', interrupted: 'Interrupted', accepting: 'Accepting', conflict: 'Conflict', accepted: 'Accepted', discarded: 'Discarded' };
@@ -209,6 +210,8 @@ const WAITING_TIP = "Opened in your browser. Download the PDF and it'll open her
 const MAP_LABELS = { settled: 'Seems settled', open: 'Seems open', untouched: 'Not touched yet' };
 const icon = (paths, size = 16, width = 1.5, caps = 'round') => `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${width}" stroke-linecap="${caps}" stroke-linejoin="${caps === 'round' ? 'round' : 'miter'}" aria-hidden="true">${paths}</svg>`;
 const ICON = {
+  // The sidebar's Agents pointer (ui/SidebarIcons.jsx), the one icon a collapsed conversation shows (2026-10-13).
+  agents: icon(`<path d="${AGENTS_PATH}"></path>`, 16, 1.75),
   copy: icon('<rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>'),
   regenerate: icon('<path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8"></path><path d="M21 3v5h-5"></path>'),
   edit: icon('<path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"></path><path d="m15 5 4 4"></path>'),
@@ -1485,7 +1488,8 @@ export default class DocEditor extends React.Component {
   findTurn(ls, q) { for (const thread of threads(ls)) { const turn = thread.turns.find((t) => t.q === q); if (turn) return { thread, turn }; } return null; }
   // A conversation's title (2026-10-12, `bart# …` above the question that starts it). Open, it is not drawn: the card
   // starts at its question, rounded, and Collapse is on the foot. Collapsed (`bart#+ …`), it is all that shows of the
-  // conversation: one grey rounded row (like a card, smaller), a chevron, the title, and on the right the agent that
+  // conversation: one grey rounded row, the open card's size (2026-10-13: 16px, the Agents pointer as its one icon, no
+  // chevron), the title, and on the right the agent that
   // answered and when it was asked (whenShown). A click on the title makes it a field to rename it in (titleEdit); a click
   // anywhere else on the row expands it. While a run is at work it cannot collapse. An empty title is still being named:
   // the line stays in the file for main's name-chat to fill. Collapsed with no title (a line emptied by hand), the row
@@ -1498,14 +1502,14 @@ export default class DocEditor extends React.Component {
     const said = [name, when].filter(Boolean).join(' · ');
     const editing = !!this.titleEdit && this.titleEdit.line === i;
     const text = editing
-      ? `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:14px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
-      : `<span class="bart-thread-name" data-act="edittitle" data-row="${i}" title="Rename" style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:14px/1.5 var(--font-sans);color:#171717">${esc(shown)}</span><span style="flex:1"></span>`;
+      ? `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
+      : `<span class="bart-thread-name" data-act="edittitle" data-row="${i}" title="Rename" style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:16px/1.5 var(--font-sans);color:#171717">${esc(shown)}</span><span style="flex:1"></span>`;
     // While its title is being edited the row is not a button: a click in the field stays in the field.
     const button = editing ? '' : ` data-act="foldthread" data-row="${i}" role="button" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false"`;
-    return `<div ${raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" class="bart-row"${button} style="user-select:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:6px 12px;margin-bottom:8px;background:#fafafa;border-radius:10px">`
-      + `<span style="flex:none;display:inline-flex;color:#8f8f8f">${ICON.chevronRight}</span>`
+    return `<div ${raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" class="bart-row"${button} style="user-select:none;cursor:pointer;display:flex;align-items:center;gap:10px;padding:10px 14px;margin-bottom:8px;background:#fafafa;border-radius:10px">`
+      + `<span style="flex:none;display:inline-flex;color:#8f8f8f">${ICON.agents}</span>`
       + text
-      + `<span style="flex:none;white-space:nowrap;font:13px/1.5 var(--font-sans);color:#8f8f8f">${esc(said)}</span>`
+      + `<span style="flex:none;white-space:nowrap;font:14px/1.5 var(--font-sans);color:#8f8f8f">${esc(said)}</span>`
       + '</div>';
   }
   // The foot of one turn (Answer Card), as icons, each with its name under it on hover: Copy, Regenerate, Edit and Build on
@@ -1574,11 +1578,14 @@ export default class DocEditor extends React.Component {
   followHtml(ls, thread, { closes = true } = {}) {
     const { step } = this.followStep(ls, thread), from = thread.from;
     const agent = answeredBy(thread);
+    // What is typed goes to Bart, who picks the agent (sendFollow, 2026-10-13), so the field says @bart whoever answered
+    // last; without a router (no onRoute) it still asks that agent, and says so.
+    const lead = this.props.onRoute ? '@bart' : `@${tokenOf(agent)}`;
     if (FOLLOW[agent]) {
       const { placeholder, label, empty } = FOLLOW[agent];
       const end = closes ? 'padding:10px 12px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px' : 'padding:10px 12px;background:#fafafa';
       return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;${end}">`
-        + `<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@${tokenOf(agent)}</span>`
+        + `<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">${lead}</span>`
         + `<textarea data-follow-input="${from}" data-agent="${agent}"${empty ? ' data-empty="1"' : ''} rows="1" placeholder="${esc(placeholder)}" aria-label="${esc(label)}" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
         + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:${empty ? '#0070f3' : '#f2f2f2'};color:${empty ? '#fff' : '#8f8f8f'};cursor:pointer">${ICON.send}</button>`
         + '</div>';
@@ -1587,7 +1594,7 @@ export default class DocEditor extends React.Component {
     // A textarea one line tall that grows as it wraps, as the @bart line above it does (2026-09-22); the question is still
     // one line of the document, so Enter sends and a pasted line break becomes a space. The chip sits on the first line.
     return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;padding:10px 12px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px">`
-      + '<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@chat</span>'
+      + `<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">${lead}</span>`
       + `<textarea data-follow-input="${from}" rows="1" placeholder="Respond…" aria-label="Ask a follow-up" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
       + `<span data-chip="f${from}" style="flex:none;position:relative;display:inline-flex;margin-top:-6px"><span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border:1px solid ${open ? '#c9c9c9' : '#eaeaea'};border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717">`
       + (step ? `<span>${esc(step.name)} ${esc(EFFORT_LABELS[step.effort] || step.effort)}</span>${ICON.chevron}<span style="width:1px;height:14px;background:#eaeaea;margin:0 2px"></span>` : '')
