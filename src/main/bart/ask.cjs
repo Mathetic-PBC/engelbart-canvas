@@ -260,8 +260,9 @@ function firstMessage({ context, prior, question, resumed, extra = '', routed = 
 // footer's Build: the editor draws `[[build]]` as the hammer, and a click on it builds the turn (model/doc.js inlineHtml).
 const ROUTED_BUILD = '<routed>The person wants this built. Write the Build prompt as one fenced code block, after at most two sentences. End with one line, exactly: `Press [[build]] Build to build it.`</routed>';
 // An @discover question (2026-10-13) is answered twice: Chat replies at once, with this block before <question>, and
-// Discover searches in a box under that reply (the editor's research turn). The reply's closing line names Discover.
-const DISCOVER_INTRO = '<discover_intro>Discover, the research agent, is searching now for what the person should read on this, and its reading guide will appear in a box under your reply. Reply first, in at most three short sentences of plain prose: what you take the problem to be, in their own setting, and what the search will look for. Do not name or recommend papers, authors or findings, and do not say that you cannot search.</discover_intro>';
+// Discover searches in a box under that reply (the editor's research turn). The reply says yes when asked, names what
+// the search looks for and says the guide appears below; the box already shows the search started, so it says no more.
+const DISCOVER_INTRO = '<discover_intro>Discover, the research agent, is searching now for what the person should read on this, and its reading guide will appear in a box under your reply. Reply first, in one or two short sentences of plain prose. If they asked whether you can (can you, could you, would you), start with "Yes." Then name the two or three things the search will look for, in their own terms, and say the reading guide will appear below. Do not restate or explain their problem, do not say you will start or are working on it, do not name or recommend papers, authors or findings, and do not say that you cannot search.</discover_intro>';
 // A line Bart sent to Build with a spec above it (2026-10-13) is answered the same way: Chat replies at once, with this
 // block in place of the routed one (ROUTED_BUILD asks for a Build prompt, and there is one), and the Build's card goes
 // under that reply (the editor's handOff). The reply's closing line names Build.

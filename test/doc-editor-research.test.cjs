@@ -163,6 +163,8 @@ test('main: Chat\'s reply is told Discover searches under it and asked without t
   const context = { head: '<engelbart>', contextJson: '', mentionedFiles: '', documents: '', now: '' };
   const intro = ask.firstMessage({ context, prior: [], question: 'tutors', resumed: false, intro: 'discover' })({ toString: () => '' });
   assert.ok(intro.includes(ask.DISCOVER_INTRO) && intro.indexOf(ask.DISCOVER_INTRO) < intro.indexOf('<question>'));
+  for (const said of ['one or two short sentences', 'Yes.', 'Do not restate']) assert.ok(ask.DISCOVER_INTRO.includes(said), said);
+  for (const gone of ['three short sentences', 'what you take the problem to be']) assert.ok(!ask.DISCOVER_INTRO.includes(gone), gone);
   assert.ok(!ask.firstMessage({ context, prior: [], question: 'tutors', resumed: false })('').includes('discover_intro'));
   assert.equal(ask.withoutResearch('--research --deep tutors'), '--deep tutors');
   const plan = ask.turnPlan({ agent: 'discover', text: '--research --deep tutors', turns: [{ question: '--research tutors', answer: 'A guide.' }] }, MODELS);
