@@ -87,14 +87,16 @@ app.whenReady().then(async () => {
     await key(wc, 'Backspace');
     await until(async () => (await rows(wc)).join('\n').trim() === '', 'an empty document');
     await typeKeys(wc, 'Notes\n@bart what does the map show\n');
-    const live = await until(() => js(mc, `(()=>{const t=document.body.innerText;return t.includes('@bart')&&t.includes('what does the map show')&&t.includes('●')&&/running|starting/.test(t)?t:null})()`).catch(() => null), 'the run in the map while it runs', 200);
-    const stillRunning = (await rows(wc)).some((line) => /^bart~> /.test(line));
+    // Bart (the router, 2026-10-12) answers first, then hands the line to @chat; the fake answers in a few ms, so the runs
+    // are caught as they show up, running or done.
+    const live = await until(() => js(mc, `(()=>{const t=document.body.innerText;return t.includes('@bart → @chat')&&t.includes('@chat · via Bart')&&t.includes('what does the map show')?t:null})()`).catch(() => null), 'the router\'s run and the one it handed to, in the map', 200);
     await shot(mc, '1-running');
-    console.log(`PASS the run is in the map while it runs (the document's line still pending: ${stillRunning})`);
-    assert.ok(stillRunning, 'seen before the answer came');
+    console.log('PASS the @bart line shows in the map as Bart\'s pick and the @chat run it handed to');
     assert.match(live, /what does the map show/);
 
     await until(async () => !(await rows(wc)).some((line) => /^bart~> /.test(line)), 'the answer', 400);
+    // The @chat run selected (the list starts on the first run it saw, Bart's).
+    await js(mc, `[...document.querySelectorAll('div')].filter((d)=>d.onclick||d.getAttribute('style')?.includes('cursor: pointer')).find((d)=>d.innerText.startsWith(' @chat · via Bart')||d.innerText.trim().startsWith('@chat · via Bart'))?.click()`);
     const done = await until(() => js(mc, `(()=>{const t=document.body.innerText;return /\\bdone\\b/.test(t)&&t.includes('FAKE ANSWER')?t:null})()`).catch(() => null), 'the run done in the map', 200);
     assert.match(done, /3 Steps/);
     assert.match(done, /step 1/);

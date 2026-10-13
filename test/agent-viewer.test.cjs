@@ -1,7 +1,7 @@
 'use strict';
 
 // The Agent Viewer's asks (2026-10-12; src/main/agent-map/asks.cjs, src/renderer/agent-map/runText.js,
-// src/renderer/model/askLine.js, src/renderer/screens/AgentMap.jsx): the run log's records grouped one entry per ask, the
+// src/renderer/model/askLine.js, src/renderer/screens/AgentMap.jsx, back to its first design on 2026-10-13): the run log's records grouped one entry per ask, the
 // place each was typed kept on its records, the line a click finds, the list, the four sections and the export.
 
 const test = require('node:test');
@@ -174,47 +174,8 @@ test('reveal: a Build with no line of its own is found by its card', () => {
 const view = compile('src/renderer/screens/AgentMap.jsx', 'agent-viewer');
 const runText = compile('src/renderer/agent-map/runText.js', 'run-text-viewer');
 
-test('list: only the line and its time, a dot while running, and All | Questions | Builds', () => {
-  const now = new Date(2026, 9, 12, 18, 0).getTime();
-  const at = new Date(2026, 9, 12, 9, 5).getTime();
-  const asks = groupAsks(RECORDS).map((ask) => ({ ...ask, at }));
-  asks.push({ id: 'pic', at, text: '![shot](x.png)', status: 'done', kind: 'question', records: [] });
-  const render = (filter) => renderToStaticMarkup(React.createElement(view.AskList, { asks, selected: null, filter, onSelect() {}, onFilter() {}, now }));
-  const all = render('all');
-  assert.match(all, />All</);
-  assert.match(all, />Questions</);
-  assert.match(all, />Builds</);
-  assert.match(all, /@bart why is the sky blue\?<\/span><span[^>]*>09:05</);
-  assert.match(all, />—</, 'a line of only a picture reads —');
-  assert.doesNotMatch(all, /Viewed|Sonnet|claude-|Chat|Discover/, 'no project, model or agent in the list');
-  assert.equal((all.match(/●/g) || []).length, 1, 'one ask runs');
-  const builds = render('builds');
-  assert.match(builds, /build a parser/);
-  assert.doesNotMatch(builds, /sky blue/);
-  const questions = render('questions');
-  assert.match(questions, /sky blue/);
-  assert.doesNotMatch(questions, /build a parser|make the thing/);
-  assert.equal(runText.askTime(new Date(2026, 9, 11, 9, 5).getTime(), now), '2026-10-11', 'another day shows its date');
-});
-
-const step = (output) => ({ model: 'claude-sonnet-5-5', name: 'Sonnet', effort: 'high', input: 'IN', output, tools: [] });
 const whole = (id, records) => ({ ...groupAsks(records).find((ask) => ask.id === id), records });
-
-test('detail: Chat through the router has the four numbered sections with the classifier\'s pick', () => {
-  const records = [
-    { ...RECORDS[0], context: { input: '<section>\nIntro\n</section>\n<line>\n@bart why is the sky blue?\n</line>' }, threads: [], steps: [step('{"agent":"chat","sure":0.9}')], sure: 0.9 },
-    { ...RECORDS[1], system: 'SYS', context: { documents: 'DOCS' }, steps: [step('Rayleigh scattering.')], written: ['bart> Rayleigh scattering.'] },
-  ];
-  const html = renderToStaticMarkup(React.createElement(view.AskDetail, { ask: whole('route-1', records), opened: { 4: true } }));
-  for (const heading of ['1 Input', '2 Bart (classifier)', '3 Chat input', '4 Chat output']) assert.match(html, new RegExp(`<b>${heading.replace(/[()]/g, '\\$&')}</b>`));
-  assert.match(runText.nodesText(runText.askSections(whole('route-1', records))[1].nodes), /Picked Chat/);
-  assert.match(html, /data-section="4" data-open="1">[\s\S]*▸ Chat<span[^>]*> 0 tools · done/, 'an open section shows one level');
-  assert.doesNotMatch(html, /step 1: Sonnet|Rayleigh/, 'and nothing below it');
-  assert.match(runText.nodesText(runText.askSections(whole('route-1', records))[3].nodes), /Rayleigh scattering\./);
-  // Closed (the default), a section shows only its heading and its summary.
-  const closed = renderToStaticMarkup(React.createElement(view.AskDetail, { ask: whole('route-1', records) }));
-  assert.doesNotMatch(closed, /what was written/);
-});
+const step = (output) => ({ model: 'claude-sonnet-5-5', name: 'Sonnet', effort: 'high', input: 'IN', output, tools: [] });
 
 test('detail: typed directly, a Brainstorm card, Discover, and a Build\'s turns and run step', () => {
   const sections = (ask) => runText.askSections(ask);
@@ -252,125 +213,7 @@ test('export: one ask, one self-contained page', () => {
   assert.equal((html.match(/<\/script>/g) || []).length, 1, 'what a run wrote cannot close the page\'s data');
 });
 
-/* ------------------------------------------------------------- plain and readable at a glance (2026-10-13) */
-
-const tool = (name, input, ms = 12, size = 340) => ({ id: `t-${name}`, name, input, at: 0, ms, result: { size, excerpt: `${name} said ok` } });
-const TOOLS = [
-  tool('Bash', { command: `npm test -- --grep viewer ${'x'.repeat(120)}`, description: 'run the tests' }),
-  tool('Read', { file_path: '/repo/src/renderer/agent-map/runText.js' }),
-  tool('Grep', { pattern: 'AgentDot', path: 'src/renderer' }),
-  tool('Glob', { pattern: 'test/*.cjs' }),
-  tool('WebFetch', { url: 'https://example.com/doc', prompt: 'summarize' }),
-  ...Array.from({ length: 9 }, (_, n) => tool('Read', { file_path: `/repo/file-${n}.js` })),
-];
-const NOTE_PLACE = { projectId: 'p-1234', ref: { kind: 'note', id: 'n1' }, line: 94, text: '@bart make the Agent Viewer plain and readable\nat a glance' };
-const BUILD_ASK = {
-  ...groupAsks([{ id: 'route-v', agent: 'router', at: 1, status: 'done', pick: 'build', handedTo: 'build:bv', place: NOTE_PLACE }, { id: 'bv:1', agent: 'build', buildId: 'bv', turn: 1, at: 2, status: 'running', place: NOTE_PLACE }])[0],
-  names: { project: 'Engelbart', workspace: 'oct-12', note: '', paper: '' },
-  records: [
-    { id: 'route-v', agent: 'router', at: 1, status: 'done', pick: 'build', handedTo: 'build:bv', sure: 0.85, ms: 3400, by: 'model', place: NOTE_PLACE, projectId: 'p-1234', projectName: '', steps: [{ name: 'Haiku', model: 'claude-haiku-5-5', effort: 'low', input: 'IN', output: '{"agent":"build","sure":0.85}', tools: [] }] },
-    { id: 'bv:1', agent: 'build', buildId: 'bv', turn: 1, at: 2, status: 'running', place: NOTE_PLACE, system: 's'.repeat(4400), context: { engelbart: 'e'.repeat(4000), request: 'r'.repeat(196000) }, steps: [{ name: 'Opus', model: 'claude-opus-5-5', effort: 'high', input: 'IN', output: null, tools: TOOLS }] },
-  ],
-};
-const DIRECT_ASK = {
-  ...groupAsks([{ id: 'a-d', agent: 'bart', at: 1, status: 'done', place: PLACE(2, '@chat hi') }])[0],
-  records: [{ id: 'a-d', agent: 'bart', at: 1, status: 'done', place: PLACE(2, '@chat hi'), system: 'SYS', context: { documents: 'DOCS' }, steps: [{ ...step('hello'), tools: TOOLS.slice(0, 6) }], written: ['bart> hello'] }],
-};
-const AGENT_COLOURS = ['#7c3aed', '#2563eb', '#d97706', '#059669', '#db2777', '#dc2626', '#6b7280', '#9ca3af', '#1a7f37', '#eef3ff'];
-const grey = (hex) => { const h = hex.slice(1); const full = h.length === 3 ? h.split('').map((c) => c + c).join('') : h; return full.slice(0, 2) === full.slice(2, 4) && full.slice(2, 4) === full.slice(4, 6); };
-
-test('viewer: a Build ask renders all four sections closed, each with its summary on its heading', () => {
-  const html = renderToStaticMarkup(React.createElement(view.AskDetail, { ask: BUILD_ASK }));
-  assert.equal((html.match(/data-open="0"/g) || []).length, 4, 'all four closed');
-  assert.doesNotMatch(html, /data-open="1"/);
-  const summary = (key) => { const m = html.match(new RegExp(`data-summary="${key}">([^<]*)<`)); return m ? m[1].trim() : null; };
-  assert.equal(summary(1), '@bart make the Agent Viewer plain and readable at a glance · note in oct-12 · line 95');
-  assert.equal(summary(2), 'Build · sure 0.85 · Haiku low · 3.4 s');
-  assert.equal(summary(3), 'system 1.1k tok · context 50k tok (most in &lt;request&gt;, 49k)');
-  assert.equal(summary(4), 'turn 1 · 14 tools · running');
-  assert.doesNotMatch(html, /Bash|runText\.js/, 'nothing inside a closed section is drawn');
-  // Opened, one level and nothing below it.
-  const open = renderToStaticMarkup(React.createElement(view.AskDetail, { ask: BUILD_ASK, opened: { 1: true, 2: true, 3: true, 4: true } }));
-  assert.doesNotMatch(open, /data-summary/, 'an open section shows its nodes, not its summary');
-  assert.match(open, /▸ turn 1<span[^>]*> claude-opus-5-5 · high · 14 tools · running/);
-  assert.doesNotMatch(open, /data-node="tool"/, 'the turn is closed: its tool calls are not drawn');
-  assert.deepEqual(open.match(/<pre[^>]*>[^<]*<\/pre>/g).map((pre) => pre.replace(/<[^>]+>/g, '')), ['{&quot;agent&quot;:&quot;build&quot;,&quot;sure&quot;:0.85}'], 'only the classifier\'s finished output is open');
-  const nodes = runText.askSections(BUILD_ASK).flatMap((section) => section.nodes);
-  const opens = (list) => list.flatMap((node) => [...(node.open ? [node.label] : []), ...opens(node.children || [])]);
-  assert.deepEqual(opens(nodes), ['raw output'], 'only the classifier\'s finished output opens on its own');
-});
-
-test('viewer: the pipeline line for a routed Build and for a direct @chat', () => {
-  assert.equal(runText.pipelineLine(BUILD_ASK), 'you → Bart: Build (0.85 · Haiku low · 3.4 s) → Build turn 1 · 14 tools · running');
-  assert.equal(runText.pipelineLine(DIRECT_ASK), 'you → Chat (typed directly) → 6 tools · done');
-  const html = renderToStaticMarkup(React.createElement(view.AskDetail, { ask: DIRECT_ASK }));
-  assert.match(html, /data-pipeline="1">you → Chat \(typed directly\) → 6 tools · done</);
-  assert.match(html, /data-summary="2"> typed directly</);
-});
-
-test('viewer: a tool call is one row with its argument summary; opened, its arguments and result together', () => {
-  const turn = runText.askSections(BUILD_ASK)[3].nodes[0];
-  const rows = turn.children.filter((node) => node.tool);
-  assert.equal(rows.length, 14);
-  assert.ok(rows.every((row) => !row.children && /^arguments\n[\s\S]*\n\nresult · 340 chars/.test(row.text)), 'no separate arguments / result nodes');
-  assert.deepEqual(rows.slice(0, 5).map((row) => [row.label, row.arg, row.dim]), [
-    ['Bash', `npm test -- --grep viewer ${'x'.repeat(53)}…`, '12 ms · 340 chars'],
-    ['Read', '/repo/src/renderer/agent-map/runText.js', '12 ms · 340 chars'],
-    ['Grep', 'AgentDot in src/renderer', '12 ms · 340 chars'],
-    ['Glob', 'test/*.cjs', '12 ms · 340 chars'],
-    ['WebFetch', 'https://example.com/doc', '12 ms · 340 chars'],
-  ]);
-  assert.equal(rows[0].arg.length, 80);
-  const closed = renderToStaticMarkup(React.createElement(view.Node, { node: rows[0] }));
-  assert.match(closed, /^<div[^>]*data-node="tool"><div[^>]*>▸ Bash <code[^>]*>npm test/, 'one row, the command in monospace');
-  assert.doesNotMatch(closed, /<pre/);
-  // Clicked (its open state on): one block with the arguments and the result.
-  const clicked = renderToStaticMarkup(React.createElement(view.Node, { node: { ...rows[1], open: true } }));
-  assert.equal((clicked.match(/<pre/g) || []).length, 1);
-  assert.match(clicked, /<pre[^>]*>arguments\n\{\n  &quot;file_path&quot;: &quot;\/repo\/src\/renderer\/agent-map\/runText.js&quot;\n\}\n\nresult · 340 chars \(first 2,000\)\nRead said ok<\/pre>/);
-});
-
-test('viewer: where shows the project\'s name, not its id; the id is a row of section 1', () => {
-  const [input] = runText.askSections(BUILD_ASK);
-  assert.deepEqual(input.nodes.filter((node) => node.plain).map((node) => [node.label, node.dim]), [['Where', 'Engelbart / note in oct-12 · line 95'], ['id', 'route-v']]);
-  const html = renderToStaticMarkup(React.createElement(view.AskDetail, { ask: BUILD_ASK, opened: { 1: true } }));
-  assert.match(html, /Engelbart \/ note in oct-12/);
-  assert.doesNotMatch(html, /p-1234/, 'no project id');
-  assert.doesNotMatch(html.slice(0, html.indexOf('data-section')), /route-v/, 'the id is not in the header');
-  // Without names from the main process, a record's project name; never the id.
-  const bare = { ...BUILD_ASK, names: undefined, records: [{ ...BUILD_ASK.records[0], projectName: 'Kept' }, BUILD_ASK.records[1]] };
-  assert.equal(runText.whereLabel(bare, bare.records[0]), 'Kept / note');
-});
-
-test('viewer: the top bar is the title, Asks | Design, the note and the two exports; no agent names or key legend', () => {
-  const html = renderToStaticMarkup(React.createElement(view.default));
-  const bar = html.slice(html.indexOf('<b'), html.indexOf('Export all') + 'Export all'.length);
-  const text = bar.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-  assert.equal(text, 'Agent Viewer Asks | Design Export ask Export all');
-  assert.equal((bar.match(/title="j\/k ask · 1–4 section · c copy · e export \(E all\)"/g) || []).length, 3, 'the keys are in the title and the two Export buttons\' tooltips');
-});
-
-test('viewer: AGENTS carry no colour, and nothing in the Viewer uses one; errors stay #a00', async () => {
-  assert.ok(runText.AGENTS.every((entry) => !('color' in entry)));
-  assert.ok(!('color' in runText.agentInfo('mystery')));
-  const { agentDesign } = require('../src/main/agent-map/design.cjs');
-  const { normalizeModels: models } = require('../src/main/bart/models.cjs');
-  const failed = { ...DIRECT_ASK, status: 'failed', records: [{ ...DIRECT_ASK.records[0], status: 'failed', error: 'boom' }] };
-  const pages = [
-    renderToStaticMarkup(React.createElement(view.default)),
-    renderToStaticMarkup(React.createElement(view.AskDetail, { ask: BUILD_ASK, opened: { 1: true, 2: true, 3: true, 4: true } })),
-    renderToStaticMarkup(React.createElement(view.AskDetail, { ask: failed, opened: { 4: true } })),
-    renderToStaticMarkup(React.createElement(view.AskList, { asks: groupAsks(RECORDS), selected: 'route-2', filter: 'all', onSelect() {}, onFilter() {} })),
-    renderToStaticMarkup(React.createElement(view.Design, { design: agentDesign({ dataRoot: tmp('colour'), models: models(null), buildModels: models(null) }) })),
-  ];
-  for (const page of pages) {
-    for (const colour of AGENT_COLOURS) assert.ok(!page.toLowerCase().includes(colour), `${colour} is gone`);
-    const hexes = (page.match(/#[0-9a-fA-F]{6}\b|#[0-9a-fA-F]{3}\b/g) || []).map((hex) => hex.toLowerCase());
-    assert.deepEqual(hexes.filter((hex) => !grey(hex) && hex !== '#a00' && hex !== '#e6b8b8'), [], 'greys only, and the error\'s red');
-  }
-  assert.match(pages[2], /color:#a00[^>]*>Failed: boom/);
-  assert.match(pages[3], /color:#111[^>]*>●</, 'the running marker is a plain dot');
-});
+/* ------------------------------------------------------------- where an ask was typed */
 
 test('placeNames: the project, workspace, note and paper an ask was typed in, by name; empty when not found', async () => {
   const { placeNames } = require('../src/main/agent-map/ipc.cjs');
@@ -387,4 +230,41 @@ test('placeNames: the project, workspace, note and paper an ask was typed in, by
   assert.deepEqual(await at({ kind: 'mark', id: 'm', rowId: 'r-1', page: 3 }), { project: 'Engelbart', workspace: '', note: '', paper: 'Augmenting Human Intellect' });
   assert.deepEqual(await at({ kind: 'workspace', workspaceId: 'gone' }), { project: 'Engelbart', workspace: '', note: '', paper: '' });
   assert.deepEqual(await at({ kind: 'workspace', workspaceId: 'w-1' }, 'gone'), { project: '', workspace: '', note: '', paper: '' });
+});
+
+/* ------------------------------------------------------------- the first design, back (2026-10-13) */
+
+test('viewer: the Agent map as it was first drawn: Runs | Design, the two exports and the key legend, in one monospace font', () => {
+  const html = renderToStaticMarkup(React.createElement(view.default));
+  assert.match(html, />Runs</);
+  assert.match(html, />Design</);
+  assert.match(html, />Export run</);
+  assert.match(html, />Export all</);
+  assert.match(html, /j\/k run · 1–4 section · c copy · e export \(E all\)/);
+  assert.match(html, /ui-monospace/);
+  assert.doesNotMatch(html, />Asks</);
+});
+
+test('viewer: the runs list names each agent, @create among them, under All | Questions | Builds', () => {
+  const runs = [
+    { id: 'c1', agent: 'create', at: 3, status: 'done', question: 'a chart of the results', projectName: 'P', model: 'claude-sonnet-5-5', effort: 'high' },
+    { id: 'd1', agent: 'discover', at: 2, status: 'running', question: 'papers on X', projectName: 'P' },
+    { id: 'b1', agent: 'build', at: 1, status: 'done', buildId: 'b1', title: 'a parser', turn: 1, projectName: 'P' },
+  ];
+  const render = (filter) => renderToStaticMarkup(React.createElement(view.RunList, { runs, selected: 'c1', filter, onSelect() {}, onFilter() {} }));
+  const all = render('all');
+  assert.match(all, /@create/);
+  assert.match(all, /a chart of the results/);
+  assert.match(all, /@discover/);
+  assert.match(all, /@build a parser · turn 1/);
+  assert.match(render('questions'), /@create/);
+  assert.doesNotMatch(render('builds'), /@create/);
+});
+
+test('viewer: a @create run\'s Written shows what it kept in the library', () => {
+  const record = { id: 'c1', agent: 'create', at: 3, status: 'done', question: 'a chart', projectName: 'P', provider: 'anthropic', steps: [], written: ['create> made it'], created: [{ name: 'Results chart', type: 'html', path: 'assets/files/chart.html' }], skipped: ['too big'] };
+  const html = renderToStaticMarkup(React.createElement(view.RunDetail, { record, open: 'written', onToggle() {} }));
+  assert.match(html, /kept in the library/);
+  assert.match(html, /Results chart · html · assets\/files\/chart\.html/);
+  assert.match(html, /skipped: too big/);
 });
