@@ -307,6 +307,9 @@ export default class DocEditor extends React.Component {
   // earlier messages and their steps, where each card's diff is scrolled to, and the HTML each part of each card was last
   // drawn with (patchBuilds compares these).
   buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildScroll = new Map(); buildDrawn = new Map();
+  // A follow-up just sent (2026-10-13): its question's row to be put where its reply field was (holdFollow),
+  // { key, line, text, top, until }. `wheelAt`: when the person last scrolled the pane with the wheel (caretLineBelow).
+  followHold = null; wheelAt = 0;
   // An @discover guide's papers being saved, by address: the button's state when it was clicked (it stays disabled on it).
   saving = new Map();
   // Its repositories being brought here from a Try line, by address in lower case: the mark's state when it was clicked.
@@ -566,6 +569,8 @@ export default class DocEditor extends React.Component {
   };
   // The person scrolled, clicked or typed: what they do from now on wins over putting the old place back.
   stopSettling = () => { this.settle = null; };
+  // While the person scrolls the pane, the line being typed on is not kept in place against them (caretLineBelow).
+  paneWheel = () => { this.settle = null; this.wheelAt = Date.now(); };
   // The Agent Viewer's click (2026-10-12; Workspace revealAsk): line `i` brought to the middle of the pane and lit up for a
   // moment. Held there as a restored view is (`settle`), so a picture or card still laying itself out does not move it.
   // → whether the line is drawn
@@ -1844,14 +1849,17 @@ export default class DocEditor extends React.Component {
      the field inside the editor being typed in, when it is below one of `rows` (about to be replaced), with its top now;
      null while a mouse button is down (a selection or a drag), with the keyboard elsewhere, or with the caret above them. */
   caretLineBelow(ed, rows) {
-    if (this.pressed || !this.scrollRef.current) return null;
+    // Nor while the person scrolls the pane with the wheel, nor with that line out of view: the pane is theirs then.
+    const pane = this.scrollRef.current; if (this.pressed || !pane || Date.now() - this.wheelAt < 400) return null;
     const act = document.activeElement; let el = null;
     if (act === ed) {
       const sel = getSelection(), n = sel && sel.rangeCount ? sel.focusNode : null, at = n && (n.nodeType === 1 ? n : n.parentElement);
       el = at && at.closest ? at.closest('[data-line]') : null;
     } else if (act && act !== ed && ed.contains(act) && act.matches && act.matches('textarea, input')) el = act;
     if (!el || !ed.contains(el) || !rows.some((d) => d.compareDocumentPosition(el) & 4)) return null; // 4: it follows the row
-    return { el, top: el.getBoundingClientRect().top };
+    const r = el.getBoundingClientRect(), b = pane.getBoundingClientRect ? pane.getBoundingClientRect() : null;
+    if (b && (r.top + r.height <= b.top || r.top >= b.top + b.height)) return null;
+    return { el, top: r.top };
   }
   // The pane scrolled by however far the change moved that line: only that, so a scroll of the person's own stays.
   keepCaretLine(keep) {
@@ -1917,7 +1925,17 @@ export default class DocEditor extends React.Component {
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
     if (land && land.top != null) this.keepCaretLine({ el: ed.querySelector(`[data-line="${land.line}"]`), top: land.top });
+    this.holdFollow(ed, key);
     this.wantFocus = false; this.syncing = false; this.menuToCaret();
+  }
+  // A follow-up just sent (sendFollow): once its question is drawn, its row is put where the reply field's top was, so the
+  // turns folding above it in the same edit do not move what was being looked at.
+  holdFollow(ed, key) {
+    const hold = this.followHold; if (!hold) return;
+    if (hold.key !== key || Date.now() > hold.until) { this.followHold = null; return; }
+    if (this.lines()[hold.line] !== hold.text) return;
+    this.followHold = null;
+    this.keepCaretLine({ el: ed.querySelector(`[data-line="${hold.line}"]`), top: hold.top });
   }
   // The @ menu's line was rewritten under it (a folder's path written in, MATH-22): it hangs from the caret again.
   menuToCaret() {
@@ -2790,14 +2808,25 @@ export default class DocEditor extends React.Component {
     const text = withAttachments(typed, this.followImages.get(from) || []);
     const { flags } = this.followStep(ls, thread), asked = [flags, text].filter(Boolean).join(' ');
     this.followText.delete(from); this.followImages.delete(from);
-    const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
+    const ed = this.editorEl();
+    const routed = typed && this.props.onRoute, question = routed ? `@bart ${asked}` : `@${tokenOf(agent)} ${asked}`.trimEnd();
+    this.holdField(ed, from, thread.to + 1, question);
+    if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     const fold = (x) => foldTurns(x, thread.turns);
-    if (typed && this.props.onRoute) { this.routeLine(thread.to + 1, `@bart ${asked}`, fold); return; }
-    const askId = newAskId(), add = [`@${tokenOf(agent)} ${asked}`.trimEnd(), `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
+    if (routed) { this.routeLine(thread.to + 1, question, fold); return; }
+    const askId = newAskId(), add = [question, `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
     const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => withAgent(turnText(ls, turn), turn));
     this.setLines((x) => { const out = fold(x); out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
     this.props.onAsk({ askId, text: asked, turns, agent, place: { line: thread.to + 1, text: add[0] } });
+  }
+  // Where the reply field `from` is on screen, kept for the question that replaces it (holdFollow): only when it is in view.
+  holdField(ed, from, line, text) {
+    this.followHold = null;
+    const pane = this.scrollRef.current, field = ed && ed.querySelector(`[data-follow-input="${from}"]`);
+    if (!field || !pane || !pane.getBoundingClientRect) return;
+    const r = field.getBoundingClientRect(), b = pane.getBoundingClientRect(); if (r.top + r.height <= b.top || r.top >= b.top + b.height) return;
+    this.followHold = { key: this.key(), line, text, top: r.top, until: Date.now() + 2000 };
   }
   // While the field's @ menu shows, the arrows move in it, Enter or Tab puts the row in and Escape closes it alone; Enter
   // sends, and Escape leaves the field, once it is closed.
@@ -3357,7 +3386,7 @@ export default class DocEditor extends React.Component {
         <style>{RISE_CSS + CARD_CSS}</style>
         {this.props.emptyHint && <style>{emptyHintCss(this.props.emptyHint)}</style>}
         {/* Past the last line the page keeps going for about half a window (2026-09-22), so the end of a document can be read and written mid-screen. */}
-        <div ref={this.scrollRef} onClick={this.docClick} onScroll={this.onScroll} onWheel={this.stopSettling} onPointerDown={this.stopSettling} onKeyDown={this.stopSettling} style={compact ? { flex: 'none', overflow: 'visible', padding: '0 0 2px', cursor: 'grab' } : { flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) max(120px, calc(50vh - 40px))', cursor: 'text' }}>
+        <div ref={this.scrollRef} onClick={this.docClick} onScroll={this.onScroll} onWheel={this.paneWheel} onPointerDown={this.stopSettling} onKeyDown={this.stopSettling} style={compact ? { flex: 'none', overflow: 'visible', padding: '0 0 2px', cursor: 'grab' } : { flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) max(120px, calc(50vh - 40px))', cursor: 'text' }}>
           <div style={{ maxWidth: compact ? 'none' : '65ch', marginInline: 'auto', paddingInline: compact ? 0 : 'clamp(0px, 3%, 24px)', cursor: 'auto', fontSize: 17 }}>
             {this.props.header}
             {this.props.above}

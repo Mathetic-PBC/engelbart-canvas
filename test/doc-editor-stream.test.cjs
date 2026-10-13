@@ -279,3 +279,85 @@ test('a box held by its scrollbar is not replaced under the pointer; it is once 
   assert.notEqual(m.pending('a1'), held);
   assert.equal(m.pending('a1').box.lines, 31);
 });
+
+/* A follow-up sent from a card's reply field (sendFollow, 2026-10-13) folds the turns above it in the same edit: its
+   question's row is put where the field's top was (holdFollow), so the view does not jump by the folded answer's height.
+   Here the pane and the field are stand-ins with fixed boxes: the pane's top at 0, 800px tall, scrolled to 1000. */
+const ANSWER = (n) => Array.from({ length: n }, (_, k) => `Line ${k + 1} of the answer so far.`);
+const META = { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 };
+
+function sending({ text, route = false }) {
+  const asked = [], routed = [];
+  const props = { docKey: 'k', text, onChange: (next) => { props.text = next; }, onAsk: (ask) => asked.push(ask), ...(route ? { onRoute: (r) => { routed.push(r); return new Promise(() => {}); } } : {}) };
+  const editor = new DocEditor(props);
+  const root = {
+    rows: new Map(), field: null,
+    closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => false, focus() {}, blur() {}, contains: () => false,
+    querySelector: (sel) => { const m = sel.match(/^\[data-line="(\d+)"\]$/); if (m) return root.rows.get(Number(m[1])) || null; return sel.startsWith('[data-follow-input') ? root.field : null; },
+    querySelectorAll: () => [],
+  };
+  editor.props = props;
+  editor.edRef = { current: root };
+  editor.scrollRef = { current: { scrollTop: 1000, closest: () => null, getBoundingClientRect: () => ({ top: 0, height: 800 }) } };
+  editor.setState = (patch) => Object.assign(editor.state, typeof patch === 'function' ? patch(editor.state) : patch);
+  editor.syncEditor = () => {};
+  editor.maybeRestoreView = () => {};
+  globalThis.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
+  globalThis.document = { addEventListener() {}, removeEventListener() {}, hasFocus: () => true, activeElement: null };
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  editor.componentDidMount();
+  // A row whose top moves with the pane's scroll: `at` its top with the pane at 1000.
+  const rowAt = (line, at) => { const r = { isConnected: true, base: at, dataset: { line: String(line) }, getBoundingClientRect: () => ({ top: r.base - (editor.scrollRef.current.scrollTop - 1000), height: 30 }) }; root.rows.set(line, r); return r; };
+  return { editor, root, props, asked, routed, rowAt };
+}
+function conversation(agent = 'bart', token = '@chat') {
+  const turn = (q, n) => [q, ...replyLines(ANSWER(n).join('\n'), META, { agent, model: agent !== 'brainstorm' })];
+  return ['Intro', ...turn(`${token} first question`, 6), ...turn(`${token} second question`, 30), ''];
+}
+
+for (const c of [
+  { label: 'typed and routed through Bart', agent: 'bart', token: '@chat', route: true, typed: 'and then?', want: '@bart and then?' },
+  { label: 'typed and sent straight', agent: 'bart', token: '@chat', route: false, typed: 'and then?', want: '@chat and then?' },
+  { label: 'sent empty from a Brainstorm recap\'s field', agent: 'brainstorm', token: '@brainstorm', route: true, typed: '', want: '@brainstorm' },
+]) {
+  test(`a follow-up ${c.label} puts its question where the reply field was, the earlier turns folded`, () => {
+    const ls = conversation(c.agent, c.token);
+    const m = sending({ text: ls.join('\n'), route: c.route });
+    m.root.field = { getBoundingClientRect: () => ({ top: 540, height: 40 }) };
+    if (c.typed) m.editor.followText.set(1, c.typed);
+    m.editor.sendFollow(1);
+    const now = m.props.text.split('\n'), q = now.indexOf(c.want);
+    assert.equal(q, ls.length - 1, 'the question goes under the card');
+    assert.ok(now.slice(0, q).some((l) => /^bart\+>/.test(l)) && !now.slice(0, q).some((l) => /^bart>/.test(l)), 'every answer above it is folded');
+    assert.deepEqual({ line: m.editor.followHold.line, text: m.editor.followHold.text, top: m.editor.followHold.top }, { line: q, text: c.want, top: 540 });
+    // Drawn again: the turns above folded, the question's row came up 900px. The pane follows it, once.
+    const r = m.rowAt(q, 540 - 900);
+    m.editor.holdFollow(m.root, m.editor.key());
+    assert.equal(r.getBoundingClientRect().top, 540, 'the question\'s row is where the field\'s top was');
+    assert.equal(m.editor.followHold, null);
+    if (c.route) assert.equal(m.routed.length, c.typed ? 1 : 0); else assert.equal(m.asked.length, 1);
+  });
+}
+
+test('a follow-up sent with its field off screen, or drawn before its question is, leaves the pane alone', () => {
+  const m = sending({ text: conversation().join('\n') });
+  m.root.field = { getBoundingClientRect: () => ({ top: 900, height: 40 }) }; // below the pane
+  m.editor.followText.set(1, 'later');
+  m.editor.sendFollow(1);
+  assert.equal(m.editor.followHold, null);
+  m.editor.followHold = { key: m.editor.key(), line: 5, text: '@chat q', top: 100, until: Date.now() + 2000 };
+  m.editor.holdFollow(m.root, m.editor.key());
+  assert.ok(m.editor.followHold, 'a draw without its question waits');
+  m.editor.holdFollow(m.root, 'another document');
+  assert.equal(m.editor.followHold, null, 'dropped with the document');
+  assert.equal(m.editor.scrollRef.current.scrollTop, 1000);
+});
+
+test('the line being typed on is not kept in place while the person scrolls the pane, nor when it is out of view', () => {
+  const m = mounted(DOC, { a1: chat(said(2)) });
+  m.caretOn(3);
+  const rows = [m.pending('a1')];
+  assert.ok(m.editor.caretLineBelow(m.ed, rows), 'kept, as a rule');
+  m.editor.paneWheel(); assert.equal(m.editor.caretLineBelow(m.ed, rows), null, 'not just after a wheel scroll'); m.editor.wheelAt = 0;
+  m.pane.scrollTop = 5000; assert.equal(m.editor.caretLineBelow(m.ed, rows), null, 'not with the line out of view');
+});
