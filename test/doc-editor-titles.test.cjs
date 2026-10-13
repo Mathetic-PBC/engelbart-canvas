@@ -3,8 +3,9 @@
 // A conversation's title and Collapse (src/renderer/workspace/DocEditor.jsx, 2026-10-12). A question that starts a new
 // @chat, @brainstorm or @discover conversation gets an empty `bart# ` line above it, which the workspace fills in when
 // main's name-chat answers (src/main/bart/name-chat.cjs, test/bart.test.cjs); the answer starts at once. A titled
-// conversation draws no header while open (its card starts at its question) and collapses whole to one grey rounded row
-// (`bart#+`), where its title is renamed; an older one, with no title line, folds a turn at a time as before. There is no document here: the editor and its elements are stand-ins, as in doc-editor-edit.
+// conversation draws no header while open (its card starts at its question) and collapses whole to one link, the Agents
+// pointer and its title (`bart#+`, 2026-10-13), which an ⌥-click renames; an older one, with no title line, folds a turn
+// at a time as before. Shown again, a document's open titled conversations collapse (autoCollapse). There is no document here: the editor and its elements are stand-ins, as in doc-editor-edit.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -29,9 +30,9 @@ const doc = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/mod
 const MODELS = normalizeModels(null);
 const answer = (text) => replyLines([text], { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: true });
 
-function mounted(lines) {
+function mounted(lines, extra = {}) {
   const asks = [], changes = [];
-  const props = { docKey: 'k', text: lines.join('\n'), models: MODELS, onChange: (next) => { changes.push(next); props.text = next; }, onAsk: (ask) => asks.push(ask), onStopAsk: () => {} };
+  const props = { ...extra, docKey: 'k', text: lines.join('\n'), models: MODELS, onChange: (next) => { changes.push(next); props.text = next; }, onAsk: (ask) => asks.push(ask), onStopAsk: () => {} };
   const editor = new DocEditor(props);
   const root = { closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => false, focus() {}, blur() {}, contains: () => false, querySelector: () => null };
   editor.props = props;
@@ -45,7 +46,8 @@ function mounted(lines) {
   globalThis.document = { addEventListener() {}, removeEventListener() {}, hasFocus: () => true, activeElement: null };
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   editor.componentDidMount();
-  const click = (act, data = {}, disabled = false) => editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset: { act, ...data }, disabled } : null) }, preventDefault() {} });
+  // `on`: { alt } for an ⌥-click, { row } when what was clicked is inside a collapsed conversation's row.
+  const click = (act, data = {}, disabled = false, on = {}) => editor.editorClick({ altKey: !!on.alt, target: { closest: (sel) => (sel === '[data-act]' ? { dataset: { act, ...data }, disabled, closest: (s) => (s === '[data-thread-row]' && on.row ? {} : null) } : null) }, preventDefault() {} });
   return { editor, props, asks, changes, click, lines: () => editor.lines(), html: () => { editor.lastHtml = null; return editor.editorHtml(); } };
 }
 
@@ -139,32 +141,31 @@ test('an open titled conversation draws no title row; its question opens the car
   assert.ok(html.includes('data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true">'), 'the foot\'s Collapse is the conversation\'s');
   assert.ok(!html.includes('data-act="fold" data-turn="1"'), 'not the turn\'s');
   assert.deepEqual(m.lines(), lines, 'the `bart#` line is as it was');
-  // Collapse from the foot folds it to one row: grey, rounded.
-  m.click('foldthread', { row: '0' });
+  // Collapse from the foot folds it to one row, a link; an ⌥-click on the foot's Collapse is a click, not a rename.
+  m.click('foldthread', { row: '0' }, false, { alt: true });
   assert.equal(m.lines()[0], 'bart#+ [chat 2026-10-12T21:41:00Z] Retry logic');
   assert.deepEqual(m.lines().slice(1), lines.slice(1));
+  assert.equal(m.editor.titleEdit, null);
   const row = rowOf(m.html(), 0), open = row.slice(0, row.indexOf('>'));
   assert.match(open, /data-thread-row="0"/);
-  assert.match(open, /background:#fafafa/);
-  assert.match(open, /border-radius:10px/);
+  assert.ok(!/background|border-radius/.test(open), 'no card around it');
+  assert.match(row, /class="bart-link" data-act="foldthread" data-row="0"/);
 });
 
-test('collapsed: one row, the Agents pointer, the title, and the agent and when; every line of it hidden; a click anywhere expands', () => {
+test('collapsed: a link, the Agents pointer and the title, the agent and when its tooltip; every line of it hidden; a click expands', () => {
   const at = new Date(); at.setHours(21, 41, 0, 0);
   const lines = ['Notes', `bart#+ [discover ${at.toISOString().replace(/\.\d{3}Z$/, 'Z')}] Retry logic`, '@bart why retry?', ...answer('because'), '@bart timeouts?', ...answer('those too'), '', 'After'];
   const m = mounted(lines);
   const html = m.html(), row = rowOf(html, 1), open = row.slice(0, row.indexOf('>'));
-  assert.match(row, /data-thread-row/);
-  assert.match(open, /data-act="foldthread" data-row="1"/, 'the whole row is the button');
-  assert.match(open, /cursor:pointer/);
-  assert.match(open, /padding:10px 14px;margin-bottom:8px;background:#fafafa;border-radius:10px/, 'a grey rounded row, the open card\'s size');
-  assert.ok(!/border-top/.test(open), 'no rule over it');
-  assert.match(row, /<span style="flex:none;display:inline-flex;color:#8f8f8f"><svg width="16"[^>]*><path d="M4\.04 4\.69/, 'the sidebar\'s Agents pointer, grey');
+  assert.match(open, /data-thread-row="1"/);
+  assert.ok(!/data-act|background|border/.test(open), 'the row is not the button, and nothing is drawn around it');
+  assert.match(open, /margin-bottom:8px;font:16px\/1\.5 var\(--font-sans\)/, 'the document\'s 16px');
+  const link = row.slice(row.indexOf('<span class="bart-link"'));
+  assert.match(link, /^<span class="bart-link" data-act="foldthread" data-row="1" role="button" tabindex="0" aria-label="Expand Retry logic" aria-expanded="false" title="Discover · 9:41 PM · ⌥-click to rename"/, 'the link is the button; the agent and when are its tooltip');
+  assert.match(link, /<span style="flex:none;display:inline-flex"><svg width="16"[^>]*><path d="M4\.04 4\.69/, 'the sidebar\'s Agents pointer, in the link\'s colour');
   assert.equal((row.match(/<svg/g) || []).length, 1, 'no other icon: no chevron');
-  assert.match(row, /data-act="edittitle" data-row="1"[^>]*font:16px\/1\.5 var\(--font-sans\);color:#171717">Retry logic</, 'the title, at the card\'s 16px, which renames');
-  assert.match(row, /text-overflow:ellipsis/);
-  assert.match(row, /font:14px\/1\.5 var\(--font-sans\);color:#8f8f8f">Discover · 9:41 PM</);
-  assert.ok(!row.includes('#0070f3'), 'no blue link');
+  assert.match(link, /class="bart-thread-name"[^>]*text-overflow:ellipsis[^>]*>Retry logic<\/span><\/span><\/div>$/, 'the title, and nothing after it');
+  assert.ok(!/Discover · 9:41 PM</.test(row), 'the agent and when are not drawn');
   const last = lines.indexOf('After') - 2;
   for (let i = 2; i <= last; i++) assert.match(rowOf(html, i), /^<div[^>]*display:none/, `line ${i} hidden`);
   const drawn = html.replace(/ data-raw="[^"]*"/g, '');
@@ -188,14 +189,9 @@ test('collapsed: one row, the Agents pointer, the title, and the agent and when;
     'bart#+ Papers on assessment', '@discover retries', ...answer('x'), '',
   ]).html();
   const n = answer('x').length + 2;
-  assert.match(rowOf(many, 0), />Build · Yesterday</);
-  assert.match(rowOf(many, n), />Brainstorm · Yesterday</);
-  assert.match(rowOf(many, 2 * n), />Discover</);
-  for (const i of [0, n, 2 * n]) {
-    const tag = rowOf(many, i).slice(0, rowOf(many, i).indexOf('>'));
-    assert.ok(!/border-top/.test(tag), `row ${i}: no rule between collapsed rows`);
-    assert.match(tag, /background:#fafafa;border-radius:10px/, `row ${i}: a card of its own`);
-  }
+  assert.match(rowOf(many, 0), /title="Build · Yesterday · ⌥-click to rename"/);
+  assert.match(rowOf(many, n), /title="Brainstorm · Yesterday · ⌥-click to rename"/);
+  assert.match(rowOf(many, 2 * n), /title="Discover · ⌥-click to rename"/);
 });
 
 test('a conversation at work cannot be collapsed: its Collapse is disabled, and `bart#+` on it is drawn open', () => {
@@ -226,32 +222,33 @@ test('Collapse all folds titled conversations by their title line, older ones a 
   assert.deepEqual(m.lines(), lines);
 });
 
-test('clicking the collapsed row\'s title edits it in place: Enter writes it, Escape and an empty field change nothing; elsewhere expands', () => {
+test('an ⌥-click on the collapsed link edits its title in place: Enter writes it, Escape and an empty field change nothing; a click expands', () => {
   const m = mounted(['bart#+ Retry logic', '@chat why retry?', ...answer('because'), '']);
-  m.click('edittitle', { row: '0' });
+  const rename = () => m.click('foldthread', { row: '0' }, false, { alt: true, row: true });
+  rename();
   let row = rowOf(m.html(), 0);
   assert.match(row, /<input[^>]*data-title-input="0"[^>]*value="Retry logic"/);
-  assert.ok(!row.slice(0, row.indexOf('>')).includes('data-act'), 'while it is edited the row is not a button: a click in the field stays there');
+  assert.ok(!row.includes('data-act'), 'while it is edited there is no link: a click in the field stays there');
   assert.equal(m.lines()[0], 'bart#+ Retry logic', 'still collapsed');
   const input = { value: 'Retries and backoff' };
   m.editor.titleInput(input);
   m.editor.titleKey({ key: 'Enter', target: input, isComposing: false, preventDefault() {} });
   assert.equal(m.lines()[0], 'bart#+ Retries and backoff', 'renamed, and kept collapsed');
-  m.click('edittitle', { row: '0' });
+  rename();
   m.editor.titleKey({ key: 'Escape', target: { value: 'nope' }, preventDefault() {} });
   assert.ok(!m.html().includes('data-title-input'));
-  m.click('edittitle', { row: '0' });
+  rename();
   m.editor.commitTitle({ value: '   ' });
   assert.equal(m.lines()[0], 'bart#+ Retries and backoff');
-  // A click anywhere else on the row (the row itself is the button) expands it.
-  row = rowOf(m.html(), 0);
-  assert.match(row.slice(0, row.indexOf('>')), /data-act="foldthread" data-row="0"/);
-  m.click('foldthread', { row: '0' });
+  // A plain click on the link expands it.
+  assert.match(rowOf(m.html(), 0), /class="bart-link" data-act="foldthread" data-row="0"/);
+  m.click('foldthread', { row: '0' }, false, { row: true });
   assert.equal(m.lines()[0], 'bart# Retries and backoff');
-  // Read only, the title is part of the row: a click on it expands.
+  assert.equal(m.editor.titleEdit, null);
+  // Read only, an ⌥-click expands it too: there is nothing to rename.
   const r = mounted(['bart#+ Retry logic', '@chat why retry?', ...answer('because'), '']);
   r.props.readOnly = true;
-  r.click('edittitle', { row: '0' });
+  r.click('foldthread', { row: '0' }, false, { alt: true, row: true });
   assert.equal(r.editor.titleEdit, null);
   assert.equal(r.lines()[0], 'bart# Retry logic');
 });
@@ -270,10 +267,10 @@ test('a new question\'s title row shows no text until name-chat returns, then th
   m.props.text = placeAnswer(m.props.text, askId, answer('because'));
   never(m.html(), 'answered, unnamed');
   m.editor.toggleThread(1);
-  assert.match(rowOf(m.html(), 1), /data-act="edittitle" data-row="1"[^>]*>why does the client retry three times\?<\/span>/);
+  assert.match(rowOf(m.html(), 1), /class="bart-thread-name"[^>]*>why does the client retry three times\?<\/span>/);
   // name-chat returns: the title fills the row.
   m.props.text = placeTitle(m.props.text, askId, 'Client retry count', near);
-  assert.match(rowOf(m.html(), 1), /data-act="edittitle" data-row="1"[^>]*>Client retry count<\/span>/);
+  assert.match(rowOf(m.html(), 1), /class="bart-thread-name"[^>]*>Client retry count<\/span>/);
   never(m.html(), 'named');
   // Collapsed with its title emptied by hand: the row shows the opening question, not "Untitled".
   const c = mounted(['bart#+ ', '@chat why does the **client** retry three times?', ...answer('because'), '']);
@@ -356,5 +353,45 @@ test('the follow-up field says @bart whichever agent answered, since what is typ
     delete m.props.onRoute;
     const token = line.split(' ')[0];
     assert.match(field(m.html()), new RegExp(`line-height:24px">${token}</span>`), `${line}: no router, it asks ${token}`);
+  }
+});
+
+test('shown again, a document collapses its open titled conversations once: not one at work or unanswered, not untitled, not read only', () => {
+  const lines = [
+    'bart# [chat 2026-10-12T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), '',
+    'bart# Running one', '@chat still going?', 'bart~> run1', '',
+    'bart#+ Folded already', '@chat old?', ...answer('old'), '',
+    'bart# ', '@chat unnamed but answered?', ...answer('yes'), '',
+    '@chat untitled?', ...answer('as before'), '',
+  ];
+  const m = mounted(lines, { autoCollapse: true });
+  const ls = m.lines();
+  assert.equal(m.changes.length, 1, 'one change, on mount');
+  assert.equal(ls[0], 'bart#+ [chat 2026-10-12T21:41:00Z] Retry logic', 'collapsed, what the line keeps kept');
+  assert.equal(ls[lines.indexOf('bart# Running one')], 'bart# Running one', 'one at work stays open');
+  assert.equal(ls[lines.indexOf('bart#+ Folded already')], 'bart#+ Folded already');
+  assert.equal(ls[lines.indexOf('bart# ')], 'bart#+', 'one still being named collapses to its question');
+  assert.ok(!ls.some((l) => /^bart\+>/.test(l)), 'an untitled conversation is not folded');
+  assert.deepEqual(m.editor.history || [], [], 'not an edit to undo');
+  // Opened again by hand, it stays open while the document is shown; another document, then this one, collapses it again.
+  m.click('foldthread', { row: '0' });
+  m.editor.componentDidUpdate({}, m.editor.state);
+  assert.equal(m.lines()[0], 'bart# [chat 2026-10-12T21:41:00Z] Retry logic');
+  m.props.docKey = 'other'; m.editor.componentDidUpdate({}, m.editor.state);
+  m.props.docKey = 'k'; m.editor.componentDidUpdate({}, m.editor.state);
+  assert.equal(m.lines()[0], 'bart#+ [chat 2026-10-12T21:41:00Z] Retry logic');
+
+  // Not loaded yet: it waits for the text, then collapses.
+  const later = mounted([], { autoCollapse: true });
+  later.props.text = undefined; later.editor.autoFolded = undefined;
+  later.editor.componentDidUpdate({}, later.editor.state);
+  assert.equal(later.changes.length, 0);
+  later.props.text = lines.join('\n'); later.editor.componentDidUpdate({}, later.editor.state);
+  assert.equal(later.lines()[0], 'bart#+ [chat 2026-10-12T21:41:00Z] Retry logic');
+
+  for (const extra of [{}, { autoCollapse: true, readOnly: true }]) {
+    const n = mounted(lines, extra);
+    assert.equal(n.changes.length, 0, JSON.stringify(extra));
+    assert.equal(n.lines()[0], lines[0]);
   }
 });

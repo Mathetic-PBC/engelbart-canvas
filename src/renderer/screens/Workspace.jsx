@@ -2004,6 +2004,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                 editor={{
                   ...editorProps,
                   onChange: (value) => onDocChange(doc.key, doc.ref, value),
+                  // Conversations left open collapse when the document is shown again (DocEditor autoCollapse, 2026-10-13).
+                  autoCollapse: true,
                   onAsk: (ask) => askBart(doc.key, doc.ref, ask),
                   onRoute: (input) => routeLine(doc.key, input, doc.ref),
                   onRouteGone: routeGone,
