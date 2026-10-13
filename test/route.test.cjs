@@ -576,6 +576,15 @@ test('@create: the fake router sends "make a chart", "make a page" and "create a
   assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /- create: they want a new standalone thing[^]*"make a chart of CHI submissions by year" → create[^]*"chat\|brainstorm\|discover\|create\|build"/);
 });
 
+test('Bart\'s prompt: the person\'s own project history is chat, published research is discover', () => {
+  const prompt = require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT;
+  assert.match(prompt, /"are you able to find what the original design of the agent viewer was\?" → chat/);
+  assert.match(prompt, /- chat \(the default\):[^\n]*the person's own project and its history/);
+  assert.match(prompt, /- discover: they want published research or other people's prior work[^\n]*that is chat\./);
+  assert.match(prompt, /"what's been published on agent debugging tools\?" → discover/);
+  assert.match(prompt, /A line that names a feature, note or decision from this project \(not papers or research\) → chat\./);
+});
+
 test('@create: the classifier\'s create pick stands at 0.8 or more; at 0.7 it goes to chat', async () => {
   const sure = await router('{"agent":"create","sure":0.9}').route(LINE);
   assert.deepEqual([sure.agent, sure.sure], ['create', 0.9]);

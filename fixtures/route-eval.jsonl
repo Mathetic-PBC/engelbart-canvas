@@ -22,3 +22,7 @@
 {"line":"give me the build prompt for a chart","section":"# Venues\nA chart of submissions would help.","specAbove":false,"expected":"chat"}
 {"line":"make the file icons different","section":"# Sidebar\nThe library's file icons all look alike.","specAbove":false,"expected":"build"}
 {"line":"write up a summary page of these papers as html","section":"# Reading\nThe papers on tutoring we collected.","specAbove":false,"expected":"create"}
+{"line":"are you able to find what the original design of the agent viewer was?","section":"# Agent Viewer\nThe viewer drifted from what we first built. I want to compare against the first agent-map Build.","specAbove":false,"expected":"chat"}
+{"line":"what did we decide about the router?","section":"# Routing\nBart routes @bart lines to chat, brainstorm, discover, create or build.","specAbove":false,"expected":"chat"}
+{"line":"find the note where we planned Create","section":"# Create agent\nCreate makes new standalone things: charts, pages, documents.","specAbove":false,"expected":"chat"}
+{"line":"what's been published on agent debugging tools?","section":"# Agent Viewer\nRelated work for the viewer section of the paper.","specAbove":false,"expected":"discover"}
