@@ -165,6 +165,31 @@ function headLines(file, bytes = 96 * 1024) {
   } catch { return []; } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* closed */ } }
 }
 const parse = (line) => { try { return JSON.parse(line); } catch { return null; } };
+
+// "The number of chats is too low. It seems to miss many Codex and Claude Code chats" (2026-10-13): a session whose first
+// prompt came after its head (Claude Code's attachments and file snapshots, Codex's instructions, often past 96 KB and
+// 256 KB) was left out as if it had none. Its lines are read on, a part at a time, until what is wanted is found or
+// SCAN_MAX bytes have been read.
+const SCAN_PART = 256 * 1024;
+const SCAN_MAX = 8 * 1024 * 1024;
+/** `visit(line)` for each line of `file` from its start, until it returns true or SCAN_MAX bytes were read. */
+function scanLines(file, visit, { max = SCAN_MAX } = {}) {
+  let fd;
+  try {
+    fd = fs.openSync(file, 'r');
+    let at = 0, rest = '';
+    const buffer = Buffer.alloc(SCAN_PART);
+    while (at < max) {
+      const read = fs.readSync(fd, buffer, 0, SCAN_PART, at);
+      if (read <= 0) break;
+      at += read;
+      const lines = (rest + buffer.subarray(0, read).toString('utf8')).split('\n');
+      rest = lines.pop();
+      for (const line of lines) if (visit(line)) return;
+    }
+    if (rest && at < max) visit(rest);
+  } catch { /* unreadable: nothing more */ } finally { if (fd !== undefined) try { fs.closeSync(fd); } catch { /* closed */ } }
+}
 // A prompt a person typed, not one a command or a hook wrote (those start with a tag) nor a caveat Claude Code adds.
 const typed = (text) => typeof text === 'string' && text.trim() && !/^\s*</.test(text) && !/^Caveat: /.test(text);
 const textOf = (content) => (typeof content === 'string' ? content : Array.isArray(content) ? content.filter((part) => part && (part.type === 'text' || part.type === 'input_text' || part.type === 'output_text') && typeof part.text === 'string').map((part) => part.text).join('\n') : '');
@@ -203,44 +228,59 @@ function codexFiles(homeDir, env) {
   return out.sort((a, b) => b.mtime - a.mtime);
 }
 
-/** A Claude Code session's head → { title, first, project, automated }. */
+/**
+ * A Claude Code session's head → { title, first, project, automated }. Its title is the one named for it (`custom-title`,
+ * then Claude Code's own `ai-title`), else its summary, else its first prompt. `automated`: a sidechain, or a `claude -p`
+ * run (entrypoint sdk-cli: scripts, and Engelbart's own agents); a session an app ran on the Agent SDK for the person
+ * (sdk-ts, sdk-py: Engelbart's Builds among them) is theirs (2026-10-13: they were all left out before).
+ */
 function claudeCodeHead(file) {
-  let first = '', summary = '', project = '', entry = '';
-  let sidechain = false;
-  for (const line of headLines(file)) {
+  let first = '', summary = '', project = '', entry = '', named = '', aiTitle = '';
+  let sidechain = false, after = 0;
+  scanLines(file, (line) => {
     const event = parse(line);
-    if (!event) continue;
+    if (!event) return false;
     if (!project && typeof event.cwd === 'string') project = event.cwd;
     if (!entry && typeof event.entrypoint === 'string') entry = event.entrypoint;
     if (event.isSidechain === true) sidechain = true;
     if (event.type === 'summary' && typeof event.summary === 'string' && !summary) summary = event.summary;
+    if (event.type === 'custom-title' && typeof event.customTitle === 'string' && event.customTitle.trim()) named = event.customTitle;
+    if (event.type === 'ai-title' && typeof event.aiTitle === 'string' && event.aiTitle.trim()) aiTitle = event.aiTitle;
     if (!first && event.type === 'user' && !event.isMeta && event.message && event.message.role === 'user') {
       const text = textOf(event.message.content);
       if (typed(text) && !(Array.isArray(event.message.content) && event.message.content.some((part) => part && part.type === 'tool_result'))) first = text;
     }
-    if (first && project && entry) break;
-  }
-  return { title: clip(summary || first, 120), first: clip(first, 300), project, automated: /^sdk/.test(entry) || sidechain };
+    // The title records come a little after the first prompt, when they come at all: a few hundred lines more at most.
+    if (first && project && entry) after += 1;
+    return !!(first && project && entry && (named || aiTitle || after > 400));
+  });
+  return { title: clip(named || aiTitle || summary || first, 120), first: clip(first, 300), project, automated: entry === 'sdk-cli' || sidechain };
 }
 
-/** A Codex session's head → { title, first, project, automated }. */
+// What Codex itself writes as a user message (not the person): the turn it was interrupted in, its context blocks.
+const CODEX_INJECTED = /^\s*<(turn_aborted|environment_context|user_instructions|user_shell_command|subagent_notification|permissions|collaboration_mode|developer)\b/;
+
+/**
+ * A Codex session's head → { title, first, project, automated }. A `user_message` event is what the person typed, even when
+ * it begins with "<" (pasted HTML or XML; 2026-10-13: such sessions were left out), unless it is one Codex writes itself.
+ */
 function codexHead(file) {
   let first = '', project = '', automated = false;
-  for (const line of headLines(file, 256 * 1024)) {
+  scanLines(file, (line) => {
     const event = parse(line);
-    if (!event || !event.payload) continue;
+    if (!event || !event.payload) return false;
     if (event.type === 'session_meta') {
       project = String(event.payload.cwd || '');
       const source = event.payload.source;
       automated = event.payload.originator === 'codex_exec' || source === 'exec' || !!(source && typeof source === 'object' && source.subagent);
     }
-    if (!first && event.type === 'event_msg' && event.payload.type === 'user_message' && typed(event.payload.message)) first = event.payload.message;
+    if (!first && event.type === 'event_msg' && event.payload.type === 'user_message' && typeof event.payload.message === 'string' && event.payload.message.trim() && !CODEX_INJECTED.test(event.payload.message)) first = event.payload.message;
     if (!first && event.type === 'response_item' && event.payload.type === 'message' && event.payload.role === 'user') {
       const text = textOf(event.payload.content);
       if (typed(text)) first = text;
     }
-    if (first && project) break;
-  }
+    return !!(first && project);
+  });
   return { title: clip(first, 120), first: clip(first, 300), project, automated };
 }
 
@@ -415,7 +455,7 @@ function exportTranscript(file, id) {
 
 /* -------------------------------------------------------------------------------------------------------- websites */
 
-const CHROMIUM = [['Chrome', ['Google', 'Chrome']], ['Arc', ['Arc', 'User Data']], ['Brave', ['BraveSoftware', 'Brave-Browser']], ['Edge', ['Microsoft Edge']], ['Chromium', ['Chromium']], ['Vivaldi', ['Vivaldi']]];
+const CHROMIUM = [['Chrome', ['Google', 'Chrome']], ['Arc', ['Arc', 'User Data']], ['Brave', ['BraveSoftware', 'Brave-Browser']], ['Edge', ['Microsoft Edge']], ['Chromium', ['Chromium']], ['Vivaldi', ['Vivaldi']], ['Opera', ['com.operasoftware.Opera']], ['Comet', ['Comet']]];
 
 /**
  * The Chromium browsers' profiles on this Mac that have a history or bookmarks → [{ browser, profile, name, dir, used }],

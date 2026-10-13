@@ -52,6 +52,7 @@ const { createImportTools } = require('./tools.cjs');
 const { skillsFor } = require('./skills.cjs');
 const memory = require('./memory.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
+const importFlow = require('../../shared/import-flow.cjs');
 
 const MAX_RUNNING = 3;
 const MAX_JOBS = 40;
@@ -133,6 +134,73 @@ function memoryJobs(s) {
   return { imports, surveys };
 }
 
+const MAX_DIRECT_PROJECTS = 8;
+const hostOfSite = (website) => { try { const url = new URL(String(website || '')); return /^https?:$/.test(url.protocol) ? url.hostname.toLowerCase().replace(/^www\./, '') : ''; } catch { return ''; } };
+
+/**
+ * Import your context's answer (2026-10-13, the "Onboarding" workspace) made safe → { mode, projects, roles, work, apps,
+ * scopes, additional } or null. `apps` are ids of shared/import-flow.cjs CATALOG (the tools confirmed, or the sources
+ * chosen); `scopes` (manual) what exactly to bring in from each; `additional` the tools named that are not in the catalog.
+ */
+function cleanDirect(input, homeDir) {
+  if (!input || typeof input !== 'object') return null;
+  const mode = input.mode === 'manual' ? 'manual' : 'auto';
+  const text = (value, max) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+  const projects = (Array.isArray(input.projects) ? input.projects : []).filter((one) => one && typeof one === 'object' && text(one.title, 120)).slice(0, MAX_DIRECT_PROJECTS).map((one, at) => ({
+    id: text(one.id, 64) || `project-${at + 1}`, title: text(one.title, 120), description: text(one.description, 400),
+    folder: typeof one.folder === 'string' && readers.expandPath(homeDir, one.folder) && readers.expandPath(homeDir, one.folder).startsWith(homeDir + path.sep) ? readers.expandPath(homeDir, one.folder) : '',
+  }));
+  const apps = [...new Set((Array.isArray(input.apps) ? input.apps : []).filter((id) => importFlow.CATALOG_IDS.includes(id)))];
+  const scopes = {};
+  for (const id of apps) {
+    const scope = input.scopes && typeof input.scopes === 'object' ? input.scopes[id] : null;
+    if (!scope || typeof scope !== 'object') continue;
+    const list = (value, max, each) => (Array.isArray(value) ? value : []).map(each).filter(Boolean).slice(0, max);
+    scopes[id] = {
+      kind: importFlow.scopeKind(id),
+      folders: list(scope.folders, 12, (folder) => { const dir = readers.expandPath(homeDir, folder && typeof folder === 'object' ? folder.path : folder); return dir && dir.startsWith(homeDir + path.sep) ? { path: dir, name: path.basename(dir) } : null; }),
+      people: list(scope.people, 20, (person) => text(person, 200)),
+      items: list(scope.items, 40, (item) => text(item, 200)),
+      labels: list(scope.labels, 40, (label) => text(label, 200)),
+      note: text(scope.note, 600),
+    };
+  }
+  const additional = (Array.isArray(input.additional) ? input.additional : []).filter((one) => one && typeof one === 'object' && text(one.name, 60)).slice(0, 12).map((one) => ({ name: text(one.name, 60), website: hostOfSite(one.website) ? String(one.website).trim().slice(0, 300) : '' }));
+  if (!apps.length && !additional.length) return null;
+  return { mode, projects, roles: (Array.isArray(input.roles) ? input.roles : []).filter((role) => importFlow.ROLE_NAMES.includes(role)).slice(0, 8), work: text(input.work, 2000), apps, scopes, additional };
+}
+
+/**
+ * The choose screen's answer that Import your context sends (`direct`) → the sources, folders and project Connect's
+ * pipeline runs on: each catalog tool on in its group, Code's GitHub and folders, the browser history as Websites, the
+ * folders the person chose (manual) as the source's folders, and the projects picked as the one project every agent is
+ * told about.
+ */
+function directInput(input, homeDir) {
+  const direct = cleanDirect(input && input.direct, homeDir);
+  if (!direct) return input;
+  const sources = Object.fromEntries(SOURCES.map((source) => [source.id, { on: false, apps: [], folders: [], repos: [] }]));
+  const picked = [];
+  for (const id of direct.apps) {
+    const scope = direct.scopes[id] || null;
+    const dirs = scope ? scope.folders.map((folder) => folder.path) : [];
+    picked.push(...dirs);
+    if (id === importFlow.SITES) { sources.sites.on = true; continue; }
+    if (id === importFlow.LOCAL_FOLDERS) { sources.code.on = true; sources.code.folders.push(...dirs); continue; }
+    if (id === 'GitHub') { sources.code.on = true; continue; }
+    const group = importFlow.groupOfApp(id);
+    if (!group || !sources[group]) continue;
+    sources[group].on = true;
+    sources[group].apps.push(id);
+    if (id === LOCAL_PDFS) sources[group].folders.push(...dirs);
+  }
+  if (direct.additional.length) sources.sites.on = true;
+  for (const source of Object.values(sources)) source.folders = [...new Set(source.folders)];
+  const titles = direct.projects.map((project) => project.title);
+  const project = titles.length ? { name: titles.join(', ').slice(0, MAX_PROJECT_NAME), description: direct.projects.map((one) => `${one.title}${one.description ? `: ${one.description}` : ''}`).join('\n').slice(0, MAX_DESCRIPTION) } : null;
+  return { ...input, sources, picked: [...new Set([...(Array.isArray(input.picked) ? input.picked : []), ...picked])], project: project || input.project, direct };
+}
+
 /**
  * The choose screen's answer made safe → { sources: { id: { on, apps, folders, repos } }, custom, computer, permissions,
  * project }. `project` { name, description } (or null) is what the person is working on; it is kept in session.json with
@@ -163,6 +231,8 @@ function cleanChoices(input, homeDir, { alsoPicked = [] } = {}) {
     permissions: { files: computer, browser: allowed.browser !== false, recall: allowed.recall !== false, notes: allowed.notes === true },
     project: cleanProject(given.project),
     days: cleanDays(given.days), // how far back to look (2026-10-10): 182, 365, or null for all time
+    direct: cleanDirect(given.direct, homeDir), // Import your context (2026-10-13): no librarian, one import a tool
+    keychain: given.keychain !== false, // whether the person let Engelbart copy their browser's sign-ins (2026-10-13)
   };
 }
 
@@ -290,8 +360,10 @@ function shownOf(input) {
  * change; `openBridge` (../sandbox/local-tools.cjs openToolBridge); `browser` the agents' browser (./browser.cjs, null
  * where there is none); `connectors` (./connectors.cjs); `appleNotes` (./apple-notes.cjs).
  */
-function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, signInWindow = null, now = () => new Date().toISOString() }) {
+function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, signInWindow = null, trace = null, now = () => new Date().toISOString() }) {
   const sessions = new Map();
+  // The agent trace (../onboarding/trace.cjs): the dispatching around the agents' turns, written down as it happens.
+  const traced = (entry) => { if (trace) { try { trace.event(entry); } catch { /* a record, never in the way */ } } };
   const readyNow = () => { try { return (ready() || []).filter((provider) => PROVIDERS.includes(provider)); } catch { return [...PROVIDERS]; } };
   const choiceFor = (provider) => connectChoice(provider, (() => { try { return models(); } catch { return null; } })());
   // The web apps' sign-ins checked when they were ticked on the choose screen (2026-10-10, signInCheck), kept while Engelbart
@@ -311,6 +383,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       permissions: s.choices.permissions, projectId: s.projectId, staged: s.projectId ? 0 : notes.stagedCount(s.dir), memory: { ...s.memory }, created: s.created,
       counts: { notes: s.jobs.reduce((n, job) => n + job.notes, 0), items: s.jobs.reduce((n, job) => n + job.items, 0) },
       placed: { project: s.inProject.size, workspace: s.inWorkspace.size },
+      // Import your context's run (2026-10-13): how it was chosen and the projects every agent keeps to, for its status modal
+      direct: s.choices.direct ? { mode: s.choices.direct.mode, projects: s.choices.direct.projects.map((project) => project.title) } : null,
     };
   }
   // What session.json keeps is enough to pick the session up again after Engelbart quits (resume): the chat, the choices,
@@ -322,7 +396,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
         ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped], skippedSources: [...s.skippedSources],
-        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles, ...(job.find ? { find: true } : {}) })),
+        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles, ...(job.find ? { find: true } : {}), ...(job.extra && job.extra.sites ? { extra: { sites: job.extra.sites } } : {}) })),
       }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
   }
@@ -527,6 +601,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     s.seq += 1;
     const job = { id: randomUUID(), key, kind, priority: PRIORITY[kind], seq: s.seq, source, apps, label, plan, extra, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null, ...(find ? { find: true } : {}) };
     s.jobs.push(job);
+    traced({ kind: 'dispatch', sessionId: s.id, jobId: job.id, text: `Queued ${kind}${find ? ' (folder search)' : ''}: ${label}`, detail: { kind, source, apps, label, priority: PRIORITY[kind], plan, sites: extra && extra.sites ? extra.sites : undefined } });
     logAction(s, job, find ? `Will look for your ${folderName(apps[0])}` : kind === 'survey' ? `Will look through ${apps.map(shownName).join(', ')}` : kind === 'recall' ? `Will ask ${apps.map(shownName).join(', ')} what it remembers` : kind === 'import' ? 'Queued' : 'Queued');
     pump(s);
     return job;
@@ -627,7 +702,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     job.controller = controller;
     const bridged = WORK.has(job.kind);
     const covered = appsOfJob(s, job);
-    const page = bridged && browser && s.choices.permissions.browser && sitesOf(covered).length ? browser.tools({ id: job.id, label: job.label, sites: sitesOf(covered) }) : null;
+    const sites = [...new Set([...sitesOf(covered), ...((job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [])])];
+    const page = bridged && browser && s.choices.permissions.browser && sites.length ? browser.tools({ id: job.id, label: job.label, sites }) : null;
     const session = {
       dataRoot: s.dataRoot, homeDir, dir: s.dir, downloads: s.downloads, projectId: () => s.projectId,
       // what macOS let Engelbart read of its protected folders (MATH-110): the file tools keep out of the rest
@@ -799,6 +875,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.newFound = { ...(s.newFound || {}), [held.source]: { ...((s.newFound || {})[held.source] || {}), [app]: left } };
       s.surveyNews.push(app);
       if (s.waitingForSurvey && !s.thinking) wake(s);
+      return;
+    }
+    if (s.choices.direct) {
+      s.found[held.source] = { ...rest, [app]: { ...entry } };
+      directImport(s, app);
+      if (held.recall) dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
       return;
     }
     s.found[held.source] = { ...rest, [app]: { ...entry, survey: s.finished ? 'not run: Import was pressed first' : 'running' } };
@@ -1001,6 +1083,14 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const results = new Map();
     const waiting = [];
     const quiet = [];
+    // Their browser's sign-ins declined (Import your context's keychain question): only what Engelbart's browser holds counts.
+    if (s.choices.keychain === false) {
+      for (const app of apps) {
+        const here = await Promise.resolve().then(() => webSignIn.signedIn(app)).catch(() => false);
+        if (here) { out.signedIn.set(app, ''); logAction(s, null, `Signed in to ${shownName(app)} already`); } else out.signedOut.add(app);
+      }
+      return out;
+    }
     for (const app of apps) {
       const known = signInChecked.get(app);
       if (signInChecking.has(app)) waiting.push(signInChecking.get(app).then(() => { results.set(app, signInChecked.get(app)); }));
@@ -1055,6 +1145,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         emit(s);
         return;
       }
+      if (s.choices.direct) { signInCard(s, app); emit(s); return; }
       // Signed out (2026-10-12): left out quietly, as signInsFirst leaves out an app signed out at the start. Everything
       // about a web app's sign-in is settled on the choose screen; no Log in card comes up later.
       skipApp(s, app);
@@ -1129,6 +1220,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, kind), closed: false, at: now() };
       s.needs.push(need);
       logAction(s, job, `Needs you: ${reason}`);
+      traced({ kind: 'need', sessionId: s.id, jobId: job.id, text: `Needs the person (${kind}, ${shownName(app)}): ${reason}` });
     }
     if (!need.jobs.includes(job.id)) need.jobs.push(job.id);
     return waitOn(s, job, need);
@@ -1312,6 +1404,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /** MEMORY.md is written once the questions are over and every survey, recall and import has ended. */
   function maybeMemory(s) {
     if (s.stopped || s.suspended || s.memoryQueued || !(s.done || s.finished)) return;
+    if (s.choices.direct && s.held.size) return; // a sign-in card still up: its import has not run yet
     if (s.jobs.some((job) => WORK.has(job.kind) && !ENDED.has(job.status))) return;
     const worked = s.jobs.some((job) => WORK.has(job.kind) && job.status === 'done') || Object.keys(s.recalls).length;
     if (!worked) { s.memory = { ...s.memory, status: 'skipped' }; return; }
@@ -1383,6 +1476,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /** The choose screen sent: the session, the scan, the first surveys, and the librarian's first turn. → snapshot */
   async function start(input) {
     const ctx = await context();
+    input = directInput(input, homeDir);
     const choices = cleanChoices(input, homeDir);
     if (!Object.values(choices.sources).some((choice) => choice.on)) throw new Error('Pick at least one source.');
     const usable = readyNow();
@@ -1405,9 +1499,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
       skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(), rows: new Set(), inProject: new Set(), inWorkspace: new Set(), workspaceId, placing: Promise.resolve(),
     };
+    // A folder the person chose for an app on this Mac (Import your context's manual scopes): the app's, as if found.
+    if (choices.direct) for (const [app, scope] of Object.entries(choices.direct.scopes)) if (FIND_APPS.has(app) && app !== LOCAL_PDFS && scope.folders.length) s.picked.folders[app] = scope.folders[0].path;
     sessions.set(id, s);
     s.dirs = dirsOf(s);
     logAction(s, null, `Started with ${PROVIDER_NAMES[s.choice.provider]} (${s.choice.modelName} · ${s.choice.effort})`);
+    traced({ kind: 'start', sessionId: id, text: `Connect session started${choices.direct ? ` (Import your context, ${choices.direct.mode === 'manual' ? 'sources chosen by the person' : 'tools found by agents'})` : ''} on ${PROVIDER_NAMES[s.choice.provider]} (${s.choice.modelName} · ${s.choice.effort})`, detail: { choices } });
     emit(s);
     void opening(s);
     return snapshot(s);
@@ -1419,6 +1516,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * first turn.
    */
   async function opening(s) {
+    if (s.choices.direct) return directOpening(s);
     let opener = s.chat.find((entry) => entry.opener);
     if (!opener) {
       opener = { role: 'agent', text: 'Looking at what you picked…', ask: null, authorize: null, opener: true, at: now() };
@@ -1453,6 +1551,96 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (lines) opener.text = `${opener.text}\n\n${lines}`;
     emit(s);
     await interviewTurn(s, 'Start.');
+  }
+
+  /* ------------------------------------------------------------------------------------- Import your context (direct) */
+
+  /**
+   * Import your context's run (2026-10-13, the workspace: "when they confirm, basically our existing agent + dispatch
+   * architecture should run, instructing each subagent for each platform to only find information pertaining to the
+   * projects the user selected"). No librarian and no questions: the scan, the web apps' sign-ins looked at, then one
+   * import job a tool (shared/import-flow.cjs importPlan: only what pertains to the projects picked; a manual import keeps
+   * to exactly what the person chose), the tools named that are not in the catalog together through the browser, the
+   * assistants asked what they remember, and MEMORY.md once everything has ended. A web app still signed out is not left
+   * out: it waits on a sign-in card (a modal in the workspace) and its import starts once it is signed in.
+   */
+  async function directOpening(s) {
+    const d = s.choices.direct;
+    const titles = d.projects.map((project) => project.title);
+    let opener = s.chat.find((entry) => entry.opener);
+    if (!opener) {
+      opener = { role: 'agent', text: titles.length ? `Bringing in what pertains to ${listed(titles)}…` : 'Bringing in what you picked…', ask: null, authorize: null, opener: true, at: now() };
+      s.chat.push(opener);
+      emit(s);
+    }
+    s.thinking = true;
+    s.activity = 'Looking at what you picked…';
+    try { s.found = await scanFor({ ...s.choices, project: projectFor(s.choices) }, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null, access: accessOf(s) }); } catch (error) { s.found = { error: error.message }; }
+    if (s.stopped || s.suspended) return;
+    s.dirs = dirsOf(s);
+    const checked = await signInsFirst(s);
+    if (s.stopped || s.suspended) return;
+    const held = new Set([...checked.signedOut, ...checked.checking.keys()]);
+    for (const [app, name] of checked.refused) {
+      skipApp(s, app);
+      logAction(s, null, `Skipped ${shownName(app)}: macOS didn't allow ${name || 'your browser'}'s sign-ins`);
+    }
+    for (const app of d.apps) {
+      if (s.skipped.has(app)) continue;
+      if (held.has(app)) {
+        s.held.set(app, { source: importFlow.groupOfApp(app), recall: false });
+        if (checked.signedOut.has(app)) signInCard(s, app);
+        continue;
+      }
+      directImport(s, app);
+    }
+    for (const [app, answer] of checked.checking) lateSignIn(s, app, answer);
+    if (d.additional.length) {
+      const sites = [...new Set(d.additional.map((tool) => hostOfSite(tool.website)).filter(Boolean))];
+      const named = d.additional.map((tool) => `${tool.name}${tool.website ? ` (${tool.website})` : ''}`);
+      const plan = [importFlow.importPlan({ app: importFlow.SITES, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, period: periodName(s.choices.days) }), `These are tools they use that Engelbart has no import of its own for: ${named.join('; ')}. Open each through their sign-in in Engelbart's browser, and bring in their pages, documents or items about these projects as saved pages. One with no website given: look for it in their browser history first.`].join('\n\n');
+      dispatch(s, { kind: 'import', source: 'sites', apps: [], label: `Other tools: ${d.additional.map((tool) => tool.name).join(', ')}`.slice(0, 120), plan, extra: { sites } });
+    }
+    if (s.choices.permissions.recall && s.choices.permissions.browser) {
+      for (const app of recallApps((s.choices.sources.chats || {}).on ? s.choices.sources.chats.apps : [])) {
+        if (s.skipped.has(app)) continue;
+        if (s.held.has(app)) s.held.get(app).recall = true;
+        else dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
+      }
+    }
+    const lines = [signInLines({ signedIn: checked.signedIn, refused: checked.refused }), s.held.size ? `Waiting for you to sign in to ${listed([...s.held.keys()].map(shownName))}.` : ''].filter(Boolean).join('\n');
+    opener.text = `${foundSentence(s).replace(/ Starting with .*$/, '')}${lines ? `\n\n${lines}` : ''}`;
+    s.thinking = false;
+    s.activity = '';
+    s.done = true;
+    s.finished = true;
+    emit(s);
+    maybeMemory(s);
+  }
+
+  /** One tool's import in an Import your context run, with its plan; the whole source when the tool is the source's one row. */
+  function directImport(s, app) {
+    const d = s.choices.direct;
+    const scope = d.scopes[app] || null;
+    const plan = importFlow.importPlan({ app, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, scope, period: periodName(s.choices.days) });
+    const where = (folders) => (folders.length ? `\n\nThe folders: ${folders.map((dir) => readers.shownPath(homeDir, dir)).join(', ')}.` : '');
+    if (app === importFlow.SITES) return dispatch(s, { kind: 'import', source: 'sites', apps: [], label: 'Pages from your browser history', plan });
+    if (app === importFlow.LOCAL_FOLDERS) return dispatch(s, { kind: 'import', source: 'code', apps: [], label: 'Folders on this Mac', plan: `${plan}${where(s.choices.sources.code.folders)}` });
+    if (app === 'GitHub') return dispatch(s, { kind: 'import', source: 'code', apps: ['GitHub'], label: 'GitHub', plan });
+    const source = importFlow.groupOfApp(app);
+    if (!source) return null;
+    const label = `${sourceOf(source).label}: ${shownName(app)}`;
+    return dispatch(s, { kind: 'import', source, apps: [app], label, plan: app === LOCAL_PDFS ? `${plan}${where(s.choices.sources.papers.folders)}` : plan });
+  }
+
+  /** A web app signed out when an Import your context run starts: a card asks the person to sign in, and its import waits. */
+  function signInCard(s, app) {
+    if (s.needs.some((need) => !need.closed && need.app === app && need.kind === 'signin')) return;
+    const reason = `Sign in to ${shownName(app)} so its agent can bring in what pertains to your projects`;
+    s.needs.push({ id: randomUUID(), app, kind: 'signin', reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, 'signin'), closed: false, held: true, at: now() });
+    if (!s.held.has(app)) s.held.set(app, { source: importFlow.groupOfApp(app), recall: false });
+    logAction(s, null, `Needs you: ${reason}`);
+    traced({ kind: 'need', sessionId: s.id, text: `Needs the person (signin, ${shownName(app)}): ${reason}` });
   }
 
   /** What the scan found, in one plain sentence: "Found 2 Obsidian vaults, 36 PDFs in Downloads and your Claude Code chats. Starting with your notes." */
@@ -1632,6 +1820,17 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (out.allowed) { s.choices.permissions.notes = true; closeNeed(s, found, 'done'); } else { found.error = line(out.error, 200); emit(s); }
       return snapshot(s);
     }
+    // Their browser's sign-ins declined (Import your context): the sign-in is made in Engelbart's own window instead.
+    if ((found.kind === 'signin' || found.kind === 'password') && s.choices.keychain === false && webSignIn && signsInAtAll(found.app)) {
+      if (found.busy) return snapshot(s);
+      found.busy = true;
+      emit(s);
+      const out = await signInWindowOpen(found.app);
+      found.busy = false;
+      if (out.status === 'signed-in') { logAction(s, null, `Signed in to ${shownName(found.app)}`, 'You'); closeNeed(s, found, 'done'); }
+      else { found.error = out.status === 'rejected' ? `${shownName(found.app)} doesn't allow signing in from Engelbart's window.` : ''; emit(s); }
+      return snapshot(s);
+    }
     // A web app's sign-in: in the person's default browser, where they are likely signed in already, then brought over to
     // Engelbart's (./web-signin.cjs). The window waits on it in the background; done once Engelbart holds the sign-in.
     if ((found.kind === 'signin' || found.kind === 'password') && webSignIn && webSignIn.supports(found.app)) {
@@ -1771,11 +1970,11 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   // What the session brought into the library, or found already there (2026-10-10). Library rows belong to no project,
   // so no agent of the project was told of them (shared/project-holds.cjs): once the session knows its project (started
-  // from it, or onboarding's attachProject), each goes on the project's own list (project.json `library`, 2026-10-11), and
-  // with a workspace (the one it was started from, or the Welcome workspace) joins its context too, those that come in
-  // later as well, so the project's agents and that workspace's sidebar see the person's library. Never a row taken out of
-  // the project before (project.json `removed`): only adding it again brings it back. One placing at a time: each reads
-  // what it adds to.
+  // from it, or onboarding's attachProject), each goes on the project's own list (project.json `library`, 2026-10-11),
+  // those that come in later as well, so the project's agents see the person's library. Never a row taken out of the
+  // project before (project.json `removed`): only adding it again brings it back. One placing at a time: each reads what
+  // it adds to. Never into a workspace's context (2026-10-13, "imports go only to the library for now, not the
+  // workspace"): filling the Welcome workspace's context to its limit was what made "Context has too many entries".
   function keepRow(s, row) {
     if (!row || typeof row.id !== 'string' || !ID_RE.test(row.id) || s.rows.has(row.id)) return;
     s.rows.add(row.id);
@@ -1789,20 +1988,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (ctx.dataRoot !== s.dataRoot) return;
       const listed = projects.keepInProject(ctx, s.projectId, ids);
       const { removed } = projects.findProject(ctx, s.projectId);
-      const kept = ids.filter((row) => !removed.includes(row));
-      for (const row of kept) s.inProject.add(row);
-      let fresh = [];
-      if (s.workspaceId) {
-        try {
-          const { workspace } = projects.findWorkspace(ctx, s.projectId, s.workspaceId);
-          for (const row of kept) if (workspace.context.includes(row)) s.inWorkspace.add(row);
-          // A workspace holds 500 entries at most (projects.cjs MAX_TREE_ENTRIES): past that, the rest are the project's alone.
-          fresh = kept.filter((row) => !workspace.context.includes(row) && !(workspace.removed || []).includes(row)).slice(0, Math.max(0, 500 - workspace.context.length));
-          if (fresh.length) await projects.setWorkspaceContext(ctx, s.projectId, s.workspaceId, [...workspace.context, ...fresh]);
-          for (const row of fresh) s.inWorkspace.add(row);
-        } catch { fresh = []; } // the workspace gone: what came in is the project's
-      }
-      if (listed.length || fresh.length) placed(s.projectId);
+      for (const row of ids.filter((one) => !removed.includes(one))) s.inProject.add(row);
+      if (listed.length) placed(s.projectId);
     }).catch(() => {}); // the project gone, or the library closed: what came in stays in the library
     return s.placing;
   }
@@ -1902,7 +2089,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.jobs.push({
         ...(find ? { find: true } : {}),
         id: typeof job.id === 'string' && ID_RE.test(job.id) ? job.id : randomUUID(), key: typeof job.key === 'string' ? job.key : `${find ? 'find' : job.kind}:${job.source}:${[...apps].sort().join(',')}`,
-        kind: job.kind, priority: PRIORITY[job.kind], seq: s.seq, source: String(job.source || ''), apps, label: line(job.label, 120), plan: typeof job.plan === 'string' ? clip(job.plan, 8000) : '', extra: null,
+        kind: job.kind, priority: PRIORITY[job.kind], seq: s.seq, source: String(job.source || ''), apps, label: line(job.label, 120), plan: typeof job.plan === 'string' ? clip(job.plan, 8000) : '', extra: job.extra && Array.isArray(job.extra.sites) ? { sites: job.extra.sites.filter((host) => typeof host === 'string' && /^[a-z0-9.-]{1,200}$/i.test(host)).slice(0, 12) } : null,
         status: again ? 'queued' : job.status, skipped: !!job.skipped, notes: Number(job.notes) || 0, items: Number(job.items) || 0, titles: (Array.isArray(job.titles) ? job.titles : []).slice(0, 80).map((title) => line(title, 120)),
         activity: '', summary: again ? '' : line(job.summary, 500), error: again ? '' : line(job.error, 300), started: again ? null : job.started || null, ended: again ? null : job.ended || null,
       });
@@ -1929,6 +2116,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.thinking = true;
       s.activity = 'Looking at what you picked…';
       void opening(s);
+    } else if (s.choices.direct) {
+      if (!s.finished) void directOpening(s); // Import your context has no librarian: the imports not queued yet are
     } else if (!s.done && !s.finished) {
       const last = s.chat[s.chat.length - 1];
       if (!last) void interviewTurn(s, 'Start.');

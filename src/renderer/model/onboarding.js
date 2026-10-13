@@ -77,9 +77,16 @@ export function toolsWanted(snapshot, { connect = false } = {}) {
   return connect ? !agentReady(snapshot) : false;
 }
 
-/** Whether Claude Code or Codex is installed and signed in: what Connect your library's agents need. */
+/**
+ * Whether Claude Code or Codex is installed and signed in: what Connect your library's agents need. One updating itself in
+ * the background (or about to: outdated with automatic updates on) counts (2026-10-13: "Codex was also updated before he
+ * could move on. Codex should update automatically in the background"): the update never holds onboarding.
+ */
+export function agentWorks(tool) {
+  return !!tool && (tool.status === 'ready' || (!!tool.installed && (tool.status === 'updating' || (tool.status === 'outdated' && tool.autoUpdate))));
+}
 export function agentReady(snapshot) {
-  return !!(snapshot && snapshot.tools) && ['claude', 'codex'].some((id) => snapshot.tools[id] && snapshot.tools[id].status === 'ready');
+  return !!(snapshot && snapshot.tools) && ['claude', 'codex'].some((id) => agentWorks(snapshot.tools[id]));
 }
 
 /**

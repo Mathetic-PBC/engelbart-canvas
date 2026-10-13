@@ -141,7 +141,7 @@ test('Claude Code and Codex sessions: listed by first typed prompt, programs\' r
     { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'And habit.' }] } },
   ]));
   write('.claude/projects/-Users-me-thesis/22222222-2222-4222-8222-222222222222.jsonl', lines([
-    { type: 'user', entrypoint: 'sdk-ts', cwd: '/tmp/run', message: { role: 'user', content: 'Summarize this note' } },
+    { type: 'user', entrypoint: 'sdk-cli', cwd: '/tmp/run', message: { role: 'user', content: 'Summarize this note' } },
   ]));
   write('.codex/sessions/2026/10/01/rollout-2026-10-01T10-00-00-abc.jsonl', lines([
     { type: 'session_meta', payload: { id: 'abc', cwd: path.join(homeDir, 'code'), originator: 'codex-tui', source: 'cli' } },
@@ -157,6 +157,25 @@ test('Claude Code and Codex sessions: listed by first typed prompt, programs\' r
   const claude = readers.localChats('Claude Code', { homeDir, env });
   assert.deepEqual(claude.map((chat) => [chat.id, chat.title, chat.project]), [['-Users-me-thesis/11111111-1111-4111-8111-111111111111', 'Why do novices skip tests?', '~/thesis']]);
   assert.equal(readers.localChats('Claude Code', { homeDir, env, automated: true }).length, 2);
+  // 2026-10-13 ("the number of chats is too low"): a first prompt past the head (attachments before it), an Agent SDK
+  // session run for the person (sdk-ts: Engelbart's Builds), its own title, and a Codex prompt that begins with "<".
+  const far = (n) => Array.from({ length: n }, (_, i) => ({ type: 'attachment', attachment: { content: 'x'.repeat(4000), at: i } }));
+  write('.claude/projects/-Users-me-thesis/33333333-3333-4333-8333-333333333333.jsonl', lines([
+    ...far(60),
+    { type: 'user', entrypoint: 'sdk-ts', cwd: path.join(homeDir, 'thesis'), message: { role: 'user', content: 'Build the study dashboard' } },
+    { type: 'ai-title', aiTitle: 'Study dashboard' },
+  ]));
+  write('.codex/sessions/2026/10/03/rollout-2026-10-03T10-00-00-ghi.jsonl', lines([
+    { type: 'session_meta', payload: { id: 'ghi', cwd: path.join(homeDir, 'code'), originator: 'codex-tui', source: 'cli' } },
+    { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'y'.repeat(300 * 1024) }] } },
+    { type: 'event_msg', payload: { type: 'user_message', message: '<div>Why does this page not render?</div>' } },
+  ]));
+  const more = readers.localChats('Claude Code', { homeDir, env });
+  assert.deepEqual(more.map((chat) => chat.title).sort(), ['Study dashboard', 'Why do novices skip tests?'], 'past the head, and its own title');
+  const pasted = readers.localChats('Codex', { homeDir, env }).find((chat) => chat.id.endsWith('ghi'));
+  assert.equal(pasted.title, '<div>Why does this page not render?</div>', 'a prompt beginning with "<" past 256 KB');
+  fs.rmSync(path.join(homeDir, '.claude/projects/-Users-me-thesis/33333333-3333-4333-8333-333333333333.jsonl'));
+  fs.rmSync(path.join(homeDir, '.codex/sessions/2026/10/03'), { recursive: true });
   const transcript = readers.localTranscript('Claude Code', claude[0].id, { homeDir, env });
   assert.deepEqual(transcript.turns, [{ role: 'user', text: 'Why do novices skip tests?' }, { role: 'assistant', text: 'Mostly time pressure.\n\nAnd habit.' }]);
   const codex = readers.localChats('Codex', { homeDir, env });
@@ -622,16 +641,61 @@ test('a session with the fake agents: a folder button, a question card, imports 
   assert.equal(await connect.attachProject(ctx, started.id, project.id, workspaceId), 0, 'no notes were held for it');
   const names = (await ctx.libraryDb.list()).filter((row) => row.project_id === project.id && row.tags.includes('note')).map((row) => row.name);
   assert.deepEqual(names, ['Welcome!']);
-  // What it brought into the library joins the Welcome workspace (2026-10-10), so that workspace's agents are told of it.
+  // What it brought into the library goes on the project's list (2026-10-11), never into the Welcome workspace's context
+  // (2026-10-13: "imports go only to the library for now, not the workspace").
   const brought = (await mdFiles()).filter((row) => !earlier.has(row.id)).map((row) => row.id);
   assert.equal(brought.length, 5);
   const held = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
-  assert.equal(held[0], noteId, 'the Welcome! note first');
-  assert.deepEqual(brought.filter((id) => !held.includes(id)), [], 'every note it brought in');
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8')).rows.sort(), [...new Set(held.slice(1))].sort(), 'kept with the session, for a resume');
+  assert.deepEqual(held, [noteId], 'the Welcome! note alone');
+  assert.deepEqual(brought.filter((id) => !projects.findProject(ctx, project.id).library.includes(id)), [], 'every note it brought in is the project\'s');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8')).rows.sort(), [...brought].sort(), 'kept with the session, for a resume');
   connect.dismiss(started.id);
   assert.equal(connect.list(ctx.dataRoot).some((s) => s.id === started.id), false);
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
+});
+
+/* Import your context (2026-10-13): a "direct" session runs no librarian; one import a tool, kept to the projects picked. */
+
+test('Import your context: one import a tool told the projects picked, a manual folder kept to, a signed-out web app waits on a sign-in card, other tools through the browser', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'direct-'));
+  fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: false }), signedIn: async () => false, keychainNote: () => '' };
+  const { connect, state } = fakeConnect({ home: fresh, webSignIn });
+  const projectsPicked = [{ id: 'calc', title: 'Calculus tutoring study', description: 'An RCT of an AI tutor in calculus.' }];
+  const started = await connect.start({
+    provider: 'openai',
+    direct: {
+      mode: 'manual', projects: projectsPicked, roles: ['Researcher', 'Nobody'], work: 'I study how students solve problems.',
+      apps: ['Obsidian', 'ChatGPT', 'Not a tool'],
+      scopes: { Obsidian: { folders: [{ path: '~/Vault' }], note: '' } },
+      additional: [{ name: 'Linear', website: 'https://linear.app' }],
+    },
+  });
+  const now = await until(state(started.id), (s) => s.finished && !s.thinking, 'the run queued');
+  assert.equal(now.chat.length, 1, 'no librarian: the opening line alone');
+  assert.ok(now.chat[0].opener);
+  assert.equal(now.chat.some((entry) => entry.ask), false);
+  const saved = savedOf(started.id);
+  assert.deepEqual(saved.choices.direct.roles, ['Researcher'], 'only known roles');
+  assert.deepEqual(saved.choices.direct.apps, ['Obsidian', 'ChatGPT'], 'only catalog tools');
+  assert.equal(saved.choices.project.name, 'Calculus tutoring study', 'every agent is told about the projects picked');
+  const obsidian = saved.jobs.find((job) => job.kind === 'import' && job.apps.includes('Obsidian'));
+  assert.ok(obsidian, 'Obsidian imported');
+  assert.match(obsidian.plan, /only what pertains to these projects/);
+  assert.match(obsidian.plan, /Calculus tutoring study: An RCT/);
+  assert.match(obsidian.plan, /Read only folders: .*Vault/, 'the folder the person chose, and nothing else');
+  assert.equal(saved.picked.folders.Obsidian, path.join(fresh, 'Vault'));
+  const linear = saved.jobs.find((job) => job.label.startsWith('Other tools'));
+  assert.equal(linear.source, 'sites');
+  assert.deepEqual(linear.extra, { sites: ['linear.app'] }, 'its agent may open the tool\'s site');
+  // ChatGPT is signed out: its import waits on a card instead of being left out.
+  assert.equal(saved.jobs.some((job) => job.apps.includes('ChatGPT')), false, 'not queued yet');
+  const card = now.needs.find((need) => need.app === 'ChatGPT');
+  assert.equal(card.kind, 'signin');
+  await connect.need(started.id, card.id, 'done');
+  await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.apps.includes('ChatGPT')), 'ChatGPT queued once signed in');
+  connect.stop(started.id);
+  connect.dismiss(started.id);
 });
 
 /* MATH-117: an app on this Mac whose folder the scan did not find is looked for by an agent before the button. */
@@ -797,7 +861,7 @@ test('an app\'s folder is looked for once a session, however often the scan runs
   }
 });
 
-test('an import started from a project and a workspace lands in both; a row removed from the project is not brought back (2026-10-11)', async () => {
+test('an import started from a project and a workspace lands on the project\'s list, never in the workspace (2026-10-13: library only); a row removed from the project is not brought back (2026-10-11)', async () => {
   const fresh = fs.mkdtempSync(path.join(homeDir, 'placed-'));
   fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
   const { project, workspaceId } = await projects.createProjectWithWelcome(ctx, { name: 'Imported into' });
@@ -809,10 +873,11 @@ test('an import started from a project and a workspace lands in both; a row remo
   connect.answer(started.id, { picked: ['Everything'] });
   await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.status === 'done'), 'the notes import');
   const listed = () => projects.findProject(ctx, project.id).library;
-  await until(() => connect.state(started.id).placed, (placed) => placed.project === 5 && placed.workspace === 5, 'the five placed');
+  await until(() => connect.state(started.id).placed, (placed) => placed.project === 5, 'the five placed');
+  assert.equal(connect.state(started.id).placed.workspace, 0, 'none in the workspace');
   assert.equal(listed().length, 5, 'on the project\'s own list');
   const context = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
-  assert.deepEqual(listed().filter((id) => !context.includes(id)), [], 'and in the workspace it was started from');
+  assert.deepEqual(listed().filter((id) => context.includes(id)), [], 'not in the workspace it was started from: imports go to the library only');
   assert.deepEqual((await library.libraryForProject(ctx, project.id)).map((row) => row.id).filter((id) => listed().includes(id)).sort(), [...listed()].sort(), 'the project holds them');
 
   // Taken out of the project, then the session places what it brought again (as a resumed or repeated import does).

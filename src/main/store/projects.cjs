@@ -48,7 +48,11 @@ const ARCHIVE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(?:-\d{1,3})?$/;
 const IMAGE_TYPES = Object.freeze({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' });
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_TREE_ENTRIES = 500;
+// "Context has too many entries" (2026-10-13, the "Onboarding" workspace): imports filled a workspace's context to the
+// old limit of 500 (Connect's placeRows), so the next link (an @mention, Add, Save) made 501 and every save of that
+// workspace threw. Imports now go to the library only, the limit has room for what was put there before, and a context
+// over it is read cut to it (contextOf) rather than emptied.
+const MAX_TREE_ENTRIES = 2000;
 const MAX_TREE_DEPTH = 6;
 const MAX_DESCRIPTION = 4000;
 
@@ -147,6 +151,24 @@ function validateTree(entries, depth = 0, counter = { n: 0, seen: new Set() }) {
 // holds one is flattened to what the folder contained, in order.
 function flatContext(entries) {
   return [...new Set(treeIds(validateTree(entries)))];
+}
+
+/**
+ * A workspace's saved context, read: flatContext's, or, when it does not pass (too many entries, an id that isn't one),
+ * the ids it holds that are, the first MAX_TREE_ENTRIES of them. Never emptied for one bad entry: the next save would
+ * write the empty list over it.
+ */
+function contextOf(entries) {
+  try { return flatContext(entries || []); } catch { /* read what can be */ }
+  const ids = [];
+  const walk = (list, depth) => {
+    if (!Array.isArray(list) || depth > MAX_TREE_DEPTH) return;
+    for (const entry of list) {
+      if (typeof entry === 'string') { if (UUID_RE.test(entry)) ids.push(entry); } else if (entry && typeof entry === 'object') walk(entry.children, depth + 1);
+    }
+  };
+  walk(entries, 0);
+  return [...new Set(ids)].slice(0, MAX_TREE_ENTRIES);
 }
 
 function treeIds(entries, out = []) {
@@ -497,12 +519,7 @@ async function followSlug(ctx, entry, slug, { moveWorktree, removeWorktrees }) {
 function workspaceRecord(dir) {
   const meta = readJson(path.join(dir, 'meta.json'));
   if (!meta || typeof meta.id !== 'string' || !STATUSES.includes(meta.status)) return null;
-  let context = [];
-  try {
-    context = flatContext(meta.context || []);
-  } catch {
-    context = [];
-  }
+  const context = contextOf(meta.context);
   // Kept by every save through the app; a workspace last saved before the count existed is measured.
   const chars = Number.isInteger(meta.chars) && meta.chars >= 0 ? meta.chars : docChars(dir);
   const removed = Array.isArray(meta.removed) ? meta.removed.filter((id) => typeof id === 'string' && UUID_RE.test(id)) : [];
@@ -717,6 +734,7 @@ async function linkToWorkspace(ctx, projectId, workspaceId, ids, { picked = fals
   // any other way, it stays when its mentions go.
   const chosen = picked ? [...workspace.picked, ...adding.filter((id) => !context.includes(id) && !workspace.picked.includes(id))] : workspace.picked.filter((id) => !adding.includes(id));
   for (const id of adding) if (!context.includes(id)) context.push(id);
+  if (context.length > MAX_TREE_ENTRIES) throw new Error(`This workspace's sidebar is full (${MAX_TREE_ENTRIES} items): take some out first. Everything stays in the library.`);
   return patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)), picked: chosen });
 }
 
@@ -1353,6 +1371,7 @@ async function loadProject(ctx, projectId) {
 
 module.exports = {
   STATUSES,
+  MAX_TREE_ENTRIES,
   WELCOME_NOTE,
   validateTree,
   treeIds,

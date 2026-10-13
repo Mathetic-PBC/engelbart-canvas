@@ -394,13 +394,13 @@ test('the rows: each agent\'s default per provider, the default providers as a r
   assert.deepEqual([lastPick(shown(root), 'quick').label, lastPick(shown(root), 'build')], ['Astra Ultra', null]);
 });
 
-test('the gear opens the settings window at Model, then Connections and Guided setup, with Test data only in test mode', () => {
+test('the gear opens the settings window at Model, then Connections and Import your context (was Guided setup), with Test data only in test mode', () => {
   const { PAGES } = load('ui/Settings.jsx');
   const ids = (props) => PAGES.filter((page) => !page.shown || page.shown(props)).map((page) => page.id);
   assert.deepEqual(ids({ test: null }), ['model', 'connections', 'guided-setup']);
   assert.deepEqual(ids({ test: { testMode: false } }), ['model', 'connections', 'guided-setup']);
   assert.deepEqual(ids({ test: { testMode: true } }), ['model', 'connections', 'guided-setup', 'test-data']);
-  assert.deepEqual([PAGES[2].section, PAGES[2].title, PAGES[2].Body.name], ['Settings', 'Guided setup', 'GuidedSetupPage']);
+  assert.deepEqual([PAGES[2].section, PAGES[2].title, PAGES[2].Body.name], ['Settings', 'Import your context', 'GuidedSetupPage']);
   assert.equal(PAGES[0].title, 'Model');
   assert.deepEqual([PAGES[1].section, PAGES[1].title, PAGES[1].Body.name], ['Settings', 'Connections', 'ConnectionsPage']);
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');

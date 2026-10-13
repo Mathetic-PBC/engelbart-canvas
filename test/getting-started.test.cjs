@@ -174,7 +174,13 @@ test('the guided setup runs a new user\'s onboarding for someone with projects: 
   assert.match(app, /onDismiss=\{\(\) => \{ setGuidedOffer\(false\); api\.guidedOfferSeen\('dismissed'\)/);
   const settings = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
   assert.match(settings, /onClick=\{\(\) => \{ close\(\); startGuidedSetup\(\); \}\}/);
-  assert.ok(settings.includes('in a Welcome workspace added to the project you’re in, or in a new project when started from All projects. Nothing you have is removed.'));
+  // 2026-10-13 ("the redo of onboarding shouldn't be called guided setup … a popup modal in front of the workspace"):
+  // Import your context, over the workspace, its imports going to the project open.
+  assert.ok(settings.includes("title: 'Import your context'"));
+  assert.ok(settings.includes('into your library and the project you’re in. Nothing you have is removed.'));
+  assert.ok(!settings.includes("title: 'Guided setup'"));
+  assert.match(app, /if \(here\) \{ setImportModal\(\{ projectId: here, workspaceId: from\.workspaceId \|\| null \}\); return; \}/, 'in a workspace: the modal over it, nothing left');
+  assert.match(app, /<ImportFlow api=\{importApi\} mode="modal" into=\{importModal\.projectId\}/);
   assert.ok(!settings.includes('Discover in a new project. Nothing'), 'no longer always a new project');
   const screen = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Onboarding.jsx'), 'utf8');
   assert.match(screen, /const end = endOf\(flowMode, next\);\n    if \(end === 'project'\) \{ openProject\(added\.filter\(\(item\) => byId\.has\(item\.id\)\)\.map\(\(item\) => item\.id\)\); return; \}\n    if \(end === 'welcome'\) \{ addWelcome\(\); return; \}/, 'past the last screen: the Welcome workspace, not Create; a new user\'s project made there (2026-10-10)');
@@ -185,5 +191,5 @@ test('the guided setup runs a new user\'s onboarding for someone with projects: 
   assert.doesNotMatch(screen, /\.opens\b/, 'Create makes no project');
   assert.match(screen, /api\.welcomeWorkspace\(into, \{ context: added\.filter/);
   const offer = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/GuidedSetup.jsx'), 'utf8');
-  for (const words of ['New: a guided setup', 'Walk through it to bring in your library and try Brainstorm and Discover.', '>Not now<', '>Start<']) assert.ok(offer.includes(words), words);
+  for (const words of ['New: import your context', 'Agents bring in the notes, chats and papers of the projects you pick, into your library.', '>Not now<', '>Start<']) assert.ok(offer.includes(words), words);
 });

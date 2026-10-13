@@ -165,7 +165,7 @@ test('no Gmail line, and the consent card directly under the Code row, in the so
   assert.equal(screen.match(/\{consentCard\}/g).length, 1, 'not pinned above the foot as well');
 });
 
-test('the starting screen: the dots, the title and the count, no line moving through the jobs', async () => {
+test('the starting screen: the dots and the title, no count and no line moving through the jobs', async () => {
   const m = await model();
   assert.equal(m.startingLines, undefined);
   assert.equal(m.STARTING_LINE_MS, undefined);
@@ -173,7 +173,8 @@ test('the starting screen: the dots, the title and the count, no line moving thr
   const starting = screen.slice(screen.indexOf('function Starting('), screen.indexOf('\n}\n', screen.indexOf('function Starting(')));
   assert.match(starting, /<ThinkingDots/);
   assert.match(starting, /Getting to know your library/);
-  assert.match(starting, /looked at/);
+  // The count is gone (2026-10-13, the Onboarding workspace: "Remove the 'looked at' counter").
+  assert.doesNotMatch(starting, /looked at/);
 });
 
 // Engelbart's sign-in window closed without signing in (2026-10-12, third run): a no. The app and every ticked app

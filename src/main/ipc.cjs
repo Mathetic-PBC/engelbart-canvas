@@ -225,7 +225,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {} }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -579,6 +579,34 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return gettingStarted.setGettingStarted(ctx, str(pid, 'project id', 64), { tick: steps(value.tick), untick: steps(value.untick), hidden: value.hidden === true });
   }));
   // MEMORY.md (./connect/memory.cjs): whether there is one in this data root, for the window to name and reveal.
+  // Import your context (2026-10-13, the "Onboarding" workspace; ./onboarding): which provider runs its agents, the
+  // browsers whose sign-ins it may use, the project and tool discovery agents, Full Disk Access, where the flow was (kept
+  // across the relaunch Full Disk Access needs), and the Agent trace.
+  const ix = () => { if (!importFlow) throw new Error('Import your context is not available'); return importFlow; };
+  const providerId = (value) => { const id = str(value, 'provider', 16); if (id !== 'anthropic' && id !== 'openai') throw new TypeError('provider is invalid'); return id; };
+  handle('import-providers', (fresh) => ix().providers.status({ fresh: fresh === true }));
+  handle('import-provider-remember', (provider) => { ix().providers.remember(providerId(provider)); return ix().providers.status(); });
+  handle('import-browsers', () => ix().browsers.list());
+  handle('import-browser-choose', (id) => ix().browsers.choose(str(id, 'browser', 32)));
+  handle('import-keychain', (answer) => ix().browsers.setKeychain(str(answer, 'answer', 16)));
+  handle('import-discovery', () => ix().discovery.state());
+  handle('import-discover-projects', (input) => {
+    const value = input == null ? {} : plainObject(input, 'input');
+    return ix().discovery.startProjects({ provider: value.provider == null ? null : providerId(value.provider), again: value.again === true });
+  });
+  handle('import-discover-tools', (input) => {
+    const value = input == null ? {} : plainObject(input, 'input');
+    return ix().discovery.startTools({ provider: value.provider == null ? null : providerId(value.provider), browserId: value.browserId == null ? null : str(value.browserId, 'browser', 32), keychain: value.keychain === 'allowed' ? 'allowed' : value.keychain === 'declined' ? 'declined' : null, again: value.again === true });
+  });
+  handle('import-discovery-stop', () => ix().discovery.stop());
+  handle('import-discovery-reset', () => ix().discovery.reset());
+  handle('import-disk-access', () => ix().diskAccess.status());
+  handle('import-disk-access-open', () => ix().diskAccess.open());
+  handle('import-disk-access-relaunch', (confirm) => ix().diskAccess.relaunch({ confirm: confirm === true }));
+  handle('import-disk-access-stop', () => { ix().diskAccess.stopWatching(); ix().diskAccess.closeHelper(); return true; });
+  handle('import-flow', () => (ix().prefs.get().flow || null));
+  handle('import-flow-save', (flow) => { if (flow === null) { ix().prefs.set({ flow: null }); return true; } ix().prefs.set({ flow: plainObject(flow, 'flow') }); return true; });
+  handle('import-trace-open', () => ix().openTrace());
   handle('connect-memory', withCtx((ctx) => { const file = path.join(ctx.dataRoot, 'MEMORY.md'); try { const stat = fs.statSync(file); return { exists: true, path: file, updated: stat.mtime.toISOString(), bytes: stat.size }; } catch { return { exists: false, path: file }; } }));
   // A repository's sandbox is stopped (and its runs forgotten) before its row can go.
   saving('discard-library-item', (id) => queued(async () => {

@@ -85,6 +85,15 @@ const { hasTestMode } = require('./developer.cjs');
 const { createUpdates } = require('./updates.cjs');
 const projects = require('./store/projects.cjs');
 const { createWindows, placement } = require('./windows.cjs');
+// Import your context (2026-10-13, the "Onboarding" workspace): its provider rule, browsers, discovery agents, Full Disk
+// Access and the Agent trace.
+const onboardingPrefs = require('./onboarding/prefs.cjs');
+const { createProviders } = require('./onboarding/providers.cjs');
+const { createBrowsers } = require('./onboarding/browsers.cjs');
+const { createTrace } = require('./onboarding/trace.cjs');
+const { createTraceWindow } = require('./onboarding/trace-window.cjs');
+const { createDiscovery } = require('./onboarding/discover.cjs');
+const { createDiskAccess } = require('./onboarding/disk-access.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -118,6 +127,7 @@ let builds = null;
 let sandbox = null;
 let tools = null;
 let updates = null;
+let traceWindow = null; // View ▸ Agent Trace (./onboarding/trace-window.cjs)
 let connect = null; // Connect your library's sessions (./connect/session.cjs): stopped, their agents' windows closed, at quit
 let quitPending = false;
 let quitReady = false;
@@ -199,7 +209,8 @@ function runningSessionCount() {
 // `update`: Restart to Update from the ready dialog (updates.cjs), which has said already that terminal sessions end; it
 // quits without asking again (from the menu or a banner it asks, as any quit does). True once it goes on to quit; false
 // when it does not: a quit already under way, Cancel, or a shutdown that failed.
-async function requestQuit({ update = false } = {}) {
+// `relaunch` (Full Disk Access, 2026-10-13): Engelbart opens again once it has quit; only when the quit goes on.
+async function requestQuit({ update = false, relaunch = false } = {}) {
   if (quitPending || quitReady) return false;
   quitPending = true;
   const runningCount = update ? 0 : runningSessionCount();
@@ -249,6 +260,7 @@ async function requestQuit({ update = false } = {}) {
     return false;
   }
   quitReady = true;
+  if (relaunch) app.relaunch();
   app.quit();
   return true;
 }
@@ -438,6 +450,9 @@ function buildMenu() {
       submenu: [
         { role: 'reload' },
         { role: 'toggleDevTools' },
+        { type: 'separator' },
+        // Every prompt, input, output and context of onboarding's agents, and the dispatching around them (2026-10-13).
+        { label: 'Agent Trace', accelerator: 'CmdOrCtrl+Alt+T', click: () => { if (traceWindow) traceWindow.open(); } },
         { type: 'separator' },
         { role: 'togglefullscreen' },
       ],
@@ -962,6 +977,20 @@ if (!hasSingleInstanceLock) {
     // however often it looks again. The person was told macOS would ask (the choose screen's panel, 2026-10-10), so its
     // prompt waits ten minutes for them rather than one.
     const keychainKeys = new Map();
+    // Import your context's remembered answers (./onboarding/prefs.cjs), in the data root open now.
+    const prefs = {
+      get: () => { try { return onboardingPrefs.get(store.config().dataRoot); } catch { return {}; } },
+      set: (patch) => onboardingPrefs.set(store.config().dataRoot, patch),
+    };
+    // The browser whose sign-ins Engelbart uses (2026-10-13): the person's pick, else macOS's default; only installed
+    // ones are offered. ENGELBART_ONBOARDING_BROWSERS (ids, the default first) stands in for this Mac in scripted runs.
+    const macDefaultBrowser = () => { try { return app.getApplicationNameForProtocol('https://'); } catch { return ''; } };
+    const onboardingBrowsers = createBrowsers({
+      installedApps,
+      defaultName: macDefaultBrowser,
+      prefs,
+      override: process.env.ENGELBART_ONBOARDING_BROWSERS != null ? process.env.ENGELBART_ONBOARDING_BROWSERS.split(',').map((id) => id.trim()).filter(Boolean) : null,
+    });
     const webSignIn = createWebSignIn({
       cookieImport: process.platform === 'darwin' ? createCookieImport({
         // The home Engelbart was given (ENGELBART_HOME_DIR in scripted runs, so they never read this Mac's browsers).
@@ -977,7 +1006,9 @@ if (!hasSingleInstanceLock) {
           return keychainKeys.get(name);
         },
       }) : null,
-      defaultBrowser: () => { try { return app.getApplicationNameForProtocol('https://'); } catch { return ''; } },
+      // The browser the person picked for their sign-ins (Import your context), else macOS's default (2026-10-13: "Claude
+      // sign-in opened in Chrome, but his keychain credentials were in Arc"): read first, and where sign-in pages open.
+      defaultBrowser: () => onboardingBrowsers.preferredName() || macDefaultBrowser(),
       openExternal: (url) => electronShell.openExternal(parseExternalUrl(url).href),
       // A browser other than the default (Safari's cookies can't be read): `open -b <bundle id> <url>`.
       openIn: (browserId, url) => new Promise((resolve, reject) => {
@@ -1004,12 +1035,23 @@ if (!hasSingleInstanceLock) {
     const connectReady = () => {
       if (connectFake) return ['anthropic', 'openai'];
       const usable = tools && typeof tools.usableAgents === 'function' ? tools.usableAgents() : null;
-      return usable === null ? ['anthropic', 'openai'] : usable.map((name) => (name === 'claude' ? 'anthropic' : 'openai'));
+      if (usable === null) return ['anthropic', 'openai'];
+      // One updating itself in the background (or about to) can run Connect's agents too (2026-10-13: the update never
+      // holds onboarding).
+      const snap = tools.snapshot();
+      const updating = ['claude', 'codex'].filter((name) => { const tool = snap.tools[name]; return tool && tool.installed && (tool.status === 'updating' || (tool.status === 'outdated' && tool.autoUpdate)); });
+      return [...new Set([...usable, ...updating])].map((name) => (name === 'claude' ? 'anthropic' : 'openai'));
     };
+    // The Agent trace (./onboarding/trace.cjs): every turn of Connect's and Import your context's agents, and the
+    // dispatching around them, in <dataRoot>/.connect/trace; View ▸ Agent Trace shows it.
+    const trace = createTrace({ dataRoot: () => store.config().dataRoot, notify: (entry) => { if (traceWindow) traceWindow.send(entry); } });
+    traceWindow = createTraceWindow({ BrowserWindow, dialog, trace, traceDir: () => path.join(store.config().dataRoot, '.connect', 'trace'), reveal: (dir) => { fs.mkdirSync(dir, { recursive: true }); electronShell.openPath(dir); } });
+    const connectAgents = trace.wrap(connectFake
+      ? createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 })
+      : createConnectAgents({ runDirectory: path.join(app.getPath('userData'), 'connect-runs'), interviewHome: path.join(app.getPath('userData'), 'codex-home-connect'), importHome: path.join(app.getPath('userData'), 'codex-home-connect-import'), tools }));
     connect = createConnect({
-      agents: connectFake
-        ? createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 })
-        : createConnectAgents({ runDirectory: path.join(app.getPath('userData'), 'connect-runs'), interviewHome: path.join(app.getPath('userData'), 'codex-home-connect'), importHome: path.join(app.getPath('userData'), 'codex-home-connect-import'), tools }),
+      agents: connectAgents,
+      trace,
       models: () => readModels('build'),
       ready: connectReady,
       context: () => store.context(),
@@ -1043,8 +1085,64 @@ if (!hasSingleInstanceLock) {
       }
       return out;
     };
+    // Import your context (2026-10-13): which provider runs its agents (both subscribed: asked once), the project and
+    // tool discovery agents (started the moment Import context is pressed), and Full Disk Access in place of four folder
+    // prompts. ENGELBART_PROVIDERS_FAKE and ENGELBART_DISK_ACCESS stand in for this Mac in scripted runs.
+    const onboardingProviders = createProviders({ tools, prefs, homeDir, fake: process.env.ENGELBART_PROVIDERS_FAKE || (connectFake ? 'both' : '') });
+    // Full Disk Access granted: the agents may read every folder macOS guards (MATH-110's four asked one by one before).
+    let diskGranted = false;
+    const diskAccess = createDiskAccess({
+      BrowserWindow, screen: require('electron').screen, shell: electronShell, homeDir,
+      requestQuit,
+      notify: (status) => {
+        if (status && status.granted) diskGranted = true;
+        sendToWindow('engelbart:disk-access', status);
+      },
+      iconPath: path.join(__dirname, '../../build/icon.png'),
+    });
+    // Granted (this process can read what it guards): the four folders count as allowed for Connect's guard too (MATH-110),
+    // so no agent is kept out of them and no folder prompt comes up.
+    void diskAccess.status().then((status) => {
+      diskGranted = !!(status && status.granted);
+      if (diskGranted) { try { folderAccess.writeAnswers(store.config().dataRoot, Object.fromEntries(folderAccess.protectedFolders({ homeDir }).map((folder) => [folder.id, 'allowed']))); } catch { /* the guard asks as before */ } }
+    }).catch(() => {});
+    const discovery = createDiscovery({
+      agents: connectAgents,
+      models: () => readModels('build'),
+      context: () => store.context(),
+      homeDir,
+      providers: onboardingProviders,
+      webSignIn,
+      cookieImport: process.platform === 'darwin' ? createCookieImport({ supportDir: path.join(homeDir, 'Library', 'Application Support'), userDataDir: app.getPath('userData'), getSession: () => electronSession.fromPartition(BROWSER_PARTITION), request: (options) => net.request(options), installed: browserInstalled, settled: browserSettled, keychain: (name) => { if (!keychainKeys.has(name)) keychainKeys.set(name, keychainRunner(name, undefined, { timeoutMs: 10 * 60_000 }).catch((error) => { keychainKeys.delete(name); throw error; })); return keychainKeys.get(name); } }) : null,
+      agentBrowser,
+      openBridge: openToolBridge,
+      zotero: { status: () => zotero.status() },
+      zoteroRoot: () => (zotero.status().connected ? zoteroLibrary.root() : null),
+      github: { status: () => github.status(), repos: (options) => github.repos(options) },
+      connectors,
+      deps: { describe: createDescriber(), identifyRepo: createRepoIdentifier({ auth: github.authHeaders }), inspectPdf, onAdded: libraryChanged, onPdf: pdfAdded },
+      notify: (state) => sendToWindow('engelbart:discovery', state),
+      trace,
+      access: (ctx) => folderAccess.guard({ homeDir, dataRoot: ctx.dataRoot, ...(diskGranted ? { answers: Object.fromEntries(folderAccess.protectedFolders({ homeDir }).map((folder) => [folder.id, 'allowed'])) } : {}) }),
+      existingProjects: async (ctx) => (await projects.listProjects(ctx)).map((project) => project.name),
+    });
+    // The trace window's own calls: from that window only.
+    const fromTrace = (handler) => async (event, ...args) => {
+      if (!traceWindow || !traceWindow.isOpen() || BrowserWindow.fromWebContents(event.sender) == null || !event.sender.getURL().startsWith('file:') || !event.sender.getURL().endsWith('/trace.html')) throw new Error('Not the trace window');
+      return handler(...args);
+    };
+    // The Full Disk Access helper's buttons (./onboarding/disk-helper.html): from that page only.
+    ipcMain.on('disk-helper:action', (event, name) => {
+      const url = event.sender.getURL();
+      if (!url.startsWith('file:') || !url.endsWith('/disk-helper.html')) return;
+      diskAccess.helperAction(String(name || ''));
+    });
+    ipcMain.handle('trace:list', fromTrace(() => traceWindow.list()));
+    ipcMain.handle('trace:save', fromTrace((html) => traceWindow.save(html)));
+    ipcMain.handle('trace:reveal', fromTrace(() => traceWindow.revealFolder()));
     app.on('will-quit', () => connect.suspendAll());
     registerEngelbartIpc({
+      onboarding: { prefs, providers: onboardingProviders, browsers: onboardingBrowsers, discovery, diskAccess, openTrace: () => traceWindow.open() },
       connect,
       connectors,
       appleNotes,

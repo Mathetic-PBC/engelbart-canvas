@@ -35,8 +35,11 @@ const READ_TOOLS = 'Read,Grep,Glob';
 const WEB_TOOLS = 'WebSearch,WebFetch';
 const IMPORT_TOOLS_PREFIX = 'mcp__engelbart__*';
 const IMPORT_SERVER = path.join(__dirname, 'import-mcp.cjs');
-const TIMEOUTS = Object.freeze({ interview: 10 * 60_000, survey: 15 * 60_000, import: 45 * 60_000, recall: 15 * 60_000, memory: 15 * 60_000, redact: 6 * 60_000 });
-const BRIDGED = new Set(['survey', 'import', 'recall']);
+// Import your context (2026-10-13, ../onboarding/discover.cjs): `projects` names the person's recent projects from a
+// digest it is handed (no tools: one quick answer); `discover` says which tools they use, looking with the survey's
+// read-only tools (tools.cjs TOOLS_FOR.discover).
+const TIMEOUTS = Object.freeze({ interview: 10 * 60_000, survey: 15 * 60_000, import: 45 * 60_000, recall: 15 * 60_000, memory: 15 * 60_000, redact: 6 * 60_000, projects: 4 * 60_000, discover: 8 * 60_000 });
+const BRIDGED = new Set(['survey', 'import', 'recall', 'discover']);
 const INTERVIEW_TIMEOUT_MS = TIMEOUTS.interview;
 const IMPORT_TIMEOUT_MS = TIMEOUTS.import;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -159,7 +162,7 @@ function updateOf(provider, event, short) {
 
 /** Claude Code's tools for a kind: what it is given (--tools) and what it may use without asking (--allowedTools). */
 function claudeToolsFor(kind, connectors = []) {
-  if (kind === 'redact') return { tools: '', allowed: '' };
+  if (kind === 'redact' || kind === 'projects') return { tools: '', allowed: '' };
   if (!BRIDGED.has(kind)) return { tools: READ_TOOLS, allowed: READ_TOOLS };
   const tools = `${READ_TOOLS},${WEB_TOOLS}`;
   const extra = connectors.filter((connector) => SERVER_NAME_RE.test(connector.name)).map((connector) => `mcp__${connector.name}__*`);
@@ -214,7 +217,9 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
   }
 
   async function codexTurn({ kind, system, message, session, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, dirs }) {
-    const own = bridge ? `${importHome}-${path.basename(stem)}` : interviewHome;
+    // A home of its own for every bridged turn and every discovery turn: the librarian's is shared turn to turn, and a
+    // discovery agent starting while it talks would rewrite its instructions (AGENTS.md) under it.
+    const own = bridge || kind === 'projects' ? `${importHome}-${path.basename(stem)}` : interviewHome;
     const source = codexAuthFile || path.join(environment.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
     if (!prepareCodexHome({ codexHome: own, source, instructions: system })) throw new ConnectError('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`). An API key is never used.');
     const inputFile = `${stem}.input.txt`, outFile = `${stem}.out.txt`, connection = `${stem}.engelbart.json`;
@@ -247,7 +252,7 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
       return { text, session: thread };
     } finally {
       for (const file of [inputFile, outFile, connection]) { try { fs.unlinkSync(file); } catch { /* none */ } }
-      if (bridge) fs.rmSync(own, { recursive: true, force: true });
+      if (own !== interviewHome) fs.rmSync(own, { recursive: true, force: true });
     }
   }
 

@@ -12,6 +12,10 @@ import UpdateBanner from './ui/UpdateBanner.jsx';
 import { useConnectSessions, ConnectChip, ConnectPopup } from './ui/ConnectDock.jsx';
 import { GuidedSetupOffer, START_GUIDED_SETUP } from './ui/GuidedSetup.jsx';
 import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
+import ImportFlow from './import/ImportFlow.jsx';
+import ImportStatus from './import/ImportStatus.jsx';
+import { importApi } from './import/import-api.js';
+import { engelbartSignIn } from './screens/ConnectLibrary.jsx';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
 // onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. Onboarding ends in the project
@@ -76,6 +80,11 @@ export default function App() {
   const lastTools = React.useRef(null);
   // Connect your library (2026-10-07): its popup ({ sessionId } from the chip, { projectId } the one-time offer).
   const [connectPopup, setConnectPopup] = React.useState(null);
+  // Import your context over the workspace (2026-10-13: the redo of onboarding, "a popup modal in front of the workspace"):
+  // { projectId, workspaceId } the imports go to. And its run's status, open for a session id (ImportStatus).
+  const [importModal, setImportModal] = React.useState(null);
+  const [importStatus, setImportStatus] = React.useState(null);
+  const seenNeeds = React.useRef(new Set());
   // The guided setup (ui/GuidedSetup.jsx): a new user's onboarding run for someone with projects, while `guided` (false;
   // true, started from all projects; or { projectId, workspaceId }, the workspace it was started in); its one-time offer
   // over the workspace while `guidedOffer`.
@@ -228,6 +237,28 @@ export default function App() {
 
   // Connect your library's sessions in this data root (each library its own, 2026-10-08), for the chip and the Inbox.
   const connectSessions = useConnectSessions(!!config, config ? config.dataRoot : '');
+  // An Import your context run's new step for the person (a sign-in, a permission) opens its status, as a modal over
+  // whatever is showing (2026-10-13: "prompts should be modals that show up to the Engelbart platform").
+  React.useEffect(() => {
+    for (const session of connectSessions) {
+      if (!session.direct) continue;
+      const fresh = (session.needs || []).filter((need) => !seenNeeds.current.has(need.id));
+      for (const need of fresh) seenNeeds.current.add(need.id);
+      if (fresh.length && !importModal) setImportStatus(session.id);
+    }
+  }, [connectSessions, importModal]);
+  const openSession = (id) => {
+    const session = connectSessions.find((entry) => entry.id === id);
+    if (session && session.direct) setImportStatus(id); else setConnectPopup({ sessionId: id });
+  };
+  const statusSession = importStatus ? connectSessions.find((entry) => entry.id === importStatus) : null;
+  const needOpen = async (session, need) => {
+    try {
+      if (need.app === 'Zotero' || need.app === 'GitHub') { if (await engelbartSignIn(need.app)) await api.connectNeed(session.id, need.id, 'done'); return; }
+      await api.connectNeed(session.id, need.id, 'open');
+    } catch (failure) { fail(failure); }
+  };
+
   // The guided setup offered once to someone who has projects, over the workspace they are in (2026-10-10: it took the
   // place of Connect your library's one-time popup; Connect is the setup's second screen). Seen once it has been shown.
   const openProjectId = phase === 'workspace' && tree ? tree.project.id : null;
@@ -254,6 +285,8 @@ export default function App() {
       : (now.phase === 'create' && now.guided && now.guided.projectId ? now.guided : null);
     setGuidedOffer(false);
     setConnectPopup(null);
+    // In a workspace: Import your context opens over it, the imports going to its project; nothing is left.
+    if (here) { setImportModal({ projectId: here, workspaceId: from.workspaceId || null }); return; }
     setTree(null);
     setEntry(null);
     setGuided(from || true);
@@ -464,7 +497,7 @@ export default function App() {
           onError={fail}
           // Connect your library's sessions, for the sidebar's Inbox: one that needs you or has finished, opened in its popup
           connectSessions={connectSessions}
-          onOpenConnect={(id) => setConnectPopup({ sessionId: id })}
+          onOpenConnect={openSession}
         />
       )}
       {phase === 'workspace' && tree && !tree.project.directory && (
@@ -488,11 +521,29 @@ export default function App() {
         onStartNew: () => resetTest(true),
         onReveal: () => api.reveal(config.testRoot).catch(fail),
       } : null}>
-        <ConnectChip sessions={connectSessions} onOpen={(id) => setConnectPopup({ sessionId: id })} />
+        <ConnectChip sessions={connectSessions} onOpen={openSession} />
         {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
       {guidedOffer && phase === 'workspace' && (
         <GuidedSetupOffer onStart={() => { api.guidedOfferSeen('started').catch(() => {}); startGuided(); }} onDismiss={() => { setGuidedOffer(false); api.guidedOfferSeen('dismissed').catch(() => {}); }} />
+      )}
+      {importModal && phase === 'workspace' && (
+        <div data-overlay="1" data-cover="1" data-import-modal="1" style={{ position: 'fixed', inset: 0, zIndex: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(23,23,23,.18)' }}>
+          {/* transform: the flow's fixed parts (its foot, its dialogs) are held inside this panel, not the window */}
+          <div role="dialog" aria-modal="true" aria-label="Import your context" style={{ position: 'relative', width: 'min(1000px, 100%)', height: 'min(800px, 100%)', overflow: 'auto', background: '#fff', borderRadius: 14, boxShadow: '0 20px 60px #00000026', transform: 'translateZ(0)' }}>
+            <ImportFlow api={importApi} mode="modal" into={importModal.projectId} workspaceId={importModal.workspaceId} platform={/Mac/i.test(navigator.platform || '') ? 'darwin' : 'other'}
+              onClose={({ session } = {}) => { setImportModal(null); if (session) setImportStatus(session.id); }} />
+          </div>
+        </div>
+      )}
+      {/* in the workspace only: during onboarding the run starts before its project opens, and the modal would cover the flow */}
+      {statusSession && !importModal && phase === 'workspace' && (
+        <ImportStatus session={statusSession} onClose={() => setImportStatus(null)}
+          onNeed={(need) => needOpen(statusSession, need)}
+          onSkip={(need) => api.connectNeed(statusSession.id, need.id, 'skip').catch(fail)}
+          onStop={() => api.connectStop(statusSession.id).catch(fail)}
+          onDone={() => { const id = statusSession.id; setImportStatus(null); api.connectDismiss(id).catch(() => {}); }}
+          onTrace={() => api.importTraceOpen().catch(() => {})} />
       )}
       {connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>

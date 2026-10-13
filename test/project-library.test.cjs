@@ -135,7 +135,7 @@ test('add-to-project with a workspace links there as far as it has room; the res
   const { project, a } = await scene();
   const rows = [await paper('One'), await paper('Two')];
   const workspace = projects.findWorkspace(ctx, project.id, a.id).workspace;
-  fs.writeFileSync(path.join(workspace.dir, 'meta.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(workspace.dir, 'meta.json'), 'utf8')), context: Array.from({ length: 499 }, () => randomUUID()) }));
+  fs.writeFileSync(path.join(workspace.dir, 'meta.json'), JSON.stringify({ ...JSON.parse(fs.readFileSync(path.join(workspace.dir, 'meta.json'), 'utf8')), context: Array.from({ length: projects.MAX_TREE_ENTRIES - 1 }, () => randomUUID()) }));
   assert.deepEqual(await projects.addToProject(ctx, project.id, rows.map((row) => row.id), { workspaceId: a.id }), { added: 2, inWorkspace: 1 });
   assert.deepEqual((await heldIds(project.id)).filter((id) => rows.some((row) => row.id === id)).length, 2);
 });

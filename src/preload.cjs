@@ -165,6 +165,27 @@ const engelbartAPI = Object.freeze({
   guidedOfferSeen: invoke('guided-offer-seen'),
   connectMemory: invoke('connect-memory'),
   onConnect: (callback) => subscribe('engelbart:connect', callback),
+  // Import your context (2026-10-13, src/main/onboarding): the provider rule, the browsers, the discovery agents, Full Disk
+  // Access, where the flow was (kept across Full Disk Access's relaunch), and View ▸ Agent Trace.
+  importProviders: invoke('import-providers'), // (fresh?) → { providers, decision: { pick, ask, choices, setup }, remembered }
+  importProviderRemember: invoke('import-provider-remember'), // (provider) → the same, that one remembered
+  importBrowsers: invoke('import-browsers'), // → { browsers: [{ id, name, keychain, isDefault }], defaultId, chosenId, keychain }
+  importBrowserChoose: invoke('import-browser-choose'), // (id) → the same
+  importKeychain: invoke('import-keychain'), // ('allowed' | 'declined')
+  importDiscovery: invoke('import-discovery'), // → { projects, tools }
+  importDiscoverProjects: invoke('import-discover-projects'), // ({ provider?, again? }) → the same
+  importDiscoverTools: invoke('import-discover-tools'), // ({ provider?, browserId?, keychain?, again? }) → the same
+  importDiscoveryStop: invoke('import-discovery-stop'),
+  importDiscoveryReset: invoke('import-discovery-reset'),
+  importDiskAccess: invoke('import-disk-access'), // → { granted, grantedFresh, app, needsRelaunch }
+  importDiskAccessOpen: invoke('import-disk-access-open'), // System Settings, the helper beside it, the watch
+  importDiskAccessRelaunch: invoke('import-disk-access-relaunch'),
+  importDiskAccessStop: invoke('import-disk-access-stop'),
+  importFlow: invoke('import-flow'), // → where the flow was, or null
+  importFlowSave: invoke('import-flow-save'), // (flow | null)
+  importTraceOpen: invoke('import-trace-open'),
+  onDiscovery: (callback) => subscribe('engelbart:discovery', callback),
+  onDiskAccess: (callback) => subscribe('engelbart:disk-access', callback),
   onConnectors: (callback) => subscribe('engelbart:connectors', callback),
   renameProject: invoke('rename-project'),
   // Delete on the all-projects screen: into the trash for a week; Recently deleted lists it (and purges older ones), Restore brings it back.

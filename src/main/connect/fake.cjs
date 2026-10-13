@@ -151,6 +151,27 @@ Their OpenAI key, sk-test-0123456789abcdefghij, was pasted in a chat.
 ## Sources
 - The fake recall, ${new Date().toISOString().slice(0, 10)}.`;
 
+const SAMPLE_PROJECTS = [
+  { title: 'Engelbart context import', description: 'Designing how agents bring project context into a local library.', recent: 'Today' },
+  { title: 'Programming requirements study', description: 'Studying how novice programmers describe and test requirements.', recent: 'Yesterday' },
+  { title: 'Learning sciences reading guide', description: 'Organizing research on learning, agency and programming.', recent: 'This week' },
+  { title: 'Engelbart launch', description: 'Preparing onboarding, outreach and the first user sessions.', recent: 'This week' },
+];
+
+function fakeProjects(meta) {
+  const folders = ((meta && meta.digest && meta.digest.folders) || []).slice(0, 3);
+  const found = folders.map((folder) => ({ title: folder.name, description: `Recent work in ${folder.shown}.`, recent: 'This week', folder: folder.path, evidence: `${folder.sessions} agent sessions` }));
+  return { projects: [...found, ...SAMPLE_PROJECTS].slice(0, 4) };
+}
+
+function fakeTools(meta) {
+  const evidence = (meta && meta.evidence) || {};
+  return {
+    tools: Object.entries(evidence).map(([id, fact]) => ({ id, used: !!fact.used, evidence: fact.evidence || '' })),
+    additional: [{ name: 'Linear', website: 'https://linear.app', used: true, evidence: 'Visited often in the sample history' }],
+  };
+}
+
 function createFakeConnectAgents({ delayMs = 600 } = {}) {
   return {
     async turn({ meta, signal, kind, message }) {
@@ -160,6 +181,10 @@ function createFakeConnectAgents({ delayMs = 600 } = {}) {
       if (what === 'recall') return { text: await recallRun(meta, delayMs, signal), session: null };
       if (what === 'memory') { await sleep(delayMs, signal); return { text: MEMORY_DRAFT, session: null }; }
       if (what === 'redact') { await sleep(delayMs, signal); const draft = String(message).replace(/^<memory_md>\n|\n<\/memory_md>$/g, ''); return { text: draft.replace('password: hunter2', 'password: [removed]'), session: null }; }
+      // Import your context's discovery agents (../onboarding/discover.cjs): the projects named from the digest's folders
+      // (or four samples), and the tools from the evidence it was given, with Linear as a tool found besides.
+      if (what === 'projects') { await sleep(delayMs * 2, signal); return { text: JSON.stringify(fakeProjects(meta)), session: null }; }
+      if (what === 'discover') { await sleep(delayMs * 2, signal); return { text: JSON.stringify(fakeTools(meta)), session: null }; }
       await sleep(delayMs, signal);
       return { text: JSON.stringify(interviewReply(meta.session, meta.message)), session: 'fake-session' };
     },

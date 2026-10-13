@@ -12,6 +12,8 @@ import { useGithubStatus } from '../workspace/useGithubStatus.js';
 import ImportSignins from '../workspace/ImportSignins.jsx';
 import GithubRepos from '../workspace/GithubRepos.jsx';
 import ConnectLibrary from './ConnectLibrary.jsx';
+import ImportFlow from '../import/ImportFlow.jsx';
+import { importApi } from '../import/import-api.js';
 import welcomePng from '../../../design/assets/welcome-field.png';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
@@ -525,6 +527,20 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
     body = null;
   } else if (step === 'open') {
     body = <div data-screen-label="08 Opening" style={{ width: '100%', display: 'flex', justifyContent: 'center' }}><ThinkingDots label={flowMode === 'guided' ? 'opening Welcome' : 'opening Getting started'} /></div>;
+  }
+
+  // Import your context (2026-10-13, the "Onboarding" workspace) in place of Create and Connect your library: it asks what
+  // the person works on, finds their projects and tools, makes a project for each one picked and opens the first (or, Start
+  // from scratch, one empty project). Its own page across the window, the title bar above it.
+  if (connectMode && flowMode !== 'guided' && (step === 'create' || step === 'connect')) {
+    return (
+      <div data-screen-label="Import your context" data-onboarding={flowMode} data-step="import-context" style={{ position: 'absolute', inset: 0, overflow: 'auto', background: '#fff' }}>
+        <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, zIndex: 5, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
+          {onBack && <button type="button" className="hov-ink" onClick={onBack} title={backTitle} style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
+        </div>
+        <ImportFlow api={importApi} mode="new" platform={IS_MAC ? 'darwin' : 'other'} onDone={(made) => onDone(made, { stageLinks: [...stageLinks.current] })} />
+      </div>
+    );
   }
 
   return (

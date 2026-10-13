@@ -111,6 +111,10 @@ const TOOLS_FOR = Object.freeze({
   survey: LOOK,
   recall: ['browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'needs_you', 'wait_for_you', 'save_memory'],
   import: IMPORT_TOOLS.map((tool) => tool.name).filter((name) => name !== 'save_memory'),
+  // Import your context's tool discovery (2026-10-13, ../onboarding/discover.cjs): which tools the person uses, seen
+  // from their browser's history and bookmarks and, signed in, the apps' own pages. It looks; it never asks the person
+  // anything (no needs_you) and never reaches Apple Notes or Gmail (a macOS prompt, someone else's mail).
+  discover: ['browser_history', 'browser_bookmarks', 'browser_open', 'browser_read', 'browser_scroll', 'browser_wait', 'github_repos', 'list_chats', 'web_chats', 'zotero_collections', 'folder_overview'],
 });
 const WRITING = new Set(['import_note_files', 'import_pdfs', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_gmail_threads', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
 

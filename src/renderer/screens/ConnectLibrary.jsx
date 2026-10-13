@@ -782,18 +782,15 @@ function FootStatus({ session }) {
 
 /**
  * Until the librarian says something (2026-10-09: "make the loading icon better and have some status to it"): the dots,
- * bigger, and how many sources have been looked at. (2026-10-12, second test run: the line that moved through the jobs'
- * labels under the title is gone.)
+ * bigger. (2026-10-12, second test run: the line that moved through the jobs' labels under the title is gone; 2026-10-13,
+ * the "Onboarding" workspace: so is the "N of M looked at" counter, "unhelpful and wrong".)
  */
-function Starting({ session }) {
-  const jobs = workJobs(session.jobs);
-  const ended = jobs.filter((entry) => statusOf(entry).done).length;
+function Starting() {
   return (
     <div data-connect-starting="1" role="status" aria-live="polite" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, paddingBottom: 40, animation: `rise 260ms ${EASE}` }}>
       <ThinkingDots label="" size={7} />
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
         <div style={{ font: '500 16px/1.3 var(--font-sans)', letterSpacing: '-0.1px', color: '#171717' }}>Getting to know your library</div>
-        {jobs.length > 0 && <div data-connect-starting-count="1" style={{ font: '12.5px/1 var(--font-sans)', color: '#8f8f8f', fontVariantNumeric: 'tabular-nums' }}>{`${ended} of ${jobs.length} looked at`}</div>}
       </div>
     </div>
   );
@@ -847,7 +844,7 @@ function waitFor(begin, status, subscribe) {
     status().then((now) => { if (now && now.connected) settle(true); }).catch(() => {});
   });
 }
-const engelbartSignIn = (app) => (app === 'Zotero' ? waitFor(api.zoteroConnect, api.zoteroStatus, api.onZotero).then(async (done) => { if (done) await api.zoteroSync().catch(() => {}); return done; }) : waitFor(api.githubConnect, api.githubStatus, api.onGithub));
+export const engelbartSignIn = (app) => (app === 'Zotero' ? waitFor(api.zoteroConnect, api.zoteroStatus, api.onZotero).then(async (done) => { if (done) await api.zoteroSync().catch(() => {}); return done; }) : waitFor(api.githubConnect, api.githubStatus, api.onGithub));
 
 /**
  * `mode` 'onboarding' (a step: `onContinue` moves on, the work going on in the background) or 'popup' (`onClose` puts it
@@ -1800,7 +1797,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: `12px ${gutter}`, borderTop: '1px solid #eaeaea' }}>
               {!session.stopped && (running > 0 || (session.memory && !memoryLine(session.memory).done)) && <button type="button" className="cx-ghost" data-connect-stop-all="1" onClick={stopAll}>Stop all</button>}
               <span style={{ flex: 1 }} />
-              <button type="button" data-connect-done="1" onClick={putAway} style={{ flex: 'none', whiteSpace: 'nowrap', height: 34, padding: '0 16px', border: '1px solid #171717', borderRadius: 8, background: '#171717', color: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)' }}>Run in background</button>
+              {/* "Run in background" while anything runs; once everything has ended, Done (2026-10-13: it stayed after all was imported) */}
+              <button type="button" data-connect-done="1" onClick={putAway} style={{ flex: 'none', whiteSpace: 'nowrap', height: 34, padding: '0 16px', border: '1px solid #171717', borderRadius: 8, background: '#171717', color: '#fff', cursor: 'pointer', font: '500 13px/1 var(--font-sans)' }}>{running > 0 || (session.memory && !memoryLine(session.memory).done) || (session.needs || []).length ? 'Run in background' : 'Done'}</button>
             </div>
         </>
       )}

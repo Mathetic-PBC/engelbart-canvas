@@ -113,12 +113,13 @@ function TestData({ test, close }) {
   );
 }
 
-// Guided setup (2026-10-10): a new user's onboarding again, at any time, over what they have (ui/GuidedSetup.jsx). Start
-// closes the window and opens its first screen; inside a project it ends in a Welcome workspace there, not a new project.
+// Import your context (2026-10-13; "Guided setup" from 2026-10-10 until the "Onboarding" workspace: "the redo of onboarding
+// shouldn't be called guided setup. It should be a popup modal in front of the workspace"). Start closes the window and
+// opens it over the workspace (App.jsx), its imports going to the project you're in; from All projects, onboarding's.
 function GuidedSetupPage({ close }) {
   return (
     <Group title="Onboarding" data-guided-setup="1">
-      <Row label="Walk through setup again" hint="Bring in your library and try Brainstorm and Discover in a Welcome workspace added to the project you’re in, or in a new project when started from All projects. Nothing you have is removed.">
+      <Row label="Import your context" hint="Agents bring in the notes, chats, papers and other context of the projects you pick, into your library and the project you’re in. Nothing you have is removed.">
         <button type="button" className="hov-bd2" data-settings-item="guided-setup" onClick={() => { close(); startGuidedSetup(); }} style={BUTTON}>Start</button>
       </Row>
     </Group>
@@ -143,8 +144,8 @@ export const PAGES = Object.freeze([
     keywords: [...LEVELS.flatMap((level) => [level.name, level.hint]), 'model', 'effort', 'intelligence', 'discover', 'Claude', 'Codex'] },
   { id: 'connections', section: 'Settings', title: 'Connections', icon: PLUG_ICON, Body: ConnectionsPage,
     keywords: ['GitHub', 'Zotero', 'accounts', 'sign in', 'sign out', ...TOOL_CONNECTIONS.map((id) => TOOL_NAME[id])] },
-  { id: 'guided-setup', section: 'Settings', title: 'Guided setup', icon: COMPASS_ICON, Body: GuidedSetupPage,
-    keywords: ['onboarding', 'setup', 'walkthrough', 'getting started', 'welcome', 'brainstorm', 'discover', 'library'] },
+  { id: 'guided-setup', section: 'Settings', title: 'Import your context', icon: COMPASS_ICON, Body: GuidedSetupPage,
+    keywords: ['onboarding', 'setup', 'guided setup', 'import', 'context', 'walkthrough', 'getting started', 'welcome', 'library'] },
   { id: 'test-data', section: 'Developer', title: 'Test data', icon: FLASK_ICON, shown: ({ test }) => !!(test && test.testMode), Body: TestData,
     keywords: ['reveal', 'reset', 'start over', 'test library'] },
 ]);
