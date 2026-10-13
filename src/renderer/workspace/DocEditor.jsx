@@ -158,11 +158,11 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.bart-ic:hover{background:#f2f2f2;color:#171717}.bart-ic[data-danger]:hover{color:#e70022}.bart-ic:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
   + '.bart-tip{position:absolute;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#171717;font:12px/1.2 var(--font-sans);white-space:nowrap;pointer-events:none;opacity:0;visibility:hidden;transition:opacity 120ms}'
   + '.bart-ic:hover+.bart-tip,.bart-ic:focus-visible+.bart-tip{opacity:1;visibility:visible}'
-  // A conversation's title (2026-10-12): its header's text is clicked to rename it; collapsed, the row is a link that says
-  // which agent it is with when hovered.
-  + '.bart-title{cursor:text}.bart-title:hover{color:#171717}.bart-thread{cursor:pointer}.bart-thread:hover>.bart-thread-name{text-decoration:underline}'
+  // A conversation's title (2026-10-12): collapsed, it is a grey rounded row, one grey darker when hovered; its title is
+  // clicked to rename it, the rest of the row to expand it.
+  + '.bart-thread{cursor:pointer}.bart-thread:hover>.bart-thread-name{text-decoration:underline}'
   + '.bart-who{cursor:pointer}.bart-who:hover{color:#171717}.bart-who:hover+.bart-tip,.bart-who:focus-visible+.bart-tip{opacity:1;visibility:visible}'
-  + '.bart-row:hover .bart-thread-name{color:#000}.bart-thread:hover+.bart-tip,.bart-thread:focus-visible+.bart-tip{opacity:1;visibility:visible}.bart-ic:disabled{cursor:default;opacity:.4}.bart-ic:disabled:hover{background:none;color:#4d4d4d}'
+  + '.bart-row{transition:background 120ms}.bart-row:hover{background:#f2f2f2!important}.bart-row .bart-thread-name{cursor:text}.bart-row:hover .bart-thread-name{color:#000}.bart-thread:hover+.bart-tip,.bart-thread:focus-visible+.bart-tip{opacity:1;visibility:visible}.bart-ic:disabled{cursor:default;opacity:.4}.bart-ic:disabled:hover{background:none;color:#4d4d4d}'
   + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
   + '.bart-text{padding:4px 2px;border:0;background:transparent;color:#8f8f8f;font:500 12px/1.4 var(--font-sans);cursor:pointer}.bart-text:hover{color:#171717}'
   + '[data-follow-input]::placeholder,[data-discover-input]::placeholder{color:#8f8f8f;font-style:italic;font-size:14.5px}'
@@ -1325,7 +1325,8 @@ export default class DocEditor extends React.Component {
     const at = new Map(), ps = this.parsedOf(ls), cards = this.cardsOf(ls);
     let shut = -2; // the last line of the collapsed conversation drawn last, whose row a row right under it is ruled off from
     for (const thread of threads(ls, ps)) {
-      // A titled conversation (2026-10-12): its title is the card's header, or, collapsed, the one row drawn for it all.
+      // A titled conversation (2026-10-12): open, its title is not drawn and the card starts at its question; collapsed, the
+      // title's row is the one row drawn for it all. (`ruled` is no longer drawn: collapsed rows are cards of their own.)
       const titled = thread.titleLine >= 0, collapsed = isCollapsed(thread);
       if (titled) at.set(thread.titleLine, { thread, agent: thread.agent, role: 'title', collapsed, running: isRunning(thread), ruled: collapsed && shut === thread.titleLine - 1 });
       if (collapsed) {
@@ -1337,7 +1338,7 @@ export default class DocEditor extends React.Component {
       const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !(endCard && endCard.live);
       for (const turn of thread.turns) {
         const agent = thread.agent, card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
-        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from && !titled, closes: !turn.answered, editable });
+        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from, closes: !turn.answered, editable });
         const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end;
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
         const lastBody = (turn.foot >= 0 ? turn.foot : turn.to + 1) - (gap >= 0 ? 2 : 1);
@@ -1462,33 +1463,29 @@ export default class DocEditor extends React.Component {
     this.props.onAsk({ askId, text, turns, agent, place: { line: thread.to + 1, text: add[0] } });
   }
   findTurn(ls, q) { for (const thread of threads(ls)) { const turn = thread.turns.find((t) => t.q === q); if (turn) return { thread, turn }; } return null; }
-  // A conversation's title (2026-10-12, `bart# …` above the question that starts it). Open, it is the card's header: the
-  // title, small and grey, which a click makes a field to rename it in (titleEdit), and Collapse on the right. Collapsed
-  // (`bart#+ …`), it is all that shows of the conversation: one row off the card's grey, a chevron, the title, and on the
-  // right the agent that answered and when it was asked (whenShown); a click anywhere on it expands it. Collapsed rows one
-  // under another are ruled off from each other. While a run is at work it cannot collapse. An empty title is still being
-  // named and shows nothing, no placeholder: the row and its Collapse stay where they are, and the title appears in it
-  // when main's name-chat answers. Collapsed with no title (a line emptied by hand), the row shows the conversation's
-  // opening question instead, so there is something to click.
+  // A conversation's title (2026-10-12, `bart# …` above the question that starts it). Open, it is not drawn: the card
+  // starts at its question, rounded, and Collapse is on the foot. Collapsed (`bart#+ …`), it is all that shows of the
+  // conversation: one grey rounded row (like a card, smaller), a chevron, the title, and on the right the agent that
+  // answered and when it was asked (whenShown). A click on the title makes it a field to rename it in (titleEdit); a click
+  // anywhere else on the row expands it. While a run is at work it cannot collapse. An empty title is still being named:
+  // the line stays in the file for main's name-chat to fill. Collapsed with no title (a line emptied by hand), the row
+  // shows the conversation's opening question instead, so there is something to click.
   titleHtml(i, raw, p, at) {
+    if (!at.collapsed) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
     const { thread } = at, title = p.text.trim();
-    if (at.collapsed) {
-      const name = agentName(thread), when = whenShown(thread.at);
-      const first = thread.turns && thread.turns[0], shown = title || (first ? questionLine(turnText(this.lines(), first).question, 60) : '') || name;
-      const said = [name, when].filter(Boolean).join(' · ');
-      return `<div ${raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" class="bart-row" data-act="foldthread" data-row="${i}" role="button" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" style="user-select:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:6px 0;${at.ruled ? 'border-top:1px solid #eaeaea;' : ''}">`
-        + `<span style="flex:none;display:inline-flex;color:#8f8f8f">${ICON.chevronRight}</span>`
-        + `<span class="bart-thread-name" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:14px/1.5 var(--font-sans);color:#171717">${esc(shown)}</span>`
-        + `<span style="flex:none;white-space:nowrap;font:13px/1.5 var(--font-sans);color:#8f8f8f">${esc(said)}</span>`
-        + '</div>';
-    }
+    const name = agentName(thread), when = whenShown(thread.at);
+    const first = thread.turns && thread.turns[0], shown = title || (first ? questionLine(turnText(this.lines(), first).question, 60) : '') || name;
+    const said = [name, when].filter(Boolean).join(' · ');
     const editing = !!this.titleEdit && this.titleEdit.line === i;
     const text = editing
-      ? `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:13px/1.6 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
-      : `<span class="bart-title" data-act="edittitle" data-row="${i}" title="Rename" style="flex:1;min-width:0;min-height:21px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px/1.6 var(--font-sans);color:#4d4d4d">${esc(title)}</span>`;
-    return `<div ${raw} contenteditable="false" data-readonly="1" data-title-row="${i}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:8px;padding:4px 6px 0 12px;background:#fafafa;border-radius:10px 10px 0 0">`
+      ? `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:14px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
+      : `<span class="bart-thread-name" data-act="edittitle" data-row="${i}" title="Rename" style="flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:14px/1.5 var(--font-sans);color:#171717">${esc(shown)}</span><span style="flex:1"></span>`;
+    // While its title is being edited the row is not a button: a click in the field stays in the field.
+    const button = editing ? '' : ` data-act="foldthread" data-row="${i}" role="button" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false"`;
+    return `<div ${raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" class="bart-row"${button} style="user-select:none;cursor:pointer;display:flex;align-items:center;gap:8px;padding:6px 12px;margin-bottom:8px;background:#fafafa;border-radius:10px">`
+      + `<span style="flex:none;display:inline-flex;color:#8f8f8f">${ICON.chevronRight}</span>`
       + text
-      + `<span style="flex:none;position:relative;display:inline-flex"><button class="bart-ic" data-act="foldthread" data-row="${i}" aria-label="Collapse" aria-expanded="true" style="width:24px;height:24px"${at.running ? ' disabled' : ''}>${ICON.collapse}</button><span class="bart-tip" style="right:0">${at.running ? 'Collapse once it answers' : 'Collapse'}</span></span>`
+      + `<span style="flex:none;white-space:nowrap;font:13px/1.5 var(--font-sans);color:#8f8f8f">${esc(said)}</span>`
       + '</div>';
   }
   // The foot of one turn (Answer Card), as icons, each with its name under it on hover: Copy, Regenerate, Edit and Build on
@@ -1502,6 +1499,8 @@ export default class DocEditor extends React.Component {
   // work; drawn dark on grey when Bart routed the line as a request to build.
   // On a turn of an `@bart` line, the agent's name is a button: Bart picked it, and it offers the others (AgentChoice,
   // pickVia). A closing line from before still saying "via Bart" after the model has that as the button instead.
+  // The " · " after the name is a piece of its own that keeps its spaces (white-space:pre): a flex item's leading space
+  // collapses, which read "Chat· Opus".
   // `busy`: a turn of the thread is at work. `thread`: the turn's; in one with a title (2026-10-12) Collapse folds all of
   // it to its title's row, once nothing in it runs.
   footHtml({ raw, q, text, folded, closes, plain = false, edit = false, busy = false, thread = null }) {
@@ -1531,7 +1530,7 @@ export default class DocEditor extends React.Component {
       : wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`);
     return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:4px 10px 6px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? '8px' : '0'}">`
       + lefts.join('')
-      + `<span class="t" style="flex:0 1 auto;min-width:0;margin-left:auto;margin-right:8px;display:inline-flex;align-items:center;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f">${who}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">${name && rest ? ' · ' : ''}${esc(rest)}${viaHtml}</span></span>`
+      + `<span class="t" style="flex:0 1 auto;min-width:0;margin-left:auto;margin-right:8px;display:inline-flex;align-items:center;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f">${who}${name && rest ? '<span style="flex:none;white-space:pre"> · </span>' : ''}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(rest)}${viaHtml}</span></span>`
       + fold
       + wrap(`<button class="bart-ic" data-danger="1" data-act="dropturn" data-turn="${q}" aria-label="Delete">${ICON.trash}</button>${tip('Delete', 'right')}`)
       + '</div>';
@@ -2131,7 +2130,7 @@ export default class DocEditor extends React.Component {
       if (k === 'cardwrap') { this.sendCard(Number(act.dataset.turn), 'wrap'); return; }
       if (k === 'fold') { this.toggleFold(Number(act.dataset.turn)); return; }
       if (k === 'foldthread') { if (!act.disabled) this.toggleThread(i); return; }
-      if (k === 'edittitle') { this.startTitle(i); return; }
+      if (k === 'edittitle') { if (this.props.readOnly) this.toggleThread(i); else this.startTitle(i); return; }
       if (k === 'dropturn') { this.closePicker(); this.deleteTurn(Number(act.dataset.turn)); return; }
       if (k === 'dropline') { this.removeLine(i); return; }
       if (k === 'copybart') {
@@ -2640,7 +2639,7 @@ export default class DocEditor extends React.Component {
     }));
     this.setState({ activeLine: null, mention: null });
   }
-  // Renaming a conversation (2026-10-12): its header's title becomes a field holding it; Enter or leaving the field writes
+  // Renaming a conversation (2026-10-12): its collapsed row's title becomes a field holding it; Enter or leaving the field writes
   // what it holds to the title line (an empty field changes nothing), Escape puts it back as it was.
   startTitle(line) {
     const p = this.parsedOf(this.lines())[line]; if (!p || p.type !== 'title' || this.props.readOnly) return;

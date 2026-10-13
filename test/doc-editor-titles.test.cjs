@@ -3,8 +3,8 @@
 // A conversation's title and Collapse (src/renderer/workspace/DocEditor.jsx, 2026-10-12). A question that starts a new
 // @chat, @brainstorm or @discover conversation gets an empty `bart# ` line above it, which the workspace fills in when
 // main's name-chat answers (src/main/bart/name-chat.cjs, test/bart.test.cjs); the answer starts at once. A titled
-// conversation has a header row and collapses whole to one row (`bart#+`); an older one, with no title line, folds a turn
-// at a time as before. There is no document here: the editor and its elements are stand-ins, as in doc-editor-edit.
+// conversation draws no header while open (its card starts at its question) and collapses whole to one grey rounded row
+// (`bart#+`), where its title is renamed; an older one, with no title line, folds a turn at a time as before. There is no document here: the editor and its elements are stand-ins, as in doc-editor-edit.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -116,7 +116,9 @@ test('the answer replaces its pending line with the title line above it, and the
   // Then the title comes back and fills its line.
   m.props.text = placeTitle(m.props.text, askId, 'Retry logic', near);
   assert.equal(m.props.text.split('\n')[1], `${head}Retry logic`, 'the title after what the line keeps');
-  assert.match(m.html(), /data-title-row[\s\S]*Retry logic/);
+  assert.ok(!/data-title-row/.test(m.html()), 'open, the title is not drawn');
+  m.editor.toggleThread(1);
+  assert.match(rowOf(m.html(), 1), /data-thread-row[\s\S]*>Retry logic</, 'collapsed, its row shows it');
 
   // Or the title first, while it is still running: the pending line is still the anchor.
   const r = mounted(['@chat why retry?', '']);
@@ -126,15 +128,25 @@ test('the answer replaces its pending line with the title line above it, and the
   assert.deepEqual(r.props.text.split('\n').slice(0, 3).map((l) => l.replace(/\[[^\]]+\] /, '')), ['bart# Retry logic', '@chat why retry?', 'bart> because']);
 });
 
-test('an expanded titled conversation has a header: its title, and Collapse; the foot\'s Collapse folds the whole of it', () => {
-  const m = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because'), '']);
+test('an open titled conversation draws no title row; its question opens the card, rounded; Collapse is on the foot', () => {
+  const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), ''];
+  const m = mounted(lines);
   const html = m.html(), head = rowOf(html, 0);
-  assert.match(head, /data-title-row/);
-  assert.match(head, /class="bart-title" data-act="edittitle" data-row="0"[^>]*font:13px[^>]*color:#4d4d4d[^>]*>Retry logic</);
-  assert.match(head, /text-overflow:ellipsis/);
-  assert.match(head, /data-act="foldthread" data-row="0" aria-label="Collapse"/);
+  assert.match(head, /^<div data-line="0" data-raw="[^"]*" contenteditable="false" data-readonly="1" style="display:none"><\/div>$/, 'the title line is in the file, not on the page');
+  assert.ok(!/data-title-row|data-thread-row/.test(html));
+  assert.ok(!html.replace(/ data-raw="[^"]*"/g, '').includes('Retry logic'), 'the title is not shown');
+  assert.match(rowOf(html, 1), /border-radius:10px 10px 0 0/, 'the first question has the card\'s rounded top');
   assert.ok(html.includes('data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true">'), 'the foot\'s Collapse is the conversation\'s');
   assert.ok(!html.includes('data-act="fold" data-turn="1"'), 'not the turn\'s');
+  assert.deepEqual(m.lines(), lines, 'the `bart#` line is as it was');
+  // Collapse from the foot folds it to one row: grey, rounded.
+  m.click('foldthread', { row: '0' });
+  assert.equal(m.lines()[0], 'bart#+ [chat 2026-10-12T21:41:00Z] Retry logic');
+  assert.deepEqual(m.lines().slice(1), lines.slice(1));
+  const row = rowOf(m.html(), 0), open = row.slice(0, row.indexOf('>'));
+  assert.match(open, /data-thread-row="0"/);
+  assert.match(open, /background:#fafafa/);
+  assert.match(open, /border-radius:10px/);
 });
 
 test('collapsed: one row, a chevron, the title, and the agent and when; every line of it hidden; a click anywhere expands', () => {
@@ -144,11 +156,11 @@ test('collapsed: one row, a chevron, the title, and the agent and when; every li
   const html = m.html(), row = rowOf(html, 1), open = row.slice(0, row.indexOf('>'));
   assert.match(row, /data-thread-row/);
   assert.match(open, /data-act="foldthread" data-row="1"/, 'the whole row is the button');
-  assert.match(open, /padding:6px 0/);
-  assert.ok(!/background/.test(open), 'no card behind it');
-  assert.ok(!/border-top/.test(open), 'no rule over the first');
+  assert.match(open, /cursor:pointer/);
+  assert.match(open, /padding:6px 12px;margin-bottom:8px;background:#fafafa;border-radius:10px/, 'a grey rounded row');
+  assert.ok(!/border-top/.test(open), 'no rule over it');
   assert.match(row, /<span style="flex:none;display:inline-flex;color:#8f8f8f"><svg[^>]*><path d="m9 18 6-6-6-6">/, 'the chevron, grey');
-  assert.match(row, /font:14px\/1\.5 var\(--font-sans\);color:#171717">Retry logic</);
+  assert.match(row, /data-act="edittitle" data-row="1"[^>]*font:14px\/1\.5 var\(--font-sans\);color:#171717">Retry logic</, 'the title, which renames');
   assert.match(row, /text-overflow:ellipsis/);
   assert.match(row, /font:13px\/1\.5 var\(--font-sans\);color:#8f8f8f">Discover · 9:41 PM</);
   assert.ok(!row.includes('#0070f3'), 'no blue link');
@@ -161,7 +173,7 @@ test('collapsed: one row, a chevron, the title, and the agent and when; every li
   m.click('foldthread', { row: '1' });
   assert.equal(m.lines()[1], lines[1].replace('bart#+', 'bart#'), 'expanded: the title line, what it keeps kept, nothing else rewritten');
   assert.deepEqual(m.lines().slice(2), lines.slice(2));
-  assert.match(m.html(), /data-title-row/);
+  assert.ok(!m.html().includes('data-thread-row'), 'open: no row for it');
   m.click('foldthread', { row: '1' });
   assert.equal(m.lines()[1], lines[1]);
   assert.deepEqual(m.lines().slice(2), lines.slice(2), 'the answers stay `bart>`: no `bart+>`');
@@ -178,21 +190,25 @@ test('collapsed: one row, a chevron, the title, and the agent and when; every li
   assert.match(rowOf(many, 0), />Build · Yesterday</);
   assert.match(rowOf(many, n), />Brainstorm · Yesterday</);
   assert.match(rowOf(many, 2 * n), />Discover</);
-  for (const i of [n, 2 * n]) assert.match(rowOf(many, i).slice(0, rowOf(many, i).indexOf('>')), /border-top:1px solid #eaeaea/, `row ${i} ruled off from the one above`);
-  assert.ok(!/border-top/.test(rowOf(many, 0).slice(0, rowOf(many, 0).indexOf('>'))));
+  for (const i of [0, n, 2 * n]) {
+    const tag = rowOf(many, i).slice(0, rowOf(many, i).indexOf('>'));
+    assert.ok(!/border-top/.test(tag), `row ${i}: no rule between collapsed rows`);
+    assert.match(tag, /background:#fafafa;border-radius:10px/, `row ${i}: a card of its own`);
+  }
 });
 
 test('a conversation at work cannot be collapsed: its Collapse is disabled, and `bart#+` on it is drawn open', () => {
-  const m = mounted(['bart# Retry logic', '@chat why retry?', 'bart~> run1', '']);
-  const head = rowOf(m.html(), 0);
-  assert.match(head, /data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true" style="[^"]*" disabled/);
-  assert.match(head, /Collapse once it answers/);
+  const m = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because'), '@chat and more?', 'bart~> run1', '']);
+  const html = m.html();
+  assert.match(html, /data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true" disabled/);
+  assert.match(html, /Collapse once it answers/);
   m.editor.toggleThread(0);
   m.click('foldthread', { row: '0' }, true);
   assert.equal(m.lines()[0], 'bart# Retry logic');
   const open = mounted(['bart#+ Retry logic', '@chat why retry?', 'bart~> run1', '']).html();
-  assert.match(rowOf(open, 0), /data-title-row/);
+  assert.match(rowOf(open, 0), /style="display:none"/, 'drawn open: no header');
   assert.ok(!open.includes('data-thread-row'));
+  assert.match(rowOf(open, 1), /border-radius:10px 10px 0 0/);
 });
 
 test('Collapse all folds titled conversations by their title line, older ones a turn at a time; Expand all opens both', () => {
@@ -209,24 +225,34 @@ test('Collapse all folds titled conversations by their title line, older ones a 
   assert.deepEqual(m.lines(), lines);
 });
 
-test('clicking the title edits it in place: Enter writes it, Escape and an empty field change nothing', () => {
-  const m = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because'), '']);
+test('clicking the collapsed row\'s title edits it in place: Enter writes it, Escape and an empty field change nothing; elsewhere expands', () => {
+  const m = mounted(['bart#+ Retry logic', '@chat why retry?', ...answer('because'), '']);
   m.click('edittitle', { row: '0' });
-  assert.match(m.html(), /<input[^>]*data-title-input="0"[^>]*value="Retry logic"/);
+  let row = rowOf(m.html(), 0);
+  assert.match(row, /<input[^>]*data-title-input="0"[^>]*value="Retry logic"/);
+  assert.ok(!row.slice(0, row.indexOf('>')).includes('data-act'), 'while it is edited the row is not a button: a click in the field stays there');
+  assert.equal(m.lines()[0], 'bart#+ Retry logic', 'still collapsed');
   const input = { value: 'Retries and backoff' };
   m.editor.titleInput(input);
   m.editor.titleKey({ key: 'Enter', target: input, isComposing: false, preventDefault() {} });
-  assert.equal(m.lines()[0], 'bart# Retries and backoff');
+  assert.equal(m.lines()[0], 'bart#+ Retries and backoff', 'renamed, and kept collapsed');
   m.click('edittitle', { row: '0' });
   m.editor.titleKey({ key: 'Escape', target: { value: 'nope' }, preventDefault() {} });
+  assert.ok(!m.html().includes('data-title-input'));
   m.click('edittitle', { row: '0' });
   m.editor.commitTitle({ value: '   ' });
+  assert.equal(m.lines()[0], 'bart#+ Retries and backoff');
+  // A click anywhere else on the row (the row itself is the button) expands it.
+  row = rowOf(m.html(), 0);
+  assert.match(row.slice(0, row.indexOf('>')), /data-act="foldthread" data-row="0"/);
+  m.click('foldthread', { row: '0' });
   assert.equal(m.lines()[0], 'bart# Retries and backoff');
-  // Renaming a collapsed one keeps it collapsed.
-  const f = mounted(['bart#+ Retry logic', '@chat why retry?', ...answer('because'), '']);
-  f.editor.titleEdit = { line: 0, value: 'Retry logic' };
-  f.editor.commitTitle({ value: 'Backoff' });
-  assert.equal(f.lines()[0], 'bart#+ Backoff');
+  // Read only, the title is part of the row: a click on it expands.
+  const r = mounted(['bart#+ Retry logic', '@chat why retry?', ...answer('because'), '']);
+  r.props.readOnly = true;
+  r.click('edittitle', { row: '0' });
+  assert.equal(r.editor.titleEdit, null);
+  assert.equal(r.lines()[0], 'bart# Retry logic');
 });
 
 test('a new question\'s title row shows no text until name-chat returns, then the model\'s title; no "Naming…" or "Untitled", ever', async () => {
@@ -235,18 +261,15 @@ test('a new question\'s title row shows no text until name-chat returns, then th
   m.editor.askInline(1);
   const { askId } = m.asks[0];
   const never = (html, when) => { assert.ok(!/Naming|Untitled/.test(html), `${when}: no placeholder`); };
-  // Running, unnamed: the row is there with its Collapse (disabled), and the title's span holds nothing.
-  let head = rowOf(m.html(), 1);
-  assert.match(head, /data-title-row="1"/);
-  assert.match(head, /<span class="bart-title" data-act="edittitle" data-row="1"[^>]*min-height:21px[^>]*><\/span>/, 'the span is empty, and keeps its height');
-  assert.match(head, /data-act="foldthread" data-row="1" aria-label="Collapse"[^>]* disabled/);
+  // Running, unnamed: no header is drawn, the line waits in the file.
+  assert.match(rowOf(m.html(), 1), /style="display:none"/);
   never(m.html(), 'running');
-  // The answer lands before the title: still nothing in the row.
+  // The answer lands before the title: still nothing shown, and collapsed the row falls back to the question.
   const near = askedAt(m.props.text, askId);
   m.props.text = placeAnswer(m.props.text, askId, answer('because'));
-  head = rowOf(m.html(), 1);
-  assert.match(head, /data-act="edittitle" data-row="1"[^>]*><\/span>/);
   never(m.html(), 'answered, unnamed');
+  m.editor.toggleThread(1);
+  assert.match(rowOf(m.html(), 1), /data-act="edittitle" data-row="1"[^>]*>why does the client retry three times\?<\/span>/);
   // name-chat returns: the title fills the row.
   m.props.text = placeTitle(m.props.text, askId, 'Client retry count', near);
   assert.match(rowOf(m.html(), 1), /data-act="edittitle" data-row="1"[^>]*>Client retry count<\/span>/);
@@ -273,15 +296,18 @@ test('a title the person edited while naming was still running is not overwritte
   const near = askedAt(m.props.text, askId);
   m.props.text = placeAnswer(m.props.text, askId, answer('because'));
   assert.equal(placeTitle(m.props.text, askId, 'Retry logic', near), null);
-  // Still being typed when the title came back: what the person writes wins.
+  // Still being typed on the collapsed row when the title came back: what the person writes wins.
   const t = mounted(['@chat why retry?', '']);
   t.editor.askInline(0);
+  const tNear = askedAt(t.props.text, t.asks[0].askId);
+  t.props.text = placeAnswer(t.props.text, t.asks[0].askId, answer('because'));
+  t.editor.toggleThread(0);
   t.click('edittitle', { row: '0' });
   t.editor.titleInput({ value: 'Typed meanwhile' });
-  t.props.text = placeTitle(t.props.text, t.asks[0].askId, 'Retry logic');
+  t.props.text = placeTitle(t.props.text, t.asks[0].askId, 'Retry logic', tNear);
   assert.match(t.html(), /<input[^>]*data-title-input="0"[^>]*value="Typed meanwhile"/, 'the field keeps what was typed');
   t.editor.commitTitle({ value: 'Typed meanwhile' });
-  assert.match(t.lines()[0], /^bart# \[chat [\dTZ:-]+\] Typed meanwhile$/);
+  assert.match(t.lines()[0], /^bart#\+ \[chat [\dTZ:-]+\] Typed meanwhile$/);
 });
 
 test('a title with no question under it is the text it is; deleting a titled conversation\'s only turn takes its title', () => {
@@ -299,4 +325,20 @@ test('cards are compact: question 8px 12px (6px after an answer), foot 4px 10px 
   assert.match(rowOf(html, 4), /padding:6px 12px/);
   assert.match(html, /padding:4px 10px 6px/);
   assert.match(html, /padding:10px 12px;margin-bottom:8px/);
+});
+
+test('the footer reads "Chat · Opus · high · 17 s", a space on both sides of each ·, routed by Bart or not', () => {
+  // The closing text as drawn: tips out, tags out. The separator after the name is its own piece that keeps its spaces
+  // (white-space:pre): as the start of the next flex item it collapsed, and read "Chat· Opus".
+  const footText = (html) => {
+    const at = html.indexOf('data-foot='); assert.ok(at >= 0, 'a foot is drawn');
+    const t = html.indexOf('<span class="t"', at), end = html.lastIndexOf('<button', html.indexOf('data-act="fold', t));
+    return html.slice(t, end).replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
+  };
+  for (const [line, routed] of [['@chat why retry?', false], ['@bart why retry?', true]]) {
+    const html = mounted(['bart# [chat 2026-10-12T21:41:00Z] Retry logic', line, 'bart> because', 'bart> *Chat · Opus · high · 17 s*', '']).html();
+    assert.equal(footText(html), 'Chat · Opus · high · 17 s', routed ? 'routed' : 'typed');
+    assert.equal(html.includes('class="bart-who"'), routed, routed ? 'the name is the button' : 'the name is text');
+    assert.match(html, /Chat<\/span>(?:<span class="bart-tip"[^>]*>[^<]*<\/span><\/span>)?<span style="flex:none;white-space:pre"> · <\/span><span[^>]*>Opus · high · 17 s</, 'the separator keeps its spaces');
+  }
 });

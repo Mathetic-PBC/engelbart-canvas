@@ -431,7 +431,7 @@ test('footer: Copy, Regenerate, Edit and Build as icons with their names; the ag
   assert.ok(html.indexOf('data-act="copybart"') < html.indexOf('data-act="regen"') && html.indexOf('data-act="regen"') < html.indexOf('editturn') && html.indexOf('editturn') < html.indexOf('footbuild') && html.indexOf('footbuild') < html.indexOf('Sonnet'), 'Copy, Regenerate, Edit, Build, then the closing text');
   assert.match(html, /data-act="footbuild"[^>]*><svg width="16" height="16"[^>]*><path d="m15 12-8\.373/, 'the hammer, the size of the others');
   assert.ok(!/data-act="footbuild"[^>]*style=/.test(html), 'grey as the others when not routed to build');
-  assert.match(html, /color:#8f8f8f"><span style="flex:none">Chat<\/span><span[^>]*> · Sonnet · high · 3 s<\/span>/);
+  assert.match(html, /color:#8f8f8f"><span style="flex:none">Chat<\/span><span style="flex:none;white-space:pre"> · <\/span><span[^>]*>Sonnet · high · 3 s<\/span>/, 'the separator keeps its spaces');
   assert.ok(html.indexOf('Sonnet') < html.indexOf('data-act="fold"') && html.indexOf('data-act="fold"') < html.indexOf('dropturn'), 'then Collapse and Delete');
   assert.match(m.editor.footHtml({ q: 0, text: 'x', busy: true }), /data-act="footbuild"[^>]* disabled>/);
   assert.ok(!mounted(SPEC, { build: false }).editor.footHtml({ q: 0, text: 'x' }).includes('footbuild'), 'no onBuild, no button');
