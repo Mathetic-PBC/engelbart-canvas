@@ -449,12 +449,14 @@ function logTo(runLog) {
 }
 
 /** What the run log starts a run with (./runlog.cjs): what the agent is told, block by block, before its first step. */
-function runRecord({ id, agent, provider, projectId, question, system, context, shown, extra, mode, pinned, routed = null }) {
+function runRecord({ id, agent, provider, projectId, question, system, context, shown, extra, mode, pinned, routed = null, place = null }) {
   return {
     id, agent, provider, projectId, projectName: context.project ? context.project.name : '', workspaceName: context.workspaceName || '',
     question: String(question || ''), at: Date.now(), status: 'running', system, mode: mode || null, pinned: !!pinned,
     // Handed over by the router (./route.cjs): its record's id, and the agent the person picked instead of its pick.
     ...(routed && routed.id ? { routedFrom: routed.id } : {}), ...(routed && routed.corrected ? { corrected: routed.corrected } : {}),
+    // Where it was asked (2026-10-12, the Agent Viewer): { projectId, ref, line, text }, for its row's click.
+    ...(place ? { place } : {}),
     context: { head: context.head, contextJson: context.contextJson, mentionedFiles: context.mentionedFiles, documents: context.documents, now: context.now, conversation: conversationBlock(shown), extra, dirs: context.dirs },
     steps: [],
   };
@@ -574,7 +576,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * web page in front's tab, asked for its selection and picture as they are now. `overleaf` (MATH-65): the window's
    * Overleaf tabs (overleaf/stage.cjs forTurn), for <stage source="overleaf"> and <overleaf_tabs>.
    */
-  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null }, { onProgress } = {}) {
+  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
     const models = readModels();
     const bart = agent === 'bart', routed = routedOf(routedInput);
     // The context first: @brainstorm's path is read against the library it shows (turnPlan).
@@ -588,7 +590,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     const system = loadSystemPrompt(ctx.dataRoot, agent);
     // The Agent map's record (runLog): from here every way out of the run is logged.
     const logId = askId || randomUUID(), startedAt = Date.now();
-    log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system, context, shown, extra, mode, pinned, routed })));
+    log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system, context, shown, extra, mode, pinned, routed, place })));
     if (routed && routed.corrected) log((runs) => markCorrected(runs, { id: routed.id, projectId, text, agent: routed.corrected }));
     try {
       const result = await answer();
@@ -855,7 +857,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   const log = logTo(runLog);
   const router = createFakeRouter({ runLog });
   return {
-    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null }, { onProgress } = {}) {
+    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
       const models = readModels(), routed = routedOf(routedInput);
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
       const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
@@ -864,7 +866,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
       const held = prior.length ? store.take(threadKey(projectId, ref, prior), provider) : null;
       const logId = askId || randomUUID(), startedAt = Date.now();
-      log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system: loadSystemPrompt(ctx.dataRoot, agent), context, shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned, routed })));
+      log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system: loadSystemPrompt(ctx.dataRoot, agent), context, shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned, routed, place })));
       if (routed && routed.corrected) log((runs) => markCorrected(runs, { id: routed.id, projectId, text, agent: routed.corrected }));
       const ended = (status, result, error) => log((runs) => runs.finish(logId, { status, written: result ? result.lines : null, error: error && error.message, ms: Date.now() - startedAt }));
       if (plan.written != null) { const result = resultReply(plan); ended('done', result); return result; }

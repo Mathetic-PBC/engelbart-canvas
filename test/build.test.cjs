@@ -1298,6 +1298,26 @@ test('the Agent map: a run log gets one record per Build turn, the first turn\'s
   assert.deepEqual(runLog.list().map((run) => run.id), [`${id}:2`, `${id}:1`]);
 });
 
+test('the Agent Viewer: a Build from a line keeps where it was typed on its first turn\'s record; one from the panel or a post-it its workspace, no line (2026-10-12)', async () => {
+  const { createRunLog } = require('../src/main/bart/runlog.cjs');
+  const { project, workspace } = await scene({ doc: 'A plan.\n@bart --build add a page' });
+  const runLog = createRunLog();
+  const { builds } = manager(scripted(['Read it.\n\nNEEDS YOU: Blue or green?', 'Green.', 'Done.', 'Done.']), { runLog });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const line = await builds.start(ctx, project.id, { workspaceId: workspace.id, text: 'add a page', fromLine: true, place: { ref, line: 1, text: '@bart --build add a page' } });
+  await settled(project, line.id);
+  assert.deepEqual(runLog.get(`${line.id}:1`).place, { projectId: project.id, ref, line: 1, text: '@bart --build add a page' });
+  await builds.reply(ctx, project.id, line.id, 'Green.');
+  await turned(project, line.id, 2);
+  assert.equal(runLog.get(`${line.id}:2`).place, undefined, 'the first turn alone');
+  const panel = await builds.start(ctx, project.id, { workspaceId: workspace.id, place: { line: 7, text: 'ignored' } });
+  await settled(project, panel.id);
+  assert.deepEqual(runLog.get(`${panel.id}:1`).place, { projectId: project.id, ref, line: null, text: null }, 'the panel: its workspace, no line');
+  const postIt = await builds.start(ctx, project.id, { workspaceId: workspace.id, text: 'fix the typo' });
+  await settled(project, postIt.id);
+  assert.deepEqual(runLog.get(`${postIt.id}:1`).place, { projectId: project.id, ref, line: null, text: null }, 'a post-it added to it: the same');
+});
+
 test('the Agent map: a failed turn is recorded failed, and a manager without a run log runs as before', async () => {
   const { createRunLog } = require('../src/main/bart/runlog.cjs');
   const { project, workspace } = await scene();

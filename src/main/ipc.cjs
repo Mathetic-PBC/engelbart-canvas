@@ -72,6 +72,20 @@ function docRef(value) {
   throw new TypeError('Unknown doc kind');
 }
 
+// Where an ask came from (2026-10-12, the Agent Viewer's click): the line's number when it was asked and the line as typed
+// (`place` from the editor), with the project and the document. Bookkeeping only: anything odd is left out, never refused.
+function placeOf(value, projectId, ref) {
+  const held = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const line = Number.isInteger(held.line) && held.line >= 0 && held.line < 1e7 ? held.line : null;
+  const text = typeof held.text === 'string' ? held.text.slice(0, 8000) : null;
+  return { projectId, ref: ref || null, line, text };
+}
+
+/** A document ref, or null when there is none or it is not one (bookkeeping: `place`). */
+function refOrNull(value) {
+  try { return value == null ? null : docRef(value); } catch { return null; }
+}
+
 /** How the renderer keys a document (`ws:<id>`, `note:<id>`); a highlight is `mark:<id>`, never a note's key. */
 const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : ref.kind === 'mark' ? `mark:${ref.id}` : `note:${ref.id}`);
 
@@ -764,7 +778,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       // `routed`: Bart, the router, handed this line over (2026-10-12, bart/route.cjs): its record's id, whether it read the
       // line as a request to build, and the agent the person picked instead of its pick.
       const routed = routedInput(value.routed);
-      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}), ...(overleaf ? { overleaf } : {}), ...(routed ? { routed } : {}) };
+      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}), ...(overleaf ? { overleaf } : {}), ...(routed ? { routed } : {}), place: placeOf(value.place, projectId, ref) };
       if (ref.kind === 'mark') {
         // a web page's mark has no page (MATH-54): its answer goes in the ink's "web" list
         mark = { markId: ref.id, page: ref.source === 'web' ? null : ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url, ...(ref.source === 'web' ? { source: 'web' } : {}) };
@@ -809,8 +823,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       agent: optStr(thread && thread.agent, 'thread agent', 20) || 'chat', question: optStr(thread && thread.question, 'thread question', 400) || '', up: Math.max(0, Math.min(1e6, Math.floor(Number(thread && thread.up) || 0))),
     }));
     const rule = value.rule && typeof value.rule === 'object' && ROUTE_PICKS.includes(value.rule.agent) ? { agent: value.rule.agent, rule: optStr(value.rule.rule, 'rule', 40) || null } : null;
+    const projectId = str(pid, 'project id', 64);
+    const ref = refOrNull(value.ref);
     return bart.route({
-      projectId: str(pid, 'project id', 64), text: str(value.text, 'line', 8000), section: optStr(value.section, 'section', 200000) || '',
+      projectId, text: str(value.text, 'line', 8000), place: placeOf(value.place, projectId, ref), section: optStr(value.section, 'section', 200000) || '',
       workspaceName: optStr(value.workspaceName, 'workspace name', 400) || '', threads, specAbove: !!value.specAbove, rule,
     });
   });
@@ -887,6 +903,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
         text: optStr(value.text, 'text', 200000),
         fromLine: !!value.fromLine, // `@bart --build <request>` (Workspace.jsx askBart)
         routedFrom: optStr(value.routedFrom, 'route id', 80), // the router's record, when Bart handed the line to Build (bart/route.cjs)
+        place: value.place && typeof value.place === 'object' ? placeOf(value.place, null, refOrNull(value.place.ref)) : null, // the line it came from (the Agent Viewer)
         provider: optStr(value.provider, 'provider', 24),
         model: optStr(value.model, 'model', 24),
         effort: optStr(value.effort, 'effort', 24),

@@ -1,7 +1,8 @@
 'use strict';
 
-// The Agent map (2026-10-12; src/main/agent-map, src/main/bart/runlog.cjs, src/renderer/screens/AgentMap.jsx): the run log,
-// what ask() tells it, each agent's design, and the Agents button and window, while test mode is on alone.
+// The Agent Viewer (2026-10-12; it was the Agent map; src/main/agent-map, src/main/bart/runlog.cjs,
+// src/renderer/screens/AgentMap.jsx): the run log, what ask() tells it, each agent's design, and the Agents button and
+// window, in a copy with test mode whether the mode is on or off. The asks it groups are in agent-viewer.test.cjs.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -263,8 +264,9 @@ test('design: the router and the three agents, the calls between them, their too
   fs.writeFileSync(path.join(dataRoot, '.context', 'brainstorm-system-prompt.md'), 'Ask one question at a time.\n');
   fs.writeFileSync(path.join(dataRoot, '.context', 'bart-system-prompt.md'), '   \n');
   const { agents } = agentDesign({ dataRoot, models: CLAUDE });
-  assert.deepEqual(agents.map((agent) => agent.agent), ['router', 'bart', 'brainstorm', 'discover', 'build', 'run step'], 'Bart, the router, first (2026-10-12)');
-  assert.deepEqual(agents.slice(0, 4).map((agent) => agent.title), ['Bart (router)', 'Chat', 'Brainstorm', 'Discover']);
+  assert.deepEqual(agents.map((agent) => agent.agent), ['router', 'bart', 'brainstorm', 'discover', 'create', 'build', 'run step'], 'Bart, the classifier, first; Create planned (2026-10-12)');
+  assert.deepEqual(agents.slice(0, 5).map((agent) => agent.title), ['Bart (classifier)', 'Chat', 'Brainstorm', 'Discover', 'Create']);
+  assert.equal(agents[4].planned, true);
   const [router, bart, brainstorm, discover] = agents;
   assert.deepEqual(router.models.providers.anthropic.steps.map((step) => `${step.name} ${step.effort}`), ['Haiku low']);
   assert.deepEqual(router.models.providers.openai.steps.map((step) => `${step.name} ${step.effort}`), ['Luna low']);
@@ -314,7 +316,7 @@ test('design: Build and the run step after it, their tools, models, time limits 
   assert.deepEqual([step.models.fallback.name, step.models.fallback.effort], ['Opus', 'high']);
   assert.deepEqual([step.timeout, step.maxTurns], [{ runnable: RUNNABLE_MS, declare: DECLARE_MS, install: INSTALL_MS, windDown: WIND_DOWN_MS }, MAX_TURNS]);
   const calls = Object.fromEntries(agents.map((agent) => [agent.agent, agent.calls.map((call) => call.to)]));
-  assert.deepEqual(calls, { router: ['chat', 'brainstorm', 'discover', 'build'], bart: ['build'], brainstorm: ['discover', 'chat'], discover: ['build'], build: ['run step'], 'run step': [] }, 'each `to` as a line writes it: @chat is bart (2026-10-12)');
+  assert.deepEqual(calls, { router: ['chat', 'brainstorm', 'discover', 'create', 'build'], bart: ['build'], brainstorm: ['discover', 'chat'], discover: ['build'], create: [], build: ['run step'], 'run step': [] }, 'each `to` as a line writes it: @chat is bart (2026-10-12)');
   // A custom Build prompt shows as custom, its quick task's with the quick paragraph after it.
   fs.mkdirSync(path.join(dataRoot, '.context'));
   fs.writeFileSync(path.join(dataRoot, '.context', 'build-system-prompt.md'), 'Build carefully.\n');
@@ -356,11 +358,11 @@ function compile(entry, name) {
   return compiled.exports;
 }
 
-test('the Agents button renders only when the copy has test mode and test mode is on', () => {
+test('the Agents button renders in a copy with test mode, whether the mode is on or off (2026-10-12)', () => {
   const { default: AgentsButton, agentsAvailable } = compile('src/renderer/ui/AgentsButton.jsx', 'agents-button');
   const render = (config) => renderToStaticMarkup(React.createElement(AgentsButton, { available: agentsAvailable(config), onOpen: () => {} }));
-  assert.match(render({ testModeAvailable: true, testMode: true }), /<button[^>]*>Agents<\/button>/);
-  assert.equal(render({ testModeAvailable: true, testMode: false }), '', 'test mode off: no button');
+  assert.match(render({ testModeAvailable: true, testMode: true }), /<button[^>]*title="Agent Viewer[^"]*"[^>]*>Agents<\/button>/);
+  assert.match(render({ testModeAvailable: true, testMode: false }), /<button[^>]*>Agents<\/button>/, 'test mode off: the button still shows');
   assert.equal(render({ testModeAvailable: false, testMode: true }), '', 'a copy without test mode: no button');
   assert.equal(render({ testModeAvailable: false, testMode: false }), '');
   assert.equal(render(null), '');
@@ -387,41 +389,43 @@ function fakeElectron() {
   return { BrowserWindow, made };
 }
 
-test('agentMap:open with test mode off opens no window; on, it opens one and focuses it after', async (t) => {
+test('agentMap:open opens the Viewer with test mode off or on, titled Agent Viewer, and focuses it after; a copy without test mode opens none', async (t) => {
   const store = createStore({ homeDir: tmp('open'), testMode: true });
   t.after(() => store.close());
   await store.setTestMode(false);
   const { BrowserWindow, made } = fakeElectron();
-  const mapWindow = createAgentMapWindow({ BrowserWindow, appUrl: 'app://x', preload: '/p.js', available: () => store.config().testModeAvailable && store.config().testMode, headless: true });
+  let developer = false;
+  const mapWindow = createAgentMapWindow({ BrowserWindow, appUrl: 'app://x', preload: '/p.js', available: () => developer && store.config().testModeAvailable, headless: true });
   const handlers = new Map();
   registerAgentMapIpc({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, mapWindow, runLog: null, design: () => ({}), saveFile: async () => null });
   const open = handlers.get('engelbart:agentMap:open');
 
   assert.equal(await open(), false);
-  assert.equal(made.length, 0, 'no window while test mode is off');
+  assert.equal(made.length, 0, 'no window in a copy without test mode');
+  developer = true;
+  assert.equal(await open(), true, 'test mode off: it opens');
+  assert.equal(made[0].options.title, 'Agent Viewer');
   await store.setTestMode(true);
-  assert.equal(await open(), true);
   assert.equal(await open(), true);
   assert.equal(made.length, 1, 'opened once, then brought forward');
 });
 
-test('turning test mode off closes the Agent map; runs are still recorded while it is off', async (t) => {
+test('turning test mode off leaves the Agent Viewer open (2026-10-12); runs are still recorded while it is off', async (t) => {
   const store = createStore({ homeDir: tmp('close'), testMode: true });
   t.after(() => store.close());
   await store.setTestMode(true);
   const { BrowserWindow, made } = fakeElectron();
-  const agentMap = createAgentMapWindow({ BrowserWindow, appUrl: 'app://x', preload: '/p.js', available: () => store.config().testModeAvailable && store.config().testMode, headless: true });
+  const agentMap = createAgentMapWindow({ BrowserWindow, appUrl: 'app://x', preload: '/p.js', available: () => store.config().testModeAvailable, headless: true });
   const handlers = new Map();
   registerEngelbartIpc({ store, agentMap, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn });
   const setTestMode = handlers.get('engelbart:set-test-mode');
 
   assert.equal(agentMap.open(), true);
-  await setTestMode(true);
-  assert.equal(agentMap.isOpen(), true, 'turning it on again leaves the map open');
   await setTestMode(false);
-  assert.equal(agentMap.isOpen(), false);
-  assert.equal(made[0].destroyed, true);
-  assert.equal(agentMap.open(), false);
+  assert.equal(agentMap.isOpen(), true, 'test mode off: the Viewer stays open');
+  assert.equal(made[0].destroyed, false);
+  await setTestMode(true);
+  assert.equal(agentMap.isOpen(), true);
   assert.equal(made.length, 1);
 
   const log = createRunLog();
@@ -441,32 +445,8 @@ test('the export is one page, its styles and data inside it', () => {
   assert.match(sectionText(record, 'steps'), /--- tool: Read ---\n\{\n  "file_path": "\/x"\n\}\n--- result \(3 chars\) ---\nabc/);
 });
 
-test('the runs list: a Build turn and a run step by their own names, and the filter shows only Builds or only questions (2026-10-12)', () => {
-  const { RunList } = compile('src/renderer/screens/AgentMap.jsx', 'agent-map-screen');
+test('a Build\'s context is shown block by block, as it was sent; a run step\'s its prompt (2026-10-12)', () => {
   const { contextBlocks } = compile('src/renderer/agent-map/runText.js', 'run-text-build');
-  const runs = [
-    { id: 'b1:2', agent: 'build', kind: 'build', buildId: 'b1', title: 'Add a page', turn: 2, ending: 'review', status: 'done', at: 3, question: 'Add a page', projectName: 'P' },
-    { id: 'b1:run:2', agent: 'run step', buildId: 'b1', title: 'Add a page', turn: 2, status: 'running', at: 4, question: 'Add a page', projectName: 'P' },
-    { id: 'q1:1', agent: 'build', kind: 'quick', buildId: 'q1', title: 'Fix the typo', turn: 1, status: 'done', at: 2, question: 'Fix the typo', projectName: 'P' },
-    { id: 'a1', agent: 'bart', status: 'done', at: 1, question: 'what does the parser do', projectName: 'P' },
-    { id: 'a2', agent: 'discover', status: 'done', at: 0, question: 'papers on parsing', projectName: 'P' },
-    { id: 'route-1', agent: 'router', by: 'model', pick: 'discover', sure: 0.9, status: 'done', at: 0, question: 'papers on parsing', projectName: 'P' },
-  ];
-  const html = (filter) => renderToStaticMarkup(React.createElement(RunList, { runs, selected: null, filter, onSelect: () => {}, onFilter: () => {} }));
-  const all = html('all');
-  assert.match(all, /@build Add a page · turn 2/);
-  assert.match(all, /@build quick/);
-  assert.match(all, /@run step Add a page/);
-  assert.match(all, /@chat/, 'the agent called bart is @chat (2026-10-12)');
-  assert.match(all, /@bart → @discover · sure 0.9/, 'the router says where it sent the line');
-  assert.match(all, />All<.*>Questions<.*>Builds</);
-  const builds = html('builds');
-  assert.ok(/@build Add a page/.test(builds) && /@run step/.test(builds) && /@build quick/.test(builds));
-  assert.ok(!/@chat|@bart|@discover/.test(builds), 'Builds: no questions');
-  const questions = html('questions');
-  assert.ok(/@chat/.test(questions) && /@bart → /.test(questions) && /@discover/.test(questions));
-  assert.ok(!/@build|@run step/.test(questions), 'Questions: no Builds');
-  // A Build's context is shown block by block, as it was sent.
   assert.deepEqual(contextBlocks({ agent: 'build', context: { engelbart: '<engelbart>\nx\n</engelbart>', task: '<task>\ny\n</task>', request: '<request>\nz\n</request>' } }).map((block) => block.label), ['<engelbart>', '<task>', '<request>']);
   assert.deepEqual(contextBlocks({ agent: 'run step', context: { prompt: 'P' } }).map((block) => [block.label, block.text]), [['prompt', 'P']]);
 });
@@ -474,12 +454,17 @@ test('the runs list: a Build turn and a run step by their own names, and the fil
 test('the Design tab draws Build and the run step beside the question agents, each with what it calls (2026-10-12)', () => {
   const { Design } = compile('src/renderer/screens/AgentMap.jsx', 'agent-map-design');
   const page = renderToStaticMarkup(React.createElement(Design, { design: agentDesign({ dataRoot: tmp('design-page'), models: CLAUDE, buildModels: DEFAULTS }) }));
-  for (const name of ['Bart (router)', 'Chat', 'Brainstorm', 'Discover', '@build', '@run step']) assert.ok(page.includes(`<b>${name}</b>`), name);
+  for (const name of ['Bart (classifier)', 'Chat', 'Brainstorm', 'Discover', 'Create', 'Build', 'Run step']) assert.ok(page.includes(`<b>${name}</b>`), name);
+  const order = ['Bart (classifier)', 'Chat', 'Brainstorm', 'Discover', 'Create', 'Build', 'Run step'].map((name) => page.indexOf(`●</span> <b>${name}</b>`));
+  assert.ok(order.every((at) => at >= 0), 'each has a heading of its own');
+  assert.deepEqual([...order].sort((a, b) => a - b), order, 'in the Viewer\'s order, Bart (classifier) first');
+  assert.match(page, /<b>Create<\/b>.*?Planned, not built yet.*?calls: <span[^>]*>none/, 'Create: planned, no data, calls nothing');
   assert.match(page, /rules, in order: an empty @bart → @brainstorm/);
   assert.match(page, /a quick task&#x27;s system prompt/);
   assert.match(page, /what codexOverrides sets/);
   assert.match(page, /NEEDS YOU: &lt;question&gt;/);
   assert.match(page, /slots at once: build 3 · quick 1/);
-  assert.match(page, /calls: <span><b>@chat<\/b>.*<b>@build<\/b>/, 'Bart calls @chat first; Build is called too');
+  assert.match(page, /calls: <span><b>Chat<\/b>.*<b>Brainstorm<\/b>.*<b>Discover<\/b>.*<b>Create<\/b>.*<b>Build<\/b>/, 'Bart calls Chat, Brainstorm, Discover, Create and Build');
+  assert.match(page, /<b>Build<\/b>[^]*?calls: <span><b>Run step<\/b>/, 'Build calls the run step');
   assert.match(page, /tools · Codex: <span[^>]*>none \(Claude Code only\)/);
 });

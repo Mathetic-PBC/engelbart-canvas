@@ -1,12 +1,12 @@
 'use strict';
 
-// The Agent map (2026-10-12): a window for developers only, one per app, that shows every @bart, @brainstorm and
-// @discover run as it happens (../bart/runlog.cjs) and how each agent is set up (./design.cjs). The app's own renderer and
-// preload at `?view=agent-map` (src/renderer/index.jsx reads it once). It is no workspace window: not in the windows
-// registry (../windows.cjs), so its IPC is the trusted handlers' that need no window's context. Opened only while test
-// mode is on (`available`: a copy with test mode, ../developer.cjs, and the mode on; 2026-10-12): `open()` does nothing
-// otherwise, and focuses it when it is already open. `closeUnlessAvailable()` closes it once test mode is off
-// (../ipc.cjs, set-test-mode). Electron is passed in.
+// The Agent Viewer (2026-10-12; it was the Agent map, and the internal names stay): a window for developers only, one per
+// app, that shows every ask as it happens, one row each (../bart/runlog.cjs, ./asks.cjs), and how each agent is set up
+// (./design.cjs). The app's own renderer and preload at `?view=agent-map` (src/renderer/index.jsx reads it once). It is no
+// workspace window: not in the windows registry (../windows.cjs), so its IPC is the trusted handlers' that need no
+// window's context. Opened only in a copy with test mode (`available`, ../developer.cjs), whether the mode is on or off
+// (2026-10-12; it was only while it was on): `open()` does nothing otherwise, and focuses it when it is already open.
+// `closeUnlessAvailable()` closes it once it is not available (../ipc.cjs, set-test-mode). Electron is passed in.
 
 const VIEW = 'agent-map';
 
@@ -23,7 +23,7 @@ function createAgentMapWindow({ BrowserWindow, appUrl, preload, available = () =
       height: 860,
       minWidth: 720,
       minHeight: 420,
-      title: 'Agent map',
+      title: 'Agent Viewer',
       backgroundColor: '#ffffff',
       show: !headless,
       webPreferences: { preload, contextIsolation: true, sandbox: true, nodeIntegration: false, webSecurity: true },

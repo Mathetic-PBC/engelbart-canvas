@@ -237,6 +237,18 @@ export default function App() {
   // importOfferDue). Once a launch: shown, it is not offered again until Engelbart opens again (or the data root changes).
   const openProjectId = phase === 'workspace' && tree ? tree.project.id : null;
   const dataRoot = config ? config.dataRoot : '';
+  // A row clicked in the Agent Viewer (2026-10-12) for a project this window does not show: it opens, at the ask's
+  // workspace, and its Workspace takes the rest from main (Workspace revealAsk). A project not in this data root (asked
+  // with test mode the other way) cannot be opened here.
+  const shownProject = React.useRef(openProjectId);
+  shownProject.current = openProjectId;
+  React.useEffect(() => (api.onAgentReveal ? api.onAgentReveal((target) => {
+    const projectId = target && target.place && target.place.projectId;
+    if (!projectId || projectId === shownProject.current) return;
+    const ref = target.place.ref;
+    openProject(projectId, ref && ref.kind === 'workspace' ? { workspaceId: ref.workspaceId } : null)
+      .catch(() => setError('This ask\'s project is not in this library (it may have been asked with test mode the other way).'));
+  }) : undefined), [openProject]);
   React.useEffect(() => {
     if (!openProjectId || offeredIn.current === dataRoot) return undefined;
     let alive = true;

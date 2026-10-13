@@ -338,7 +338,7 @@ test('the walkthrough\'s Brainstorm types @brainstorm at the end of the document
   assert.match(ls[4], ID);
   assert.deepEqual(ls.slice(5), ['']);
   assert.equal(m.asks.length, 1);
-  assert.deepEqual({ ...m.asks[0], askId: undefined }, { askId: undefined, text: '', turns: [], agent: 'brainstorm' }, 'asked as Enter on an empty @brainstorm line is: from the workspace, with no earlier turns');
+  assert.deepEqual({ ...m.asks[0], askId: undefined }, { askId: undefined, text: '', turns: [], agent: 'brainstorm', place: { line: 3, text: '@brainstorm' } }, 'asked as Enter on an empty @brainstorm line is: from the workspace, with no earlier turns');
   assert.equal(ls[4], `bart~> ${m.asks[0].askId}`);
   // An empty document: the line first, with nothing above it.
   const empty = mounted(['']);

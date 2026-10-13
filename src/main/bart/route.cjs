@@ -100,11 +100,13 @@ function routeModel(models) {
 const logTo = (runLog) => (call) => { if (!runLog) return; try { call(runLog); } catch { /* the log only */ } };
 
 /** The router's record, as the run log starts it. */
-function routerRecord({ id, provider, projectId, workspaceName, text, section, threads, specAbove, input, by, rule }) {
+function routerRecord({ id, provider, projectId, workspaceName, text, section, threads, specAbove, input, by, rule, place = null }) {
   return {
     id, agent: 'router', provider: provider || null, projectId, projectName: '', workspaceName: workspaceName || '',
     question: String(text || ''), at: Date.now(), status: 'running', system: by === 'rule' ? '' : ROUTE_SYSTEM_PROMPT, mode: null, pinned: false,
     by, ...(rule ? { rule } : {}), sectionSize: sectionText(section).length, threads: threadsOf(threads), specAbove: !!specAbove,
+    // Where the line was (2026-10-12, the Agent Viewer): { projectId, ref, line, text }, the line as typed.
+    ...(place ? { place } : {}),
     context: { input: input || '' }, steps: [],
   };
 }
@@ -117,7 +119,7 @@ function markCorrected(runs, { id = null, projectId = null, text = '', agent }) 
 }
 
 /**
- * → { route, corrected, handed }. `route({ projectId, text, section, workspaceName, threads, specAbove, rule })` →
+ * → { route, corrected, handed }. `route({ projectId, text, section, workspaceName, threads, specAbove, rule, place })` →
  * { id, agent, sure, model, ms, by }: with `rule` (the editor's own pick) it is only logged.
  */
 function createRouter({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-router'), codexAuthFile, run = execFile, tools = null, runLog = null, timeout = ROUTE_TIMEOUT_MS, now = Date.now } = {}) {
@@ -202,16 +204,16 @@ function createFakeRouter({ runLog = null, now = Date.now } = {}) {
 
 /** What both routers share: the rule's or the model's pick, logged. `pick(input, text)` → { parsed, step, raw, error? }. */
 function routerOf({ log, now, pick }) {
-  async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, rule = null } = {}) {
+  async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, rule = null, place = null } = {}) {
     const id = `route-${randomUUID()}`, started = now();
     if (rule && RULE_PICKS.has(rule.agent)) {
-      log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, by: 'rule', rule: rule.rule || null })));
+      log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, by: 'rule', rule: rule.rule || null, place })));
       const out = { id, agent: rule.agent, sure: 1, model: null, ms: now() - started, by: 'rule', rule: rule.rule || null };
       log((runs) => { runs.amend(id, { pick: out.agent, sure: 1 }); runs.finish(id, { status: 'done', written: [`@${out.agent}`], ms: out.ms }); });
       return out;
     }
     const input = routeInput({ text, section, workspaceName, threads, specAbove });
-    log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, input, by: 'model' })));
+    log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, input, by: 'model', place })));
     const { parsed, step, raw, error } = await pick(input, text);
     if (step) log((runs) => { runs.step(id, { model: step.id, name: step.name, effort: step.effort, input }); runs.output(id, { raw }); });
     const { agent, sure } = decide(parsed);

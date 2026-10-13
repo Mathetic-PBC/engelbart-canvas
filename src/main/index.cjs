@@ -120,7 +120,7 @@ let sweeper = null;
 let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
 let bart = null;
 let nameChat = null;
-let agentMap = null; // the Agent map (./agent-map/window.cjs): developers only, one per app
+let agentMap = null; // the Agent Viewer (./agent-map/window.cjs): developers only, one per app
 let runLog = null; // what it shows (./bart/runlog.cjs): kept only in a copy with test mode
 let builds = null;
 let sandbox = null;
@@ -655,10 +655,10 @@ if (!hasSingleInstanceLock) {
     const bartThreads = () => createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') });
     const brainstormThreads = () => createThreads({ idleMs: BRAINSTORM_IDLE_MS, file: path.join(app.getPath('userData'), 'brainstorm-threads.json') });
     const discoverThreads = () => createThreads({ idleMs: DISCOVER_IDLE_MS, file: path.join(app.getPath('userData'), 'discover-threads.json') });
-    // The Agent map (2026-10-12): each run's prompt, context, steps, tool calls and output, in a developer's copy alone; a
-    // copy people download keeps none of it. Runs are recorded whether test mode is on or off; the window opens only while
-    // it is on. Each change goes to the map window only.
-    agentMap = createAgentMapWindow({ BrowserWindow, appUrl: APP_URL, preload: PRELOAD_FILE, available: () => developer && store.config().testMode, headless: process.env.ENGELBART_HEADLESS === '1' });
+    // The Agent Viewer (2026-10-12; it was the Agent map): each ask's prompt, context, steps, tool calls and output, in a
+    // developer's copy alone; a copy people download keeps none of it. Runs are recorded whether test mode is on or off,
+    // and the window opens either way (it was only while test mode was on). Each change goes to the Viewer only.
+    agentMap = createAgentMapWindow({ BrowserWindow, appUrl: APP_URL, preload: PRELOAD_FILE, available: () => developer, headless: process.env.ENGELBART_HEADLESS === '1' });
     runLog = developer ? createRunLog({ file: path.join(app.getPath('userData'), 'agent-runs.jsonl'), onChange: (record) => agentMap.send('engelbart:agent-run', record) }) : null;
     bart = process.env.ENGELBART_BART_FAKE === '1'
       ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), runLog })
@@ -1155,12 +1155,32 @@ if (!hasSingleInstanceLock) {
         return result.response === 0;
       },
     });
+    // The reveal a window was told of, taken once by the Workspace of its project (agentMap:reveal above).
+    ipcMain.handle('engelbart:agentMap:take-reveal', windowHandler((ctx, projectId) => {
+      const held = ctx.agentReveal;
+      if (!held || held.place.projectId !== projectId) return null;
+      ctx.agentReveal = null;
+      return held;
+    }));
     registerAgentMapIpc({
       ipcMain,
       trustedHandler,
       mapWindow: agentMap,
       runLog,
       design: () => agentDesign({ dataRoot: store.config().dataRoot, models: readModels('bart'), buildModels: readModels('build') }),
+      // A row clicked (2026-10-12): the window on the ask's project comes to the front, else the focused one (which opens
+      // the project; App.jsx), and is told where. It is also kept on the window, for a Workspace that mounts after the
+      // event went by (agentMap:take-reveal).
+      reveal: (target) => {
+        const ctx = windows.showing(target.place.projectId) || focusedWindow() || openWindow();
+        if (!ctx || ctx.win.isDestroyed()) return false;
+        ctx.agentReveal = target;
+        if (ctx.win.isMinimized()) ctx.win.restore();
+        ctx.win.show();
+        ctx.win.focus();
+        windows.send(ctx, 'engelbart:agent-reveal', target);
+        return true;
+      },
       // The map's export: a page of its own, saved where the person picks.
       saveFile: async (text, name) => {
         const parent = agentMap.window();

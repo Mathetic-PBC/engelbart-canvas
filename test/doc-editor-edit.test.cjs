@@ -156,7 +156,7 @@ test('Enter on changed words: the later turns go (a run among them is stopped), 
   assert.equal(e.prevented, true);
   assert.equal(m.asks.length, 1);
   const ask = m.asks[0];
-  assert.deepEqual({ ...ask, askId: undefined }, { askId: undefined, text: 'second, reworded?', turns: [{ question: 'first?', answer: 'one' }], agent: 'bart', choice: { model: 'sonnet', effort: 'high' } }, 'asked with the new words, the turn before it, and the model that answered it (ranWith)');
+  assert.deepEqual({ ...ask, askId: undefined }, { askId: undefined, text: 'second, reworded?', turns: [{ question: 'first?', answer: 'one' }], agent: 'bart', choice: { model: 'sonnet', effort: 'high' }, place: { line: 5, text: '@chat second, reworded?' } }, 'asked with the new words, the turn before it, and the model that answered it (ranWith)');
   assert.deepEqual(m.stopped, ['run4'], 'the follow-up at work is stopped');
   assert.deepEqual(m.lines(), ['Notes', '@chat first?', ...answer('one'), '@chat second, reworded?', `bart~> ${ask.askId}`, '', 'After']);
   assert.equal(m.editor.editing, null);
@@ -285,7 +285,7 @@ test('@discover: its level chip shows while editing and the edit is asked on its
   assert.match(line, /data-act="pick" data-row="0"[^>]*>Deep/, 'the level chip');
   m.type('@discover --deep retries in queues');
   m.key('Enter');
-  assert.deepEqual({ ...m.asks[0], askId: undefined }, { askId: undefined, text: '--deep retries in queues', turns: [], agent: 'discover', choice: undefined });
+  assert.deepEqual({ ...m.asks[0], askId: undefined }, { askId: undefined, text: '--deep retries in queues', turns: [], agent: 'discover', choice: undefined, place: { line: 0, text: '@discover --deep retries in queues' } });
 });
 
 test('Enter waits on a line that no longer asks its agent, or asks for a Build; the line is never joined to its neighbours', () => {

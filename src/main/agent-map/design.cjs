@@ -1,6 +1,6 @@
 'use strict';
 
-// The Agent map's Design tab (2026-10-12): each agent as it is set up now, read from the code and files that set it up,
+// The Agent Viewer's Design tab (2026-10-12; it was the Agent map's): each agent as it is set up now, read from the code and files that set it up,
 // never written down twice. Its system prompt (the open data root's .context/<agent>-system-prompt.md when it holds any,
 // else the built-in one), its tools on each provider, its model steps and efforts as the models file has them now, its
 // time limit, and the blocks of context it is sent. Then Build and the run step after it (its tools, models, limits and what
@@ -33,7 +33,7 @@ function routerDesign(models) {
   const providers = models && models.providers ? Object.keys(models.providers) : [];
   const step = (provider) => { const found = routeModel({ ...models, provider }); return found ? { steps: [{ name: found.name, model: found.id, effort: found.effort }] } : { error: 'no model' }; };
   return {
-    agent: 'router', title: 'Bart (router)', token: 'bart',
+    agent: 'router', title: 'Bart (classifier)', token: 'bart',
     prompt: { text: ROUTE_SYSTEM_PROMPT, custom: false, file: null },
     tools: { anthropic: { tools: '', allowedTools: null, papers: false }, openai: { webSearch: false, papers: false, sandbox: 'read-only' } },
     models: { inForce: models ? models.provider : null, providers: Object.fromEntries(providers.map((provider) => [provider, step(provider)])) },
@@ -117,6 +117,7 @@ const CALLS = {
     { to: 'chat', how: 'the router\'s pick: the line is rewritten @chat and asked' },
     { to: 'brainstorm', how: 'the router\'s pick, or an empty @bart' },
     { to: 'discover', how: 'the router\'s pick, or --quick, --standard or --deep' },
+    { to: 'create', how: 'not yet: Create is planned, and the router does not pick it' },
     { to: 'build', how: '--build, or the router\'s pick with a spec above (else Chat writes the Build prompt)' },
   ],
   bart: [{ to: 'build', how: '--build: the line\'s request becomes a Build; the footer\'s Build' }],
@@ -125,6 +126,7 @@ const CALLS = {
     { to: 'chat', how: 'its result line, the Welcome handoff' },
   ],
   discover: [{ to: 'build', how: 'the footer\'s Build' }],
+  create: [],
   build: [{ to: 'run step', how: 'on review: a Build turn that ends in review' }],
   'run step': [],
 };
@@ -239,7 +241,7 @@ function runStepEntry(buildModels) {
 
 /**
  * → { agents: [{ agent, title?, token?, prompt, tools, models, timeout, context, calls, rules?, inputs?, … }] } for the
- * open data root and the models in force; Bart, the router, first (2026-10-12).
+ * open data root and the models in force; Bart, the classifier (the router), first, and Create planned (2026-10-12).
  */
 function agentDesign({ dataRoot, models, buildModels = models }) {
   const agents = [
@@ -252,6 +254,8 @@ function agentDesign({ dataRoot, models, buildModels = models }) {
       timeout: agent === 'discover' ? { quick: DISCOVER_TIMEOUT_MS, standard: DISCOVER_TIMEOUT_MS, deep: DEEP_DISCOVER_TIMEOUT_MS } : { step: STEP_TIMEOUT_MS },
       context: contextOf(agent),
     })),
+    // Create (2026-10-12): planned, not built yet. Its entry holds nothing to read; a run of it shows as any other.
+    { agent: 'create', title: 'Create', token: 'create', planned: true },
     buildEntry(dataRoot, buildModels),
     runStepEntry(buildModels),
   ];

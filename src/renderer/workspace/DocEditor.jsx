@@ -503,6 +503,20 @@ export default class DocEditor extends React.Component {
   };
   // The person scrolled, clicked or typed: what they do from now on wins over putting the old place back.
   stopSettling = () => { this.settle = null; };
+  // The Agent Viewer's click (2026-10-12; Workspace revealAsk): line `i` brought to the middle of the pane and lit up for a
+  // moment. Held there as a restored view is (`settle`), so a picture or card still laying itself out does not move it.
+  // → whether the line is drawn
+  showLine(i) {
+    const box = this.scrollRef.current, ed = this.editorEl(); if (!box || !ed) return false;
+    const d = ed.querySelector(`[data-line="${i}"]`); if (!d) return false;
+    const r = d.getBoundingClientRect(), b = box.getBoundingClientRect();
+    const pos = { line: i, hash: hashLine(this.lines()[i] || ''), offset: -Math.max(0, Math.round((b.height - r.height) / 2)) };
+    this.settle = { key: this.key(), pos, until: Date.now() + 1500 };
+    this.applyView(pos);
+    d.removeAttribute('data-ask-flash'); void d.offsetWidth; d.setAttribute('data-ask-flash', '');
+    setTimeout(() => { if (d.isConnected) d.removeAttribute('data-ask-flash'); }, 2400);
+    return true;
+  }
   caretRect() {
     const sel = getSelection(); if (!sel || !sel.rangeCount) return null;
     const r = sel.getRangeAt(0).getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
@@ -975,7 +989,7 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: query, turns: [], agent });
+    this.props.onAsk({ askId, text: query, turns: [], agent, place: { line: thread.to + 2, text: add[1] } });
   }
   // The walkthrough's Brainstorm (2026-10-10, "when i click the brainstorming button it automatically types and runs
   // it"): "@<agent>" on a line of its own at the end of the document, after a blank line so that it starts a thread of its
@@ -989,7 +1003,7 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => [...x.slice(0, end), ...add]);
     this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: '', turns: [], agent });
+    this.props.onAsk({ askId, text: '', turns: [], agent, place: { line: end ? end + 1 : 0, text: `@${tokenOf(agent)}` } });
     this.showEnd(); // the button is above the document: its run, at the end, is brought into view
     return true;
   }
@@ -1432,7 +1446,7 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text, turns, agent });
+    this.props.onAsk({ askId, text, turns, agent, place: { line: thread.to + 1, text: add[0] } });
   }
   findTurn(ls, q) { for (const thread of threads(ls)) { const turn = thread.turns.find((t) => t.q === q); if (turn) return { thread, turn }; } return null; }
   // A conversation's title (2026-10-12, `bart# …` above the question that starts it). Open, it is the card's header: the
@@ -2226,7 +2240,7 @@ export default class DocEditor extends React.Component {
     const name = this.startsTitled(ls, i, turns, agent, p.text);
     this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, ...add); if (name) out.splice(i, 0, titleLine('', false)); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: p.text.trim(), turns, agent, ...(name ? { name: true } : {}) });
+    this.props.onAsk({ askId, text: p.text.trim(), turns, agent, place: { line: name ? i + 1 : i, text: ls[i] }, ...(name ? { name: true } : {}) });
   }
   // Whether the question on line `i` starts a conversation that takes a title (askInline, and handOff for a line Bart routed).
   startsTitled(ls, i, turns, agent, text) {
@@ -2241,7 +2255,7 @@ export default class DocEditor extends React.Component {
     this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, ...add); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
     const asked = this.props.onRoute
-      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, rule }))
+      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, rule, place: { line: i, text: ls[i] } }))
       : Promise.resolve(rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: 'chat', sure: 0, by: 'none' });
     return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: 'chat', sure: 0 }));
   }
@@ -2254,11 +2268,11 @@ export default class DocEditor extends React.Component {
   handOff(askId, pick) {
     const ls = this.lines(), at = ls.indexOf(`bart~> ${askId}`), q = at - 1, p = q >= 0 ? parseLine(ls[q]) : null;
     if (!p || p.type !== 'bart' || agentOf(p) !== 'router') { if (this.props.onRouteGone) this.props.onRouteGone(askId); return null; }
-    const id = pick.id || null, text = p.text.trim();
-    if (pick.agent === 'build' && pick.rule === '--build') { this.props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id } }); return 'build'; }
+    const id = pick.id || null, text = p.text.trim(), typed = { line: q, text: ls[q] }; // where it was (the Agent Viewer)
+    if (pick.agent === 'build' && pick.rule === '--build') { this.props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id }, place: typed }); return 'build'; }
     if (pick.agent === 'build') {
       const spec = routeInputs(ls, q).spec;
-      if (spec != null && pick.sure >= 0.8 && this.props.onBuild) { this.props.onBuild({ text: spec, askId, routedFrom: id }); return 'build'; }
+      if (spec != null && pick.sure >= 0.8 && this.props.onBuild) { this.props.onBuild({ text: spec, askId, routedFrom: id, place: typed }); return 'build'; }
     }
     const agent = pick.agent === 'brainstorm' || pick.agent === 'discover' ? pick.agent : 'bart', line = `@${tokenOf(agent)}${p.text ? ` ${p.text}` : ''}`;
     const next = ls.map((l, j) => (j === q ? line : l)), turns = this.turnsBefore(next, q);
@@ -2267,7 +2281,7 @@ export default class DocEditor extends React.Component {
     const name = this.startsTitled(next, q, turns, agent, p.text);
     if (name) next.splice(q, 0, titleLine('', false));
     this.setLines(() => next);
-    this.props.onAsk({ askId, text, turns, agent, routed: { id, ...(pick.agent === 'build' ? { build: true } : {}) }, ...(name ? { name: true } : {}) });
+    this.props.onAsk({ askId, text, turns, agent, routed: { id, ...(pick.agent === 'build' ? { build: true } : {}) }, place: { line: name ? q + 1 : q, text: typed.text }, ...(name ? { name: true } : {}) });
     return agent;
   }
   // The footer's Build (2026-10-12): the turn's last fenced block as it reads now, else its question and answer, built;
@@ -2275,7 +2289,7 @@ export default class DocEditor extends React.Component {
   footBuild(q) {
     const ls = this.lines(), found = this.findTurn(ls, q);
     if (!found || !found.turn.answered || found.turn.pending || found.thread.turns.some((t) => t.pending) || !this.props.onBuild) return false;
-    this.props.onBuild({ text: buildTextOf(ls, found.turn), after: found.thread.to, afterLine: ls[found.thread.to] });
+    this.props.onBuild({ text: buildTextOf(ls, found.turn), after: found.thread.to, afterLine: ls[found.thread.to], place: { line: found.turn.q, text: ls[found.turn.q] } });
     return true;
   }
   // "via Bart" on a closing line: the agents Bart could have picked (AgentChoice).
@@ -2322,7 +2336,7 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => { const out = [...x]; out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: asked, turns, agent });
+    this.props.onAsk({ askId, text: asked, turns, agent, place: { line: thread.to + 1, text: add[0] } });
   }
   // While the field's @ menu shows, the arrows move in it, Enter or Tab puts the row in and Escape closes it alone; Enter
   // sends, and Escape leaves the field, once it is closed.
@@ -2444,7 +2458,7 @@ export default class DocEditor extends React.Component {
     const asked = (x) => { const out = [...x]; out.splice(turn.from, gone, `bart~> ${askId}`); return out; };
     if (edited) this.setDoc(asked(ls).join('\n'), undefined, edited.undo); else this.setLines(asked);
     this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: p.text.trim(), turns, agent, choice: choice && this.props.models && modelOf(choice.model, this.props.models) ? choice : undefined, ...(routing ? { routed: routing } : {}) });
+    this.props.onAsk({ askId, text: p.text.trim(), turns, agent, place: { line: q, text: ls[q] }, choice: choice && this.props.models && modelOf(choice.model, this.props.models) ? choice : undefined, ...(routing ? { routed: routing } : {}) });
   }
   // Edit (2026-10-03): the question of an answered turn becomes an ordinary agent line again (lockedAt), as it stands with
   // its @agent and flags, the caret at its end and its answer dimmed under it. One question at a time: another's goes back.

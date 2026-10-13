@@ -23,6 +23,7 @@ import { flatWorkspaces, nextPlace } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
 import { buildLine, placeAnswer, placeTitle, askedAt, migrateChatLines } from '../model/doc.js';
+import { findAskLine, findBuildLine } from '../model/askLine.js';
 import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
 import { addOrFind } from '../model/add-or-find.js';
@@ -568,17 +569,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // A Build started from a line (2026-10-12; was askBart's alone): `@chat --build …` and `@bart --build …`, an `@bart`
   // line Bart, the router, handed to Build, and an answer's footer Build. Everything open is saved first; the Build is
   // given `text` as a request typed on a line of the workspace. `routedFrom`: the router's record, told where the line went.
-  const buildFrom = React.useCallback(async (ref, text, routedFrom = null) => {
+  // `place`: the line it was typed on ({ line, text }), kept on its record for the Agent Viewer's click.
+  const buildFrom = React.useCallback(async (ref, text, routedFrom = null, place = null) => {
     const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
     await new Promise((resolve) => { setTimeout(resolve, 0); }); // the pending line (or the edit) reaches `pending` first
     await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-    const task = await api.buildStart(project.id, { workspaceId, text, fromLine: true, ...(routedFrom ? { routedFrom } : {}) });
+    const task = await api.buildStart(project.id, { workspaceId, text, fromLine: true, ...(routedFrom ? { routedFrom } : {}), ...(place ? { place: { ...place, ref } } : {}) });
     setBuilds((current) => ({ ...current, [task.id]: task }));
     if (routedFrom && api.routeHanded) api.routeHanded(routedFrom, `build:${task.id}`).catch(() => {});
     return task;
   }, [topic, project.id, flush]);
 
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null }) => {
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null }) => {
     if (!key || !ref || !topic) return;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
     let answered = null;
@@ -616,7 +618,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (build) {
       try {
         if (!build.request) { place(['bart> **No Build.** Write what to build after --build.']); return; }
-        const task = await buildFrom(ref, build.request, routed && routed.id);
+        const task = await buildFrom(ref, build.request, routed && routed.id, typed);
         place([buildLine(task.id)]);
       } catch (error) {
         place([`bart> **No Build.** ${errorMessage(error)}`]);
@@ -628,7 +630,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}) });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}) });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? [] : out.lines);
@@ -644,11 +646,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // Bart, the router (2026-10-12; main/bart/route.cjs): which agent an `@bart` line is for. Its pending line says
   // "Choosing an agent…" until the editor hands the line over (DocEditor handOff), which asks under the same id. A rule's
   // pick (`rule`) is only logged. Failing, the line goes to Chat.
-  const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, rule }) => {
+  const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, rule, place = null }, ref = null) => {
     setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: 'router', activity: 'Choosing an agent…' } }));
     const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: 'chat', sure: 0, by: 'none' };
     try {
-      return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, rule })) || fallback;
+      return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, rule, ...(ref ? { ref } : {}), ...(place ? { place } : {}) })) || fallback;
     } catch {
       return fallback;
     }
@@ -658,7 +660,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // A Build from the editor (2026-10-12): an `@bart` line Bart handed to Build, whose card takes its pending line's place
   // (`askId`), or an answer's footer Build, whose card goes on a line of its own after the thread: after line `after`,
   // found again by its words (`afterLine`) if the document moved meanwhile, else at the end.
-  const buildFromEditor = React.useCallback(async (key, ref, { text, askId = null, routedFrom = null, after = null, afterLine = null }) => {
+  const buildFromEditor = React.useCallback(async (key, ref, { text, askId = null, routedFrom = null, after = null, afterLine = null, place = null }) => {
     if (!key || !ref || !topic) return;
     const put = (lines) => {
       const held = docsRef.current[key];
@@ -673,7 +675,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     };
     if (askId) setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: 'router', activity: 'Starting a Build' } }));
     try {
-      const task = await buildFrom(ref, text, routedFrom);
+      const task = await buildFrom(ref, text, routedFrom, place);
       put([buildLine(task.id)]);
     } catch (error) {
       if (askId) put([`bart> **No Build.** ${errorMessage(error)}`]); else onError(error);
@@ -1223,6 +1225,59 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     setActiveTab(restored.active);
   };
   selectRef.current = selectTopic;
+
+  /* ------------------------------------------------------- the Agent Viewer */
+
+  // A row clicked in the Agent Viewer (2026-10-12; main's agentMap:reveal): the workspace or note the ask was on comes to
+  // the front and its line is shown (model/askLine.js finds it where it is now) and lit up; a highlight's paper opens in
+  // the Stage at its passage; a Build with no line of its own shows its card. A line that is gone says so.
+  const revealAsk = (target) => {
+    if (!target || !target.place || target.place.projectId !== project.id) return;
+    const { place, routedTo, buildId } = target, ref = place.ref;
+    if (!ref) return; // a post-it's quick task: nowhere in a document
+    if (ref.kind === 'mark') {
+      const row = ref.rowId ? library.find((held) => held.id === ref.rowId) : null;
+      if (!stageRef.current || (!row && !ref.url)) { onError(new Error('This highlight\'s paper is no longer here')); return; }
+      showRight('stage');
+      if (row) stageRef.current.openRow(row, place.quote || '', ''); else stageRef.current.openInput(ref.url);
+      return;
+    }
+    let key;
+    if (ref.kind === 'note') {
+      const note = notesById.get(ref.id);
+      if (!note) { onError(new Error('This note is no longer here')); return; }
+      openTab(note.id, note.name);
+      key = `note:${note.id}`;
+    } else {
+      if (!index.get(ref.workspaceId)) { onError(new Error('This workspace is no longer here')); return; }
+      selectTopic(ref.workspaceId);
+      showWs();
+      key = `ws:${ref.workspaceId}`;
+    }
+    // The document reaches its editor a few renders later (and is read first when it was not open).
+    let tries = 0;
+    const attempt = () => {
+      const editor = editorRefs.current.map((held) => held && held.current).find((held) => held && held.props && held.props.docKey === key);
+      if (!editor || typeof docsRef.current[key] !== 'string') { tries += 1; if (tries < 60) setTimeout(attempt, 100); return; }
+      const lines = editor.lines();
+      let at = place.text ? findAskLine(lines, { text: place.text, line: place.line, routedTo }) : -1;
+      if (at < 0 && buildId) at = findBuildLine(lines, buildId);
+      if (at < 0) { if (place.text) onError(new Error('This line is no longer here')); return; }
+      let drawn = 0;
+      const show = () => { if (!editor.showLine(at) && (drawn += 1) < 20) setTimeout(show, 100); };
+      setTimeout(show, 50);
+    };
+    setTimeout(attempt, 0);
+  };
+  const revealRef = React.useRef(revealAsk);
+  revealRef.current = revealAsk;
+  // Taken from main when this window is told of one, and once when the project opens (a click that opened it).
+  React.useEffect(() => {
+    if (!api.takeAgentReveal) return undefined;
+    const take = () => api.takeAgentReveal(project.id).then((target) => { if (target) revealRef.current(target); }).catch(() => {});
+    take();
+    return api.onAgentReveal ? api.onAgentReveal(take) : undefined;
+  }, [project.id]);
 
   /* ------------------------------------------------------------ next place */
 
@@ -1946,7 +2001,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   ...editorProps,
                   onChange: (value) => onDocChange(doc.key, doc.ref, value),
                   onAsk: (ask) => askBart(doc.key, doc.ref, ask),
-                  onRoute: (input) => routeLine(doc.key, input),
+                  onRoute: (input) => routeLine(doc.key, input, doc.ref),
                   onRouteGone: routeGone,
                   onBuild: doc.ref && (doc.ref.kind === 'workspace' || topic) && doc.ref.kind !== 'archive' ? (input) => buildFromEditor(doc.key, doc.ref, input) : undefined,
                   onOpenBeside: openDocBeside,

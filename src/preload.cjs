@@ -202,13 +202,20 @@ const engelbartAPI = Object.freeze({
   onModelsChanged: (callback) => subscribe('engelbart:models-changed', callback),
   copyText: invoke('copy-text'),
   onBartProgress: (callback) => subscribe('engelbart:bart-progress', callback),
-  // The Agent map (2026-10-12, developers only; src/main/agent-map): open it, its runs, one run whole, each agent's design,
-  // a page of it saved, and each change to a run as it happens (sent to the map window alone).
+  // The Agent Viewer (2026-10-12, developers only, test mode on or off; src/main/agent-map): open it, its runs, one run
+  // whole, the runs grouped one entry per ask and one entry whole, each agent's design, a page of it saved, a row's click
+  // (its line shown in the window of its project; that window's Workspace takes it), and each change to a run as it
+  // happens (sent to the Viewer alone).
   openAgentMap: invoke('agentMap:open'),
   agentRuns: invoke('agentMap:runs'),
   agentRun: invoke('agentMap:run'),
   agentDesign: invoke('agentMap:design'),
   exportAgentRuns: invoke('agentMap:export'),
+  agentAsks: invoke('agentMap:asks'),
+  agentAsk: invoke('agentMap:ask'),
+  revealAsk: invoke('agentMap:reveal'),
+  takeAgentReveal: invoke('agentMap:take-reveal'),
+  onAgentReveal: (callback) => subscribe('engelbart:agent-reveal', callback),
   onAgentRun: (callback) => subscribe('engelbart:agent-run', callback),
   // @bart from a highlight's note (MATH-27): the ones this window asked that are still running (for after ⌘R), and how each
   // ended, told to every window: { askId, markId, page, rowId | url, and entry (the answer, already on its mark) | stopped | failed and lines }.

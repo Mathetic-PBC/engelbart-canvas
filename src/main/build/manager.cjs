@@ -600,6 +600,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       messages: [say('engelbart', `Started on ${choice.modelName} ${choice.effort} in ${pre.target.name}, from ${at.branch} at ${at.sha.slice(0, 7)}${pre.dirty ? `; ${pre.dirty} uncommitted ${pre.dirty === 1 ? 'file' : 'files'} left out` : ''}.`)],
       attach, archive: null, checks: null, conflict: null, accepted: null, created: now().toISOString(), finished: null,
     };
+    // Where it came from (2026-10-12, the Agent Viewer): the line a Build from a line was typed on, else its workspace.
+    task.place = placeOfTask(projectId, workspaceId, fromLine ? input.place : null);
     const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt, fromLine });
     task.archive = frozen.archive;
     // A post-it added to a workspace is put in as an archived version of it, after the one it is given as history.
@@ -717,6 +719,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
         logged('start', {
           id: record, agent: 'build', kind: task.kind === 'quick' ? 'quick' : 'build', buildId: task.id, title: task.title, turn: task.turn,
           provider: task.provider, projectId, projectName: project.name, workspaceName: workspaceNameOf(ctx, projectId, task), question: task.title, system,
+          ...(task.turn === 1 && task.place ? { place: task.place } : {}),
           // The first turn: context.md, block by block; a later one: what was sent (a reply, or everything again).
           context: fresh ? contextParts(message) : { reply: message },
         });
@@ -1411,6 +1414,17 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
   }
 
   return { targets, setDefault, preflight, initRepository, prepareDefault, cloneRepository, start, reply, stop, resume, review, accept, fix, discard, promote, reconcile, list, get, openIds, stopAll, stopProject, removeWorktrees, moveWorktree, running: () => [...live.keys()], stepping: (id) => stepping.has(id), showRunnable, stopRunning, stopRunnable, sweeping: () => Promise.all([...sweeps]) };
+}
+
+/** A Build's `place` (the Agent Viewer): { projectId, ref, line, text } for one from a line; no line for the panel's or a post-it's. */
+function placeOfTask(projectId, workspaceId, from) {
+  const held = from && typeof from === 'object' ? from : {};
+  const ref = held.ref && (held.ref.kind === 'workspace' || held.ref.kind === 'note') ? held.ref : workspaceId ? { kind: 'workspace', workspaceId } : null;
+  return {
+    projectId, ref,
+    line: Number.isInteger(held.line) && held.line >= 0 ? held.line : null,
+    text: typeof held.text === 'string' ? held.text.slice(0, 8000) : null,
+  };
 }
 
 module.exports = { createBuilds, createShell, checkOutput, LIMITS, TURN_MS, CLONES, AUTO_FIXES };

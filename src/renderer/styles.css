@@ -53,6 +53,9 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .glyph14 svg{width:14px;height:14px}
 .doc-preview a{pointer-events:none}
 @keyframes added{from{background:#e6f0fd}to{background:transparent}}
+/* the Agent Viewer's click (2026-10-12): the ask's line lit up for a moment (DocEditor showLine) */
+@keyframes ask-flash{0%,45%{background:#fff1b8}to{background:transparent}}
+[data-ask-flash]{animation:ask-flash 2.4s ease-out;border-radius:4px}
 #root{position:fixed;inset:0;overflow:hidden;background:#fff;color:#171717;font-family:var(--font-sans)}
 .terminal-view.locked .xterm:not(.xterm-cursor-pointer){cursor:default}
 /* The workspace sidebar (Canvas.dc.html, Add - Mention.dc.html, 2026-09-22): rows on the grey library card wash one grey
