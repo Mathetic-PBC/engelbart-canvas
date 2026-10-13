@@ -645,14 +645,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // Bart, the router (2026-10-12; main/bart/route.cjs): which agent an `@bart` line is for. Its pending line says
   // "Choosing an agent…" until the editor hands the line over (DocEditor handOff), which asks under the same id. A rule's
-  // pick (`rule`) is only logged. Failing, the line goes to Chat.
+  // pick (`rule`) is only logged. Failing, the line goes to Chat (or to its rule's agent), the pick saying `by: 'error'`
+  // and why, so the run it is handed to shows the classifier failed rather than that it chose Chat (DocEditor handOff).
   const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, rule, place = null }, ref = null) => {
     setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: 'router', activity: 'Choosing an agent…' } }));
     const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: 'chat', sure: 0, by: 'none' };
     try {
       return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, rule, ...(ref ? { ref } : {}), ...(place ? { place } : {}) })) || fallback;
-    } catch {
-      return fallback;
+    } catch (error) {
+      console.warn('Bart could not route the line:', error);
+      return { ...fallback, by: 'error', error: errorMessage(error) };
     }
   }, [project.id, topic]);
   const routeGone = React.useCallback((askId) => { setAsks((current) => { const next = { ...current }; delete next[askId]; return next; }); }, []);

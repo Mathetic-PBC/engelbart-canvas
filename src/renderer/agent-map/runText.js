@@ -80,7 +80,8 @@ export const msLabel = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : ms < 
 
 /**
  * A run's agent as the runs list names it (2026-10-12): the internal 'bart' is @chat; a router's record says where it
- * sent the line ("@bart → @discover", "@bart → Build"), and a run Bart handed over or the person corrected says so.
+ * sent the line ("@bart → @discover", "@bart → Build"), and a run Bart handed over or the person corrected says so, as
+ * does one Bart could not route ("· Bart failed to route": the classifier failed, and the line went to its fallback).
  */
 export function agentLabel(run) {
   const word = (agent) => (agent === 'build' ? 'Build' : `@${agent === 'bart' ? 'chat' : agent}`);
@@ -88,7 +89,7 @@ export function agentLabel(run) {
     const to = run.handedTo && /^build:/.test(run.handedTo) ? 'Build' : run.pick ? word(run.pick) : '…';
     return `@bart → ${to}${run.corrected ? ` (corrected to ${word(run.corrected)})` : ''}${run.by === 'rule' ? ` · rule: ${run.rule || '?'}` : run.sure != null ? ` · sure ${run.sure}` : ''}`;
   }
-  return `${word(run.agent)}${run.routedFrom ? ' · via Bart' : ''}${run.corrected ? ` · corrected from Bart` : ''}`;
+  return `${word(run.agent)}${run.routedBy === 'error' ? ' · Bart failed to route' : run.routedFrom ? ' · via Bart' : ''}${run.corrected ? ` · corrected from Bart` : ''}`;
 }
 /** "model · effort" for the list: the last step's, which is where it ended up. */
 export const modelLabel = (run) => [run.model, run.effort].filter(Boolean).join(' · ') || (run.status === 'running' ? 'starting' : 'no model run');
@@ -271,7 +272,11 @@ export function askSections(ask) {
       ...(step && step.output != null ? [{ label: 'raw output', dim: sizeLabel(step.output), text: step.output }] : []),
     ];
   } else {
-    classified = [{ label: viaLabel(ask.via, ask.routedTo), plain: true }];
+    // Bart failed to route the line (Workspace routeLine, `by: 'error'`): no router record, and its agent is the fallback.
+    const unrouted = [...runs, ...turns].find((record) => record.routedBy === 'error');
+    classified = unrouted
+      ? [{ label: `Bart (classifier) failed: sent to ${agentInfo(ask.routedTo).name} as the fallback, not Bart's pick`, plain: true }, ...(unrouted.routeError ? [{ label: 'error', error: unrouted.routeError }] : [])]
+      : [{ label: viaLabel(ask.via, ask.routedTo), plain: true }];
   }
   // 3 <Agent> input, 4 <Agent> output.
   let agentIn = [], agentOut = [];

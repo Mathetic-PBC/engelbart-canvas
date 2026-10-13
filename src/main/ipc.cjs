@@ -91,6 +91,20 @@ const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : 
 
 // A string past `max` cut in the middle (bart/clip.cjs) rather than refused: a passage highlighted across many pages, an
 // earlier turn longer than a turn may be (MATH-27 second pass, 2026-10-06).
+/** A string cut to its first `max` characters instead of refused for its length; still refused when not a string. Null stays null. */
+function cutStr(value, what, max) {
+  if (value == null) return null;
+  if (typeof value !== 'string') throw new TypeError(`${what} must be a string`);
+  return value.length > max ? value.slice(0, max) : value;
+}
+
+/** The same, kept to its last `max` characters. */
+function tailStr(value, what, max) {
+  if (value == null) return null;
+  if (typeof value !== 'string') throw new TypeError(`${what} must be a string`);
+  return value.length > max ? value.slice(value.length - max) : value;
+}
+
 function clipped(value, what, max) {
   if (typeof value !== 'string') throw new TypeError(`${what} must be a string`);
   return clipMiddle(value, max);
@@ -143,13 +157,17 @@ function turnsInput(value) {
 // What Bart, the router, can pick (bart/route.cjs PICKS), and the agents a routed ask can say the person picked instead.
 const ROUTE_PICKS = ['chat', 'brainstorm', 'discover', 'build'];
 
-/** An ask's `routed` ({ id?, build?, corrected? }), or null for a line Bart did not hand over. */
+/**
+ * An ask's `routed` ({ id?, build?, corrected?, by?, error? }), or null for a line Bart did not hand over. `by: 'error'`:
+ * routing failed and the line went to its fallback, `error` saying why.
+ */
 function routedInput(value) {
   if (!value || typeof value !== 'object') return null;
   const id = optStr(value.id, 'route id', 80);
   const corrected = value.corrected == null ? null : str(value.corrected, 'corrected agent', 20);
   if (corrected && !ROUTE_PICKS.includes(corrected)) throw new TypeError('corrected must be chat, brainstorm, discover or build');
-  return { ...(id ? { id } : {}), build: !!value.build, ...(corrected ? { corrected } : {}) };
+  const failed = value.by === 'error' ? { by: 'error', ...(value.error != null ? { error: cutStr(value.error, 'route error', 400) } : {}) } : {};
+  return { ...(id ? { id } : {}), build: !!value.build, ...(corrected ? { corrected } : {}), ...failed };
 }
 
 function projectInput(value) {
@@ -816,26 +834,29 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       .map(({ askId, markId, page, rowId, url, source, question, progress }) => ({ ...progress, askId, markId, page, rowId, url, ...(source ? { source } : {}), question, agent: 'bart' }));
   });
   // Bart, the router (2026-10-12, bart/route.cjs): which agent an `@bart` line is for. The editor sends the line, its
-  // section, the threads above and whether a spec is above; its own rule's pick (`rule`) is only logged.
+  // section, the threads above and whether a spec is above; its own rule's pick (`rule`) is only logged. Nothing here is
+  // refused for its length (2026-10-12: a thread asked with a long document under it made every later line fail to route):
+  // a thread's question is cut to 400 characters, its agent to 20, the line to 8,000, the workspace's name to 400 and the
+  // section to its last 200,000; the router reads less of each still (bart/route.cjs). A value of the wrong type is refused.
   handleFor('route-line', async (win, pid, input) => {
     const value = input && typeof input === 'object' ? input : {};
     const threads = (Array.isArray(value.threads) ? value.threads : []).slice(-5).map((thread) => ({
-      agent: optStr(thread && thread.agent, 'thread agent', 20) || 'chat', question: optStr(thread && thread.question, 'thread question', 400) || '', up: Math.max(0, Math.min(1e6, Math.floor(Number(thread && thread.up) || 0))),
+      agent: cutStr(thread && thread.agent, 'thread agent', 20) || 'chat', question: cutStr(thread && thread.question, 'thread question', 400) || '', up: Math.max(0, Math.min(1e6, Math.floor(Number(thread && thread.up) || 0))),
     }));
-    const rule = value.rule && typeof value.rule === 'object' && ROUTE_PICKS.includes(value.rule.agent) ? { agent: value.rule.agent, rule: optStr(value.rule.rule, 'rule', 40) || null } : null;
+    const rule = value.rule && typeof value.rule === 'object' && ROUTE_PICKS.includes(value.rule.agent) ? { agent: value.rule.agent, rule: cutStr(value.rule.rule, 'rule', 40) || null } : null;
     const projectId = str(pid, 'project id', 64);
     const ref = refOrNull(value.ref);
     return bart.route({
-      projectId, text: str(value.text, 'line', 8000), place: placeOf(value.place, projectId, ref), section: optStr(value.section, 'section', 200000) || '',
-      workspaceName: optStr(value.workspaceName, 'workspace name', 400) || '', threads, specAbove: !!value.specAbove, rule,
+      projectId, text: cutStr(str(value.text, 'line', Infinity), 'line', 8000), place: placeOf(value.place, projectId, ref), section: tailStr(value.section, 'section', 200000) || '',
+      workspaceName: cutStr(value.workspaceName, 'workspace name', 400) || '', threads, specAbove: !!value.specAbove, rule,
     });
   });
   // Where a routed line went when it was not an ask: `build:<id>`, on the router's record.
   handle('route-handed', (id, to) => { if (bart.routeHanded) bart.routeHanded(str(id, 'route id', 80), str(to, 'handed to', 80)); return true; });
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
   // A new thread's title (2026-10-12, ./bart/name-chat.cjs): asked while its question runs, never in its way. `agent` says
-  // which line asked, so the title comes from the provider the question runs on. The fallback (the question's first six
-  // words) answers when no model can.
+  // which line asked, so the title comes from the provider the question runs on. The fallback (the opening message, at
+  // most 60 characters) answers when no model can.
   handle('name-chat', async (input) => {
     const value = input && typeof input === 'object' ? input : {};
     const text = str(value.text, 'question', 8000);

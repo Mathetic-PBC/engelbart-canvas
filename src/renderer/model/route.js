@@ -7,6 +7,26 @@ import { readFlags, readBuildFlag, effortOf } from '../../main/bart/question.cjs
 const LEVEL_RE = /(^|\s)--(quick|standard|deep)(?=\s|$)/i;
 // The models' words when the models file is not loaded yet: a flag naming one still means a question for Chat.
 const MODEL_WORDS = new Set(['haiku', 'sonnet', 'opus', 'fable', 'luna', 'sol', 'astra']);
+// A thread's question as the router is sent it, at most (main's bart/route.cjs reads 80 too).
+export const QUESTION_CHARS = 80;
+
+/**
+ * A thread's question as the router reads it: its first line, as plain text (mentions as their names, links as their
+ * words, markdown marks, agent tokens and flags gone), cut at a word to at most QUESTION_CHARS characters. A thread asked
+ * with a pasted document under it is still one short line.
+ */
+export function questionLine(text, max = QUESTION_CHARS) {
+  let s = String(text == null ? '' : text).split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
+  s = s.replace(/@\[([^\]\n]+)\]\([^)\s]*\)/g, '$1').replace(/@\[([^\]\n]+)\]/g, '$1')
+    .replace(/(^|\s)@(?:bart|chat|brainstorm|orient|discover)\b/gi, '$1').replace(/(^|\s)--\S+/g, '$1')
+    .replace(/!?\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
+    .replace(/^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)/, '')
+    .replace(/(\*\*|__|\*|_|`)(\S(?:.*?\S)?)\1/g, '$2').replace(/[*`]/g, '')
+    .replace(/\s+/g, ' ').trim();
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max + 1), space = cut.lastIndexOf(' ');
+  return (space > 0 ? cut.slice(0, space) : s.slice(0, max)).replace(/[\s,;:–—-]+$/, '');
+}
 
 /** Whether the text after `@bart` carries a model or effort flag. */
 function hasModelFlag(text, models) {
@@ -49,16 +69,18 @@ export function buildTextOf(lines, turn) {
 /**
  * What the router reads around the `@bart` line at `at`: { section, threads, specAbove, spec }.
  *   section: from the nearest heading above (it included) to the line;
- *   threads: every thread above, each { agent (its token), question (its first question), up (lines above the line) };
+ *   threads: every thread above, each { agent (its token), question (the first line of its first question, plain, at most
+ *     QUESTION_CHARS characters: questionLine), up (lines above the line) };
  *   spec: the last fenced block of the last answer of the nearest answered turn above in the section, or null.
- * The router (main) takes the last five threads and the section's last 4,000 characters, agent replies left out.
+ * The router (main) takes the last five threads and the section's last 4,000 characters once agent replies are left out
+ * (bart/route.cjs sectionText), so the section is sent whole here: cut first, it would hold less than that.
  */
 export function routeInputs(lines, at) {
   const ps = parseLines(lines);
   let start = 0;
   for (let k = at - 1; k >= 0; k--) if (ps[k].type === 'h') { start = k; break; }
   const above = threads(lines, ps).filter((thread) => thread.from < at && thread.to < at);
-  const list = above.map((thread) => ({ agent: tokenOf(agentOf(ps[thread.from])), question: turnText(lines, thread.turns[0]).question, up: at - thread.from }));
+  const list = above.map((thread) => ({ agent: tokenOf(agentOf(ps[thread.from])), question: questionLine(turnText(lines, thread.turns[0]).question), up: at - thread.from }));
   let spec = null;
   const near = [...above].reverse().find((thread) => thread.from >= start && thread.turns.some((turn) => turn.answered && !turn.pending));
   if (near) {

@@ -5,7 +5,7 @@
 // the window fills it in when this answers, without waiting on it: the answer runs alongside. One short run with no
 // tools and no session, on the provider the question runs on and that provider's lowest model (the first the models file
 // lists: Haiku on Claude Code, Luna on Codex) at low effort, 15 seconds at most. Whatever goes wrong, the title is the
-// question's first six words. Follow-ups are never named again.
+// person's opening message as a title reads (plainTitle, at most 60 characters). Follow-ups are never named again.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -21,7 +21,6 @@ const { TOOL_OF } = require('../tools/requirements.cjs');
 const NAME_PROMPT = 'Name this conversation in 2–6 words, sentence case, no quotes or final period.';
 const NAME_TIMEOUT_MS = 15_000;
 const MAX_TITLE = 60;
-const FALLBACK_WORDS = 6;
 // A reply longer than this is not taken as a title.
 const MAX_WORDS = 10;
 // What an empty question line (an @brainstorm or @discover started from the workspace) is called: there is nothing to name.
@@ -52,7 +51,7 @@ function namingStep(models, provider) {
 function plainTitle(text) {
   let s = String(text == null ? '' : text).split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
   s = s.replace(/@\[([^\]\n]+)\]\([^)\s]*\)/g, '$1').replace(/@\[([^\]\n]+)\]/g, '$1')
-    .replace(/(^|\s)@(?:bart|brainstorm|orient|discover)\b/gi, '$1').replace(/(^|\s)--\S+/g, '$1')
+    .replace(/(^|\s)@(?:bart|chat|brainstorm|orient|discover)\b/gi, '$1').replace(/(^|\s)--\S+/g, '$1')
     .replace(/!?\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
     .replace(/^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)/, '')
     .replace(/(\*\*|__|\*|_|`)(\S(?:.*?\S)?)\1/g, '$2').replace(/[*`]/g, '')
@@ -74,10 +73,12 @@ function capTitle(text) {
 /** What the model said, as the title line holds it; '' when nothing usable is left. */
 const cleanTitle = (raw) => capTitle(plainTitle(raw));
 
-/** The title when no model names it: the question's first six words. */
+/**
+ * The title when no model names it (2026-10-12): the person's opening message as a title reads (mentions as their names,
+ * agent tokens, flags and markdown gone), at most MAX_TITLE characters, cut at a word. UNNAMED only for an empty line.
+ */
 function fallbackTitle(text) {
-  const words = plainTitle(text).split(' ').filter(Boolean).slice(0, FALLBACK_WORDS).join(' ');
-  return capTitle(words.replace(/[\s,;:.?!–—-]+$/, '')) || UNNAMED;
+  return capTitle(plainTitle(text)) || UNNAMED;
 }
 
 /**
@@ -139,7 +140,7 @@ function createNameChat({ readModels, environment = process.env, runDirectory = 
   };
 }
 
-/** Scripted runs only (ENGELBART_BART_FAKE=1): no model, the question's first six words. */
+/** Scripted runs only (ENGELBART_BART_FAKE=1): no model, the fallback title (the opening message). */
 function createFakeNameChat({ readModels }) {
   return async function nameChat({ text, provider }) {
     const step = namingStep(readModels(), provider);

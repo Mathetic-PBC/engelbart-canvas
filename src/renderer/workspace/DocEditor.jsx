@@ -55,7 +55,7 @@ import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSp
 import { SKIPPED, MAP_GROUPS, isResultOffer, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
 import AgentChoice from './AgentChoice.jsx';
-import { routeByRule, routeInputs, buildTextOf } from '../model/route.js';
+import { routeByRule, routeInputs, buildTextOf, questionLine } from '../model/route.js';
 import DiscoverLevels, { LEVEL_LABELS } from './DiscoverLevels.jsx';
 import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
@@ -334,7 +334,7 @@ export default class DocEditor extends React.Component {
       drop: (e) => { this.markDropChip(null); if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
       // Leaving it otherwise puts back a question being edited (2026-10-03).
-      focusout: (e) => { if (inEd(e) && inTitle(e) && document.hasFocus()) { this.commitTitle(e.target); return; } if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
+      focusout: (e) => { if (inEd(e) && inTitle(e) && document.hasFocus()) { if (!this.syncing) this.commitTitle(e.target); return; } if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
       compositionstart: () => { this.composing = true; },
       compositionend: (e) => { this.composing = false; if (inEd(e) && !inFollow(e)) this.editorInput(); },
     };
@@ -1452,12 +1452,15 @@ export default class DocEditor extends React.Component {
   // A conversation's title (2026-10-12, `bart# …` above the question that starts it). Open, it is the card's header: the
   // title, small and grey, which a click makes a field to rename it in (titleEdit), and Collapse on the right. Collapsed
   // (`bart#+ …`), it is all that shows of the conversation: the Agents icon and the title as a link, off the card's grey,
-  // which expands it, and says who it is with when hovered. While a run is at work it cannot collapse; an empty title is
-  // still being named.
+  // which expands it, and says who it is with when hovered. While a run is at work it cannot collapse. An empty title is
+  // still being named and shows nothing, no placeholder: the row and its Collapse stay where they are, and the title
+  // appears in it when main's name-chat answers. Collapsed with no title (a line emptied by hand), the row shows the
+  // conversation's opening question instead, so there is something to click.
   titleHtml(i, raw, p, at) {
     const { thread } = at, title = p.text.trim();
     if (at.collapsed) {
-      const name = AGENT_NAMES[thread.agent] || AGENT_NAMES.bart, shown = title || 'Untitled';
+      const name = AGENT_NAMES[thread.agent] || AGENT_NAMES.bart;
+      const first = thread.turns && thread.turns[0], shown = title || (first ? questionLine(turnText(this.lines(), first).question, 60) : '') || name;
       return `<div ${raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" style="user-select:none;cursor:default;display:flex;padding:4px 0;margin-bottom:6px">`
         + '<span style="position:relative;display:inline-flex;min-width:0;max-width:100%">'
         + `<span class="bart-thread" data-act="foldthread" data-row="${i}" role="button" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" style="display:inline-flex;align-items:center;gap:6px;min-width:0;color:#0070f3;font:14px/1.5 var(--font-sans)">${ICON.agents}<span class="bart-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span></span>`
@@ -1466,7 +1469,7 @@ export default class DocEditor extends React.Component {
     const editing = !!this.titleEdit && this.titleEdit.line === i;
     const text = editing
       ? `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:13px/1.6 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
-      : `<span class="bart-title" data-act="edittitle" data-row="${i}" title="Rename" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px/1.6 var(--font-sans);color:${title ? '#4d4d4d' : '#8f8f8f'}">${esc(title || (at.running ? 'Naming…' : 'Untitled'))}</span>`;
+      : `<span class="bart-title" data-act="edittitle" data-row="${i}" title="Rename" style="flex:1;min-width:0;min-height:21px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px/1.6 var(--font-sans);color:#4d4d4d">${esc(title)}</span>`;
     return `<div ${raw} contenteditable="false" data-readonly="1" data-title-row="${i}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:8px;padding:4px 6px 0 12px;background:#fafafa;border-radius:10px 10px 0 0">`
       + text
       + `<span style="flex:none;position:relative;display:inline-flex"><button class="bart-ic" data-act="foldthread" data-row="${i}" aria-label="Collapse" aria-expanded="true" style="width:24px;height:24px"${at.running ? ' disabled' : ''}>${ICON.collapse}</button><span class="bart-tip" style="right:0">${at.running ? 'Collapse once it answers' : 'Collapse'}</span></span>`
@@ -1622,20 +1625,24 @@ export default class DocEditor extends React.Component {
       : field && field.matches && field.matches('[data-card-input]') && ed.contains(field) ? { card: true, key: field.dataset.cardInput, field: field.dataset.cardField, a: field.selectionStart, b: field.selectionEnd }
         : field && field.matches && field.matches('[data-discover-input]') && ed.contains(field) ? { discover: true, key: field.dataset.discoverInput, a: field.selectionStart, b: field.selectionEnd } : null;
     const buildField = field && field.matches && field.matches('[data-build-input]') && ed.contains(field) ? { key: field.dataset.buildInput, a: field.selectionStart, b: field.selectionEnd } : null;
+    // A title being renamed (2026-10-12) keeps the keyboard through a redraw (an answer landing, its title filled in by
+    // name-chat meanwhile): the field is drawn again with what was typed, and focused again where it was.
+    const titleField = field && field.matches && field.matches('[data-title-input]') && ed.contains(field) ? { line: field.dataset.titleInput, a: field.selectionStart, b: field.selectionEnd } : null;
     // A field of its own has the keyboard (a follow-up, a card's answer, a Build reply): the document has no caret to put
     // back. Taking one anyway (2026-09-30: a card's textarea sits in a line, so the selection read as that line) left it
     // set, and the next redraw focused the editor with it: typing in the card jumped the caret to the top of the document.
-    if (had || buildField) this.caret = null;
+    if (had || buildField || titleField) this.caret = null;
     if (html === this.lastHtml && key === this.lastKey) {
       if (this.caret && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.applyCaret(); }
       this.wantFocus = false; this.menuToCaret(); return;
     }
-    let c = had || buildField ? null : this.caret || (hadFocus ? this.caretInfo()?.anchor : null);
-    if (!c && hadFocus && !had && !buildField && !ed.querySelector('[data-line]')) { const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]); c = { line: last, offset: lineText(p, ls[last]).length }; }
+    let c = had || buildField || titleField ? null : this.caret || (hadFocus ? this.caretInfo()?.anchor : null);
+    if (!c && hadFocus && !had && !buildField && !titleField && !ed.querySelector('[data-line]')) { const ls = this.lines(), last = ls.length - 1, p = parseLine(ls[last]); c = { line: last, offset: lineText(p, ls[last]).length }; }
     if (c && !this.caret) this.caret = c;
     // Read before the fields are replaced: taking a focused field out of the page may blur it, which closes the menu.
     const menu = this.state.mention && this.state.mention.field != null ? this.state.mention : null;
     this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.markBeside(); this.restoreFollow(ed, had && !had.card && !had.discover ? had : null); this.restoreCards(ed, had); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
+    if (titleField) { const input = ed.querySelector(`[data-title-input="${titleField.line}"]`); if (input) { input.focus({ preventScroll: true }); try { input.setSelectionRange(titleField.a, titleField.b); } catch { /* not a text field */ } } }
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
     this.wantFocus = false; this.syncing = false; this.menuToCaret();
@@ -2265,11 +2272,13 @@ export default class DocEditor extends React.Component {
   //   build, with a spec above and sure ≥ 0.8: a Build of that fenced block as it reads now; the line stays, its card under it.
   //   build otherwise: asked of Chat as `@chat <text>`, told it is wanted built (routed.build), so it writes the Build prompt.
   //   `--build` on the line (a rule): a Build of the line, as `@chat --build` makes (Workspace askBart).
+  // A pick made because routing failed (`by: 'error'`, Workspace routeLine) says so in `routed`, for the run's record.
   handOff(askId, pick) {
     const ls = this.lines(), at = ls.indexOf(`bart~> ${askId}`), q = at - 1, p = q >= 0 ? parseLine(ls[q]) : null;
     if (!p || p.type !== 'bart' || agentOf(p) !== 'router') { if (this.props.onRouteGone) this.props.onRouteGone(askId); return null; }
     const id = pick.id || null, text = p.text.trim(), typed = { line: q, text: ls[q] }; // where it was (the Agent Viewer)
-    if (pick.agent === 'build' && pick.rule === '--build') { this.props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id }, place: typed }); return 'build'; }
+    const failed = pick.by === 'error' ? { by: 'error', ...(pick.error ? { error: String(pick.error).slice(0, 400) } : {}) } : {};
+    if (pick.agent === 'build' && pick.rule === '--build') { this.props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id, ...failed }, place: typed }); return 'build'; }
     if (pick.agent === 'build') {
       const spec = routeInputs(ls, q).spec;
       if (spec != null && pick.sure >= 0.8 && this.props.onBuild) { this.props.onBuild({ text: spec, askId, routedFrom: id, place: typed }); return 'build'; }
@@ -2281,7 +2290,7 @@ export default class DocEditor extends React.Component {
     const name = this.startsTitled(next, q, turns, agent, p.text);
     if (name) next.splice(q, 0, titleLine('', false));
     this.setLines(() => next);
-    this.props.onAsk({ askId, text, turns, agent, routed: { id, ...(pick.agent === 'build' ? { build: true } : {}) }, place: { line: name ? q + 1 : q, text: typed.text }, ...(name ? { name: true } : {}) });
+    this.props.onAsk({ askId, text, turns, agent, routed: { id, ...failed, ...(pick.agent === 'build' ? { build: true } : {}) }, place: { line: name ? q + 1 : q, text: typed.text }, ...(name ? { name: true } : {}) });
     return agent;
   }
   // The footer's Build (2026-10-12): the turn's last fenced block as it reads now, else its question and answer, built;

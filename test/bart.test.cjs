@@ -2630,12 +2630,16 @@ test('naming runs on the question\'s provider and its lowest model at low effort
   assert.equal(codexCalls[0].timeout, 15000);
 });
 
-test('when naming fails the title is the question\'s first six words; a title is 60 characters at most', async () => {
+test('when naming fails the title is the opening message as a title reads, 60 characters at most; a title is 60 characters at most', async () => {
   const { createNameChat, createFakeNameChat, fallbackTitle, capTitle, cleanTitle, MAX_TITLE } = nameChatModule;
   const models = normalizeModels(null);
   const failing = createNameChat({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'name-runs-fail'), run: (s, a, o, callback) => callback(Object.assign(new Error('timed out'), { killed: true }), '') });
   const fell = await failing({ text: 'why does the client retry three times before giving up?', provider: 'anthropic' });
-  assert.equal(fell.title, 'Why does the client retry three');
+  assert.equal(fell.title, 'Why does the client retry three times before giving up?');
+  const longer = await failing({ text: `@chat --opus Compare **retries** in @[TutorTrace](lib:abc-1) with [the guide](https://x.y/z) ${'and every other deployment we ran '.repeat(150)}`, provider: 'anthropic' });
+  assert.ok(longer.title.length <= 60, longer.title);
+  assert.ok(longer.title.startsWith('Compare retries in TutorTrace with the guide and every'), longer.title);
+  assert.ok(!/[*@[\]()]|--/.test(longer.title), 'mentions as names; agent token, flags and markdown gone');
   assert.equal(fell.named, false);
   const empty = createNameChat({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'name-runs-empty'), run: (s, a, o, callback) => callback(null, `${JSON.stringify({ type: 'result', is_error: false, result: '  ' })}\n`) });
   assert.equal((await empty({ text: 'short one', provider: 'anthropic' })).title, 'Short one');
@@ -2655,6 +2659,6 @@ test('when naming fails the title is the question\'s first six words; a title is
   assert.equal(fallbackTitle(''), 'New conversation');
   const fake = createFakeNameChat({ readModels: () => models });
   const faked = await fake({ text: 'one two three four five six seven', provider: 'openai' });
-  assert.equal(faked.title, 'One two three four five six');
+  assert.equal(faked.title, 'One two three four five six seven');
   assert.equal(faked.model, 'gpt-6-luna');
 });

@@ -234,10 +234,13 @@ const ROUTED_BUILD = '<routed>The person wants this built. Write the Build promp
 /** The block a routed turn carries before <question>: '' unless Bart routed it with build. */
 const routedBlock = (routed) => (routed && routed.build ? ROUTED_BUILD : '');
 
-/** What a routed run's meta and its record say of the routing ({ id, build, corrected }), or null when it was not routed. */
+/**
+ * What a routed run's meta and its record say of the routing ({ id, build, corrected, failed }), or null when it was not
+ * routed. `failed`: routing failed and this is the fallback (the editor's `by: 'error'`), with why when it is known.
+ */
 function routedOf(value) {
   if (!value || typeof value !== 'object') return null;
-  return { id: value.id ? String(value.id) : null, build: !!value.build, corrected: value.corrected ? String(value.corrected) : null };
+  return { id: value.id ? String(value.id) : null, build: !!value.build, corrected: value.corrected ? String(value.corrected) : null, ...(value.by === 'error' ? { failed: value.error ? String(value.error) : true } : {}) };
 }
 
 /** Where the cards at the end of `turns` begin: after the last recap, or the last reply that was not a card. */
@@ -455,6 +458,8 @@ function runRecord({ id, agent, provider, projectId, question, system, context, 
     question: String(question || ''), at: Date.now(), status: 'running', system, mode: mode || null, pinned: !!pinned,
     // Handed over by the router (./route.cjs): its record's id, and the agent the person picked instead of its pick.
     ...(routed && routed.id ? { routedFrom: routed.id } : {}), ...(routed && routed.corrected ? { corrected: routed.corrected } : {}),
+    // Routing failed and the line came here as the fallback: not Bart's pick (Workspace routeLine, `by: 'error'`).
+    ...(routed && routed.failed ? { routedBy: 'error', routeError: routed.failed === true ? null : routed.failed } : {}),
     // Where it was asked (2026-10-12, the Agent Viewer): { projectId, ref, line, text }, for its row's click.
     ...(place ? { place } : {}),
     context: { head: context.head, contextJson: context.contextJson, mentionedFiles: context.mentionedFiles, documents: context.documents, now: context.now, conversation: conversationBlock(shown), extra, dirs: context.dirs },
@@ -911,4 +916,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { createBart, createFakeBart, createThreads, logTo, runRecord, CLAUDE_TOOLS, BRAINSTORM_TOOLS, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, brainstormReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS };
+module.exports = { createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, brainstormReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS };

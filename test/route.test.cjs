@@ -112,6 +112,46 @@ test('routeInputs: the section from the heading, the threads above with their to
   assert.equal(buildTextOf(plain, threads(plain, parseLines(plain))[0].turns[0]), 'why\n\nbecause', 'no block: the question and the answer');
 });
 
+test('routeInputs: a thread\'s question is its first line, as plain text, cut at a word to 80 characters or fewer', async () => {
+  const { routeInputs, questionLine, QUESTION_CHARS } = await loadRoute();
+  const long = `Compare **this** with @[TutorTrace](lib:abc-1) and [the guide](https://x.y/z) ${'across every deployment '.repeat(220)}`.trim();
+  assert.ok(long.length >= 5000);
+  const lines = ['# Notes', `@chat ${long}`, 'and a second line of the question', 'bart> an answer', '', '@bart what next?'];
+  const got = routeInputs(lines, lines.length - 1);
+  const question = got.threads[0].question;
+  assert.equal(QUESTION_CHARS, 80);
+  assert.ok(question.length <= 80, `${question.length} characters`);
+  assert.ok(question.startsWith('Compare this with TutorTrace and the guide across every'), question);
+  assert.ok(!/[*@[\]()]/.test(question), 'plain text: no markdown, mention or link syntax');
+  assert.ok(!question.includes('second line'), 'the first line only');
+  const whole = questionLine(long, 100000);
+  assert.ok(whole.startsWith(question) && whole[question.length] === ' ', 'cut at a word');
+  assert.equal(questionLine('one two three', 7), 'one two', 'cut at a word');
+  assert.equal(questionLine('x'.repeat(200)).length, 80, 'one long word is cut where it must be');
+  assert.equal(questionLine('@chat --opus why\nmore'), 'why');
+  // The section is sent as it is: the router keeps its last 4,000 characters once replies are left out (route.cjs).
+  assert.ok(got.section.includes(long));
+});
+
+test('route-line: a 5,000-character thread question, a long section and a long workspace name are cut, never refused; a wrong type still is', async () => {
+  const { registerEngelbartIpc } = require('../src/main/ipc.cjs');
+  const handlers = new Map(), seen = [];
+  const bart = { route: async (input) => { seen.push(input); return { id: 'route-long', agent: 'discover', sure: 0.9, by: 'model' }; }, stop: () => true };
+  registerEngelbartIpc({ store: {}, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, notify: () => {}, bart, windowHandler: (fn) => (...args) => fn({ id: 'w' }, ...args), reply: () => {}, announce: () => {} });
+  const routeLine = handlers.get('engelbart:route-line');
+  const pick = await routeLine('p', {
+    text: 'what does this one entail', section: 's'.repeat(250000) + 'END', workspaceName: 'W'.repeat(900),
+    threads: [{ agent: 'chat'.repeat(10), question: 'q'.repeat(5000), up: 3 }], specAbove: false, rule: null,
+  });
+  assert.equal(pick.agent, 'discover', 'routed, not thrown');
+  const input = seen[0];
+  assert.deepEqual([input.threads[0].question.length, input.threads[0].agent.length, input.workspaceName.length, input.section.length], [400, 20, 400, 200000]);
+  assert.ok(input.section.endsWith('END'), 'the section keeps its end');
+  await assert.rejects(() => routeLine('p', { text: 'x', threads: [{ agent: 'chat', question: 42 }] }), /thread question must be a string/);
+  await assert.rejects(() => routeLine('p', { text: 'x', section: { no: 1 } }), /section must be a string/);
+  await assert.rejects(() => routeLine('p', { text: 7 }), /line must be a string/);
+});
+
 /* ------------------------------------------------------------- the model */
 
 function cli(reply, seen = {}) {
@@ -319,6 +359,29 @@ test('handoff: a rule is passed to the router; --build is asked as a Build reque
   release({ id: 'route-g', agent: 'chat', sure: 0.9 });
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual([g.asks.length, g.gone.length], [0, 1]);
+});
+
+test('handoff: when routing fails the line goes to Chat saying so (by: error), and its run is marked as Bart\'s failure, not its pick', async () => {
+  const m = mounted(['# Notes', '@bart how do tutors notice struggle?'], { route: async () => ({ agent: 'chat', sure: 0, by: 'error', error: 'thread question must be a string of at most 400 characters' }) });
+  m.editor.askInline(1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(m.lines()[2], '@chat how do tutors notice struggle?');
+  assert.deepEqual(m.asks[0].routed, { id: null, by: 'error', error: 'thread question must be a string of at most 400 characters' });
+
+  // Main keeps it ({ by: 'error' } through ask-bart), and the run's record says the classifier failed.
+  const { routedOf, runRecord } = require('../src/main/bart/ask.cjs');
+  const routed = routedOf(m.asks[0].routed);
+  const record = runRecord({ id: 'r1', agent: 'bart', provider: 'anthropic', projectId: 'p', question: 'how?', system: '', context: { project: null }, shown: [], extra: '', mode: null, pinned: false, routed });
+  assert.deepEqual([record.routedBy, record.routeError, record.routedFrom], ['error', 'thread question must be a string of at most 400 characters', undefined]);
+  const plain = runRecord({ id: 'r2', agent: 'bart', provider: 'anthropic', projectId: 'p', question: 'how?', system: '', context: { project: null }, shown: [], extra: '', mode: null, pinned: false, routed: routedOf({ id: 'route-a' }) });
+  assert.deepEqual([plain.routedBy, plain.routedFrom], [undefined, 'route-a']);
+  const { agentLabel, askSections } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/agent-map/runText.js')).href);
+  assert.equal(agentLabel(record), '@chat · Bart failed to route');
+  assert.equal(agentLabel(plain), '@chat · via Bart');
+  // The Agent Viewer's second section says so too, with the error.
+  const [, picked] = askSections({ id: 'r1', routedTo: 'bart', via: 'direct', records: [{ ...record, steps: [] }] });
+  assert.match(picked.nodes[0].label, /Bart \(classifier\) failed/);
+  assert.equal(picked.nodes[1].error, 'thread question must be a string of at most 400 characters');
 });
 
 test('footer Build: on every answered turn, off while the thread is at work, dark when the line was routed to build; it sends the last fenced block', () => {

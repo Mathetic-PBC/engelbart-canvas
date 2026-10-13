@@ -213,6 +213,61 @@ test('clicking the title edits it in place: Enter writes it, Escape and an empty
   assert.equal(f.lines()[0], 'bart#+ Backoff');
 });
 
+test('a new question\'s title row shows no text until name-chat returns, then the model\'s title; no "Naming…" or "Untitled", ever', async () => {
+  const { placeAnswer, placeTitle, askedAt } = await doc();
+  const m = mounted(['Notes', '@chat why does the client retry three times?', '']);
+  m.editor.askInline(1);
+  const { askId } = m.asks[0];
+  const never = (html, when) => { assert.ok(!/Naming|Untitled/.test(html), `${when}: no placeholder`); };
+  // Running, unnamed: the row is there with its Collapse (disabled), and the title's span holds nothing.
+  let head = rowOf(m.html(), 1);
+  assert.match(head, /data-title-row="1"/);
+  assert.match(head, /<span class="bart-title" data-act="edittitle" data-row="1"[^>]*min-height:21px[^>]*><\/span>/, 'the span is empty, and keeps its height');
+  assert.match(head, /data-act="foldthread" data-row="1" aria-label="Collapse"[^>]* disabled/);
+  never(m.html(), 'running');
+  // The answer lands before the title: still nothing in the row.
+  const near = askedAt(m.props.text, askId);
+  m.props.text = placeAnswer(m.props.text, askId, answer('because'));
+  head = rowOf(m.html(), 1);
+  assert.match(head, /data-act="edittitle" data-row="1"[^>]*><\/span>/);
+  never(m.html(), 'answered, unnamed');
+  // name-chat returns: the title fills the row.
+  m.props.text = placeTitle(m.props.text, askId, 'Client retry count', near);
+  assert.match(rowOf(m.html(), 1), /data-act="edittitle" data-row="1"[^>]*>Client retry count<\/span>/);
+  never(m.html(), 'named');
+  // Collapsed with its title emptied by hand: the row shows the opening question, not "Untitled".
+  const c = mounted(['bart#+ ', '@chat why does the **client** retry three times?', ...answer('because'), '']);
+  const row = rowOf(c.html(), 0);
+  assert.match(row, /class="bart-thread-name"[^>]*>why does the client retry three times\?<\/span>/);
+  never(c.html(), 'collapsed, untitled');
+});
+
+test('a title the person edited while naming was still running is not overwritten when name-chat returns', async () => {
+  const { placeAnswer, placeTitle, askedAt } = await doc();
+  // Renamed and written before the title came back, while the question still runs.
+  const m = mounted(['@chat why retry?', '']);
+  m.editor.askInline(0);
+  const { askId } = m.asks[0];
+  m.click('edittitle', { row: '0' });
+  m.editor.commitTitle({ value: 'My own name' });
+  assert.equal(m.lines()[0], 'bart# My own name');
+  assert.equal(placeTitle(m.props.text, askId, 'Retry logic'), null, 'the model\'s title is not placed');
+  assert.equal(m.lines()[0], 'bart# My own name');
+  // After the answer landed too.
+  const near = askedAt(m.props.text, askId);
+  m.props.text = placeAnswer(m.props.text, askId, answer('because'));
+  assert.equal(placeTitle(m.props.text, askId, 'Retry logic', near), null);
+  // Still being typed when the title came back: what the person writes wins.
+  const t = mounted(['@chat why retry?', '']);
+  t.editor.askInline(0);
+  t.click('edittitle', { row: '0' });
+  t.editor.titleInput({ value: 'Typed meanwhile' });
+  t.props.text = placeTitle(t.props.text, t.asks[0].askId, 'Retry logic');
+  assert.match(t.html(), /<input[^>]*data-title-input="0"[^>]*value="Typed meanwhile"/, 'the field keeps what was typed');
+  t.editor.commitTitle({ value: 'Typed meanwhile' });
+  assert.equal(t.lines()[0], 'bart# Typed meanwhile');
+});
+
 test('a title with no question under it is the text it is; deleting a titled conversation\'s only turn takes its title', () => {
   const plain = mounted(['bart# Left behind', 'Notes']).html();
   assert.ok(!plain.includes('data-title-row') && !plain.includes('data-thread-row'));
