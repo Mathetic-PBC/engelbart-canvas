@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src file:">
 <title>Agent trace</title>
 <!-- The Agent trace (./trace-window.cjs): plain, as https://mathetic.com/bart is. -->
 <style id="trace-style">
@@ -24,6 +24,10 @@
   summary { cursor: pointer; }
   pre { white-space: pre-wrap; word-break: break-word; background: rgba(128,128,128,.08); padding: 10px 12px; margin: 6px 0 10px; max-height: 520px; overflow: auto; font-size: 12.5px; line-height: 1.5; }
   ol.activity { margin: 6px 0 10px; padding-left: 22px; font-size: .92em; }
+  .pictures { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin: 6px 0 10px; }
+  .pictures figure { margin: 0; }
+  .pictures img { width: 100%; border: 1px solid rgba(128,128,128,.35); display: block; }
+  .pictures figcaption { font-size: .85em; }
   .empty { color: rgba(0,0,0,.55); }
   @media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } .meta, .empty { color: rgba(255,255,255,.6); } }
 </style>
@@ -68,6 +72,18 @@
     var d = el('details', open ? { open: '' } : null, [el('summary', { text: title + ' (' + text.length.toLocaleString() + ' characters)' }), el('pre', { text: text })]);
     return d;
   }
+  // A browser agent's screenshots: the pictures its browser showed it, as files in the session's steps folder.
+  function pictures(entry) {
+    if (!entry.pictures || !entry.pictures.length) return null;
+    return el('details', null, [
+      el('summary', { text: 'What it saw (' + entry.pictures.length + ' screenshots)' }),
+      el('div', { class: 'pictures' }, entry.pictures.map(function (shot) {
+        var img = el('img', { alt: 'Screenshot at ' + time(shot.at), loading: 'lazy' });
+        img.src = 'file://' + encodeURI(shot.file);
+        return el('figure', null, [img, el('figcaption', { text: time(shot.at) })]);
+      })),
+    ]);
+  }
   function turn(entry) {
     var head = [time(entry.at), entry.kind, entry.label].filter(Boolean).join(' · ');
     var who = [PROVIDERS[entry.provider] || entry.provider, entry.model, entry.effort].filter(Boolean).join(' ');
@@ -88,7 +104,10 @@
       block('System prompt', entry.system, false),
       block('Input (the message, with its context blocks)', entry.message, false),
       block('Context', context, false),
+      block('Command (run in the Engelbart terminal)', entry.command, false),
       activity,
+      pictures(entry),
+      block('Terminal transcript', entry.transcript, false),
       block('Output', entry.output, entry.status !== 'running'),
       block('Error', entry.error, true),
     ]);
@@ -102,7 +121,7 @@
   function matches(entry) {
     if (filter !== 'all' && entry.type !== filter) return false;
     if (!query) return true;
-    var hay = [entry.kind, entry.label, entry.text, entry.provider, entry.model, entry.message, entry.output, entry.system, entry.detail].join('\n').toLowerCase();
+    var hay = [entry.kind, entry.label, entry.text, entry.provider, entry.model, entry.message, entry.output, entry.system, entry.detail, entry.command].join('\n').toLowerCase();
     return hay.indexOf(query) >= 0;
   }
   function render() {

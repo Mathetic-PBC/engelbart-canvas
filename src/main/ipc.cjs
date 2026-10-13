@@ -589,6 +589,18 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('import-browsers', () => ix().browsers.list());
   handle('import-browser-choose', (id) => ix().browsers.choose(str(id, 'browser', 32)));
   handle('import-keychain', (answer) => ix().browsers.setKeychain(str(answer, 'answer', 16)));
+  // Browser agents (./onboarding/browser-agents.cjs): whether the web apps' imports can run in the person's own browser,
+  // and their answer to "Let agents use your browser?" ('allowed' | 'declined'; null forgets it).
+  handle('import-browser-agents', (input) => {
+    const value = input == null ? {} : plainObject(input, 'input');
+    if (!ix().browserAgents) return { available: false, use: false, ask: false, browser: null, others: [], allowedByCli: false, consent: null, why: 'Not on this Mac' };
+    return ix().browserAgents.status({ provider: value.provider == null ? null : providerId(value.provider), browserId: value.browserId == null ? null : str(value.browserId, 'browser', 32) });
+  });
+  handle('import-browser-agents-answer', (answer) => {
+    if (answer !== null && answer !== 'allowed' && answer !== 'declined') throw new TypeError('answer is invalid');
+    if (!ix().browserAgents) throw new Error('Browser agents are not available');
+    return ix().browserAgents.consent(answer);
+  });
   handle('import-discovery', () => ix().discovery.state());
   handle('import-discover-projects', (input) => {
     const value = input == null ? {} : plainObject(input, 'input');

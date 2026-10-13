@@ -538,7 +538,7 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
         <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, zIndex: 5, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
           {onBack && <button type="button" className="hov-ink" onClick={onBack} title={backTitle} style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
         </div>
-        <ImportFlow api={importApi} mode="new" platform={IS_MAC ? 'darwin' : 'other'} onDone={(made) => onDone(made, { stageLinks: [...stageLinks.current] })} />
+        <ImportFlow api={importApi} mode="new" platform={IS_MAC ? 'darwin' : 'other'} onDone={(made, extra = {}) => onDone(made, { stageLinks: [...stageLinks.current], session: extra.session || null })} />
       </div>
     );
   }

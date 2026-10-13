@@ -2,15 +2,20 @@
 
 // npm run build && npx electron scripts/smoke-import-context.cjs
 // Import your context (2026-10-13, the "Onboarding" workspace), walked in the real app, hidden, against a disposable home
-// with stand-ins for this Mac: Connect's fake agents (ENGELBART_CONNECT_FAKE), Claude alone subscribed
-// (ENGELBART_PROVIDERS_FAKE=claude: no provider question), Arc the default browser with Chrome installed
+// with stand-ins for this Mac: Connect's fake agents (ENGELBART_CONNECT_FAKE), Claude and Codex both subscribed
+// (ENGELBART_PROVIDERS_FAKE=both: the provider asked), Arc the default browser with Chrome installed
 // (ENGELBART_ONBOARDING_BROWSERS), Full Disk Access off until System Settings is "opened" (ENGELBART_DISK_ACCESS=denied, which
-// grants it 2.5 s later), and no browser whose cookies can be read (so ChatGPT stays signed out and its import waits on a card).
-//   welcome → Import your context (intro over the sources) → Import context → How would you like to import context?
-//   (Let agents choose) → Allow Engelbart to use your Arc sign-ins? (Allow) → roles → What are you working on? →
-//   the projects the fake project agent found → Confirm your tools (the fake tool agent's) → Run in background →
-//   Allow Full Disk Access → Switch on Engelbart (granted) → a project for each project picked, the first open →
-//   Imports in progress over the workspace, ChatGPT's sign-in card; Skip; the run ends; the Agent trace has every turn.
+// grants it 2.5 s later), no browser whose cookies can be read, and Chrome holding the browser extension though the
+// person's CLI does not let its agents use it yet (ENGELBART_BROWSER_AGENTS=ask), ChatGPT's browser agent stopping at a
+// sign-in page (ENGELBART_CONNECT_FAKE_NEEDS=ChatGPT). Second round (2026-10-13).
+//   welcome → Import your context (intro over the sources) → Import context → Which provider? (Claude Code, one click) →
+//   How would you like to import context? (Let agents choose, one click) → Allow Engelbart to use your Arc sign-ins?
+//   (Allow) → roles (none ticked yet) → What are you working on? (Continue only once written) → the projects the fake
+//   project agent found (none ticked yet) → Confirm your tools (every tool, the ticked first) → Import to Engelbart →
+//   Allow Full Disk Access → Switch on Engelbart (granted) → Let agents use Chrome? (Don't allow → Are you sure? → Allow
+//   Chrome) → a project for each project picked, the first open → Imports in progress over the workspace, ChatGPT in
+//   Chrome, its browser agent's sign-in card (Open Chrome, never pressed here); Skip; Stop all asks first; Continue to
+//   project; the run ends; the Agent trace has every turn, the browser agents' among them.
 // ENGELBART_IMPORT_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -30,7 +35,9 @@ process.env.ENGELBART_CONNECT_FAKE_MS = '150';
 process.env.ENGELBART_CONNECT_APPLICATIONS = '';
 process.env.ENGELBART_HEADLESS = '1';
 process.env.ENGELBART_INSTALLED_BROWSERS = '';
-process.env.ENGELBART_PROVIDERS_FAKE = 'claude';
+process.env.ENGELBART_PROVIDERS_FAKE = 'both';
+process.env.ENGELBART_BROWSER_AGENTS = 'ask';
+process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'ChatGPT';
 process.env.ENGELBART_ONBOARDING_BROWSERS = 'arc,chrome';
 process.env.ENGELBART_DISK_ACCESS = 'denied';
 
@@ -94,12 +101,16 @@ app.whenReady().then(async () => {
     await shot(wc, '01-intro');
     assert.match(await js(wc, 'document.querySelector(".intro-modal h1").textContent'), /^Import your context$/);
     await press(wc, '[data-import-start]');
-    /* Claude alone subscribed: no provider question; the method, the project agent already started */
+    /* both subscribed: asked which, and choosing is continuing */
+    await until(async () => (await flow(wc)).dialog === 'provider-choice', 'Which provider?');
+    await shot(wc, '01b-provider');
+    await press(wc, '[data-onboarding-provider="anthropic"]');
+    /* the method, the project agent already started */
     await until(async () => (await flow(wc)).dialog === 'import-mode', 'How would you like to import context?');
+    assert.equal(await has(wc, '[data-import-mode-continue]'), false, 'no Continue: choosing is continuing');
     await until(() => js(wc, 'window.engelbartAPI.importDiscovery().then((d)=>d.projects.status)').then((status) => status === 'running' || status === 'done'), 'the project agent, started before the method is chosen');
     await shot(wc, '02-mode');
     await press(wc, '[data-import-mode="auto"]');
-    await press(wc, '[data-import-mode-continue]');
     /* Arc's sign-ins */
     await until(async () => (await flow(wc)).dialog === 'keychain', 'the browser\'s sign-ins');
     assert.match(await js(wc, 'document.querySelector("[role=dialog] h3").textContent'), /Arc sign-ins/, 'the default browser, Arc');
@@ -107,10 +118,12 @@ app.whenReady().then(async () => {
     await press(wc, '[data-import-keychain-allow]');
     /* roles, work, projects */
     await until(async () => (await flow(wc)).screen === 'roles', 'What kind of work do you do?');
+    assert.equal(await has(wc, '[data-work-role][aria-checked=true]'), false, 'no role ticked for them');
     await press(wc, '[data-work-role="Researcher"]');
     await shot(wc, '04-roles');
     await pressText(wc, '.work-foot', 'Continue');
     await until(async () => (await flow(wc)).screen === 'work', 'What are you working on?');
+    assert.equal(await js(wc, '[...document.querySelectorAll(".work-foot button")].find((b)=>b.textContent.trim().startsWith("Continue")).disabled'), true, 'Continue waits for a description');
     await js(wc, '(()=>{const el=document.querySelector("#work-description");Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,"value").set.call(el,"I study how students ask for help.");el.dispatchEvent(new Event("input",{bubbles:true}))})()');
     await pressText(wc, '.work-foot', 'Continue');
     await until(async () => (await flow(wc)).screen === 'projects', 'What project do you want to work on first?');
@@ -126,7 +139,12 @@ app.whenReady().then(async () => {
     await shot(wc, '06-tools');
     const ticked = await js(wc, '[...document.querySelectorAll("[data-work-tool][aria-checked=true]")].map((b)=>b.dataset.workTool)');
     assert.ok(ticked.includes('Obsidian'), 'Obsidian, found on this Mac, ticked');
-    if (!ticked.includes('ChatGPT')) { await pressText(wc, '.tool-list-actions', 'Show all'); await press(wc, '[data-work-tool="ChatGPT"]'); }
+    assert.equal(await has(wc, '.tool-list-actions button'), true);
+    assert.equal(await js(wc, '[...document.querySelectorAll(".tool-list-actions button")].some((b)=>/Show all/.test(b.textContent))'), false, 'every tool shown: no Show all');
+    const order = await js(wc, '[...document.querySelectorAll("[data-work-tool]")].map((b)=>b.getAttribute("aria-checked")==="true")');
+    assert.ok(order.indexOf(false) === -1 || order.slice(order.indexOf(false)).every((on) => !on), 'the ticked tools first');
+    if (!ticked.includes('ChatGPT')) await press(wc, '[data-work-tool="ChatGPT"]');
+    assert.match(await js(wc, 'document.querySelector("[data-import-run]").textContent'), /^Import to Engelbart/);
     await press(wc, '[data-import-run]');
     /* Full Disk Access */
     await until(async () => (await flow(wc)).dialog === 'folders', 'Allow Full Disk Access');
@@ -134,6 +152,15 @@ app.whenReady().then(async () => {
     await press(wc, '[data-import-disk-open]');
     await until(async () => (await flow(wc)).dialog === 'disk-wait', 'waiting for the switch');
     await shot(wc, '08-disk-wait');
+    /* agents in the person's browser: asked, a no asked again with the safe choice the button */
+    await until(async () => (await flow(wc)).dialog === 'browser-agents', 'Let agents use Chrome?', 1200);
+    await shot(wc, '08b-browser-agents');
+    assert.match(await js(wc, 'document.querySelector("[role=dialog]").textContent'), /never send, post, delete, archive, change settings, type a password or close tabs/);
+    await pressText(wc, '[role=dialog] .mf', 'Don');
+    await until(async () => (await flow(wc)).dialog === 'browser-agents-confirm', 'Are you sure?');
+    await shot(wc, '08c-browser-agents-confirm');
+    assert.equal(await js(wc, 'document.querySelector("[role=dialog] .mf .btn").textContent'), 'Allow Chrome', 'the safe choice is the button');
+    await pressText(wc, '[role=dialog] .mf', 'Allow Chrome');
     /* the run: a project made and opened, the status over it */
     await until(() => js(wc, '!!document.querySelector("[data-import-status]")').catch(() => false), 'Imports in progress over the workspace', 1200);
     await shot(wc, '09-status');
@@ -144,9 +171,19 @@ app.whenReady().then(async () => {
     assert.ok(run, 'a direct session');
     assert.deepEqual(run.direct.projects, [titles[0]]);
     assert.ok(run.jobs.some((job) => job.kind === 'import' && job.apps.includes('Obsidian')), 'Obsidian imported');
-    const card = run.needs.find((need) => need.app === 'ChatGPT');
-    assert.ok(card, 'ChatGPT signed out: its card, not left out');
-    assert.ok(await has(wc, '[data-import-need="ChatGPT"]'), 'its card in the modal');
+    assert.ok(run.jobs.some((job) => job.apps.includes('ChatGPT') && job.route === 'browser'), 'ChatGPT in the person\'s own Chrome');
+    // ChatGPT's browser agent stops at its sign-in page: a card that opens Chrome (not pressed: it would open this Mac's).
+    await until(() => js(wc, 'window.engelbartAPI.connectList()').then((all) => all.find((entry) => entry.id === run.id).needs.some((need) => need.app === 'ChatGPT' && need.own)), 'ChatGPT\'s browser agent at its sign-in page', 1200);
+    await until(() => has(wc, '[data-import-need="ChatGPT"]'), 'its card in the modal');
+    assert.match(await js(wc, 'document.querySelector("[data-import-need=ChatGPT] .btn").textContent'), /^Open Chrome$/);
+    await shot(wc, '09b-browser-card');
+    // Stop all asks first (while ChatGPT's agent waits, the run cannot have ended); Keep importing leaves it as it was.
+    assert.equal(await js(wc, 'document.querySelector("[data-import-status-close]").textContent'), 'Continue to project');
+    await press(wc, '[data-import-stop-all]');
+    await until(() => has(wc, '[data-import-stop-confirm]'), 'Are you sure? (Stop all)');
+    await shot(wc, '09c-stop-confirm');
+    await pressText(wc, '.stop-confirm .mf', 'Keep importing');
+    assert.equal(await has(wc, '[data-import-stop-confirm]'), false);
     await pressText(wc, '[data-import-need="ChatGPT"]', 'Skip');
     // Every other sign-in card skipped too (the fake tool agent ticks more web apps than ChatGPT): Done needs none waiting.
     for (let i = 0; i < 12; i++) {
@@ -168,7 +205,8 @@ app.whenReady().then(async () => {
     assert.ok(traceFiles.length, 'the trace written in the data root');
     const entries = traceFiles.flatMap((file) => fs.readFileSync(file, 'utf8').split('\n').filter(Boolean).map((line) => JSON.parse(line)));
     const kinds = new Set(entries.filter((entry) => entry.type === 'turn').map((entry) => entry.kind));
-    for (const kind of ['projects', 'import']) assert.ok(kinds.has(kind), `a ${kind} turn traced`);
+    for (const kind of ['projects', 'import', 'browse']) assert.ok(kinds.has(kind), `a ${kind} turn traced`);
+    assert.ok(entries.some((entry) => entry.type === 'turn' && entry.kind === 'browse' && /Guardrails/.test(entry.system) && entry.command), 'a browser agent with its guardrails and command');
     assert.ok(entries.some((entry) => entry.type === 'event' && entry.kind === 'dispatch'), 'dispatching traced');
     assert.ok(entries.some((entry) => entry.type === 'turn' && entry.system && entry.message), 'with its prompt and input');
     console.log(`smoke-import-context: ok (${titles.length} projects found, ${ticked.length} tools ticked, ${entries.length} trace entries)`);

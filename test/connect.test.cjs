@@ -698,6 +698,102 @@ test('Import your context: one import a tool told the projects picked, a manual 
   connect.dismiss(started.id);
 });
 
+/* Browser agents (2026-10-13, second round: "We will use computer use in my real browser"). */
+
+test('Import your context with browser agents: web apps in the person\'s own browser (Gmail aside), no sign-in hold, a login stop is a card that opens their browser, at most 6 at once', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'browse-'));
+  // Engelbart's own browser is signed out of everything: none of that matters to a browser agent's app.
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: false }), signedIn: async () => false, keychainNote: () => '' };
+  const turns = [];
+  const fake = createFakeConnectAgents({ delayMs: 5 });
+  let release = null;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const agents = {
+    async turn(input) {
+      turns.push({ kind: input.kind, label: input.meta && input.meta.job ? input.meta.job.label : '', system: input.system, message: input.message, browse: input.browse, connectors: input.connectors });
+      if (input.kind === 'browse' && input.meta.job.apps.includes('Overleaf')) {
+        const out = await input.meta.callTool('needs_you', { kind: 'signin', reason: 'Sign in to Overleaf in Chrome' });
+        await gate;
+        return { text: `Overleaf: ${out.status}`, session: null };
+      }
+      return fake.turn(input);
+    },
+  };
+  const opened = [];
+  const browserAgents = { status: ({ provider }) => ({ available: true, use: true, ask: false, allowedByCli: false, consent: 'allowed', provider, browser: { id: 'chrome', name: 'Chrome' }, others: [] }) };
+  const { connect, state } = fakeConnect({ home: fresh, webSignIn, agents, browserAgents, openBrowserApp: async (id) => { opened.push(id); return true; } });
+  const started = await connect.start({
+    provider: 'anthropic',
+    browserAgents: { browserId: 'evil', browserName: 'Spoofed', enable: true }, // the window's word is never taken
+    direct: { mode: 'auto', projects: [{ id: 'p', title: 'Calculus study' }], roles: [], work: '', apps: ['Google Docs', 'Overleaf', 'Gmail', 'ChatGPT'], scopes: {}, additional: [{ name: 'Linear', website: 'https://linear.app' }] },
+  });
+  const saved = () => savedOf(started.id);
+  await until(() => saved(), (s) => s.jobs.filter((job) => job.route === 'browser').length === 4, 'the browser agents queued');
+  const value = saved();
+  assert.deepEqual(value.choices.browserAgents, { browserId: 'chrome', browserName: 'Chrome', enable: true }, 'from this Mac and the person\'s answer, not from the window');
+  const routeOf = (app) => { const job = value.jobs.find((one) => one.kind === 'import' && one.apps.includes(app)); return job ? job.route || 'engelbart' : 'none'; };
+  assert.equal(routeOf('Google Docs'), 'browser');
+  assert.equal(routeOf('Overleaf'), 'browser');
+  assert.equal(routeOf('ChatGPT'), 'browser', 'signed out of Engelbart\'s browser, and still not held for it');
+  assert.equal(value.jobs.find((job) => job.label.startsWith('Other tools')).route, 'browser');
+  assert.notEqual(routeOf('Gmail'), 'browser', 'Gmail keeps its approved-threads route');
+  assert.match(value.jobs.find((job) => job.apps.includes('Google Docs')).plan, /in the person's own Chrome/);
+  let now = await until(state(started.id), (s) => s.needs.some((need) => need.app === 'Overleaf'), 'Overleaf\'s login stop');
+  assert.equal(now.needs.some((need) => need.app === 'Google Docs' || need.app === 'ChatGPT'), false, 'no sign-in card for a browser agent\'s app');
+  const card = now.needs.find((need) => need.app === 'Overleaf');
+  assert.equal(card.own, true);
+  assert.equal(card.browser, 'Chrome');
+  assert.match(card.note, /on its tab in Chrome, then press Done/);
+  await connect.need(started.id, card.id, 'open');
+  assert.deepEqual(opened, ['chrome'], 'Open brings their browser forward');
+  assert.equal(connect.state(started.id).needs.find((need) => need.id === card.id).opened, true);
+  await connect.need(started.id, card.id, 'done');
+  release();
+  now = await until(state(started.id), (s) => s.jobs.filter((job) => job.kind === 'import').every((job) => ['done', 'failed', 'stopped'].includes(job.status)), 'every import ended');
+  const browse = turns.filter((turn) => turn.kind === 'browse');
+  assert.equal(browse.length, 4);
+  for (const turn of browse) {
+    assert.match(turn.system, /You must never: send, post, delete, archive, change settings, type a password or close tabs/);
+    assert.match(turn.system, /You may: open pages, in tabs of your own; read them; scroll; search .*download files; and export/);
+    assert.match(turn.system, /At a login page .*call needs_you/);
+    assert.match(turn.system, /Claude in Chrome/, 'Claude Code\'s way to the browser');
+    assert.match(turn.message, /<browser note="The person's own browser/);
+    assert.equal(turn.browse.enable, true);
+    assert.match(turn.browse.steps, new RegExp(`\\.connect/${started.id}/steps/`));
+    assert.deepEqual(turn.connectors, [], 'no connector of the person\'s');
+  }
+  assert.ok(now.jobs.find((job) => job.apps.includes('Google Docs')).notes >= 1, 'what it read came in through add_note');
+  connect.stop(started.id);
+  connect.dismiss(started.id);
+  fs.rmSync(memory.memoryPath(ctx.dataRoot), { force: true }); // the next tests start with no MEMORY.md
+});
+
+test('without browser agents allowed, web apps keep Engelbart\'s own browser; at most 6 agents run at once', async () => {
+  const { MAX_RUNNING } = require('../src/main/connect/session.cjs');
+  assert.equal(MAX_RUNNING, 6);
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'browse-off-'));
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: true, browser: 'Chrome' }), signedIn: async () => true, keychainNote: () => '' };
+  const browserAgents = { status: () => ({ available: true, use: false, ask: false, allowedByCli: false, consent: 'declined', browser: { id: 'chrome', name: 'Chrome' }, others: [] }) };
+  const { connect } = fakeConnect({ home: fresh, webSignIn, browserAgents });
+  const started = await connect.start({ provider: 'openai', direct: { mode: 'auto', projects: [{ id: 'p', title: 'Study' }], roles: [], work: '', apps: ['Google Docs'], scopes: {}, additional: [] } });
+  await until(() => savedOf(started.id), (s) => s.jobs.some((job) => job.apps.includes('Google Docs')), 'Google Docs queued');
+  const value = savedOf(started.id);
+  assert.equal(value.choices.browserAgents, null);
+  assert.equal(value.jobs.find((job) => job.apps.includes('Google Docs')).route, undefined);
+  connect.stop(started.id);
+  connect.dismiss(started.id);
+  fs.rmSync(memory.memoryPath(ctx.dataRoot), { force: true });
+});
+
+test('a browser agent\'s tools: what brings in what it read or downloaded, needs_you, never Engelbart\'s hidden browser', () => {
+  const names = toolsFor('browse').map((tool) => tool.name);
+  for (const name of ['add_note', 'add_to_library', 'import_pdfs', 'unpack', 'import_note_files', 'needs_you', 'wait_for_you']) assert.ok(names.includes(name), name);
+  for (const name of ['browser_open', 'browser_eval', 'browser_type', 'browser_download', 'web_chats', 'import_google_files', 'import_gmail_threads', 'save_memory']) assert.equal(names.includes(name), false, name);
+  assert.match(prompts.browseSystemPrompt('openai'), /search your tools for "node_repl js"/);
+  assert.match(prompts.browseSystemPrompt('anthropic'), /tabs_create_mcp/);
+  assert.match(prompts.BROWSE_RULES, /Never close a tab, your own included/);
+});
+
 /* MATH-117: an app on this Mac whose folder the scan did not find is looked for by an agent before the button. */
 
 const savedOf = (id) => JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', id, 'session.json'), 'utf8'));
@@ -1384,12 +1480,12 @@ test('no browser whose sign-ins can be read (Safari only): a sign-in lost mid-ru
   }
 });
 
-test('the priority queue: surveys first, then the recalls, three at a time, MEMORY.md after everything; a survey waits on the person', async () => {
+test('the priority queue: surveys first, then the recalls, three at a time (a limit of 3 here; 6 in the app), MEMORY.md after everything; a survey waits on the person', async () => {
   const order = [];
   const inner = createFakeConnectAgents({ delayMs: 30 });
   const agents = { turn: (input) => { if (input.meta && input.meta.job) order.push(`${input.meta.job.kind}:${input.meta.job.apps.join(',')}`); return inner.turn(input); } };
   process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'Claude';
-  const { connect, state } = fakeConnect({ agents });
+  const { connect, state } = fakeConnect({ agents, deps: { maxRunning: 3 } });
   try {
     const started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude', 'Gemini', 'Grok'] } } });
     const first = await until(state(started.id), (s) => s.jobs.filter((job) => job.status === 'running' || job.status === 'waiting').length === 3, 'three running');
@@ -1490,10 +1586,10 @@ test('without Claude Code or Codex signed in nothing starts; the provider can ch
 
 test('Skip holds for the run: the app is never put to the person again, and its queued work ends as skipped', async () => {
   process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'Claude';
-  const { connect, state } = fakeConnect({ delayMs: 150 });
+  const { connect, state } = fakeConnect({ delayMs: 150, deps: { maxRunning: 3 } });
   let started = null;
   try {
-    // three surveys take the three places, so the recalls wait their turn
+    // three surveys take the three places (a limit of 3 here), so the recalls wait their turn
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Gemini', 'Claude'] } } });
     const asked = await until(state(started.id), (s) => s.needs.length === 1, 'Claude\'s sign-in');
     const after = await connect.need(started.id, asked.needs[0].id, 'skip');

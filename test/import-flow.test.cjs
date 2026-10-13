@@ -9,11 +9,11 @@ const flow = require('../src/shared/import-flow.cjs');
 
 const p = (id, extra) => ({ id, installed: true, signedIn: true, subscription: null, since: null, ...extra });
 
-test('both subscribed: the person is asked, unless they picked before', () => {
+test('both subscribed: the person is always asked, the one picked before suggested (2026-10-13, second round)', () => {
   const both = [p('anthropic', { subscription: 'max' }), p('openai', { subscription: 'pro' })];
-  assert.deepEqual(flow.chooseProvider(both), { pick: null, ask: true, choices: ['anthropic', 'openai'], setup: false });
-  assert.equal(flow.chooseProvider(both, 'openai').pick, 'openai');
-  assert.equal(flow.chooseProvider(both, 'openai').ask, false);
+  assert.deepEqual(flow.chooseProvider(both), { pick: null, ask: true, choices: ['anthropic', 'openai'], setup: false, suggested: null });
+  assert.deepEqual(flow.chooseProvider(both, 'openai'), { pick: null, ask: true, choices: ['anthropic', 'openai'], setup: false, suggested: 'openai' });
+  assert.equal(flow.chooseProvider(both, 'nobody').suggested, null);
 });
 
 test('one subscribed: that one, whichever is older', () => {
@@ -100,4 +100,13 @@ test('the plan keeps the agent to the projects picked, and a manual import to it
   const manual = flow.importPlan({ app: 'Gmail', mode: 'manual', projects, scope: { kind: 'email', folders: [], items: [], people: ['lee@example.edu'], note: '', labels: [] } });
   assert.match(manual, /Read only email with these people: lee@example.edu/);
   assert.doesNotMatch(manual, /Never install/);
+});
+
+test('the plan of a browser agent sends it to the person\'s own browser, never to install anything', () => {
+  const plan = flow.importPlan({ app: 'Google Docs', mode: 'auto', projects: [{ title: 'Study', description: 'A study' }], roles: [], work: '', browser: 'Chrome' });
+  assert.match(plan, /in the person's own Chrome/);
+  assert.match(plan, /Never install a plugin or an extension/);
+  assert.doesNotMatch(flow.importPlan({ app: 'Google Docs', mode: 'auto', projects: [{ title: 'Study' }], roles: [], work: '' }), /own Chrome/);
+  assert.equal(flow.isWebApp('Google Docs'), true);
+  assert.equal(flow.isWebApp('Obsidian'), false);
 });

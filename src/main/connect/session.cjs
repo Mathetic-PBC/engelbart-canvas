@@ -54,7 +54,8 @@ const memory = require('./memory.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
 const importFlow = require('../../shared/import-flow.cjs');
 
-const MAX_RUNNING = 3;
+// At most this many agents at once (2026-10-13, the "Onboarding" workspace: "Get rid of the max_running=3 and set it to 6").
+const MAX_RUNNING = 6;
 const MAX_JOBS = 40;
 const MAX_LOG = 400;
 const SHOWN_LOG = 150;
@@ -233,8 +234,26 @@ function cleanChoices(input, homeDir, { alsoPicked = [] } = {}) {
     days: cleanDays(given.days), // how far back to look (2026-10-10): 182, 365, or null for all time
     direct: cleanDirect(given.direct, homeDir), // Import your context (2026-10-13): no librarian, one import a tool
     keychain: given.keychain !== false, // whether the person let Engelbart copy their browser's sign-ins (2026-10-13)
+    browserAgents: cleanBrowserAgents(given.browserAgents), // the web apps' imports in the person's own browser (2026-10-13)
   };
 }
+
+/**
+ * Browser agents for a run (../onboarding/browser-agents.cjs, set by start from what this Mac and the person allow, never
+ * from the window's word) → { browserId, browserName, enable } | null. `enable`: Codex's browser use turned on for the run,
+ * the person having allowed it in Engelbart rather than in their own Codex.
+ */
+function cleanBrowserAgents(value) {
+  if (!value || typeof value !== 'object' || typeof value.browserId !== 'string' || !/^[a-z]{2,20}$/.test(value.browserId)) return null;
+  const name = typeof value.browserName === 'string' ? value.browserName.replace(/[^\w .-]/g, '').trim().slice(0, 40) : '';
+  return { browserId: value.browserId, browserName: name || 'your browser', enable: value.enable === true };
+}
+
+// The web apps an Import your context run's browser agents bring in, in the person's own browser: every web app but Gmail,
+// whose threads come in only as the person approved them and under a cap (import_gmail_threads), which an agent reading
+// their inbox in their browser would go around.
+const BROWSER_AGENT_SKIPS = new Set(['Gmail']);
+const browseApp = (choices, app) => !!(choices && choices.direct && choices.browserAgents && importFlow.isWebApp(app) && !BROWSER_AGENT_SKIPS.has(app));
 
 /** The <project> block every agent is given when there is a project with a description, else nothing. */
 function projectBlock(choices) {
@@ -360,7 +379,7 @@ function shownOf(input) {
  * change; `openBridge` (../sandbox/local-tools.cjs openToolBridge); `browser` the agents' browser (./browser.cjs, null
  * where there is none); `connectors` (./connectors.cjs); `appleNotes` (./apple-notes.cjs).
  */
-function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, signInWindow = null, trace = null, now = () => new Date().toISOString() }) {
+function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, signInWindow = null, trace = null, browserAgents = null, openBrowserApp = null, now = () => new Date().toISOString() }) {
   const sessions = new Map();
   // The agent trace (../onboarding/trace.cjs): the dispatching around the agents' turns, written down as it happens.
   const traced = (entry) => { if (trace) { try { trace.event(entry); } catch { /* a record, never in the way */ } } };
@@ -373,8 +392,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   const signInChecked = new Map();
   const signInChecking = new Map();
 
-  const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended });
-  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, browser: need.browser || '', error: need.error, note: need.note || '', at: need.at });
+  const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended, ...(job.route ? { route: job.route } : {}) });
+  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, browser: need.browser || need.own || '', error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}) });
   function snapshot(s) {
     return {
       id: s.id, mode: s.mode, chat: s.chat, thinking: s.thinking, activity: s.activity, waiting: s.waitingForSurvey, done: s.done, error: s.error, finished: s.finished, stopped: s.stopped, minimized: s.minimized, dismissed: s.dismissed,
@@ -495,6 +514,16 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return `<engelbart>\nA person is connecting their library to Engelbart. Their library is at ${s.dataRoot}. ${where}\nPermissions they gave: read files anywhere in their home folder: ${s.choices.permissions.files ? 'yes' : 'no, only the folders of the sources they picked'}; use their accounts in Engelbart's background browser: ${s.choices.permissions.browser ? 'yes' : 'no (web apps are left out)'}; ask their AI assistants what they remember: ${s.choices.permissions.recall ? 'yes' : 'no'}.\n</engelbart>`;
   }
 
+  /**
+   * A browser agent's job (2026-10-13): the browser it works in, the sites of its apps, where what it downloads lands. The
+   * rules it keeps are its system prompt's (prompts.BROWSE_SYSTEM_PROMPT).
+   */
+  function browserBlock(s, job, apps) {
+    const agentsOf = s.choice.provider === 'openai' ? 'Codex\'s Chrome plugin' : 'Claude in Chrome';
+    const sites = [...new Set([...sitesOf(apps), ...((job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [])])];
+    return `<browser note="The person's own browser, where they are signed in. You work in it through ${agentsOf}.">\n${JSON.stringify({ browser: s.choices.browserAgents.browserName, sites, downloadsLandIn: `${readers.shownPath(homeDir, path.join(homeDir, 'Downloads'))} (their browser's downloads folder, unless they changed it)` })}\n</browser>`;
+  }
+
   const surveying = (s) => s.jobs.some((job) => job.kind === 'survey' && !ENDED.has(job.status)) || !!(s.held && s.held.size);
 
   async function firstMessage(s, message, { again = false } = {}) {
@@ -590,7 +619,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /* --------------------------------------------------------------------------------------------- the priority queue */
 
   /** A job queued: started when a place is free, the most urgent kind first. The same kind, source and apps go once. */
-  function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null, find = false }) {
+  function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null, find = false, route = null }) {
     if (kind === 'import' && s.skippedSources.has(source)) return null; // the person skipped it: nothing of it comes in
     const apps = kind === 'import' && given.length ? given.filter((app) => !s.skipped.has(app)) : given;
     if (given.length && !apps.length) return null;
@@ -599,9 +628,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (apps.length && apps.every((app) => s.skipped.has(app))) return null; // the person skipped them for this run
     if (kind === 'import' && apps.length && s.jobs.some((job) => job.kind === 'import' && job.source === source && !job.apps.length)) return null; // the whole source went already
     s.seq += 1;
-    const job = { id: randomUUID(), key, kind, priority: PRIORITY[kind], seq: s.seq, source, apps, label, plan, extra, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null, ...(find ? { find: true } : {}) };
+    const job = { id: randomUUID(), key, kind, priority: PRIORITY[kind], seq: s.seq, source, apps, label, plan, extra, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null, ...(find ? { find: true } : {}), ...(route === 'browser' && kind === 'import' ? { route } : {}) };
     s.jobs.push(job);
-    traced({ kind: 'dispatch', sessionId: s.id, jobId: job.id, text: `Queued ${kind}${find ? ' (folder search)' : ''}: ${label}`, detail: { kind, source, apps, label, priority: PRIORITY[kind], plan, sites: extra && extra.sites ? extra.sites : undefined } });
+    traced({ kind: 'dispatch', sessionId: s.id, jobId: job.id, text: `Queued ${kind}${find ? ' (folder search)' : ''}${job.route ? ` (in ${s.choices.browserAgents.browserName})` : ''}: ${label}`, detail: { kind, source, apps, label, priority: PRIORITY[kind], plan, route: job.route || undefined, sites: extra && extra.sites ? extra.sites : undefined } });
     logAction(s, job, find ? `Will look for your ${folderName(apps[0])}` : kind === 'survey' ? `Will look through ${apps.map(shownName).join(', ')}` : kind === 'recall' ? `Will ask ${apps.map(shownName).join(', ')} what it remembers` : kind === 'import' ? 'Queued' : 'Queued');
     pump(s);
     return job;
@@ -611,7 +640,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (s.stopped || s.suspended) return;
     for (;;) {
       const running = s.jobs.filter((job) => job.status === 'running' || job.status === 'waiting').length;
-      if (running >= MAX_RUNNING) break;
+      if (running >= (deps.maxRunning || MAX_RUNNING)) break; // deps.maxRunning: a test's smaller limit
       const next = s.jobs.filter((job) => job.status === 'queued').sort((a, b) => a.priority - b.priority || a.seq - b.seq)[0];
       if (!next) break;
       void runJob(s, next);
@@ -646,6 +675,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       skillsFor({ source: job.source, apps }, s.dataRoot),
       s.choices.custom ? `<import_instructions note="What the person typed on the choose screen for this import.">\n${s.choices.custom}\n</import_instructions>` : '',
       custom ? `<custom_instructions>\n${custom}\n</custom_instructions>` : '',
+      job.route === 'browser' && s.choices.browserAgents ? browserBlock(s, job, apps) : '',
       'Do the import now.',
     ].filter(Boolean).join('\n\n');
   }
@@ -685,6 +715,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   function systemOf(s, kind) {
+    if (kind === 'browse') return prompts.browseSystemPrompt(s.choice.provider, promptOf(s.dataRoot, 'connect-browse-system-prompt.md', prompts.BROWSE_SYSTEM_PROMPT));
     if (kind === 'survey') return prompts.SURVEY_SYSTEM_PROMPT;
     if (kind === 'recall') return prompts.RECALL_SYSTEM_PROMPT;
     if (kind === 'memory') return prompts.MEMORY_SYSTEM_PROMPT;
@@ -701,9 +732,13 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     s.controllers.add(controller);
     job.controller = controller;
     const bridged = WORK.has(job.kind);
+    // A browser agent's import (2026-10-13): in the person's own browser, through the Engelbart terminal, with the import
+    // tools that bring things in from this Mac (what it downloaded or read) and never Engelbart's hidden browser.
+    const browse = job.route === 'browser' && s.choices.browserAgents ? s.choices.browserAgents : null;
+    const turnKind = browse ? 'browse' : job.kind;
     const covered = appsOfJob(s, job);
     const sites = [...new Set([...sitesOf(covered), ...((job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [])])];
-    const page = bridged && browser && s.choices.permissions.browser && sites.length ? browser.tools({ id: job.id, label: job.label, sites }) : null;
+    const page = bridged && !browse && browser && s.choices.permissions.browser && sites.length ? browser.tools({ id: job.id, label: job.label, sites }) : null;
     const session = {
       dataRoot: s.dataRoot, homeDir, dir: s.dir, downloads: s.downloads, projectId: () => s.projectId,
       // what macOS let Engelbart read of its protected folders (MATH-110): the file tools keep out of the rest
@@ -718,7 +753,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       set gmailThreads(n) { s.gmailThreads = Math.max(0, Number(n) || 0); save(s); },
     };
     const callTool = bridged ? createImportTools({
-      session, context, zotero, github, deps, env, kind: job.kind, page, appleNotes,
+      session, context, zotero, github, deps, env, kind: turnKind, page, appleNotes,
       needs: { ask: (request) => askPerson(s, job, request), wait: () => waitAgain(s, job) },
       recall: (app, text) => keepRecall(s, app, text),
       // the chat the memory question opened (2026-10-12), deleted by the tools once its answer is kept
@@ -730,12 +765,14 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     let bridge = null;
     try {
       const onUpdate = ({ activity }) => { if (activity && activity !== job.activity) { job.activity = activity; emit(s, { soon: true }); } };
-      const connectorsNow = bridged && connectors ? await connectors.serversFor(covered).catch(() => []) : [];
+      if (browse) logAction(s, job, `In ${browse.browserName}, in a tab of its own`);
+      const connectorsNow = bridged && !browse && connectors ? await connectors.serversFor(covered).catch(() => []) : [];
       if (bridged) bridge = await openBridge(callTool, { signal: controller.signal, maxBody: 1_000_000 });
       const choice = job.kind === 'redact' ? s.redactChoice || s.choice : s.choice;
       const dirs = job.kind === 'memory' ? [s.dir, path.join(s.dataRoot, 'assets', 'md'), ...(s.projectDir ? [s.projectDir] : [])].filter((dir) => fs.existsSync(dir)) : job.kind === 'redact' ? [] : s.dirs;
       const message = job.kind === 'memory' ? await memoryMessage(s) : job.kind === 'redact' ? `<memory_md>\n${s.memoryDraft}\n</memory_md>` : jobMessage(s, job);
-      const out = await agents.turn({ choice, kind: job.kind, system: systemOf(s, job.kind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: connectorsNow, onUpdate, meta: { kind: job.kind, session: s, job, callTool } });
+      const browseOptions = browse ? { steps: path.join(s.dir, 'steps', job.id), enable: browse.enable, browser: browse.browserName } : null;
+      const out = await agents.turn({ choice, kind: turnKind, system: systemOf(s, turnKind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: browse ? [] : connectorsNow, onUpdate, browse: browseOptions, meta: { kind: turnKind, session: s, job, callTool } });
       if (job.kind === 'survey') await surveyed(s, job, out.text);
       else if (job.kind === 'memory') drafted(s, out.text);
       else if (job.kind === 'redact') await finishMemory(s, out.text);
@@ -1077,8 +1114,11 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   async function signInsFirst(s) {
     const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map(), checking: new Map() };
     if (!webSignIn || !s.choices.permissions.browser) return out;
+    // A browser agent's app (2026-10-13) is signed in in the person's own browser: Engelbart's is looked at only for its
+    // recall, which asks the assistant there.
+    const recalled = new Set(s.choices.permissions.recall ? recallApps((s.choices.sources.chats || {}).on ? s.choices.sources.chats.apps : []) : []);
     const apps = Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps)
-      .filter((app) => appOf(app) && appOf(app).reach === 'web' && signsInAtAll(app));
+      .filter((app) => appOf(app) && appOf(app).reach === 'web' && signsInAtAll(app) && (!browseApp(s.choices, app) || recalled.has(app)));
     if (!apps.length) return out;
     const results = new Map();
     const waiting = [];
@@ -1212,6 +1252,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // Skip holds for the whole run (2026-10-08: "hitting skip should skip it permanently for this run, right now it tries
     // again"): an app the person skipped is never put to them again; the agent hears at once that it was skipped.
     if (s.skipped.has(app)) return Promise.resolve({ status: 'skipped', note: `The person skipped ${shownName(app)} for this run. Do not ask again: finish without it.` });
+    if (job.route === 'browser' && s.choices.browserAgents) return askInBrowser(s, job, app, { kind, reason });
     // A web app's sign-in lost partway through (2026-10-12): settled here, with no card (Zotero's and GitHub's sign-ins,
     // connectors and folder choices keep theirs).
     if ((kind === 'signin' || kind === 'password') && webSignIn && signsInAtAll(app) && appOf(app) && appOf(app).reach === 'web') return signInAgain(s, job, app);
@@ -1221,6 +1262,25 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.needs.push(need);
       logAction(s, job, `Needs you: ${reason}`);
       traced({ kind: 'need', sessionId: s.id, jobId: job.id, text: `Needs the person (${kind}, ${shownName(app)}): ${reason}` });
+    }
+    if (!need.jobs.includes(job.id)) need.jobs.push(job.id);
+    return waitOn(s, job, need);
+  }
+
+  /**
+   * A browser agent stopped at a sign-in, a code or a check in the person's own browser (2026-10-13: "At a login page it
+   * should call `needs_you`"): a card that says so, whose Open brings that browser forward (the agent's tab is in it), and
+   * Done once they have. Nothing of Engelbart's own sign-ins is involved.
+   */
+  function askInBrowser(s, job, app, { kind, reason }) {
+    const ba = s.choices.browserAgents;
+    let need = s.needs.find((entry) => !entry.closed && entry.app === app && entry.kind === kind && entry.own);
+    if (!need) {
+      const what = kind === 'signin' || kind === 'password' ? 'Sign in' : kind === '2fa' ? 'Enter the code' : kind === 'captcha' ? 'Answer the check' : 'Do it';
+      need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: `${what} on its tab in ${ba.browserName}, then press Done. The agent never types a password.`, closed: false, own: ba.browserName, ownId: ba.browserId, at: now() };
+      s.needs.push(need);
+      logAction(s, job, `Needs you in ${ba.browserName}: ${reason}`);
+      traced({ kind: 'need', sessionId: s.id, jobId: job.id, text: `Needs the person in ${ba.browserName} (${kind}, ${shownName(app)}): ${reason}` });
     }
     if (!need.jobs.includes(job.id)) need.jobs.push(job.id);
     return waitOn(s, job, need);
@@ -1482,6 +1542,14 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const usable = readyNow();
     if (!usable.length) throw new Error('Sign in to Claude Code or Codex first: the agents run on one of them.');
     const provider = usable.includes(input && input.provider) ? input.provider : usable[0];
+    // Browser agents (2026-10-13): from what this Mac has and what the person answered, never from the window's word.
+    choices.browserAgents = null;
+    if (choices.direct && browserAgents) {
+      try {
+        const status = browserAgents.status({ provider, browserId: input && typeof input.browser === 'string' ? input.browser : null });
+        if (status.use && status.browser) choices.browserAgents = { browserId: status.browser.id, browserName: status.browser.name, enable: !status.allowedByCli };
+      } catch { choices.browserAgents = null; }
+    }
     const id = randomUUID();
     let projectId = null, projectDir = null;
     if (input && typeof input.projectId === 'string' && ID_RE.test(input.projectId)) {
@@ -1581,12 +1649,18 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const checked = await signInsFirst(s);
     if (s.stopped || s.suspended) return;
     const held = new Set([...checked.signedOut, ...checked.checking.keys()]);
+    // The web apps the person's own browser brings in (browser agents): never held for Engelbart's sign-in, never skipped
+    // for it; a recall of theirs runs only when Engelbart's browser is signed in already.
+    const browsing = new Set(d.apps.filter((app) => browseApp(s.choices, app)));
     for (const [app, name] of checked.refused) {
+      if (browsing.has(app)) continue;
       skipApp(s, app);
       logAction(s, null, `Skipped ${shownName(app)}: macOS didn't allow ${name || 'your browser'}'s sign-ins`);
     }
+    if (browsing.size) logAction(s, null, `${listed([...browsing].map(shownName))} in ${s.choices.browserAgents.browserName}, by agents with tabs of their own`);
     for (const app of d.apps) {
       if (s.skipped.has(app)) continue;
+      if (browsing.has(app)) { directImport(s, app); continue; }
       if (held.has(app)) {
         s.held.set(app, { source: importFlow.groupOfApp(app), recall: false });
         if (checked.signedOut.has(app)) signInCard(s, app);
@@ -1594,16 +1668,19 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       }
       directImport(s, app);
     }
-    for (const [app, answer] of checked.checking) lateSignIn(s, app, answer);
+    for (const [app, answer] of checked.checking) if (!browsing.has(app)) lateSignIn(s, app, answer);
     if (d.additional.length) {
+      const ba = s.choices.browserAgents;
       const sites = [...new Set(d.additional.map((tool) => hostOfSite(tool.website)).filter(Boolean))];
       const named = d.additional.map((tool) => `${tool.name}${tool.website ? ` (${tool.website})` : ''}`);
-      const plan = [importFlow.importPlan({ app: importFlow.SITES, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, period: periodName(s.choices.days) }), `These are tools they use that Engelbart has no import of its own for: ${named.join('; ')}. Open each through their sign-in in Engelbart's browser, and bring in their pages, documents or items about these projects as saved pages. One with no website given: look for it in their browser history first.`].join('\n\n');
-      dispatch(s, { kind: 'import', source: 'sites', apps: [], label: `Other tools: ${d.additional.map((tool) => tool.name).join(', ')}`.slice(0, 120), plan, extra: { sites } });
+      const how = ba ? `Open each in a tab of your own in their ${ba.browserName}, where they are signed in, and bring in their pages, documents or items about these projects: what you read as notes (add_note), files you download or export as library items.` : 'Open each through their sign-in in Engelbart\'s browser, and bring in their pages, documents or items about these projects as saved pages.';
+      const plan = [importFlow.importPlan({ app: importFlow.SITES, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, period: periodName(s.choices.days) }), `These are tools they use that Engelbart has no import of its own for: ${named.join('; ')}. ${how} One with no website given: look for it in their browser history first.`].join('\n\n');
+      dispatch(s, { kind: 'import', source: 'sites', apps: [], label: `Other tools: ${d.additional.map((tool) => tool.name).join(', ')}`.slice(0, 120), plan, extra: { sites }, route: ba ? 'browser' : null });
     }
     if (s.choices.permissions.recall && s.choices.permissions.browser) {
       for (const app of recallApps((s.choices.sources.chats || {}).on ? s.choices.sources.chats.apps : [])) {
         if (s.skipped.has(app)) continue;
+        if (browsing.has(app) && !checked.signedIn.has(app)) continue; // a recall asks in Engelbart's browser, signed out there
         if (s.held.has(app)) s.held.get(app).recall = true;
         else dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
       }
@@ -1622,7 +1699,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   function directImport(s, app) {
     const d = s.choices.direct;
     const scope = d.scopes[app] || null;
-    const plan = importFlow.importPlan({ app, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, scope, period: periodName(s.choices.days) });
+    const route = browseApp(s.choices, app) ? 'browser' : null;
+    const plan = importFlow.importPlan({ app, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, scope, period: periodName(s.choices.days), browser: route ? s.choices.browserAgents.browserName : '' });
     const where = (folders) => (folders.length ? `\n\nThe folders: ${folders.map((dir) => readers.shownPath(homeDir, dir)).join(', ')}.` : '');
     if (app === importFlow.SITES) return dispatch(s, { kind: 'import', source: 'sites', apps: [], label: 'Pages from your browser history', plan });
     if (app === importFlow.LOCAL_FOLDERS) return dispatch(s, { kind: 'import', source: 'code', apps: [], label: 'Folders on this Mac', plan: `${plan}${where(s.choices.sources.code.folders)}` });
@@ -1630,7 +1708,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const source = importFlow.groupOfApp(app);
     if (!source) return null;
     const label = `${sourceOf(source).label}: ${shownName(app)}`;
-    return dispatch(s, { kind: 'import', source, apps: [app], label, plan: app === LOCAL_PDFS ? `${plan}${where(s.choices.sources.papers.folders)}` : plan });
+    return dispatch(s, { kind: 'import', source, apps: [app], label, plan: app === LOCAL_PDFS ? `${plan}${where(s.choices.sources.papers.folders)}` : plan, route });
   }
 
   /** A web app signed out when an Import your context run starts: a card asks the person to sign in, and its import waits. */
@@ -1806,6 +1884,15 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (action === 'done' || action === 'skip') { closeNeed(s, found, action); return snapshot(s); }
     if (action !== 'open') throw new Error('Unknown action');
     found.error = '';
+    // A browser agent's stop in the person's own browser: that browser brought forward, where its tab is.
+    if (found.own) {
+      const opened = openBrowserApp ? await Promise.resolve().then(() => openBrowserApp(found.ownId)).then(() => true, () => false) : false;
+      found.opened = opened;
+      found.error = opened ? '' : `Open ${found.own} yourself: the agent's tab is there.`;
+      if (opened) logAction(s, null, `Opened ${found.own}`, 'You');
+      emit(s);
+      return snapshot(s);
+    }
     if (found.kind === 'connector' && connectors && APPS[found.app] && APPS[found.app].reach === 'connector') {
       found.busy = true;
       emit(s);
@@ -2092,6 +2179,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         kind: job.kind, priority: PRIORITY[job.kind], seq: s.seq, source: String(job.source || ''), apps, label: line(job.label, 120), plan: typeof job.plan === 'string' ? clip(job.plan, 8000) : '', extra: job.extra && Array.isArray(job.extra.sites) ? { sites: job.extra.sites.filter((host) => typeof host === 'string' && /^[a-z0-9.-]{1,200}$/i.test(host)).slice(0, 12) } : null,
         status: again ? 'queued' : job.status, skipped: !!job.skipped, notes: Number(job.notes) || 0, items: Number(job.items) || 0, titles: (Array.isArray(job.titles) ? job.titles : []).slice(0, 80).map((title) => line(title, 120)),
         activity: '', summary: again ? '' : line(job.summary, 500), error: again ? '' : line(job.error, 300), started: again ? null : job.started || null, ended: again ? null : job.ended || null,
+        ...(job.route === 'browser' && job.kind === 'import' && s.choices.browserAgents ? { route: 'browser' } : {}),
       });
     }
     // A survey that waited on a sign-in card when Engelbart closed (the card is not kept): it runs now, and asks again itself.

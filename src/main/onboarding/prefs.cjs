@@ -5,6 +5,8 @@
 //   browser    the browser whose sign-ins Engelbart uses (an id of shared/import-flow.cjs BROWSERS), when the person chose
 //              one other than their default ("Use another browser")
 //   keychain   'allowed' | 'declined': the answer to "Allow Engelbart to use your <browser> sign-ins?"
+//   browserAgents  'allowed' | 'declined': the answer to "Let agents use your browser?" (./browser-agents.cjs), asked
+//              only when the person's Claude Code or Codex does not already let its agents drive their browser
 //   flow       where onboarding was (its screen and answers), so a relaunch (Full Disk Access needs one) comes back to it
 // Ids and short words only: never a cookie, a path the person did not pick, or anything an account holds.
 
@@ -31,11 +33,12 @@ function clean(value) {
   if (PROVIDER_IDS.includes(value.provider)) out.provider = value.provider;
   if (browserById(value.browser)) out.browser = value.browser;
   if (value.keychain === 'allowed' || value.keychain === 'declined') out.keychain = value.keychain;
+  if (value.browserAgents === 'allowed' || value.browserAgents === 'declined') out.browserAgents = value.browserAgents;
   if (value.flow && typeof value.flow === 'object' && JSON.stringify(value.flow).length <= MAX_FLOW_BYTES) out.flow = value.flow;
   return out;
 }
 
-/** What is remembered → { provider?, browser?, keychain?, flow? } */
+/** What is remembered → { provider?, browser?, keychain?, browserAgents?, flow? } */
 function get(dataRoot) {
   return clean(read(dataRoot));
 }

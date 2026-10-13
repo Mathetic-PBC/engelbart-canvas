@@ -172,6 +172,8 @@ const engelbartAPI = Object.freeze({
   importBrowsers: invoke('import-browsers'), // → { browsers: [{ id, name, keychain, isDefault }], defaultId, chosenId, keychain }
   importBrowserChoose: invoke('import-browser-choose'), // (id) → the same
   importKeychain: invoke('import-keychain'), // ('allowed' | 'declined')
+  importBrowserAgents: invoke('import-browser-agents'), // ({ provider, browserId }) → whether agents can use the person's own browser
+  importBrowserAgentsAnswer: invoke('import-browser-agents-answer'), // ('allowed' | 'declined' | null)
   importDiscovery: invoke('import-discovery'), // → { projects, tools }
   importDiscoverProjects: invoke('import-discover-projects'), // ({ provider?, again? }) → the same
   importDiscoverTools: invoke('import-discover-tools'), // ({ provider?, browserId?, keychain?, again? }) → the same

@@ -94,6 +94,9 @@ const { createTrace } = require('./onboarding/trace.cjs');
 const { createTraceWindow } = require('./onboarding/trace-window.cjs');
 const { createDiscovery } = require('./onboarding/discover.cjs');
 const { createDiskAccess } = require('./onboarding/disk-access.cjs');
+const { createBrowserAgents } = require('./onboarding/browser-agents.cjs');
+const { createAgentTerminal } = require('./terminal/agent-terminal.cjs');
+const { browserById: importBrowserById } = require('../shared/import-flow.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -1046,9 +1049,21 @@ if (!hasSingleInstanceLock) {
     // dispatching around them, in <dataRoot>/.connect/trace; View ▸ Agent Trace shows it.
     const trace = createTrace({ dataRoot: () => store.config().dataRoot, notify: (entry) => { if (traceWindow) traceWindow.send(entry); } });
     traceWindow = createTraceWindow({ BrowserWindow, dialog, trace, traceDir: () => path.join(store.config().dataRoot, '.connect', 'trace'), reveal: (dir) => { fs.mkdirSync(dir, { recursive: true }); electronShell.openPath(dir); } });
+    // Browser agents (./onboarding/browser-agents.cjs, 2026-10-13): the web apps' imports in the person's own browser, run in
+    // the Engelbart terminal (./terminal/agent-terminal.cjs) as a terminal pane's session is. ENGELBART_BROWSER_AGENTS
+    // ('allowed' | 'ask' | 'none') stands in for this Mac in scripted runs.
+    const browserAgents = createBrowserAgents({ homeDir, prefs, fake: process.env.ENGELBART_BROWSER_AGENTS || (connectFake ? 'none' : '') });
+    const agentTerminal = createAgentTerminal({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => tools.environment() });
+    // The person's browser brought forward when they press Open on a browser agent's sign-in card: the agent's tab is there.
+    const openBrowserApp = (id) => new Promise((resolve, reject) => {
+      const known = importBrowserById(id);
+      const args = known ? ['-b', known.bundle] : id === 'vivaldi' ? ['-a', 'Vivaldi'] : null;
+      if (!args || process.platform !== 'darwin') { reject(new Error('Unknown browser')); return; }
+      execFile('/usr/bin/open', args, { timeout: 10_000 }, (error) => (error ? reject(error) : resolve(true)));
+    });
     const connectAgents = trace.wrap(connectFake
       ? createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 })
-      : createConnectAgents({ runDirectory: path.join(app.getPath('userData'), 'connect-runs'), interviewHome: path.join(app.getPath('userData'), 'codex-home-connect'), importHome: path.join(app.getPath('userData'), 'codex-home-connect-import'), tools }));
+      : createConnectAgents({ runDirectory: path.join(app.getPath('userData'), 'connect-runs'), interviewHome: path.join(app.getPath('userData'), 'codex-home-connect'), importHome: path.join(app.getPath('userData'), 'codex-home-connect-import'), tools, terminal: agentTerminal }));
     connect = createConnect({
       agents: connectAgents,
       trace,
@@ -1072,6 +1087,8 @@ if (!hasSingleInstanceLock) {
       appleNotes,
       webSignIn,
       signInWindow,
+      browserAgents,
+      openBrowserApp,
     });
     // The apps Engelbart's browser holds a sign-in for (their sign-in cookie in the Stage's session): ticked on the choose
     // screen, as an app found on this Mac is.
@@ -1142,7 +1159,7 @@ if (!hasSingleInstanceLock) {
     ipcMain.handle('trace:reveal', fromTrace(() => traceWindow.revealFolder()));
     app.on('will-quit', () => connect.suspendAll());
     registerEngelbartIpc({
-      onboarding: { prefs, providers: onboardingProviders, browsers: onboardingBrowsers, discovery, diskAccess, openTrace: () => traceWindow.open() },
+      onboarding: { prefs, providers: onboardingProviders, browsers: onboardingBrowsers, browserAgents, discovery, diskAccess, openTrace: () => traceWindow.open() },
       connect,
       connectors,
       appleNotes,

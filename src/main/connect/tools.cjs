@@ -115,6 +115,10 @@ const TOOLS_FOR = Object.freeze({
   // from their browser's history and bookmarks and, signed in, the apps' own pages. It looks; it never asks the person
   // anything (no needs_you) and never reaches Apple Notes or Gmail (a macOS prompt, someone else's mail).
   discover: ['browser_history', 'browser_bookmarks', 'browser_open', 'browser_read', 'browser_scroll', 'browser_wait', 'github_repos', 'list_chats', 'web_chats', 'zotero_collections', 'folder_overview'],
+  // A browser agent's import (2026-10-13, ./agents.cjs kind browse): it reads in the person's own browser, so it is given
+  // none of Engelbart's hidden browser (nor what reads through it: web chats, Drive, Gmail, Overleaf), only what brings in
+  // what it read or downloaded, and needs_you for a sign-in page.
+  browse: ['folder_overview', 'list_note_files', 'import_note_files', 'add_note', 'add_to_library', 'list_pdfs', 'import_pdfs', 'unpack', 'browser_history', 'browser_bookmarks', 'needs_you', 'wait_for_you'],
 });
 const WRITING = new Set(['import_note_files', 'import_pdfs', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_gmail_threads', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
 

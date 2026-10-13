@@ -128,6 +128,31 @@ async function importRun({ session: s, job, callTool }, delayMs, signal) {
   return n ? `Brought in ${n} notes.` : 'Nothing to bring in from the fake agent.';
 }
 
+/**
+ * A browser agent (kind browse, 2026-10-13): says its steps as one in the person's own browser would, stops at the
+ * sign-in when ENGELBART_CONNECT_FAKE_NEEDS names its app, and brings in one note a web app through add_note.
+ */
+async function browseRun({ session: s, job, callTool }, delayMs, signal, onUpdate) {
+  const apps = job.apps.length ? job.apps : ['Other tools'];
+  const browserName = (s.choices.browserAgents && s.choices.browserAgents.browserName) || 'Chrome';
+  onUpdate({ command: `fake browser agent in ${browserName}` });
+  let n = 0;
+  for (const app of apps) {
+    onUpdate({ activity: `Opening ${shownName(app)} in a tab of its own` });
+    await sleep(delayMs, signal);
+    if (String(process.env.ENGELBART_CONNECT_FAKE_NEEDS || '').split(',').includes(app)) {
+      let out = await callTool('needs_you', { kind: 'signin', reason: `Sign in to ${shownName(app)} in ${browserName}` });
+      for (let k = 0; k < 10 && out.status === 'waiting'; k += 1) out = await callTool('wait_for_you', {});
+      if (out.status === 'skipped') continue;
+    }
+    onUpdate({ activity: 'Reading the page' });
+    const out = await callTool('add_note', { title: `${shownName(app)}: a page read in ${browserName}`, markdown: `A page the fake browser agent read in ${shownName(app)}.`, source: `fake-browser:${app}` });
+    if (out.added) n += 1;
+  }
+  await sleep(delayMs, signal);
+  return n ? `Brought in ${n} pages from ${browserName}.` : `Nothing brought in from ${browserName}.`;
+}
+
 async function recallRun({ job, callTool }, delayMs, signal) {
   await sleep(delayMs, signal);
   const app = job.apps[0];
@@ -174,8 +199,9 @@ function fakeTools(meta) {
 
 function createFakeConnectAgents({ delayMs = 600 } = {}) {
   return {
-    async turn({ meta, signal, kind, message }) {
+    async turn({ meta, signal, kind, message, onUpdate = () => {} }) {
       const what = (meta && meta.kind) || kind;
+      if (what === 'browse') return { text: await browseRun(meta, delayMs, signal, onUpdate), session: null };
       if (what === 'survey') return { text: await surveyRun(meta, delayMs, signal), session: null };
       if (what === 'import') return { text: await importRun(meta, delayMs, signal), session: null };
       if (what === 'recall') return { text: await recallRun(meta, delayMs, signal), session: null };

@@ -5,8 +5,8 @@
 // (src/renderer/import). The flow:
 //   Import context → How would you like to import context? (agents choose | choose sources myself)
 //   → What kind of work do you do? → What are you working on? → What project do you want to work on first?
-//   → agents: Confirm your tools → Run in background
-//   → myself: the source picker → Choose exactly what to bring in → Run in background
+//   → agents: Confirm your tools → Import to Engelbart
+//   → myself: the source picker → Choose exactly what to bring in → Import to Engelbart
 // A project-discovery agent starts the moment Import context is pressed (before the method is chosen) and returns 1-5
 // recent projects; a tool-discovery agent starts when agents are chosen and says which of the catalog's tools the person
 // uses. Then Connect's own pipeline (src/main/connect/session.cjs, "direct" sessions) imports each confirmed tool, every
@@ -61,10 +61,12 @@ const PROVIDER_NAMES = Object.freeze({ anthropic: 'Claude Code', openai: 'Codex'
  * and codex and have a subscription for each, they should be prompted to select … if one has a subscription and one
  * doesnt … they should use the one with a subscription", else "the one with most seniority").
  * `providers` [{ id, installed, signedIn, subscription (a plan's name or null), since (ms, when it was first used, or null) }];
- * `remembered` the id picked before. → { pick, ask, choices, setup }:
- *   setup  neither can run: the tools setup comes first
- *   ask    both subscribed and nothing remembered: the person picks among `choices`
- *   pick   the provider to use
+ * `remembered` the id picked before. → { pick, ask, choices, setup, suggested }:
+ *   setup      neither can run: the tools setup comes first
+ *   ask        both subscribed: the person picks among `choices`, every time onboarding runs (2026-10-13, second round:
+ *              "I do not think I saw the popup to select the model provider"; a pick remembered from an earlier run
+ *              had skipped it). `suggested` is that earlier pick, shown chosen
+ *   pick       the provider to use
  */
 function chooseProvider(providers, remembered = null) {
   const list = (Array.isArray(providers) ? providers : []).filter((p) => p && PROVIDER_IDS.includes(p.id));
@@ -72,8 +74,8 @@ function chooseProvider(providers, remembered = null) {
   if (!ready.length) return { pick: null, ask: false, choices: [], setup: true };
   const subscribed = ready.filter((p) => !!p.subscription);
   if (subscribed.length >= 2) {
-    if (remembered && subscribed.some((p) => p.id === remembered)) return { pick: remembered, ask: false, choices: subscribed.map((p) => p.id), setup: false };
-    return { pick: null, ask: true, choices: subscribed.map((p) => p.id), setup: false };
+    const suggested = remembered && subscribed.some((p) => p.id === remembered) ? remembered : null;
+    return { pick: null, ask: true, choices: subscribed.map((p) => p.id), setup: false, suggested };
   }
   if (subscribed.length === 1) return { pick: subscribed[0].id, ask: false, choices: [subscribed[0].id], setup: false };
   const senior = [...ready].sort((a, b) => (Number.isFinite(a.since) ? a.since : Infinity) - (Number.isFinite(b.since) ? b.since : Infinity) || PROVIDER_IDS.indexOf(a.id) - PROVIDER_IDS.indexOf(b.id))[0];
@@ -224,7 +226,7 @@ function scopeOptions(id, projects) {
  * projects picked, leave out everything else; a manual import keeps to the exact folders, people, drafts, collections
  * or items the person chose. `scope` (manual) as emptyScope's, with `labels` for the ticked items' names.
  */
-function importPlan({ app, mode, projects, roles = [], work = '', scope = null, period = '' }) {
+function importPlan({ app, mode, projects, roles = [], work = '', scope = null, period = '', browser = '' }) {
   const titles = (projects || []).map((project) => project.title).filter(Boolean);
   const described = (projects || []).map((project) => `- ${project.title}${project.description ? `: ${project.description}` : ''}`).join('\n');
   const lines = [
@@ -243,14 +245,19 @@ function importPlan({ app, mode, projects, roles = [], work = '', scope = null, 
       String(scope.note || '').trim() ? `what they named: ${clip(scope.note, 400)}` : '',
     ].filter(Boolean);
     lines.push(`They chose exactly what to bring in. Read only ${exact.join(', and ')}. Nothing outside it comes in, even when it looks related.`);
+  } else if (browser) {
+    lines.push(`Find what belongs with these projects yourself, in the person's own ${browser} (their sign-ins are there) and the files on this Mac. Never install a plugin or an extension.`);
   } else {
     lines.push('Find what belongs with these projects yourself, through the person\'s existing sign-ins in Engelbart\'s browser and the files on this Mac. Never install a plugin or an extension.');
   }
   return lines.filter(Boolean).join('\n');
 }
 
+/** Whether an app is reached on the web (a browser agent's, when the person let agents use their browser). */
+const isWebApp = (app) => reachOf(app) === 'web';
+
 module.exports = {
   LOCAL_FOLDERS, SITES, GROUPS, CATALOG, CATALOG_IDS, ROLES, ROLE_NAMES, PROVIDER_IDS, PROVIDER_NAMES, BROWSERS,
-  groupOfApp, reachOf, isLocal, catalogTool, chooseProvider, browserById, browserIdOfName, orderBrowsers,
+  groupOfApp, reachOf, isLocal, isWebApp, catalogTool, chooseProvider, browserById, browserIdOfName, orderBrowsers,
   jsonOf, readProjects, readTools, scopeKind, emptyScope, scopeReady, scopeOptions, importPlan,
 };

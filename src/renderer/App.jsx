@@ -60,6 +60,9 @@ function DirectoryGate({ project, onChosen, onHome, error }) {
   );
 }
 
+// A run's status put away by the person comes back for a new step only after this long (2026-10-13).
+const STATUS_QUIET_MS = 45_000;
+
 export default function App() {
   const [config, setConfig] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -85,6 +88,9 @@ export default function App() {
   const [importModal, setImportModal] = React.useState(null);
   const [importStatus, setImportStatus] = React.useState(null);
   const seenNeeds = React.useRef(new Set());
+  // When the person last put a run's status away (Continue to project): a new step does not bring it straight back over
+  // their work (2026-10-13, second round: "I can't work in my workspace"), only once STATUS_QUIET_MS have passed.
+  const statusClosedAt = React.useRef(new Map());
   // The guided setup (ui/GuidedSetup.jsx): a new user's onboarding run for someone with projects, while `guided` (false;
   // true, started from all projects; or { projectId, workspaceId }, the workspace it was started in); its one-time offer
   // over the workspace while `guidedOffer`.
@@ -240,18 +246,31 @@ export default function App() {
   // An Import your context run's new step for the person (a sign-in, a permission) opens its status, as a modal over
   // whatever is showing (2026-10-13: "prompts should be modals that show up to the Engelbart platform").
   React.useEffect(() => {
+    const timers = [];
     for (const session of connectSessions) {
       if (!session.direct) continue;
       const fresh = (session.needs || []).filter((need) => !seenNeeds.current.has(need.id));
       for (const need of fresh) seenNeeds.current.add(need.id);
-      if (fresh.length && !importModal) setImportStatus(session.id);
+      if (!fresh.length || importModal) continue;
+      const quietFor = STATUS_QUIET_MS - (Date.now() - (statusClosedAt.current.get(session.id) || 0));
+      if (quietFor <= 0) { setImportStatus(session.id); continue; }
+      // Put away a moment ago: it comes back once the quiet time is over, if the step is still waiting then.
+      const ids = new Set(fresh.map((need) => need.id));
+      timers.push(setTimeout(() => {
+        const now = latestSessions.current.find((entry) => entry.id === session.id);
+        if (now && (now.needs || []).some((need) => ids.has(need.id))) setImportStatus((open) => open || session.id);
+      }, quietFor));
     }
+    return () => timers.forEach(clearTimeout);
   }, [connectSessions, importModal]);
   const openSession = (id) => {
     const session = connectSessions.find((entry) => entry.id === id);
     if (session && session.direct) setImportStatus(id); else setConnectPopup({ sessionId: id });
   };
+  const latestSessions = React.useRef(connectSessions);
+  latestSessions.current = connectSessions;
   const statusSession = importStatus ? connectSessions.find((entry) => entry.id === importStatus) : null;
+  const closeStatus = () => { if (importStatus) statusClosedAt.current.set(importStatus, Date.now()); setImportStatus(null); };
   const needOpen = async (session, need) => {
     try {
       if (need.app === 'Zotero' || need.app === 'GitHub') { if (await engelbartSignIn(need.app)) await api.connectNeed(session.id, need.id, 'done'); return; }
@@ -375,11 +394,13 @@ export default function App() {
   // the sites its sign-in import said to sign in to again on the Stage. A new user's (made.gettingStarted, 2026-10-09)
   // lands on its Welcome workspace's own document instead, under the walkthrough; the note is in its sidebar. The guided
   // setup started inside a project (api.welcomeWorkspace) lands the same way on the Welcome workspace it added there.
-  async function onboarded(made, { stageLinks = [] } = {}) {
+  async function onboarded(made, { stageLinks = [], session = null } = {}) {
     setError('');
     setGuided(false);
     await loadHome();
     await openProject(made.project.id, { workspaceId: made.workspaceId, tab: made.gettingStarted ? null : { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
+    // Import your context's run: its status over the project it opened, as the mockup has it; Continue to project puts it away.
+    if (session && session.id && session.direct) setImportStatus(session.id);
   }
 
   async function goHome() {
@@ -538,12 +559,12 @@ export default function App() {
       )}
       {/* in the workspace only: during onboarding the run starts before its project opens, and the modal would cover the flow */}
       {statusSession && !importModal && phase === 'workspace' && (
-        <ImportStatus session={statusSession} onClose={() => setImportStatus(null)}
+        <ImportStatus session={statusSession} onClose={closeStatus}
           onNeed={(need) => needOpen(statusSession, need)}
+          onNeedDone={(need) => api.connectNeed(statusSession.id, need.id, 'done').catch(fail)}
           onSkip={(need) => api.connectNeed(statusSession.id, need.id, 'skip').catch(fail)}
           onStop={() => api.connectStop(statusSession.id).catch(fail)}
-          onDone={() => { const id = statusSession.id; setImportStatus(null); api.connectDismiss(id).catch(() => {}); }}
-          onTrace={() => api.importTraceOpen().catch(() => {})} />
+          onDone={() => { const id = statusSession.id; setImportStatus(null); api.connectDismiss(id).catch(() => {}); }} />
       )}
       {connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>

@@ -2,7 +2,7 @@ import React from 'react';
 import { IMPORT_CSS } from './import-css.js';
 import { TOOL_LOGOS, WORKS, BROWSER_LOGOS, PROVIDER_LOGOS, APP_ICON } from './logos.js';
 import {
-  CATALOG, CATALOG_IDS, ROLES, GROUPS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf,
+  CATALOG, CATALOG_IDS, ROLES, GROUPS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp,
   scopeKind, emptyScope, scopeReady, scopeOptions,
 } from '../../shared/import-flow.cjs';
 import { LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, cleanDays, shownName } from '../../shared/connect-sources.cjs';
@@ -13,11 +13,11 @@ import { LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, cleanDays, shownName } from '
 //   Import context → (the provider: asked when both are subscribed; tools set up when neither can run) → How would you
 //   like to import context? → (the browser's sign-ins) → What kind of work do you do? → What are you working on?
 //   → What project do you want to work on first? → agents: Confirm your tools | myself: the sources, then exactly what
-//   to bring in → (Full Disk Access) → Run in background
+//   to bring in → (Full Disk Access) → (Let agents use your browser?) → Import to Engelbart
 //
 // The project agent starts the moment the provider is known, before the method is chosen; the tool agent once the
-// method is "Let agents choose" and the browser's sign-ins are answered (src/main/onboarding/discover.cjs). Run in
-// background starts Connect's pipeline in its direct mode (src/main/connect/session.cjs): one import agent a tool, each
+// method is "Let agents choose" and the browser's sign-ins are answered (src/main/onboarding/discover.cjs). Import to
+// Engelbart starts Connect's pipeline in its direct mode (src/main/connect/session.cjs): one import agent a tool, each
 // told only the projects picked. In a new user's onboarding (`mode` 'new') a project is made for every project picked
 // and the first opens; over a workspace (`mode` 'modal', the redo that replaced "guided setup") the imports go to that
 // project and the modal closes. Everything it talks to goes through `api` (./import-api.js in the app, the standalone
@@ -54,7 +54,8 @@ const FOLDER = <Svg d={'<path d="M2 5h7l2 2h11v13H2z"/>'} />;
 const GLOBE = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 17 0 0 0 0 18 17 17 0 0 0 0-18"/>'} />;
 const WEB = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18"/>'} />;
 const PLUS = <Svg d={'<path d="M12 5v14M5 12h14"/>'} />;
-const PROJECT = <Svg d={'<path d="M4 4h7l2 2h7v14H4zM8 11h8M8 15h5"/>'} />;
+// A project's symbol is the workspace icon (../ui/SidebarIcons.jsx WorkspaceIcon): workspaces become projects (2026-10-13).
+const PROJECT = <Svg d={'<rect x="3.5" y="3" width="6.5" height="18" rx="2.5"/><rect x="14" y="3" width="6.5" height="10.5" rx="2.5"/><rect x="14" y="16.5" width="6.5" height="4.5" rx="2.25"/>'} />;
 const CURSOR = <Svg d={'<path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.44l-1.58 6.12a.5.5 0 0 1-.95.07z"/>'} />;
 
 const Check = ({ on }) => <span className={`cb ${on ? 'on' : ''}`}>{on ? CHECK : null}</span>;
@@ -85,7 +86,7 @@ const fresh = () => ({
   mode: null, modeChoice: null, modeFirst: true,
   provider: null, providerChoice: null,
   roles: [], work: '', customProjects: [], picked: [],
-  confirmed: [], touched: [], added: [], showAll: false,
+  confirmed: [], touched: [], added: [], toolOrder: [],
   picks: [...DEFAULT_PICKS], open: ['notes'], period: DEFAULT_PERIOD_DAYS, consent: true, leaves: false, menu: null,
   scopes: {}, browserChoice: null, folderAnswers: null, pendingRun: false,
   scratchName: '', scratchDesc: '',
@@ -96,6 +97,33 @@ const allProjects = (F, discovery) => [...((discovery && discovery.projects && d
 
 /** The apps a run imports from: the tools confirmed (agents), else the sources picked (myself). */
 const runApps = (F) => (F.mode === 'auto' ? F.confirmed : F.picks);
+
+const RUN_LABEL = 'Import to Engelbart';
+
+/** Every tool the tools page lists (the catalog's, then those added), its ids. */
+const toolIds = (F) => [...CATALOG.map((tool) => tool.id), ...F.added.map((tool) => tool.id).filter((id) => !CATALOG_IDS.includes(id))];
+
+/** The tools page's order settled now: the selected tools first, then the rest, each in the catalog's order. */
+function settleTools(F) {
+  const all = toolIds(F);
+  return [...all.filter((id) => F.confirmed.includes(id)), ...all.filter((id) => !F.confirmed.includes(id))];
+}
+
+/** The tools page's order: what was settled (settleTools), then any tool it does not hold yet, the selected ones first. */
+function orderedTools(F) {
+  const all = toolIds(F);
+  const settled = (F.toolOrder || []).filter((id) => all.includes(id));
+  const rest = all.filter((id) => !settled.includes(id));
+  return [...settled, ...rest.filter((id) => F.confirmed.includes(id)), ...rest.filter((id) => !F.confirmed.includes(id))];
+}
+
+/** `order` with `id` placed after the last selected tool (a tool added by name, selected as it is added). */
+function placeSelected(order, id, confirmed) {
+  const without = order.filter((one) => one !== id);
+  let at = 0;
+  without.forEach((one, index) => { if (confirmed.includes(one)) at = index + 1; });
+  return [...without.slice(0, at), id, ...without.slice(at)];
+}
 
 /** A source's hint under its name in the picker (the mockup's third column). */
 function sourceHint(app, diskGranted) {
@@ -187,7 +215,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         if (!added.some((tool) => tool.id === id)) added.push({ id, name: extra.name, website: extra.website || '', source: 'agent' });
         if (extra.used && !now.touched.includes(id)) confirmed.add(id);
       }
-      return { confirmed: [...confirmed], added };
+      return { confirmed: [...confirmed], added, toolOrder: settleTools({ ...now, confirmed: [...confirmed], added }) };
     });
   }, [discovery && discovery.tools && discovery.tools.results]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -234,7 +262,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     const out = status && status.decision;
     if (!out || out.setup) { set({ purpose, dialog: 'tools-setup' }); return; }
     if (latest.current.provider && readyProviders().concat(out.choices || []).includes(latest.current.provider)) { providerReady(latest.current.provider, purpose); return; }
-    if (out.ask) { set({ purpose, providerChoice: null, dialog: 'provider-choice' }); return; }
+    if (out.ask) { set({ purpose, providerChoice: out.suggested || null, dialog: 'provider-choice' }); return; }
     providerReady(out.pick, purpose);
   };
   const providerReady = (provider, purpose) => {
@@ -246,22 +274,24 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     } else if (purpose === 'run') void run(provider);
     else set({ dialog: null });
   };
-  const chooseProvider = async () => {
-    const pick = latest.current.providerChoice;
+  // Choosing is continuing, as the import method is (one click).
+  const chooseProvider = async (pick) => {
     if (!pick) return;
+    set({ providerChoice: pick });
     try { await api.rememberProvider(pick); } catch { /* asked again next time */ }
     providerReady(pick, latest.current.purpose);
   };
 
   /* -------- the start */
   const importContext = () => { setError(''); void needProvider('start'); };
-  const modeContinue = () => {
-    const choice = F.modeChoice;
+  // Choosing a method is continuing (2026-10-13, second round: "clicking either let agents choose or choose sources myself
+  // should act as continuing, no need for two clicks").
+  const chooseMode = (choice) => {
     if (!choice) return;
-    const first = F.modeFirst;
-    set({ mode: choice, modeFirst: false });
+    const first = latest.current.modeFirst;
+    set({ mode: choice, modeChoice: choice, modeFirst: false });
     if (first) { keychainGate(() => set({ dialog: null, screen: 'roles' }), choice); return; }
-    if (choice === 'auto') keychainGate(() => { set({ dialog: null, screen: 'tools' }); }, choice);
+    if (choice === 'auto') keychainGate(() => { set((now) => ({ dialog: null, screen: 'tools', toolOrder: settleTools(now) })); }, choice);
     else set({ dialog: null, screen: 'picker' });
   };
 
@@ -296,6 +326,31 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     api.discoverTools({ provider: now.provider, browserId: (browsers && browsers.chosenId) || null, keychain: answer || (browsers && browsers.keychain) || null }).then(setDiscovery).catch(() => {});
   };
 
+  /* -------- browser agents */
+  // The web apps' imports in the person's own browser (2026-10-13, second round: "We will use computer use in my real
+  // browser"). Asked before the run only when their Claude Code or Codex does not already let its agents use the browser
+  // (src/main/onboarding/browser-agents.cjs); "Don't allow" asks again, the safe choice the button and leaving them out a link.
+  const afterBrowserAgents = React.useRef(null);
+  const browserAgentsGate = async (provider, then) => {
+    const now = latest.current;
+    const web = runApps(now).filter((id) => isWebApp(id) && id !== 'Gmail');
+    const others = now.mode === 'auto' ? now.added.filter((tool) => now.confirmed.includes(tool.id)) : [];
+    if (!web.length && !others.length) { then(); return; }
+    let status = null;
+    try { status = await api.browserAgents({ provider, browserId: (browsers && browsers.chosenId) || null }); } catch { status = null; }
+    if (!status || !status.ask) { then(); return; }
+    afterBrowserAgents.current = then;
+    set({ dialog: 'browser-agents', agentsBrowser: status.browser ? status.browser.name : 'your browser', agentsApps: [...web.map((id) => shownName(id)), ...others.map((tool) => tool.name)].slice(0, 6) });
+  };
+  const browserAgentsAnswer = async (answer) => {
+    if (answer === 'declined' && latest.current.dialog === 'browser-agents') { set({ dialog: 'browser-agents-confirm' }); return; }
+    try { await api.browserAgentsAnswer(answer); } catch (failure) { say(failure); }
+    const go = afterBrowserAgents.current;
+    afterBrowserAgents.current = null;
+    set({ dialog: null });
+    if (go) go();
+  };
+
   /* -------- the run */
   const runGate = () => {
     const now = latest.current;
@@ -307,7 +362,14 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     void run();
   };
 
-  async function run(providerNow = null) {
+  /** The run, once the person said whether agents may use their browser (when that is theirs to say). */
+  function run(providerNow = null) {
+    const provider = providerNow || latest.current.provider;
+    if (!provider) { void needProvider('run'); return Promise.resolve(); }
+    return browserAgentsGate(provider, () => { void startRun(provider); });
+  }
+
+  async function startRun(providerNow = null) {
     const now = latest.current;
     const provider = providerNow || now.provider;
     if (!provider) { void needProvider('run'); return; }
@@ -330,6 +392,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         provider,
         permissions: { files: true, browser: true, recall: true, notes: apps.includes('Apple Notes') },
         keychain: !browsers || browsers.keychain !== 'declined',
+        browser: (browsers && browsers.chosenId) || null,
         days: cleanDays(now.period),
         ...(mode === 'modal' && into ? { projectId: into, ...(workspaceId ? { workspaceId } : {}) } : {}),
         direct: { mode: now.mode || 'auto', projects, roles: now.roles, work: now.work, apps, scopes, additional },
@@ -347,6 +410,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       }
       if (!first) first = await api.startProject({ name: 'My research', description: '', folder: 'new', directory: '', context: [], onboarding: true, connect: session.id });
       await onDone(first, { session });
+      // Off the screen once the project has opened: the flow is never left on Starting your imports over the workspace.
+      set({ dialog: null });
     } catch (failure) {
       say(failure);
       set({ dialog: null });
@@ -385,6 +450,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   };
 
   /* -------- picks */
+  /** A supported tool added from "+ Add a tool": selected, and placed with the selected ones. */
+  const pickTool = (id) => set((now) => ({ confirmed: [...new Set([...now.confirmed, id])], touched: [...new Set([...now.touched, id])], toolOrder: placeSelected(orderedTools(now), id, now.confirmed), dialog: null }));
   const keysOf = (group) => (group.apps.length ? group.apps : [`__${group.id}`]).map((key) => (key === '__sites' ? SITES : key));
   const allKeys = GROUPS.flatMap(keysOf);
   const toggle = (list, id) => (list.includes(id) ? list.filter((one) => one !== id) : [...list, id]);
@@ -450,19 +517,19 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
             </button>
           ))}
         </div>
-        {discoveryLine()}
         <footer className="work-foot"><span /><button type="button" className="btn" disabled={!F.roles.length} onClick={() => { set({ screen: 'work' }); window.scrollTo(0, 0); }}>Continue{CHEV}</button></footer>
       </div>
     </main>
   );
 
+  // Not optional (2026-10-13, second round: "Dont make this optional"); the project agent is already running, so what is
+  // written here goes to the import agents with the projects picked.
   const workPage = () => (
     <main className="work-page" data-import-screen="work">
       <div className="work-column">
         {flowHeader('What are you working on?', 'work-description-title', () => set({ screen: 'roles' }))}
-        <textarea id="work-description" className="field" rows={4} aria-label="What are you working on?" placeholder="Describe your work (optional)" value={F.work} onChange={(event) => set({ work: event.target.value.slice(0, 2000) })} />
-        {discoveryLine()}
-        <footer className="work-foot"><span /><button type="button" className="btn" onClick={() => set({ screen: 'projects' })}>Continue{CHEV}</button></footer>
+        <textarea id="work-description" className="field" rows={4} aria-label="What are you working on?" placeholder="Describe your work" value={F.work} onChange={(event) => set({ work: event.target.value.slice(0, 2000) })} />
+        <footer className="work-foot"><span /><button type="button" className="btn" disabled={!F.work.trim()} onClick={() => set({ screen: 'projects' })}>Continue{CHEV}</button></footer>
       </div>
     </main>
   );
@@ -489,7 +556,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           <footer className="work-foot">
             <span className="muted">{F.picked.length} selected</span>
             <button type="button" className="btn" disabled={!F.picked.length} onClick={() => {
-              if (F.mode === 'auto') { set({ screen: 'tools' }); if (toolStatus === 'idle' || toolStatus === 'stale') startTools(); } else set({ screen: 'picker' });
+              if (F.mode === 'auto') { set((now) => ({ screen: 'tools', toolOrder: settleTools(now) })); if (toolStatus === 'idle' || toolStatus === 'stale') startTools(); } else set({ screen: 'picker' });
               window.scrollTo(0, 0);
             }}>Continue{CHEV}</button>
           </footer>
@@ -501,7 +568,11 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const toolsPage = () => {
     const scanned = toolStatus === 'done';
     const detected = (id) => results && (results.tools.find((tool) => tool.id === id) || {});
-    const shown = CATALOG.filter((tool) => F.showAll || F.confirmed.includes(tool.id) || (tool.local && (detected(tool.id) || {}).used));
+    // Every supported tool, the selected ones first (2026-10-13, second round: "dont have the toggle … show all
+    // automatically but all the selected ones should be shown on top"). The order is settled when the page opens and when
+    // the agent answers (toolOrder), not on every click, so a tool never jumps away from the pointer that ticked it.
+    const byId = new Map([...CATALOG, ...F.added].map((tool) => [tool.id, tool]));
+    const shown = orderedTools(F).map((id) => byId.get(id)).filter(Boolean);
     const subtitle = (tool) => {
       if (tool.source === 'user') return 'Added by you';
       if (tool.source === 'agent') return 'Found in your browser';
@@ -520,7 +591,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           {discovery && discovery.tools && discovery.tools.error && <div className="discovery-line" role="status"><span>{`The agent didn’t finish (${discovery.tools.error}). What was found on this Mac is ticked.`}</span></div>}
           <div className="tool-scroll" role="region" aria-label="Available tools" tabIndex={0}>
             <div className="tool-grid">
-              {[...shown, ...F.added].map((tool) => (
+              {shown.map((tool) => (
                 <button key={tool.id} type="button" className="tool-choice" data-work-tool={tool.id} role="checkbox" aria-checked={F.confirmed.includes(tool.id)} title={(detected(tool.id) || {}).evidence || ''} onClick={() => set((now) => ({ touched: [...new Set([...now.touched, tool.id])], confirmed: toggle(now.confirmed, tool.id) }))}>
                   <ToolLogo id={tool.id} />
                   <span><b>{tool.name}</b><small>{subtitle(tool)}</small></span>
@@ -530,12 +601,12 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
             </div>
           </div>
           <div className="tool-list-actions">
-            <button type="button" className="link under" onClick={() => set((now) => ({ showAll: !now.showAll }))}>{F.showAll ? 'Show detected tools' : 'Show all supported tools'}</button>
+            <span />
             <button type="button" className="link under" onClick={() => { setCatalogQuery(''); setDraft({ title: '', description: '', tool: '', website: '' }); set({ dialog: 'work-add-tool' }); }}>+ Add a tool</button>
           </div>
           <footer className="work-foot">
             <span className="muted">{F.confirmed.length} tools selected</span>
-            <button type="button" className="btn" data-import-run="1" disabled={!(scanned || F.skipWait) || !F.confirmed.length} onClick={runGate}>Run in background{CHEV}</button>
+            <button type="button" className="btn" data-import-run="1" disabled={!(scanned || F.skipWait) || !F.confirmed.length} onClick={runGate}>{RUN_LABEL}{CHEV}</button>
           </footer>
         </div>
       </main>
@@ -680,7 +751,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           </div>
           <footer className="work-foot">
             <span className="muted">{`${sources.filter((id) => scopeReady(scopeOf(id))).length} of ${sources.length} sources scoped`}</span>
-            <button type="button" className="btn" data-import-run="1" disabled={!ready} onClick={runGate}>Run in background{CHEV}</button>
+            <button type="button" className="btn" data-import-run="1" disabled={!ready} onClick={runGate}>{RUN_LABEL}{CHEV}</button>
           </footer>
         </div>
       </main>
@@ -763,14 +834,14 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       return (
         <>
           <h3>Which provider should Engelbart use for onboarding?</h3>
-          <div className="profiles provider-choices" role="radiogroup" aria-label="Onboarding provider">
+          <div className="profiles provider-choices" role="group" aria-label="Onboarding provider">
             {choices.map((id) => (
-              <button key={id} type="button" className="prof browser-choice" role="radio" aria-checked={F.providerChoice === id} data-onboarding-provider={id} onClick={() => set({ providerChoice: id })}>
-                <Logo src={PROVIDER_LOGOS[id]} /><span>{id === 'anthropic' ? 'Claude' : 'Codex'}</span>{F.providerChoice === id ? CHECK : null}
+              <button key={id} type="button" className="prof browser-choice" data-onboarding-provider={id} onClick={() => chooseProvider(id)}>
+                <Logo src={PROVIDER_LOGOS[id]} /><span>{id === 'anthropic' ? 'Claude' : 'Codex'}</span>
               </button>
             ))}
           </div>
-          <div className="mf"><button type="button" className="link" onClick={() => set({ dialog: F.purpose === 'start' ? 'intro' : null })}>Back</button><button type="button" className="btn" disabled={!F.providerChoice} onClick={chooseProvider}>Continue</button></div>
+          <div className="mf mf-start"><button type="button" className="link" onClick={() => set({ dialog: F.purpose === 'start' ? 'intro' : null })}>Back</button></div>
         </>
       );
     }
@@ -793,14 +864,14 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       return (
         <>
           <h3>How would you like to import context?</h3>
-          <div className="profiles import-modes" role="radiogroup" aria-label="Import method">
+          <div className="profiles import-modes" role="group" aria-label="Import method">
             {[['auto', 'Let agents choose'], ['manual', 'Choose sources myself']].map(([value, label]) => (
-              <button key={value} type="button" className="prof import-mode" role="radio" aria-checked={F.modeChoice === value} data-import-mode={value} onClick={() => set({ modeChoice: value })}>
-                <span className="mode-icon">{value === 'auto' ? CURSOR : FOLDER}</span><span className="import-mode-copy"><b>{label}</b></span>{F.modeChoice === value ? CHECK : null}
+              <button key={value} type="button" className="prof import-mode" data-import-mode={value} onClick={() => chooseMode(value)}>
+                <span className="mode-icon">{value === 'auto' ? CURSOR : FOLDER}</span><span className="import-mode-copy"><b>{label}</b></span>
               </button>
             ))}
           </div>
-          <div className="mf"><button type="button" className="link" onClick={() => set(F.modeFirst ? { dialog: 'intro', screen: 'picker' } : { dialog: null })}>Back</button><button type="button" className="btn" data-import-mode-continue="1" disabled={!F.modeChoice} onClick={modeContinue}>Continue</button></div>
+          <div className="mf mf-start"><button type="button" className="link" onClick={() => set(F.modeFirst ? { dialog: 'intro', screen: 'picker' } : { dialog: null })}>Back</button></div>
         </>
       );
     }
@@ -878,6 +949,26 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       const list = Object.keys(answers).length ? Object.keys(answers) : ['Desktop', 'Documents', 'Downloads', 'iCloud Drive'];
       return (<><h3>Folder permissions</h3><p>Only folders you allowed will be included.</p><div className="folder-results">{list.map((folder) => <div key={folder}><span>{folder}</span><span className={answers[folder] === 'allowed' ? 'allowed' : 'failed'}>{answers[folder] === 'allowed' ? 'Allowed' : 'Left out'}</span></div>)}</div><div className="mf">{list.some((folder) => answers[folder] !== 'allowed') && <button type="button" className="link" onClick={askFolders}>Review left-out folders</button>}<button type="button" className="btn" onClick={() => { set({ dialog: null }); runGate(); }}>Continue</button></div></>);
     }
+    if (d === 'browser-agents') {
+      const name = F.agentsBrowser || 'your browser';
+      const who = F.provider === 'openai' ? 'OpenAI' : 'Anthropic';
+      const apps = F.agentsApps && F.agentsApps.length ? F.agentsApps.join(', ') : 'your web apps';
+      return (
+        <>
+          <div className="key">{WEB}</div>
+          <h3>{`Let agents use ${name}?`}</h3>
+          <p>{`Agents will bring in ${apps} from ${name}, where you’re already signed in. Each works in a tab of its own in the background.`}</p>
+          <ul className="guardrails">
+            <li><b>They can</b> open, read, scroll, search, download and export.</li>
+            <li><b>They never</b> send, post, delete, archive, change settings, type a password or close tabs.</li>
+            <li><b>At a sign-in page</b> they stop and ask you.</li>
+          </ul>
+          <p className="fine">{`What they see in ${name}, screenshots included, goes to ${who} as in any chat with its models.`}</p>
+          <div className="mf"><button type="button" className="link" onClick={() => browserAgentsAnswer('declined')}>Don’t allow</button><button type="button" className="btn small" data-import-browser-agents-allow="1" onClick={() => browserAgentsAnswer('allowed')}>Allow</button></div>
+        </>
+      );
+    }
+    if (d === 'browser-agents-confirm') return (<><h3>Are you sure?</h3><p>{`Without ${F.agentsBrowser || 'your browser'}, agents bring in your web apps through Engelbart’s own browser instead, with the sign-ins it copied or those you make inside Engelbart.`}</p><div className="mf"><button type="button" className="link" onClick={() => browserAgentsAnswer('declined')}>Continue without it</button><button type="button" className="btn small" onClick={() => browserAgentsAnswer('allowed')}>{`Allow ${F.agentsBrowser || 'your browser'}`}</button></div></>);
     if (d === 'starting') return (<><h3>Starting your imports</h3><p>{`Each agent will bring in only what pertains to ${chosen.map((project) => project.title).join(' and ') || 'your projects'}.`}</p><div className="discovery-line" role="status"><span className="activity-dot" /><span>{mode === 'modal' ? 'Starting…' : 'Setting up your projects…'}</span></div></>);
     if (d === 'work-add-project') {
       const save = () => {
@@ -903,9 +994,13 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         if (website && !/^https?:\/\//i.test(website)) { setError('Use a website beginning with https://'); return; }
         setError('');
         const known = CATALOG.find((tool) => tool.name.toLowerCase() === name.toLowerCase());
-        if (known) { set((now) => ({ confirmed: [...new Set([...now.confirmed, known.id])], touched: [...new Set([...now.touched, known.id])], dialog: null })); return; }
+        if (known) { pickTool(known.id); return; }
         const id = `custom:${name.toLowerCase()}`;
-        set((now) => ({ added: now.added.some((tool) => tool.id === id) ? now.added : [...now.added, { id, name, website, source: 'user' }], confirmed: [...new Set([...now.confirmed, id])], touched: [...new Set([...now.touched, id])], dialog: null }));
+        set((now) => {
+          const added = now.added.some((tool) => tool.id === id) ? now.added : [...now.added, { id, name, website, source: 'user' }];
+          const confirmed = [...new Set([...now.confirmed, id])];
+          return { added, confirmed, touched: [...new Set([...now.touched, id])], toolOrder: placeSelected(orderedTools({ ...now, added }), id, now.confirmed), dialog: null };
+        });
       };
       return (
         <>
@@ -913,7 +1008,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           <input id="catalog-search" className="field" placeholder="Search supported tools…" aria-label="Search supported tools" value={catalogQuery} onChange={(event) => setCatalogQuery(event.target.value)} />
           <div className="catalog-tool-list">
             {CATALOG.filter((tool) => !F.confirmed.includes(tool.id) && tool.name.toLowerCase().includes(catalogQuery.toLowerCase())).map((tool) => (
-              <button key={tool.id} type="button" onClick={() => set((now) => ({ confirmed: [...new Set([...now.confirmed, tool.id])], touched: [...new Set([...now.touched, tool.id])], showAll: now.showAll, dialog: null }))}><ToolLogo id={tool.id} />{tool.name}</button>
+              <button key={tool.id} type="button" onClick={() => pickTool(tool.id)}><ToolLogo id={tool.id} />{tool.name}</button>
             ))}
           </div>
           <label className="field-label">Or add another tool<input id="custom-tool-name" className="field" placeholder="Tool name" value={draft.tool} onChange={(event) => setDraft((now) => ({ ...now, tool: event.target.value }))} /></label>
@@ -937,7 +1032,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         <div className="ix-app" inert={d ? true : undefined}>{screen}</div>
         {error && <div className="ix-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
         {body && (
-          <div className={`scrim ${d === 'intro' ? 'intro-scrim' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !['intro', 'starting', 'disk-wait', 'folders-asking'].includes(d)) set({ dialog: d === 'privacy' || d === 'apps' ? 'intro' : null }); }}>
+          <div className={`scrim ${d === 'intro' ? 'intro-scrim' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !['intro', 'starting', 'disk-wait', 'folders-asking', 'browser-agents', 'browser-agents-confirm'].includes(d)) set({ dialog: d === 'privacy' || d === 'apps' ? 'intro' : null }); }}>
             <section className={`modal ${modalClass}`} role="dialog" aria-modal="true" aria-label={d}>{body}</section>
           </div>
         )}
@@ -954,4 +1049,12 @@ const EXTRA_CSS = `
 .ix.ix-in-modal{min-height:100%}
 .ix.ix-in-modal .page,.ix.ix-in-modal .work-page{min-height:100%}
 .ix .prof small{display:block;font-size:11.5px;color:var(--mute);font-weight:400}
+.ix .mf.mf-start{justify-content:flex-start}
+.ix .mf .mf-left{margin-right:auto}
+.ix textarea.field{resize:none}
+.ix .import-mode.prof:hover,.ix .provider-choices .prof:hover{border-color:var(--ink)}
+.ix ul.guardrails{margin:4px 0 12px;padding:0;list-style:none;font-size:13px;line-height:1.5;text-align:left}
+.ix ul.guardrails li{padding:6px 0;border-top:1px solid var(--line)}
+.ix ul.guardrails li:first-child{border-top:0}
+.ix p.fine{font-size:12px;color:var(--mute);margin-top:0}
 `;

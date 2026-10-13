@@ -20,6 +20,8 @@ const MAX_FIELD = 400_000;
 const MAX_MEMORY = 400;
 const MAX_DAYS = 14;
 const MAX_ACTIVITY = 300;
+const MAX_PICTURES = 80;
+const MAX_TRANSCRIPT = 200_000;
 
 const cut = (value, max = MAX_FIELD) => {
   const text = value == null ? '' : typeof value === 'string' ? value : JSON.stringify(value, null, 1);
@@ -64,6 +66,9 @@ function createTrace({ dataRoot, notify = () => {}, now = () => new Date().toISO
       label: (job && job.label) || meta.label || kind, sessionId: s ? s.id : meta.sessionId || null, jobId: job ? job.id : null,
       resumed: !!session, agentSession: session || null, dirs: (dirs || []).slice(0, 40),
       system: cut(system), message: cut(message), output: '', error: '', activity: [],
+      // A browser agent's (kind browse): the command it ran in the Engelbart terminal, the screenshots it was shown (their
+      // files in the session's steps folder), what its terminal printed.
+      ...(kind === 'browse' ? { command: '', pictures: [], transcript: '' } : {}),
     });
   }
 
@@ -74,6 +79,14 @@ function createTrace({ dataRoot, notify = () => {}, now = () => new Date().toISO
     if (last && last.text === text) return;
     entry.activity.push({ at: now(), text: String(text).slice(0, 300) });
     if (entry.activity.length > MAX_ACTIVITY) entry.activity.splice(0, entry.activity.length - MAX_ACTIVITY);
+  }
+
+  /** A browser agent's command, screenshot or terminal transcript, kept with its turn. */
+  function turnBrowse(entry, { command, picture, transcript } = {}) {
+    if (!entry) return;
+    if (command) entry.command = String(command).slice(0, 4000);
+    if (picture && Array.isArray(entry.pictures) && entry.pictures.length < MAX_PICTURES) { entry.pictures.push({ at: now(), file: String(picture) }); keep(entry); }
+    if (transcript) entry.transcript = cut(transcript, MAX_TRANSCRIPT);
   }
 
   function turnEnded(entry, { output = '', error = '', session = null } = {}) {
@@ -121,6 +134,7 @@ function createTrace({ dataRoot, notify = () => {}, now = () => new Date().toISO
         const entry = turnStarted(input);
         const onUpdate = (update) => {
           if (update && update.activity) turnActivity(entry, update.activity);
+          if (update && (update.command || update.picture || update.transcript)) turnBrowse(entry, update);
           if (input.onUpdate) input.onUpdate(update);
         };
         try {
@@ -135,7 +149,7 @@ function createTrace({ dataRoot, notify = () => {}, now = () => new Date().toISO
     };
   }
 
-  return { turnStarted, turnActivity, turnEnded, event, list, wrap };
+  return { turnStarted, turnActivity, turnBrowse, turnEnded, event, list, wrap };
 }
 
 module.exports = { createTrace, cut, MAX_FIELD };
