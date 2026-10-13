@@ -71,6 +71,15 @@ export const DOC = () => (
   </svg>
 );
 
+// The same sheet with code brackets on it: an html page on disk, a file rather than a link (2026-10-12).
+export const HTML = () => (
+  <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+    <path d="M5 1.5h4.5L13 5v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z" />
+    <path d="M9.5 1.5v2A1.5 1.5 0 0 0 11 5h2" />
+    <path d="M6.75 8.25 5.25 10l1.5 1.75M9.25 8.25l1.5 1.75-1.5 1.75" />
+  </svg>
+);
+
 export const SEARCH = () => (
   <svg viewBox="0 0 16 16" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" aria-hidden="true">
     <circle cx={6.75} cy={6.75} r={4.5} />
@@ -127,7 +136,7 @@ export const KIND = {
   git: { glyph: <GH />, label: 'git repo' },
   folder: { glyph: <FOLDER />, label: 'folder' },
   website: { glyph: <GLOBE />, label: 'link' },
-  html: { glyph: <GLOBE />, label: 'html' }, // a page on disk, the Stage's saved copies among them: a page, not code
+  html: { glyph: <HTML />, label: 'html' }, // a page on disk, the Stage's saved copies among them: a file of markup
   data: { glyph: <LAYERS />, label: 'data file' },
   chat: { glyph: <CHAT />, label: 'chat', fixed: true },
   task: { glyph: <TASK />, label: 'task', fixed: true },
@@ -146,8 +155,8 @@ export function kindOf(item) {
 
 // The design draws a note at 15px, a globe at 14 and every other kind at 12, centred in a box of 16 (18 in a list):
 // the workspace sidebar's rows and search, and the @ menu (Canvas.dc.html, Add - Mention.dc.html `icon`). The sheets
-// (note, md, docx, any other file) are drawn at the note's size, an html page at the globe's.
-const GLYPH_SIZE = { note: 15, md: 15, docx: 15, website: 14, html: 14 };
+// (note, md, docx, html, any other file) are drawn at the note's size.
+const GLYPH_SIZE = { note: 15, md: 15, docx: 15, html: 15, website: 14 };
 export function KindGlyph({ item, kind: key = null, box = 16, color = '#171717' }) {
   const name = key || (item.type === 'workspace' || item.type === 'child' ? 'workspace' : kindKey(item));
   const kind = KIND[name] || kindOf(item || {});

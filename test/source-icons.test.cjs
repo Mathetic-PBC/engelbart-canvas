@@ -2,7 +2,7 @@
 
 // "Your sources" draws each row as its type (2026-10-12): a file is KIND's glyph for it (src/renderer/ui/Icons.jsx), not
 // the folder every file used to get; a note, a website and a repository keep the sidebar's own icons. And KIND itself:
-// docx has a sheet of its own, an html page is a globe, a type nobody listed is a plain sheet.
+// docx has a sheet of its own, an html page a sheet with code brackets, a type nobody listed is a plain sheet.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -37,7 +37,7 @@ const ROWS = [
   [row('note', 'md', ['note']), glyph(Sidebar.NoteIcon)],
   [row('paper.pdf', 'pdf', ['paper']), glyph(Icons.PDF)],
   [row('draft.docx', 'docx'), glyph(Icons.DOC)],
-  [row('apple', 'html', [], { path: '/u/.engelbart/assets/pages/1/index.html', url: 'https://www.apple.com/' }), glyph(Icons.GLOBE)],
+  [row('apple', 'html', [], { path: '/u/.engelbart/assets/pages/1/index.html', url: 'https://www.apple.com/' }), glyph(Icons.HTML)],
   ...['csv', 'tsv', 'json', 'jsonl', 'parquet', 'xlsx'].map((type) => [row(`data.${type}`, type), glyph(Icons.LAYERS)]),
   [row('figure.png', 'image'), glyph(Icons.IMAGE)],
   [row('Papers', 'folder', [], { folder_path: '/Desktop/Papers' }), glyph(Icons.FOLDER)],
@@ -57,7 +57,9 @@ test('the pairs that must not look alike: a note and a plain md, docx and a note
   assert.notEqual(icon('draft.docx'), icon('note'));
   assert.notEqual(icon('draft.docx'), glyph(Icons.NOTE), 'not KIND\'s note either');
   assert.notEqual(icon('apple'), icon('clone'));
-  assert.notEqual(icon('apple'), glyph(Icons.CODE), 'not the code brackets it had');
+  assert.notEqual(icon('apple'), glyph(Icons.CODE), 'not bare code brackets');
+  assert.notEqual(icon('apple'), icon('pond'), 'a page on disk is not a link');
+  assert.notEqual(icon('apple'), icon('plain.md'), 'nor a plain sheet');
   assert.notEqual(icon('notes.txt'), glyph(Sidebar.FolderIcon), 'an unknown type is a sheet, not a folder');
   for (const [source] of ROWS) if (source.type !== 'folder') assert.notEqual(icon(source.id), glyph(Sidebar.FolderIcon), source.id);
 });
@@ -85,14 +87,14 @@ test('drawn in the sidebar: the mixed rows of Your sources start with their own 
   }
 });
 
-test('KIND: docx its own sheet, html a globe, an unknown type a plain sheet labelled by its type', () => {
+test('KIND: docx its own sheet, html a sheet with code brackets, an unknown type a plain sheet labelled by its type', () => {
   const kindShape = (item) => shape(React.createElement(Icons.KindGlyph, { item }));
   assert.equal(kindShape({ type: 'docx', tags: [] }), glyph(Icons.DOC));
-  assert.equal(kindShape({ type: 'html', tags: [] }), glyph(Icons.GLOBE));
+  assert.equal(kindShape({ type: 'html', tags: [] }), glyph(Icons.HTML));
   assert.equal(kindShape({ type: 'txt', tags: [] }), glyph(Icons.FILE));
   assert.equal(kindShape({ type: 'md', tags: ['note'] }), glyph(Icons.NOTE), 'a note keeps its lines');
   assert.equal(Icons.kindOf({ type: 'txt', tags: [] }).label, 'txt');
-  // a sheet is drawn at the note's size, a page on disk at the globe's
+  // a sheet, an html page's among them, is drawn at the note's size; a link's globe a little smaller
   const box = (item) => renderToStaticMarkup(React.createElement(Icons.KindGlyph, { item })).match(/class="glyph-fit" style="[^"]*width:(\d+)px/)[1];
-  assert.deepEqual(['docx', 'txt', 'html', 'website', 'pdf'].map((type) => box({ type, tags: [] })), ['15', '15', '14', '14', '12']);
+  assert.deepEqual(['docx', 'txt', 'html', 'website', 'pdf'].map((type) => box({ type, tags: [] })), ['15', '15', '15', '14', '12']);
 });

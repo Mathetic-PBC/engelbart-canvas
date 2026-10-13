@@ -222,7 +222,7 @@ const svgIcon = (body, fill = 'none') => `<svg viewBox="0 0 16 16" width="0.8em"
 const FILE_ICONS = {
   pdf: svgIcon('<path d="M3.5 1.5h6l3 3v10h-9z"/><path d="M9.5 1.5v3h3"/>'),
   md: svgIcon('<path d="M5 1.5h4.5L13 5v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z"/><path d="M9.5 1.5v2A1.5 1.5 0 0 0 11 5h2"/><path d="M5.5 7.75h5M5.5 10h5M5.5 12.25h5"/>'),
-  html: svgIcon('<path d="M5.5 4.5 2 8l3.5 3.5M10.5 4.5 14 8l-3.5 3.5"/>'),
+  html: svgIcon('<path d="M5 1.5h4.5L13 5v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z"/><path d="M9.5 1.5v2A1.5 1.5 0 0 0 11 5h2"/><path d="M6.75 8.25 5.25 10l1.5 1.75M9.25 8.25l1.5 1.75-1.5 1.75"/>'),
   data: svgIcon('<path d="M8 2.5 14 5.5 8 8.5 2 5.5z"/><path d="M2 8.5l6 3 6-3"/><path d="M2 11.5l6 3 6-3"/>'),
   image: svgIcon('<rect x="1.5" y="2.5" width="13" height="11" rx="1.2"/><circle cx="5.5" cy="6" r="1.25"/><path d="M14.5 10.5 11 7l-4.5 4.5L4.5 9.5 1.5 12.5"/>'),
   folder: svgIcon('<path d="M1.5 4a1 1 0 0 1 1-1h3.3l1.5 1.8h6.2a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"/>'),
