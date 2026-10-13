@@ -1,7 +1,7 @@
 // Bart, the router, in the editor (2026-10-12). An `@bart` line picks its agent here first, by rule; only a line no
 // rule settles is sent to the model (src/main/bart/route.cjs), with what this module reads of the document around it:
 // its section, the threads above and the spec above, if any.
-import { parseLines, threads, turnText, agentOf, tokenOf, answerFences } from './doc.js';
+import { parseLines, threads, turnText, answeredBy, tokenOf, answerFences } from './doc.js';
 import { readFlags, readBuildFlag, effortOf } from '../../main/bart/question.cjs';
 
 const LEVEL_RE = /(^|\s)--(quick|standard|deep)(?=\s|$)/i;
@@ -53,7 +53,7 @@ export function routeByRule(text, { lines = null, at = -1, models = null } = {})
   if (lines && at > 0) {
     const ps = parseLines(lines);
     const above = threads(lines, ps).find((thread) => thread.to === at - 1 && thread.from < at);
-    const agent = above ? agentOf(ps[above.from]) : null;
+    const agent = above ? answeredBy(above) : null; // a thread Bart handed to @discover is @discover's
     if (agent === 'brainstorm' || agent === 'discover') return { agent, rule: 'under thread' };
   }
   return null;
@@ -80,7 +80,7 @@ export function routeInputs(lines, at) {
   let start = 0;
   for (let k = at - 1; k >= 0; k--) if (ps[k].type === 'h') { start = k; break; }
   const above = threads(lines, ps).filter((thread) => thread.from < at && thread.to < at);
-  const list = above.map((thread) => ({ agent: tokenOf(agentOf(ps[thread.from])), question: questionLine(turnText(lines, thread.turns[0]).question), up: at - thread.from }));
+  const list = above.map((thread) => ({ agent: tokenOf(answeredBy(thread)), question: questionLine(turnText(lines, thread.turns[0]).question), up: at - thread.from }));
   let spec = null;
   const near = [...above].reverse().find((thread) => thread.from >= start && thread.turns.some((turn) => turn.answered && !turn.pending));
   if (near) {

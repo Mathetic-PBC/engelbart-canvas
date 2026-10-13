@@ -357,7 +357,7 @@ function brainstormReply(text, stage, welcome = false) {
 function resultReply(plan) {
   const meta = { provider: plan.provider, level: { name: '', effort: '', model: '' }, trail: [], ms: 0, pinned: false };
   // The welcome path's result says so: the window asks @discover on it (screens/Workspace.jsx askBart).
-  return { lines: replyLines(plan.written, meta, { model: false }), meta, ...(plan.welcome && plan.stage === 'result' ? { welcome: 'result' } : {}) };
+  return { lines: replyLines(plan.written, meta, { model: false, agent: 'brainstorm' }), meta, ...(plan.welcome && plan.stage === 'result' ? { welcome: 'result' } : {}) };
 }
 
 /**
@@ -650,7 +650,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const body = replyBody(agent, plan.brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
         // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
         if (out.session) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
-        return { lines: replyLines(body, meta, { model: !QUIET.has(agent) }), meta };
+        return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta };
       } finally {
         feed.end();
         running.delete(askId);
@@ -900,7 +900,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned, ...(routed ? { routed } : {}) };
         const body = replyBody(agent, brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
         store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
-        const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent) }), meta };
+        const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta };
         ended('done', result);
         return result;
       } catch (error) {

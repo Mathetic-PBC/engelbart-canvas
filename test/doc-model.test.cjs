@@ -636,10 +636,11 @@ test('flattenPaste: several pasted lines become one question line, one space at 
 
 test('a conversation title (2026-10-12): `bart# ` above the question that starts a thread, `bart#+ ` collapsed; threads attach it', async () => {
   const { parseLine, parseLines, threads, titleLine, TITLE_RE } = await load();
-  assert.deepEqual(parseLine('bart# Retry logic in the client'), { type: 'title', text: 'Retry logic in the client', folded: false });
-  assert.deepEqual(parseLine('bart#+ Retry logic'), { type: 'title', text: 'Retry logic', folded: true });
-  assert.deepEqual(parseLine('bart# '), { type: 'title', text: '', folded: false });
-  assert.deepEqual(parseLine('bart#'), { type: 'title', text: '', folded: false });
+  const none = { agent: null, at: null, build: false };
+  assert.deepEqual(parseLine('bart# Retry logic in the client'), { type: 'title', text: 'Retry logic in the client', folded: false, ...none });
+  assert.deepEqual(parseLine('bart#+ Retry logic'), { type: 'title', text: 'Retry logic', folded: true, ...none });
+  assert.deepEqual(parseLine('bart# '), { type: 'title', text: '', folded: false, ...none });
+  assert.deepEqual(parseLine('bart#'), { type: 'title', text: '', folded: false, ...none });
   assert.equal(titleLine('A title', false), 'bart# A title');
   assert.equal(titleLine('A title', true), 'bart#+ A title');
   assert.ok(TITLE_RE.test(titleLine('', false)));
@@ -670,6 +671,47 @@ test('a conversation title (2026-10-12): `bart# ` above the question that starts
   const split = threads(['@bart a', 'bart> one', 'bart# New one', '@bart b', 'bart> two']);
   assert.equal(split.length, 2);
   assert.equal(split[1].title, 'New one');
+});
+
+test('a title line keeps the agent that answered and when it was asked (2026-10-12); answeredBy reads it, an older line reads as before', async () => {
+  const { parseLine, titleLine, threads, answeredBy, placeTitle, migrateChatLines } = await load();
+  assert.deepEqual(parseLine('bart# [discover 2026-10-12T21:41:00Z] Papers on tutors'), { type: 'title', text: 'Papers on tutors', folded: false, agent: 'discover', at: '2026-10-12T21:41:00Z', build: false });
+  assert.deepEqual(parseLine('bart#+ [chat build 2026-10-12T21:41:00Z] Retry check'), { type: 'title', text: 'Retry check', folded: true, agent: 'bart', at: '2026-10-12T21:41:00Z', build: true });
+  assert.deepEqual(parseLine('bart# [brainstorm 2026-10-12T21:41:00Z]'), { type: 'title', text: '', folded: false, agent: 'brainstorm', at: '2026-10-12T21:41:00Z', build: false });
+  assert.equal(parseLine('bart# [not a meta] A title').text, '[not a meta] A title', 'brackets that keep nothing are the title');
+  assert.equal(titleLine('Papers', true, { agent: 'discover', at: '2026-10-12T21:41:00Z' }), 'bart#+ [discover 2026-10-12T21:41:00Z] Papers');
+  assert.equal(titleLine('', false, { agent: 'bart', at: '2026-10-12T21:41:00Z', build: true }), 'bart# [chat build 2026-10-12T21:41:00Z] ');
+  assert.equal(titleLine('Same', false, parseLine('bart# Same')), 'bart# Same', 'nothing kept, nothing written');
+
+  // An @bart line Bart handed to @discover: the line as typed, the thread @discover's, and its next @bart turn too.
+  const lines = ['bart# [discover 2026-10-12T21:41:00Z] Papers', '@bart papers on tutors?', 'bart> a guide', 'bart> *Discover · Opus · high · 9 s*', '@bart and more?', 'bart~> run2'];
+  const [thread] = threads(lines);
+  assert.deepEqual([thread.asked, thread.routedTo, thread.agent, answeredBy(thread), thread.at, thread.turns.length], ['router', 'discover', 'discover', 'discover', '2026-10-12T21:41:00Z', 2]);
+  // Not asked yet, an @bart line under it is not its turn: Bart has not picked for it.
+  assert.equal(threads([...lines.slice(0, 4), '@bart and more?'])[0].turns.length, 1);
+  // Old documents: an untitled thread, a title with no brackets, a line rewritten to the agent's.
+  assert.equal(answeredBy(threads(['@discover old', 'bart> a guide'])[0]), 'discover');
+  assert.equal(answeredBy(threads(['bart# Old title', '@chat why', 'bart> because'])[0]), 'bart');
+  assert.equal(answeredBy(threads(['@bart pending', 'bart~> x'])[0]), 'router');
+
+  // Filling an empty title keeps what the line kept.
+  assert.equal(placeTitle(['bart# [discover 2026-10-12T21:41:00Z] ', '@bart papers?', 'bart~> a1'].join('\n'), 'a1', 'Papers').split('\n')[0], 'bart# [discover 2026-10-12T21:41:00Z] Papers');
+  // The migration to @chat leaves an @bart line Bart routed as it is.
+  assert.equal(migrateChatLines(lines.join('\n')).count, 0);
+  assert.equal(migrateChatLines(['@bart old question', 'bart> answer'].join('\n')).count, 1);
+});
+
+test('when a collapsed conversation was asked: the time today, Yesterday, the weekday, else the date (2026-10-12)', async () => {
+  const { whenShown } = await load();
+  const now = new Date(2026, 9, 12, 23, 0);
+  assert.equal(whenShown(new Date(2026, 9, 12, 21, 41).toISOString(), now), '9:41 PM');
+  assert.equal(whenShown(new Date(2026, 9, 12, 0, 5).toISOString(), now), '12:05 AM');
+  assert.equal(whenShown(new Date(2026, 9, 11, 9, 0).toISOString(), now), 'Yesterday');
+  assert.equal(whenShown(new Date(2026, 9, 8, 9, 0).toISOString(), now), 'Thursday');
+  assert.equal(whenShown(new Date(2026, 8, 3, 9, 0).toISOString(), now), 'Sep 3');
+  assert.equal(whenShown(new Date(2025, 8, 3, 9, 0).toISOString(), now), 'Sep 3, 2025');
+  assert.equal(whenShown(null, now), '');
+  assert.equal(whenShown('not a time', now), '');
 });
 
 test('a title fills its own conversation\'s line, found by the ask: before its answer lands or after, never another\'s (2026-10-12)', async () => {

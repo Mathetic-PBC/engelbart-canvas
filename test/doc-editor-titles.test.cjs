@@ -63,7 +63,7 @@ test('a new question gets an empty title line above it and is asked to be named;
     const m = mounted(['Notes', line, 'After']);
     m.editor.askInline(1);
     const ls = m.lines();
-    assert.equal(ls[1], 'bart# ', `${agent}: the title line, empty`);
+    assert.match(ls[1], new RegExp(`^bart# \\[${line.slice(1, line.indexOf(' '))} \\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ\\] $`), `${agent}: the title line, empty, keeping its agent and when it was asked`);
     assert.equal(ls[2], line);
     assert.match(ls[3], /^bart~> /);
     assert.equal(ls[4], 'After');
@@ -109,11 +109,13 @@ test('the answer replaces its pending line with the title line above it, and the
   // The answer lands first, as Workspace askBart places it, noting where its question stood.
   const near = askedAt(m.props.text, askId);
   m.props.text = placeAnswer(m.props.text, askId, answer('because'));
-  assert.deepEqual(m.props.text.split('\n').slice(0, 4), ['Notes', 'bart# ', '@chat why retry?', 'bart> because']);
+  const head = m.props.text.split('\n')[1];
+  assert.match(head, /^bart# \[chat [^\]]+\] $/);
+  assert.deepEqual(m.props.text.split('\n').slice(2, 4), ['@chat why retry?', 'bart> because']);
   assert.ok(!m.props.text.includes('bart~>'), 'the pending line is gone');
   // Then the title comes back and fills its line.
   m.props.text = placeTitle(m.props.text, askId, 'Retry logic', near);
-  assert.equal(m.props.text.split('\n')[1], 'bart# Retry logic');
+  assert.equal(m.props.text.split('\n')[1], `${head}Retry logic`, 'the title after what the line keeps');
   assert.match(m.html(), /data-title-row[\s\S]*Retry logic/);
 
   // Or the title first, while it is still running: the pending line is still the anchor.
@@ -121,7 +123,7 @@ test('the answer replaces its pending line with the title line above it, and the
   r.editor.askInline(0);
   r.props.text = placeTitle(r.props.text, r.asks[0].askId, 'Retry logic');
   r.props.text = placeAnswer(r.props.text, r.asks[0].askId, answer('because'));
-  assert.deepEqual(r.props.text.split('\n').slice(0, 3), ['bart# Retry logic', '@chat why retry?', 'bart> because']);
+  assert.deepEqual(r.props.text.split('\n').slice(0, 3).map((l) => l.replace(/\[[^\]]+\] /, '')), ['bart# Retry logic', '@chat why retry?', 'bart> because']);
 });
 
 test('an expanded titled conversation has a header: its title, and Collapse; the foot\'s Collapse folds the whole of it', () => {
@@ -135,18 +137,21 @@ test('an expanded titled conversation has a header: its title, and Collapse; the
   assert.ok(!html.includes('data-act="fold" data-turn="1"'), 'not the turn\'s');
 });
 
-test('collapsed: one row, the Agents icon and the title as a link; every line of it hidden; a click expands', () => {
-  const lines = ['Notes', 'bart#+ Retry logic', '@chat why retry?', ...answer('because'), '@chat timeouts?', ...answer('those too'), '', 'After'];
+test('collapsed: one row, a chevron, the title, and the agent and when; every line of it hidden; a click anywhere expands', () => {
+  const at = new Date(); at.setHours(21, 41, 0, 0);
+  const lines = ['Notes', `bart#+ [discover ${at.toISOString().replace(/\.\d{3}Z$/, 'Z')}] Retry logic`, '@bart why retry?', ...answer('because'), '@bart timeouts?', ...answer('those too'), '', 'After'];
   const m = mounted(lines);
-  const html = m.html(), row = rowOf(html, 1);
+  const html = m.html(), row = rowOf(html, 1), open = row.slice(0, row.indexOf('>'));
   assert.match(row, /data-thread-row/);
-  assert.match(row, /padding:4px 0/);
-  assert.match(row, /margin-bottom:6px/);
-  assert.ok(!/background/.test(row.slice(0, row.indexOf('>'))), 'no card behind it');
-  assert.match(row, /data-act="foldthread" data-row="1"[^>]*color:#0070f3;font:14px/);
-  assert.match(row, /<svg[^>]*width="14"[^>]*>/, 'the Agents icon at 14px');
-  assert.match(row, />Retry logic</);
-  assert.match(row, /class="bart-tip"[^>]*>Chat</, 'hovering names the agent');
+  assert.match(open, /data-act="foldthread" data-row="1"/, 'the whole row is the button');
+  assert.match(open, /padding:6px 0/);
+  assert.ok(!/background/.test(open), 'no card behind it');
+  assert.ok(!/border-top/.test(open), 'no rule over the first');
+  assert.match(row, /<span style="flex:none;display:inline-flex;color:#8f8f8f"><svg[^>]*><path d="m9 18 6-6-6-6">/, 'the chevron, grey');
+  assert.match(row, /font:14px\/1\.5 var\(--font-sans\);color:#171717">Retry logic</);
+  assert.match(row, /text-overflow:ellipsis/);
+  assert.match(row, /font:13px\/1\.5 var\(--font-sans\);color:#8f8f8f">Discover · 9:41 PM</);
+  assert.ok(!row.includes('#0070f3'), 'no blue link');
   const last = lines.indexOf('After') - 2;
   for (let i = 2; i <= last; i++) assert.match(rowOf(html, i), /^<div[^>]*display:none/, `line ${i} hidden`);
   const drawn = html.replace(/ data-raw="[^"]*"/g, '');
@@ -154,16 +159,27 @@ test('collapsed: one row, the Agents icon and the title as a link; every line of
   assert.match(rowOf(html, 0), />Notes</);
 
   m.click('foldthread', { row: '1' });
-  assert.equal(m.lines()[1], 'bart# Retry logic', 'expanded: the title line, nothing else rewritten');
+  assert.equal(m.lines()[1], lines[1].replace('bart#+', 'bart#'), 'expanded: the title line, what it keeps kept, nothing else rewritten');
   assert.deepEqual(m.lines().slice(2), lines.slice(2));
   assert.match(m.html(), /data-title-row/);
   m.click('foldthread', { row: '1' });
-  assert.equal(m.lines()[1], 'bart#+ Retry logic');
+  assert.equal(m.lines()[1], lines[1]);
   assert.deepEqual(m.lines().slice(2), lines.slice(2), 'the answers stay `bart>`: no `bart+>`');
 
-  // @brainstorm and @discover are named for themselves.
-  assert.match(mounted(['bart#+ Plan', '@brainstorm a plan', ...answer('x'), '']).html(), /class="bart-tip"[^>]*>Brainstorm</);
-  assert.match(mounted(['bart#+ Read', '@discover retries', ...answer('x'), '']).html(), /class="bart-tip"[^>]*>Discover</);
+  // Each names its agent; one from yesterday says so; a line Bart read as a build is Build's; an older title has no time.
+  const day = new Date(); day.setDate(day.getDate() - 1); day.setHours(12, 0, 0, 0);
+  const iso = day.toISOString().replace(/\.\d{3}Z$/, 'Z');
+  const many = mounted([
+    `bart#+ [chat build ${iso}] Unaccepted builds check`, '@bart check the builds', ...answer('x'),
+    `bart#+ [brainstorm ${iso}] Questions as multi-select`, '@brainstorm a plan', ...answer('x'),
+    'bart#+ Papers on assessment', '@discover retries', ...answer('x'), '',
+  ]).html();
+  const n = answer('x').length + 2;
+  assert.match(rowOf(many, 0), />Build · Yesterday</);
+  assert.match(rowOf(many, n), />Brainstorm · Yesterday</);
+  assert.match(rowOf(many, 2 * n), />Discover</);
+  for (const i of [n, 2 * n]) assert.match(rowOf(many, i).slice(0, rowOf(many, i).indexOf('>')), /border-top:1px solid #eaeaea/, `row ${i} ruled off from the one above`);
+  assert.ok(!/border-top/.test(rowOf(many, 0).slice(0, rowOf(many, 0).indexOf('>'))));
 });
 
 test('a conversation at work cannot be collapsed: its Collapse is disabled, and `bart#+` on it is drawn open', () => {
@@ -250,9 +266,9 @@ test('a title the person edited while naming was still running is not overwritte
   const { askId } = m.asks[0];
   m.click('edittitle', { row: '0' });
   m.editor.commitTitle({ value: 'My own name' });
-  assert.equal(m.lines()[0], 'bart# My own name');
+  assert.match(m.lines()[0], /^bart# \[chat [\dTZ:-]+\] My own name$/);
   assert.equal(placeTitle(m.props.text, askId, 'Retry logic'), null, 'the model\'s title is not placed');
-  assert.equal(m.lines()[0], 'bart# My own name');
+  assert.match(m.lines()[0], /^bart# \[chat [\dTZ:-]+\] My own name$/);
   // After the answer landed too.
   const near = askedAt(m.props.text, askId);
   m.props.text = placeAnswer(m.props.text, askId, answer('because'));
@@ -265,7 +281,7 @@ test('a title the person edited while naming was still running is not overwritte
   t.props.text = placeTitle(t.props.text, t.asks[0].askId, 'Retry logic');
   assert.match(t.html(), /<input[^>]*data-title-input="0"[^>]*value="Typed meanwhile"/, 'the field keeps what was typed');
   t.editor.commitTitle({ value: 'Typed meanwhile' });
-  assert.equal(t.lines()[0], 'bart# Typed meanwhile');
+  assert.match(t.lines()[0], /^bart# \[chat [\dTZ:-]+\] Typed meanwhile$/);
 });
 
 test('a title with no question under it is the text it is; deleting a titled conversation\'s only turn takes its title', () => {

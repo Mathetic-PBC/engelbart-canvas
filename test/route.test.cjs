@@ -245,14 +245,15 @@ test('run log: a pick is a router record; the run it hands to names it; a correc
   assert.equal(runLog.get(other.id).corrected, 'chat');
 });
 
-test('reply: an answer Bart handed over closes "· via Bart", "· via Bart · build" when it was wanted built', () => {
-  const meta = { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 };
-  const plain = replyLines('Because.', meta, { model: false });
-  assert.ok(!plain[plain.length - 1].includes('via Bart'));
-  const via = replyLines('Because.', { ...meta, routed: { id: 'route-1' } }, { model: false });
-  assert.match(via[via.length - 1], / · via Bart\*$/);
-  const build = replyLines('Because.', { ...meta, routed: { id: 'route-1', build: true } }, { model: false });
-  assert.match(build[build.length - 1], / · via Bart · build\*$/);
+test('reply: the closing line names the agent first, "Build" when Bart wanted it built, and says nothing of Bart (2026-10-12)', () => {
+  const meta = { level: { name: 'Opus', effort: 'high' }, trail: [], ms: 9000 };
+  const last = (lines) => lines[lines.length - 1].replace(/^bart> /, '');
+  assert.equal(last(replyLines('Because.', meta, { model: true, agent: 'discover' })), '*Discover · Opus · high · 9 s*');
+  assert.equal(last(replyLines('Because.', { ...meta, routed: { id: 'route-1' } }, { model: true, agent: 'discover' })), '*Discover · Opus · high · 9 s*', 'routed: no "via Bart"');
+  assert.equal(last(replyLines('Because.', { ...meta, routed: { id: 'route-1', build: true } }, { model: true, agent: 'bart' })), '*Build · Opus · high · 9 s*');
+  assert.equal(last(replyLines('Because.', meta, { model: false, agent: 'brainstorm' })), '*Brainstorm · 9 s*');
+  assert.equal(last(replyLines('Because.', meta, { model: true, agent: 'bart' })), '*Chat · Opus · high · 9 s*');
+  assert.equal(last(replyLines('Because.', meta, { model: true })), '*Opus · high · 9 s*', 'no agent given, none named');
   assert.equal(typeof attribution, 'function');
 });
 
@@ -294,19 +295,52 @@ function mounted(lines, { route: onRoute = null, build = true } = {}) {
 }
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
-test('handoff: chat, brainstorm and discover rewrite the line and ask that agent, carrying the pick', async () => {
+test('handoff: chat, brainstorm and discover keep the @bart line as typed, ask that agent, and keep the pick on the title line', async () => {
   for (const [agent, token, internal] of [['chat', 'chat', 'bart'], ['brainstorm', 'brainstorm', 'brainstorm'], ['discover', 'discover', 'discover']]) {
     const m = mounted(['# Notes', '@bart how do tutors notice struggle?'], { route: async () => ({ id: 'route-a', agent, sure: 0.9, by: 'model' }) });
     m.editor.askInline(1);
     assert.match(m.lines()[2], /^bart~> /, 'a pending line at once');
     await new Promise((resolve) => setImmediate(resolve));
-    // It starts a conversation, so it gets its empty title line, as an asked line does (doc-editor-titles).
-    assert.deepEqual(m.lines().slice(1, 3), ['bart# ', `@${token} how do tutors notice struggle?`]);
+    // It starts a conversation, so it gets its empty title line, as an asked line does (doc-editor-titles), with the pick.
+    assert.match(m.lines()[1], new RegExp(`^bart# \\[${token} \\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ\\] $`));
+    assert.equal(m.lines()[2], '@bart how do tutors notice struggle?', '@bart stays @bart');
     assert.match(m.lines()[3], /^bart~> /);
     assert.equal(m.asks.length, 1);
     assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name], [internal, 'how do tutors notice struggle?', { id: 'route-a' }, true]);
+    assert.deepEqual(m.asks[0].place, { line: 2, text: '@bart how do tutors notice struggle?' });
     assert.equal(m.routes[0].text, 'how do tutors notice struggle?');
+    const { threads, answeredBy } = await loadDoc();
+    assert.equal(answeredBy(threads(m.lines())[0]), internal);
   }
+});
+
+test('a line Bart handed to @discover: its follow-up, Regenerate, the session and the rules are @discover\'s', async () => {
+  const head = 'bart# [discover 2026-10-12T21:41:00Z] Tutors';
+  const done = [head, '@bart papers on tutors?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', ''];
+  // The follow-up field asks @discover, and is written as its line.
+  const f = mounted(done);
+  assert.match(f.editor.followHtml(f.lines(), f.editor.findTurn(f.lines(), 1).thread), />@discover</);
+  f.editor.followText.set(1, 'and newer ones?');
+  f.editor.sendFollow(1);
+  assert.equal(f.asks[0].agent, 'discover');
+  assert.equal(f.lines()[4], '@discover and newer ones?');
+  assert.equal(f.asks[0].turns.length, 1, 'a follow-up to the routed turn: the same thread, the same session key');
+  // Regenerate asks @discover again, as routed; the line and the title stay.
+  const r = mounted(done);
+  r.editor.regenerate(1);
+  assert.deepEqual([r.asks[0].agent, r.asks[0].routed], ['discover', { build: false }]);
+  assert.deepEqual(r.lines().slice(0, 2), [head, '@bart papers on tutors?']);
+  // An @bart line typed under it is @discover's by rule, and once handed over it is the thread's next turn, line as typed.
+  const { routeByRule } = await loadRoute();
+  assert.deepEqual(routeByRule('and more?', { lines: [...done.slice(0, 4), '@bart and more?'], at: 4 }), { agent: 'discover', rule: 'under thread' });
+  const n = mounted([...done.slice(0, 4), '@bart and more?'], { route: async (input) => ({ id: 'route-n', agent: input.rule.agent, sure: 1, by: 'rule' }) });
+  n.editor.askInline(4);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(n.lines()[4], '@bart and more?');
+  assert.equal(n.lines().filter((l) => l.startsWith('bart#')).length, 1, 'no second title');
+  assert.deepEqual([n.asks[0].agent, n.asks[0].turns.length, n.asks[0].name], ['discover', 1, undefined]);
+  const { threads } = await loadDoc();
+  assert.equal(threads(n.lines())[0].turns.length, 2);
 });
 
 test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the spec; otherwise Chat is asked to write the Build prompt', async () => {
@@ -331,6 +365,8 @@ test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the sp
   noSpec.editor.askInline(0);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual([noSpec.builds.length, noSpec.asks[0].routed.build], [0, true]);
+  assert.match(noSpec.lines()[0], /^bart# \[chat build [^\]]+\] $/, 'wanted built: kept on the title line');
+  assert.equal(noSpec.lines()[1], '@bart build a hello page');
 });
 
 test('handoff: a line Bart routes under a conversation that has a title, or as a follow-up, gets none', async () => {
@@ -345,7 +381,8 @@ test('handoff: a rule is passed to the router; --build is asked as a Build reque
   m.editor.askInline(0);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(m.routes[0].rule, { agent: 'discover', rule: 'level' });
-  assert.deepEqual(m.lines().slice(0, 2), ['bart# ', '@discover --deep tutors']);
+  assert.match(m.lines()[0], /^bart# \[discover [^\]]+\] $/);
+  assert.equal(m.lines()[1], '@bart --deep tutors');
 
   const b = mounted(['@bart --build add x'], { route: async (input) => ({ id: 'route-x', ...input.rule, sure: 1 }) });
   b.editor.askInline(0);
@@ -361,11 +398,12 @@ test('handoff: a rule is passed to the router; --build is asked as a Build reque
   assert.deepEqual([g.asks.length, g.gone.length], [0, 1]);
 });
 
-test('handoff: when routing fails the line goes to Chat saying so (by: error), and its run is marked as Bart\'s failure, not its pick', async () => {
+test('handoff: when routing fails the line is asked of Chat saying so (by: error), and its run is marked as Bart\'s failure, not its pick', async () => {
   const m = mounted(['# Notes', '@bart how do tutors notice struggle?'], { route: async () => ({ agent: 'chat', sure: 0, by: 'error', error: 'thread question must be a string of at most 400 characters' }) });
   m.editor.askInline(1);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(m.lines()[2], '@chat how do tutors notice struggle?');
+  assert.equal(m.lines()[2], '@bart how do tutors notice struggle?');
+  assert.match(m.lines()[1], /^bart# \[chat \d{4}-\d\d-\d\dT[\d:]+Z\] $/);
   assert.deepEqual(m.asks[0].routed, { id: null, by: 'error', error: 'thread question must be a string of at most 400 characters' });
 
   // Main keeps it ({ by: 'error' } through ask-bart), and the run's record says the classifier failed.
@@ -384,16 +422,40 @@ test('handoff: when routing fails the line goes to Chat saying so (by: error), a
   assert.equal(picked.nodes[1].error, 'thread question must be a string of at most 400 characters');
 });
 
-test('footer Build: on every answered turn, off while the thread is at work, dark when the line was routed to build; it sends the last fenced block', () => {
+test('footer: Copy, Regenerate, Edit and Build as icons with their names; the agent, model and time on the right; Build dark on grey when routed to build', () => {
   const m = mounted([...SPEC, '']);
-  const html = m.editor.footHtml({ q: 0, text: 'Sonnet · high · 3s', closes: true });
-  assert.match(html, /data-act="footbuild" data-turn="0" aria-label="Build" +style/);
-  assert.ok(html.indexOf('data-act="regen"') < html.indexOf('footbuild') && html.indexOf('footbuild') < html.indexOf('Sonnet'), 'between Regenerate and the closing text');
-  assert.match(m.editor.footHtml({ q: 0, text: 'x', busy: true }), /data-act="footbuild"[^>]* disabled /);
-  const dark = m.editor.footHtml({ q: 0, text: 'Sonnet · 3s · via Bart · build' });
-  assert.match(dark, /footbuild[^>]*background:#171717/);
-  assert.match(dark, /data-act="viabart"/);
+  const html = m.editor.footHtml({ q: 0, text: 'Chat · Sonnet · high · 3 s', closes: true, edit: true });
+  for (const [act, name] of [['copybart', 'Copy'], ['regen', 'Regenerate'], ['editturn', 'Edit'], ['footbuild', 'Build']]) {
+    assert.match(html, new RegExp(`<button class="bart-ic" data-act="${act}" data-turn="0"[^>]*aria-label="${name}"[^>]*>[\\s\\S]*?</button><span class="bart-tip"[^>]*>${name}</span>`), `${name}: an icon with its tip`);
+  }
+  assert.ok(html.indexOf('data-act="copybart"') < html.indexOf('data-act="regen"') && html.indexOf('data-act="regen"') < html.indexOf('editturn') && html.indexOf('editturn') < html.indexOf('footbuild') && html.indexOf('footbuild') < html.indexOf('Sonnet'), 'Copy, Regenerate, Edit, Build, then the closing text');
+  assert.match(html, /data-act="footbuild"[^>]*><svg width="16" height="16"[^>]*><path d="m15 12-8\.373/, 'the hammer, the size of the others');
+  assert.ok(!/data-act="footbuild"[^>]*style=/.test(html), 'grey as the others when not routed to build');
+  assert.match(html, /color:#8f8f8f"><span style="flex:none">Chat<\/span><span[^>]*> · Sonnet · high · 3 s<\/span>/);
+  assert.ok(html.indexOf('Sonnet') < html.indexOf('data-act="fold"') && html.indexOf('data-act="fold"') < html.indexOf('dropturn'), 'then Collapse and Delete');
+  assert.match(m.editor.footHtml({ q: 0, text: 'x', busy: true }), /data-act="footbuild"[^>]* disabled>/);
   assert.ok(!mounted(SPEC, { build: false }).editor.footHtml({ q: 0, text: 'x' }).includes('footbuild'), 'no onBuild, no button');
+
+  // Routed by Bart: the agent's name opens the other agents; routed to build, Build is dark on grey.
+  const routed = mounted(['bart# [chat build 2026-10-12T21:41:00Z] Haiku', '@bart build the haiku entry', ...SPEC.slice(1), '']);
+  const foot = routed.editor.footHtml({ q: 1, text: 'Build · Sonnet · high · 3 s' });
+  assert.match(foot, /data-act="footbuild"[^>]*style="color:#171717;background:#f2f2f2"/);
+  assert.match(foot, /<span class="bart-who" data-act="viabart" data-turn="1"[^>]*>Build<\/span><span class="bart-tip"[^>]*>Bart picked this\. Ask another<\/span>/);
+  assert.ok(!foot.includes('via Bart'));
+  const discover = mounted(['bart# [discover 2026-10-12T21:41:00Z] Tutors', '@bart papers?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '']);
+  const drawn = discover.editor.editorHtml();
+  assert.match(drawn, /data-act="viabart" data-turn="1"[^>]*>Discover<\/span>/);
+  assert.match(drawn.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, ''), /Discover · Opus · high · 9 s/);
+  assert.ok(!drawn.replace(/ data-raw="[^"]*"/g, '').includes('via Bart'));
+  assert.ok(!/data-act="footbuild"[^>]*style=/.test(drawn), 'not routed to build: Build is grey');
+  // A line asked as typed (not routed): the name is text, no button.
+  const typed = mounted(['bart# [discover 2026-10-12T21:41:00Z] Tutors', '@discover papers?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '']).editor.editorHtml();
+  assert.ok(!typed.includes('data-act="viabart"'));
+
+  // An older closing line still saying "via Bart" reads as before.
+  const dark = m.editor.footHtml({ q: 0, text: 'Sonnet · 3s · via Bart · build' });
+  assert.match(dark, /footbuild[^>]*style="color:#171717;background:#f2f2f2"/);
+  assert.match(dark, /data-act="viabart"[^>]*>via Bart<\/span> · build/);
 
   assert.equal(m.editor.footBuild(0), true);
   assert.deepEqual([m.builds[0].text, m.builds[0].after, m.builds[0].afterLine], ['Add Haiku 5.5 to models.cjs.', SPEC.length - 1, SPEC[SPEC.length - 1]]);
@@ -401,7 +463,26 @@ test('footer Build: on every answered turn, off while the thread is at work, dar
   assert.equal(pending.editor.footBuild(0), false);
 });
 
-test('"via Bart": picking another agent rewrites the line and asks it again, the correction carried', () => {
+test('another agent for a routed line: only the title line changes, and it is asked again with the correction carried', () => {
+  const m = mounted(['bart# [chat 2026-10-12T21:41:00Z] Tutors', '@bart what papers on tutors?', 'bart> An answer.', 'bart> *Chat · Sonnet · high · 3 s*', '']);
+  m.editor.state.picker = { kind: 'via', i: 1 };
+  m.editor.pickVia('discover');
+  assert.deepEqual(m.lines().slice(0, 2), ['bart# [discover 2026-10-12T21:41:00Z] Tutors', '@bart what papers on tutors?']);
+  assert.match(m.lines()[2], /^bart~> /);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].routed], ['discover', { corrected: 'discover' }]);
+  // The same agent again asks nothing.
+  const same = mounted(['bart# [chat 2026-10-12T21:41:00Z] Tutors', '@bart why?', 'bart> An answer.', 'bart> *Chat · Sonnet · high · 3 s*', '']);
+  same.editor.state.picker = { kind: 'via', i: 1 };
+  same.editor.pickVia('bart');
+  assert.equal(same.asks.length, 0);
+  // Regenerate on a turn routed to build keeps it wanted built.
+  const b = mounted(['bart# [chat build 2026-10-12T21:41:00Z] Build it', '@bart build a page', 'bart> Here.', 'bart> *Build · Sonnet · high · 3 s*', '']);
+  assert.deepEqual(b.editor.ranWith(b.lines(), 1).choice, { model: 'sonnet', effort: 'high' }, 'the model is read past the agent\'s name');
+  b.editor.regenerate(1);
+  assert.deepEqual([b.asks[0].agent, b.asks[0].routed], ['bart', { build: true }]);
+});
+
+test('an older document\'s "via Bart": picking another agent rewrites the line and asks it again, the correction carried', () => {
   const m = mounted(['@chat what papers on tutors?', 'bart> An answer.', 'bart> *Sonnet · high · 3s · via Bart*', '']);
   m.editor.state.picker = { kind: 'via', i: 0 };
   m.editor.pickVia('discover');

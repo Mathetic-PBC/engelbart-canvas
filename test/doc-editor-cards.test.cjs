@@ -217,7 +217,8 @@ test('an @orient line is asked as @brainstorm and stays as written; its live car
   asked.editor.askInline(1);
   assert.deepEqual([asked.asks[0].agent, asked.asks[0].text, asked.asks[0].turns], ['brainstorm', 'metacognition', []]);
   // As @brainstorm, it starts a conversation: an empty title line above it, to be named (2026-10-12).
-  assert.deepEqual(asked.lines().slice(0, 4), ['Notes', 'bart# ', '@orient metacognition', `bart~> ${asked.asks[0].askId}`], 'the line is not rewritten');
+  assert.deepEqual(asked.lines().slice(2, 4), ['@orient metacognition', `bart~> ${asked.asks[0].askId}`], 'the line is not rewritten');
+  assert.match(asked.lines()[1], /^bart# \[brainstorm \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\] $/, 'the empty title line, keeping its agent and when');
   assert.equal(asked.asks[0].name, true);
 
   const m = mounted(['Notes', '@orient metacognition', ...answer(KNOW), '']);

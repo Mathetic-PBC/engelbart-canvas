@@ -504,7 +504,7 @@ test('the fake agent (scripted runs) answers through the same loop, moves up on 
   assert.ok(previews.length > 1 && previews[previews.length - 1].startsWith('FAKE ANSWER to "a hard one".'), 'the answer arrives in pieces');
   assert.ok(previews.every((text) => !/ESCALATE/.test(text)), 'a request to move up is never shown as an answer');
   assert.equal(out.lines[0], 'bart> FAKE ANSWER to "a hard one".');
-  assert.equal(out.lines[out.lines.length - 1].startsWith('bart> *Sol · high · '), true);
+  assert.equal(out.lines[out.lines.length - 1].startsWith('bart> *Chat · Sol · high · '), true, 'the agent, then the model (2026-10-12)');
   assert.match(out.lines[out.lines.length - 1], /moved up from Sol medium\*$/);
   const slow = createFakeBart({ readModels: () => MODELS, delayMs: 5000 });
   const waiting = slow.ask(ctx, project.id, { askId: 'f2', ref, workspaceId: workspace.id, text: 'q' });
@@ -1208,7 +1208,7 @@ test('the real runner for @brainstorm: file tools only, no web, its own Codex ho
   assert.equal(fs.readFileSync(path.join(`${codexHome}-brainstorm`, 'AGENTS.md'), 'utf8'), BRAINSTORM_SYSTEM_PROMPT, 'the JSON-only rule reaches Codex through its instructions file');
   assert.match(calls[0].input, /<path>open<\/path>\n<stage>first<\/stage>\n<card>1 of 5<\/card>\n\n<level>You are running as Sol at medium effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nStart from this workspace\.\n<\/question>$/);
   assert.equal(first.lines[0], 'bart> ```json');
-  assert.match(first.lines[first.lines.length - 1], /^bart> \*\d+ s\*$/, 'the foot gives the time alone');
+  assert.match(first.lines[first.lines.length - 1], /^bart> \*Brainstorm · \d+ s\*$/, 'the foot gives the agent and the time alone');
   assert.deepEqual(first.meta.trail, []);
   assert.deepEqual([threads.size(), brainstormThreads.size()], [0, 1], 'kept apart from @bart\'s');
 
@@ -1292,7 +1292,7 @@ test('the real runner: an @orient thread left halfway goes on as @brainstorm in 
   const SENTENCE = 'I want to see how often people correct an agent mid-task.';
   const result = await ask('m4', `--sonnet ${SENTENCE}`, [...four, { question: 'correction once more', answer: card.cardBody(JSON.stringify(shown)).body }]);
   assert.equal(calls.length, 4, 'no model run for the result');
-  assert.deepEqual(result.lines, [`bart> ${SENTENCE}`, `bart> ${card.RESULT_OFFER}`, 'bart>', 'bart> *1 s*'], 'their sentence as written, the offer, the foot');
+  assert.deepEqual(result.lines, [`bart> ${SENTENCE}`, `bart> ${card.RESULT_OFFER}`, 'bart>', 'bart> *Brainstorm · 1 s*'], 'their sentence as written, the offer, the foot');
   assert.deepEqual(card.resultParts(answerText(result.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n'))), { sentence: SENTENCE });
 
   // On the fourth card, an answer that only repeats their first: the again card, then the result, neither run by a model.
@@ -1440,7 +1440,7 @@ test('the fake @brainstorm follows the person: a plain first card, moves whose r
   assert.deepEqual(ids(orient.cards), ['excites', 'example'], 'an @orient thread goes on as @brainstorm');
 
   const feet = topic.doc.filter((line) => /^bart> \*[^*]+\*$/.test(line));
-  assert.ok(feet.length === 6 && feet.every((line) => /^bart> \*\d+ s\*$/.test(line)), 'every card\'s foot, and the result\'s, gives the time alone');
+  assert.ok(feet.length === 6 && feet.every((line) => /^bart> \*Brainstorm · \d+ s\*$/.test(line)), 'every card\'s foot, and the result\'s, gives the agent and the time alone');
   const bad = await bart.ask(ctx, proj.id, { askId: 'zm', ref, workspaceId: space.id, text: 'malformed please', agent: 'brainstorm' });
   assert.equal(bad.lines[0], 'bart> FAKE REPLY that is not a card: {"say": "cut off');
   assert.equal(card.cardOfAnswer(bad.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n')), null, 'drawn as plain answer lines');
@@ -1811,6 +1811,24 @@ test('strip: @bart and @discover replies become one marker per run; their questi
   ].join('\n'));
   assert.equal(stripAgentReplies('no agents here\n\n- [ ] a task'), 'no agents here\n\n- [ ] a task');
   assert.equal(stripAgentReplies(''), '');
+});
+
+test('strip: an @bart thread Bart handed to an agent is that agent\'s, its next @bart turns too; an older @bart line stays the router\'s (2026-10-12)', () => {
+  const doc = [
+    'bart# [brainstorm 2026-10-12T21:41:00Z] A plan', '@bart help me plan', 'bart> a card', '@bart and next?', 'bart> another card',
+    '',
+    'bart# [discover 2026-10-12T21:41:00Z] Papers', '@bart papers on tutors', 'bart> a guide',
+    '',
+    'bart# Old title', '@bart --build x', 'bart> **No Build.**',
+  ].join('\n');
+  assert.equal(stripAgentReplies(doc, 'brainstorm'), [
+    '@bart help me plan', 'bart> a card', '@bart and next?', 'bart> another card',
+    '',
+    '@bart papers on tutors', OMITTED,
+    '',
+    '@bart --build x', OMITTED,
+  ].join('\n'));
+  assert.ok(stripAgentReplies(doc, 'discover').includes('bart> a guide'), '@discover keeps its own');
 });
 
 test('strip: an @orient line is @brainstorm\'s (M-02): its cards and recap stay for @brainstorm, as its own threads do; other agents\' replies go', () => {
@@ -2305,7 +2323,7 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   const fast = calls[3];
   assert.deepEqual([fast.timeout, fast.env.ENGELBART_BART_MODEL, /model_reasoning_effort="medium"/.test(fast.command)], [30 * 60_000, 'gpt-6.1-sol', true], 'quick: Sol medium, half an hour');
   assert.match(fast.input, /<mode>quick\. Up to two starting points;[^<]*at most five sources in the guide, of which up to two are essays when essays apply\. No extra papers opened to look for code\.<\/mode>\n\n<level>You are running as Sol at medium effort/);
-  assert.match(quick.lines[quick.lines.length - 1], /^bart> \*Sol · medium · \d+ s\*$/, 'its foot still names the model');
+  assert.match(quick.lines[quick.lines.length - 1], /^bart> \*Discover · Sol · medium · \d+ s\*$/, 'its foot still names the model');
 
   writeCodexConfig(home, {});
   assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n');
@@ -2332,7 +2350,7 @@ test('a --codex @discover line runs Codex at its level when Claude Code is the d
   assert.match(calls[0].command, /^exec \S*codex exec --color never /, 'Codex, a new session');
   assert.deepEqual([calls[0].env.ENGELBART_BART_MODEL, /model_reasoning_effort="ultra"/.test(calls[0].command), calls[0].timeout], ['gpt-6-astra', true, 45 * 60_000], 'at deep: Astra ultra');
   assert.equal(first.meta.provider, 'openai');
-  assert.match(first.lines[first.lines.length - 1], /^bart> \*Astra · ultra · \d+ s\*$/, 'the foot names it (A-02)');
+  assert.match(first.lines[first.lines.length - 1], /^bart> \*Discover · Astra · ultra · \d+ s\*$/, 'the foot names it (A-02)');
 
   // The follow-up line says no provider: the exchange's carries, and so does its session.
   const said = [{ question: 'agents --codex --deep', answer: answerOf(first) }];

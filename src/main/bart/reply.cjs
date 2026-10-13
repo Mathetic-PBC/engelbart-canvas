@@ -17,18 +17,22 @@ const MAX_REPLY_CHARS = 12000;
 
 const seconds = (ms) => `${Math.max(1, Math.round(ms / 1000))} s`;
 
+// The names the foot gives the agents (2026-10-12), as the editor shows them.
+const AGENT_NAMES = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover' };
+
 /**
- * "Sol · high · 41 s · moved up from Sol medium": which model said this, kept with the answer. "8 s" alone without `model`
- * (@brainstorm, 2026-10-02: its model is fixed and not shown). " · via Bart" after it when the router chose the agent.
+ * "Discover · Sol · high · 41 s · moved up from Sol medium": which agent and model said this, kept with the answer.
+ * "Brainstorm · 8 s" without `model` (@brainstorm, 2026-10-02: its model is fixed and not shown). The agent comes first
+ * (2026-10-12), "Build" when Bart, the router, read the line as a request to build (the foot's Build is then drawn
+ * highlighted); with no `agent`, none. The line says nothing of Bart: the title line keeps his pick (doc.js titleLine).
  */
-function attribution({ level, trail, ms, routed = null }, { model = true } = {}) {
-  const parts = model ? [level.name, level.effort, seconds(ms)] : [seconds(ms)];
+function attribution({ level, trail, ms, routed = null }, { model = true, agent = null } = {}) {
+  const name = routed && routed.build ? 'Build' : AGENT_NAMES[agent] || null;
+  const parts = [...(name ? [name] : []), ...(model ? [level.name, level.effort, seconds(ms)] : [seconds(ms)])];
   if (model && trail.length) parts.push(`moved up from ${trail.map((step) => `${step.name} ${step.effort}`).join(', then ')}`);
-  // Handed over by Bart, the router (2026-10-12): kept in the document, so the foot still says so after reopening, and
-  // "build" when Bart read the line as a request to build (the foot's Build button is then drawn highlighted).
-  if (routed) parts.push(routed.build ? `${VIA_BART} · build` : VIA_BART);
   return `*${parts.join(' · ')}*`;
 }
+// What a closing line said after the model when Bart handed the line over, before 2026-10-12 (the editor still reads it).
 const VIA_BART = 'via Bart';
 
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
@@ -79,4 +83,4 @@ function failureLines(message) {
   return [`${REPLY_PREFIX}**No answer.** ${String(message || 'The run failed.').replace(/\s+/g, ' ').slice(0, 300)}`];
 }
 
-module.exports = { PENDING_RE, REPLY_PREFIX, VIA_BART, attribution, bodyLines, replyLines, answerText, failureLines };
+module.exports = { PENDING_RE, REPLY_PREFIX, VIA_BART, AGENT_NAMES, attribution, bodyLines, replyLines, answerText, failureLines };

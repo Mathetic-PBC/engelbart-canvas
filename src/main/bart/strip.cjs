@@ -10,7 +10,8 @@
 //
 // A conversation's title (2026-10-12, `bart# …` or `bart#+ …` above the question that starts a thread; ./name-chat.cjs)
 // is the editor's, named by a model: no agent is shown it, its own threads' included (stripTitles; ./context.cjs applies
-// it to every agent's text).
+// it to every agent's text). It keeps, in brackets before the title, the agent Bart handed an `@bart` line to
+// (`bart# [discover …] …`, doc.js titleMeta): the `@bart` lines of that thread are that agent's.
 //
 // The text is read after its mentions are placed (../context/expand-mentions.cjs): a mention on a question line puts a
 // blank line, the <file> and a blank line between the question and its replies (2026-10-04, `@brainstorm @[Paper]`). That
@@ -20,6 +21,7 @@ const BART_RE = /^@(bart|chat|brainstorm|orient|discover)(?:\s(.*))?$/i;
 const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 const PENDING_RE = /^bart~> ?([\w-]*)$/;
 const TITLE_RE = /^bart#(\+?) ?(.*)$/;
+const TITLE_META_RE = /^\[(chat|brainstorm|discover)( build)?(?: [^\]]*)?\](?: |$)/;
 const OMITTED = '[agent reply omitted]';
 // An agent a line names by another word: `@orient` is @brainstorm's; `@chat` is the agent the app calls 'bart', and an
 // `@bart` line is the router's (2026-10-12, src/renderer/model/doc.js tokenOf).
@@ -46,10 +48,13 @@ function stripAgentReplies(text, agent = 'brainstorm') {
   const outer = []; // the owners of the lines whose mentioned notes are open around this one
   let owner = null; // the agent of the question the lines below answer, until a line that is neither
   let omitting = false;
+  let titled = null; // under a title line: the agent its brackets name, or '' (none)
+  let routed = null; // the agent Bart handed this thread's `@bart` lines to
   const ends = (n) => n >= 0 && (lines[n] === FILE_END || (FILE_RE.test(lines[n]) && CLOSED_RE.test(lines[n])));
   for (let n = 0; n < lines.length; n += 1) {
     const line = lines[n];
-    if (TITLE_RE.test(line)) continue;
+    const title = line.match(TITLE_RE);
+    if (title) { const meta = title[2].match(TITLE_META_RE); titled = meta ? SAME_AS[meta[1]] || meta[1] : ''; continue; }
     // A mention placed under an agent's line: the blank lines around it, then the file itself.
     if (owner && line === '' && (FILE_RE.test(lines[n + 1] || '') || ends(n - 1))) { if (!omitting) out.push(line); continue; }
     if (FILE_RE.test(line)) {
@@ -60,7 +65,12 @@ function stripAgentReplies(text, agent = 'brainstorm') {
     }
     if (line === FILE_END && outer.length) { owner = outer.pop(); omitting = false; out.push(line); continue; }
     const asked = line.match(BART_RE);
-    if (asked) { const named = asked[1].toLowerCase(); owner = SAME_AS[named] || named; omitting = false; out.push(line); continue; }
+    if (asked) {
+      if (titled !== null) routed = titled || null; else if (!owner) routed = null;
+      titled = null;
+      const named = asked[1].toLowerCase(), who = SAME_AS[named] || named;
+      owner = who === 'router' && routed ? routed : who; omitting = false; out.push(line); continue;
+    }
     if (REPLY_RE.test(line) || PENDING_RE.test(line)) {
       if (owner && owner !== agent) {
         if (!omitting) out.push(OMITTED);
@@ -71,6 +81,7 @@ function stripAgentReplies(text, agent = 'brainstorm') {
       continue;
     }
     owner = null;
+    titled = null;
     omitting = false;
     out.push(line);
   }

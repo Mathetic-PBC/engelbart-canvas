@@ -45,7 +45,41 @@ export const REPLY_RE = /^bart(\+?)> ?(.*)$/;
 // question was asked (src/main/bart/name-chat.cjs); `bart#+ ` is the same thread collapsed to that one row. Threads begun
 // before then have none and keep folding a turn at a time. A title with no question under it is plain text (parseLines).
 export const TITLE_RE = /^bart#(\+?) ?(.*)$/;
-export const titleLine = (text, folded) => `bart#${folded ? '+' : ''} ${text}`;
+// What a title line keeps of its conversation (2026-10-12), in brackets before the title: the agent that answered it and
+// when it was asked, `bart# [discover 2026-10-12T21:41:00Z] Papers on tutors`, and ` build` after the agent when Bart
+// routed it to be built (`[chat build …]`). An `@bart` line stays as the person typed it; this is where Bart's pick is
+// kept. A title line from before has none and reads as its text.
+const TITLE_META_RE = /^\[(chat|brainstorm|discover)( build)?(?: (\d{4}-\d\d-\d\dT[\d:.]+Z?))?\](?: |$)/;
+/** The title line's text after `bart# ` read → { text, agent, at, build }: agent 'bart' | 'brainstorm' | 'discover' or null. */
+export function titleMeta(rest) {
+  const m = String(rest ?? '').match(TITLE_META_RE);
+  if (!m) return { text: String(rest ?? ''), agent: null, at: null, build: false };
+  return { text: String(rest).slice(m[0].length), agent: m[1] === 'chat' ? 'bart' : m[1], at: m[3] || null, build: !!m[2] };
+}
+/** A title line: its text, collapsed or not, and `meta` ({ agent, at, build }, as parseLine reads them) kept in brackets. */
+export const titleLine = (text, folded, meta = null) => {
+  const agent = meta && meta.agent ? (meta.agent === 'bart' ? 'chat' : meta.agent) : null;
+  const tag = agent ? `[${agent}${meta.build ? ' build' : ''}${meta.at ? ` ${meta.at}` : ''}] ` : '';
+  return `bart#${folded ? '+' : ''} ${tag}${text}`;
+};
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+/**
+ * When a conversation was asked, as its collapsed row says it (2026-10-12), in local time: "9:41 PM" today, "Yesterday",
+ * the weekday within the week, else the date ("Oct 3", and the year when it is not this one). '' with no time.
+ */
+export function whenShown(at, now = new Date()) {
+  const d = at ? new Date(at) : null;
+  if (!d || Number.isNaN(d.getTime())) return '';
+  const day = (x) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+  const days = Math.round((day(now) - day(d)) / 864e5);
+  if (days <= 0) return `${d.getHours() % 12 || 12}:${String(d.getMinutes()).padStart(2, '0')} ${d.getHours() < 12 ? 'AM' : 'PM'}`;
+  if (days === 1) return 'Yesterday';
+  if (days < 7) return WEEKDAYS[d.getDay()];
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}${d.getFullYear() !== now.getFullYear() ? `, ${d.getFullYear()}` : ''}`;
+}
+/** Now, as a title line keeps it: to the second, in UTC. */
+export const askedNow = (now = new Date()) => now.toISOString().replace(/\.\d{3}Z$/, 'Z');
 /**
  * Where ask `askId`'s question stands now → { question, index }: its line as written and its index, or null when its
  * pending line is gone. Read just before the answer replaces the pending line, so the title can still find it (placeTitle).
@@ -62,7 +96,7 @@ export function askedAt(text, askId) {
  */
 export function placeTitle(text, askId, title, near = null) {
   const all = String(text).split('\n');
-  const empty = (j) => { const m = j >= 0 ? String(all[j]).match(TITLE_RE) : null; return !!m && !m[2].trim(); };
+  const empty = (j) => { const m = j >= 0 ? String(all[j]).match(TITLE_RE) : null; return !!m && !titleMeta(m[2]).text.trim(); };
   let at = -1;
   const pending = all.indexOf(`bart~> ${askId}`);
   if (pending >= 0) { if (pending >= 2 && BART_RE.test(all[pending - 1]) && empty(pending - 2)) at = pending - 2; }
@@ -72,7 +106,8 @@ export function placeTitle(text, askId, title, near = null) {
     if (best >= 0) at = best - 1;
   }
   if (at < 0 || !String(title || '').trim()) return null;
-  all[at] = titleLine(String(title).trim(), all[at].match(TITLE_RE)[1] === '+');
+  const m = all[at].match(TITLE_RE);
+  all[at] = titleLine(String(title).trim(), m[1] === '+', titleMeta(m[2]));
   return all.join('\n');
 }
 // The closing line of an answer: which model said it and how long it took. It is drawn as the card's foot.
@@ -256,7 +291,7 @@ export const parseLine = (l) => {
   if ((m = l.match(BART_RE))) { const agent = m[1].toLowerCase(); return agent === 'chat' ? { type: 'bart', text: m[2] || '' } : { type: 'bart', text: m[2] || '', agent: agent === 'bart' ? 'router' : agent }; }
   if ((m = l.match(BUILD_RE))) return { type: 'build', id: m[1], text: '' };
   if ((m = l.match(PENDING_RE))) return { type: 'pending', id: m[1], text: '' };
-  if ((m = l.match(TITLE_RE))) return { type: 'title', text: m[2], folded: m[1] === '+' };
+  if ((m = l.match(TITLE_RE))) return { type: 'title', ...titleMeta(m[2]), folded: m[1] === '+' };
   if ((m = l.match(DRAFT_RE))) return { type: 'reply', text: m[1], folded: false };
   if ((m = l.match(REPLY_RE))) return { type: 'reply', text: m[2], folded: m[1] === '+' };
   if ((m = l.match(QUOTE_RE))) return { type: 'quote', text: m[1] };
@@ -460,14 +495,23 @@ export function replyRawOffset(p, fOff, opts) {
  * (2026-10-02). An `@orient` line (2026-10-05) starts a thread of its own, as it did when it was an agent of its own,
  * unless that thread is an @orient one; the @brainstorm lines answering an @orient thread's cards go on with it.
  */
-const followsIn = (p, first) => agentOf(p) === agentOf(first) && (p.agent !== 'orient' || first.agent === 'orient');
+const followsIn = (p, first, thread) => (
+  agentOf(p) === thread.agent ? p.agent !== 'orient' || first.agent === 'orient' : agentOf(p) === 'router' && !!thread.routedTo
+);
+/**
+ * The agent that answers a thread (2026-10-12): the one its title line names, where Bart's pick for an `@bart` line is
+ * kept, else the one its first question line asks. 'bart' (Chat), 'brainstorm', 'discover', or 'router' for an `@bart`
+ * line not handed over yet.
+ */
+export const answeredBy = (thread) => (thread && thread.routedTo) || (thread && thread.asked) || 'bart';
 
 /**
  * The @bart exchanges of a document, by line index. A thread is a run of lines with nothing between them: a question,
  * what stands under it (a pending line, or the answer), then any question asked right after that answer — a follow-up,
  * which reads as one card. A follow-up asks the agent the thread's first question asked; a line for another agent
  * starts a thread of its own, with its own card and reply field (2026-10-02; followsIn). → [{ from, to, turns, agent,
- * title, titleLine, folded }]: `agent` the thread's ('bart', 'brainstorm' or 'discover'), and for a thread begun under a
+ * asked, routedTo, at, build, title, titleLine, folded }]: `agent` the thread's (answeredBy: 'bart', 'brainstorm' or
+ * 'discover'), `asked` its first line's, `routedTo`, `at` and `build` what its title line keeps; and for a thread begun under a
  * title line (2026-10-12) `title` its text, `titleLine` its index (-1 and null without one) and `folded` whether the
  * thread is collapsed to it; `from` is always the first question's line. Each turn
  * { q, from, to, answered, pending, foot, folded } where `from..to` are the lines under the question (to === q when there
@@ -479,7 +523,8 @@ export function threads(lines, ps = parseLines(lines)) {
   for (let i = 0; i < lines.length; i++) {
     if (ps[i].type !== 'bart') continue;
     const head = i > 0 && ps[i - 1].type === 'title' ? ps[i - 1] : null;
-    const thread = { from: i, to: i, turns: [], agent: agentOf(ps[i]), title: head ? head.text : null, titleLine: head ? i - 1 : -1, folded: !!(head && head.folded) };
+    const thread = { from: i, to: i, turns: [], asked: agentOf(ps[i]), routedTo: (head && head.agent) || null, at: (head && head.at) || null, build: !!(head && head.build), title: head ? head.text : null, titleLine: head ? i - 1 : -1, folded: !!(head && head.folded) };
+    thread.agent = answeredBy(thread);
     for (;;) {
       const turn = { q: i, from: i + 1, to: i, answered: false, pending: null, foot: -1, folded: false };
       while (i + 1 < lines.length) {
@@ -492,7 +537,9 @@ export function threads(lines, ps = parseLines(lines)) {
       turn.answered = turn.to > turn.q;
       if (turn.answered && !turn.pending) { const last = ps[turn.to]; if (last.type === 'reply' && ATTRIBUTION_RE.test(last.text)) turn.foot = turn.to; }
       thread.turns.push(turn); thread.to = turn.to;
-      if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || !followsIn(ps[i + 1], ps[thread.from])) break;
+      // An `@bart` line goes on with a thread Bart's pick is kept for once it is asked (a pending line or an answer under it).
+      if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || !followsIn(ps[i + 1], ps[thread.from], thread)) break;
+      if (agentOf(ps[i + 1]) === 'router' && !(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply'))) break;
       i += 1;
     }
     out.push(thread);
@@ -516,9 +563,12 @@ export function turnText(lines, turn) {
  */
 export function migrateChatLines(text) {
   const source = String(text ?? ''), lines = source.split('\n'), ps = parseLines(lines);
+  // An `@bart` line whose thread's title line keeps Bart's pick (2026-10-12) was routed, and stays as typed.
+  const routed = new Set();
+  for (const thread of threads(lines, ps)) if (thread.routedTo) for (const turn of thread.turns) routed.add(turn.q);
   let count = 0;
   for (let i = 0; i + 1 < lines.length; i++) {
-    if (ps[i].type !== 'bart' || ps[i].agent !== 'router') continue;
+    if (ps[i].type !== 'bart' || ps[i].agent !== 'router' || routed.has(i)) continue;
     const under = ps[i + 1];
     if (under.type !== 'reply' && under.type !== 'pending') continue;
     lines[i] = lines[i].replace(/^@(b)art/i, (all, b) => (b === 'B' ? '@Chat' : '@chat'));
