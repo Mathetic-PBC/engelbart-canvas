@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, errorMessage } from '../api.js';
+import Benchmark from './Benchmark.jsx';
 import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, modelLabel, sectionText, exportPage, runLabel, agentInfo, createdLines, BUILD_AGENTS } from '../agent-map/runText.js';
 
 // The Agent map (2026-10-12; src/main/agent-map): a window for developers only, the app's renderer at ?view=agent-map.
@@ -9,6 +10,7 @@ import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msL
 // (engelbart:agent-run), all in one list, and the one selected in sections: its system prompt, its context
 // block by block, each model step (the input, its tool calls, what it said) and what was written (a run step: its
 // runnables). Design: one agent at a time, picked from a row of tabs, as it is set up now and which agents it hands work to.
+// Benchmark (2026-10-13, ./Benchmark.jsx): every Chat question in the notes, its saved answer beside it asked again now.
 // Plain and dense on purpose: one font, small type, thin rules. Less text (2026-10-13): no filter tabs, status dots, size
 // notes beside the sections, run header or key legend; a failed run still says why.
 // Keys, not shown: j/k the next and previous run, 1–4 a section, c copies the open section, e exports the run (E every run).
@@ -279,6 +281,7 @@ export default function AgentMap() {
       <div style={S.bar}>
         <button type="button" style={S.tab(tab === 'runs')} onClick={() => setTab('runs')}>Runs</button>
         <button type="button" style={S.tab(tab === 'design')} onClick={() => setTab('design')}>Design</button>
+        <button type="button" style={S.tab(tab === 'benchmark')} onClick={() => setTab('benchmark')}>Benchmark</button>
         <span style={{ flex: 1 }} />
         <span style={S.dim}>{note}</span>
         <button type="button" style={S.button} disabled={!record} onClick={() => exportRuns(false)}>Export run</button>
@@ -289,8 +292,10 @@ export default function AgentMap() {
           <div style={S.list}>{list}</div>
           <div style={S.detail}>{record ? <RunDetail record={record} open={open} onToggle={toggle} /> : <div style={S.dim}>{runs.length ? 'Loading…' : ''}</div>}</div>
         </div>
-      ) : (
+      ) : tab === 'design' ? (
         <div style={{ ...S.detail, flex: 1 }}><Design design={design} agent={agent} onPick={setAgent} /></div>
+      ) : (
+        <Benchmark />
       )}
     </div>
   );

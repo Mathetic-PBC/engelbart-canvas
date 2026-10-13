@@ -58,7 +58,8 @@ async function placeNames(ctx, place, { projects = require('../store/projects.cj
   return names;
 }
 
-function registerAgentMapIpc({ ipcMain, trustedHandler, mapWindow, runLog, design, saveFile, reveal = () => false, context = null }) {
+// `benchmark` (./benchmark.cjs): the Benchmark tab's questions, replays and notes; each change is sent to the Viewer alone.
+function registerAgentMapIpc({ ipcMain, trustedHandler, mapWindow, runLog, design, saveFile, reveal = () => false, context = null, benchmark = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   handle('agentMap:open', () => mapWindow.open());
   handle('agentMap:runs', () => (runLog ? runLog.list() : []));
@@ -78,6 +79,12 @@ function registerAgentMapIpc({ ipcMain, trustedHandler, mapWindow, runLog, desig
     const safe = String(name || 'agent-runs').replace(/[^\w.-]+/g, '-').slice(0, 80) || 'agent-runs';
     return saveFile(html, `${safe}.html`);
   });
+  if (benchmark) benchmark.subscribe((change) => mapWindow.send('engelbart:chat-benchmark', change));
+  const benched = (fn) => (...args) => { if (!benchmark) throw new Error('The benchmark is not available.'); return fn(...args); };
+  handle('agentMap:benchmark', benched(() => benchmark.list()));
+  handle('agentMap:benchmark-run', benched((key) => (key == null ? benchmark.run() : benchmark.runOne(key))));
+  handle('agentMap:benchmark-stop', benched(() => benchmark.stop()));
+  handle('agentMap:benchmark-note', benched((key, text) => (typeof key === 'string' && typeof text === 'string' ? benchmark.setNote(key, text) : false)));
 }
 
 module.exports = { registerAgentMapIpc, revealTarget, placeNames };

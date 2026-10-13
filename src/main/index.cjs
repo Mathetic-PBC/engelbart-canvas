@@ -87,6 +87,7 @@ const { createRunLog } = require('./bart/runlog.cjs');
 const { createAgentMapWindow } = require('./agent-map/window.cjs');
 const { registerAgentMapIpc } = require('./agent-map/ipc.cjs');
 const { agentDesign } = require('./agent-map/design.cjs');
+const { createChatBenchmark, askChat } = require('./agent-map/benchmark.cjs');
 const { createUpdates } = require('./updates.cjs');
 const projects = require('./store/projects.cjs');
 const { createWindows, placement } = require('./windows.cjs');
@@ -1170,6 +1171,13 @@ if (!hasSingleInstanceLock) {
       runLog,
       context: () => store.context(),
       design: () => agentDesign({ dataRoot: store.config().dataRoot, models: readModels('bart'), buildModels: readModels('build') }),
+      // The Benchmark tab (2026-10-13): Chat's questions in the notes asked again under its prompt now, read-only tools.
+      benchmark: developer ? createChatBenchmark({
+        file: path.join(app.getPath('userData'), 'chat-benchmark.json'),
+        context: () => store.context(),
+        runLog,
+        chat: askChat({ readModels: () => readModels('bart'), runDirectory: path.join(app.getPath('userData'), 'benchmark-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-benchmark'), tools, ...(process.env.ENGELBART_BART_FAKE === '1' ? { makeBart: createFakeBart } : {}) }),
+      }) : null,
       // A row clicked (2026-10-12): the window on the ask's project comes to the front, else the focused one (which opens
       // the project; App.jsx), and is told where. It is also kept on the window, for a Workspace that mounts after the
       // event went by (agentMap:take-reveal).

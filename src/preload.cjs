@@ -217,6 +217,14 @@ const engelbartAPI = Object.freeze({
   takeAgentReveal: invoke('agentMap:take-reveal'),
   onAgentReveal: (callback) => subscribe('engelbart:agent-reveal', callback),
   onAgentRun: (callback) => subscribe('engelbart:agent-run', callback),
+  // Its Benchmark tab (2026-10-13, src/main/agent-map/benchmark.cjs): every Chat question in the notes with its old and new
+  // answers and its note; Run (no key: every one with no new answer; a key: that one again), Stop, a note saved, and each
+  // change as a replay starts or ends ({ key, new, running }).
+  chatBenchmark: invoke('agentMap:benchmark'),
+  runChatBenchmark: invoke('agentMap:benchmark-run'),
+  stopChatBenchmark: invoke('agentMap:benchmark-stop'),
+  saveChatBenchmarkNote: invoke('agentMap:benchmark-note'),
+  onChatBenchmark: (callback) => subscribe('engelbart:chat-benchmark', callback),
   // @bart from a highlight's note (MATH-27): the ones this window asked that are still running (for after ⌘R), and how each
   // ended, told to every window: { askId, markId, page, rowId | url, and entry (the answer, already on its mark) | stopped | failed and lines }.
   runningPaperAsks: invoke('running-paper-asks'),
