@@ -521,6 +521,16 @@ test('in an answer line, the hammer builds that turn as the footer\'s Build does
   assert.ok(!mounted([...SPEC, '']).editor.editorHtml().includes('data-build-icon'));
 });
 
+test('the [[build]] line clicked into: the hammer stays drawn and builds; the keyboard at it shows its source', () => {
+  const at = ROUTED_SPEC.indexOf(`bart> ${BUILD_LINE}`), after = 'Press [[build]]'.length;
+  const m = mounted(ROUTED_SPEC);
+  m.editor.state.activeLine = at; m.editor.caret = { line: at, offset: after }; m.editor.byMouse = true;
+  const clicked = m.editor.editorHtml();
+  assert.match(clicked, /<span data-src="\[\[build\]\]" data-open="0"><span data-build-icon="1" contenteditable="false" data-act="footbuild" data-turn="1"/, 'the mouse put the caret beside it: still the hammer, still the turn\'s Build');
+  m.editor.byMouse = false;
+  assert.match(m.editor.editorHtml(), /<span data-src="\[\[build\]\]" data-open="1">\[\[build\]\]<\/span>/, 'the keyboard reached it: its source');
+});
+
 test('another agent for a routed line: only the title line changes, and it is asked again with the correction carried', () => {
   const m = mounted(['bart# [chat 2026-10-12T21:41:00Z] Tutors', '@bart what papers on tutors?', 'bart> An answer.', 'bart> *Chat · Sonnet · high · 3 s*', '']);
   m.editor.state.picker = { kind: 'via', i: 1 };

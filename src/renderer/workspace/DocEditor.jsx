@@ -50,7 +50,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { HAMMER_PATHS } from '../model/hammer.js';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, whenShown, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, tokenOf } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, whenShown, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, isResultOffer, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -633,23 +633,24 @@ export default class DocEditor extends React.Component {
   // Math (2026-10-12) opens when the caret touches it, as bold does: the caret never stands inside a drawn formula.
   // `shut` (2026-10-12): a link stays drawn whatever the caret touches. An answer's line the mouse put the caret on
   // (byMouse) is drawn so: a click beside a link must not turn it into `[title](url)`, or the next click lands on plain
-  // text and opens nothing. Its source shows once the keyboard reaches the caret (keyReached).
+  // text and opens nothing. Its source shows once the keyboard reaches the caret (keyReached). An answer's [[build]]
+  // (2026-10-12) stays drawn there as a link does: a click on it builds.
   openIdx(tokens, a, b, shut = false) {
     const out = []; let acc = 0;
-    tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre, touched = tok.startsWith('@[') ? a < end && b > acc : a <= end && b >= acc; if (pre && touched && !(shut && holdsLink(tok))) out.push(k); acc = end; });
+    tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre, touched = tok.startsWith('@[') ? a < end && b > acc : a <= end && b >= acc; if (pre && touched && !(shut && (holdsLink(tok) || tok === BUILD_TOKEN))) out.push(k); acc = end; });
     return out;
   }
   // Whether line `p`'s links stay drawn with the caret on it: an answer's line, the caret put there by the mouse.
   linksShut(p) { return !!this.byMouse && !!p && p.type === 'reply' && !p.code; }
   // `marker`: the style of tokens[0] when it is a line's own `## ` or `- ` (an answer's line being edited: faint, so the
   // line keeps its look and only the mark shows).
-  activeHtml(tokens, flags, marker = null, shut = false) {
+  activeHtml(tokens, flags, marker = null, shut = false, opts = this.mentionOpts) {
     const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b, shut); this.openKey = open.join(',');
     return tokens.map((tok, k) => {
       if (marker && k === 0) return `<span data-src="${esc(tok)}" data-open="1" style="${marker}">${esc(tok)}</span>`;
       if (flags && flags.has(k)) return `<span data-src="${esc(tok)}" data-open="1" style="${FLAG_LOOK}">${esc(tok)}</span>`;
       const isOpen = !tokShown(tok).pre || open.includes(k);
-      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !AGENT_TOKEN.test(tok) ? esc(tok) : inlineHtml(tok, this.mentionOpts)}</span>`;
+      return `<span data-src="${esc(tok)}" data-open="${isOpen ? 1 : 0}">${isOpen && !AGENT_TOKEN.test(tok) ? esc(tok) : inlineHtml(tok, opts)}</span>`;
     }).join('');
   }
   // An @bart line in pieces: its recognised flags (src/main/bart/question.cjs reads them, as the run will) each a token of
@@ -814,7 +815,7 @@ export default class DocEditor extends React.Component {
       const q = active ? parseLine(p.text) : null, cut = q && (q.type === 'h' || isMarked(q.type)) ? p.text.length - q.text.length : 0;
       const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
       const hang = cut && q.type !== 'h' ? `padding-left:calc(${q.depth * 18}px + ${MARK_COL});` : '';
-      const a = this.answerLook(p.text, at && at.turn && !isRunning(at.thread) ? at.turn.q : null), shut = active && this.linksShut(p), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`, shut) : this.activeHtml(tokensOf(p, line), null, null, shut)) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
+      const own = at && at.turn && !isRunning(at.thread) ? at.turn.q : null, a = this.answerLook(p.text, own), shut = active && this.linksShut(p), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`, shut, this.answerOpts(own)) : this.activeHtml(tokensOf(p, line), null, null, shut, this.answerOpts(own))) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
       return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 8 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -1051,11 +1052,13 @@ export default class DocEditor extends React.Component {
   // (model/doc.js inlineHtml); left out where there is nothing to build (a run still writing, a Build's messages).
   answerLook(text, turn = null) {
     const q = parseLine(text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
-    const opts = Number.isInteger(turn) && this.props.onBuild && !this.props.readOnly ? { ...this.mentionOpts, buildTurn: turn } : this.mentionOpts;
+    const opts = this.answerOpts(turn);
     if (q.type === 'h') return { content: ink(inlineHtml(q.text, opts)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
     if (isMarked(q.type)) return { content: `<span style="display:flex;padding-left:${q.depth * 18}px"><span contenteditable="false" style="${MARK_DRAWN};color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text, opts))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
     return { content: ink(inlineHtml(text, opts)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
   }
+  // inlineHtml's options for a line of turn `turn`'s answer: its [[build]] builds that turn, drawn or with the caret on it.
+  answerOpts(turn) { return Number.isInteger(turn) && this.props.onBuild && !this.props.readOnly ? { ...this.mentionOpts, buildTurn: turn } : this.mentionOpts; }
   /* ---------------------------------------------------------------- Build cards (2026-09-25) */
   // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends), props.buildProgress
   // (what a running turn is doing) and props.buildDiffs (what it has changed). The card is in parts — head, body, live,
@@ -2122,6 +2125,7 @@ export default class DocEditor extends React.Component {
       if (k === 'papersave') { if (!act.disabled) this.savePaper(i); return; }
       if (k === 'regen') { this.closePicker(); const q = Number(act.dataset.turn); this.regenerate(q, act.dataset.plain ? undefined : this.ranWith(this.lines(), q).choice); return; }
       if (k === 'editturn') { this.closePicker(); this.startEdit(Number(act.dataset.turn)); return; }
+      // The foot's Build, or an answer line's [[build]] (2026-10-12): the same Build of that turn.
       if (k === 'footbuild') { this.closePicker(); if (!act.disabled) this.footBuild(Number(act.dataset.turn)); return; }
       if (k === 'viabart') { this.openVia(act); return; }
       if (k === 'cardopt') { this.pickCard(Number(act.dataset.turn), Number(act.dataset.opt)); return; }
