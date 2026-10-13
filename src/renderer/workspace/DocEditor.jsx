@@ -131,6 +131,10 @@ const BUILD_WORKING = new Set(['setting-up', 'queued', 'running', 'accepting']);
 const NOTE_VERB_RE = /(^|\s)@Note(?:\s+(.*))?$/;
 // How far beside an answer's link, in px from its box, a press is still on it (nearLink, 2026-10-12).
 const NEAR_LINK = 4;
+// How tall a pending row's answer so far may grow before it scrolls in its box (2026-10-13), and how far above the box's
+// bottom the person must scroll for it to stop following the newest line.
+export const STREAM_CAP = 'min(240px, 35vh)';
+const STREAM_SLACK = 40;
 // A short fingerprint of a line (FNV-1a), so a remembered scroll position finds its line again without keeping its text.
 const hashLine = (line) => { let h = 0x811c9dc5; const s = String(line ?? ''); for (let k = 0; k < s.length; k++) { h ^= s.charCodeAt(k); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); };
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -283,6 +287,7 @@ export default class DocEditor extends React.Component {
   syncing = false; wantFocus = false; wantAnchor = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
   openLogs = new Set(); // asks whose list of steps is open
   waits = new Map(); // routed Create asks counting down (waitCreate): askId → { ask, left, timer }
+  streamFollow = new Map(); // askId → false while the person has scrolled up in its answer-so-far box (streamScrolled)
   pickerT = null;
   // A follow-up being typed, the model picked for it and the images pasted into it ([{ n, id }]), by the first line of its
   // card. None is in the document, and none is in the editor's HTML: the field keeps its text across redraws because it
@@ -351,6 +356,10 @@ export default class DocEditor extends React.Component {
       // A press in the space under a card (gapAt) is kept for its click too. One on a heading's space above its text must not
       // put the caret in the heading: the click makes a line above it instead.
       mousedown: (e) => {
+        // While a button is down the pane is not scrolled for the person (keepCaretLine), and an answer-so-far box being
+        // dragged by its scrollbar is not replaced under the pointer (patchPending): it is, once the button comes up.
+        this.pressed = true;
+        const stream = e.target && e.target.closest ? e.target.closest('[data-stream]') : null; this.pressedStream = stream ? stream.dataset.stream : null;
         this.downOnPage = e.target === this.scrollRef.current;
         this.nearA = null; this.downGap = null;
         if (!inEd(e)) return;
@@ -364,7 +373,11 @@ export default class DocEditor extends React.Component {
       },
       // While the button is down a selection is only noted: redrawing the line under a drag (to show its source) lost the
       // highlight. The line becomes the caret's once the button comes up, after this click is handled.
-      mouseup: () => { if (!this.held) return; this.held = false; this.timer(() => this.onSel(), 0); },
+      mouseup: () => {
+        this.pressed = false;
+        if (this.pressedStream != null) { this.pressedStream = null; this.timer(() => { if (this.mounted) this.patchPending(); }, 0); }
+        if (!this.held) return; this.held = false; this.timer(() => this.onSel(), 0);
+      },
       click: (e) => { if (inEd(e)) this.editorClick(e); },
       mouseover: (e) => { if (inEd(e)) this.editorOver(e); },
       mouseout: (e) => { if (inEd(e)) this.editorOut(e); },
@@ -383,6 +396,7 @@ export default class DocEditor extends React.Component {
     };
     Object.entries(this.docListeners).forEach(([k, f]) => document.addEventListener(k, f));
     document.addEventListener('scroll', this.buildScrolled, true); // a card's diff scrolls on its own; redraws put it back
+    document.addEventListener('scroll', this.streamScrolled, true); // so does an answer so far (placeStreams)
     window.addEventListener('resize', this.fitFollows);
     this.syncEditor();
     this.wantView = true; this.maybeRestoreView();
@@ -432,6 +446,7 @@ export default class DocEditor extends React.Component {
     window.removeEventListener('resize', this.fitFollows);
     Object.entries(this.docListeners || {}).forEach(([k, f]) => document.removeEventListener(k, f));
     document.removeEventListener('scroll', this.buildScrolled, true);
+    document.removeEventListener('scroll', this.streamScrolled, true);
     for (const id of this.timers) clearTimeout(id);
     this.timers.clear();
     // A Create counting down was going to be asked: it is, now, as the document is left (its answer lands in it all the same).
@@ -895,8 +910,12 @@ export default class DocEditor extends React.Component {
         return `<span style="display:block;min-height:${text ? 22 : 10}px;padding:1px 0 1px 14px;${a.look}color:#8f8f8f;font-size:14px;line-height:1.65;${end ? 'margin-bottom:10px;' : ''}">${end ? (/<\/span><\/span>$/.test(a.content) ? a.content.replace(/<\/span><\/span>$/, `${cursor}</span></span>`) : a.content + cursor) : (a.content || '<br>')}</span>`;
       }).join('');
       const closes = !at || at.closes;
+      // The answer so far is in a box of its own, as tall as min(240px, 35vh) at most (2026-10-13): a long answer scrolls
+      // inside it, on its newest line unless the person scrolled up in it (placeStreams), and the card does not grow to
+      // fill the pane or push the line being typed below it out of view. The log and the activity row stay under it.
+      const box = written ? `<div data-stream="${esc(p.id)}" style="max-height:${STREAM_CAP};overflow-y:auto">${written}</div>` : '';
       return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:2px 16px 12px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '8px' : '0'};color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
-        + written
+        + box
         + (open && log.length ? `<div style="margin:0 0 8px 16px;font:12px/1.7 var(--font-sans);color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '')
         + '<div style="display:flex;align-items:center;gap:10px">'
         + (ask || wait ? '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>' : '')
@@ -1784,13 +1803,69 @@ export default class DocEditor extends React.Component {
   }
   patchPending() {
     const ed = this.editorEl(); if (!ed || this.lastKey !== this.key()) return false;
-    const ls = this.lines(), at = this.layout(ls);
+    const ls = this.lines(), at = this.layout(ls), changed = [];
     for (const d of ed.querySelectorAll('[data-pending]')) {
       const i = Number(d.dataset.line), p = parseLine(ls[i] ?? ''); if (p.type !== 'pending' || p.id !== d.dataset.pending) return false;
+      // Its answer so far held by its scrollbar: it is replaced when the button comes up (mouseup).
+      if (this.pressedStream != null && this.pressedStream === p.id) continue;
       const html = this.lineHtml(i, ls[i], p, false, false, at.get(i), true);
-      if (html !== d.outerHTML) { const holder = document.createElement('div'); holder.innerHTML = html; if (holder.firstElementChild.outerHTML !== d.outerHTML) d.replaceWith(holder.firstElementChild); }
+      if (html !== d.outerHTML) { const holder = document.createElement('div'); holder.innerHTML = html; if (holder.firstElementChild.outerHTML !== d.outerHTML) changed.push([d, holder.firstElementChild]); }
     }
+    if (changed.length) {
+      const keep = this.caretLineBelow(ed, changed.map(([d]) => d)), tops = this.streamTops(ed);
+      for (const [d, next] of changed) d.replaceWith(next);
+      this.placeStreams(changed.map(([, next]) => next), tops);
+      if (keep) this.keepCaretLine(keep);
+    }
+    this.pruneStreams();
     this.lastHtml = this.editorHtml(); return true;
+  }
+  /* The answer so far, in its box (2026-10-13). A row replaced by progress starts its box at the top again: it is put back
+     on its newest line, or where the person scrolled it to while they keep it more than STREAM_SLACK px above its bottom. */
+  streamScrolled = (e) => {
+    const box = e.target; if (!box || !box.dataset || box.dataset.stream == null || box.isConnected === false) return;
+    if (box.scrollHeight - box.clientHeight - box.scrollTop > STREAM_SLACK) this.streamFollow.set(box.dataset.stream, false);
+    else this.streamFollow.delete(box.dataset.stream);
+  };
+  streamTops(root) { const tops = new Map(); for (const box of root.querySelectorAll('[data-stream]')) tops.set(box.dataset.stream, box.scrollTop); return tops; }
+  placeStreams(rows, tops) {
+    for (const row of rows) for (const box of row.querySelectorAll('[data-stream]')) {
+      const id = box.dataset.stream;
+      box.scrollTop = this.streamFollow.get(id) === false && tops.has(id) ? tops.get(id) : box.scrollHeight;
+    }
+  }
+  // An ask that ended (answered, stopped, failed) follows again if it is ever drawn.
+  pruneStreams() { const asks = this.props.asks || {}; for (const id of this.streamFollow.keys()) if (!asks[id]) this.streamFollow.delete(id); }
+  /* The line being typed on stays where it is on screen while a card above it changes (2026-10-13). → the caret's line, or
+     the field inside the editor being typed in, when it is below one of `rows` (about to be replaced), with its top now;
+     null while a mouse button is down (a selection or a drag), with the keyboard elsewhere, or with the caret above them. */
+  caretLineBelow(ed, rows) {
+    if (this.pressed || !this.scrollRef.current) return null;
+    const act = document.activeElement; let el = null;
+    if (act === ed) {
+      const sel = getSelection(), n = sel && sel.rangeCount ? sel.focusNode : null, at = n && (n.nodeType === 1 ? n : n.parentElement);
+      el = at && at.closest ? at.closest('[data-line]') : null;
+    } else if (act && act !== ed && ed.contains(act) && act.matches && act.matches('textarea, input')) el = act;
+    if (!el || !ed.contains(el) || !rows.some((d) => d.compareDocumentPosition(el) & 4)) return null; // 4: it follows the row
+    return { el, top: el.getBoundingClientRect().top };
+  }
+  // The pane scrolled by however far the change moved that line: only that, so a scroll of the person's own stays.
+  keepCaretLine(keep) {
+    const box = this.scrollRef.current; if (!box || !keep.el || keep.el.isConnected === false || keep.top == null) return;
+    const moved = keep.el.getBoundingClientRect().top - keep.top; if (moved) box.scrollTop += moved;
+  }
+  /* An answer landing (Workspace placeAnswer) above the caret's line: its pending row, drawn above that line, is the
+     answer's lines in the text now. → { caret, from, line, top }: the caret on its own line again, that many lines further
+     down (`from` → `line`), and that line's top as drawn now, for keepCaretLine once the answer is (null while a mouse
+     button is down); or null when the text changed anywhere else under the caret. */
+  landing(ed, ls) {
+    const drawn = this.drawnLines; if (!drawn || this.caret) return null;
+    const c = this.caretInfo(); if (!c) return null; const from = c.anchor.line;
+    if (![...ed.querySelectorAll('[data-pending]')].some((d) => Number(d.dataset.line) < from && !ls.includes(`bart~> ${d.dataset.pending}`))) return null;
+    let same = 0; while (same < drawn.length - from && same < ls.length && drawn[drawn.length - 1 - same] === ls[ls.length - 1 - same]) same++;
+    if (from < drawn.length - same) return null;
+    const line = from + ls.length - drawn.length, el = ed.querySelector(`[data-line="${from}"]`);
+    return { caret: { ...c.anchor, line }, from, line, top: el && !this.pressed ? el.getBoundingClientRect().top : null };
   }
   syncEditor() {
     const ed = this.editorEl(); if (!ed) return; const key = this.key();
@@ -1815,6 +1890,13 @@ export default class DocEditor extends React.Component {
     // back. Taking one anyway (2026-09-30: a card's textarea sits in a line, so the selection read as that line) left it
     // set, and the next redraw focused the editor with it: typing in the card jumped the caret to the top of the document.
     if (had || buildField || titleField) this.caret = null;
+    // An answer landed above the line being typed on (2026-10-13): the caret stays on that line, and the line where it is
+    // on screen. The line was the open one: it is again, under its new number, before anything is drawn.
+    let land = this.landAt || null; this.landAt = null;
+    if (!land && hadFocus && !had && !buildField && !titleField && key === this.lastKey && (land = this.landing(ed, this.lines()))) {
+      this.caret = land.caret;
+      if (this.state.activeLine === land.from) { this.landAt = land; this.setState({ activeLine: land.line }); return; }
+    }
     if (html === this.lastHtml && key === this.lastKey) {
       if (this.caret && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.applyCaret(); }
       this.wantFocus = false; this.menuToCaret(); return;
@@ -1824,10 +1906,13 @@ export default class DocEditor extends React.Component {
     if (c && !this.caret) this.caret = c;
     // Read before the fields are replaced: taking a focused field out of the page may blur it, which closes the menu.
     const menu = this.state.mention && this.state.mention.field != null ? this.state.mention : null;
-    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.markBeside(); this.restoreFollow(ed, had && !had.discover ? had : null); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
+    const tops = this.streamTops(ed);
+    this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.drawnLines = this.lines(); this.markBeside();
+    this.placeStreams([ed], tops); this.pruneStreams(); this.restoreFollow(ed, had && !had.discover ? had : null); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
     if (titleField) { const input = ed.querySelector(`[data-title-input="${titleField.line}"]`); if (input) { input.focus({ preventScroll: true }); try { input.setSelectionRange(titleField.a, titleField.b); } catch { /* not a text field */ } } }
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
+    if (land && land.top != null) this.keepCaretLine({ el: ed.querySelector(`[data-line="${land.line}"]`), top: land.top });
     this.wantFocus = false; this.syncing = false; this.menuToCaret();
   }
   // The @ menu's line was rewritten under it (a folder's path written in, MATH-22): it hangs from the caret again.
