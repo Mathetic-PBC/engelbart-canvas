@@ -1362,20 +1362,22 @@ test('the fake @brainstorm follows the person: a plain first card, moves whose r
   await projects.linkToWorkspace(ctx, proj.id, space.id, [retry.id, paperRow.id]); // only this workspace's library is read (round 3)
   await projects.writeDoc(ctx, proj.id, ref, 'Notes on agents.\n');
   const progress = [];
+  // Each answer goes under the card with its pending line, as the card's Submit writes it (DocEditor sendCard): a line
+  // with nothing under it is no turn of the card (2026-10-13). The answer then takes the pending line's place.
   const run = async (answers, start = ['@brainstorm']) => {
-    let doc = [...start];
+    let doc = [...start, 'bart~> z0'];
     const cards = [];
     for (let n = 0; n <= answers.length; n += 1) {
-      const thread = model.threads(doc).at(-1);
-      const turns = thread.turns.filter((turn) => turn.answered).map((turn) => model.turnText(doc, turn));
-      const p = model.parseLine(doc[doc.length - 1]);
+      const at = doc.length - 1, thread = model.threads(doc).at(-1);
+      const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => model.turnText(doc, turn));
+      const p = model.parseLine(doc[at - 1]);
       const out = await bart.ask(ctx, proj.id, { askId: `z${n}`, ref, workspaceId: space.id, text: p.text, turns, agent: model.agentOf(p) }, { onProgress: (step) => progress.push({ n, ...step }) });
-      doc = [...doc, ...out.lines];
+      doc = [...doc.slice(0, at), ...out.lines];
       const again = model.threads(doc).at(-1);
       const shown = card.cardOfAnswer(model.turnText(doc, again.turns[again.turns.length - 1]).answer);
       cards.push(shown);
       if (!shown || n === answers.length) break;
-      doc.push(`@brainstorm ${answers[n](shown)}`);
+      doc.push(`@brainstorm ${answers[n](shown)}`, `bart~> z${n + 1}`);
     }
     const thread = model.threads(doc).at(-1);
     return { doc, cards, end: model.turnText(doc, thread.turns[thread.turns.length - 1]).answer };
@@ -1646,18 +1648,18 @@ test('the Welcome walkthrough\'s @brainstorm, run in its workspace: three cards,
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
   const exchange = async (workspaceId, answers) => {
     const ref = { kind: 'workspace', workspaceId };
-    let doc = ['@brainstorm'];
+    let doc = ['@brainstorm', 'bart~> w0']; // each answer with its pending line, as sendCard writes it
     const outs = [], shown = [];
     for (let n = 0; n <= answers.length; n += 1) {
-      const thread = model.threads(doc).at(-1);
-      const turns = thread.turns.filter((turn) => turn.answered).map((turn) => model.turnText(doc, turn));
-      const p = model.parseLine(doc[doc.length - 1]);
+      const at = doc.length - 1, thread = model.threads(doc).at(-1);
+      const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => model.turnText(doc, turn));
+      const p = model.parseLine(doc[at - 1]);
       const out = await bart.ask(ctx, proj.id, { askId: `w${n}`, ref, workspaceId, text: p.text, turns, agent: 'brainstorm' });
       outs.push(out);
-      doc = [...doc, ...out.lines];
+      doc = [...doc.slice(0, at), ...out.lines];
       const last = model.threads(doc).at(-1);
       shown.push(card.cardOfAnswer(model.turnText(doc, last.turns[last.turns.length - 1]).answer));
-      if (n < answers.length) doc.push(`@brainstorm ${answers[n](shown[n])}`);
+      if (n < answers.length) doc.push(`@brainstorm ${answers[n](shown[n])}`, `bart~> w${n + 1}`);
     }
     return { doc, outs, shown };
   };

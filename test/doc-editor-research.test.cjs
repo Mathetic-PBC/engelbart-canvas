@@ -91,9 +91,11 @@ test('no box for an @discover line with nothing but flags, an answer to its card
   assert.ok(!flags.lines().some((l) => l.includes('--research')));
   const CARD = JSON.stringify({ say: '', card: 'focus', focus: { title: 'Which part?', options: [{ label: 'Tutors' }, { label: 'Tests' }] }, ready: false });
   const body = replyLines(replyBody('discover', CARD), { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 1000 }, { model: false, agent: 'discover' });
-  const carded = mounted(['@discover', ...body, '@discover picked "Tutors"']);
-  carded.editor.askInline(carded.lines().length - 1);
-  assert.deepEqual([carded.asks.length, carded.asks[0].agent], [1, 'discover'], 'an answer to its card is asked as before');
+  // The answer as the card's Submit writes it (sendCard), its pending line with it: a turn of the card, with no box.
+  const carded = mounted(['@discover', ...body, '@discover picked "Tutors"', 'bart~> card-1']);
+  const turns = carded.editor.turnsBefore(carded.lines(), carded.lines().length - 2);
+  assert.equal(turns.length, 1);
+  assert.equal(carded.editor.splitsDiscover({ type: 'bart', agent: 'discover', text: 'picked "Tutors"' }, turns), false, 'an answer to its card is asked as before');
   assert.equal(carded.editor.splitsDiscover({ type: 'bart', agent: 'discover', text: '--research tutors' }, []), false, 'a box\'s own line is the search');
 });
 

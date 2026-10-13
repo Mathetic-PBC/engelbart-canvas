@@ -580,9 +580,12 @@ export function threads(lines, ps = parseLines(lines)) {
       turn.agent = (turn.foot >= 0 && footAgent(ps[turn.foot].text)) || (asks !== 'router' ? asks : turn.q === thread.from ? thread.routedTo : null);
       thread.turns.push(turn); thread.to = turn.to;
       thread.agent = answeredBy(thread); // a line under this turn follows in with the agent that answered last
-      // An `@bart` line goes on with a thread Bart's pick is kept for once it is asked (a pending line or an answer under it).
+      // A question line goes on with a thread once it is asked (a pending line or an answer under it), whatever its agent
+      // (2026-10-13): one still being typed under a card is no turn of it, and asked from the document it starts a
+      // conversation of its own (DocEditor askInline). The card's reply field, its cards and its research boxes put the
+      // pending line in with the question.
       if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || !followsIn(ps[i + 1], ps[thread.from], thread)) break;
-      if (agentOf(ps[i + 1]) === 'router' && !(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply'))) break;
+      if (!(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply'))) break;
       i += 1;
     }
     out.push(thread);

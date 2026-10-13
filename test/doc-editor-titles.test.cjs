@@ -90,9 +90,10 @@ test('no title for a follow-up, a question under an older conversation, one with
   assert.equal(follow.lines().filter((l) => l.startsWith('bart#')).length, 1, 'still the one title');
   assert.equal(follow.lines()[0], 'bart# Retry logic', 'not renamed');
 
-  // A question typed under an older conversation's answer is its next turn: no title, and none put in the old one.
-  const old = mounted(['@chat why retry?', ...answer('because'), '@chat and timeouts?']);
-  old.editor.askInline(4);
+  // A follow-up from the field of an older conversation (no title line): none put in it.
+  const old = mounted(['@chat why retry?', ...answer('because'), '']);
+  old.editor.followText.set(0, 'and timeouts?');
+  old.editor.sendFollow(0);
   assert.equal(old.asks[0].name, undefined);
   assert.ok(!old.lines().some((l) => l.startsWith('bart#')), 'an untitled conversation stays untitled');
 
@@ -436,4 +437,52 @@ test('a follow-up collapses the turns before it, in the same edit; each keeps it
   m.editor.foldAll(false);
   assert.ok(!m.lines().some((l) => /^bart\+>/.test(l)), 'Expand all opens every turn');
   assert.equal(m.lines()[0], lines[0]);
+});
+
+test('a line typed and asked right under an answer starts a conversation of its own: an empty line above it, in the same change, then its title line; no earlier turns, and routed with no current agent (2026-10-13)', async () => {
+  const { threads } = await doc();
+  const card = ['bart# [chat 2026-10-13T09:00:00Z] Retries', '@chat why retry?', ...answer('because')];
+  const end = card.length; // where the typed line stands
+  for (const typed of ['@bart new', '@chat new']) {
+    const routes = [];
+    const m = mounted([...card, typed], { onRoute: async (input) => { routes.push(input); return { id: 'r', agent: 'chat', sure: 0.9, by: 'model' }; } });
+    m.editor.askInline(end);
+    await new Promise((resolve) => setImmediate(resolve));
+    const ls = m.lines();
+    assert.deepEqual(ls.slice(0, end), card, `${typed}: the card above is as it was`);
+    assert.equal(ls[end], '', `${typed}: an empty line above it`);
+    assert.match(ls[end + 1], /^bart# \[chat \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\] $/, `${typed}: its own title line`);
+    assert.equal(ls[end + 2], typed);
+    assert.equal(ls[end + 3], `bart~> ${m.asks[0].askId}`);
+    assert.deepEqual([m.asks.length, m.asks[0].turns, m.asks[0].name, m.asks[0].place], [1, [], true, { line: end + 2, text: typed }]);
+    assert.deepEqual(threads(ls).map((t) => [t.from, t.turns.length]), [[1, 1], [end + 2, 1]], `${typed}: two conversations`);
+    if (typed === '@bart new') {
+      assert.equal(routes.length, 1);
+      assert.equal(routes[0].current, null, 'routed as a line that starts a conversation');
+      assert.deepEqual(routes[0].place, { line: end + 1, text: typed });
+    } else assert.equal(m.changes.length, 1, 'the empty line, the title line and the pending line in one change (one undo)');
+  }
+});
+
+test('the reply field still adds a follow-up to the card: one conversation of two turns; a typed line with an empty line or text above it is asked as before', async () => {
+  const { threads } = await doc();
+  const card = ['bart# [chat 2026-10-13T09:00:00Z] Retries', '@chat why retry?', ...answer('because'), ''];
+  const f = mounted(card);
+  f.editor.followText.set(1, 'and timeouts?');
+  f.editor.sendFollow(1);
+  const placed = f.lines().map((l) => (l === `bart~> ${f.asks[0].askId}` ? answer('this') : [l])).flat();
+  assert.deepEqual(threads(placed).map((t) => t.turns.length), [2]);
+  assert.equal(f.asks[0].turns.length, 1);
+  // An empty line above it: no second one is put in.
+  const gap = mounted(['@chat why retry?', ...answer('because'), '', '@chat new']);
+  const at = gap.lines().length - 1;
+  gap.editor.askInline(at);
+  assert.equal(gap.lines()[at - 1], '', 'one empty line, as before');
+  assert.match(gap.lines()[at], /^bart# /);
+  assert.notEqual(gap.lines()[at - 2], '', 'not two');
+  assert.equal(gap.lines()[at + 1], '@chat new');
+  // Text above it: asked under it as before.
+  const text = mounted(['Notes', '@chat new']);
+  text.editor.askInline(1);
+  assert.deepEqual([text.lines()[0], text.lines()[2]], ['Notes', '@chat new']);
 });

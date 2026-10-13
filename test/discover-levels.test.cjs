@@ -106,10 +106,10 @@ test('the chip on an @discover line: Standard, Quick, Deep, or the model and eff
   assert.equal(await mounted(['@discover why'], null).chip(0), null, 'no chip before the models load');
 });
 
-test('a follow-up in a --deep exchange shows Deep; an answered @discover line has no chip', async () => {
+test('a line typed under a --deep exchange starts its own conversation, so it shows Standard; an answered @discover line has no chip', async () => {
   const lines = ['@discover agents --deep', 'bart> ## Start here', 'bart> *Opus · max · 3 s*', '@discover more like these'];
   const m = mounted(lines);
-  assert.equal(await m.chip(3), 'Deep', 'carried from the turn above');
+  assert.equal(await m.chip(3), 'Standard', 'not a turn of the card above (2026-10-13): nothing carried');
   assert.equal(await m.chip(0), null, 'answered: the foot says who answered');
   assert.equal(await mounted(['@discover agents --quick', 'bart> ## Start here', '@discover more --deep']).chip(2), 'Deep', 'the line\'s own wins');
 });
@@ -135,12 +135,13 @@ test('picking writes the level into the line: Deep adds --deep, Standard takes i
   empty.pick(0, 'standard');
   assert.deepEqual(empty.lines(), ['@discover ']);
 
-  const follow = mounted(['@discover agents --deep', 'bart> ## Start here', '@discover more like these']);
-  follow.pick(2, 'standard');
-  assert.deepEqual(follow.lines()[2], '@discover more like these --standard', 'standard has to be said in a deep exchange');
-  assert.equal(await follow.chip(2), 'Standard');
-  follow.pick(2, 'deep');
-  assert.deepEqual(follow.lines()[2], '@discover more like these');
+  // A line typed under a deep exchange is a conversation of its own (2026-10-13): Standard is its default, Deep is written.
+  const under = mounted(['@discover agents --deep', 'bart> ## Start here', '@discover more like these']);
+  under.pick(2, 'standard');
+  assert.deepEqual(under.lines()[2], '@discover more like these', 'standard need not be said');
+  assert.equal(await under.chip(2), 'Standard');
+  under.pick(2, 'deep');
+  assert.deepEqual(under.lines()[2], '@discover more like these --deep');
 
   const bart = mounted(['@chat how people read']);
   bart.pick(0, 'deep');
@@ -303,15 +304,13 @@ test('picking Codex › Deep writes --codex --deep and the chip reads "Codex · 
   empty.pick(0, 'quick', 'openai');
   assert.deepEqual(empty.lines(), ['@Discover --codex --quick '], 'a space after the flags, for the question');
 
-  // A follow-up in a Codex exchange runs on Codex: its chip says so, and Claude Code has to be written.
-  const follow = mounted(['@discover agents --codex --deep', 'bart> ## Start here', 'bart> *Astra · ultra · 3 s*', '@discover more like these']);
-  assert.equal(await follow.chip(3), 'Codex · Deep');
-  assert.deepEqual(follow.view(3).props.current, { mode: 'deep', provider: 'openai', pinned: false });
-  follow.pick(3, 'deep', 'anthropic');
-  assert.equal(follow.lines()[3], '@discover more like these --claude');
-  assert.equal(await follow.chip(3), 'Deep');
-  follow.pick(3, 'deep', 'openai');
-  assert.equal(follow.lines()[3], '@discover more like these');
+  // A line typed under a Codex exchange starts its own conversation (2026-10-13): it runs on the default, and Codex is written.
+  const under = mounted(['@discover agents --codex --deep', 'bart> ## Start here', 'bart> *Astra · ultra · 3 s*', '@discover more like these']);
+  assert.equal(await under.chip(3), 'Standard');
+  assert.deepEqual(under.view(3).props.current, { mode: 'standard', provider: 'anthropic', pinned: false });
+  under.pick(3, 'deep', 'openai');
+  assert.equal(under.lines()[3], '@discover more like these --codex --deep');
+  assert.equal(await under.chip(3), 'Codex · Deep');
 
   // Claude Code named on a list whose default is Codex; and one provider offered, where --codex does nothing.
   assert.equal(await mounted(['@discover why --claude'], CODEX).chip(0), 'Claude Code · Standard');

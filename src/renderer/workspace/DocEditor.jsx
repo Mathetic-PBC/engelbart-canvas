@@ -2395,20 +2395,26 @@ export default class DocEditor extends React.Component {
     const ls = this.lines(), p = parseLine(ls[i] || ''), agent = agentOf(p);
     if (p.type !== 'bart' || (!p.text.trim() && !oneModel(agent)) || !this.props.onAsk || this.lockedAt(ls, i)) return;
     if (agent === 'router') { this.routeLine(i); return; }
+    // A line typed right under a card's last answer (2026-10-13) starts a conversation of its own: an empty line goes in
+    // above it, in the same change. The card's reply field adds follow-ups (sendFollow).
+    const gap = this.underCard(ls, i), at = gap ? i + 1 : i, gapped = gap ? [...ls.slice(0, i), '', ...ls.slice(i)] : ls;
     const askId = newAskId(), add = [`bart~> ${askId}`];
-    const turns = this.turnsBefore(ls, i);
+    const turns = this.turnsBefore(gapped, at);
     // An @discover question with a problem on it (2026-10-13): Chat's reply, then the research box (researchLines).
     const research = agent === 'discover' && this.splitsDiscover(p, turns) ? { askId: newAskId(), line: researchLine(p.text) } : null;
     if (research) add.push(research.line, `bart~> ${research.askId}`);
-    if (i + 1 >= ls.length) add.push('');
+    if (at + 1 >= gapped.length) add.push('');
     // A question that starts a conversation (2026-10-12) gets an empty title line above it, keeping its agent and when it
     // was asked (doc.js titleLine), which the workspace fills in when the title comes back (Workspace askBart, main's bart/name-chat.cjs); the answer starts now, never waiting on it.
     // Not a follow-up, not a conversation that has a title already (or began before titles: it has no line above it to
     // take one), and not a Build, which is no conversation.
-    const name = this.startsTitled(ls, i, turns, agent, p.text);
-    this.setLines((x) => { const out = this.refining(x, i); out.splice(i + 1, 0, ...add); if (name) out.splice(i, 0, titleLine('', false, { agent, at: askedNow() })); return out; });
+    const name = this.startsTitled(gapped, at, turns, agent, p.text);
+    this.setLines((x) => {
+      const out = this.refining(gap ? [...x.slice(0, i), '', ...x.slice(i)] : x, at);
+      out.splice(at + 1, 0, ...add); if (name) out.splice(at, 0, titleLine('', false, { agent, at: askedNow() })); return out;
+    });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
-    const q = name ? i + 1 : i;
+    const q = name ? at + 1 : at;
     this.props.onAsk({ askId, text: p.text.trim(), turns, agent: research ? 'bart' : agent, place: { line: q, text: ls[i] }, ...(research ? { intro: 'discover' } : {}), ...(name ? { name: true } : {}) });
     if (research) this.askResearch({ askId: research.askId, text: p.text.trim(), turns, place: { line: q + 2, text: research.line } });
   }
@@ -2445,6 +2451,12 @@ export default class DocEditor extends React.Component {
     const models = this.props.models, mode = models ? readDiscover(ask.text, models, ask.turns).mode : null;
     if (mode === 'deep') this.waitCreate(full); else this.props.onAsk(full);
   }
+  // Whether line `i` stands right under the last line of an answered conversation (2026-10-13): asked from the document
+  // there, it starts a conversation of its own (askInline, routeLine), as it is drawn while typed (doc.js threads). Not
+  // under one still at work, which has no reply field yet: a line asked there goes on with it (a search refined, refining).
+  underCard(ls, i) {
+    return i > 0 && threads(ls, this.parsedOf(ls)).some((t) => t.to === i - 1 && t.turns[t.turns.length - 1].answered && !t.turns.some((turn) => turn.pending));
+  }
   // Whether the question on line `i` starts a conversation that takes a title (askInline, and handOff for a line Bart routed).
   startsTitled(ls, i, turns, agent, text) {
     return !turns.length && !this.findTurn(ls, i)?.thread.turns.some((turn) => turn.q < i) && this.parsedOf(ls)[i - 1]?.type !== 'title' && !buildRequestOf({ agent, text });
@@ -2455,15 +2467,18 @@ export default class DocEditor extends React.Component {
   // stays with unless the line clearly wants another. `line`: an `@bart` line to put in at `i` first (sendFollow), in the
   // same change as its pending line.
   // `before`: a change to the lines made in the same edit (one undo), which keeps their number (sendFollow's fold).
+  // A typed line (`line` null) right under a card's last answer (2026-10-13) gets an empty line above it in the same change,
+  // as askInline's does: it starts a conversation of its own, routed with no `current`, and handOff gives it its title line.
   routeLine(i, line = null, before = null) {
-    const now = this.lines(), ls = line == null ? now : [...now.slice(0, i), line, ...now.slice(i)], p = parseLine(ls[i] || '');
-    const askId = newAskId(), add = [`bart~> ${askId}`]; if (i + 1 >= ls.length) add.push('');
-    const inputs = routeInputs(ls, i), current = inputs.current, rule = routeByRule(p.text, { models: this.props.models, current });
-    this.setLines((x) => { const out = before ? before(x) : [...x]; if (line != null) out.splice(i, 0, line); out.splice(i + 1, 0, ...add); return out; });
+    const now = this.lines(), gap = line == null && this.underCard(now, i), put = line != null ? line : gap ? '' : null;
+    const ls = put == null ? now : [...now.slice(0, i), put, ...now.slice(i)], q = gap ? i + 1 : i, p = parseLine(ls[q] || '');
+    const askId = newAskId(), add = [`bart~> ${askId}`]; if (q + 1 >= ls.length) add.push('');
+    const inputs = routeInputs(ls, q), current = inputs.current, rule = routeByRule(p.text, { models: this.props.models, current });
+    this.setLines((x) => { const out = before ? before(x) : [...x]; if (put != null) out.splice(i, 0, put); out.splice(q + 1, 0, ...add); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
     const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: fallbackAgent(current), sure: 0, by: 'none' };
     const asked = this.props.onRoute
-      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, rule, current, place: { line: i, text: ls[i] } }))
+      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, rule, current, place: { line: q, text: ls[q] } }))
       : Promise.resolve(fallback);
     return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: fallbackAgent(current), sure: 0 }));
   }

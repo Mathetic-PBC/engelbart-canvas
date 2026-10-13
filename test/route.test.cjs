@@ -335,11 +335,13 @@ test('a line Bart handed to @discover: its follow-up, Regenerate, the session an
   r.editor.regenerate(1);
   assert.deepEqual([r.asks[0].agent, r.asks[0].routed], ['discover', { build: false }]);
   assert.deepEqual(r.lines().slice(0, 2), [head, '@bart papers on tutors?']);
-  // An @bart line typed under it is routed with @discover as the agent the conversation is with (2026-10-13; no rule),
-  // and once handed over it is the thread's next turn, line as typed.
+  // A follow-up from the card's field is routed with @discover as the agent the conversation is with (2026-10-13; no
+  // rule), and once handed over it is the thread's next turn, as an `@bart` line. (One typed in the document under the
+  // card starts a conversation of its own, doc-editor-titles.)
   // Sent to Discover again, it is Chat's reply and a research box of the same conversation (2026-10-13).
-  const n = mounted([...done.slice(0, 4), '@bart and more?'], { route: async (input) => ({ id: 'route-n', agent: input.current, sure: 0.9, by: 'model' }) });
-  n.editor.askInline(4);
+  const n = mounted(done.slice(0, 4), { route: async (input) => ({ id: 'route-n', agent: input.current, sure: 0.9, by: 'model' }) });
+  n.editor.followText.set(1, 'and more?');
+  n.editor.sendFollow(1);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual([n.routes[0].rule, n.routes[0].current], [null, 'discover']);
   assert.equal(n.lines()[4], '@bart and more?');
@@ -351,8 +353,10 @@ test('a line Bart handed to @discover: its follow-up, Regenerate, the session an
 });
 
 test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the spec; otherwise Chat is asked to write the Build prompt', async () => {
-  const sure = mounted([...SPEC, '@bart ok build it'], { route: async () => ({ id: 'route-b', agent: 'build', sure: 0.9 }) });
-  sure.editor.askInline(SPEC.length);
+  // Asked from the spec's conversation's field (2026-10-13: a line typed under it starts a conversation of its own).
+  const sure = mounted(SPEC, { route: async () => ({ id: 'route-b', agent: 'build', sure: 0.9 }) });
+  sure.editor.followText.set(0, 'ok build it');
+  sure.editor.sendFollow(0);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(sure.builds.length, 1);
   assert.deepEqual([sure.builds[0].text, sure.builds[0].routedFrom], ['Add Haiku 5.5 to models.cjs.', 'route-b']);
@@ -372,8 +376,9 @@ test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the sp
   const { threads } = await loadDoc();
   assert.deepEqual(threads(placed).map((t) => t.turns.length), [2], 'the reply is the next turn of the spec\'s conversation');
 
-  const unsure = mounted([...SPEC, '@bart ok build it'], { route: async () => ({ id: 'route-c', agent: 'build', sure: 0.7 }) });
-  unsure.editor.askInline(SPEC.length);
+  const unsure = mounted(SPEC, { route: async () => ({ id: 'route-c', agent: 'build', sure: 0.7 }) });
+  unsure.editor.followText.set(0, 'ok build it');
+  unsure.editor.sendFollow(0);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(unsure.builds.length, 0);
   assert.equal(unsure.lines()[SPEC.length], '@bart ok build it', 'a follow-up (2026-10-13) stays as typed; its closing line names who answered');
@@ -388,8 +393,9 @@ test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the sp
 });
 
 test('handoff: a line Bart routes under a conversation that has a title, or as a follow-up, gets none', async () => {
-  const m = mounted(['bart# Tutors', '@chat how?', 'bart> watching', 'bart> *Sonnet 5.5*', '@bart and then?'], { route: async () => ({ id: 'route-f', agent: 'chat', sure: 0.9, by: 'model' }) });
-  m.editor.askInline(4);
+  const m = mounted(['bart# Tutors', '@chat how?', 'bart> watching', 'bart> *Sonnet 5.5*'], { route: async () => ({ id: 'route-f', agent: 'chat', sure: 0.9, by: 'model' }) });
+  m.editor.followText.set(1, 'and then?');
+  m.editor.sendFollow(1);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(m.lines().filter((l) => l.startsWith('bart#')).length, 1);
   assert.equal(m.asks[0].name, undefined);
@@ -765,14 +771,16 @@ test('a follow-up Bart is less than 0.8 sure wants another agent stays with the 
   assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /at least 0\.8 sure/);
   assert.equal(route.fakePick('and then?', 'brainstorm').agent, 'brainstorm', 'the fake router stays put too');
   assert.equal(route.fakePick('and then?', 'discover').agent, 'chat', 'but not with Discover');
-  // In the editor: the router's own fallback, with no answer, is the thread's agent.
-  const m = mounted([...CHAT_DONE.slice(0, 4), '@bart and then?'], { route: async () => null });
-  m.editor.askInline(4);
+  // In the editor: the router's own fallback, with no answer, is the thread's agent (a follow-up from the card's field).
+  const m = mounted(CHAT_DONE.slice(0, 4), { route: async () => null });
+  m.editor.followText.set(1, 'and then?');
+  m.editor.sendFollow(1);
   await settled();
   assert.equal(m.asks[0].agent, 'bart');
   // With Discover (2026-10-13), Chat: a failed routing never starts a search.
-  const d = mounted(['@discover tutors', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '@bart and newer?'], { route: async () => { throw new Error('down'); } });
-  d.editor.askInline(3);
+  const d = mounted(['@discover tutors', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*'], { route: async () => { throw new Error('down'); } });
+  d.editor.followText.set(0, 'and newer?');
+  d.editor.sendFollow(0);
   await settled();
   assert.deepEqual([d.asks.length, d.asks[0].agent, d.asks[0].intro], [1, 'bart', undefined]);
   assert.equal(d.lines()[3], '@bart and newer?', 'a follow-up stays as typed');

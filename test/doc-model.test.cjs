@@ -734,3 +734,21 @@ test('a title fills its own conversation\'s line, found by the ask: before its a
   assert.equal(placeTitle(answered, 'ask1', 'Retry logic'), null, 'gone without a place to look: nowhere');
   assert.equal(placeTitle(doc, 'nope', 'Retry logic'), null);
 });
+
+test('a question line under an answer joins its thread only once asked: one being typed (no pending line or answer under it) is no turn of it, whatever its agent (2026-10-13)', async () => {
+  const { threads } = await load();
+  const chat = ['@chat why?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*'];
+  for (const typed of ['@chat x', '@bart x', '@chat']) {
+    const found = threads([...chat, typed]);
+    assert.deepEqual(found.map((t) => t.turns.map((turn) => turn.q)), [[0], [3]], `${typed}: a thread of its own, not a turn of the card`);
+    assert.equal(found[0].to, 2, `${typed}: the card ends at its answer`);
+  }
+  // Asked: its pending line is put in with it (the reply field, a card's Submit), and it is the card's next turn.
+  assert.deepEqual(threads([...chat, '@chat x', 'bart~> a1']).map((t) => t.turns.length), [2]);
+  assert.deepEqual(threads([...chat, '@bart x', 'bart~> a1']).map((t) => t.turns.length), [2]);
+  // A document with a follow-up already answered under an answer is one conversation, as it was.
+  const old = [...chat, '@chat and then?', 'bart> then this', 'bart> *Chat · Sonnet · high · 2 s*'];
+  assert.deepEqual(threads(old).map((t) => t.turns.map((turn) => turn.q)), [[0, 3]]);
+  // An @discover research box, put in with its pending line, is a turn of its conversation.
+  assert.deepEqual(threads([...chat, '@discover --research tutors', 'bart~> r1']).map((t) => t.turns.length), [2]);
+});
