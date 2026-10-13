@@ -442,11 +442,25 @@ function useLines(ref, line) {
 
 /* ------------------------------------------------------------ the sidebar */
 
+/**
+ * Where a press on an Agents or Inbox row goes (2026-10-13). A Build cleared away opens its archived version; another
+ * Build, from Agents (entry.task) or the Inbox (kind 'build', id the Build's), opens its workspace at its card, as the
+ * Agent Viewer does; the rest (Bart, Brainstorm, Discover) open their workspace. A quick task with no workspace goes nowhere.
+ */
+export function goToAgent(entry, { onOpenVersion, onRevealBuild, onSelectWorkspace }) {
+  if (!entry) return;
+  if (entry.task && entry.task.version && entry.task.workspaceId) onOpenVersion({ workspaceId: entry.task.workspaceId, file: entry.task.version.file, title: entry.task.version.title });
+  else if (entry.task && entry.task.id && entry.workspaceId && onRevealBuild) onRevealBuild({ workspaceId: entry.workspaceId, buildId: entry.task.id });
+  else if (!entry.task && entry.kind === 'build' && entry.id && entry.workspaceId && onRevealBuild) onRevealBuild({ workspaceId: entry.workspaceId, buildId: entry.id });
+  else if (entry.workspaceId) onSelectWorkspace(entry.workspaceId);
+}
+
 export default function Rail({
   width, hidden = false, // the sidebar folded away, or the document's full screen (MATH-23): out of sight, kept as it is
   project, onOpenProject, onNewProject, onAllProjects, onRenameProject,
   roots = [], hereId = null, recent = [], agents = [], builds = [],
   onSelectWorkspace, onCreateWorkspace, onRenameWorkspace, onDeleteWorkspace, onOpenVersion, onSeenAll,
+  onRevealBuild = null, // ({ workspaceId, buildId }): a Build's row opens its workspace at its card, which flashes
   onRejectAgent = null, // (buildId): a Build's Reject from its Agents row. The panel closes first, as the card's confirmation opens under it
   connectSessions = [], onOpenConnect = () => {},
   rows = [], activeRowId = null, flashId = null, starred = [], onStar,
@@ -582,8 +596,7 @@ export default function Rail({
   const agentList = React.useMemo(() => agentGroups({ agents, builds, projectId: project.id }), [agents, builds, project.id]);
   const goAgent = (entry) => {
     close();
-    if (entry.task && entry.task.version && entry.task.workspaceId) onOpenVersion({ workspaceId: entry.task.workspaceId, file: entry.task.version.file, title: entry.task.version.title });
-    else if (entry.workspaceId) onSelectWorkspace(entry.workspaceId);
+    goToAgent(entry, { onOpenVersion, onRevealBuild, onSelectWorkspace });
   };
 
   const stickiesDrag = !!(postItDrag && postItDrag.active);
