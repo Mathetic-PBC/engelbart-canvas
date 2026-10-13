@@ -461,9 +461,23 @@ function writeCodexConfig(home, servers) {
   if (current !== text) fs.writeFileSync(file, text, { mode: 0o600 });
 }
 
+// A closing line like the foot the app writes (./reply.cjs attribution): "*Chat · Opus · high*". The model copies one it
+// saw in the conversation (2026-10-13, Chat UX); the app adds the real one, which always ends with the time.
+const COPIED_FOOT_RE = /^\*(Chat|Brainstorm|Discover|Create|Build)( · [^*]*)?\*$/;
+
+/** The text without the copied feet it ends with, and the blank lines before them. */
+function withoutCopiedFoot(text) {
+  const lines = String(text).split('\n');
+  let end = lines.length;
+  while (end > 0 && (!lines[end - 1].trim() || COPIED_FOOT_RE.test(lines[end - 1].trim()))) end -= 1;
+  if (lines.slice(end).every((line) => !line.trim())) return String(text);
+  return lines.slice(0, end).join('\n');
+}
+
 /**
  * The reply as the document keeps it, by agent: @brainstorm's card or recap (./card.cjs cardBody);
- * @discover's card when it asked one, else its guide as it came; @bart's answer as it came.
+ * @discover's card when it asked one, else its guide as it came; @bart's answer as it came. Every agent but
+ * @brainstorm loses a copied foot at its end.
  */
 function replyBody(agent, text) {
   if (agent === 'brainstorm') return cardBody(text).body;
@@ -471,10 +485,10 @@ function replyBody(agent, text) {
     const card = /^\s*(\{|```)/.test(String(text)) ? readCard(text) : null;
     if (card && card.card !== 'none') return cardBody(text).body;
     // A guide starts at its first "## " heading (round 2): a status line or an account of the run written before it is dropped.
-    const lines = String(text).split('\n'), at = lines.findIndex((line) => line.startsWith('## '));
-    return at > 0 ? lines.slice(at).join('\n') : String(text);
+    const lines = withoutCopiedFoot(text).split('\n'), at = lines.findIndex((line) => line.startsWith('## '));
+    return at > 0 ? lines.slice(at).join('\n') : lines.join('\n');
   }
-  return String(text);
+  return withoutCopiedFoot(text);
 }
 
 /** A pick handed on to be kept; keeping it never stands in a question's way. */

@@ -285,6 +285,17 @@ test('the system prompt says what the harness relies on', () => {
   assert.ok(BART_SYSTEM_PROMPT.indexOf('# Asked from a highlight') < BART_SYSTEM_PROMPT.indexOf('# Moving up a step'), 'the highlight rules come before moving up');
 });
 
+test('Chat\'s answers have a voice and five pillars (2026-10-13), shown by examples, with no length to aim at', () => {
+  const at = (s) => BART_SYSTEM_PROMPT.indexOf(s);
+  for (const phrase of ['well-read colleague', 'Direct:', 'Succinct:', 'Conversational:', 'Polite:', 'Grounded:', '<examples>', '</examples>', '<tone_preference>']) assert.ok(at(phrase) >= 0, phrase);
+  for (const pillar of ['Direct:', 'Succinct:', 'Conversational:', 'Polite:', 'Grounded:']) assert.ok(at('# The answer') < at(pillar) && at(pillar) < at('fenced code blocks'), `${pillar} comes first under "# The answer"`);
+  assert.ok(!BART_SYSTEM_PROMPT.includes('1,500'), 'no character count to aim at');
+  assert.ok(!/Lead with the answer\. No preamble/.test(BART_SYSTEM_PROMPT) && !/Length follows the question/.test(BART_SYSTEM_PROMPT), 'the bullets the pillars replace are gone');
+  assert.match(BART_SYSTEM_PROMPT, /Never write a closing line like `\*Chat · …\*`; the app adds it\./);
+  assert.match(BART_SYSTEM_PROMPT, /# Asked from a highlight\n\nThe same voice applies; the box is just smaller\.\n/);
+  assert.ok(at('# Moving up a step') < at('<tone_preference>') && BART_SYSTEM_PROMPT.trimEnd().endsWith('</tone_preference>'), 'the tone preference closes the prompt');
+});
+
 /* ------------------------------------------------------------- with the store */
 
 const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-bart-'));
@@ -2489,6 +2500,17 @@ test('@discover on a named paper (2026-10-04): no card, the paper opened whole f
   assert.ok(at('"## This paper", "## Start here", "## Classics"') > at('# The guide'), 'P-03: "This paper" is the first group');
   assert.ok(at('"Classics" holds only papers that two or more starting points cite') < at('When there is a "This paper" group'), 'the rules for a problem stay, those for a paper follow them');
   assert.ok(at('The Try line comes after Why') < at('The "This paper" entry') && at('The "This paper" entry') < at('For an essay, the title line'));
+});
+
+test('replyBody drops a foot the model copied from the conversation (2026-10-13), for every agent but brainstorm', () => {
+  assert.equal(replyBody('bart', 'Yes.\n\n*Chat · Opus · high*'), 'Yes.');
+  assert.equal(replyBody('bart', 'Yes.\n\n*Chat · Opus · high · 7 s*\n\n'), 'Yes.', 'a whole foot too, and the blank lines around it');
+  assert.equal(replyBody('bart', 'Yes.\n\n*see p. 4*'), 'Yes.\n\n*see p. 4*', 'ordinary italics at the end are kept');
+  assert.equal(replyBody('bart', '*Chat · Opus · high*\n\nYes.'), '*Chat · Opus · high*\n\nYes.', 'only at the end');
+  assert.equal(replyBody('create', 'Made it.\n\n*Create · Opus · high*'), 'Made it.');
+  assert.equal(replyBody('discover', '## Start here\n\nx\n\n*Discover · Sol · high*'), '## Start here\n\nx');
+  assert.equal(replyBody('discover', 'Opened it.\n## Start here\n\nx\n*Build · Opus*'), '## Start here\n\nx', 'with the status line before the guide');
+  assert.equal(replyBody('bart', 'Yes.\n'), 'Yes.\n', 'nothing to drop: kept as it came');
 });
 
 test('replyBody keeps a guide that starts at "## This paper", and drops what was written before it', () => {
