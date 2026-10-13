@@ -78,7 +78,7 @@ test('an @discover question is Chat\'s reply under it and a research box under t
   assert.deepEqual(ls.slice(6), ['', 'After']);
   assert.equal(m.asks.length, 2);
   const [intro, search] = m.asks;
-  assert.deepEqual([intro.agent, intro.intro, intro.name, intro.text, intro.askId], ['bart', true, true, 'how do tutors notice struggle?', ls[3].slice(7)]);
+  assert.deepEqual([intro.agent, intro.intro, intro.name, intro.text, intro.askId], ['bart', 'discover', true, 'how do tutors notice struggle?', ls[3].slice(7)]);
   assert.deepEqual([search.agent, search.research, search.name, search.text, search.askId, search.place], ['discover', true, undefined, 'how do tutors notice struggle?', ls[5].slice(7), { line: 4, text: ls[4] }]);
   const [thread] = threads(ls);
   assert.deepEqual(thread.turns.map((t) => t.q), [2, 4], 'one conversation: the reply, then the box, while both run');
@@ -159,7 +159,7 @@ test('a reply Bart sends to Discover refines the search: one still running stops
 
 test('main: Chat\'s reply is told Discover searches under it and asked without the flags; --research is never part of a question', () => {
   const context = { head: '<engelbart>', contextJson: '', mentionedFiles: '', documents: '', now: '' };
-  const intro = ask.firstMessage({ context, prior: [], question: 'tutors', resumed: false, intro: true })({ toString: () => '' });
+  const intro = ask.firstMessage({ context, prior: [], question: 'tutors', resumed: false, intro: 'discover' })({ toString: () => '' });
   assert.ok(intro.includes(ask.DISCOVER_INTRO) && intro.indexOf(ask.DISCOVER_INTRO) < intro.indexOf('<question>'));
   assert.ok(!ask.firstMessage({ context, prior: [], question: 'tutors', resumed: false })('').includes('discover_intro'));
   assert.equal(ask.withoutResearch('--research --deep tutors'), '--deep tutors');

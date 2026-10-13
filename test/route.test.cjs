@@ -307,7 +307,7 @@ test('handoff: chat, brainstorm and discover keep the @bart line as typed, ask t
     // research box under it (doc-editor-research).
     const discover = agent === 'discover';
     assert.equal(m.asks.length, discover ? 2 : 1);
-    assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name, m.asks[0].intro], [discover ? 'bart' : internal, 'how do tutors notice struggle?', { id: 'route-a' }, true, discover || undefined]);
+    assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name, m.asks[0].intro], [discover ? 'bart' : internal, 'how do tutors notice struggle?', { id: 'route-a' }, true, discover ? 'discover' : undefined]);
     assert.deepEqual(m.asks[0].place, { line: 2, text: '@bart how do tutors notice struggle?' });
     if (discover) {
       assert.deepEqual(m.lines().slice(4, 6).map((l) => l.replace(/ \S+$/, '')), ['@discover --research how do tutors notice', 'bart~>']);
@@ -344,7 +344,7 @@ test('a line Bart handed to @discover: its follow-up, Regenerate, the session an
   assert.deepEqual([n.routes[0].rule, n.routes[0].current], [null, 'discover']);
   assert.equal(n.lines()[4], '@bart and more?');
   assert.equal(n.lines().filter((l) => l.startsWith('bart#')).length, 1, 'no second title');
-  assert.deepEqual([n.asks[0].agent, n.asks[0].intro, n.asks[0].turns.length, n.asks[0].name], ['bart', true, 1, undefined]);
+  assert.deepEqual([n.asks[0].agent, n.asks[0].intro, n.asks[0].turns.length, n.asks[0].name], ['bart', 'discover', 1, undefined]);
   assert.deepEqual([n.asks[1].agent, n.asks[1].research, n.asks[1].turns.length], ['discover', true, 1]);
   const { threads } = await loadDoc();
   assert.equal(threads(n.lines())[0].turns.length, 3);
@@ -354,12 +354,23 @@ test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the sp
   const sure = mounted([...SPEC, '@bart ok build it'], { route: async () => ({ id: 'route-b', agent: 'build', sure: 0.9 }) });
   sure.editor.askInline(SPEC.length);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.equal(sure.asks.length, 0);
   assert.equal(sure.builds.length, 1);
   assert.deepEqual([sure.builds[0].text, sure.builds[0].routedFrom], ['Add Haiku 5.5 to models.cjs.', 'route-b']);
-  assert.ok(sure.builds[0].askId, 'the card takes the pending line\'s place');
   assert.equal(sure.lines()[SPEC.length], '@bart ok build it', 'the @bart line stays');
   assert.equal(sure.routes[0].specAbove, true);
+  // Chat replies first (2026-10-13, main's BUILD_INTRO), under the line; the card takes a pending line of its own under it.
+  assert.equal(sure.asks.length, 1);
+  assert.deepEqual([sure.asks[0].agent, sure.asks[0].intro, sure.asks[0].routed, sure.asks[0].text], ['bart', 'build', { id: 'route-b', build: true }, 'ok build it']);
+  assert.deepEqual(sure.lines().slice(SPEC.length + 1, SPEC.length + 3), [`bart~> ${sure.asks[0].askId}`, `bart~> ${sure.builds[0].askId}`]);
+  // Answered, and the card in: the reply closes its card, with no follow-up field; the Build's card is the conversation now.
+  const placed = sure.lines().flatMap((l) => (l === `bart~> ${sure.asks[0].askId}` ? ['bart> Building the Haiku entry from the spec above.', 'bart> *Build · 3 s*'] : l === `bart~> ${sure.builds[0].askId}` ? ['build> 0123456789'] : [l]));
+  sure.props.text = placed.join('\n');
+  const drawn = sure.editor.editorHtml();
+  assert.ok(!drawn.includes('data-followup='), 'no follow-up field over the card');
+  const foot = drawn.slice(drawn.indexOf(`data-foot="${SPEC.length}"`));
+  assert.match(foot.slice(0, foot.indexOf('>')), /border-radius:0 0 10px 10px;margin-bottom:8px/);
+  const { threads } = await loadDoc();
+  assert.deepEqual(threads(placed).map((t) => t.turns.length), [2], 'the reply is the next turn of the spec\'s conversation');
 
   const unsure = mounted([...SPEC, '@bart ok build it'], { route: async () => ({ id: 'route-c', agent: 'build', sure: 0.7 }) });
   unsure.editor.askInline(SPEC.length);
@@ -694,7 +705,7 @@ test('Chat → Discover → Chat: a typed follow-up is an @bart line Bart routes
   assert.deepEqual([m.routes[0].text, m.routes[0].current, m.routes[0].rule], ['papers on this?', 'chat', null]);
   await settled();
   // Discover (2026-10-13): Chat's reply, said to be Discover's, then the search in a research box under it.
-  assert.deepEqual([m.asks[0].agent, m.asks[0].intro, m.asks[0].routed.id, m.asks[0].name], ['bart', true, 'route-chat', undefined]);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].intro, m.asks[0].routed.id, m.asks[0].name], ['bart', 'discover', 'route-chat', undefined]);
   assert.deepEqual(m.asks[0].turns, [{ question: 'how do tutors notice struggle?', answer: 'By watching.', agent: 'bart' }], 'the earlier turn says Chat answered it');
   assert.deepEqual([m.asks[1].agent, m.asks[1].research], ['discover', true]);
   assert.equal(m.lines()[0], CHAT_DONE[0], 'the title line keeps the first pick');

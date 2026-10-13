@@ -114,6 +114,28 @@ app.whenReady().then(async () => {
     assert.ok(collapsed > 0, 'the turns before the reply collapsed');
     await shot(wc, '3-refined');
     console.log('PASS a reply asking for other papers refines the search in a second box, the turns before it collapsed');
+
+    /* ------------------------------------------------ a Build Bart picks: Chat's reply, then the Build's card under it */
+    // At the end of the document: an answer with a fenced block (the fake's answer to a question about code), then "ok build it".
+    const before = await rows(wc);
+    await press(wc, `${ED} [data-line="${before.length - 1}"]`);
+    await typeKeys(wc, '\n@chat show the code config\n');
+    await settled(wc);
+    const spec = await rows(wc);
+    assert.ok(spec.some((l) => l === 'bart> ```json'), `a fenced block to build: ${JSON.stringify(spec)}`);
+    const end = spec.length - 1;
+    await press(wc, `${ED} [data-line="${end}"]`);
+    await typeKeys(wc, '@bart ok build it\n');
+    await until(async () => (await rows(wc)).some((l) => /^build> /.test(l)), 'the Build\'s card', 600);
+    await settled(wc);
+    const built = await rows(wc), line = built.indexOf('@bart ok build it'), card = built.findIndex((l) => /^build> /.test(l));
+    assert.equal(built[line + 1], 'bart> FAKE INTRO to "ok build it": Build is making the spec above.', JSON.stringify(built.slice(line)));
+    assert.match(built[card - 1], /^bart> \*Build · /, 'the reply closes as Build\'s, right above the card');
+    const from = built.indexOf('@chat show the code config');
+    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-followup="${from}"]').length`), 0, 'no follow-up field over the card');
+    assert.ok(await js(wc, `document.querySelectorAll('${ED} [data-followup]').length`) > 0, 'the conversation above keeps its own');
+    await shot(wc, '4-build');
+    console.log('PASS a Build Bart picks is Chat\'s reply first, closing as Build\'s, with the Build\'s card under it');
     app.exit(0);
   } catch (error) {
     console.error(error);

@@ -581,9 +581,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return task;
   }, [topic, project.id, flush]);
 
-  // `intro`: Chat's reply to an @discover question, and `research` the search in the box under it (2026-10-13, DocEditor
-  // splitsDiscover). A research box stopped by hand says so, so it stays a turn of its conversation.
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, intro = false, research = false }) => {
+  // `intro`: Chat's reply that comes first, 'discover' over an @discover question's search (`research`, the box under it;
+  // DocEditor splitsDiscover) or 'build' over the card of a Build Bart picked (DocEditor handOff), 2026-10-13. A research
+  // box stopped by hand says so, so it stays a turn of its conversation.
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, intro = null, research = false }) => {
     if (!key || !ref || !topic) return;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
     let answered = null;
@@ -633,7 +634,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}), ...(intro ? { intro: true } : {}) });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}), ...(intro ? { intro } : {}) });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? (research ? ['bart> Stopped.'] : []) : out.lines);

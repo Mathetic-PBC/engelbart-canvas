@@ -1362,7 +1362,10 @@ export default class DocEditor extends React.Component {
         continue;
       }
       const end = thread.turns[thread.turns.length - 1], endCard = cards.byQ.get(end.q);
-      const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !(endCard && endCard.live);
+      // A Build's card right under the conversation (2026-10-13: the one a reply was written over, or one built from it) is
+      // where it goes on: the conversation has no follow-up field above it.
+      const built = (ps[thread.to + 1] || {}).type === 'build';
+      const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !(endCard && endCard.live) && !built;
       // A collapsed turn (2026-10-13) is drawn bare, its question and foot on no grey: the card starts again under it.
       // An @discover research box (2026-10-13, doc.js isResearch) is a card of its own: the turn above it closes its card,
       // and its line is the box's head (researchHtml). `cut`: the turn's last row closes the card, a box coming next.
@@ -2337,7 +2340,7 @@ export default class DocEditor extends React.Component {
     this.setLines((x) => { const out = this.refining(x, i); out.splice(i + 1, 0, ...add); if (name) out.splice(i, 0, titleLine('', false, { agent, at: askedNow() })); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
     const q = name ? i + 1 : i;
-    this.props.onAsk({ askId, text: p.text.trim(), turns, agent: research ? 'bart' : agent, place: { line: q, text: ls[i] }, ...(research ? { intro: true } : {}), ...(name ? { name: true } : {}) });
+    this.props.onAsk({ askId, text: p.text.trim(), turns, agent: research ? 'bart' : agent, place: { line: q, text: ls[i] }, ...(research ? { intro: 'discover' } : {}), ...(name ? { name: true } : {}) });
     if (research) this.askResearch({ askId: research.askId, text: p.text.trim(), turns, place: { line: q + 2, text: research.line } });
   }
   // An @discover question with a problem on it (2026-10-13) is answered twice: Chat replies under it at once (main's
@@ -2417,7 +2420,17 @@ export default class DocEditor extends React.Component {
     if (pick.agent === 'build' && pick.rule === '--build') { this.props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id, ...failed }, place: typed }); return 'build'; }
     if (pick.agent === 'build') {
       const spec = routeInputs(ls, q).spec;
-      if (spec != null && pick.sure >= 0.8 && this.props.onBuild) { this.props.onBuild({ text: spec, askId, routedFrom: id, place: typed }); return 'build'; }
+      if (spec != null && pick.sure >= 0.8 && this.props.onBuild) {
+        // Chat replies first (2026-10-13, main's bart/ask.cjs BUILD_INTRO; its closing line names Build), under the line,
+        // and the Build's card takes a pending line of its own under that reply. The card is the conversation from there:
+        // the reply has no follow-up field (layout).
+        if (!this.props.onAsk) { this.props.onBuild({ text: spec, askId, routedFrom: id, place: typed }); return 'build'; }
+        const card = newAskId();
+        this.setLines((x) => { const out = [...x], at = out.indexOf(`bart~> ${askId}`); if (at >= 0) out.splice(at + 1, 0, `bart~> ${card}`); return out; });
+        this.props.onAsk({ askId, text, turns: this.turnsBefore(ls, q), agent: 'bart', intro: 'build', routed: { id, ...failed, build: true }, place: typed });
+        this.props.onBuild({ text: spec, askId: card, routedFrom: id, place: typed });
+        return 'build';
+      }
     }
     const agent = ['brainstorm', 'discover', 'create'].includes(pick.agent) ? pick.agent : 'bart', build = pick.agent === 'build';
     // An `@bart` line goes on with the conversation above whatever agent answers it (doc.js followsIn).
@@ -2432,7 +2445,7 @@ export default class DocEditor extends React.Component {
     const at2 = name ? q + 1 : q, research = agent === 'discover' && this.splitsDiscover(p, turns) ? { askId: newAskId(), line: researchLine(text) } : null;
     if (research) { next = this.refining(next, at2); next.splice(at2 + 2, 0, research.line, `bart~> ${research.askId}`); }
     if (next !== ls) this.setLines(() => next);
-    const ask = { askId, text, turns, agent: research ? 'bart' : agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: at2, text: typed.text }, ...(research ? { intro: true } : {}), ...(name ? { name: true } : {}) };
+    const ask = { askId, text, turns, agent: research ? 'bart' : agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: at2, text: typed.text }, ...(research ? { intro: 'discover' } : {}), ...(name ? { name: true } : {}) };
     if (agent === 'create') this.waitCreate(ask); else this.props.onAsk(ask);
     if (research) this.askResearch({ askId: research.askId, text, turns, place: { line: at2 + 2, text: research.line } });
     return agent;

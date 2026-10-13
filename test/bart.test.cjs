@@ -496,9 +496,16 @@ test('the system prompt tells @bart what <stage> and <highlights> are, after <hi
 test('Chat\'s reply to an @discover question (2026-10-13, `intro`): asked without the flags, it closes as Discover\'s', async () => {
   const bart = createFakeBart({ readModels: () => MODELS, delayMs: 5 });
   const ref = { kind: 'workspace', workspaceId: workspace.id };
-  const out = await bart.ask(ctx, project.id, { askId: 'i1', ref, workspaceId: workspace.id, text: '--deep tutors', agent: 'bart', intro: true });
+  const out = await bart.ask(ctx, project.id, { askId: 'i1', ref, workspaceId: workspace.id, text: '--deep tutors', agent: 'bart', intro: 'discover' });
   assert.equal(out.lines[0], 'bart> FAKE INTRO to "tutors": Discover is looking for what to read on it.');
   assert.match(out.lines[out.lines.length - 1], /^bart> \*Discover · /);
+  // Over a Build's card (2026-10-13): told so in place of the routed block, which asks for a Build prompt; it closes as Build's.
+  const built = await bart.ask(ctx, project.id, { askId: 'i3', ref, workspaceId: workspace.id, text: 'ok build it', agent: 'bart', intro: 'build', routed: { id: 'r1', build: true } });
+  assert.equal(built.lines[0], 'bart> FAKE INTRO to "ok build it": Build is making the spec above.');
+  assert.match(built.lines[built.lines.length - 1], /^bart> \*Build · /);
+  const { firstMessage, BUILD_INTRO } = require('../src/main/bart/ask.cjs');
+  const sent = firstMessage({ context: { head: '<engelbart>' }, prior: [], question: 'ok build it', resumed: false, routed: { build: true }, intro: 'build' })('');
+  assert.ok(sent.includes(BUILD_INTRO) && !sent.includes('Press [[build]]'), 'the Build intro, not the Build prompt');
   // Not asked as an intro, it is Chat's as before; `intro` means nothing to another agent.
   const plain = await bart.ask(ctx, project.id, { askId: 'i2', ref, workspaceId: workspace.id, text: 'tutors', agent: 'bart' });
   assert.match(plain.lines[plain.lines.length - 1], /^bart> \*Chat · /);
