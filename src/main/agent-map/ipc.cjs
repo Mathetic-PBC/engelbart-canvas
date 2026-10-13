@@ -3,7 +3,8 @@
 // The Agent Viewer's IPC (2026-10-12; ./window.cjs; it was the Agent map). Trusted handlers that need no window's context:
 // the Viewer is no workspace window. agentMap:open opens or focuses it (from a workspace window's Agents button);
 // agentMap:runs is every run without its big fields, newest first; agentMap:run(id) one run whole; agentMap:asks the runs
-// grouped one entry per ask (./asks.cjs); agentMap:ask(id) one entry with its records whole; agentMap:design each agent as
+// grouped one entry per ask (./asks.cjs); agentMap:ask(id) one entry with its records whole and
+// the names of where it was typed (placeNames); agentMap:design each agent as
 // it is set up now (./design.cjs); agentMap:export(html, name) saves a page the Viewer made, through a save dialog;
 // agentMap:reveal(target) brings the window with the ask's project to the front at its line (index.cjs `reveal`). Each
 // change to a run is sent to the Viewer alone as engelbart:agent-run (index.cjs, the run log's onChange).
@@ -33,13 +34,43 @@ function revealTarget(value) {
   };
 }
 
-function registerAgentMapIpc({ ipcMain, trustedHandler, mapWindow, runLog, design, saveFile, reveal = () => false }) {
+/**
+ * The names of where an ask's line was typed (2026-10-13), for the Viewer to show in place of ids: { project, workspace,
+ * note, paper }, each '' when it cannot be found (a project or note since deleted). `ctx` is the store's context.
+ */
+async function placeNames(ctx, place, { projects = require('../store/projects.cjs'), db = require('../store/db.cjs') } = {}) {
+  const names = { project: '', workspace: '', note: '', paper: '' };
+  if (!ctx || !place || typeof place.projectId !== 'string') return names;
+  const ref = place.ref && typeof place.ref === 'object' ? place.ref : null;
+  let project;
+  try { project = projects.findProject(ctx, place.projectId); } catch { return names; }
+  names.project = project.name;
+  const workspaceName = (id) => { try { return projects.findWorkspace(ctx, place.projectId, id).workspace.name; } catch { return ''; } };
+  const libraryName = async (id) => { try { const row = ctx.libraryDb ? await ctx.libraryDb.get(id) : null; return row && row.name ? String(row.name) : ''; } catch { return ''; } };
+  if (ref && ref.kind === 'workspace' && typeof ref.workspaceId === 'string') names.workspace = workspaceName(ref.workspaceId);
+  else if (ref && ref.kind === 'note' && typeof ref.id === 'string') {
+    // A project's note (its notes database, the workspace it was made in), else a note of the library.
+    let note = null;
+    try { note = await (await db.openNotesDb(project.dir)).get(ref.id); } catch { note = null; }
+    if (note) { names.note = String(note.name || ''); if (note.topic_id) names.workspace = workspaceName(note.topic_id); }
+    else names.note = await libraryName(ref.id);
+  } else if (ref && ref.kind === 'mark' && typeof ref.rowId === 'string') names.paper = await libraryName(ref.rowId);
+  return names;
+}
+
+function registerAgentMapIpc({ ipcMain, trustedHandler, mapWindow, runLog, design, saveFile, reveal = () => false, context = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   handle('agentMap:open', () => mapWindow.open());
   handle('agentMap:runs', () => (runLog ? runLog.list() : []));
   handle('agentMap:run', (id) => (runLog && typeof id === 'string' ? runLog.get(id) : null));
   handle('agentMap:asks', () => (runLog ? groupAsks(runLog.list()) : []));
-  handle('agentMap:ask', (id) => askOf(runLog, id));
+  handle('agentMap:ask', async (id) => {
+    const ask = askOf(runLog, id);
+    if (!ask || !ask.place || !context) return ask;
+    let names = null;
+    try { names = await placeNames(await context(), ask.place); } catch { names = null; }
+    return names ? { ...ask, names } : ask;
+  });
   handle('agentMap:reveal', (value) => { const target = revealTarget(value); return target ? reveal(target) : false; });
   handle('agentMap:design', () => design());
   handle('agentMap:export', async (html, name) => {
@@ -49,4 +80,4 @@ function registerAgentMapIpc({ ipcMain, trustedHandler, mapWindow, runLog, desig
   });
 }
 
-module.exports = { registerAgentMapIpc, revealTarget };
+module.exports = { registerAgentMapIpc, revealTarget, placeNames };

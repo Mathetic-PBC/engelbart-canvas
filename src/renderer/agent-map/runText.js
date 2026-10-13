@@ -5,20 +5,21 @@
 // The agents the Viewer knows (2026-10-12): the list, the detail and Design all name them from here. `agent` is the run
 // log's name, `routed` the name an ask is routed to (asks.cjs routedTo). Create is not built yet: a record of it shows as
 // any other. The run step shows only inside a Build's output. Any other agent shows under its own name (agentInfo).
+// No colours (2026-10-13): the Viewer names agents in words only.
 export const AGENTS = [
-  { agent: 'router', routed: null, name: 'Bart (classifier)', token: '@bart', color: '#7c3aed' },
-  { agent: 'bart', routed: 'chat', name: 'Chat', token: '@chat', color: '#2563eb' },
-  { agent: 'brainstorm', routed: 'brainstorm', name: 'Brainstorm', token: '@brainstorm', color: '#d97706' },
-  { agent: 'discover', routed: 'discover', name: 'Discover', token: '@discover', color: '#059669' },
-  { agent: 'create', routed: 'create', name: 'Create', token: '@create', color: '#db2777', planned: true },
-  { agent: 'build', routed: 'build', name: 'Build', token: '@bart / Build button / panel / post-it', color: '#dc2626' },
-  { agent: 'run step', routed: null, name: 'Run step', token: '', color: '#6b7280', inside: 'build' },
+  { agent: 'router', routed: null, name: 'Bart (classifier)', token: '@bart' },
+  { agent: 'bart', routed: 'chat', name: 'Chat', token: '@chat' },
+  { agent: 'brainstorm', routed: 'brainstorm', name: 'Brainstorm', token: '@brainstorm' },
+  { agent: 'discover', routed: 'discover', name: 'Discover', token: '@discover' },
+  { agent: 'create', routed: 'create', name: 'Create', token: '@create', planned: true },
+  { agent: 'build', routed: 'build', name: 'Build', token: '@bart / Build button / panel / post-it' },
+  { agent: 'run step', routed: null, name: 'Run step', token: '', inside: 'build' },
 ];
 
 /** An agent's entry by its run log name or its routed name ('chat' is 'bart'); an unknown one under its own name. */
 export function agentInfo(name) {
   const key = String(name == null ? '' : name);
-  return AGENTS.find((held) => held.agent === key || held.routed === key) || { agent: key, routed: key, name: key || 'unknown', token: '', color: '#9ca3af', unknown: true };
+  return AGENTS.find((held) => held.agent === key || held.routed === key) || { agent: key, routed: key, name: key || 'unknown', token: '', unknown: true };
 }
 
 // The agents a question line runs, and the ones a Build runs (the list's filter).
@@ -207,14 +208,63 @@ export const cardText = (card) => (card ? [`┌ card: ${card.type}${card.title ?
 
 const stepLabel = (step, n) => `step ${n + 1}: ${step.name || step.model || '?'}${step.model && step.name && step.model !== step.name ? ` (${step.model})` : ''}${step.effort ? ` · ${step.effort}` : ''}${step.ms != null ? ` · ${msLabel(step.ms)}` : ''}${step.escalated ? ' · escalated' : ''}`;
 
-/** A step's tool calls, each its arguments and result (open: section 4 opens them). */
+/** A count of tokens, short: 940, 1.1k, 50k. */
+export const tokShort = (n) => (n < 1000 ? String(n) : n < 10000 ? `${(n / 1000).toFixed(1)}k` : `${Math.round(n / 1000)}k`);
+const tok = (text) => `${tokShort(tokens(text))} tok`;
+/** Text on one line, cut to `n` characters. */
+export const oneLine = (text, n = 80) => { const line = String(text == null ? '' : text).replace(/\s+/g, ' ').trim(); return line.length > n ? `${line.slice(0, n - 1)}…` : line; };
+
+const argString = (value) => (Array.isArray(value) ? value.map(String).join(' ') : typeof value === 'string' ? value : '');
+const COMMAND_KEYS = ['command', 'cmd'];
+const ARG_KEYS = ['command', 'cmd', 'file_path', 'path', 'url', 'pattern', 'query', 'notebook_path', 'description', 'prompt'];
+
+/**
+ * A tool call's argument summary for its row (2026-10-13): Bash the command's first 80 characters, Read the path,
+ * Grep and Glob the pattern (and where), WebFetch the URL; any other the first of its usual arguments. → { text, command }
+ * where `command` says it is a command (drawn in monospace).
+ */
+export function toolArg(tool) {
+  const input = tool && tool.input;
+  if (typeof input === 'string') return { text: oneLine(input), command: false };
+  const held = input && typeof input === 'object' ? input : {};
+  const name = String((tool && tool.name) || '');
+  const pick = (keys) => { for (const key of keys) { const value = argString(held[key]); if (value) return { key, value }; } return null; };
+  let found = null;
+  if (name === 'Bash') found = pick(COMMAND_KEYS);
+  else if (name === 'Read') found = pick(['file_path', 'path']);
+  else if (name === 'Grep' || name === 'Glob') {
+    const pattern = argString(held.pattern), where = argString(held.path);
+    found = pattern ? { key: 'pattern', value: where ? `${pattern} in ${where}` : pattern } : pick(['path']);
+  } else if (name === 'WebFetch') found = pick(['url']);
+  if (!found) found = pick(ARG_KEYS);
+  if (!found) { const first = Object.values(held).map(argString).find(Boolean); found = first ? { key: '', value: first } : null; }
+  return found ? { text: oneLine(found.value), command: COMMAND_KEYS.includes(found.key) } : { text: '', command: false };
+}
+
+/** What a tool call's row shows when opened: its arguments and its result, together. */
+function toolText(tool) {
+  const result = tool.result;
+  return [
+    'arguments', json(tool.input) || '(none)', '',
+    result ? `result · ${Number(result.size || 0).toLocaleString('en-US')} chars${result.error ? ' · error' : ''}${String(result.excerpt || '').length < Number(result.size || 0) ? ' (first 2,000)' : ''}` : 'no result yet',
+    ...(result ? [result.excerpt == null ? '' : String(result.excerpt)] : []),
+  ].join('\n');
+}
+
+/** A step's tool calls: one row each, its name, argument summary, time and result size; opened, its arguments and result. */
 function toolNodes(step) {
-  const tools = (step.tools || []).map((tool) => ({
-    label: tool.name, dim: `${tool.ms != null ? msLabel(tool.ms) : 'running'}${tool.result ? ` · ${tool.result.size} chars` : ''}${tool.result && tool.result.error ? ' · error' : ''}`, open: true,
-    children: [{ label: 'arguments', text: json(tool.input), open: true }, ...(tool.result ? [{ label: 'result (first 2,000 characters)', text: tool.result.excerpt }] : [])],
-  }));
+  const tools = (step.tools || []).map((tool) => {
+    const arg = toolArg(tool);
+    return {
+      label: tool.name, arg: arg.text, command: arg.command, tool: true, text: toolText(tool),
+      dim: [tool.ms != null ? msLabel(tool.ms) : 'running', tool.result ? `${Number(tool.result.size || 0).toLocaleString('en-US')} chars` : '', tool.result && tool.result.error ? 'error' : ''].filter(Boolean).join(' · '),
+    };
+  });
   return step.toolsDropped ? [...tools, { label: `${step.toolsDropped} more tool calls, not kept`, plain: true }] : tools;
 }
+
+/** A step's raw output: open once the step has finished, the one thing in the Viewer that opens on its own. */
+const outputNode = (step) => ({ label: 'raw output', dim: sizeLabel(step.output), text: step.output == null ? '(running)' : step.output, ...(step.output != null ? { open: true } : {}) });
 
 const promptNode = (record) => ({ label: `System prompt${record.promptSource ? ` (${record.promptSource})` : ''}`, dim: sizeLabel(record.system), text: String(record.system || '') });
 const blockNodes = (record) => contextBlocks(record).filter((block) => block.text).map((block) => ({ label: block.label, dim: sizeLabel(block.text), text: block.text }));
@@ -231,26 +281,107 @@ export function pipelineOf(ask) {
 }
 
 /**
+ * Where the line was typed, in names (2026-10-13): "Engelbart / oct-12", "Engelbart / note Ideas in oct-12",
+ * "Engelbart / a highlight in <paper>, page 3". `ask.names` is what the main process found ({ project, workspace, note,
+ * paper }, agentMap:ask); the records' own names fill in for it. No id: the project's id is never shown.
+ */
+export function whereLabel(ask, first = {}) {
+  const place = (ask && ask.place) || {};
+  const names = (ask && ask.names) || {};
+  const ref = place.ref || null;
+  const project = names.project || first.projectName || '';
+  const workspace = names.workspace || first.workspaceName || '';
+  let spot = '';
+  if (ref && ref.kind === 'note') spot = `note${names.note ? ` ${names.note}` : ''}${workspace ? ` in ${workspace}` : ''}`;
+  else if (ref && ref.kind === 'mark') spot = `a highlight${names.paper ? ` in ${names.paper}` : ''}${ref.page ? `, page ${ref.page}` : ''}`;
+  else spot = workspace || (ref ? 'workspace' : '');
+  return [project, spot].filter(Boolean).join(' / ');
+}
+
+/** "Haiku low" for a step: its name and effort. */
+const modelShort = (step) => (step ? [step.name || step.model, step.effort].filter(Boolean).join(' ') : '');
+const toolCount = (record) => (record.steps || []).reduce((n, step) => n + (step.tools || []).length + (step.toolsDropped || 0), 0);
+const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+
+/** What the router did, short: { to, parts } where parts are "sure 0.85", "Haiku low", "3.4 s" (or "rule: x"). */
+function routerShort(router) {
+  const step = (router.steps || [])[0];
+  const to = router.handedTo && /^build:/.test(router.handedTo) ? 'Build' : agentInfo(router.corrected || router.pick || 'chat').name;
+  const parts = [
+    router.by === 'rule' ? `rule: ${router.rule || '?'}` : router.sure != null ? `sure ${router.sure}` : '',
+    router.by === 'rule' ? '' : modelShort(step),
+    router.ms != null ? msLabel(router.ms) : '',
+  ].filter(Boolean);
+  return { to, parts, failed: router.status === 'failed' };
+}
+
+/** Section 4's one line: "turn 1 · 14 tools · running", "6 tools · done · 18 s". */
+function outputSummary(ask, { turns, runs }) {
+  if (ask.routedTo === 'build') {
+    const turn = turns[turns.length - 1];
+    if (!turn) return ask.status === 'running' ? 'not started' : 'nothing run';
+    return [`turn ${turn.turn == null ? '?' : turn.turn}`, plural(toolCount(turn), 'tool'), turn.status || ask.status, turn.status !== 'running' && turn.ms != null ? msLabel(turn.ms) : ''].filter(Boolean).join(' · ');
+  }
+  if (!runs.length) return ask.status === 'running' ? 'not started' : 'nothing run';
+  const last = runs[runs.length - 1];
+  const tools = runs.reduce((n, run) => n + toolCount(run), 0);
+  return [runs.length > 1 ? plural(runs.length, 'run') : '', plural(tools, 'tool'), last.status || ask.status, last.status !== 'running' && last.ms != null ? msLabel(last.ms) : ''].filter(Boolean).join(' · ');
+}
+
+/** Section 3's one line: "system 1.1k tok · context 50k tok (most in documents, 42k)". */
+function inputSummary(record) {
+  if (!record) return 'nothing sent yet';
+  const blocks = contextBlocks(record).filter((block) => block.text);
+  const total = blocks.reduce((n, block) => n + tokens(block.text), 0);
+  const largest = blocks.reduce((best, block) => (!best || tokens(block.text) > tokens(best.text) ? block : best), null);
+  return [record.system ? `system ${tok(record.system)}` : '', blocks.length ? `context ${tokShort(total)} tok${blocks.length > 1 && largest ? ` (most in ${largest.label}, ${tokShort(tokens(largest.text))})` : ''}` : 'no context'].filter(Boolean).join(' · ');
+}
+
+/**
+ * The ask's pipeline on one line (2026-10-13), under its header: "you → Bart: Build (0.85 · Haiku low · 3.4 s) → Build
+ * turn 1 · 14 tools · running", or with nothing routed "you → Chat (typed directly) → 6 tools · done".
+ */
+export function pipelineLine(ask) {
+  if (!ask) return '';
+  const parts = pipelineOf(ask);
+  const { router, agent } = parts;
+  const out = outputSummary(ask, parts);
+  if (router) {
+    const short = routerShort(router);
+    const how = short.parts.map((part) => part.replace(/^sure /, '')).join(' · ');
+    return `you → Bart: ${short.to}${how ? ` (${how})` : ''} → ${agent.name}${/^turn /.test(out) ? ' ' : ' · '}${out}`;
+  }
+  const unrouted = [...parts.runs, ...parts.turns].some((record) => record.routedBy === 'error');
+  return `you → ${agent.name} (${unrouted ? 'Bart failed to route' : 'typed directly'}) → ${out}`;
+}
+
+/**
  * The right side's four sections for an ask with its records whole (asks.cjs askOf), as plain data both the Viewer and
- * the export draw: [{ key, title, nodes }], each node { label, dim?, text?, plain?, error?, open?, children? }.
+ * the export draw: [{ key, title, summary, nodes }], each node { label, dim?, arg?, command?, tool?, text?, plain?, error?,
+ * open?, children? }. Each section starts closed and shows its `summary`; nothing inside opens on its own but the raw
+ * output of a finished step (2026-10-13).
  */
 export function askSections(ask) {
   if (!ask) return [];
-  const { router, turns, runSteps, runs, agent } = pipelineOf(ask);
+  const pipeline = pipelineOf(ask);
+  const { router, turns, runSteps, runs, agent } = pipeline;
   const first = router || runs[0] || turns[0] || runSteps[0] || {};
   const place = ask.place || {};
-  // 1 Input: the line as typed, where, and what the router saw.
-  const where = [first.projectName || place.projectId || '', place.ref && place.ref.kind === 'note' ? `note${first.workspaceName ? ` (in ${first.workspaceName})` : ''}` : place.ref && place.ref.kind === 'mark' ? `a highlight${place.ref.page ? `, page ${place.ref.page}` : ''}` : first.workspaceName || (place.ref ? 'workspace' : '')].filter(Boolean).join(' / ');
+  // 1 Input: the line as typed, where, its id, and what the router saw.
+  const where = whereLabel(ask, first);
+  const lineNo = place.line != null ? `line ${place.line + 1}` : '';
+  const typed = place.text != null ? place.text : first.question || '';
   const input = [
-    { label: 'The line as typed', text: place.text != null ? place.text : first.question || '', open: true },
-    { label: 'Where', plain: true, dim: `${where || '—'}${place.line != null ? ` · line ${place.line + 1}` : ''}` },
+    { label: 'The line as typed', text: typed },
+    { label: 'Where', plain: true, dim: [where || '—', lineNo].filter(Boolean).join(' · ') },
+    { label: 'id', plain: true, dim: String(ask.id || '') },
   ];
   if (router) {
     const parts = routerInputParts(router.context && router.context.input);
     const threads = Array.isArray(router.threads) ? router.threads : [];
     const threadText = threads.length ? threads.map((thread) => `@${thread.agent}, ${thread.up} lines up: ${JSON.stringify(thread.question)}`).join('\n') : '(none)';
     input.push({
-      label: 'What Bart (classifier) saw', open: true, children: [
+      label: 'What Bart (classifier) saw', children: [
         parts.section != null ? { label: 'section', dim: sizeLabel(parts.section), text: parts.section } : { label: 'section', plain: true, dim: `${(router.sectionSize || 0).toLocaleString('en-US')} chars (not kept: a rule picked, so no model was sent it)` },
         { label: 'threads', dim: `${threads.length} · ${sizeLabel(threadText)}`, text: threadText },
         { label: 'spec above', plain: true, dim: router.specAbove ? 'yes' : 'no' },
@@ -258,57 +389,61 @@ export function askSections(ask) {
       ],
     });
   }
+  const inputSum = [oneLine(askText(typed), 60), [where ? (where.split(' / ').pop() || where) : '', lineNo].filter(Boolean).join(' · ')].filter(Boolean).join(' · ');
   // 2 Bart (classifier) output.
-  let classified;
+  let classified, classifiedSum;
   if (router) {
     const step = (router.steps || [])[0];
-    const to = router.handedTo && /^build:/.test(router.handedTo) ? 'Build' : agentInfo(router.pick || 'chat').name;
+    const short = routerShort(router);
+    const picked = router.handedTo && /^build:/.test(router.handedTo) ? 'Build' : agentInfo(router.pick || 'chat').name;
     const corrected = router.corrected ? `changed to ${agentInfo(router.corrected).name}` : '';
     classified = [
-      { label: `Picked ${to}`, plain: true, dim: [router.sure != null ? `sure ${router.sure}` : '', router.by === 'rule' ? `rule: ${router.rule || '?'}` : step ? `model: ${step.name || step.model} · ${step.effort}` : 'model', router.ms != null ? msLabel(router.ms) : '', router.unread ? 'reply not read: chat' : ''].filter(Boolean).join(' · ') },
+      { label: `Picked ${picked}`, plain: true, dim: [router.sure != null ? `sure ${router.sure}` : '', router.by === 'rule' ? `rule: ${router.rule || '?'}` : step ? `model: ${step.name || step.model} · ${step.effort}` : 'model', router.ms != null ? msLabel(router.ms) : '', router.unread ? 'reply not read: chat' : ''].filter(Boolean).join(' · ') },
       ...(corrected ? [{ label: corrected, plain: true }] : []),
       ...(router.handedTo ? [{ label: 'handed to', plain: true, dim: router.handedTo }] : []),
       ...(router.error ? [{ label: 'error', error: router.error }] : []),
-      ...(step && step.output != null ? [{ label: 'raw output', dim: sizeLabel(step.output), text: step.output }] : []),
+      ...(step && step.output != null ? [outputNode(step)] : []),
     ];
+    classifiedSum = [short.to, ...short.parts, router.error ? 'error' : ''].filter(Boolean).join(' · ');
   } else {
     // Bart failed to route the line (Workspace routeLine, `by: 'error'`): no router record, and its agent is the fallback.
     const unrouted = [...runs, ...turns].find((record) => record.routedBy === 'error');
     classified = unrouted
       ? [{ label: `Bart (classifier) failed: sent to ${agentInfo(ask.routedTo).name} as the fallback, not Bart's pick`, plain: true }, ...(unrouted.routeError ? [{ label: 'error', error: unrouted.routeError }] : [])]
       : [{ label: viaLabel(ask.via, ask.routedTo), plain: true }];
+    classifiedSum = unrouted ? `failed · sent to ${agentInfo(ask.routedTo).name}` : ['--build', 'button', 'panel', 'post-it'].includes(ask.via) ? viaLabel(ask.via, ask.routedTo).replace(/^Typed/, 'typed') : 'typed directly';
   }
   // 3 <Agent> input, 4 <Agent> output.
   let agentIn = [], agentOut = [];
   const failed = [...runs, ...turns, ...runSteps].filter((record) => record.error && (record.status === 'failed' || record.status === 'stopped'));
   if (ask.routedTo === 'build') {
     const firstTurn = turns[0];
-    if (firstTurn) agentIn.push(promptNode(firstTurn), { label: `turn ${firstTurn.turn || 1}: context`, open: true, children: blockNodes(firstTurn) });
+    if (firstTurn) agentIn.push(promptNode(firstTurn), { label: `turn ${firstTurn.turn || 1}: context`, dim: tok(blockNodes(firstTurn).map((node) => node.text).join('')), children: blockNodes(firstTurn) });
     for (const turn of turns.slice(1)) agentIn.push({ label: `turn ${turn.turn}: what it was sent`, children: blockNodes(turn) });
     agentOut = turns.map((turn) => ({
-      label: `turn ${turn.turn == null ? '?' : turn.turn}`, dim: [modelLabel({ ...turn, ...lastOf(turn) }), turn.status, turn.ending ? `ending: ${turn.ending}` : ''].filter(Boolean).join(' · '), open: true,
-      children: [...(turn.error ? [{ label: 'error', error: turn.error }] : []), ...(turn.steps || []).flatMap((step) => [...toolNodes(step), { label: 'raw output', dim: sizeLabel(step.output), text: step.output == null ? '(running)' : step.output }])],
+      label: `turn ${turn.turn == null ? '?' : turn.turn}`, dim: [modelLabel({ ...turn, ...lastOf(turn) }), plural(toolCount(turn), 'tool'), turn.status, turn.ending ? `ending: ${turn.ending}` : ''].filter(Boolean).join(' · '),
+      children: [...(turn.error ? [{ label: 'error', error: turn.error }] : []), ...(turn.steps || []).flatMap((step) => [...toolNodes(step), outputNode(step)])],
     }));
     for (const run of runSteps) {
       const runnables = Array.isArray(run.written) ? run.written : [];
       agentOut.push({
-        label: `Run step${run.turn != null ? ` (after turn ${run.turn})` : ''}`, dim: run.status, open: true, children: [
+        label: `Run step${run.turn != null ? ` (after turn ${run.turn})` : ''}`, dim: run.status, children: [
           ...(run.error ? [{ label: 'error', error: run.error }] : []),
           ...(run.steps || []).flatMap((step) => toolNodes(step)),
-          { label: 'runnables', text: runnables.length ? runnables.map((item) => `${item.name}: ${item.status}${item.passed ? ' · passed' : ''}${item.error ? `\n  last error: ${item.error}` : ''}`).join('\n') : '(none yet)', open: true },
+          { label: 'runnables', text: runnables.length ? runnables.map((item) => `${item.name}: ${item.status}${item.passed ? ' · passed' : ''}${item.error ? `\n  last error: ${item.error}` : ''}`).join('\n') : '(none yet)' },
         ],
       });
     }
   } else {
     runs.forEach((run, n) => {
       const again = runs.length > 1 ? ` (run ${n + 1}${n ? ', asked again' : ''})` : '';
-      agentIn.push(promptNode(run), { label: `context${again}`, open: true, children: blockNodes(run) }, ...(run.steps || []).map((step, k) => ({ label: stepLabel(step, k), dim: sizeLabel(step.input), text: step.input })));
+      agentIn.push(promptNode(run), { label: `context${again}`, dim: tok(blockNodes(run).map((node) => node.text).join('')), children: blockNodes(run) }, ...(run.steps || []).map((step, k) => ({ label: stepLabel(step, k), dim: sizeLabel(step.input), text: step.input })));
       const card = run.agent === 'brainstorm' ? cardOf(run) : null;
       agentOut.push({
-        label: `${agentInfo(run.agent).name}${again}`, dim: [run.status, run.ms != null ? msLabel(run.ms) : ''].filter(Boolean).join(' · '), open: true,
+        label: `${agentInfo(run.agent).name}${again}`, dim: [plural(toolCount(run), 'tool'), run.status, run.ms != null ? msLabel(run.ms) : ''].filter(Boolean).join(' · '),
         children: [
-          ...(run.steps || []).map((step, k) => ({ label: stepLabel(step, k), open: true, children: [...toolNodes(step), { label: 'raw output', dim: sizeLabel(step.output), text: step.output == null ? '(running)' : step.output }] })),
-          ...(card ? [{ label: 'the card it wrote', text: cardText(card), open: true }] : []),
+          ...(run.steps || []).map((step, k) => ({ label: stepLabel(step, k), children: [...toolNodes(step), outputNode(step)] })),
+          ...(card ? [{ label: 'the card it wrote', text: cardText(card) }] : []),
           { label: 'what was written', dim: sizeLabel(writtenText(run)), text: writtenText(run) },
         ],
       });
@@ -318,10 +453,10 @@ export function askSections(ask) {
   if (!agentIn.length) agentIn.push({ label: ask.status === 'running' ? 'Not started yet' : 'Nothing was run', plain: true });
   if (!agentOut.length) agentOut.push({ label: ask.status === 'running' ? 'Running…' : 'Nothing was written', plain: true });
   return [
-    { key: '1', title: '1 Input (you)', nodes: input },
-    { key: '2', title: `2 ${AGENTS[0].name} output`, nodes: classified },
-    { key: '3', title: `3 ${agent.name} input`, nodes: agentIn },
-    { key: '4', title: `4 ${agent.name} output`, nodes: agentOut },
+    { key: '1', title: '1 Input', summary: inputSum, nodes: input },
+    { key: '2', title: `2 ${AGENTS[0].name}`, summary: classifiedSum, nodes: classified },
+    { key: '3', title: `3 ${agent.name} input`, summary: inputSummary(ask.routedTo === 'build' ? turns[0] : runs[0]), nodes: agentIn },
+    { key: '4', title: `4 ${agent.name} output`, summary: [failed.length ? (failed[0].status === 'stopped' ? 'stopped' : 'failed') : '', outputSummary(ask, pipeline)].filter(Boolean).join(' · '), nodes: agentOut },
   ];
 }
 
@@ -335,7 +470,7 @@ function lastOf(record) {
 export function nodesText(nodes, depth = 0) {
   const pad = '  '.repeat(depth);
   return (nodes || []).map((node) => [
-    `${pad}${node.error ? `! ${node.label}: ${node.error}` : node.label}${node.dim ? ` (${node.dim})` : ''}`,
+    `${pad}${node.error ? `! ${node.label}: ${node.error}` : node.label}${node.arg ? ` ${node.arg}` : ''}${node.dim ? ` (${node.dim})` : ''}`,
     ...(node.text != null && node.text !== '' ? [String(node.text)] : []),
     ...(node.children ? [nodesText(node.children, depth + 1)] : []),
   ].join('\n')).join('\n');
@@ -343,7 +478,7 @@ export function nodesText(nodes, depth = 0) {
 
 const nodeHtml = (node) => {
   if (node.error) return `<div class="error">${escape(node.label)}: ${escape(node.error)}</div>`;
-  const head = `${escape(node.label)}${node.dim ? ` <span class="dim">${escape(node.dim)}</span>` : ''}`;
+  const head = `${escape(node.label)}${node.arg ? ` ${node.command ? `<code>${escape(node.arg)}</code>` : escape(node.arg)}` : ''}${node.dim ? ` <span class="dim">${escape(node.dim)}</span>` : ''}`;
   if (node.plain) return `<div class="sub">${head}</div>`;
   return details(head, `${node.text != null ? pre(node.text) : ''}${(node.children || []).map(nodeHtml).join('')}`, !!node.open);
 };
@@ -353,6 +488,6 @@ export function exportAsk(ask) {
   const records = (ask && ask.records) || [];
   const title = `Agent Viewer · ${askText(ask && ask.text)}`;
   const data = JSON.stringify(ask).replace(/</g, '\\u003c');
-  const sections = askSections(ask).map((section) => details(escape(section.title), section.nodes.map(nodeHtml).join(''), true)).join('');
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(title)}</title><style>${STYLE}</style></head><body><h1>${escape(title)}</h1><div class="dim">Exported from Engelbart's Agent Viewer, ${escape(new Date().toISOString())}. ${escape(agentInfo(ask && ask.routedTo).name)} · ${escape(ask && ask.status)} · ${records.length} record${records.length === 1 ? '' : 's'}.</div><section>${sections}</section>${records.map(runHtml).join('')}<script type="application/json" id="agent-ask">${data}</script></body></html>`;
+  const sections = askSections(ask).map((section) => details(`${escape(section.title)}${section.summary ? ` <span class="dim">${escape(section.summary)}</span>` : ''}`, section.nodes.map(nodeHtml).join(''), true)).join('');
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(title)}</title><style>${STYLE}</style></head><body><h1>${escape(title)}</h1><div class="dim">Exported from Engelbart's Agent Viewer, ${escape(new Date().toISOString())}. ${escape(pipelineLine(ask))} · ${records.length} record${records.length === 1 ? '' : 's'}.</div><section>${sections}</section>${records.map(runHtml).join('')}<script type="application/json" id="agent-ask">${data}</script></body></html>`;
 }

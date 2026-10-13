@@ -455,7 +455,7 @@ test('the Design tab draws Build and the run step beside the question agents, ea
   const { Design } = compile('src/renderer/screens/AgentMap.jsx', 'agent-map-design');
   const page = renderToStaticMarkup(React.createElement(Design, { design: agentDesign({ dataRoot: tmp('design-page'), models: CLAUDE, buildModels: DEFAULTS }) }));
   for (const name of ['Bart (classifier)', 'Chat', 'Brainstorm', 'Discover', 'Create', 'Build', 'Run step']) assert.ok(page.includes(`<b>${name}</b>`), name);
-  const order = ['Bart (classifier)', 'Chat', 'Brainstorm', 'Discover', 'Create', 'Build', 'Run step'].map((name) => page.indexOf(`●</span> <b>${name}</b>`));
+  const order = ['Bart (classifier)', 'Chat', 'Brainstorm', 'Discover', 'Create', 'Build', 'Run step'].map((name) => page.indexOf(`<div><b>${name}</b>`));
   assert.ok(order.every((at) => at >= 0), 'each has a heading of its own');
   assert.deepEqual([...order].sort((a, b) => a - b), order, 'in the Viewer\'s order, Bart (classifier) first');
   assert.match(page, /<b>Create<\/b>.*?Planned, not built yet.*?calls: <span[^>]*>none/, 'Create: planned, no data, calls nothing');

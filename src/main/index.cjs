@@ -1167,6 +1167,7 @@ if (!hasSingleInstanceLock) {
       trustedHandler,
       mapWindow: agentMap,
       runLog,
+      context: () => store.context(),
       design: () => agentDesign({ dataRoot: store.config().dataRoot, models: readModels('bart'), buildModels: readModels('build') }),
       // A row clicked (2026-10-12): the window on the ask's project comes to the front, else the focused one (which opens
       // the project; App.jsx), and is told where. It is also kept on the window, for a Workspace that mounts after the
