@@ -131,9 +131,11 @@ app.whenReady().then(async () => {
     const built = await rows(wc), line = built.indexOf('@bart ok build it'), card = built.findIndex((l) => /^build> /.test(l));
     assert.equal(built[line + 1], 'bart> FAKE INTRO to "ok build it": Build is making the spec above.', JSON.stringify(built.slice(line)));
     assert.match(built[card - 1], /^bart> \*Build · /, 'the reply closes as Build\'s, right above the card');
+    // Typed under the answer, the line starts a conversation of its own (2026-10-13): that one has no follow-up field over
+    // the card; the @chat conversation above keeps its own.
     const from = built.indexOf('@chat show the code config');
-    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-followup="${from}"]').length`), 0, 'no follow-up field over the card');
-    assert.ok(await js(wc, `document.querySelectorAll('${ED} [data-followup]').length`) > 0, 'the conversation above keeps its own');
+    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-followup="${line}"]').length`), 0, 'no follow-up field over the card');
+    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-followup="${from}"]').length`), 1, 'the conversation above keeps its own');
     await shot(wc, '4-build');
     console.log('PASS a Build Bart picks is Chat\'s reply first, closing as Build\'s, with the Build\'s card under it');
     app.exit(0);

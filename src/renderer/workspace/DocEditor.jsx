@@ -2478,7 +2478,7 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
     const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: fallbackAgent(current), sure: 0, by: 'none' };
     const asked = this.props.onRoute
-      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, rule, current, place: { line: q, text: ls[q] } }))
+      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, specTitle: inputs.specTitle, rule, current, place: { line: q, text: ls[q] } }))
       : Promise.resolve(fallback);
     return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: fallbackAgent(current), sure: 0 }));
   }
@@ -2491,7 +2491,9 @@ export default class DocEditor extends React.Component {
   //     starting an untitled conversation, which has nowhere to keep the pick, is written `@<token> <text>` as before.
   //   create (main sends it only when sure ≥ 0.8, else chat): as chat, brainstorm and discover are, after five seconds in
   //     which its pending line says "Creating in 5 s" and offers Cancel (waitCreate), which asks Chat instead.
-  //   build, with a spec above and sure ≥ 0.8: a Build of that fenced block as it reads now; the line stays, its card under it.
+  //   build, with a spec above, sure ≥ 0.8, and the router saying the line asks for that spec (pick.spec, 2026-10-13: a
+  //     request of its own was built as the unrelated spec above it): a Build of that fenced block as it reads now; the
+  //     line stays, its card under it.
   //   build otherwise: asked of Chat, told it is wanted built (routed.build, ` build` on the title line), so it writes the
   //     Build prompt.
   //   `--build` on the line (a rule): a Build of the line, as `@chat --build` makes (Workspace askBart).
@@ -2504,7 +2506,7 @@ export default class DocEditor extends React.Component {
     if (pick.agent === 'build' && pick.rule === '--build') { this.props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id, ...failed }, place: typed }); return 'build'; }
     if (pick.agent === 'build') {
       const spec = routeInputs(ls, q).spec;
-      if (spec != null && pick.sure >= 0.8 && this.props.onBuild) {
+      if (spec != null && pick.spec === true && pick.sure >= 0.8 && this.props.onBuild) {
         // Chat replies first (2026-10-13, main's bart/ask.cjs BUILD_INTRO; its closing line names Build), under the line,
         // and the Build's card takes a pending line of its own under that reply. The card is the conversation from there:
         // the reply has no follow-up field (layout).

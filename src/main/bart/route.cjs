@@ -62,22 +62,23 @@ function threadsOf(threads) {
 /** The agent a follow-up's conversation is with ('chat', 'brainstorm' or 'discover'), or null. */
 const currentOf = (current) => { const agent = String(current || '').toLowerCase().replace(/^@/, ''); return PICKS.includes(agent) && agent !== 'build' && agent !== 'create' ? agent : null; };
 
-/** What the model is sent: the line, its section, the threads above, whether a spec is above and, for a follow-up, the
- * agent the conversation is with. Nothing else. */
-function routeInput({ text, section, workspaceName = '', threads = [], specAbove = false, current = null }) {
+/** What the model is sent: the line, its section, the threads above, whether a spec is above (and its first line,
+ * 2026-10-13) and, for a follow-up, the agent the conversation is with. Nothing else. */
+function routeInput({ text, section, workspaceName = '', threads = [], specAbove = false, specTitle = '', current = null }) {
   const list = threadsOf(threads), now = currentOf(current);
   const threadLines = list.length ? list.map((thread) => `- @${thread.agent}, ${thread.up} line${thread.up === 1 ? '' : 's'} up: ${JSON.stringify(thread.question)}`).join('\n') : '(none)';
   return [
     workspaceName ? `<workspace>${clean(workspaceName, 200)}</workspace>` : '',
     `<section>\n${sectionText(section)}\n</section>`,
     `<threads>\n${threadLines}\n</threads>`,
-    `<spec_above>${specAbove ? 'yes' : 'no'}</spec_above>`,
+    `<spec_above>${specAbove ? (clean(specTitle, QUESTION_CHARS) ? `yes: ${JSON.stringify(clean(specTitle, QUESTION_CHARS))}` : 'yes') : 'no'}</spec_above>`,
     now ? `<current>${now}</current>` : '',
     `<line>\n${String(text || '').trim()}\n</line>`,
   ].filter(Boolean).join('\n\n');
 }
 
-/** { agent, sure } from the model's reply, or null when it holds no such object. */
+/** { agent, sure } from the model's reply, or null when it holds no such object; a build's also has `spec` (2026-10-13):
+ * true only when the reply says the line asks for the spec above to be built. */
 function parseReply(raw) {
   const text = String(raw || '');
   const found = text.match(/\{[^{}]*\}/g) || [];
@@ -86,7 +87,7 @@ function parseReply(raw) {
     try { value = JSON.parse(candidate); } catch { continue; }
     const agent = value && String(value.agent || '').toLowerCase().replace(/^@/, '');
     const sure = Number(value && value.sure);
-    if (PICKS.includes(agent) && Number.isFinite(sure)) return { agent, sure: Math.max(0, Math.min(1, sure)) };
+    if (PICKS.includes(agent) && Number.isFinite(sure)) return { agent, sure: Math.max(0, Math.min(1, sure)), ...(agent === 'build' ? { spec: value.spec === true } : {}) };
   }
   return null;
 }
@@ -211,7 +212,10 @@ function createRouter({ readModels, environment = process.env, runDirectory = pa
  * keyword settles stays with the agent its thread is with (`current`). */
 function fakePick(text, current = null) {
   const line = String(text || '').toLowerCase();
-  if (/\bbuild it\b|\bimplement\b|\bmake the\b.*\bdifferent\b/.test(line)) return { agent: 'build', sure: 0.9 };
+  // "build it", "implement that", "go ahead" build the spec above; anything else asked built is a request of its own
+  // (spec: false, 2026-10-13).
+  if (/\b(?:build|implement) (?:it|that|this)\b|\bgo ahead\b/.test(line)) return { agent: 'build', sure: 0.9, spec: true };
+  if (/\bimplement\b|\bmake the\b.*\bdifferent\b/.test(line)) return { agent: 'build', sure: 0.9, spec: false };
   // Something new made ("make a chart", "make an html page", "write up a summary page", "create a …"), not a prompt or a spec for one.
   if (/\b(?:make|write up|draw) (?:a|an) (?:[\w-]+ ){0,2}(?:chart|page|plot|graph)\b|\bcreate (?:a|an) (?!(?:[\w-]+ )?(?:prompt|spec)\b)/.test(line)) return { agent: 'create', sure: 0.9 };
   if (/\bpapers?\b|\bread\b|\breading\b|prior work/.test(line)) return { agent: 'discover', sure: 0.9 };
@@ -227,7 +231,7 @@ function createFakeRouter({ runLog = null, now = Date.now } = {}) {
 
 /** What both routers share: the rule's or the model's pick, logged. `pick(input, text, current)` → { parsed, step, raw, error? }. */
 function routerOf({ log, now, pick }) {
-  async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, current = null, rule = null, place = null } = {}) {
+  async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, specTitle = '', current = null, rule = null, place = null } = {}) {
     const id = `route-${randomUUID()}`, started = now();
     if (rule && RULE_PICKS.has(rule.agent)) {
       log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, by: 'rule', rule: rule.rule || null, place })));
@@ -235,14 +239,16 @@ function routerOf({ log, now, pick }) {
       log((runs) => { runs.amend(id, { pick: out.agent, sure: 1 }); runs.finish(id, { status: 'done', written: [`@${out.agent}`], ms: out.ms }); });
       return out;
     }
-    const input = routeInput({ text, section, workspaceName, threads, specAbove, current });
+    const input = routeInput({ text, section, workspaceName, threads, specAbove, specTitle, current });
     log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, current, input, by: 'model', place })));
     const { parsed, step, raw, error } = await pick(input, text, current);
     if (step) log((runs) => { runs.step(id, { model: step.id, name: step.name, effort: step.effort, input }); runs.output(id, { raw }); });
-    const { agent, sure } = decide(parsed, current);
-    const out = { id, agent, sure, model: step ? { provider: step.provider, name: step.name, id: step.id, effort: step.effort } : null, ms: now() - started, by: 'model', ...(error ? { error } : {}) };
+    const { agent, sure, spec } = decide(parsed, current);
+    // Whether the line asks for the spec above to be built (2026-10-13): only a build the model picked says so.
+    const means = agent === 'build' && spec === true;
+    const out = { id, agent, sure, ...(agent === 'build' ? { spec: means } : {}), model: step ? { provider: step.provider, name: step.name, id: step.id, effort: step.effort } : null, ms: now() - started, by: 'model', ...(error ? { error } : {}) };
     log((runs) => {
-      runs.amend(id, { provider: step ? step.provider : null, pick: agent, sure, ...(parsed ? {} : { unread: true }) });
+      runs.amend(id, { provider: step ? step.provider : null, pick: agent, sure, ...(agent === 'build' ? { spec: means } : {}), ...(parsed ? {} : { unread: true }) });
       runs.finish(id, { status: error ? 'failed' : 'done', written: [`@${agent}`], error: error || null, ms: out.ms });
     });
     return out;

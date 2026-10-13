@@ -4,7 +4,7 @@
 {"line":"what does this one entail","section":"# Options\n1. A router\n2. Separate buttons","specAbove":false,"expected":"chat"}
 {"line":"should @chat and @build be separate?","section":"# Naming","specAbove":false,"expected":"chat"}
 {"line":"how do other tools handle this?","section":"# Footer buttons\nEvery answer gets a Build button.","specAbove":false,"expected":"chat"}
-{"line":"ok build it","section":"# Haiku\n@chat give me the build prompt\nbart> ```\nbart> Add Haiku 5.5 to models.cjs\nbart> ```","specAbove":true,"expected":"build"}
+{"line":"ok build it","section":"# Haiku\n@chat give me the build prompt\nbart> ```\nbart> Add Haiku 5.5 to models.cjs\nbart> ```","specAbove":true,"specTitle":"Add Haiku 5.5 to models.cjs","expected":"build","spec":true}
 {"line":"help me figure out what my study should measure","section":"# Study design","specAbove":false,"expected":"brainstorm"}
 {"line":"what's been done on behaviour-aware tutors?","section":"# Related work","specAbove":false,"expected":"discover"}
 {"line":"find me papers on hint timing in programming tutors","section":"# Related work","specAbove":false,"expected":"discover"}
@@ -12,7 +12,7 @@
 {"line":"why does the Build card stay grey after it finishes?","section":"# Bugs","specAbove":false,"expected":"chat"}
 {"line":"summarize this section for the weekly update","section":"# Week 41\nShipped the router. Fixed the footer.","specAbove":false,"expected":"chat"}
 {"line":"I'm not sure whether this paper is about tutors or about feedback, what's my angle?","section":"# Framing","specAbove":false,"expected":"brainstorm"}
-{"line":"go ahead and implement that","section":"# Settings\n@chat write the spec for the Chat label\nbart> ```\nbart> Rename the Settings label to Chat\nbart> ```","specAbove":true,"expected":"build"}
+{"line":"go ahead and implement that","section":"# Settings\n@chat write the spec for the Chat label\nbart> ```\nbart> Rename the Settings label to Chat\nbart> ```","specAbove":true,"specTitle":"Rename the Settings label to Chat","expected":"build","spec":true}
 {"line":"add a dark mode toggle to the settings page","section":"# Ideas","specAbove":false,"expected":"build"}
 {"line":"is a 20 second timeout too long for routing?","section":"# Router","specAbove":false,"expected":"chat"}
 {"line":"which of these two designs would you pick?","section":"# Design\nA: one button. B: a menu.","specAbove":false,"expected":"chat"}
@@ -26,3 +26,5 @@
 {"line":"what did we decide about the router?","section":"# Routing\nBart routes @bart lines to chat, brainstorm, discover, create or build.","specAbove":false,"expected":"chat"}
 {"line":"find the note where we planned Create","section":"# Create agent\nCreate makes new standalone things: charts, pages, documents.","specAbove":false,"expected":"chat"}
 {"line":"what's been published on agent debugging tools?","section":"# Agent Viewer\nRelated work for the viewer section of the paper.","specAbove":false,"expected":"discover"}
+{"line":"yes, build that","section":"# Haiku\n@chat give me the build prompt\nbart> ```\nbart> Add Haiku 5.5 to models.cjs\nbart> ```","specAbove":true,"specTitle":"Add Haiku 5.5 to models.cjs","expected":"build","spec":true}
+{"line":"for the agent viewer, get rid of the all, questions, and build tabs, just show all by default, and in the design tab add tabs for each type of agent and show one at a time, and get rid of the green dots","section":"# Concision in Agent Responses\n@bart --build Workspace editor: an @ line typed under an answer starts its own conversation\nbart> ```\nbart> Workspace editor: an @ line typed under an answer starts its own conversation\nbart> ```","specAbove":true,"specTitle":"Workspace editor: an @ line typed under an answer starts its own conversation","expected":"build","spec":false}

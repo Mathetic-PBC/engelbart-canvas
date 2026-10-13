@@ -63,11 +63,13 @@ export function buildTextOf(lines, turn) {
 }
 
 /**
- * What the router reads around the `@bart` line at `at`: { section, threads, specAbove, spec, current }.
+ * What the router reads around the `@bart` line at `at`: { section, threads, specAbove, spec, specTitle, current }.
  *   section: from the nearest heading above (it included) to the line;
  *   threads: every thread above, each { agent (its token), question (the first line of its first question, plain, at most
  *     QUESTION_CHARS characters: questionLine), up (lines above the line) };
  *   spec: the last fenced block of the last answer of the nearest answered turn above in the section, or null;
+ *   specTitle: its first line, plain and cut as a thread's question is (questionLine), or '' (2026-10-13: so the router can
+ *     tell a line asking for that spec to be built from one asking for something of its own);
  *   current: when the line follows up a thread (a turn of it, or directly under its last answer), the token of the agent
  *     that answered it last ('chat', 'brainstorm' or 'discover'), else null (2026-10-13).
  * The router (main) takes the last five threads and the section's last 4,000 characters once agent replies are left out
@@ -98,5 +100,6 @@ export function routeInputs(lines, at) {
   const into = above.find((thread) => thread.to === at - 1 || thread.turns.some((turn) => turn.q === at));
   const agent = into ? answeredBy(into) : null;
   const current = agent === 'bart' || agent === 'brainstorm' || agent === 'discover' ? tokenOf(agent) : null;
-  return { section: lines.slice(start, at + 1).join('\n'), threads: list, specAbove: spec != null, spec, current };
+  const specTitle = spec != null ? questionLine(spec.split('\n').find((line) => line.trim()) || '') : '';
+  return { section: lines.slice(start, at + 1).join('\n'), threads: list, specAbove: spec != null, spec, specTitle, current };
 }

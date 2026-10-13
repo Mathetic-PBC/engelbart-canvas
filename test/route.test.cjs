@@ -102,8 +102,12 @@ test('routeInputs: the section from the heading, the threads above with their to
   const at = lines.length - 1, got = routeInputs(lines, at);
   assert.ok(got.section.startsWith('# Haiku') && got.section.endsWith('@bart ok build it'));
   assert.deepEqual(got.threads.map((t) => [t.agent, t.question.slice(0, 22), t.up]), [['discover', 'tutors', at - 1], ['chat', 'give me the build prom', at - 6]]);
-  assert.deepEqual([got.specAbove, got.spec], [true, 'Add Haiku 5.5 to models.cjs.']);
-  assert.equal(routeInputs(['# A', '@chat why', 'bart> because', '@bart next'], 3).specAbove, false);
+  assert.deepEqual([got.specAbove, got.spec, got.specTitle], [true, 'Add Haiku 5.5 to models.cjs.', 'Add Haiku 5.5 to models.cjs.']);
+  assert.deepEqual(['specAbove', 'specTitle'].map((k) => routeInputs(['# A', '@chat why', 'bart> because', '@bart next'], 3)[k]), [false, '']);
+  // A spec's title is its first line with words on it, as a thread's question is cut (2026-10-13).
+  const long = ['@chat spec', 'bart> ```text', 'bart> ', `bart> Agent Viewer: one run list ${'and more '.repeat(20)}`, 'bart> Why: busy', 'bart> ```', '@bart yes'];
+  const title = routeInputs(long, long.length - 1).specTitle;
+  assert.ok(title.startsWith('Agent Viewer: one run list') && title.length <= 80, title);
   const thread = threads(lines, parseLines(lines)).find((t) => t.from === 6);
   assert.equal(buildTextOf(lines, thread.turns[0]), 'Add Haiku 5.5 to models.cjs.', 'the last fenced block');
   const plain = ['@chat why', 'bart> because', 'bart> *Sonnet · 2s*'];
@@ -193,6 +197,10 @@ test('route.cjs: unsure, garbage, a timeout or an error all go to chat', async (
   const none = await route.createRouter({ readModels: () => null }).route(LINE);
   assert.equal(none.agent, 'chat');
   assert.deepEqual(route.parseReply('Sure: {"agent":"@Discover","sure":7}'), { agent: 'discover', sure: 1 });
+  // A build says whether the line means the spec above (2026-10-13); anything but true is no.
+  assert.deepEqual(['{"agent":"build","sure":0.9,"spec":true}', '{"agent":"build","sure":0.9,"spec":"yes"}', '{"agent":"build","sure":0.9}'].map((raw) => route.parseReply(raw).spec), [true, false, false]);
+  assert.deepEqual([(await router('{"agent":"build","sure":0.9,"spec":true}').route(LINE)).spec, (await router('{"agent":"build","sure":0.9,"spec":false}').route(LINE)).spec], [true, false]);
+  assert.equal('spec' in (await router('{"agent":"chat","sure":0.9,"spec":true}').route(LINE)), false, 'only a build');
 });
 
 test('route.cjs: the model reads the line, its section without agent replies, five threads, the spec flag; never the library or mentioned files', async () => {
@@ -203,6 +211,10 @@ test('route.cjs: the model reads the line, its section without agent replies, fi
   assert.ok(!/context_json|LIBRARY|MENTIONED/.test(seen.input), 'no library, no context_json, no mentioned file');
   assert.match(seen.input, /<line>\nwhat does this one entail\n<\/line>/);
   assert.match(seen.input, /<spec_above>no<\/spec_above>/);
+  // With a spec above, its first line (2026-10-13), so a line asking for something of its own is not built as it.
+  const told = {};
+  await router('{"agent":"build","sure":0.9,"spec":false}', { seen: told }).route({ ...LINE, specAbove: true, specTitle: 'Workspace editor: an @ line typed under an answer starts its own conversation' });
+  assert.match(told.input, /<spec_above>yes: "Workspace editor: an @ line typed under an answer starts its own conversation"<\/spec_above>/);
   const section = seen.input.match(/<section>\n([\s\S]*?)\n<\/section>/)[1];
   assert.ok(section.length <= 4000, 'the last 4,000 characters');
   const listed = seen.input.match(/<threads>\n([\s\S]*?)\n<\/threads>/)[1].split('\n');
@@ -213,6 +225,7 @@ test('route.cjs: the model reads the line, its section without agent replies, fi
 
 test('route.cjs fake (ENGELBART_BART_FAKE=1): by keyword', () => {
   assert.deepEqual(['build it now', 'please implement x', 'what papers on tutors', 'prior work on this', 'help me think this through', 'why is it red'].map((t) => route.fakePick(t).agent), ['build', 'build', 'discover', 'discover', 'brainstorm', 'chat']);
+  assert.deepEqual(['ok build it', 'go ahead', 'implement that', 'please implement x'].map((t) => route.fakePick(t).spec), [true, true, true, false], 'a go-ahead means the spec above; a request of its own does not');
 });
 
 /* ---------------------------------------------------------- the run log */
@@ -352,16 +365,16 @@ test('a line Bart handed to @discover: its follow-up, Regenerate, the session an
   assert.equal(threads(n.lines())[0].turns.length, 3);
 });
 
-test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the spec; otherwise Chat is asked to write the Build prompt', async () => {
+test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec starts a Build of the spec; otherwise Chat is asked to write the Build prompt', async () => {
   // Asked from the spec's conversation's field (2026-10-13: a line typed under it starts a conversation of its own).
-  const sure = mounted(SPEC, { route: async () => ({ id: 'route-b', agent: 'build', sure: 0.9 }) });
+  const sure = mounted(SPEC, { route: async () => ({ id: 'route-b', agent: 'build', sure: 0.9, spec: true }) });
   sure.editor.followText.set(0, 'ok build it');
   sure.editor.sendFollow(0);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(sure.builds.length, 1);
   assert.deepEqual([sure.builds[0].text, sure.builds[0].routedFrom], ['Add Haiku 5.5 to models.cjs.', 'route-b']);
   assert.equal(sure.lines()[SPEC.length], '@bart ok build it', 'the @bart line stays');
-  assert.equal(sure.routes[0].specAbove, true);
+  assert.deepEqual([sure.routes[0].specAbove, sure.routes[0].specTitle], [true, 'Add Haiku 5.5 to models.cjs.'], 'the router is told what the spec is');
   // Chat replies first (2026-10-13, main's BUILD_INTRO), under the line; the card takes a pending line of its own under it.
   assert.equal(sure.asks.length, 1);
   assert.deepEqual([sure.asks[0].agent, sure.asks[0].intro, sure.asks[0].routed, sure.asks[0].text], ['bart', 'build', { id: 'route-b', build: true }, 'ok build it']);
@@ -376,7 +389,22 @@ test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the sp
   const { threads } = await loadDoc();
   assert.deepEqual(threads(placed).map((t) => t.turns.length), [2], 'the reply is the next turn of the spec\'s conversation');
 
-  const unsure = mounted(SPEC, { route: async () => ({ id: 'route-c', agent: 'build', sure: 0.7 }) });
+  // A request of its own under a spec (2026-10-13, the Agent Viewer line built as the spec above it): sure it is a build,
+  // but not of that spec, so Chat writes its Build prompt.
+  const own = mounted(SPEC, { route: async () => ({ id: 'route-o', agent: 'build', sure: 0.9, spec: false }) });
+  own.editor.followText.set(0, 'also remove the filter tabs from the agent viewer');
+  own.editor.sendFollow(0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(own.builds.length, 0, 'the spec above is not built');
+  assert.deepEqual([own.asks[0].agent, own.asks[0].intro, own.asks[0].routed], ['bart', undefined, { id: 'route-o', build: true }]);
+  // Nor when the router does not say (an older pick, or a failed one).
+  const silent = mounted(SPEC, { route: async () => ({ id: 'route-s', agent: 'build', sure: 0.9 }) });
+  silent.editor.followText.set(0, 'ok build it');
+  silent.editor.sendFollow(0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(silent.builds.length, 0);
+
+  const unsure = mounted(SPEC, { route: async () => ({ id: 'route-c', agent: 'build', sure: 0.7, spec: true }) });
   unsure.editor.followText.set(0, 'ok build it');
   unsure.editor.sendFollow(0);
   await new Promise((resolve) => setImmediate(resolve));

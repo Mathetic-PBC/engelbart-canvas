@@ -853,7 +853,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const ref = refOrNull(value.ref);
     return bart.route({
       projectId, text: cutStr(str(value.text, 'line', Infinity), 'line', 8000), place: placeOf(value.place, projectId, ref), section: tailStr(value.section, 'section', 200000) || '',
-      workspaceName: cutStr(value.workspaceName, 'workspace name', 400) || '', threads, specAbove: !!value.specAbove, rule,
+      workspaceName: cutStr(value.workspaceName, 'workspace name', 400) || '', threads, specAbove: !!value.specAbove, specTitle: value.specAbove ? cutStr(value.specTitle, 'spec title', 400) || '' : '', rule,
       current: ['chat', 'brainstorm', 'discover'].includes(value.current) ? value.current : null,
     });
   });
