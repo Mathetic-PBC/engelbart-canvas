@@ -303,9 +303,16 @@ test('handoff: chat, brainstorm and discover keep the @bart line as typed, ask t
     assert.match(m.lines()[1], new RegExp(`^bart# \\[${token} \\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ\\] $`));
     assert.equal(m.lines()[2], '@bart how do tutors notice struggle?', '@bart stays @bart');
     assert.match(m.lines()[3], /^bart~> /);
-    assert.equal(m.asks.length, 1);
-    assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name], [internal, 'how do tutors notice struggle?', { id: 'route-a' }, true]);
+    // Discover (2026-10-13): Chat's reply is asked under the line, told it is Discover's (intro), and the search in a
+    // research box under it (doc-editor-research).
+    const discover = agent === 'discover';
+    assert.equal(m.asks.length, discover ? 2 : 1);
+    assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name, m.asks[0].intro], [discover ? 'bart' : internal, 'how do tutors notice struggle?', { id: 'route-a' }, true, discover || undefined]);
     assert.deepEqual(m.asks[0].place, { line: 2, text: '@bart how do tutors notice struggle?' });
+    if (discover) {
+      assert.deepEqual(m.lines().slice(4, 6).map((l) => l.replace(/ \S+$/, '')), ['@discover --research how do tutors notice', 'bart~>']);
+      assert.deepEqual([m.asks[1].agent, m.asks[1].research, m.asks[1].text, m.asks[1].place], ['discover', true, 'how do tutors notice struggle?', { line: 4, text: '@discover --research how do tutors notice struggle?' }]);
+    }
     assert.equal(m.routes[0].text, 'how do tutors notice struggle?');
     const { threads, answeredBy } = await loadDoc();
     assert.equal(answeredBy(threads(m.lines())[0]), internal);
@@ -330,15 +337,17 @@ test('a line Bart handed to @discover: its follow-up, Regenerate, the session an
   assert.deepEqual(r.lines().slice(0, 2), [head, '@bart papers on tutors?']);
   // An @bart line typed under it is routed with @discover as the agent the conversation is with (2026-10-13; no rule),
   // and once handed over it is the thread's next turn, line as typed.
+  // Sent to Discover again, it is Chat's reply and a research box of the same conversation (2026-10-13).
   const n = mounted([...done.slice(0, 4), '@bart and more?'], { route: async (input) => ({ id: 'route-n', agent: input.current, sure: 0.9, by: 'model' }) });
   n.editor.askInline(4);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual([n.routes[0].rule, n.routes[0].current], [null, 'discover']);
   assert.equal(n.lines()[4], '@bart and more?');
   assert.equal(n.lines().filter((l) => l.startsWith('bart#')).length, 1, 'no second title');
-  assert.deepEqual([n.asks[0].agent, n.asks[0].turns.length, n.asks[0].name], ['discover', 1, undefined]);
+  assert.deepEqual([n.asks[0].agent, n.asks[0].intro, n.asks[0].turns.length, n.asks[0].name], ['bart', true, 1, undefined]);
+  assert.deepEqual([n.asks[1].agent, n.asks[1].research, n.asks[1].turns.length], ['discover', true, 1]);
   const { threads } = await loadDoc();
-  assert.equal(threads(n.lines())[0].turns.length, 2);
+  assert.equal(threads(n.lines())[0].turns.length, 3);
 });
 
 test('handoff: build with a spec above and sure ≥ 0.8 starts a Build of the spec; otherwise Chat is asked to write the Build prompt', async () => {
@@ -684,10 +693,13 @@ test('Chat → Discover → Chat: a typed follow-up is an @bart line Bart routes
   assert.equal(m.routes.length, 1);
   assert.deepEqual([m.routes[0].text, m.routes[0].current, m.routes[0].rule], ['papers on this?', 'chat', null]);
   await settled();
-  assert.deepEqual([m.asks[0].agent, m.asks[0].routed.id, m.asks[0].name], ['discover', 'route-chat', undefined]);
+  // Discover (2026-10-13): Chat's reply, said to be Discover's, then the search in a research box under it.
+  assert.deepEqual([m.asks[0].agent, m.asks[0].intro, m.asks[0].routed.id, m.asks[0].name], ['bart', true, 'route-chat', undefined]);
   assert.deepEqual(m.asks[0].turns, [{ question: 'how do tutors notice struggle?', answer: 'By watching.', agent: 'bart' }], 'the earlier turn says Chat answered it');
+  assert.deepEqual([m.asks[1].agent, m.asks[1].research], ['discover', true]);
   assert.equal(m.lines()[0], CHAT_DONE[0], 'the title line keeps the first pick');
-  answerAt(m, m.asks[0].askId, ['bart> A guide.', 'bart> *Discover · Opus · high · 9 s*']);
+  answerAt(m, m.asks[0].askId, ['bart> Looking for tutoring papers.', 'bart> *Discover · Sonnet · high · 3 s*']);
+  answerAt(m, m.asks[1].askId, ['bart> A guide.', 'bart> *Discover · Opus · high · 9 s*']);
 
   // Discover answered: the card's next follow-up is routed with Discover as `current`; Bart sends it back to Chat.
   pick = 'chat';
@@ -695,54 +707,63 @@ test('Chat → Discover → Chat: a typed follow-up is an @bart line Bart routes
   m.editor.sendFollow(1);
   await settled();
   assert.equal(m.routes[1].current, 'discover');
-  assert.equal(m.asks[1].agent, 'bart');
-  assert.deepEqual(m.asks[1].turns.map((t) => t.agent), ['bart', 'discover']);
-  answerAt(m, m.asks[1].askId, ['bart> The first.', 'bart> *Chat · Sonnet · high · 2 s*']);
+  assert.equal(m.asks[2].agent, 'bart');
+  assert.deepEqual(m.asks[2].turns.map((t) => t.agent), ['bart', 'discover', 'discover']);
+  answerAt(m, m.asks[2].askId, ['bart> The first.', 'bart> *Chat · Sonnet · high · 2 s*']);
 
   const { threads, answeredBy } = await loadDoc();
   const all = threads(m.lines());
   assert.equal(all.length, 1, 'one card');
-  assert.deepEqual(all[0].turns.map((t) => t.agent), ['bart', 'discover', 'bart']);
+  assert.deepEqual(all[0].turns.map((t) => t.agent), ['bart', 'discover', 'discover', 'bart']);
   assert.deepEqual([answeredBy(all[0]), all[0].routedTo], ['bart', 'bart']);
   assert.equal(m.lines()[0], CHAT_DONE[0], 'still the first pick');
   // Each turn is drawn as its own agent's, and its footer names it, as Bart's pick.
   const at = m.editor.layout(m.lines());
-  assert.deepEqual([at.get(1).agent, at.get(4).agent, at.get(7).agent], ['bart', 'discover', 'bart']);
+  assert.deepEqual([at.get(1).agent, at.get(4).agent, at.get(7).agent, at.get(10).agent], ['bart', 'discover', 'discover', 'bart']);
   const html = m.editor.editorHtml();
   assert.match(html, /aria-label="Discover: Bart picked this\. Ask another"/);
   assert.equal((html.match(/aria-label="Chat: Bart picked this\. Ask another"/g) || []).length, 2);
   // Regenerate asks each turn of the agent that answered it; another agent for a follow-up leaves the title line alone.
   m.editor.regenerate(4);
-  assert.deepEqual([m.asks[2].agent, m.asks[2].routed], ['discover', { build: false }]);
+  assert.deepEqual([m.asks[3].agent, m.asks[3].routed], ['discover', { build: false }]);
 });
 
 test('a follow-up Bart is less than 0.8 sure wants another agent stays with the agent the conversation is with', async () => {
-  const unsure = route.decide({ agent: 'chat', sure: 0.75 }, 'discover');
-  assert.deepEqual(unsure, { agent: 'discover', sure: 0.75 });
-  assert.deepEqual(route.decide({ agent: 'chat', sure: 0.8 }, 'discover'), { agent: 'chat', sure: 0.8 }, 'sure enough: it switches');
-  assert.deepEqual(route.decide({ agent: 'discover', sure: 0.3 }, 'discover'), { agent: 'discover', sure: 0.3 }, 'the same agent, however unsure');
+  const unsure = route.decide({ agent: 'chat', sure: 0.75 }, 'brainstorm');
+  assert.deepEqual(unsure, { agent: 'brainstorm', sure: 0.75 });
+  assert.deepEqual(route.decide({ agent: 'chat', sure: 0.8 }, 'brainstorm'), { agent: 'chat', sure: 0.8 }, 'sure enough: it switches');
+  assert.deepEqual(route.decide({ agent: 'brainstorm', sure: 0.3 }, 'brainstorm'), { agent: 'brainstorm', sure: 0.3 }, 'the same agent, however unsure');
+  // A conversation with Discover (2026-10-13) has its search in a box already: a reply is Chat's, a new search only at 0.8.
+  assert.deepEqual(route.decide({ agent: 'chat', sure: 0.75 }, 'discover'), { agent: 'chat', sure: 0.75 });
+  assert.deepEqual(route.decide({ agent: 'discover', sure: 0.75 }, 'discover'), { agent: 'chat', sure: 0.75 }, 'not sure enough it wants a new search');
+  assert.deepEqual(route.decide({ agent: 'discover', sure: 0.85 }, 'discover'), { agent: 'discover', sure: 0.85 });
+  assert.deepEqual(route.decide({ agent: 'brainstorm', sure: 0.7 }, 'discover'), { agent: 'brainstorm', sure: 0.7 }, 'another agent as for a line with no conversation');
+  assert.deepEqual(route.decide(null, 'discover'), { agent: 'chat', sure: 0 });
+  assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /When the current agent is discover/);
   assert.deepEqual(route.decide(null, 'brainstorm'), { agent: 'brainstorm', sure: 0 }, 'an unread reply leaves it there');
   assert.deepEqual(route.decide({ agent: 'build', sure: 0.7 }, 'chat'), { agent: 'chat', sure: 0.7 });
   assert.deepEqual(route.decide({ agent: 'brainstorm', sure: 0.7 }), { agent: 'brainstorm', sure: 0.7 }, 'a line starting a conversation: 0.6 as before');
   // Through the router: `current` is given the model as <current>, and a timeout leaves the line where it was.
   const seen = {};
-  const stays = await router('{"agent":"chat","sure":0.7}', { seen }).route({ ...LINE, current: 'discover' });
-  assert.deepEqual([stays.agent, stays.sure], ['discover', 0.7]);
-  assert.match(seen.input, /<current>discover<\/current>\n\n<line>/);
+  const stays = await router('{"agent":"chat","sure":0.7}', { seen }).route({ ...LINE, current: 'brainstorm' });
+  assert.deepEqual([stays.agent, stays.sure], ['brainstorm', 0.7]);
+  assert.match(seen.input, /<current>brainstorm<\/current>\n\n<line>/);
   const timedOut = await router(Object.assign(new Error('Command failed: timed out'), { killed: true, signal: 'SIGTERM' })).route({ ...LINE, current: 'brainstorm' });
   assert.equal(timedOut.agent, 'brainstorm');
   assert.ok(!(await router('{"agent":"chat","sure":0.9}', { seen: {} }).route(LINE)).error);
   assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /at least 0\.8 sure/);
-  assert.equal(route.fakePick('and then?', 'discover').agent, 'discover', 'the fake router stays put too');
+  assert.equal(route.fakePick('and then?', 'brainstorm').agent, 'brainstorm', 'the fake router stays put too');
+  assert.equal(route.fakePick('and then?', 'discover').agent, 'chat', 'but not with Discover');
   // In the editor: the router's own fallback, with no answer, is the thread's agent.
   const m = mounted([...CHAT_DONE.slice(0, 4), '@bart and then?'], { route: async () => null });
   m.editor.askInline(4);
   await settled();
   assert.equal(m.asks[0].agent, 'bart');
+  // With Discover (2026-10-13), Chat: a failed routing never starts a search.
   const d = mounted(['@discover tutors', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '@bart and newer?'], { route: async () => { throw new Error('down'); } });
   d.editor.askInline(3);
   await settled();
-  assert.equal(d.asks[0].agent, 'discover');
+  assert.deepEqual([d.asks.length, d.asks[0].agent, d.asks[0].intro], [1, 'bart', undefined]);
   assert.equal(d.lines()[3], '@bart and newer?', 'a follow-up stays as typed');
 });
 
@@ -798,7 +819,7 @@ test('@create in a conversation: its closing line names Create, and a Create thr
   assert.equal(footAgent('*Create · Sonnet · high · 41 s*'), 'create');
   assert.equal(route.fakePick('and then?', 'create').agent, 'chat', 'Create keeps no conversation: a follow-up is routed afresh');
   assert.deepEqual(route.decide({ agent: 'create', sure: 0.8 }, 'chat'), { agent: 'create', sure: 0.8 }, 'switching to Create needs 0.8, as a create pick does');
-  assert.deepEqual(route.decide({ agent: 'create', sure: 0.79 }, 'discover'), { agent: 'discover', sure: 0.79 });
+  assert.deepEqual(route.decide({ agent: 'create', sure: 0.79 }, 'brainstorm'), { agent: 'brainstorm', sure: 0.79 });
   const { turnsInput } = require('../src/main/ipc.cjs');
   assert.deepEqual(turnsInput([{ question: 'a chart', answer: 'Made.', agent: 'create' }]).map((t) => t.agent), ['create']);
 });

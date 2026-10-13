@@ -23,6 +23,7 @@ import { flatWorkspaces, nextPlace } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
 import { buildLine, placeAnswer, placeTitle, askedAt, migrateChatLines } from '../model/doc.js';
+import { fallbackAgent } from '../model/route.js';
 import { findAskLine, findBuildLine } from '../model/askLine.js';
 import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
@@ -580,7 +581,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return task;
   }, [topic, project.id, flush]);
 
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null }) => {
+  // `intro`: Chat's reply to an @discover question, and `research` the search in the box under it (2026-10-13, DocEditor
+  // splitsDiscover). A research box stopped by hand says so, so it stays a turn of its conversation.
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, intro = false, research = false }) => {
     if (!key || !ref || !topic) return;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
     let answered = null;
@@ -630,10 +633,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}) });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}), ...(intro ? { intro: true } : {}) });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
-      place(out.stopped ? [] : out.lines);
+      place(out.stopped ? (research ? ['bart> Stopped.'] : []) : out.lines);
       // The Welcome walkthrough's last card answered (main's ask.cjs, the welcome path): Discover starts on their next steps.
       if (out.welcome === 'result') handOff(key, askId);
     } catch (error) {
@@ -651,7 +654,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // shows the classifier failed rather than that it chose Chat (DocEditor handOff).
   const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, rule, current = null, place = null }, ref = null) => {
     setAsks((held) => ({ ...held, [askId]: { docKey: key, agent: 'router' } }));
-    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: current || 'chat', sure: 0, by: 'none' };
+    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: fallbackAgent(current), sure: 0, by: 'none' };
     try {
       return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, rule, ...(current ? { current } : {}), ...(ref ? { ref } : {}), ...(place ? { place } : {}) })) || fallback;
     } catch (error) {

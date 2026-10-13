@@ -68,11 +68,15 @@ test('a new question gets an empty title line above it and is asked to be named;
     assert.match(ls[1], new RegExp(`^bart# \\[${line.slice(1, line.indexOf(' '))} \\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ\\] $`), `${agent}: the title line, empty, keeping its agent and when it was asked`);
     assert.equal(ls[2], line);
     assert.match(ls[3], /^bart~> /);
-    assert.equal(ls[4], 'After');
-    assert.equal(m.asks.length, 1);
-    assert.equal(m.asks[0].agent, agent);
+    // @discover (2026-10-13): Chat's reply is the one named, and the search is a research box under it.
+    const research = agent === 'discover';
+    assert.equal(ls[research ? 6 : 4], 'After');
+    if (research) assert.deepEqual([ls[4], ls[5].slice(0, 7)], ['@discover --research retries', 'bart~> ']);
+    assert.equal(m.asks.length, research ? 2 : 1);
+    assert.equal(m.asks[0].agent, research ? 'bart' : agent);
     assert.equal(m.asks[0].name, true);
     assert.equal(m.asks[0].askId, ls[3].slice('bart~> '.length));
+    if (research) assert.deepEqual([m.asks[1].agent, m.asks[1].name, m.asks[1].askId], ['discover', undefined, ls[5].slice('bart~> '.length)]);
   }
 });
 

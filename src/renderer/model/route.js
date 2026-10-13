@@ -73,6 +73,12 @@ export function buildTextOf(lines, turn) {
  * The router (main) takes the last five threads and the section's last 4,000 characters once agent replies are left out
  * (bart/route.cjs sectionText), so the section is sent whole here: cut first, it would hold less than that.
  */
+/**
+ * The agent a follow-up goes to when Bart could not pick (2026-10-13): the one its conversation is with, but Chat for a
+ * conversation with Discover, whose reply would otherwise start a new search.
+ */
+export const fallbackAgent = (current) => (current && current !== 'discover' ? current : 'chat');
+
 export function routeInputs(lines, at) {
   const ps = parseLines(lines);
   let start = 0;

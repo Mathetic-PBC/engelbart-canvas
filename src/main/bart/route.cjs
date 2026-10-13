@@ -93,10 +93,13 @@ function parseReply(raw) {
 
 /**
  * The pick a reply comes to: its agent when it is sure enough (create: CREATE_SURE), else chat. With `current` (a
- * follow-up, 2026-10-13): that agent, unless the reply picks another and is at least 0.8 sure of it.
+ * follow-up, 2026-10-13): that agent, unless the reply picks another and is at least 0.8 sure of it. A conversation with
+ * discover (2026-10-13) has its search in a research box already: a reply is chat's, a new search only when the reply
+ * picks discover at least 0.8 sure, and any other pick as a line with no conversation is.
  */
 function decide(parsed, current = null) {
   const now = currentOf(current);
+  if (now === 'discover') return parsed && parsed.agent === 'discover' ? (parsed.sure >= SURE_TO_SWITCH ? parsed : { agent: 'chat', sure: parsed.sure }) : decide(parsed);
   if (now) return parsed && parsed.agent !== now && parsed.sure >= SURE_TO_SWITCH ? parsed : { agent: now, sure: parsed ? parsed.sure : 0 };
   if (!parsed) return { agent: 'chat', sure: 0 };
   return parsed.sure < (parsed.agent === 'create' ? CREATE_SURE : SURE_ENOUGH) ? { agent: 'chat', sure: parsed.sure } : parsed;
@@ -213,7 +216,8 @@ function fakePick(text, current = null) {
   if (/\b(?:make|write up|draw) (?:a|an) (?:[\w-]+ ){0,2}(?:chart|page|plot|graph)\b|\bcreate (?:a|an) (?!(?:[\w-]+ )?(?:prompt|spec)\b)/.test(line)) return { agent: 'create', sure: 0.9 };
   if (/\bpapers?\b|\bread\b|\breading\b|prior work/.test(line)) return { agent: 'discover', sure: 0.9 };
   if (/\bthink\b|\bunsure\b/.test(line)) return { agent: 'brainstorm', sure: 0.9 };
-  return { agent: currentOf(current) || 'chat', sure: 0.9 };
+  // A conversation with discover (2026-10-13): its search is in a research box already, so a reply is chat's (decide).
+  return { agent: currentOf(current) === 'discover' ? 'chat' : currentOf(current) || 'chat', sure: 0.9 };
 }
 
 function createFakeRouter({ runLog = null, now = Date.now } = {}) {

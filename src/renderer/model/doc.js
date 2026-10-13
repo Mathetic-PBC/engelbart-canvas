@@ -510,8 +510,21 @@ export function replyRawOffset(p, fOff, opts) {
  * own, unless that thread is an @orient one; the @brainstorm lines answering an @orient thread's cards go on with it.
  */
 const followsIn = (p, first, thread) => (
-  agentOf(p) === 'router' || (agentOf(p) === thread.agent && (p.agent !== 'orient' || first.agent === 'orient'))
+  agentOf(p) === 'router' || isResearch(p) || (agentOf(p) === thread.agent && (p.agent !== 'orient' || first.agent === 'orient'))
 );
+// An @discover research box (2026-10-13): an @discover question is answered by a reply (Chat, asked with main's
+// bart/ask.cjs DISCOVER_INTRO, its closing line naming Discover), then searched in a box of its own under it, a turn of
+// the same conversation whose line is `@discover --research <problem>`. The editor draws that line as the box's head and
+// its answer inside the box (DocEditor layout `box`). It goes on with any conversation, whoever answered the turn before
+// it, as an `@bart` line does: the reply above it may still be running.
+export const RESEARCH_FLAG = '--research';
+const RESEARCH_RE = /(^|\s)--research(?=\s|$)/i;
+/** Whether parsed line `p` is a research box's line. */
+export const isResearch = (p) => !!p && p.type === 'bart' && agentOf(p) === 'discover' && RESEARCH_RE.test(p.text);
+/** A research box's line for `text` (an @discover question's, its flags kept). */
+export const researchLine = (text) => `@discover ${RESEARCH_FLAG}${String(text || '').trim() ? ` ${String(text).trim()}` : ''}`;
+/** What a research box's line asks, without its flag. */
+export const researchText = (text) => String(text || '').replace(new RegExp(RESEARCH_RE.source, 'gi'), '$1').replace(/\s+/g, ' ').trim();
 // The agents a closing line names first (main/bart/reply.cjs attribution, 2026-10-12): "Build" is Chat, asked to write
 // the Build prompt for a line Bart read as one to build.
 const FOOT_AGENTS = { Chat: 'bart', Build: 'bart', Brainstorm: 'brainstorm', Discover: 'discover', Create: 'create' };

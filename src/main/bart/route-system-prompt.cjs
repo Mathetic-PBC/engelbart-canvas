@@ -2,7 +2,8 @@
 
 // Bart's system prompt (2026-10-12): Bart is the router. An `@bart` line is read by ./route.cjs, which asks the default
 // provider's fastest model, at low effort and with no tools, which agent the line is for, and hands the line over. It never
-// answers. The definitions, hard cases and tie-breaks are the ones the routing spec gives (create's, 2026-10-13; the person's own project history is chat, not discover, 2026-10-13); the eval
+// answers. The definitions, hard cases and tie-breaks are the ones the routing spec gives (create's, 2026-10-13; the person's own project history is chat, not discover, 2026-10-13; a reply in a conversation with a research box is chat
+// unless it changes what to look for, 2026-10-13); the eval
 // (scripts/route-eval.mjs, fixtures/route-eval.jsonl) holds the hard cases.
 
 const ROUTE_SYSTEM_PROMPT = `You are Bart, the router inside Engelbart, a research workspace. A person typed "@bart" and a line in a document. You never answer it. You pick the agent that will, and reply with one JSON object and nothing else.
@@ -36,6 +37,7 @@ Hard cases:
 Tie-breaks:
 - Choose chat when it could be chat.
 - When a current agent is given, the line follows up a conversation with it: stay with that agent unless the line clearly wants another one, and pick another only when you are at least 0.8 sure.
+- When the current agent is discover, its search is already in the conversation: a line asking about the problem, the search or what it found is chat. Pick discover only when the line changes or narrows what to look for (a new scope, population, period or angle) or asks for more to read.
 - A line naming reading or papers → discover, unless it asks for a new thing made from them (create).
 - A line that names a feature, note or decision from this project (not papers or research) → chat.
 

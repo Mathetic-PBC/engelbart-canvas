@@ -50,13 +50,13 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { HAMMER_PATHS } from '../model/hammer.js';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, whenShown, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchLine, researchText, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, whenShown, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, isResultOffer, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
 import BartPicker from './BartPicker.jsx';
 import AgentChoice from './AgentChoice.jsx';
-import { routeByRule, routeInputs, buildTextOf, questionLine } from '../model/route.js';
+import { routeByRule, routeInputs, fallbackAgent, buildTextOf, questionLine } from '../model/route.js';
 import DiscoverLevels, { LEVEL_LABELS } from './DiscoverLevels.jsx';
 import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
@@ -223,6 +223,8 @@ const ICON = {
   trash: icon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
   chevron: `<span style="display:inline-flex;color:#8f8f8f">${icon('<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`,
   send: icon('<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>', 13, 2.2),
+  // A research box's head (2026-10-13): Lucide's search.
+  search: icon('<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path>', 14, 2),
   discoverOut: icon('<path d="M7 17 17 7"></path><path d="M8 7h9v9"></path>', 12, 2),
   // The steps toggle: a plain angle with square ends (Hudson's reference, 2026-09-21), pointing up while the list is open.
   stepsOpen: icon('<path d="m5 15.5 7-7 7 7"></path>', 10, 3, 'square'),
@@ -752,6 +754,7 @@ export default class DocEditor extends React.Component {
       return `<div ${raw} style="padding:4px 0;min-height:35px;font:500 ${size}px/1.6 var(--font-sans);letter-spacing:-0.3px"><span class="t">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'bart') {
+      if (at && at.box && at.role === 'question') return this.researchHtml(i, raw, p, at);
       const { tokens, flags } = this.bartTokens(line, p), models = this.props.models;
       const content = active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok, this.mentionOpts))).join('');
       // @brainstorm and @discover run on one model (BS-08) and may be asked with nothing after them.
@@ -777,7 +780,7 @@ export default class DocEditor extends React.Component {
       // it is doing, the things it has done (behind the count, closed until clicked) and the answer so far. None of that is
       // in the document: it comes from props.asks, and the row's `data-raw` stays the bare pending line.
       const ask = (this.props.asks || {})[p.id], wait = this.waits.get(p.id);
-      const doing = wait ? `Creating in ${wait.left} s` : ask ? (ask.activity || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
+      const doing = wait ? `${wait.ask.research ? 'Searching' : 'Creating'} in ${wait.left} s` : ask ? (ask.activity || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
       const label = wait ? esc(doing) : ask ? `${esc(doing)}${ask.name ? ` · ${esc(ask.name)} ${esc(ask.effort)}` : ''}` : 'No answer came back: the run was interrupted.';
       const log = (ask && ask.log) || [], open = this.openLogs.has(p.id);
       // The answer so far is not the answer: smaller and grey, with a mark pulsing where the next words go. No rule beside
@@ -810,7 +813,7 @@ export default class DocEditor extends React.Component {
         + '</div></div>';
     }
     if (p.type === 'reply') {
-      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), edit: at.editable, busy: isRunning(at.thread), thread: at.thread });
+      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), edit: at.editable, busy: isRunning(at.thread), thread: at.thread, box: at.box });
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.card) return this.cardHtml(raw, at.card);
@@ -1361,21 +1364,23 @@ export default class DocEditor extends React.Component {
       const end = thread.turns[thread.turns.length - 1], endCard = cards.byQ.get(end.q);
       const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !(endCard && endCard.live);
       // A collapsed turn (2026-10-13) is drawn bare, its question and foot on no grey: the card starts again under it.
+      // An @discover research box (2026-10-13, doc.js isResearch) is a card of its own: the turn above it closes its card,
+      // and its line is the box's head (researchHtml). `cut`: the turn's last row closes the card, a box coming next.
       let afterBare = false;
-      for (const turn of thread.turns) {
+      thread.turns.forEach((turn, n) => {
         const agent = this.turnAgent(thread, turn), card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
-        const bare = turn.answered && !turn.pending && turn.folded;
-        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || afterBare, closes: !turn.answered, editable, bare });
+        const bare = turn.answered && !turn.pending && turn.folded, box = isResearch(ps[turn.q]), next = thread.turns[n + 1], cut = !!next && isResearch(ps[next.q]);
+        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || afterBare || box, closes: !turn.answered, editable: editable && !box, bare, box });
         afterBare = bare;
-        const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end;
+        const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end, shuts = (tail && !follow) || cut;
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
         const lastBody = (turn.foot >= 0 ? turn.foot : turn.to + 1) - (gap >= 0 ? 2 : 1);
         for (let i = turn.from; i <= turn.to; i++) {
           const role = i === turn.foot ? 'foot' : parseLine(ls[i]).type === 'pending' ? 'pending' : 'answer', ends = i === turn.to;
           const drawn = card && i <= card.last ? { card: i === turn.from ? card : null, underCard: i !== turn.from } : {};
-          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && tail && !follow && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, tail, editable, ...drawn });
+          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, tail, cut, box, editable: editable && !box, ...drawn });
         }
-      }
+      });
     }
     return at;
   }
@@ -1523,6 +1528,18 @@ export default class DocEditor extends React.Component {
       + `<span class="bart-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span>`
       + '</span></div>';
   }
+  // An @discover research box's head (2026-10-13; doc.js isResearch): its line, drawn as "Research · Standard", the level
+  // it runs at (discoverLabel); a box that refines an earlier one in its conversation also says what it was asked. The
+  // line is never edited in place: a reply refines it.
+  researchHtml(i, raw, p, at) {
+    const ls = this.lines(), ps = this.parsedOf(ls), { thread, turn } = at;
+    const refines = thread.turns.some((t) => t.q < turn.q && isResearch(ps[t.q]));
+    const asked = refines ? researchText(this.props.models ? this.discoverRead(ls, i).question : p.text) : '';
+    const level = this.props.models ? this.discoverLabel(i) : '';
+    const said = [level, asked].filter(Boolean).map((part) => `<span style="flex:none;white-space:pre"> · </span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400;color:#8f8f8f">${esc(part)}</span>`).join('');
+    return `<div ${raw} contenteditable="false" data-readonly="1" data-research="${i}" style="user-select:none;cursor:default;display:flex;align-items:center;min-width:0;padding:10px 16px ${at.closes ? 10 : 2}px;background:${at.bare ? 'none' : '#fafafa'};border-radius:${radius(true, at.closes)};margin-bottom:${at.closes ? '8px' : '0'};font:500 13px/1.6 var(--font-sans);color:#4d4d4d">`
+      + `<span style="flex:none;display:inline-flex;margin-right:8px;color:#8f8f8f">${ICON.search}</span><span style="flex:none">Research</span>${said}</div>`;
+  }
   // The foot of one turn (Answer Card), as icons, each with its name under it on hover: Copy on the left (2026-10-13:
   // Regenerate, Edit and Build are no longer on it); on the right the closing line as "Chat · 9 s", the agent that
   // answered and how long it took (the model and effort the line keeps are not shown), Collapse or Expand, and
@@ -1538,8 +1555,9 @@ export default class DocEditor extends React.Component {
   // The " · " after the name is a piece of its own that keeps its spaces (white-space:pre): a flex item's leading space
   // collapses, which read "Chat· Opus".
   // `busy`: a turn of the thread is at work. `thread`: the turn's; in one with a title (2026-10-12) Collapse folds all of
-  // it to its title's row, once nothing in it runs. A turn collapsed by a follow-up (2026-10-13) has its own Expand.
-  footHtml({ raw, q, text, folded, closes, plain = false, edit = false, busy = false, thread = null }) {
+  // it to its title's row, once nothing in it runs. A turn collapsed by a follow-up (2026-10-13) has its own Expand, and a
+  // research box (`box`, 2026-10-13) its own Collapse.
+  footHtml({ raw, q, text, folded, closes, plain = false, edit = false, busy = false, thread = null, box = false }) {
     const wrap = (inner, extra = '') => `<span style="flex:none;position:relative;display:inline-flex;${extra}">${inner}</span>`;
     const tip = (label, side) => `<span class="bart-tip" style="${side}:0">${label}</span>`;
     const copied = this.copied === `bart${q}`;
@@ -1560,7 +1578,7 @@ export default class DocEditor extends React.Component {
       ? `<span style="flex:none;position:relative;display:inline-flex"><span class="bart-who" data-act="viabart" data-turn="${q}" role="button" tabindex="0" aria-haspopup="dialog" aria-label="${esc(`${name}: Bart picked this. Ask another`)}">${esc(name)}</span>${tip('Bart picked this. Ask another', 'right')}</span>`
       : `<span style="flex:none">${esc(name)}</span>`;
     const whole = !!thread && thread.titleLine >= 0, running = whole && isRunning(thread);
-    const fold = whole && !folded
+    const fold = whole && !folded && !box
       ? wrap(`<button class="bart-ic" data-act="foldthread" data-row="${thread.titleLine}" aria-label="Collapse" aria-expanded="true"${running ? ' disabled' : ''}>${ICON.collapse}</button>${tip(running ? 'Collapse once it answers' : 'Collapse', 'right')}`)
       : wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`);
     return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:4px 10px 6px;background:${folded ? 'none' : '#fafafa'};border-radius:${radius(false, closes)};margin-bottom:${closes ? '8px' : '0'}">`
@@ -1651,7 +1669,7 @@ export default class DocEditor extends React.Component {
       // Under a question being edited (2026-10-03), its answer and the answer's foot are dimmed.
       const dim = !!editing && !!where && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
       out += dimmed(this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i)));
-      if (where && where.footAfter) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter, plain: oneModel(where.agent), edit: where.editable, busy: isRunning(where.thread), thread: where.thread }));
+      if (where && where.footAfter) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.followAfter) || where.cut, plain: oneModel(where.agent), edit: where.editable, busy: isRunning(where.thread), thread: where.thread, box: where.box }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
       // card (MATH-31; under it, not above, since 2026-10-05: the agent's own field comes first).
       const recap = !!where && where.followAfter && this.endsInRecap(ls, where.thread);
@@ -2305,16 +2323,55 @@ export default class DocEditor extends React.Component {
     const ls = this.lines(), p = parseLine(ls[i] || ''), agent = agentOf(p);
     if (p.type !== 'bart' || (!p.text.trim() && !oneModel(agent)) || !this.props.onAsk || this.lockedAt(ls, i)) return;
     if (agent === 'router') { this.routeLine(i); return; }
-    const askId = newAskId(), add = [`bart~> ${askId}`]; if (i + 1 >= ls.length) add.push('');
+    const askId = newAskId(), add = [`bart~> ${askId}`];
     const turns = this.turnsBefore(ls, i);
+    // An @discover question with a problem on it (2026-10-13): Chat's reply, then the research box (researchLines).
+    const research = agent === 'discover' && this.splitsDiscover(p, turns) ? { askId: newAskId(), line: researchLine(p.text) } : null;
+    if (research) add.push(research.line, `bart~> ${research.askId}`);
+    if (i + 1 >= ls.length) add.push('');
     // A question that starts a conversation (2026-10-12) gets an empty title line above it, keeping its agent and when it
     // was asked (doc.js titleLine), which the workspace fills in when the title comes back (Workspace askBart, main's bart/name-chat.cjs); the answer starts now, never waiting on it.
     // Not a follow-up, not a conversation that has a title already (or began before titles: it has no line above it to
     // take one), and not a Build, which is no conversation.
     const name = this.startsTitled(ls, i, turns, agent, p.text);
-    this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, ...add); if (name) out.splice(i, 0, titleLine('', false, { agent, at: askedNow() })); return out; });
+    this.setLines((x) => { const out = this.refining(x, i); out.splice(i + 1, 0, ...add); if (name) out.splice(i, 0, titleLine('', false, { agent, at: askedNow() })); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
-    this.props.onAsk({ askId, text: p.text.trim(), turns, agent, place: { line: name ? i + 1 : i, text: ls[i] }, ...(name ? { name: true } : {}) });
+    const q = name ? i + 1 : i;
+    this.props.onAsk({ askId, text: p.text.trim(), turns, agent: research ? 'bart' : agent, place: { line: q, text: ls[i] }, ...(research ? { intro: true } : {}), ...(name ? { name: true } : {}) });
+    if (research) this.askResearch({ askId: research.askId, text: p.text.trim(), turns, place: { line: q + 2, text: research.line } });
+  }
+  // An @discover question with a problem on it (2026-10-13) is answered twice: Chat replies under it at once (main's
+  // bart/ask.cjs DISCOVER_INTRO, its closing line naming Discover), and Discover searches in a research box under that
+  // reply, a turn of the same conversation (doc.js isResearch), asked alongside it with the same earlier turns. Not an
+  // @discover line with nothing on it but flags (Discover asks its card first, as before), not an answer to its card, and
+  // not a research box's own line.
+  splitsDiscover(p, turns) {
+    if (isResearch(p) || !this.props.onAsk) return false;
+    const models = this.props.models, problem = models ? readDiscover(p.text, models).question : p.text;
+    const last = turns[turns.length - 1];
+    return !!String(problem || '').trim() && !(last && cardOfAnswer(last.answer));
+  }
+  // A question that refines a search still running in its conversation (2026-10-13) stops it: `ls` with that box's pending
+  // line written as what happened to it, so the box stays a turn of the conversation. Its run is stopped too; the answer it
+  // would place finds no pending line.
+  refining(ls, q) {
+    const out = [...ls], ps = this.parsedOf(ls), thread = threads(ls, ps).find((t) => t.from <= q && q <= t.to);
+    if (!thread) return out;
+    for (const turn of thread.turns) {
+      if (turn.q >= q || !turn.pending || !isResearch(ps[turn.q])) continue;
+      const at = ls.indexOf(`bart~> ${turn.pending}`); if (at < 0) continue;
+      out[at] = 'bart> Stopped: refined below.';
+      if (this.waits.has(turn.pending)) { const held = this.waits.get(turn.pending); clearTimeout(held.timer); this.timers.delete(held.timer); this.waits.delete(turn.pending); }
+      else if (this.props.onStopAsk) this.props.onStopAsk(turn.pending);
+    }
+    return out;
+  }
+  // A research box's search, asked of Discover; a Deep one after RESEARCH_WAIT_S seconds, its pending line counting them
+  // down with Cancel beside it (waitCreate), so a reply that corrects what it is about costs nothing.
+  askResearch(ask) {
+    const full = { ...ask, agent: 'discover', research: true };
+    const models = this.props.models, mode = models ? readDiscover(ask.text, models, ask.turns).mode : null;
+    if (mode === 'deep') this.waitCreate(full); else this.props.onAsk(full);
   }
   // Whether the question on line `i` starts a conversation that takes a title (askInline, and handOff for a line Bart routed).
   startsTitled(ls, i, turns, agent, text) {
@@ -2332,11 +2389,11 @@ export default class DocEditor extends React.Component {
     const inputs = routeInputs(ls, i), current = inputs.current, rule = routeByRule(p.text, { models: this.props.models, current });
     this.setLines((x) => { const out = before ? before(x) : [...x]; if (line != null) out.splice(i, 0, line); out.splice(i + 1, 0, ...add); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
-    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: current || 'chat', sure: 0, by: 'none' };
+    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: fallbackAgent(current), sure: 0, by: 'none' };
     const asked = this.props.onRoute
       ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, rule, current, place: { line: i, text: ls[i] } }))
       : Promise.resolve(fallback);
-    return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: current || 'chat', sure: 0 }));
+    return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: fallbackAgent(current), sure: 0 }));
   }
   // Where Bart's pick goes. The `@bart` line is the one over pending line `askId`, as the document holds it now (gone: the
   // line was deleted while it was being routed, and nothing is asked).
@@ -2371,11 +2428,16 @@ export default class DocEditor extends React.Component {
     else if (above && above.type === 'title') next = ls.map((l, j) => (j === q - 1 ? titleLine(above.text, above.folded, meta) : l));
     else if (this.startsTitled(ls, q, turns, agent, p.text)) { next = [...ls]; next.splice(q, 0, titleLine('', false, meta)); name = true; }
     else next = ls.map((l, j) => (j === q ? `@${tokenOf(agent)}${p.text ? ` ${p.text}` : ''}` : l));
+    // Sent to Discover with a problem on it (2026-10-13): Chat's reply, then the research box (askInline's).
+    const at2 = name ? q + 1 : q, research = agent === 'discover' && this.splitsDiscover(p, turns) ? { askId: newAskId(), line: researchLine(text) } : null;
+    if (research) { next = this.refining(next, at2); next.splice(at2 + 2, 0, research.line, `bart~> ${research.askId}`); }
     if (next !== ls) this.setLines(() => next);
-    const ask = { askId, text, turns, agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: name ? q + 1 : q, text: typed.text }, ...(name ? { name: true } : {}) };
+    const ask = { askId, text, turns, agent: research ? 'bart' : agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: at2, text: typed.text }, ...(research ? { intro: true } : {}), ...(name ? { name: true } : {}) };
     if (agent === 'create') this.waitCreate(ask); else this.props.onAsk(ask);
+    if (research) this.askResearch({ askId: research.askId, text, turns, place: { line: at2 + 2, text: research.line } });
     return agent;
   }
+  // A Deep research box's search waits the same way (askResearch), "Searching in 5 s"; its Cancel takes the box out.
   // A line Bart sent to Create (2026-10-13) is asked after CREATE_WAIT_S seconds, its pending line counting them down with
   // Cancel beside it: Create adds to the library, and the person may have wanted an answer. A typed `@create` starts at once.
   // The line deleted meanwhile, nothing is asked.
@@ -2392,9 +2454,16 @@ export default class DocEditor extends React.Component {
   }
   // Cancel on a routed Create counting down: the line is asked of Chat instead, and the router's record marked corrected
   // (routed.corrected, as pickVia's). Its conversation's title line, when it has one, names Chat.
+  // Cancel on a Deep research box counting down (2026-10-13): the box is taken out, and nothing is searched.
   cancelCreate(askId) {
     const held = this.waits.get(askId); if (!held) return false;
     clearTimeout(held.timer); this.timers.delete(held.timer); this.waits.delete(askId);
+    if (held.ask.research) {
+      const at = this.lines().indexOf(`bart~> ${askId}`);
+      if (at > 0 && isResearch(this.parsedOf(this.lines())[at - 1])) this.setLines((x) => x.filter((_, j) => j !== at - 1 && j !== at));
+      else if (!this.patchPending()) this.syncEditor();
+      return true;
+    }
     const ls = this.lines(), ps = this.parsedOf(ls), q = ls.indexOf(`bart~> ${askId}`) - 1;
     const head = q > 0 && ps[q - 1].type === 'title' && ps[q - 1].agent === 'create' ? ps[q - 1] : null;
     if (head) this.setLines((x) => x.map((l, j) => (j === q - 1 ? titleLine(head.text, head.folded, { agent: 'bart', at: head.at }) : l)));

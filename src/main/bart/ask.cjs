@@ -77,6 +77,7 @@ const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
 const { CREATE_SYSTEM_PROMPT } = require('./create-system-prompt.cjs');
 const { CREATE_TIMEOUT_MS, openDraft, dropDraft, keepCreated, createdBody } = require('./create.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
+const { readMode, readProvider } = require('./question.cjs');
 const { OPENING, SKIPPED, NEXT_ID, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, cardBody, cardOfAnswer, questionOf, readCard, readAnswer, resultText, nextLead, sameWords, NEXT_TITLE } = require('./card.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
@@ -170,7 +171,11 @@ function levelBlock(steps, at, pinned) {
  * past 20,000 cut in the middle, its start and end kept (./clip.cjs, 2026-10-06; before, an answer kept its start alone).
  * `agent` (2026-10-13): the agent that answered it, when the document says; never part of threadKey.
  */
-const cleanTurn = (turn) => ({ question: clipMiddle(String(turn.question).trim(), 8000), answer: clipMiddle(String(turn.answer || '').trim(), 20000), ...(AGENTS.includes(turn.agent) ? { agent: turn.agent } : {}) });
+// An @discover research box's line (2026-10-13; src/renderer/model/doc.js isResearch) is `@discover --research <problem>`:
+// the flag says where the editor draws it, and is never part of the question.
+const RESEARCH_RE = /(^|\s)--research(?=\s|$)/gi;
+const withoutResearch = (text) => String(text == null ? '' : text).replace(RESEARCH_RE, '$1').replace(/\s+/g, ' ').trim();
+const cleanTurn = (turn) => ({ question: clipMiddle(withoutResearch(turn.question), 8000), answer: clipMiddle(String(turn.answer || '').trim(), 20000), ...(AGENTS.includes(turn.agent) ? { agent: turn.agent } : {}) });
 
 /**
  * The earlier turns of an exchange as the renderer read them from the document, made safe: strings, bounded, no empty
@@ -244,8 +249,8 @@ async function withImagePaths(ctx, projectId, question) {
  * turn is also sent the Stage and the highlights as they are now (`context.now`, MATH-54 follow-up): what it was given
  * when the session started may be out of date.
  */
-function firstMessage({ context, prior, question, resumed, extra = '', routed = null, agent = null }) {
-  const asked = [routedBlock(routed), `<question>\n${question}\n</question>`].filter(Boolean).join('\n\n');
+function firstMessage({ context, prior, question, resumed, extra = '', routed = null, agent = null, intro = false }) {
+  const asked = [routedBlock(routed), intro ? DISCOVER_INTRO : '', `<question>\n${question}\n</question>`].filter(Boolean).join('\n\n');
   if (resumed) return (level) => [extra, context.now, level, asked].filter(Boolean).join('\n\n');
   return (level) => [context.head, context.contextJson, context.mentionedFiles, context.documents, conversationBlock(prior, { agent }), extra, level, asked].filter(Boolean).join('\n\n');
 }
@@ -254,6 +259,11 @@ function firstMessage({ context, prior, question, resumed, extra = '', routed = 
 // is asked of Chat with this one block before <question>, and nothing else Chat is sent changes. Its last line names the
 // footer's Build: the editor draws `[[build]]` as the hammer, and a click on it builds the turn (model/doc.js inlineHtml).
 const ROUTED_BUILD = '<routed>The person wants this built. Write the Build prompt as one fenced code block, after at most two sentences. End with one line, exactly: `Press [[build]] Build to build it.`</routed>';
+// An @discover question (2026-10-13) is answered twice: Chat replies at once, with this block before <question>, and
+// Discover searches in a box under that reply (the editor's research turn). The reply's closing line names Discover.
+const DISCOVER_INTRO = '<discover_intro>Discover, the research agent, is searching now for what the person should read on this, and its reading guide will appear in a box under your reply. Reply first, in at most three short sentences of plain prose: what you take the problem to be, in their own setting, and what the search will look for. Do not name or recommend papers, authors or findings, and do not say that you cannot search.</discover_intro>';
+/** An @discover question as Chat's reply to it is asked (DISCOVER_INTRO): without its mode and provider flags. */
+const introQuestion = (text) => readProvider(readMode(withoutResearch(text)).rest).rest;
 /** The block a routed turn carries before <question>: '' unless Bart routed it with build. */
 const routedBlock = (routed) => (routed && routed.build ? ROUTED_BUILD : '');
 
@@ -302,7 +312,7 @@ function turnPlan({ agent, text, turns, choice, entries = [], welcome = false },
   const brainstorm = agent === 'brainstorm', discover = agent === 'discover';
   const prior = cleanTurns(turns, { keepEmpty: brainstorm || discover });
   // @discover's mode, and the level it runs on, is the one the line names, else the one an earlier turn named (readDiscover).
-  const read = brainstorm ? readBrainstorm(text, models) : discover ? readDiscover(text, models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
+  const read = brainstorm ? readBrainstorm(text, models) : discover ? readDiscover(withoutResearch(text), models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
   if (discover) {
     return {
       agent, brainstorm, ...read, prior,
@@ -631,8 +641,9 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * web page in front's tab, asked for its selection and picture as they are now. `overleaf` (MATH-65): the window's
    * Overleaf tabs (overleaf/stage.cjs forTurn), for <stage source="overleaf"> and <overleaf_tabs>.
    */
-  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
-    const models = readModels();
+  // `intro` (2026-10-13): Chat's reply to an @discover question, asked alongside Discover's search (DISCOVER_INTRO).
+  async function ask(ctx, projectId, { askId, ref, workspaceId, text: typed, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null, intro: introInput = false }, { onProgress } = {}) {
+    const models = readModels(), intro = !!introInput && agent === 'bart', text = intro ? introQuestion(typed) : typed;
     const bart = agent === 'bart', create = agent === 'create', routed = routedOf(routedInput);
     // The context first: @brainstorm's path is read against the library it shows (turnPlan).
     const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
@@ -677,7 +688,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
             create: { allowed: CREATE_TOOLS, rules: draft && createRules(draft), home: createCodexHome, write: true, timeout: CREATE_TIMEOUT_MS },
           }[agent];
           cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd: draft || cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, logId, ...only });
-          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed, agent }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
+          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed, agent, intro }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
         } finally { if (cli) cli.done(); }
       };
       const cliName = TOOL_OF[provider];
@@ -709,7 +720,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const body = made ? createdBody(out.text, made) : replyBody(agent, plan.brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
         // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
         if (out.session && store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
-        return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta };
+        return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent: intro ? 'discover' : agent }), meta };
       } finally {
         feed.end();
         running.delete(askId);
@@ -939,8 +950,8 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   const log = logTo(runLog);
   const router = createFakeRouter({ runLog });
   return {
-    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
-      const models = readModels(), routed = routedOf(routedInput);
+    async ask(ctx, projectId, { askId, ref, workspaceId, text: typed, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null, intro: introInput = false }, { onProgress } = {}) {
+      const models = readModels(), routed = routedOf(routedInput), intro = !!introInput && agent === 'bart', text = intro ? introQuestion(typed) : typed;
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
       const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' || agent === 'create' ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
       const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover', create = agent === 'create';
@@ -953,7 +964,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const ended = (status, result, error) => log((runs) => runs.finish(logId, { status, written: result ? result.lines : null, error: error && error.message, ms: Date.now() - startedAt }));
       if (plan.written != null) { const result = resultReply(plan); ended('done', result); return result; }
       if (create && !question) { const error = new BartError('failed', 'There is nothing on the line to make.'); ended('failed', null, error); throw error; }
-      const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed, agent });
+      const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed, agent, intro });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
       // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces. An
@@ -974,14 +985,14 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
           first: message, session: held ? held.session : null,
           // What it was sent is what it reports: a resumed session gets the question alone (an @bart one, the Stage and
           // highlights as well), a new one gets everything.
-          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: await act(create ? fakeCreate(draft, question) : brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
+          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: await act(intro ? `FAKE INTRO to "${question}": Discover is looking for what to read on it.` : create ? fakeCreate(draft, question) : brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned, ...(routed ? { routed } : {}) };
         const made = create ? await keepCreated(ctx, projectId, workspaceId, draft, { inspectPdf, onAdded }) : null;
         if (made) { meta.created = made.rows.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
         const body = made ? createdBody(out.text, made) : replyBody(agent, brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
         if (store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
-        const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta };
+        const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent: intro ? 'discover' : agent }), meta };
         ended('done', result);
         return result;
       } catch (error) {
@@ -997,4 +1008,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, brainstormReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS };
+module.exports = { DISCOVER_INTRO, withoutResearch, createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, brainstormReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS };

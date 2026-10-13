@@ -493,6 +493,17 @@ test('the system prompt tells @bart what <stage> and <highlights> are, after <hi
   assert.ok(!/read it again for a follow-up/.test(BART_SYSTEM_PROMPT), 'a follow-up is sent the highlights: no reading them off disk');
 });
 
+test('Chat\'s reply to an @discover question (2026-10-13, `intro`): asked without the flags, it closes as Discover\'s', async () => {
+  const bart = createFakeBart({ readModels: () => MODELS, delayMs: 5 });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const out = await bart.ask(ctx, project.id, { askId: 'i1', ref, workspaceId: workspace.id, text: '--deep tutors', agent: 'bart', intro: true });
+  assert.equal(out.lines[0], 'bart> FAKE INTRO to "tutors": Discover is looking for what to read on it.');
+  assert.match(out.lines[out.lines.length - 1], /^bart> \*Discover · /);
+  // Not asked as an intro, it is Chat's as before; `intro` means nothing to another agent.
+  const plain = await bart.ask(ctx, project.id, { askId: 'i2', ref, workspaceId: workspace.id, text: 'tutors', agent: 'bart' });
+  assert.match(plain.lines[plain.lines.length - 1], /^bart> \*Chat · /);
+});
+
 test('the fake agent (scripted runs) answers through the same loop, moves up on "hard", and stops', async () => {
   const bart = createFakeBart({ readModels: () => MODELS, delayMs: 5 });
   const ref = { kind: 'workspace', workspaceId: workspace.id };
