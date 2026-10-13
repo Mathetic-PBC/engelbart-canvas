@@ -511,10 +511,12 @@ function logTo(runLog) {
 }
 
 /** What the run log starts a run with (./runlog.cjs): what the agent is told, block by block, before its first step. */
-function runRecord({ id, agent, provider, projectId, question, system, context, shown, extra, mode, pinned, routed = null, place = null }) {
+function runRecord({ id, agent, provider, projectId, question, system, context, shown, extra, mode, pinned, routed = null, place = null, reply = null }) {
   return {
     id, agent, provider, projectId, projectName: context.project ? context.project.name : '', workspaceName: context.workspaceName || '',
     question: String(question || ''), at: Date.now(), status: 'running', system, mode: mode || null, pinned: !!pinned,
+    // How many turns of its conversation came before it (2026-10-13, the Agent Viewer's first message or reply): 0 is a first message.
+    ...(Number.isInteger(reply) && reply >= 0 ? { reply } : {}),
     // Handed over by the router (./route.cjs): its record's id, and the agent the person picked instead of its pick.
     ...(routed && routed.id ? { routedFrom: routed.id } : {}), ...(routed && routed.corrected ? { corrected: routed.corrected } : {}),
     // Routing failed and the line came here as the fallback: not Bart's pick (Workspace routeLine, `by: 'error'`).
@@ -683,7 +685,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     const system = loadSystemPrompt(ctx.dataRoot, agent);
     // The Agent map's record (runLog): from here every way out of the run is logged.
     const logId = askId || randomUUID(), startedAt = Date.now();
-    log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system, context, shown, extra, mode, pinned, routed, place })));
+    log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system, context, shown, extra, mode, pinned, routed, place, reply: prior.length })));
     if (routed && routed.corrected) log((runs) => markCorrected(runs, { id: routed.id, projectId, text, agent: routed.corrected }));
     try {
       const result = await answer();
@@ -985,7 +987,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent] || null;
       const held = prior.length && store && !switched(prior, agent) ? store.take(threadKey(projectId, ref, prior), provider) : null;
       const logId = askId || randomUUID(), startedAt = Date.now();
-      log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system: loadSystemPrompt(ctx.dataRoot, agent), context, shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned, routed, place })));
+      log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system: loadSystemPrompt(ctx.dataRoot, agent), context, shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned, routed, place, reply: prior.length })));
       if (routed && routed.corrected) log((runs) => markCorrected(runs, { id: routed.id, projectId, text, agent: routed.corrected }));
       const ended = (status, result, error) => log((runs) => runs.finish(logId, { status, written: result ? result.lines : null, error: error && error.message, ms: Date.now() - startedAt }));
       if (plan.written != null) { const result = resultReply(plan); ended('done', result); return result; }

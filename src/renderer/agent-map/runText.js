@@ -25,14 +25,11 @@ export function agentInfo(name) {
 // The agents a Build runs: their runs are named by Build, not by a question (the list has no filter since 2026-10-13).
 export const BUILD_AGENTS = ['build', 'run step'];
 
-/**
- * A run's name in the list and the export: "@chat", "@bart → @discover" (agentLabel), "@build <title> · turn n",
- * "@build quick", "@run step <title>".
- */
+/** A run's name in the export: its agent in plain words, then a Build turn's title; the run step "Build · run step <title>". */
 export function runLabel(run) {
   if (!run) return '';
-  if (run.agent === 'build') return `${run.kind === 'quick' ? '@build quick' : `@build ${run.title || ''} · turn ${run.turn == null ? '?' : run.turn}`}${run.routedFrom ? ' · via Bart' : ''}`;
-  if (run.agent === 'run step') return `@run step ${run.title || ''}`;
+  if (run.agent === 'build') return `Build ${run.kind === 'quick' ? run.title || 'quick task' : run.title || ''} · turn ${run.turn == null ? '?' : run.turn}${run.routedFrom ? ' · via Bart' : ''}`;
+  if (run.agent === 'run step') return `Build · run step ${run.title || ''}`;
   return agentLabel(run);
 }
 
@@ -70,19 +67,72 @@ export function timeLabel(at, now = Date.now()) {
 }
 export const msLabel = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : ms < 60000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.floor(ms / 60000)} m ${Math.round((ms % 60000) / 1000)} s`);
 
+// The agents in the words a person uses (2026-10-13): no "@", the internal 'bart' is Chat.
+const WORDS = { bart: 'Chat', chat: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover', create: 'Create', build: 'Build' };
+const agentWord = (agent) => WORDS[agent] || agentInfo(agent).name;
+
 /**
- * A run's agent as the runs list names it (2026-10-12): the internal 'bart' is @chat; a router's record says where it
- * sent the line ("@bart → @discover", "@bart → Build"), and a run Bart handed over or the person corrected says so, as
- * does one Bart could not route ("· Bart failed to route": the classifier failed, and the line went to its fallback).
+ * A run's agent as the runs list names it (2026-10-13, plain words): "Chat", "Brainstorm", "Discover", "Create"; a
+ * router's record where it sent the line ("Bart → Chat · 0.85", the model's sureness; none for a rule's pick), "Build ·
+ * turn n", "Build · run step"; "· via Bart" on a run Bart handed over, and what the person corrected or Bart failed to route.
  */
 export function agentLabel(run) {
-  const word = (agent) => (agent === 'build' ? 'Build' : `@${agent === 'bart' ? 'chat' : agent}`);
+  if (!run) return '';
   if (run.agent === 'router') {
-    const to = run.handedTo && /^build:/.test(run.handedTo) ? 'Build' : run.pick ? word(run.pick) : '…';
-    return `@bart → ${to}${run.corrected ? ` (corrected to ${word(run.corrected)})` : ''}${run.by === 'rule' ? ` · rule: ${run.rule || '?'}` : run.sure != null ? ` · sure ${run.sure}` : ''}`;
+    const to = run.handedTo && /^build:/.test(run.handedTo) ? 'Build' : run.pick ? agentWord(run.pick) : '…';
+    return `Bart → ${to}${run.corrected ? `, corrected to ${agentWord(run.corrected)}` : ''}${run.by !== 'rule' && run.sure != null ? ` · ${run.sure}` : ''}`;
   }
-  return `${word(run.agent)}${run.routedBy === 'error' ? ' · Bart failed to route' : run.routedFrom ? ' · via Bart' : ''}${run.corrected ? ` · corrected from Bart` : ''}`;
+  if (run.agent === 'run step') return 'Build · run step';
+  const via = run.routedBy === 'error' ? ' · Bart failed to route' : run.routedFrom ? ' · via Bart' : '';
+  if (run.agent === 'build') return `Build · turn ${run.turn == null ? '?' : run.turn}${via}`;
+  return `${agentWord(run.agent)}${via}${run.corrected ? ' · corrected from Bart' : ''}`;
 }
+
+/**
+ * Whether a run began a conversation or answered in one: "first message", "reply", or "reply n" for a question's nth
+ * turn (its record's `reply`, the turns before it: ask.cjs runRecord). A router's record is a reply when it has
+ * `current` (route.cjs sets it only on a follow-up), a Build turn after the first is one; a run step is no message, and a
+ * record kept before the field was there says neither.
+ */
+export function turnLabel(run) {
+  if (!run || run.agent === 'run step') return '';
+  if (run.agent === 'router') return run.current ? 'reply' : 'first message';
+  if (run.agent === 'build') return typeof run.turn !== 'number' ? '' : run.turn > 1 ? 'reply' : 'first message';
+  if (!Number.isInteger(run.reply)) return '';
+  return run.reply > 0 ? `reply ${run.reply + 1}` : 'first message';
+}
+
+/** "failed", or "escalated" (a Build turn that ended so, or a question that moved up a step), else ''. */
+export function outcomeLabel(run) {
+  if (!run) return '';
+  if (run.status === 'failed') return 'failed';
+  const climbed = Array.isArray(run.steps) ? run.steps.some((step) => step.escalated) : !BUILD_AGENTS.includes(run.agent) && run.stepCount > 1;
+  return run.ending === 'escalated' || climbed ? 'escalated' : '';
+}
+
+/** A row's first line: the person's words. A question's line, a Build turn's or run step's title (a quick one's, else "quick task"). */
+export function rowText(run) {
+  const text = !run ? '' : BUILD_AGENTS.includes(run.agent) ? run.title || (run.kind === 'quick' ? 'quick task' : '') : run.question;
+  return String(text || '').replace(/\s+/g, ' ').trim() || '(empty line)';
+}
+
+/** A row's second line, before its time: the agent, first message or reply, how it ended if it failed, the model. */
+export const rowLine = (run) => [agentLabel(run), turnLabel(run), outcomeLabel(run), modelLabel(run)].filter(Boolean).join(' · ');
+
+/** The runs the list shows: a rule's pick made no model call and the run it handed to is listed, so it is left out unless it failed. */
+export const listedRuns = (runs) => (runs || []).filter((run) => !(run.agent === 'router' && run.by === 'rule' && run.status !== 'failed'));
+
+/**
+ * "Project / Workspace" for a run, the list's header over it. A router's record keeps no project name, so `names`
+ * (projectId → name, from the other runs: projectNames) fills it in.
+ */
+export const placeLabel = (run, names = new Map()) => [run.projectName || names.get(run.projectId) || '', run.workspaceName || ''].filter(Boolean).join(' / ');
+export function projectNames(runs) {
+  const names = new Map();
+  for (const run of runs || []) if (run.projectId && run.projectName && !names.has(run.projectId)) names.set(run.projectId, run.projectName);
+  return names;
+}
+
 /** "model · effort" for the list: the last step's, which is where it ended up. */
 export const modelLabel = (run) => [run.model, run.effort].filter(Boolean).join(' · ') || (run.status === 'running' ? 'starting' : 'no model run');
 
@@ -148,7 +198,7 @@ const STYLE = 'body{font:12px/1.45 ui-monospace,SFMono-Regular,Menlo,monospace;c
 /** The exported page: `records` (whole runs), its title. */
 export function exportPage(records, title = 'Agent runs') {
   const data = JSON.stringify(records).replace(/</g, '\\u003c');
-  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(title)}</title><style>${STYLE}</style></head><body><h1>${escape(title)}</h1><div class="dim">Exported from Engelbart's Agent map, ${escape(new Date().toISOString())}. ${records.length} run${records.length === 1 ? '' : 's'}.</div>${records.map(runHtml).join('')}<script type="application/json" id="agent-runs">${data}</script></body></html>`;
+  return `<!doctype html><html><head><meta charset="utf-8"><title>${escape(title)}</title><style>${STYLE}</style></head><body><h1>${escape(title)}</h1><div class="dim">Exported from Engelbart's Agent Viewer, ${escape(new Date().toISOString())}. ${records.length} run${records.length === 1 ? '' : 's'}.</div>${records.map(runHtml).join('')}<script type="application/json" id="agent-runs">${data}</script></body></html>`;
 }
 
 /* ------------------------------------------------------------------ asks (2026-10-12, the Agent Viewer) */

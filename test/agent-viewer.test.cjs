@@ -245,7 +245,7 @@ test('viewer: Runs | Design and the two exports, in one monospace font, and no k
   assert.doesNotMatch(html, />Asks</);
 });
 
-test('viewer: the runs list shows every run, each agent named, @create among them, with no filter tabs or status dots (2026-10-13)', () => {
+test('viewer: the runs list shows every run, newest first, the person\'s words over the agent in plain words, with no filter tabs or status dots (2026-10-13)', () => {
   const runs = [
     { id: 'c1', agent: 'create', at: 3, status: 'done', question: 'a chart of the results', projectName: 'P', model: 'claude-sonnet-5-5', effort: 'high' },
     { id: 'd1', agent: 'discover', at: 2, status: 'running', question: 'papers on X', projectName: 'P' },
@@ -253,18 +253,112 @@ test('viewer: the runs list shows every run, each agent named, @create among the
     { id: 's1', agent: 'run step', at: 0, status: 'stopped', buildId: 'b1', title: 'a parser', projectName: 'P' },
   ];
   const html = renderToStaticMarkup(React.createElement(view.RunList, { runs, selected: 'c1', onSelect() {} }));
-  assert.match(html, /@create/);
-  assert.match(html, /a chart of the results/);
-  assert.match(html, /@discover/);
-  assert.match(html, /@build a parser · turn 1/);
-  assert.match(html, /@run step a parser/);
-  const order = ['@create', '@discover', '@build a parser', '@run step a parser'].map((label) => html.indexOf(label));
+  const order = ['a chart of the results', 'papers on X', 'Build · turn 1', 'Build · run step'].map((label) => html.indexOf(label));
+  assert.ok(order.every((at) => at >= 0), 'each row is there');
   assert.deepEqual([...order].sort((a, b) => a - b), order, 'in the order given, newest first');
+  assert.match(html, /Create · claude-sonnet-5-5 · high/);
+  assert.match(html, /Build · turn 1 · first message · failed/);
   assert.doesNotMatch(html, />Questions</);
   assert.doesNotMatch(html, />Builds</);
   assert.doesNotMatch(html, />All</);
   assert.ok(!html.includes('●') && !html.includes('○'), 'no status dots');
-  assert.match(html, /<div style="[^"]*"><b>@create<\/b>/, 'the label starts the row');
+  assert.ok(!html.includes('@'), 'no "@" in any row');
+});
+
+/** The list's rows as text: each header, and each row's two lines, in order. */
+function listRows(html) {
+  const rows = [];
+  const re = /<div style="[^"]*font-size:11px[^"]*">([^<]*)<\/div>|<div style="[^"]*cursor:pointer[^"]*" title="([^"]*)"><div[^>]*>([^<]*)<\/div><div[^>]*><span[^>]*>([^<]*)<\/span><span[^>]*>([^<]*)<\/span><\/div><\/div>/g;
+  for (const match of html.matchAll(re)) rows.push(match[1] != null ? { header: match[1] } : { title: match[2], first: match[3], second: match[4], time: match[5] });
+  return rows;
+}
+const unescape = (text) => text.replace(/&amp;/g, '&').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<');
+
+test('viewer: a row is the person\'s words, then the agent, first message or reply, the model and the time; a rule\'s router pick is not listed; one header per workspace (2026-10-13)', () => {
+  const W = { projectId: 'p1', workspaceName: 'Concision in Agent Responses' };
+  const runs = [
+    { id: 'rt-1', agent: 'router', at: 5, status: 'done', by: 'model', sure: 0.85, pick: 'chat', question: 'why is the sky blue?', projectName: '', ...W, model: 'claude-haiku-5-5', effort: 'low' },
+    { id: 'ch-1', agent: 'bart', at: 4, status: 'done', question: 'why is the sky blue?', routedFrom: 'rt-1', reply: 0, projectName: 'Engelbart', ...W, model: 'claude-opus-5-5', effort: 'high' },
+    { id: 'rt-2', agent: 'router', at: 3, status: 'done', by: 'rule', rule: '--build', pick: 'build', handedTo: 'build:9f3e2a1b7c', question: 'make the list readable', projectName: '', ...W },
+    { id: '9f3e2a1b7c:1', agent: 'build', at: 2, status: 'done', buildId: '9f3e2a1b7c', turn: 1, title: 'Make the list readable', projectName: 'Engelbart', ...W, model: 'claude-opus-5-5', effort: 'high', toolCount: 12 },
+    { id: 'rs-1', agent: 'run step', at: 1, status: 'done', buildId: '9f3e2a1b7c', title: 'Make the list readable', projectName: 'Engelbart', ...W },
+  ];
+  const html = renderToStaticMarkup(React.createElement(view.RunList, { runs, selected: 'ch-1', onSelect() {} }));
+  const rows = listRows(html).map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, unescape(value)])));
+  assert.deepEqual(rows.filter((row) => row.header).map((row) => row.header), ['Engelbart / Concision in Agent Responses'], 'one header; the router\'s record gets its project name from the other runs');
+  const items = rows.filter((row) => !row.header);
+  assert.equal(items.length, 4, 'the rule\'s pick is gone');
+  assert.deepEqual(items.map((row) => row.first), ['why is the sky blue?', 'why is the sky blue?', 'Make the list readable', 'Make the list readable']);
+  assert.equal(items[0].second, 'Bart → Chat · 0.85 · first message · claude-haiku-5-5 · low');
+  assert.equal(items[1].first, 'why is the sky blue?');
+  assert.match(items[1].second, /^Chat · via Bart · first message · claude-opus-5-5 · high$/);
+  assert.match(items[2].second, /^Build · turn 1 · first message · claude-opus-5-5 · high$/);
+  assert.match(items[3].second, /^Build · run step · no model run$/, 'a run step is no message');
+  for (const row of items) {
+    assert.ok(row.time, 'a time on the right');
+    assert.ok(!/@run|@bart|@chat|@/.test(row.first + row.second), `no "@" in ${row.second}`);
+    assert.ok(!(row.first + row.second).includes('9f3e2a1b7c'), 'no Build id in the row');
+    assert.ok(!/tools/.test(row.second), 'no tool count');
+  }
+  assert.match(items[2].title, /^Engelbart \/ Concision in Agent Responses\nBuild 9f3e2a1b7c\nMake the list readable$/, 'hover: place, Build id, the whole text');
+  assert.ok(!html.includes('picked by') && !html.includes('rule:'), 'no internal labels');
+
+  // A failed rule pick is listed.
+  const failed = renderToStaticMarkup(React.createElement(view.RunList, { runs: [{ ...runs[2], status: 'failed' }], selected: null, onSelect() {} }));
+  assert.match(unescape(failed), /Bart → Build · first message · failed/);
+  assert.deepEqual(runText.listedRuns(runs).map((run) => run.id), ['rt-1', 'ch-1', '9f3e2a1b7c:1', 'rs-1'], 'j/k move over these');
+
+  // Two workspaces: two headers, and a header again only when the place changes.
+  const two = renderToStaticMarkup(React.createElement(view.RunList, { runs: [
+    { id: 'a', agent: 'bart', at: 3, status: 'done', question: 'q1', projectId: 'p1', projectName: 'Engelbart', workspaceName: 'One' },
+    { id: 'b', agent: 'bart', at: 2, status: 'done', question: 'q2', projectId: 'p1', projectName: 'Engelbart', workspaceName: 'One' },
+    { id: 'c', agent: 'discover', at: 1, status: 'done', question: 'q3', projectId: 'p1', projectName: 'Engelbart', workspaceName: 'Two' },
+  ], selected: null, onSelect() {} }));
+  assert.deepEqual(listRows(two).filter((row) => row.header).map((row) => row.header), ['Engelbart / One', 'Engelbart / Two']);
+});
+
+test('viewer: first message or reply, from each record\'s own field; none on a record without one (2026-10-13)', () => {
+  const { turnLabel, rowLine, runLabel } = runText;
+  assert.equal(turnLabel({ agent: 'bart', reply: 0 }), 'first message');
+  assert.equal(turnLabel({ agent: 'bart', reply: 2 }), 'reply 3');
+  assert.equal(turnLabel({ agent: 'discover', reply: 1 }), 'reply 2');
+  assert.equal(turnLabel({ agent: 'router', current: 'chat' }), 'reply');
+  assert.equal(turnLabel({ agent: 'router' }), 'first message');
+  assert.equal(turnLabel({ agent: 'build', turn: 1 }), 'first message');
+  assert.equal(turnLabel({ agent: 'build', turn: 2 }), 'reply');
+  assert.equal(turnLabel({ agent: 'run step', turn: 1 }), '');
+  for (const old of [{ agent: 'bart', question: 'q' }, { agent: 'brainstorm' }, { agent: 'build' }]) {
+    assert.doesNotMatch(rowLine(old), /first message|reply/, `${old.agent} without the field says neither`);
+  }
+  assert.match(rowLine({ agent: 'bart', reply: 2, status: 'done', model: 'opus', effort: 'high' }), /^Chat · reply 3 · opus · high$/);
+  assert.match(rowLine({ agent: 'bart', reply: 0, status: 'done', stepCount: 2, model: 'opus', effort: 'high' }), /^Chat · first message · escalated/);
+  assert.match(rowLine({ agent: 'build', turn: 3, status: 'escalated', ending: 'escalated' }), /^Build · turn 3 · reply · escalated/);
+  assert.equal(runLabel({ agent: 'run step', title: 'a parser' }), 'Build · run step a parser');
+  assert.equal(runText.AGENTS.find((agent) => agent.agent === 'run step').name, 'Run step');
+});
+
+test('viewer: the window is called Agent Viewer, and so is an export (2026-10-13)', () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/AgentMap.jsx'), 'utf8');
+  assert.match(source, /document\.title = 'Agent Viewer'/);
+  assert.doesNotMatch(source, /document\.title = 'Agent map'/);
+  const page = runText.exportPage([{ id: 'x', agent: 'bart', at: 0, status: 'done', question: 'q', system: '', context: {}, steps: [], written: [] }]);
+  assert.match(page, /Exported from Engelbart's Agent Viewer/);
+  assert.doesNotMatch(page, /Agent map/);
+});
+
+test('viewer: a question\'s record keeps how many turns came before it (reply)', async () => {
+  const log = createRunLog();
+  const bart = createFakeBart({ readModels: () => normalizeModels(null), delayMs: 0, runLog: log });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const turns = [{ question: 'why?', answer: 'because' }, { question: 'and then?', answer: 'then this' }];
+  await bart.ask(ctx, project.id, { askId: 'rp-0', ref, workspaceId: workspace.id, text: 'first one' });
+  await bart.ask(ctx, project.id, { askId: 'rp-2', ref, workspaceId: workspace.id, text: 'and after that?', turns });
+  assert.equal(log.get('rp-0').reply, 0);
+  assert.equal(log.get('rp-2').reply, 2);
+  const { runRecord } = require('../src/main/bart/ask.cjs');
+  const base = { id: 'r', agent: 'bart', provider: 'anthropic', projectId: 'p', question: 'q', system: '', context: { project: null }, shown: [], extra: '', mode: null, pinned: false };
+  assert.equal(runRecord({ ...base, reply: 2 }).reply, 2);
+  assert.equal('reply' in runRecord(base), false, 'none given, none kept');
 });
 
 test('viewer: an open run has no header and no size notes beside its sections; a failed one still says why (2026-10-13)', () => {
@@ -281,6 +375,8 @@ test('viewer: an open run has no header and no size notes beside its sections; a
   assert.match(failed, /failed: the model timed out/);
   const routed = renderToStaticMarkup(React.createElement(view.RunDetail, { record: { ...record, routedFrom: 'route-1' }, open: null, onToggle() {} }));
   assert.match(routed, /handed over by Bart: route-1/);
+  const router = renderToStaticMarkup(React.createElement(view.RunDetail, { record: { ...record, agent: 'router', by: 'model', sure: 0.85, pick: 'chat', sectionSize: 4000, specAbove: true, threads: [{ agent: 'bart', up: 292 }], context: { input: 'IN' } }, open: null, onToggle() {} }));
+  assert.ok(!router.includes('picked by') && !router.includes('threads:') && !router.includes('spec above'), 'no router line');
 });
 
 test('viewer: a @create run\'s Written shows what it kept in the library', () => {

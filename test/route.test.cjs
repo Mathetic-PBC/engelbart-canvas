@@ -469,8 +469,8 @@ test('handoff: when routing fails the line is asked of Chat saying so (by: error
   const plain = runRecord({ id: 'r2', agent: 'bart', provider: 'anthropic', projectId: 'p', question: 'how?', system: '', context: { project: null }, shown: [], extra: '', mode: null, pinned: false, routed: routedOf({ id: 'route-a' }) });
   assert.deepEqual([plain.routedBy, plain.routedFrom], [undefined, 'route-a']);
   const { agentLabel, askSections } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/agent-map/runText.js')).href);
-  assert.equal(agentLabel(record), '@chat · Bart failed to route');
-  assert.equal(agentLabel(plain), '@chat · via Bart');
+  assert.equal(agentLabel(record), 'Chat · Bart failed to route');
+  assert.equal(agentLabel(plain), 'Chat · via Bart');
   // The Agent Viewer's second section says so too, with the error.
   const [, picked] = askSections({ id: 'r1', routedTo: 'bart', via: 'direct', records: [{ ...record, steps: [] }] });
   assert.match(picked.nodes[0].label, /Bart \(classifier\) failed/);

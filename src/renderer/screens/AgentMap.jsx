@@ -1,18 +1,19 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, errorMessage } from '../api.js';
 import Benchmark from './Benchmark.jsx';
-import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, modelLabel, sectionText, exportPage, runLabel, agentInfo, createdLines, BUILD_AGENTS } from '../agent-map/runText.js';
+import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, sectionText, exportPage, runLabel, agentInfo, createdLines, rowText, rowLine, listedRuns, placeLabel, projectNames } from '../agent-map/runText.js';
 
-// The Agent map (2026-10-12; src/main/agent-map): a window for developers only, the app's renderer at ?view=agent-map.
+// The Agent Viewer (2026-10-12; it was the Agent map, and the internal names stay: src/main/agent-map): a window for developers only, the app's renderer at ?view=agent-map.
 // Its first design again (2026-10-13: the Agent Viewer's asks and pipeline sections were taken out; main's asks, reveal and
 // the run log are unchanged), with every agent there is now: @create's runs, its Design entry and the rows it kept.
-// Runs: every @bart (the router, 2026-10-12: where it sent the line), @chat, @brainstorm, @discover and @create run, each Build turn and each run step after one, newest first, live
+// Runs: every @bart the model routed or that failed (the router, 2026-10-12: where it sent the line; a rule's pick is not listed), @chat, @brainstorm, @discover and @create run, each Build turn and each run step after one, newest first, live
 // (engelbart:agent-run), all in one list, and the one selected in sections: its system prompt, its context
 // block by block, each model step (the input, its tool calls, what it said) and what was written (a run step: its
 // runnables). Design: one agent at a time, picked from a row of tabs, as it is set up now and which agents it hands work to.
 // Benchmark (2026-10-13, ./Benchmark.jsx): every Chat question in the notes, its saved answer beside it asked again now.
 // Plain and dense on purpose: one font, small type, thin rules. Less text (2026-10-13): no filter tabs, status dots, size
-// notes beside the sections, run header or key legend; a failed run still says why.
+// notes beside the sections, run header, router line or key legend; a failed run still says why. A row reads as the person's
+// words over the agent in plain words, first message or reply, the model and the time (RunList).
 // Keys, not shown: j/k the next and previous run, 1–4 a section, c copies the open section, e exports the run (E every run).
 
 const SECTIONS = [['system', 'System prompt'], ['context', 'Context'], ['steps', 'Steps'], ['written', 'Written']];
@@ -27,6 +28,8 @@ const S = {
   body: { flex: 1, display: 'flex', minHeight: 0 },
   list: { width: 360, flex: 'none', overflowY: 'auto', borderRight: RULE },
   row: (on) => ({ padding: '5px 10px', borderBottom: '1px solid #eee', cursor: 'pointer', background: on ? '#eef3ff' : 'transparent' }),
+  line: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  place: { padding: '6px 10px 2px', fontSize: 11, color: '#777', borderBottom: '1px solid #eee', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   detail: { flex: 1, overflowY: 'auto', padding: '8px 14px 40px' },
   pre: { font: FONT, whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#f6f6f6', border: '1px solid #e6e6e6', padding: 6, margin: '3px 0' },
   head: { cursor: 'pointer', padding: '3px 0', borderTop: RULE, marginTop: 6, userSelect: 'none' },
@@ -92,7 +95,6 @@ export function RunDetail({ record, open, onToggle }) {
   const blocks = contextBlocks(record);
   return (
     <div>
-      {record.agent === 'router' && <div style={S.dim}>picked by {record.by === 'rule' ? `rule (${record.rule})` : 'the model'} · section {(record.sectionSize || 0).toLocaleString('en-US')} chars · spec above {record.specAbove ? 'yes' : 'no'} · threads: {(record.threads || []).map((thread) => `@${thread.agent} ${thread.up} up`).join(', ') || 'none'}{record.handedTo ? ` · handed to ${record.handedTo}` : ''}</div>}
       {record.routedFrom && <div style={S.dim}>handed over by Bart: {record.routedFrom}{record.corrected ? ` · the person picked ${record.corrected} instead` : ''}</div>}
       {record.error && <div style={S.error}>{record.status}: {record.error}</div>}
       <Section n={1} id="system" title="System prompt" open={open === 'system'} onToggle={onToggle}>
@@ -192,18 +194,28 @@ function DesignBody({ agent }) {
   );
 }
 
-/** The list of runs: every run, newest first. */
+/**
+ * The list of runs, newest first (2026-10-13): each row the person's words, then the agent in plain words, first message
+ * or reply, the model and the time; a dim "Project / Workspace" header over a row whose place differs from the row above.
+ * A rule's router pick is not listed (listedRuns). Hover gives the place, the Build id and the whole text.
+ */
 export function RunList({ runs, selected, onSelect }) {
+  const shown = listedRuns(runs), names = projectNames(runs);
+  let above = null;
   return (
     <div>
-      {runs.length ? runs.map((run) => {
-        const build = BUILD_AGENTS.includes(run.agent);
+      {shown.length ? shown.map((run) => {
+        const place = placeLabel(run, names), header = place !== above;
+        above = place;
+        const hover = [place, run.buildId ? `Build ${run.buildId}` : '', rowText(run)].filter(Boolean).join('\n');
         return (
-          <div key={run.id} style={S.row(run.id === selected)} onClick={() => onSelect(run.id)}>
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}><b>{runLabel(run)}</b> <span style={S.dim}>{modelLabel(run)}</span>{run.toolCount ? <span style={S.dim}> · {run.toolCount}{run.toolsDropped ? `+${run.toolsDropped}` : ''} tools</span> : null}</div>
-            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{build ? <span style={S.dim}>{run.kind === 'quick' ? `${firstWords(run.title)} · ` : ''}Build {run.buildId}{run.ending ? ` · ${run.ending}` : ''}</span> : firstWords(run.question)}</div>
-            <div style={S.dim}>{run.projectName}{run.workspaceName ? ` / ${run.workspaceName}` : ''} · {timeLabel(run.at)}</div>
-          </div>
+          <React.Fragment key={run.id}>
+            {header && place ? <div style={S.place}>{place}</div> : null}
+            <div style={S.row(run.id === selected)} title={hover} onClick={() => onSelect(run.id)}>
+              <div style={S.line}>{rowText(run)}</div>
+              <div style={{ display: 'flex', gap: 8, ...S.dim }}><span style={{ ...S.line, flex: 1, minWidth: 0 }}>{rowLine(run)}</span><span style={{ flex: 'none' }}>{timeLabel(run.at)}</span></div>
+            </div>
+          </React.Fragment>
         );
       }) : <div style={{ padding: 10, ...S.dim }}>No runs yet. Ask @bart, @chat, @brainstorm, @discover or @create, or start a Build, in any window.</div>}
     </div>
@@ -223,13 +235,13 @@ export default function AgentMap() {
   const refetch = useRef(null);
   selectedRef.current = selected;
 
-  useEffect(() => { document.title = 'Agent map'; }, []);
+  useEffect(() => { document.title = 'Agent Viewer'; }, []);
   useEffect(() => {
     let live = true;
-    api.agentRuns().then((list) => { if (!live) return; setRuns(list); setSelected((current) => current || (list[0] && list[0].id) || null); }).catch((error) => setNote(errorMessage(error)));
+    api.agentRuns().then((list) => { if (!live) return; setRuns(list); const first = listedRuns(list)[0]; setSelected((current) => current || (first && first.id) || null); }).catch((error) => setNote(errorMessage(error)));
     const off = api.onAgentRun((summary) => {
       setRuns((list) => [summary, ...list.filter((run) => run.id !== summary.id)].sort((a, b) => b.at - a.at));
-      setSelected((current) => current || summary.id);
+      if (listedRuns([summary]).length) setSelected((current) => current || summary.id);
       // The run in view is read again, at most every 400 ms while it changes.
       if (summary.id === selectedRef.current && !refetch.current) {
         refetch.current = setTimeout(() => { refetch.current = null; api.agentRun(summary.id).then((full) => { if (full && full.id === selectedRef.current) setRecord(full); }).catch(() => {}); }, 400);
@@ -259,9 +271,10 @@ export default function AgentMap() {
   useEffect(() => {
     const onKey = (event) => {
       if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA)$/.test(event.target.tagName)) return;
-      const at = runs.findIndex((run) => run.id === selected);
-      if (event.key === 'j' && runs.length) setSelected(runs[Math.min(runs.length - 1, at + 1)].id);
-      else if (event.key === 'k' && runs.length) setSelected(runs[Math.max(0, at - 1)].id);
+      // j/k move over the rows the list shows.
+      const shown = listedRuns(runs), at = shown.findIndex((run) => run.id === selected);
+      if (event.key === 'j' && shown.length) setSelected(shown[Math.min(shown.length - 1, at + 1)].id);
+      else if (event.key === 'k' && shown.length) setSelected(shown[Math.max(0, at - 1)].id);
       else if (/^[1-4]$/.test(event.key)) { setTab('runs'); setOpen(SECTIONS[Number(event.key) - 1][0]); }
       else if (event.key === 'c' && record && open) {
         const text = sectionText(record, open);
