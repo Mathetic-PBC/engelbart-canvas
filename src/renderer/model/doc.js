@@ -505,6 +505,16 @@ function nameHtml(name, named, trashed) {
   return `<span data-mention="${esc(name)}"${bin ? ' title="In trash"' : ''} style="${bin ? TRASHED_LOOK : MENTION_LOOK}">@${esc(chat ? chat.shown : name)}</span>`;
 }
 
+// A link's box (2026-10-12): 5px above and below its letters and 2px either side, so a click on its underline, in the gap
+// between a wrapped link's lines or just past its last letter is on the link. The negative margin takes the padding back:
+// the letters stand where they did, a wrapped link wraps where it did, and a link at a line's start or end does not move.
+const LINK_LOOK = 'color:#0070f3;text-decoration:underline;text-underline-offset:3px;padding:5px 2px;margin:-5px -2px;border-radius:3px;cursor:pointer';
+/** Whether an inline token draws as a link: `[title](url)`, a bare address, or bold around a link (an @discover guide's title). */
+export function holdsLink(tok) {
+  const s = String(tok ?? ''), inner = s.startsWith('**') && s.endsWith('**') && s.length > 4 ? s.slice(2, -2) : s;
+  return inner.split(INLINE).some((part) => LINK_RE.test(part) || URL_RE.test(part));
+}
+
 /**
  * Rendered HTML for inline markup (bold, code, italic, @bart, @brainstorm and @discover, an older line's @orient,
  * @[mention], [link](url), bare urls). `opts.libName(id)`: a library mention's name now, or null when it is gone (libHtml).
@@ -533,8 +543,8 @@ export function inlineHtml(text, opts) {
     if (zotero) return zoteroHtml(zotero[1], zotero[2]);
     if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named, opts && opts.trashed);
     const m = p.match(LINK_RE);
-    if (m) return `<a href="${esc(m[2])}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(m[1])}</a>`;
-    if (URL_RE.test(p)) return `<a href="${esc(p)}" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">${esc(p)}</a>`;
+    if (m) return `<a href="${esc(m[2])}" data-link="1" style="${LINK_LOOK}">${esc(m[1])}</a>`;
+    if (URL_RE.test(p)) return `<a href="${esc(p)}" data-link="1" style="${LINK_LOOK}">${esc(p)}</a>`;
     return esc(p);
   }).join('');
 }

@@ -495,7 +495,7 @@ test('@discover is an @bart line asked of a third agent: with or without words, 
   assert.equal(parseLine('@discovery').type, 'p');
   assert.match(inlineHtml('@discover here'), /<span style="color:#0070f3;font-weight:500">@discover<\/span> here/);
   assert.deepEqual('@Discover `@bart` x'.split(INLINE).filter(Boolean), ['@Discover', ' ', '`@bart`', ' x']);
-  assert.equal(inlineHtml('**[A paper](https://arxiv.org/abs/1)** · Ada'), '<strong style="font-weight:600"><a href="https://arxiv.org/abs/1" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px">A paper</a></strong> · Ada', 'a guide\'s title: a link in bold');
+  assert.equal(inlineHtml('**[A paper](https://arxiv.org/abs/1)** · Ada'), '<strong style="font-weight:600"><a href="https://arxiv.org/abs/1" data-link="1" style="color:#0070f3;text-decoration:underline;text-underline-offset:3px;padding:5px 2px;margin:-5px -2px;border-radius:3px;cursor:pointer">A paper</a></strong> · Ada', 'a guide\'s title: a link in bold');
   assert.match(inlineHtml('**@[Plan]** · Ada'), /^<strong style="font-weight:600"><span data-mention="Plan"[^>]*>@Plan<\/span><\/strong> · Ada$/, 'a library item in bold is still a mention');
   assert.deepEqual(threads(['@discover agents', 'bart> ## Start here', 'bart> *Opus · high · 90 s*', '@discover only after 2022', 'bart~> k4']).map((t) => t.turns.length), [2], 'a follow-up joins the guide\'s card');
 });

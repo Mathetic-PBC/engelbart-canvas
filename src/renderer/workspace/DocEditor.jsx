@@ -49,7 +49,7 @@
 //     (preventDefault), so the window's Escape leaves it alone (Workspace.jsx).
 import React from 'react';
 import { createPortal } from 'react-dom';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, RESULT_OFFER, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -91,6 +91,8 @@ const BUILD_STATUS = { 'setting-up': 'Setting up', queued: 'Waiting for a slot',
 const BUILD_WORKING = new Set(['setting-up', 'queued', 'running', 'accepting']);
 // `@Note` (the @ menu's Note) and the name after it, to the end of the line.
 const NOTE_VERB_RE = /(^|\s)@Note(?:\s+(.*))?$/;
+// How far beside an answer's link, in px from its box, a press is still on it (nearLink, 2026-10-12).
+const NEAR_LINK = 4;
 // A short fingerprint of a line (FNV-1a), so a remembered scroll position finds its line again without keeping its text.
 const hashLine = (line) => { let h = 0x811c9dc5; const s = String(line ?? ''); for (let k = 0; k < s.length; k++) { h ^= s.charCodeAt(k); h = Math.imul(h, 0x01000193); } return (h >>> 0).toString(36); };
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
@@ -281,12 +283,18 @@ export default class DocEditor extends React.Component {
       // redraw as its source and the click land on plain text (links in answers did nothing).
       // Where the press landed is kept for the click that follows it: a drag across lines ends in a click on what holds
       // both ends (the editor, or the page around it when released past it), and only a press there is a click there.
+      // A press just beside a link in an answer (2026-10-12: on its underline, between a wrapped link's lines, past its last
+      // letter) is a press on that link (nearLink), and the click that follows opens it.
+      // A press that puts the caret is the mouse's (byMouse): the line it lands on, if an answer's, keeps its links drawn.
       mousedown: (e) => {
         this.downOnPage = e.target === this.scrollRef.current;
+        this.nearA = null;
         if (!inEd(e)) return;
         this.downOnRoot = e.target === this.editorEl();
         if (e.target.closest('button[data-act], .bart-chip, a[data-link], [data-mention]')) { e.preventDefault(); return; }
-        if (e.button === 0 && !inFollow(e)) this.held = true;
+        const near = e.button === 0 && !inFollow(e) ? this.nearLink(e.target, e.clientX, e.clientY) : null;
+        if (near) { this.nearA = near; e.preventDefault(); return; }
+        if (e.button === 0 && !inFollow(e)) { this.held = true; this.byMouse = true; }
       },
       // While the button is down a selection is only noted: redrawing the line under a drag (to show its source) lost the
       // highlight. The line becomes the caret's once the button comes up, after this click is handled.
@@ -570,15 +578,20 @@ export default class DocEditor extends React.Component {
   // left an empty span the browser typed into, and those characters were lost). A mention opens only with the caret strictly
   // inside it (MATH-56): at its start or end it stays drawn, so one just picked from the @ menu shows finished at once.
   // Math (2026-10-12) opens when the caret touches it, as bold does: the caret never stands inside a drawn formula.
-  openIdx(tokens, a, b) {
+  // `shut` (2026-10-12): a link stays drawn whatever the caret touches. An answer's line the mouse put the caret on
+  // (byMouse) is drawn so: a click beside a link must not turn it into `[title](url)`, or the next click lands on plain
+  // text and opens nothing. Its source shows once the keyboard reaches the caret (keyReached).
+  openIdx(tokens, a, b, shut = false) {
     const out = []; let acc = 0;
-    tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre, touched = tok.startsWith('@[') ? a < end && b > acc : a <= end && b >= acc; if (pre && touched) out.push(k); acc = end; });
+    tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre, touched = tok.startsWith('@[') ? a < end && b > acc : a <= end && b >= acc; if (pre && touched && !(shut && holdsLink(tok))) out.push(k); acc = end; });
     return out;
   }
+  // Whether line `p`'s links stay drawn with the caret on it: an answer's line, the caret put there by the mouse.
+  linksShut(p) { return !!this.byMouse && !!p && p.type === 'reply' && !p.code; }
   // `marker`: the style of tokens[0] when it is a line's own `## ` or `- ` (an answer's line being edited: faint, so the
   // line keeps its look and only the mark shows).
-  activeHtml(tokens, flags, marker = null) {
-    const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b); this.openKey = open.join(',');
+  activeHtml(tokens, flags, marker = null, shut = false) {
+    const [a, b] = this.revealRange(), open = this.openIdx(tokens, a, b, shut); this.openKey = open.join(',');
     return tokens.map((tok, k) => {
       if (marker && k === 0) return `<span data-src="${esc(tok)}" data-open="1" style="${marker}">${esc(tok)}</span>`;
       if (flags && flags.has(k)) return `<span data-src="${esc(tok)}" data-open="1" style="${FLAG_LOOK}">${esc(tok)}</span>`;
@@ -745,7 +758,7 @@ export default class DocEditor extends React.Component {
       const q = active ? parseLine(p.text) : null, cut = q && (q.type === 'h' || isMarked(q.type)) ? p.text.length - q.text.length : 0;
       const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
       const hang = cut && q.type !== 'h' ? `padding-left:calc(${q.depth * 18}px + ${MARK_COL});` : '';
-      const a = this.answerLook(p.text), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`) : this.activeHtml(tokensOf(p, line))) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
+      const a = this.answerLook(p.text), shut = active && this.linksShut(p), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`, shut) : this.activeHtml(tokensOf(p, line), null, null, shut)) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
       return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 14 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -1632,11 +1645,11 @@ export default class DocEditor extends React.Component {
       if (!this.caret) this.caret = { line: c.anchor.line, sel: [a, b], back };
       this.setState({ activeLine: c.anchor.line, mention: null }); return;
     }
-    const line = ls[c.anchor.line] ?? '', p = this.parsedOf(ls)[c.anchor.line] || parseLine(line), key = p.type === 'img' || isCode(p) || isFence(p) ? '' : this.openIdx(tokensOf(p, line), a, b).join(',');
+    const line = ls[c.anchor.line] ?? '', p = this.parsedOf(ls)[c.anchor.line] || parseLine(line), key = p.type === 'img' || isCode(p) || isFence(p) ? '' : this.openIdx(tokensOf(p, line), a, b, this.linksShut(p)).join(',');
     if (key !== this.openKey) { this.caret = { line: c.anchor.line, sel: [a, b], back }; this.forceUpdate(); }
   }
   editorInput = () => {
-    const ed = this.editorEl(); if (!ed || this.composing) return; const old = this.lines(), psOld = this.parsedOf(old);
+    const ed = this.editorEl(); if (!ed || this.composing) return; this.byMouse = false; const old = this.lines(), psOld = this.parsedOf(old);
     const divs = [...ed.querySelectorAll('[data-raw]')], c = this.caretInfo(), activeId = c ? c.anchor.line : null;
     // Text the browser put outside the line structure (a caret that landed on the root) is folded into the last line.
     const strayText = [...ed.childNodes]
@@ -1719,7 +1732,24 @@ export default class DocEditor extends React.Component {
     this.setState({ activeLine: pos, mention, browse: read.browse, mentionIdx: this.mentionStart(mention, read.browse) });
     if (read.into != null) this.browseInto(mention, read.browse.row, read.into, read.browse.before); // `sub/` typed: in it
   }
+  // The keyboard reaching the caret (2026-10-12): a key that moves it or types, not a modifier or a shortcut. From then on
+  // an answer's line shows the source of a link the caret touches, as any line being edited does. A link the caret
+  // touches opens now, before the key acts, so a Backspace or a letter goes into its source and is not lost on the
+  // drawn title.
+  keyReached(e) {
+    if (!this.byMouse) return;
+    const k = e.key || '', moves = /^(Arrow|Home$|End$|Page)/.test(k);
+    if (!moves && (e.metaKey || e.ctrlKey || /^(Shift|Meta|Control|Alt|AltGraph|CapsLock|Escape|Fn|Dead|Unidentified)$/.test(k))) return;
+    this.byMouse = false;
+    const c = this.caretInfo(), i = this.state.activeLine; if (!c || c.anchor.line !== i || c.focus.line !== i) return;
+    const ls = this.lines(), line = ls[i] ?? '', p = this.parsedOf(ls)[i] || parseLine(line); if (p.type !== 'reply' || p.code) return;
+    const a = Math.min(c.anchor.offset, c.focus.offset), b = Math.max(c.anchor.offset, c.focus.offset), tokens = tokensOf(p, line);
+    if (this.openIdx(tokens, a, b).join(',') === this.openIdx(tokens, a, b, true).join(',')) return;
+    this.caret = { line: i, sel: [a, b], back: c.focus.offset < c.anchor.offset }; this.lastHtml = null;
+    if (this.mounted) this.syncEditor();
+  }
   editorKey = (e) => {
+    this.keyReached(e);
     if (this.state.picker) this.closePicker();
     const s = this.state, c = this.caretInfo(); if (!c) return; const ls = this.lines();
     const ps = this.parsedOf(ls), i = c.anchor.line, line = ls[i] ?? '', p = ps[i] || parseLine(line), cur = lineText(p, line), mod = e.metaKey || e.ctrlKey;
@@ -1997,7 +2027,7 @@ export default class DocEditor extends React.Component {
       else if (k === 'remove') this.removeLine(i);
       return;
     }
-    const a = e.target.closest('a[data-link]');
+    const a = e.target.closest('a[data-link]') || this.nearClick(e);
     if (a) {
       e.preventDefault();
       const href = a.getAttribute('href'), row = a.closest('[data-line]'), sections = row ? this.linkSections(Number(row.dataset.line), href) : null;
@@ -2049,6 +2079,29 @@ export default class DocEditor extends React.Component {
     const onto = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-bart-picker]');
     if (!onto && e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]')) this.leavePicker();
   };
+  // The link of an answer's line within NEAR_LINK px of (x, y), measured from its boxes (one per line it wraps over), the
+  // nearest when there are two; null on any other line, and on the answer's line being typed in (the caret put there by
+  // the keyboard): a click beside a link there places the caret.
+  nearLink(target, x, y) {
+    if (x == null || y == null || !target || !target.closest) return null;
+    const row = target.closest('[data-line]'), ed = this.editorEl(); if (!row || !ed || !ed.contains(row) || !row.querySelectorAll) return null;
+    const i = Number(row.dataset.line), p = this.parsedOf(this.lines())[i]; if (!p || p.type !== 'reply') return null;
+    if ((i === this.state.activeLine && !this.byMouse) || (this.editing && this.editing.q === i)) return null;
+    let best = null, gap = Infinity;
+    for (const a of row.querySelectorAll('a[data-link]')) {
+      for (const r of a.getClientRects()) {
+        const dx = Math.max(r.left - x, 0, x - r.right), dy = Math.max(r.top - y, 0, y - r.bottom), d = Math.max(dx, dy);
+        if (d <= NEAR_LINK && d < gap) { best = a; gap = d; }
+      }
+    }
+    return best;
+  }
+  // The click after a press beside a link (nearLink): that link, when the click is still beside it.
+  nearClick(e) {
+    const a = this.nearA; this.nearA = null;
+    if (!a || a.isConnected === false) return null;
+    return this.nearLink(e.target, e.clientX, e.clientY) === a ? a : null;
+  }
   openLink(href, options) { if (this.props.onOpenLink) this.props.onOpenLink(href, options); else window.open(href, '_blank', 'noreferrer'); }
   // A passage link in an @discover answer (2026-10-03) goes with the answer's other sections for the same paper, the
   // Stage's Sections menu (model/stage.js guideSections). Anywhere else, none: null.
