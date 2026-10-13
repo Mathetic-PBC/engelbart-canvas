@@ -62,6 +62,15 @@ export const FILE = () => (
   </svg>
 );
 
+// The same sheet with a W on it: a Word document, which a note's three lines must not be mistaken for.
+export const DOC = () => (
+  <svg viewBox="0 0 16 16" width="1em" height="1em" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" strokeLinecap="round" aria-hidden="true">
+    <path d="M5 1.5h4.5L13 5v7.5a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-9a2 2 0 0 1 2-2z" />
+    <path d="M9.5 1.5v2A1.5 1.5 0 0 0 11 5h2" />
+    <path d="M5.25 7.75 6.4 12 8 9l1.6 3 1.15-4.25" />
+  </svg>
+);
+
 export const SEARCH = () => (
   <svg viewBox="0 0 16 16" width={16} height={16} fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" aria-hidden="true">
     <circle cx={6.75} cy={6.75} r={4.5} />
@@ -113,12 +122,12 @@ export const Collapse = () => <svg width="16" height="16" viewBox="0 0 16 16" ar
 export const KIND = {
   note: { glyph: <NOTE />, label: 'note' },
   md: { glyph: <FILE />, label: 'md' },
-  docx: { glyph: <NOTE />, label: 'docx' },
+  docx: { glyph: <DOC />, label: 'docx' },
   pdf: { glyph: <PDF />, label: 'pdf' },
   git: { glyph: <GH />, label: 'git repo' },
   folder: { glyph: <FOLDER />, label: 'folder' },
   website: { glyph: <GLOBE />, label: 'link' },
-  html: { glyph: <CODE />, label: 'html' },
+  html: { glyph: <GLOBE />, label: 'html' }, // a page on disk, the Stage's saved copies among them: a page, not code
   data: { glyph: <LAYERS />, label: 'data file' },
   chat: { glyph: <CHAT />, label: 'chat', fixed: true },
   task: { glyph: <TASK />, label: 'task', fixed: true },
@@ -126,19 +135,23 @@ export const KIND = {
   image: { glyph: <IMAGE />, label: 'image' },
 };
 
+// A type KIND does not know is some file: a plain sheet, never a note's or a folder's.
+const ANY_FILE = { glyph: <FILE />, label: 'file' };
+
 /** A row's glyph, and the words beside it: a library row says its type then its tags ("pdf · paper"); the editor's own items keep their name. */
 export function kindOf(item) {
-  const kind = KIND[kindKey(item)] || KIND.note;
+  const kind = KIND[kindKey(item)] || ANY_FILE;
   return kind.fixed || !item || !item.type ? kind : { glyph: kind.glyph, label: kindLabel(item) };
 }
 
 // The design draws a note at 15px, a globe at 14 and every other kind at 12, centred in a box of 16 (18 in a list):
-// the workspace sidebar's rows and search, and the @ menu (Canvas.dc.html, Add - Mention.dc.html `icon`).
-const GLYPH_SIZE = { note: 15, md: 15, website: 14 };
+// the workspace sidebar's rows and search, and the @ menu (Canvas.dc.html, Add - Mention.dc.html `icon`). The sheets
+// (note, md, docx, any other file) are drawn at the note's size, an html page at the globe's.
+const GLYPH_SIZE = { note: 15, md: 15, docx: 15, website: 14, html: 14 };
 export function KindGlyph({ item, kind: key = null, box = 16, color = '#171717' }) {
   const name = key || (item.type === 'workspace' || item.type === 'child' ? 'workspace' : kindKey(item));
   const kind = KIND[name] || kindOf(item || {});
-  const size = GLYPH_SIZE[name] || 12;
+  const size = KIND[name] ? GLYPH_SIZE[name] || 12 : GLYPH_SIZE.md;
   return (
     <span style={{ flex: 'none', width: box, height: box, display: 'flex', alignItems: 'center', justifyContent: 'center', color }}>
       <span className="glyph-fit" style={{ display: 'flex', width: size, height: size }}>{kind.glyph}</span>

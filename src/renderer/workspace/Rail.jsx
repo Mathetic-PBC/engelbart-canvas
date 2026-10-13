@@ -410,8 +410,11 @@ function SectionHead({ label, open, onToggle, plus = null, ...rest }) {
 
 const GROUP_ICON = { starred: <I.StarIcon />, notes: <I.NoteIcon /> };
 const GROUP_EMPTY = { starred: 'Star a source to keep it here', notes: 'No notes yet' };
-// A mixed source's own icon: a link for a website, code for a repository, a folder for files; a note or a star keeps its own.
-const SOURCE_ICON = { notes: <I.NoteIcon />, websites: <I.LinkIcon />, code: <I.CodeIcon />, files: <I.FolderIcon /> };
+// A mixed source's own icon: a link for a website, code for a repository; a note or a star keeps its own. A file is
+// drawn as its type (KIND: a sheet, a pdf, a W for docx, a globe for a page on disk, layers for data, a picture, a folder).
+// Exported for test/source-icons.test.cjs.
+const SOURCE_ICON = { notes: <I.NoteIcon />, websites: <I.LinkIcon />, code: <I.CodeIcon /> };
+export const sourceIcon = (row, active) => (sourceKind(row) === 'files' ? <Glyph item={row} box={ICON} color={active ? '#171717' : '#5c5c5c'} /> : SOURCE_ICON[sourceKind(row)]);
 
 /** The rows to show of a group: its first `n`, with the one open in front among them when it would be cut. */
 function visibleRows(rows, n, activeId) {
@@ -607,7 +610,7 @@ export default function Rail({
                     key={row.id}
                     data-sb-source={row.id}
                     indent={indent}
-                    icon={row.type === 'md' && sourceKind(row) === 'files' ? <I.FileIcon /> : SOURCE_ICON[sourceKind(row)]}
+                    icon={sourceIcon(row, row.id === activeRowId)}
                     label={renaming === row.id ? <RenameField initial={row.name} onDone={(name) => { setRenaming(null); if (name) onRenameRow(row, name); }} style={text(indent ? SIZE.indent : SIZE.row)} /> : row.name}
                     title={row.name}
                     faint={isUntitled(row.name)}
