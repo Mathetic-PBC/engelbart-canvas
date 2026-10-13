@@ -336,12 +336,16 @@ export default class DocEditor extends React.Component {
       // A press just beside a link in an answer (2026-10-12: on its underline, between a wrapped link's lines, past its last
       // letter) is a press on that link (nearLink), and the click that follows opens it.
       // A press that puts the caret is the mouse's (byMouse): the line it lands on, if an answer's, keeps its links drawn.
+      // A press in the space under a card (gapAt) is kept for its click too. One on a heading's space above its text must not
+      // put the caret in the heading: the click makes a line above it instead.
       mousedown: (e) => {
         this.downOnPage = e.target === this.scrollRef.current;
-        this.nearA = null;
+        this.nearA = null; this.downGap = null;
         if (!inEd(e)) return;
         this.downOnRoot = e.target === this.editorEl();
         if (e.target.closest('button[data-act], [data-build-icon][data-act], .bart-chip, a[data-link], [data-mention]')) { e.preventDefault(); return; }
+        this.downGap = e.button === 0 && !inFollow(e) ? this.gapAt(e.target, e.clientY) : null;
+        if (this.downGap && !this.downOnRoot) { e.preventDefault(); return; }
         const near = e.button === 0 && !inFollow(e) ? this.nearLink(e.target, e.clientX, e.clientY) : null;
         if (near) { this.nearA = near; e.preventDefault(); return; }
         if (e.button === 0 && !inFollow(e)) { this.held = true; this.byMouse = true; }
@@ -614,6 +618,60 @@ export default class DocEditor extends React.Component {
     }
     this.cardCache.set(ls, held); return held;
   }
+  // Where each card of the document ends (2026-10-13), by line: the last line of the @bart conversation (title to last turn,
+  // answered or at work), Build, code block or checklist that line is drawn in, or -1 for a line in none. Kept for the text
+  // it was read from: lineHtml asks it for every heading.
+  cardEnds() {
+    const text = this.docText(); if (this.endsCache && this.endsCache.text === text) return this.endsCache.end;
+    const ls = text.split('\n'), ps = this.parsedOf(ls), end = new Array(ls.length).fill(-1);
+    for (let j = 0; j < ls.length; j++) {
+      const p = ps[j];
+      if (p.type === 'build' || p.type === 'pending') end[j] = j;
+      else if ((p.type === 'code' || p.type === 'fence') && p.block) end[j] = p.block.close;
+      else if (p.type === 'todo') { let k = j; while (k + 1 < ls.length && ps[k + 1].type === 'todo') k++; end.fill(k, j, k + 1); j = k; }
+    }
+    for (const t of threads(ls, ps)) if (t.to > t.from) end.fill(t.to, t.titleLine >= 0 ? t.titleLine : t.from, t.to + 1);
+    this.endsCache = { text, end, ls, ps }; return end;
+  }
+  // The rows drawn just above and just below a height on the page (a click's clientY) → { above, below, level }: their
+  // lines, -1 where there is none; `level`: a row spans that height (beside it, then, not between two). Rows not drawn (a
+  // folded answer's, a collapsed conversation's) are passed over.
+  rowsAround(y) {
+    const ed = this.editorEl(), out = { above: -1, below: -1, level: false }; if (!ed || !ed.querySelectorAll || y == null) return out;
+    for (const row of ed.querySelectorAll('[data-line]')) {
+      const r = row.getBoundingClientRect(); if (!r.height) continue;
+      if (r.bottom <= y) out.above = Number(row.dataset.line);
+      else { if (r.top >= y) out.below = Number(row.dataset.line); else out.level = true; break; }
+    }
+    return out;
+  }
+  // A press in the space under a card (2026-10-13): between the last row of an answer, a run, a Build, a code block or a
+  // checklist and whatever row comes under it. It lands on the editor itself (the card's bottom margin), or on the space
+  // a heading right under a card has above its text (padding, not margin, so there is a row to land on). → { at, add }:
+  // the line under the card the caret goes to, and whether that line is to be made (it is not when it is already empty),
+  // or null for any other press, and in a document that cannot be written in.
+  gapAt(target, y) {
+    const ed = this.editorEl(); if (!ed || !target || y == null || this.props.readOnly) return null;
+    const end = this.cardEnds(); let e = -1;
+    if (target === ed) {
+      const { above, below, level } = this.rowsAround(y); if (level || above < 0 || below < 0) return null;
+      e = end[above]; if (e < 0 || below <= e) return null;
+    } else {
+      if (!target.matches || !target.matches('[data-line]') || !ed.contains(target)) return null;
+      const i = Number(target.dataset.line), p = this.endsCache.ps[i], t = target.querySelector && target.querySelector('.t');
+      if (!p || p.type !== 'h' || !t || i < 1 || end[i - 1] !== i - 1 || y >= t.getBoundingClientRect().top) return null;
+      e = i - 1;
+    }
+    const { ls, ps } = this.endsCache, at = e + 1, next = ps[at];
+    return { at, add: !(ls[at] === '' && next && next.type === 'p') };
+  }
+  // The caret on the line under a card, made first if it is not there: as the checklist's foot does (data-act="after"), one
+  // step to undo.
+  openGap(g) {
+    if (g.add) this.setLines((x) => { const out = [...x]; out.splice(g.at, 0, ''); return out; });
+    this.caret = { line: g.at, offset: 0 }; this.wantFocus = true;
+    if (!g.add && this.state.activeLine === g.at) this.applyCaret(); else this.setState({ activeLine: g.at, mention: null });
+  }
   timer(fn, ms) { const id = setTimeout(() => { this.timers.delete(id); if (this.mounted) fn(); }, ms); this.timers.add(id); return id; }
 
   // `undo` (2026-10-03): an edited question asked again is one step back to before it was edited, whatever was typed
@@ -751,7 +809,9 @@ export default class DocEditor extends React.Component {
     }
     if (p.type === 'h') {
       const size = [26, 22, 18][p.level - 1]; const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
-      return `<div ${raw} style="padding:4px 0;min-height:35px;font:500 ${size}px/1.6 var(--font-sans);letter-spacing:-0.3px"><span class="t">${content || '<br>'}</span></div>`;
+      // Right under a card it has room above its text to click in (gapAt): a new line goes there.
+      const pad = i > 0 && this.cardEnds()[i - 1] === i - 1 ? '12px 0 4px' : '4px 0';
+      return `<div ${raw} style="padding:${pad};min-height:35px;font:500 ${size}px/1.6 var(--font-sans);letter-spacing:-0.3px"><span class="t">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'bart') {
       if (at && at.box && at.role === 'question') return this.researchHtml(i, raw, p, at);
@@ -2150,7 +2210,23 @@ export default class DocEditor extends React.Component {
   editorClick = (e) => {
     // The editor's own empty space below the last line. A drag from one line to another also ends here (2026-10-02: Chromium
     // clicks what holds both ends), and putting the caret at the end lost its highlight.
-    if (e.target === this.editorEl()) { if (this.downOnRoot && getSelection().isCollapsed) { this.cancelEdit(); this.focusEnd(); } return; }
+    // The space under a card, with a row under it (2026-10-13), puts the caret on a line there (gapAt); the space between
+    // two other rows is the browser's, which puts the caret on the nearer one.
+    if (e.target === this.editorEl()) {
+      if (!this.downOnRoot || !getSelection().isCollapsed) return;
+      this.cancelEdit();
+      const gap = this.downGap && this.gapAt(e.target, e.clientY);
+      if (gap && gap.at === this.downGap.at) this.openGap(gap);
+      else { const rows = this.rowsAround(e.clientY); if (rows.below < 0 && !rows.level) this.focusEnd(); }
+      return;
+    }
+    // A heading's space above its text, right under a card: the same, when the press was there too.
+    if (this.downGap && !this.downOnRoot && getSelection().isCollapsed) {
+      const pressed = this.downGap; this.downGap = null;
+      if (this.editing) this.cancelEdit();
+      const gap = this.gapAt(e.target, e.clientY);
+      if (gap && gap.at === pressed.at) { e.preventDefault(); this.openGap(gap); return; }
+    }
     const act = e.target.closest('[data-act]');
     // A click anywhere but on the question being edited puts it back first (2026-10-03); what was clicked then does what it
     // does, on the document as it was. Its own Edit button leaves it being edited.
