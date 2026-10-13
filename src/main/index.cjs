@@ -82,6 +82,10 @@ const { createRunner: createBuildRunner, createFakeRunner: createFakeBuildRunner
 const { EDGES: WINDOW_EDGES, resizedBounds } = require('./window-edges.cjs');
 const { windowOpenRoute } = require('./window-open.cjs');
 const { hasTestMode } = require('./developer.cjs');
+const { createRunLog } = require('./bart/runlog.cjs');
+const { createAgentMapWindow } = require('./agent-map/window.cjs');
+const { registerAgentMapIpc } = require('./agent-map/ipc.cjs');
+const { agentDesign } = require('./agent-map/design.cjs');
 const { createUpdates } = require('./updates.cjs');
 const projects = require('./store/projects.cjs');
 const { createWindows, placement } = require('./windows.cjs');
@@ -114,6 +118,8 @@ let store = null;
 let sweeper = null;
 let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
 let bart = null;
+let agentMap = null; // the Agent map (./agent-map/window.cjs): developers only, one per app
+let runLog = null; // what it shows (./bart/runlog.cjs): kept only in a copy with test mode
 let builds = null;
 let sandbox = null;
 let tools = null;
@@ -551,7 +557,11 @@ function openWindow({ place = null, bounds = null, from = null } = {}) {
     }
   });
   win.on('show', () => { ctx.closedHidden = false; });
-  win.on('closed', () => windows.remove(ctx));
+  win.on('closed', () => {
+    windows.remove(ctx);
+    // The Agent map is no workspace window: it goes with the last of them, so the app can quit (window-all-closed).
+    if (!windows.count() && agentMap) agentMap.close();
+  });
   win.loadURL(APP_URL);
   return ctx;
 }
@@ -589,7 +599,8 @@ if (!hasSingleInstanceLock) {
     const afterOpen = process.env.ENGELBART_WEB_PDFS === 'off' ? null
       : (ctx, { again = false } = {}) => checkWebPdfs(ctx, { fetchPdf, inspectPdf, onChange: () => { libraryChanged(); pdfAdded(); }, log: (line) => console.warn(`[engelbart] ${line}`), again });
     // Test mode only in a developer's copy: run from a checkout, or packaged by `npm run relaunch` (./developer.cjs).
-    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, pdfTitle, afterOpen, testMode: hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env }), zotero: () => zoteroLibrary });
+    const developer = hasTestMode({ packaged: app.isPackaged, distDir: DIST, env: process.env });
+    store = createStore({ homeDir, rootDir: process.env.ENGELBART_ROOT_DIR || null, fixturesDir: FIXTURES, inspectPdf, pdfTitle, afterOpen, testMode: developer, zotero: () => zoteroLibrary });
     // Git, Claude Code and Codex (src/main/tools): checked at every launch in the background and recorded in
     // config.json → tools; installed, updated and signed in to from the setup dialog. The Git that comes with
     // Engelbart stands in when the Mac has none of its own (tools/bundled-git.cjs), and on a Mac with neither agent
@@ -642,9 +653,13 @@ if (!hasSingleInstanceLock) {
     const bartThreads = () => createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') });
     const brainstormThreads = () => createThreads({ idleMs: BRAINSTORM_IDLE_MS, file: path.join(app.getPath('userData'), 'brainstorm-threads.json') });
     const discoverThreads = () => createThreads({ idleMs: DISCOVER_IDLE_MS, file: path.join(app.getPath('userData'), 'discover-threads.json') });
+    // The Agent map (2026-10-12): each run's prompt, context, steps, tool calls and output, in a developer's copy alone; a
+    // copy people download keeps none of it. Each change goes to the map window only.
+    agentMap = createAgentMapWindow({ BrowserWindow, appUrl: APP_URL, preload: PRELOAD_FILE, available: () => developer, headless: process.env.ENGELBART_HEADLESS === '1' });
+    runLog = developer ? createRunLog({ file: path.join(app.getPath('userData'), 'agent-runs.jsonl'), onChange: (record) => agentMap.send('engelbart:agent-run', record) }) : null;
     bart = process.env.ENGELBART_BART_FAKE === '1'
-      ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads() })
-      : createBart({ readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), brainstormCodexHome: path.join(app.getPath('userData'), 'codex-home-brainstorm'), discoverCodexHome: path.join(app.getPath('userData'), 'codex-home-discover'), threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), tools });
+      ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), runLog })
+      : createBart({ runLog, readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), brainstormCodexHome: path.join(app.getPath('userData'), 'codex-home-brainstorm'), discoverCodexHome: path.join(app.getPath('userData'), 'codex-home-discover'), threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), tools });
     sweeper.start();
     powerMonitor.on('resume', () => sweeper.sweepSoon());
     // Build (src/main/build): a workspace handed to Claude Code or Codex in a git worktree of its own, writing only there.
@@ -1127,6 +1142,22 @@ if (!hasSingleInstanceLock) {
         const parent = dialogWindow();
         const result = parent ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options);
         return result.response === 0;
+      },
+    });
+    registerAgentMapIpc({
+      ipcMain,
+      trustedHandler,
+      mapWindow: agentMap,
+      runLog,
+      design: () => agentDesign({ dataRoot: store.config().dataRoot, models: readModels('bart') }),
+      // The map's export: a page of its own, saved where the person picks.
+      saveFile: async (text, name) => {
+        const parent = agentMap.window();
+        const options = { defaultPath: path.join(app.getPath('downloads'), name), filters: [{ name: 'Web page', extensions: ['html'] }] };
+        const result = parent ? await dialog.showSaveDialog(parent, options) : await dialog.showSaveDialog(options);
+        if (result.canceled || !result.filePath) return null;
+        await fs.promises.writeFile(result.filePath, text);
+        return result.filePath;
       },
     });
     // New versions (updates.cjs): only in a packaged app built with a download folder. ENGELBART_UPDATES=off stops it.

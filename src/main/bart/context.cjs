@@ -388,4 +388,4 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, mentionedFiles: mentionedFilesBlock(files), files, documents: documents.join('\n\n'), now, entries, workspaceName: workspace.name };
 }
 
-module.exports = { HERE, NO_STAGE, NO_HIGHLIGHTS, SELECTION_WAIT_MS, markPlace, buildContext, conversationBlock, catalogEntries, mentionedFiles, mentionedFilesBlock, libraryDirs, block, highlightBlock, paperOf, webPageOf };
+module.exports = { HERE, NO_STAGE, NO_HIGHLIGHTS, SELECTION_WAIT_MS, SCOPED, ZOTERO_READERS, LIBRARY_READERS, markPlace, buildContext, conversationBlock, catalogEntries, mentionedFiles, mentionedFilesBlock, libraryDirs, block, highlightBlock, paperOf, webPageOf };

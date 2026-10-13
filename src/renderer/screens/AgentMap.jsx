@@ -1,0 +1,231 @@
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { api, errorMessage } from '../api.js';
+import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, modelLabel, sectionText, exportPage } from '../agent-map/runText.js';
+
+// The Agent map (2026-10-12; src/main/agent-map): a window for developers only, the app's renderer at ?view=agent-map.
+// Runs: every @bart, @brainstorm and @discover run, newest first, live (engelbart:agent-run), and the one selected in
+// sections: its system prompt, its context block by block, each model step (the input, its tool calls, what it said) and
+// what was written. Design: each agent as it is set up now. Plain and dense on purpose: one font, small type, thin rules.
+// Keys: j/k the next and previous run, 1–4 a section, c copies the open section, e exports the run (E every run).
+
+const SECTIONS = [['system', 'System prompt'], ['context', 'Context'], ['steps', 'Steps'], ['written', 'Written']];
+const FONT = '12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace';
+const RULE = '1px solid #ddd';
+const S = {
+  root: { position: 'fixed', inset: 0, display: 'flex', flexDirection: 'column', font: FONT, color: '#111', background: '#fff' },
+  bar: { display: 'flex', alignItems: 'center', gap: 12, padding: '6px 10px', borderBottom: RULE, flex: 'none' },
+  tab: (on) => ({ font: FONT, background: 'none', border: 'none', borderBottom: on ? '2px solid #111' : '2px solid transparent', padding: '2px 0', cursor: 'pointer', fontWeight: on ? 600 : 400, color: '#111' }),
+  button: { font: FONT, background: '#fff', border: RULE, padding: '1px 6px', cursor: 'pointer', color: '#111' },
+  dim: { color: '#777' },
+  body: { flex: 1, display: 'flex', minHeight: 0 },
+  list: { width: 360, flex: 'none', overflowY: 'auto', borderRight: RULE },
+  row: (on) => ({ padding: '5px 10px', borderBottom: '1px solid #eee', cursor: 'pointer', background: on ? '#eef3ff' : 'transparent' }),
+  detail: { flex: 1, overflowY: 'auto', padding: '8px 14px 40px' },
+  pre: { font: FONT, whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#f6f6f6', border: '1px solid #e6e6e6', padding: 6, margin: '3px 0' },
+  head: { cursor: 'pointer', padding: '3px 0', borderTop: RULE, marginTop: 6, userSelect: 'none' },
+  sub: { margin: '2px 0 2px 14px' },
+  error: { color: '#a00', border: '1px solid #e6b8b8', padding: 4, margin: '6px 0' },
+};
+
+const dot = (status) => (status === 'running' ? <span title="running" style={{ color: '#1a7f37' }}>●</span> : status === 'failed' ? <span title="failed" style={{ color: '#a00' }}>●</span> : status === 'stopped' ? <span title="stopped" style={{ color: '#999' }}>○</span> : <span style={{ visibility: 'hidden' }}>●</span>);
+
+/** Text shown only once it is opened: a block of documents can be large. */
+function Expand({ label, text, open: wanted = false }) {
+  const [open, setOpen] = useState(wanted);
+  // A step's output opens when it arrives, after the step was drawn.
+  useEffect(() => { if (wanted) setOpen(true); }, [wanted]);
+  return (
+    <div style={S.sub}>
+      <div style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>{open ? '▾' : '▸'} {label}</div>
+      {open && <pre style={S.pre}>{text || '(empty)'}</pre>}
+    </div>
+  );
+}
+
+function Section({ n, id, title, note, open, onToggle, children }) {
+  return (
+    <div>
+      <div style={S.head} onClick={() => onToggle(id)}>{open ? '▾' : '▸'} <b>{n} {title}</b> {note && <span style={S.dim}>{note}</span>}</div>
+      {open && <div>{children}</div>}
+    </div>
+  );
+}
+
+function ToolCall({ tool, from }) {
+  const [open, setOpen] = useState(false);
+  const result = tool.result;
+  return (
+    <div style={{ ...S.sub, borderLeft: '1px solid #ccc', paddingLeft: 8 }}>
+      <div style={{ cursor: 'pointer' }} onClick={() => setOpen(!open)}>
+        {open ? '▾' : '▸'} <b>{tool.name}</b> <span style={S.dim}>+{msLabel(Math.max(0, tool.at - from))}{tool.ms != null ? ` · took ${msLabel(tool.ms)}` : ' · running'}{result ? ` · ${result.size.toLocaleString('en-US')} chars` : ''}{result && result.exitCode != null ? ` · exit ${result.exitCode}` : ''}</span>{result && result.error && <span style={{ color: '#a00' }}> · error</span>}
+        {!open && <span style={S.dim}> {firstWords(json(tool.input).replace(/\s+/g, ' '), 14)}</span>}
+      </div>
+      {open && (
+        <div>
+          <div style={S.dim}>arguments</div>
+          <pre style={S.pre}>{json(tool.input) || '(none)'}</pre>
+          {result && <><div style={S.dim}>result, first 2,000 characters</div><pre style={S.pre}>{result.excerpt || '(empty)'}</pre></>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Step({ step, n }) {
+  return (
+    <div style={{ margin: '6px 0 10px 14px' }}>
+      <div><b>step {n}</b> {step.name || step.model} <span style={S.dim}>({step.model}) · {step.effort}{step.ms != null ? ` · ${msLabel(step.ms)}` : step.output == null ? ' · running' : ''}</span>{step.escalated && <b style={{ color: '#9a6700' }}> · escalated</b>}</div>
+      <Expand label={<>input <span style={S.dim}>{sizeLabel(step.input)}</span></>} text={step.input} />
+      <div style={{ ...S.sub, ...S.dim }}>tool calls ({step.tools.length})</div>
+      {step.tools.map((tool, i) => <ToolCall key={tool.id || i} tool={tool} from={step.at} />)}
+      <Expand label={<>output <span style={S.dim}>{step.output == null ? 'running' : sizeLabel(step.output)}</span></>} text={step.output == null ? '' : step.output} open={step.output != null} />
+    </div>
+  );
+}
+
+function RunDetail({ record, open, onToggle }) {
+  const blocks = contextBlocks(record);
+  const total = blocks.reduce((sum, block) => sum + block.text.length, 0);
+  return (
+    <div>
+      <div><b>@{record.agent}</b> {firstWords(record.question, 30)}</div>
+      <div style={S.dim}>{record.status} · {record.provider} · {record.projectName}{record.workspaceName ? ` / ${record.workspaceName}` : ''} · {timeLabel(record.at)}{record.ms != null ? ` · ${msLabel(record.ms)}` : ''}{record.mode ? ` · ${record.mode}` : ''}{record.pinned ? ' · picked by hand' : ''} · {record.id}</div>
+      {record.error && <div style={S.error}>{record.status}: {record.error}</div>}
+      <Section n={1} id="system" title="System prompt" note={sizeLabel(record.system)} open={open === 'system'} onToggle={onToggle}>
+        <pre style={S.pre}>{record.system}</pre>
+      </Section>
+      <Section n={2} id="context" title="Context" note={`${blocks.filter((block) => block.text).length} blocks · ${total.toLocaleString('en-US')} chars · ~${Math.round(total / 4).toLocaleString('en-US')} tok`} open={open === 'context'} onToggle={onToggle}>
+        {blocks.map((block) => <Expand key={block.key} label={<>{block.label} <span style={S.dim}>{block.text ? sizeLabel(block.text) : 'none'}</span></>} text={block.text} />)}
+      </Section>
+      <Section n={3} id="steps" title="Steps" note={`${record.steps.length}`} open={open === 'steps'} onToggle={onToggle}>
+        {record.steps.length ? record.steps.map((step, i) => <Step key={i} step={step} n={i + 1} />) : <div style={{ ...S.sub, ...S.dim }}>no model run</div>}
+      </Section>
+      <Section n={4} id="written" title="Written" note={record.written ? `${record.written.length} lines` : record.status === 'running' ? 'running' : 'nothing'} open={open === 'written'} onToggle={onToggle}>
+        <pre style={S.pre}>{writtenText(record) || '(nothing)'}</pre>
+      </Section>
+    </div>
+  );
+}
+
+function Design({ design }) {
+  if (!design) return <div style={S.dim}>Loading…</div>;
+  return (
+    <div>
+      {design.agents.map((agent) => (
+        <div key={agent.agent} style={{ borderTop: RULE, padding: '6px 0 10px' }}>
+          <div><b>@{agent.agent}</b></div>
+          <Expand label={<>system prompt <span style={S.dim}>{agent.prompt.custom ? `custom (${agent.prompt.file})` : 'built-in'} · {sizeLabel(agent.prompt.text)}</span></>} text={agent.prompt.text} />
+          <div style={S.sub}>tools · Claude: <code>--tools "{agent.tools.anthropic.tools}"</code> <code>--allowedTools "{agent.tools.anthropic.allowedTools}"</code></div>
+          <div style={S.sub}>tools · Codex: web search {agent.tools.openai.webSearch ? 'on' : 'off'} · paper MCP {agent.tools.openai.papers ? 'on' : 'off'} · sandbox {agent.tools.openai.sandbox}</div>
+          {Object.entries(agent.models.providers).map(([provider, set]) => (
+            <div key={provider} style={S.sub}>
+              models · {provider}{provider === agent.models.inForce ? <b> (in force)</b> : ''}:{' '}
+              {set.error ? <span style={{ color: '#a00' }}>{set.error}</span>
+                : set.steps ? set.steps.map((step) => `${step.name} (${step.model}) at ${step.effort}`).join(' → ')
+                  : Object.entries(set.modes || {}).map(([mode, steps]) => `${mode}: ${steps.map((step) => `${step.name} (${step.model}) at ${step.effort}`).join(', ')}`).join(' · ')}
+            </div>
+          ))}
+          <div style={S.sub}>timeout: {Object.entries(agent.timeout).map(([key, ms]) => `${key} ${msLabel(ms)}`).join(' · ')}</div>
+          <div style={S.sub}>context, a new session:</div>
+          {agent.context.blocks.map((block) => <div key={block.block} style={{ marginLeft: 28 }}>{block.block} <span style={S.dim}>— {block.note}</span></div>)}
+          <div style={S.sub}>a resumed session: {agent.context.resumed.join(', ')}</div>
+          <div style={S.sub}>folders: {agent.context.dirs}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export default function AgentMap() {
+  const [tab, setTab] = useState('runs');
+  const [runs, setRuns] = useState([]);
+  const [selected, setSelected] = useState(null);
+  const [record, setRecord] = useState(null);
+  const [open, setOpen] = useState('steps');
+  const [design, setDesign] = useState(null);
+  const [note, setNote] = useState('');
+  const selectedRef = useRef(null);
+  const refetch = useRef(null);
+  selectedRef.current = selected;
+
+  useEffect(() => { document.title = 'Agent map'; }, []);
+  useEffect(() => {
+    let live = true;
+    api.agentRuns().then((list) => { if (!live) return; setRuns(list); setSelected((current) => current || (list[0] && list[0].id) || null); }).catch((error) => setNote(errorMessage(error)));
+    const off = api.onAgentRun((summary) => {
+      setRuns((list) => [summary, ...list.filter((run) => run.id !== summary.id)].sort((a, b) => b.at - a.at));
+      setSelected((current) => current || summary.id);
+      // The run in view is read again, at most every 400 ms while it changes.
+      if (summary.id === selectedRef.current && !refetch.current) {
+        refetch.current = setTimeout(() => { refetch.current = null; api.agentRun(summary.id).then((full) => { if (full && full.id === selectedRef.current) setRecord(full); }).catch(() => {}); }, 400);
+      }
+    });
+    return () => { live = false; off(); clearTimeout(refetch.current); refetch.current = null; };
+  }, []);
+  useEffect(() => {
+    if (!selected) { setRecord(null); return; }
+    let live = true;
+    api.agentRun(selected).then((full) => { if (live) setRecord(full); }).catch((error) => setNote(errorMessage(error)));
+    return () => { live = false; };
+  }, [selected]);
+  useEffect(() => { if (tab === 'design') api.agentDesign().then(setDesign).catch((error) => setNote(errorMessage(error))); }, [tab]);
+
+  const toggle = useCallback((id) => setOpen((current) => (current === id ? null : id)), []);
+  const exportRuns = useCallback(async (all) => {
+    try {
+      const records = all ? (await Promise.all(runs.map((run) => api.agentRun(run.id)))).filter(Boolean) : record ? [record] : [];
+      if (!records.length) { setNote('Nothing to export.'); return; }
+      const name = all ? `agent-runs-${new Date().toISOString().slice(0, 10)}` : `agent-run-${records[0].agent}-${records[0].id.slice(0, 8)}`;
+      const saved = await api.exportAgentRuns(exportPage(records, all ? 'Agent runs' : `@${records[0].agent}: ${firstWords(records[0].question, 12)}`), name);
+      setNote(saved ? `Saved ${saved}` : 'Not saved.');
+    } catch (error) { setNote(errorMessage(error)); }
+  }, [runs, record]);
+
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA)$/.test(event.target.tagName)) return;
+      const at = runs.findIndex((run) => run.id === selected);
+      if (event.key === 'j' && runs.length) setSelected(runs[Math.min(runs.length - 1, at + 1)].id);
+      else if (event.key === 'k' && runs.length) setSelected(runs[Math.max(0, at - 1)].id);
+      else if (/^[1-4]$/.test(event.key)) { setTab('runs'); setOpen(SECTIONS[Number(event.key) - 1][0]); }
+      else if (event.key === 'c' && record && open) {
+        const text = sectionText(record, open);
+        api.copyText(text.slice(0, 400000)).then(() => setNote(`Copied ${SECTIONS.find(([id]) => id === open)[1]}${text.length > 400000 ? ' (first 400,000 characters)' : ''}.`)).catch((error) => setNote(errorMessage(error)));
+      } else if (event.key === 'e' || event.key === 'E') void exportRuns(event.key === 'E');
+      else return;
+      event.preventDefault();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [runs, selected, record, open, exportRuns]);
+
+  const rows = useMemo(() => runs.map((run) => (
+    <div key={run.id} style={S.row(run.id === selected)} onClick={() => setSelected(run.id)}>
+      <div>{dot(run.status)} <b>@{run.agent}</b> <span style={S.dim}>{modelLabel(run)}</span>{run.toolCount ? <span style={S.dim}> · {run.toolCount} tools</span> : null}</div>
+      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{firstWords(run.question)}</div>
+      <div style={S.dim}>{run.projectName}{run.workspaceName ? ` / ${run.workspaceName}` : ''} · {timeLabel(run.at)}</div>
+    </div>
+  )), [runs, selected]);
+
+  return (
+    <div style={S.root}>
+      <div style={S.bar}>
+        <button type="button" style={S.tab(tab === 'runs')} onClick={() => setTab('runs')}>Runs</button>
+        <button type="button" style={S.tab(tab === 'design')} onClick={() => setTab('design')}>Design</button>
+        <span style={{ flex: 1 }} />
+        <span style={S.dim}>{note}</span>
+        <button type="button" style={S.button} disabled={!record} onClick={() => exportRuns(false)}>Export run</button>
+        <button type="button" style={S.button} disabled={!runs.length} onClick={() => exportRuns(true)}>Export all</button>
+        <span style={S.dim}>j/k run · 1–4 section · c copy · e export (E all)</span>
+      </div>
+      {tab === 'runs' ? (
+        <div style={S.body}>
+          <div style={S.list}>{rows.length ? rows : <div style={{ padding: 10, ...S.dim }}>No runs yet. Ask @bart, @brainstorm or @discover in any window.</div>}</div>
+          <div style={S.detail}>{record ? <RunDetail record={record} open={open} onToggle={toggle} /> : <div style={S.dim}>{runs.length ? 'Loading…' : ''}</div>}</div>
+        </div>
+      ) : (
+        <div style={{ ...S.detail, flex: 1 }}><Design design={design} /></div>
+      )}
+    </div>
+  );
+}

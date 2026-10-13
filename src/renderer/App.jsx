@@ -1,6 +1,7 @@
 import React from 'react';
 import { api, errorMessage } from './api.js';
 import TestToggle from './ui/TestToggle.jsx';
+import AgentsButton from './ui/AgentsButton.jsx';
 import WindowEdges from './ui/WindowEdges.jsx';
 import WindowControls from './ui/WindowControls.jsx';
 import SandboxProgress from './ui/SandboxProgress.jsx';
@@ -507,6 +508,7 @@ export default function App() {
         onReveal: () => api.reveal(config.testRoot).catch(fail),
       } : null}>
         <ConnectChip sessions={connectSessions} onOpen={(id) => setConnectPopup({ sessionId: id })} />
+        <AgentsButton available={config.testModeAvailable} onOpen={() => { void api.openAgentMap().catch(() => {}); }} />
         {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
       {guidedOffer && phase === 'workspace' && (
