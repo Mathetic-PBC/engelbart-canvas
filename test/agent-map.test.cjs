@@ -1,7 +1,7 @@
 'use strict';
 
 // The Agent map (2026-10-12; src/main/agent-map, src/main/bart/runlog.cjs, src/renderer/screens/AgentMap.jsx): the run log,
-// what ask() tells it, each agent's design, and the Agents button, in a developer's copy alone.
+// what ask() tells it, each agent's design, and the Agents button and window, while test mode is on alone.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -20,6 +20,9 @@ const { normalizeModels } = require('../src/main/bart/models.cjs');
 const { createBart, createFakeBart, CLAUDE_TOOLS, BRAINSTORM_TOOLS, PAPER_TOOLS } = require('../src/main/bart/ask.cjs');
 const { createRunLog, toolCallsOf } = require('../src/main/bart/runlog.cjs');
 const { agentDesign } = require('../src/main/agent-map/design.cjs');
+const { createAgentMapWindow } = require('../src/main/agent-map/window.cjs');
+const { registerAgentMapIpc } = require('../src/main/agent-map/ipc.cjs');
+const { createStore, registerEngelbartIpc } = require('../src/main/ipc.cjs');
 const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('../src/main/bart/brainstorm-system-prompt.cjs');
 
@@ -282,10 +285,78 @@ function compile(entry, name) {
   return compiled.exports;
 }
 
-test('the Agents button renders only in a copy with test mode', () => {
-  const AgentsButton = compile('src/renderer/ui/AgentsButton.jsx', 'agents-button').default;
-  assert.equal(renderToStaticMarkup(React.createElement(AgentsButton, { available: false, onOpen: () => {} })), '');
-  assert.match(renderToStaticMarkup(React.createElement(AgentsButton, { available: true, onOpen: () => {} })), /<button[^>]*>Agents<\/button>/);
+test('the Agents button renders only when the copy has test mode and test mode is on', () => {
+  const { default: AgentsButton, agentsAvailable } = compile('src/renderer/ui/AgentsButton.jsx', 'agents-button');
+  const render = (config) => renderToStaticMarkup(React.createElement(AgentsButton, { available: agentsAvailable(config), onOpen: () => {} }));
+  assert.match(render({ testModeAvailable: true, testMode: true }), /<button[^>]*>Agents<\/button>/);
+  assert.equal(render({ testModeAvailable: true, testMode: false }), '', 'test mode off: no button');
+  assert.equal(render({ testModeAvailable: false, testMode: true }), '', 'a copy without test mode: no button');
+  assert.equal(render({ testModeAvailable: false, testMode: false }), '');
+  assert.equal(render(null), '');
+});
+
+/** A BrowserWindow that opens nothing: each made is kept in `made`. */
+function fakeElectron() {
+  const made = [];
+  class BrowserWindow {
+    constructor(options) {
+      this.options = options;
+      this.handlers = {};
+      this.destroyed = false;
+      this.webContents = { setWindowOpenHandler() {}, on() {}, getURL: () => '', isLoading: () => false, send() {} };
+      made.push(this);
+    }
+    on(event, fn) { this.handlers[event] = fn; }
+    loadURL() { return Promise.resolve(); }
+    show() {}
+    focus() {}
+    isDestroyed() { return this.destroyed; }
+    close() { this.destroyed = true; if (this.handlers.closed) this.handlers.closed(); }
+  }
+  return { BrowserWindow, made };
+}
+
+test('agentMap:open with test mode off opens no window; on, it opens one and focuses it after', async (t) => {
+  const store = createStore({ homeDir: tmp('open'), testMode: true });
+  t.after(() => store.close());
+  await store.setTestMode(false);
+  const { BrowserWindow, made } = fakeElectron();
+  const mapWindow = createAgentMapWindow({ BrowserWindow, appUrl: 'app://x', preload: '/p.js', available: () => store.config().testModeAvailable && store.config().testMode, headless: true });
+  const handlers = new Map();
+  registerAgentMapIpc({ ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn, mapWindow, runLog: null, design: () => ({}), saveFile: async () => null });
+  const open = handlers.get('engelbart:agentMap:open');
+
+  assert.equal(await open(), false);
+  assert.equal(made.length, 0, 'no window while test mode is off');
+  await store.setTestMode(true);
+  assert.equal(await open(), true);
+  assert.equal(await open(), true);
+  assert.equal(made.length, 1, 'opened once, then brought forward');
+});
+
+test('turning test mode off closes the Agent map; runs are still recorded while it is off', async (t) => {
+  const store = createStore({ homeDir: tmp('close'), testMode: true });
+  t.after(() => store.close());
+  await store.setTestMode(true);
+  const { BrowserWindow, made } = fakeElectron();
+  const agentMap = createAgentMapWindow({ BrowserWindow, appUrl: 'app://x', preload: '/p.js', available: () => store.config().testModeAvailable && store.config().testMode, headless: true });
+  const handlers = new Map();
+  registerEngelbartIpc({ store, agentMap, ipcMain: { handle: (name, fn) => handlers.set(name, fn) }, trustedHandler: (fn) => fn });
+  const setTestMode = handlers.get('engelbart:set-test-mode');
+
+  assert.equal(agentMap.open(), true);
+  await setTestMode(true);
+  assert.equal(agentMap.isOpen(), true, 'turning it on again leaves the map open');
+  await setTestMode(false);
+  assert.equal(agentMap.isOpen(), false);
+  assert.equal(made[0].destroyed, true);
+  assert.equal(agentMap.open(), false);
+  assert.equal(made.length, 1);
+
+  const log = createRunLog();
+  log.start({ id: 'off', agent: 'bart', question: 'while off', system: 's', context: {}, steps: [] });
+  log.finish('off', { status: 'done', written: [] });
+  assert.equal(log.get('off').status, 'done', 'the log takes no notice of test mode');
 });
 
 test('the export is one page, its styles and data inside it', () => {

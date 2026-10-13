@@ -654,8 +654,9 @@ if (!hasSingleInstanceLock) {
     const brainstormThreads = () => createThreads({ idleMs: BRAINSTORM_IDLE_MS, file: path.join(app.getPath('userData'), 'brainstorm-threads.json') });
     const discoverThreads = () => createThreads({ idleMs: DISCOVER_IDLE_MS, file: path.join(app.getPath('userData'), 'discover-threads.json') });
     // The Agent map (2026-10-12): each run's prompt, context, steps, tool calls and output, in a developer's copy alone; a
-    // copy people download keeps none of it. Each change goes to the map window only.
-    agentMap = createAgentMapWindow({ BrowserWindow, appUrl: APP_URL, preload: PRELOAD_FILE, available: () => developer, headless: process.env.ENGELBART_HEADLESS === '1' });
+    // copy people download keeps none of it. Runs are recorded whether test mode is on or off; the window opens only while
+    // it is on. Each change goes to the map window only.
+    agentMap = createAgentMapWindow({ BrowserWindow, appUrl: APP_URL, preload: PRELOAD_FILE, available: () => developer && store.config().testMode, headless: process.env.ENGELBART_HEADLESS === '1' });
     runLog = developer ? createRunLog({ file: path.join(app.getPath('userData'), 'agent-runs.jsonl'), onChange: (record) => agentMap.send('engelbart:agent-run', record) }) : null;
     bart = process.env.ENGELBART_BART_FAKE === '1'
       ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), runLog })
@@ -1060,6 +1061,7 @@ if (!hasSingleInstanceLock) {
     };
     app.on('will-quit', () => connect.suspendAll());
     registerEngelbartIpc({
+      agentMap,
       connect,
       connectors,
       appleNotes,
