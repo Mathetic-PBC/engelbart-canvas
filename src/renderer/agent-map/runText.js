@@ -3,15 +3,15 @@
 // file, its styles inline and the records' data in it, sections as <details> so it needs no script.
 
 // The agents the Viewer knows (2026-10-12): the list, the detail and Design all name them from here. `agent` is the run
-// log's name, `routed` the name an ask is routed to (asks.cjs routedTo). Create is not built yet: a record of it shows as
-// any other. The run step shows only inside a Build's output. Any other agent shows under its own name (agentInfo).
+// log's name, `routed` the name an ask is routed to (asks.cjs routedTo). Create (2026-10-13) lists the library rows a run
+// kept under its output (createdLines). The run step shows only inside a Build's output. Any other agent shows under its own name (agentInfo).
 // No colours (2026-10-13): the Viewer names agents in words only.
 export const AGENTS = [
   { agent: 'router', routed: null, name: 'Bart (classifier)', token: '@bart' },
   { agent: 'bart', routed: 'chat', name: 'Chat', token: '@chat' },
   { agent: 'brainstorm', routed: 'brainstorm', name: 'Brainstorm', token: '@brainstorm' },
   { agent: 'discover', routed: 'discover', name: 'Discover', token: '@discover' },
-  { agent: 'create', routed: 'create', name: 'Create', token: '@create', planned: true },
+  { agent: 'create', routed: 'create', name: 'Create', token: '@create' },
   { agent: 'build', routed: 'build', name: 'Build', token: '@bart / Build button / panel / post-it' },
   { agent: 'run step', routed: null, name: 'Run step', token: '', inside: 'build' },
 ];
@@ -23,7 +23,7 @@ export function agentInfo(name) {
 }
 
 // The agents a question line runs, and the ones a Build runs (the list's filter).
-export const QUESTION_AGENTS = ['router', 'bart', 'brainstorm', 'discover'];
+export const QUESTION_AGENTS = ['router', 'bart', 'brainstorm', 'discover', 'create'];
 export const BUILD_AGENTS = ['build', 'run step'];
 export const FILTERS = [['all', 'All'], ['questions', 'Questions'], ['builds', 'Builds']];
 
@@ -94,6 +94,16 @@ export function agentLabel(run) {
 }
 /** "model · effort" for the list: the last step's, which is where it ended up. */
 export const modelLabel = (run) => [run.model, run.effort].filter(Boolean).join(' · ') || (run.status === 'running' ? 'starting' : 'no model run');
+
+/** The library rows a Create run kept, one a line ("Name · type · path"), then what it skipped; '(none)' when it kept nothing. */
+export function createdLines(record) {
+  const rows = Array.isArray(record && record.created) ? record.created : [];
+  const skipped = Array.isArray(record && record.skipped) ? record.skipped : [];
+  return [
+    ...(rows.length ? rows.map((row) => [row.name, row.type, row.path].filter(Boolean).join(' · ')) : ['(none)']),
+    ...skipped.map((why) => `skipped: ${why}`),
+  ].join('\n');
+}
 
 /** A section's text, as `c` copies it: 'system', 'context', 'steps' or 'written'. */
 export function sectionText(record, section) {
@@ -444,6 +454,7 @@ export function askSections(ask) {
         children: [
           ...(run.steps || []).map((step, k) => ({ label: stepLabel(step, k), children: [...toolNodes(step), outputNode(step)] })),
           ...(card ? [{ label: 'the card it wrote', text: cardText(card) }] : []),
+          ...(run.agent === 'create' ? [{ label: 'kept in the library', dim: `${(run.created || []).length} rows`, text: createdLines(run) }] : []),
           { label: 'what was written', dim: sizeLabel(writtenText(run)), text: writtenText(run) },
         ],
       });

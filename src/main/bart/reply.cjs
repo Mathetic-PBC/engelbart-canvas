@@ -18,7 +18,7 @@ const MAX_REPLY_CHARS = 12000;
 const seconds = (ms) => `${Math.max(1, Math.round(ms / 1000))} s`;
 
 // The names the foot gives the agents (2026-10-12), as the editor shows them.
-const AGENT_NAMES = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover' };
+const AGENT_NAMES = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover', create: 'Create' };
 
 /**
  * "Discover · Sol · high · 41 s · moved up from Sol medium": which agent and model said this, kept with the answer.

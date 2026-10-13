@@ -18,7 +18,7 @@ export const QUESTION_CHARS = 80;
 export function questionLine(text, max = QUESTION_CHARS) {
   let s = String(text == null ? '' : text).split(/\r?\n/).map((line) => line.trim()).find(Boolean) || '';
   s = s.replace(/@\[([^\]\n]+)\]\([^)\s]*\)/g, '$1').replace(/@\[([^\]\n]+)\]/g, '$1')
-    .replace(/(^|\s)@(?:bart|chat|brainstorm|orient|discover)\b/gi, '$1').replace(/(^|\s)--\S+/g, '$1')
+    .replace(/(^|\s)@(?:bart|chat|brainstorm|orient|discover|create)\b/gi, '$1').replace(/(^|\s)--\S+/g, '$1')
     .replace(/!?\[([^\]\n]*)\]\([^)\s]*\)/g, '$1')
     .replace(/^\s*(?:#{1,6}\s+|[-*+]\s+|\d+[.)]\s+|>\s*)/, '')
     .replace(/(\*\*|__|\*|_|`)(\S(?:.*?\S)?)\1/g, '$2').replace(/[*`]/g, '')

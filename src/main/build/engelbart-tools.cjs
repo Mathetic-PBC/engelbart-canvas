@@ -55,6 +55,42 @@ const real = (file) => { try { return fs.realpathSync(file); } catch { return pa
 const stem = (file) => path.basename(file, path.extname(file));
 const shown = (row) => ({ id: row.id, name: row.name, type: row.type, path: row.path || null });
 
+/** A new folder for one kept file, under <data root>/assets/files/<uuid>/. → the file's path, not yet written */
+function keptFile(ctx, name, extension) {
+  const { sanitizeName } = require('../store/home.cjs');
+  const dir = path.join(ctx.dataRoot, 'assets', 'files', randomUUID());
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const base = sanitizeName(name).replace(new RegExp(`\\${extension}$`, 'i'), '') || 'Untitled';
+  return path.join(dir, `${base}${extension}`);
+}
+
+/** `source` (a file of a format the library reads, not Markdown) kept by Engelbart as a new row named `name`: a pdf or a picture as a copy (addFileCopy), anything else under assets/files. A row that cannot be made leaves no file. */
+async function keepCopy(ctx, source, name, { inspectPdf = null } = {}) {
+  const library = require('../store/library.cjs');
+  const extension = path.extname(source).toLowerCase();
+  const type = library.FILE_TYPES.get(extension);
+  if (type === 'pdf' || COPIED_IMAGES[extension]) {
+    const buffer = fs.readFileSync(source);
+    return library.addFileCopy(ctx, { bytes: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength), mime: type === 'pdf' ? 'application/pdf' : COPIED_IMAGES[extension], name }, { inspectPdf });
+  }
+  const file = keptFile(ctx, name, extension);
+  fs.copyFileSync(source, file, fs.constants.COPYFILE_FICLONE);
+  try {
+    return await library.addItem(ctx, file, { inspectPdf, name });
+  } catch (error) {
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
+    throw error;
+  }
+}
+
+/** A row made: linked to the workspace (when there is one, and it is still there), announced. → the row */
+async function linkMade(ctx, projectId, workspaceId, row, onAdded = () => {}) {
+  const projects = require('../store/projects.cjs');
+  if (workspaceId) { try { await projects.linkToWorkspace(ctx, projectId, workspaceId, [row.id]); } catch { /* the workspace went meanwhile */ } }
+  try { onAdded(row); } catch { /* nobody listening */ }
+  return row;
+}
+
 /**
  * The tools for one turn of one Build. `task`: its record (workspaceId, cwd, worktree, repo, source); `inspectPdf`: what
  * tags a pdf (a paper or not); `onAdded(row)`: a row was made (the sidebar reads the library again). → call(name, args)
@@ -62,7 +98,6 @@ const shown = (row) => ({ id: row.id, name: row.name, type: row.type, path: row.
 function createEngelbartTools({ ctx, projectId, task, inspectPdf = null, onAdded = () => {} }) {
   const projects = require('../store/projects.cjs');
   const library = require('../store/library.cjs');
-  const { sanitizeName } = require('../store/home.cjs');
   const home = ctx.homeDir || os.homedir();
 
   /** A path the agent gave: absolute, ~/…, file://…, or relative to its working directory. */
@@ -73,20 +108,8 @@ function createEngelbartTools({ ctx, projectId, task, inspectPdf = null, onAdded
     return path.resolve(task.cwd || task.worktree || home, file);
   }
 
-  /** A new folder for one kept file, under <data root>/assets/files. */
-  function keptFile(name, extension) {
-    const dir = path.join(ctx.dataRoot, 'assets', 'files', randomUUID());
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const base = sanitizeName(name).replace(new RegExp(`\\${extension}$`, 'i'), '') || 'Untitled';
-    return path.join(dir, `${base}${extension}`);
-  }
-
   /** The row made: linked to the workspace, announced. */
-  async function made(row) {
-    if (task.workspaceId) { try { await projects.linkToWorkspace(ctx, projectId, task.workspaceId, [row.id]); } catch { /* the workspace went meanwhile */ } }
-    try { onAdded(row); } catch { /* nobody listening */ }
-    return row;
-  }
+  const made = (row) => linkMade(ctx, projectId, task.workspaceId, row, onAdded);
 
   async function note(name, body) {
     const created = await projects.createNote(ctx, projectId, { name, workspaceId: task.workspaceId || null, text: body });
@@ -105,24 +128,13 @@ function createEngelbartTools({ ctx, projectId, task, inspectPdf = null, onAdded
       if (stat.size > MAX_NOTE) throw new Error('A note is at most 5 MB');
       return note(name || stem(source), fs.readFileSync(source, 'utf8'));
     }
-    if (type === 'pdf' || COPIED_IMAGES[extension]) {
-      const buffer = fs.readFileSync(source);
-      return library.addFileCopy(ctx, { bytes: new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength), mime: type === 'pdf' ? 'application/pdf' : COPIED_IMAGES[extension], name: name || stem(source) }, { inspectPdf });
-    }
-    const file = keptFile(name || stem(source), extension);
-    fs.copyFileSync(source, file, fs.constants.COPYFILE_FICLONE);
-    try {
-      return await library.addItem(ctx, file, { inspectPdf, name: name || stem(source) });
-    } catch (error) {
-      fs.rmSync(path.dirname(file), { recursive: true, force: true });
-      throw error;
-    }
+    return keepCopy(ctx, source, name || stem(source), { inspectPdf });
   }
 
   async function saveFile({ name, content, format = 'md' }) {
     if (content.length > MAX_TEXT) throw new Error('content is at most 100 KB: write the file and use move_file_into_engelbart');
     if (format === 'md') return shown(await made(await note(name, content)));
-    const file = keptFile(name, `.${format}`);
+    const file = keptFile(ctx, name, `.${format}`);
     fs.writeFileSync(file, content, { mode: 0o600 });
     try {
       return shown(await made(await library.addItem(ctx, file, { inspectPdf, name })));
@@ -169,4 +181,4 @@ function createEngelbartTools({ ctx, projectId, task, inspectPdf = null, onAdded
   };
 }
 
-module.exports = { ENGELBART_TOOLS, SAVE_FORMATS, validateEngelbartTool, createEngelbartTools };
+module.exports = { ENGELBART_TOOLS, SAVE_FORMATS, COPIED_IMAGES, validateEngelbartTool, createEngelbartTools, keptFile, keepCopy, linkMade };

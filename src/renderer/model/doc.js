@@ -20,7 +20,8 @@ export const IMG_RE = /^!\[([^\]]*)\]\((img:[\w-]+|https?:[^)\s]+|data:image[^)\
 // `@chat` (2026-10-12) asks the question-answering agent, which is still 'bart' inside the app (its settings, sessions,
 // models file and run log keep that name); `@bart` is now the router (agent 'router'), which picks Chat, Brainstorm,
 // Discover or Build for the line and steps aside. tokenOf gives the word a line is written with for each agent.
-export const BART_RE = /^@(bart|chat|brainstorm|orient|discover)(?:\s(.*))?$/i;
+// `@create` (2026-10-13) makes something new, and its answer mentions the library rows it kept (src/main/bart/create.cjs).
+export const BART_RE = /^@(bart|chat|brainstorm|orient|discover|create)(?:\s(.*))?$/i;
 // An answer under an @bart line, one prefix per line (src/main/bart/reply.cjs writes them): pending while the run with
 // that id works, then a reply. A reply is kept as it arrives (2026-09-21: no Save; Delete is the way out) and its text
 // can be edited; `bart+> ` is the same line folded away by Collapse, so a fold is in the file and survives everything
@@ -50,8 +51,8 @@ export const TITLE_RE = /^bart#(\+?) ?(.*)$/;
 // when it was asked, `bart# [discover 2026-10-12T21:41:00Z] Papers on tutors`, and ` build` after the agent when Bart
 // routed it to be built (`[chat build …]`). An `@bart` line stays as the person typed it; this is where Bart's pick is
 // kept. A title line from before has none and reads as its text.
-const TITLE_META_RE = /^\[(chat|brainstorm|discover)( build)?(?: (\d{4}-\d\d-\d\dT[\d:.]+Z?))?\](?: |$)/;
-/** The title line's text after `bart# ` read → { text, agent, at, build }: agent 'bart' | 'brainstorm' | 'discover' or null. */
+const TITLE_META_RE = /^\[(chat|brainstorm|discover|create)( build)?(?: (\d{4}-\d\d-\d\dT[\d:.]+Z?))?\](?: |$)/;
+/** The title line's text after `bart# ` read → { text, agent, at, build }: agent 'bart' | 'brainstorm' | 'discover' | 'create' or null. */
 export function titleMeta(rest) {
   const m = String(rest ?? '').match(TITLE_META_RE);
   if (!m) return { text: String(rest ?? ''), agent: null, at: null, build: false };
@@ -118,7 +119,7 @@ export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 // Math (2026-10-12): `$…$` inline by Pandoc's rule (no space just inside either `$`, the closing `$` not followed by a
 // digit, so "$5 and $10" stays text), `$$…$$` display, and `\$` a dollar as typed. Drawn with KaTeX (renderMath).
 const MATH_SRC = String.raw`\$\$(?:[^$\n\\]|\\.)+?\$\$|\$(?=[^\s$])(?:[^$\n\\]|\\.)+?(?<!\s)\$(?!\d)|\\\$`;
-export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|\[\[build\]\]|@(?:[Bb]art|[Cc]hat|[Bb]rainstorm|[Oo]rient|[Dd]iscover)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
+export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|\[\[build\]\]|@(?:[Bb]art|[Cc]hat|[Bb]rainstorm|[Oo]rient|[Dd]iscover|[Cc]reate)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // The footer's Build, named in an answer (2026-10-12): a routed build's answer ends "Press [[build]] Build below this
 // answer to build it." (main/bart/ask.cjs ROUTED_BUILD), and the token is drawn as the footer's hammer (inlineHtml). It is
@@ -280,14 +281,14 @@ const ZOTERO_ICON = svgIcon('<path d="M3 2.5h7.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1
 const URL_RE = /^https?:\/\/\S+$/;
 
 /**
- * Which agent a question line asks: 'bart' (an `@chat` line), 'router' (an `@bart` line), 'brainstorm' or 'discover'. An
- * `@orient` line asks @brainstorm (2026-10-05).
+ * Which agent a question line asks: 'bart' (an `@chat` line), 'router' (an `@bart` line), 'brainstorm', 'discover' or
+ * 'create'. An `@orient` line asks @brainstorm (2026-10-05).
  */
-export const agentOf = (p) => (p && p.agent === 'orient' ? 'brainstorm' : p && (p.agent === 'brainstorm' || p.agent === 'discover' || p.agent === 'router') ? p.agent : 'bart');
+export const agentOf = (p) => (p && p.agent === 'orient' ? 'brainstorm' : p && (p.agent === 'brainstorm' || p.agent === 'discover' || p.agent === 'create' || p.agent === 'router') ? p.agent : 'bart');
 /** The word a line asking `agent` starts with (2026-10-12): Chat's is `chat`, the router's `bart`, every other its own name. */
 export const tokenOf = (agent) => (agent === 'bart' || !agent ? 'chat' : agent === 'router' ? 'bart' : agent);
 /** The token that starts a question line, as INLINE splits it out. */
-export const AGENT_TOKEN = /^@(bart|chat|brainstorm|orient|discover)$/i;
+export const AGENT_TOKEN = /^@(bart|chat|brainstorm|orient|discover|create)$/i;
 /**
  * Text pasted into a question line, as one line (2026-10-02): a question is one line of the document, and a paste split
  * over several put all but its first line under the question, where it was never asked. Each line break, with the
@@ -513,9 +514,9 @@ const followsIn = (p, first, thread) => (
 );
 // The agents a closing line names first (main/bart/reply.cjs attribution, 2026-10-12): "Build" is Chat, asked to write
 // the Build prompt for a line Bart read as one to build.
-const FOOT_AGENTS = { Chat: 'bart', Build: 'bart', Brainstorm: 'brainstorm', Discover: 'discover' };
-const FOOT_LEAD_RE = /^\*(Chat|Brainstorm|Discover|Build)(?: · [^*]*)?\*$/;
-/** The agent a closing line says answered ('bart', 'brainstorm' or 'discover'), or null: an older one names none. */
+const FOOT_AGENTS = { Chat: 'bart', Build: 'bart', Brainstorm: 'brainstorm', Discover: 'discover', Create: 'create' };
+const FOOT_LEAD_RE = /^\*(Chat|Brainstorm|Discover|Create|Build)(?: · [^*]*)?\*$/;
+/** The agent a closing line says answered ('bart', 'brainstorm', 'discover' or 'create'), or null: an older one names none. */
 export const footAgent = (text) => { const m = String(text ?? '').match(FOOT_LEAD_RE); return m ? FOOT_AGENTS[m[1]] : null; };
 /**
  * The agent that answers a thread (2026-10-13): the one that answered its last answered turn (turn.agent, read from that

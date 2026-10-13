@@ -561,6 +561,95 @@ test('an older document\'s "via Bart": picking another agent rewrites the line a
   assert.deepEqual(r.asks[0].routed, { build: true });
 });
 
+/* ------------------------------------------------------------ @create (2026-10-13) */
+
+test('@create: the fake router sends "make a chart", "make a page" and "create a" to Create; a prompt for one is Chat\'s, a change Build\'s', () => {
+  const picks = (lines) => lines.map((line) => route.fakePick(line).agent);
+  assert.deepEqual(picks([
+    'make a chart of CHI submissions by year',
+    'make an html page summarizing the papers in my library on AI-assisted programming',
+    'write up a summary page of these papers as html',
+    'create a dataset of the tutors in my notes',
+  ]), ['create', 'create', 'create', 'create']);
+  assert.deepEqual(picks(['can you create the build prompt for this', 'create a prompt for the chart', 'give me the build prompt for a chart', 'make the file icons different', 'what papers should I read']), ['chat', 'chat', 'chat', 'build', 'discover']);
+  assert.ok(route.PICKS.includes('create'));
+  assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /- create: they want a new standalone thing[^]*"make a chart of CHI submissions by year" → create[^]*"chat\|brainstorm\|discover\|create\|build"/);
+});
+
+test('@create: the classifier\'s create pick stands at 0.8 or more; at 0.7 it goes to chat', async () => {
+  const sure = await router('{"agent":"create","sure":0.9}').route(LINE);
+  assert.deepEqual([sure.agent, sure.sure], ['create', 0.9]);
+  assert.deepEqual(await router('{"agent":"create","sure":0.8}').route(LINE).then((r) => r.agent), 'create');
+  assert.deepEqual(await router('{"agent":"create","sure":0.7}').route(LINE).then((r) => [r.agent, r.sure]), ['chat', 0.7], 'below CREATE_SURE');
+  assert.deepEqual(await router('{"agent":"discover","sure":0.7}').route(LINE).then((r) => r.agent), 'discover', 'the others keep SURE_ENOUGH');
+  assert.deepEqual([route.CREATE_SURE, route.decide({ agent: 'create', sure: 0.79 }).agent], [0.8, 'chat']);
+});
+
+test('@create: a line Bart sent to Create waits 5 s ("Creating in 5 s · Cancel"), then asks create, titled [create <when>]', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const m = mounted(['# Notes', '@bart make a chart of CHI submissions by year'], { route: async () => ({ id: 'route-c', agent: 'create', sure: 0.9, by: 'model' }) });
+  m.editor.askInline(1);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.match(m.lines()[1], /^bart# \[create \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\] $/, 'the pick on its title line');
+  assert.equal(m.lines()[2], '@bart make a chart of CHI submissions by year', '@bart stays @bart');
+  const askId = m.lines()[3].replace(/^bart~> /, '');
+  assert.equal(m.asks.length, 0, 'not asked yet');
+  let html = m.editor.editorHtml();
+  assert.match(html, /Creating in 5 s/);
+  assert.match(html, new RegExp(`data-act="cancelwait" data-ask="${askId}"[^>]*>Cancel<`));
+  const seconds = (n) => { for (let k = 0; k < n; k++) t.mock.timers.tick(1000); }; // a tick fires no timer set during it
+  seconds(2);
+  assert.match(m.editor.editorHtml(), /Creating in 3 s/, 'it counts down');
+  seconds(2);
+  t.mock.timers.tick(999);
+  assert.equal(m.asks.length, 0);
+  t.mock.timers.tick(1);
+  assert.equal(m.asks.length, 1, 'asked after 5 s');
+  assert.deepEqual([m.asks[0].askId, m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name], [askId, 'create', 'make a chart of CHI submissions by year', { id: 'route-c' }, true]);
+  html = m.editor.editorHtml();
+  assert.ok(!/Creating in|cancelwait/.test(html), 'the countdown is gone');
+  assert.equal(m.editor.cancelCreate(askId), false, 'too late to cancel: Stop stops it now');
+});
+
+test('@create: Cancel during the wait asks @chat instead, marks the router corrected, and the title line names Chat', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const m = mounted(['# Notes', '@bart make a page on tutors'], { route: async () => ({ id: 'route-k', agent: 'create', sure: 0.95, by: 'model' }) });
+  m.editor.askInline(1);
+  await new Promise((resolve) => setImmediate(resolve));
+  const askId = m.lines()[3].replace(/^bart~> /, '');
+  t.mock.timers.tick(1000);
+  assert.equal(m.editor.cancelCreate(askId), true);
+  assert.equal(m.asks.length, 1);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].routed], ['bart', 'make a page on tutors', { id: 'route-k', corrected: 'chat' }]);
+  assert.match(m.lines()[1], /^bart# \[chat \d{4}-[^\]]+\] $/);
+  t.mock.timers.tick(10_000);
+  assert.equal(m.asks.length, 1, 'Create is never asked');
+  // Main marks the router's record corrected: chat, as for a pick changed under "via Bart".
+  const runLog = createRunLog({ file: path.join(tmp('create-cancel'), 'agent-runs.jsonl') });
+  const picked = await router('{"agent":"create","sure":0.9}', { runLog }).route({ ...LINE, text: 'make a page on tutors' });
+  route.markCorrected(runLog, { id: picked.id, agent: m.asks[0].routed.corrected });
+  assert.deepEqual([runLog.get(picked.id).pick, runLog.get(picked.id).corrected], ['create', 'chat']);
+});
+
+test('@create: a typed @create starts at once; a line deleted during the wait asks nothing', async (t) => {
+  const typed = mounted(['@create make a chart of CHI submissions by year']);
+  typed.editor.askInline(0);
+  assert.equal(typed.routes.length, 0);
+  assert.deepEqual([typed.asks.length, typed.asks[0].agent, typed.asks[0].text], [1, 'create', 'make a chart of CHI submissions by year']);
+  assert.match(typed.lines()[0], /^bart# \[create [^\]]+\] $/);
+  const empty = mounted(['@create']);
+  empty.editor.askInline(0);
+  assert.equal(empty.asks.length, 0, 'nothing on the line: nothing to make');
+
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const g = mounted(['@bart make a chart of x'], { route: async () => ({ id: 'route-g2', agent: 'create', sure: 0.9 }) });
+  g.editor.askInline(0);
+  await new Promise((resolve) => setImmediate(resolve));
+  g.props.text = 'gone';
+  t.mock.timers.tick(5000);
+  assert.deepEqual([g.asks.length, g.gone.length], [0, 1]);
+});
+
 /* ------------------------------------------- a conversation across agents (2026-10-13) */
 
 const CHAT_DONE = ['bart# [chat 2026-10-13T09:00:00Z] Tutors', '@bart how do tutors notice struggle?', 'bart> By watching.', 'bart> *Chat · Sonnet · high · 3 s*', ''];
@@ -697,4 +786,14 @@ test('a run asked of another agent than the turn before it starts a session of i
   const said = cleanTurns(turnsInput([{ question: 'why?', answer: 'because', agent: 'discover' }, { question: 'and?', answer: 'so', agent: 'nobody' }]));
   assert.deepEqual(said.map((t) => t.agent), ['discover', undefined]);
   assert.equal(threadKey('p', ref, said), threadKey('p', ref, cleanTurns([{ question: 'why?', answer: 'because' }, { question: 'and?', answer: 'so' }])));
+});
+
+test('@create in a conversation: its closing line names Create, and a Create thread is no `current` to stay with', async () => {
+  const { footAgent } = await loadDoc();
+  assert.equal(footAgent('*Create · Sonnet · high · 41 s*'), 'create');
+  assert.equal(route.fakePick('and then?', 'create').agent, 'chat', 'Create keeps no conversation: a follow-up is routed afresh');
+  assert.deepEqual(route.decide({ agent: 'create', sure: 0.8 }, 'chat'), { agent: 'create', sure: 0.8 }, 'switching to Create needs 0.8, as a create pick does');
+  assert.deepEqual(route.decide({ agent: 'create', sure: 0.79 }, 'discover'), { agent: 'discover', sure: 0.79 });
+  const { turnsInput } = require('../src/main/ipc.cjs');
+  assert.deepEqual(turnsInput([{ question: 'a chart', answer: 'Made.', agent: 'create' }]).map((t) => t.agent), ['create']);
 });

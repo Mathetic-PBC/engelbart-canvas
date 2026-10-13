@@ -7,7 +7,9 @@ import { onlyProviders, preferUsable, startingAt } from '../../main/bart/in-forc
 // One row per agent. `place`: where its last pick by hand is kept (src/main/bart/choices.cjs); Build's covers a post-it's
 // quick task too, which starts on the same default but keeps a pick of its own (`also`).
 export const AGENT_ROWS = Object.freeze([
-  { id: 'bart', name: '@chat', place: 'bart' }, // the question-answering agent, @chat since 2026-10-12 (@bart is the router, which has no setting)
+  // the question-answering agent, @chat since 2026-10-12 (@bart is the router, which has no setting). @create (2026-10-13)
+  // runs on its models and efforts and has no row of its own: `label` says so.
+  { id: 'bart', name: '@chat', place: 'bart', label: '@chat and @create' },
   { id: 'brainstorm', name: '@brainstorm' },
   { id: 'discover', name: '@discover' },
   { id: 'build', name: 'Build', place: 'build', also: 'quick' },

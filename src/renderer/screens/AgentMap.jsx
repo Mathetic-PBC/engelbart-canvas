@@ -155,6 +155,7 @@ function DesignBody({ agent }) {
       {agent.prompt.quick && <Expand label={<>a quick task's system prompt <span style={S.dim}>{sizeLabel(agent.prompt.quick)}</span></>} text={agent.prompt.quick} />}
       <DesignTools tools={agent.tools} />
       {agent.reach && <div style={S.sub}>reach: <span style={S.dim}>{agent.reach}</span></div>}
+      {agent.keeps && <div style={S.sub}>keeps: <span style={S.dim}>{agent.keeps}</span></div>}
       <DesignModels models={agent.models} />
       <div style={S.sub}>{agent.agent === 'build' ? 'turn time' : 'time'}: {Object.entries(agent.timeout).map(([key, ms]) => `${key} ${msLabel(ms)}`).join(' · ')}{agent.maxTurns ? ` · at most ${agent.maxTurns} turns` : ''}</div>
       {agent.slots && <div style={S.sub}>slots at once: {Object.entries(agent.slots).map(([key, n]) => `${key} ${n}`).join(' · ')}</div>}

@@ -71,20 +71,22 @@ import { isNote } from '../model/kind.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
-// Bart is the router (2026-10-12): `@bart` picks Chat, Brainstorm, Discover or Build for the line and steps aside. The
+// Bart is the router (2026-10-12): `@bart` picks Chat, Brainstorm, Discover, Create or Build for the line and steps aside. The
 // question-answering agent (internally still 'bart') is `@chat`.
-export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask anything. Bart picks Chat, Brainstorm, Discover or Build, then steps aside.', facts: 'picks, never answers' };
+export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart', summary: 'Ask anything. Bart picks Chat, Brainstorm, Discover, Create or Build, then steps aside.', facts: 'picks, never answers' };
 export const CHAT_ITEM = { id: 'chat', type: 'chat', name: 'chat', title: 'Chat', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
 export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', title: 'Discover', summary: 'Find what to read about a problem, and where in it to look: it traces the citations of the papers in your library and the pages of the people you follow. Pick Quick, Standard or Deep on the line\'s chip.', facts: 'finds, never concludes' };
+// @create (2026-10-13; main/bart/create.cjs): makes a new thing and keeps it in the library. It adds files, never changes one.
+export const CREATE_ITEM = { id: 'create', type: 'chat', name: 'create', title: 'Create', summary: 'Makes a new file (a page, a chart, a document) and saves it to your library.', facts: 'adds, never edits' };
 export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Think out loud about a topic, a paper or what is on your mind, then write what you want to dig into next.', facts: 'asks, never proposes' };
 
 const UNDER_BART = ['pending', 'reply'];
 // The agents that run on one model of their own (no model chip, no selector on Regenerate), may be asked with nothing after
-// them and answer with cards: every one but @bart. An @discover line's chip picks its level instead (2026-10-03). What
-// their follow-up field says, and whether it may be sent empty.
-const oneModel = (agent) => agent !== 'bart';
+// them and answer with cards: every one but @bart and @create (which runs on @bart's models, 2026-10-13). An @discover
+// line's chip picks its level instead (2026-10-03). What their follow-up field says, and whether it may be sent empty.
+const oneModel = (agent) => agent !== 'bart' && agent !== 'create';
 // Who a collapsed conversation is with, said when its row is hovered (2026-10-12).
-const AGENT_NAMES = { bart: CHAT_ITEM.title, brainstorm: BRAINSTORM_ITEM.title, discover: DISCOVER_ITEM.title };
+const AGENT_NAMES = { bart: CHAT_ITEM.title, brainstorm: BRAINSTORM_ITEM.title, discover: DISCOVER_ITEM.title, create: CREATE_ITEM.title };
 // The ones of those on a fixed step (main/bart/models.cjs readBrainstorm): no flag is read or marked on their lines, their
 // cards have no subtitle and have Wrap up, and their recaps are drawn as sections: @brainstorm.
 const fixedStep = (agent) => agent === 'brainstorm';
@@ -96,7 +98,9 @@ const leadOf = (line, agent) => { const token = tokenOf(agent); return (String(l
 const VIA_RE = /(?:^| · )via Bart( · build)?$/;
 // A closing line since 2026-10-12 names the agent that answered first (main/bart/reply.cjs attribution): "Build" for a line
 // Bart routed to be built.
-const LEAD_RE = /^(Chat|Brainstorm|Discover|Build)(?: · |$)/;
+const LEAD_RE = /^(Chat|Brainstorm|Discover|Create|Build)(?: · |$)/;
+// How long a line Bart sent to Create waits before it is asked, its pending line offering Cancel (2026-10-13).
+export const CREATE_WAIT_S = 5;
 // The agent a conversation is with, as its collapsed row names it: "Build" for an `@bart` line Bart read as one to build.
 const agentName = (thread) => (thread.build && thread.asked === 'router' ? 'Build' : AGENT_NAMES[thread.agent] || AGENT_NAMES.bart);
 // A turn as text (doc.js turnText) with the agent that answered it, when its lines say (doc.js turn.agent).
@@ -254,6 +258,7 @@ export default class DocEditor extends React.Component {
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
   syncing = false; wantFocus = false; wantAnchor = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
   openLogs = new Set(); // asks whose list of steps is open
+  waits = new Map(); // routed Create asks counting down (waitCreate): askId → { ask, left, timer }
   pickerT = null;
   // A follow-up being typed, the model picked for it and the images pasted into it ([{ n, id }]), by the first line of its
   // card. None is in the document, and none is in the editor's HTML: the field keeps its text across redraws because it
@@ -399,6 +404,9 @@ export default class DocEditor extends React.Component {
     document.removeEventListener('scroll', this.buildScrolled, true);
     for (const id of this.timers) clearTimeout(id);
     this.timers.clear();
+    // A Create counting down was going to be asked: it is, now, as the document is left (its answer lands in it all the same).
+    for (const [, held] of this.waits) if (this.props.onAsk) this.props.onAsk(held.ask);
+    this.waits.clear();
   }
 
   /* ---------------------------------------------------------------- public (via ref) */
@@ -757,9 +765,9 @@ export default class DocEditor extends React.Component {
       // The run with this id is working, or it died with the app and only Hide is left. While it works the row shows what
       // it is doing, the things it has done (behind the count, closed until clicked) and the answer so far. None of that is
       // in the document: it comes from props.asks, and the row's `data-raw` stays the bare pending line.
-      const ask = (this.props.asks || {})[p.id];
-      const doing = ask ? (ask.activity || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
-      const label = ask ? `${esc(doing)}${ask.name ? ` · ${esc(ask.name)} ${esc(ask.effort)}` : ''}` : 'No answer came back: the run was interrupted.';
+      const ask = (this.props.asks || {})[p.id], wait = this.waits.get(p.id);
+      const doing = wait ? `Creating in ${wait.left} s` : ask ? (ask.activity || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
+      const label = wait ? esc(doing) : ask ? `${esc(doing)}${ask.name ? ` · ${esc(ask.name)} ${esc(ask.effort)}` : ''}` : 'No answer came back: the run was interrupted.';
       const log = (ask && ask.log) || [], open = this.openLogs.has(p.id);
       // The answer so far is not the answer: smaller and grey, with a mark pulsing where the next words go. No rule beside
       // it (2026-09-21); it starts where the answer's text will, so nothing moves sideways when the answer lands.
@@ -784,10 +792,10 @@ export default class DocEditor extends React.Component {
         + written
         + (open && log.length ? `<div style="margin:0 0 8px 16px;font:12px/1.7 var(--font-sans);color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '')
         + '<div style="display:flex;align-items:center;gap:10px">'
-        + (ask ? '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>' : '')
+        + (ask || wait ? '<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:thinking 1.2s ease-in-out infinite"></span>' : '')
         + `<span class="t" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span>`
         + (log.length ? `<button class="bart-text" data-act="asklog" data-ask="${esc(p.id)}" aria-expanded="${open}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:6px;font-weight:400">${log.length} ${log.length === 1 ? 'step' : 'steps'}${open ? ICON.stepsOpen : ICON.stepsShut}</button>` : '')
-        + (ask ? `<button class="bart-text" data-act="stopask" data-ask="${esc(p.id)}" style="user-select:none;flex:none">Stop</button>` : `<button class="bart-text" data-act="dropline" data-row="${i}" style="user-select:none;flex:none">Hide</button>`)
+        + (wait ? `<button class="bart-text" data-act="cancelwait" data-ask="${esc(p.id)}" style="user-select:none;flex:none">Cancel</button>` : ask ? `<button class="bart-text" data-act="stopask" data-ask="${esc(p.id)}" style="user-select:none;flex:none">Stop</button>` : `<button class="bart-text" data-act="dropline" data-row="${i}" style="user-select:none;flex:none">Hide</button>`)
         + '</div></div>';
     }
     if (p.type === 'reply') {
@@ -2168,6 +2176,7 @@ export default class DocEditor extends React.Component {
       }
       if (k === 'asklog') { const id = act.dataset.ask; if (this.openLogs.has(id)) this.openLogs.delete(id); else this.openLogs.add(id); this.patchPending(); return; }
       if (k.startsWith('build') && act.dataset.buildId) { this.buildAct(k, act.dataset.buildId, act.dataset.runName); return; }
+      if (k === 'cancelwait') { this.cancelCreate(act.dataset.ask); return; }
       if (k === 'stopask') { if (this.props.onStopAsk) this.props.onStopAsk(act.dataset.ask); return; }
       if (k === 'toggle') this.toggleTodo(i);
       else if (k === 'remove') this.removeLine(i);
@@ -2319,6 +2328,8 @@ export default class DocEditor extends React.Component {
   //     (askInline). A line going on with a conversation (2026-10-13) is its next turn whatever agent answers it: the
   //     title line keeps the first pick, and the turn's own closing line names who answered (doc.js turn.agent). A line
   //     starting an untitled conversation, which has nowhere to keep the pick, is written `@<token> <text>` as before.
+  //   create (main sends it only when sure ≥ 0.8, else chat): as chat, brainstorm and discover are, after five seconds in
+  //     which its pending line says "Creating in 5 s" and offers Cancel (waitCreate), which asks Chat instead.
   //   build, with a spec above and sure ≥ 0.8: a Build of that fenced block as it reads now; the line stays, its card under it.
   //   build otherwise: asked of Chat, told it is wanted built (routed.build, ` build` on the title line), so it writes the
   //     Build prompt.
@@ -2334,7 +2345,7 @@ export default class DocEditor extends React.Component {
       const spec = routeInputs(ls, q).spec;
       if (spec != null && pick.sure >= 0.8 && this.props.onBuild) { this.props.onBuild({ text: spec, askId, routedFrom: id, place: typed }); return 'build'; }
     }
-    const agent = pick.agent === 'brainstorm' || pick.agent === 'discover' ? pick.agent : 'bart', build = pick.agent === 'build';
+    const agent = ['brainstorm', 'discover', 'create'].includes(pick.agent) ? pick.agent : 'bart', build = pick.agent === 'build';
     // An `@bart` line goes on with the conversation above whatever agent answers it (doc.js followsIn).
     const turns = this.turnsBefore(ls, q);
     const above = q > 0 ? this.parsedOf(ls)[q - 1] : null, meta = { agent, at: askedNow(), build };
@@ -2344,8 +2355,35 @@ export default class DocEditor extends React.Component {
     else if (this.startsTitled(ls, q, turns, agent, p.text)) { next = [...ls]; next.splice(q, 0, titleLine('', false, meta)); name = true; }
     else next = ls.map((l, j) => (j === q ? `@${tokenOf(agent)}${p.text ? ` ${p.text}` : ''}` : l));
     if (next !== ls) this.setLines(() => next);
-    this.props.onAsk({ askId, text, turns, agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: name ? q + 1 : q, text: typed.text }, ...(name ? { name: true } : {}) });
+    const ask = { askId, text, turns, agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: name ? q + 1 : q, text: typed.text }, ...(name ? { name: true } : {}) };
+    if (agent === 'create') this.waitCreate(ask); else this.props.onAsk(ask);
     return agent;
+  }
+  // A line Bart sent to Create (2026-10-13) is asked after CREATE_WAIT_S seconds, its pending line counting them down with
+  // Cancel beside it: Create adds to the library, and the person may have wanted an answer. A typed `@create` starts at once.
+  // The line deleted meanwhile, nothing is asked.
+  waitCreate(ask) {
+    const redraw = () => { if (!this.patchPending()) this.syncEditor(); };
+    const tick = () => {
+      const held = this.waits.get(ask.askId); if (!held) return;
+      if (!this.lines().includes(`bart~> ${ask.askId}`)) { this.waits.delete(ask.askId); if (this.props.onRouteGone) this.props.onRouteGone(ask.askId); return; }
+      if (held.left <= 1) { this.waits.delete(ask.askId); redraw(); this.props.onAsk(ask); return; }
+      held.left -= 1; held.timer = this.timer(tick, 1000); redraw();
+    };
+    this.waits.set(ask.askId, { ask, left: CREATE_WAIT_S, timer: this.timer(tick, 1000) });
+    redraw();
+  }
+  // Cancel on a routed Create counting down: the line is asked of Chat instead, and the router's record marked corrected
+  // (routed.corrected, as pickVia's). Its conversation's title line, when it has one, names Chat.
+  cancelCreate(askId) {
+    const held = this.waits.get(askId); if (!held) return false;
+    clearTimeout(held.timer); this.timers.delete(held.timer); this.waits.delete(askId);
+    const ls = this.lines(), ps = this.parsedOf(ls), q = ls.indexOf(`bart~> ${askId}`) - 1;
+    const head = q > 0 && ps[q - 1].type === 'title' && ps[q - 1].agent === 'create' ? ps[q - 1] : null;
+    if (head) this.setLines((x) => x.map((l, j) => (j === q - 1 ? titleLine(head.text, head.folded, { agent: 'bart', at: head.at }) : l)));
+    else if (!this.patchPending()) this.syncEditor();
+    this.props.onAsk({ ...held.ask, agent: 'bart', routed: { ...held.ask.routed, corrected: 'chat' } });
+    return true;
   }
   // The footer's Build (2026-10-12): the turn's last fenced block as it reads now, else its question and answer, built;
   // the card goes on a line of its own after the thread (Workspace onBuild).
@@ -2763,11 +2801,11 @@ export default class DocEditor extends React.Component {
     if (m.field != null) { this.pickInField(m, r); return; }
     const ls = this.lines(), p = parseLine(ls[m.i] || '');
     const cur = lineText(p, ls[m.i]);
-    const verb = r.kind === 'verb' ? r.verb : r.id === 'bart' || r.id === 'chat' || r.id === 'brainstorm' || r.id === 'discover' ? r.id : null;
+    const verb = r.kind === 'verb' ? r.verb : r.id === 'bart' || r.id === 'chat' || r.id === 'brainstorm' || r.id === 'discover' || r.id === 'create' ? r.id : null;
     // Bart, Brainstorm, Discover and Note are words the line keeps (Enter asks, or makes the note); anything else is a mention, and
     // what it names comes into this workspace (the open page is added to the library first: props.onMentionPicked). A verb
     // is followed by a space, since a question comes next; a mention is not (MATH-11, 2026-10-05): the caret stops right after it.
-    const ins = verb === 'bart' ? '@Bart ' : verb === 'chat' ? '@Chat ' : verb === 'brainstorm' ? '@Brainstorm ' : verb === 'discover' ? '@Discover ' : verb === 'note' ? '@Note ' : mentionToken(r);
+    const ins = verb === 'bart' ? '@Bart ' : verb === 'chat' ? '@Chat ' : verb === 'brainstorm' ? '@Brainstorm ' : verb === 'discover' ? '@Discover ' : verb === 'create' ? '@Create ' : verb === 'note' ? '@Note ' : mentionToken(r);
     this.writeText(m.i, cur.slice(0, m.start) + ins + cur.slice(m.caret), { line: m.i, offset: m.start + ins.length });
     this.wantFocus = true; this.setState({ mention: null, activeLine: m.i });
     if (!verb && r.kind !== 'workspace' && pickedRow(r) && this.props.onMentionPicked) this.props.onMentionPicked(pickedRow(r)); // a workspace is not a library row

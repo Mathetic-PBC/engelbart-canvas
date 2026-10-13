@@ -18,3 +18,7 @@
 {"line":"which of these two designs would you pick?","section":"# Design\nA: one button. B: a menu.","specAbove":false,"expected":"chat"}
 {"line":"what do I actually want this tool to do for students?","section":"# Vision","specAbove":false,"expected":"brainstorm"}
 {"line":"write a spec for exporting the run log as CSV","section":"# Agent map","specAbove":false,"expected":"chat"}
+{"line":"make a chart of CHI submissions by year","section":"# Venues\nWhere the lab has published since 2019.","specAbove":false,"expected":"create"}
+{"line":"give me the build prompt for a chart","section":"# Venues\nA chart of submissions would help.","specAbove":false,"expected":"chat"}
+{"line":"make the file icons different","section":"# Sidebar\nThe library's file icons all look alike.","specAbove":false,"expected":"build"}
+{"line":"write up a summary page of these papers as html","section":"# Reading\nThe papers on tutoring we collected.","specAbove":false,"expected":"create"}

@@ -180,8 +180,8 @@ export const countWorkspaces = (roots) => (roots || []).reduce((n, node) => n + 
 
 /* ------------------------------------------------------------ inbox, agents */
 
-const AGENT_DID = { bart: 'Bart answered', brainstorm: 'Brainstorm asked', discover: 'Discover found reading', build: 'Build finished a turn' };
-export const AGENT_NAME = { bart: 'Bart', brainstorm: 'Brainstorm', discover: 'Discover', build: 'Build' };
+const AGENT_DID = { bart: 'Bart answered', brainstorm: 'Brainstorm asked', discover: 'Discover found reading', create: 'Create made a file', build: 'Build finished a turn' };
+export const AGENT_NAME = { bart: 'Bart', brainstorm: 'Brainstorm', discover: 'Discover', create: 'Create', build: 'Build' };
 
 /**
  * The Inbox: this project's agents that finished in a workspace and wait for you to look (state.json `agents`, `waiting`),

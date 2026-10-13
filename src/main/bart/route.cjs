@@ -5,7 +5,8 @@
 // steps aside. The editor tries its rules first (src/renderer/model/route.js routeByRule); a line no rule settles comes
 // here, and the default provider's fastest model (Haiku on Claude Code, Luna on Codex) is asked at low effort, with no
 // tools and no session, which agent it is for. Anything that goes wrong (bad JSON, a timeout, an error) or a pick it is
-// less than 0.6 sure of goes to chat: a misrouted line costs more than a plain answer. A follow-up in a thread (2026-10-13)
+// less than 0.6 sure of goes to chat: a misrouted line costs more than a plain answer. @create (2026-10-13, ./create.cjs)
+// adds files to the library and starts by itself, so a create pick needs 0.8. A follow-up in a thread (2026-10-13)
 // comes with `current`, the agent that answered the thread last: it stays there unless the model is at least 0.8 sure
 // the line wants another agent, and anything that goes wrong leaves it there too.
 //
@@ -34,8 +35,10 @@ const SECTION_CHARS = 4000;
 const MAX_THREADS = 5;
 const QUESTION_CHARS = 80;
 const SURE_ENOUGH = 0.6;
+// How sure a create pick must be: below it the line goes to chat, which makes nothing.
+const CREATE_SURE = 0.8;
 const SURE_TO_SWITCH = 0.8;
-const PICKS = ['chat', 'brainstorm', 'discover', 'build'];
+const PICKS = ['chat', 'brainstorm', 'discover', 'create', 'build'];
 const RULE_PICKS = new Set(PICKS);
 
 const clean = (value, max) => String(value == null ? '' : value).replace(/\s+/g, ' ').trim().slice(0, max);
@@ -57,7 +60,7 @@ function threadsOf(threads) {
 }
 
 /** The agent a follow-up's conversation is with ('chat', 'brainstorm' or 'discover'), or null. */
-const currentOf = (current) => { const agent = String(current || '').toLowerCase().replace(/^@/, ''); return PICKS.includes(agent) && agent !== 'build' ? agent : null; };
+const currentOf = (current) => { const agent = String(current || '').toLowerCase().replace(/^@/, ''); return PICKS.includes(agent) && agent !== 'build' && agent !== 'create' ? agent : null; };
 
 /** What the model is sent: the line, its section, the threads above, whether a spec is above and, for a follow-up, the
  * agent the conversation is with. Nothing else. */
@@ -89,14 +92,14 @@ function parseReply(raw) {
 }
 
 /**
- * The pick a reply comes to: its agent when it is sure enough, else chat. With `current` (a follow-up, 2026-10-13): that
- * agent, unless the reply picks another and is at least 0.8 sure of it.
+ * The pick a reply comes to: its agent when it is sure enough (create: CREATE_SURE), else chat. With `current` (a
+ * follow-up, 2026-10-13): that agent, unless the reply picks another and is at least 0.8 sure of it.
  */
 function decide(parsed, current = null) {
   const now = currentOf(current);
   if (now) return parsed && parsed.agent !== now && parsed.sure >= SURE_TO_SWITCH ? parsed : { agent: now, sure: parsed ? parsed.sure : 0 };
   if (!parsed) return { agent: 'chat', sure: 0 };
-  return parsed.sure < SURE_ENOUGH ? { agent: 'chat', sure: parsed.sure } : parsed;
+  return parsed.sure < (parsed.agent === 'create' ? CREATE_SURE : SURE_ENOUGH) ? { agent: 'chat', sure: parsed.sure } : parsed;
 }
 
 /** The model a line is routed on: the default provider's first model, at low effort (or its lowest). */
@@ -205,7 +208,9 @@ function createRouter({ readModels, environment = process.env, runDirectory = pa
  * keyword settles stays with the agent its thread is with (`current`). */
 function fakePick(text, current = null) {
   const line = String(text || '').toLowerCase();
-  if (/\bbuild it\b|\bimplement\b/.test(line)) return { agent: 'build', sure: 0.9 };
+  if (/\bbuild it\b|\bimplement\b|\bmake the\b.*\bdifferent\b/.test(line)) return { agent: 'build', sure: 0.9 };
+  // Something new made ("make a chart", "make an html page", "write up a summary page", "create a …"), not a prompt or a spec for one.
+  if (/\b(?:make|write up|draw) (?:a|an) (?:[\w-]+ ){0,2}(?:chart|page|plot|graph)\b|\bcreate (?:a|an) (?!(?:[\w-]+ )?(?:prompt|spec)\b)/.test(line)) return { agent: 'create', sure: 0.9 };
   if (/\bpapers?\b|\bread\b|\breading\b|prior work/.test(line)) return { agent: 'discover', sure: 0.9 };
   if (/\bthink\b|\bunsure\b/.test(line)) return { agent: 'brainstorm', sure: 0.9 };
   return { agent: currentOf(current) || 'chat', sure: 0.9 };
@@ -247,4 +252,4 @@ function routerOf({ log, now, pick }) {
   };
 }
 
-module.exports = { createRouter, createFakeRouter, routeInput, parseReply, decide, routeModel, sectionText, threadsOf, fakePick, markCorrected, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH, SURE_TO_SWITCH, PICKS };
+module.exports = { createRouter, createFakeRouter, routeInput, parseReply, decide, routeModel, sectionText, threadsOf, fakePick, markCorrected, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH, SURE_TO_SWITCH, CREATE_SURE, PICKS };

@@ -53,6 +53,16 @@
 // ask a card or two first, which are written as @brainstorm's are; its guide is markdown, written as an @bart answer is.
 // Each turn carries <mode>: quick or deep when a line of the exchange said --quick or --deep, else standard.
 //
+// @create (2026-10-13): the same run, for something new the person wants made (a page, a chart, a document, a dataset, a
+// small script). Its own prompt (./create-system-prompt.cjs), @bart's models and steps (./models.cjs readQuestion; no
+// setting of its own), no sessions kept (each turn starts from the document), ten minutes a step, and its working
+// directory a draft folder of its own (./create.cjs), the one place it can write: Claude Code gets Write and Edit allowed
+// there alone (permission rules on the folder's absolute path, --permission-mode dontAsk refusing the rest) and no Bash;
+// Codex a workspace-write sandbox rooted there, with no other writable root (no /tmp, no $TMPDIR, no --add-dir) and no
+// network. After a run that answered, what it wrote is kept in the library and the folder deleted (./create.cjs
+// keepCreated); a run stopped or failed deletes the folder and keeps nothing. It runs here, not in Build: it never takes
+// a Build slot.
+//
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -64,6 +74,8 @@ const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../c
 const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('./brainstorm-system-prompt.cjs');
 const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
+const { CREATE_SYSTEM_PROMPT } = require('./create-system-prompt.cjs');
+const { CREATE_TIMEOUT_MS, openDraft, dropDraft, keepCreated, createdBody } = require('./create.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
 const { OPENING, SKIPPED, NEXT_ID, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, cardBody, cardOfAnswer, questionOf, readCard, readAnswer, resultText, nextLead, sameWords, NEXT_TITLE } = require('./card.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
@@ -87,11 +99,13 @@ const ESCALATE_RE = /^ESCALATE:\s*(.{0,400})$/s;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CLAUDE_TOOLS = 'Read,Grep,Glob,WebSearch,WebFetch';
 const BRAINSTORM_TOOLS = 'Read,Grep,Glob';
+// @create's: @bart's, and Write and Edit, which its permission rules allow in its draft folder alone (createRules).
+const CREATE_TOOLS = `${CLAUDE_TOOLS},Write,Edit`;
 // @discover's paper tools, as Claude Code names an MCP server's tools; the server, run by Engelbart's own executable as Node.
 const PAPER_TOOLS = 'mcp__papers__*';
 const PAPERS_SERVER = path.join(__dirname, 'papers-mcp.cjs');
-const AGENTS = ['bart', 'brainstorm', 'discover'];
-const PROMPTS = { bart: ['bart-system-prompt.md', BART_SYSTEM_PROMPT], brainstorm: ['brainstorm-system-prompt.md', BRAINSTORM_SYSTEM_PROMPT], discover: ['discover-system-prompt.md', DISCOVER_SYSTEM_PROMPT] };
+const AGENTS = ['bart', 'brainstorm', 'discover', 'create'];
+const PROMPTS = { bart: ['bart-system-prompt.md', BART_SYSTEM_PROMPT], brainstorm: ['brainstorm-system-prompt.md', BRAINSTORM_SYSTEM_PROMPT], discover: ['discover-system-prompt.md', DISCOVER_SYSTEM_PROMPT], create: ['create-system-prompt.md', CREATE_SYSTEM_PROMPT] };
 // The agents on one fixed step whose model is never named, while they run or in their foot (2026-10-02, B-05).
 const QUIET = new Set(['brainstorm']);
 // @brainstorm's paths (2026-10-05, @orient folded in; the prompt's <path>): a library paper mentioned on the opening line,
@@ -297,7 +311,8 @@ function turnPlan({ agent, text, turns, choice, entries = [], welcome = false },
       extra: `<mode>${MODE_LIMITS[read.mode]}</mode>`,
     };
   }
-  if (!brainstorm) return { agent: 'bart', brainstorm, ...read, prior, asked: read.question, shown: prior, extra: '' };
+  // @create asks as @bart does, on @bart's models (2026-10-13).
+  if (!brainstorm) return { agent: agent === 'create' ? 'create' : 'bart', brainstorm, ...read, prior, asked: read.question, shown: prior, extra: '' };
   // Which kind of card comes next is decided here (round 7; MATH-40), and which move a later card makes by the model. The
   // path is read from the exchange's opening, its first line since the exchange last ended (after a result, a recap or a
   // reply that was not a card, the next line opens again), against the library this turn is shown. No card yet: the
@@ -485,6 +500,25 @@ async function loggedTurn(log, logId, input, turn) {
   return out;
 }
 
+/** A row @create kept, as its run's meta and record name it. */
+const createdRow = (row) => ({ id: row.id, name: row.name, type: row.type, path: row.path || null });
+
+/**
+ * @create's Claude Code permission rules: its read and web tools, and Write and Edit on `draft` (an absolute, real path)
+ * and what is under it alone, written as Claude Code writes an absolute path in a rule ("//" then the path without its
+ * leading "/"). With --permission-mode dontAsk a write anywhere else is refused, not asked.
+ */
+function createRules(draft) {
+  const under = `/${path.resolve(draft)}/**`;
+  return `${CLAUDE_TOOLS},Edit(${under}),Write(${under})`;
+}
+
+/**
+ * @create's Codex settings (each a `-c key=value` in TOML): the workspace-write sandbox, its working directory the one
+ * writable root (no other, not /tmp or $TMPDIR), no network from inside it, and no asking.
+ */
+const CREATE_CODEX = ['sandbox_mode="workspace-write"', 'sandbox_workspace_write.writable_roots=[]', 'sandbox_workspace_write.exclude_slash_tmp=true', 'sandbox_workspace_write.exclude_tmpdir_env_var=true', 'sandbox_workspace_write.network_access=false', 'approval_policy="never"'];
+
 // `tools` (../tools/manager.cjs, optional): a question waits for an install or update of its CLI to end and
 // holds one off while it runs, a stale check is redone in the background, and a CLI the login shell's PATH
 // does not reach is run by its full path. `onPicked({ provider, model, effort })`: a question asked with a model or an
@@ -494,8 +528,9 @@ async function loggedTurn(log, logId, input, turn) {
 // also holds the config.toml that gives Codex the paper tools.
 // `papersServer`: the MCP server's script, run by `node` (Engelbart's own executable, as Node).
 // `runLog` (./runlog.cjs, optional): the Agent map's record of each run; none keeps nothing. It is told, and never changes,
-// what each run is sent and does.
-function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), routerCodexHome = `${codexHome}-router`, brainstormCodexHome = `${codexHome}-brainstorm`, discoverCodexHome = `${codexHome}-discover`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER, runLog = null } = {}) {
+// what each run is sent and does. `inspectPdf` and `onAdded(row)`: for what @create keeps in the library (a pdf read for
+// whether it is a paper; a row made, so the sidebar reads the library again).
+function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), routerCodexHome = `${codexHome}-router`, brainstormCodexHome = `${codexHome}-brainstorm`, discoverCodexHome = `${codexHome}-discover`, createCodexHome = `${codexHome}-create`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER, runLog = null, inspectPdf = null, onAdded = () => {} } = {}) {
   const log = logTo(runLog);
   // Bart, the router (./route.cjs, 2026-10-12): picks the agent an `@bart` line is for and steps aside.
   const router = createRouter({ readModels, environment, runDirectory, codexHome: routerCodexHome, codexAuthFile, run, tools, runLog });
@@ -522,7 +557,9 @@ function createBart({ readModels, environment = process.env, runDirectory = path
   // Every flag is a literal, every value arrives through the environment: nothing is quoted by hand.
   // `effort` is one of six known words (./question.cjs). `resume`: the id of a session to go on with. `mcp`: the paper
   // tools too (@discover), from a config written next to the prompt.
-  function claudeTurns({ system, cwd, dirs, stem, signal, short, onUpdate, resume, allowed = CLAUDE_TOOLS, mcp = false, timeout, logId = null }) {
+  // `rules`: the permission rules in place of `allowed` (@create's, which name a path), sent through the environment, with
+  // --permission-mode dontAsk.
+  function claudeTurns({ system, cwd, dirs, stem, signal, short, onUpdate, resume, allowed = CLAUDE_TOOLS, rules = null, mcp = false, timeout, logId = null }) {
     const promptFile = `${stem}.system.md`, mcpFile = `${stem}.mcp.json`;
     fs.writeFileSync(promptFile, system, { mode: 0o600 });
     if (mcp) fs.writeFileSync(mcpFile, JSON.stringify({ mcpServers: { papers } }), { mode: 0o600 });
@@ -534,8 +571,9 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         fs.writeFileSync(`${stem}.input.txt`, message, { mode: 0o600 });
         // --tools names the built-in tools; the paper tools are allowed by their server's prefix.
         const servers = mcp ? ' --mcp-config "$ENGELBART_BART_MCP"' : '', granted = mcp ? `${allowed},${PAPER_TOOLS}` : allowed;
-        const command = `exec ${program('claude')} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config${servers} --tools "${allowed}" --allowedTools "${granted}" ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
-        const env = childEnvironment({ ...programEnv('claude'), ENGELBART_BART_SESSION: id, ENGELBART_BART_MODEL: level.model, ENGELBART_BART_PROMPT: promptFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...(mcp ? { ENGELBART_BART_MCP: mcpFile } : {}), ...Object.fromEntries(dirs.map((dir, n) => [`ENGELBART_BART_DIR${n}`, dir])) });
+        const permitted = rules ? '--allowedTools "$ENGELBART_BART_RULES" --permission-mode dontAsk' : `--allowedTools "${granted}"`;
+        const command = `exec ${program('claude')} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config${servers} --tools "${allowed}" ${permitted} ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
+        const env = childEnvironment({ ...programEnv('claude'), ENGELBART_BART_SESSION: id, ENGELBART_BART_MODEL: level.model, ENGELBART_BART_PROMPT: promptFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...(rules ? { ENGELBART_BART_RULES: rules } : {}), ...(mcp ? { ENGELBART_BART_MCP: mcpFile } : {}), ...Object.fromEntries(dirs.map((dir, n) => [`ENGELBART_BART_DIR${n}`, dir])) });
         const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { log((runs) => runs.event(logId, event)); onUpdate(claudeUpdate(event, short)); }, timeout);
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
         const result = lastResultLine(stdout);
@@ -547,7 +585,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
   }
 
   // `mcp`: the paper tools too (@discover), from the private home's config.toml, which holds nothing else.
-  function codexTurns({ system, cwd, stem, signal, short, onUpdate, home = codexHome, web = true, mcp = false, timeout, logId = null }) {
+  // `write`: @create's sandbox (CREATE_CODEX) in place of the read-only one, rooted at `cwd`.
+  function codexTurns({ system, cwd, stem, signal, short, onUpdate, home = codexHome, web = true, mcp = false, write = false, timeout, logId = null }) {
     const source = codexAuthFile || path.join(environment.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
     if (!prepareCodexHome({ codexHome: home, source, instructions: system })) throw new BartError('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`). An API key is never used.');
     writeCodexConfig(home, mcp ? { papers } : {});
@@ -557,9 +596,11 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       turn: async ({ level, message, session }) => {
         fs.writeFileSync(`${stem}.input.txt`, message, { mode: 0o600 });
         try { fs.unlinkSync(outFile); } catch { /* none */ }
-        const shared = `--skip-git-repo-check -m "$ENGELBART_BART_MODEL" -c 'model_reasoning_effort="${level.effort}"' -c 'sandbox_mode="read-only"' -c 'tools.web_search=${web}' -c project_doc_max_bytes=0 --json -o "$ENGELBART_BART_OUTPUT" - < "$ENGELBART_BART_INPUT"`;
-        const command = session ? `exec ${program('codex')} exec resume "$ENGELBART_BART_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${shared}`;
-        const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: home, ENGELBART_BART_SESSION: session || '', ENGELBART_BART_MODEL: level.model, ENGELBART_BART_OUTPUT: outFile, ENGELBART_BART_INPUT: `${stem}.input.txt` });
+        // -C is `exec`'s, before its subcommand: `exec resume` takes none of its own.
+        const sandbox = write ? CREATE_CODEX.map((setting) => `-c '${setting}'`).join(' ') : `-c 'sandbox_mode="read-only"'`, at = write ? '-C "$ENGELBART_BART_CWD" ' : '';
+        const shared = `--skip-git-repo-check -m "$ENGELBART_BART_MODEL" -c 'model_reasoning_effort="${level.effort}"' ${sandbox} -c 'tools.web_search=${web}' -c project_doc_max_bytes=0 --json -o "$ENGELBART_BART_OUTPUT" - < "$ENGELBART_BART_INPUT"`;
+        const command = session ? `exec ${program('codex')} exec ${at}resume "$ENGELBART_BART_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${at}${shared}`;
+        const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: home, ENGELBART_BART_SESSION: session || '', ENGELBART_BART_MODEL: level.model, ENGELBART_BART_OUTPUT: outFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...(write ? { ENGELBART_BART_CWD: cwd } : {}) });
         const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { log((runs) => runs.event(logId, event)); onUpdate(codexUpdate(event, short)); }, timeout);
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
         let text = '';
@@ -592,15 +633,16 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    */
   async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
     const models = readModels();
-    const bart = agent === 'bart', routed = routedOf(routedInput);
+    const bart = agent === 'bart', create = agent === 'create', routed = routedOf(routedInput);
     // The context first: @brainstorm's path is read against the library it shows (turnPlan).
     const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
-    const plan = turnPlan({ agent, text, turns, choice: bart ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
+    const plan = turnPlan({ agent, text, turns, choice: bart || create ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
     const { question, provider, steps, pinned, prior, asked, shown, extra, mode } = plan;
-    if (!question && bart) throw new BartError('failed', 'There is no question on the line.');
+    if (!question && (bart || create)) throw new BartError('failed', create ? 'There is nothing on the line to make.' : 'There is no question on the line.');
     if (pinned && bart) remember(onPicked, steps[0]);
-    const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
-    const held = prior.length && !switched(prior, agent) ? store.take(threadKey(projectId, ref, prior), provider) : null;
+    // @create keeps no sessions: each turn starts from the document.
+    const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent] || null;
+    const held = prior.length && store && !switched(prior, agent) ? store.take(threadKey(projectId, ref, prior), provider) : null;
     const system = loadSystemPrompt(ctx.dataRoot, agent);
     // The Agent map's record (runLog): from here every way out of the run is logged.
     const logId = askId || randomUUID(), startedAt = Date.now();
@@ -632,8 +674,9 @@ function createBart({ readModels, environment = process.env, runDirectory = path
             bart: {},
             brainstorm: { allowed: BRAINSTORM_TOOLS, home: brainstormCodexHome, web: false },
             discover: { home: discoverCodexHome, mcp: true, timeout: mode === 'deep' ? DEEP_DISCOVER_TIMEOUT_MS : DISCOVER_TIMEOUT_MS },
+            create: { allowed: CREATE_TOOLS, rules: draft && createRules(draft), home: createCodexHome, write: true, timeout: CREATE_TIMEOUT_MS },
           }[agent];
-          cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, logId, ...only });
+          cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd: draft || cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, logId, ...only });
           return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed, agent }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
         } finally { if (cli) cli.done(); }
       };
@@ -649,20 +692,28 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         }
       };
       if (tools) await tools.ensure(cliName);
+      // @create's working directory is its draft folder, made empty, the one place it writes (./create.cjs); it is
+      // deleted however the run ends.
+      const draft = create ? openDraft(ctx.dataRoot, logId) : null;
       try {
         let out;
         // A session that will not resume (its file is gone, the CLI changed) is not the person's problem: start again from the document.
         try { out = await guarded(held ? held.session : null); } catch (error) { if (!held || error.kind === 'stopped') throw error; out = await guarded(null); }
         const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned, ...(routed ? { routed } : {}) };
+        // @create's files kept in the library, each answered with a mention of its row (./create.cjs); stopped, it keeps none.
+        if (create && stopped(controller.signal)) throw new BartError('stopped', 'Stopped.');
+        const made = create ? await keepCreated(ctx, projectId, workspaceId, draft, { inspectPdf, onAdded }) : null;
+        if (made) { meta.created = made.rows.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
         // A card is written as its JSON in a fence; a reply that is not one, as it came (the editor draws it as an answer).
         // @brainstorm's next card always reads the same (brainstormReply).
-        const body = replyBody(agent, plan.brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
+        const body = made ? createdBody(out.text, made) : replyBody(agent, plan.brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
         // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
-        if (out.session) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
+        if (out.session && store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta };
       } finally {
         feed.end();
         running.delete(askId);
+        dropDraft(draft);
         try { fs.unlinkSync(`${stem}.input.txt`); } catch { /* already gone */ }
       }
     }
@@ -689,7 +740,7 @@ function ownSentence(documents, subject) {
   for (const line of String(documents || '').split('\n')) {
     if (/^<file\s/.test(line)) { if (!/\/>$/.test(line)) depth += 1; continue; }
     if (line === '</file>') { depth = Math.max(0, depth - 1); continue; }
-    if (depth || /^(?:@(?:bart|chat|brainstorm|orient|discover)\b|bart[+?~]?>|<|\[agent reply omitted\]|#)/i.test(line)) continue;
+    if (depth || /^(?:@(?:bart|chat|brainstorm|orient|discover|create)\b|bart[+?~]?>|<|\[agent reply omitted\]|#)/i.test(line)) continue;
     const found = (line.match(/[^.!?]+[.!?]/g) || []).find((sentence) => sentence.toLowerCase().includes(needle));
     if (found) return found.trim();
   }
@@ -865,8 +916,25 @@ function fakeDiscover(context, plan) {
   ].join('\n');
 }
 
-/** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. @brainstorm runs fakeCard, @discover fakeDiscover. */
-function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {}, runLog = null }) {
+/**
+ * The fake @create's run (2026-10-13), as a model would do it: files written in its working folder, `draft`, then a sentence
+ * naming them. A request to change something it has ("change", "fix", "rename", "edit", "delete", "make the … different",
+ * or a Build) gets no file and the one sentence that it is a Build. Anything else: report.md, chart.html (a page that
+ * draws its chart itself) and data.csv, from fake numbers. → the reply
+ */
+function fakeCreate(draft, question) {
+  if (/\b(?:build|change|fix|rename|edit|delete|remove)\b|\bmake (?:the|my)\b[^.]*\bdifferent\b/i.test(question)) return 'This is a Build: it changes something you already have, so I made nothing.';
+  const rows = [[2021, 3], [2022, 5], [2023, 4], [2024, 7]];
+  const bars = rows.map(([year, n], at) => `<rect x="${20 + at * 60}" y="${150 - n * 18}" width="40" height="${n * 18}" fill="#4a6fa5"><title>${year}: ${n}</title></rect><text x="${40 + at * 60}" y="168" text-anchor="middle">${year}</text>`).join('');
+  const title = String(question).replace(/[<>&"]/g, '').trim().slice(0, 80) || 'Fake chart';
+  fs.writeFileSync(path.join(draft, 'report.md'), `# Fake report\n\nA fake report for “${title}”. Nothing was read: every number here is fake.\n`);
+  fs.writeFileSync(path.join(draft, 'chart.html'), `<!doctype html>\n<html><head><meta charset="utf-8"><title>${title}</title><style>body{font:14px system-ui;margin:24px}text{font-size:11px}</style></head>\n<body><h1>${title}</h1><svg width="280" height="180" role="img" aria-label="fake bars">${bars}</svg><p id="n"></p><script>document.getElementById('n').textContent = 'Fake data, drawn by the page itself.';</script></body></html>\n`);
+  fs.writeFileSync(path.join(draft, 'data.csv'), `year,count\n${rows.map((row) => row.join(',')).join('\n')}\n`);
+  return 'I made a fake report, a chart page and its data: report.md, chart.html and data.csv.';
+}
+
+/** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. @brainstorm runs fakeCard, @discover fakeDiscover, @create fakeCreate. */
+function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {}, runLog = null, inspectPdf = null, onAdded = () => {} }) {
   const waits = new Map();
   const log = logTo(runLog);
   const router = createFakeRouter({ runLog });
@@ -874,16 +942,17 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
     async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
       const models = readModels(), routed = routedOf(routedInput);
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
-      const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
-      const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover';
+      const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' || agent === 'create' ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
+      const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover', create = agent === 'create';
       if (pinned && question && agent === 'bart') remember(onPicked, steps[0]);
-      const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent];
-      const held = prior.length && !switched(prior, agent) ? store.take(threadKey(projectId, ref, prior), provider) : null;
+      const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent] || null;
+      const held = prior.length && store && !switched(prior, agent) ? store.take(threadKey(projectId, ref, prior), provider) : null;
       const logId = askId || randomUUID(), startedAt = Date.now();
       log((runs) => runs.start(runRecord({ id: logId, agent, provider, projectId, question: text, system: loadSystemPrompt(ctx.dataRoot, agent), context, shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned, routed, place })));
       if (routed && routed.corrected) log((runs) => markCorrected(runs, { id: routed.id, projectId, text, agent: routed.corrected }));
       const ended = (status, result, error) => log((runs) => runs.finish(logId, { status, written: result ? result.lines : null, error: error && error.message, ms: Date.now() - startedAt }));
       if (plan.written != null) { const result = resultReply(plan); ended('done', result); return result; }
+      if (create && !question) { const error = new BartError('failed', 'There is nothing on the line to make.'); ended('failed', null, error); throw error; }
       const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed, agent });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
@@ -898,24 +967,27 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
         for (const delta of pieces) { feed.take({ delta }); await pause(delayMs / 2 / pieces.length); }
         return text;
       };
+      const draft = create ? openDraft(ctx.dataRoot, logId) : null;
       try {
         const out = await climb({
           steps, pinned, onProgress: stepShown(agent, onProgress),
           first: message, session: held ? held.session : null,
           // What it was sent is what it reports: a resumed session gets the question alone (an @bart one, the Stage and
           // highlights as well), a new one gets everything.
-          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: await act(brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
+          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: await act(create ? fakeCreate(draft, question) : brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned, ...(routed ? { routed } : {}) };
-        const body = replyBody(agent, brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
-        store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
+        const made = create ? await keepCreated(ctx, projectId, workspaceId, draft, { inspectPdf, onAdded }) : null;
+        if (made) { meta.created = made.rows.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
+        const body = made ? createdBody(out.text, made) : replyBody(agent, brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
+        if (store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta };
         ended('done', result);
         return result;
       } catch (error) {
         ended(error && error.kind === 'stopped' ? 'stopped' : 'failed', null, error);
         throw error;
-      } finally { feed.end(); waits.delete(askId); }
+      } finally { feed.end(); waits.delete(askId); dropDraft(draft); }
     },
     stop(askId) { const cancel = waits.get(askId); if (cancel) cancel(); return !!cancel; },
     stopAll() { for (const cancel of waits.values()) cancel(); },
@@ -925,4 +997,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, brainstormReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS };
+module.exports = { createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, brainstormReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS };

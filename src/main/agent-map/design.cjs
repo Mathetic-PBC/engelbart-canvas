@@ -8,12 +8,13 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { loadSystemPrompt, AGENTS, PROMPTS, CLAUDE_TOOLS, BRAINSTORM_TOOLS, PAPER_TOOLS, STEP_TIMEOUT_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS } = require('../bart/ask.cjs');
+const { loadSystemPrompt, AGENTS, PROMPTS, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS } = require('../bart/ask.cjs');
 const { readQuestion, readBrainstorm, readDiscover, MODES } = require('../bart/models.cjs');
 const { SCOPED, ZOTERO_READERS, LIBRARY_READERS } = require('../bart/context.cjs');
 const { OMITTED } = require('../bart/strip.cjs');
 const { ROUTE_SYSTEM_PROMPT } = require('../bart/route-system-prompt.cjs');
-const { routeModel, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH } = require('../bart/route.cjs');
+const { routeModel, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH, CREATE_SURE } = require('../bart/route.cjs');
+const { CREATE_TIMEOUT_MS, MAX_CREATED, MAX_CREATED_BYTES } = require('../bart/create.cjs');
 const { buildChoices, resolveBuildChoice } = require('../bart/models.cjs');
 const { loadBuildPrompt } = require('../build/prompt.cjs');
 const { buildPolicy, claudeSettings } = require('../build/policy.cjs');
@@ -25,8 +26,10 @@ const { LIMITS, TURN_MS } = require('../build/manager.cjs');
 
 // What each agent is called on a line, and above its Design entry (2026-10-12): the internal 'bart' is typed @chat and
 // titled Chat; @bart is the router.
-const TITLES = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover' };
-const TOKENS = { bart: 'chat', brainstorm: 'brainstorm', discover: 'discover' };
+const TITLES = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover', create: 'Create' };
+const TOKENS = { bart: 'chat', brainstorm: 'brainstorm', discover: 'discover', create: 'create' };
+// Where @create writes, named as a placeholder (each run's is its own, ../bart/create.cjs).
+const DRAFT = '/<data root>/.create/<ask id>';
 
 /** Bart, the router (../bart/route.cjs): its rules, model, prompt and inputs. */
 function routerDesign(models) {
@@ -45,6 +48,7 @@ function routerDesign(models) {
       { when: 'a model or effort flag', to: '@chat' },
       { when: 'directly under a @brainstorm or @discover thread', to: 'that agent' },
       { when: 'otherwise', to: `the model (bad JSON, a timeout, an error or sure < ${SURE_ENOUGH} → @chat)` },
+      { when: 'the model says create', to: `@create when sure ≥ ${CREATE_SURE} (else @chat), started after 5 s unless Cancel turns it into @chat` },
       { when: 'the model says build, a spec above and sure ≥ 0.8', to: 'Build of that fenced block' },
       { when: 'the model says build otherwise', to: '@chat, told to write the Build prompt' },
     ],
@@ -64,6 +68,12 @@ function promptOf(dataRoot, agent) {
 
 /** The tools each provider's CLI is given, as ask.cjs's `only` gives them. */
 function toolsOf(agent) {
+  if (agent === 'create') {
+    return {
+      anthropic: { tools: CREATE_TOOLS, allowedTools: `${createRules(DRAFT)} --permission-mode dontAsk`, papers: false },
+      openai: { overrides: [`-C ${DRAFT}`, ...CREATE_CODEX, 'tools.web_search=true'] },
+    };
+  }
   const allowed = agent === 'brainstorm' ? BRAINSTORM_TOOLS : CLAUDE_TOOLS, mcp = agent === 'discover';
   return {
     anthropic: { tools: allowed, allowedTools: mcp ? `${allowed},${PAPER_TOOLS}` : allowed, papers: mcp },
@@ -79,7 +89,7 @@ function stepsOf(agent, models) {
     const on = { ...models, provider };
     const shape = (steps) => steps.map((step) => ({ name: step.name, model: step.model, effort: step.effort }));
     try {
-      if (agent === 'bart') out[provider] = { steps: shape(readQuestion('', on).steps) };
+      if (agent === 'bart' || agent === 'create') out[provider] = { steps: shape(readQuestion('', on).steps) };
       else if (agent === 'brainstorm') out[provider] = { steps: shape(readBrainstorm('', on).steps) };
       else out[provider] = { modes: Object.fromEntries(MODES.map((mode) => [mode, shape(readDiscover(mode === 'standard' ? '' : `--${mode}`, on, []).steps)])) };
     } catch (error) { out[provider] = { error: error.message }; }
@@ -100,9 +110,9 @@ function contextOf(agent) {
     ...(agent === 'brainstorm' ? [{ block: '<path> <stage> <card>', note: `the path (${BRAINSTORM_PATHS.join(', ')}, welcome), which card comes next (moves: ${BRAINSTORM_MOVES.join(', ')}), card n of ${MAX_BRAINSTORM_CARDS}` }] : []),
     ...(agent === 'discover' ? [{ block: '<mode>', note: Object.values(MODE_LIMITS).join(' | ') }] : []),
     { block: '<level>', note: 'the model and effort this step runs on, and whether a higher step exists' },
-    { block: '<question>', note: 'the line after the agent\'s name (an empty line: the opening question)' },
+    { block: '<question>', note: agent === 'create' ? 'what to make: the line after @create' : 'the line after the agent\'s name (an empty line: the opening question)' },
   ];
-  const resumed = [
+  const resumed = agent === 'create' ? ['(none: no session is kept, each turn starts from the document)'] : [
     ...(agent === 'brainstorm' ? ['<path> <stage> <card>'] : agent === 'discover' ? ['<mode>'] : []),
     ...(agent === 'bart' ? ['<stage> / <highlights> (as they are now)'] : []),
     '<level>', '<question>',
@@ -117,7 +127,7 @@ const CALLS = {
     { to: 'chat', how: 'the router\'s pick: the line is rewritten @chat and asked' },
     { to: 'brainstorm', how: 'the router\'s pick, or an empty @bart' },
     { to: 'discover', how: 'the router\'s pick, or --quick, --standard or --deep' },
-    { to: 'create', how: 'not yet: Create is planned, and the router does not pick it' },
+    { to: 'create', how: `the router's pick, sure ≥ ${CREATE_SURE}: the line shows "Creating in 5 s · Cancel", then is asked @create (Cancel: @chat)` },
     { to: 'build', how: '--build, or the router\'s pick with a spec above (else Chat writes the Build prompt)' },
   ],
   bart: [{ to: 'build', how: '--build: the line\'s request becomes a Build; the footer\'s Build' }],
@@ -240,8 +250,19 @@ function runStepEntry(buildModels) {
 }
 
 /**
+ * What @create's entry says beyond the others' (2026-10-13): that it runs on @chat's models, where it may write, and where
+ * what it makes goes (../bart/create.cjs).
+ */
+function createExtras() {
+  return {
+    reach: `writes in its draft folder alone (${DRAFT}/, made empty, its working directory): Claude Code's Write and Edit are allowed there and nowhere else, with no Bash; Codex runs in a workspace-write sandbox rooted there, with no other writable root and no network. A write anywhere else fails.`,
+    keeps: `after a run that answered, at most ${MAX_CREATED} of its files, each at most ${Math.round(MAX_CREATED_BYTES / 1024 / 1024)} MB and of a format the library reads: .md to assets/md, a pdf or a picture as a copy (assets/pdfs, assets/images), anything else to assets/files/<uuid>/; each row linked to the line's workspace, and the answer mentions each. Then the draft folder is deleted; a run stopped or failed deletes it and keeps nothing.`,
+  };
+}
+
+/**
  * → { agents: [{ agent, title?, token?, prompt, tools, models, timeout, context, calls, rules?, inputs?, … }] } for the
- * open data root and the models in force; Bart, the classifier (the router), first, and Create planned (2026-10-12).
+ * open data root and the models in force; Bart, the classifier (the router), first.
  */
 function agentDesign({ dataRoot, models, buildModels = models }) {
   const agents = [
@@ -250,12 +271,11 @@ function agentDesign({ dataRoot, models, buildModels = models }) {
       agent, title: TITLES[agent], token: TOKENS[agent],
       prompt: promptOf(dataRoot, agent),
       tools: toolsOf(agent),
-      models: stepsOf(agent, models),
-      timeout: agent === 'discover' ? { quick: DISCOVER_TIMEOUT_MS, standard: DISCOVER_TIMEOUT_MS, deep: DEEP_DISCOVER_TIMEOUT_MS } : { step: STEP_TIMEOUT_MS },
+      models: agent === 'create' ? { ...stepsOf(agent, models), rule: '@chat\'s models and efforts (no setting of its own)' } : stepsOf(agent, models),
+      timeout: agent === 'discover' ? { quick: DISCOVER_TIMEOUT_MS, standard: DISCOVER_TIMEOUT_MS, deep: DEEP_DISCOVER_TIMEOUT_MS } : agent === 'create' ? { step: CREATE_TIMEOUT_MS } : { step: STEP_TIMEOUT_MS },
       context: contextOf(agent),
+      ...(agent === 'create' ? createExtras() : {}),
     })),
-    // Create (2026-10-12): planned, not built yet. Its entry holds nothing to read; a run of it shows as any other.
-    { agent: 'create', title: 'Create', token: 'create', planned: true },
     buildEntry(dataRoot, buildModels),
     runStepEntry(buildModels),
   ];

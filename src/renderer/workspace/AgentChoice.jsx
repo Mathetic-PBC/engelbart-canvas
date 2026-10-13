@@ -1,5 +1,5 @@
 // The menu under an answer's "via Bart" (2026-10-12): Bart, the router, picked the agent that wrote it; picking another
-// here writes the line as that agent's (@chat, @brainstorm, @discover) and asks it again (DocEditor pickVia). The agent
+// here writes the line as that agent's (@chat, @brainstorm, @discover, @create) and asks it again (DocEditor pickVia). The agent
 // that wrote it is marked.
 import React from 'react';
 import { usePlaced } from '../ui/usePlaced.js';
@@ -10,6 +10,7 @@ export const VIA_AGENTS = [
   { agent: 'bart', label: 'Chat', detail: 'an answer' },
   { agent: 'brainstorm', label: 'Brainstorm', detail: 'think it through' },
   { agent: 'discover', label: 'Discover', detail: 'what to read' },
+  { agent: 'create', label: 'Create', detail: 'a new file' },
 ];
 
 // `current`: the agent that answered ('bart' is Chat). `onPick(agent)`.

@@ -80,7 +80,7 @@ function markPlace(text, askId) {
 }
 
 // The agents' names, as a turn another agent answered is labelled (main/bart/reply.cjs AGENT_NAMES).
-const TURN_AGENTS = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover' };
+const TURN_AGENTS = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover', create: 'Create' };
 
 /**
  * The earlier turns of the exchange a follow-up continues, as the document holds them now: the person may have edited
@@ -159,14 +159,14 @@ function mentionedFilesBlock(files) {
 
 // The agents told where the Zotero mirror is (MATH-65 build 2): those that answer about the library. @brainstorm reads this
 // workspace alone.
-const ZOTERO_READERS = new Set(['bart', 'discover']);
+const ZOTERO_READERS = new Set(['bart', 'discover', 'create']);
 /** The files of the Zotero items the documents mention, kept in `seen` by expand-mentions.cjs → [{ dir }]. */
 const zoteroFiles = (seen) => [...seen].filter((key) => typeof key === 'string' && key.startsWith('zfile:')).map((key) => ({ dir: path.dirname(key.slice(6)) }));
 
 // The agents that may open the library's own files (2026-09-30, MB-06): the folders those files are in join the
 // --add-dir list, read-only like the rest. @bart too since 2026-10-02 (a paper in ~/Downloads was out of its reach).
 // @brainstorm opens the paper a line mentions (2026-10-05).
-const LIBRARY_READERS = new Set(['bart', 'brainstorm', 'discover']);
+const LIBRARY_READERS = new Set(['bart', 'brainstorm', 'discover', 'create']);
 const MAX_LIBRARY_DIRS = 24;
 const within = (dir, root) => { const inside = path.relative(root, dir); return inside === '' || (!inside.startsWith('..') && !path.isAbsolute(inside)); };
 

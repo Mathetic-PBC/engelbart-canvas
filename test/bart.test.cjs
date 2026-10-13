@@ -1575,7 +1575,7 @@ test('@brainstorm: five cards at most, the last of them the next card; Wrap up a
   // The others are as they were.
   assert.equal(turnPlan({ agent: 'bart', text: 'q', turns: drafted, entries: ENTRIES }, DEFAULTS).extra, '', '@bart is unchanged');
   assert.equal(turnPlan({ agent: 'discover', text: '(wrap up)', turns: [] }, DEFAULTS).close, undefined, '@discover has no wrap up');
-  assert.deepEqual(AGENTS, ['bart', 'brainstorm', 'discover'], 'no @orient');
+  assert.deepEqual(AGENTS, ['bart', 'brainstorm', 'discover', 'create'], 'no @orient; @create since 2026-10-13');
 });
 
 test('the next card always reads the same: on the next stage, or when the agent asked it, its lead-in is said above the question (its "say", else what its title says before the question) and the rest is the card; any other card keeps its "say"; any other reply is as it came; the result reads back from its offer line (MATH-40, round 3)', () => {
@@ -1986,7 +1986,7 @@ test('@brainstorm\'s context: this workspace\'s library and mentions only, other
 
 test('ask-bart takes the agent, and a Brainstorm is an agent of its workspace like Bart; @orient is no agent of its own any more (M-01)', async () => {
   const src = fs.readFileSync(path.join(__dirname, '../src/main/ipc.cjs'), 'utf8');
-  assert.match(src, /\['bart', 'brainstorm', 'discover'\]\.includes\(agent\)/);
+  assert.match(src, /\['bart', 'brainstorm', 'discover', 'create'\]\.includes\(agent\)/, '@create too (2026-10-13)');
   projects.agentStarted(ctx, { id: 'bs-agent', kind: 'brainstorm', projectId: project.id, workspaceId: workspace.id });
   projects.agentFinished(ctx, 'bs-agent');
   assert.throws(() => projects.agentStarted(ctx, { id: 'or-agent', kind: 'orient', projectId: project.id, workspaceId: workspace.id }));

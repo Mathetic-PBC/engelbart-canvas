@@ -151,13 +151,13 @@ function stageInput(value) {
 
 /** The earlier turns of an exchange, the last 40, each cut in the middle past what a turn may hold. */
 // The agents an earlier turn can say answered it (2026-10-13; bart/ask.cjs AGENTS).
-const TURN_AGENTS = ['bart', 'brainstorm', 'discover'];
+const TURN_AGENTS = ['bart', 'brainstorm', 'discover', 'create'];
 function turnsInput(value) {
   return (Array.isArray(value) ? value : []).slice(-40).map((turn) => ({ question: clipped(turn && turn.question, 'earlier question', 8000), answer: clipped(turn && turn.answer, 'earlier answer', 40000), ...(turn && TURN_AGENTS.includes(turn.agent) ? { agent: turn.agent } : {}) }));
 }
 
 // What Bart, the router, can pick (bart/route.cjs PICKS), and the agents a routed ask can say the person picked instead.
-const ROUTE_PICKS = ['chat', 'brainstorm', 'discover', 'build'];
+const ROUTE_PICKS = ['chat', 'brainstorm', 'discover', 'create', 'build'];
 
 /**
  * An ask's `routed` ({ id?, build?, corrected?, by?, error? }), or null for a line Bart did not hand over. `by: 'error'`:
@@ -167,7 +167,7 @@ function routedInput(value) {
   if (!value || typeof value !== 'object') return null;
   const id = optStr(value.id, 'route id', 80);
   const corrected = value.corrected == null ? null : str(value.corrected, 'corrected agent', 20);
-  if (corrected && !ROUTE_PICKS.includes(corrected)) throw new TypeError('corrected must be chat, brainstorm, discover or build');
+  if (corrected && !ROUTE_PICKS.includes(corrected)) throw new TypeError('corrected must be chat, brainstorm, discover, create or build');
   const failed = value.by === 'error' ? { by: 'error', ...(value.error != null ? { error: cutStr(value.error, 'route error', 400) } : {}) } : {};
   return { ...(id ? { id } : {}), build: !!value.build, ...(corrected ? { corrected } : {}), ...failed };
 }
@@ -782,9 +782,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       const choice = value.choice && typeof value.choice === 'object' ? { model: str(value.choice.model, 'model', 24), effort: str(value.choice.effort, 'effort', 24) } : null;
       if (choice && !/^[a-z][a-z0-9]*$/.test(choice.model + choice.effort)) throw new TypeError('choice is invalid');
       // `agent`: which line asked, @bart, @brainstorm or @discover (2026-09-30): the same run with other instructions. An
-      // `@orient` line (2026-10-04) is asked as @brainstorm since 2026-10-05 (src/renderer/model/doc.js agentOf).
+      // `@orient` line (2026-10-04) is asked as @brainstorm since 2026-10-05 (src/renderer/model/doc.js agentOf). @create
+      // (2026-10-13) makes files and keeps them in the library (bart/create.cjs).
       const agent = value.agent == null ? 'bart' : value.agent;
-      if (!['bart', 'brainstorm', 'discover'].includes(agent)) throw new TypeError('agent must be bart, brainstorm or discover');
+      if (!['bart', 'brainstorm', 'discover', 'create'].includes(agent)) throw new TypeError('agent must be bart, brainstorm, discover or create');
       const ref = docRef(value.ref);
       // A highlight's note asks @bart alone (MATH-27), with the passage it is on.
       if (ref.kind === 'mark' && agent !== 'bart') throw new TypeError('a highlight asks @bart');
@@ -864,7 +865,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const value = input && typeof input === 'object' ? input : {};
     const text = str(value.text, 'question', 8000);
     const agent = value.agent == null ? 'bart' : value.agent;
-    if (!['bart', 'brainstorm', 'discover'].includes(agent)) throw new TypeError('agent must be bart, brainstorm or discover');
+    if (!['bart', 'brainstorm', 'discover', 'create'].includes(agent)) throw new TypeError('agent must be bart, brainstorm, discover or create');
     const models = readModels('bart');
     const provider = providerOf(text, agent, models);
     if (nameChat) return nameChat({ text, provider });

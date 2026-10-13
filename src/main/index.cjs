@@ -650,6 +650,7 @@ if (!hasSingleInstanceLock) {
     const modelSettings = createModelSettings({ homeRoot: () => store.layout.root, only: () => store.config().providers, tools });
     const bartModels = () => readModels('bart');
     const bartPicked = (choice) => rememberModelChoice('bart', choice);
+    // @create (2026-10-13) too, keeping no sessions; what it makes goes in the library (bart/create.cjs), so the sidebar hears of it.
     // @brainstorm and @discover (2026-09-30) run through the same object, each with sessions of its own kept for two idle
     // hours and its own Codex home. @orient's (2026-10-04) are left in orient-threads.json, unread: it is @brainstorm now.
     const bartThreads = () => createThreads({ file: path.join(app.getPath('userData'), 'bart-threads.json') });
@@ -661,8 +662,8 @@ if (!hasSingleInstanceLock) {
     agentMap = createAgentMapWindow({ BrowserWindow, appUrl: APP_URL, preload: PRELOAD_FILE, available: () => developer, headless: process.env.ENGELBART_HEADLESS === '1' });
     runLog = developer ? createRunLog({ file: path.join(app.getPath('userData'), 'agent-runs.jsonl'), onChange: (record) => agentMap.send('engelbart:agent-run', record) }) : null;
     bart = process.env.ENGELBART_BART_FAKE === '1'
-      ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), runLog })
-      : createBart({ runLog, readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), brainstormCodexHome: path.join(app.getPath('userData'), 'codex-home-brainstorm'), discoverCodexHome: path.join(app.getPath('userData'), 'codex-home-discover'), threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), tools });
+      ? createFakeBart({ readModels: bartModels, onPicked: bartPicked, threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), runLog, inspectPdf, onAdded: libraryChanged })
+      : createBart({ runLog, readModels: bartModels, onPicked: bartPicked, runDirectory: path.join(app.getPath('userData'), 'bart-runs'), codexHome: path.join(app.getPath('userData'), 'codex-home-bart'), brainstormCodexHome: path.join(app.getPath('userData'), 'codex-home-brainstorm'), discoverCodexHome: path.join(app.getPath('userData'), 'codex-home-discover'), createCodexHome: path.join(app.getPath('userData'), 'codex-home-create'), threads: bartThreads(), brainstormThreads: brainstormThreads(), discoverThreads: discoverThreads(), tools, inspectPdf, onAdded: libraryChanged });
     // A new thread's title (2026-10-12, bart/name-chat.cjs): the lowest model of the provider its question runs on, low effort.
     nameChat = process.env.ENGELBART_BART_FAKE === '1'
       ? createFakeNameChat({ readModels: bartModels })
