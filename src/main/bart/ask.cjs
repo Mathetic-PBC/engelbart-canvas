@@ -256,9 +256,11 @@ function firstMessage({ context, prior, question, resumed, extra = '', routed = 
 }
 
 // A line Bart, the router (./route.cjs), read as a request to build, with no spec above it to build from (2026-10-12): it
-// is asked of Chat with this one block before <question>, and nothing else Chat is sent changes. Its last line names the
-// footer's Build: the editor draws `[[build]]` as the hammer, and a click on it builds the turn (model/doc.js inlineHtml).
-const ROUTED_BUILD = '<routed>The person wants this built. Write the Build prompt as one fenced code block, after at most two sentences. End with one line, exactly: `Press [[build]] Build to build it.`</routed>';
+// is asked of Chat with this one block before <question>, and nothing else Chat is sent changes. Its last line asks
+// whether to build it (2026-10-13: Build is no longer on the foot to press): a "yes" under it is a line Bart routes to
+// build, the answer's fenced block the spec above it (BUILD_INTRO). Older answers that end "Press [[build]] Build" still
+// draw the hammer and build on a click (model/doc.js BUILD_TOKEN).
+const ROUTED_BUILD = '<routed>The person wants this built. Write the Build prompt as one fenced code block, after at most two sentences. End with one short line asking whether they want you to build it, such as `Want me to build it?` Do not write [[build]] or tell them to press anything.</routed>';
 // An @discover question (2026-10-13) is answered twice: Chat replies at once, with this block before <question>, and
 // Discover searches in a box under that reply (the editor's research turn). The reply says yes when asked, names what
 // the search looks for and says the guide appears below; the box already shows the search started, so it says no more.

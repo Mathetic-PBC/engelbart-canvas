@@ -121,9 +121,10 @@ export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 const MATH_SRC = String.raw`\$\$(?:[^$\n\\]|\\.)+?\$\$|\$(?=[^\s$])(?:[^$\n\\]|\\.)+?(?<!\s)\$(?!\d)|\\\$`;
 export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|\[\[build\]\]|@(?:[Bb]art|[Cc]hat|[Bb]rainstorm|[Oo]rient|[Dd]iscover|[Cc]reate)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
-// Build, named in an answer (2026-10-12): a routed build's answer ends "Press [[build]] Build to build it." (main/bart/
-// ask.cjs ROUTED_BUILD; "below this answer" until 2026-10-13, when Build left the footer), and the token is drawn as a
-// hammer that builds (inlineHtml). It is one unit, as drawn math is (tokShown, rawOffset, cutToken), and copies as typed.
+// Build, named in an answer (2026-10-12): a routed build's answer ended "Press [[build]] Build to build it." (main/bart/
+// ask.cjs ROUTED_BUILD) until 2026-10-13, when it began asking "Want me to build it?" instead, a "yes" being routed to
+// build. Answers written before still hold the token: it is drawn as a hammer that builds (inlineHtml). It is one unit, as
+// drawn math is (tokShown, rawOffset, cutToken), and copies as typed.
 export const BUILD_TOKEN = '[[build]]';
 // The hammer inline: 14px, the answer's grey, sitting on the text's baseline. In an answer line `turn` is the turn's
 // question line, and a click does what the footer's Build does for it (DocEditor footbuild); anywhere else it is a drawing.

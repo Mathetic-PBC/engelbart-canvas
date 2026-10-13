@@ -368,20 +368,25 @@ test('cards are compact: question 8px 12px (6px after an answer), foot 4px 10px 
   assert.match(html, /padding:10px 12px;margin-bottom:8px/);
 });
 
-test('the footer reads "Chat · 17 s", the agent and the time (not the model, 2026-10-13), a space on both sides of the ·, routed by Bart or not', () => {
-  // The closing text as drawn: tips out, tags out. The separator after the name is its own piece that keeps its spaces
-  // (white-space:pre): as the start of the next flex item it collapsed, and read "Chat· Opus".
-  const footText = (html) => {
-    const at = html.indexOf('data-foot='); assert.ok(at >= 0, 'a foot is drawn');
-    const t = html.indexOf('<span class="t"', at), end = html.lastIndexOf('<button', html.indexOf('data-act="fold', t));
-    return html.slice(t, end).replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
-  };
-  for (const [line, routed] of [['@chat why retry?', false], ['@bart why retry?', true]]) {
-    const html = mounted(['bart# [chat 2026-10-12T21:41:00Z] Retry logic', line, 'bart> because', 'bart> *Chat · Opus · high · 17 s*', '']).html();
-    assert.equal(footText(html), 'Chat · 17 s', routed ? 'routed' : 'typed');
-    assert.equal(html.includes('class="bart-who"'), routed, routed ? 'the name is the button' : 'the name is text');
-    assert.match(html, /Chat<\/span>(?:<span class="bart-tip"[^>]*>[^<]*<\/span><\/span>)?<span style="flex:none;white-space:pre"> · <\/span><span[^>]*>17 s</, 'the separator keeps its spaces');
+test('the foot draws no label (2026-10-13): not the agent, the time or "via Bart"; Copy on the left, Collapse and Delete on the right; the closing line is kept', () => {
+  const footOf = (html) => { const at = html.indexOf('data-foot='); assert.ok(at >= 0, 'a foot is drawn'); const start = html.lastIndexOf('<div', at); return html.slice(start, html.indexOf('</div>', at) + 6); };
+  const shown = (html) => html.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
+  for (const [line, closing] of [['@bart make the icons bigger', '*Build · Opus · high · 39 s*'], ['@chat why retry?', '*Chat · Opus · high · 17 s*'], ['@bart why retry?', '*Chat · 48 s · via Bart*']]) {
+    const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', line, 'bart> because', `bart> ${closing}`, ''];
+    const m = mounted(lines), foot = footOf(m.html());
+    assert.equal(shown(foot), '', `${closing}: nothing of the closing line is drawn`);
+    for (const word of ['Build', 'Chat', '39 s', '17 s', '48 s', 'via Bart']) assert.ok(!shown(foot).includes(word), `${closing}: no ${word}`);
+    assert.ok(!foot.includes('class="t"') && !foot.includes('data-act="viabart"') && !foot.includes('bart-who'), `${closing}: no label, no picker button`);
+    assert.match(foot, /data-act="copybart" data-turn="1" aria-label="Copy"/, 'Copy');
+    assert.match(foot, /<span style="flex:none;position:relative;display:inline-flex;margin-left:auto"><button class="bart-ic" data-act="foldthread" data-row="0" aria-label="Collapse"/, 'Collapse, pushed right');
+    assert.match(foot, /data-act="dropturn" data-turn="1" aria-label="Delete"/, 'Delete');
+    assert.ok(foot.indexOf('copybart') < foot.indexOf('foldthread') && foot.indexOf('foldthread') < foot.indexOf('dropturn'), 'Copy, then Collapse, then Delete');
+    assert.equal(m.lines()[3], `bart> ${closing}`, 'the closing line in the file is as it was');
   }
+  // What reads the closing line still does: a routed turn's agent is the one it names.
+  const m = mounted(['@bart make the icons bigger', 'bart> ```', 'bart> Make them 20px', 'bart> ```', 'bart> *Build · Opus · high · 39 s*', '']);
+  const found = m.editor.findTurn(m.lines(), 0);
+  assert.equal(m.editor.turnAgent(found.thread, found.turn), 'bart', 'a Build-named closing line is still read (Chat answered it)');
 });
 
 test('the follow-up field says @bart whichever agent answered, since what is typed goes to Bart; with no router, that agent', () => {
@@ -439,9 +444,10 @@ test('shown again, a document collapses its open titled conversations once: not 
   }
 });
 
-test('a follow-up collapses the turns before it, in the same edit; each keeps its question and a foot whose Expand opens it', () => {
-  const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), '@chat and timeouts?', ...answer('those too'), ''];
-  const second = lines.indexOf('@chat and timeouts?');
+test('a follow-up collapses the turns before it, in the same edit; each is one read-only row, its question cut to one line with Expand (2026-10-13)', () => {
+  const long = 'and timeouts, and what happens when the server answers slowly but never quite fails, and whether the retry budget should be shared across every request of a session?';
+  const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), `@chat ${long}`, ...answer('those too'), ''];
+  const second = lines.indexOf(`@chat ${long}`);
   for (const routed of [false, true]) {
     const m = mounted(lines);
     if (routed) m.props.onRoute = () => new Promise(() => {});
@@ -455,22 +461,38 @@ test('a follow-up collapses the turns before it, in the same edit; each keeps it
     assert.match(ls[second + 1 + answer('x').length], routed ? /^@bart and backoff\?$/ : /^@chat and backoff\?$/, `${tag}: the follow-up under them`);
     const html = m.html(), drawn = html.replace(/ data-raw="[^"]*"/g, '');
     assert.ok(!drawn.includes('because') && !drawn.includes('those too'), `${tag}: the earlier answers are not drawn`);
-    assert.ok(drawn.includes('why retry?') && drawn.includes('and timeouts?'), `${tag}: their questions are`);
-    assert.match(html, /data-act="fold" data-turn="1" aria-label="Expand" aria-expanded="false"/, `${tag}: a collapsed turn's foot expands it, not the conversation`);
     for (const q of [1, second]) {
-      assert.match(rowOf(html, q), /^<div[^>]*background:none/, `${tag}: question ${q} collapsed, on no grey`);
-      const foot = html.slice(html.indexOf(`data-foot="${q}"`)); assert.match(foot.slice(0, foot.indexOf('>')), /background:none/, `${tag}: its foot too`);
+      const row = rowOf(html, q), open = row.slice(0, row.indexOf('>') + 1);
+      assert.match(open, /contenteditable="false" data-readonly="1" data-folded-row="\d+" data-act="fold" data-turn="\d+"/, `${tag}: question ${q} is a read-only row a click expands`);
+      assert.match(open, /cursor:pointer;display:flex;align-items:center/, `${tag}: one row`);
+      assert.match(open, /font:14px\/1\.6 var\(--font-sans\);color:#8f8f8f/, `${tag}: grey, 14px`);
+      assert.match(row, /<span class="t" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/, `${tag}: its question on one line, cut off`);
+      assert.match(row, new RegExp(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="Expand" aria-expanded="false">`), `${tag}: Expand at its right`);
+      assert.match(row, /<span class="bart-tip" style="right:0">Expand<\/span>/);
+      assert.ok(!row.includes('editturn') && !row.includes('data-chip') && !row.includes('data-corner'), `${tag}: no edit, chip or corner Collapse`);
+      assert.ok(!html.includes(`data-foot="${q}"`), `${tag}: no foot drawn for ${q}`);
     }
+    assert.ok(rowOf(html, 1).includes('why retry?') && rowOf(html, second).includes('and timeouts, and what happens'), `${tag}: the questions, as said`);
     const asked = second + 1 + answer('x').length;
     assert.match(rowOf(html, asked), /background:#fafafa;border-radius:10px 10px/, `${tag}: the new question opens the card again, rounded`);
+    // Two folded rows a few pixels apart, then the open turn.
+    assert.match(rowOf(html, 1).slice(0, 400), /margin-bottom:3px/, `${tag}: 3px under the first row`);
+    assert.ok(html.indexOf(`data-line="${second}"`) < html.indexOf(`data-line="${asked}"`));
   }
-  // Expand on one opens it; Expand all opens the rest.
+  // The foot rows of the folded turns are hidden; their lines stay in the file.
   const m = mounted(lines);
   m.editor.followText.set(1, 'and backoff?');
   m.editor.sendFollow(1);
+  const html = m.html();
+  for (const foot of [1 + answer('x').length, second + answer('x').length]) assert.match(rowOf(html, foot), /^<div[^>]*style="display:none"><\/div>$/, `foot line ${foot} hidden`);
+  // A click on the row (or its Expand) opens that turn: question, answer and foot again; Expand all opens the rest.
   m.click('fold', { turn: '1' });
   assert.ok(m.lines().slice(2, second).every((l) => /^bart>/.test(l)));
-  assert.match(m.html(), /data-act="foldthread" data-row="0" aria-label="Collapse"/, 'open again, its foot collapses the conversation');
+  const open = m.html();
+  assert.match(open, /data-act="foldthread" data-row="0" aria-label="Collapse"/, 'open again, its foot collapses the conversation');
+  assert.ok(open.includes('because') && open.includes('data-foot="1"'), 'its answer and foot are drawn');
+  assert.ok(!rowOf(open, 1).includes('data-folded-row'), 'its question is a question row again');
+  assert.ok(rowOf(open, second).includes('data-folded-row'), 'the other stays one row');
   m.props.text = m.props.text.replace(/bart~> \S+/, 'bart> sure').trimEnd() + '\n';
   m.editor.foldAll(false);
   assert.ok(!m.lines().some((l) => /^bart\+>/.test(l)), 'Expand all opens every turn');

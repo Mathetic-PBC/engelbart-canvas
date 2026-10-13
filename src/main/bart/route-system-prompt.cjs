@@ -23,6 +23,8 @@ Hard cases:
 - "should @chat and @build be separate?" → chat
 - "how do other tools handle this?" → chat
 - "ok build it", with a spec above → build, spec true
+- "yes", as a follow-up with a spec above → build, spec true
+- "yes build it", as a follow-up with a spec above → build, spec true
 - "yes, build that" or "go ahead", with a spec above → build, spec true
 - a line describing changes of its own ("for the agent viewer, remove the filter tabs and the green dots"), with a spec above about something else → build, spec false
 - "help me figure out what my study should measure" → brainstorm

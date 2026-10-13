@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
-import { BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM } from '../workspace/DocEditor.jsx';
+import { BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, askStarted, askProgressed } from '../workspace/DocEditor.jsx';
 import DocPane from '../workspace/DocPane.jsx';
 import GettingStarted from '../workspace/GettingStarted.jsx';
 import { EMPTY_HINT, discoverPapers, stepsHere } from '../model/getting-started.js';
@@ -482,14 +482,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // is dropped), what the agent is doing ({ activity }, kept in `log` when it is a thing done rather than a state), and the
   // answer so far ({ lines }). All of it lives here, never in the document: only the finished answer is written there.
   // A question asked from a highlight's note on a pdf (MATH-27) is kept the same way in `paperAsks`, for the Stage.
-  React.useEffect(() => api.onBartProgress(({ askId, log, ...progress }) => {
+  React.useEffect(() => api.onBartProgress(({ askId, ...progress }) => {
     const apply = (current) => {
       const ask = current[askId];
       if (!ask) return current;
-      const next = { ...ask, ...progress };
-      if (progress.step) { next.activity = ''; next.lines = []; }
-      if (log && progress.activity) next.log = [...(ask.log || []), progress.activity].slice(-60);
-      return { ...current, [askId]: next };
+      return { ...current, [askId]: askProgressed(ask, progress) };
     };
     setAsks(apply);
     setPaperAsks(apply);
@@ -613,7 +610,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       }).catch(() => {});
     }
     const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
-    setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: agent || 'bart' } }));
+    // Merged, not replaced (2026-10-13): a routed line's entry shows the level it was sent at until the run's first step.
+    setAsks((current) => askStarted(current, askId, { docKey: key, agent: agent || 'bart' }));
     if (agent === 'brainstorm') tickWalk(2);
     if (agent === 'discover') tickWalk(3);
     // `@bart --build <request>` (2026-10-02): not a question. A full Build of only what follows the flag starts, and its
@@ -648,13 +646,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow, tickWalk, handOff, buildFrom]);
 
   // Bart, the router (2026-10-12; main/bart/route.cjs): which agent an `@bart` line is for. Its pending line says what
-  // the editor's says for any run ("Thinking", 2026-10-13) until the editor hands the line over (DocEditor handOff), which
-  // asks under the same id. A rule's pick (`rule`) is only logged. `current` is the agent a follow-up's conversation is
+  // the editor's says for any run, "Thinking · <name> <effort>" with the level the line would start on if he could not
+  // pick (`level`, DocEditor routingLevel; 2026-10-13), until the editor hands the line over (DocEditor handOff), which
+  // asks under the same id and keeps that level until the run's first step (askStarted). A rule's pick (`rule`) is only logged. `current` is the agent a follow-up's conversation is
   // with (route.js routeInputs), which Bart stays with unless the line clearly wants another. Failing, the line goes to
   // that agent, else Chat (or to its rule's agent), the pick saying `by: 'error'` and why, so the run it is handed to
   // shows the classifier failed rather than that it chose Chat (DocEditor handOff).
-  const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, specTitle = '', rule, current = null, place = null }, ref = null) => {
-    setAsks((held) => ({ ...held, [askId]: { docKey: key, agent: 'router' } }));
+  const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, specTitle = '', rule, current = null, place = null, level = null }, ref = null) => {
+    setAsks((held) => ({ ...held, [askId]: { docKey: key, agent: 'router', ...(level ? { name: level.name, effort: level.effort } : {}) } }));
     const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: fallbackAgent(current), sure: 0, by: 'none' };
     try {
       return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, specTitle, rule, ...(current ? { current } : {}), ...(ref ? { ref } : {}), ...(place ? { place } : {}) })) || fallback;

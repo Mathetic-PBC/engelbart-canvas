@@ -103,6 +103,19 @@ const VIA_RE = /(?:^| · )via Bart( · build)?$/;
 const LEAD_RE = /^(Chat|Brainstorm|Discover|Create|Build)(?: · |$)/;
 // How long a line Bart sent to Create waits before it is asked, its pending line offering Cancel (2026-10-13).
 export const CREATE_WAIT_S = 5;
+// The runs Workspace keeps (`asks`, by id), as pure steps (2026-10-13). A run starting under an id the router held (a
+// routed line, Workspace routeLine) keeps what that entry showed, the level the line was sent at (DocEditor routingLevel),
+// until its first step's progress replaces it: the pending row is never a bare "Thinking" in between.
+export const askStarted = (held, askId, entry) => ({ ...held, [askId]: { ...(held[askId] || {}), ...entry } });
+// Progress on a run (main's bart/ask.cjs): a step beginning ({ step, name, effort, movedUp }) drops what the last step
+// showed, its name and effort included (an @brainstorm step names none); what the agent is doing ({ activity }) is kept in
+// `log` when it is a thing done; the answer so far ({ lines }).
+export function askProgressed(ask, { log, ...progress }) {
+  const next = { ...ask, ...progress };
+  if (progress.step) { next.activity = ''; next.lines = []; next.name = progress.name || ''; next.effort = progress.effort || ''; }
+  if (log && progress.activity) next.log = [...(ask.log || []), progress.activity].slice(-60);
+  return next;
+}
 // The agent a conversation is with, as its collapsed row names it: "Build" for an `@bart` line Bart read as one to build.
 const agentName = (thread) => (thread.build && thread.asked === 'router' ? 'Build' : AGENT_NAMES[thread.agent] || AGENT_NAMES.bart);
 // A turn as text (doc.js turnText) with the agent that answered it, when its lines say (doc.js turn.agent).
@@ -169,7 +182,6 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   // A conversation's title (2026-10-12): collapsed, it is a link (2026-10-13, Hudson's): the Agents pointer and the title in
   // the link's blue, underlined once hovered; a click expands it, an ⌥-click renames it.
   + '.bart-thread{cursor:pointer}.bart-thread:hover>.bart-thread-name{text-decoration:underline}'
-  + '.bart-who{cursor:pointer}.bart-who:hover{color:#171717}.bart-who:hover+.bart-tip,.bart-who:focus-visible+.bart-tip{opacity:1;visibility:visible}'
   + '.bart-link{cursor:pointer;color:#0070f3}.bart-link:hover .bart-thread-name{text-decoration:underline;text-underline-offset:3px}.bart-thread:hover+.bart-tip,.bart-thread:focus-visible+.bart-tip{opacity:1;visibility:visible}.bart-ic:disabled{cursor:default;opacity:.4}.bart-ic:disabled:hover{background:none;color:#4d4d4d}'
   + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
   + '.bart-text{padding:4px 2px;border:0;background:transparent;color:#8f8f8f;font:500 12px/1.4 var(--font-sans);cursor:pointer}.bart-text:hover{color:#171717}'
@@ -339,7 +351,7 @@ export default class DocEditor extends React.Component {
         this.nearA = null; this.downGap = null;
         if (!inEd(e)) return;
         this.downOnRoot = e.target === this.editorEl();
-        if (e.target.closest('button[data-act], [data-build-icon][data-act], .bart-chip, a[data-link], [data-mention]')) { e.preventDefault(); return; }
+        if (e.target.closest('button[data-act], [data-build-icon][data-act], .bart-chip, a[data-link], [data-mention], [data-folded-row]')) { e.preventDefault(); return; }
         this.downGap = e.button === 0 && !inFollow(e) ? this.gapAt(e.target, e.clientY) : null;
         if (this.downGap && !this.downOnRoot) { e.preventDefault(); return; }
         const near = e.button === 0 && !inFollow(e) ? this.nearLink(e.target, e.clientX, e.clientY) : null;
@@ -811,6 +823,7 @@ export default class DocEditor extends React.Component {
     }
     if (p.type === 'bart') {
       if (at && at.box && at.role === 'question') return this.researchHtml(i, raw, p, at);
+      if (at && at.bare && at.role === 'question') return this.foldedHtml(i, raw, line, p, at);
       const { tokens, flags } = this.bartTokens(line, p), models = this.props.models;
       const shown = at && at.answers && !(active && !locked) ? this.answerShown(at.answers) : '';
       const content = shown ? `${inlineHtml(leadOf(line, agentOf(p)), this.mentionOpts)} ${shown}` : active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok, this.mentionOpts))).join('');
@@ -828,8 +841,10 @@ export default class DocEditor extends React.Component {
       // Deep"), or the model and effort a flag pins it to; its menu is DiscoverLevels. @brainstorm runs on one model: no chip.
       const label = read ? `${read.steps[0].name} ${EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort}` : models && agent === 'discover' && chipped ? this.discoverLabel(i) : null;
       const chip = label ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:8px;margin:-2px -6px 0 0;padding:2px 2px 2px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:7px;height:26px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;align-items:center;justify-content:center;width:10px;height:12px;font:12px/1 var(--font-sans);color:#8f8f8f"><span style="position:relative;top:${open ? '3px' : '-3px'}">${open ? '⌃' : '⌄'}</span></span></span>${send}</span>` : `<span contenteditable="false" style="flex:none;margin-top:3px">${send}</span>`;
-      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''}${editing ? ' data-editing="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 8 : 6}px 12px ${closes ? '8px' : '4px'};min-height:35px;background:${at && at.bare ? 'none' : '#fafafa'};border-radius:${radius(top, closes)};margin-bottom:${closes ? '8px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
-        + (chipped ? chip : '')
+      // An answered question that opens its card (2026-10-13) has Collapse in its top-right corner, the one its foot has.
+      const corner = at && top && at.turn.answered && !at.turn.pending && !editing ? this.cornerHtml(at) : '';
+      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''}${editing ? ' data-editing="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 8 : 6}px 12px ${closes ? '8px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '8px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
+        + (chipped ? chip : corner)
         + '</div>';
     }
     if (p.type === 'pending') {
@@ -870,6 +885,8 @@ export default class DocEditor extends React.Component {
         + '</div></div>';
     }
     if (p.type === 'reply') {
+      // A folded turn's foot is not drawn: the turn is its question's one row (foldedHtml). A research box keeps its own.
+      if (at && at.role === 'foot' && at.turn.answered && !at.turn.pending && at.turn.folded && !at.box) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), edit: at.editable, busy: isRunning(at.thread), thread: at.thread, box: at.box });
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
@@ -1424,7 +1441,8 @@ export default class DocEditor extends React.Component {
       // where it goes on: the conversation has no follow-up field above it.
       const built = (ps[thread.to + 1] || {}).type === 'build';
       const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !built;
-      // A collapsed turn (2026-10-13) is drawn bare, its question and foot on no grey: the card starts again under it.
+      // A collapsed turn (2026-10-13) is drawn bare, as one row on no grey (foldedHtml) with no foot: the card starts again
+      // under it.
       // An @discover research box (2026-10-13, doc.js isResearch) is a card of its own: the turn above it closes its card,
       // and its line is the box's head (researchHtml). `cut`: the turn's last row closes the card, a box coming next.
       let afterBare = false;
@@ -1432,9 +1450,10 @@ export default class DocEditor extends React.Component {
         const agent = this.turnAgent(thread, turn), card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
         const bare = turn.answered && !turn.pending && turn.folded, box = isResearch(ps[turn.q]), next = thread.turns[n + 1], cut = !!next && isResearch(ps[next.q]);
         const answers = n > 0 ? cards.byQ.get(thread.turns[n - 1].q) || null : null;
-        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || afterBare || box, closes: !turn.answered, editable: editable && !box, bare, box, answers });
-        afterBare = bare;
         const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end, shuts = (tail && !follow) || cut;
+        // A folded turn's row (lineHtml foldedHtml) closes the card when its foot would have: its foot is not drawn.
+        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || afterBare || box, closes: !turn.answered || (bare && !box && shuts), editable: editable && !box, bare, box, answers });
+        afterBare = bare;
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
         const lastBody = (turn.foot >= 0 ? turn.foot : turn.to + 1) - (gap >= 0 ? 2 : 1);
         for (let i = turn.from; i <= turn.to; i++) {
@@ -1564,6 +1583,27 @@ export default class DocEditor extends React.Component {
       + `<span class="bart-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span>`
       + '</span></div>';
   }
+  // The Collapse in an answered question's top-right corner (2026-10-13): what its card's foot Collapse does. In a titled
+  // conversation it folds all of it to its title's row (foldthread), not while a turn of it runs; otherwise it folds the
+  // turn (fold). Out of the text (contenteditable=false, as the chip is), so it is never in the caret's way or a copy, and
+  // pulled into the padding so the row is no taller for it.
+  cornerHtml(at) {
+    const { thread, turn } = at, whole = thread.titleLine >= 0, running = whole && isRunning(thread);
+    const button = whole
+      ? `<button class="bart-ic" data-act="foldthread" data-row="${thread.titleLine}" aria-label="Collapse" aria-expanded="true"${running ? ' disabled' : ''}>${ICON.collapse}</button><span class="bart-tip" style="right:0">${running ? 'Collapse once it answers' : 'Collapse'}</span>`
+      : `<button class="bart-ic" data-act="fold" data-turn="${turn.q}" aria-label="Collapse" aria-expanded="true">${ICON.collapse}</button><span class="bart-tip" style="right:0">Collapse</span>`;
+    return `<span contenteditable="false" data-corner="${turn.q}" style="user-select:none;flex:none;position:relative;display:inline-flex;margin:-2px -6px -2px 0;height:28px">${button}</span>`;
+  }
+  // A turn folded by a follow-up (2026-10-13): one row, its question on one line cut off with an ellipsis, grey and small,
+  // and Expand at its right. Read-only (no caret, no edit in place, no chip, no corner Collapse); a click on it, or on
+  // Expand, unfolds the turn (toggleFold). Its answer and foot are not drawn; its lines in the file are as they were.
+  foldedHtml(i, raw, line, p, at) {
+    const shown = (at.answers && this.answerShown(at.answers)) || esc(questionLine(p.text, 300) || leadOf(line, agentOf(p)));
+    return `<div ${raw} contenteditable="false" data-readonly="1" data-folded-row="${at.turn.q}" data-act="fold" data-turn="${at.turn.q}" role="button" aria-expanded="false" aria-label="Expand" style="user-select:none;cursor:pointer;display:flex;align-items:center;gap:8px;min-width:0;padding:0 6px 0 12px;margin-bottom:${at.closes ? '8px' : '3px'};font:14px/1.6 var(--font-sans);color:#8f8f8f">`
+      + `<span class="t" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${shown}</span>`
+      + `<span style="flex:none;position:relative;display:inline-flex"><button class="bart-ic" data-act="fold" data-turn="${at.turn.q}" aria-label="Expand" aria-expanded="false">${ICON.expand}</button><span class="bart-tip" style="right:0">Expand</span></span>`
+      + '</div>';
+  }
   // An @discover research box's head (2026-10-13; doc.js isResearch): its line, drawn as "Research · Standard", the level
   // it runs at (discoverLabel); a box that refines an earlier one in its conversation also says what it was asked. The
   // line is never edited in place: a reply refines it.
@@ -1577,35 +1617,21 @@ export default class DocEditor extends React.Component {
       + `<span style="flex:none;display:inline-flex;margin-right:8px;color:#8f8f8f">${ICON.search}</span><span style="flex:none">Research</span>${said}</div>`;
   }
   // The foot of one turn (Answer Card), as icons, each with its name under it on hover: Copy on the left (2026-10-13:
-  // Regenerate, Edit and Build are no longer on it); on the right the closing line as "Chat · 9 s", the agent that
-  // answered and how long it took (the model and effort the line keeps are not shown), Collapse or Expand, and
-  // Delete. The handlers for regen, editturn and footbuild stay: the build icon in a question still asks footbuild.
+  // Regenerate, Edit and Build are no longer on it), with a live card's Skip and Wrap up; Collapse or Expand and Delete on
+  // the right. Nothing of the closing line is drawn (2026-10-13: no "Chat · 9 s", no agent, no "via Bart"); the line keeps
+  // the agent, model, effort and time, and what reads it (turnAgent, routed builds) still does. The handlers for regen,
+  // editturn and footbuild stay: the build icon in a question still asks footbuild.
   // `raw` is set when the answer's closing line is this foot; an answer without one (a run that failed) gets the same foot.
   // `plain`: an @brainstorm or @discover turn, whose Regenerate asks again on its one model, with no selector (BS-08).
   // `edit` (2026-10-03): Edit, which makes the question editable in place (startEdit).
-  // Build (2026-10-12) on every answered turn of every agent: a Build of the last fenced block of this turn's answer as the
-  // document holds it now, else of its question and answer (DocEditor footBuild). Off while a turn of the thread is at
-  // work; drawn dark on grey when Bart routed the line as a request to build.
-  // On a turn of an `@bart` line, the agent's name is a button: Bart picked it, and it offers the others (AgentChoice,
-  // pickVia). A closing line from before still saying "via Bart" after the model has that as the button instead.
-  // The " · " after the name is a piece of its own that keeps its spaces (white-space:pre): a flex item's leading space
-  // collapses, which read "Chat· Opus".
   // `busy`: a turn of the thread is at work. `thread`: the turn's; in one with a title (2026-10-12) Collapse folds all of
-  // it to its title's row, once nothing in it runs. A turn collapsed by a follow-up (2026-10-13) has its own Expand, and a
-  // research box (`box`, 2026-10-13) its own Collapse.
+  // it to its title's row, once nothing in it runs. A research box (`box`, 2026-10-13) has its own Collapse. A turn folded
+  // by a follow-up has no foot: it is one row (lineHtml's bare question).
   footHtml({ raw, q, text, folded, closes, plain = false, edit = false, busy = false, thread = null, box = false }) {
     const wrap = (inner, extra = '') => `<span style="flex:none;position:relative;display:inline-flex;${extra}">${inner}</span>`;
     const tip = (label, side) => `<span class="bart-tip" style="${side}:0">${label}</span>`;
     const copied = this.copied === `bart${q}`;
-    const ls = this.lines(), th = thread || (this.findTurn(ls, q) || {}).thread || null;
-    const said = String(text || ''), via = said.match(VIA_RE), lead = via ? null : said.match(LEAD_RE);
-    const name = lead ? lead[1] : null, rest = via ? said.slice(0, via.index) : lead ? said.slice(lead[0].length) : said;
-    // An `@bart` line Bart handed over: its conversation's title line keeps his pick, or (a follow-up, 2026-10-13) its
-    // closing line names the agent he handed it to.
-    const routed = !via && !!th && (!!th.routedTo || !!name) && agentOf(this.parsedOf(ls)[q]) === 'router';
-    const toBuild = via ? !!via[1] : name === 'Build' || (routed && th.build && q === th.from);
-    // Of what the line says after the agent, only how long it took is drawn: the model and effort stay in the file.
-    const time = rest.split(' · ').filter((part) => /^\d+ s$/.test(part)).join(' · ');
+    const ls = this.lines();
     // A live card's Skip, and @brainstorm's Wrap up (2026-10-13: off the card, which is drawn as an answer, onto its foot).
     const live = this.cardsOf(ls).byQ.get(q), answering = !!live && live.live;
     const lefts = [
@@ -1613,17 +1639,12 @@ export default class DocEditor extends React.Component {
       ...(answering ? [`<button type="button" class="bart-text" data-act="cardskip" data-turn="${q}" style="user-select:none;flex:none;margin-left:6px">Skip</button>`] : []),
       ...(answering && fixedStep(live.agent) ? [`<button type="button" class="bart-text" data-act="cardwrap" data-turn="${q}" style="user-select:none;flex:none;margin-left:6px">Wrap up</button>`] : []),
     ];
-    const viaHtml = via ? `${time ? ' · ' : ''}<span class="bart-text" data-act="viabart" data-turn="${q}" role="button" aria-haspopup="dialog" title="Bart picked this agent. Ask another" style="display:inline;padding:0;font:inherit;color:#0070f3;cursor:pointer">via Bart</span>${toBuild ? ' · build' : ''}` : '';
-    const who = !name ? '' : routed
-      ? `<span style="flex:none;position:relative;display:inline-flex"><span class="bart-who" data-act="viabart" data-turn="${q}" role="button" tabindex="0" aria-haspopup="dialog" aria-label="${esc(`${name}: Bart picked this. Ask another`)}">${esc(name)}</span>${tip('Bart picked this. Ask another', 'right')}</span>`
-      : `<span style="flex:none">${esc(name)}</span>`;
     const whole = !!thread && thread.titleLine >= 0, running = whole && isRunning(thread);
     const fold = whole && !folded && !box
-      ? wrap(`<button class="bart-ic" data-act="foldthread" data-row="${thread.titleLine}" aria-label="Collapse" aria-expanded="true"${running ? ' disabled' : ''}>${ICON.collapse}</button>${tip(running ? 'Collapse once it answers' : 'Collapse', 'right')}`)
-      : wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`);
+      ? wrap(`<button class="bart-ic" data-act="foldthread" data-row="${thread.titleLine}" aria-label="Collapse" aria-expanded="true"${running ? ' disabled' : ''}>${ICON.collapse}</button>${tip(running ? 'Collapse once it answers' : 'Collapse', 'right')}`, 'margin-left:auto')
+      : wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`, 'margin-left:auto');
     return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:4px 10px 6px;background:${folded ? 'none' : '#fafafa'};border-radius:${radius(false, closes)};margin-bottom:${closes ? '8px' : '0'}">`
       + lefts.join('')
-      + `<span class="t" style="flex:0 1 auto;min-width:0;margin-left:auto;margin-right:8px;display:inline-flex;align-items:center;white-space:nowrap;font:12px/1.6 var(--font-sans);color:#8f8f8f">${who}${name && time ? '<span style="flex:none;white-space:pre"> · </span>' : ''}<span style="min-width:0;overflow:hidden;text-overflow:ellipsis">${esc(time)}${viaHtml}</span></span>`
       + fold
       + wrap(`<button class="bart-ic" data-danger="1" data-act="dropturn" data-turn="${q}" aria-label="Delete">${ICON.trash}</button>${tip('Delete', 'right')}`)
       + '</div>';
@@ -1725,9 +1746,9 @@ export default class DocEditor extends React.Component {
     ls.forEach((line, i) => {
       const p = ps[i], where = at.get(i);
       // Under a question being edited (2026-10-03), its answer and the answer's foot are dimmed.
-      const dim = !!editing && !!where && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
+      const dim = !!editing && !!where && !!where.turn && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
       out += dimmed(this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i)));
-      if (where && where.footAfter) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.followAfter) || where.cut, plain: oneModel(where.agent), edit: where.editable, busy: isRunning(where.thread), thread: where.thread, box: where.box }));
+      if (where && where.footAfter && !(where.turn.folded && !where.box)) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.followAfter) || where.cut, plain: oneModel(where.agent), edit: where.editable, busy: isRunning(where.thread), thread: where.thread, box: where.box }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
       // card (MATH-31; under it, not above, since 2026-10-05: the agent's own field comes first).
       const recap = !!where && where.followAfter && this.endsInRecap(ls, where.thread);
@@ -2253,7 +2274,6 @@ export default class DocEditor extends React.Component {
       if (k === 'editturn') { this.closePicker(); this.startEdit(Number(act.dataset.turn)); return; }
       // The foot's Build, or an answer line's [[build]] (2026-10-12): the same Build of that turn.
       if (k === 'footbuild') { this.closePicker(); if (!act.disabled) this.footBuild(Number(act.dataset.turn)); return; }
-      if (k === 'viabart') { this.openVia(act); return; }
       if (k === 'cardopt') { this.pickCard(Number(act.dataset.turn), Number(act.dataset.opt)); return; }
       if (k === 'cardskip') { this.sendCard(Number(act.dataset.turn), 'skip'); return; }
       if (k === 'cardwrap') { this.sendCard(Number(act.dataset.turn), 'wrap'); return; }
@@ -2477,10 +2497,23 @@ export default class DocEditor extends React.Component {
     this.setLines((x) => { const out = before ? before(x) : [...x]; if (put != null) out.splice(i, 0, put); out.splice(q + 1, 0, ...add); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
     const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: fallbackAgent(current), sure: 0, by: 'none' };
+    const level = this.routingLevel(ls, q, p.text, fallback.agent);
     const asked = this.props.onRoute
-      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, specTitle: inputs.specTitle, rule, current, place: { line: q, text: ls[q] } }))
+      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, specTitle: inputs.specTitle, rule, current, place: { line: q, text: ls[q] }, ...(level ? { level } : {}) }))
       : Promise.resolve(fallback);
     return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: fallbackAgent(current), sure: 0 }));
+  }
+  // What a line's pending row names while Bart routes it (2026-10-13): the first step of the agent it goes to if he cannot
+  // pick (`agent`: its rule's, else fallbackAgent's, Chat for a new line), read as main reads it (bart/ask.cjs turnPlan)
+  // from the models file it was sent (props.models), with what the line pins by flags or was picked by hand (pickLine and
+  // the follow-up's chip write those into it): a question's first step, an @discover line's level with the turns before
+  // it. @brainstorm's model is never shown, and a Build has none. → { name, effort } | null
+  routingLevel(ls, q, text, agent) {
+    const models = this.props.models; if (!models || !models.providers) return null;
+    try {
+      const step = agent === 'discover' ? this.discoverRead(ls, q).steps[0] : agent === 'brainstorm' || agent === 'build' ? null : readQuestion(text, models).steps[0];
+      return step && step.name ? { name: step.name, effort: step.effort || '' } : null;
+    } catch { return null; }
   }
   // Where Bart's pick goes. The `@bart` line is the one over pending line `askId`, as the document holds it now (gone: the
   // line was deleted while it was being routed, and nothing is asked).
@@ -2578,15 +2611,12 @@ export default class DocEditor extends React.Component {
     this.props.onBuild({ text: buildTextOf(ls, found.turn), after: found.thread.to, afterLine: ls[found.thread.to], place: { line: found.turn.q, text: ls[found.turn.q] } });
     return true;
   }
-  // The agent's name on a routed turn's foot ("via Bart" on an older one): the agents Bart could have picked (AgentChoice).
-  openVia(el) {
-    const q = Number(el.dataset.turn), r = el.getBoundingClientRect();
-    this.setState({ picker: { kind: 'via', i: q, left: null, right: r.right, top: r.top, bottom: r.bottom, choice: null } });
-  }
   // Another agent for a line Bart routed: asked again of it in its place; the run says the person corrected Bart
   // (routed.corrected), and the router's record is marked. The `@bart` line stays. Its conversation's first turn changes
   // its agent on the title line, which keeps the first pick; a follow-up (2026-10-13) is only asked of the other agent,
   // whose closing line then names it. An older document's line, written as the agent's, is written again.
+  // Since the foot lost its label (2026-10-13), nothing on the page opens this picker (kind 'via'); it stays for when a
+  // control for it comes back.
   pickVia = (agent) => {
     const pk = this.state.picker; this.closePicker(); if (!pk || pk.kind !== 'via') return;
     const ls = this.lines(), q = pk.i, p = parseLine(ls[q] || ''), found = this.findTurn(ls, q);
