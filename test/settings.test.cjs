@@ -64,6 +64,9 @@ test('@bart\'s default is its ladder\'s first step, then every step of the built
   const { fable, ...noFable } = claude.models;
   assert.deepEqual(ladder('anthropic', { ...claude, models: noFable }, { model: 'sonnet', effort: 'high' }), ['sonnet high', 'opus high']);
   assert.deepEqual(ladder('openai', { ...codex, efforts: ['medium', 'high'] }, { model: 'luna', effort: 'high' }), ['luna high', 'sol medium', 'sol high']);
+  // Haiku and low (2026-10-12): below every built-in step, so all of them stay above a pick of either.
+  assert.deepEqual(ladder('anthropic', claude, { model: 'haiku', effort: 'low' }), ['haiku low', 'sonnet high', 'opus high', 'fable xhigh']);
+  assert.deepEqual(ladder('openai', codex, { model: 'sol', effort: 'low' }), ['sol low', 'sol medium', 'sol high', 'astra xhigh']);
 });
 
 // A press on a model in a cell's ModelGrid, as the panel makes it: the effort the grid gives that model (effortFor, from
@@ -101,6 +104,15 @@ test('picking Astra and then Sol in @bart\'s Codex cell keeps the ladder whole t
   saveSettingsModels(root, { bart: { openai: { model: 'sol', effort: 'medium' } } });
   assert.deepEqual(readFile(root).providers.openai.ladder, DEFAULT_MODELS.providers.openai.ladder);
   assert.deepEqual(ladderOn(root, 'anthropic'), ['sonnet high', 'opus high', 'fable xhigh'], 'Claude Code\'s untouched');
+});
+
+test('picking Haiku in @bart\'s Claude Code cell (2026-10-12): it starts at the ladder\'s first effort, and every built-in step stays above it', () => {
+  const root = home();
+  loadModels(root);
+  pressModel(root, 'anthropic', 'haiku');
+  assert.deepEqual(ladderOn(root, 'anthropic'), ['haiku high', 'sonnet high', 'opus high', 'fable xhigh']);
+  saveSettingsModels(root, { bart: { anthropic: { model: 'haiku', effort: 'low' } } });
+  assert.deepEqual(steps(modelsInForce(root)), ['Haiku low', 'Sonnet high', 'Opus high', 'Fable xhigh'], 'and a run climbs from it');
 });
 
 test('settingsModels: the file normalized with every provider, the last picks, the usable CLIs, the providers offered, and why a CLI cannot run', () => {
@@ -519,6 +531,10 @@ test('Model: Quick, Standard and Deep of the provider @discover runs on, each a 
   assert.match(row(html, 'anthropic:quick'), /<option value="medium" selected="">Medium<\/option>/);
   assert.match(row(html, 'anthropic:deep'), /<option value="opus" selected="">Opus<\/option>/);
   assert.match(row(html, 'anthropic:deep'), /<option value="max" selected="">Max<\/option>/);
+  // Haiku and low effort (2026-10-12) are offered, Haiku first and Low first.
+  assert.match(row(html, 'anthropic:quick'), /<option value="haiku">Haiku<\/option><option value="sonnet" selected="">Sonnet<\/option>/);
+  assert.match(row(html, 'anthropic:quick'), /<option value="low">Low<\/option><option value="medium" selected="">Medium<\/option>/);
+  assert.match(row(html, 'anthropic:quick'), /data-level-field="effort"[^]*?<option value="low">Low<\/option>/);
   assert.ok(!html.includes('data-cli-note="anthropic"'), 'Claude Code can run');
   assert.ok(html.includes('data-cli-note="openai"'), 'Codex cannot');
   const codex = renderToStaticMarkup(React.createElement(IntelligenceLevels, { initial: settingsModels(root, { tools: toolsFor(['codex']) }) }));

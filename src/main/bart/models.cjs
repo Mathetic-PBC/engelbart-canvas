@@ -52,7 +52,7 @@ const DEFAULT_BUILD = {
 };
 
 const BART_DEFAULTS = {
-  about: 'Models and efforts for @bart, the inline question agent. This file applies to every project and is read again for each question. A question starts where the last one picked by hand did (model-choices.json), else on the first step of the default provider\'s ladder, or on the other provider\'s when the default one\'s CLI cannot run (not installed or not signed in). The agent may move up a step when the question needs more than it was given, and it keeps what it has read. `@bart --opus --high …` picks a model and an effort by hand and turns that off. Luna and Sonnet: lookups, definitions, rewording. Sol and Opus: questions that need several files read or careful reasoning. Astra and Fable: the hardest questions, where a slow answer is acceptable. Medium effort answers in seconds; high and xhigh think longer before answering; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.',
+  about: 'Models and efforts for @bart, the inline question agent. This file applies to every project and is read again for each question. A question starts where the last one picked by hand did (model-choices.json), else on the first step of the default provider\'s ladder, or on the other provider\'s when the default one\'s CLI cannot run (not installed or not signed in). The agent may move up a step when the question needs more than it was given, and it keeps what it has read. `@bart --opus --high …` picks a model and an effort by hand and turns that off. Luna and Haiku: the fastest, for routing, naming and short lookups. Sonnet: lookups, definitions, rewording. Sol and Opus: questions that need several files read or careful reasoning. Astra and Fable: the hardest questions, where a slow answer is acceptable. Low effort answers fastest; medium answers in seconds; high and xhigh think longer before answering; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.',
   provider: 'anthropic',
   providers: {
     openai: {
@@ -62,19 +62,22 @@ const BART_DEFAULTS = {
         sol: { id: 'gpt-6.1-sol', name: 'Sol', use: 'The default. Most questions about the project.' },
         astra: { id: 'gpt-6-astra', name: 'Astra', use: 'Deepest. Hard reasoning across many files; slow.' },
       },
-      efforts: ['medium', 'high', 'xhigh', 'ultra'],
+      efforts: ['low', 'medium', 'high', 'xhigh', 'ultra'],
       ladder: [{ model: 'sol', effort: 'medium' }, { model: 'sol', effort: 'high' }, { model: 'astra', effort: 'xhigh' }],
     },
     anthropic: {
       name: 'Claude Code',
       // Opus and Fable are aliases, not versions: Claude Code resolves each to the latest model of that name. Sonnet is
-      // named by version (2026-09-29), since a Claude Code older than 2.1.284 still resolves `sonnet` to Sonnet 5.
+      // named by version (2026-09-29), since a Claude Code older than 2.1.284 still resolves `sonnet` to Sonnet 5. Haiku
+      // too (2026-10-12): an older Claude Code may resolve `haiku` to Haiku 4.5. Haiku is first, so it ranks lowest
+      // (question.cjs above()); like low effort it is picked by hand (`@bart --haiku --low …`, Settings), and no ladder reaches it.
       models: {
+        haiku: { id: 'claude-haiku-5-5', name: 'Haiku', use: 'Fastest. Routing, naming, short lookups.' },
         sonnet: { id: 'claude-sonnet-5-5', name: 'Sonnet', use: 'Fast. Lookups, definitions, rewording, most questions.' },
         opus: { id: 'opus', name: 'Opus', use: 'Questions that need several files read or careful reasoning.' },
         fable: { id: 'fable', name: 'Fable', use: 'Deepest. The hardest questions; slow.' },
       },
-      efforts: ['medium', 'high', 'xhigh', 'max'],
+      efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
       ladder: [{ model: 'sonnet', effort: 'high' }, { model: 'opus', effort: 'high' }, { model: 'fable', effort: 'xhigh' }],
     },
   },
@@ -116,6 +119,19 @@ function withIds(defaults, ids) {
   return { ...defaults, providers };
 }
 
+// @bart as it shipped from 2026-09-29 until 2026-10-12: no Haiku, and no low effort for either provider.
+const BART_1006 = {
+  ...BART_DEFAULTS,
+  about: BART_DEFAULTS.about.replace('Luna and Haiku: the fastest, for routing, naming and short lookups. Sonnet: lookups, definitions, rewording.', 'Luna and Sonnet: lookups, definitions, rewording.').replace('Low effort answers fastest; medium answers in seconds;', 'Medium effort answers in seconds;'),
+  providers: {
+    openai: { ...BART_DEFAULTS.providers.openai, efforts: ['medium', 'high', 'xhigh', 'ultra'] },
+    anthropic: (() => {
+      const { haiku, ...models } = BART_DEFAULTS.providers.anthropic.models;
+      return { ...BART_DEFAULTS.providers.anthropic, models, efforts: ['medium', 'high', 'xhigh', 'max'] };
+    })(),
+  },
+};
+
 // What shipped from 2026-09-25 (Build) and 2026-09-27 (@bart on GPT-6) until 2026-09-29: GPT-6 Sol, Claude Code's
 // `sonnet` alias, @bart on Codex first (Sol medium) and Claude Code's ladder from Sonnet medium, Build on @bart's provider.
 const BUILD_0925 = withIds({
@@ -123,7 +139,7 @@ const BUILD_0925 = withIds({
   providers: DEFAULT_BUILD.providers,
 }, { openai: { sol: 'gpt-6-sol' }, anthropic: { sonnet: 'sonnet' } });
 const BART_0927 = (() => {
-  const shipped = withIds(BART_DEFAULTS, { openai: { sol: 'gpt-6-sol' }, anthropic: { sonnet: 'sonnet' } });
+  const shipped = withIds(BART_1006, { openai: { sol: 'gpt-6-sol' }, anthropic: { sonnet: 'sonnet' } });
   return {
     ...shipped,
     about: 'Models and efforts for @bart, the inline question agent. This file applies to every project and is read again for each question. A question starts on the first step of the default provider\'s ladder; the agent may move up a step when the question needs more than it was given, and it keeps what it has read. `@bart --opus --high …` picks a model and an effort by hand and turns that off. Luna and Sonnet: lookups, definitions, rewording. Sol and Opus: questions that need several files read or careful reasoning. Astra and Fable: the hardest questions, where a slow answer is acceptable. Medium effort answers in seconds; high and xhigh think longer before answering; ultra (Codex) and max (Claude Code) are the most either will spend, by hand only: no ladder reaches them.',
@@ -164,11 +180,13 @@ const PAST_DEFAULT_MODELS = [
   // 2026-09-27 to 2026-09-29: both on GPT-6, @bart on Codex first.
   { ...BART_0927, build: BUILD_0925 },
   // 2026-09-29 to 2026-09-30: GPT-6.1 Sol, Sonnet 5.5, Claude Code first, Build on a provider of its own.
-  { ...BART_DEFAULTS, build: DEFAULT_BUILD },
+  { ...BART_1006, build: DEFAULT_BUILD },
   // 2026-09-30 to 2026-10-02: @brainstorm and @discover, one step each, both in the file.
-  { ...BART_DEFAULTS, build: DEFAULT_BUILD, brainstorm: BRAINSTORM_0930, discover: DISCOVER_0930 },
+  { ...BART_1006, build: DEFAULT_BUILD, brainstorm: BRAINSTORM_0930, discover: DISCOVER_0930 },
   // 2026-10-02 to 2026-10-06: @discover's three levels; @brainstorm's step fixed in the code, not in the file.
-  { ...BART_DEFAULTS, build: DEFAULT_BUILD, discover: DEFAULT_DISCOVER },
+  { ...BART_1006, build: DEFAULT_BUILD, discover: DEFAULT_DISCOVER },
+  // 2026-10-06 to 2026-10-12: @brainstorm back in the file, for Settings; @bart without Haiku or low effort.
+  { ...BART_1006, build: DEFAULT_BUILD, brainstorm: DEFAULT_BRAINSTORM, discover: DEFAULT_DISCOVER },
 ];
 
 const isObject = (value) => !!value && typeof value === 'object' && !Array.isArray(value);

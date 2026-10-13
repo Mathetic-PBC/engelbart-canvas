@@ -43,11 +43,14 @@ test('flags are matched loosely, from either end, and pin one step', () => {
     ['--sol --ultra q', 'q', 'Sol ultra'], // Codex's top effort
     ['--astra --max q', 'q', 'Astra ultra'], // max is not in Codex's list: of the two equally near, the higher
     ['--opus --ultra q', 'q', 'Opus max'], // ultra is not in Claude Code's list: the nearest that is
-    ['--luna --low q', 'q', 'Luna medium'],
+    ['--luna --low q', 'q', 'Luna low'], // both providers offer low since 2026-10-12
+    ['--haiku --low q', 'q', 'Haiku low'],
   ]) {
     const read = readQuestion(text, MODELS);
     assert.deepEqual([read.question, read.pinned, read.steps.map((s) => `${s.name} ${s.effort}`)], [question, true, [step]], text);
   }
+  const withoutLow = { ...MODELS, providers: { ...MODELS.providers, openai: { ...MODELS.providers.openai, efforts: ['medium', 'high', 'xhigh', 'ultra'] } } };
+  assert.deepEqual(readQuestion('--luna --low q', withoutLow).steps.map((s) => `${s.name} ${s.effort}`), ['Luna medium'], 'low asked of a list without it is the nearest it has');
   const kept = readQuestion('--nope what does --verbose do', MODELS);
   assert.deepEqual([kept.question, kept.pinned], ['--nope what does --verbose do', false]);
   assert.equal(effortOf(' X-High '), 'xhigh');
@@ -186,7 +189,7 @@ test('a file written before defaults were carried (Hudson\'s: 09-20 wording, 09-
   loadModels(root);
   const now = JSON.parse(fs.readFileSync(file, 'utf8'));
   assert.equal(now.about, DEFAULT_MODELS.about);
-  assert.deepEqual(now.providers.openai.efforts, ['medium', 'high', 'xhigh', 'ultra']);
+  assert.deepEqual(now.providers.openai.efforts, ['low', 'medium', 'high', 'xhigh', 'ultra']);
   assert.equal(now.providers.anthropic.models.sonnet.use, 'My own words.');
   const copies = fs.readdirSync(path.join(root, '.backups'));
   assert.equal(copies.length, 1);
@@ -2018,7 +2021,7 @@ test('@discover has three levels a provider: Sonnet medium, Opus high, Opus max 
 
 test('a models file left as 2026-09-30 wrote it: @discover\'s untouched step becomes the three levels, @brainstorm\'s untouched block the new one; a step of the person\'s own is the standard level, and a brainstorm step of their own stays and is read (2026-10-06)', () => {
   for (const withBase of [true, false]) {
-    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-2)));
+    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS[5]));
     assert.deepEqual([shipped.discover.providers.anthropic, !!shipped.brainstorm], [{ model: 'opus', effort: 'high' }, true], 'the 09-30 shape');
     const write = (value) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-1002-'));
@@ -2050,7 +2053,7 @@ test('a models file left as 2026-09-30 wrote it: @discover\'s untouched step bec
 
 test('a models file left as 2026-10-02 wrote it (no brainstorm block) gets the new one; values the person edited stay, a brainstorm block of their own too (2026-10-06)', () => {
   for (const withBase of [true, false]) {
-    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+    const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS[6]));
     assert.deepEqual([!!shipped.brainstorm, !!shipped.discover.providers.anthropic.deep], [false, true], 'the 10-02 shape');
     const write = (value) => {
       const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-1006-'));
@@ -2083,6 +2086,76 @@ test('a models file left as 2026-10-02 wrote it (no brainstorm block) gets the n
     const read = loadModels(old);
     assert.deepEqual(JSON.parse(fs.readFileSync(path.join(old, MODELS_FILE), 'utf8')).brainstorm, theirsBlock.brainstorm, `their block is not replaced, ${how}`);
     assert.deepEqual([readBrainstorm('', read).steps[0].name, readBrainstorm('', read).steps[0].effort], ['Fable', 'high']);
+  }
+});
+
+test('Haiku and low effort for @bart (2026-10-12): Haiku first on Claude Code, low first in both providers\' efforts; ladders, Build, @brainstorm and @discover as they were', () => {
+  const { DEFAULT_BUILD, normalizeBuild, normalizeDiscover } = require('../src/main/bart/models.cjs');
+  const { normalizeBrainstorm } = require('../src/main/bart/models.cjs');
+  const models = loadModels(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-haiku-')));
+  assert.deepEqual(Object.keys(models.providers.anthropic.models), ['haiku', 'sonnet', 'opus', 'fable'], 'Haiku first, so it ranks lowest');
+  assert.deepEqual(models.providers.anthropic.models.haiku, { id: 'claude-haiku-5-5', name: 'Haiku', use: 'Fastest. Routing, naming, short lookups.' }, 'named by version, as Sonnet is');
+  assert.deepEqual(models.providers.anthropic.efforts, ['low', 'medium', 'high', 'xhigh', 'max']);
+  assert.deepEqual(models.providers.openai.efforts, ['low', 'medium', 'high', 'xhigh', 'ultra']);
+  assert.match(models.about, /Luna and Haiku: the fastest/);
+  assert.match(models.about, /Low effort answers fastest/);
+  // No ladder reaches Haiku or low: a plain question starts on Sonnet high, as before.
+  assert.deepEqual(models.providers.anthropic.ladder, [{ model: 'sonnet', effort: 'high' }, { model: 'opus', effort: 'high' }, { model: 'fable', effort: 'xhigh' }]);
+  assert.deepEqual(models.providers.openai.ladder, [{ model: 'sol', effort: 'medium' }, { model: 'sol', effort: 'high' }, { model: 'astra', effort: 'xhigh' }]);
+  assert.deepEqual(ladder('why?', models), ['Sonnet high', 'Opus high', 'Fable xhigh']);
+  // Build: no Haiku and no low.
+  assert.deepEqual(models.build, normalizeBuild(DEFAULT_BUILD));
+  assert.deepEqual(Object.keys(models.build.providers.anthropic.models), ['sonnet', 'opus', 'fable']);
+  assert.deepEqual([models.build.providers.anthropic.efforts, models.build.providers.openai.efforts], [['medium', 'high', 'xhigh', 'max'], ['medium', 'high', 'xhigh', 'ultra']]);
+  assert.deepEqual(buildChoices(models).providers.anthropic.ladder, [{ model: 'opus', effort: 'high' }]);
+  // @brainstorm and @discover normalize to their defaults, unchanged.
+  assert.deepEqual(normalizeBrainstorm(DEFAULT_BRAINSTORM, models.providers).providers, DEFAULT_BRAINSTORM.providers);
+  assert.deepEqual(normalizeDiscover(DEFAULT_DISCOVER, models.providers).providers, DEFAULT_DISCOVER.providers);
+  assert.deepEqual([models.brainstorm.providers, models.discover.providers], [DEFAULT_BRAINSTORM.providers, DEFAULT_DISCOVER.providers]);
+});
+
+test('`@bart --haiku --low x` picks Haiku at low on Claude Code; a question after a Haiku pick climbs Sonnet high, Opus high, Fable xhigh (2026-10-12)', () => {
+  const read = readQuestion('--haiku --low x', DEFAULTS);
+  assert.deepEqual([read.question, read.pinned, read.provider, read.steps], ['x', true, 'anthropic', [{ provider: 'anthropic', key: 'haiku', model: 'claude-haiku-5-5', name: 'Haiku', effort: 'low' }]]);
+  assert.deepEqual(readQuestion('x --Haiku-5.5 --LOW', DEFAULTS).steps.map((s) => `${s.name} ${s.effort}`), ['Haiku low'], 'matched loosely, from either end');
+  assert.deepEqual(modelOf('claude-haiku-5-5', DEFAULTS), { provider: 'anthropic', model: 'haiku' });
+  assert.deepEqual(ladder('why?', startingAt(DEFAULTS, 'bart', { provider: 'anthropic', model: 'haiku', effort: 'low' })), ['Haiku low', 'Sonnet high', 'Opus high', 'Fable xhigh']);
+  assert.deepEqual(ladder('why?', startingAt(DEFAULTS, 'bart', { provider: 'anthropic', model: 'haiku', effort: 'max' })), ['Haiku max', 'Sonnet high', 'Opus high', 'Fable xhigh'], 'every later model is above Haiku');
+  assert.deepEqual(ladder('why?', startingAt(DEFAULTS, 'bart', { provider: 'openai', model: 'sol', effort: 'low' })), ['Sol low', 'Sol medium', 'Sol high', 'Astra xhigh'], 'low is below every step on Codex');
+  assert.deepEqual(ladder('--low why?', DEFAULTS), ['Sonnet low'], 'low alone keeps the model a question starts on');
+  assert.deepEqual(ladder('why?', DEFAULTS), ['Sonnet high', 'Opus high', 'Fable xhigh'], 'a plain question still starts on Sonnet high');
+});
+
+test('a models file left as 2026-10-06 wrote it gains Haiku and low, with a base and without; Claude Code efforts the person edited stay theirs (2026-10-12)', () => {
+  const shipped = JSON.parse(JSON.stringify(PAST_DEFAULT_MODELS.at(-1)));
+  assert.deepEqual([Object.keys(shipped.providers.anthropic.models), shipped.providers.anthropic.efforts, shipped.providers.openai.efforts, !!shipped.brainstorm], [['sonnet', 'opus', 'fable'], ['medium', 'high', 'xhigh', 'max'], ['medium', 'high', 'xhigh', 'ultra'], true], 'the 10-06 shape');
+  for (const withBase of [true, false]) {
+    const how = withBase ? 'with a base' : 'without one';
+    const write = (value) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-models-1012-'));
+      fs.writeFileSync(path.join(root, MODELS_FILE), JSON.stringify(value));
+      if (withBase) { fs.mkdirSync(path.join(root, '.defaults')); fs.writeFileSync(path.join(root, '.defaults', MODELS_FILE), JSON.stringify(shipped)); }
+      return root;
+    };
+    const untouched = write(shipped);
+    const models = loadModels(untouched);
+    assert.deepEqual(JSON.parse(fs.readFileSync(path.join(untouched, MODELS_FILE), 'utf8')), DEFAULT_MODELS, `the file is today's defaults, ${how}`);
+    assert.deepEqual(Object.keys(models.providers.anthropic.models), ['haiku', 'sonnet', 'opus', 'fable'], how);
+    assert.deepEqual([models.providers.anthropic.efforts[0], models.providers.openai.efforts[0]], ['low', 'low'], how);
+    assert.deepEqual(ladder('why?', models), ['Sonnet high', 'Opus high', 'Fable xhigh'], how);
+
+    const mine = JSON.parse(JSON.stringify(shipped));
+    mine.providers.anthropic.efforts = ['high', 'max'];
+    mine.providers.anthropic.models.sonnet.use = 'My own words.';
+    const edited = write(mine);
+    const theirs = loadModels(edited);
+    const kept = JSON.parse(fs.readFileSync(path.join(edited, MODELS_FILE), 'utf8'));
+    assert.deepEqual(kept.providers.anthropic.efforts, ['high', 'max'], `their Claude Code efforts stay, ${how}`);
+    assert.deepEqual(kept.providers.openai.efforts, ['low', 'medium', 'high', 'xhigh', 'ultra'], `Codex's, left alone, gain low, ${how}`);
+    assert.deepEqual(Object.keys(kept.providers.anthropic.models), ['haiku', 'sonnet', 'opus', 'fable'], `Haiku is added first beside their edit, ${how}`);
+    assert.equal(kept.providers.anthropic.models.sonnet.use, 'My own words.');
+    assert.deepEqual(theirs.providers.anthropic.efforts, ['high', 'max']);
+    assert.deepEqual(readQuestion('--haiku --low x', theirs).steps.map((s) => `${s.name} ${s.effort}`), ['Haiku high'], 'low they do not offer is the nearest effort they do');
   }
 });
 

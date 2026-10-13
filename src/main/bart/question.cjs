@@ -88,8 +88,8 @@ function readQuestion(text, models) {
   let effort = asked;
   const provider = chosen ? chosen.provider : models.provider;
   const entry = models.providers[provider];
-  // An effort the list does not offer becomes the nearest one it does, the higher of two equally near: --low is medium,
-  // and --max asked of Codex (medium to xhigh, then ultra) is ultra.
+  // An effort the list does not offer becomes the nearest one it does, the higher of two equally near: --low asked of a
+  // list without it is medium, and --max asked of Codex (low to xhigh, then ultra) is ultra.
   if (effort && !entry.efforts.includes(effort)) {
     const rank = (value) => EFFORTS.indexOf(value);
     effort = [...entry.efforts].sort((a, b) => (Math.abs(rank(a) - rank(effort)) - Math.abs(rank(b) - rank(effort))) || rank(b) - rank(a))[0];
