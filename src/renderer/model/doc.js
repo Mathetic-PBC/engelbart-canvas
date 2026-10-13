@@ -555,9 +555,10 @@ export const answeredBy = (thread) => {
  * its text, `titleLine` its index (-1 and null without one) and `folded` whether the thread is collapsed to it; `from` is
  * always the first question's line. Each turn { q, from, to, answered, pending, foot, folded, agent } where `from..to`
  * are the lines under the question (to === q when there are none), `pending` is the id of a run still working, `foot` the
- * closing line that says which model answered (-1 without one), and `agent` the agent that answered it: the one its
- * closing line names, else the one its line asks, else (an `@bart` line opening a thread) the title line's; null for an
- * `@bart` turn none of them names (pending, or failed).
+ * closing line that says which model answered (-1 without one), `build` the id of the Build card that stands directly
+ * under the question as its answer (an `@bart --build` line's; no turn follows it), and `agent` the agent that answered
+ * it: the one its closing line names, else the one its line asks, else (an `@bart` line opening a thread) the title
+ * line's; null for an `@bart` turn none of them names (pending, or failed).
  */
 export function threads(lines, ps = parseLines(lines)) {
   const out = [];
@@ -575,6 +576,9 @@ export function threads(lines, ps = parseLines(lines)) {
         if (p.type === 'pending') turn.pending = p.id;
         else turn.folded = p.folded;
       }
+      // A Build card right under the question is its answer (2026-10-13): an `@bart --build` line's, which replaced its
+      // pending line. Only the line directly under it: a card under a reply was started from the answer above it.
+      if (turn.to === turn.q && ps[i + 1] && ps[i + 1].type === 'build') { i += 1; turn.to = i; turn.build = ps[i].id; }
       turn.answered = turn.to > turn.q;
       if (turn.answered && !turn.pending) { const last = ps[turn.to]; if (last.type === 'reply' && ATTRIBUTION_RE.test(last.text)) turn.foot = turn.to; }
       const asks = agentOf(ps[turn.q]);
@@ -585,7 +589,7 @@ export function threads(lines, ps = parseLines(lines)) {
       // (2026-10-13): one still being typed under a card is no turn of it, and asked from the document it starts a
       // conversation of its own (DocEditor askInline). The card's reply field, its cards and its research boxes put the
       // pending line in with the question.
-      if (!turn.answered || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || !followsIn(ps[i + 1], ps[thread.from], thread)) break;
+      if (!turn.answered || turn.build || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || !followsIn(ps[i + 1], ps[thread.from], thread)) break;
       if (!(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply'))) break;
       i += 1;
     }

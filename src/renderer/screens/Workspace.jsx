@@ -592,12 +592,21 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const next = placeAnswer(held, askId, lines);
       if (next !== null) changeDoc(key, ref, next);
     };
+    const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
+    // Merged, not replaced (2026-10-13): a routed line's entry shows the level it was sent at until the run's first step.
+    setAsks((current) => askStarted(current, askId, { docKey: key, agent: agent || 'bart' }));
+    if (agent === 'brainstorm') tickWalk(2);
+    if (agent === 'discover') tickWalk(3);
     // A question that starts a thread has an empty `bart# ` line above it (DocEditor askInline): its title is asked for
     // alongside the answer, never waited on, and written into that line when it comes (2026-10-12, bart/name-chat.cjs).
     // The line is found by the ask, not by an index: the answer may land first, or the person type above it meanwhile. The
     // document reaches docsRef a render after the editor wrote the line, so a title quicker than that tries again.
+    // `@bart --build <request>` (2026-10-02): not a question. A full Build of only what follows the flag starts, and its
+    // card takes the pending line's place, under the request. Its conversation's title (2026-10-13) is named from that
+    // request, by Chat's namer, and stays when the Build could not start.
+    const build = buildRequestOf({ agent, text }, bartModels || await api.bartModels().catch(() => null));
     if (name) {
-      api.nameChat({ text, agent: agent || 'bart' }).then((named) => {
+      api.nameChat(build ? { text: build.request || text, agent: 'bart' } : { text, agent: agent || 'bart' }).then((named) => {
         let tries = 0;
         const fill = () => {
           const held = docsRef.current[key];
@@ -609,14 +618,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         fill();
       }).catch(() => {});
     }
-    const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
-    // Merged, not replaced (2026-10-13): a routed line's entry shows the level it was sent at until the run's first step.
-    setAsks((current) => askStarted(current, askId, { docKey: key, agent: agent || 'bart' }));
-    if (agent === 'brainstorm') tickWalk(2);
-    if (agent === 'discover') tickWalk(3);
-    // `@bart --build <request>` (2026-10-02): not a question. A full Build of only what follows the flag starts, and its
-    // card takes the pending line's place, under the request.
-    const build = buildRequestOf({ agent, text }, bartModels || await api.bartModels().catch(() => null));
     if (build) {
       try {
         if (!build.request) { place(['bart> **No Build.** Write what to build after --build.']); return; }

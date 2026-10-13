@@ -80,7 +80,7 @@ test('a new question gets an empty title line above it and is asked to be named;
   }
 });
 
-test('no title for a follow-up, a question under an older conversation, one with a title already, or a Build', () => {
+test('no title for a follow-up, a question under an older conversation, or one with a title already', () => {
   // A follow-up sent from the field under an answer.
   const follow = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because'), '']);
   follow.editor.followText.set(1, 'and timeouts?');
@@ -103,9 +103,6 @@ test('no title for a follow-up, a question under an older conversation, one with
   assert.equal(titled.asks[0].name, undefined);
   assert.deepEqual(titled.lines().slice(0, 2), ['bart# Mine', '@chat why?']);
 
-  const build = mounted(['@chat --build make it', '']);
-  build.editor.askInline(0);
-  assert.ok(!build.lines().some((l) => l.startsWith('bart#')));
 });
 
 test('an @ line typed under an answer starts a conversation of its own: an empty line and its title line above it, in one change; the reply field still adds a follow-up (2026-10-13)', async () => {
@@ -545,4 +542,145 @@ test('the reply field still adds a follow-up to the card: one conversation of tw
   const text = mounted(['Notes', '@chat new']);
   text.editor.askInline(1);
   assert.deepEqual([text.lines()[0], text.lines()[2]], ['Notes', '@chat new']);
+});
+
+/* ------------------------------------------- a Build's conversation (2026-10-13) */
+
+// A `--build` line asked from the document starts a conversation, as a question does: its title line, marked a Build's,
+// named from what it asks to build (Workspace askBart); its Build's card is its answer, and it collapses once the Build is
+// finished (accepted, discarded, failed or stopped), never while it runs or waits in review.
+const BUILT = 'abc0123456';
+const task = (status, extra = {}) => ({ id: BUILT, status, title: 'Make X', model: 'opus', effort: 'high', messages: [], final: status === 'accepted' || status === 'discarded', ...extra });
+const BUILD_DOC = ['Notes', 'bart# [chat build 2026-10-13T09:00:00Z] Make X', '@chat --build make X', `build> ${BUILT}`, '', 'After'];
+
+test('@chat --build from the document gets a title line, marked a Build\'s, and is asked to be named; its line is under it', () => {
+  const m = mounted(['Notes', '@chat --build make X', 'After']);
+  m.editor.askInline(1);
+  const ls = m.lines();
+  assert.match(ls[1], /^bart# \[chat build \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\] $/, 'as titleLine writes it, with ` build`');
+  assert.equal(ls[2], '@chat --build make X');
+  assert.match(ls[3], /^bart~> /);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].name, m.asks[0].place], ['bart', '--build make X', true, { line: 2, text: '@chat --build make X' }]);
+});
+
+test('@bart --build from the document: Bart\'s --build rule hands it over with a title line above it, and it is named', async () => {
+  const m = mounted(['Notes', '@bart --build make X', 'After'], { onRoute: async (input) => ({ id: 'route-b', ...input.rule, sure: 1, by: 'rule' }) });
+  m.editor.askInline(1);
+  await new Promise((resolve) => setImmediate(resolve));
+  const ls = m.lines();
+  assert.match(ls[1], /^bart# \[chat build \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\] $/);
+  assert.equal(ls[2], '@bart --build make X');
+  assert.match(ls[3], /^bart~> /);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].name, m.asks[0].place], ['router', true, { line: 2, text: '@bart --build make X' }]);
+  // A failed Build ("No Build.") keeps the title it was given.
+  const { placeAnswer, placeTitle, askedAt } = await doc();
+  const near = askedAt(m.props.text, m.asks[0].askId);
+  m.props.text = placeAnswer(m.props.text, m.asks[0].askId, ['bart> **No Build.** It could not start.']);
+  m.props.text = placeTitle(m.props.text, m.asks[0].askId, 'Make X', near);
+  assert.match(m.lines()[1], /^bart# \[chat build [^\]]+\] Make X$/);
+});
+
+test('Workspace askBart names a Build\'s conversation from its request, as Chat\'s, before the Build starts', () => {
+  const src = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  const named = src.indexOf("api.nameChat(build ? { text: build.request || text, agent: 'bart' } : { text, agent: agent || 'bart' })");
+  assert.ok(named > 0, 'named from build.request, by Chat\'s namer');
+  assert.ok(src.indexOf('const build = buildRequestOf({ agent, text }') < named && named < src.indexOf('const task = await buildFrom(ref, build.request'), 'before the Build branch returns');
+});
+
+test('an open Build conversation draws its question and the Build\'s card as before; Collapse waits until the Build is finished', () => {
+  for (const [builds, running] of [[{}, true], [{ [BUILT]: task('running') }, true], [{ [BUILT]: task('review') }, true], [{ [BUILT]: task('accepted') }, false], [{ [BUILT]: task('stopped') }, false], [{ [BUILT]: task('failed') }, false]]) {
+    const m = mounted(BUILD_DOC, { builds });
+    const html = m.html(), said = JSON.stringify(builds[BUILT] && builds[BUILT].status);
+    assert.match(rowOf(html, 1), /style="display:none"/, `${said}: open, no title row`);
+    const q = rowOf(html, 2);
+    assert.match(q, /data-act="ask" data-row="2"/, `${said}: the question keeps its send`);
+    assert.match(q, /margin-bottom:8px/, `${said}: the question closes its card, as before`);
+    assert.ok(q.includes(`data-act="foldthread" data-row="1" aria-label="Collapse" aria-expanded="true"${running ? ' disabled' : ''}>`), `${said}: the conversation's Collapse`);
+    assert.ok(q.includes(running ? 'Collapse once it answers' : '>Collapse<'), said);
+    assert.match(rowOf(html, 3), new RegExp(`^<div data-line="3" data-raw="build&gt; ${BUILT}" data-build="${BUILT}"`), `${said}: the card is drawn as a Build's card`);
+    assert.ok(!/data-foot|data-follow/.test(html), `${said}: no foot or reply field under it`);
+    // toggleThread, Collapse all: only once the Build is finished.
+    m.editor.toggleThread(1);
+    assert.equal(m.lines()[1].startsWith('bart#+'), !running, `${said}: its Collapse`);
+    const n = mounted(BUILD_DOC, { builds });
+    n.editor.foldAll(true);
+    assert.equal(n.lines()[1].startsWith('bart#+'), !running, `${said}: Collapse all`);
+  }
+});
+
+test('a collapsed Build conversation is one row named Build; `bart#+` on one still running is drawn open', () => {
+  const folded = BUILD_DOC.map((l, j) => (j === 1 ? l.replace('bart#', 'bart#+') : l));
+  const done = mounted(folded, { builds: { [BUILT]: task('accepted') } }), html = done.html();
+  assert.match(rowOf(html, 1), /data-thread-row="1"[\s\S]*title="Build · [^"]*⌥-click to rename"[\s\S]*>Make X</);
+  for (const i of [2, 3]) assert.match(rowOf(html, i), /^<div[^>]*style="display:none"/, `line ${i} hidden`);
+  assert.match(rowOf(html, 5), />After</);
+  // The Build's record arriving finished collapses it; one that starts again opens it.
+  const later = mounted(folded, { builds: { [BUILT]: task('review') } });
+  assert.match(rowOf(later.html(), 1), /style="display:none"/, 'in review: drawn open');
+  assert.match(rowOf(later.html(), 3), /data-build=/);
+  later.props.builds = { [BUILT]: task('accepted') };
+  assert.match(rowOf(later.html(), 1), /data-thread-row/, 'finished: collapsed');
+  // An @chat line's: Build too.
+  assert.match(rowOf(mounted(['bart#+ [chat build 2026-10-13T09:00:00Z] Make X', '@bart --build make X', `build> ${BUILT}`, ''], { builds: { [BUILT]: task('discarded') } }).html(), 0), /title="Build · /);
+});
+
+test('the editor is drawn again, not patched, when a Build that answers a conversation finishes', () => {
+  const m = mounted(BUILD_DOC, { builds: { [BUILT]: task('review') } });
+  let synced = 0; m.editor.syncEditor = () => { synced += 1; }; m.editor.patchBuilds = () => true; m.editor.markBeside = () => {};
+  const prev = { ...m.props };
+  m.props.builds = { [BUILT]: task('review', { messages: [{ role: 'agent', text: 'more' }] }) };
+  m.editor.componentDidUpdate(prev, m.editor.state);
+  assert.equal(synced, 0, 'still in review: its card is patched');
+  const prev2 = { ...m.props };
+  m.props.builds = { [BUILT]: task('accepted') };
+  m.editor.componentDidUpdate(prev2, m.editor.state);
+  assert.equal(synced, 1, 'finished: drawn again');
+});
+
+test('shown again, a Build conversation collapses once its Build is finished: not one in review or running; one not loaded yet once it loads', () => {
+  const ids = ['a000000001', 'a000000002', 'a000000003'];
+  const conv = (id, n) => [`bart# [chat build 2026-10-13T09:00:00Z] Build ${n}`, `@chat --build make ${n}`, `build> ${id}`, ''];
+  const lines = [...conv(ids[0], 1), ...conv(ids[1], 2), ...conv(ids[2], 3)];
+  const builds = { [ids[0]]: { ...task('accepted'), id: ids[0] }, [ids[1]]: { ...task('review'), id: ids[1] }, [ids[2]]: { ...task('running'), id: ids[2] } };
+  const m = mounted(lines, { autoCollapse: true, builds });
+  assert.deepEqual([0, 4, 8].map((j) => m.lines()[j].startsWith('bart#+')), [true, false, false]);
+
+  // Shown before the project's Builds have loaded: nothing of them is decided until they have.
+  const w = mounted(lines, { autoCollapse: true, builds: {} });
+  assert.equal(w.changes.length, 0);
+  w.props.builds = builds; w.editor.componentDidUpdate({ ...w.props, builds: {} }, w.editor.state);
+  assert.deepEqual([0, 4, 8].map((j) => w.lines()[j].startsWith('bart#+')), [true, false, false]);
+  // Expanded by hand afterwards, it stays open.
+  w.click('foldthread', { row: '0' });
+  w.props.builds = { ...builds }; w.editor.componentDidUpdate({ ...w.props, builds }, w.editor.state);
+  assert.equal(w.lines()[0].startsWith('bart#+'), false);
+});
+
+test('an older --build line with no title parses and draws as before: no title, no Collapse, nothing for Collapse all', async () => {
+  const { threads } = await doc();
+  const lines = ['@bart --build x', `build> ${BUILT}`, ''];
+  const m = mounted(lines, { builds: { [BUILT]: task('accepted') } });
+  const t = threads(lines);
+  assert.deepEqual([t.length, t[0].titleLine, t[0].turns[0].build], [1, -1, BUILT]);
+  const html = m.html(), q = rowOf(html, 0);
+  assert.match(q, /data-act="ask" data-row="0"/);
+  assert.ok(!/data-corner|foldthread|data-act="fold"/.test(html), 'no Collapse of any kind');
+  assert.match(rowOf(html, 1), /data-build=/);
+  assert.deepEqual(m.editor.foldable(m.lines()), []);
+  m.editor.foldAll(true);
+  assert.deepEqual(m.lines(), lines);
+  // A line typed under its card is asked as before: no empty line goes in above it.
+  const u = mounted([...lines.slice(0, 2), '@chat next?'], { builds: { [BUILT]: task('accepted') } });
+  u.editor.askInline(2);
+  assert.equal(u.lines()[2].startsWith('bart#'), true);
+  assert.equal(u.lines()[3], '@chat next?');
+});
+
+test('revealing a line inside a collapsed conversation expands it first', () => {
+  const folded = BUILD_DOC.map((l, j) => (j === 1 ? l.replace('bart#', 'bart#+') : l));
+  const m = mounted(folded, { builds: { [BUILT]: task('accepted') } });
+  m.editor.scrollRef = { current: { getBoundingClientRect: () => ({ height: 100 }) } };
+  m.editor.edRef = { current: { ...m.editor.edRef.current, querySelector: () => ({}) } };
+  assert.equal(m.editor.showLine(3), false, 'not on the page yet');
+  assert.equal(m.lines()[1], BUILD_DOC[1], 'expanded');
 });

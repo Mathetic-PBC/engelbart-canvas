@@ -439,7 +439,10 @@ test('handoff: a rule is passed to the router; --build is asked as a Build reque
   const b = mounted(['@bart --build add x'], { route: async (input) => ({ id: 'route-x', ...input.rule, sure: 1 }) });
   b.editor.askInline(0);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual([b.asks[0].agent, b.asks[0].text, b.lines()[0], b.asks[0].name], ['router', '--build add x', '@bart --build add x', undefined], 'a Build gets no title line');
+  // A Build's line gets a title line too (2026-10-13), marked a Build's, and is named; its place is the line under it.
+  assert.match(b.lines()[0], /^bart# \[chat build \d{4}-\d\d-\d\dT[\d:]+Z\] $/);
+  assert.deepEqual([b.asks[0].agent, b.asks[0].text, b.lines()[1], b.asks[0].name, b.asks[0].place], ['router', '--build add x', '@bart --build add x', true, { line: 1, text: '@bart --build add x' }]);
+  assert.match(b.lines()[2], /^bart~> /);
 
   let release; const later = new Promise((resolve) => { release = resolve; });
   const g = mounted(['@bart why?'], { route: () => later });

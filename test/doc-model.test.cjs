@@ -768,3 +768,22 @@ test('a question line under an answer joins its thread only once asked: one bein
   // An @discover research box, put in with its pending line, is a turn of its conversation.
   assert.deepEqual(threads([...chat, '@discover --research tutors', 'bart~> r1']).map((t) => t.turns.length), [2]);
 });
+
+test('threads: a Build\'s card directly under its question is that turn\'s answer; one under a reply is not in the thread (2026-10-13)', async () => {
+  const { threads } = await load();
+  const titled = threads(['bart# [chat build 2026-10-13T09:00:00Z] X', '@bart --build x', 'build> abc0123456']);
+  assert.equal(titled.length, 1);
+  const [t] = titled;
+  assert.deepEqual([t.from, t.to, t.titleLine, t.build, t.turns.length], [1, 2, 0, true, 1]);
+  assert.deepEqual([t.turns[0].q, t.turns[0].from, t.turns[0].to, t.turns[0].answered, t.turns[0].pending, t.turns[0].foot, t.turns[0].build], [1, 2, 2, true, null, -1, 'abc0123456']);
+
+  // A card the footer's Build put under an answer is the conversation's next thing, not a turn of it.
+  const chat = ['@chat why?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*', 'build> abc0123456'];
+  const [c] = threads(chat);
+  assert.deepEqual([c.to, c.turns.length, c.turns[0].to, c.turns[0].build], [2, 1, 2, undefined]);
+
+  // Pending, it is a turn at work as before; an older untitled line parses with the card as its answer; nothing follows it in.
+  assert.deepEqual(threads(['@bart --build x', 'bart~> a1']).map((x) => [x.to, x.turns[0].pending, x.turns[0].build]), [[1, 'a1', undefined]]);
+  const old = threads(['@bart --build x', 'build> abc0123456', '@chat next?', 'bart> ok']);
+  assert.deepEqual(old.map((x) => [x.from, x.to, x.titleLine, x.turns.length]), [[0, 1, -1, 1], [2, 3, -1, 1]]);
+});
