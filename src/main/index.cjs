@@ -1075,6 +1075,7 @@ if (!hasSingleInstanceLock) {
         return true;
       },
       writeClipboard: (text) => clipboard.writeText(text),
+      writeImage: (buf) => { const img = require('electron').nativeImage.createFromBuffer(buf); if (img.isEmpty()) return false; clipboard.writeImage(img); return true; },
       bart,
       builds,
       sandbox,

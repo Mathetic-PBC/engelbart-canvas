@@ -96,6 +96,8 @@ const hashLine = (line) => { let h = 0x811c9dc5; const s = String(line ?? ''); f
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 // A follow-up's text with each [Attachment n] whose image was saved ([{ n, id }]) written as an image pasted on a line is:
 // ![Attachment n](img:<id>). A token typed by hand, or one whose image did not save, stays as it was typed.
+// An image line's alt text carries its width after a bar (`Attachment 1|w=320`), kept in the document so a resize stays.
+const imgParts = (text) => { const m = /^(.*)\|w=(\d+)$/.exec(text || ''); return m ? { name: m[1], width: Number(m[2]) } : { name: text || '', width: 0 }; };
 const withAttachments = (text, images) => {
   const ids = new Map(images.filter((image) => image.id).map((image) => [image.n, image.id]));
   return text.replace(/(?<!!)\[Attachment (\d+)\](?!\()/g, (token, n) => (ids.has(Number(n)) ? `![Attachment ${n}](img:${ids.get(Number(n))})` : token));
@@ -217,7 +219,7 @@ const MARK_DRAWN = `flex:none;min-width:${MARK_COL};padding-right:0.25em;box-siz
 const MARK_EDITED = `display:inline-block;min-width:${MARK_COL};margin-left:-${MARK_COL};box-sizing:border-box;white-space:pre`;
 
 export default class DocEditor extends React.Component {
-  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null };
+  state = { lightbox: null, activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
   syncing = false; wantFocus = false; wantAnchor = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
@@ -285,6 +287,8 @@ export default class DocEditor extends React.Component {
         this.downOnPage = e.target === this.scrollRef.current;
         if (!inEd(e)) return;
         this.downOnRoot = e.target === this.editorEl();
+        const grip = e.target.closest && e.target.closest('[data-imgsize]');
+        if (grip && e.button === 0) { e.preventDefault(); this.startResize(e, grip); return; }
         if (e.target.closest('button[data-act], .bart-chip, a[data-link], [data-mention]')) { e.preventDefault(); return; }
         if (e.button === 0 && !inFollow(e)) this.held = true;
       },
@@ -641,11 +645,10 @@ export default class DocEditor extends React.Component {
     if (p.type === 'todo') {
       const done = p.done;
       const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
-      return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;background:#fafafa;padding:${first ? '10px' : '0'} 16px 0 ${16 + p.depth * 24}px;border-radius:${first ? '10px 10px 0 0' : '0'}">`
-        + `<span contenteditable="false" data-act="toggle" data-row="${i}" role="button" style="user-select:none;flex:none;width:14px;margin-top:12px;text-align:center;font:15px/1 var(--font-sans);color:${done ? '#8f8f8f' : '#171717'};cursor:pointer">${done ? '✓' : '–'}</span>`
-        + `<span class="t" style="flex:1;min-width:0;padding:6px 0;min-height:39px;color:${done ? '#8f8f8f' : '#171717'};text-decoration:${done ? 'line-through' : 'none'}">${content || '<br>'}</span>`
-        + `<button contenteditable="false" data-act="remove" data-row="${i}" aria-label="Remove todo" style="user-select:none;flex:none;margin-top:12px;padding:0 2px;border:0;background:transparent;font:14px/1 var(--font-sans);color:#c9c9c9;cursor:pointer">×</button>`
-        + '</div>';
+      // Each checkbox is its own row (2026-10-12): a square box that fills blue when checked, no card around the run.
+      const box = `<span contenteditable="false" data-act="toggle" data-row="${i}" role="checkbox" aria-checked="${!!done}" style="user-select:none;flex:none;box-sizing:border-box;width:16px;height:16px;margin-top:10px;border:1.5px solid ${done ? '#0070f3' : '#c9c9c9'};border-radius:4px;background:${done ? '#0070f3' : '#fff'};color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer">${done ? '<svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.4 5 8.8l4.5-5.4"/></svg>' : ''}</span>`;
+      return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;padding:0 0 0 ${p.depth * 24}px;min-height:35px">${box}`
+        + `<span class="t" style="flex:1;min-width:0;padding:4px 0;color:${done ? '#8f8f8f' : '#171717'};text-decoration:${done ? 'line-through' : 'none'}">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'list') {
       const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
@@ -754,7 +757,9 @@ export default class DocEditor extends React.Component {
     }
     if (p.type === 'img') {
       const src = p.src.startsWith('img:') ? ((this.props.images || {})[p.src.slice(4)] || '') : p.src;
-      const content = active ? this.activeHtml([line]) : !src ? `<span contenteditable="false" style="display:inline-block;margin:6px 0;padding:10px 14px;border:1px dashed #c9c9c9;border-radius:8px;font:12.5px/1.5 var(--font-sans);color:#8f8f8f;user-select:none">${esc(p.text || 'image')}…</span>` : `<img src="${esc(src)}" alt="${esc(p.text)}" draggable="false" style="display:block;max-width:100%;max-height:520px;margin:6px 0;border:1px solid #eaeaea;border-radius:8px;user-select:none">`;
+      const { name, width } = imgParts(p.text);
+      const picture = `<span contenteditable="false" data-imgbox="${i}" style="position:relative;display:inline-block;max-width:100%;margin:6px 0;line-height:0;user-select:none;${width ? `width:${width}px;` : ''}"><img data-img="${i}" src="${esc(src)}" alt="${esc(name)}" draggable="false" style="display:block;width:100%;max-width:100%;${width ? '' : 'max-height:520px;width:auto;'}border:1px solid #eaeaea;border-radius:8px;cursor:zoom-in"><span data-imgsize="${i}" aria-label="Resize image" style="position:absolute;right:4px;bottom:4px;width:14px;height:14px;border-right:2px solid #8f8f8f;border-bottom:2px solid #8f8f8f;border-radius:0 0 4px 0;cursor:nwse-resize;opacity:.7;background:transparent"></span></span>`;
+      const content = active ? this.activeHtml([line]) : !src ? `<span contenteditable="false" style="display:inline-block;margin:6px 0;padding:10px 14px;border:1px dashed #c9c9c9;border-radius:8px;font:12.5px/1.5 var(--font-sans);color:#8f8f8f;user-select:none">${esc(name || 'image')}…</span>` : picture;
       return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t" style="display:block">${content}</span></div>`;
     }
     const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line, this.mentionOpts);
@@ -1219,13 +1224,6 @@ export default class DocEditor extends React.Component {
     act(id, { buildstop: 'stop', buildpreview: 'review', buildreview: 'review', buildaccept: 'accept', buildreject: 'reject', buildresume: 'resume' }[k]);
   }
 
-  // The foot of a checklist card: Copy all; clicking its whitespace adds a line below the card. (Build all and ⌘⏎,
-  // which only pretended to build, went with @Task on 2026-09-29.)
-  groupHtml(group) {
-    const lastIdx = group[group.length - 1].i;
-    const copy = `<button data-act="copyall" data-lines="${group.map((t) => t.i).join(',')}" style="margin-right:auto;display:inline-flex;align-items:center;min-height:32px;padding:8px 12px;border:1px solid #eaeaea;border-radius:8px;background:#fff;color:#171717;font:500 13px/1 var(--font-sans);cursor:pointer">${this.copied === group[0].i ? 'Copied' : 'Copy all'}</button>`;
-    return `<div contenteditable="false" data-act="after" data-after="${lastIdx}" style="user-select:none;display:flex;align-items:center;padding:8px 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px;cursor:text">${copy}</div>`;
-  }
   // Where every line of an @bart card stands in it: which turn it belongs to, whether it opens or closes the card, and
   // what is drawn after it that is not a line (a foot for an answer that has no closing line; the follow-up field).
   // `agent` is the turn's; an @brainstorm answer that is a card is drawn on its first line (`card`) and the rest of its
@@ -1453,21 +1451,18 @@ export default class DocEditor extends React.Component {
     const ready = input.dataset.empty === '1' || !!input.value.trim(); send.style.background = ready ? '#0070f3' : '#f2f2f2'; send.style.color = ready ? '#fff' : '#8f8f8f';
   }
   editorHtml() {
-    const ls = this.lines(), ps = this.parsedOf(ls), active = this.state.activeLine, at = this.layout(ls), editing = this.editing; let out = '', group = [];
+    const ls = this.lines(), ps = this.parsedOf(ls), active = this.state.activeLine, at = this.layout(ls), editing = this.editing; let out = '';
     ls.forEach((line, i) => {
       const p = ps[i], where = at.get(i);
       // Under a question being edited (2026-10-03), its answer and the answer's foot are dimmed.
       const dim = !!editing && !!where && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
-      out += dimmed(this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i)));
+      out += dimmed(this.lineHtml(i, line, p, active === i, false, where, this.lockedAt(ls, i)));
       if (where && where.footAfter) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: where.tail && !where.followAfter, plain: oneModel(where.agent), edit: where.editable }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
       // card (MATH-31; under it, not above, since 2026-10-05: the agent's own field comes first).
       const recap = !!where && where.followAfter && this.endsInRecap(ls, where.thread);
       if (where && where.followAfter) out += this.followHtml(ls, where.thread, { closes: !recap });
       if (recap) out += `<div contenteditable="false" data-recap-discover="${where.thread.from}" style="user-select:none;padding:0 16px 14px;margin-bottom:14px;background:#fafafa;border-radius:0 0 10px 10px">${this.sendDiscoverHtml(`t${where.thread.from}`)}</div>`;
-      if (p.type === 'todo') group.push({ i, p });
-      const next = ls[i + 1];
-      if (p.type === 'todo' && (next == null || ps[i + 1].type !== 'todo')) { out += this.groupHtml(group); group = []; }
     });
     return out;
   }
@@ -1913,7 +1908,52 @@ export default class DocEditor extends React.Component {
     e.clipboardData.setData('text/html', selectionHtml(text));
     if (cut && !this.props.readOnly) { this.bulkDelete = true; document.execCommand('delete'); this.bulkDelete = false; }
   }
+  // Dragging an image's bottom-right corner (2026-10-12) sizes it live; letting go writes the width into its line.
+  startResize(e, grip) {
+    const box = grip.closest('[data-imgbox]'), i = Number(grip.dataset.imgsize); if (!box) return;
+    const x0 = e.clientX, w0 = box.getBoundingClientRect().width, img = box.querySelector('img'), max = this.editorEl().clientWidth || 2000;
+    let w = Math.round(w0);
+    this.resizing = true;
+    const move = (ev) => { w = Math.max(48, Math.min(max, Math.round(w0 + ev.clientX - x0))); box.style.width = `${w}px`; img.style.width = '100%'; img.style.maxHeight = 'none'; };
+    const up = () => {
+      window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up);
+      this.timer(() => { this.resizing = false; }, 0);
+      this.setLines((ls) => ls.map((l, j) => { if (j !== i) return l; const p = parseLine(l); return p.type === 'img' ? `![${imgParts(p.text).name}|w=${w}](${p.src})` : l; }));
+    };
+    window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
+  }
+  copyPicture = async () => {
+    const lb = this.state.lightbox; if (!lb) return;
+    try {
+      const blob = await (await fetch(lb.src)).blob();
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      await window.engelbartAPI.copyImage(bytes);
+      this.setState({ lightbox: { ...lb, copied: true } });
+      if (this.copiedT) clearTimeout(this.copiedT);
+      this.copiedT = this.timer(() => { if (this.state.lightbox) this.setState({ lightbox: { ...this.state.lightbox, copied: false } }); }, 1400);
+    } catch { /* the picture stays where it was */ }
+  };
+  lightboxEl() {
+    const lb = this.state.lightbox; if (!lb) return null;
+    const close = () => this.setState({ lightbox: null });
+    const btn = { position: 'absolute', width: 36, height: 36, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', color: '#171717', cursor: 'pointer' };
+    return (
+      <div data-lightbox="1" role="dialog" aria-modal="true" aria-label="Image" onClick={close} onKeyDown={(e) => { if (e.key === 'Escape') close(); }} tabIndex={-1} ref={(el) => { if (el && !el.contains(document.activeElement)) el.focus(); }} style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 56, background: 'rgba(0,0,0,.55)', outline: 'none' }}>
+        <img src={lb.src} alt={lb.alt} onClick={(e) => e.stopPropagation()} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 8, background: '#fff', boxShadow: '0 12px 40px rgba(0,0,0,.35)' }} />
+        <button type="button" aria-label="Close" onClick={(e) => { e.stopPropagation(); close(); }} style={{ ...btn, top: 16, right: 16 }}>
+          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
+        </button>
+        <button type="button" aria-label="Copy image" title={lb.copied ? 'Copied' : 'Copy image'} onClick={(e) => { e.stopPropagation(); void this.copyPicture(); }} style={{ ...btn, bottom: 16, left: 16, color: lb.copied ? '#0070f3' : '#171717' }}>
+          {lb.copied
+            ? <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8.4 6.4 12 13 4.5" /></svg>
+            : <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H3A1.5 1.5 0 0 0 1.5 3v6A1.5 1.5 0 0 0 3 10.5h.5" /></svg>}
+        </button>
+      </div>
+    );
+  }
   editorClick = (e) => {
+    const pic = e.target.closest && e.target.closest('[data-img]');
+    if (pic && typeof pic.getAttribute === 'function' && !this.resizing) { e.preventDefault(); this.setState({ lightbox: { src: pic.getAttribute('src'), alt: pic.getAttribute('alt') || '', copied: false } }); return; }
     // The editor's own empty space below the last line. A drag from one line to another also ends here (2026-10-02: Chromium
     // clicks what holds both ends), and putting the caret at the end lost its highlight.
     if (e.target === this.editorEl()) { if (this.downOnRoot && getSelection().isCollapsed) { this.cancelEdit(); this.focusEnd(); } return; }
@@ -2570,11 +2610,13 @@ export default class DocEditor extends React.Component {
   render() {
     const s = this.state;
     const compact = this.props.compact;
+    const lightbox = this.lightboxEl();
     const answers = compact || this.props.readOnly ? [] : this.foldable(this.lines()), anyOpen = answers.some((turn) => !turn.folded);
     // Compact (a post-it, 2026-09-22) never scrolls: it is as tall as its lines, and the card fits the type to its size.
     return (
       <>
         <style>{RISE_CSS + CARD_CSS}</style>
+        {lightbox && createPortal(lightbox, document.body)}
         {this.props.emptyHint && <style>{emptyHintCss(this.props.emptyHint)}</style>}
         {/* Past the last line the page keeps going for about half a window (2026-09-22), so the end of a document can be read and written mid-screen. */}
         <div ref={this.scrollRef} onClick={this.docClick} onScroll={this.onScroll} onWheel={this.stopSettling} onPointerDown={this.stopSettling} onKeyDown={this.stopSettling} style={compact ? { flex: 'none', overflow: 'visible', padding: '0 0 2px', cursor: 'grab' } : { flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) max(120px, calc(50vh - 40px))', cursor: 'text' }}>

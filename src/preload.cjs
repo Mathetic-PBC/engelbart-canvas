@@ -196,6 +196,7 @@ const engelbartAPI = Object.freeze({
   clearModelChoice: invoke('clear-model-choice'),
   onModelsChanged: (callback) => subscribe('engelbart:models-changed', callback),
   copyText: invoke('copy-text'),
+  copyImage: invoke('copy-image'),
   onBartProgress: (callback) => subscribe('engelbart:bart-progress', callback),
   // @bart from a highlight's note (MATH-27): the ones this window asked that are still running (for after ⌘R), and how each
   // ended, told to every window: { askId, markId, page, rowId | url, and entry (the answer, already on its mark) | stopped | failed and lines }.
