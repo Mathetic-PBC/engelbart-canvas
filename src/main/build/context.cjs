@@ -110,4 +110,30 @@ function freshMessage(context, messages, next) {
   return [context, conversation, next].filter(Boolean).join('\n\n');
 }
 
-module.exports = { BUILD_LINE_RE, freezeContext, replyMessage, freshMessage };
+/**
+ * A first message split into its top-level blocks, for the Agent map: { engelbart, task, workspace | request | post-it,
+ * attached, history, context_json, … } in the order sent, each the whole block. A block starts with `<name …>` at the start
+ * of a line and ends at the first `</name>` line after it; text outside any block goes under `other`.
+ */
+function contextParts(text) {
+  const source = String(text || '');
+  const parts = {};
+  const open = /^<([a-z][\w-]*)(?:\s[^>\n]*)?>/gm;
+  let at = 0, match, other = '';
+  while ((match = open.exec(source))) {
+    if (match.index < at) continue;
+    const name = match[1];
+    const close = source.indexOf(`\n</${name}>`, match.index);
+    const end = close === -1 ? source.length : close + name.length + 4;
+    other += source.slice(at, match.index);
+    const block = source.slice(match.index, end);
+    parts[name] = parts[name] ? `${parts[name]}\n\n${block}` : block;
+    at = end;
+    open.lastIndex = end;
+  }
+  other += source.slice(at);
+  if (other.trim()) parts.other = other.trim();
+  return parts;
+}
+
+module.exports = { BUILD_LINE_RE, freezeContext, replyMessage, freshMessage, contextParts };

@@ -4,6 +4,8 @@
 // developers only): what the agent was told (its system prompt and each block of context), what each model step was sent,
 // the tools it called with their arguments and a piece of each result, what each step said, and what was written. ask.cjs
 // calls it at those points when createBart is given one; a copy without test mode is given none, so nothing is kept.
+// Since 2026-10-12 each Build turn (../build/manager.cjs, one record a turn, `buildId` naming its Build) and each run step
+// after one (../build/run-step.cjs, its runnables as what was written) are recorded the same way.
 //
 // Kept in <userData>/agent-runs.jsonl, one JSON object a line, the last `maxRuns` runs: a run is written when it starts and
 // again when it ends (a later line for the same id wins), and what happens between stays in memory. A system prompt is
@@ -18,6 +20,8 @@ const path = require('node:path');
 const { createHash } = require('node:crypto');
 
 const EXCERPT = 2000;
+// The tool calls one step keeps; the rest are counted in the step's `toolsDropped` (a Build can call thousands).
+const MAX_TOOLS = 1000;
 // What `list()` leaves out of a run: the text the map shows only for the run it selects.
 const BIG = ['system', 'context', 'steps', 'written'];
 
@@ -68,7 +72,7 @@ function toolCallsOf(event) {
 }
 
 /**
- * → { start, step, event, output, finish, list, get, flush }. `file`: the JSONL file (null keeps nothing on disk);
+ * → { start, step, event, output, note, finish, list, get, flush }. `file`: the JSONL file (null keeps nothing on disk);
  * `onChange(record)`: each change to a run, the record without its big fields (as list() gives it); `maxRuns`: how many
  * runs are kept.
  */
@@ -106,6 +110,8 @@ function createRunLog({ file = null, onChange = () => {}, maxRuns = 300, now = D
     if (last) { out.model = last.model; out.effort = last.effort; }
     out.stepCount = record.steps ? record.steps.length : 0;
     out.toolCount = (record.steps || []).reduce((sum, step) => sum + step.tools.length, 0);
+    const dropped = (record.steps || []).reduce((sum, step) => sum + (step.toolsDropped || 0), 0);
+    if (dropped) out.toolsDropped = dropped;
     return out;
   };
   const changed = (record) => { try { onChange(summary(record)); } catch { /* the map's problem, never the run's */ } };
@@ -172,6 +178,8 @@ function createRunLog({ file = null, onChange = () => {}, maxRuns = 300, now = D
         if (found) {
           if (call.input !== undefined && found.input == null) found.input = call.input;
           if (call.result) { found.result = call.result; found.ms = now() - found.at; }
+        } else if (call.name && step.tools.length >= MAX_TOOLS) {
+          if (!call.done) step.toolsDropped = (step.toolsDropped || 0) + 1; // a completed one was counted when it started
         } else if (call.name) {
           step.tools.push({ id: call.id, name: call.name, input: call.input === undefined ? null : call.input, at: now(), ...(call.result ? { result: call.result, ms: 0 } : {}) });
         }
@@ -187,11 +195,22 @@ function createRunLog({ file = null, onChange = () => {}, maxRuns = 300, now = D
       step.ms = now() - step.at;
       changed(runs.get(id));
     }),
-    /** The run's end: 'done', 'failed' or 'stopped', the lines written, the error and how long it took. */
-    finish: safe((id, { status = 'done', written: wrote = null, error = null, ms = null } = {}) => {
+    /** Fields of a run learnt after it started (a run step's prompt, known once its stored commands are tried). */
+    note: safe((id, fields) => {
+      const record = runs.get(id);
+      if (!record || !isObject(fields)) return;
+      for (const [key, value] of Object.entries(fields)) if (!['id', 'steps', 'system', 'systemHash', 'status', 'at'].includes(key)) record[key] = value;
+      changed(record);
+    }),
+    /**
+     * The run's end: 'done', 'failed' or 'stopped', the lines written (a run step: its runnables), the error, how long it
+     * took, and a Build turn's `ending` (needs-you, escalated, review, conflict).
+     */
+    finish: safe((id, { status = 'done', written: wrote = null, error = null, ms = null, ending } = {}) => {
       const record = runs.get(id);
       if (!record) return;
       record.status = status;
+      if (ending !== undefined) record.ending = ending;
       record.written = Array.isArray(wrote) ? wrote : null;
       record.error = error ? String(error) : null;
       record.ms = ms != null ? ms : now() - record.at;
@@ -211,4 +230,4 @@ function createRunLog({ file = null, onChange = () => {}, maxRuns = 300, now = D
   };
 }
 
-module.exports = { createRunLog, toolCallsOf, resultText, EXCERPT };
+module.exports = { createRunLog, toolCallsOf, resultText, EXCERPT, MAX_TOOLS };

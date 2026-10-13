@@ -3,7 +3,8 @@
 // The Agent map's Design tab (2026-10-12): each agent as it is set up now, read from the code and files that set it up,
 // never written down twice. Its system prompt (the open data root's .context/<agent>-system-prompt.md when it holds any,
 // else the built-in one), its tools on each provider, its model steps and efforts as the models file has them now, its
-// time limit, and the blocks of context it is sent.
+// time limit, and the blocks of context it is sent. Then Build and the run step after it (its tools, models, limits and what
+// starts it), and on every entry the agents it hands work to.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -11,6 +12,14 @@ const { loadSystemPrompt, AGENTS, PROMPTS, CLAUDE_TOOLS, BRAINSTORM_TOOLS, PAPER
 const { readQuestion, readBrainstorm, readDiscover, MODES } = require('../bart/models.cjs');
 const { SCOPED, ZOTERO_READERS, LIBRARY_READERS } = require('../bart/context.cjs');
 const { OMITTED } = require('../bart/strip.cjs');
+const { buildChoices, resolveBuildChoice } = require('../bart/models.cjs');
+const { loadBuildPrompt } = require('../build/prompt.cjs');
+const { buildPolicy, claudeSettings } = require('../build/policy.cjs');
+const { CLAUDE_TOOLS: BUILD_TOOLS, SETTING_SOURCES, codexOverrides } = require('../build/runner.cjs');
+const { ENGELBART_TOOLS } = require('../build/engelbart-tools.cjs');
+const { RUN_TOOLS, RUN_KINDS } = require('../build/run-tools.cjs');
+const { prompt: runStepPrompt, RUNNABLE_MS, DECLARE_MS, INSTALL_MS, WIND_DOWN_MS, MAX_TURNS } = require('../build/run-step.cjs');
+const { LIMITS, TURN_MS } = require('../build/manager.cjs');
 
 /** The file a custom prompt is read from, and whether it holds one (loadSystemPrompt's own test: any text at all). */
 function promptOf(dataRoot, agent) {
@@ -68,10 +77,130 @@ function contextOf(agent) {
   return { blocks, resumed, dirs: LIBRARY_READERS.has(agent) ? 'the code directory and data root, plus the library\'s folders (read-only)' : 'the code directory and data root (read-only)' };
 }
 
-/** → { agents: [{ agent, prompt, tools, models, timeout, context }] } for the open data root and the models in force. */
-function agentDesign({ dataRoot, models }) {
+// Who hands work to whom, and how: { to, how }.
+const CALLS = {
+  bart: [{ to: 'build', how: '--build: the line\'s request becomes a Build' }],
+  brainstorm: [
+    { to: 'discover', how: 'its result line, the Welcome handoff, Send to Discover' },
+    { to: 'bart', how: 'its result line, the Welcome handoff' },
+  ],
+  discover: [],
+  build: [{ to: 'run step', how: 'on review: a Build turn that ends in review' }],
+  'run step': [],
+};
+
+// The policy with its folders named, not the open project's: what any Build may reach.
+const PLACEHOLDER = { project: { dir: '<project folder>' }, dataRoot: '<data root>', gitDir: '<repository>/.git' };
+
+/** Build's system prompt: the custom file's when it holds any, else the built-in one; a quick task's when it differs. */
+function buildPromptOf(dataRoot) {
+  const file = dataRoot ? path.join(dataRoot, '.context', 'build-system-prompt.md') : null;
+  let custom = false;
+  try { custom = !!file && fs.readFileSync(file, 'utf8').trim().length > 0; } catch { custom = false; }
+  const text = loadBuildPrompt(dataRoot || '');
+  const quick = loadBuildPrompt(dataRoot || '', { quick: true });
+  return { text, custom, file, quick: quick !== text ? quick : null };
+}
+
+/** One paragraph on what a Build may reach (../build/policy.cjs buildPolicy). */
+function reachOf() {
+  const policy = buildPolicy(PLACEHOLDER);
+  return [
+    'Works in a git worktree of its own, on a branch made for the Build; the person\'s folder is never touched.',
+    `Also works in ${policy.folders.join(' and ')}${policy.writable.length ? ` (Codex writes there without asking: ${policy.writable.join(', ')})` : ''}.`,
+    `Kept aside while it works and put back after each turn: ${policy.kept.join(' and ')}, and every pdf and picture the library holds.`,
+    `Refused to the edit tools: ${policy.records.join(', ')}.`,
+    `Git is Engelbart's alone: the git guard (first on PATH, with hooks on ${policy.gitDir}) refuses what writes the repository's history, refs or settings, and every push; Engelbart commits after each turn.`,
+    `The person's own settings, hooks and MCP servers: ${policy.personal ? 'yes' : 'no'}. Subagents: ${policy.subagents ? 'yes' : 'no'}. Computer use and browser control: ${policy.computerUse ? 'yes' : 'no'}.`,
+  ].join(' ');
+}
+
+function buildToolsOf() {
+  const policy = buildPolicy(PLACEHOLDER);
+  let codex;
+  try { codex = codexOverrides(policy, { instructions: '<the system prompt>', engelbart: { command: '<node>', args: ['engelbart-mcp.cjs', '<connection>'] }, home: path.join(PLACEHOLDER.dataRoot, '.no-codex-home') }); } catch (error) { codex = [`(${error.message})`]; }
   return {
-    agents: AGENTS.map((agent) => ({
+    anthropic: {
+      tools: BUILD_TOOLS,
+      settingSources: SETTING_SOURCES,
+      personal: 'the person\'s own Claude Code settings, hooks and MCP servers',
+      engelbart: ENGELBART_TOOLS.map((tool) => `mcp__engelbart__${tool.name}`),
+      deny: claudeSettings(policy).permissions.deny,
+    },
+    openai: { overrides: codex, engelbart: ENGELBART_TOOLS.map((tool) => `engelbart.${tool.name}`) },
+  };
+}
+
+/** Build's models per provider (the models file's build block): its default, the models and efforts the dialog offers. */
+function buildStepsOf(buildModels) {
+  if (!buildModels) return { inForce: null, providers: {} };
+  try {
+    const choices = buildChoices(buildModels);
+    const providers = {};
+    for (const [provider, entry] of Object.entries(choices.providers)) {
+      const start = entry.ladder[0];
+      providers[provider] = {
+        steps: [{ name: entry.models[start.model].name, model: entry.models[start.model].id, effort: start.effort }],
+        models: Object.values(entry.models).map((model) => ({ name: model.name, model: model.id, use: model.use || '' })),
+        efforts: entry.efforts,
+      };
+    }
+    return { inForce: choices.provider, providers };
+  } catch (error) { return { inForce: null, providers: {}, error: error.message }; }
+}
+
+function buildEntry(dataRoot, buildModels) {
+  return {
+    agent: 'build',
+    prompt: buildPromptOf(dataRoot),
+    tools: buildToolsOf(),
+    reach: reachOf(),
+    models: buildStepsOf(buildModels),
+    timeout: { build: TURN_MS.build, quick: TURN_MS.quick },
+    slots: { build: LIMITS.build, quick: LIMITS.quick },
+    context: {
+      blocks: [
+        { block: '<engelbart>', note: 'the project, the working copy, the branch and where it started, the person\'s own folder' },
+        { block: '<custom_instructions> / <memory>', note: 'the data root\'s instructions and MEMORY.md, when there are any' },
+        { block: '<task>', note: 'what to do' },
+        { block: '<workspace>', note: 'the workspace document with every mentioned note under its line. A line\'s Build sends <request> instead (what was typed, its notes); a post-it sends <post-it>' },
+        { block: '<attached>', note: 'library items attached when the Build started' },
+        { block: '<history>', note: 'the newest archived version of the workspace (not for a line\'s request)' },
+        { block: '<context_json>', note: 'the library, each item flagged when the document mentions it' },
+      ],
+      resumed: ['<reply> (and <attachments>, the images pasted into it)', 'a session that will not resume: everything again, <conversation>, then the reply'],
+      dirs: 'the worktree, the project folder and the data root\'s assets (./policy.cjs)',
+    },
+    ends: [
+      { line: 'NEEDS YOU: <question>', means: 'a question only the person can answer; the Build waits (needs-you)' },
+      { line: 'ESCALATE: <why>', means: 'a quick task that is not small: it changes nothing and is escalated' },
+      { line: '(anything else)', means: 'done: the Build goes to review, and its run step starts' },
+    ],
+    startedFrom: ['@bart --build on a line', 'the Build panel (a workspace\'s Build button)', 'a post-it (a quick task)'],
+  };
+}
+
+function runStepEntry(buildModels) {
+  let fallback = null;
+  try { const choice = resolveBuildChoice(buildModels, { provider: 'anthropic' }); fallback = { name: choice.modelName, model: choice.modelId, effort: choice.effort, provider: choice.provider }; } catch { fallback = null; }
+  let template = '';
+  try { template = runStepPrompt({ name: '<repository>', discovery: null, uncovered: [], stored: [], tried: [], minutes: Math.round(RUNNABLE_MS / 60_000), kinds: RUN_KINDS, changed: [] }); } catch (error) { template = `(${error.message})`; }
+  return {
+    agent: 'run step',
+    prompt: { text: template, custom: false, file: null, note: 'written per Build from launch facts (the repository, what the Build changed, the stored commands and how they did); the template, with no facts:' },
+    tools: { anthropic: { tools: '', allowedTools: RUN_TOOLS.map((tool) => `mcp__canvas__${tool.name}`).join(','), restricted: true }, openai: null },
+    models: { rule: 'the Build\'s own model and effort when it ran on Claude Code, else Claude Code\'s Build step', fallback, providers: {} },
+    timeout: { runnable: RUNNABLE_MS, declare: DECLARE_MS, install: INSTALL_MS, windDown: WIND_DOWN_MS },
+    maxTurns: MAX_TURNS,
+    context: { blocks: [{ block: 'prompt', note: 'one message, written for the Build (above)' }], resumed: [], dirs: 'none: it reads and writes the worktree through its tools alone' },
+    startedFrom: ['a Build turn that ends in review (never a quick task)'],
+  };
+}
+
+/** → { agents: [{ agent, prompt, tools, models, timeout, context, calls, … }] } for the open data root and the models in force. */
+function agentDesign({ dataRoot, models, buildModels = models }) {
+  const agents = [
+    ...AGENTS.map((agent) => ({
       agent,
       prompt: promptOf(dataRoot, agent),
       tools: toolsOf(agent),
@@ -79,7 +208,10 @@ function agentDesign({ dataRoot, models }) {
       timeout: agent === 'discover' ? { quick: DISCOVER_TIMEOUT_MS, standard: DISCOVER_TIMEOUT_MS, deep: DEEP_DISCOVER_TIMEOUT_MS } : { step: STEP_TIMEOUT_MS },
       context: contextOf(agent),
     })),
-  };
+    buildEntry(dataRoot, buildModels),
+    runStepEntry(buildModels),
+  ];
+  return { agents: agents.map((entry) => ({ ...entry, calls: CALLS[entry.agent] || [] })) };
 }
 
-module.exports = { agentDesign };
+module.exports = { agentDesign, CALLS };

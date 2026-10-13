@@ -228,8 +228,10 @@ test('the agent runs as the sandbox setup runs it: restricted, Engelbart\'s tool
     return child;
   };
   const server = path.join(__dirname, '..', 'src', 'main', 'build', 'run-mcp.cjs');
-  const text = await runLocalClaude({ auth: { file: '/bin/claude', env: {} }, bridge: { url: 'http://127.0.0.1:1/tools', token: '0'.repeat(64) }, prompt: 'x', model: 'opus', server, spawnProcess });
+  const events = [];
+  const text = await runLocalClaude({ auth: { file: '/bin/claude', env: {} }, bridge: { url: 'http://127.0.0.1:1/tools', token: '0'.repeat(64) }, prompt: 'x', model: 'opus', server, spawnProcess, onEvent: (event) => events.push(event.type) });
   assert.equal(text, 'All running.');
+  assert.deepEqual(events, ['system', 'result'], 'each event it streams, for the Agent map');
   assert.equal(config.mcpServers.canvas.args[0], server);
 });
 
@@ -262,12 +264,12 @@ function scripted(steps) {
   };
 }
 
-function manager(runner, runAgent, extra = {}) {
+function manager(runner, runAgent, extra = {}, { runLog = null } = {}) {
   const events = [];
   const shown = terminals();
   const processes = processesOf({ environment, appAliveMs: 400, uiReadyMs: 8000 });
-  const runStep = createRunStep({ processes, runAgent, prepareClaude: async () => ({ file: 'claude', env: {} }), tickMs: 100, kinds: ALL_KINDS, ...shown, ...extra });
-  const builds = createBuilds({ git, runner, readModels: () => MODELS, notify: (channel, payload) => events.push({ channel, payload }), runShell: async () => ({ ok: true, output: '' }), runStep });
+  const runStep = createRunStep({ processes, runAgent, prepareClaude: async () => ({ file: 'claude', env: {} }), tickMs: 100, kinds: ALL_KINDS, ...shown, ...extra, runLog });
+  const builds = createBuilds({ git, runner, readModels: () => MODELS, notify: (channel, payload) => events.push({ channel, payload }), runShell: async () => ({ ok: true, output: '' }), runStep, runLog });
   return { builds, events, shown, processes, runStep };
 }
 
@@ -765,4 +767,24 @@ test('a Build that adds a plain page to a desktop app\'s repository: the run ste
   assert.match(await (await fetch(task.runStep.runnables[0].url)).text(), /CHI submissions, 2017-2026/, 'the page the Build made is what answers');
   await builds.stopAll();
   assert.equal(await answers(task.runStep.runnables[0].url), false);
+});
+
+test('the Agent map (2026-10-12): a run step is one record linked to its Build, its prompt, one step with the tool calls, the summary, and its runnables as what was written', async () => {
+  const { createRunLog } = require('../src/main/bart/runlog.cjs');
+  const runLog = createRunLog();
+  const { project, workspace, target } = await scene();
+  const { builds } = manager(scripted(['Built it.']), createFakeRunAgent({ kinds: ALL_KINDS }), {}, { runLog });
+  const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target, provider: 'anthropic', model: 'opus', effort: 'high' });
+  const task = await stepped(builds, project, started.id, 1);
+  const record = runLog.get(`${task.id}:run:1`);
+  assert.deepEqual([record.agent, record.buildId, record.turn, record.title, record.projectName, record.workspaceName, record.status, record.system], ['run step', task.id, 1, task.title, project.name, 'Feature', 'done', '']);
+  assert.match(record.context.prompt, /^You are the run step of an Engelbart Build/);
+  assert.equal(record.steps.length, 1);
+  assert.deepEqual([record.steps[0].model, record.steps[0].effort, record.steps[0].input], ['opus', 'high', record.context.prompt]);
+  assert.deepEqual(record.steps[0].tools.map((tool) => tool.name).slice(0, 2), ['mcp__canvas__read_file', 'mcp__canvas__declare_runnables']);
+  assert.ok(record.steps[0].tools.every((tool) => tool.result), 'each with its result');
+  assert.match(record.steps[0].output, /^FAKE RUN STEP: web: runs; cli: runs\.$/);
+  assert.deepEqual(record.written, [{ name: 'web', status: 'running', passed: true, error: null }, { name: 'cli', status: 'running', passed: true, error: null }]);
+  assert.deepEqual([runLog.get(`${task.id}:1`).agent, runLog.get(`${task.id}:1`).ending], ['build', 'review'], 'the Build\'s own turn beside it');
+  await builds.discard(ctx, project.id, task.id);
 });

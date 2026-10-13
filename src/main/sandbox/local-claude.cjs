@@ -73,8 +73,9 @@ function claudeArguments(config, model = 'claude-sonnet-5-5', { maxTurns = 32, e
     '--model', model, ...(effort ? ['--effort', effort] : []), '--max-turns', String(maxTurns)];
 }
 
-// `server`: the stdio adapter that serves the tools (the sandbox setup's by default). → the final result text
-async function runLocalClaude({ auth, bridge, prompt, model, effort = null, maxTurns = 32, server = path.join(__dirname, 'local-mcp.cjs'), signal, onMessage = () => {}, spawnProcess = spawn }) {
+// `server`: the stdio adapter that serves the tools (the sandbox setup's by default); `onEvent(event)`: each event Claude
+// Code streams (a Build's run step: the Agent map's record). → the final result text
+async function runLocalClaude({ auth, bridge, prompt, model, effort = null, maxTurns = 32, server = path.join(__dirname, 'local-mcp.cjs'), signal, onMessage = () => {}, onEvent = () => {}, spawnProcess = spawn }) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'canvas-claude-setup-'));
   fs.chmodSync(directory, 0o700);
   const config = path.join(directory, 'mcp.json');
@@ -100,6 +101,7 @@ async function runLocalClaude({ auth, bridge, prompt, model, effort = null, maxT
     const consume = (line) => {
       let event;
       try { event = JSON.parse(line); } catch { return; }
+      try { onEvent(event); } catch { /* a watcher's problem (the Agent map's record), never the run's */ }
       if (event.type === 'system' && event.subtype === 'init') {
         if (!event.mcp_servers?.some((server) => server.name === 'canvas' && server.status === 'connected') || event.mcp_server_errors?.length) {
           failure = 'Claude could not connect to the sandbox tools.';

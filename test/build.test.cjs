@@ -1216,3 +1216,107 @@ test('a check runs without Engelbart\'s terminal, and what failed keeps its name
   assert.equal(checkOutput('ok 1\nnot ok 2 - short'), 'ok 1\nnot ok 2 - short', 'what fits is kept as it is');
   assert.match(checkOutput(`✖ spec: fails\n${'y'.repeat(5000)}`), /^What failed[^\n]*\n✖ spec: fails\n/, "node's spec reporter too");
 });
+
+/* ------------------------------------------------------------------ the Agent map (2026-10-12) */
+
+test('the Agent map: the real runner gives onEvent each raw event of both CLIs before it becomes an update, and the updates are the same', async () => {
+  const { EventEmitter } = require('node:events');
+  const authFile = path.join(homeDir, 'auth-map.json');
+  fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+  const worktree = path.join(homeDir, 'wt-map');
+  fs.mkdirSync(worktree, { recursive: true });
+  const CLAUDE_EVENTS = [
+    { type: 'assistant', message: { content: [{ type: 'tool_use', id: 't1', name: 'Read', input: { file_path: path.join(worktree, 'a.txt') } }] } },
+    { type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 't1', content: 'one' }] } },
+    { type: 'result', subtype: 'success', is_error: false, result: 'claude did it' },
+  ];
+  const CODEX_EVENTS = [
+    { type: 'thread.started', thread_id: '01a0bc2d-7c18-77d2-8b21-3cc7e942cbcf' },
+    { type: 'item.started', item: { id: 'i1', type: 'command_execution', command: 'ls' } },
+    { type: 'item.completed', item: { id: 'i1', type: 'command_execution', command: 'ls', aggregated_output: 'a.txt', exit_code: 0 } },
+  ];
+  // The CLIs, stubbed: what each prints, streamed to the child's stdout before it ends.
+  const run = (shell, args, options, callback) => {
+    const codex = /codex/.test(args[args.length - 1]);
+    const text = `${(codex ? CODEX_EVENTS : CLAUDE_EVENTS).map((event) => JSON.stringify(event)).join('\n')}\n`;
+    const child = { stdout: new EventEmitter() };
+    setImmediate(() => { child.stdout.emit('data', text); if (codex) fs.writeFileSync(options.env.ENGELBART_BUILD_OUTPUT, 'codex did it'); callback(null, text); });
+    return child;
+  };
+  const runner = createRunner({ environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'build-runs-map'), codexHome: path.join(homeDir, 'codex-home-map'), codexAuthFile: authFile, run });
+  const policy = buildPolicy({ project: { dir: path.join(ctx.dataRoot, 'p') }, dataRoot: ctx.dataRoot });
+  for (const [provider, events] of [['anthropic', CLAUDE_EVENTS], ['openai', CODEX_EVENTS]]) {
+    const task = { id: 'abcdef0123', provider, modelId: provider === 'anthropic' ? 'opus' : 'gpt-6-sol', effort: 'high', worktree };
+    const order = [];
+    const raw = [];
+    const updates = [];
+    await runner.turn({ task, message: 'do it', system: 'SYSTEM', policy, onEvent: (event) => { raw.push(event); order.push('event'); }, onUpdate: (update) => { updates.push(update); order.push('update'); } });
+    assert.deepEqual(raw, events, `${provider}: every raw event`);
+    assert.deepEqual(order.slice(0, 2), ['event', 'update'], `${provider}: the raw event first`);
+    const plain = [];
+    await runner.turn({ task, message: 'do it', system: 'SYSTEM', policy, onUpdate: (update) => plain.push(update) });
+    assert.deepEqual(updates, plain, `${provider}: onUpdate gets the same labels`);
+    assert.ok(updates.some((update) => update && update.activity), `${provider}: a tool call is still an activity`);
+    // A watcher that throws never reaches the turn.
+    const out = await runner.turn({ task, message: 'do it', system: 'SYSTEM', policy, onEvent: () => { throw new Error('the map broke'); } });
+    assert.match(out.text, /did it/);
+  }
+});
+
+test('the Agent map: a run log gets one record per Build turn, the first turn\'s context block by block, a reply\'s turn its reply, the tool calls and how the turn ended', async () => {
+  const { createRunLog } = require('../src/main/bart/runlog.cjs');
+  const { project, workspace } = await scene({ doc: 'Build the thing.' });
+  const runLog = createRunLog();
+  const agent = scripted([
+    ({ onEvent }) => {
+      onEvent({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'r1', name: 'Read', input: { file_path: 'a.txt' } }] } });
+      onEvent({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'r1', content: 'one\ntwo' }] } });
+      return 'Read it.\n\nNEEDS YOU: Blue or green?';
+    },
+    'Painted it green.',
+  ]);
+  const { builds } = manager(agent, { runLog });
+  const { id } = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  await settled(project, id);
+  const first = runLog.get(`${id}:1`);
+  assert.deepEqual([first.agent, first.kind, first.buildId, first.turn, first.title, first.question, first.provider, first.projectName, first.workspaceName], ['build', 'build', id, 1, store.readTask(projects.findProject(ctx, project.id), id).title, first.title, 'anthropic', project.name, 'Feature']);
+  assert.deepEqual([first.status, first.ending, first.written, first.error], ['done', 'needs-you', null, null]);
+  assert.equal(first.system, loadBuildPrompt(ctx.dataRoot));
+  assert.deepEqual(Object.keys(first.context), ['engelbart', 'task', 'workspace', 'context_json'], 'context.md, block by block');
+  assert.match(first.context.workspace, /^<workspace name="Feature">[\s\S]*Build the thing\.[\s\S]*<\/workspace>$/);
+  assert.equal(first.context.task.startsWith('<task>'), true);
+  assert.equal(first.steps.length, 1);
+  assert.equal(first.steps[0].input, agent.calls[0].message, 'the step\'s input is what the agent was sent');
+  assert.deepEqual(first.steps[0].tools.map((tool) => [tool.name, tool.input, tool.result.excerpt]), [['Read', { file_path: 'a.txt' }, 'one\ntwo']]);
+  assert.match(first.steps[0].output, /NEEDS YOU: Blue or green\?/);
+  await builds.reply(ctx, project.id, id, 'Green.');
+  await turned(project, id, 2);
+  const second = runLog.get(`${id}:2`);
+  assert.deepEqual(second.context, { reply: agent.calls[1].message }, 'a later turn: what it was sent');
+  assert.match(second.steps[0].input, /<reply>\nGreen\.\n<\/reply>/);
+  assert.deepEqual([second.turn, second.status, second.ending, second.steps[0].output], [2, 'done', 'review', 'Painted it green.']);
+  assert.deepEqual(runLog.list().map((run) => run.id), [`${id}:2`, `${id}:1`]);
+});
+
+test('the Agent map: a failed turn is recorded failed, and a manager without a run log runs as before', async () => {
+  const { createRunLog } = require('../src/main/bart/runlog.cjs');
+  const { project, workspace } = await scene();
+  const runLog = createRunLog();
+  const { builds } = manager(scripted([Object.assign(new Error('The agent fell over.'), { kind: 'failed' })]), { runLog });
+  const { id } = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  await settled(project, id);
+  assert.deepEqual([runLog.get(`${id}:1`).status, runLog.get(`${id}:1`).error, runLog.get(`${id}:1`).ending], ['failed', 'The agent fell over.', null]);
+  const other = await scene();
+  const plain = scripted([({ onEvent }) => { assert.equal(onEvent, undefined, 'no run log: nothing to give events to'); return 'Done.'; }]);
+  const { builds: without } = manager(plain);
+  const started = await without.start(ctx, other.project.id, { workspaceId: other.workspace.id });
+  const task = await settled(other.project, started.id);
+  assert.equal(task.status, 'review');
+  // The fake runner, with and without a watcher.
+  const fake = createFakeRunner({ delayMs: 0 });
+  const worktree = fs.mkdtempSync(path.join(homeDir, 'fake-'));
+  const seen = [];
+  await fake.turn({ task: { kind: 'build', worktree, modelName: 'Opus', effort: 'high' }, message: 'go', onEvent: (event) => seen.push(event) });
+  assert.deepEqual(seen.map((event) => event.type), ['assistant', 'user'], 'its Write, and its result');
+  await fake.turn({ task: { kind: 'build', worktree, modelName: 'Opus', effort: 'high' }, message: 'go' });
+});

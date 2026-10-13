@@ -1,11 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, errorMessage } from '../api.js';
-import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, modelLabel, sectionText, exportPage } from '../agent-map/runText.js';
+import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, modelLabel, sectionText, exportPage, filterRuns, runLabel, FILTERS, BUILD_AGENTS } from '../agent-map/runText.js';
 
 // The Agent map (2026-10-12; src/main/agent-map): a window for developers only, the app's renderer at ?view=agent-map.
-// Runs: every @bart, @brainstorm and @discover run, newest first, live (engelbart:agent-run), and the one selected in
-// sections: its system prompt, its context block by block, each model step (the input, its tool calls, what it said) and
-// what was written. Design: each agent as it is set up now. Plain and dense on purpose: one font, small type, thin rules.
+// Runs: every @bart, @brainstorm and @discover run, each Build turn and each run step after one, newest first, live
+// (engelbart:agent-run), filtered to questions or Builds, and the one selected in sections: its system prompt, its context
+// block by block, each model step (the input, its tool calls, what it said) and what was written (a run step: its
+// runnables). Design: each agent as it is set up now, and which agents it hands work to. Plain and dense on purpose: one font, small type, thin rules.
 // Keys: j/k the next and previous run, 1–4 a section, c copies the open section, e exports the run (E every run).
 
 const SECTIONS = [['system', 'System prompt'], ['context', 'Context'], ['steps', 'Steps'], ['written', 'Written']];
@@ -76,7 +77,7 @@ function Step({ step, n }) {
     <div style={{ margin: '6px 0 10px 14px' }}>
       <div><b>step {n}</b> {step.name || step.model} <span style={S.dim}>({step.model}) · {step.effort}{step.ms != null ? ` · ${msLabel(step.ms)}` : step.output == null ? ' · running' : ''}</span>{step.escalated && <b style={{ color: '#9a6700' }}> · escalated</b>}</div>
       <Expand label={<>input <span style={S.dim}>{sizeLabel(step.input)}</span></>} text={step.input} />
-      <div style={{ ...S.sub, ...S.dim }}>tool calls ({step.tools.length})</div>
+      <div style={{ ...S.sub, ...S.dim }}>tool calls ({step.tools.length}{step.toolsDropped ? `, and ${step.toolsDropped.toLocaleString('en-US')} more not kept` : ''})</div>
       {step.tools.map((tool, i) => <ToolCall key={tool.id || i} tool={tool} from={step.at} />)}
       <Expand label={<>output <span style={S.dim}>{step.output == null ? 'running' : sizeLabel(step.output)}</span></>} text={step.output == null ? '' : step.output} open={step.output != null} />
     </div>
@@ -88,8 +89,8 @@ function RunDetail({ record, open, onToggle }) {
   const total = blocks.reduce((sum, block) => sum + block.text.length, 0);
   return (
     <div>
-      <div><b>@{record.agent}</b> {firstWords(record.question, 30)}</div>
-      <div style={S.dim}>{record.status} · {record.provider} · {record.projectName}{record.workspaceName ? ` / ${record.workspaceName}` : ''} · {timeLabel(record.at)}{record.ms != null ? ` · ${msLabel(record.ms)}` : ''}{record.mode ? ` · ${record.mode}` : ''}{record.pinned ? ' · picked by hand' : ''} · {record.id}</div>
+      <div><b>{runLabel(record)}</b> {BUILD_AGENTS.includes(record.agent) ? null : firstWords(record.question, 30)}</div>
+      <div style={S.dim}>{record.status}{record.buildId ? ` · Build ${record.buildId}` : ''}{record.ending ? ` · ended: ${record.ending}` : ''} · {record.provider} · {record.projectName}{record.workspaceName ? ` / ${record.workspaceName}` : ''} · {timeLabel(record.at)}{record.ms != null ? ` · ${msLabel(record.ms)}` : ''}{record.mode ? ` · ${record.mode}` : ''}{record.pinned ? ' · picked by hand' : ''} · {record.id}</div>
       {record.error && <div style={S.error}>{record.status}: {record.error}</div>}
       <Section n={1} id="system" title="System prompt" note={sizeLabel(record.system)} open={open === 'system'} onToggle={onToggle}>
         <pre style={S.pre}>{record.system}</pre>
@@ -100,38 +101,95 @@ function RunDetail({ record, open, onToggle }) {
       <Section n={3} id="steps" title="Steps" note={`${record.steps.length}`} open={open === 'steps'} onToggle={onToggle}>
         {record.steps.length ? record.steps.map((step, i) => <Step key={i} step={step} n={i + 1} />) : <div style={{ ...S.sub, ...S.dim }}>no model run</div>}
       </Section>
-      <Section n={4} id="written" title="Written" note={record.written ? `${record.written.length} lines` : record.status === 'running' ? 'running' : 'nothing'} open={open === 'written'} onToggle={onToggle}>
+      <Section n={4} id="written" title="Written" note={record.written ? `${record.written.length} ${record.agent === 'run step' ? 'runnables' : 'lines'}` : record.status === 'running' ? 'running' : 'nothing'} open={open === 'written'} onToggle={onToggle}>
         <pre style={S.pre}>{writtenText(record) || '(nothing)'}</pre>
       </Section>
     </div>
   );
 }
 
-function Design({ design }) {
+const stepText = (step) => `${step.name} (${step.model}) at ${step.effort}`;
+
+/** One agent's tools on each provider: a question agent's flags, Build's tools and overrides, the run step's own tools. */
+function DesignTools({ tools }) {
+  const claude = tools.anthropic, codex = tools.openai;
+  return (
+    <>
+      {claude && <div style={S.sub}>tools · Claude: {claude.restricted && 'restricted · '}<code>--tools "{claude.tools}"</code> {claude.allowedTools != null && <code>--allowedTools "{claude.allowedTools}"</code>}{claude.settingSources && <> <code>--setting-sources {claude.settingSources}</code></>}</div>}
+      {claude && claude.personal && <div style={{ ...S.sub, marginLeft: 28 }}>plus {claude.personal}</div>}
+      {claude && claude.engelbart && <div style={{ ...S.sub, marginLeft: 28 }}>Engelbart's MCP tools: {claude.engelbart.join(', ')}</div>}
+      {claude && claude.deny && <Expand label={<>refused to the edit tools <span style={S.dim}>{claude.deny.length} rules</span></>} text={claude.deny.join('\n')} />}
+      {codex === null ? <div style={S.sub}>tools · Codex: <span style={S.dim}>none (Claude Code only)</span></div>
+        : codex && codex.overrides ? <Expand label={<>tools · Codex: what codexOverrides sets <span style={S.dim}>{codex.overrides.length} -c values</span></>} text={codex.overrides.join('\n')} />
+          : codex && <div style={S.sub}>tools · Codex: web search {codex.webSearch ? 'on' : 'off'} · paper MCP {codex.papers ? 'on' : 'off'} · sandbox {codex.sandbox}</div>}
+    </>
+  );
+}
+
+function DesignModels({ models }) {
+  return (
+    <>
+      {models.rule && <div style={S.sub}>model: {models.rule}{models.fallback ? <span style={S.dim}> (now {stepText(models.fallback)})</span> : ''}</div>}
+      {models.error && <div style={{ ...S.sub, color: '#a00' }}>{models.error}</div>}
+      {Object.entries(models.providers || {}).map(([provider, set]) => (
+        <div key={provider} style={S.sub}>
+          models · {provider}{provider === models.inForce ? <b> (in force)</b> : ''}:{' '}
+          {set.error ? <span style={{ color: '#a00' }}>{set.error}</span>
+            : set.steps ? set.steps.map(stepText).join(' → ')
+              : Object.entries(set.modes || {}).map(([mode, steps]) => `${mode}: ${steps.map(stepText).join(', ')}`).join(' · ')}
+          {set.models && <span style={S.dim}> · offers {set.models.map((model) => `${model.name} (${model.model})`).join(', ')} at {set.efforts.join(', ')}</span>}
+        </div>
+      ))}
+    </>
+  );
+}
+
+export function Design({ design }) {
   if (!design) return <div style={S.dim}>Loading…</div>;
   return (
     <div>
       {design.agents.map((agent) => (
         <div key={agent.agent} style={{ borderTop: RULE, padding: '6px 0 10px' }}>
           <div><b>@{agent.agent}</b></div>
-          <Expand label={<>system prompt <span style={S.dim}>{agent.prompt.custom ? `custom (${agent.prompt.file})` : 'built-in'} · {sizeLabel(agent.prompt.text)}</span></>} text={agent.prompt.text} />
-          <div style={S.sub}>tools · Claude: <code>--tools "{agent.tools.anthropic.tools}"</code> <code>--allowedTools "{agent.tools.anthropic.allowedTools}"</code></div>
-          <div style={S.sub}>tools · Codex: web search {agent.tools.openai.webSearch ? 'on' : 'off'} · paper MCP {agent.tools.openai.papers ? 'on' : 'off'} · sandbox {agent.tools.openai.sandbox}</div>
-          {Object.entries(agent.models.providers).map(([provider, set]) => (
-            <div key={provider} style={S.sub}>
-              models · {provider}{provider === agent.models.inForce ? <b> (in force)</b> : ''}:{' '}
-              {set.error ? <span style={{ color: '#a00' }}>{set.error}</span>
-                : set.steps ? set.steps.map((step) => `${step.name} (${step.model}) at ${step.effort}`).join(' → ')
-                  : Object.entries(set.modes || {}).map(([mode, steps]) => `${mode}: ${steps.map((step) => `${step.name} (${step.model}) at ${step.effort}`).join(', ')}`).join(' · ')}
-            </div>
-          ))}
-          <div style={S.sub}>timeout: {Object.entries(agent.timeout).map(([key, ms]) => `${key} ${msLabel(ms)}`).join(' · ')}</div>
+          {agent.prompt.note && <div style={{ ...S.sub, ...S.dim }}>system prompt: {agent.prompt.note}</div>}
+          <Expand label={<>{agent.prompt.note ? 'prompt template' : 'system prompt'} <span style={S.dim}>{agent.prompt.note ? 'per Build' : agent.prompt.custom ? `custom (${agent.prompt.file})` : 'built-in'} · {sizeLabel(agent.prompt.text)}</span></>} text={agent.prompt.text} />
+          {agent.prompt.quick && <Expand label={<>a quick task's system prompt <span style={S.dim}>{sizeLabel(agent.prompt.quick)}</span></>} text={agent.prompt.quick} />}
+          <DesignTools tools={agent.tools} />
+          {agent.reach && <div style={S.sub}>reach: <span style={S.dim}>{agent.reach}</span></div>}
+          <DesignModels models={agent.models} />
+          <div style={S.sub}>{agent.agent === 'build' ? 'turn time' : 'time'}: {Object.entries(agent.timeout).map(([key, ms]) => `${key} ${msLabel(ms)}`).join(' · ')}{agent.maxTurns ? ` · at most ${agent.maxTurns} turns` : ''}</div>
+          {agent.slots && <div style={S.sub}>slots at once: {Object.entries(agent.slots).map(([key, n]) => `${key} ${n}`).join(' · ')}</div>}
           <div style={S.sub}>context, a new session:</div>
           {agent.context.blocks.map((block) => <div key={block.block} style={{ marginLeft: 28 }}>{block.block} <span style={S.dim}>— {block.note}</span></div>)}
-          <div style={S.sub}>a resumed session: {agent.context.resumed.join(', ')}</div>
+          {agent.context.resumed.length ? <div style={S.sub}>{agent.agent === 'build' ? 'a later turn' : 'a resumed session'}: {agent.context.resumed.join('; ')}</div> : null}
           <div style={S.sub}>folders: {agent.context.dirs}</div>
+          {agent.ends && <div style={S.sub}>a turn ends: {agent.ends.map((end) => <div key={end.line} style={{ marginLeft: 14 }}><code>{end.line}</code> <span style={S.dim}>— {end.means}</span></div>)}</div>}
+          {agent.startedFrom && <div style={S.sub}>started from: {agent.startedFrom.join(' · ')}</div>}
+          <div style={S.sub}>calls: {agent.calls && agent.calls.length ? agent.calls.map((call) => <span key={call.to}><b>@{call.to}</b> <span style={S.dim}>({call.how})</span> </span>) : <span style={S.dim}>none</span>}</div>
         </div>
       ))}
+    </div>
+  );
+}
+
+/** The list of runs, with its filter: All, Questions (@bart, @brainstorm, @discover) or Builds (turns and run steps). */
+export function RunList({ runs, selected, filter, onSelect, onFilter }) {
+  const shown = filterRuns(runs, filter);
+  return (
+    <div>
+      <div style={{ display: 'flex', gap: 10, padding: '4px 10px', borderBottom: RULE }}>
+        {FILTERS.map(([id, label]) => <button key={id} type="button" style={S.tab(filter === id)} onClick={() => onFilter(id)}>{label}</button>)}
+      </div>
+      {shown.length ? shown.map((run) => {
+        const build = BUILD_AGENTS.includes(run.agent);
+        return (
+          <div key={run.id} style={S.row(run.id === selected)} onClick={() => onSelect(run.id)}>
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{dot(run.status)} <b>{runLabel(run)}</b> <span style={S.dim}>{modelLabel(run)}</span>{run.toolCount ? <span style={S.dim}> · {run.toolCount}{run.toolsDropped ? `+${run.toolsDropped}` : ''} tools</span> : null}</div>
+            <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{build ? <span style={S.dim}>{run.kind === 'quick' ? `${firstWords(run.title)} · ` : ''}Build {run.buildId}{run.ending ? ` · ${run.ending}` : ''}</span> : firstWords(run.question)}</div>
+            <div style={S.dim}>{run.projectName}{run.workspaceName ? ` / ${run.workspaceName}` : ''} · {timeLabel(run.at)}</div>
+          </div>
+        );
+      }) : <div style={{ padding: 10, ...S.dim }}>{runs.length ? 'None of these yet.' : 'No runs yet. Ask @bart, @brainstorm or @discover, or start a Build, in any window.'}</div>}
     </div>
   );
 }
@@ -144,6 +202,7 @@ export default function AgentMap() {
   const [open, setOpen] = useState('steps');
   const [design, setDesign] = useState(null);
   const [note, setNote] = useState('');
+  const [filter, setFilter] = useState('all');
   const selectedRef = useRef(null);
   const refetch = useRef(null);
   selectedRef.current = selected;
@@ -176,7 +235,7 @@ export default function AgentMap() {
       const records = all ? (await Promise.all(runs.map((run) => api.agentRun(run.id)))).filter(Boolean) : record ? [record] : [];
       if (!records.length) { setNote('Nothing to export.'); return; }
       const name = all ? `agent-runs-${new Date().toISOString().slice(0, 10)}` : `agent-run-${records[0].agent}-${records[0].id.slice(0, 8)}`;
-      const saved = await api.exportAgentRuns(exportPage(records, all ? 'Agent runs' : `@${records[0].agent}: ${firstWords(records[0].question, 12)}`), name);
+      const saved = await api.exportAgentRuns(exportPage(records, all ? 'Agent runs' : `${runLabel(records[0])}: ${firstWords(records[0].question, 12)}`), name);
       setNote(saved ? `Saved ${saved}` : 'Not saved.');
     } catch (error) { setNote(errorMessage(error)); }
   }, [runs, record]);
@@ -184,9 +243,10 @@ export default function AgentMap() {
   useEffect(() => {
     const onKey = (event) => {
       if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA)$/.test(event.target.tagName)) return;
-      const at = runs.findIndex((run) => run.id === selected);
-      if (event.key === 'j' && runs.length) setSelected(runs[Math.min(runs.length - 1, at + 1)].id);
-      else if (event.key === 'k' && runs.length) setSelected(runs[Math.max(0, at - 1)].id);
+      const shown = filterRuns(runs, filter);
+      const at = shown.findIndex((run) => run.id === selected);
+      if (event.key === 'j' && shown.length) setSelected(shown[Math.min(shown.length - 1, at + 1)].id);
+      else if (event.key === 'k' && shown.length) setSelected(shown[Math.max(0, at - 1)].id);
       else if (/^[1-4]$/.test(event.key)) { setTab('runs'); setOpen(SECTIONS[Number(event.key) - 1][0]); }
       else if (event.key === 'c' && record && open) {
         const text = sectionText(record, open);
@@ -197,15 +257,9 @@ export default function AgentMap() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [runs, selected, record, open, exportRuns]);
+  }, [runs, selected, record, open, exportRuns, filter]);
 
-  const rows = useMemo(() => runs.map((run) => (
-    <div key={run.id} style={S.row(run.id === selected)} onClick={() => setSelected(run.id)}>
-      <div>{dot(run.status)} <b>@{run.agent}</b> <span style={S.dim}>{modelLabel(run)}</span>{run.toolCount ? <span style={S.dim}> · {run.toolCount} tools</span> : null}</div>
-      <div style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{firstWords(run.question)}</div>
-      <div style={S.dim}>{run.projectName}{run.workspaceName ? ` / ${run.workspaceName}` : ''} · {timeLabel(run.at)}</div>
-    </div>
-  )), [runs, selected]);
+  const list = useMemo(() => <RunList runs={runs} selected={selected} filter={filter} onSelect={setSelected} onFilter={setFilter} />, [runs, selected, filter]);
 
   return (
     <div style={S.root}>
@@ -220,7 +274,7 @@ export default function AgentMap() {
       </div>
       {tab === 'runs' ? (
         <div style={S.body}>
-          <div style={S.list}>{rows.length ? rows : <div style={{ padding: 10, ...S.dim }}>No runs yet. Ask @bart, @brainstorm or @discover in any window.</div>}</div>
+          <div style={S.list}>{list}</div>
           <div style={S.detail}>{record ? <RunDetail record={record} open={open} onToggle={toggle} /> : <div style={S.dim}>{runs.length ? 'Loading…' : ''}</div>}</div>
         </div>
       ) : (

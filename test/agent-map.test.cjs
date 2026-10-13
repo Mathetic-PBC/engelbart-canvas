@@ -25,6 +25,13 @@ const { registerAgentMapIpc } = require('../src/main/agent-map/ipc.cjs');
 const { createStore, registerEngelbartIpc } = require('../src/main/ipc.cjs');
 const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('../src/main/bart/brainstorm-system-prompt.cjs');
+const { MAX_TOOLS } = require('../src/main/bart/runlog.cjs');
+const { BUILD_SYSTEM_PROMPT, QUICK_PARAGRAPH } = require('../src/main/build/prompt.cjs');
+const { CLAUDE_TOOLS: BUILD_TOOLS } = require('../src/main/build/runner.cjs');
+const { ENGELBART_TOOLS } = require('../src/main/build/engelbart-tools.cjs');
+const { RUN_TOOLS } = require('../src/main/build/run-tools.cjs');
+const { RUNNABLE_MS, DECLARE_MS, INSTALL_MS, WIND_DOWN_MS, MAX_TURNS } = require('../src/main/build/run-step.cjs');
+const { LIMITS, TURN_MS } = require('../src/main/build/manager.cjs');
 
 const DEFAULTS = normalizeModels(null);
 const CLAUDE = { ...DEFAULTS, provider: 'anthropic' };
@@ -256,7 +263,7 @@ test('design: the three agents, their tools and model steps, and a custom .conte
   fs.writeFileSync(path.join(dataRoot, '.context', 'brainstorm-system-prompt.md'), 'Ask one question at a time.\n');
   fs.writeFileSync(path.join(dataRoot, '.context', 'bart-system-prompt.md'), '   \n');
   const { agents } = agentDesign({ dataRoot, models: CLAUDE });
-  assert.deepEqual(agents.map((agent) => agent.agent), ['bart', 'brainstorm', 'discover']);
+  assert.deepEqual(agents.map((agent) => agent.agent), ['bart', 'brainstorm', 'discover', 'build', 'run step']);
   const [bart, brainstorm, discover] = agents;
   assert.deepEqual([bart.prompt.custom, bart.prompt.text], [false, BART_SYSTEM_PROMPT], 'a prompt file with nothing in it is not custom');
   assert.deepEqual([brainstorm.prompt.custom, brainstorm.prompt.text], [true, 'Ask one question at a time.']);
@@ -270,6 +277,64 @@ test('design: the three agents, their tools and model steps, and a custom .conte
   assert.deepEqual([bart.timeout.step, discover.timeout.deep], [15 * 60_000, 45 * 60_000]);
   assert.ok(brainstorm.context.blocks.some((block) => /\[agent reply omitted\]/.test(block.note)), '@brainstorm\'s documents leave other agents\' replies out');
   assert.ok(bart.context.blocks.some((block) => /<stage>/.test(block.block)) && !brainstorm.context.blocks.some((block) => /<stage> \//.test(block.block)));
+});
+
+test('design: Build and the run step after it, their tools, models, time limits and context blocks, and who calls whom (2026-10-12)', () => {
+  const dataRoot = tmp('design-build');
+  const { agents } = agentDesign({ dataRoot, models: CLAUDE, buildModels: DEFAULTS });
+  const build = agents.find((agent) => agent.agent === 'build');
+  const step = agents.find((agent) => agent.agent === 'run step');
+  assert.deepEqual([build.prompt.custom, build.prompt.text, build.prompt.quick], [false, BUILD_SYSTEM_PROMPT, `${BUILD_SYSTEM_PROMPT}\n\n${QUICK_PARAGRAPH}`]);
+  assert.equal(build.tools.anthropic.tools, BUILD_TOOLS);
+  assert.equal(build.tools.anthropic.settingSources, 'user,project,local');
+  assert.match(build.tools.anthropic.personal, /own Claude Code settings, hooks and MCP servers/);
+  assert.deepEqual(build.tools.anthropic.engelbart, ENGELBART_TOOLS.map((tool) => `mcp__engelbart__${tool.name}`));
+  assert.ok(build.tools.openai.overrides.includes('features.multi_agent=true') && build.tools.openai.overrides.includes('features.computer_use=false'), 'what codexOverrides sets');
+  assert.match(build.reach, /worktree/);
+  assert.match(build.reach, /git guard/);
+  assert.match(build.reach, /Kept aside/);
+  assert.equal(build.models.inForce, 'anthropic');
+  assert.deepEqual(build.models.providers.anthropic.steps.map((one) => `${one.name} ${one.effort}`), ['Opus high']);
+  assert.deepEqual(build.models.providers.openai.steps.map((one) => `${one.name} ${one.effort}`), ['Sol high']);
+  assert.deepEqual([build.timeout, build.slots], [{ build: TURN_MS.build, quick: TURN_MS.quick }, { build: LIMITS.build, quick: LIMITS.quick }]);
+  assert.deepEqual(build.context.blocks.map((block) => block.block), ['<engelbart>', '<custom_instructions> / <memory>', '<task>', '<workspace>', '<attached>', '<history>', '<context_json>']);
+  assert.match(build.context.blocks.find((block) => block.block === '<workspace>').note, /<request> instead.*<post-it>/);
+  assert.deepEqual(build.ends.map((end) => end.line.split(':')[0]), ['NEEDS YOU', 'ESCALATE', '(anything else)']);
+  assert.equal(build.startedFrom.length, 3);
+  assert.match(step.prompt.note, /launch facts/);
+  assert.match(step.prompt.text, /You are the run step of an Engelbart Build/);
+  assert.equal(step.tools.anthropic.allowedTools, RUN_TOOLS.map((tool) => `mcp__canvas__${tool.name}`).join(','));
+  assert.deepEqual([step.tools.anthropic.tools, step.tools.anthropic.restricted, step.tools.openai], ['', true, null], 'Engelbart\'s run tools only, Claude only, restricted');
+  assert.deepEqual([step.models.fallback.name, step.models.fallback.effort], ['Opus', 'high']);
+  assert.deepEqual([step.timeout, step.maxTurns], [{ runnable: RUNNABLE_MS, declare: DECLARE_MS, install: INSTALL_MS, windDown: WIND_DOWN_MS }, MAX_TURNS]);
+  const calls = Object.fromEntries(agents.map((agent) => [agent.agent, agent.calls.map((call) => call.to)]));
+  assert.deepEqual(calls, { bart: ['build'], brainstorm: ['discover', 'bart'], discover: [], build: ['run step'], 'run step': [] });
+  // A custom Build prompt shows as custom, its quick task's with the quick paragraph after it.
+  fs.mkdirSync(path.join(dataRoot, '.context'));
+  fs.writeFileSync(path.join(dataRoot, '.context', 'build-system-prompt.md'), 'Build carefully.\n');
+  const custom = agentDesign({ dataRoot, models: CLAUDE, buildModels: DEFAULTS }).agents.find((agent) => agent.agent === 'build');
+  assert.deepEqual([custom.prompt.custom, custom.prompt.text, custom.prompt.file], [true, 'Build carefully.', path.join(dataRoot, '.context', 'build-system-prompt.md')]);
+  assert.equal(custom.prompt.quick, `Build carefully.\n\n${QUICK_PARAGRAPH}`);
+});
+
+test('run log: a step keeps its first 1,000 tool calls and counts the rest, whatever their results (2026-10-12)', () => {
+  const log = createRunLog();
+  log.start({ id: 'b:1', agent: 'build', system: 'S' });
+  log.step('b:1', { model: 'opus', input: 'go' });
+  for (let i = 0; i < MAX_TOOLS + 25; i += 1) { log.event('b:1', toolUse(`t${i}`, 'Read', { i })); log.event('b:1', toolResult(`t${i}`, 'x')); }
+  log.event('b:1', { type: 'item.started', item: { id: 'c1', type: 'command_execution', command: 'ls' } });
+  log.event('b:1', { type: 'item.completed', item: { id: 'c1', type: 'command_execution', command: 'ls', aggregated_output: '', exit_code: 0 } });
+  const [step] = log.get('b:1').steps;
+  assert.equal(MAX_TOOLS, 1000);
+  assert.equal(step.tools.length, 1000);
+  assert.equal(step.toolsDropped, 26, 'a Codex command counted once, started and completed');
+  assert.ok(step.tools.every((tool) => tool.result), 'the kept ones have their results');
+  const [summary] = log.list();
+  assert.deepEqual([summary.toolCount, summary.toolsDropped], [1000, 26]);
+  log.note('b:1', { context: { prompt: 'P' }, id: 'other', status: 'x' });
+  log.finish('b:1', { status: 'done', ending: 'review' });
+  const record = log.get('b:1');
+  assert.deepEqual([record.id, record.status, record.ending, record.context], ['b:1', 'done', 'review', { prompt: 'P' }], 'note merges fields but never the id or status');
 });
 
 /* ------------------------------------------------------------- the button and the page */
@@ -368,4 +433,44 @@ test('the export is one page, its styles and data inside it', () => {
   assert.match(page, /&lt;engelbart&gt;/);
   assert.match(page, /<script type="application\/json" id="agent-runs">.*\\u003c\/script>/, 'the data cannot close its script');
   assert.match(sectionText(record, 'steps'), /--- tool: Read ---\n\{\n  "file_path": "\/x"\n\}\n--- result \(3 chars\) ---\nabc/);
+});
+
+test('the runs list: a Build turn and a run step by their own names, and the filter shows only Builds or only questions (2026-10-12)', () => {
+  const { RunList } = compile('src/renderer/screens/AgentMap.jsx', 'agent-map-screen');
+  const { contextBlocks } = compile('src/renderer/agent-map/runText.js', 'run-text-build');
+  const runs = [
+    { id: 'b1:2', agent: 'build', kind: 'build', buildId: 'b1', title: 'Add a page', turn: 2, ending: 'review', status: 'done', at: 3, question: 'Add a page', projectName: 'P' },
+    { id: 'b1:run:2', agent: 'run step', buildId: 'b1', title: 'Add a page', turn: 2, status: 'running', at: 4, question: 'Add a page', projectName: 'P' },
+    { id: 'q1:1', agent: 'build', kind: 'quick', buildId: 'q1', title: 'Fix the typo', turn: 1, status: 'done', at: 2, question: 'Fix the typo', projectName: 'P' },
+    { id: 'a1', agent: 'bart', status: 'done', at: 1, question: 'what does the parser do', projectName: 'P' },
+    { id: 'a2', agent: 'discover', status: 'done', at: 0, question: 'papers on parsing', projectName: 'P' },
+  ];
+  const html = (filter) => renderToStaticMarkup(React.createElement(RunList, { runs, selected: null, filter, onSelect: () => {}, onFilter: () => {} }));
+  const all = html('all');
+  assert.match(all, /@build Add a page · turn 2/);
+  assert.match(all, /@build quick/);
+  assert.match(all, /@run step Add a page/);
+  assert.match(all, /@bart/);
+  assert.match(all, />All<.*>Questions<.*>Builds</);
+  const builds = html('builds');
+  assert.ok(/@build Add a page/.test(builds) && /@run step/.test(builds) && /@build quick/.test(builds));
+  assert.ok(!/@bart|@discover/.test(builds), 'Builds: no questions');
+  const questions = html('questions');
+  assert.ok(/@bart/.test(questions) && /@discover/.test(questions));
+  assert.ok(!/@build|@run step/.test(questions), 'Questions: no Builds');
+  // A Build's context is shown block by block, as it was sent.
+  assert.deepEqual(contextBlocks({ agent: 'build', context: { engelbart: '<engelbart>\nx\n</engelbart>', task: '<task>\ny\n</task>', request: '<request>\nz\n</request>' } }).map((block) => block.label), ['<engelbart>', '<task>', '<request>']);
+  assert.deepEqual(contextBlocks({ agent: 'run step', context: { prompt: 'P' } }).map((block) => [block.label, block.text]), [['prompt', 'P']]);
+});
+
+test('the Design tab draws Build and the run step beside the question agents, each with what it calls (2026-10-12)', () => {
+  const { Design } = compile('src/renderer/screens/AgentMap.jsx', 'agent-map-design');
+  const page = renderToStaticMarkup(React.createElement(Design, { design: agentDesign({ dataRoot: tmp('design-page'), models: CLAUDE, buildModels: DEFAULTS }) }));
+  for (const name of ['@bart', '@brainstorm', '@discover', '@build', '@run step']) assert.ok(page.includes(`<b>${name}</b>`), name);
+  assert.match(page, /a quick task&#x27;s system prompt/);
+  assert.match(page, /what codexOverrides sets/);
+  assert.match(page, /NEEDS YOU: &lt;question&gt;/);
+  assert.match(page, /slots at once: build 3 · quick 1/);
+  assert.match(page, /calls: <span><b>@build<\/b>/);
+  assert.match(page, /tools · Codex: <span[^>]*>none \(Claude Code only\)/);
 });

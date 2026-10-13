@@ -100,7 +100,9 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
    * token }; none: no `engelbart` server). → { text, session }; throws TurnError (a stopped one carries the session when
    * it had one: Claude Code's is named before it starts, Codex's is read from what it printed so far).
    */
-  async function turn({ task, message, session = null, system, policy, engelbart = null, signal, timeoutMs, onUpdate = () => {} }) {
+  async function turn({ task, message, session = null, system, policy, engelbart = null, signal, timeoutMs, onUpdate = () => {}, onEvent = () => {} }) {
+    // `onEvent(raw)`: each event the CLI streams, before it becomes an update (the Agent map's record; never in the way).
+    const raw = (event) => { try { onEvent(event); } catch { /* the map's problem, never the Build's */ } };
     fs.mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
     const stem = path.join(runDirectory, `${task.id}-${randomUUID()}`);
     const input = `${stem}.input.txt`;
@@ -125,7 +127,7 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
         const command = `${guardFirst}exec ${program('claude')} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BUILD_SESSION" --setting-sources ${SETTING_SOURCES}${server ? ' --mcp-config "$ENGELBART_BUILD_MCP"' : ''} --no-chrome --tools "${CLAUDE_TOOLS}" --permission-mode auto --permission-prompts none ${grants} --settings "$ENGELBART_BUILD_SETTINGS" --model "$ENGELBART_BUILD_MODEL" --effort ${task.effort} --append-system-prompt-file "$ENGELBART_BUILD_PROMPT" < "$ENGELBART_BUILD_INPUT"`;
         const env = childEnvironment({ ...programEnv('claude'), ...guarded, ENGELBART_BUILD_SESSION: id, ENGELBART_BUILD_MODEL: task.modelId, ENGELBART_BUILD_PROMPT: promptFile, ENGELBART_BUILD_SETTINGS: settingsFile, ...(server ? { ENGELBART_BUILD_MCP: mcpFile } : {}), ENGELBART_BUILD_INPUT: input, ...Object.fromEntries(policy.folders.map((dir, n) => [`ENGELBART_BUILD_DIR${n}`, dir])) });
         try {
-          const { stdout, failure } = await execute(command, task.worktree, env, { signal, timeoutMs, onEvent: (event) => onUpdate(claudeUpdate(event, short)) });
+          const { stdout, failure } = await execute(command, task.worktree, env, { signal, timeoutMs, onEvent: (event) => { raw(event); onUpdate(claudeUpdate(event, short)); } });
           if (signal && signal.aborted) throw new TurnError('stopped', 'Stopped.', id);
           const result = lastResultLine(stdout);
           if (!result) throw new TurnError(notFound(failure) ? 'unavailable' : 'failed', notFound(failure) ? 'Claude Code was not found on the login shell PATH.' : timedOut(failure) ? 'The turn ran past its time limit and was stopped.' : `Claude Code did not return a result${failure ? ` (${failure.message.split('\n')[0]})` : ''}.`);
@@ -144,7 +146,7 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
       const command = `${guardFirst}${session ? `exec ${program('codex')} exec resume "$ENGELBART_BUILD_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${shared}`}`;
       const env = childEnvironment({ ...programEnv('codex'), ...guarded, ...(codexHome ? { CODEX_HOME: codexHome } : {}), ENGELBART_BUILD_SESSION: session || '', ENGELBART_BUILD_MODEL: task.modelId, ENGELBART_BUILD_OUTPUT: outFile, ENGELBART_BUILD_INPUT: input, ...Object.fromEntries(overrides.map((value, n) => [`ENGELBART_BUILD_C${n}`, value])) });
       try {
-        const { stdout, failure } = await execute(command, task.worktree, env, { signal, timeoutMs, onEvent: (event) => onUpdate(codexUpdate(event, short)) });
+        const { stdout, failure } = await execute(command, task.worktree, env, { signal, timeoutMs, onEvent: (event) => { raw(event); onUpdate(codexUpdate(event, short)); } });
         let thread = session;
         for (const line of String(stdout || '').split(/\r?\n/)) {
           if (thread || !line.startsWith('{')) continue;
@@ -178,7 +180,8 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
 function createFakeRunner({ delayMs = 900 } = {}) {
   const waits = new Map();
   return {
-    async turn({ task, message, session = null, signal, onUpdate = () => {} }) {
+    async turn({ task, message, session = null, signal, onUpdate = () => {}, onEvent = () => {} }) {
+      const raw = (event) => { try { onEvent(event); } catch { /* never in the way */ } };
       const pause = (ms) => new Promise((resolve, reject) => {
         const timer = setTimeout(resolve, ms);
         const stop = () => { clearTimeout(timer); reject(new TurnError('stopped', 'Stopped.', session || 'fake-session')); };
@@ -191,9 +194,12 @@ function createFakeRunner({ delayMs = 900 } = {}) {
       if (task.kind === 'quick' && /escalate/i.test(said) && !session) return { text: 'ESCALATE: the fake agent was asked to escalate.', session: 'fake-session' };
       onUpdate({ activity: 'Editing BUILD-FAKE.md', log: true });
       const file = path.join(task.worktree, 'BUILD-FAKE.md');
+      // The tool call it makes, as Claude Code streams one: the Agent map records it.
+      raw({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'fake-write', name: 'Write', input: { file_path: file } }] } });
       let held = '';
       try { held = fs.readFileSync(file, 'utf8'); } catch { held = ''; }
       fs.writeFileSync(file, `${held}turn ${(held.match(/\n/g) || []).length + 1}: ${said.includes('<reply>') ? said.replace(/[\s\S]*<reply>\n?|\n?<\/reply>[\s\S]*/g, '').slice(0, 80) : 'first'}\n`);
+      raw({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: 'fake-write', content: 'written' }] } });
       await pause(delayMs / 3);
       onUpdate({ textStart: true });
       onUpdate({ delta: 'FAKE BUILD' });
@@ -205,4 +211,4 @@ function createFakeRunner({ delayMs = 900 } = {}) {
   };
 }
 
-module.exports = { createRunner, createFakeRunner, TurnError, CLAUDE_TOOLS, codexOverrides };
+module.exports = { createRunner, createFakeRunner, TurnError, CLAUDE_TOOLS, SETTING_SOURCES, codexOverrides };

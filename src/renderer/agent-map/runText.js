@@ -1,9 +1,33 @@
 // What the Agent map (../screens/AgentMap.jsx) reads off a run record (src/main/bart/runlog.cjs), and the page it exports:
 // one self-contained HTML file, its styles inline and the runs' data in it, sections as <details> so it needs no script.
 
+// The agents a question line runs, and the ones a Build runs (the list's filter).
+export const QUESTION_AGENTS = ['bart', 'brainstorm', 'discover'];
+export const BUILD_AGENTS = ['build', 'run step'];
+export const FILTERS = [['all', 'All'], ['questions', 'Questions'], ['builds', 'Builds']];
+
+/** The runs a filter of the list shows: 'all', 'questions' or 'builds'. */
+export function filterRuns(runs, filter) {
+  if (filter === 'questions') return runs.filter((run) => QUESTION_AGENTS.includes(run.agent));
+  if (filter === 'builds') return runs.filter((run) => BUILD_AGENTS.includes(run.agent));
+  return runs;
+}
+
+/** A run's name in the list and its header: "@bart", "@build <title> · turn n", "@build quick", "@run step <title>". */
+export function runLabel(run) {
+  if (!run) return '';
+  if (run.agent === 'build') return run.kind === 'quick' ? '@build quick' : `@build ${run.title || ''} · turn ${run.turn == null ? '?' : run.turn}`;
+  if (run.agent === 'run step') return `@run step ${run.title || ''}`;
+  return `@${run.agent}`;
+}
+
+const blockLabel = (key) => (key === 'prompt' ? 'prompt' : key === 'other' ? 'text outside any block' : key === 'reply' ? 'sent this turn (<reply>, or everything again)' : `<${key}>`);
+
 /** A run's context blocks, in the order the agent is sent them, as { key, label, text }. */
 export function contextBlocks(record) {
   const c = (record && record.context) || {};
+  // A Build turn (its message's blocks, or what a later turn was sent) and a run step (its prompt): as they were kept.
+  if (record && BUILD_AGENTS.includes(record.agent)) return Object.entries(c).map(([key, text]) => ({ key, label: blockLabel(key), text: text == null ? '' : String(text) }));
   return [
     ['head', '<engelbart>', c.head],
     ['contextJson', '<context_json>', c.contextJson],
@@ -43,6 +67,7 @@ export function sectionText(record, section) {
       `===== step ${n + 1}: ${step.name || step.model} (${step.model}) at ${step.effort}${step.escalated ? ' · escalated' : ''} =====`,
       '--- input ---', step.input,
       ...(step.tools || []).flatMap((tool) => [`--- tool: ${tool.name} ---`, json(tool.input), ...(tool.result ? [`--- result (${tool.result.size} chars${tool.result.error ? ', error' : ''}) ---`, tool.result.excerpt] : ['--- no result yet ---'])]),
+      ...(step.toolsDropped ? [`--- ${step.toolsDropped} more tool calls, not kept ---`] : []),
       '--- output ---', step.output == null ? '(running)' : step.output,
     ].join('\n')).join('\n\n');
   }
@@ -55,11 +80,11 @@ const pre = (text) => `<pre>${escape(text)}</pre>`;
 const details = (summary, body, open = false) => `<details${open ? ' open' : ''}><summary>${summary}</summary>${body}</details>`;
 
 function runHtml(record) {
-  const head = `${escape(record.agent)} · ${escape(modelLabel({ ...record, ...lastStep(record) }))} · ${escape(record.status)} · ${escape(record.projectName || '')}${record.workspaceName ? ` / ${escape(record.workspaceName)}` : ''} · ${escape(new Date(record.at).toISOString())}${record.ms != null ? ` · ${escape(msLabel(record.ms))}` : ''}`;
+  const head = `${escape(runLabel(record))}${record.buildId ? ` · Build ${escape(record.buildId)}` : ''}${record.ending ? ` · ${escape(record.ending)}` : ''} · ${escape(modelLabel({ ...record, ...lastStep(record) }))} · ${escape(record.status)} · ${escape(record.projectName || '')}${record.workspaceName ? ` / ${escape(record.workspaceName)}` : ''} · ${escape(new Date(record.at).toISOString())}${record.ms != null ? ` · ${escape(msLabel(record.ms))}` : ''}`;
   const steps = (record.steps || []).map((step, n) => details(
     `step ${n + 1}: ${escape(step.name || step.model)} <span class="dim">(${escape(step.model)}) · ${escape(step.effort)}${step.ms != null ? ` · ${escape(msLabel(step.ms))}` : ''}</span>${step.escalated ? ' <b>escalated</b>' : ''}`,
     details(`input <span class="dim">${escape(sizeLabel(step.input))}</span>`, pre(step.input))
-      + `<div class="sub">tool calls (${(step.tools || []).length})</div>`
+      + `<div class="sub">tool calls (${(step.tools || []).length}${step.toolsDropped ? `, and ${step.toolsDropped} more not kept` : ''})</div>`
       + (step.tools || []).map((tool) => details(`${escape(tool.name)} <span class="dim">${tool.ms != null ? escape(msLabel(tool.ms)) : 'running'}${tool.result ? ` · ${tool.result.size} chars` : ''}${tool.result && tool.result.error ? ' · error' : ''}</span>`, `<div class="sub">arguments</div>${pre(json(tool.input))}${tool.result ? `<div class="sub">result (first 2,000 characters)</div>${pre(tool.result.excerpt)}` : ''}`)).join('')
       + details(`output <span class="dim">${escape(sizeLabel(step.output))}</span>`, pre(step.output == null ? '(running)' : step.output), true),
     true,

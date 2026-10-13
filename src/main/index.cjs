@@ -688,6 +688,7 @@ if (!hasSingleInstanceLock) {
       libraryChanged, // the default repo's row made, a clone kept on its row, an agent's save_file: the sidebar reads the library again
       inspectPdf, // a pdf an agent moves into Engelbart is read for whether it is a paper
       keepDir: path.join(app.getPath('userData'), 'build-keep'), // a turn's library files kept aside (build/keep.cjs)
+      runLog, // the Agent map's record of each turn (a developer copy's only; none: nothing kept)
       // The run step after a turn that ends in review (build/run-step.cjs): Claude Code on the person's subscription finds
       // what the repository runs; Engelbart starts, checks and shows it (a UI in the Stage, a terminal program in a
       // terminal of its own, an app in its window). ENGELBART_RUN_STEP=off leaves it out; a scripted run
@@ -695,6 +696,7 @@ if (!hasSingleInstanceLock) {
       runStep: process.env.ENGELBART_RUN_STEP === 'off' ? null : createRunStep({
         processes: createRunProcesses({ environment: process.env, extraEnvironment: () => tools.environment() }),
         tools,
+        runLog, // the Agent map's record of each run step
         ...(process.env.ENGELBART_BUILD_FAKE === '1' || process.env.ENGELBART_RUN_FAKE === '1' ? { runAgent: createFakeRunAgent(), prepareClaude: async () => ({ file: 'fake', env: {} }) } : {}),
         // The command is typed once the shell has drawn its prompt (quiet for a moment, at most 3s): typed sooner, the
         // terminal echoes it and then the shell's line editor draws it again.
@@ -1151,7 +1153,7 @@ if (!hasSingleInstanceLock) {
       trustedHandler,
       mapWindow: agentMap,
       runLog,
-      design: () => agentDesign({ dataRoot: store.config().dataRoot, models: readModels('bart') }),
+      design: () => agentDesign({ dataRoot: store.config().dataRoot, models: readModels('bart'), buildModels: readModels('build') }),
       // The map's export: a page of its own, saved where the person picks.
       saveFile: async (text, name) => {
         const parent = agentMap.window();

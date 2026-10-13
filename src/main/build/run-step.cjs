@@ -101,7 +101,9 @@ ${triedNote(tried, uncovered)}`;
  * `openTerminal({ cwd, command })` → a terminal session running `command`; `closeTerminal(id)`; `terminalSnapshot(id)`.
  * `tools`: ../tools (the agent holds Claude Code's lock while it runs).
  */
-function createRunStep({ processes = createProcesses(), prepareClaude = () => prepareLocalClaude(), runAgent = runLocalClaude, discover = discoverLocal, kinds = RUN_KINDS, openTerminal = null, closeTerminal = null, terminalSnapshot = null, focusWindow = focusApp, tools = null, runnableMs = RUNNABLE_MS, declareMs = DECLARE_MS, windDownMs = WIND_DOWN_MS, installMs = INSTALL_MS, terminalMs = TERMINAL_MS, tickMs = 2000 } = {}) {
+function createRunStep({ processes = createProcesses(), prepareClaude = () => prepareLocalClaude(), runAgent = runLocalClaude, discover = discoverLocal, kinds = RUN_KINDS, openTerminal = null, closeTerminal = null, terminalSnapshot = null, focusWindow = focusApp, tools = null, runnableMs = RUNNABLE_MS, declareMs = DECLARE_MS, windDownMs = WIND_DOWN_MS, installMs = INSTALL_MS, terminalMs = TERMINAL_MS, tickMs = 2000, runLog = null } = {}) {
+  // The Agent map's record (../bart/runlog.cjs; a developer copy's only): one per run step, never in its way.
+  const logged = (method, ...args) => { if (!runLog) return; try { runLog[method](...args); } catch { /* the map's problem */ } };
   const jobs = new Map(); // Build id → { controller, done } while its run step works
   const held = new Map(); // Build id → { keys: Set, sessions: Set }: what it left running
 
@@ -118,8 +120,12 @@ function createRunStep({ processes = createProcesses(), prepareClaude = () => pr
    * Nothing is written to the repository's rows here: what passed and what failed stays on the Build's record until
    * Accept writes it (manager.cjs recordRunnables), so the stored commands are always ones an accepted Build ran.
    */
-  async function run({ id, root, name, libraryId, db, model, effort = null, changed = [], onState = () => {} }) {
+  async function run({ id, root, name, libraryId, db, model, effort = null, changed = [], onState = () => {}, turn = null, title = null, projectId = null, projectName = null, workspaceName = null }) {
     if (jobs.has(id)) throw new Error('A run step is already working for this Build.');
+    // Its record: linked to the Build by `buildId`; the prompt is known once the stored commands are tried.
+    const record = runLog ? `${id}:run:${turn == null ? 0 : turn}` : null;
+    if (record) logged('start', { id: record, agent: 'run step', buildId: id, title, turn, provider: 'anthropic', projectId, projectName, workspaceName, question: title || name, system: '', context: { prompt: '' } });
+    let failed = null;
     const controller = new AbortController();
     const { signal } = controller;
     let settle;
@@ -294,8 +300,13 @@ function createRunStep({ processes = createProcesses(), prepareClaude = () => pr
         })().catch(() => {});
       }, tickMs);
       if (watchdog.unref) watchdog.unref();
-      const agent = () => runAgent({ auth, bridge: bridge.connection, model, effort, maxTurns: MAX_TURNS, server: SERVER, signal,
-        prompt: prompt({ name, discovery, uncovered: uncovered || [], stored: stored.map((row) => ({ name: row.name, folder: row.folder, type: row.type, install_command: row.install_command, run_command: row.run_command, status: row.status, last_error: row.last_error ? tail(row.last_error, 800) : null })), tried, minutes: Math.round(runnableMs / 60_000), kinds, changed: changed.slice(0, 200) }) });
+      const text = prompt({ name, discovery, uncovered: uncovered || [], stored: stored.map((row) => ({ name: row.name, folder: row.folder, type: row.type, install_command: row.install_command, run_command: row.run_command, status: row.status, last_error: row.last_error ? tail(row.last_error, 800) : null })), tried, minutes: Math.round(runnableMs / 60_000), kinds, changed: changed.slice(0, 200) });
+      if (record) {
+        logged('note', record, { context: { prompt: text } });
+        logged('step', record, { model, effort: effort || '', name: 'run agent', input: text });
+      }
+      const onEvent = record ? (event) => logged('event', record, event) : undefined;
+      const agent = () => runAgent({ auth, bridge: bridge.connection, model, effort, maxTurns: MAX_TURNS, server: SERVER, signal, prompt: text, onEvent });
       try {
         summary = String((tools ? await tools.use('claude', agent) : await agent()) || '').trim();
       } catch (error) {
@@ -304,6 +315,9 @@ function createRunStep({ processes = createProcesses(), prepareClaude = () => pr
         if (!declared) throw new Error(`The run agent named no runnables within ${Math.round(declareMs / 60_000)} minutes.`);
       }
       return { runnables: items.map(view), summary };
+    } catch (error) {
+      failed = error;
+      throw error;
     } finally {
       clearInterval(watchdog);
       if (bridge) await bridge.close().catch(() => {});
@@ -319,6 +333,10 @@ function createRunStep({ processes = createProcesses(), prepareClaude = () => pr
       }
       for (const key of [...mine.keys]) if (key.startsWith(`${id}:agent:`)) { await processes.stop(key); mine.keys.delete(key); }
       emit();
+      if (record) {
+        if (summary) logged('output', record, { raw: summary });
+        logged('finish', record, { status: !failed ? 'done' : failed.stopped ? 'stopped' : 'failed', written: items.map((item) => ({ name: item.name, status: item.status, passed: !!item.passed, error: item.lastError ? tail(item.lastError, 1500) : null })), error: failed ? failed.message : null });
+      }
       jobs.delete(id);
       settle();
     }
@@ -384,7 +402,7 @@ function createRunStep({ processes = createProcesses(), prepareClaude = () => pr
   return { run, halt, stop, stopOne, stopAll, session, terminal, focus, stopLeftover, working: (id) => jobs.has(id), holds: (id) => held.has(id) };
 }
 
-module.exports = { createRunStep, prompt, RUNNABLE_MS, TYPE_NAMES };
+module.exports = { createRunStep, prompt, RUNNABLE_MS, DECLARE_MS, INSTALL_MS, WIND_DOWN_MS, MAX_TURNS, TYPE_NAMES };
 
 /**
  * Scripted runs (ENGELBART_BUILD_FAKE=1 or ENGELBART_RUN_FAKE=1): no model, the same tools through the same bridge. A
@@ -393,11 +411,17 @@ module.exports = { createRunStep, prompt, RUNNABLE_MS, TYPE_NAMES };
  * not started again.
  */
 function createFakeRunAgent({ fetcher = fetch, kinds = RUN_KINDS } = {}) {
-  return async ({ bridge, signal }) => {
+  return async ({ bridge, signal, onEvent = () => {} }) => {
+    let calls = 0;
+    const raw = (event) => { try { onEvent(event); } catch { /* never in the way */ } };
     const use = async (name, args) => {
+      // Each call as Claude Code streams one, for the Agent map.
+      const callId = `fake-run-${calls += 1}`;
+      raw({ type: 'assistant', message: { content: [{ type: 'tool_use', id: callId, name: `mcp__canvas__${name}`, input: args }] } });
       const response = await fetcher(bridge.url, { method: 'POST', headers: { authorization: `Bearer ${bridge.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ name, args }), signal });
       const out = await response.json();
       const text = (out.content && out.content[0] && out.content[0].text) || '';
+      raw({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: callId, content: text, ...(out.isError ? { is_error: true } : {}) }] } });
       if (out.isError) throw new Error(text);
       return JSON.parse(text);
     };

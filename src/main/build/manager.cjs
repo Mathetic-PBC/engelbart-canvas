@@ -64,7 +64,7 @@ const { createFeed } = require('../bart/activity.cjs');
 const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const store = require('./store.cjs');
-const { freezeContext, replyMessage, freshMessage } = require('./context.cjs');
+const { freezeContext, replyMessage, freshMessage, contextParts } = require('./context.cjs');
 const { loadBuildPrompt, readEnding } = require('./prompt.cjs');
 const { buildPolicy } = require('./policy.cjs');
 const { keepLibrary } = require('./keep.cjs');
@@ -193,7 +193,9 @@ function guardNotes(putBack = [], holding = null) {
 // folder here (the sidebar reads the library again). `runStep`: ./run-step.cjs's, or null for no run step. `inspectPdf`:
 // what tags a pdf an agent puts in the library (../context/pdf-kind.cjs). `keepDir`: where a turn keeps the library's
 // files aside (./keep.cjs).
-function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell({ tools }), copyTree = null, githubToken = async () => null, libraryChanged = () => {}, runStep = null, inspectPdf = null, keepDir = path.join(os.tmpdir(), 'engelbart-build-keep'), limits = LIMITS, turnMs = TURN_MS, autoFixes = AUTO_FIXES, diffMs = DIFF_MS, now = () => new Date() }) {
+function createBuilds({ git, runner, readModels, notify = () => {}, tools = null, gitReady = () => true, runShell = createShell({ tools }), copyTree = null, githubToken = async () => null, libraryChanged = () => {}, runStep = null, inspectPdf = null, keepDir = path.join(os.tmpdir(), 'engelbart-build-keep'), limits = LIMITS, turnMs = TURN_MS, autoFixes = AUTO_FIXES, diffMs = DIFF_MS, now = () => new Date(), runLog = null }) {
+  // The Agent map's record (../bart/runlog.cjs; a developer copy's only): one per turn, and never in a Build's way.
+  const logged = (method, ...args) => { if (!runLog) return; try { runLog[method](...args); } catch { /* the map's problem */ } };
   const live = new Map(); // id → { controller, stopping: null | 'stop' | 'quit', done: Promise }
   const active = { build: 0, quick: 0 };
   const waiting = { build: [], quick: [] };
@@ -663,6 +665,11 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
 
   /* ---------------------------------------------------------------------- turns */
 
+  /** The workspace a Build belongs to, by name (the Agent map's record); null when it has none or it is gone. */
+  function workspaceNameOf(ctx, projectId, task) {
+    try { return task.workspaceId ? projects.findWorkspace(ctx, projectId, task.workspaceId).workspace.name : null; } catch { return null; }
+  }
+
   async function runTurn(ctx, projectId, id, { message, fresh = false }) {
     if (halted.has(id)) return;
     const project = projectOf(ctx, projectId);
@@ -676,6 +683,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     let free = null;
     let bridge = null; // Engelbart's tools for this turn (closed when it ends, or here when something threw before)
     let keeping = null; // the library kept aside for this turn (put back when it ends, or here)
+    let record = null; // this turn's id in the Agent map's run log, until it is finished
     try {
       await haltRunStep(id); // a run step still working ends (its changes a checkpoint) before the worktree is the agent's again
       if (active[pool] >= limits[pool]) save(ctx, projectId, id, { status: 'queued' });
@@ -702,15 +710,26 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       let diffsDone = Promise.resolve();
       const system = loadBuildPrompt(ctx.dataRoot, { quick: task.kind === 'quick' });
       const agent = TOOL_OF[task.provider];
+      if (runLog) {
+        record = `${task.id}:${task.turn}`;
+        logged('start', {
+          id: record, agent: 'build', kind: task.kind === 'quick' ? 'quick' : 'build', buildId: task.id, title: task.title, turn: task.turn,
+          provider: task.provider, projectId, projectName: project.name, workspaceName: workspaceNameOf(ctx, projectId, task), question: task.title, system,
+          // The first turn: context.md, block by block; a later one: what was sent (a reply, or everything again).
+          context: fresh ? contextParts(message) : { reply: message },
+        });
+      }
       const once = (session, text) => {
         feed.reset();
         // Each step, and whatever the model starts after one (a tool's result is in by then), reads the diff again.
         const onUpdate = (update) => { feed.take(update); if (update && (update.log || update.activity || update.textStart)) diffs.poke(); };
+        const onEvent = record ? (event) => logged('event', record, event) : undefined;
+        if (record) logged('step', record, { model: task.modelId || task.modelName || '', name: task.modelName || '', effort: task.effort || '', input: text });
         // Stopped (or cut short for a reply) before the agent started, while the turn was being made ready or its CLI was
         // busy: the agent never starts, and the turn ends as a stopped one does.
         const call = () => (controller.signal.aborted
           ? Promise.reject(Object.assign(new Error('Stopped.'), { kind: 'stopped', session }))
-          : runner.turn({ task: { ...task, worktree: task.cwd }, message: text, session, system, policy, engelbart: bridge ? bridge.connection : null, signal: controller.signal, timeoutMs: turnMs[pool], onUpdate }));
+          : runner.turn({ task: { ...task, worktree: task.cwd }, message: text, session, system, policy, engelbart: bridge ? bridge.connection : null, signal: controller.signal, timeoutMs: turnMs[pool], onUpdate, onEvent }));
         return tools ? tools.use(agent, call) : call();
       };
       let out = null;
@@ -771,7 +790,16 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
         return next;
       });
       track(() => projects.agentFinished(ctx, id));
+      if (record) {
+        if (out) logged('output', record, { raw: out.text });
+        const ending = ['needs-you', 'escalated', 'review', 'conflict'].includes(task.status) ? task.status : null;
+        logged('finish', record, { status: !failure ? 'done' : failure.kind === 'stopped' ? 'stopped' : 'failed', written: null, error: failure ? failure.message : null, ending });
+        record = null;
+      }
       void diffsDone.then(() => sendDiff(projectId, task, false));
+    } catch (error) {
+      if (record) { logged('finish', record, { status: 'failed', written: null, error: error && error.message }); record = null; }
+      throw error;
     } finally {
       if (bridge) await bridge.close().catch(() => {});
       if (keeping) await keeping.restore().catch(() => []);
@@ -855,6 +883,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
           id, root: task.cwd, name: task.target ? task.target.name : path.basename(task.repo), libraryId: row.id, db: ctx.libraryDb, changed,
           model: choice.modelId, effort: choice.effort,
           onState: (state) => put(state),
+          // For the Agent map's record of it.
+          turn: task.turn, title: task.title, projectId, projectName: project.name, workspaceName: workspaceNameOf(ctx, projectId, task),
         });
       } catch (error) {
         failure = error;
