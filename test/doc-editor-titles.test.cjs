@@ -700,6 +700,31 @@ test('revealing a line inside a collapsed conversation expands it first', () => 
   assert.equal(m.lines()[1], BUILD_DOC[1], 'expanded');
 });
 
+// A drawn line `i` and a pane to centre it in: the line's element keeps its attributes, applyView records where it went.
+function drawnLine(m, i) {
+  const attrs = new Map(), views = [];
+  const el = { isConnected: true, offsetWidth: 0, getBoundingClientRect: () => ({ height: 20 }), setAttribute: (k, v) => attrs.set(k, v), removeAttribute: (k) => attrs.delete(k), hasAttribute: (k) => attrs.has(k) };
+  m.editor.scrollRef = { current: { closest: () => null, getBoundingClientRect: () => ({ height: 400 }) } };
+  m.editor.edRef = { current: { ...m.editor.edRef.current, querySelector: (sel) => (sel === `[data-line="${i}"]` ? el : null) } };
+  m.editor.applyView = (pos) => views.push(pos);
+  return { el, views };
+}
+
+test('showLine centres a drawn line and lights it up; with flash: false it centres it without the light', () => {
+  const m = mounted(['Notes', '@chat why?', 'After']);
+  const lit = drawnLine(m, 2);
+  assert.equal(m.editor.showLine(2), true);
+  assert.equal(lit.el.hasAttribute('data-ask-flash'), true, 'lit up, as before');
+  assert.deepEqual([lit.views.length, lit.views[0].line, lit.views[0].offset], [1, 2, -190]);
+
+  const n = mounted(['Notes', '@chat why?', 'After']);
+  const quiet = drawnLine(n, 2);
+  assert.equal(n.editor.showLine(2, { flash: false }), true);
+  assert.equal(quiet.el.hasAttribute('data-ask-flash'), false, 'no light');
+  assert.deepEqual([quiet.views.length, quiet.views[0].line, quiet.views[0].offset], [1, 2, -190], 'centred all the same');
+  assert.equal(n.editor.settle.pos.line, 2, 'held there as before');
+});
+
 test('a Build conversation opened from the Agents dropdown before its record loads stays open when the record arrives', () => {
   // Folded once it finished; revealed from the dropdown, then its record arrives again: it stays open.
   const w = mounted(['Notes', `${BUILD_DOC[1].replace('bart#', 'bart#+')}`, ...BUILD_DOC.slice(2)], { autoCollapse: true, builds: {} });

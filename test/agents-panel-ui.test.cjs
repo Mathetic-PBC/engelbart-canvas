@@ -153,7 +153,9 @@ test('a Build in the Inbox reveals its card by its id; another agent there opens
   assert.deepEqual(calls, [['reveal', { workspaceId: 'sb', buildId: 'b7' }], ['select', 'ag']]);
 });
 
-test('the workspace hands a Build\'s reveal to revealAsk, as a workspace place with its build id', () => {
+test('the workspace hands a Build\'s reveal to revealAsk, as a workspace place with its build id, shown without the flash', () => {
   const src = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
-  assert.match(src, /onRevealBuild=\{\(\{ workspaceId, buildId \}\) => revealAsk\(\{ place: \{ projectId: project\.id, ref: \{ kind: 'workspace', workspaceId \} \}, buildId \}\)\}/);
+  assert.match(src, /onRevealBuild=\{\(\{ workspaceId, buildId \}\) => revealAsk\(\{ place: \{ projectId: project\.id, ref: \{ kind: 'workspace', workspaceId \} \}, buildId, flash: false \}\)\}/);
+  // revealAsk lights the line up unless told not to: the Agent Viewer's reveal, which says nothing of it, still flashes.
+  assert.match(src, /editor\.showLine\(at, \{ flash: target\.flash !== false \}\)/);
 });

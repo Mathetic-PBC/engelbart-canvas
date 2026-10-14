@@ -606,8 +606,9 @@ export default class DocEditor extends React.Component {
   paneWheel = () => { this.settle = null; this.wheelAt = Date.now(); };
   // The Agent Viewer's click (2026-10-12; Workspace revealAsk): line `i` brought to the middle of the pane and lit up for a
   // moment. Held there as a restored view is (`settle`), so a picture or card still laying itself out does not move it.
+  // `flash: false` (a Build jumped to from the Agents dropdown or the Inbox, 2026-10-13) brings it there without the light.
   // → whether the line is drawn
-  showLine(i) {
+  showLine(i, { flash = true } = {}) {
     const box = this.scrollRef.current, ed = this.editorEl(); if (!box || !ed) return false;
     // A line inside a collapsed conversation (a Build's card, 2026-10-13) is not on the page: the conversation is expanded
     // first, and the caller asks again once it is drawn (Workspace revealAsk). Opened on purpose, it is no longer waited
@@ -626,8 +627,10 @@ export default class DocEditor extends React.Component {
     const pos = { line: i, hash: hashLine(this.lines()[i] || ''), offset: -Math.max(0, Math.round((b.height - r.height) / 2)) };
     this.settle = { key: this.key(), pos, until: Date.now() + 1500 };
     this.applyView(pos);
-    d.removeAttribute('data-ask-flash'); void d.offsetWidth; d.setAttribute('data-ask-flash', '');
-    setTimeout(() => { if (d.isConnected) d.removeAttribute('data-ask-flash'); }, 2400);
+    if (flash) {
+      d.removeAttribute('data-ask-flash'); void d.offsetWidth; d.setAttribute('data-ask-flash', '');
+      setTimeout(() => { if (d.isConnected) d.removeAttribute('data-ask-flash'); }, 2400);
+    }
     return true;
   }
   caretRect() {

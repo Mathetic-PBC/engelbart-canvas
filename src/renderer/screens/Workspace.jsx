@@ -1236,7 +1236,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // A row clicked in the Agent Viewer (2026-10-12; main's agentMap:reveal): the workspace or note the ask was on comes to
   // the front and its line is shown (model/askLine.js finds it where it is now) and lit up; a highlight's paper opens in
-  // the Stage at its passage; a Build with no line of its own shows its card. A line that is gone says so.
+  // the Stage at its passage; a Build with no line of its own shows its card. A line that is gone says so. `flash: false`
+  // shows the line without lighting it up (a Build from the Agents dropdown or the Inbox, 2026-10-13).
   const revealAsk = (target) => {
     if (!target || !target.place || target.place.projectId !== project.id) return;
     const { place, routedTo, buildId } = target, ref = place.ref;
@@ -1270,7 +1271,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       if (at < 0 && buildId) at = findBuildLine(lines, buildId);
       if (at < 0) { if (place.text) onError(new Error('This line is no longer here')); return; }
       let drawn = 0;
-      const show = () => { if (!editor.showLine(at) && (drawn += 1) < 20) setTimeout(show, 100); };
+      const show = () => { if (!editor.showLine(at, { flash: target.flash !== false }) && (drawn += 1) < 20) setTimeout(show, 100); };
       setTimeout(show, 50);
     };
     setTimeout(attempt, 0);
@@ -1931,7 +1932,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onRenameWorkspace={renameWorkspace}
           onDeleteWorkspace={deleteTopic}
           onOpenVersion={(version) => { goToVersion(version.workspaceId, { file: version.file, title: version.title }).catch(onError); }}
-          onRevealBuild={({ workspaceId, buildId }) => revealAsk({ place: { projectId: project.id, ref: { kind: 'workspace', workspaceId } }, buildId })}
+          onRevealBuild={({ workspaceId, buildId }) => revealAsk({ place: { projectId: project.id, ref: { kind: 'workspace', workspaceId } }, buildId, flash: false })}
           onRejectAgent={(id) => { void onBuildAction(id, 'reject'); }}
           onSeenAll={(ids) => { for (const id of ids) api.seenAgents(project.id, id).catch(() => {}); }}
           connectSessions={connectSessions}
