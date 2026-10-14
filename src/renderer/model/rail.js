@@ -141,8 +141,8 @@ export const BART_VERB = { kind: 'verb', verb: 'bart', key: 'verb:bart', name: '
 // @chat (2026-10-12): the question-answering agent, which @bart was until the router took its name.
 export const CHAT_VERB = { kind: 'verb', verb: 'chat', key: 'verb:chat', name: 'Chat', glyph: 'chat', token: '@Chat ' };
 export const NOTE_VERB = { kind: 'verb', verb: 'note', key: 'verb:note', name: 'Note', glyph: 'note', token: '@Note ' };
-// @brainstorm (2026-09-30): asks, a card at a time, what you know about a topic or paper and where it thins out, until you
-// write a research question (2026-10-05, @orient folded in).
+// @brainstorm (2026-09-30; @orient folded in 2026-10-05): helps the person think something through. Until 2026-10-13 it
+// asked a card at a time, toward a research question; since 2026-10-14 it is a conversation in prose, as Chat's is.
 export const BRAINSTORM_VERB = { kind: 'verb', verb: 'brainstorm', key: 'verb:brainstorm', name: 'Brainstorm', glyph: 'chat', token: '@Brainstorm ' };
 // @discover (2026-09-30): what to read about a problem, and where in it to look.
 export const DISCOVER_VERB = { kind: 'verb', verb: 'discover', key: 'verb:discover', name: 'Discover', glyph: 'chat', token: '@Discover ' };

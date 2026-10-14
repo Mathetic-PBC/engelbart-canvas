@@ -296,7 +296,7 @@ test('design: the router and the three agents, the calls between them, their too
   assert.equal(brainstorm.models.providers.anthropic.steps.length, 1);
   assert.deepEqual(Object.keys(discover.models.providers.openai.modes), ['quick', 'standard', 'deep']);
   assert.deepEqual([bart.timeout.step, discover.timeout.deep], [15 * 60_000, 45 * 60_000]);
-  assert.ok(brainstorm.context.blocks.some((block) => /\[agent reply omitted\]/.test(block.note)), '@brainstorm\'s documents leave other agents\' replies out');
+  assert.ok(brainstorm.context.blocks.some((block) => /other agents' replies as <reply agent="…">/.test(block.note)), '@brainstorm\'s documents carry other agents\' replies, labelled');
   assert.ok(bart.context.blocks.some((block) => /<stage>/.test(block.block)) && !brainstorm.context.blocks.some((block) => /<stage> \//.test(block.block)));
 });
 

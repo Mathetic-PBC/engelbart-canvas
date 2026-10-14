@@ -11,6 +11,8 @@ import { parseLines, parseLine, inlineHtml, highlight, isMarked, listMark, fence
 // after them, which starts an empty one. Only the newest is asked into; an earlier one shows its answers as they were, with
 // its notes, and has no Run or Run again. Export (2026-10-14) saves the run shown as one page: each question, its Old and New
 // answers and the note, by note, with the same entries as JSON at its end.
+// Any agent (2026-10-14, David's): Chat · Brainstorm · Discover · Create across the very top; the one picked is whose
+// questions are listed, run and exported (main keeps which).
 
 const FONT = '12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace';
 const RULE = '1px solid #ddd';
@@ -18,6 +20,7 @@ const NOTE_SAVE_MS = 500;
 const S = {
   root: { flex: 1, overflowY: 'auto', padding: '8px 14px 40px' },
   top: { display: 'flex', alignItems: 'center', gap: 12, margin: '0 0 8px' },
+  agents: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, margin: '0 0 8px' },
   runs: { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 4, margin: '0 0 10px', borderBottom: RULE, paddingBottom: 6 },
   run: (on) => ({ font: FONT, background: on ? '#111' : '#fff', color: on ? '#fff' : '#111', border: RULE, padding: '1px 8px', cursor: 'pointer' }),
   button: { font: FONT, background: '#fff', border: RULE, padding: '1px 6px', cursor: 'pointer', color: '#111' },
@@ -80,6 +83,12 @@ export function BenchmarkEntry({ entry, note, onNote, onRunOne, live = true }) {
   );
 }
 
+/** The name of the agent shown ("Chat" when main names none). */
+export function agentName(data) {
+  const one = ((data && data.agents) || []).find((agent) => agent.id === (data && data.agent));
+  return one ? one.name : 'Chat';
+}
+
 /** When a run was started, short: "Oct 14, 3:02 PM". */
 export function runWhen(at) {
   const date = new Date(at);
@@ -90,12 +99,20 @@ export function runWhen(at) {
  * The tab's list as drawn from what main gave: the runs as tabs, then Run (or Stop) on the newest run, then each note's
  * questions under its name.
  */
-export function BenchmarkList({ data, notes = {}, onRun, onStop, onRunOne, onNote, onPick = () => {}, onNew = () => {}, onExport = () => {}, said = '', error = '' }) {
+export function BenchmarkList({ data, notes = {}, onRun, onStop, onRunOne, onNote, onPick = () => {}, onNew = () => {}, onExport = () => {}, onAgent = () => {}, said = '', error = '' }) {
   const groups = (data && data.groups) || [];
   const runs = (data && data.runs) || [];
+  const agents = (data && data.agents) || [];
   const live = !data || data.live !== false;
   return (
     <div style={S.root}>
+      {agents.length > 0 && (
+        <div style={S.agents} role="tablist" aria-label="Agent">
+          {agents.map((agent) => (
+            <button key={agent.id} type="button" role="tab" aria-selected={agent.id === data.agent} data-agent={agent.id} style={S.run(agent.id === data.agent)} disabled={!!data.running && agent.id !== data.agent} onClick={() => onAgent(agent.id)}>{agent.name}</button>
+          ))}
+        </div>
+      )}
       {runs.length > 0 && (
         <div style={S.runs} role="tablist">
           {runs.map((run) => (
@@ -114,7 +131,7 @@ export function BenchmarkList({ data, notes = {}, onRun, onStop, onRunOne, onNot
         {said ? <span style={S.dim}>{said}</span> : null}
         {error ? <span style={S.error}>{error}</span> : null}
       </div>
-      {!data ? <div style={S.dim}>Loading…</div> : !groups.length ? <div style={S.dim}>No Chat questions in the notes.</div> : groups.map((group) => (
+      {!data ? <div style={S.dim}>Loading…</div> : !groups.length ? <div style={S.dim}>No {agentName(data)} questions in the notes.</div> : groups.map((group) => (
         <div key={group.rel}>
           <div style={S.group}>{group.name}</div>
           {group.entries.map((entry) => (
@@ -150,7 +167,7 @@ const PAGE_STYLE = 'body{font:14px/1.5 system-ui,sans-serif;color:#171717;max-wi
  */
 export function benchmarkPage(data, notes = {}, exported = new Date().toISOString()) {
   const run = ((data && data.runs) || []).find((one) => one.id === data.current) || null;
-  const title = `Chat benchmark: ${run ? run.name : 'answers'}`;
+  const title = `${agentName(data)} benchmark: ${run ? run.name : 'answers'}`;
   const noteOf = (entry) => (entry.key in notes ? notes[entry.key] : entry.note) || '';
   const newHtml = (value) => {
     if (value && typeof value.answer === 'string') return `<div class="answer">${answerHtml(value.answer)}</div>`;
@@ -159,7 +176,7 @@ export function benchmarkPage(data, notes = {}, exported = new Date().toISOStrin
   };
   const groups = (data && data.groups) || [];
   const body = groups.map((group) => `<h2>${esc(group.name)}</h2>${group.entries.map((entry) => `<div class="entry"><div class="q">${esc(entry.question)}</div><div class="cols"><div><div class="label">Old</div><div class="answer">${answerHtml(entry.old)}</div></div><div><div class="label">New</div>${newHtml(entry.new)}</div></div>${noteOf(entry).trim() ? `<div class="note">${esc(noteOf(entry))}</div>` : ''}</div>`).join('')}`).join('');
-  const json = JSON.stringify({ run: run ? { id: run.id, name: run.name, at: run.at } : null, exported, entries: groups.flatMap((group) => group.entries.map((entry) => ({ note: group.rel, question: entry.question, old: entry.old, new: entry.new && typeof entry.new.answer === 'string' ? entry.new.answer : null, error: entry.new && typeof entry.new.error === 'string' ? entry.new.error : null, notes: noteOf(entry) }))) }).replace(/</g, '\\u003c');
+  const json = JSON.stringify({ agent: (data && data.agent) || 'bart', run: run ? { id: run.id, name: run.name, at: run.at } : null, exported, entries: groups.flatMap((group) => group.entries.map((entry) => ({ note: group.rel, question: entry.question, old: entry.old, new: entry.new && typeof entry.new.answer === 'string' ? entry.new.answer : null, error: entry.new && typeof entry.new.error === 'string' ? entry.new.error : null, notes: noteOf(entry) }))) }).replace(/</g, '\\u003c');
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(title)}</title><style>${PAGE_STYLE}</style></head><body><h1>${esc(title)}</h1><div class="dim">${run && runWhen(run.at) ? `Run ${esc(runWhen(run.at))}. ` : ''}Exported from Engelbart's Agent Viewer, ${esc(exported)}.</div>${body}<script type="application/json" id="chat-benchmark">${json}</script></body></html>`;
 }
 
@@ -209,6 +226,11 @@ export default function Benchmark() {
     flush(); setNotes({}); setError(''); setSaid('');
     api.newChatBenchmarkRun().then((id) => api.chatBenchmark(id)).then(show).catch((reason) => setError(errorMessage(reason)));
   }, [flush, show]);
+  // Another agent's questions, in the same run (its notes saved first).
+  const onAgent = useCallback((agent) => {
+    flush(); setNotes({}); setError(''); setSaid('');
+    api.chatBenchmark(shown.current, agent).then(show).catch((reason) => setError(errorMessage(reason)));
+  }, [flush, show]);
   const onRun = useCallback(() => { setError(''); api.runChatBenchmark(null, shown.current).catch((reason) => setError(errorMessage(reason))); }, []);
   const onStop = useCallback(() => { api.stopChatBenchmark().catch((reason) => setError(errorMessage(reason))); }, []);
   const onRunOne = useCallback((key) => { setError(''); api.runChatBenchmark(key, shown.current).catch((reason) => setError(errorMessage(reason))); }, []);
@@ -218,10 +240,10 @@ export default function Benchmark() {
     setError(''); setSaid('');
     try {
       const run = (data.runs || []).find((one) => one.id === data.current);
-      const saved = await api.exportAgentRuns(benchmarkPage(data, notes), `chat-benchmark-${run ? run.id : 'answers'}-${new Date().toISOString().slice(0, 10)}`);
+      const saved = await api.exportAgentRuns(benchmarkPage(data, notes), `${agentName(data).toLowerCase()}-benchmark-${run ? run.id : 'answers'}-${new Date().toISOString().slice(0, 10)}`);
       setSaid(saved ? `Saved ${saved}` : 'Not saved.');
     } catch (reason) { setError(errorMessage(reason)); }
   }, [data, notes]);
 
-  return <BenchmarkList data={data} notes={notes} onRun={onRun} onStop={onStop} onRunOne={onRunOne} onNote={onNote} onPick={onPick} onNew={onNew} onExport={onExport} said={said} error={error} />;
+  return <BenchmarkList data={data} notes={notes} onRun={onRun} onStop={onStop} onRunOne={onRunOne} onNote={onNote} onPick={onPick} onNew={onNew} onExport={onExport} onAgent={onAgent} said={said} error={error} />;
 }

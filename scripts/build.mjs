@@ -27,6 +27,9 @@ await copyFile('src/renderer/index.html', 'dist/index.html');
 await copyFile('src/renderer/post-its/post-it.html', 'dist/post-it.html');
 await copyFile('src/renderer/box-card/box-card.html', 'dist/box-card.html');
 await copyFile('node_modules/pdfjs-dist/build/pdf.worker.min.mjs', 'dist/pdf.worker.min.mjs');
+// The MIT notice of Phosphor's icons, bundled into index.js (DocEditor's made-file icon), ships with the app.
+await mkdir('dist/licenses', { recursive: true });
+await copyFile('node_modules/@phosphor-icons/core/LICENSE', 'dist/licenses/phosphor-icons.txt');
 // pdf.js optional assets (fonts for PDFs without embedded fonts, CJK cmaps, JBIG2/JPX decoders).
 import { cp } from 'node:fs/promises';
 for (const folder of ['standard_fonts', 'cmaps', 'wasm']) {

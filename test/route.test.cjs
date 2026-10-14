@@ -650,13 +650,42 @@ test('Bart\'s prompt (2026-10-14): classify by what the person wants back; their
   for (const tag of ['<line>', '<section>', '<threads>', '<spec_above>', '<current>']) assert.ok(prompt.includes(tag), tag);
 });
 
-test('@create: the classifier\'s create pick stands at 0.8 or more; at 0.7 it goes to chat', async () => {
+test('@create: the classifier\'s create pick stands at SURE_ENOUGH, as the others do (2026-10-14: no longer 0.8)', async () => {
   const sure = await router('{"agent":"create","sure":0.9}').route(LINE);
   assert.deepEqual([sure.agent, sure.sure], ['create', 0.9]);
-  assert.deepEqual(await router('{"agent":"create","sure":0.8}').route(LINE).then((r) => r.agent), 'create');
-  assert.deepEqual(await router('{"agent":"create","sure":0.7}').route(LINE).then((r) => [r.agent, r.sure]), ['chat', 0.7], 'below CREATE_SURE');
-  assert.deepEqual(await router('{"agent":"discover","sure":0.7}').route(LINE).then((r) => r.agent), 'discover', 'the others keep SURE_ENOUGH');
-  assert.deepEqual([route.CREATE_SURE, route.decide({ agent: 'create', sure: 0.79 }).agent], [0.8, 'chat']);
+  assert.deepEqual(await router('{"agent":"create","sure":0.6}').route(LINE).then((r) => [r.agent, r.sure]), ['create', 0.6], 'Chat makes no files: an unsure create pick is still Create, with its 5 s Cancel');
+  assert.deepEqual(await router('{"agent":"create","sure":0.5}').route(LINE).then((r) => [r.agent, r.sure]), ['chat', 0.5], 'below SURE_ENOUGH');
+  assert.deepEqual(await router('{"agent":"discover","sure":0.7}').route(LINE).then((r) => r.agent), 'discover');
+  assert.equal(route.CREATE_SURE, undefined);
+});
+
+test('routing regression (2026-10-14): "can you make a file going over the changes we made" is Create, by its end result', async () => {
+  const runs = [];
+  const runLog = { start: (r) => runs.push({ ...r }), amend: (id, fields) => Object.assign(runs.find((r) => r.id === id), fields), step() {}, output() {}, finish() {} };
+  const LINE_FILE = 'can you make a file going over the changes we made';
+  // The reply the model gave in the workspace, which was sent to Chat (CREATE_SURE 0.8); Chat said it could not write files.
+  const fake = (raw) => router(raw, { runLog });
+  const out = await fake('{"agent":"create","sure":0.6}').route({ text: LINE_FILE, section: `# Concision\n@bart ${LINE_FILE}` });
+  assert.deepEqual([out.agent, out.sure], ['create', 0.6]);
+  // When the line goes elsewhere than the model said, the record keeps what it said.
+  await fake('{"agent":"create","sure":0.4}').route({ text: LINE_FILE, section: '' });
+  assert.deepEqual([runs[runs.length - 1].pick, runs[runs.length - 1].said, runs[runs.length - 1].sure], ['chat', 'create', 0.4]);
+  assert.equal(runs[0].said, undefined, 'none when the model\'s pick stands');
+  // The prompt draws the distinction by the result wanted, not by keywords: the summary is a step toward the file.
+  const prompt = require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT;
+  assert.match(prompt, /making it may first take reading, gathering or summarizing them: that work is part of Create's job, and the request is still Create/);
+  assert.match(prompt, /Judge the request by its end result, not by the steps needed to get there\./);
+  assert.match(prompt, /Polite or conversational wording \("can you…"[^\n]*is still a request for the action\./);
+  assert.match(prompt, /Asking HOW to do something[^\n]*→ Chat\./);
+  assert.match(prompt, /- chat: [^\n]*Chat cannot make files\./);
+  const contrast = ['"go over what we changed today" → chat', '"can you put what we changed today in a doc" → create', '"how would I put what we changed today in a doc?" → chat', '"add today\'s changes to the changelog file" → build'].map((k) => prompt.indexOf(k));
+  assert.ok(contrast.every((at, n) => at >= 0 && (!n || at > contrast[n - 1])), 'the four-way contrast, in order');
+  assert.ok(!prompt.includes(LINE_FILE), 'the failing line itself stays out of the prompt: it is the eval\'s');
+  // The eval holds the line and its contrasts, in the workspace they came from.
+  const cases = fs.readFileSync(path.join(__dirname, '../fixtures/route-eval.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  for (const [line, expected] of [[LINE_FILE, 'create'], ['summarize the changes we made', 'chat'], ['make a file summarizing the changes we made', 'create'], ['how would I make a file summarizing the changes we made?', 'chat']]) {
+    assert.ok(cases.some((c) => c.line === line && c.expected === expected), `eval: ${line} → ${expected}`);
+  }
 });
 
 test('@create: a line Bart sent to Create waits 5 s ("Creating a chart · Starts in 5 s · Cancel"), then asks create, titled [create <when>]', async (t) => {
@@ -880,7 +909,7 @@ test('@create in a conversation: its closing line names Create, and a Create thr
   const { footAgent } = await loadDoc();
   assert.equal(footAgent('*Create · Sonnet · high · 41 s*'), 'create');
   assert.equal(route.fakePick('and then?', 'create').agent, 'chat', 'Create keeps no conversation: a follow-up is routed afresh');
-  assert.deepEqual(route.decide({ agent: 'create', sure: 0.8 }, 'chat'), { agent: 'create', sure: 0.8 }, 'switching to Create needs 0.8, as a create pick does');
+  assert.deepEqual(route.decide({ agent: 'create', sure: 0.8 }, 'chat'), { agent: 'create', sure: 0.8 }, 'switching to Create needs SURE_TO_SWITCH, as any switch does');
   assert.deepEqual(route.decide({ agent: 'create', sure: 0.79 }, 'brainstorm'), { agent: 'brainstorm', sure: 0.79 });
   const { turnsInput } = require('../src/main/ipc.cjs');
   assert.deepEqual(turnsInput([{ question: 'a chart', answer: 'Made.', agent: 'create' }]).map((t) => t.agent), ['create']);

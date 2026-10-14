@@ -49,12 +49,12 @@ test('Chat, Brainstorm, Discover, Create and Build open with it, then their own 
     assert.equal(prompt.split(CORE_PERSONALITY).length, 2, `${name} holds it once`);
   }
   // Each role says what this collaborator is doing here.
-  assert.match(BRAINSTORM_SYSTEM_PROMPT, /# Your role: Brainstorm\n\nYou help the person develop their own thinking\.\n\nDo not replace uncertainty with your answer\./);
+  assert.match(BRAINSTORM_SYSTEM_PROMPT, /# Your role: Brainstorm\n\nYou help the person develop their own thinking\.\n\nAttend to what they are trying to understand/);
   assert.match(DISCOVER_SYSTEM_PROMPT, /# Your role: Discover\n\nYou find prior work worth the person's attention\./);
   assert.match(CREATE_SYSTEM_PROMPT, /# Your role: Create\n\nYou make a new standalone artifact the person asked for\./);
   assert.match(BUILD_SYSTEM_PROMPT, /# Your role: Build\n\nYou implement the change the person handed you and verify it\./);
   // How the shared voice shows in each role: one line, no more.
-  assert.match(BRAINSTORM_SYSTEM_PROMPT, /the voice shows in a perceptive next question, not an interview script, and never in a conclusion of your own\./);
+  assert.match(BRAINSTORM_SYSTEM_PROMPT, /Respond in ordinary conversational prose, with the shared personality and the amount of detail the moment needs\./);
   assert.match(DISCOVER_SYSTEM_PROMPT, /the voice shows as selective taste in what you put in front of them, not as chatter in the guide\./);
   assert.match(CREATE_SYSTEM_PROMPT, /The voice belongs only in what you say to the person\. The artifact itself follows the style they asked for\./);
   assert.match(BUILD_SYSTEM_PROMPT, /the voice shows as direct, discerning reporting[^\n]*with no extra conversational text\./);

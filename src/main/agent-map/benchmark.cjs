@@ -18,6 +18,12 @@
 // with the hash of the prompt it was made under. Since 2026-10-14 (David's) they are kept by run: { runs: [{ id, name, at,
 // entries }], current }, a tab each. Only the newest run is asked into (Run, Run again); an earlier one is kept as it was
 // answered, its notes still editable. A new run starts empty. A file from before runs is read as its "Run 1".
+//
+// Any agent (2026-10-14, David's): the tab shows one agent's questions at a time, Chat, Brainstorm, Discover or Create, by
+// the name its closing line starts with (../bart/reply.cjs AGENT_NAMES), and asks them again through that agent's own path
+// and prompt. The agent shown is kept in the file (`agent`); a run holds every agent's answers, a Chat entry under its key
+// as before, another agent's under its name before it. A Create replay makes its files as Create does, in the project's
+// .created folder (../bart/create.cjs keepCreated), never in the library.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -29,11 +35,15 @@ const { buildContext, block, markPlace, conversationBlock, NO_STAGE } = require(
 const { expandMentions, projectSource } = require('../context/expand-mentions.cjs');
 const { stripTitles } = require('../bart/strip.cjs');
 const { createBart, loadSystemPrompt, cleanTurns } = require('../bart/ask.cjs');
+const { AGENT_NAMES } = require('../bart/reply.cjs');
 
 // How many replays run at once.
 const AT_ONCE = 3;
-// A Chat answer's closing line (../bart/reply.cjs attribution): `*Chat · Opus · high · 41 s*`.
-const CHAT_FOOT_RE = /^\*Chat(?: · [^*]*)?\*$/;
+// The agents the tab shows, in its order: their ids (ask.cjs) and the names their closing lines start with.
+const AGENTS = Object.keys(AGENT_NAMES);
+const agentOf = (value) => (AGENTS.includes(value) ? value : 'bart');
+// An answer's closing line (../bart/reply.cjs attribution): `*Chat · Opus · high · 41 s*`, `*Brainstorm · 8 s*`.
+const footRe = (agent) => new RegExp(`^\\*${AGENT_NAMES[agentOf(agent)]}(?: · [^*]*)?\\*$`);
 // The pending line the cut document ends with, read as "the question being asked now" (../bart/context.cjs HERE).
 const MARK = 'benchmark';
 // Folders of a project that hold no notes (../store/projects.cjs PROJECT_RESERVED).
@@ -73,16 +83,16 @@ function footChoice(foot) {
 const withoutFeet = (answer) => { const lines = String(answer || '').split('\n'); while (lines.length && (!lines[lines.length - 1].trim() || /^\*[^*]+\*$/.test(lines[lines.length - 1].trim()))) lines.pop(); return lines.join('\n'); };
 
 /**
- * The Chat questions of one document → [{ question, old, turns, foot, q, lines }]: each turn whose answer closes with a
- * `*Chat · …*` line, its answer without that line, and the turns of its thread before it ({ question, answer, agent }).
+ * One agent's questions in one document → [{ question, old, turns, foot, q, lines }]: each turn whose answer closes with
+ * its line (`*Chat · …*` for Chat), its answer without that line, and the turns of its thread before it ({ question, answer, agent }).
  */
-function questionsIn(text, doc) {
-  const lines = String(text || '').split('\n'), ps = doc.parseLines(lines), out = [];
+function questionsIn(text, doc, agent = 'bart') {
+  const lines = String(text || '').split('\n'), ps = doc.parseLines(lines), out = [], FOOT_RE = footRe(agent);
   for (const thread of doc.threads(lines, ps)) {
     const earlier = [];
     for (const turn of thread.turns) {
       const { question, answer } = doc.turnText(lines, turn);
-      if (turn.foot >= 0 && CHAT_FOOT_RE.test(ps[turn.foot].text)) {
+      if (turn.foot >= 0 && FOOT_RE.test(ps[turn.foot].text)) {
         out.push({ question, old: withoutFeet(answer), turns: earlier.map((t) => ({ ...t })), foot: ps[turn.foot].text, q: turn.q, lines });
       }
       earlier.push({ question, answer, ...(turn.agent ? { agent: turn.agent } : {}) });
@@ -92,10 +102,13 @@ function questionsIn(text, doc) {
 }
 
 /**
- * Every Chat question in the notes of every project, by note, in document order →
- * [{ rel, name, projectId, workspaceId, ref, entries: [{ key, question, old, turns, foot, q, lines }] }].
+ * Every question one agent answered in the notes of every project, by note, in document order →
+ * [{ rel, name, projectId, workspaceId, ref, agent, entries: [{ key, question, old, turns, foot, q, lines }] }]. A key is
+ * the note and the question (keyOf); another agent's than Chat's has the agent's id before it.
  */
-async function collectQuestions(ctx) {
+async function collectQuestions(ctx, agent = 'bart') {
+  agent = agentOf(agent);
+  const said = new RegExp(`^bart\\+?> \\*${AGENT_NAMES[agent]}`, 'm');
   const doc = await loadDoc();
   const rows = await ctx.libraryDb.list();
   const groups = [];
@@ -106,8 +119,8 @@ async function collectQuestions(ctx) {
     for (const file of markdownFiles(project.dir)) {
       let text = '';
       try { text = fs.readFileSync(file, 'utf8'); } catch { continue; }
-      if (!/^bart\+?> \*Chat/m.test(text)) continue;
-      const found = questionsIn(text, doc);
+      if (!said.test(text)) continue;
+      const found = questionsIn(text, doc, agent);
       if (!found.length) continue;
       const inProject = path.relative(project.dir, file), rel = path.relative(ctx.dataRoot, file);
       let workspaceId = null, ref = null, name;
@@ -128,20 +141,20 @@ async function collectQuestions(ctx) {
       }
       const seen = new Map();
       const entries = found.map((entry) => {
-        const base = keyOf(rel, entry.question), n = (seen.get(base) || 0) + 1;
+        const base = agent === 'bart' ? keyOf(rel, entry.question) : `${agent}\n${keyOf(rel, entry.question)}`, n = (seen.get(base) || 0) + 1;
         seen.set(base, n);
         return { ...entry, key: n > 1 ? `${base}\n${n}` : base };
       });
-      groups.push({ rel, name: records.length > 1 ? `${project.name} / ${name}` : name, projectId: project.id, workspaceId, ref, title: path.basename(file) === 'workspace.md' ? path.basename(path.dirname(file)) : path.basename(file, '.md'), kind: path.basename(file) === 'workspace.md' ? 'workspace' : 'note', entries });
+      groups.push({ rel, name: records.length > 1 ? `${project.name} / ${name}` : name, projectId: project.id, workspaceId, ref, title: path.basename(file) === 'workspace.md' ? path.basename(path.dirname(file)) : path.basename(file, '.md'), kind: path.basename(file) === 'workspace.md' ? 'workspace' : 'note', agent, entries });
     }
   }
   return groups;
 }
 
 /** The message a run the log recorded for this question was first sent, everything before its <level>; null when none. */
-function recordedMessage(runLog, question) {
+function recordedMessage(runLog, question, agent = 'bart') {
   if (!runLog) return null;
-  const found = runLog.find((record) => record.agent === 'bart' && String(record.question || '').trim() === question);
+  const found = runLog.find((record) => record.agent === agent && String(record.question || '').trim() === question);
   const run = found ? runLog.get(found.id) : null;
   const input = run && run.steps && run.steps[0] ? String(run.steps[0].input || '') : '';
   const at = input.indexOf('\n\n<level>');
@@ -154,17 +167,18 @@ function recordedMessage(runLog, question) {
  * and the highlights, then the earlier turns as <conversation>.
  */
 async function messageFor(ctx, group, entry) {
-  const context = await buildContext(ctx, group.projectId, { ref: group.ref, workspaceId: group.workspaceId, askId: MARK, agent: 'bart' });
+  const agent = agentOf(group.agent);
+  const context = await buildContext(ctx, group.projectId, { ref: group.ref, workspaceId: group.workspaceId, askId: MARK, agent });
   const cut = [...entry.lines.slice(0, entry.q + 1), `bart~> ${MARK}`].join('\n');
   const { lines } = await expandMentions(cut, projectSource(ctx, group.projectId, await ctx.libraryDb.list()), new Set());
   const body = markPlace(stripTitles(lines.join('\n').trimEnd()), MARK);
   const stage = context.documents.indexOf(NO_STAGE);
   const documents = [block(group.kind, group.title, body), stage >= 0 ? context.documents.slice(stage) : NO_STAGE].join('\n\n');
-  return [context.head, context.contextJson, context.mentionedFiles, documents, conversationBlock(cleanTurns(entry.turns), { agent: 'bart' })].filter(Boolean).join('\n\n');
+  return [context.head, context.contextJson, context.mentionedFiles, documents, conversationBlock(cleanTurns(entry.turns), { agent })].filter(Boolean).join('\n\n');
 }
 
 /**
- * Chat as ask.cjs runs it, for one replay: a Bart of its own (no run log, no sessions kept) whose first message has what
+ * The agent (job.agent, Chat when none) as ask.cjs runs it, for one replay: a Bart of its own (no run log, no sessions kept) whose first message has what
  * comes before its <level> replaced by `message`. → async (ctx, job, { signal }) → the answer's text, without its closing line.
  * `makeBart`: createBart, or createFakeBart in a copy whose Bart is fake (ENGELBART_BART_FAKE).
  */
@@ -187,7 +201,7 @@ function askChat({ readModels, environment = process.env, runDirectory = path.jo
     const stop = () => bart.stop(askId);
     if (signal) { if (signal.aborted) throw Object.assign(new Error('Stopped.'), { kind: 'stopped' }); signal.addEventListener('abort', stop, { once: true }); }
     try {
-      const { lines } = await bart.ask(ctx, job.projectId, { askId, ref: job.ref, workspaceId: job.workspaceId, text: job.question, turns: job.turns, choice, agent: 'bart' });
+      const { lines } = await bart.ask(ctx, job.projectId, { askId, ref: job.ref, workspaceId: job.workspaceId, text: job.question, turns: job.turns, choice, agent: agentOf(job.agent) });
       const body = lines.map((line) => line.replace(/^bart\+?> ?/, ''));
       while (body.length && (!body[body.length - 1].trim() || /^\*[^*]+\*$/.test(body[body.length - 1]))) body.pop();
       return body.join('\n').trim();
@@ -232,6 +246,7 @@ function createChatBenchmark({ file, context, chat, runLog = null, now = () => n
       kept = { runs: [{ ...freshRun(1, dates[0] || now()), entries: value.entries }], current: 'run-1' };
     } else kept = { runs: [freshRun(1, now())], current: 'run-1' };
     if (!kept.runs.some((one) => one.id === kept.current)) kept.current = kept.runs[kept.runs.length - 1].id;
+    kept.agent = agentOf(kept.agent);
     return kept;
   };
   const save = () => {
@@ -274,16 +289,17 @@ function createChatBenchmark({ file, context, chat, runLog = null, now = () => n
     try {
       const ctx = await context();
       if (!group.workspaceId || !group.ref) throw new Error('This note belongs to no workspace to ask from.');
-      const system = loadSystemPrompt(ctx.dataRoot, 'bart');
-      const message = recordedMessage(runLog, entry.question) || await messageFor(ctx, group, entry);
-      const answer = await chat(ctx, { projectId: group.projectId, workspaceId: group.workspaceId, ref: group.ref, question: entry.question, turns: entry.turns, foot: entry.foot, message }, { signal: controller.signal });
+      const agent = agentOf(group.agent);
+      const system = loadSystemPrompt(ctx.dataRoot, agent);
+      const message = recordedMessage(runLog, entry.question, agent) || await messageFor(ctx, group, entry);
+      const answer = await chat(ctx, { projectId: group.projectId, workspaceId: group.workspaceId, ref: group.ref, agent, question: entry.question, turns: entry.turns, foot: entry.foot, message }, { signal: controller.signal });
       if (controller.signal.aborted) return;
       const one = runOf(id);
       if (one) { const { error, ...rest } = one.entries[key] || {}; one.entries[key] = { ...rest, answer: String(answer || ''), promptHash: hashOf(system), at: now() }; save(); }
     } catch (error) {
       if (controller.signal.aborted || (error && error.kind === 'stopped')) return;
       let promptHash = null;
-      try { promptHash = hashOf(loadSystemPrompt((await context()).dataRoot, 'bart')); } catch { promptHash = null; }
+      try { promptHash = hashOf(loadSystemPrompt((await context()).dataRoot, agentOf(group.agent))); } catch { promptHash = null; }
       const one = runOf(id);
       if (one) { const { answer, ...rest } = one.entries[key] || {}; one.entries[key] = { ...rest, error: String((error && error.message) || error || 'The run failed.'), promptHash, at: now() }; save(); }
     } finally {
@@ -303,15 +319,18 @@ function createChatBenchmark({ file, context, chat, runLog = null, now = () => n
   return {
     /**
      * Every entry by note, with its old answer, its new one in the run shown ({ answer } | { error } | { running } | {}) and
-     * its note there; the runs (newest last), which one is shown, and whether it can be asked into (only the newest).
-     * `id`: the run to show from now on.
+     * its note there; the runs (newest last), which one is shown, and whether it can be asked into (only the newest); the
+     * agents and which one's questions are shown. `id`: the run to show from now on; `agent`: the agent to show from now on.
      */
-    async list(id) {
+    async list(id, agent) {
       if (id != null && runOf(id) && load().current !== id) { load().current = id; save(); }
-      groups = await collectQuestions(await context());
+      if (AGENTS.includes(agent) && load().agent !== agent) { load().agent = agent; save(); }
+      groups = await collectQuestions(await context(), load().agent);
       const current = load().current;
       return {
         running: running.size > 0,
+        agents: AGENTS.map((one) => ({ id: one, name: AGENT_NAMES[one] })),
+        agent: load().agent,
         runs: load().runs.map((one) => ({ id: one.id, name: one.name, at: one.at })),
         current,
         live: current === latest().id,
@@ -373,4 +392,4 @@ function createChatBenchmark({ file, context, chat, runLog = null, now = () => n
   };
 }
 
-module.exports = { createChatBenchmark, collectQuestions, questionsIn, messageFor, recordedMessage, askChat, choiceOf, footChoice, markdownFiles, keyOf, AT_ONCE };
+module.exports = { createChatBenchmark, collectQuestions, questionsIn, messageFor, recordedMessage, askChat, choiceOf, footChoice, markdownFiles, keyOf, AGENTS, AT_ONCE };

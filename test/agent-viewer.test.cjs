@@ -564,6 +564,9 @@ test('viewer: a corrected pick says "you changed it to …"', () => {
   assert.equal(runText.classificationLine(corrected, { ...CHAT, corrected: 'chat' }), 'Bart sent this to Build; you changed it to Chat');
   assert.equal(runText.classificationLine({ ...ROUTER, pick: 'build' }, { ...CHAT, corrected: 'chat' }), 'Bart sent this to Build; you changed it to Chat', 'the run\'s own correction when the router\'s record has none');
   assert.equal(runText.agentLabel({ ...CHAT, corrected: 'chat' }), 'Chat', 'no "corrected from Bart" in the row');
+  // 2026-10-14: a line sent elsewhere than the model said names what it said.
+  assert.equal(runText.classificationLine({ ...ROUTER, pick: 'chat', said: 'create', sure: 0.4 }, CHAT), 'Bart sent this to Chat (the model said Create, 0.4 sure)');
+  assert.equal(runText.classificationLine(ROUTER, CHAT), 'Bart sent this to Chat (0.85 sure)');
   assert.equal(runText.runLabel({ agent: 'build', title: 'x', turn: 1, routedFrom: 'route-1' }), 'Build x · turn 1');
 });
 

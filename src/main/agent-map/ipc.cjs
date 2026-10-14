@@ -83,7 +83,8 @@ function registerAgentMapIpc({ ipcMain, trustedHandler, mapWindow, runLog, desig
   const benched = (fn) => (...args) => { if (!benchmark) throw new Error('The benchmark is not available.'); return fn(...args); };
   // A run is named by its id (2026-10-14: a tab each); left out, it is the one shown.
   const runId = (id) => (typeof id === 'string' ? id : undefined);
-  handle('agentMap:benchmark', benched((id) => benchmark.list(runId(id))));
+  // And an agent by its id (Chat's is bart); left out, the one shown.
+  handle('agentMap:benchmark', benched((id, agent) => benchmark.list(runId(id), typeof agent === 'string' ? agent : undefined)));
   handle('agentMap:benchmark-run', benched((key, id) => (key == null ? benchmark.run(runId(id)) : benchmark.runOne(key, runId(id)))));
   handle('agentMap:benchmark-new', benched(() => benchmark.newRun()));
   handle('agentMap:benchmark-stop', benched(() => benchmark.stop()));

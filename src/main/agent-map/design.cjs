@@ -8,12 +8,12 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
-const { loadSystemPrompt, AGENTS, PROMPTS, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, BRAINSTORM_PATHS, BRAINSTORM_MOVES, MAX_BRAINSTORM_CARDS } = require('../bart/ask.cjs');
+const { loadSystemPrompt, AGENTS, PROMPTS, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, WELCOME_CARDS } = require('../bart/ask.cjs');
 const { readQuestion, readBrainstorm, readDiscover, MODES } = require('../bart/models.cjs');
 const { SCOPED, ZOTERO_READERS, LIBRARY_READERS } = require('../bart/context.cjs');
-const { OMITTED } = require('../bart/strip.cjs');
+const { REPLY_BUDGET } = require('../bart/strip.cjs');
 const { ROUTE_SYSTEM_PROMPT } = require('../bart/route-system-prompt.cjs');
-const { routeModel, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH, CREATE_SURE } = require('../bart/route.cjs');
+const { routeModel, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH } = require('../bart/route.cjs');
 const { CREATE_TIMEOUT_MS, MAX_CREATED, MAX_CREATED_BYTES } = require('../bart/create.cjs');
 const { buildChoices, resolveBuildChoice } = require('../bart/models.cjs');
 const { loadBuildPrompt } = require('../build/prompt.cjs');
@@ -48,7 +48,7 @@ function routerDesign(models) {
       { when: 'a model or effort flag', to: '@chat' },
       { when: 'directly under a @brainstorm or @discover thread', to: 'that agent' },
       { when: 'otherwise', to: `the model (bad JSON, a timeout, an error or sure < ${SURE_ENOUGH} → @chat)` },
-      { when: 'the model says create', to: `@create when sure ≥ ${CREATE_SURE} (else @chat), started after 5 s unless Cancel turns it into @chat` },
+      { when: 'the model says create', to: `@create when sure ≥ ${SURE_ENOUGH} (else @chat), started after 5 s unless Cancel turns it into @chat` },
       { when: 'the model says build, a spec above and sure ≥ 0.8', to: 'Build of that fenced block' },
       { when: 'the model says build otherwise', to: '@chat, told to write the Build prompt' },
     ],
@@ -104,16 +104,16 @@ function contextOf(agent) {
     { block: '<engelbart>', note: `project, description, code directory, notes folder, where it was asked from${ZOTERO_READERS.has(agent) ? ', the Zotero mirror' : ''}; then the data root's instructions and MEMORY.md` },
     { block: '<context_json>', note: scoped ? 'the library of this workspace alone (notes made in it, items it mentions)' : 'the whole library, each item flagged when the documents mention it' },
     { block: '<mentioned_files>', note: 'files inside library folders the documents point at (none: left out)' },
-    { block: 'documents', note: scoped ? `the workspace, with every mentioned note under its line; other agents' replies removed (strip.cjs: "${OMITTED}")` : 'the workspace, with every mentioned note under its line' },
+    { block: 'documents', note: scoped ? `the workspace, with every mentioned note under its line; other agents' replies as <reply agent="…">, nearest the line first up to ${REPLY_BUDGET.toLocaleString('en-US')} characters, the rest left out with their size (strip.cjs)` : 'the workspace, with every mentioned note under its line' },
     ...(agent === 'bart' ? [{ block: '<stage> / <highlights>', note: 'the paper, web page or Overleaf editor in front (none: <stage>none</stage>), then the highlights of the papers the documents mention' }] : []),
     { block: '<conversation>', note: 'the earlier turns of the exchange, when there are any' },
-    ...(agent === 'brainstorm' ? [{ block: '<path> <stage> <card>', note: `the path (${BRAINSTORM_PATHS.join(', ')}, welcome), which card comes next (moves: ${BRAINSTORM_MOVES.join(', ')}), card n of ${MAX_BRAINSTORM_CARDS}` }] : []),
+    ...(agent === 'brainstorm' ? [{ block: '<path> <stage> <card>', note: `the Welcome walkthrough's exchange only (its own prompt): which of its ${WELCOME_CARDS} cards comes next; an ordinary Brainstorm is sent none` }] : []),
     ...(agent === 'discover' ? [{ block: '<mode>', note: Object.values(MODE_LIMITS).join(' | ') }] : []),
     { block: '<level>', note: 'the model and effort this step runs on, and whether a higher step exists' },
     { block: '<question>', note: agent === 'create' ? 'what to make: the line after @create' : 'the line after the agent\'s name (an empty line: the opening question)' },
   ];
   const resumed = agent === 'create' ? ['(none: no session is kept, each turn starts from the document)'] : [
-    ...(agent === 'brainstorm' ? ['<path> <stage> <card>'] : agent === 'discover' ? ['<mode>'] : []),
+    ...(agent === 'brainstorm' ? ['<path> <stage> <card> (the Welcome walkthrough only)'] : agent === 'discover' ? ['<mode>'] : []),
     ...(agent === 'bart' ? ['<stage> / <highlights> (as they are now)'] : []),
     '<level>', '<question>',
   ];
@@ -127,7 +127,7 @@ const CALLS = {
     { to: 'chat', how: 'the router\'s pick: the line is rewritten @chat and asked' },
     { to: 'brainstorm', how: 'the router\'s pick, or an empty @bart' },
     { to: 'discover', how: 'the router\'s pick, or --quick, --standard or --deep' },
-    { to: 'create', how: `the router's pick, sure ≥ ${CREATE_SURE}: the line shows "Creating in 5 s · Cancel", then is asked @create (Cancel: @chat)` },
+    { to: 'create', how: `the router's pick, sure ≥ ${SURE_ENOUGH}: the line shows "Creating in 5 s · Cancel", then is asked @create (Cancel: @chat)` },
     { to: 'build', how: '--build, or the router\'s pick with a spec above (else Chat writes the Build prompt)' },
   ],
   bart: [{ to: 'build', how: '--build: the line\'s request becomes a Build; the footer\'s Build' }],

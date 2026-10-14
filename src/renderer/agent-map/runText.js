@@ -114,7 +114,9 @@ export function routerFor(run, runs) {
 /**
  * The line under "1. Classification": "Bart sent this to Chat (0.85 sure)", "Bart sent this to Build (rule: --build)",
  * "Bart sent this to Build; you changed it to Chat", or "Bart couldn't route this; it went to Chat". `run` is the
- * agent's run, whose agent a correction names when the router's record does not.
+ * agent's run, whose agent a correction names when the router's record does not. When the line went elsewhere than the
+ * model said (`said`, 2026-10-14: too unsure, or a follow-up kept in its conversation): "Bart sent this to Chat (the
+ * model said Create, 0.5 sure)".
  */
 export function classificationLine(router, run = null) {
   if (!router) return '';
@@ -122,7 +124,8 @@ export function classificationLine(router, run = null) {
   if (router.status === 'failed') return `Bart couldn't route this${went ? `; it went to ${went}` : ''}`;
   const corrected = router.corrected || (run && run.corrected);
   if (corrected) return `Bart sent this to ${routedWord(router)}; you changed it to ${agentWord(corrected)}`;
-  const why = router.by === 'rule' ? `rule: ${router.rule || '?'}` : router.sure != null ? `${router.sure} sure` : '';
+  const sure = router.sure != null ? `${router.sure} sure` : '';
+  const why = router.by === 'rule' ? `rule: ${router.rule || '?'}` : router.said ? `the model said ${agentWord(router.said)}${sure ? `, ${sure}` : ''}` : sure;
   return `Bart sent this to ${routedWord(router)}${why ? ` (${why})` : ''}`;
 }
 

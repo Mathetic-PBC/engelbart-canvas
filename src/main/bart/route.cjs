@@ -6,7 +6,9 @@
 // here, and the default provider's fastest model (Haiku on Claude Code, Luna on Codex) is asked at low effort, with no
 // tools and no session, which agent it is for. Anything that goes wrong (bad JSON, a timeout, an error) or a pick it is
 // less than 0.6 sure of goes to chat: a misrouted line costs more than a plain answer. @create (2026-10-13, ./create.cjs)
-// adds files to the library and starts by itself, so a create pick needs 0.8. A follow-up in a thread (2026-10-13)
+// adds files to the library and starts by itself, so a create pick needed 0.8; since 2026-10-14 it needs 0.6 as the others
+// do: Chat makes no files, so a create pick it was sent ended in "ask @create", and the editor's 5 s countdown with Cancel
+// (DocEditor waitCreate) already stops a Create nobody wanted. A follow-up in a thread (2026-10-13)
 // comes with `current`, the agent that answered the thread last: it stays there unless the model is at least 0.8 sure
 // the line wants another agent, and anything that goes wrong leaves it there too.
 //
@@ -35,8 +37,6 @@ const SECTION_CHARS = 4000;
 const MAX_THREADS = 5;
 const QUESTION_CHARS = 80;
 const SURE_ENOUGH = 0.6;
-// How sure a create pick must be: below it the line goes to chat, which makes nothing.
-const CREATE_SURE = 0.8;
 const SURE_TO_SWITCH = 0.8;
 const PICKS = ['chat', 'brainstorm', 'discover', 'create', 'build'];
 const RULE_PICKS = new Set(PICKS);
@@ -93,7 +93,7 @@ function parseReply(raw) {
 }
 
 /**
- * The pick a reply comes to: its agent when it is sure enough (create: CREATE_SURE), else chat. With `current` (a
+ * The pick a reply comes to: its agent when it is sure enough (SURE_ENOUGH), else chat. With `current` (a
  * follow-up, 2026-10-13): that agent, unless the reply picks another and is at least 0.8 sure of it. A conversation with
  * discover (2026-10-13) has its search in a research box already: a reply is chat's, a new search only when the reply
  * picks discover at least 0.8 sure, and any other pick as a line with no conversation is.
@@ -103,7 +103,7 @@ function decide(parsed, current = null) {
   if (now === 'discover') return parsed && parsed.agent === 'discover' ? (parsed.sure >= SURE_TO_SWITCH ? parsed : { agent: 'chat', sure: parsed.sure }) : decide(parsed);
   if (now) return parsed && parsed.agent !== now && parsed.sure >= SURE_TO_SWITCH ? parsed : { agent: now, sure: parsed ? parsed.sure : 0 };
   if (!parsed) return { agent: 'chat', sure: 0 };
-  return parsed.sure < (parsed.agent === 'create' ? CREATE_SURE : SURE_ENOUGH) ? { agent: 'chat', sure: parsed.sure } : parsed;
+  return parsed.sure < SURE_ENOUGH ? { agent: 'chat', sure: parsed.sure } : parsed;
 }
 
 /** The model a line is routed on: the default provider's first model, at low effort (or its lowest). */
@@ -248,7 +248,8 @@ function routerOf({ log, now, pick }) {
     const means = agent === 'build' && spec === true;
     const out = { id, agent, sure, ...(agent === 'build' ? { spec: means } : {}), model: step ? { provider: step.provider, name: step.name, id: step.id, effort: step.effort } : null, ms: now() - started, by: 'model', ...(error ? { error } : {}) };
     log((runs) => {
-      runs.amend(id, { provider: step ? step.provider : null, pick: agent, sure, ...(agent === 'build' ? { spec: means } : {}), ...(parsed ? {} : { unread: true }) });
+      // The model's own pick when it is not where the line went (2026-10-14): `sure` is its sureness of that pick.
+      runs.amend(id, { provider: step ? step.provider : null, pick: agent, sure, ...(agent === 'build' ? { spec: means } : {}), ...(parsed ? {} : { unread: true }), ...(parsed && parsed.agent !== agent ? { said: parsed.agent } : {}) });
       runs.finish(id, { status: error ? 'failed' : 'done', written: [`@${agent}`], error: error || null, ms: out.ms });
     });
     return out;
@@ -262,4 +263,4 @@ function routerOf({ log, now, pick }) {
   };
 }
 
-module.exports = { createRouter, createFakeRouter, routeInput, parseReply, decide, routeModel, sectionText, threadsOf, fakePick, markCorrected, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH, SURE_TO_SWITCH, CREATE_SURE, PICKS };
+module.exports = { createRouter, createFakeRouter, routeInput, parseReply, decide, routeModel, sectionText, threadsOf, fakePick, markCorrected, ROUTE_TIMEOUT_MS, SECTION_CHARS, SURE_ENOUGH, SURE_TO_SWITCH, PICKS };

@@ -459,10 +459,10 @@ test('shown again, a document collapses its open titled conversations once: not 
   }
 });
 
-test('a follow-up collapses the turns before it, in the same edit; each is one read-only row, its question cut to one line with Expand (2026-10-13)', () => {
+test('a follow-up collapses the turns before it but the last (2026-10-14: the two newest stay open), in the same edit; each is one read-only row, its question cut to one line with Expand (2026-10-13)', () => {
   const long = 'and timeouts, and what happens when the server answers slowly but never quite fails, and whether the retry budget should be shared across every request of a session?';
-  const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), `@chat ${long}`, ...answer('those too'), ''];
-  const second = lines.indexOf(`@chat ${long}`);
+  const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), `@chat ${long}`, ...answer('those too'), '@chat and jitter?', ...answer('jitter as well'), ''];
+  const second = lines.indexOf(`@chat ${long}`), third = lines.indexOf('@chat and jitter?');
   for (const routed of [false, true]) {
     const m = mounted(lines);
     if (routed) m.props.onRoute = () => new Promise(() => {});
@@ -471,11 +471,12 @@ test('a follow-up collapses the turns before it, in the same edit; each is one r
     m.editor.sendFollow(1);
     const ls = m.lines(), tag = routed ? 'routed' : 'asked';
     assert.equal(m.editor.history.length, undo + 1, `${tag}: one edit, one undo`);
-    assert.ok(ls.slice(2, second).every((l) => /^bart\+>/.test(l)) && ls.slice(second + 1, second + 1 + answer('x').length).every((l) => /^bart\+>/.test(l)), `${tag}: both earlier answers collapsed`);
+    assert.ok(ls.slice(2, second).every((l) => /^bart\+>/.test(l)) && ls.slice(second + 1, third).every((l) => /^bart\+>/.test(l)), `${tag}: the two oldest answers collapsed`);
+    assert.ok(ls.slice(third + 1, third + 1 + answer('x').length).every((l) => /^bart>/.test(l)), `${tag}: the one before the follow-up stays open`);
     assert.equal(ls[0], lines[0], `${tag}: the conversation stays open`);
-    assert.match(ls[second + 1 + answer('x').length], routed ? /^@bart and backoff\?$/ : /^@chat and backoff\?$/, `${tag}: the follow-up under them`);
+    assert.match(ls[third + 1 + answer('x').length], routed ? /^@bart and backoff\?$/ : /^@chat and backoff\?$/, `${tag}: the follow-up under them`);
     const html = m.html(), drawn = html.replace(/ data-raw="[^"]*"/g, '');
-    assert.ok(!drawn.includes('because') && !drawn.includes('those too'), `${tag}: the earlier answers are not drawn`);
+    assert.ok(!drawn.includes('because') && !drawn.includes('those too') && drawn.includes('jitter as well'), `${tag}: the older answers are not drawn; the last is`);
     for (const q of [1, second]) {
       const row = rowOf(html, q), open = row.slice(0, row.indexOf('>') + 1);
       assert.match(open, /contenteditable="false" data-readonly="1" data-folded-row="\d+" data-act="fold" data-turn="\d+"/, `${tag}: question ${q} is a read-only row a click expands`);
@@ -488,8 +489,8 @@ test('a follow-up collapses the turns before it, in the same edit; each is one r
       assert.ok(!html.includes(`data-foot="${q}"`), `${tag}: no foot drawn for ${q}`);
     }
     assert.ok(rowOf(html, 1).includes('why retry?') && rowOf(html, second).includes('and timeouts, and what happens'), `${tag}: the questions, as said`);
-    const asked = second + 1 + answer('x').length;
-    assert.match(rowOf(html, asked), /padding:0px 16px 0px;background:#fafafa;border-radius:0 0 0 0/, `${tag}: the new question goes on in the same card`);
+    const asked = third + 1 + answer('x').length;
+    assert.match(rowOf(html, asked), /padding:\d+px 16px 0px;background:#fafafa;border-radius:0 0 0 0/, `${tag}: the new question goes on in the same card, under the open turn`);
     // Folded lines at the top of the card, 6px apart, then 18px to the question.
     assert.match(rowOf(html, 1).slice(0, 600), /padding:14px 16px 6px;background:#fafafa;border-radius:10px 10px 0 0/, `${tag}: the first at the card's top, 6px under it`);
     assert.match(rowOf(html, second).slice(0, 600), /padding:0px 16px 18px/, `${tag}: 18px under the last`);
@@ -601,9 +602,19 @@ test('@bart --build from the document: Bart\'s --build rule hands it over with a
 
 test('Workspace askBart names a Build\'s conversation from its request, as Chat\'s, before the Build starts', () => {
   const src = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
-  const named = src.indexOf("api.nameChat(build ? { text: build.request || text, agent: 'bart' } : { text, agent: agent || 'bart' })");
-  assert.ok(named > 0, 'named from build.request, by Chat\'s namer');
+  assert.ok(src.includes("api.nameChat(build ? { text: build.request || text, agent: 'bart' } : { text: said, agent: agent || 'bart' })"), 'named from build.request, by Chat\'s namer');
+  assert.ok(src.includes('const later = name && !build && '), 'a Build is never one named later, from its answer');
+  const named = src.indexOf('if (name && !later && !ownTopic) nameAs(text);');
+  assert.ok(named > 0, 'named at once');
   assert.ok(src.indexOf('const build = buildRequestOf({ agent, text }') < named && named < src.indexOf('const task = await buildFrom(ref, build.request'), 'before the Build branch returns');
+});
+
+test('Workspace askBart names a conversation an empty line started from its first answer, not "New conversation" (2026-10-14); a Brainstorm one names its own topic (test/brainstorm-topic.test.cjs)', () => {
+  const src = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  const placed = src.indexOf("place(out.stopped ? (research ? ['bart> Stopped.'] : []) : out.lines);");
+  const later = src.indexOf("if (later && !ownTopic) nameAs(out.stopped ? '' : answerText(out.lines));");
+  assert.ok(placed > 0 && later > placed, 'named once its answer is placed');
+  assert.ok(src.indexOf("if (later && !ownTopic) nameAs('');") > later, 'a failed run still gets its title line filled');
 });
 
 test('an open Build conversation draws its question and the Build\'s card as before; Collapse waits until the Build is finished', () => {
@@ -739,4 +750,20 @@ test('a Build conversation opened from the Agents dropdown before its record loa
   assert.equal(w.lines()[1], BUILD_DOC[1], 'expanded to show it');
   w.editor.componentDidUpdate({ ...w.props, builds: { [BUILT]: task('review') } }, w.editor.state);
   assert.equal(w.lines()[1], BUILD_DOC[1], 'left open');
+});
+
+test('three turns: the follow-up that makes the third collapses the first and leaves the second open; the one that makes the second collapses nothing (2026-10-14)', () => {
+  const two = ['bart# [chat 2026-10-14T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), '@chat and backoff?', ...answer('backoff too'), ''];
+  const m = mounted(two), second = two.indexOf('@chat and backoff?');
+  m.editor.followText.set(1, 'and jitter?');
+  m.editor.sendFollow(1);
+  const ls = m.lines();
+  assert.ok(ls.slice(2, second).every((l) => /^bart\+>/.test(l)), 'the first collapsed');
+  assert.ok(ls.slice(second + 1, second + 1 + answer('x').length).every((l) => /^bart>/.test(l)), 'the second open');
+  assert.equal(ls[second + 1 + answer('x').length], '@chat and jitter?');
+  const one = ['bart# [chat 2026-10-14T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), ''];
+  const n = mounted(one);
+  n.editor.followText.set(1, 'and backoff?');
+  n.editor.sendFollow(1);
+  assert.ok(n.lines().slice(2, 2 + answer('x').length).every((l) => /^bart>/.test(l)), 'two turns: nothing collapsed');
 });

@@ -256,8 +256,11 @@ test('an answer landing with the caret above it moves nothing', async () => {
   assert.equal(m.editor.state.activeLine, 0);
 });
 
-test('a Brainstorm pending row has no stream box; nor does Discover output that starts as JSON, nor a row with nothing yet', () => {
-  const brainstorm = mounted(['Plan', '@brainstorm a plan', 'bart~> b1', ''], { b1: { agent: 'brainstorm', activity: 'Reading', lines: ['{"type":"mcq",', '"question": "Which?"}'] } });
+test('a Brainstorm answer streams in its box as Chat\'s does (2026-10-14); a card arriving as JSON (the Welcome walkthrough\'s, or Discover\'s) has none, nor a row with nothing yet', () => {
+  const prose = mounted(['Plan', '@brainstorm a plan', 'bart~> b0', ''], { b0: { agent: 'brainstorm', activity: 'Reading', lines: ['That sounds like two questions.', 'Which one is yours?'] } });
+  assert.equal(prose.pending('b0').box.dataset.stream, 'b0');
+  assert.match(prose.pending('b0').html, /That sounds like two questions\./);
+  const brainstorm = mounted(['Plan', '@brainstorm', 'bart~> b1', ''], { b1: { agent: 'brainstorm', activity: 'Reading', lines: ['{"type":"mcq",', '"question": "Which?"}'] } });
   assert.equal(brainstorm.pending('b1').box, null);
   assert.doesNotMatch(brainstorm.pending('b1').html, /data-stream/);
   const discover = mounted(['Plan', '@discover tutors', 'bart~> d1', ''], { d1: { agent: 'discover', activity: 'Searching', lines: ['{"type":"free"', '}'] } });
@@ -312,13 +315,14 @@ function sending({ text, route = false }) {
 }
 function conversation(agent = 'bart', token = '@chat') {
   const turn = (q, n) => [q, ...replyLines(ANSWER(n).join('\n'), META, { agent, model: agent !== 'brainstorm' })];
-  return ['Intro', ...turn(`${token} first question`, 6), ...turn(`${token} second question`, 30), ''];
+  return ['Intro', ...turn(`${token} first question`, 6), ...turn(`${token} second question`, 4), ...turn(`${token} third question`, 30), ''];
 }
 
 for (const c of [
   { label: 'typed and routed through Bart', agent: 'bart', token: '@chat', route: true, typed: 'and then?', want: '@bart and then?' },
   { label: 'typed and sent straight', agent: 'bart', token: '@chat', route: false, typed: 'and then?', want: '@chat and then?' },
-  { label: 'sent empty from a Brainstorm recap\'s field', agent: 'brainstorm', token: '@brainstorm', route: true, typed: '', want: '@brainstorm' },
+  // Brainstorm is a conversation (2026-10-14): its field needs words and goes through Bart, as Chat's does.
+  { label: 'typed under a Brainstorm answer and routed through Bart', agent: 'brainstorm', token: '@brainstorm', route: true, typed: 'and the logs?', want: '@bart and the logs?' },
 ]) {
   test(`a follow-up ${c.label} puts its question where the reply field was, the earlier turns folded`, () => {
     const ls = conversation(c.agent, c.token);
@@ -328,7 +332,9 @@ for (const c of [
     m.editor.sendFollow(1);
     const now = m.props.text.split('\n'), q = now.indexOf(c.want);
     assert.equal(q, ls.length - 1, 'the question goes under the card');
-    assert.ok(now.slice(0, q).some((l) => /^bart\+>/.test(l)) && !now.slice(0, q).some((l) => /^bart>/.test(l)), 'every answer above it is folded');
+    const last = now.indexOf(`${c.token} third question`);
+    assert.ok(now.slice(0, last).some((l) => /^bart\+>/.test(l)) && !now.slice(0, last).some((l) => /^bart>/.test(l)), 'the answers above it but the last are folded');
+    assert.ok(now.slice(last + 1, q).every((l) => /^bart>/.test(l)), 'the last stays open');
     assert.deepEqual({ line: m.editor.followHold.line, text: m.editor.followHold.text, top: m.editor.followHold.top }, { line: q, text: c.want, top: 540 });
     // Drawn again: the turns above folded, the question's row came up 900px. The pane follows it, once.
     const r = m.rowAt(q, 540 - 900);

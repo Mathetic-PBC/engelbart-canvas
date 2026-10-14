@@ -22,7 +22,8 @@ import { zoteroChipAction } from '../model/zotero.js';
 import { flatWorkspaces, nextPlace } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
-import { buildLine, placeAnswer, placeTitle, askedAt, migrateChatLines, madeKey } from '../model/doc.js';
+import { buildLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey } from '../model/doc.js';
+import { cardOfAnswer, questionOf } from '../../main/bart/card.cjs';
 import { fallbackAgent } from '../model/route.js';
 import { findAskLine, findBuildLine } from '../model/askLine.js';
 import { openBeside, closePane } from '../model/panes.js';
@@ -72,6 +73,8 @@ const EASE = 'cubic-bezier(.25,.1,.25,1)';
 const basename = (value) => String(value || '').split('/').pop();
 // Why a question from a highlight's note got no answer, as its box says it: the reply's words without "No answer.".
 const paperFailure = (lines) => answerOf(lines).answer.replace(/^\*\*No answer\.\*\*\s*/, '');
+// An answer's words, for naming the conversation an empty line started (2026-10-14): a card's question, else its text.
+const answerText = (lines) => { const { answer } = answerOf(lines), asked = questionOf(cardOfAnswer(answer)); return (asked ? asked.title : answer).slice(0, 4000); };
 
 function copiedLabel(copied) {
   const parts = ['Copied'];
@@ -614,8 +617,26 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     // card takes the pending line's place, under the request. Its conversation's title (2026-10-13) is named from that
     // request, by Chat's namer, and stays when the Build could not start.
     const build = buildRequestOf({ agent, text }, bartModels || await api.bartModels().catch(() => null));
-    if (name) {
-      api.nameChat(build ? { text: build.request || text, agent: 'bart' } : { text, agent: agent || 'bart' }).then((named) => {
+    // An empty line (an @brainstorm or @discover started from the workspace) has nothing to be named by (2026-10-14: every
+    // one was "New conversation"): it is named from its first answer once that lands, or "New conversation" without one.
+    const later = name && !build && !String(text || '').trim();
+    // A Brainstorm conversation (2026-10-14) names its own topic: its title stays unset until the person says what they
+    // want to talk about, and Brainstorm's reply marks it (main's bart/ask.cjs takeTopic, `out.topic`), then or whenever
+    // they change to another. A first line with words and no topic marked is named from those words, as any thread is.
+    const ownTopic = agent === 'brainstorm' && !build;
+    // The answer is in the document a render after it is placed: the title changes once it is there.
+    const retitleTo = (title) => {
+      let tries = 0;
+      const fill = () => {
+        const held = docsRef.current[key];
+        if (typeof held === 'string' && !held.includes(`bart~> ${askId}`)) { const next = retitle(held, answered, title); if (next !== null) changeDoc(key, ref, next); return; }
+        tries += 1;
+        if (tries < 20) setTimeout(fill, 100);
+      };
+      fill();
+    };
+    const nameAs = (said) => {
+      api.nameChat(build ? { text: build.request || text, agent: 'bart' } : { text: said, agent: agent || 'bart' }).then((named) => {
         let tries = 0;
         const fill = () => {
           const held = docsRef.current[key];
@@ -626,7 +647,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         };
         fill();
       }).catch(() => {});
-    }
+    };
+    if (name && !later && !ownTopic) nameAs(text);
     if (build) {
       try {
         if (!build.request) { place(['bart> **No Build.** Write what to build after --build.']); return; }
@@ -646,10 +668,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       place(out.stopped ? (research ? ['bart> Stopped.'] : []) : out.lines);
+      if (later && !ownTopic) nameAs(out.stopped ? '' : answerText(out.lines));
+      if (ownTopic && !out.stopped && !out.failed) { if (out.topic) retitleTo(out.topic); else if (name && !later) nameAs(text); }
       // The Welcome walkthrough's last card answered (main's ask.cjs, the welcome path): Discover starts on their next steps.
       if (out.welcome === 'result') handOff(key, askId);
     } catch (error) {
       place([`bart> **No answer.** ${errorMessage(error)}`]);
+      if (later && !ownTopic) nameAs('');
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }

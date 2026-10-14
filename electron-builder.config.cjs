@@ -63,7 +63,7 @@ module.exports = {
     'fixtures/**/*', // test mode's seed library
     // electron-builder adds the production dependencies; these are the renderer's, already bundled into dist/.
     '!node_modules/{react,react-dom,scheduler,roughjs,hachure-fill,path-data-parser,points-on-curve,points-on-path}{,/**}',
-    '!node_modules/{@xterm,@fontsource}{,/**}',
+    '!node_modules/{@xterm,@fontsource,@phosphor-icons}{,/**}', // Phosphor's MIT notice ships in dist/licenses/
     // pdf.js: the main process reads text with the legacy build only (src/main/context/pdf-text.cjs).
     '!node_modules/pdfjs-dist/{build,web,types,image_decoders}{,/**}',
     '!node_modules/pdfjs-dist/legacy/{web,image_decoders}{,/**}',

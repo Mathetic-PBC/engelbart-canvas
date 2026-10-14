@@ -1,10 +1,11 @@
 'use strict';
 
 // npm run build && npx electron scripts/smoke-brainstorm.cjs
-// Runs the real app, hidden, against disposable project/user data and the fake agents (src/main/bart/ask.cjs), and drives
-// an @brainstorm exchange by typing (2026-10-13: a card drawn as any answer is): its card has no box, field or Submit of its
-// own, its foot has Skip and Wrap up, and the follow-up field under it answers it; a row clicked (or words typed) is the
-// answer, read back on the line under the card as said, and the turn before it collapses.
+// Runs the real app, hidden, against disposable project/user data and the fake agents (src/main/bart/ask.cjs fakeThink),
+// and holds an @brainstorm conversation by typing (2026-10-14: prose, as Chat's): its answer is drawn as an answer, with
+// no card, Skip or Wrap up; Reply opens the follow-up field, and what is typed there goes through Bart and stays with
+// Brainstorm, in the same thread and session, turn after turn with no count that ends it; a wrap-up gets a summary that
+// asks nothing, and the conversation goes on after it.
 // ENGELBART_BRAINSTORM_SHOTS=<dir> saves pictures of the window.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -55,8 +56,8 @@ async function shot(wc, name) {
   const picture = await wc.capturePage(undefined, { stayHidden: true, stayAwake: true });
   fs.writeFileSync(path.join(SHOTS, `${name}.png`), picture.toPNG());
 }
-// The last live card: its question line, whether it has rows to click, and whether anything of the old card is drawn.
-const live = (wc) => js(wc, `(()=>{const f=[...document.querySelectorAll('${ED} [data-answers]')].pop();if(!f)return null;const q=f.dataset.answers,c=document.querySelector('${ED} [data-card="'+q+'"]');return{q:Number(q),rows:c?c.querySelectorAll('[data-act="cardopt"]').length:0,old:!!document.querySelector('${ED} [data-card-box], ${ED} [data-card-input], ${ED} .bs-submit'),skip:!!document.querySelector('${ED} [data-foot="'+q+'"] [data-act="cardskip"]'),wrap:!!document.querySelector('${ED} [data-foot="'+q+'"] [data-act="cardwrap"]'),rule:c?getComputedStyle(c.firstElementChild).borderLeftWidth:null}})()`);
+// The last answer on the page: its words, and what its foot holds.
+const lastAnswer = (wc) => js(wc, `(()=>{const ls=[...document.querySelectorAll('${ED} [data-line]')];const raw=ls.map((d)=>d.dataset.raw);let end=raw.length-1;while(end>=0&&!/^bart>( |$)/.test(raw[end]))end--;let start=end;while(start>0&&/^bart>( |$)/.test(raw[start-1]))start--;const words=raw.slice(start,end+1).map((l)=>l.replace(/^bart> ?/,'')).filter((l)=>l&&!/^\\*.*\\*$/.test(l)).join('\\n');const foot=raw.slice(start,end+1).find((l)=>/^bart> \\*.*\\*$/.test(l))||'';return{words,foot,skip:!!document.querySelector('${ED} [data-act="cardskip"]'),wrap:!!document.querySelector('${ED} [data-act="cardwrap"]'),live:!!document.querySelector('${ED} [data-answers]'),reply:!!document.querySelector('${ED} [data-act="reply"]')}})()`);
 
 app.whenReady().then(async () => {
   try {
@@ -70,58 +71,43 @@ app.whenReady().then(async () => {
     await until(() => js(wc, `!!document.querySelector(${JSON.stringify(ED)})`).catch(() => false), 'the workspace document');
     await pause(400);
 
-    /* ------------------------------------------------ the first card: drawn as an answer, answered under it */
+    /* ------------------------------------------------ the first turn: prose, drawn as an answer */
     await press(wc, `${ED} [data-line="0"] .t`);
     await key(wc, 'A', { modifiers: ['meta'] });
     await key(wc, 'Backspace');
     await until(async () => (await rows(wc)).join('\n').trim() === '', 'an empty document');
     await typeKeys(wc, 'Retries loop when the lock frees.\n@brainstorm retries\n');
     await settled(wc);
-    const first = await until(() => live(wc), 'the live card');
-    assert.equal(first.old, false, 'no box, field or Submit of the old card');
-    assert.equal(first.rule, '2px', 'inside an answer\'s rule');
-    assert.deepEqual([first.skip, first.wrap], [true, true], 'Skip and Wrap up on its foot');
-    await shot(wc, '1-card');
-    console.log(`PASS the first card is drawn as an answer (${first.rows} rows to click), Skip and Wrap up on its foot, the field under it`);
+    const first = await lastAnswer(wc);
+    assert.match(first.words, /^FAKE BRAINSTORM on "retries" \(no earlier turns\)\./, first.words);
+    assert.deepEqual([first.live, first.skip, first.wrap, first.reply], [false, false, false, true], 'no card, Skip or Wrap up; Reply on its foot');
+    assert.match(first.foot, /Brainstorm/);
+    await shot(wc, '1-first');
+    console.log('PASS the first turn is prose, drawn as an answer, with Reply and no card controls');
 
-    if (first.rows) await press(wc, `${ED} [data-card="${first.q}"] [data-act="cardopt"]`);
-    else { await press(wc, `${ED} [data-follow-input]`); await typeKeys(wc, 'when two workers race\n'); }
-    await settled(wc);
-    const ls = await rows(wc), answered = ls.findIndex((l, i) => i > first.q && /^@brainstorm /.test(l));
-    assert.ok(answered > first.q, `the answer under the card: ${JSON.stringify(ls)}`);
-    const said = await js(wc, `document.querySelector('${ED} [data-line="${answered}"] .t').innerText`);
-    assert.ok(!/picked|"/.test(said), `read as said: ${said}`);
-    assert.ok(ls.slice(first.q + 1, answered).some((l) => /^bart\+> /.test(l)), 'the card\'s turn collapsed');
-    await shot(wc, '2-answered');
-    console.log(`PASS answered (${JSON.stringify(said)}), read back as said, the card before it collapsed`);
-
-    /* ------------------------------------------------ Skip, on the next card's foot */
-    const second = await until(() => live(wc), 'the next card');
-    await press(wc, `${ED} [data-foot="${second.q}"] [data-act="cardskip"]`);
-    await settled(wc);
-    const after = await rows(wc);
-    assert.ok(after.includes('@brainstorm (skipped)'), JSON.stringify(after.slice(-8)));
-    await shot(wc, '3-skipped');
-    console.log('PASS Skip on the foot answers the card with (skipped)');
-
-    /* ------------------------------------------------ a choice: its options a list of rows, one clicked answers */
-    // An @brainstorm line with nothing after it, in a workspace with something in it: the fake asks a focus card of areas.
-    const end = (await rows(wc)).length - 1;
-    await press(wc, `${ED} [data-line="${end}"]`);
-    await typeKeys(wc, '\n@brainstorm\n'); // Enter picks Brainstorm in the @ menu,
-    await typeKeys(wc, '\n'); // and asks it
-    await settled(wc);
-    const choice = await until(async () => { const c = await live(wc); return c && c.rows ? c : null; }, 'a card with rows to click');
-    const look = await js(wc, `(()=>{const r=document.querySelector('${ED} [data-card="${choice.q}"] .bs-row');const s=getComputedStyle(r);return{border:s.borderTopWidth,bg:s.backgroundColor,mark:r.querySelector('.bs-mark').textContent}})()`);
-    assert.deepEqual(look, { border: '0px', bg: 'rgba(0, 0, 0, 0)', mark: '•' }, 'a row of a list, not a boxed option');
-    const label = await js(wc, `document.querySelector('${ED} [data-card="${choice.q}"] .bs-row .bs-label').innerText`);
-    await shot(wc, '4-choice');
-    await press(wc, `${ED} [data-card="${choice.q}"] [data-act="cardopt"]`);
-    await settled(wc);
-    const picked = await rows(wc);
-    assert.ok(picked.includes(`@brainstorm picked "${label}"`), JSON.stringify(picked.slice(-8)));
-    await shot(wc, '5-picked');
-    console.log(`PASS a choice card's options are a list; a row clicked answers it (${label})`);
+    /* ------------------------------------------------ follow-ups: Reply, type, Enter; Bart keeps them with Brainstorm */
+    const SAID = ['Not the backoff.', 'No, I mean the lock, not the timer.', 'Actually, forget retries: the logging worries me.', 'Who writes the logs.', 'Mostly one worker.', 'So that is the real problem.', 'Let us wrap up.', 'One more thing: it only happens at night.'];
+    for (const [n, said] of SAID.entries()) {
+      await press(wc, `${ED} [data-act="reply"]`);
+      await press(wc, `${ED} [data-follow-input]`);
+      await typeKeys(wc, `${said}\n`);
+      await settled(wc);
+      const got = await until(async () => { const a = await lastAnswer(wc); return a.words.includes(/wrap up/.test(said) ? 'wrap-up after' : said) ? a : null; }, `the answer to "${said}"`, 600);
+      assert.ok(/^FAKE BRAINSTORM /.test(got.words) && /the same session, given the question alone/.test(got.words), `turn ${n + 2}, Brainstorm in the same session: ${got.words}`);
+      assert.deepEqual([got.live, got.skip, got.wrap], [false, false, false], `turn ${n + 2}: no card controls`);
+      assert.match(got.foot, /Brainstorm/, `turn ${n + 2}: answered by Brainstorm`);
+      if (/wrap up/.test(said)) {
+        assert.match(got.words, /^FAKE BRAINSTORM wrap-up after \d+ turns/);
+        assert.ok(!got.words.includes('?'), 'a wrap-up asks nothing');
+        await shot(wc, '2-wrap-up');
+      } else assert.ok(got.words.endsWith('?'), got.words);
+      console.log(`PASS turn ${n + 2}: ${JSON.stringify(got.words.split('\n')[0])}`);
+    }
+    const ls = await rows(wc);
+    assert.equal(ls.filter((l) => /^@brainstorm /.test(l)).length, 1, 'one @brainstorm line opened it');
+    assert.equal(ls.filter((l) => /^@bart /.test(l)).length, SAID.length, 'each follow-up a line of its own, routed through Bart');
+    await shot(wc, '3-after');
+    console.log(`PASS ${SAID.length + 1} turns in one conversation, the wrap-up and a turn after it`);
     app.exit(0);
   } catch (error) {
     console.error(error);

@@ -141,3 +141,27 @@ test('a follow-up with no image is sent as it always was', () => {
   assert.equal(asks[0].text, 'and then?');
   assert.equal(changes[0].split('\n')[3], '@chat and then?');
 });
+
+test('a follow-up that starts by naming an agent is asked of it, never routed (2026-10-14)', () => {
+  const { editor, asks, changes } = mounted({ typed: '@Brainstorm what else could it be?' });
+  const routed = [];
+  editor.props.onRoute = () => {};
+  editor.routeLine = (...args) => routed.push(args);
+  editor.sendFollow(FROM);
+  assert.equal(routed.length, 0, 'Bart is skipped');
+  assert.equal(asks[0].agent, 'brainstorm');
+  assert.equal(asks[0].text, 'what else could it be?');
+  assert.equal(changes[0].split('\n')[3], '@brainstorm what else could it be?');
+});
+
+test('a follow-up with no agent named, or with @bart, is still routed', () => {
+  for (const typed of ['and then?', '@bart and then?']) {
+    const { editor, asks } = mounted({ typed });
+    const routed = [];
+    editor.props.onRoute = () => {};
+    editor.routeLine = (i, line) => routed.push(line);
+    editor.sendFollow(FROM);
+    assert.deepEqual(routed, ['@bart and then?'], typed);
+    assert.equal(asks.length, 0);
+  }
+});

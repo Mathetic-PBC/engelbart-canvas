@@ -39,7 +39,7 @@ const projects = require('../store/projects.cjs');
 const { buildCatalog } = require('../context/catalog.cjs');
 const { expandDoc } = require('../context/expand-mentions.cjs');
 const { PENDING_RE } = require('./reply.cjs');
-const { stripAgentReplies, stripTitles } = require('./strip.cjs');
+const { stripAgentReplies, stripTitles, topicOf } = require('./strip.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
 const { memoryBlock } = require('../connect/memory.cjs');
 const library = require('../store/library.cjs');
@@ -315,11 +315,16 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   const rows = await ctx.libraryDb.list();
   const seen = new Set();
   const documents = [];
-  // @brainstorm reads where the person is from what they wrote: other agents' answers are taken out, its own threads
-  // stay (./strip.cjs).
+  // @brainstorm reads where the person is from what they wrote; since 2026-10-14 the other agents' answers are there
+  // too, each labelled with the agent that wrote it, nearest the line first (./strip.cjs show). Its own threads stay.
   const scoped = SCOPED.has(agent);
   // A conversation's title is no agent's to read (2026-10-12, ./strip.cjs stripTitles).
-  const shown = (body) => markPlace(scoped ? stripAgentReplies(body, agent) : stripTitles(body), askId);
+  // @brainstorm's conversation's topic (2026-10-14, ./strip.cjs topicOf): read from the document the question is in.
+  let topic = null;
+  const shown = (body) => {
+    if (scoped && !topic) topic = topicOf(body, askId);
+    return markPlace(scoped ? stripAgentReplies(body, agent, { show: true, askId }) : stripTitles(body), askId);
+  };
   let from = `the workspace "${workspace.name}"`;
   let paper = null, pointed = null;
   if (ref.kind === 'mark') {
@@ -393,7 +398,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   }
   // The files inside library folders the documents point at (MATH-22): their folders are granted above, as library items.
   const files = mentionedFiles(rows, seen, ctx.homeDir || os.homedir());
-  return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, mentionedFiles: mentionedFilesBlock(files), files, documents: documents.join('\n\n'), now, entries, workspaceName: workspace.name };
+  return { project, dirs, head, contextJson: `<context_json>\n${JSON.stringify(entries, null, 1)}\n</context_json>`, mentionedFiles: mentionedFilesBlock(files), files, documents: documents.join('\n\n'), now, entries, workspaceName: workspace.name, topic };
 }
 
 module.exports = { HERE, NO_STAGE, NO_HIGHLIGHTS, SELECTION_WAIT_MS, SCOPED, ZOTERO_READERS, LIBRARY_READERS, markPlace, buildContext, conversationBlock, catalogEntries, mentionedFiles, mentionedFilesBlock, libraryDirs, block, highlightBlock, paperOf, webPageOf };

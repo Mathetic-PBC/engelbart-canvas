@@ -112,6 +112,28 @@ export function placeTitle(text, askId, title, near = null) {
   all[at] = titleLine(String(title).trim(), m[1] === '+', titleMeta(m[2]));
   return all.join('\n');
 }
+/**
+ * `text` with the title of the conversation that holds the question `near` (askedAt, read before its answer was placed)
+ * changed to `title` (2026-10-14: a Brainstorm conversation's topic, the label on its chip); null when there is nothing
+ * to change: no such question, a conversation with no title line, or the same title already.
+ */
+export function retitle(text, near, title) {
+  const said = String(title || '').trim();
+  if (!said || !near || typeof near.question !== 'string') return null;
+  const all = String(text).split('\n');
+  let best = -1;
+  all.forEach((line, j) => { if (line === near.question && (best < 0 || Math.abs(j - near.index) < Math.abs(best - near.index))) best = j; });
+  const thread = best < 0 ? null : threads(all).find((t) => t.turns.some((turn) => turn.q === best));
+  if (!thread || thread.titleLine < 0) return null;
+  const m = all[thread.titleLine].match(TITLE_RE), meta = titleMeta(m[2]);
+  if (meta.text.trim() === said) return null;
+  all[thread.titleLine] = titleLine(said, m[1] === '+', meta);
+  return all.join('\n');
+}
+// What a bare line's Brainstorm conversation was called before 2026-10-14 (main's bart/name-chat.cjs UNNAMED): no topic.
+export const UNSET_TOPIC = 'New conversation';
+/** A Brainstorm conversation's topic, as its chip shows it: its title, unless it has none yet. '' otherwise. */
+export const topicOfThread = (thread) => (thread && thread.routedTo === 'brainstorm' && thread.title && thread.title.trim() !== UNSET_TOPIC ? thread.title.trim() : '');
 // The closing line of an answer: which model said it and how long it took. It is drawn as the card's foot.
 export const ATTRIBUTION_RE = /^\*[^*]+\*$/;
 export const QUOTE_RE = /^> ?(.*)$/;

@@ -145,6 +145,31 @@ test('two Chat questions in a note, one a follow-up, are two entries with their 
   assert.equal(fs.readFileSync(noteFile, 'utf8'), NOTE);
 });
 
+test('any agent (2026-10-14): the tab shows one agent\'s questions at a time, Chat first; another agent\'s are asked through it, kept apart, and the agent shown is remembered', async () => {
+  const file = path.join(tmp('store'), 'chat-benchmark.json');
+  const { chat, jobs } = fakeChat();
+  const bench = benchmark(file, chat);
+  const chatList = await bench.list();
+  assert.deepEqual(chatList.agents.map((one) => one.name), ['Chat', 'Brainstorm', 'Discover', 'Create']);
+  assert.equal(chatList.agent, 'bart');
+  assert.deepEqual(entriesOf(chatList).map((entry) => entry.question), ['What is X?', 'And Y?']);
+
+  const storm = await bench.list(undefined, 'brainstorm');
+  assert.equal(storm.agent, 'brainstorm');
+  assert.deepEqual(entriesOf(storm).map((entry) => [entry.question, entry.old]), [['a topic', 'A card.']]);
+  assert.match(entriesOf(storm)[0].key, /^brainstorm\n/, 'kept apart from a Chat question of the same words');
+  assert.equal(await bench.run(), true);
+  await bench.idle();
+  assert.deepEqual(jobs.map((job) => [job.agent, job.question]), [['brainstorm', 'a topic']], 'only the agent shown is asked, through it');
+  assert.equal(entriesOf(await bench.list()).length, 1, 'shown again with no agent named: still Brainstorm');
+  assert.deepEqual(entriesOf(await bench.list(undefined, 'discover')), [], 'no Discover answers in the notes');
+  assert.equal((await bench.list(undefined, 'nobody')).agent, 'discover', 'an agent that is none is not taken');
+  // Read again from the file (the app reopened): the agent shown, and the Brainstorm answer in its run.
+  const again = benchmark(file, chat);
+  assert.equal((await again.list()).agent, 'discover');
+  assert.equal(entriesOf(await again.list(undefined, 'brainstorm'))[0].new.answer, 'NEW 1: a topic');
+});
+
 test('a note typed in an entry survives reloading the tab and a Run again', async () => {
   const file = path.join(tmp('notes'), 'chat-benchmark.json');
   const { chat } = fakeChat();
@@ -389,6 +414,15 @@ test('the Benchmark tab: Run at the top, each question over Old and New, the not
   const shown = { ...data, runs, current: 'run-1', live: false };
   const elsewhere = applyChange(shown, { run: 'run-2', key: 'a', new: { answer: 'not here' }, running: true });
   assert.deepEqual([elsewhere.running, elsewhere.groups[0].entries[0].new], [true, {}]);
+  // Any agent (2026-10-14): the agents across the very top, the one shown picked; while a run runs, only it can be picked.
+  const agents = [{ id: 'bart', name: 'Chat' }, { id: 'brainstorm', name: 'Brainstorm' }, { id: 'discover', name: 'Discover' }, { id: 'create', name: 'Create' }];
+  const storm = renderToStaticMarkup(React.createElement(BenchmarkList, { data: { ...data, groups: [], runs, current: 'run-2', live: true, agents, agent: 'brainstorm' }, onRun() {}, onStop() {}, onRunOne() {}, onNote() {} }));
+  assert.deepEqual([...storm.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1].replace(/ · .*/, '')).slice(0, 4), ['Chat', 'Brainstorm', 'Discover', 'Create']);
+  assert.match(storm, /aria-selected="true" data-agent="brainstorm"/);
+  assert.ok(storm.includes('No Brainstorm questions in the notes.'));
+  const stormBusy = renderToStaticMarkup(React.createElement(BenchmarkList, { data: { ...data, runs, current: 'run-2', live: true, agents, agent: 'brainstorm', running: true }, onRun() {}, onStop() {}, onRunOne() {}, onNote() {} }));
+  assert.match(stormBusy, /data-agent="bart"[^>]*disabled=""/);
+  assert.ok(!/data-agent="brainstorm"[^>]*disabled=""/.test(stormBusy));
 });
 
 test('Export (2026-10-14): the run shown as one page: its name, each question with Old, New and the note, and the same as JSON', () => {

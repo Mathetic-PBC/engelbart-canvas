@@ -17,7 +17,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 // Bundled into dist/ by scripts/build.mjs, and left out of the app by electron-builder.config.cjs.
-const RENDERER = ['react', 'react-dom', 'roughjs', /^@xterm\//, /^@fontsource\//];
+const RENDERER = ['react', 'react-dom', 'roughjs', /^@xterm\//, /^@fontsource\//, /^@phosphor-icons\//];
 const isRenderer = (name) => RENDERER.some((rule) => (typeof rule === 'string' ? rule === name : rule.test(name)));
 
 function loadAsar() {

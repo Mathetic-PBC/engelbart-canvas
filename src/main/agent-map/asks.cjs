@@ -105,7 +105,10 @@ function promptSource(record) {
   if (!record || !record.system || record.agent === 'run step') return null;
   const builtIn = builtInPrompt(record);
   if (builtIn == null) return null;
-  return String(record.system).trim() === String(builtIn).trim() ? 'built-in' : 'custom';
+  // A Brainstorm run of the Welcome walkthrough (2026-10-14) ran under that exchange's own built-in prompt.
+  const welcome = record.agent === 'brainstorm' ? builtInPrompt({ agent: 'welcome' }) : null;
+  const same = (text) => text != null && String(record.system).trim() === String(text).trim();
+  return same(builtIn) || same(welcome) ? 'built-in' : 'custom';
 }
 
 /** One entry with its records whole (runLog.get), for the Viewer's right side and its export. → null when gone. */

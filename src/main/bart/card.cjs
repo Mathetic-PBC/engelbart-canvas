@@ -32,6 +32,9 @@
 // MATH-40 round 3 (2026-10-06): `say` is back, drawn in the card above its question: a reply of one to three sentences
 // to what they just said. The next card's lead-in is its `say`, its title NEXT_TITLE alone; nextLead still reads a
 // lead-in from the title of an agent that wrote it there.
+// 2026-10-14: an ordinary @brainstorm is a conversation in prose (./brainstorm-system-prompt.cjs) and asks no cards. What
+// is here still serves @discover's card, the Welcome walkthrough's three, and the cards and results older documents keep;
+// a conversation that goes on from one is sent its cards as text (cardAsText).
 
 const TYPES = ['mcq', 'select_all', 'free', 'open'];
 const MAX_OPTIONS = 6;
@@ -230,6 +233,13 @@ function questionOf(card) {
   return { ...item, options: item.options || [], eyebrow: card.questions.eyebrow || '' };
 }
 
+/** A card as an agent reading an older conversation is shown it (2026-10-14): its reply, its question, its options as a list. */
+function cardAsText(card) {
+  const asked = card && card.card !== 'none' ? questionOf(card) : null;
+  if (!asked) return '';
+  return [card.say, asked.title, ...asked.options.map((option) => `- ${option.label}`)].filter(Boolean).join('\n');
+}
+
 const isChoice = (type) => type === 'mcq' || type === 'select_all' || type === 'focus';
 
 /**
@@ -369,4 +379,4 @@ function resultParts(text) {
   return sentence ? { sentence } : null;
 }
 
-module.exports = { resultText, resultParts, nextLead, nextTitle, sameWords, NEXT_ID, NEXT_TITLE, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, RESULT_OFFER, OLD_RESULT_OFFER, isResultOffer, LEFT_OPEN, recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, jsonBlocks, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };
+module.exports = { resultText, resultParts, nextLead, nextTitle, sameWords, NEXT_ID, NEXT_TITLE, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, RESULT_OFFER, OLD_RESULT_OFFER, isResultOffer, LEFT_OPEN, recapParts, recapLine, RECAP_LABELS, TYPES, SKIPPED, WRAP, OPENING, MAP_GROUPS, LOOK_FOR_CHARS, jsonBlocks, parseJson, cleanMap, mapHolds, readCard, cardBody, cardOfAnswer, cardAsText, questionOf, isChoice, answerLine, readWrap, withWrap, readAnswer, answersSoFar };

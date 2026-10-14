@@ -156,7 +156,8 @@ test('on a live @brainstorm versions card the field under it reads "Or rewrite i
   for (const lines of [['@brainstorm', ...answer(FOCUS), ''], ['@discover', ...answer(VERSIONS), '']]) {
     assert.match(mounted(lines).editor.editorHtml(), /placeholder="Pick one, or say it in your own words…"/, `${lines[0]}: as on any card`);
   }
-  assert.equal(editorModule.BRAINSTORM_ITEM.summary, 'Think out loud about a topic, a paper or what is on your mind, then write what you want to dig into next.', 'MATH-40');
+  assert.match(editorModule.BRAINSTORM_ITEM.summary, /^Think something through out loud/, '2026-10-14: a conversation');
+  assert.ok(!/dig into next|card/.test(editorModule.BRAINSTORM_ITEM.summary + editorModule.BRAINSTORM_ITEM.facts), 'no fixed ending, no cards');
 });
 
 /* ------------------------------------------------------------- @orient folded into @brainstorm (2026-10-05) */
@@ -194,7 +195,7 @@ test('a live @brainstorm card is drawn as an answer: what it says, then its ques
   assert.match(next.editor.editorHtml(), /placeholder="One thing, as specific as you can make it" aria-label="Answer"/);
 });
 
-test('a free card is answered by what is typed in the field under it, sent with Enter or Send as a follow-up is, never routed; the turns before it collapse; nothing typed sends nothing (2026-10-13)', () => {
+test('a free card is answered by what is typed in the field under it, sent with Enter or Send as a follow-up is, never routed; with one turn before it nothing collapses (2026-10-14: the two newest stay open); nothing typed sends nothing (2026-10-13)', () => {
   const m = mounted(['@brainstorm', ...answer(FREE), '']);
   m.props.onRoute = () => { throw new Error('routed'); };
   m.editor.sendFollow(0);
@@ -204,7 +205,7 @@ test('a free card is answered by what is typed in the field under it, sent with 
   assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['brainstorm', 'when the lock frees', 1]);
   const ls = m.lines();
   assert.equal(ls[ls.length - 3], '@brainstorm when the lock frees');
-  assert.ok(ls.slice(1, ls.length - 3).every((l) => l.startsWith('bart+>')), 'the card\'s turn collapsed');
+  assert.ok(ls.slice(1, ls.length - 3).every((l) => l.startsWith('bart>')), 'the card\'s turn stays open: two turns');
   assert.equal(m.editor.followText.get(0), undefined, 'the field emptied');
 });
 
@@ -235,7 +236,7 @@ test('a single choice answers with the row clicked, with what is typed as a note
   const done = mounted(['@brainstorm', ...answer(MANY), '@brainstorm picked "Retries", "Deadlocks"; note: mostly at night', 'bart> FAKE', 'bart> *3 s*', '']);
   const row = done.lines().indexOf('@brainstorm picked "Retries", "Deadlocks"; note: mostly at night');
   const line = await lineOf(done, row);
-  assert.ok(line.includes('<span class="t" style="flex:1;min-width:0"><span style="color:#0070f3;font-weight:500">@bart</span> Retries, Deadlocks · mostly at night</span>'), 'their picks and note, after @bart (2026-10-13)');
+  assert.ok(line.includes('<span class="t" style="flex:1;min-width:0"><span style="color:#0070f3;font-weight:500">@brainstorm</span> Retries, Deadlocks · mostly at night</span>'), 'their picks and note, after the agent the line names (2026-10-14)');
   assert.match(line, /data-raw="@brainstorm picked &quot;Retries&quot;, &quot;Deadlocks&quot;; note: mostly at night"/, 'the line as main reads it');
   assert.match(done.html(0), /class="bs-row" disabled role="checkbox" aria-checked="true">/, 'still, ticked');
   const skipped = await lineOf(mounted(['@brainstorm', ...answer(FREE), '@brainstorm (skipped)', 'bart> x', '']), answer(FREE).length + 1);
@@ -299,7 +300,7 @@ test('an @orient line is asked as @brainstorm and stays as written; its live car
   assert.ok(pending.includes('Reading tutortrace.pdf') && !pending.includes('&quot;card&quot;') && !pending.includes('"card"'));
 });
 
-test('a recap is drawn as sections, the paper path\'s "What you took from it" and an older @orient recap\'s labels too; under it "Brainstorm again", which may be sent empty, then Send to Discover on a row of its own (M-07, M-08, A-05, A-06)', async () => {
+test('an older recap is drawn as sections, the paper path\'s "What you took from it" and an older @orient recap\'s labels too; under it the follow-up field, which needs words since 2026-10-14, then Send to Discover on a row of its own (M-07, M-08, A-05, A-06)', async () => {
   for (const [first, label] of [['@brainstorm @[TutorTrace]', 'What you took from it'], ['@orient metacognition', 'What you know']]) {
     const lines = [first, ...answer(KNOW), '@brainstorm (wrap up)', `bart> ${label}: learners query before trying`, 'bart> Where it thins out: not said', 'bart> What draws you: the gap', 'bart> Your question: not written yet', 'bart> ', 'bart> *3 s*', ''];
     const m = mounted(lines);
@@ -309,15 +310,19 @@ test('a recap is drawn as sections, the paper path\'s "What you took from it" an
     assert.match(await lineOf(m, row('bart> What draws you: the gap')), />What draws you<\/span>/, 'an older recap\'s label still draws');
     const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
     const follow = m.editor.followHtml(m.lines(), model.threads(m.lines())[0]);
-    assert.match(follow, /data-agent="brainstorm" data-empty="1" placeholder="Respond…" aria-label="Brainstorm again"/, 'Brainstorm again, as it is today');
+    assert.match(follow, /data-agent="brainstorm" placeholder="Respond…" aria-label="Ask a follow-up"/, 'the conversation\'s next turn, as Chat\'s field is');
+    assert.ok(!follow.includes('data-empty'), 'it is not sent empty');
     assert.match(follow, />@brainstorm<\/span>/);
     m.editor.replyOpen.add(0); // Reply opened it (2026-10-13)
     const page = m.editor.editorHtml();
     assert.ok(page.indexOf('data-recap-discover="0"') > page.indexOf('data-followup="0"'), 'Send to Discover, a row of its own under it');
     assert.ok(!page.includes('Orient again'));
     m.editor.sendFollow(0);
-    assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['brainstorm', '', 2], 'sent empty: @brainstorm again on the same thread');
-    assert.equal(m.lines()[lines.length - 1], '@brainstorm');
+    assert.equal(m.asks.length, 0, 'sent empty: nothing is asked');
+    m.editor.followText.set(0, 'Actually the gap is narrower than that');
+    m.editor.sendFollow(0);
+    assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['brainstorm', 'Actually the gap is narrower than that', 2], 'typed: the same conversation goes on, with its earlier turns');
+    assert.equal(m.lines()[lines.length - 1], '@brainstorm Actually the gap is narrower than that');
   }
 });
 
@@ -435,4 +440,28 @@ test('the walkthrough\'s handoff asks @discover on the last brainstorm result, o
   // No result in the document: nothing.
   const none = mounted(['Welcome!', '@brainstorm', ...answer(NEXT), '']);
   assert.equal(none.editor.discoverLastResult(), false);
+});
+
+/* ------------------------------------------------------------- @brainstorm as a conversation (2026-10-14) */
+
+test('an @brainstorm answer in prose is drawn as Chat\'s: its own lines, Copy, Regenerate and Reply on its foot, no card, Skip, Wrap up, Send to Discover or result line; one that asks nothing still takes a reply, which goes on in the same thread', async () => {
+  const prose = (text) => replyLines(text, { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: false, agent: 'brainstorm' });
+  const REFLECT = 'So the rubric did more than the model swap.';
+  const lines = ['@brainstorm why did the second version feel better', ...prose('Was it the model, or the rubric you wrote at the same time?'), '@brainstorm the rubric, I think', ...prose(`${REFLECT}\n\nWhat you know: the comparison mixed two changes.`), ''];
+  const m = mounted(lines);
+  assert.equal(m.editor.cardsOf(m.lines()).byQ.size, 0, 'no card');
+  const page = m.editor.editorHtml();
+  for (const act of ['cardskip', 'cardwrap', 'cardopt', 'opendiscover', 'resultask']) assert.ok(!page.includes(`data-act="${act}"`), `no ${act}`);
+  assert.ok(!page.includes('data-recap-discover'), 'a line that reads like an older recap section is not one: no Send to Discover');
+  assert.doesNotMatch(await lineOf(m, m.lines().indexOf('bart> What you know: the comparison mixed two changes.')), />What you know<\/span>/, 'nor drawn as a section');
+  assert.match(page, /data-act="regen"[^>]*data-plain="1"/, 'Regenerate, on its one model');
+  assert.match(page, /data-act="reply"/, 'Reply, though it asked nothing');
+  assert.match(await lineOf(m, m.lines().indexOf(`bart> ${REFLECT}`)), /So the rubric did more than the model swap\./, 'its words as written');
+  m.editor.replyOpen.add(0);
+  const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
+  assert.match(m.editor.followHtml(m.lines(), model.threads(m.lines())[0]), /data-agent="brainstorm" placeholder="Respond…" aria-label="Ask a follow-up"/);
+  m.editor.followText.set(0, 'and the rubric came from the tutors');
+  m.editor.sendFollow(0);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['brainstorm', 'and the rubric came from the tutors', 2], 'the same conversation, with its two turns');
+  assert.equal(model.threads(m.lines()).length, 1);
 });
