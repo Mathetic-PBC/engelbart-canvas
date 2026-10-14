@@ -290,6 +290,17 @@ test('Connect while a sign-in waits opens the same page again, not a second sign
   await until(() => zotero.status().connected);
 });
 
+test('Connect once signed in opens nothing: it answers the status (2026-10-14, the beta\'s step reopened Zotero\'s page each press)', async (t) => {
+  const { zotero, broker, opened } = await setup(t);
+  await zotero.connect();
+  await browse(broker, opened[0]);
+  await until(() => zotero.status().connected);
+  const again = await zotero.connect();
+  assert.equal(again.connected, true);
+  assert.equal(again.pending, null);
+  assert.equal(opened.length, 1, 'no second authorize page');
+});
+
 test('a browser that will not open cancels the sign-in and says so', async (t) => {
   const { zotero } = await setup(t, { openAuthorize: () => { throw new Error('no browser'); } });
   await assert.rejects(zotero.connect(), /no browser/);

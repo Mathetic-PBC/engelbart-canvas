@@ -154,6 +154,7 @@ const engelbartAPI = Object.freeze({
   connectNeed: invoke('connect-need'),
   connectImport: invoke('connect-import'),
   connectStop: invoke('connect-stop'),
+  connectUnblock: invoke('connect-unblock'), // (id, provider?) → snapshot: a run waiting for its provider goes on
   connectStopJob: invoke('connect-stop-job'),
   connectProvider: invoke('connect-provider'),
   connectRetryMemory: invoke('connect-retry-memory'),
@@ -335,6 +336,7 @@ const engelbartAPI = Object.freeze({
   toolsInstall: invoke('tools-install'),
   toolsUpdate: invoke('tools-update'),
   toolsSignIn: invoke('tools-sign-in'),
+  toolsConnect: invoke('tools-connect'), // (name) → snapshot; installs, updates, checks and signs in, whichever it needs
   toolsCancelSignIn: invoke('tools-cancel-sign-in'),
   toolsSignOut: invoke('tools-sign-out'),
   toolsSkip: invoke('tools-skip'),

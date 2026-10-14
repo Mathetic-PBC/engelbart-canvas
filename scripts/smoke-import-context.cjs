@@ -190,6 +190,7 @@ app.whenReady().then(async () => {
       assert.equal(await has(wc, '.bar'), false, 'no Sources / From / Select all (Attachment 16)');
       assert.equal(await has(wc, '.consent'), false, 'no subscription card (Attachment 17)');
       assert.equal(await subtext(wc, '[data-app]'), 0, 'no subtext under the sources');
+      assert.equal(await js(wc, 'document.querySelectorAll("[data-app][aria-checked=true]").length'), 0, 'nothing ticked for them (2026-10-14)');
       // One group open at a time (Attachment 20).
       assert.equal(await js(wc, 'document.querySelector("[data-group=notes]").getAttribute("aria-expanded")'), 'true', 'Notes open first');
       await press(wc, '[data-group="transcripts"]');
@@ -280,6 +281,18 @@ app.whenReady().then(async () => {
     const popupApp = await until(() => js(wc, '(document.querySelector("[data-need-popup]")||{}).dataset'), 'a sign-in popup', 1200);
     assert.ok(popupApp.needPopup);
     assert.equal(BrowserWindow.getAllWindows().filter((one) => one.isVisible() && one !== win).length, 0, 'no other Engelbart window shown');
+    // A connector nothing reaches (Granola, when the tool agent names it) is held on a Connect popup of its own first
+    // (2026-10-14: its import used to start without the connection, and could never use one made mid-run); it opens the
+    // default browser, so it names none. A web app's sign-in continues in Arc.
+    if (/^Connect /.test(await text(wc, '[data-need-popup] h3'))) {
+      assert.equal(await has(wc, '[data-need-popup] .need-modal > p'), false, 'no line under a Connect popup');
+      assert.equal(await text(wc, '[data-need-popup] [data-need-primary]'), 'Connect');
+      await shot(wc, '13a-connect-popup');
+      await pressText(wc, '[data-need-popup] .mf', 'Later');
+      await until(async () => !/^Connect /.test(await text(wc, '[data-need-popup] h3')), 'the next popup');
+    }
+    // The overlay is the scrim (the whole window), so native views step aside for it, and a click on Later lands on Later.
+    assert.equal(await js(wc, '(()=>{const s=document.querySelector("[data-need-popup] .scrim");const r=s.getBoundingClientRect();const l=document.querySelector("[data-need-later]").getBoundingClientRect();return s.dataset.overlay==="1"&&r.width===innerWidth&&r.height===innerHeight&&document.elementFromPoint(l.x+l.width/2,l.y+l.height/2)===document.querySelector("[data-need-later]")})()'), true, 'the scrim is the overlay, Later on top');
     assert.match(await text(wc, '[data-need-popup] h3'), /^Sign in to /);
     assert.equal(await text(wc, '[data-need-popup] p'), 'Continue in Arc.');
     assert.equal(await text(wc, '[data-need-popup] [data-need-primary]'), 'Open Arc');
@@ -323,6 +336,12 @@ app.whenReady().then(async () => {
     assert.ok(md.length > 0 && md.every((id) => contexts.includes(id)), 'what came in is in the Welcome project\'s folder');
     await press(wc, '[data-import-status-close]');
     await until(() => js(wc, '!document.querySelector("[data-import-status]")'), 'Open library closes it');
+    /* Import context from Settings, inside the project (2026-10-14): straight to the source picker, nothing ticked */
+    await js(wc, 'window.dispatchEvent(new CustomEvent("engelbart:guided-setup"))'); // Settings ▸ Import context ▸ Start
+    await until(() => js(wc, '!!document.querySelector("[data-import-flow=modal]")'), 'Import context over the project');
+    const modal = await js(wc, '(()=>{const el=document.querySelector("[data-import-flow=modal]");return {screen:el.dataset.screen,dialog:el.dataset.dialog,ticked:document.querySelectorAll("[data-import-flow=modal] [data-app][aria-checked=true]").length}})()');
+    assert.deepEqual(modal, { screen: 'picker', dialog: '', ticked: 0 }, `the picker at once, nothing ticked: ${JSON.stringify(modal)}`);
+    await shot(wc, '16-settings-import');
     console.log(`smoke-import-context (${MODE}): ok (${titles.length} projects found, ${ticked.length} ${MODE === 'auto' ? 'tools' : 'sources'} ticked, ${logos.length} imported tiles)`);
     app.exit(0);
   } catch (error) {

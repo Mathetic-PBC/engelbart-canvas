@@ -337,13 +337,13 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
         <Head title="Set up your tools">{connectMode ? 'Engelbart works through Git and an agent: Claude Code or Codex. Install one and sign in; the next step’s agents run on it.' : 'Engelbart works through Git and an agent: Claude Code or Codex. They install in the background while you carry on.'}</Head>
         {withTools === null && <div style={{ minHeight: 150, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ThinkingDots label="checking this Mac" /></div>}
         {withTools && (
-          <div data-onboarding-tools="1" style={{ display: 'flex', flexDirection: 'column', borderBottom: '1px solid #f2f2f2' }}>
+          <div data-onboarding-tools="1" style={{ display: 'flex', flexDirection: 'column' }}>
             {plan.ids.map((id) => {
               const row = rowOf(tools.tools[id]);
               const apple = id === 'git' && tools.platform === 'darwin' && row.action === 'install';
               const label = { install: 'Install', update: 'Update', 'sign-in': 'Sign in', retry: 'Try again', cancel: 'Cancel' }[row.action];
               return (
-                <div key={id} data-tool-row={id} style={{ display: 'flex', alignItems: 'flex-start', gap: 16, padding: '14px 2px', borderTop: '1px solid #f2f2f2' }}>
+                <div key={id} data-tool-row={id} style={{ display: 'flex', alignItems: 'flex-start', gap: 16, padding: '14px 2px' }}>
                   <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
                     <span style={{ font: '500 14px/1.4 var(--font-sans)', color: '#171717' }}>{row.name}</span>
                     <span style={{ font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{TOOL_WHY[id]}{apple ? ' Installing it opens Apple’s installer for the command line tools.' : ''}</span>
@@ -369,7 +369,7 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
       <div data-screen-label="03 Import context" data-part={cur} style={{ ...column, minHeight: 0, gap: 24, animation: rise }}>
         <Head title="Add to your library">Bring in the papers, websites, and code you've already read to conduct research. You can add more any time.</Head>
         <div style={{ flex: '0 1 300px', minHeight: 180, display: 'flex', flexDirection: 'column' }}>
-          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '0 2px 12px', borderBottom: '1px solid #f2f2f2' }}>
+          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '0 2px 12px' }}>
             <Mark done={n > 0} />
             <Glyph>{ICON[cur]}</Glyph>
             <span style={{ flex: 1, minWidth: 0, font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{LABEL[cur]}</span>

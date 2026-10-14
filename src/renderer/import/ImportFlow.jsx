@@ -132,6 +132,12 @@ const runApps = (F) => (F.mode === 'auto' ? F.confirmed : F.picks);
 
 const RUN_LABEL = 'Import to Engelbart';
 
+// "Allow Engelbart to read Apple Notes?" answered Allow once is not asked again (2026-10-14: skip permission prompts that
+// were already accepted). macOS keeps its own answer; this is Engelbart's question in front of it.
+const NOTES_KEY = 'engelbart.import.notesConsent';
+function notesConsented() { try { return window.localStorage.getItem(NOTES_KEY) === '1'; } catch { return false; } }
+function rememberNotesConsent() { try { window.localStorage.setItem(NOTES_KEY, '1'); } catch { /* asked again next time */ } }
+
 /** Every tool the tools page lists (the catalog's, then those added), its ids. */
 const toolIds = (F) => [...CATALOG.map((tool) => tool.id), ...F.added.map((tool) => tool.id).filter((id) => !CATALOG_IDS.includes(id))];
 
@@ -174,8 +180,16 @@ function sourceHint(app, diskGranted) {
  * `copy`/`setCopy` the standalone page's editing; `preview` a dialog or screen to show at once (the standalone page's
  * Popups); `platform` 'darwin' or another.
  */
-export default function ImportFlow({ api, mode = 'new', into = null, workspaceId = null, onDone = () => {}, onClose = () => {}, edit = false, copy = {}, setCopy = () => {}, preview = null, platform = 'darwin' }) {
-  const [F, setF] = React.useState(fresh);
+export default function ImportFlow({ api, mode = 'new', into = null, workspaceId = null, intoProject = null, onDone = () => {}, onClose = () => {}, edit = false, copy = {}, setCopy = () => {}, preview = null, platform = 'darwin' }) {
+  // Import context from inside a project (2026-10-14: "it should just basically start from if they picked manual import"):
+  // the source picker at once, for this project; no intro, work questions or project list again. The permissions already
+  // answered are not asked again (the browser's sign-ins, Full Disk Access, agents in the browser are kept by main; Apple
+  // Notes' consent below).
+  const [F, setF] = React.useState(() => (mode === 'modal' && into ? {
+    ...fresh(), screen: 'picker', dialog: null, mode: 'manual', modeChoice: 'manual',
+    customProjects: [{ id: `project:${into}`, title: (intoProject && intoProject.name) || 'This project', description: (intoProject && intoProject.description) || '', recent: '' }],
+    picked: [`project:${into}`], notesConsent: notesConsented(),
+  } : fresh()));
   const set = React.useCallback((patch) => setF((now) => ({ ...now, ...(typeof patch === 'function' ? patch(now) : patch) })), []);
   const latest = React.useRef(F);
   latest.current = F;
@@ -199,7 +213,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     let live = true;
     api.flow().then((saved) => {
       if (!live) return;
-      if (saved && saved.v === FLOW_VERSION && (mode === 'new' || saved.into === into)) { restoredPending.current = !!saved.pendingRun; setF({ ...fresh(), ...saved, menu: null }); }
+      // In a project, only a run that Full Disk Access's relaunch left pending comes back; otherwise the picker, fresh.
+      if (saved && saved.v === FLOW_VERSION && (mode === 'new' || (saved.into === into && saved.pendingRun))) { restoredPending.current = !!saved.pendingRun; setF({ ...fresh(), ...saved, menu: null }); }
       setRestored(true);
     }).catch(() => setRestored(true));
     api.providers(false).then((out) => { if (live) setProviders(out); }).catch(() => {});
@@ -223,16 +238,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     return () => clearTimeout(timer);
   }, [F, restored]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The picker starts with what was found on this Mac ticked (the old choose screen's), once.
-  const seeded = React.useRef(false);
-  React.useEffect(() => {
-    if (seeded.current || !found || !restored) return;
-    seeded.current = true;
-    // As connect-detect answers (model/connect.js foundRow): what is on this Mac, the browser, GitHub, local repositories.
-    const local = Object.entries(found.apps || {}).filter(([app, value]) => value && value.found && CATALOG_IDS.includes(app) && isLocal(app)).map(([app]) => app);
-    const more = [...(found.sites && found.sites.found ? [SITES] : []), ...(found.github && found.github.found ? ['GitHub'] : []), ...((found.localRepos || []).length ? [LOCAL_FOLDERS] : [])];
-    if ((local.length || more.length) && latest.current.picks.join() === DEFAULT_PICKS.join()) set({ picks: [...new Set([...local, ...more])] });
-  }, [found, restored]); // eslint-disable-line react-hooks/exhaustive-deps
+  // The picker starts with nothing ticked (2026-10-14: "it should not preselect anything on manual import, including
+  // obsidian"); what was found on this Mac only informs the agents' tools page.
 
   // The tool agent's answer ticks what it found, unless the person touched it.
   React.useEffect(() => {
@@ -288,20 +295,58 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   /* -------- the provider */
   const decision = providers && providers.decision;
-  const readyProviders = () => ((providers && providers.providers) || []).filter((one) => one.installed && one.signedIn).map((one) => one.id);
+  const toolsNow = React.useRef(null);
+  toolsNow.current = toolsSnap;
+  const cliOf = (provider) => (provider === 'openai' ? 'codex' : 'claude');
+  const checkedAt = (provider) => { const tool = toolsNow.current && toolsNow.current.tools && toolsNow.current.tools[cliOf(provider)]; return (tool && tool.checkedAt) || null; };
+  // A provider whose CLI says it is signed in yet turned the agent away (an account without a subscription, say): not
+  // ready for this until it is signed in again (its check changes), so Try again never re-runs it as it is.
+  const refusedNow = () => { const refused = latest.current.refused; return refused && checkedAt(refused.provider) === refused.since ? refused.provider : null; };
+  const readyIn = (status) => ((status && status.providers) || []).filter((one) => one.installed && one.signedIn && one.id !== refusedNow()).map((one) => one.id);
+  const readyProviders = () => readyIn(providers);
 
-  /** The provider for `purpose` ('start' | 'run'): asked when both are subscribed, the tools set up when none can run. */
-  const needProvider = async (purpose) => {
+  /**
+   * The provider for `purpose`: 'start' | 'run' | 'projects' (the recent projects again: their line's Try again or Connect,
+   * 2026-10-14) | 'tools' (the tool agent again). Asked when both are subscribed; Connect Claude Code or Codex when none can
+   * run, or `connectFor` can't (`refused`: it turned the agent away while signed in). The one picked before is kept only
+   * while its CLI can run (read fresh: a stale "ready" re-ran a signed-out Claude Code on every Try again).
+   */
+  const needProvider = async (purpose, connectFor = null, refused = false) => {
+    if (refused && connectFor) { const mark = { provider: connectFor, since: checkedAt(connectFor) }; latest.current = { ...latest.current, refused: mark }; set({ refused: mark }); }
     let status = providers;
     try { status = await api.providers(true); setProviders(status); } catch { /* the last answer */ }
     const out = status && status.decision;
-    if (!out || out.setup) { set({ purpose, dialog: 'tools-setup' }); return; }
-    if (latest.current.provider && readyProviders().concat(out.choices || []).includes(latest.current.provider)) { providerReady(latest.current.provider, purpose); return; }
-    if (out.ask) { set({ purpose, providerChoice: out.suggested || null, dialog: 'provider-choice' }); return; }
-    providerReady(out.pick, purpose);
+    const ready = readyIn(status);
+    if (!out || !ready.length || (connectFor && !ready.includes(connectFor))) { set({ purpose, connectFor, dialog: 'tools-setup' }); return; }
+    if (connectFor) { providerReady(connectFor, purpose); return; }
+    if (latest.current.provider && ready.includes(latest.current.provider)) { providerReady(latest.current.provider, purpose); return; }
+    if (out.ask && out.choices.every((id) => ready.includes(id))) { set({ purpose, providerChoice: out.suggested || null, dialog: 'provider-choice' }); return; }
+    providerReady(out.pick && ready.includes(out.pick) ? out.pick : ready[0], purpose);
   };
+  // Connected while Connect Claude Code or Codex is open (its Connect, or Settings): on with what it was opened for, with
+  // no Continue to press (2026-10-14: "maybe if they dont hit connect it doesnt work but fails silently").
+  const connectOpen = F.dialog === 'tools-setup';
+  const readyNow = readyProviders().join(',');
+  const wantedAt = F.connectFor ? checkedAt(F.connectFor) : null;
+  React.useEffect(() => {
+    if (!connectOpen || !readyNow) return;
+    const want = latest.current.connectFor;
+    if (want && !readyNow.split(',').includes(want)) return;
+    void needProvider(latest.current.purpose || 'start', want || null);
+  }, [connectOpen, readyNow, wantedAt]); // eslint-disable-line react-hooks/exhaustive-deps
   const providerReady = (provider, purpose) => {
-    set({ provider });
+    set({ provider, connectFor: null, refused: null });
+    if (purpose === 'projects') {
+      // Try again (or Connect) on the recent projects: they are looked for again, now on a provider that can run.
+      set({ dialog: null });
+      api.discoverProjects({ provider, again: true }).then(setDiscovery).catch(() => {});
+      return;
+    }
+    if (purpose === 'tools') {
+      set({ dialog: null });
+      api.discoverTools({ provider, browserId: (browsers && browsers.chosenId) || null, keychain: (browsers && browsers.keychain) || null, again: true }).then(setDiscovery).catch(() => {});
+      return;
+    }
     if (purpose === 'start') {
       // Recent projects, found in the background from now on: not waiting for the method (the workspace's ask).
       api.discoverProjects({ provider }).then(setDiscovery).catch(() => {});
@@ -400,7 +445,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     // Which project opens (2026-10-14, "Right now I think it opens a random project"): asked when more than one was picked.
     // It gets the Welcome project holding every source the run brings in, for all the projects.
     if (mode === 'new' && now.picked.length > 1 && !now.picked.includes(now.firstProject)) { set({ dialog: 'first-project', firstChoice: now.picked[0] }); return; }
-    if (apps.includes('Apple Notes') && !now.notesConsent) { set({ dialog: 'notes-permission' }); return; }
+    if (apps.includes('Apple Notes') && !now.notesConsent && !notesConsented()) { set({ dialog: 'notes-permission' }); return; }
     const files = apps.some((id) => FILE_TOOLS.includes(id));
     if (platform === 'darwin' && files && !(disk && (disk.granted || disk.grantedFresh)) && !now.folderAnswers) { set({ dialog: 'folders' }); return; }
     if (!now.provider) { void needProvider('run'); return; }
@@ -574,18 +619,28 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     else set({ screen: 'picker' });
   }}>{CHEV} Back</button>;
 
+  // 2026-10-14 (a beta tester: "it said try again but it didn't work ever"): a failure its provider's CLI caused (not
+  // installed, not signed in: the discovery's `connect`) asks to connect that one, and Try again checks the provider before
+  // it looks again, so it never re-runs a CLI that cannot run. A search that never started (idle, or stopped by a quit)
+  // says so instead of "Finding…".
   const discoveryLine = () => {
     if (projectStatus === 'idle' && !F.provider) return null;
+    const found = (discovery && discovery.projects) || {};
+    const connect = found.connect === 'anthropic' || found.connect === 'openai' ? found.connect : null;
+    const named = connect === 'openai' ? 'Codex' : connect === 'anthropic' ? 'Claude Code' : '';
+    // Its CLI says it is signed in, yet it turned the agent away (no subscription, say): connecting is signing in again.
+    const refused = projectStatus === 'failed' && !!connect && ((providers && providers.providers) || []).some((one) => one.id === connect && one.installed && one.signedIn);
     const text = projectStatus === 'done' ? 'Recent projects found'
       : projectStatus === 'running' ? 'Finding recent projects in the background…'
-        : projectStatus === 'failed' ? 'Couldn’t find recent projects. Add your own below.'
-          : projectStatus === 'waiting-provider' ? 'Waiting for your AI provider…' : 'Finding recent projects in the background…';
+        : projectStatus === 'failed' ? (connect ? `Couldn’t reach ${named}.` : 'Couldn’t find recent projects. Add your own below.')
+          : projectStatus === 'waiting-provider' ? `Waiting for ${named || 'your AI provider'}…`
+            : projectStatus === 'stale' || projectStatus === 'idle' ? 'Recent projects weren’t looked for.' : 'Finding recent projects in the background…';
     return (
-      <div className="discovery-line" role="status">
+      <div className="discovery-line" role="status" data-discovery-status={projectStatus}>
         <span className="activity-dot" />
         <span>{text}</span>
-        {projectStatus === 'waiting-provider' && <button type="button" className="link under" onClick={() => needProvider('start')}>Connect provider</button>}
-        {(projectStatus === 'failed' || projectStatus === 'stale') && <button type="button" className="link under" onClick={() => api.discoverProjects({ provider: F.provider, again: true }).then(setDiscovery).catch(() => {})}>Try again</button>}
+        {(projectStatus === 'waiting-provider' || (projectStatus === 'failed' && connect)) && <button type="button" className="link under" data-discovery-connect={connect || ''} onClick={() => needProvider('projects', connect, refused)}>{named ? `Connect ${named}` : 'Connect Claude Code or Codex'}</button>}
+        {((projectStatus === 'failed' && !connect) || projectStatus === 'stale' || projectStatus === 'idle') && <button type="button" className="link under" data-discovery-again="1" onClick={() => needProvider('projects')}>Try again</button>}
       </div>
     );
   };
@@ -819,7 +874,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           })}
         </div>
       </main>
-      <footer className="foot"><div className="foot-inner"><div className="back-skip"><button type="button" className="link" onClick={() => set({ dialog: 'import-mode', modeFirst: false })}>Back</button></div><span className="muted review-count">{F.picks.length} selected</span><div className="foot-right"><button type="button" className="btn" data-import-run="1" disabled={!F.picks.length || !F.picked.length || busy === 'run'} onClick={runGate}>{busy === 'run' ? 'Starting…' : RUN_LABEL}{busy === 'run' ? null : CHEV}</button></div></div></footer>
+      <footer className="foot"><div className="foot-inner"><div className="back-skip"><button type="button" className="link" onClick={() => { if (mode === 'modal') { api.saveFlow(null).catch(() => {}); onClose({}); } else set({ dialog: 'import-mode', modeFirst: false }); }}>{mode === 'modal' ? 'Cancel' : 'Back'}</button></div><span className="muted review-count">{F.picks.length} selected</span><div className="foot-right"><button type="button" className="btn" data-import-run="1" disabled={!F.picks.length || !F.picked.length || busy === 'run'} onClick={runGate}>{busy === 'run' ? 'Starting…' : RUN_LABEL}{busy === 'run' ? null : CHEV}</button></div></div></footer>
     </>
   );
 
@@ -838,22 +893,34 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const close = () => set({ dialog: null });
   const browserNow = browsers ? browserName(browsers.chosenId) : 'your browser';
 
+  // Claude Code's and Codex's rows (2026-10-14): one Connect each, which installs, checks and signs in, whichever the CLI
+  // still needs (src/main/tools/manager.cjs connect); "Connecting…" while Engelbart works on it, never "Installing" for
+  // one the person has ("it should say connecting instead"); Connected only once the CLI itself says it is signed in.
+  // What stopped it (an install that failed, a CLI that does not run) is its line.
   const toolRow = (id, name) => {
     const tool = toolsSnap && toolsSnap.tools && toolsSnap.tools[id];
     const provider = id === 'claude' ? 'anthropic' : 'openai';
     const status = providers && (providers.providers || []).find((one) => one.id === provider);
-    const ready = tool && tool.status === 'ready';
-    const label = !tool || !tool.installed ? 'Not installed' : ready ? (status && status.subscription ? 'Signed in' : 'Signed in · no subscription found') : tool.status === 'signing-in' ? 'Signing in…' : 'Not signed in';
-    const act = () => {
-      if (!tool || !tool.installed) api.toolsInstall([id]).catch(say);
-      else api.toolsSignIn(id).catch(say);
-    };
+    const busy = (tool && tool.busy) || null;
+    // Signed in by its own word, yet it turned the agent away (refusedNow): its line says why, and Connect signs in again.
+    const refused = refusedNow() === provider && !busy;
+    const ready = !refused && !!(status && status.installed && status.signedIn);
+    const signing = !ready && !!busy && busy.action === 'sign-in';
+    const connecting = !ready && !signing && !refused && (!!(busy && busy.action !== 'sign-out') || (status && status.state === 'connecting') || (!!tool && ['installing', 'checking', 'unknown', 'updating'].includes(tool.status)));
+    const why = refused ? String((discovery && discovery.projects && discovery.projects.error) || '') : !ready && !busy && tool && tool.error ? String(tool.error) : '';
+    const problem = why ? why.split(/(?<=[.!?])\s/)[0] : '';
+    const label = ready ? 'Connected' : signing ? 'Finish in your browser' : connecting ? 'Connecting…' : problem || 'Not connected';
+    const state = ready ? 'ready' : refused ? 'refused' : signing ? 'signing-in' : connecting ? 'connecting' : 'not-connected';
+    const connect = () => (refused ? api.toolsSignIn(id) : api.toolsConnect ? api.toolsConnect(id) : api.toolsInstall([id])).catch(say);
     return (
-      <div key={id}>
+      <div key={id} data-provider-row={provider} data-provider-state={state} style={{ borderTop: 0 }}>
         <Logo src={PROVIDER_LOGOS[provider]} />
         <span>{name}</span>
-        <small>{label}</small>
-        {ready ? CHECK : <button type="button" className="btn secondary small" onClick={act}>{!tool || !tool.installed ? 'Install' : 'Sign in'}</button>}
+        <small title={problem || undefined} style={{ maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</small>
+        {ready ? CHECK
+          : signing ? (busy.url && api.openExternal ? <button type="button" className="btn secondary small" onClick={() => api.openExternal(busy.url).catch(say)}>Open page</button> : null)
+            : connecting ? null
+              : <button type="button" className="btn secondary small" data-provider-connect={provider} onClick={connect}>Connect</button>}
       </div>
     );
   };
@@ -898,10 +965,10 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       const ready = readyProviders().length > 0;
       return (
         <>
-          <div className="modal-head"><h3>Set up your tools</h3><button type="button" className="close" aria-label="Close tool setup" onClick={() => set({ dialog: null })}>×</button></div>
-          <p>Engelbart’s agents run on Claude Code or Codex with the subscription you already have. One is enough.</p>
+          <div className="modal-head"><h3>Connect Claude Code or Codex</h3><button type="button" className="close" aria-label="Close tool setup" onClick={() => set({ dialog: null })}>×</button></div>
+          <p>Engelbart’s agents run on the subscription you already have. One is enough.</p>
           <div className="tool-list">
-            {toolsSnap && toolsSnap.tools && toolsSnap.tools.git ? <div><span>Git</span><small>{toolsSnap.tools.git.status === 'ready' ? 'Installed' : 'Not installed'}</small>{toolsSnap.tools.git.status === 'ready' ? CHECK : <button type="button" className="btn secondary small" onClick={() => api.toolsInstall(['git']).catch(say)}>Install</button>}</div> : null}
+            {toolsSnap && toolsSnap.tools && toolsSnap.tools.git && toolsSnap.tools.git.status !== 'ready' ? <div style={{ borderTop: 0 }}><span>Git</span><small>{toolsSnap.tools.git.status === 'ready' ? 'Installed' : 'Not installed'}</small>{toolsSnap.tools.git.status === 'ready' ? CHECK : <button type="button" className="btn secondary small" onClick={() => api.toolsInstall(['git']).catch(say)}>Install</button>}</div> : null}
             {toolRow('claude', 'Claude Code')}
             {toolRow('codex', 'Codex')}
           </div>
@@ -926,7 +993,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     }
     if (d === 'keychain') return (<><div className="key">{KEY}</div><h3>{`Allow Engelbart to use your ${browserNow} sign-ins?`}</h3><div className="mf keychain-actions"><button type="button" className="link under" onClick={() => set({ dialog: 'keychain-browser', browserChoice: (browsers && browsers.chosenId) || null })}>Use another browser</button><button type="button" className="link" onClick={() => set({ dialog: 'keychain-confirm' })}>Don’t allow</button><button type="button" className="btn small" data-import-keychain-allow="1" onClick={() => keychainAnswer('allowed')}>Allow</button></div></>);
     if (d === 'keychain-confirm') return (<><h3>Continue without browser access?</h3><p>You can still import from sources on your Mac.</p><div className="mf"><button type="button" className="link" onClick={() => keychainAnswer('declined')}>Continue without access</button><button type="button" className="btn small" onClick={() => keychainAnswer('allowed')}>Allow access</button></div></>);
-    if (d === 'notes-permission') return (<><h3>Allow Engelbart to read Apple Notes?</h3><div className="mf"><button type="button" className="link" onClick={() => { const now = latest.current; const next = { ...now, picks: now.picks.filter(id => id !== 'Apple Notes'), confirmed: now.confirmed.filter(id => id !== 'Apple Notes'), dialog: null }; latest.current = next; set(next); setTimeout(runGate, 0); }}>Don’t allow</button><button type="button" className="btn" onClick={() => { latest.current = { ...latest.current, notesConsent: true, dialog: null }; set({ notesConsent: true, dialog: null }); setTimeout(runGate, 0); }}>Allow</button></div></>);
+    if (d === 'notes-permission') return (<><h3>Allow Engelbart to read Apple Notes?</h3><div className="mf"><button type="button" className="link" onClick={() => { const now = latest.current; const next = { ...now, picks: now.picks.filter(id => id !== 'Apple Notes'), confirmed: now.confirmed.filter(id => id !== 'Apple Notes'), dialog: null }; latest.current = next; set(next); setTimeout(runGate, 0); }}>Don’t allow</button><button type="button" className="btn" onClick={() => { rememberNotesConsent(); latest.current = { ...latest.current, notesConsent: true, dialog: null }; set({ notesConsent: true, dialog: null }); setTimeout(runGate, 0); }}>Allow</button></div></>);
 
     if (d === 'keychain-browser') {
       const list = (browsers && browsers.browsers) || [];

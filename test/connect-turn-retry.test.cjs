@@ -25,7 +25,7 @@ function harness(answers, { provider = 'openai' } = {}) {
   const waits = [];
   const run = (shell, args, options, done) => {
     const answer = answers[Math.min(runs.length, answers.length - 1)];
-    runs.push({ env: options.env });
+    runs.push({ env: options.env, command: args.join(' ') });
     let stdout = '';
     if (provider === 'openai') {
       if (answer.ok) fs.writeFileSync(options.env.ENGELBART_CONNECT_OUTPUT, answer.ok);
@@ -101,4 +101,15 @@ test('a Codex browser agent: the Chrome plugin\'s per-site questions go to auto-
   assert.match(policy, /mcp_elicitations = true/, 'the plugin asks as an MCP elicitation: answered by auto-review, not declined');
   for (const kind of ['sandbox_approval', 'rules', 'skill_approval', 'request_permissions']) assert.match(policy, new RegExp(`${kind} = false`), `${kind} refused as under "never"`);
   assert.doesNotMatch(CODEX_BROWSE_APPROVALS, /approval_policy="never"/);
+});
+
+// 2026-10-14 ("please ensure our agent also deletes the claude/codex chats that get run with the prompt asking about them
+// … it is alarming and no need for user to see this"): Engelbart's own agent runs are not kept in the person's Claude Code
+// history; the librarian's interview, whose turns resume one session, still is.
+test('an agent turn on Claude Code is not saved to the person\'s history; the interview, which resumes, is', async () => {
+  const { agents, runs } = harness([{ ok: 'done' }], { provider: 'anthropic' });
+  await agents.turn({ choice: choiceOf('anthropic'), kind: 'projects', system: 'rules', message: 'go', onUpdate: () => {} });
+  assert.match(runs[0].command, /--no-session-persistence/);
+  await agents.turn({ choice: choiceOf('anthropic'), kind: 'interview', system: 'rules', message: 'go', onUpdate: () => {} });
+  assert.doesNotMatch(runs[1].command, /--no-session-persistence/);
 });

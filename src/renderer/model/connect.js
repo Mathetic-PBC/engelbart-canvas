@@ -24,7 +24,7 @@ export const NEVER_TICKED = Object.freeze(['Gmail']);
  */
 export const START_UNTICKED = Object.freeze([...NEVER_TICKED, 'Google Docs']);
 /** Websites' one row, and Code's second (the first is GitHub). */
-export const BROWSER_ROW = 'Browser history';
+export const BROWSER_ROW = 'Saved URLs'; // 2026-10-14: "Saved URLs" in place of "Browser history" (less off-putting)
 export const LOCAL_REPOS = 'Local repos';
 
 /** The rows a group's header ticks, in order. */

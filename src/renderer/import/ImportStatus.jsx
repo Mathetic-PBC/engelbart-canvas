@@ -31,7 +31,6 @@ const rowName = (job) => {
   if (app) return catalogTool(app) ? catalogTool(app).name : shownName(app);
   return String(job.label || '').replace(/^[^:]{1,30}:\s*/, '');
 };
-const listNames = (names) => (names.length <= 1 ? names[0] || '' : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
 /** Whether a job brought anything into the library. */
 const brought = (job) => job.status === 'done' && (job.notes || 0) + (job.items || 0) > 0;
 const RANK = { waiting: 0, running: 1, queued: 2 };
@@ -47,6 +46,42 @@ export function jobState(job) {
   if (job.status === 'failed') return 'Couldn’t import';
   if (job.status === 'stopped') return 'Stopped';
   return 'Left out';
+}
+
+/** A reason's first sentence, without its full stop, at most `max` characters. */
+const firstSentence = (text, max = 140) => {
+  const one = String(text || '').replace(/\s+/g, ' ').trim().split(/(?<=[.!?])\s/)[0].replace(/[.!?]+$/, '');
+  return one.length > max ? `${one.slice(0, max - 1)}…` : one;
+};
+
+/**
+ * Why each source that ended brought nothing in (2026-10-14, a beta tester's Zotero: "when she finally hit later,
+ * nothing was imported, so she was super confused") → [{ name, line }], one line each: what the run left out and why
+ * (`session.leftOut`, main's words: "you chose Later instead of signing in"), else a failed import's error, else what its
+ * agent said it found. `jobs` the status's rows; `imported` those that brought something in.
+ */
+export function nothingLines(session, jobs, imported) {
+  const leftOut = Array.isArray(session.leftOut) ? session.leftOut : [];
+  const whyOf = (apps) => { const entry = leftOut.find((one) => (apps || []).includes(one.app)); return entry ? entry.why : ''; };
+  const out = new Map();
+  const add = (name, line) => { if (name && !out.has(name) && !imported.some((job) => rowName(job) === name)) out.set(name, line); };
+  for (const job of jobs) {
+    if (brought(job) || !ENDED.has(job.status)) continue;
+    const name = rowName(job);
+    const why = whyOf(job.apps);
+    if (why) add(name, `Nothing came in from ${name}: ${why}.`);
+    else if (job.status === 'failed') add(name, `Nothing came in from ${name}: its import failed${job.error ? ` (${firstSentence(job.error, 100)})` : ''}.`);
+    else if (job.status === 'stopped') add(name, `Nothing came in from ${name}: it was stopped.`);
+    else if (job.summary) add(name, `Nothing came in from ${name}. ${firstSentence(job.summary)}.`);
+    else add(name, `Nothing came in from ${name}.`);
+  }
+  // An app left out before any import of it started (Later on its sign-in, a sign-in macOS refused): no row of its own.
+  for (const entry of leftOut) {
+    if (jobs.some((job) => (job.apps || []).includes(entry.app))) continue;
+    const name = catalogTool(entry.app) ? catalogTool(entry.app).name : shownName(entry.app);
+    add(name, `Nothing came in from ${name}: ${entry.why}.`);
+  }
+  return [...out].map(([name, line]) => ({ name, line }));
 }
 
 /** A card's words: what the app needs, and its button. */
@@ -77,21 +112,28 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   }, [onClose, confirmStop]);
   // The rows that need the person first, then what is working, queued and ended (a stable sort: their order otherwise).
   const jobs = (session.jobs || []).filter((job) => WORK.has(job.kind) && job.kind !== 'recall').sort((a, b) => (RANK[a.status] ?? 3) - (RANK[b.status] ?? 3));
-  const ended = jobs.length > 0 && jobs.every((job) => ENDED.has(job.status)) && !(session.needs || []).length;
+  // Apps left out before an import of theirs started (Later on a sign-in held at the start): a row each, "Left out".
+  const leftOnly = (Array.isArray(session.leftOut) ? session.leftOut : []).filter((entry) => !jobs.some((job) => (job.apps || []).includes(entry.app)) && !(session.needs || []).some((need) => need.app === entry.app))
+    .map((entry) => ({ id: `left-${entry.app}`, kind: 'import', apps: [entry.app], label: entry.app, status: 'stopped', skipped: true }));
+  // Ended with nothing to run at all (every app left out) is ended too: it said "Imports in progress" for good.
+  const ended = (jobs.length > 0 || (leftOnly.length > 0 && session.finished && !session.thinking)) && jobs.every((job) => ENDED.has(job.status)) && !(session.needs || []).length;
   const imported = jobs.filter(brought);
-  const all = ended && imported.length === jobs.length;
-  // The sources that ended without bringing anything in, named once each (the completion said nothing about them).
-  const missed = [...new Set(jobs.filter((job) => !brought(job) && !job.skipped).map(rowName))].filter((name) => !imported.some((job) => rowName(job) === name));
+  const all = ended && imported.length === jobs.length && !leftOnly.length;
+  // The sources that ended without bringing anything in, each named once with why (the completion said nothing about the
+  // ones left out, and only "Nothing came in from …" about the rest).
+  const missed = ended ? nothingLines(session, jobs, imported) : [];
   // A step belongs to the jobs that asked for it (jobIds), else to a job of its app.
   const needOf = (job) => (session.needs || []).find((need) => (job.needId ? need.id === job.needId : (need.jobIds || []).includes(job.id) || (job.apps || []).includes(need.app)));
   // An app held on its sign-in has no import yet (it starts once signed in): its row all the same, first.
   const held = (session.needs || []).filter((need) => !(need.jobIds || []).length && !jobs.some((job) => (job.apps || []).includes(need.app)))
     .map((need) => ({ id: `need-${need.id}`, needId: need.id, kind: 'import', apps: [need.app], label: need.app, status: 'waiting' }));
-  const rows = [...held, ...jobs];
+  const rows = [...held, ...jobs, ...leftOnly];
   return (
-    <div className="ix ix-overlay" data-overlay="1" data-cover="1" data-import-status={session.id}>
+    <div className="ix ix-overlay" data-cover="1" data-import-status={session.id}>
       <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:140}.ix.ix-overlay .scrim.stop-confirm{z-index:150}.ix .mf .mf-left{margin-right:auto}.ix .review-logos.one-row{flex-wrap:nowrap;overflow:hidden}.ix .review-logo.more{border:1px dashed #c9c9c9;font-size:14px;color:var(--mute)}.ix .modal p.missed-line{margin:0 0 4px;font-size:13px;color:var(--mute)}'}{ROUND3_CSS}{ROUND4_CSS}</style>
-      <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      {/* the scrim is the overlay (as NeedPopup's): the outer element has no height, and the Stage's page and the post-it
+          cards, native views, only step aside for an overlay they can see is over them */}
+      <div className="scrim" data-overlay="1" data-cover="1" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
         <section className={`modal ${ended ? 'done-modal' : 'wide'}`} role="dialog" aria-modal="true" aria-label={ended ? 'Your imports are complete' : 'Imports in progress'}>
           <div className="modal-head">
             <h3>{ended ? (all ? 'Your imports are complete!' : 'Your imports have finished') : 'Imports in progress'}</h3>
@@ -101,7 +143,7 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
           {ended ? (
             <>
               {imported.length > 0 && <CompletionLogos jobs={completionJobs(imported)} />}
-              {!all && missed.length > 0 && <p className="missed-line" data-imported-none={missed.join('|')}>{`Nothing came in from ${listNames(missed)}.`}</p>}
+              {!all && missed.map((entry) => <p key={entry.name} className="missed-line" data-imported-none={entry.name}>{entry.line}</p>)}
             </>
           ) : (
             <div className="background-job-list">

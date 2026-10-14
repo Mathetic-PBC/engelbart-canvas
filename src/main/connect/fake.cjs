@@ -217,4 +217,30 @@ function createFakeConnectAgents({ delayMs = 600 } = {}) {
   };
 }
 
-module.exports = { createFakeConnectAgents, interviewReply, MEMORY_DRAFT };
+/**
+ * The fake agents behind the pretend machine's Claude Code and Codex (ENGELBART_CONNECT_FAKE_CLI=1 with
+ * ENGELBART_TOOLS_FAKE, 2026-10-14): a turn fails as the real CLI's does when it is missing ("… was not found on the login
+ * shell PATH.") or not signed in (Claude Code 2.1.300's "Not logged in · Please run /login"; Codex's ChatGPT sign-in
+ * missing), so onboarding's connect edge cases can be driven. `state` is ../tools/fake.cjs's, changed by its installs and
+ * sign-ins. `refuse` names CLIs whose account is turned away though signed in (ENGELBART_CONNECT_FAKE_REFUSE).
+ */
+function createCliGatedAgents(agents, state, { delayMs = 60, refuse = [] } = {}) {
+  const failure = (kind, message) => Object.assign(new Error(message), { kind });
+  return {
+    async turn(input) {
+      const cli = input && input.choice && input.choice.provider === 'openai' ? 'codex' : 'claude';
+      const tool = state[cli] || {};
+      await sleep(delayMs, input && input.signal);
+      if (!tool.present || tool.broken) throw failure('unavailable', `${cli === 'codex' ? 'Codex' : 'Claude Code'} was not found on the login shell PATH.`);
+      if (tool.signedIn !== true) {
+        if (cli === 'codex') throw failure('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`). An API key is never used.');
+        throw failure('failed', 'Not logged in · Please run /login');
+      }
+      // `refuse` (ENGELBART_CONNECT_FAKE_REFUSE): signed in, yet its account is turned away, as one without credits is.
+      if (refuse.includes(cli)) throw failure('failed', 'Credit balance is too low');
+      return agents.turn(input);
+    },
+  };
+}
+
+module.exports = { createFakeConnectAgents, createCliGatedAgents, interviewReply, MEMORY_DRAFT };

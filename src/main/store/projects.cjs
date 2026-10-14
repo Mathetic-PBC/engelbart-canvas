@@ -337,11 +337,12 @@ async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting s
 }
 
 // A new user's first project (2026-10-14, Hudson's placeholder: "replaces the welcome screen and the get started and all
-// that crap with this"): a second-level project "Welcome!" whose page is this, with the picture of Engelbart at work. No
+// that crap with this"): a second-level project "Welcome to Engelbart!" whose page is this, with the picture of Engelbart at work. No
 // Welcome! note and no Get started walkthrough. `context`: what the onboarding brought in, in the Welcome! folder.
 const WELCOME_IMAGE = path.join(__dirname, 'welcome.png');
+// 2026-10-14, second pass: the project is "Welcome to Engelbart!" and its page starts with the picture, no title line.
+const WELCOME_NAME = 'Welcome to Engelbart!';
 const welcomePageText = (imageId) => [
-  '# Welcome to Engelbart!',
   ...(imageId ? [`![Attachment 1](img:${imageId})`] : []),
   'Engelbart is a **research notebook** that *remembers where all of your thoughts came from.*',
   '',
@@ -357,7 +358,7 @@ const welcomePageText = (imageId) => [
 
 async function createProjectWithWelcomePage(ctx, input, { context = [] } = {}) {
   const project = await createProject(ctx, input);
-  const workspace = await createWorkspace(ctx, project.id, { name: 'Welcome!' });
+  const workspace = await createWorkspace(ctx, project.id, { name: WELCOME_NAME });
   let image = null;
   try { image = await saveImage(ctx, project.id, { bytes: fs.readFileSync(WELCOME_IMAGE), mime: 'image/png', name: 'Attachment 1' }); } catch { image = null; }
   await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, welcomePageText(image && image.id));

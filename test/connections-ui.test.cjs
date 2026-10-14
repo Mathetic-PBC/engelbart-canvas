@@ -288,7 +288,7 @@ test('missing: Install; a broken one: Try again; before the first snapshot: Chec
   assert.match(broken, /role="alert"[^>]*>Codex did not start/);
   assert.equal(action('retry').props.children, 'Try again');
   const installing = renderTool('claude', { ...tools.snapshot().tools.claude, busy: { action: 'install', phase: null } });
-  assert.match(installing, /Installing…/);
+  assert.match(installing, /Connecting…/, '2026-10-14: an agent being installed reads "Connecting…" (Hudson: "it should say connecting instead")');
   assert.equal(elements.some(element => element.type === 'button'), false, 'nothing to press while it installs');
   const unknown = renderTool('codex', undefined);
   assert.match(unknown, /Codex[\s\S]*Checking…/);

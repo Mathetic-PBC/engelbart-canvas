@@ -20,7 +20,7 @@ const Pulse = () => <span aria-hidden="true" style={{ width: 6, height: 6, borde
 
 function Row({ row, onAct, onAskAgain, onOpenPage, showAskAgain }) {
   return (
-    <div data-tool-row={row.id} style={{ display: 'grid', gridTemplateColumns: '112px 1fr auto', alignItems: 'center', columnGap: 12, rowGap: 4, padding: '10px 0', borderTop: '1px solid #f2f2f2' }}>
+    <div data-tool-row={row.id} style={{ display: 'grid', gridTemplateColumns: '112px 1fr auto', alignItems: 'center', columnGap: 12, rowGap: 4, padding: '10px 0' }}>
       <span style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{row.name}</span>
       <span data-tool-state style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: 0, font: '12px/1.4 var(--font-mono)', color: TONE[row.tone] }}>
         {row.tone === 'ok' && <Check />}

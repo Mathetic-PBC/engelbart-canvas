@@ -106,9 +106,34 @@ function knownPlaces(name, home, systemBins = SYSTEM_BINS) {
   return [...inHome, ...systemBins.map((dir) => path.join(dir, name)), ...nvm];
 }
 
+/**
+ * The Claude Code the Claude desktop app keeps for its own Code tab (2026-10-14, a beta tester: "it says installing claude
+ * code, even if it is already installed"): ~/Library/Application Support/Claude/claude-code/<version>/<hash>/claude.app/
+ * Contents/MacOS/claude, a whole Claude Code that shares the CLI's sign-in (checked on 2.1.295: `--version` and `auth status
+ * --json` answer as the CLI's do). Newest version first. Looked at after every other place: a CLI of the person's own wins.
+ */
+function desktopCopies(name, home) {
+  if (name !== 'claude') return [];
+  const root = path.join(home, 'Library', 'Application Support', 'Claude', 'claude-code');
+  const out = [];
+  let versions = [];
+  try { versions = fs.readdirSync(root).filter((entry) => /^\d+\.\d+\.\d+/.test(entry)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true })); } catch { return out; }
+  for (const version of versions.slice(0, 3)) {
+    let builds = [];
+    try { builds = fs.readdirSync(path.join(root, version)); } catch { builds = []; }
+    for (const build of builds) {
+      const file = path.join(root, version, build, 'claude.app', 'Contents', 'MacOS', 'claude');
+      if (isExecutable(file)) out.push(file);
+    }
+  }
+  return out;
+}
+const isDesktopCopy = (file) => /\/Application Support\/Claude\/claude-code\//.test(String(file || ''));
+
 /** How a program was installed, from where its file really is: this decides how it updates and whether an update can be undone. */
 function sourceOf(name, file) {
   const real = realPath(file);
+  if (name === 'claude' && isDesktopCopy(real)) return 'desktop'; // the Claude app's own: it updates it, never Engelbart
   if (name === 'git') {
     if (real === APPLE_GIT_STUB || real.startsWith('/Applications/Xcode') || real.startsWith('/Library/Developer/CommandLineTools/')) return 'apple';
     if (/\/(Cellar|Homebrew|homebrew)\//.test(real) || real.startsWith('/opt/homebrew/')) return 'homebrew';
@@ -300,6 +325,7 @@ function copiesOf(name, candidates, { home, systemBins }) {
   };
   for (const file of candidates) add(file, true);
   for (const file of knownPlaces(name, home, systemBins)) if (isExecutable(file)) add(file, false);
+  for (const file of desktopCopies(name, home)) add(file, false);
   return copies;
 }
 
@@ -315,6 +341,9 @@ async function detectAgent(runner, name, candidates, { env, home, systemBins }) 
     const read = await readVersion(runner, name, copy.file);
     if (read.other) { other = other || { ...copy, read }; continue; }
     const entry = { ...copy, read };
+    // The Claude app's copy only when it is recent enough: Engelbart cannot update it (the app does), so an old one would
+    // stand in the way of installing Claude Code.
+    if (isDesktopCopy(copy.file) && !(read.ran && !['outdated', 'incompatible'].includes(judge(name, read.version).status))) continue;
     first = first || entry;
     if (read.ran && judge(name, read.version).status !== 'outdated' && judge(name, read.version).status !== 'incompatible') { chosen = entry; break; }
     if (read.silent) break; // the login shell runs nothing: every other copy would fail the same way
@@ -339,7 +368,8 @@ async function detectAgent(runner, name, candidates, { env, home, systemBins }) 
   const after = candidates.slice(candidates.indexOf(file) + 1);
   const origin = (isScript(file) && after.find((candidate) => !isScript(candidate))) || file;
   const auth = read.ran ? await readSignIn(runner, name, file, { env: shellEnv, home }) : { signedIn: null, account: null };
-  return observed(name, { file, onPath, source: sourceOf(name, origin), ...read, signedIn: auth.signedIn, account: auth.account, error: read.error || auth.error || null, updater, note });
+  const desktop = isDesktopCopy(file);
+  return observed(name, { file, onPath, source: desktop ? 'desktop' : sourceOf(name, origin), ...read, signedIn: auth.signedIn, account: auth.account, error: read.error || auth.error || null, updater: updater || desktop, note });
 }
 
 /**
@@ -360,4 +390,4 @@ async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = o
   return { ...Object.fromEntries(await Promise.all(jobs)), aliases, lookupError };
 }
 
-module.exports = { detectTools, lookupCommand, parseLookup, knownPlaces, sourceOf, observed, readVersion, readSignIn, codexAccount, removal, shellSilent, AUTH, APPLE_GIT_STUB };
+module.exports = { detectTools, lookupCommand, parseLookup, knownPlaces, desktopCopies, sourceOf, observed, readVersion, readSignIn, codexAccount, removal, shellSilent, AUTH, APPLE_GIT_STUB };

@@ -175,6 +175,9 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
   async function installOne(name) {
     if (records[name].installed && WORKS.has(records[name].status)) return { ok: true, error: null };
     return installer.exclusive(() => locks[name].exclusive(async () => {
+      // Installed while this waited its turn (2026-10-14: Install pressed while the launch's background install ran
+      // installed Claude Code a second time).
+      if (records[name].installed && WORKS.has(records[name].status)) return { ok: true, error: null };
       busy[name] = { action: 'install', phase: null };
       seen[name] = { ...seen[name], status: 'installing', error: null };
       persist({ [name]: { skip: false } });
@@ -223,6 +226,34 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
       emit();
     }
     return snapshot();
+  }
+
+  /**
+   * Connect Claude Code or Codex (2026-10-14, onboarding's "Connect"): whatever it still needs, in order, from one press —
+   * installed (or waited for, when the launch's install is running), updated when too old, checked when its sign-in is
+   * unknown, then signed in. A press while one is under way joins it. → snapshot once it is connected or has stopped.
+   */
+  const connecting = new Map();
+  function connect(name) {
+    if (!AGENTS.includes(name)) return Promise.resolve(snapshot());
+    if (connecting.has(name)) return connecting.get(name);
+    const run = (async () => {
+      let record = records[name];
+      if (!record.installed || record.status === 'missing' || record.status === 'failed' || record.status === 'installing') {
+        const out = await installOne(name);
+        if (!out.ok) return snapshot();
+      } else if ((record.status === 'outdated' || record.status === 'incompatible') && !record.pin) {
+        const out = await update(name);
+        if (!out.ok) return snapshot();
+      }
+      record = records[name];
+      // Checked first: one signed in since the last check (in a terminal, in Settings) needs no browser sign-in.
+      if (record.signedIn !== true && !busy[name]) { await check([name]); record = records[name]; }
+      if (record.installed && record.signedIn !== true && (record.status === 'signed-out' || record.status === 'ready')) await signIn(name);
+      return snapshot();
+    })().finally(() => connecting.delete(name));
+    connecting.set(name, run);
+    return run;
   }
 
   function cancelSignIn(name) {
@@ -326,7 +357,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     ];
   }
 
-  return { start, check, update, install, signIn, cancelSignIn, signOut, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
+  return { start, check, update, install, connect, signIn, cancelSignIn, signOut, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
 }
 
 module.exports = { createTools, STALE_MS, RETRY_UPDATE_MS };

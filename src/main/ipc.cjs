@@ -565,6 +565,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('connect-need', (id, needId, action) => cx().need(importId(id), str(needId, 'request id', 64), str(action, 'action', 8)));
   handle('connect-import', (id) => cx().importNow(importId(id)));
   handle('connect-stop', (id) => cx().stop(importId(id)));
+  // A run waiting for its provider (session.cjs holdForProvider): it goes on, on `provider` when the other one was picked.
+  handle('connect-unblock', (id, provider) => cx().unblock(importId(id), provider === 'anthropic' || provider === 'openai' ? provider : null));
   handle('connect-stop-job', (id, jobId) => cx().stopJob(importId(id), str(jobId, 'job id', 64)));
   handle('connect-provider', (id, provider) => cx().setProvider(importId(id), str(provider, 'provider', 16)));
   handle('connect-retry-memory', (id) => cx().retryMemory(importId(id)));
@@ -1113,6 +1115,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('tools-install', (names) => { void tools.install(toolNames(names)).catch(() => {}); return tools.snapshot(); });
     handle('tools-update', (name) => { void tools.update(toolName(name)).catch(() => {}); return tools.snapshot(); });
     handle('tools-sign-in', (name) => { void tools.signIn(toolName(name)).catch(() => {}); return tools.snapshot(); });
+    // Connect (2026-10-14): installed, updated, checked and signed in, whichever it still needs, from one press.
+    handle('tools-connect', (name) => { void tools.connect(toolName(name)).catch(() => {}); return tools.snapshot(); });
     handle('tools-cancel-sign-in', (name) => tools.cancelSignIn(toolName(name)));
     handle('tools-sign-out', (name) => tools.signOut(toolName(name)));
     handle('tools-skip', (names) => tools.skip(toolNames(names)));

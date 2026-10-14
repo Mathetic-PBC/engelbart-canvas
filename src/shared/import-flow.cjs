@@ -34,7 +34,7 @@ function reachOf(app) {
 const isLocal = (app) => ['local', 'automation'].includes(reachOf(app));
 
 /** Every tool the tools page can list: each picker app, and the browser's history. */
-const CATALOG = Object.freeze([...GROUPS.flatMap((group) => group.apps.map((app) => Object.freeze({ id: app, name: app === SITES ? 'Browser history' : shownName(app), group: group.id, local: isLocal(app) }))), Object.freeze({ id: SITES, name: 'Browser history', group: 'sites', local: true })]);
+const CATALOG = Object.freeze([...GROUPS.flatMap((group) => group.apps.map((app) => Object.freeze({ id: app, name: app === SITES ? 'Saved URLs' : shownName(app), group: group.id, local: isLocal(app) }))), Object.freeze({ id: SITES, name: 'Saved URLs', group: 'sites', local: true })]);
 const CATALOG_IDS = Object.freeze(CATALOG.map((tool) => tool.id));
 const catalogTool = (id) => CATALOG.find((tool) => tool.id === id) || null;
 

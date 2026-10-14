@@ -34,6 +34,7 @@ const { CATALOG, LOCAL_FOLDERS, SITES, PROVIDER_IDS, browserById, readProjects, 
 const prompts = require('./prompts.cjs');
 const { projectDigest, DIGEST_DAYS } = require('./digest.cjs');
 const { accessSpec } = require('../connect/offthread.cjs');
+const { needsProvider } = require('../connect/provider-failure.cjs');
 
 const FILE = 'discovery.json';
 const HISTORY_DAYS = 90;
@@ -181,11 +182,23 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
   }
   const say = (kind, text, detail) => { if (trace) trace.event({ kind, text, detail }); };
 
+  // The provider to run on, or null when none can run now. One the window names is used only while its CLI can run
+  // (2026-10-14: Try again re-ran a signed-out Claude Code forever, each time "Not logged in"); then it is the one the
+  // person is asked to connect (`connect` on the 'waiting-provider' state).
   async function provider(asked) {
-    if (PROVIDER_IDS.includes(asked)) return asked;
-    const out = await providers.status();
-    return out.decision.pick;
+    const out = await providers.status({ fresh: true });
+    const ready = (id) => out.providers.some((one) => one.id === id && one.installed && one.signedIn);
+    if (PROVIDER_IDS.includes(asked)) return ready(asked) ? { id: asked } : { id: null, connect: asked };
+    return out.decision.pick ? { id: out.decision.pick } : { id: null, connect: null };
   }
+  // An agent's failure that connecting the provider fixes (../connect/provider-failure.cjs): its CLI is checked again, so
+  // the window's rows and the next decision say what the CLI says.
+  const failure = (error, chosen, fallback) => {
+    const text = String((error && error.message) || fallback).slice(0, 300);
+    if (!needsProvider(error)) return { error: text };
+    if (providers && typeof providers.recheck === 'function') void providers.recheck(chosen);
+    return { error: text, connect: chosen };
+  };
 
   /** The state now, for the window → { projects, tools } */
   async function state() {
@@ -200,8 +213,9 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
   async function startProjects({ provider: asked = null, again = false } = {}) {
     const ctx = await context();
     const st = stateOf(ctx.dataRoot);
-    const chosen = await provider(asked);
-    if (!chosen) { if (st.projects.status !== 'done') { st.projects = { status: 'waiting-provider', projects: [] }; changed(ctx.dataRoot); } return publicOf(st); }
+    const pick = await provider(asked);
+    const chosen = pick.id;
+    if (!chosen) { if (st.projects.status !== 'done' || again) { st.projects = { status: 'waiting-provider', projects: st.projects.projects || [], connect: pick.connect }; changed(ctx.dataRoot); } return publicOf(st); }
     if (!again && (st.projects.status === 'running' || (st.projects.status === 'done' && st.projects.provider === chosen))) return publicOf(st);
     if (st.controllers.projects) st.controllers.projects.abort();
     const controller = new AbortController();
@@ -230,7 +244,8 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
         st.projects = read ? { status: 'done', provider: chosen, projects: read.projects, started: st.projects.started, ended: now() } : { status: 'failed', provider: chosen, projects: [], error: 'The agent did not name any projects.', ended: now() };
       } catch (error) {
         if (controller.signal.aborted) return;
-        st.projects = { status: 'failed', provider: chosen, projects: [], error: (error && error.message) || 'The agent did not answer.', ended: now() };
+        // What an earlier run found stays on screen (2026-10-14: a run again that failed emptied the list).
+        st.projects = { status: 'failed', provider: chosen, projects: st.projects.projects || [], ...failure(error, chosen, 'The agent did not answer.'), ended: now() };
       } finally {
         if (st.controllers.projects === controller) st.controllers.projects = null;
       }
@@ -247,9 +262,11 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
   async function startTools({ provider: asked = null, browserId = null, keychain = null, again = false } = {}) {
     const ctx = await context();
     const st = stateOf(ctx.dataRoot);
-    const chosen = await provider(asked);
-    if (!chosen) { if (st.tools.status !== 'done') { st.tools = { status: 'waiting-provider', results: null }; changed(ctx.dataRoot); } return publicOf(st); }
-    if (!again && (st.tools.status === 'checking' || (st.tools.status === 'done' && st.tools.provider === chosen && st.tools.browser === browserId))) return publicOf(st);
+    const pick = await provider(asked);
+    const chosen = pick.id;
+    if (!chosen) { if (st.tools.status !== 'done' || again) { st.tools = { status: 'waiting-provider', results: st.tools.results || null, evidence: st.tools.evidence, connect: pick.connect }; changed(ctx.dataRoot); } return publicOf(st); }
+    // A run that ended needing its provider connected (`connect`) runs again once it is.
+    if (!again && (st.tools.status === 'checking' || (st.tools.status === 'done' && !st.tools.connect && st.tools.provider === chosen && st.tools.browser === browserId))) return publicOf(st);
     if (st.controllers.tools) st.controllers.tools.abort();
     const controller = new AbortController();
     st.controllers.tools = controller;
@@ -317,7 +334,7 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
         st.tools = { ...st.tools, status: 'done', results: readTools(out.text, evidence), signedIn, ended: now() };
       } catch (error) {
         if (controller.signal.aborted) return;
-        st.tools = { ...st.tools, status: 'done', results: readTools('', evidence), signedIn, error: (error && error.message) || 'The agent did not finish', ended: now() };
+        st.tools = { ...st.tools, status: 'done', results: readTools('', evidence), signedIn, ...failure(error, chosen, 'The agent did not finish'), ended: now() };
       } finally {
         if (bridge) await bridge.close().catch(() => {});
         if (agentBrowser && page) agentBrowser.close(job.id);

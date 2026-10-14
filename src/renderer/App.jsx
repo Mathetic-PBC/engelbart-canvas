@@ -15,8 +15,8 @@ import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
 import ImportFlow from './import/ImportFlow.jsx';
 import ImportStatus from './import/ImportStatus.jsx';
 import NeedPopup from './import/NeedPopup.jsx';
+import ProviderPopup from './import/ProviderPopup.jsx';
 import { importApi } from './import/import-api.js';
-import { engelbartSignIn } from './screens/ConnectLibrary.jsx';
 import { welcomePlace } from './model/welcome-place.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
@@ -267,7 +267,8 @@ export default function App() {
     for (const session of connectSessions) {
       if (!session.direct || completedShown.current.has(session.id)) continue;
       const work = (session.jobs || []).filter((job) => job.kind === 'import' || job.kind === 'recall' || job.kind === 'survey');
-      const ended = work.length > 0 && work.every((job) => job.status === 'done' || job.status === 'failed' || job.status === 'stopped') && !(session.needs || []).length;
+      // A run whose every app was left out (Later on each sign-in) has no work, and ends too, saying why (ImportStatus).
+      const ended = (work.length > 0 || ((session.leftOut || []).length > 0 && session.finished && !session.thinking)) && work.every((job) => job.status === 'done' || job.status === 'failed' || job.status === 'stopped') && !(session.needs || []).length;
       if (!ended || session.dismissed) continue;
       completedShown.current.add(session.id);
       setImportStatus(session.id);
@@ -284,14 +285,18 @@ export default function App() {
   const needUp = !!pendingNeed;
   const statusUp = !!(statusSession && !importModal && phase === 'workspace' && !needUp);
   const closeStatus = () => setImportStatus(null);
+  // Every step's primary action runs in main (connect/session.cjs need 'open'): Zotero's and GitHub's own sign-ins too
+  // (2026-10-14), whose step closes there once the account is connected, so nothing here waits on their events.
   const needOpen = async (session, need) => {
-    try {
-      if (need.app === 'Zotero' || need.app === 'GitHub') { if (await engelbartSignIn(need.app)) await api.connectNeed(session.id, need.id, 'done'); return; }
-      await api.connectNeed(session.id, need.id, 'open');
-    } catch (failure) { fail(failure); }
+    try { await api.connectNeed(session.id, need.id, 'open'); } catch (failure) { fail(failure); }
   };
   // The status modal's "Needs you": that step's popup again, over the modal.
   const needAgain = (session, need) => { laterNeeds.current.delete(need.id); setNeedShown({ sessionId: session.id, needId: need.id }); };
+  // A run waiting for its Claude Code or Codex to be connected (2026-10-14; connect/session.cjs `blocked`): "Connect Claude
+  // Code" over the workspace (./import/ProviderPopup.jsx), after any step above. Later puts it away until the next launch.
+  const laterProvider = React.useRef(new Set());
+  const [, setProviderTick] = React.useState(0);
+  const blockedSession = phase === 'workspace' && !importModal ? connectSessions.find((session) => session.direct && session.blocked && !session.stopped && !session.dismissed && !laterProvider.current.has(session.id)) || null : null;
 
   // The guided setup offered once to someone who has projects, over the workspace they are in (2026-10-10: it took the
   // place of Connect your library's one-time popup; Connect is the setup's second screen). Seen once it has been shown.
@@ -517,8 +522,10 @@ export default function App() {
   };
 
   const offerUp = guidedOffer && phase === 'workspace' && !needUp && !statusUp && !importModal && !connectPopup;
-  const setupUp = !!(setup && tools && !needUp && !statusUp);
-  const popupUp = needUp || statusUp || offerUp || setupUp || !!importModal || !!connectPopup;
+  // A run waiting for its provider asks before the tools' setup does (2026-10-14): it names what is stuck and why.
+  const providerUp = !!blockedSession && !needUp && !statusUp && !offerUp && !connectPopup;
+  const setupUp = !!(setup && tools && !needUp && !statusUp && !providerUp);
+  const popupUp = needUp || statusUp || offerUp || setupUp || providerUp || !!importModal || !!connectPopup;
 
   return (
     <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree}>
@@ -610,7 +617,7 @@ export default function App() {
         <div data-overlay="1" data-cover="1" data-import-modal="1" style={{ position: 'fixed', inset: 0, zIndex: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(23,23,23,.18)' }}>
           {/* transform: the flow's fixed parts (its foot, its dialogs) are held inside this panel, not the window */}
           <div role="dialog" aria-modal="true" aria-label="Import your context" style={{ position: 'relative', width: 'min(1000px, 100%)', height: 'min(800px, 100%)', overflow: 'auto', background: '#fff', borderRadius: 14, boxShadow: '0 20px 60px #00000026', transform: 'translateZ(0)' }}>
-            <ImportFlow api={importApi} mode="modal" into={importModal.projectId} workspaceId={importModal.workspaceId} platform={/Mac/i.test(navigator.platform || '') ? 'darwin' : 'other'}
+            <ImportFlow api={importApi} mode="modal" into={importModal.projectId} workspaceId={importModal.workspaceId} intoProject={tree && tree.project && tree.project.id === importModal.projectId ? { name: tree.project.name || '', description: tree.project.description || '' } : null} platform={/Mac/i.test(navigator.platform || '') ? 'darwin' : 'other'}
               // the flow over the workspace ended: as on landing, the status is not opened by itself (the title bar's words open it)
               onClose={() => setImportModal(null)} />
           </div>
@@ -633,6 +640,12 @@ export default function App() {
           // Later puts the step away for good (2026-10-14: "clicking later should dismiss the needs you, too"): skipped for
           // this run, so no "Needs you" is left in the title bar or the status.
           onLater={() => { const { session, need } = pendingNeed; needLater(need); api.connectNeed(session.id, need.id, 'skip').catch(fail); }} />
+      )}
+      {providerUp && (
+        <ProviderPopup key={`${blockedSession.id}:${blockedSession.blocked.at || ''}`} session={blockedSession} tools={tools}
+          onConnect={(cli) => api.toolsConnect(cli)} onSignIn={(cli) => api.toolsSignIn(cli)} onOpenPage={(url) => api.openExternal(url).catch(fail)}
+          onContinue={(provider) => api.connectUnblock(blockedSession.id, provider)}
+          onLater={() => { laterProvider.current.add(blockedSession.id); setProviderTick((n) => n + 1); }} />
       )}
       {connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>

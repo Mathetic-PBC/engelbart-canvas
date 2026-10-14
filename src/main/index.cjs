@@ -65,7 +65,7 @@ const { prepareLocalClaude } = require('./sandbox/local-claude.cjs');
 const { createRepoIdentifier, createRemoteFileLister, createDescriber } = require('./store/page-meta.cjs');
 const { createConnect } = require('./connect/session.cjs');
 const { createConnectAgents } = require('./connect/agents.cjs');
-const { createFakeConnectAgents } = require('./connect/fake.cjs');
+const { createFakeConnectAgents, createCliGatedAgents } = require('./connect/fake.cjs');
 const { createAgentBrowser } = require('./connect/browser.cjs');
 const { createConnectors } = require('./connect/connectors.cjs');
 const { createOwnConnectors } = require('./connect/own-connectors.cjs');
@@ -985,6 +985,9 @@ if (!hasSingleInstanceLock) {
     // Its events go to the windows directly: the onboarding screen never attaches a terminal. ENGELBART_CONNECT_FAKE=1 (or
     // ENGELBART_BART_FAKE=1) runs it with no model.
     const connectFake = process.env.ENGELBART_CONNECT_FAKE === '1' || process.env.ENGELBART_BART_FAKE === '1';
+    // Scripted runs of onboarding's connect edge cases (2026-10-14): the fake agents run only while the pretend machine's
+    // Claude Code or Codex could (ENGELBART_TOOLS_FAKE), and which can is the tool check's answer, not "both".
+    const cliFake = connectFake && !!toolsFake && process.env.ENGELBART_CONNECT_FAKE_CLI === '1';
     const crypt = {
       available: () => safeStorage.isEncryptionAvailable(),
       encrypt: (text) => safeStorage.encryptString(text).toString('base64'),
@@ -1083,7 +1086,7 @@ if (!hasSingleInstanceLock) {
     });
     // The providers whose CLI can run now (the tool check), as Connect names them; before the first check, both.
     const connectReady = () => {
-      if (connectFake) return ['anthropic', 'openai'];
+      if (connectFake && !cliFake) return ['anthropic', 'openai'];
       const usable = tools && typeof tools.usableAgents === 'function' ? tools.usableAgents() : null;
       if (usable === null) return ['anthropic', 'openai'];
       // One updating itself in the background (or about to) can run Connect's agents too (2026-10-13: the update never
@@ -1109,21 +1112,27 @@ if (!hasSingleInstanceLock) {
       execFile('/usr/bin/open', args, { timeout: 10_000 }, (error) => (error ? reject(error) : resolve(true)));
     });
     const connectAgents = trace.wrap(connectFake
-      ? createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 })
+      ? (cliFake ? createCliGatedAgents(createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 }), toolsFake.state, { refuse: String(process.env.ENGELBART_CONNECT_FAKE_REFUSE || '').split(',').filter(Boolean) }) : createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 }))
       : createConnectAgents({ runDirectory: path.join(app.getPath('userData'), 'connect-runs'), interviewHome: path.join(app.getPath('userData'), 'codex-home-connect'), importHome: path.join(app.getPath('userData'), 'codex-home-connect-import'), tools, terminal: agentTerminal }));
     connect = createConnect({
       agents: connectAgents,
       trace,
       models: () => readModels('build'),
       ready: connectReady,
+      // a run waiting for its provider (session.cjs holdForProvider): that CLI is checked again, so its rows say why
+      providerCheck: (provider) => tools.check([provider === 'openai' ? 'codex' : 'claude']),
       context: () => store.context(),
       homeDir,
+      // connect(): an import step's Sign in starts Engelbart's own sign-in here in main (2026-10-14); ready(): the
+      // library's sync, which the Zotero tools wait for before a first read
       zotero: {
         status: () => zotero.status(),
         root: () => (zotero.status().connected ? zoteroLibrary.root() : null),
         download: (key, filename) => zoteroLibrary.download(key, filename),
+        connect: () => zotero.connect(),
+        ready: () => zoteroLibrary.autoSync(),
       },
-      github: { status: () => github.status(), repos: (options) => github.repos(options) },
+      github: { status: () => github.status(), repos: (options) => github.repos(options), connect: () => github.connect() },
       deps: { describe: createDescriber(), identifyRepo: createRepoIdentifier({ auth: github.authHeaders }), inspectPdf, onAdded: libraryChanged, onPdf: pdfAdded },
       notify: (snapshot) => sendToWindow('engelbart:connect', snapshot),
       // What came in joined the Welcome workspace (connect/session.cjs placeRows): its sidebar reads it again.
@@ -1152,7 +1161,7 @@ if (!hasSingleInstanceLock) {
     // Import your context (2026-10-13): which provider runs its agents (both subscribed: asked once), the project and
     // tool discovery agents (started the moment Import context is pressed), and Full Disk Access in place of four folder
     // prompts. ENGELBART_PROVIDERS_FAKE and ENGELBART_DISK_ACCESS stand in for this Mac in scripted runs.
-    const onboardingProviders = createProviders({ tools, prefs, homeDir, fake: process.env.ENGELBART_PROVIDERS_FAKE || (connectFake ? 'both' : '') });
+    const onboardingProviders = createProviders({ tools, prefs, homeDir, fake: process.env.ENGELBART_PROVIDERS_FAKE || (connectFake && !cliFake ? 'both' : ''), ...(toolsFake ? { run: toolsFake.execFile } : {}) });
     // Full Disk Access granted: the agents may read every folder macOS guards (MATH-110's four asked one by one before).
     let diskGranted = false;
     const diskAccess = createDiskAccess({

@@ -29,6 +29,10 @@ export const importApi = {
   onTools: (callback) => api.onTools(callback),
   toolsInstall: (ids) => api.toolsInstall(ids),
   toolsSignIn: (id) => api.toolsSignIn(id),
+  // Connect Claude Code / Codex (2026-10-14): installed, checked and signed in, whichever it still needs, from one press.
+  toolsConnect: (id) => api.toolsConnect(id),
+  toolsCancelSignIn: (id) => api.toolsCancelSignIn(id),
+  openExternal: (url) => api.openExternal(url),
   detect: () => api.connectDetect(),
   pickDirectory: () => window.terminalAPI.pickDirectory(undefined),
   // "Choose files" under Specify context (round 3): files and folders, several at once (the sidebar's Choose from disk…).

@@ -39,17 +39,43 @@ function codexPlan({ env = process.env, home = os.homedir() } = {}) {
   }
 }
 
-/** Claude Code's `auth status --json` text → its plan's name, or null. */
-function claudePlan(text) {
+/** Claude Code's `auth status --json` text → { loggedIn, plan } (plan: its subscription's name, or null), or null when unreadable. */
+function claudeAuth(text) {
   const raw = String(text || '');
   try {
     const status = JSON.parse(raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1));
-    if (!status || status.loggedIn !== true) return null;
-    if (status.authMethod && status.authMethod !== 'claude.ai') return null;
-    return typeof status.subscriptionType === 'string' && status.subscriptionType ? status.subscriptionType.toLowerCase().slice(0, 24) : null;
+    if (!status || typeof status.loggedIn !== 'boolean') return null;
+    if (status.loggedIn !== true) return { loggedIn: false, plan: null };
+    const plan = (!status.authMethod || status.authMethod === 'claude.ai') && typeof status.subscriptionType === 'string' && status.subscriptionType ? status.subscriptionType.toLowerCase().slice(0, 24) : null;
+    return { loggedIn: true, plan };
   } catch {
     return null;
   }
+}
+/** Claude Code's `auth status --json` text → its plan's name, or null. */
+const claudePlan = (text) => { const auth = claudeAuth(text); return auth ? auth.plan : null; };
+
+/** Whether Codex's sign-in file holds a ChatGPT sign-in (an ID token): what `codex login status` says, read without running it. */
+function codexSignedIn({ env = process.env, home = os.homedir() } = {}) {
+  try {
+    const auth = JSON.parse(fs.readFileSync(path.join(env.CODEX_HOME || path.join(home, '.codex'), 'auth.json'), 'utf8'));
+    return !!(auth && auth.tokens && typeof auth.tokens.id_token === 'string' && auth.tokens.id_token);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Where a provider's CLI is, in the words the window shows (2026-10-14: "it says installing claude code, even if it is
+ * already installed. it should say connecting instead"): 'connecting' while Engelbart installs, checks or updates it,
+ * 'signing-in' while its sign-in waits for the browser, 'ready', else 'not-connected' (missing, signed out, not working).
+ */
+function stateOf(record, signedIn) {
+  const busy = record.busy || null;
+  if (busy && busy.action === 'sign-in') return 'signing-in';
+  if (busy && (busy.action === 'install' || busy.action === 'check' || busy.action === 'update')) return signedIn ? 'ready' : 'connecting';
+  if (record.status === 'installing' || record.status === 'checking' || record.status === 'unknown') return 'connecting';
+  return signedIn ? 'ready' : 'not-connected';
 }
 
 /** When a folder was made (its birth time, else its change time), in ms, or null. */
@@ -82,24 +108,33 @@ function createProviders({ tools, prefs, homeDir = os.homedir(), environment = p
 
   async function read() {
     if (fake) {
-      if (fake === 'none') return ['anthropic', 'openai'].map((id) => ({ id, name: PROVIDER_NAMES[id], installed: true, signedIn: false, subscription: null, since: null }));
+      if (fake === 'none') return ['anthropic', 'openai'].map((id) => ({ id, name: PROVIDER_NAMES[id], installed: true, signedIn: false, subscription: null, since: null, state: 'not-connected' }));
       const plans = FAKES[fake] || FAKES.claude;
-      return ['anthropic', 'openai'].map((id, n) => ({ id, name: PROVIDER_NAMES[id], installed: true, signedIn: true, subscription: plans[id], since: n === 0 ? 1_700_000_000_000 : 1_710_000_000_000 }));
+      return ['anthropic', 'openai'].map((id, n) => ({ id, name: PROVIDER_NAMES[id], installed: true, signedIn: true, subscription: plans[id], since: n === 0 ? 1_700_000_000_000 : 1_710_000_000_000, state: 'ready' }));
     }
     const snap = tools && tools.snapshot ? tools.snapshot() : null;
     const record = (id) => (snap && snap.tools && snap.tools[TOOL_OF[id]]) || {};
     const out = [];
     for (const id of ['anthropic', 'openai']) {
       const r = record(id);
-      const installed = !!r.installed;
-      // Updating itself in the background (or about to) counts as signed in: the update never holds onboarding (2026-10-13).
+      const installed = !!r.installed && !(r.busy && r.busy.action === 'install');
+      // Updating itself in the background (or about to) counts: the update never holds onboarding (2026-10-13).
       const works = r.status === 'ready' || r.status === 'updating' || (r.status === 'outdated' && r.autoUpdate === true);
-      const signedIn = installed && (works || r.signedIn === true) && r.signedIn !== false;
+      // Signed in only when the CLI says so (2026-10-14): a check that could not tell (`signedIn: null`, e.g. `auth status`
+      // timing out on a fresh Mac's first run) counted as signed in, and every agent then failed with "Not logged in".
+      // Claude Code is asked now (its answer also names the plan); Codex's own sign-in file is read when its check could not tell.
+      let signedIn = installed && works && r.signedIn === true;
       let subscription = null;
-      if (signedIn && id === 'anthropic' && r.path) subscription = claudePlan(await claudeStatus(r.path));
-      if (signedIn && id === 'openai') subscription = codexPlan({ env: environment, home: homeDir });
+      if (installed && works && id === 'anthropic' && r.path) {
+        const auth = claudeAuth(await claudeStatus(r.path));
+        if (auth) { signedIn = auth.loggedIn; subscription = auth.plan; }
+      }
+      if (installed && works && id === 'openai') {
+        if (r.signedIn !== true && r.signedIn !== false) signedIn = codexSignedIn({ env: environment, home: homeDir });
+        if (signedIn) subscription = codexPlan({ env: environment, home: homeDir });
+      }
       const since = bornAt(id === 'anthropic' ? path.join(homeDir, '.claude') : (environment.CODEX_HOME || path.join(homeDir, '.codex')));
-      out.push({ id, name: PROVIDER_NAMES[id], installed, signedIn, subscription, since, account: r.account || null, status: r.status || 'missing' });
+      out.push({ id, name: PROVIDER_NAMES[id], installed, signedIn, subscription, since, account: r.account || null, status: r.status || 'missing', state: stateOf(r, signedIn), error: signedIn ? null : (r.error || null) });
     }
     return out;
   }
@@ -126,7 +161,21 @@ function createProviders({ tools, prefs, homeDir = os.homedir(), environment = p
 
   const forget = () => { cache = null; };
 
-  return { status, remember, forget };
+  /** An agent on `id` failed as one that needs the person (../connect/provider-failure.cjs): its CLI is checked again now. */
+  function recheck(id) {
+    cache = null;
+    const name = TOOL_OF[id];
+    if (!name || fake || !tools || typeof tools.check !== 'function') return Promise.resolve(null);
+    return Promise.resolve().then(() => tools.check([name])).catch(() => null).then(() => { cache = null; return status({ fresh: true }); });
+  }
+
+  /** Whether `id` can run onboarding's agents now (read fresh). */
+  async function ready(id) {
+    const out = await status({ fresh: true });
+    return out.providers.some((one) => one.id === id && one.installed && one.signedIn);
+  }
+
+  return { status, remember, forget, recheck, ready };
 }
 
-module.exports = { createProviders, codexPlan, claudePlan, bornAt };
+module.exports = { createProviders, codexPlan, claudePlan, claudeAuth, codexSignedIn, stateOf, bornAt };
