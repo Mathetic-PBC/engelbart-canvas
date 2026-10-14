@@ -735,7 +735,8 @@ export function AddPicker({ anchor, from, into, projectId, library, inRail, has,
   const searchRef = React.useRef(null);
   const { busy, error, setError, run } = useAddRun(onClose);
   const busyRef = React.useRef(false);
-  busyRef.current = busy;
+  // It stays while it is adding, while GitHub's sign-in or list is in it, and while a link or a path is typed in it.
+  busyRef.current = busy || view === 'github' || !!value.trim();
   React.useEffect(() => { const timer = setTimeout(() => { if (searchRef.current) searchRef.current.focus({ preventScroll: true }); }, 0); return () => clearTimeout(timer); }, []);
   React.useEffect(() => { if (onLibraryChange) onLibraryChange(!!side); }, [side, onLibraryChange]);
   // Hiding by itself: the pointer more than a little outside the picker, the library beside it, a peek and the + itself.

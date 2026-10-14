@@ -533,6 +533,20 @@ export default function Rail({
   };
   const labelTip = (element, label) => showTip(element, { kind: 'label', label });
   const quiet = () => { holdFly(); setFlyout(null); showTip(null); };
+  // Escape with a hover card, a tooltip or a peek showing puts it away, and goes no further: it never leaves the project.
+  const hovering = !!(flyout || tip || peek.peek);
+  React.useEffect(() => {
+    if (!hovering || hidden) return undefined;
+    const onKey = (event) => {
+      if (event.key !== 'Escape' || event.defaultPrevented) return;
+      event.preventDefault();
+      event.stopPropagation();
+      quiet();
+      peek.drop();
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [hovering, hidden]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const go = (id) => { quiet(); onSelectWorkspace(id); };
   const chevronPress = (id, element) => {
@@ -864,7 +878,7 @@ export default function Rail({
       })()}
       {panel && panel.kind === 'trash' && (postItTrash || workspaceTrash) && <TrashPanel anchor={panel.anchor} trash={postItTrash} workspaces={workspaceTrash} onClose={close} />}
 
-      {searching && <SearchDialog projectId={project.id} workspaces={flatWorkspaces(roots)} rows={rows} library={library} inRail={inRail} onGoWorkspace={go} onOpen={(row) => onOpenRow(row)} onLink={onLinkRow} onAddInput={(input) => onAddInput(input, null)} onClose={() => setSearching(false)} />}
+      {searching && <SearchDialog projectId={project.id} workspaces={flatWorkspaces(roots)} rows={rows} library={library} inRail={inRail} onGoWorkspace={go} onOpen={(row) => onOpenRow(row)} onLink={(row) => Promise.resolve(onLinkRow(row)).catch(() => {})} onAddInput={(input) => onAddInput(input, null)} onClose={() => setSearching(false)} />}
       {shortcuts && <ShortcutsDialog roots={roots} railHidden={railHidden} onNext={onNextAgent} onGo={go} onToggleRail={onToggleRail} onClose={() => setShortcuts(false)} />}
       {creating && <CreateProjectDialog parent={creating.parent} onCreate={(name) => onCreateWorkspace({ name, parentId: creating.parent.id })} onClose={() => setCreating(null)} />}
       {makingFolder && <FolderDialog onCreate={(name) => onCreateFolder(name)} onClose={() => setMakingFolder(false)} />}
