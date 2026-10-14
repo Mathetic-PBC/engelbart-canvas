@@ -111,6 +111,16 @@ put() {
   echo "  ok     $f"
 }
 
+# ENGELBART_UPLOAD_ONLY="beta.sh" (2026-10-14): just these files of the folder, never latest-mac.yml, so a file can go
+# next to the live release (the beta's install command at mathetic.com/engelbart/beta.sh) without touching its feed.
+if [ -n "${ENGELBART_UPLOAD_ONLY:-}" ]; then
+  for f in $ENGELBART_UPLOAD_ONLY; do
+    [ "$f" = latest-mac.yml ] && { echo "Refusing latest-mac.yml with ENGELBART_UPLOAD_ONLY: it would change what installed apps update to."; exit 1; }
+    put "$f" || exit 1
+  done
+  exit 0
+fi
+
 for f in "${VERSIONED[@]}"; do
   if [ "$(remote_size "$f")" = "$(size_of "$UPLOAD/$f")" ]; then echo "  there  $f"; continue; fi
   put "$f" || { echo "Stopped at $f. latest-mac.yml was not uploaded, so the previous version stays live; run this again to continue."; exit 1; }
