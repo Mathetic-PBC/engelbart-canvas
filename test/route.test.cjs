@@ -633,16 +633,21 @@ test('@create: the fake router sends "make a chart", "make a page" and "create a
   ]), ['create', 'create', 'create', 'create']);
   assert.deepEqual(picks(['can you create the build prompt for this', 'create a prompt for the chart', 'give me the build prompt for a chart', 'make the file icons different', 'what papers should I read']), ['chat', 'chat', 'chat', 'build', 'discover']);
   assert.ok(route.PICKS.includes('create'));
-  assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /- create: they want a new standalone thing[^]*"make a chart of CHI submissions by year" → create[^]*"chat\|brainstorm\|discover\|create\|build"/);
+  assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /- create: the person wants a NEW STANDALONE ARTIFACT[^]*"make a chart of CHI submissions by year" → create[^]*"chat\|brainstorm\|discover\|create\|build"/);
 });
 
-test('Bart\'s prompt: the person\'s own project history is chat, published research is discover', () => {
+test('Bart\'s prompt (2026-10-14): classify by what the person wants back; their own project history is chat, published research is discover', () => {
   const prompt = require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT;
-  assert.match(prompt, /"are you able to find what the original design of the agent viewer was\?" → chat/);
-  assert.match(prompt, /- chat \(the default\):[^\n]*the person's own project and its history/);
-  assert.match(prompt, /- discover: they want published research or other people's prior work[^\n]*that is chat\./);
-  assert.match(prompt, /"what's been published on agent debugging tools\?" → discover/);
-  assert.match(prompt, /A line that names a feature, note or decision from this project \(not papers or research\) → chat\./);
+  assert.match(prompt, /Classify by WHAT THE PERSON WANTS BACK FROM THIS TURN, not by what subject the request happens to mention\./);
+  assert.match(prompt, /- Topic does not determine the agent\. Desired result does\./);
+  assert.match(prompt, /- chat: [^\n]*retrieval of their own prior work/);
+  assert.match(prompt, /- discover: the person wants published research or other people's prior work[^\n]*Their own notes, decisions, Builds and chats are not Discover\./);
+  assert.match(prompt, /"what did we decide about the router\?" → chat/);
+  assert.match(prompt, /"what papers should I read on agent debugging\?" → discover/);
+  const order = ['1. Do they want an existing thing changed now? → build', '2. Do they want a new standalone artifact/file made? → create', '3. Do they want prior work from other people to go read? → discover', '4. Do they want help forming their own judgment, direction or question? → brainstorm', '5. Otherwise'].map((k) => prompt.indexOf(k));
+  assert.ok(order.every((at) => at >= 0) && order.every((at, n) => !n || at > order[n - 1]), 'the decision procedure, in order');
+  // What the model is given stays described, tag by tag.
+  for (const tag of ['<line>', '<section>', '<threads>', '<spec_above>', '<current>']) assert.ok(prompt.includes(tag), tag);
 });
 
 test('@create: the classifier\'s create pick stands at 0.8 or more; at 0.7 it goes to chat', async () => {
@@ -794,7 +799,7 @@ test('a follow-up Bart is less than 0.8 sure wants another agent stays with the 
   assert.deepEqual(route.decide({ agent: 'discover', sure: 0.85 }, 'discover'), { agent: 'discover', sure: 0.85 });
   assert.deepEqual(route.decide({ agent: 'brainstorm', sure: 0.7 }, 'discover'), { agent: 'brainstorm', sure: 0.7 }, 'another agent as for a line with no conversation');
   assert.deepEqual(route.decide(null, 'discover'), { agent: 'chat', sure: 0 });
-  assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /When the current agent is discover/);
+  assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /After Discover: "what do you think these findings mean for us\?" → Chat/i);
   assert.deepEqual(route.decide(null, 'brainstorm'), { agent: 'brainstorm', sure: 0 }, 'an unread reply leaves it there');
   assert.deepEqual(route.decide({ agent: 'build', sure: 0.7 }, 'chat'), { agent: 'chat', sure: 0.7 });
   assert.deepEqual(route.decide({ agent: 'brainstorm', sure: 0.7 }), { agent: 'brainstorm', sure: 0.7 }, 'a line starting a conversation: 0.6 as before');
@@ -806,7 +811,7 @@ test('a follow-up Bart is less than 0.8 sure wants another agent stays with the 
   const timedOut = await router(Object.assign(new Error('Command failed: timed out'), { killed: true, signal: 'SIGTERM' })).route({ ...LINE, current: 'brainstorm' });
   assert.equal(timedOut.agent, 'brainstorm');
   assert.ok(!(await router('{"agent":"chat","sure":0.9}', { seen: {} }).route(LINE)).error);
-  assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /at least 0\.8 sure/);
+  assert.match(require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT, /Only switch agents when you are confident the user has changed modes/);
   assert.equal(route.fakePick('and then?', 'brainstorm').agent, 'brainstorm', 'the fake router stays put too');
   assert.equal(route.fakePick('and then?', 'discover').agent, 'chat', 'but not with Discover');
   // In the editor: the router's own fallback, with no answer, is the thread's agent (a follow-up from the card's field).
@@ -984,8 +989,8 @@ test('"yes" under an answer that asks "Want me to build it?": from the reply fie
   assert.deepEqual([unsure.builds.length, unsure.asks[0].agent, unsure.asks[0].routed.build], [0, 'bart', true]);
   // The prompt and the eval: "yes", "yes build it", "go ahead" with a spec above → build; "yes" with none → chat.
   const prompt = require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT;
-  for (const said of ['yes', 'yes build it']) assert.ok(prompt.includes(`- "${said}", as a follow-up with a spec above → build, spec true`), said);
-  assert.ok(prompt.includes('- "yes, build that" or "go ahead", with a spec above → build, spec true'));
+  assert.ok(prompt.includes('- "yes", "yes build it" or "go ahead", as a follow-up with a spec above → build, spec true'));
+  assert.ok(prompt.includes('- "ok build it", with a spec above → build, spec true'));
   const cases = fs.readFileSync(path.join(__dirname, '../fixtures/route-eval.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   for (const [line, specAbove, expected] of [['yes', true, 'build'], ['yes build it', true, 'build'], ['go ahead', true, 'build'], ['yes', false, 'chat']]) {
     assert.ok(cases.some((c) => c.line === line && c.specAbove === specAbove && c.expected === expected), `eval: ${line}, spec ${specAbove} → ${expected}`);
