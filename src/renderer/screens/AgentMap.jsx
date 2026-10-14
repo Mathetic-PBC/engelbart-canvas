@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, errorMessage } from '../api.js';
 import Benchmark from './Benchmark.jsx';
-import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, sectionText, exportPage, runLabel, agentInfo, createdLines, rowText, rowLine, listedRuns, placeLabel, projectNames } from '../agent-map/runText.js';
+import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, sectionText, exportPage, runLabel, agentInfo, createdLines, rowText, rowLine, listedRuns, placeLabel, projectNames, filterRuns, filterOptions } from '../agent-map/runText.js';
 
 // The Agent Viewer (2026-10-12; it was the Agent map, and the internal names stay: src/main/agent-map): a window for developers only, the app's renderer at ?view=agent-map.
 // Its first design again (2026-10-13: the Agent Viewer's asks and pipeline sections were taken out; main's asks, reveal and
@@ -13,7 +13,8 @@ import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msL
 // Benchmark (2026-10-13, ./Benchmark.jsx): every Chat question in the notes, its saved answer beside it asked again now.
 // Plain and dense on purpose: one font, small type, thin rules. Less text (2026-10-13): no filter tabs, status dots, size
 // notes beside the sections, run header, router line or key legend; a failed run still says why. A row reads as the person's
-// words over the agent in plain words, first message or reply, the model and the time (RunList).
+// words over the agent in plain words, first message or reply and the time (RunList; no model, no place headers since
+// 2026-10-13). Above the list, Project, Workspace and Date filters; a run opens with its sections closed.
 // Keys, not shown: j/k the next and previous run, 1–4 a section, c copies the open section, e exports the run (E every run).
 
 const SECTIONS = [['system', 'System prompt'], ['context', 'Context'], ['steps', 'Steps'], ['written', 'Written']];
@@ -26,10 +27,11 @@ const S = {
   button: { font: FONT, background: '#fff', border: RULE, padding: '1px 6px', cursor: 'pointer', color: '#111' },
   dim: { color: '#777' },
   body: { flex: 1, display: 'flex', minHeight: 0 },
-  list: { width: 360, flex: 'none', overflowY: 'auto', borderRight: RULE },
+  list: { width: 360, flex: 'none', display: 'flex', flexDirection: 'column', borderRight: RULE },
+  filters: { display: 'flex', gap: 6, padding: '5px 10px', borderBottom: RULE, flex: 'none' },
+  rows: { flex: 1, overflowY: 'auto', minHeight: 0 },
   row: (on) => ({ padding: '5px 10px', borderBottom: '1px solid #eee', cursor: 'pointer', background: on ? '#eef3ff' : 'transparent' }),
   line: { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
-  place: { padding: '6px 10px 2px', fontSize: 11, color: '#777', borderBottom: '1px solid #eee', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   detail: { flex: 1, overflowY: 'auto', padding: '8px 14px 40px' },
   pre: { font: FONT, whiteSpace: 'pre-wrap', wordBreak: 'break-word', background: '#f6f6f6', border: '1px solid #e6e6e6', padding: 6, margin: '3px 0' },
   head: { cursor: 'pointer', padding: '3px 0', borderTop: RULE, marginTop: 6, userSelect: 'none' },
@@ -195,39 +197,62 @@ function DesignBody({ agent }) {
 }
 
 /**
- * The list of runs, newest first (2026-10-13): each row the person's words, then the agent in plain words, first message
- * or reply, the model and the time; a dim "Project / Workspace" header over a row whose place differs from the row above.
- * A rule's router pick is not listed (listedRuns). Hover gives the place, the Build id and the whole text.
+ * The list of runs, newest first by `at` (listedRuns), the filters applied (filterRuns): each row the person's words,
+ * then the agent in plain words, first message or reply, and the time. No place headers (2026-10-13): hover gives the
+ * project and workspace, the Build id and the whole text. A rule's router pick is not listed.
  */
-export function RunList({ runs, selected, onSelect }) {
-  const shown = listedRuns(runs), names = projectNames(runs);
-  let above = null;
+export function RunList({ runs, filter, selected, onSelect }) {
+  const names = projectNames(runs), listed = listedRuns(runs), shown = filterRuns(listed, filter, names);
+  if (!listed.length) return <div style={{ padding: 10, ...S.dim }}>No runs yet. Ask @bart, @chat, @brainstorm, @discover or @create, or start a Build, in any window.</div>;
+  if (!shown.length) return <div style={{ padding: 10, ...S.dim }}>No runs match.</div>;
   return (
     <div>
-      {shown.length ? shown.map((run) => {
-        const place = placeLabel(run, names), header = place !== above;
-        above = place;
-        const hover = [place, run.buildId ? `Build ${run.buildId}` : '', rowText(run)].filter(Boolean).join('\n');
+      {shown.map((run) => {
+        const hover = [placeLabel(run, names), run.buildId ? `Build ${run.buildId}` : '', rowText(run)].filter(Boolean).join('\n');
         return (
-          <React.Fragment key={run.id}>
-            {header && place ? <div style={S.place}>{place}</div> : null}
-            <div style={S.row(run.id === selected)} title={hover} onClick={() => onSelect(run.id)}>
-              <div style={S.line}>{rowText(run)}</div>
-              <div style={{ display: 'flex', gap: 8, ...S.dim }}><span style={{ ...S.line, flex: 1, minWidth: 0 }}>{rowLine(run)}</span><span style={{ flex: 'none' }}>{timeLabel(run.at)}</span></div>
-            </div>
-          </React.Fragment>
+          <div key={run.id} style={S.row(run.id === selected)} title={hover} onClick={() => onSelect(run.id)}>
+            <div style={S.line}>{rowText(run)}</div>
+            <div style={{ display: 'flex', gap: 8, ...S.dim }}><span style={{ ...S.line, flex: 1, minWidth: 0 }}>{rowLine(run)}</span><span style={{ flex: 'none' }}>{timeLabel(run.at)}</span></div>
+          </div>
         );
-      }) : <div style={{ padding: 10, ...S.dim }}>No runs yet. Ask @bart, @chat, @brainstorm, @discover or @create, or start a Build, in any window.</div>}
+      })}
     </div>
   );
 }
 
-export default function AgentMap() {
+export const ALL_RUNS = { project: '', workspace: '', day: '' };
+
+/** One row of three selects over the list: Project, Workspace (the Project's), Date. Changing Project resets Workspace. */
+export function RunFilters({ runs, filter, onChange }) {
+  const options = filterOptions(listedRuns(runs), filter, projectNames(runs));
+  const select = { ...S.button, flex: 1, minWidth: 0, padding: '1px 2px' };
+  return (
+    <div style={S.filters}>
+      <select style={select} title="Project" value={filter.project} onChange={(event) => onChange({ ...filter, project: event.target.value, workspace: '' })}>
+        <option value="">All projects</option>
+        {options.projects.map((name) => <option key={name} value={name}>{name}</option>)}
+      </select>
+      <select style={select} title="Workspace" value={filter.workspace} onChange={(event) => onChange({ ...filter, workspace: event.target.value })}>
+        <option value="">All workspaces</option>
+        {options.workspaces.map((name) => <option key={name} value={name}>{name}</option>)}
+      </select>
+      <select style={select} title="Date" value={filter.day} onChange={(event) => onChange({ ...filter, day: event.target.value })}>
+        <option value="">All dates</option>
+        {options.days.map((day) => <option key={day.key} value={day.key}>{day.label}</option>)}
+      </select>
+    </div>
+  );
+}
+
+/** `seed` (tests): the runs and the selected run's record to start from; the window starts empty and loads them. */
+export default function AgentMap({ seed } = {}) {
   const [tab, setTab] = useState('runs');
-  const [runs, setRuns] = useState([]);
-  const [selected, setSelected] = useState(null);
-  const [record, setRecord] = useState(null);
-  const [open, setOpen] = useState('steps');
+  const [runs, setRuns] = useState(() => (seed && seed.runs) || []);
+  const [selected, setSelected] = useState(() => (seed && seed.record && seed.record.id) || null);
+  const [record, setRecord] = useState(() => (seed && seed.record) || null);
+  // No section open when a run opens (2026-10-13); the one opened stays open from run to run.
+  const [open, setOpen] = useState(null);
+  const [filter, setFilter] = useState(ALL_RUNS);
   const [design, setDesign] = useState(null);
   const [note, setNote] = useState('');
   const [agent, setAgent] = useState(null);
@@ -238,10 +263,10 @@ export default function AgentMap() {
   useEffect(() => { document.title = 'Agent Viewer'; }, []);
   useEffect(() => {
     let live = true;
-    api.agentRuns().then((list) => { if (!live) return; setRuns(list); const first = listedRuns(list)[0]; setSelected((current) => current || (first && first.id) || null); }).catch((error) => setNote(errorMessage(error)));
+    // Which run is selected follows the rows shown (below); the order is listedRuns'.
+    api.agentRuns().then((list) => { if (live) setRuns(list); }).catch((error) => setNote(errorMessage(error)));
     const off = api.onAgentRun((summary) => {
-      setRuns((list) => [summary, ...list.filter((run) => run.id !== summary.id)].sort((a, b) => b.at - a.at));
-      if (listedRuns([summary]).length) setSelected((current) => current || summary.id);
+      setRuns((list) => [summary, ...list.filter((run) => run.id !== summary.id)]);
       // The run in view is read again, at most every 400 ms while it changes.
       if (summary.id === selectedRef.current && !refetch.current) {
         refetch.current = setTimeout(() => { refetch.current = null; api.agentRun(summary.id).then((full) => { if (full && full.id === selectedRef.current) setRecord(full); }).catch(() => {}); }, 400);
@@ -249,6 +274,12 @@ export default function AgentMap() {
     });
     return () => { live = false; off(); clearTimeout(refetch.current); refetch.current = null; };
   }, []);
+  // The rows the list shows, newest first, the filters applied: j/k move over them, and when the selected run is not
+  // among them (filtered out, or none picked yet) the first is selected, or none when there are none.
+  const shown = useMemo(() => filterRuns(listedRuns(runs), filter, projectNames(runs)), [runs, filter]);
+  useEffect(() => {
+    if (!shown.some((run) => run.id === selected)) setSelected(shown.length ? shown[0].id : null);
+  }, [shown, selected]);
   useEffect(() => {
     if (!selected) { setRecord(null); return; }
     let live = true;
@@ -270,9 +301,9 @@ export default function AgentMap() {
 
   useEffect(() => {
     const onKey = (event) => {
-      if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA)$/.test(event.target.tagName)) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || /^(INPUT|TEXTAREA|SELECT)$/.test(event.target.tagName)) return;
       // j/k move over the rows the list shows.
-      const shown = listedRuns(runs), at = shown.findIndex((run) => run.id === selected);
+      const at = shown.findIndex((run) => run.id === selected);
       if (event.key === 'j' && shown.length) setSelected(shown[Math.min(shown.length - 1, at + 1)].id);
       else if (event.key === 'k' && shown.length) setSelected(shown[Math.max(0, at - 1)].id);
       else if (/^[1-4]$/.test(event.key)) { setTab('runs'); setOpen(SECTIONS[Number(event.key) - 1][0]); }
@@ -285,9 +316,9 @@ export default function AgentMap() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [runs, selected, record, open, exportRuns]);
+  }, [shown, selected, record, open, exportRuns]);
 
-  const list = useMemo(() => <RunList runs={runs} selected={selected} onSelect={setSelected} />, [runs, selected]);
+  const list = useMemo(() => <RunList runs={runs} filter={filter} selected={selected} onSelect={setSelected} />, [runs, filter, selected]);
 
   return (
     <div style={S.root}>
@@ -302,8 +333,11 @@ export default function AgentMap() {
       </div>
       {tab === 'runs' ? (
         <div style={S.body}>
-          <div style={S.list}>{list}</div>
-          <div style={S.detail}>{record ? <RunDetail record={record} open={open} onToggle={toggle} /> : <div style={S.dim}>{runs.length ? 'Loading…' : ''}</div>}</div>
+          <div style={S.list}>
+            <RunFilters runs={runs} filter={filter} onChange={setFilter} />
+            <div style={S.rows}>{list}</div>
+          </div>
+          <div style={S.detail}>{record ? <RunDetail record={record} open={open} onToggle={toggle} /> : <div style={S.dim}>{shown.length ? 'Loading…' : ''}</div>}</div>
         </div>
       ) : tab === 'design' ? (
         <div style={{ ...S.detail, flex: 1 }}><Design design={design} agent={agent} onPick={setAgent} /></div>

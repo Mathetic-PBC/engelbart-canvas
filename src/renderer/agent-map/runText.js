@@ -116,24 +116,75 @@ export function rowText(run) {
   return String(text || '').replace(/\s+/g, ' ').trim() || '(empty line)';
 }
 
-/** A row's second line, before its time: the agent, first message or reply, how it ended if it failed, the model. */
-export const rowLine = (run) => [agentLabel(run), turnLabel(run), outcomeLabel(run), modelLabel(run)].filter(Boolean).join(' · ');
-
-/** The runs the list shows: a rule's pick made no model call and the run it handed to is listed, so it is left out unless it failed. */
-export const listedRuns = (runs) => (runs || []).filter((run) => !(run.agent === 'router' && run.by === 'rule' && run.status !== 'failed'));
+/** A row's second line, before its time: the agent, first message or reply, how it ended if it failed (no model since 2026-10-13). */
+export const rowLine = (run) => [agentLabel(run), turnLabel(run), outcomeLabel(run)].filter(Boolean).join(' · ');
 
 /**
- * "Project / Workspace" for a run, the list's header over it. A router's record keeps no project name, so `names`
+ * The runs the list shows, newest first by `at` (2026-10-13: the first load, live updates, j/k and the filters all use
+ * this order, whatever order the log gave them in). A rule's pick made no model call and the run it handed to is listed,
+ * so it is left out unless it failed.
+ */
+export const listedRuns = (runs) => (runs || [])
+  .filter((run) => !(run.agent === 'router' && run.by === 'rule' && run.status !== 'failed'))
+  .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+
+/**
+ * "Project / Workspace" for a run, in a row's hover title. A router's record keeps no project name, so `names`
  * (projectId → name, from the other runs: projectNames) fills it in.
  */
-export const placeLabel = (run, names = new Map()) => [run.projectName || names.get(run.projectId) || '', run.workspaceName || ''].filter(Boolean).join(' / ');
+export const placeLabel = (run, names = new Map()) => [projectOf(run, names), run.workspaceName || ''].filter(Boolean).join(' / ');
 export function projectNames(runs) {
   const names = new Map();
   for (const run of runs || []) if (run.projectId && run.projectName && !names.has(run.projectId)) names.set(run.projectId, run.projectName);
   return names;
 }
+/** A run's project name, a router's record's through `names`; '' when it has none. */
+export const projectOf = (run, names = new Map()) => (run && (run.projectName || names.get(run.projectId))) || '';
 
-/** "model · effort" for the list: the last step's, which is where it ended up. */
+/** The local day a run started on, "2026-10-13"; '' for none. */
+export function dayKey(at) {
+  if (!at) return '';
+  const date = new Date(at), pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+/** A day in the Date filter: "Today", "Yesterday", else "Oct 11" (and the year when it is not this one). */
+export function dayLabel(key, now = Date.now()) {
+  if (key === dayKey(now)) return 'Today';
+  const before = new Date(now);
+  before.setDate(before.getDate() - 1);
+  if (key === dayKey(before.getTime())) return 'Yesterday';
+  const [year, month, day] = key.split('-').map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(year !== new Date(now).getFullYear() ? { year: 'numeric' } : {}) });
+}
+
+/**
+ * The runs the filters leave (2026-10-13), in the order given: `project` a project name, `workspace` a workspace name,
+ * `day` a dayKey; '' or none is all. A run with no project or workspace shows only under all for that filter.
+ * `names` fills a router's record's project (projectNames; from `runs` when not given).
+ */
+export function filterRuns(runs, { project = '', workspace = '', day = '' } = {}, names = projectNames(runs)) {
+  return (runs || []).filter((run) => (!project || projectOf(run, names) === project)
+    && (!workspace || run.workspaceName === workspace)
+    && (!day || dayKey(run.at) === day));
+}
+
+/**
+ * The three selects' options: every project the runs name, the workspaces among the runs the Project filter leaves
+ * (both A–Z), and each local day with runs, newest first, as { key, label }.
+ */
+export function filterOptions(runs, { project = '' } = {}, names = projectNames(runs), now = Date.now()) {
+  const sorted = (values) => [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  const list = runs || [];
+  return {
+    projects: sorted(list.map((run) => projectOf(run, names))),
+    workspaces: sorted(filterRuns(list, { project }, names).map((run) => run.workspaceName)),
+    days: [...new Set(list.map((run) => dayKey(run.at)).filter(Boolean))].sort().reverse().map((key) => ({ key, label: dayLabel(key, now) })),
+  };
+}
+
+/** "model · effort": the last step's, which is where it ended up (the export's run header; rows leave it out since 2026-10-13). */
 export const modelLabel = (run) => [run.model, run.effort].filter(Boolean).join(' · ') || (run.status === 'running' ? 'starting' : 'no model run');
 
 /** The library rows a Create run kept, one a line ("Name · type · path"), then what it skipped; '(none)' when it kept nothing. */

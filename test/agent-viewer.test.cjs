@@ -256,7 +256,8 @@ test('viewer: the runs list shows every run, newest first, the person\'s words o
   const order = ['a chart of the results', 'papers on X', 'Build · turn 1', 'Build · run step'].map((label) => html.indexOf(label));
   assert.ok(order.every((at) => at >= 0), 'each row is there');
   assert.deepEqual([...order].sort((a, b) => a - b), order, 'in the order given, newest first');
-  assert.match(html, /Create · claude-sonnet-5-5 · high/);
+  assert.match(html, /<span[^>]*>Create<\/span>/, 'no model in the row (2026-10-13)');
+  assert.doesNotMatch(html, /claude-sonnet-5-5|· high/);
   assert.match(html, /Build · turn 1 · first message · failed/);
   assert.doesNotMatch(html, />Questions</);
   assert.doesNotMatch(html, />Builds</);
@@ -274,7 +275,7 @@ function listRows(html) {
 }
 const unescape = (text) => text.replace(/&amp;/g, '&').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<');
 
-test('viewer: a row is the person\'s words, then the agent, first message or reply, the model and the time; a rule\'s router pick is not listed; one header per workspace (2026-10-13)', () => {
+test('viewer: a row is the person\'s words, then the agent, first message or reply and the time; a rule\'s router pick is not listed; no place headers (2026-10-13)', () => {
   const W = { projectId: 'p1', workspaceName: 'Concision in Agent Responses' };
   const runs = [
     { id: 'rt-1', agent: 'router', at: 5, status: 'done', by: 'model', sure: 0.85, pick: 'chat', question: 'why is the sky blue?', projectName: '', ...W, model: 'claude-haiku-5-5', effort: 'low' },
@@ -285,15 +286,15 @@ test('viewer: a row is the person\'s words, then the agent, first message or rep
   ];
   const html = renderToStaticMarkup(React.createElement(view.RunList, { runs, selected: 'ch-1', onSelect() {} }));
   const rows = listRows(html).map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, unescape(value)])));
-  assert.deepEqual(rows.filter((row) => row.header).map((row) => row.header), ['Engelbart / Concision in Agent Responses'], 'one header; the router\'s record gets its project name from the other runs');
+  assert.deepEqual(rows.filter((row) => row.header), [], 'no place header');
   const items = rows.filter((row) => !row.header);
   assert.equal(items.length, 4, 'the rule\'s pick is gone');
   assert.deepEqual(items.map((row) => row.first), ['why is the sky blue?', 'why is the sky blue?', 'Make the list readable', 'Make the list readable']);
-  assert.equal(items[0].second, 'Bart → Chat · 0.85 · first message · claude-haiku-5-5 · low');
+  assert.equal(items[0].second, 'Bart → Chat · 0.85 · first message');
   assert.equal(items[1].first, 'why is the sky blue?');
-  assert.match(items[1].second, /^Chat · via Bart · first message · claude-opus-5-5 · high$/);
-  assert.match(items[2].second, /^Build · turn 1 · first message · claude-opus-5-5 · high$/);
-  assert.match(items[3].second, /^Build · run step · no model run$/, 'a run step is no message');
+  assert.equal(items[1].second, 'Chat · via Bart · first message');
+  assert.equal(items[2].second, 'Build · turn 1 · first message');
+  assert.equal(items[3].second, 'Build · run step', 'a run step is no message');
   for (const row of items) {
     assert.ok(row.time, 'a time on the right');
     assert.ok(!/@run|@bart|@chat|@/.test(row.first + row.second), `no "@" in ${row.second}`);
@@ -301,6 +302,7 @@ test('viewer: a row is the person\'s words, then the agent, first message or rep
     assert.ok(!/tools/.test(row.second), 'no tool count');
   }
   assert.match(items[2].title, /^Engelbart \/ Concision in Agent Responses\nBuild 9f3e2a1b7c\nMake the list readable$/, 'hover: place, Build id, the whole text');
+  assert.match(items[0].title, /^Engelbart \/ Concision in Agent Responses\n/, 'the router\'s record gets its project name from the other runs');
   assert.ok(!html.includes('picked by') && !html.includes('rule:'), 'no internal labels');
 
   // A failed rule pick is listed.
@@ -308,13 +310,16 @@ test('viewer: a row is the person\'s words, then the agent, first message or rep
   assert.match(unescape(failed), /Bart → Build · first message · failed/);
   assert.deepEqual(runText.listedRuns(runs).map((run) => run.id), ['rt-1', 'ch-1', '9f3e2a1b7c:1', 'rs-1'], 'j/k move over these');
 
-  // Two workspaces: two headers, and a header again only when the place changes.
+  // Two workspaces: no header row; the place is only in the rows' hover titles.
   const two = renderToStaticMarkup(React.createElement(view.RunList, { runs: [
     { id: 'a', agent: 'bart', at: 3, status: 'done', question: 'q1', projectId: 'p1', projectName: 'Engelbart', workspaceName: 'One' },
     { id: 'b', agent: 'bart', at: 2, status: 'done', question: 'q2', projectId: 'p1', projectName: 'Engelbart', workspaceName: 'One' },
     { id: 'c', agent: 'discover', at: 1, status: 'done', question: 'q3', projectId: 'p1', projectName: 'Engelbart', workspaceName: 'Two' },
   ], selected: null, onSelect() {} }));
-  assert.deepEqual(listRows(two).filter((row) => row.header).map((row) => row.header), ['Engelbart / One', 'Engelbart / Two']);
+  assert.deepEqual(listRows(two).filter((row) => row.header), []);
+  assert.equal(listRows(two).length, 3);
+  const outsideTitles = two.replace(/ title="[^"]*"/g, '');
+  assert.ok(!outsideTitles.includes('Engelbart / One') && !outsideTitles.includes('Engelbart / Two') && !outsideTitles.includes('Engelbart'), 'no place text outside the titles');
 });
 
 test('viewer: first message or reply, from each record\'s own field; none on a record without one (2026-10-13)', () => {
@@ -330,7 +335,7 @@ test('viewer: first message or reply, from each record\'s own field; none on a r
   for (const old of [{ agent: 'bart', question: 'q' }, { agent: 'brainstorm' }, { agent: 'build' }]) {
     assert.doesNotMatch(rowLine(old), /first message|reply/, `${old.agent} without the field says neither`);
   }
-  assert.match(rowLine({ agent: 'bart', reply: 2, status: 'done', model: 'opus', effort: 'high' }), /^Chat · reply 3 · opus · high$/);
+  assert.equal(rowLine({ agent: 'bart', reply: 2, status: 'done', model: 'opus', effort: 'high' }), 'Chat · reply 3');
   assert.match(rowLine({ agent: 'bart', reply: 0, status: 'done', stepCount: 2, model: 'opus', effort: 'high' }), /^Chat · first message · escalated/);
   assert.match(rowLine({ agent: 'build', turn: 3, status: 'escalated', ending: 'escalated' }), /^Build · turn 3 · reply · escalated/);
   assert.equal(runLabel({ agent: 'run step', title: 'a parser' }), 'Build · run step a parser');
@@ -385,4 +390,79 @@ test('viewer: a @create run\'s Written shows what it kept in the library', () =>
   assert.match(html, /kept in the library/);
   assert.match(html, /Results chart · html · assets\/files\/chart\.html/);
   assert.match(html, /skipped: too big/);
+});
+
+/* ------------------------------------------------------------- order, filters, no model, closed sections (2026-10-13) */
+
+test('viewer: listedRuns is newest first by `at`, whatever order the log gave', () => {
+  const runs = [{ id: 'three', agent: 'bart', at: 3 }, { id: 'one', agent: 'bart', at: 1 }, { id: 'two', agent: 'bart', at: 2 }];
+  assert.deepEqual(runText.listedRuns(runs).map((run) => run.at), [3, 2, 1]);
+  assert.deepEqual(runs.map((run) => run.at), [3, 1, 2], 'the given list is left as it was');
+  const html = renderToStaticMarkup(React.createElement(view.RunList, { runs: runs.map((run) => ({ ...run, status: 'done', question: run.id })), selected: null, onSelect() {} }));
+  assert.deepEqual(listRows(html).map((row) => row.first), ['three', 'two', 'one']);
+});
+
+const DAY = (d, h) => new Date(2026, 9, d, h).getTime();
+const NOW = DAY(13, 18);
+const FILTERED = [
+  { id: 'r1', agent: 'router', by: 'model', at: DAY(13, 12), status: 'done', question: 'q', projectId: 'p1', workspaceName: 'oct-12' },
+  { id: 'c1', agent: 'bart', at: DAY(13, 11), status: 'done', question: 'q', projectId: 'p1', projectName: 'Engelbart', workspaceName: 'oct-12' },
+  { id: 'c2', agent: 'bart', at: DAY(12, 9), status: 'done', question: 'q', projectId: 'p1', projectName: 'Engelbart', workspaceName: 'Concision in Agent Responses' },
+  { id: 'd1', agent: 'discover', at: DAY(11, 20), status: 'done', question: 'q', projectId: 'p2', projectName: 'Papers', workspaceName: 'oct-12' },
+  { id: 'n1', agent: 'bart', at: DAY(11, 8), status: 'done', question: 'q' },
+];
+
+test('viewer: filterRuns by project, by workspace within a project, by day; all three on all is everything', () => {
+  const { filterRuns, dayKey } = runText;
+  const ids = (filter) => filterRuns(FILTERED, filter).map((run) => run.id);
+  assert.deepEqual(ids({ project: '', workspace: '', day: '' }), ['r1', 'c1', 'c2', 'd1', 'n1']);
+  assert.deepEqual(ids({}), ['r1', 'c1', 'c2', 'd1', 'n1']);
+  assert.deepEqual(ids({ project: 'Engelbart' }), ['r1', 'c1', 'c2'], 'the router\'s record is matched through projectNames');
+  assert.deepEqual(ids({ project: 'Engelbart', workspace: 'oct-12' }), ['r1', 'c1'], 'a workspace within a project: not Papers\' oct-12');
+  assert.deepEqual(ids({ workspace: 'oct-12' }), ['r1', 'c1', 'd1']);
+  assert.deepEqual(ids({ day: dayKey(DAY(11, 0)) }), ['d1', 'n1']);
+  assert.deepEqual(ids({ project: 'Papers', day: dayKey(DAY(13, 0)) }), []);
+  assert.ok(!ids({ project: 'Engelbart' }).includes('n1') && !ids({ workspace: 'oct-12' }).includes('n1'), 'a run with no place shows only under all');
+});
+
+test('viewer: the filters\' options: projects, the project\'s workspaces, and days newest first as Today, Yesterday, Oct 11', () => {
+  const { filterOptions, projectNames } = runText;
+  const all = filterOptions(FILTERED, {}, projectNames(FILTERED), NOW);
+  assert.deepEqual(all.projects, ['Engelbart', 'Papers']);
+  assert.deepEqual(all.workspaces, ['Concision in Agent Responses', 'oct-12']);
+  assert.deepEqual(all.days.map((day) => day.label), ['Today', 'Yesterday', 'Oct 11']);
+  assert.deepEqual(filterOptions(FILTERED, { project: 'Papers' }, projectNames(FILTERED), NOW).workspaces, ['oct-12']);
+  assert.equal(runText.dayLabel('2025-10-11', NOW), 'Oct 11, 2025', 'another year says which');
+
+  const html = renderToStaticMarkup(React.createElement(view.RunFilters, { runs: FILTERED, filter: view.ALL_RUNS, onChange() {} }));
+  assert.equal((html.match(/<select/g) || []).length, 3);
+  assert.match(html, /<option value="" selected="">All projects<\/option><option value="Engelbart">Engelbart<\/option><option value="Papers">Papers<\/option>/);
+  assert.match(html, /<option value="" selected="">All workspaces<\/option>/);
+  assert.match(html, /<option value="" selected="">All dates<\/option>/);
+});
+
+test('viewer: a filter that leaves nothing says so; the list under a filter', () => {
+  const none = renderToStaticMarkup(React.createElement(view.RunList, { runs: FILTERED, filter: { project: 'Papers', workspace: '', day: runText.dayKey(DAY(13, 0)) }, selected: null, onSelect() {} }));
+  assert.match(none, /No runs match\./);
+  const papers = renderToStaticMarkup(React.createElement(view.RunList, { runs: FILTERED, filter: { project: 'Papers', workspace: '', day: '' }, selected: null, onSelect() {} }));
+  assert.equal(listRows(papers).length, 1);
+});
+
+test('viewer: no model in a row; a router row has no "claude" (2026-10-13)', () => {
+  const chat = runText.rowLine({ agent: 'bart', reply: 0, status: 'done', model: 'opus', effort: 'high' });
+  assert.ok(!chat.includes('opus') && !chat.includes('high'), chat);
+  const router = runText.rowLine({ agent: 'router', by: 'model', sure: 0.9, pick: 'chat', status: 'done', model: 'claude-haiku-5-5', effort: 'low' });
+  assert.ok(!router.includes('claude'), router);
+  assert.equal(runText.modelLabel({ model: 'opus', effort: 'high' }), 'opus · high', 'kept for the export');
+});
+
+test('viewer: a run opens with its sections closed; a step row shows once Steps is opened (2026-10-13)', () => {
+  const record = { id: 'c1', agent: 'bart', at: 3, status: 'done', question: 'why?', system: 'SYS', context: { head: 'H' }, steps: [step('blue')], written: ['bart> blue'] };
+  const html = renderToStaticMarkup(React.createElement(view.default, { seed: { runs: [record], record } }));
+  assert.match(html, /<b>3 Steps<\/b>/, 'the run is drawn');
+  assert.ok(!html.includes('<b>step 1</b>'), 'no step row');
+  assert.ok(!html.includes('SYS') && !html.includes('bart&gt; blue'), 'no section open');
+  const opened = renderToStaticMarkup(React.createElement(view.RunDetail, { record, open: 'steps', onToggle() {} }));
+  assert.match(opened, /<b>step 1<\/b>/);
+  assert.match(opened, /\(claude-sonnet-5-5\) · high/, 'a step still names its model');
 });
