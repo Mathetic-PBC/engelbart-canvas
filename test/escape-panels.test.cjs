@@ -25,7 +25,8 @@ test('the sidebar\'s panels take Escape before the workspace, the newest one fir
   assert.match(panels, /if \(event\.key !== 'Escape' \|\| layers\[layers\.length - 1\] !== layer\) return;\s*event\.preventDefault\(\);\s*event\.stopPropagation\(\);\s*live\.current\(\);/);
   assert.match(panels, /window\.addEventListener\('keydown', key, true\);/, 'in the capture phase, before an editor or the workspace');
   assert.match(panels, /label=\{`Add sources to \$\{into\.name\}`\} onClose=\{\(\) => \{ if \(!busyRef\.current\) onClose\(\); \}\}/, 'the add picker waits out an add');
-  assert.match(panels, /if \(inside\(event\) \|\| busyRef\.current\) \{ clearTimeout\(timer\); timer = null; return; \}/, 'and does not hide by itself while adding');
+  assert.match(panels, /if \(inside\(event\) \|\| stayRef\.current\) \{ clearTimeout\(timer\); timer = null; return; \}/, 'and does not hide by itself while adding');
+  assert.match(panels, /busyRef\.current = busy;\n/, 'Escape and a press elsewhere still close it with a link typed in it: only adding holds it');
   const trash = read('post-its/TrashPanel.jsx');
   assert.match(trash, /if \(event\.key === 'Escape'\) \{ event\.preventDefault\(\); onClose\(\); \}/, 'the trash marks the key used, so the workspace stays');
 });

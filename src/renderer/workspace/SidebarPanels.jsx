@@ -734,9 +734,12 @@ export function AddPicker({ anchor, from, into, projectId, library, inRail, has,
   const fieldRef = React.useRef(null);
   const searchRef = React.useRef(null);
   const { busy, error, setError, run } = useAddRun(onClose);
+  // Nothing closes it while it is adding. It does not hide by itself while GitHub's sign-in or list is in it, or while a
+  // link or a path is typed in it; Escape and a press elsewhere still close it then.
   const busyRef = React.useRef(false);
-  // It stays while it is adding, while GitHub's sign-in or list is in it, and while a link or a path is typed in it.
-  busyRef.current = busy || view === 'github' || !!value.trim();
+  busyRef.current = busy;
+  const stayRef = React.useRef(false);
+  stayRef.current = busy || view === 'github' || !!value.trim();
   React.useEffect(() => { const timer = setTimeout(() => { if (searchRef.current) searchRef.current.focus({ preventScroll: true }); }, 0); return () => clearTimeout(timer); }, []);
   React.useEffect(() => { if (onLibraryChange) onLibraryChange(!!side); }, [side, onLibraryChange]);
   // Hiding by itself: the pointer more than a little outside the picker, the library beside it, a peek and the + itself.
@@ -748,10 +751,10 @@ export function AddPicker({ anchor, from, into, projectId, library, inRail, has,
       return boxes.some((r) => event.clientX >= r.left - PICKER_MARGIN && event.clientX <= r.right + PICKER_MARGIN && event.clientY >= r.top - PICKER_MARGIN && event.clientY <= r.bottom + PICKER_MARGIN);
     };
     const move = (event) => {
-      if (inside(event) || busyRef.current) { clearTimeout(timer); timer = null; return; }
-      if (!timer) timer = setTimeout(() => { timer = null; if (!busyRef.current) onClose(); }, PICKER_LEAVE);
+      if (inside(event) || stayRef.current) { clearTimeout(timer); timer = null; return; }
+      if (!timer) timer = setTimeout(() => { timer = null; if (!stayRef.current) onClose(); }, PICKER_LEAVE);
     };
-    const leave = () => { if (!timer && !busyRef.current) timer = setTimeout(() => { timer = null; if (!busyRef.current) onClose(); }, PICKER_LEAVE); };
+    const leave = () => { if (!timer && !stayRef.current) timer = setTimeout(() => { timer = null; if (!stayRef.current) onClose(); }, PICKER_LEAVE); };
     document.addEventListener('mousemove', move, true);
     document.documentElement.addEventListener('mouseleave', leave);
     return () => { clearTimeout(timer); document.removeEventListener('mousemove', move, true); document.documentElement.removeEventListener('mouseleave', leave); };
