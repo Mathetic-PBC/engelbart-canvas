@@ -60,6 +60,14 @@ const engelbartAPI = Object.freeze({
   recordEdit: invoke('record-edit'),
   seenAgents: invoke('seen-agents'),
   onNav: (callback) => subscribe('engelbart:nav', callback),
+  // the sidebar's folders: the person's own, the same in every project, and every change of them ({ folders })
+  folders: invoke('folders'),
+  createFolder: invoke('create-folder'),
+  renameFolder: invoke('rename-folder'),
+  deleteFolder: invoke('delete-folder'),
+  addToFolder: invoke('add-to-folder'),
+  removeFromFolder: invoke('remove-from-folder'),
+  onFolders: (callback) => subscribe('engelbart:folders', callback),
   // the sidebar's Starred: a project's starred library ids, and every change of them ({ projectId, ids })
   starred: invoke('starred'),
   setStarred: invoke('set-starred'),

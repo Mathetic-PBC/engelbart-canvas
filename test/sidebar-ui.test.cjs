@@ -1,9 +1,9 @@
 'use strict';
 
-// The workspace sidebar as it draws (src/renderer/workspace/Rail.jsx, 2026-10-07, Hudson's "Sidebar" workspace): the
-// project's name with Settings and Search; Inbox, Agents, Connections, Library and Add sources, fixed; Workspaces, the three
-// worked in last with their sub-workspaces; Your sources by kind; the stickies at the foot. Sections have no icons;
-// indented rows have none either.
+// The sidebar as it draws (src/renderer/workspace/Rail.jsx, redone 2026-10-13 from design/sidebar-mockup/Sidebar.html):
+// the top-level project's name with Settings and New note; Agents, Library and Search, fixed; Projects, three level-2
+// projects at most with what is open under them, ten rows in all; Sources, this project's folder and the person's own
+// folders; the stickies at the foot. Sections have no icons; indented rows have none either.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -33,7 +33,7 @@ const ws = (id, name, edited, children = []) => ({ id, name, edited, children, a
 const roots = [
   ws('gs', 'Getting started', at(600)),
   ws('ui', 'User Interface', at(500), [ws('sb', 'Sidebar', at(5), [ws('ic', 'Iconography', at(400))]), ws('mc', 'Middle Canvas', at(50))]),
-  ws('ag', 'Agents', at(450), [ws('bb', 'Bart build agents', at(30))]),
+  ws('ag', 'Agents', at(450), [ws('bb', 'Bart build agents', at(30), [ws('sx', 'Sandbox', at(31))])]),
   ws('lb', 'Library', at(100)),
 ];
 const row = (id, name, type, tags = [], more = {}) => ({ id, name, type, tags, ...more });
@@ -49,14 +49,13 @@ function render(more = {}) {
     roots,
     hereId: 'sb',
     recent: [],
-    agents: [{ id: 'a1', kind: 'bart', projectId: 'p', workspaceId: 'ag', status: 'waiting', name: 'Agents', finished: at(3) }],
-    builds: [],
+    entries: [{ id: 'agent:a1', kind: 'bart', title: 'Bart', node: 'bb', state: 'unseen', at: at(3) }, { id: 'build:b1', kind: 'build', title: 'Pills', node: 'ic', state: 'running', at: at(1) }],
     rows,
-    starred: ['p1'],
+    folders: [{ id: 'f1', name: 'References', items: ['w1', 'gone'] }],
     library: rows,
     inRail: (id) => rows.some((candidate) => candidate.id === id),
     onSelectWorkspace: call('select'), onCreateWorkspace: call('create'), onRenameWorkspace: call('rename'), onDeleteWorkspace: call('delete'),
-    onOpenVersion: call('version'), onSeenAll: call('seen'), onStar: call('star'), onOpenRow: call('open'), onRenameRow: call('renameRow'),
+    onOpenVersion: call('version'), onSeenAll: call('seen'), onOpenRow: call('open'), onRenameRow: call('renameRow'),
     onRemoveRow: call('remove'), onLinkRow: call('link'), onOpenHeld: call('held'), onDropItems: call('drop'), onAddInput: call('add'),
     onPickDisk: call('disk'), onNewNote: call('note'), onNewSticky: call('sticky'), onPickRepo: call('repo'), onOpenLink: call('link'),
     onOpenProject: call('project'), onNewProject: call('newProject'), onAllProjects: call('home'), onRenameProject: call('renameProject'),
@@ -71,75 +70,94 @@ function render(more = {}) {
 }
 const attrs = (html, name) => [...html.matchAll(new RegExp(`${name}="([^"]+)"`, 'g'))].map((match) => match[1]);
 
-test('the head: the project\'s name with its chevron, then Settings and Search, in that order', () => {
+const between = (html, from, to) => html.slice(html.indexOf(from), to ? html.indexOf(to) : undefined);
+
+test('the head: the top-level project\'s name with its chevron, which never turns; then Settings and New note', () => {
   const { html } = render();
-  assert.match(html, /data-sb-trigger="project"[^>]*>.*?<span data-sb-project-name="1"[^>]*>Engelbart<\/span><svg/);
-  assert.ok(html.indexOf('data-sb-settings') < html.indexOf('data-sb-search'), 'Settings, then Search');
-  assert.equal(attrs(html, 'aria-label').filter((label) => label === 'Settings' || label === 'Search').join(','), 'Settings,Search');
+  assert.match(html, /data-sb-trigger="project"[^>]*>.*?<span data-sb-project-name="1"[^>]*>Engelbart<\/span><span class="sb-chev-mark"[^>]*><svg/);
+  assert.doesNotMatch(between(html, 'data-sb-trigger="project"', 'data-sb-settings'), /data-open=/, 'the switcher\'s chevron has no open state');
+  assert.ok(html.indexOf('data-sb-settings') < html.indexOf('data-sb-new-note'), 'Settings, then New note');
+  assert.doesNotMatch(between(html, 'data-sb-head="project"', 'data-sb-fixed'), /aria-label="Search"/, 'Search is a row now, not an icon');
 });
 
-test('fixed rows, in order: Inbox, Agents, Connections, Library, Add sources; the inbox wears its dot and count while an agent waits', () => {
+test('fixed rows, in order: Agents, Library, Search; Inbox, Connections and Add sources are gone', () => {
   const { html } = render();
-  assert.deepEqual(attrs(html, 'data-sb-fixed-row'), ['inbox', 'agents', 'connections', 'library', 'add']);
-  assert.match(html, /data-sb-fixed-row="inbox".*?data-inbox-dot="1".*?data-sb-count="inbox"[^>]*>1</);
-  const quiet = render({ agents: [] }).html;
-  assert.doesNotMatch(quiet, /data-inbox-dot|data-sb-count="inbox"/);
+  assert.deepEqual(attrs(html, 'data-sb-fixed-row'), ['agents', 'library', 'search']);
+  assert.doesNotMatch(html, />Inbox<|>Connections<|>Add sources</);
+  assert.match(html, /data-sb-fixed-row="library".*?data-sb-count="library"[^>]*>11</, 'the library\'s size');
 });
 
-test('Workspaces: the three worked in last, the one holding this workspace open onto its children, this one marked; no grandchildren; More', () => {
+test('Agents: one count, running and to look at together, its outline breathing while one runs, filled once all wait; 9+', () => {
   const { html } = render();
-  assert.deepEqual(attrs(html.slice(html.indexOf('data-sb-section="workspaces"'), html.indexOf('data-sb-section="sources"')), 'data-sb-workspace'), ['ui', 'sb', 'mc', 'ag', 'lb']);
-  assert.match(html, /<div[^>]*data-active="1"[^>]*data-sb-workspace="sb"/, 'Sidebar, where you are, marked');
-  assert.doesNotMatch(html, /<div[^>]*data-active="1"[^>]*data-sb-workspace="ui"/, 'not its parent');
-  assert.doesNotMatch(html, /data-sb-workspace="ic"/, 'Iconography is a grandchild');
-  assert.match(html, /data-sb-more="workspaces"/, 'More, for Getting started and the rest');
-  assert.deepEqual(attrs(html, 'data-sb-waiting'), ['ag'], 'Agents, where an agent waits, wears the blue dot');
+  assert.match(html, /<span class="sb-pill running"[^>]*data-sb-count="agents"[^>]*>2</);
+  const done = render({ entries: [{ id: 'a', node: 'sb', state: 'needs' }, { id: 'b', node: null, state: 'unseen' }] }).html;
+  assert.match(done, /<span class="sb-pill ready"[^>]*data-sb-count="agents"[^>]*>2</);
+  const many = render({ entries: Array.from({ length: 12 }, (_, i) => ({ id: `e${i}`, node: 'sb', state: 'unseen' })) }).html;
+  assert.match(many, /data-sb-count="agents"[^>]*>9\+</);
+  assert.doesNotMatch(render({ entries: [{ id: 'old', node: 'sb', state: 'done' }] }).html, /data-sb-count="agents"/, 'nothing to count: no pill');
 });
 
-test('a + on the Workspaces title, and on each workspace row but not on its sub-workspaces', () => {
+test('Projects: three level-2 projects at most, the way down to where you are open, its siblings; More for the rest; this one marked', () => {
   const { html } = render();
-  assert.match(html, /data-sb-new-workspace="1"/);
-  assert.match(html, /aria-label="Add workspace"[^>]*title="Add workspace"/, 'its tooltip');
-  assert.match(html, /aria-label="Add sub-workspace"[^>]*title="Add sub-workspace"/, 'and the row\'s');
-  assert.deepEqual(attrs(html, 'data-sb-new-child'), ['ui', 'ag', 'lb']);
+  const section = between(html, 'data-sb-section="projects"', 'data-sb-section="sources"');
+  assert.deepEqual(attrs(section, 'data-sb-project-row'), ['ui', 'sb', 'ic', 'mc', 'ag', 'lb']);
+  assert.match(section, /data-active="1"[^>]*data-sb-project-row="sb"/, 'Sidebar, where you are, marked');
+  assert.match(section, /data-sb-more="projects"/, 'More, for Getting started');
+  assert.deepEqual(attrs(section, 'data-level'), ['2', '3', '4', '3', '2', '2']);
 });
 
-test('sections have no icon: a section\'s title is its name and its chevron, which always shows', () => {
+test('counts roll up, each agent once: a parent counts what is under it, folded or open; a number, no box', () => {
   const { html } = render();
-  for (const key of ['workspaces', 'sources']) {
+  const count = (id) => (html.match(new RegExp(`data-sb-count="${id}"[^>]*>([^<]+)<`)) || [])[1] || null;
+  assert.deepEqual([count('ui'), count('sb'), count('ic'), count('ag'), count('lb')], ['1', '1', '1', '1', null]);
+  assert.match(html, /<span class="sb-count running"[^>]*data-sb-count="ui"/, 'grey and breathing while it runs');
+  assert.match(html, /<span class="sb-count done"[^>]*data-sb-count="ag"/, 'dark once ready');
+});
+
+test('a + makes a project within the title\'s project or a row\'s, never in a fourth-level one; Ctrl+number only on level 2', () => {
+  const { html } = render();
+  assert.match(html, /aria-label="Create project within Engelbart"[^>]*data-sb-new-workspace="1"/);
+  assert.deepEqual(attrs(html, 'data-sb-new-child'), ['ui', 'sb', 'mc', 'ag', 'lb'], 'Iconography is the fourth level: no +');
+  assert.match(html, /aria-label="User Interface, Ctrl\+2"/);
+  assert.doesNotMatch(html, /aria-label="Sidebar, Ctrl/);
+});
+
+test('chevrons: down while open, up while folded; a level-2 project you are not in shows its own on hover', () => {
+  const { html } = render();
+  assert.match(html, /class="sb-chev" data-open="1"[^>]*data-sb-chevron="ui"/, 'User Interface: open, always shown');
+  assert.match(html, /class="sb-chev sb-on-hover" data-open="0"[^>]*data-sb-chevron="ag"/, 'Agents: folded, on hover');
+  assert.match(html, /data-sb-children="sb" data-guide="1"/, 'the guide line beside the deepest group open');
+  assert.match(html, /data-sb-children="ui" data-guide="0"/);
+});
+
+test('sections have no icon: a section\'s title is its name and its chevron', () => {
+  const { html } = render();
+  for (const key of ['projects', 'sources']) {
     const head = html.slice(html.indexOf(`data-sb-head="${key}"`));
     const toggle = head.slice(0, head.indexOf('</button>'));
     assert.equal((toggle.match(/<svg/g) || []).length, 1, `${key}: only the chevron`);
   }
 });
 
-test('Your sources: Starred and Notes, each with its icon and no chevron, always open; the rest mixed below with no heading', () => {
+test('Sources: this project\'s folder, open, its first four and More; the person\'s folders, folded; Create new', () => {
   const { html } = render();
-  assert.deepEqual(attrs(html, 'data-sb-group'), ['starred', 'notes'], 'two subsections');
-  assert.match(html, /data-sb-group="starred"[^>]*><span[^>]*><svg/, 'a subsection has its icon');
-  const sources = html.slice(html.indexOf('data-sb-sources-body'));
-  assert.doesNotMatch(sources, /aria-expanded/, 'nothing folds but the section itself');
-  assert.deepEqual(attrs(html.slice(html.indexOf('data-sb-group-rows="starred"')), 'data-sb-source')[0], 'p1', 'the starred paper under Starred');
-  assert.match(html, /data-sb-group-rows="other"/, 'websites, code and files in one list');
-  assert.doesNotMatch(html, /data-sb-group="(websites|code|files|other)"/);
+  const sources = between(html, 'data-sb-section="sources"', 'data-sb-foot');
+  assert.deepEqual(attrs(sources, 'data-sb-folder'), ['project', 'f1']);
+  assert.match(sources, /aria-expanded="true"[^>]*data-sb-folder="project"/);
+  assert.match(sources, /aria-expanded="false"[^>]*data-sb-folder="f1"/);
+  assert.deepEqual(attrs(sources, 'data-sb-source'), ['n0', 'n1', 'n2', 'n3'], 'eleven sources: four, then More');
+  assert.match(sources, /data-sb-more="project"/);
+  assert.match(sources, /data-sb-create-folder="1"/);
+  assert.doesNotMatch(html, /Starred|data-sb-star/, 'Starred is gone');
 });
 
-test('an open subsection shows its first few, indented without icons, then More; a starred row keeps its star in sight', () => {
-  const { html } = render();
-  const notesRows = html.slice(html.indexOf('data-sb-group-rows="notes"'), html.indexOf('data-sb-group-rows="other"'));
-  assert.deepEqual(attrs(notesRows, 'data-sb-source').slice(0, 5), ['n0', 'n1', 'n2', 'n3', 'n4'], 'five: "the first few"');
-  assert.match(notesRows, /data-sb-more="notes"/);
-  assert.match(notesRows, /data-sb-source="n0"[^>]*><span style="flex:0 1 auto/, 'an indented row starts with its name, no icon');
-  const starredNote = render({ starred: ['n1'] }).html;
-  const n1 = starredNote.slice(starredNote.indexOf('data-sb-group-rows="notes"'));
-  assert.match(n1.slice(n1.indexOf('data-sb-source="n1"')), /^[^]*?class="sb-act sb-act-on"[^>]*data-sb-star="n1"/, 'starred: its star shows without the pointer on it');
-  assert.match(n1.slice(n1.indexOf('data-sb-source="n2"')), /^[^]*?class="sb-act"[^>]*data-sb-star="n2"/, 'not starred: on hover only');
-});
-
-test('the mixed sources are not indented and each has its own icon', () => {
-  const { html } = render();
-  const other = html.slice(html.indexOf('data-sb-group-rows="other"'));
-  assert.match(other, /data-sb-source="[^"]+"[^>]*><span[^>]*><svg/, 'a mixed row starts with its icon');
+test('a source wears its kind\'s icon', async () => {
+  const { pathToFileURL } = require('node:url');
+  const { sourceIcon } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/sidebar.js')).href);
+  const { html } = render({ rows: [rows[7], rows[8], rows[9], rows[10]] });
+  const sources = between(html, 'data-sb-section="sources"', 'data-sb-foot');
+  assert.deepEqual(attrs(sources, 'data-sb-source'), ['w1', 'w2', 'g1', 'p1']);
+  assert.deepEqual([rows[7], rows[9], rows[10]].map(sourceIcon), ['website', 'git', 'pdf']);
 });
 
 test('the foot: Hide stickies while they show, Show stickies (dotted) while hidden; the trash only while something is in it', () => {
@@ -151,12 +169,11 @@ test('the foot: Hide stickies while they show, Show stickies (dotted) while hidd
   assert.match(hidden, /data-sb-trash="1"/);
 });
 
-test('a project with no workspace yet says so, and still offers the +', () => {
-  const { html } = render({ roots: [], hereId: null, rows: [], starred: [] });
-  assert.match(html, /No workspaces yet/);
+test('a project with nothing in it yet says so, and still offers the +', () => {
+  const { html } = render({ roots: [], hereId: null, rows: [], entries: [] });
+  assert.match(html, /No projects yet/);
   assert.match(html, /data-sb-new-workspace="1"/);
-  assert.match(html, /aria-label="Add workspace"[^>]*title="Add workspace"/, 'its tooltip');
-  assert.doesNotMatch(html, /data-sb-more="workspaces"/);
+  assert.doesNotMatch(html, /data-sb-more="projects"/);
 });
 
 test('folded away it draws nothing: display none, kept as it is', () => {

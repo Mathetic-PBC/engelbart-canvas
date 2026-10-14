@@ -741,7 +741,29 @@ async function lookupItem(ctx, input) {
  * (the Browser's Save card lets the person name the page). `about`: what an import knows of it (aboutRow); without
  * one, its source is what it is (a repository github, a path mac, an address web).
  */
+// A picture or a pdf outside the home folder (2026-10-13, Hudson: "Get rid of this issue!" over "Only files inside your home
+// directory can be added"): a screenshot dragged from its thumbnail, a file a program left in a temporary folder. Kept as a
+// copy, as one dropped from a browser is (addFileCopy), rather than refused: the original may be gone in a minute.
+const COPY_FROM_OUTSIDE = new Map([['.png', 'image/png'], ['.jpg', 'image/jpeg'], ['.jpeg', 'image/jpeg'], ['.gif', 'image/gif'], ['.webp', 'image/webp'], ['.pdf', 'application/pdf']]);
+function outsideHomeCopy(input, homeDir) {
+  let value = String(input || '').trim().replace(/^["'](.*)["']$/, '$1');
+  if (/^file:\/\//i.test(value)) { try { value = fileURLToPath(value); } catch { return null; } }
+  if (!path.isAbsolute(value)) return null;
+  let resolved;
+  try { resolved = fs.realpathSync(value); } catch { return null; }
+  let homeReal;
+  try { homeReal = fs.realpathSync(homeDir); } catch { return null; }
+  if (resolved.startsWith(homeReal + path.sep)) return null;
+  const mime = COPY_FROM_OUTSIDE.get(path.extname(resolved).toLowerCase());
+  let stat;
+  try { stat = fs.statSync(resolved); } catch { return null; }
+  if (!mime || !stat.isFile()) return null;
+  return { file: resolved, mime, name: path.basename(resolved) };
+}
+
 async function addItem(ctx, input, { describe, identifyRepo, inspectPdf, name: given = null, about: knows = null } = {}) {
+  const outside = outsideHomeCopy(input, ctx.homeDir);
+  if (outside) return addFileCopy(ctx, { bytes: new Uint8Array(fs.readFileSync(outside.file)), mime: outside.mime, name: given || outside.name }, { inspectPdf });
   const found = resolveAddition(input, { homeDir: ctx.homeDir });
   const rows = await ctx.libraryDb.list();
   let about = null, who = null;

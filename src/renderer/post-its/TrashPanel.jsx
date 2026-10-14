@@ -40,7 +40,7 @@ export default function TrashPanel({ anchor, trash, workspaces, onClose }) {
   const restore = (id) => trash.restore(id).then(load, (error) => setProblem(errorMessage(error)));
   return createPortal(
     <div ref={ref} data-overlay="1" data-trash-panel="1" role="dialog" aria-label="Trash" style={{ ...placed, zIndex: 80, width: 320, boxSizing: 'border-box', padding: 4, background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
-      <div style={{ padding: '8px 10px 6px', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f' }}>{spaces.length ? 'Workspaces and stickies' : 'Stickies'} in the trash are deleted a week after they’re thrown away.</div>
+      <div style={{ padding: '8px 10px 6px', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f' }}>{spaces.length ? 'Projects and stickies' : 'Stickies'} in the trash are deleted a week after they’re thrown away.</div>
       {spaces.map((row) => (
         <div key={row.id} data-trashed-workspace={row.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 6px 7px 10px', borderRadius: 6 }}>
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 16 16" style={{ flex: 'none', fill: 'none', stroke: '#4d4d4d', strokeWidth: 1.3, strokeLinejoin: 'round' }}>
@@ -48,7 +48,7 @@ export default function TrashPanel({ anchor, trash, workspaces, onClose }) {
           </svg>
           <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
             <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13px/1.4 var(--font-sans)', color: '#171717' }}>{row.name}</span>
-            <span style={{ font: '11px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{row.nested ? `Workspace and ${row.nested} inside it · ` : 'Workspace · '}{timeLeft(row.expires)}</span>
+            <span style={{ font: '11px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{row.nested ? `Project and ${row.nested} inside it · ` : 'Project · '}{timeLeft(row.expires)}</span>
           </span>
           <button type="button" className="hov-bd2" data-restore-workspace={row.id} onClick={() => bringBack(row.id)} style={{ flex: 'none', padding: '6px 10px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', cursor: 'pointer', font: '500 12px/1 var(--font-sans)', color: '#171717' }}>Restore</button>
         </div>

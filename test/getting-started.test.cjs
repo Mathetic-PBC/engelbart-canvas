@@ -176,8 +176,8 @@ test('the guided setup runs a new user\'s onboarding for someone with projects: 
   assert.match(settings, /onClick=\{\(\) => \{ close\(\); startGuidedSetup\(\); \}\}/);
   // 2026-10-13 ("the redo of onboarding shouldn't be called guided setup … a popup modal in front of the workspace"):
   // Import your context, over the workspace, its imports going to the project open.
-  assert.ok(settings.includes("title: 'Import your context'"));
-  assert.ok(settings.includes('into your library and the project you’re in. Nothing you have is removed.'));
+  assert.ok(settings.includes("title: 'Import context'"), '2026-10-13: "change Guided Setup to Import context"');
+  assert.ok(settings.includes('<Row label="Import your context">'), 'with no line under it');
   assert.ok(!settings.includes("title: 'Guided setup'"));
   assert.match(app, /if \(here\) \{ setImportModal\(\{ projectId: here, workspaceId: from\.workspaceId \|\| null \}\); return; \}/, 'in a workspace: the modal over it, nothing left');
   assert.match(app, /<ImportFlow api=\{importApi\} mode="modal" into=\{importModal\.projectId\}/);

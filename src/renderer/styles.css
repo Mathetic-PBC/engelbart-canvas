@@ -88,28 +88,70 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .rail-minus{opacity:0;transition:opacity 120ms,color 120ms}
 [data-project-card]:hover .rail-minus,.rail-minus:focus-visible{opacity:1}
 .rail-minus:hover{color:#171717!important}
-/* The workspace sidebar (workspace/Rail.jsx, 2026-10-07, Linear's): a row washes grey under the pointer and a shade darker
-   where you are; what a row offers on its right shows only while the pointer is on it (a star that is on stays). */
+/* The sidebar (workspace/Rail.jsx; redone 2026-10-13 from design/sidebar-mockup/Sidebar.html): a row washes grey under the
+   pointer and a shade darker where you are; what a row offers on its right shows only while the pointer is on it. */
 .sb-row{transition:background 120ms}
-.sb-row:hover{background:#f0f0f0}
-.sb-row[data-active="1"]{background:#ebebeb}
-.sb-row[data-active="1"]:hover{background:#e8e8e8}
+.sb-row:hover{background:#efefef}
+.sb-row[data-active="1"]{background:#e6e6e6}
+.sb-row[data-active="1"]:hover{background:#e0e0e0}
 .sb-row:focus-visible{box-shadow:inset 0 0 0 2px rgba(0,112,243,.28)}
 .sb-more:hover,.sb-more:hover span{color:#4d4d4d!important}
 .sb-act{opacity:0;transition:opacity 120ms,color 120ms,background 120ms}
-.sb-row:hover .sb-act,.sb-prow:hover .sb-act,.sb-act:focus-visible,.sb-act-on{opacity:1}
-.sb-act:hover{color:#171717!important;background:#e6e6e6!important}
-.sb-icon{display:flex;align-items:center;justify-content:center;flex:none;width:30px;height:30px;padding:0;border:0;border-radius:6px;background:transparent;color:#5c5c5c;cursor:pointer;transition:background 120ms,color 120ms}
+.sb-row:hover .sb-act,.sb-row:focus-within .sb-act,.sb-prow:hover .sb-act,.sb-act:focus-visible,.sb-act-on{opacity:1}
+.sb-act:hover{color:#171717!important;background:#e3e3e3!important}
+.sb-icon{display:flex;align-items:center;justify-content:center;flex:none;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:#5c5c5c;cursor:pointer;transition:background 120ms,color 120ms}
 .sb-icon:hover,.sb-icon[aria-expanded="true"]{background:#ececec;color:#171717}
 .sb-icon:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(0,112,243,.28)}
-.sb-project:hover{background:#ededed!important}
-.sb-chevron:hover{background:#e4e4e4!important}
+.sb-project:hover{background:#ececec!important}
 .sb-section-toggle:hover span{color:#4d4d4d!important}
-/* A workspace an agent waits in: a still blue dot. An agent at work: one that breathes. */
-.sb-dot{flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3}
-.sb-pulse{flex:none;width:6px;height:6px;border-radius:50%;background:#0070f3;animation:sb-pulse 1.6s ease-in-out infinite}
-@keyframes sb-pulse{0%,100%{opacity:.35}50%{opacity:1}}
-@media(prefers-reduced-motion:reduce){.sb-pulse{animation:none}}
+.sb-section-toggle:hover .sb-chev-mark{color:#4d4d4d}
+/* A row's right: the + (on hover), the count, the chevron, each in a column of its own so they line up row under row. */
+.sb-tools{flex:none;display:flex;align-items:center;gap:5px;margin-left:6px}
+.sb-slot-add{display:grid;place-items:center;flex:none;width:22px;height:22px}
+.sb-slot-add>*{grid-area:1/1}
+.sb-slot-add .sb-add{visibility:hidden;pointer-events:none}
+.sb-row:hover .sb-slot-add .sb-add,.sb-row:focus-within .sb-slot-add .sb-add{visibility:visible;pointer-events:auto}
+.sb-slot-count{display:flex;align-items:center;justify-content:center;flex:none;width:22px}
+.sb-slot-chev{display:flex;align-items:center;justify-content:center;flex:none;width:18px}
+.sb-add{flex:none;display:flex;align-items:center;justify-content:center;width:22px;height:22px;padding:0;border:0;border-radius:4px;background:transparent;color:#8f8f8f;cursor:pointer}
+.sb-add:hover{background:#e3e3e3;color:#171717}
+/* Chevrons point down while open and up while folded (2026-10-13: "the chevrons should point up when they point down and
+   vise versa"); the top-level project's never turns. A level-2 project you are not in shows its chevron on hover. */
+.sb-chev{flex:none;display:flex;align-items:center;justify-content:center;width:18px;height:18px;padding:0;border:0;border-radius:4px;background:transparent;color:#9b9b9b;cursor:pointer}
+.sb-chev:hover{background:#e0e0e0;color:#4d4d4d}
+.sb-chev svg,.sb-chev-mark svg{transition:transform 160ms cubic-bezier(.25,.1,.25,1)}
+.sb-chev[data-open="0"] svg,.sb-chev-mark[data-open="0"] svg{transform:rotate(180deg)}
+.sb-chev-mark{display:flex;color:#9b9b9b}
+.sb-chev.sb-on-hover{opacity:0;pointer-events:none}
+:is(.sb-row,.sb-prow):is(:hover,:focus-within) .sb-chev.sb-on-hover{opacity:1;pointer-events:auto}
+/* Counts. Agents: a number in a rounded square, its outline breathing while anything runs, filled grey once all of it waits
+   to be looked at. Projects: the bare number, grey and breathing while running, dark once ready. */
+.sb-pill{flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:22px;height:22px;padding:0 3px;border:1px solid transparent;border-radius:4px;font:400 12px/1 var(--font-sans);font-variant-numeric:tabular-nums}
+.sb-pill.ready{background:#eaeaea;color:#171717}
+.sb-pill.running{background:transparent;color:#4d4d4d;border-color:#c9c9c9;animation:sb-outline 1.8s ease-in-out infinite}
+.sb-count{flex:none;display:inline-block;min-width:12px;text-align:center;font:400 12px/16px var(--font-sans);font-variant-numeric:tabular-nums}
+.sb-count.done{color:#171717}
+.sb-count.running{color:#8f8f8f;animation:sb-number 1.8s ease-in-out infinite}
+@keyframes sb-outline{0%,100%{border-color:#8f8f8f}50%{border-color:#eaeaea}}
+@keyframes sb-number{0%,100%{opacity:1}50%{opacity:.4}}
+@media(prefers-reduced-motion:reduce){.sb-pill.running,.sb-count.running{animation:none}}
+/* A project's children: indented under its name; a faint guide line only beside the deepest group open. */
+.sb-kids{position:relative;display:flex;flex-direction:column;padding-left:22px}
+.sb-kids.l3{padding-left:24px}
+.sb-kids[data-guide="1"]::before{content:"";position:absolute;left:15.5px;top:2px;bottom:2px;width:1px;background:#dcdcdc}
+.sb-kids.l4[data-guide="1"]::before{left:10.5px}
+.sb-fly-kids{position:relative;display:flex;flex-direction:column}
+.sb-fly-kids[data-guide="1"]::before{content:"";position:absolute;left:9px;top:2px;bottom:2px;width:1px;background:#e3e3e3}
+/* A folder of Sources: its chevron always, its + only on hover and only while it is open. */
+.sb-folder .sb-folder-add{visibility:hidden}
+.sb-folder:is(:hover,:focus-within) .sb-folder-add{visibility:visible}
+.sb-prow{transition:background 120ms}
+.sb-prow:hover{background:#f3f3f3}
+/* Tooltips in the app's own look (2026-10-13: "it should use our native tooltip UI"). */
+.sb-tip{position:fixed;z-index:120;display:flex;align-items:center;gap:8px;box-sizing:border-box;max-width:calc(100vw - 16px);padding:9px 10px;background:#fff;border:1px solid #eaeaea;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.08);color:#4d4d4d;font:12px/1.4 var(--font-sans);pointer-events:none;white-space:nowrap;animation:rise 120ms cubic-bezier(.25,.1,.25,1)}
+.sb-tip-key{flex:none;display:flex;align-items:center;justify-content:center;min-width:28px;height:24px;padding:0 4px;box-sizing:border-box;border:1px solid #eaeaea;border-radius:4px;background:#fafafa;color:#171717;font:12px/1 var(--font-sans)}
+.sb-tip kbd{font:inherit;color:#171717}
+.sb-shortcut{flex:none;color:#8f8f8f;font:12px/1.4 var(--font-sans);white-space:nowrap;font-variant-numeric:tabular-nums}
 /* While the sidebar shows its own gear, the top-right controls' gear is out of sight (Workspace.jsx). */
 html[data-sidebar-gear] [data-window-controls] [data-settings]{display:none!important}
 /* the notification bell lives in the sidebar's Inbox while the sidebar is shown (2026-10-08) */

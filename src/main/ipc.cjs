@@ -56,6 +56,7 @@ function docRef(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('doc ref must be an object');
   if (value.kind === 'note') return { kind: 'note', id: str(value.id, 'note id', 64) };
   if (value.kind === 'workspace') return { kind: 'workspace', workspaceId: str(value.workspaceId, 'workspace id', 64) };
+  if (value.kind === 'project') return { kind: 'project' }; // the top-level project's page (projects.cjs PROJECT_PAGE)
   if (value.kind === 'mark') {
     const id = str(value.id, 'mark id', 64);
     if (!/^[\w-]+$/.test(id)) throw new TypeError('mark id is invalid');
@@ -71,7 +72,7 @@ function docRef(value) {
 }
 
 /** How the renderer keys a document (`ws:<id>`, `note:<id>`); a highlight is `mark:<id>`, never a note's key. */
-const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : ref.kind === 'mark' ? `mark:${ref.id}` : `note:${ref.id}`);
+const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : ref.kind === 'project' ? 'project' : ref.kind === 'mark' ? `mark:${ref.id}` : `note:${ref.id}`);
 
 // A string past `max` cut in the middle (bart/clip.cjs) rather than refused: a passage highlighted across many pages, an
 // earlier turn longer than a turn may be (MATH-27 second pass, 2026-10-06).
@@ -348,6 +349,16 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     if (notify) notify('engelbart:starred', { projectId, ids });
     return ids;
   }));
+
+  // The sidebar's folders (2026-10-13): the person's own, the same in every project, each a list of library items. Every
+  // change is announced on `engelbart:folders` with the whole list, so every window shows it.
+  const foldersChanged = (folders) => { if (notify) notify('engelbart:folders', { folders }); return folders; };
+  handle('folders', withCtx((ctx) => projects.readFolders(ctx)));
+  handle('create-folder', withCtx((ctx, name) => { const out = projects.createFolder(ctx, str(name, 'folder name', 400)); foldersChanged(out.folders); return out; }));
+  handle('rename-folder', withCtx((ctx, id, name) => foldersChanged(projects.renameFolder(ctx, str(id, 'folder id', 64), str(name, 'folder name', 400)))));
+  handle('delete-folder', withCtx((ctx, id) => foldersChanged(projects.deleteFolder(ctx, str(id, 'folder id', 64)))));
+  handle('add-to-folder', withCtx((ctx, id, ids) => foldersChanged(projects.addToFolder(ctx, str(id, 'folder id', 64), (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((each) => str(each, 'library id', 64))))));
+  handle('remove-from-folder', withCtx((ctx, id, item) => foldersChanged(projects.removeFromFolder(ctx, str(id, 'folder id', 64), str(item, 'library id', 64)))));
 
   // GitHub (src/main/github/connection.cjs): signing in through the default browser, and the repositories the App can read.
   // Every change of the sign-in is announced on `engelbart:github` with the status. `github-open` shows GitHub's device

@@ -1,6 +1,7 @@
 import React from 'react';
 import { isUntitled, wsLabel } from '../model/names.js';
 import { KindGlyph } from '../ui/Icons.jsx';
+import { ProjectIcon } from '../ui/SidebarIcons.jsx';
 import { FluidTab, TabCard, TabClose, TabTitle, useTabCard } from '../ui/FluidTab.jsx';
 
 const SLIDE = 'transform 160ms cubic-bezier(.25,.1,.25,1)';
@@ -129,12 +130,13 @@ export default function DocTabs({ tabs, activeTab, onSelect, onClose, onMove, ws
             style={{ touchAction: 'none' }}
           >
             {ws && <span data-ws-icon="1" style={{ flex: 'none', display: 'flex', color: on ? '#4d4d4d' : '#8f8f8f' }}><KindGlyph kind="workspace" item={{ type: 'workspace' }} box={14} color="currentColor" /></span>}
+            {tab.id === 'project' && <span data-project-icon="1" style={{ flex: 'none', display: 'flex', color: on ? '#4d4d4d' : '#8f8f8f' }}><ProjectIcon size={14} /></span>}
             <TabTitle weight={ws ? 600 : 400} color={untitled ? '#8f8f8f' : on || ws ? '#171717' : '#4d4d4d'}>{title}</TabTitle>
             {!ws && <TabClose onClose={() => onClose(tab.id)} title="Close" />}
           </FluidTab>
         );
       })}
-      {hovered && <TabCard card={card.card} title={hovered.title} detail="Note" />}
+      {hovered && <TabCard card={card.card} title={hovered.title} detail={hovered.id === 'project' ? 'Project page' : 'Note'} />}
     </>
   );
 }

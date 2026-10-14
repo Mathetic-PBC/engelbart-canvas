@@ -62,7 +62,7 @@ const GUIDE = [
 ].join('\n');
 const TITLE_ROWS = [4, 8]; // the two @discover titles with a Read link
 
-const WORDS = { none: 'Save to library and this workspace', lib: 'Add to this workspace (already in the library)', here: 'Saved in this workspace' };
+const WORDS = { none: 'Save to library and this project', lib: 'Add to this project (already in the library)', here: 'Saved in this project' };
 /** Each bookmark in a drawing as { row, save, label, title, text, busy, disabled, html }: its state from data-save, its words from aria-label. */
 function marks(html) {
   return [...html.matchAll(/<button([^>]*data-act="papersave"[^>]*)>([\s\S]*?)<\/button>/g)].map(([whole, tag, inner]) => ({
