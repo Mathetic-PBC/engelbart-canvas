@@ -6,10 +6,12 @@
 // System Settings ▸ Privacy & Security ▸ Full Disk Access. So that they do not get lost there (Granola's way), Engelbart:
 //   1. reads a protected file first (`register`), so it is in that list when Settings opens;
 //   2. opens Settings on that page (`open`: x-apple.systempreferences:…?Privacy_AllFiles);
-//   3. shows a small window of its own beside it, always on top (`helper`, ./disk-helper.html): the one step, outlined in
-//      red, "Still stuck?", the way to add Engelbart when it is not listed, and the fallback to the four folder prompts.
-//      Engelbart cannot outline Settings' own switch: where that row is can't be read without Accessibility access, which
-//      would be another prompt; the red outline is on its own panel;
+//   3. shows a small window of its own beside it, always on top (`helper`, ./disk-helper.html). Round 3 (2026-10-13): only
+//      "Toggle Setting" and a thick arrow toward Settings ("there is way too much text and like nothing is in the right
+//      location"), docked against the Settings window itself (its frame read from the window list, which needs no
+//      permission; `settingsFrame`). Where Settings' own switch is can't be read without Accessibility access, which
+//      would be another prompt, so the arrow points at the window, not the switch (the review mockup's simulated
+//      Settings guide was left out: Hudson, "that requires some pretty advanced and tricky engineering");
 //   4. watches for the grant (`watch`) from a new process every 1.5 s (the running app keeps the access it started with;
 //      a process started after the switch is turned on has it), then relaunches itself (`relaunch`) so the running app
 //      has it too, onboarding coming back where it was (./prefs.cjs flow).
@@ -24,7 +26,11 @@ const { execFile } = require('node:child_process');
 const SETTINGS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles';
 const WATCH_MS = 1500;
 const WATCH_FOR_MS = 15 * 60_000;
-const HELPER = { width: 340, height: 470 };
+const HELPER = { width: 330, height: 150 };
+const GAP = 4;
+// System Settings' window frame (CoreGraphics' window list, through JavaScript for Automation: no prompt), as the points
+// Electron's screen uses → '[{"x":…,"y":…,"width":…,"height":…}]'.
+const SETTINGS_FRAME_JXA = "ObjC.import('CoreGraphics');ObjC.import('Foundation');const l=ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly|$.kCGWindowListExcludeDesktopElements,0));const o=[];for(let i=0;i<l.count;i++){const w=l.objectAtIndex(i);if(ObjC.unwrap(w.objectForKey('kCGWindowOwnerName'))!=='System Settings'||ObjC.unwrap(w.objectForKey('kCGWindowLayer'))!==0)continue;const b=w.objectForKey('kCGWindowBounds');o.push({x:ObjC.unwrap(b.objectForKey('X')),y:ObjC.unwrap(b.objectForKey('Y')),width:ObjC.unwrap(b.objectForKey('Width')),height:ObjC.unwrap(b.objectForKey('Height'))});}JSON.stringify(o);";
 
 /** A file only Full Disk Access lets an app read (the per-user privacy database). */
 const probeFile = (homeDir) => path.join(homeDir, 'Library', 'Application Support', 'com.apple.TCC', 'TCC.db');
@@ -51,6 +57,44 @@ function createDiskAccess({ BrowserWindow = null, screen = null, shell = null, h
   let started = 0;
   let granted = null; // eslint-disable-line no-unused-vars
   let fakeGranted = fake === 'granted';
+  let grantSeen = false; // the switch was turned on, and the relaunch it needs has not happened yet
+  let ticks = 0;
+
+  /** System Settings' largest window → { x, y, width, height } | null (not open, or not on screen). */
+  function settingsFrame() {
+    if (fake || platform !== 'darwin') return Promise.resolve(null);
+    return new Promise((resolve) => {
+      try {
+        run('osascript', ['-l', 'JavaScript', '-e', SETTINGS_FRAME_JXA], { timeout: 4000 }, (error, stdout) => {
+          if (error) { resolve(null); return; }
+          let frames = [];
+          try { frames = JSON.parse(String(stdout || '[]').trim() || '[]'); } catch { frames = []; }
+          frames = frames.filter((frame) => frame && frame.width > 200 && frame.height > 200).sort((a, b) => b.width * b.height - a.width * a.height);
+          resolve(frames[0] || null);
+        });
+      } catch { resolve(null); }
+    });
+  }
+
+  /** Where the helper goes: against Settings' right edge (its arrow pointing left), else its left edge, else the screen's right. */
+  function placement(frame) {
+    let area = null;
+    try { area = (frame ? screen.getDisplayNearestPoint({ x: Math.round(frame.x + frame.width / 2), y: Math.round(frame.y + frame.height / 2) }) : screen.getDisplayNearestPoint(screen.getCursorScreenPoint())).workArea; } catch { area = null; }
+    if (!frame || !area) return area ? { x: Math.round(area.x + area.width - HELPER.width - 28), y: Math.round(area.y + (area.height - HELPER.height) / 2), side: 'left' } : { side: 'left' };
+    const y = Math.round(Math.min(Math.max(frame.y + frame.height * 0.42 - HELPER.height / 2, area.y), area.y + area.height - HELPER.height));
+    if (frame.x + frame.width + GAP + HELPER.width <= area.x + area.width) return { x: Math.round(frame.x + frame.width + GAP), y, side: 'left' };
+    if (frame.x - GAP - HELPER.width >= area.x) return { x: Math.round(frame.x - GAP - HELPER.width), y, side: 'right' };
+    return { x: Math.round(area.x + area.width - HELPER.width - 12), y, side: 'left' };
+  }
+
+  /** The helper moved against Settings again (it may have opened late, or been moved). */
+  async function dock() {
+    if (!helperWindow || helperWindow.isDestroyed()) return;
+    const spot = placement(await settingsFrame());
+    if (!helperWindow || helperWindow.isDestroyed()) return;
+    if (Number.isFinite(spot.x) && Number.isFinite(spot.y)) { try { helperWindow.setPosition(spot.x, spot.y); } catch { /* gone */ } }
+    helperWindow.webContents.send('disk-helper:state', helperState({ side: spot.side }));
+  }
 
   /** A new process's answer (it has a grant the running app does not have yet) → Promise<boolean|null>. */
   function canReadFresh() {
@@ -86,17 +130,11 @@ function createDiskAccess({ BrowserWindow = null, screen = null, shell = null, h
     return { app: bundleName(execPath), icon: iconPath && fs.existsSync(iconPath) ? `file://${iconPath}` : '', ...extra };
   }
 
-  /** The helper beside System Settings: the right part of the screen the pointer is on, always on top. */
+  /** The helper against System Settings (dock), always on top, never taking the keyboard. */
   function helper(extra = {}) {
     if (!BrowserWindow || platform !== 'darwin') return false;
-    if (helperWindow && !helperWindow.isDestroyed()) { helperWindow.webContents.send('disk-helper:state', helperState(extra)); helperWindow.showInactive(); return true; }
-    let x, y;
-    try {
-      const display = screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-      const area = display.workArea;
-      x = Math.round(area.x + area.width - HELPER.width - 28);
-      y = Math.round(area.y + (area.height - HELPER.height) / 2);
-    } catch { x = undefined; y = undefined; }
+    if (helperWindow && !helperWindow.isDestroyed()) { helperWindow.webContents.send('disk-helper:state', helperState(extra)); helperWindow.showInactive(); void dock(); return true; }
+    const { x, y } = placement(null);
     helperWindow = new BrowserWindow({
       width: HELPER.width, height: HELPER.height, x, y, frame: false, resizable: false, movable: true, minimizable: false, maximizable: false, fullscreenable: false,
       alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: true, transparent: true, backgroundColor: '#00000000', title: 'Full Disk Access',
@@ -105,8 +143,10 @@ function createDiskAccess({ BrowserWindow = null, screen = null, shell = null, h
     helperWindow.setAlwaysOnTop(true, 'floating');
     helperWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     helperWindow.loadFile(page).catch(() => {});
-    helperWindow.webContents.once('did-finish-load', () => { if (helperWindow && !helperWindow.isDestroyed()) { helperWindow.webContents.send('disk-helper:state', helperState(extra)); helperWindow.showInactive(); } });
+    helperWindow.webContents.once('did-finish-load', () => { if (helperWindow && !helperWindow.isDestroyed()) { helperWindow.webContents.send('disk-helper:state', helperState(extra)); void dock().then(() => { if (helperWindow && !helperWindow.isDestroyed()) helperWindow.showInactive(); }); } });
     helperWindow.on('closed', () => { helperWindow = null; });
+    // Settings takes a moment to open (seconds, cold): docked again as soon as its window is there.
+    for (const ms of [600, 1500, 3000, 5000]) setTimeout(() => { void dock(); }, ms);
     return true;
   }
 
@@ -133,11 +173,14 @@ function createDiskAccess({ BrowserWindow = null, screen = null, shell = null, h
       timer = null;
       const out = await status();
       if (out.granted || out.grantedFresh) {
-        if (helperWindow && !helperWindow.isDestroyed()) helperWindow.webContents.send('disk-helper:state', helperState({ done: true }));
+        grantSeen = !!out.needsRelaunch;
+        // Gone at once: the window comes back in front of Settings on the same step (round 3: "popups go everywhere").
+        closeHelper();
         notify({ ...out, done: true });
-        setTimeout(closeHelper, 1200);
         return;
       }
+      ticks += 1;
+      if (ticks % 2 === 0) void dock();
       if (Date.now() - started > WATCH_FOR_MS) { notify({ ...out, done: false, gaveUp: true }); return; }
       timer = setTimeout(tick, WATCH_MS);
     };
@@ -147,6 +190,15 @@ function createDiskAccess({ BrowserWindow = null, screen = null, shell = null, h
   function stopWatching() {
     if (timer) clearTimeout(timer);
     timer = null;
+  }
+
+  /**
+   * Whether a quit now is the one Full Disk Access needs (round 3: macOS's "Quit & Reopen" did nothing): the switch is
+   * being waited for, or was turned on and this process can't read yet. index.cjs's before-quit then quits at once and
+   * opens Engelbart again on the same step.
+   */
+  function waiting() {
+    return !!timer || !!(helperWindow && !helperWindow.isDestroyed()) || grantSeen;
   }
 
   /**
@@ -169,7 +221,7 @@ function createDiskAccess({ BrowserWindow = null, screen = null, shell = null, h
     return false;
   }
 
-  return { status, register, open, helper, closeHelper, watch, stopWatching, relaunch, helperAction, SETTINGS_URL };
+  return { status, register, open, helper, closeHelper, watch, stopWatching, relaunch, helperAction, waiting, settingsFrame, placement, SETTINGS_URL };
 }
 
 module.exports = { createDiskAccess, bundleName, canReadHere, probeFile, SETTINGS_URL };

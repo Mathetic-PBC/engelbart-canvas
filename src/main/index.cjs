@@ -15,8 +15,10 @@ const {
   safeStorage,
   session: electronSession,
   shell: electronShell,
+  utilityProcess,
   WebContentsView,
 } = require('electron');
+const { createScanner, accessSpec } = require('./connect/offthread.cjs');
 const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
 const { createSweeper } = require('./context/sweeper.cjs');
@@ -66,6 +68,7 @@ const { createConnectAgents } = require('./connect/agents.cjs');
 const { createFakeConnectAgents } = require('./connect/fake.cjs');
 const { createAgentBrowser } = require('./connect/browser.cjs');
 const { createConnectors } = require('./connect/connectors.cjs');
+const { createOwnConnectors } = require('./connect/own-connectors.cjs');
 const { createWebSignIn, SIGN_IN_COOKIES } = require('./connect/web-signin.cjs');
 const { createAppleNotes } = require('./connect/apple-notes.cjs');
 const { createSignInWindow } = require('./connect/signin-window.cjs');
@@ -122,6 +125,12 @@ const MIME = {
 let windows = null; // every window's context (./windows.cjs): its Stage tabs, post-its, terminal attachment, place
 let manager = null;
 let settings = null;
+let scanner = null;
+// Full Disk Access (round 3): the watch for its switch, and how to mark onboarding's run pending, for before-quit.
+let diskAccessRef = null;
+let markFlowPending = () => {};
+// A relaunch asked for while a quit was already under way (macOS's Quit & Reopen racing Engelbart's own): kept, not dropped.
+let relaunchWanted = false;
 let store = null;
 let sweeper = null;
 let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
@@ -214,7 +223,7 @@ function runningSessionCount() {
 // when it does not: a quit already under way, Cancel, or a shutdown that failed.
 // `relaunch` (Full Disk Access, 2026-10-13): Engelbart opens again once it has quit; only when the quit goes on.
 async function requestQuit({ update = false, relaunch = false } = {}) {
-  if (quitPending || quitReady) return false;
+  if (quitPending || quitReady) { if (relaunch) relaunchWanted = true; return false; }
   quitPending = true;
   const runningCount = update ? 0 : runningSessionCount();
   if (runningCount > 0) {
@@ -263,7 +272,7 @@ async function requestQuit({ update = false, relaunch = false } = {}) {
     return false;
   }
   quitReady = true;
-  if (relaunch) app.relaunch();
+  if (relaunch || relaunchWanted) app.relaunch();
   app.quit();
   return true;
 }
@@ -365,6 +374,7 @@ function registerTerminalIpc() {
         // Fall back to the persisted valid directory.
       }
     }
+    if (process.env.ENGELBART_PICK_DIRECTORY) return process.env.ENGELBART_PICK_DIRECTORY; // driver harness only (scripts/smoke-import-context.cjs)
     const result = await dialog.showOpenDialog(ctx.win, {
       title: 'Choose working directory',
       defaultPath,
@@ -582,6 +592,17 @@ if (!hasSingleInstanceLock) {
   app.on('before-quit', (event) => {
     if (quitReady) return;
     event.preventDefault();
+    // macOS's "“Engelbart” will not have full disk access until it is quit. Quit & Reopen" (round 3: it did nothing, this
+    // handler cancelling every quit Engelbart didn't start): while the switch is waited for and a new process can read,
+    // the quit goes through at once, asks nothing, and Engelbart opens again on onboarding's step with its run pending.
+    // A quit while the switch is still off is an ordinary one.
+    if (diskAccessRef && diskAccessRef.waiting()) {
+      void diskAccessRef.status().then((status) => {
+        if (status && (status.grantedFresh || status.granted)) { try { markFlowPending(); } catch { /* the flow asks again */ } return requestQuit({ update: true, relaunch: true }); }
+        return requestQuit();
+      }, () => requestQuit());
+      return;
+    }
     requestQuit();
   });
   app.on('window-all-closed', () => {
@@ -595,6 +616,11 @@ if (!hasSingleInstanceLock) {
     manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => (tools ? tools.environment() : {}), attached: (id) => (windows ? windows.attached(id) : false), sandboxPty: createSandboxPty() });
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
     const homeDir = process.env.ENGELBART_HOME_DIR || app.getPath('home');
+    // What is read from this Mac before anything is picked (the apps here, the repositories, onboarding's digest) runs in
+    // a utility process: on this process it froze every window for seconds (./connect/scan-child.cjs).
+    // ENGELBART_SCANNER=inline runs the scans here, as before (scripts/probe-onboarding-lag.cjs compares the two).
+    scanner = createScanner({ fork: process.env.ENGELBART_SCANNER === 'inline' ? null : () => utilityProcess.fork(path.join(__dirname, 'connect', 'scan-child.cjs'), [], { serviceName: 'Engelbart Scanner', stdio: 'ignore' }) });
+    app.on('will-quit', () => scanner.stop());
     // Pdfs saved as links before the Stage kept copies: every library that opens is checked, and what is left is
     // downloaded in the background with the Stage's cookies (a paper behind a sign-in comes too). A page row added while
     // the app is open is checked straight away (`again`: store.recheck). ENGELBART_WEB_PDFS=off disables it (scripted runs).
@@ -807,12 +833,16 @@ if (!hasSingleInstanceLock) {
     // ~/Desktop, ~/Documents or ~/Downloads is left out unless macOS already let Engelbart read that folder (MATH-110,
     // asked on Connect's choose screen): signing in never makes macOS ask for those folders (Connect's scan adds the ones
     // the person picked).
-    let macRepos = { at: 0, dirs: [] };
+    // Read in the scanner process (./connect/scan-child.cjs): 4 s of session files froze the window here. The last answer
+    // is used while a new one is read.
+    let macRepos = { at: 0, dirs: [], reading: false };
     const macRepoDirs = () => {
-      if (Date.now() - macRepos.at > 5 * 60_000) {
-        let dirs = [];
-        try { dirs = localRepos({ homeDir, access: folderAccess.guard({ homeDir, dataRoot: store.config().dataRoot }) }).filter((repo) => repo.checked).map((repo) => repo.path); } catch { dirs = []; }
-        macRepos = { at: Date.now(), dirs };
+      if (Date.now() - macRepos.at > 5 * 60_000 && !macRepos.reading) {
+        macRepos.reading = true;
+        const dataRoot = store.config().dataRoot;
+        scanner.run('localRepos', { homeDir, access: accessSpec(folderAccess.guard({ homeDir, dataRoot }), dataRoot) })
+          .then((repos) => { macRepos = { at: Date.now(), dirs: (Array.isArray(repos) ? repos : []).filter((repo) => repo.checked).map((repo) => repo.path), reading: false }; })
+          .catch(() => { macRepos = { ...macRepos, at: Date.now(), reading: false }; });
       }
       return macRepos.dirs;
     };
@@ -960,11 +990,21 @@ if (!hasSingleInstanceLock) {
       encrypt: (text) => safeStorage.encryptString(text).toString('base64'),
       decrypt: (text) => safeStorage.decryptString(Buffer.from(text, 'base64')),
     };
+    // A page Engelbart opens for the person to act on (a connector's consent, round 3): in the browser they chose for their
+    // sign-ins, not macOS's default (which need not be it). Set once that choice is known (onboardingBrowsers, below).
+    let openChosen = (url) => electronShell.openExternal(parseExternalUrl(url).href);
     const connectors = createConnectors({
       file: () => path.join(store.config().dataRoot, 'connectors.json'),
       crypt,
-      openExternal: (url) => electronShell.openExternal(parseExternalUrl(url).href),
+      openExternal: (url) => openChosen(url),
       onChange: (status) => sendToWindow('engelbart:connectors', status),
+      // The connectors the person signed in to in their own Claude Code or Codex (round 3: Granola "headlessly").
+      own: createOwnConnectors({
+        homeDir,
+        codexList: () => new Promise((resolve, reject) => {
+          execFile('codex', ['mcp', 'list', '--json'], { env: { ...process.env, ...(tools ? tools.environment() : {}) }, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
+        }),
+      }),
     });
     const agentBrowser = createAgentBrowser({
       BrowserWindow,
@@ -994,6 +1034,12 @@ if (!hasSingleInstanceLock) {
       prefs,
       override: process.env.ENGELBART_ONBOARDING_BROWSERS != null ? process.env.ENGELBART_ONBOARDING_BROWSERS.split(',').map((id) => id.trim()).filter(Boolean) : null,
     });
+    openChosen = (url) => new Promise((resolve, reject) => {
+      const remembered = (prefs.get() || {}).browser || null;
+      const bundle = remembered ? bundleOf(remembered) : null;
+      if (!bundle || process.platform !== 'darwin') { electronShell.openExternal(parseExternalUrl(url).href).then(resolve, reject); return; }
+      execFile('open', ['-b', bundle, parseExternalUrl(url).href], (error) => (error ? reject(error) : resolve()));
+    });
     const webSignIn = createWebSignIn({
       cookieImport: process.platform === 'darwin' ? createCookieImport({
         // The home Engelbart was given (ENGELBART_HOME_DIR in scripted runs, so they never read this Mac's browsers).
@@ -1012,7 +1058,8 @@ if (!hasSingleInstanceLock) {
       // The browser the person picked for their sign-ins (Import your context), else macOS's default (2026-10-13: "Claude
       // sign-in opened in Chrome, but his keychain credentials were in Arc"): read first, and where sign-in pages open.
       defaultBrowser: () => onboardingBrowsers.preferredName() || macDefaultBrowser(),
-      openExternal: (url) => electronShell.openExternal(parseExternalUrl(url).href),
+      // The "default" above is the browser the person chose: its pages open there, not in macOS's default (round 3).
+      openExternal: (url) => openChosen(url),
       // A browser other than the default (Safari's cookies can't be read): `open -b <bundle id> <url>`.
       openIn: (browserId, url) => new Promise((resolve, reject) => {
         const bundle = bundleOf(browserId);
@@ -1117,6 +1164,13 @@ if (!hasSingleInstanceLock) {
       },
       iconPath: path.join(__dirname, '../../build/icon.png'),
     });
+    diskAccessRef = diskAccess;
+    // The flow saved with its run pending, so the relaunch starts the imports (ImportFlow's restore): what the window would
+    // have saved itself, had macOS's Quit & Reopen not come first.
+    markFlowPending = () => {
+      const now = prefs.get() || {};
+      if (now.flow && typeof now.flow === 'object') prefs.set({ flow: { ...now.flow, pendingRun: true, dialog: null } });
+    };
     // Granted (this process can read what it guards): the four folders count as allowed for Connect's guard too (MATH-110),
     // so no agent is kept out of them and no folder prompt comes up.
     void diskAccess.status().then((status) => {
@@ -1142,6 +1196,7 @@ if (!hasSingleInstanceLock) {
       trace,
       access: (ctx) => folderAccess.guard({ homeDir, dataRoot: ctx.dataRoot, ...(diskGranted ? { answers: Object.fromEntries(folderAccess.protectedFolders({ homeDir }).map((folder) => [folder.id, 'allowed'])) } : {}) }),
       existingProjects: async (ctx) => (await projects.listProjects(ctx)).map((project) => project.name),
+      scanner,
     });
     // The trace window's own calls: from that window only.
     const fromTrace = (handler) => async (event, ...args) => {
@@ -1159,6 +1214,7 @@ if (!hasSingleInstanceLock) {
     ipcMain.handle('trace:reveal', fromTrace(() => traceWindow.revealFolder()));
     app.on('will-quit', () => connect.suspendAll());
     registerEngelbartIpc({
+      scanner,
       onboarding: { prefs, providers: onboardingProviders, browsers: onboardingBrowsers, browserAgents, discovery, diskAccess, openTrace: () => traceWindow.open() },
       connect,
       connectors,

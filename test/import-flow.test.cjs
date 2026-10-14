@@ -98,7 +98,7 @@ test('the plan keeps the agent to the projects picked, and a manual import to it
   assert.match(auto, /Requirements study: How novices/);
   assert.match(auto, /Never install a plugin/);
   const manual = flow.importPlan({ app: 'Gmail', mode: 'manual', projects, scope: { kind: 'email', folders: [], items: [], people: ['lee@example.edu'], note: '', labels: [] } });
-  assert.match(manual, /Read only email with these people: lee@example.edu/);
+  assert.match(manual, /read only email with these people: lee@example.edu/);
   assert.doesNotMatch(manual, /Never install/);
 });
 

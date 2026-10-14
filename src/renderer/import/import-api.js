@@ -31,6 +31,8 @@ export const importApi = {
   toolsSignIn: (id) => api.toolsSignIn(id),
   detect: () => api.connectDetect(),
   pickDirectory: () => window.terminalAPI.pickDirectory(undefined),
+  // "Choose files" under Specify context (round 3): files and folders, several at once (the sidebar's Choose from disk…).
+  pickFiles: async () => (await api.pickLibraryPaths('any').catch(() => [])).map((file) => ({ path: file, name: file.split('/').filter(Boolean).pop() || file })),
   connectStart: (choices) => api.connectStart(choices),
   startProject: (input) => api.startProject(input),
   openTrace: () => api.importTraceOpen(),

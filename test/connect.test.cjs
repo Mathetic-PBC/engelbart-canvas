@@ -659,7 +659,9 @@ test('a session with the fake agents: a folder button, a question card, imports 
 test('Import your context: one import a tool told the projects picked, a manual folder kept to, a signed-out web app waits on a sign-in card, other tools through the browser', async () => {
   const fresh = fs.mkdtempSync(path.join(homeDir, 'direct-'));
   fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
-  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: false }), signedIn: async () => false, keychainNote: () => '' };
+  // Signed out until the person signs in in their browser (round 3: "I'm signed in" copies the sign-in and checks it first).
+  let signedInThere = false;
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: signedInThere, browser: signedInThere ? 'Chrome' : '' }), signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome' };
   const { connect, state } = fakeConnect({ home: fresh, webSignIn });
   const projectsPicked = [{ id: 'calc', title: 'Calculus tutoring study', description: 'An RCT of an AI tutor in calculus.' }];
   const started = await connect.start({
@@ -683,7 +685,7 @@ test('Import your context: one import a tool told the projects picked, a manual 
   assert.ok(obsidian, 'Obsidian imported');
   assert.match(obsidian.plan, /only what pertains to these projects/);
   assert.match(obsidian.plan, /Calculus tutoring study: An RCT/);
-  assert.match(obsidian.plan, /Read only folders: .*Vault/, 'the folder the person chose, and nothing else');
+  assert.match(obsidian.plan, /read only these folders and files: .*Vault/, 'the folder the person chose, and nothing else');
   assert.equal(saved.picked.folders.Obsidian, path.join(fresh, 'Vault'));
   const linear = saved.jobs.find((job) => job.label.startsWith('Other tools'));
   assert.equal(linear.source, 'sites');
@@ -692,6 +694,11 @@ test('Import your context: one import a tool told the projects picked, a manual 
   assert.equal(saved.jobs.some((job) => job.apps.includes('ChatGPT')), false, 'not queued yet');
   const card = now.needs.find((need) => need.app === 'ChatGPT');
   assert.equal(card.kind, 'signin');
+  assert.equal(card.browser, 'Chrome', 'the popup says where it continues');
+  // "I'm signed in" before signing in: the copy finds nothing, and the popup says so.
+  await connect.need(started.id, card.id, 'done');
+  assert.match(connect.state(started.id).needs.find((need) => need.id === card.id).error, /Still not signed in to ChatGPT/);
+  signedInThere = true;
   await connect.need(started.id, card.id, 'done');
   await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.apps.includes('ChatGPT')), 'ChatGPT queued once signed in');
   connect.stop(started.id);
@@ -700,10 +707,12 @@ test('Import your context: one import a tool told the projects picked, a manual 
 
 /* Browser agents (2026-10-13, second round: "We will use computer use in my real browser"). */
 
-test('Import your context with browser agents: web apps in the person\'s own browser (Gmail aside), no sign-in hold, a login stop is a card that opens their browser, at most 6 at once', async () => {
+test('Import your context, round 3: web apps in Engelbart\'s browser with the copied sign-ins; the person\'s browser only for a sign-in Engelbart can\'t use; a signed-out app is a popup', async () => {
   const fresh = fs.mkdtempSync(path.join(homeDir, 'browse-'));
-  // Engelbart's own browser is signed out of everything: none of that matters to a browser agent's app.
-  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: false }), signedIn: async () => false, keychainNote: () => '' };
+  // Google Docs and Overleaf come over from Chrome; Gmail is signed in there but its copy is refused (Google's binding);
+  // ChatGPT is signed out everywhere.
+  const quiet = { Gmail: { signedIn: false, held: true }, ChatGPT: { signedIn: false } };
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async (app) => quiet[app] || { signedIn: true, browser: 'Chrome' }, signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome', copyDomains: async () => true };
   const turns = [];
   const fake = createFakeConnectAgents({ delayMs: 5 });
   let release = null;
@@ -711,10 +720,10 @@ test('Import your context with browser agents: web apps in the person\'s own bro
   const agents = {
     async turn(input) {
       turns.push({ kind: input.kind, label: input.meta && input.meta.job ? input.meta.job.label : '', system: input.system, message: input.message, browse: input.browse, connectors: input.connectors });
-      if (input.kind === 'browse' && input.meta.job.apps.includes('Overleaf')) {
-        const out = await input.meta.callTool('needs_you', { kind: 'signin', reason: 'Sign in to Overleaf in Chrome' });
+      if (input.kind === 'browse' && input.meta.job.apps.includes('Gmail')) {
+        const out = await input.meta.callTool('needs_you', { kind: 'signin', reason: 'Choose an account in Chrome' });
         await gate;
-        return { text: `Overleaf: ${out.status}`, session: null };
+        return { text: `Gmail: ${out.status}`, session: null };
       }
       return fake.turn(input);
     },
@@ -728,41 +737,45 @@ test('Import your context with browser agents: web apps in the person\'s own bro
     direct: { mode: 'auto', projects: [{ id: 'p', title: 'Calculus study' }], roles: [], work: '', apps: ['Google Docs', 'Overleaf', 'Gmail', 'ChatGPT'], scopes: {}, additional: [{ name: 'Linear', website: 'https://linear.app' }] },
   });
   const saved = () => savedOf(started.id);
-  await until(() => saved(), (s) => s.jobs.filter((job) => job.route === 'browser').length === 4, 'the browser agents queued');
+  await until(() => saved(), (s) => s.jobs.filter((job) => job.kind === 'import').length >= 4, 'the imports queued');
   const value = saved();
   assert.deepEqual(value.choices.browserAgents, { browserId: 'chrome', browserName: 'Chrome', enable: true }, 'from this Mac and the person\'s answer, not from the window');
   const routeOf = (app) => { const job = value.jobs.find((one) => one.kind === 'import' && one.apps.includes(app)); return job ? job.route || 'engelbart' : 'none'; };
-  assert.equal(routeOf('Google Docs'), 'browser');
-  assert.equal(routeOf('Overleaf'), 'browser');
-  assert.equal(routeOf('ChatGPT'), 'browser', 'signed out of Engelbart\'s browser, and still not held for it');
-  assert.equal(value.jobs.find((job) => job.label.startsWith('Other tools')).route, 'browser');
-  assert.notEqual(routeOf('Gmail'), 'browser', 'Gmail keeps its approved-threads route');
-  assert.match(value.jobs.find((job) => job.apps.includes('Google Docs')).plan, /in the person's own Chrome/);
-  let now = await until(state(started.id), (s) => s.needs.some((need) => need.app === 'Overleaf'), 'Overleaf\'s login stop');
-  assert.equal(now.needs.some((need) => need.app === 'Google Docs' || need.app === 'ChatGPT'), false, 'no sign-in card for a browser agent\'s app');
-  const card = now.needs.find((need) => need.app === 'Overleaf');
+  assert.equal(routeOf('Google Docs'), 'engelbart', 'its copied sign-in: no plugin, nothing brought forward, no tab left');
+  assert.equal(routeOf('Overleaf'), 'engelbart');
+  assert.equal(routeOf('Gmail'), 'browser', 'signed in in Chrome, refused in Engelbart: read there instead of a Log in loop');
+  assert.equal(routeOf('ChatGPT'), 'none', 'signed out: waits on its sign-in popup');
+  assert.equal(value.jobs.find((job) => job.label.startsWith('Other tools')).route, undefined, 'their sites\' sign-ins copied over');
+  assert.match(value.jobs.find((job) => job.apps.includes('Gmail')).plan, /in the person's own Chrome/);
+  let now = await until(state(started.id), (s) => s.needs.some((need) => need.app === 'Gmail'), 'Gmail\'s stop in Chrome');
+  const popup = now.needs.find((need) => need.app === 'ChatGPT');
+  assert.equal(popup.kind, 'signin');
+  assert.equal(popup.own, undefined, 'a sign-in Engelbart copies once they have signed in, in Chrome');
+  assert.equal(popup.browser, 'Chrome');
+  const card = now.needs.find((need) => need.app === 'Gmail');
   assert.equal(card.own, true);
   assert.equal(card.browser, 'Chrome');
-  assert.match(card.note, /on its tab in Chrome, then press Done/);
   await connect.need(started.id, card.id, 'open');
   assert.deepEqual(opened, ['chrome'], 'Open brings their browser forward');
-  assert.equal(connect.state(started.id).needs.find((need) => need.id === card.id).opened, true);
   await connect.need(started.id, card.id, 'done');
+  await connect.need(started.id, popup.id, 'skip');
   release();
   now = await until(state(started.id), (s) => s.jobs.filter((job) => job.kind === 'import').every((job) => ['done', 'failed', 'stopped'].includes(job.status)), 'every import ended');
   const browse = turns.filter((turn) => turn.kind === 'browse');
-  assert.equal(browse.length, 4);
+  assert.deepEqual(browse.map((turn) => turn.label), ['Email: Gmail']);
   for (const turn of browse) {
-    assert.match(turn.system, /You must never: send, post, delete, archive, change settings, type a password or close tabs/);
-    assert.match(turn.system, /You may: open pages, in tabs of your own; read them; scroll; search .*download files; and export/);
+    assert.match(turn.system, /Never download or export anything/);
+    assert.match(turn.system, /Close every tab you opened before you reply/);
+    assert.match(turn.system, /never switch, resize or focus a window/);
     assert.match(turn.system, /At a login page .*call needs_you/);
-    assert.match(turn.system, /Claude in Chrome/, 'Claude Code\'s way to the browser');
+    assert.match(turn.system, /tabs_close_mcp/, 'Claude Code closes its tabs');
     assert.match(turn.message, /<browser note="The person's own browser/);
-    assert.equal(turn.browse.enable, true);
-    assert.match(turn.browse.steps, new RegExp(`\\.connect/${started.id}/steps/`));
+    assert.doesNotMatch(turn.message, /downloadsLandIn/);
+    assert.match(turn.message, /You do not have them: follow the same steps in your own tabs/);
     assert.deepEqual(turn.connectors, [], 'no connector of the person\'s');
   }
-  assert.ok(now.jobs.find((job) => job.apps.includes('Google Docs')).notes >= 1, 'what it read came in through add_note');
+  const hidden = turns.filter((turn) => turn.kind === 'import' && turn.label.includes('Google Drive'));
+  assert.equal(hidden.length, 1, 'Google Drive in Engelbart\'s browser');
   connect.stop(started.id);
   connect.dismiss(started.id);
   fs.rmSync(memory.memoryPath(ctx.dataRoot), { force: true }); // the next tests start with no MEMORY.md
@@ -791,7 +804,8 @@ test('a browser agent\'s tools: what brings in what it read or downloaded, needs
   for (const name of ['browser_open', 'browser_eval', 'browser_type', 'browser_download', 'web_chats', 'import_google_files', 'import_gmail_threads', 'save_memory']) assert.equal(names.includes(name), false, name);
   assert.match(prompts.browseSystemPrompt('openai'), /search your tools for "node_repl js"/);
   assert.match(prompts.browseSystemPrompt('anthropic'), /tabs_create_mcp/);
-  assert.match(prompts.BROWSE_RULES, /Never close a tab, your own included/);
+  assert.match(prompts.BROWSE_RULES, /Close every tab you opened before you reply/);
+  assert.match(prompts.BROWSE_RULES, /Never download or export anything/);
 });
 
 /* MATH-117: an app on this Mac whose folder the scan did not find is looked for by an agent before the button. */
@@ -1098,8 +1112,9 @@ test('Sign in in Engelbart\'s own browser: Google Drive signed in there signs in
   const shut = fakeWindow('closed');
   const other = fakeConnect({ webSignIn: google, signInWindow: shut.signInWindow });
   assert.deepEqual(await other.connect.signInWindowOpen('Gmail'), { status: 'closed' });
-  assert.deepEqual(await other.connect.signInWindowOpen('Notion'), { status: 'closed' }, 'not one it can sign in');
-  assert.deepEqual(shut.opened, ['Gmail']);
+  assert.deepEqual(await other.connect.signInWindowOpen('Notion'), { status: 'closed' });
+  // Round 3 (2026-10-13): Notion's sign-in can be told apart now (its token_v2 cookie), so it is one it can sign in.
+  assert.deepEqual(shut.opened, ['Gmail', 'Notion']);
 });
 
 test('a web app\'s sign-in lost mid-run: copied again quietly from the browser, no card, and the agent carries on (2026-10-12)', async () => {
@@ -1444,7 +1459,9 @@ test('a dead Google copy at tick time: copied again from Chrome and good; dead t
   assert.deepEqual(await connect.signInCheck('Gmail'), { status: 'signed-in', browser: 'Chrome', profile: 'Work' }, 'Me\'s copy dead, Work\'s good');
   const dead = fakeGoogle({ defaultName: 'Google Chrome', checks: [false], browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }] } } });
   const other = fakeConnect({ webSignIn: dead.webSignIn });
-  assert.deepEqual(await other.connect.signInCheck('Gmail'), { status: 'signed-out', browser: '' });
+  // Round 3 (2026-10-13): Chrome holds the Google sign-in and its copy is dead in Engelbart — Google's binding, not a
+  // signed-out browser ("I know I am signed into Gmail in my browser"): said as such, so no Log in loop follows.
+  assert.deepEqual(await other.connect.signInCheck('Gmail'), { status: 'held-elsewhere', browser: 'Chrome' });
 });
 
 test('a refusal when ticked: the browser is not asked again, until Try again', async () => {
@@ -1456,7 +1473,8 @@ test('a refusal when ticked: the browser is not asked again, until Try again', a
   assert.deepEqual(fake.calls.keychain, ['chrome'], 'Chrome is in denied: asked once');
   assert.deepEqual(await connect.signInCheck('ChatGPT', { retry: true }), { status: 'refused', browser: 'Chrome' });
   assert.deepEqual(fake.calls.keychain, ['chrome', 'chrome'], 'Try again asks macOS again');
-  assert.deepEqual(await connect.signInCheck('Notion'), { status: '', browser: '' }, 'a connector is not checked here');
+  // Round 3: Notion's sign-in is checked as a web app's (when no connector reaches it); Chrome doesn't hold it here.
+  assert.deepEqual(await connect.signInCheck('Notion'), { status: 'signed-out', browser: '' });
   const none = fakeConnect({ webSignIn: fakeSignIn({ browsers: {} }).webSignIn });
   assert.deepEqual(await none.connect.signInCheck('ChatGPT'), { status: 'no-browser', browser: '' });
 });

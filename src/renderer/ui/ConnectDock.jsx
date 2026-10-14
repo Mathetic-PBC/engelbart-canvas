@@ -43,8 +43,19 @@ const TONES = {
 };
 
 /** The chip: the newest session not shown in this window, what it is doing, a click to open it. */
+/**
+ * An Import your context run whose imports have all ended (round 3, 2026-10-13): no chip. Its completion is a popup of its
+ * own ("instead of having the pill in the header once it is done a popup should just come"), and what goes on after it
+ * (MEMORY.md) is background work never shown ("No need to say anything about MEMORY.md").
+ */
+const importsEnded = (entry) => {
+  if (!entry || !entry.direct) return false;
+  const work = (entry.jobs || []).filter((job) => job.kind === 'import' || job.kind === 'recall' || job.kind === 'survey');
+  return work.length > 0 && work.every((job) => ['done', 'failed', 'stopped'].includes(job.status)) && !(entry.needs || []).length;
+};
+
 export function ConnectChip({ sessions, onOpen }) {
-  const shown = (sessions || []).filter((entry) => !isOpen(entry.id));
+  const shown = (sessions || []).filter((entry) => !isOpen(entry.id) && !importsEnded(entry));
   const top = shown.find((entry) => entry.needs && entry.needs.length) || shown[0];
   if (!top) return null;
   const view = dockLine(top);

@@ -76,6 +76,8 @@ function createBrowsers({ installedApps, defaultName = () => '', prefs, override
   function preferredName() {
     const remembered = (prefs.get() || {}).browser || null;
     if (remembered) return browserById(remembered).name;
+    // The one the flow showed ("Allow Engelbart to use your Arc sign-ins?"), so a sign-in popup names the same browser.
+    if (last && last.chosenId && browserById(last.chosenId)) return browserById(last.chosenId).name;
     return defaultName();
   }
 

@@ -1,6 +1,7 @@
 import React from 'react';
 import { IMPORT_CSS } from './import-css.js';
-import { TOOL_LOGOS, WORKS, BROWSER_LOGOS, PROVIDER_LOGOS, APP_ICON } from './logos.js';
+import { ROUND3_CSS } from './round3-css.js';
+import { TOOL_LOGOS, WORKS, BROWSER_LOGOS, PROVIDER_LOGOS } from './logos.js';
 import {
   CATALOG, CATALOG_IDS, ROLES, GROUPS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp,
   scopeKind, emptyScope, scopeReady, scopeOptions,
@@ -25,7 +26,7 @@ import { LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, cleanDays, shownName } from '
 // relaunch Full Disk Access needs comes back to the same step.
 
 const FILE_TOOLS = ['Obsidian', 'Zoom', LOCAL_PDFS, LOCAL_FOLDERS];
-const DEFAULT_PICKS = ['Obsidian', 'Zoom', 'Codex', 'Claude Code', 'Cursor', LOCAL_PDFS, SITES];
+const DEFAULT_PICKS = [];
 const ANSWERS = [
   ['Does my context leave my computer?', 'No. All files, both saved locally and located in the cloud through a 3rd-party are all saved locally and are not uploaded to any of our servers. However, your text will be sent to model providers during the retrieval process and is subject to their own data retention guidelines, just like any other AI chat.'],
   ['Will you sell my data?', 'No. Engelbart does neither retains nor sells any of your data. Importing context simply makes the experience more seamless for you and is not a means to collect your data :)'],
@@ -37,11 +38,11 @@ export const COPY = {
   subtitle: "Agents will import your notes, chats, and other project context into Engelbart. Everything remains local and isn't uploaded to the cloud.",
   primary: 'Import context (recommended)',
   secondary: 'Start from scratch',
-  privacy: 'Remove anything at any time',
+  privacy: 'Remove anything at any time.',
   pickerTitle: 'What should go in your library?',
   bring: 'Bring these in',
 };
-const FLOW_VERSION = 1;
+const FLOW_VERSION = 2;
 
 /* ------------------------------------------------------------------------------------------------- small pieces */
 
@@ -83,7 +84,7 @@ function T({ k, tag = 'span', fallback, className, ...rest }) {
 const fresh = () => ({
   v: FLOW_VERSION,
   screen: 'picker', dialog: 'intro', purpose: null,
-  mode: null, modeChoice: null, modeFirst: true,
+  mode: null, modeChoice: null, modeFirst: false, scopeOpen: null, notesConsent: false,
   provider: null, providerChoice: null,
   roles: [], work: '', customProjects: [], picked: [],
   confirmed: [], touched: [], added: [], toolOrder: [],
@@ -207,13 +208,13 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     const results = discovery && discovery.tools && discovery.tools.results;
     if (!results) return;
     set((now) => {
-      const confirmed = new Set(now.confirmed);
-      for (const tool of results.tools) if (tool.used && !now.touched.includes(tool.id)) confirmed.add(tool.id);
+      const confirmed = new Set(now.confirmed.filter(id => now.touched.includes(id) || (results.tools || []).some(tool => tool.id === id && tool.used && tool.evidence)));
+      for (const tool of results.tools) if (!now.touched.includes(tool.id)) { if (tool.used && tool.evidence) confirmed.add(tool.id); else confirmed.delete(tool.id); }
       const added = [...now.added];
       for (const extra of results.additional || []) {
         const id = `custom:${extra.name.toLowerCase()}`;
         if (!added.some((tool) => tool.id === id)) added.push({ id, name: extra.name, website: extra.website || '', source: 'agent' });
-        if (extra.used && !now.touched.includes(id)) confirmed.add(id);
+        if (extra.used && extra.evidence && !now.touched.includes(id)) confirmed.add(id);
       }
       return { confirmed: [...confirmed], added, toolOrder: settleTools({ ...now, confirmed: [...confirmed], added }) };
     });
@@ -240,7 +241,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     if (!disk || !disk.done || latest.current.dialog !== 'disk-wait') return;
     // Restarting is not a decision (the bart chat: "The window blinks and reopens on the same step … The user never sees a
     // decision"): said, then done, the run pending so it starts when Engelbart is back.
-    if (disk.needsRelaunch) { set({ pendingRun: true, dialog: 'disk-relaunch' }); setTimeout(() => { void relaunch(); }, 1400); return; }
+    if (disk.needsRelaunch) { set({ pendingRun: true, dialog: 'disk-relaunch' }); setTimeout(() => { void relaunch(); }, 120); return; }
     void run();
   }, [disk]); // eslint-disable-line react-hooks/exhaustive-deps
   React.useEffect(() => {
@@ -249,6 +250,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     if (disk.relaunched && latest.current.dialog === 'disk-relaunch') { void run(); return; }
     if (disk.fallback && latest.current.dialog === 'disk-wait') set({ dialog: 'folder-fallback' });
     if (disk.cancelled && latest.current.dialog === 'disk-wait') set({ dialog: 'folders' });
+    // Fifteen minutes without the switch: asked again rather than waiting forever.
+    if (disk.gaveUp && latest.current.dialog === 'disk-wait') set({ dialog: 'folders' });
   }, [disk]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* -------- the provider */
@@ -270,7 +273,11 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     if (purpose === 'start') {
       // Recent projects, found in the background from now on: not waiting for the method (the workspace's ask).
       api.discoverProjects({ provider }).then(setDiscovery).catch(() => {});
-      set({ dialog: 'import-mode', modeFirst: true, modeChoice: latest.current.mode });
+      // Round 3: the method is asked after the projects, so the work questions come next. The next screen is drawn behind the
+      // browser question ("advance to next screen before immediately showing [the popup]"), and the tool agent starts once
+      // it is answered, so Confirm your tools is ready by the time the person gets there.
+      set({ screen: 'roles', modeFirst: false });
+      keychainGate(() => set({ dialog: null }), 'auto');
     } else if (purpose === 'run') void run(provider);
     else set({ dialog: null });
   };
@@ -317,8 +324,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     try { setBrowsers(await api.chooseBrowser(id)); } catch (failure) { say(failure); return; }
     // Firefox keeps no Keychain key to ask for: its sign-ins are read as they are. Safari's can't be read at all: the
     // sign-ins are made inside Engelbart (src/main/connect/web-signin.cjs).
-    if (id === 'safari') { await keychainAnswer('declined'); return; }
-    if (!(BROWSERS.find((browser) => browser.id === id) || {}).keychain) { await keychainAnswer('allowed'); return; }
+    if (id === 'safari') { set({ dialog: 'keychain' }); return; }
+    if (!(BROWSERS.find((browser) => browser.id === id) || {}).keychain) { set({ dialog: 'keychain' }); return; }
     set({ dialog: 'keychain' });
   };
   const startTools = (answer) => {
@@ -355,7 +362,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const runGate = () => {
     const now = latest.current;
     const apps = runApps(now);
-    if (!apps.length) return;
+    if (!apps.length || !now.picked.length) return;
+    if (apps.includes('Apple Notes') && !now.notesConsent) { set({ dialog: 'notes-permission' }); return; }
     const files = apps.some((id) => FILE_TOOLS.includes(id));
     if (platform === 'darwin' && files && !(disk && (disk.granted || disk.grantedFresh)) && !now.folderAnswers) { set({ dialog: 'folders' }); return; }
     if (!now.provider) { void needProvider('run'); return; }
@@ -379,8 +387,9 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     if (now.mode === 'manual') {
       for (const id of apps) {
         const scope = now.scopes[id] || emptyScope(id);
-        const options = scopeOptions(id, projects);
-        scopes[id] = { ...scope, labels: scope.items.map((item) => (options.find((option) => option.id === item) || {}).label).filter(Boolean) };
+        // The project pills (round 3): a project is ticked when its options are; none ticked means every project picked.
+        const only = projects.filter((project) => { const mine = scopeOptions(id, [project]); return mine.length > 0 && mine.every((option) => scope.items.includes(option.id)); }).map((project) => project.title);
+        scopes[id] = { ...scope, items: [], labels: [], projects: only.length === projects.length ? [] : only };
       }
     }
     const additional = now.mode === 'auto' ? now.added.filter((tool) => now.confirmed.includes(tool.id)).map((tool) => ({ name: tool.name, website: tool.website || '' })) : [];
@@ -471,16 +480,25 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const toolStatus = discovery && discovery.tools ? discovery.tools.status : 'idle';
   const results = discovery && discovery.tools && discovery.tools.results;
   const diskGranted = !!(disk && (disk.granted || disk.grantedFresh));
+  const diskApp = (disk && disk.app) || 'Engelbart';
 
   /* ================================================================================================== the screens */
 
   const flowHeader = (title, key, onBack, sub = '') => (
     <header className="work-head">
-      {onBack && <button type="button" className="link work-back" onClick={onBack}>{CHEV} Back</button>}
+      
       <T k={key} tag="h1" fallback={title} />
       {sub ? <p>{sub}</p> : null}
     </header>
   );
+
+  const lowerBack = () => <button type="button" className="link work-back" onClick={() => {
+    if (F.screen === 'roles') set({ screen: 'picker', dialog: 'intro' });
+    else if (F.screen === 'work') set({ screen: 'roles' });
+    else if (F.screen === 'projects') set({ screen: 'work' });
+    else if (F.screen === 'tools') set({ dialog: 'import-mode', modeChoice: 'auto', modeFirst: false });
+    else set({ screen: 'picker' });
+  }}>{CHEV} Back</button>;
 
   const discoveryLine = () => {
     if (projectStatus === 'idle' && !F.provider) return null;
@@ -517,7 +535,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
             </button>
           ))}
         </div>
-        <footer className="work-foot"><span /><button type="button" className="btn" disabled={!F.roles.length} onClick={() => { set({ screen: 'work' }); window.scrollTo(0, 0); }}>Continue{CHEV}</button></footer>
+        <footer className="work-foot">{lowerBack()}<span /><button type="button" className="btn" disabled={!F.roles.length} onClick={() => { set({ screen: 'work' }); window.scrollTo(0, 0); }}>Continue{CHEV}</button></footer>
       </div>
     </main>
   );
@@ -525,13 +543,11 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   // Not optional (2026-10-13, second round: "Dont make this optional"); the project agent is already running, so what is
   // written here goes to the import agents with the projects picked.
   const workPage = () => (
-    <main className="work-page" data-import-screen="work">
-      <div className="work-column">
-        {flowHeader('What are you working on?', 'work-description-title', () => set({ screen: 'roles' }))}
-        <textarea id="work-description" className="field" rows={4} aria-label="What are you working on?" placeholder="Describe your work" value={F.work} onChange={(event) => set({ work: event.target.value.slice(0, 2000) })} />
-        <footer className="work-foot"><span /><button type="button" className="btn" disabled={!F.work.trim()} onClick={() => set({ screen: 'projects' })}>Continue{CHEV}</button></footer>
-      </div>
-    </main>
+    <main className="work-page review-work" data-import-screen="work"><div className="work-column">
+      {flowHeader('What are you working on?', 'work-description-title', () => set({ screen: 'roles' }))}
+      <textarea id="work-description" className="field" rows={1} ref={growReviewInput} aria-label="What are you working on?" placeholder="Understanding the Memex..." value={F.work} onChange={event => { growReviewInput(event.currentTarget); set({ work: event.target.value.slice(0, 2000) }); }} />
+      <footer className="work-foot">{lowerBack()}<button type="button" className="btn" disabled={!F.work.trim()} onClick={() => set({ screen: 'projects' })}>Continue{CHEV}</button></footer>
+    </div></main>
   );
 
   const projectsPage = () => {
@@ -553,10 +569,10 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
             {ready && projectStatus === 'failed' && discoveryLine()}
           </div>
           <button type="button" className="add-project" onClick={() => { setDraft({ title: '', description: '', tool: '', website: '' }); set({ dialog: 'work-add-project' }); }}>{PLUS} Add a project</button>
-          <footer className="work-foot">
+          <footer className="work-foot">{lowerBack()}
             <span className="muted">{F.picked.length} selected</span>
             <button type="button" className="btn" disabled={!F.picked.length} onClick={() => {
-              if (F.mode === 'auto') { set((now) => ({ screen: 'tools', toolOrder: settleTools(now) })); if (toolStatus === 'idle' || toolStatus === 'stale') startTools(); } else set({ screen: 'picker' });
+              set({ screen: 'picker', dialog: 'import-mode', modeFirst: false });
               window.scrollTo(0, 0);
             }}>Continue{CHEV}</button>
           </footer>
@@ -573,14 +589,6 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     // the agent answers (toolOrder), not on every click, so a tool never jumps away from the pointer that ticked it.
     const byId = new Map([...CATALOG, ...F.added].map((tool) => [tool.id, tool]));
     const shown = orderedTools(F).map((id) => byId.get(id)).filter(Boolean);
-    const subtitle = (tool) => {
-      if (tool.source === 'user') return 'Added by you';
-      if (tool.source === 'agent') return 'Found in your browser';
-      const fact = detected(tool.id) || {};
-      if (fact.method === 'local' || (tool.local && fact.used)) return 'Found on this Mac';
-      if (fact.used) return 'Found in your browser';
-      return 'Not detected';
-    };
     return (
       <main className="work-page tools-page" data-import-screen="tools">
         <div className="work-column">
@@ -594,7 +602,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
               {shown.map((tool) => (
                 <button key={tool.id} type="button" className="tool-choice" data-work-tool={tool.id} role="checkbox" aria-checked={F.confirmed.includes(tool.id)} title={(detected(tool.id) || {}).evidence || ''} onClick={() => set((now) => ({ touched: [...new Set([...now.touched, tool.id])], confirmed: toggle(now.confirmed, tool.id) }))}>
                   <ToolLogo id={tool.id} />
-                  <span><b>{tool.name}</b><small>{subtitle(tool)}</small></span>
+                  <span><b>{tool.name}</b></span>
                   <Check on={F.confirmed.includes(tool.id)} />
                 </button>
               ))}
@@ -604,7 +612,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
             <span />
             <button type="button" className="link under" onClick={() => { setCatalogQuery(''); setDraft({ title: '', description: '', tool: '', website: '' }); set({ dialog: 'work-add-tool' }); }}>+ Add a tool</button>
           </div>
-          <footer className="work-foot">
+          <footer className="work-foot">{lowerBack()}
             <span className="muted">{F.confirmed.length} tools selected</span>
             <button type="button" className="btn" data-import-run="1" disabled={!(scanned || F.skipWait) || !F.confirmed.length} onClick={runGate}>{RUN_LABEL}{CHEV}</button>
           </footer>
@@ -613,150 +621,58 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     );
   };
 
-  const picker = () => {
-    const allOn = allKeys.every((key) => F.picks.includes(key));
-    const providerName = F.provider ? PROVIDER_NAMES[F.provider] : null;
-    return (
-      <>
-        <main className="page picker-page" data-import-screen="picker">
-          <div className="col">
-            <T k="pickerTitle" tag="h2" />
-            {F.mode === 'manual' && projectScopeStrip()}
-            <div className="bar">
-              <span>Sources <span style={{ fontSize: 10 }}>⌄</span></span>
-              <div className="bar-right">
-                <span style={{ display: 'flex', alignItems: 'center', gap: 7 }}>From{' '}
-                  <span className="select">
-                    <button type="button" aria-expanded={F.menu === 'period'} onClick={() => set((now) => ({ menu: now.menu === 'period' ? null : 'period' }))}>{(PERIODS.find((period) => period.days === cleanDays(F.period)) || PERIODS[2]).label}{DOWN}</button>
-                    {F.menu === 'period' && (
-                      <div className="menu" role="menu">
-                        {PERIODS.map((period) => <button key={period.label} type="button" role="menuitemradio" aria-checked={cleanDays(F.period) === period.days} onClick={() => set({ period: period.days, menu: null })}>{cleanDays(F.period) === period.days ? '✓' : ' '} {period.label}</button>)}
-                      </div>
-                    )}
-                  </span>
-                </span>
-                <button type="button" className="link" data-import-select-all="1" onClick={() => set({ picks: allOn ? [] : [...allKeys] })}>{allOn ? 'Clear' : 'Select all'}</button>
+  const picker = () => (
+    <>
+      <main className="page picker-page review-picker" data-import-screen="picker">
+        <div className="col">
+          <T k="pickerTitle" tag="h2" />
+          {GROUPS.map((group) => {
+            const keys = keysOf(group), open = F.open.includes(group.id);
+            return <section key={group.id}>
+              <div className="group-head">
+                <button type="button" className="expand" data-group={group.id} aria-expanded={open} onClick={() => set({ open: open ? [] : [group.id], scopeOpen: null })}>{CHEV}<span>{group.label}</span></button>
+                <span className="muted review-count">{keys.filter(id => F.picks.includes(id)).length ? `${keys.filter(id => F.picks.includes(id)).length} selected` : ''}</span>
               </div>
-            </div>
-            {GROUPS.map((group) => {
-              const keys = keysOf(group);
-              const n = keys.filter((key) => F.picks.includes(key)).length;
-              const on = keys.length > 0 && n === keys.length;
-              const mixed = n > 0 && !on;
-              const open = F.open.includes(group.id);
-              return (
-                <section key={group.id}>
-                  <div className="group-head">
-                    <button type="button" className="expand" aria-expanded={open} onClick={() => set((now) => ({ open: toggle(now.open, group.id) }))}>{CHEV}<span>{group.label}</span></button>
-                    <button type="button" className={`cb ${on ? 'on' : mixed ? 'mix' : ''}`} role="checkbox" aria-checked={mixed ? 'mixed' : on} aria-label={`Select ${group.label}`} onClick={() => toggleGroup(group)}>{on ? CHECK : null}</button>
-                  </div>
-                  {open && (
-                    <div className="apps">
-                      {group.apps.length ? group.apps.map((app) => {
-                        const hint = sourceHint(app, diskGranted);
-                        return (
-                          <button key={app} type="button" className="app-row" data-app={app} role="checkbox" aria-checked={F.picks.includes(app)} onClick={() => set((now) => ({ picks: toggle(now.picks, app) }))}>
-                            <ToolLogo id={app} />
-                            <span className="app-text">{toolName(app)}{hint ? <small>{hint}</small> : null}</span>
-                            <Check on={F.picks.includes(app)} />
-                          </button>
-                        );
-                      }) : (
-                        <button type="button" className="app-row" data-app={SITES} role="checkbox" aria-checked={F.picks.includes(SITES)} onClick={() => set((now) => ({ picks: toggle(now.picks, SITES) }))}>
-                          {GLOBE}<span className="app-text">Browser history<small>Websites you have visited</small></span><Check on={F.picks.includes(SITES)} />
-                        </button>
-                      )}
+              {open && <div className="apps">
+                {keys.map(id => {
+                  const selected = F.picks.includes(id), scope = scopeOf(id);
+                  const files = ['Obsidian', 'Zoom', 'Zotero', LOCAL_PDFS, LOCAL_FOLDERS].includes(id);
+                  return <section key={id} className={`review-source ${selected ? 'selected' : ''}`}>
+                    <div className="review-source-row">
+                      <button type="button" className="app-row" data-app={id} role="checkbox" aria-checked={selected} onClick={() => set(now => ({ picks: toggle(now.picks, id), scopeOpen: now.scopeOpen === id ? id : null }))}>
+                        <ToolLogo id={id} /><span className="app-text">{toolName(id)}</span><Check on={selected} />
+                      </button>
+                      {selected && <button type="button" className={`review-specify ${F.scopeOpen === id ? 'is-open' : ''}`} data-specify-context={id} aria-expanded={F.scopeOpen === id} onClick={() => set({ scopeOpen: F.scopeOpen === id ? null : id })}>Specify context{DOWN}</button>}
                     </div>
-                  )}
-                </section>
-              );
-            })}
-            <div className="consent">
-              <span className="consent-logo"><Logo src={PROVIDER_LOGOS[F.provider || 'anthropic']} /></span>
-              <div className="consent-copy">
-                {providerName ? `Read with your ${providerName} subscription` : 'Use your AI subscription to read these sources'}
-                <p>Uses the plan you already have, so there’s no API key to set up. Saved only on your Mac, and Mathetic never receives it. <button type="button" className="link" aria-expanded={F.leaves} onClick={() => set((now) => ({ leaves: !now.leaves }))}>What leaves my Mac?</button></p>
-                {F.leaves && <div className="leaves">{`What the agents read is sent to ${F.provider === 'openai' ? 'OpenAI' : 'Anthropic'} through your own account to be turned into notes. Your library and those notes are saved on this Mac. Nothing goes to Mathetic.`}</div>}
-              </div>
-              <button type="button" className={`switch ${F.consent ? 'on' : ''}`} role="switch" aria-checked={F.consent} aria-label="Allow the onboarding provider to read selected sources" onClick={() => set((now) => ({ consent: !now.consent }))} />
-            </div>
-          </div>
-        </main>
-        <footer className="foot">
-          <div className="foot-inner">
-            <div className="back-skip"><button type="button" className="link" onClick={() => set({ dialog: 'scratch-confirm' })}>Start from scratch</button></div>
-            <div className="foot-right">
-              {F.mode === 'manual' && <button type="button" className="link" onClick={() => set({ screen: 'projects' })}>Back</button>}
-              <button type="button" className="btn" data-import-bring="1" disabled={!F.consent || !F.picks.length} onClick={() => {
-                if (F.mode === 'manual') { set({ screen: 'scopes' }); window.scrollTo(0, 0); return; }
-                set({ dialog: 'intro' });
-              }}>{F.mode === 'manual' ? 'Choose details' : <T k="bring" />}{CHEV}</button>
-            </div>
-          </div>
-        </footer>
-      </>
-    );
-  };
-
-  const scopesPage = () => {
-    const sources = F.picks.filter((id) => CATALOG_IDS.includes(id));
-    const ready = sources.length > 0 && sources.every((id) => scopeReady(scopeOf(id)));
-    return (
-      <main className="work-page" data-import-screen="scopes">
-        <div className="work-column">
-          {flowHeader('Choose exactly what to bring in', 'manual-title', () => set({ screen: 'picker' }), 'Agents will use only the folders, drafts, threads and collections you select.')}
-          <div className="flow-step-label">Manual import</div>
-          {projectScopeStrip()}
-          <div className="manual-source-list">
-            {sources.map((id) => {
-              const scope = scopeOf(id);
-              const kind = scopeKind(id);
-              const options = scopeOptions(id, chosen);
-              return (
-                <section key={id} className="manual-source-card">
-                  <div className="manual-source-head"><ToolLogo id={id} /><h3>{toolName(id)}</h3><button type="button" className="link" onClick={() => set((now) => ({ picks: now.picks.filter((one) => one !== id) }))}>Leave out</button></div>
-                  {kind === 'folders' ? (
-                    <>
-                      <p>{`Choose the ${id === LOCAL_PDFS ? 'paper folders' : id === 'Zoom' ? 'recording folders' : 'folders'} to read for these projects.`}</p>
-                      <div className="folder-upload"><button type="button" className="btn secondary small" onClick={() => chooseFolder(id)}>{FOLDER} Choose folder</button></div>
-                      <div className="selected-folder-list">
-                        {scope.folders.map((folder, index) => (
-                          <div key={folder.path}>{FOLDER}<span>{folder.name}<small>{folder.path}</small></span><button type="button" className="link" aria-label={`Remove ${folder.name}`} onClick={() => setScope(id, { folders: scope.folders.filter((_, at) => at !== index) })}>×</button></div>
-                        ))}
+                    {selected && F.scopeOpen === id && <div className="review-context">
+                      <div className="review-projects" role="group" aria-label={`Projects to import from ${toolName(id)}`}>
+                        {chosen.map(project => {
+                          const options = scopeOptions(id, [project]);
+                          const selected = options.every(option => scope.items.includes(option.id));
+                          return <button key={project.id} type="button" className="review-project" data-source-project={project.id} role="checkbox" aria-checked={selected} onClick={() => setScope(id, { items: selected ? scope.items.filter(item => !options.some(option => option.id === item)) : [...new Set([...scope.items, ...options.map(option => option.id)])] })}>{selected && <span className="review-project-check" aria-hidden="true">✓</span>}{project.title}</button>;
+                        })}
                       </div>
-                    </>
-                  ) : (
-                    <>
-                      <p>{kind === 'email' ? 'Choose email groups or add specific people. No whole inbox is imported.' : kind === 'drafts' ? 'Choose specific Overleaf drafts.' : kind === 'collections' ? 'Choose the collections to bring in.' : kind === 'chats' ? 'Choose project conversations to read.' : 'Choose the items to bring in.'}</p>
-                      {kind === 'email' && (
-                        <>
-                          <div className="sender-input">
-                            <input className="field" placeholder="Name or email address" value={sender[id] || ''} onChange={(event) => setSender((now) => ({ ...now, [id]: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') event.currentTarget.nextSibling.click(); }} />
-                            <button type="button" className="btn secondary small" onClick={() => { const name = String(sender[id] || '').trim(); if (name && !scope.people.includes(name)) setScope(id, { people: [...scope.people, name] }); setSender((now) => ({ ...now, [id]: '' })); }}>Add person</button>
-                          </div>
-                          <div className="sender-chips">{scope.people.map((person, index) => <button key={person} type="button" onClick={() => setScope(id, { people: scope.people.filter((_, at) => at !== index) })}>{person} ×</button>)}</div>
-                        </>
-                      )}
-                      <div className="scope-options">
-                        {options.map((option) => (
-                          <button key={option.id} type="button" className="scope-option" role="checkbox" aria-checked={scope.items.includes(option.id)} onClick={() => setScope(id, { items: toggle(scope.items, option.id) })}><Check on={scope.items.includes(option.id)} /><span>{option.label}</span></button>
-                        ))}
-                      </div>
-                      <input className="field" placeholder="Or name a specific draft, collection or project…" value={scope.note} onChange={(event) => setScope(id, { note: event.target.value.slice(0, 600) })} />
-                    </>
-                  )}
-                </section>
-              );
-            })}
-          </div>
-          <footer className="work-foot">
-            <span className="muted">{`${sources.filter((id) => scopeReady(scopeOf(id))).length} of ${sources.length} sources scoped`}</span>
-            <button type="button" className="btn" data-import-run="1" disabled={!ready} onClick={runGate}>{RUN_LABEL}{CHEV}</button>
-          </footer>
+                      {chosen.length > 0 && <p className="review-projects-note">Select all projects you want Engelbart to import from {toolName(id)}.</p>}
+                      <label className="review-context-label" htmlFor={`review-context-${id}`}>Further specify</label>
+                      <textarea id={`review-context-${id}`} className="field" rows={1} ref={growReviewInput} data-scope-note={id} aria-label={`Optional context for ${toolName(id)}`} placeholder={id === LOCAL_FOLDERS ? 'e.g. Research notes and PDFs about the Memex in Documents' : id === 'Obsidian' ? 'e.g. My notes about Engelbart and context engineering' : 'e.g. Only context related to my current projects'} value={scope.note} onChange={event => { growReviewInput(event.currentTarget); setScope(id, { note: event.target.value.slice(0, 2000) }); }} />
+                      {files && <div className="folder-upload"><button type="button" className="link under" onClick={() => chooseFolder(id)}>Choose a folder</button><button type="button" className="link under" onClick={async () => { const files = await api.pickFiles(); setScope(id, { folders: [...scope.folders, ...files.filter(file => !scope.folders.some(folder => folder.path === file.path))] }); }}>Choose files</button></div>}
+                      {scope.kind === 'email' && <><div className="sender-input"><input className="field" aria-label="Name or email address" placeholder="Name or email address" value={sender[id] || ''} onChange={event => setSender(now => ({ ...now, [id]: event.target.value }))} /><button type="button" className="link" onClick={() => { const person = (sender[id] || '').trim(); if (person) setScope(id, { people: [...new Set([...scope.people, person])] }); setSender(now => ({ ...now, [id]: '' })); }}>Add person</button></div><div className="sender-chips">{scope.people.map(person => <button type="button" key={person} onClick={() => setScope(id, { people: scope.people.filter(one => one !== person) })}>{person} ×</button>)}</div></>}
+                      <div className="selected-folder-list">{scope.folders.map(folder => <div key={folder.path}>{FOLDER}<span>{folder.name}</span><button type="button" className="link" aria-label={`Remove ${folder.name}`} onClick={() => setScope(id, { folders: scope.folders.filter(one => one.path !== folder.path) })}>×</button></div>)}</div>
+                    </div>}
+                  </section>;
+                })}
+              </div>}
+            </section>;
+          })}
         </div>
       </main>
-    );
-  };
+      <footer className="foot"><div className="foot-inner"><div className="back-skip"><button type="button" className="link" onClick={() => set({ dialog: 'import-mode', modeFirst: false })}>Back</button></div><span className="muted review-count">{F.picks.length} selected</span><div className="foot-right"><button type="button" className="btn" data-import-run="1" disabled={!F.picks.length || !F.picked.length} onClick={runGate}>{RUN_LABEL}{CHEV}</button></div></div></footer>
+    </>
+  );
+
+  const scopesPage = () => picker();
+
+
 
   /* ================================================================================================== the dialogs */
 
@@ -817,7 +733,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       const list = [...WORKS.map(([name, src]) => [shownName(name), src]), ...CATALOG.filter((tool) => TOOL_LOGOS[tool.id]).map((tool) => [tool.name, TOOL_LOGOS[tool.id]])].filter(([name]) => (seen.has(name) ? false : seen.add(name)));
       return (<><div className="modal-head"><h3>Works with your tools</h3><button type="button" className="close" aria-label="Close" onClick={() => set({ dialog: 'intro' })}>×</button></div><div className="all-apps">{list.map(([name, src]) => <span key={name} className="supported-app"><img src={src} alt="" />{name}</span>)}</div>{buttons('', 'Done', null, () => set({ dialog: 'intro' }))}</>);
     }
-    if (d === 'scratch-confirm') return (<><h3>Are you sure?</h3><p>{mode === 'modal' ? 'Nothing will be imported. You can import your context later.' : 'Your project will start with an empty library. You can import your context later.'}</p><div className="mf"><button type="button" className="link" onClick={() => (mode === 'modal' ? startFromScratch() : set({ dialog: 'project' }))}>{mode === 'modal' ? 'Close' : 'Start from scratch'}</button><button type="button" className="btn small" onClick={() => set({ dialog: 'intro' })}>Keep importing</button></div></>);
+    if (d === 'scratch-confirm') return (<><h3>Are you sure?</h3><p>{mode === 'modal' ? 'Nothing will be imported. You can import your context later.' : 'Your project will start with an empty library. You can import your context later.'}</p><div className="mf"><button type="button" className="link" onClick={() => (mode === 'modal' ? startFromScratch() : set({ dialog: 'project' }))}>{mode === 'modal' ? 'Close' : 'Start from scratch'}</button><button type="button" className="btn small" onClick={importContext}>Keep importing</button></div></>);
     if (d === 'project') {
       return (
         <>
@@ -871,38 +787,14 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
               </button>
             ))}
           </div>
-          <div className="mf mf-start"><button type="button" className="link" onClick={() => set(F.modeFirst ? { dialog: 'intro', screen: 'picker' } : { dialog: null })}>Back</button></div>
+          <div className="mf mf-start"><button type="button" className="link" onClick={() => set({ dialog: null, screen: 'projects' })}>Back</button></div>
         </>
       );
     }
-    if (d === 'keychain' && browsers && browsers.chosenId === 'safari') {
-      return (
-        <>
-          <div className="key">{KEY}</div>
-          <h3>Use the sign-ins of another browser?</h3>
-          <p>Engelbart can’t read the sign-ins Safari saves. Choose another browser you’re signed in with, or sign in to each app inside Engelbart when its import needs it.</p>
-          <div className="mf keychain-actions">
-            {browsers.browsers.length > 1 && <button type="button" className="link under" onClick={() => set({ dialog: 'keychain-browser', browserChoice: browsers.browsers.find((browser) => browser.id !== 'safari').id })}>Use another browser</button>}
-            <button type="button" className="btn small" onClick={() => keychainAnswer('declined')}>Sign in inside Engelbart</button>
-          </div>
-        </>
-      );
-    }
-    if (d === 'keychain') {
-      return (
-        <>
-          <div className="key">{KEY}</div>
-          <h3>{`Allow Engelbart to use your ${browserNow} sign-ins?`}</h3>
-          <p>{`Engelbart copies the sign-ins of the apps you import from ${browserNow} into its own browser, so you don’t log in again. ${(BROWSERS.find((browser) => browser.id === (browsers && browsers.chosenId)) || {}).keychain ? 'macOS will ask for your Mac password next. Choose Allow.' : ''}`}</p>
-          <div className="mf keychain-actions">
-            {browsers && browsers.browsers.length > 1 && <button type="button" className="link under" onClick={() => set({ dialog: 'keychain-browser', browserChoice: browsers.chosenId })}>Use another browser</button>}
-            <button type="button" className="link" onClick={() => set({ dialog: 'keychain-confirm' })}>Don’t allow</button>
-            <button type="button" className="btn small" data-import-keychain-allow="1" onClick={() => keychainAnswer('allowed')}>Allow</button>
-          </div>
-        </>
-      );
-    }
-    if (d === 'keychain-confirm') return (<><h3>Are you sure?</h3><p>{`Without Keychain access, Engelbart can’t bring over your saved ${browserNow} sign-ins. Sources that need an account will ask you to sign in inside Engelbart instead.`}</p><div className="mf"><button type="button" className="link" onClick={() => keychainAnswer('declined')}>Continue without access</button><button type="button" className="btn small" onClick={() => keychainAnswer('allowed')}>Allow access</button></div></>);
+    if (d === 'keychain') return (<><div className="key">{KEY}</div><h3>{`Allow Engelbart to use your ${browserNow} sign-ins?`}</h3><div className="mf keychain-actions"><button type="button" className="link under" onClick={() => set({ dialog: 'keychain-browser', browserChoice: (browsers && browsers.chosenId) || null })}>Use another browser</button><button type="button" className="link" onClick={() => set({ dialog: 'keychain-confirm' })}>Don’t allow</button><button type="button" className="btn small" data-import-keychain-allow="1" onClick={() => keychainAnswer('allowed')}>Allow</button></div></>);
+    if (d === 'keychain-confirm') return (<><h3>Continue without browser access?</h3><p>You can still import from sources on your Mac.</p><div className="mf"><button type="button" className="link" onClick={() => keychainAnswer('declined')}>Continue without access</button><button type="button" className="btn small" onClick={() => keychainAnswer('allowed')}>Allow access</button></div></>);
+    if (d === 'notes-permission') return (<><h3>Allow Engelbart to read Apple Notes?</h3><div className="mf"><button type="button" className="link" onClick={() => { const now = latest.current; const next = { ...now, picks: now.picks.filter(id => id !== 'Apple Notes'), confirmed: now.confirmed.filter(id => id !== 'Apple Notes'), dialog: null }; latest.current = next; set(next); setTimeout(runGate, 0); }}>Don’t allow</button><button type="button" className="btn" onClick={() => { latest.current = { ...latest.current, notesConsent: true, dialog: null }; set({ notesConsent: true, dialog: null }); setTimeout(runGate, 0); }}>Allow</button></div></>);
+
     if (d === 'keychain-browser') {
       const list = (browsers && browsers.browsers) || [];
       return (
@@ -919,55 +811,21 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         </>
       );
     }
-    if (d === 'folders') {
-      return (
-        <>
-          <div className="key">{FOLDER}</div>
-          <h3>Allow Full Disk Access</h3>
-          <p>{`So the agents can find your papers, notes and folders wherever they are, turn on Full Disk Access for ${disk && disk.app ? disk.app : 'Engelbart'} in System Settings. It is one switch instead of four prompts. Agents look only for what pertains to your projects.`}</p>
-          <div className="mf"><button type="button" className="link" onClick={() => set({ dialog: 'folder-fallback' })}>Deny access</button><button type="button" className="btn" data-import-disk-open="1" onClick={openDisk}>Open System Settings</button></div>
-          <button type="button" className="link under fallback-link" onClick={() => set({ dialog: 'folder-fallback' })}>Use individual folder permissions instead</button>
-        </>
-      );
-    }
-    if (d === 'disk-wait') {
-      return (
-        <>
-          <div className="key">{FOLDER}</div>
-          <h3>{`Switch on ${disk && disk.app ? disk.app : 'Engelbart'}`}</h3>
-          <p>{`In System Settings ▸ Privacy & Security ▸ Full Disk Access, turn on the switch next to ${disk && disk.app ? disk.app : 'Engelbart'}. The panel beside Settings shows where. Engelbart continues as soon as it is on.`}</p>
-          <div className="discovery-line" role="status"><span className="activity-dot" /><span>Waiting for Full Disk Access…</span></div>
-          <div className="mf"><button type="button" className="link" onClick={() => { api.diskAccessStop().catch(() => {}); set({ dialog: 'folder-fallback' }); }}>Use individual permissions</button><button type="button" className="btn small" onClick={openDisk}>Open System Settings again</button></div>
-        </>
-      );
-    }
-    if (d === 'disk-relaunch') return (<><div className="key">{FOLDER}</div><h3>{`Restarting ${disk && disk.app ? disk.app : 'Engelbart'} to finish setup…`}</h3><p>Full Disk Access is on. Engelbart reopens on this step, with your choices kept, and starts your imports.</p><div className="discovery-line" role="status"><span className="activity-dot" /><span>Restarting…</span></div></>);
-    if (d === 'folder-fallback') return (<><h3>Are you sure?</h3><p>Without Full Disk Access, macOS will ask for Desktop, Documents, Downloads and iCloud Drive individually.</p><div className="mf"><button type="button" className="link" onClick={askFolders}>Use individual permissions</button><button type="button" className="btn" onClick={openDisk}>Grant Full Disk Access</button></div></>);
+    // Full Disk Access (round 3): one line each; System Settings and the small "Toggle Setting" panel beside it do the
+    // rest (../../main/onboarding/disk-helper.html). The simulated Settings guide of the review mockup was left out.
+    if (d === 'folders') return (<><div className="key">{FOLDER}</div><h3>Allow Full Disk Access</h3><p>{`Turn on ${diskApp} in System Settings so agents can find your files.`}</p><div className="mf"><button type="button" className="link" onClick={() => set({ dialog: 'folder-fallback' })}>Don’t allow</button><button type="button" className="btn small" data-import-disk-open="1" onClick={openDisk}>Open System Settings</button></div></>);
+    if (d === 'disk-wait') return (<><div className="key">{FOLDER}</div><h3>{`Turn on ${diskApp}`}</h3><div className="discovery-line" role="status"><span className="activity-dot" /><span>Waiting for System Settings…</span></div><div className="mf"><button type="button" className="link" onClick={() => { api.diskAccessStop().catch(() => {}); set({ dialog: 'folder-fallback' }); }}>Don’t allow</button><button type="button" className="btn small" onClick={openDisk}>Open System Settings</button></div></>);
+
+    if (d === 'disk-relaunch') return (<><h3>Reopening Engelbart…</h3><p>Your imports resume automatically.</p></>);
+    if (d === 'folder-fallback') return (<><h3>Are you sure?</h3><p>macOS will ask about each folder instead.</p><div className="mf"><button type="button" className="link" onClick={askFolders}>Use individual permissions</button><button type="button" className="btn" onClick={openDisk}>Grant Full Disk Access</button></div></>);
     if (d === 'folders-asking') return (<><div className="key">{FOLDER}</div><h3>macOS is asking about your folders</h3><p>Choose Allow for each folder you want included.</p></>);
     if (d === 'folder-results') {
       const answers = F.folderAnswers || {};
       const list = Object.keys(answers).length ? Object.keys(answers) : ['Desktop', 'Documents', 'Downloads', 'iCloud Drive'];
       return (<><h3>Folder permissions</h3><p>Only folders you allowed will be included.</p><div className="folder-results">{list.map((folder) => <div key={folder}><span>{folder}</span><span className={answers[folder] === 'allowed' ? 'allowed' : 'failed'}>{answers[folder] === 'allowed' ? 'Allowed' : 'Left out'}</span></div>)}</div><div className="mf">{list.some((folder) => answers[folder] !== 'allowed') && <button type="button" className="link" onClick={askFolders}>Review left-out folders</button>}<button type="button" className="btn" onClick={() => { set({ dialog: null }); runGate(); }}>Continue</button></div></>);
     }
-    if (d === 'browser-agents') {
-      const name = F.agentsBrowser || 'your browser';
-      const who = F.provider === 'openai' ? 'OpenAI' : 'Anthropic';
-      const apps = F.agentsApps && F.agentsApps.length ? F.agentsApps.join(', ') : 'your web apps';
-      return (
-        <>
-          <div className="key">{WEB}</div>
-          <h3>{`Let agents use ${name}?`}</h3>
-          <p>{`Agents will bring in ${apps} from ${name}, where you’re already signed in. Each works in a tab of its own in the background.`}</p>
-          <ul className="guardrails">
-            <li><b>They can</b> open, read, scroll, search, download and export.</li>
-            <li><b>They never</b> send, post, delete, archive, change settings, type a password or close tabs.</li>
-            <li><b>At a sign-in page</b> they stop and ask you.</li>
-          </ul>
-          <p className="fine">{`What they see in ${name}, screenshots included, goes to ${who} as in any chat with its models.`}</p>
-          <div className="mf"><button type="button" className="link" onClick={() => browserAgentsAnswer('declined')}>Don’t allow</button><button type="button" className="btn small" data-import-browser-agents-allow="1" onClick={() => browserAgentsAnswer('allowed')}>Allow</button></div>
-        </>
-      );
-    }
+    if (d === 'browser-agents') return (<><h3>{`Let agents use ${browserNow}?`}</h3><p>They’ll read your selected sources in the background.</p><div className="mf"><button type="button" className="link" onClick={() => browserAgentsAnswer('declined')}>Don’t allow</button><button type="button" className="btn small" data-import-browser-agents-allow="1" onClick={() => browserAgentsAnswer('allowed')}>Allow</button></div></>);
+
     if (d === 'browser-agents-confirm') return (<><h3>Are you sure?</h3><p>{`Without ${F.agentsBrowser || 'your browser'}, agents bring in your web apps through Engelbart’s own browser instead, with the sign-ins it copied or those you make inside Engelbart.`}</p><div className="mf"><button type="button" className="link" onClick={() => browserAgentsAnswer('declined')}>Continue without it</button><button type="button" className="btn small" onClick={() => browserAgentsAnswer('allowed')}>{`Allow ${F.agentsBrowser || 'your browser'}`}</button></div></>);
     if (d === 'starting') return (<><h3>Starting your imports</h3><p>{`Each agent will bring in only what pertains to ${chosen.map((project) => project.title).join(' and ') || 'your projects'}.`}</p><div className="discovery-line" role="status"><span className="activity-dot" /><span>{mode === 'modal' ? 'Starting…' : 'Setting up your projects…'}</span></div></>);
     if (d === 'work-add-project') {
@@ -1022,13 +880,13 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   const d = F.dialog;
   const body = d ? dialogBody() : null;
-  const modalClass = d === 'folder-fallback' ? 'disk-deny-modal' : d === 'folders' ? 'wide' : d === 'intro' ? 'intro-modal' : d === 'privacy' ? 'context-modal' : '';
+  const modalClass = d === 'folder-fallback' ? 'disk-deny-modal' : (d === 'folders' || d === 'disk-wait') ? 'disk-modal' : d === 'intro' ? 'intro-modal' : d === 'privacy' ? 'context-modal' : '';
   const screen = F.screen === 'roles' ? rolesPage() : F.screen === 'work' ? workPage() : F.screen === 'projects' ? projectsPage() : F.screen === 'tools' ? toolsPage() : F.screen === 'scopes' ? scopesPage() : picker();
 
   return (
     <CopyContext.Provider value={{ edit, copy, setCopy }}>
       <div className={`ix ${edit ? 'editing' : ''} ${mode === 'modal' ? 'ix-in-modal' : ''}`} data-import-flow={mode} data-screen={F.screen} data-dialog={d || ''}>
-        <style>{IMPORT_CSS}{EXTRA_CSS}</style>
+        <style>{IMPORT_CSS}{EXTRA_CSS}{ROUND3_CSS}</style>
         <div className="ix-app" inert={d ? true : undefined}>{screen}</div>
         {error && <div className="ix-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
         {body && (
@@ -1058,3 +916,5 @@ const EXTRA_CSS = `
 .ix ul.guardrails li:first-child{border-top:0}
 .ix p.fine{font-size:12px;color:var(--mute);margin-top:0}
 `;
+
+function growReviewInput(element) { if (!element) return; element.style.height = 'auto'; element.style.height = Math.min(140, Math.max(46, element.scrollHeight)) + 'px'; }

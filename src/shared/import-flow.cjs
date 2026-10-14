@@ -237,14 +237,17 @@ function importPlan({ app, mode, projects, roles = [], work = '', scope = null, 
     period ? `Look back over ${period}.` : '',
     'Leave out unrelated projects, personal files, daily notes, journals, receipts and forms, and tools used every day (mail, calendar, social media) unless they are about these projects.',
   ];
-  if (mode === 'manual' && scope) {
-    const exact = [
-      scope.folders.length ? `folders: ${scope.folders.map((folder) => folder.path || folder.name).join('; ')}` : '',
-      scope.people.length ? `email with these people: ${scope.people.join('; ')}` : '',
-      scope.labels && scope.labels.length ? `these items: ${scope.labels.join('; ')}` : '',
-      String(scope.note || '').trim() ? `what they named: ${clip(scope.note, 400)}` : '',
-    ].filter(Boolean);
-    lines.push(`They chose exactly what to bring in. Read only ${exact.join(', and ')}. Nothing outside it comes in, even when it looks related.`);
+  // Manual (round 3, 2026-10-13): what the person said under "Specify context" is optional. The projects ticked there
+  // narrow this source to those; the folders and files chosen are where to read; what they wrote says what they want.
+  const said = mode === 'manual' && scope ? [
+    scope.folders.length ? `only these folders and files: ${scope.folders.map((folder) => folder.path || folder.name).join('; ')}` : '',
+    scope.people.length ? `only email with these people: ${scope.people.join('; ')}` : '',
+    scope.labels && scope.labels.length ? `these items: ${scope.labels.join('; ')}` : '',
+  ].filter(Boolean) : [];
+  if (mode === 'manual' && scope && Array.isArray(scope.projects) && scope.projects.length) lines.push(`For this source, only these of the projects: ${scope.projects.join('; ')}.`);
+  if (mode === 'manual' && scope && String(scope.note || '').trim()) lines.push(`In their words, what to bring in from it: ${clip(scope.note, 600)}`);
+  if (said.length) {
+    lines.push(`They narrowed it down: read ${said.join(', and ')}. Nothing outside it comes in, even when it looks related.`);
   } else if (browser) {
     lines.push(`Find what belongs with these projects yourself, in the person's own ${browser} (their sign-ins are there) and the files on this Mac. Never install a plugin or an extension.`);
   } else {

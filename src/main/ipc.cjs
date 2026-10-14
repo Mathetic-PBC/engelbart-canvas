@@ -225,7 +225,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null, scanner = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -502,7 +502,23 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Spotlight asked in the background which browsers are installed, as Connect opens (./browser/installed-apps.cjs).
   const warm = () => { try { void Promise.resolve(warmBrowsers()).catch(() => {}); } catch { /* not asked */ } };
   // `platform`: off the Mac, web apps' rows say "Not on Windows yet" and can't be ticked (2026-10-12, model/connect.js notOnYet).
-  handle('connect-detect', withCtx(async (ctx) => { cx(); warm(); return { platform: process.platform, ...await detectSources({ homeDir: ctx.homeDir, access: folderAccess.guard({ homeDir: ctx.homeDir, dataRoot: ctx.dataRoot }), zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }) }; }));
+  // Read in the scanner process when there is one (./connect/scan-child.cjs): on this process it froze the window ~4 s.
+  handle('connect-detect', withCtx(async (ctx) => {
+    cx(); warm();
+    const guard = folderAccess.guard({ homeDir: ctx.homeDir, dataRoot: ctx.dataRoot });
+    const signedIn = await connectSignedIn().catch(() => []);
+    const applications = process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {};
+    if (scanner) {
+      const connected = {};
+      for (const [app, entry] of Object.entries(require('../shared/connect-sources.cjs').APPS)) {
+        if (entry.reach !== 'connector') continue;
+        try { connected[app] = !!(connectors && connectors.status(app).connected); } catch { connected[app] = false; }
+      }
+      const found = await scanner.run('detect', { homeDir: ctx.homeDir, access: { dataRoot: ctx.dataRoot, answers: guard.answers }, zotero: zotero ? zotero.status() : null, github: github ? github.status() : null, signedIn, connectors: connected, ...applications }).catch(() => null);
+      if (found) return { platform: process.platform, ...found };
+    }
+    return { platform: process.platform, ...await detectSources({ homeDir: ctx.homeDir, access: guard, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn, connectors: (app) => !!(connectors && connectors.status(app).connected), ...applications }) };
+  }));
   handle('connect-providers', () => { const out = cx().providers(); warm(); return out; });
   handle('connect-start', (input) => cx().start(plainObject(input, 'choices')));
   handle('connect-answer', (id, input) => cx().answer(importId(id), plainObject(input, 'answer')));

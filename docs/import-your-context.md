@@ -1,5 +1,8 @@
 # Import your context (2026-10-13)
 
+Round 3 (the same day, later): the order, the combined picker, the popups, the headless web route and the fixes are in
+`docs/onboarding-round-3.md`, which supersedes this file where they differ.
+
 The onboarding's "Connect your library" became **Import your context**: the mockup in
 `Desktop/Codex Readings/Onboarding.html` built as `src/renderer/import/ImportFlow.jsx`, with the backend in
 `src/main/onboarding/` and the direct mode of `src/main/connect/session.cjs`.

@@ -4,69 +4,45 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src file: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'">
 <title>Full Disk Access</title>
-<!-- The helper docked beside System Settings (./disk-access.cjs), drawn as the onboarding mockup's .disk-helper panel. -->
+<!-- The helper docked beside System Settings (./disk-access.cjs). Round 3 (2026-10-13): the review mockup's coach, and only
+     that ("get rid of all this highlighted text and it should just say Toggle Setting also make the arrow like way thicker"):
+     the app's icon, "Toggle Setting", a close button, and a thick arrow toward Settings. -->
 <style>
-:root{--ink:#171717;--mute:#8f8f8f;--body:#4d4d4d;--font:-apple-system,BlinkMacSystemFont,"Inter","Helvetica Neue",Arial,sans-serif}
-*{box-sizing:border-box}html,body{margin:0;background:transparent;font-family:var(--font);color:var(--ink);-webkit-user-select:none;user-select:none}
-.wrap{position:absolute;inset:14px 14px 14px 34px}
-.disk-helper{position:relative;background:#fff;padding:25px;border-radius:14px;box-shadow:0 15px 40px #0002;-webkit-app-region:drag}
-.disk-helper button{-webkit-app-region:no-drag}
-.guide-pointer{position:absolute;left:-30px;top:44%;color:#d13b32;font-size:30px;font-weight:600;animation:nudge 1.2s ease-in-out infinite}
-@keyframes nudge{0%,100%{transform:translateX(0)}50%{transform:translateX(-6px)}}
-.engelbart-icon{width:35px;height:35px;border-radius:8px;display:block}
-h3{margin:16px 0 0;font-size:19px;line-height:1.3;letter-spacing:-.3px;font-weight:600}
-p{font-size:13px;line-height:1.55;color:var(--body);margin:10px 0 0}
-.guide-red{border:1.5px solid #d13b32;border-radius:7px;padding:10px;margin:20px 0;color:#b52c25;font-size:12px;font-weight:500}
-.done .guide-red{border-color:#28754a;color:#28754a}
-.link{border:0;background:transparent;padding:0;color:var(--mute);font:inherit;font-size:12px;cursor:pointer}
-.link:hover{color:var(--ink)}
-.under{text-decoration:underline;text-underline-offset:3px;color:var(--ink)}
-.fallback-link{display:block;margin-top:22px;font-size:13px}
-.close{position:absolute;top:14px;right:16px;font-size:20px;line-height:1;border:0;background:transparent;color:var(--mute);cursor:pointer}
-.row{display:flex;gap:16px;align-items:center;margin-top:4px}
+:root{--ink:#171717;--mute:#8f8f8f;--font:-apple-system,BlinkMacSystemFont,"Inter","Helvetica Neue",Arial,sans-serif}
+*{box-sizing:border-box}html,body{margin:0;background:transparent;font-family:var(--font);color:var(--ink);-webkit-user-select:none;user-select:none;overflow:hidden}
+.wrap{position:absolute;inset:14px 14px 14px 70px;display:flex;align-items:center}
+.coach{position:relative;width:100%;background:#fff;border:1px solid #ddd;border-radius:12px;padding:22px;box-shadow:0 12px 40px #0002;-webkit-app-region:drag}
+.coach button{-webkit-app-region:no-drag}
+.icon{width:30px;height:30px;border-radius:7px;display:block}
+h3{margin:15px 0 0;font-size:19px;line-height:1.3;letter-spacing:-.3px;font-weight:600}
+.close{position:absolute;top:12px;right:12px;font-size:20px;line-height:1;border:0;background:transparent;color:var(--mute);cursor:pointer}
+.close:hover{color:var(--ink)}
+.arrow{position:absolute;left:4px;top:50%;width:62px;height:24px;margin-top:-12px;color:var(--ink);animation:nudge 1.2s ease-in-out infinite}
+.arrow path{fill:none;stroke:currentColor;stroke-width:5;stroke-linecap:round;stroke-linejoin:round}
+.right .wrap{inset:14px 70px 14px 14px}.right .arrow{left:auto;right:4px;transform:scaleX(-1)}
+@keyframes nudge{0%,100%{translate:0 0}50%{translate:-6px 0}}
+.right .arrow{animation-name:nudge-right}@keyframes nudge-right{0%,100%{translate:0 0}50%{translate:6px 0}}
 </style>
 </head>
 <body>
-<div class="wrap"><aside class="disk-helper" id="panel">
-  <div class="guide-pointer" aria-hidden="true">←</div>
-  <button class="close" data-action="close" aria-label="Close">×</button>
-  <img class="engelbart-icon" id="icon" alt="" hidden>
-  <h3 id="title">Switch on Engelbart</h3>
-  <p id="body">Turn on the switch next to Engelbart. Confirm the macOS prompt; Engelbart reopens by itself.</p>
-  <div class="guide-red" id="red">Enable the highlighted switch</div>
-  <div class="row"><button class="link under" data-action="help" id="help">Still stuck?</button><button class="link under" data-action="missing" id="missing">Engelbart isn’t listed</button></div>
-  <p id="helptext" hidden></p>
-  <button class="link under fallback-link" data-action="fallback">Use individual folder permissions</button>
+<svg class="arrow" viewBox="0 0 62 24" aria-hidden="true"><path d="M58 12H6m12-9-12 9 12 9"/></svg>
+<div class="wrap"><aside class="coach" id="panel">
+  <button class="close" data-action="close" aria-label="Handle permission later">×</button>
+  <img class="icon" id="icon" alt="" hidden>
+  <h3 id="title">Toggle Setting</h3>
 </aside></div>
 <script>
-let state = { app: 'Engelbart' }, missing = false, help = false;
+let state = {};
 const $ = (id) => document.getElementById(id);
 function draw() {
-  const app = state.app || 'Engelbart';
-  $('panel').classList.toggle('done', !!state.done);
   if (state.icon) { $('icon').src = state.icon; $('icon').hidden = false; }
-  if (state.done) {
-    $('title').textContent = 'Full Disk Access is on';
-    $('body').textContent = `Restarting ${app} to finish setup…`;
-    $('red').textContent = 'Done';
-    return;
-  }
-  $('title').textContent = missing ? `Add ${app} to the list` : `Switch on ${app}`;
-  $('body').textContent = missing ? `Click + under the list, choose ${app} from Applications, then click Open.` : `Turn on the switch next to ${app}. Confirm the macOS prompt; ${app} reopens by itself.`;
-  $('red').textContent = missing ? 'Click the + button under the list' : `Enable the switch next to ${app}`;
-  $('missing').textContent = missing ? `${app} is listed` : `${app} isn’t listed`;
-  $('help').textContent = help ? 'Hide help' : 'Still stuck?';
-  $('helptext').hidden = !help;
-  $('helptext').textContent = `If the page didn’t open, open System Settings ▸ Privacy & Security ▸ Full Disk Access. If ${app} is missing, use + to add ${app}.app from Applications. You can also allow folders one by one instead.`;
+  document.body.classList.toggle('right', state.side === 'right');
+  $('title').textContent = state.done ? 'Full Disk Access is on' : 'Toggle Setting';
 }
 window.diskHelper.onState((next) => { state = next || state; draw(); });
 document.addEventListener('click', (event) => {
   const button = event.target.closest('button[data-action]');
-  if (!button) return;
-  const action = button.dataset.action;
-  if (action === 'help') { help = !help; draw(); return; }
-  if (action === 'missing') { missing = !missing; draw(); if (missing) window.diskHelper.action('open'); return; }
-  window.diskHelper.action(action);
+  if (button) window.diskHelper.action(button.dataset.action);
 });
 draw();
 </script>

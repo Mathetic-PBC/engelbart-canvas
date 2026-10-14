@@ -99,8 +99,9 @@ test('config.toml read for what a browser agent needs: features, plugins, MCP se
   assert.deepEqual(config.servers, [{ name: 'research', enabled: true }, { name: 'node_repl', enabled: true }, { name: 'old', enabled: false }]);
   const home = tmp();
   write(path.join(home, 'config.toml'), ['[mcp_servers.research]', 'command = "x"', '[mcp_servers.node_repl]', 'command = "y"', '[mcp_servers.computer-use]', 'command = "z"', '[plugins."chrome@openai-bundled"]', 'enabled = true', '[plugins."slack@openai-curated"]', 'enabled = true', '[plugins."computer-use@openai-bundled"]', 'enabled = true'].join('\n'));
-  assert.deepEqual(codexServersOff(home), ['research'], 'node_repl and computer use kept');
-  assert.deepEqual(codexPluginsOff(home), ['slack@openai-curated'], 'the Chrome plugin and computer use kept');
+  // Round 3 (2026-10-13): computer use is off for a browser agent, server and plugin ("it shifted my window to the chrome window").
+  assert.deepEqual(codexServersOff(home), ['research', 'computer-use'], 'node_repl kept, computer use off');
+  assert.deepEqual(codexPluginsOff(home), ['slack@openai-curated', 'computer-use@openai-bundled'], 'only the Chrome plugin kept');
 });
 
 /** A node-pty stand-in: records what was spawned and written; `script(handle)` plays the session. */
@@ -175,7 +176,9 @@ test('a browser agent\'s run: Claude in Chrome with the risky tools refused and 
   assert.match(claudeCommand, /--setting-sources "" --strict-mcp-config/, 'none of the person\'s settings or MCP servers');
   assert.match(claudeCommand, /--permission-mode auto --permission-prompts none/);
   assert.match(claudeCommand, new RegExp(`--disallowedTools "${CHROME_REFUSED.join(',')}"`));
-  for (const name of ['javascript_tool', 'form_input', 'upload_image', 'tabs_close_mcp']) assert.ok(CHROME_REFUSED.includes(`mcp__claude-in-chrome__${name}`), name);
+  for (const name of ['javascript_tool', 'form_input', 'upload_image', 'switch_browser', 'resize_window']) assert.ok(CHROME_REFUSED.includes(`mcp__claude-in-chrome__${name}`), name);
+  // Round 3: it closes the tabs it opened ("The agents need to close all of the tabs and tab groups when they're done").
+  assert.ok(!CHROME_REFUSED.includes('mcp__claude-in-chrome__tabs_close_mcp'));
   assert.ok(updates.some((update) => update.command && /--chrome/.test(update.command)), 'its command kept for the trace');
   assert.ok(updates.some((update) => update.activity === 'Opening docs.google.com'), JSON.stringify(updates));
   assert.ok(updates.some((update) => update.transcript === 'transcript'));
@@ -189,6 +192,7 @@ test('a browser agent\'s run: Claude in Chrome with the risky tools refused and 
   assert.match(codexCommand, /plugins\."slack@openai-curated"\.enabled=false/);
   assert.match(codexCommand, /--disable apps/);
   assert.doesNotMatch(codexCommand, /--enable browser_use/, 'already allowed in their Codex: nothing turned on');
+  assert.match(codexCommand, /--disable computer_use/, 'computer use never: it brings windows to the front');
   assert.equal(runs[1].env.CODEX_HOME, path.join(home, '.codex'), 'the person\'s own Codex home: its plugins and sign-in');
   assert.equal(runs[1].env.OPENAI_API_KEY, undefined);
 });

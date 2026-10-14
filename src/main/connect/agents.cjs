@@ -54,11 +54,13 @@ const IMPORT_SERVER = path.join(__dirname, 'import-mcp.cjs');
 const TIMEOUTS = Object.freeze({ interview: 10 * 60_000, survey: 15 * 60_000, import: 45 * 60_000, recall: 15 * 60_000, memory: 15 * 60_000, redact: 6 * 60_000, projects: 4 * 60_000, discover: 8 * 60_000, browse: 45 * 60_000 });
 const BRIDGED = new Set(['survey', 'import', 'recall', 'discover', 'browse']);
 // Claude in Chrome's tools a browser agent is never given: a script in the page, a file sent up, a form filled, a saved
-// shortcut run, a recording, a tab closed. What is left opens its own tabs, reads, finds, scrolls, clicks and types.
-const CHROME_REFUSED = Object.freeze(['javascript_tool', 'upload_image', 'file_upload', 'form_input', 'shortcuts_execute', 'shortcuts_list', 'gif_creator', 'tabs_close_mcp'].map((name) => `mcp__claude-in-chrome__${name}`));
-// The MCP servers of the person's own Codex a browser agent keeps: node_repl, which its Chrome plugin and computer use run
-// in, and Codex's Computer Use server as the person has it. Every other one of theirs is turned off for the run.
-const CODEX_KEPT_SERVERS = new Set(['node_repl', 'computer-use']);
+// shortcut run, a recording, another browser or window chosen, a window resized (round 3: "it shifted my window to the
+// chrome window … This should also NEVER happen"). What is left opens its own tabs, reads, finds, scrolls, clicks, types
+// and closes the tabs it opened (round 3: "The agents need to close all of the tabs and tab groups when they're done").
+const CHROME_REFUSED = Object.freeze(['javascript_tool', 'upload_image', 'file_upload', 'form_input', 'shortcuts_execute', 'shortcuts_list', 'gif_creator', 'switch_browser', 'select_browser', 'resize_window'].map((name) => `mcp__claude-in-chrome__${name}`));
+// The MCP servers of the person's own Codex a browser agent keeps: node_repl, which its Chrome plugin runs in. Every other
+// one of theirs is turned off for the run, Computer Use among them: it drives apps by bringing them to the front.
+const CODEX_KEPT_SERVERS = new Set(['node_repl']);
 const MAX_STEP_PICTURES = 80;
 const INTERVIEW_TIMEOUT_MS = TIMEOUTS.interview;
 const IMPORT_TIMEOUT_MS = TIMEOUTS.import;
@@ -90,7 +92,9 @@ function writeImportConfig(home, server, connectors = []) {
     `env = { ${Object.entries(server.env || {}).map(([key, value]) => `${key} = ${toml(value)}`).join(', ')} }`, 'startup_timeout_sec = 30', 'tool_timeout_sec = 240', 'default_tools_approval_mode = "approve"'];
   for (const connector of connectors) {
     if (!SERVER_NAME_RE.test(connector.name) || connector.name === 'engelbart') continue;
-    lines.push('', `[mcp_servers.${connector.name}]`, `url = ${toml(connector.url)}`, `bearer_token_env_var = ${toml(tokenEnv(connector.name))}`, 'startup_timeout_sec = 30', 'tool_timeout_sec = 120', 'default_tools_approval_mode = "approve"');
+    // The person's own server (./own-connectors.cjs): no token here, Codex finds its own sign-in for it by name and address.
+    const auth = connector.own ? [] : [`bearer_token_env_var = ${toml(tokenEnv(connector.name))}`];
+    lines.push('', `[mcp_servers.${connector.name}]`, `url = ${toml(connector.url)}`, ...auth, 'startup_timeout_sec = 30', 'tool_timeout_sec = 120', 'default_tools_approval_mode = "approve"');
   }
   const text = `${lines.join('\n')}\n`;
   const file = path.join(home, 'config.toml');
@@ -104,7 +108,8 @@ function claudeServers({ node, server, connection, connectors = [] }) {
   const servers = { engelbart: { command: node, args: [server, connection], env: { ELECTRON_RUN_AS_NODE: '1' } } };
   for (const connector of connectors) {
     if (!SERVER_NAME_RE.test(connector.name) || connector.name === 'engelbart') continue;
-    servers[connector.name] = { type: 'http', url: connector.url, headers: { Authorization: `Bearer ${connector.token}` } };
+    // The person's own server: as their Claude Code has it, which finds its sign-in by that name and address.
+    servers[connector.name] = connector.own ? { type: connector.type === 'sse' ? 'sse' : 'http', url: connector.url } : { type: 'http', url: connector.url, headers: { Authorization: `Bearer ${connector.token}` } };
   }
   return { mcpServers: servers };
 }
@@ -263,9 +268,10 @@ function codexServersOff(codexHome) {
   return readCodexConfig(text).servers.map((server) => server.name).filter((name) => !CODEX_KEPT_SERVERS.has(name) && name !== 'engelbart' && /^[A-Za-z0-9_-]{1,64}$/.test(name));
 }
 
-// The person's Codex plugins a browser agent keeps: its browser control and computer use. Every other plugin their
-// config.toml turns on (some bring MCP servers of their own, Slack's among them) is off for the run.
-const CODEX_KEPT_PLUGINS = /^(chrome|computer-use|unified-computer-use)@/;
+// The person's Codex plugins a browser agent keeps: its browser control only. Every other plugin their config.toml turns
+// on (some bring MCP servers of their own, Slack's among them) is off for the run, computer use too (round 3: it brings
+// the browser's window to the front).
+const CODEX_KEPT_PLUGINS = /^chrome@/;
 
 /** The person's Codex config.toml → the plugins it turns on that a browser agent turns off. */
 function codexPluginsOff(codexHome) {
@@ -360,7 +366,7 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     const web = bridge ? 'true' : 'false'; // an app's help pages, when its skill is out of date
     const shared = `--skip-git-repo-check -m "$ENGELBART_CONNECT_MODEL" -c 'model_reasoning_effort="${effort}"' -c 'sandbox_mode="read-only"' -c 'tools.web_search=${web}' -c project_doc_max_bytes=0 --json -o "$ENGELBART_CONNECT_OUTPUT" - < "$ENGELBART_CONNECT_INPUT"`;
     const command = session ? `exec ${program('codex')} exec resume "$ENGELBART_CONNECT_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${shared}`;
-    const tokens = Object.fromEntries((bridge ? connectors : []).filter((connector) => SERVER_NAME_RE.test(connector.name)).map((connector) => [tokenEnv(connector.name), connector.token]));
+    const tokens = Object.fromEntries((bridge ? connectors : []).filter((connector) => SERVER_NAME_RE.test(connector.name) && !connector.own && connector.token).map((connector) => [tokenEnv(connector.name), connector.token]));
     const env = childEnvironment({ ...programEnv('codex'), ...tokens, CODEX_HOME: own, ENGELBART_CONNECT_SESSION: session || '', ENGELBART_CONNECT_MODEL: model, ENGELBART_CONNECT_OUTPUT: outFile, ENGELBART_CONNECT_INPUT: inputFile });
     try {
       const short = pathLabeller(dirs);
@@ -466,7 +472,7 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     fs.writeFileSync(inputFile, message, { mode: 0o600 });
     if (bridge) fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind }), { mode: 0o600 });
     const off = [...codexServersOff(home).map((name) => `-c 'mcp_servers.${name}.enabled=false'`), ...codexPluginsOff(home).map((name) => `-c 'plugins."${name}".enabled=false'`)].join(' ');
-    const enable = browse.enable ? ' --enable browser_use --enable computer_use' : '';
+    const enable = `${browse.enable ? ' --enable browser_use' : ''} --disable computer_use`;
     const command = `exec ${program('codex')} exec --skip-git-repo-check --color never -m "$ENGELBART_CONNECT_MODEL" -c 'model_reasoning_effort="${effort}"' -c 'sandbox_mode="read-only"' -c 'approval_policy="never"' -c project_doc_max_bytes=0 -c "developer_instructions=$ENGELBART_CONNECT_INSTRUCTIONS" ${off}${bridge ? ' -c "mcp_servers.engelbart=$ENGELBART_CONNECT_SERVER"' : ''} --disable apps${enable} --json -o "$ENGELBART_CONNECT_OUTPUT" - < "$ENGELBART_CONNECT_INPUT"`;
     const serverToml = bridge ? tomlValue({ command: node, args: [server, connection], env: { ELECTRON_RUN_AS_NODE: '1' }, startup_timeout_sec: 30, tool_timeout_sec: 240, default_tools_approval_mode: 'approve' }) : '';
     const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: home, ENGELBART_CONNECT_MODEL: model, ENGELBART_CONNECT_OUTPUT: outFile, ENGELBART_CONNECT_INPUT: inputFile, ENGELBART_CONNECT_INSTRUCTIONS: tomlValue(system), ...(bridge ? { ENGELBART_CONNECT_SERVER: serverToml } : {}) });

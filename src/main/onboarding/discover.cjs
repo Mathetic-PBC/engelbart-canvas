@@ -32,67 +32,19 @@ const { connectChoice } = require('../connect/session.cjs');
 const { APPS, SIGN_IN_COOKIES, shownName } = require('../../shared/connect-sources.cjs');
 const { CATALOG, LOCAL_FOLDERS, SITES, PROVIDER_IDS, browserById, readProjects, readTools } = require('../../shared/import-flow.cjs');
 const prompts = require('./prompts.cjs');
+const { projectDigest, DIGEST_DAYS } = require('./digest.cjs');
+const { accessSpec } = require('../connect/offthread.cjs');
 
 const FILE = 'discovery.json';
-const DIGEST_DAYS = 120;
 const HISTORY_DAYS = 90;
 const SIGN_IN_TIMEOUT_MS = 20_000;
 
 const exists = (file) => { try { fs.accessSync(file); return true; } catch { return false; } };
-const shown = (homeDir, dir) => readers.shownPath(homeDir, dir);
 const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
-const dayOf = (iso) => String(iso || '').slice(0, 10);
 
 /* ------------------------------------------------------------------------------------------------- the project digest */
 
-/**
- * What the person worked on lately, read from this Mac without a model → { folders, vaults, zotero, projects }:
- *   folders  the folders their Claude Code and Codex sessions ran in, the busiest and most recent first, each with how
- *            many sessions, the last day, the repository it is in, and the newest sessions' titles
- *   vaults   each Obsidian vault's notes changed lately (title and folder)
- *   zotero   the collections of their Zotero library (Engelbart's copy), when signed in
- *   projects the Engelbart projects they have already (so a project is not offered twice)
- */
-function projectDigest({ homeDir, env = process.env, access = null, zoteroRoot = null, existing = [], days = DIGEST_DAYS }) {
-  const byFolder = new Map();
-  for (const app of ['Claude Code', 'Codex']) {
-    let chats = [];
-    try { chats = readers.localChats(app, { homeDir, env, days, limit: 400 }); } catch { chats = []; }
-    for (const chat of chats) {
-      const key = chat.project || '(no folder)';
-      const entry = byFolder.get(key) || { shown: key, sessions: 0, last: '', apps: new Set(), titles: [] };
-      entry.sessions += 1;
-      entry.apps.add(app);
-      if (chat.date > entry.last) entry.last = chat.date;
-      if (entry.titles.length < 10 && chat.title && !entry.titles.includes(chat.title)) entry.titles.push(chat.title);
-      byFolder.set(key, entry);
-    }
-  }
-  let repos = [];
-  try { repos = scan.localRepos({ homeDir, env, access }); } catch { repos = []; }
-  const repoOf = (shownPath) => repos.find((repo) => shownPath === repo.shown || shownPath.startsWith(`${repo.shown}/`)) || null;
-  const folders = [...byFolder.values()]
-    .map((entry) => {
-      const repo = repoOf(entry.shown);
-      const full = entry.shown.startsWith('~') ? path.join(homeDir, entry.shown.slice(1)) : entry.shown;
-      return { shown: entry.shown, path: path.isAbsolute(full) ? full : '', name: path.basename(full) || entry.shown, sessions: entry.sessions, last: dayOf(entry.last), apps: [...entry.apps], repository: repo ? repo.shown : null, titles: entry.titles };
-    })
-    .sort((a, b) => b.last.localeCompare(a.last) || b.sessions - a.sessions)
-    .slice(0, 25);
-  const vaults = [];
-  let found = [];
-  try { found = readers.obsidianVaults(homeDir); } catch { found = []; }
-  for (const vault of found.slice(0, 3)) {
-    if (access && !access.readable(vault.path)) continue;
-    let files = [];
-    try { files = readers.noteFiles(vault.path, { days: 60, max: 60, readable: access ? access.readable : null }); } catch { files = []; }
-    const notes = files.slice(0, 40).map((file) => ({ title: path.basename(file).replace(/\.(md|markdown|txt)$/i, ''), folder: path.relative(vault.path, path.dirname(file)) || '.' }));
-    vaults.push({ vault: vault.shown, notes });
-  }
-  let zotero = [];
-  if (zoteroRoot) { try { zotero = readers.zoteroCollections(zoteroRoot).collections.slice(0, 40).map((one) => ({ name: one.path, items: one.items })); } catch { zotero = []; } }
-  return { folders, vaults, zotero, projects: existing.slice(0, 30) };
-}
+// ./digest.cjs (the scanner process runs it: ../connect/scan-child.cjs).
 
 /* ------------------------------------------------------------------------------------------------- the tool evidence */
 
@@ -105,12 +57,12 @@ async function historySites({ homeDir, browserId, days = HISTORY_DAYS, run = exe
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-history-'));
     try {
       const copy = path.join(scratch, path.basename(file));
-      fs.copyFileSync(file, copy);
-      if (exists(`${file}-wal`)) fs.copyFileSync(`${file}-wal`, `${copy}-wal`);
+      await fs.promises.copyFile(file, copy);
+      if (exists(`${file}-wal`)) await fs.promises.copyFile(`${file}-wal`, `${copy}-wal`);
       const out = await new Promise((resolve, reject) => { run('sqlite3', ['-json', '-readonly', copy, query], { maxBuffer: 256 * 1024 * 1024, timeout: 60_000 }, (error, stdout) => (error ? reject(error) : resolve(stdout))); });
       return JSON.parse(String(out || '').trim() || '[]');
     } finally {
-      fs.rmSync(scratch, { recursive: true, force: true });
+      await fs.promises.rm(scratch, { recursive: true, force: true }).catch(() => {});
     }
   };
   const tally = (rows) => {
@@ -143,17 +95,34 @@ async function historySites({ homeDir, browserId, days = HISTORY_DAYS, run = exe
 }
 
 const sitesOf = (app) => (APPS[app] && APPS[app].sites) || [];
-const visitsTo = (sites, app) => sites.filter((site) => sitesOf(app).some((domain) => site.host === domain || site.host.endsWith(`.${domain}`))).reduce((n, site) => n + site.visits, 0);
+// The hosts that show an app itself is used, for apps whose sites are shared with others (2026-10-13: OneNote was ticked
+// for 151 visits to Outlook on live.com, Gemini for the google.com sign-in every Google app has). An app not here is told
+// by its own sites.
+const USAGE_SITES = Object.freeze({
+  OneNote: ['onenote.com', 'onenote.cloud.microsoft'],
+  'Google Docs': ['docs.google.com', 'drive.google.com'],
+  'Google Meet': ['meet.google.com'],
+  Gmail: ['mail.google.com'],
+  Gemini: ['gemini.google.com'],
+  Grok: ['grok.com'],
+  ChatGPT: ['chatgpt.com', 'chat.openai.com'],
+  Claude: ['claude.ai'],
+});
+const usageSitesOf = (app) => USAGE_SITES[app] || sitesOf(app);
+const visitsTo = (sites, app) => sites.filter((site) => usageSitesOf(app).some((domain) => site.host === domain || site.host.endsWith(`.${domain}`))).reduce((n, site) => n + site.visits, 0);
+// A sign-in cookie on a domain other apps share (google.com) says the person has the account, not that they use this app.
+const sharedSignIn = (app) => Object.keys(SIGN_IN_COOKIES).some((other) => other !== app && SIGN_IN_COOKIES[other][0] === (SIGN_IN_COOKIES[app] || [])[0]);
 
 /**
  * What can be told without a model → { evidence: { [toolId]: { used, method, evidence } }, sites: [{ host, visits }] }.
  * `cookies(app)` → whether the chosen browser holds the app's sign-in cookie (names only).
  */
-async function toolEvidence({ homeDir, env = process.env, browserId, access = null, github = null, zotero = null, connectors = null, cookies = () => false, applications = ['/Applications', path.join(homeDir, 'Applications')], run = execFile }) {
+async function toolEvidence({ homeDir, env = process.env, browserId, access = null, github = null, zotero = null, connectors = null, cookies = () => false, applications = ['/Applications', path.join(homeDir, 'Applications')], run = execFile, detected: given = null }) {
   const evidence = {};
   const set = (id, used, method, text) => { evidence[id] = { used: !!used, method, evidence: text }; };
-  let detected = { apps: {}, localRepos: [] };
-  try { detected = scan.detect({ homeDir, env, access, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), connectors: (app) => !!(connectors && connectors.status(app).connected), applications }); } catch { /* nothing found */ }
+  // `detected`: scan.detect's answer, read in the scanner process (../connect/scan-child.cjs) so the window never waits.
+  let detected = given || { apps: {}, localRepos: [] };
+  if (!given) { try { detected = scan.detect({ homeDir, env, access, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), connectors: (app) => !!(connectors && connectors.status(app).connected), applications }); } catch { /* nothing found */ } }
   const appInstalled = (app) => (DESKTOP[app] || []).some((bundle) => applications.some((dir) => exists(path.join(dir, bundle))));
   const sites = await historySites({ homeDir, browserId, run }).catch(() => []);
   const browserName = (browserById(browserId) || {}).name || 'your browser';
@@ -170,8 +139,8 @@ async function toolEvidence({ homeDir, env = process.env, browserId, access = nu
     const found = detected.apps && detected.apps[id];
     if (tool.local && found && found.found) { set(id, true, 'local', found.where ? `Found on this Mac (${found.where})` : 'Found on this Mac'); continue; }
     if (tool.local) { set(id, false, 'local', ''); continue; }
-    if (SIGN_IN_COOKIES[id] && cookies(id)) { set(id, true, 'cookie', `Signed in in ${browserName}`); continue; }
     const visits = visitsTo(sites, id);
+    if (SIGN_IN_COOKIES[id] && (!sharedSignIn(id) || visits > 0) && cookies(id)) { set(id, true, 'cookie', `Signed in in ${browserName}`); continue; }
     if (visits >= 3) { set(id, true, 'history', `${visits} visits in ${browserName} lately`); continue; }
     if (appInstalled(id)) { set(id, true, 'app', 'Its app is installed'); continue; }
     if (found && found.found) { set(id, true, 'app', found.where || 'Found on this Mac'); continue; }
@@ -188,7 +157,7 @@ async function toolEvidence({ homeDir, env = process.env, browserId, access = nu
  * (../browser/import-cookies.cjs: cookie names only, here); `agentBrowser` (../connect/browser.cjs); `openBridge`;
  * `zotero`, `github`, `connectors`, `deps` as Connect's; `notify(state)`; `trace` (./trace.cjs).
  */
-function createDiscovery({ agents, models = () => null, context, homeDir, env = process.env, providers, webSignIn = null, cookieImport = null, agentBrowser = null, openBridge = null, zotero = null, zoteroRoot = () => null, github = null, connectors = null, deps = {}, notify = () => {}, trace = null, access = () => null, existingProjects = () => [], now = () => new Date().toISOString() }) {
+function createDiscovery({ agents, models = () => null, context, homeDir, env = process.env, providers, webSignIn = null, cookieImport = null, agentBrowser = null, openBridge = null, zotero = null, zoteroRoot = () => null, github = null, connectors = null, deps = {}, notify = () => {}, trace = null, access = () => null, existingProjects = () => [], scanner = null, now = () => new Date().toISOString() }) {
   const roots = new Map(); // dataRoot → { projects, tools, controllers }
 
   const fileOf = (dataRoot) => path.join(dataRoot, '.connect', FILE);
@@ -241,7 +210,12 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
     changed(ctx.dataRoot);
     void (async () => {
       const existing = await Promise.resolve().then(() => existingProjects(ctx)).catch(() => []);
-      const digest = projectDigest({ homeDir, env, access: access(ctx), zoteroRoot: zoteroRoot(), existing: Array.isArray(existing) ? existing : [] });
+      const args = { homeDir, zoteroRoot: zoteroRoot(), existing: Array.isArray(existing) ? existing : [] };
+      // Off the main process (5 s of session files on a busy Mac froze the window between screens).
+      const digest = scanner
+        ? await scanner.run('projectDigest', { ...args, access: accessSpec(access(ctx), ctx.dataRoot) }).catch(() => projectDigest({ ...args, env, access: access(ctx) }))
+        : projectDigest({ ...args, env, access: access(ctx) });
+      if (controller.signal.aborted) return;
       say('discovery', `Looking for recent projects with ${chosen === 'openai' ? 'Codex' : 'Claude Code'}`, { folders: digest.folders.length, vaults: digest.vaults.length, zotero: digest.zotero.length });
       const choice = connectChoice(chosen, (() => { try { return models(); } catch { return null; } })());
       const message = [
@@ -292,7 +266,17 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
           return source.profiles.some((profile) => cookieImport.cookieNames(source.id, profile.id, [domain]).some((entry) => entry.domain === domain && pattern.test(entry.name)));
         } catch { return false; }
       };
-      const { evidence, sites } = await toolEvidence({ homeDir, env, browserId, access: access(ctx), github, zotero, connectors, cookies: holds });
+      let detected = null;
+      if (scanner) {
+        const connected = {};
+        for (const [app, entry] of Object.entries(APPS)) {
+          if (entry.reach !== 'connector') continue;
+          try { connected[app] = !!(connectors && connectors.status(app).connected); } catch { connected[app] = false; }
+        }
+        detected = await scanner.run('detect', { homeDir, access: accessSpec(access(ctx), ctx.dataRoot), zotero: zotero ? zotero.status() : null, github: github ? github.status() : null, connectors: connected }).catch(() => null);
+        if (controller.signal.aborted) return;
+      }
+      const { evidence, sites } = await toolEvidence({ homeDir, env, browserId, access: access(ctx), github, zotero, connectors, cookies: holds, detected });
       if (controller.signal.aborted) return;
       st.tools = { ...st.tools, results: readTools('', evidence), evidence };
       changed(ctx.dataRoot);

@@ -48,7 +48,7 @@ async function listen(preferred, onRequest) {
  * `openExternal(url)` the person's browser; `urls` { [app]: server url } in place of the real ones (tests); `fetchFn` the
  * fetch the OAuth requests use. → { list, status, signIn, cancel, signOut, accessToken, serversFor }
  */
-function createConnectors({ file, crypt, openExternal, fetchFn = globalThis.fetch, now = Date.now, urls = {}, onChange = () => {} }) {
+function createConnectors({ file, crypt, openExternal, fetchFn = globalThis.fetch, now = Date.now, urls = {}, onChange = () => {}, own = null }) {
   const pending = new Map(); // app → { cancel, promise }
   const memory = new Map(); // app → what could not be written (no keychain): kept for this run only
   const urlOf = (app) => urls[app] || CONNECTORS[app].url;
@@ -177,9 +177,27 @@ function createConnectors({ file, crypt, openExternal, fetchFn = globalThis.fetc
     return out;
   }
 
+  /**
+   * The servers an agent on `provider` gets for `apps` (round 3): Engelbart's sign-in where it has one, else the one the
+   * person made in their own Claude Code or Codex (./own-connectors.cjs: no token of Engelbart's, their CLI's own).
+   */
+  async function serversForRun(apps, provider) {
+    const mine = await serversFor(apps);
+    const rest = (apps || []).filter((app) => CONNECTORS[app] && !mine.some((server) => server.app === app));
+    const theirs = own && rest.length ? await own.serversFor(rest, provider).catch(() => []) : [];
+    return [...mine, ...theirs];
+  }
+
+  /** Whether an agent on `provider` reaches `app` through a connector: Engelbart's sign-in or the person's own. */
+  async function reaches(app, provider) {
+    if (!CONNECTORS[app]) return false;
+    if (status(app).connected) return true;
+    return own ? own.reaches(app, provider).catch(() => false) : false;
+  }
+
   return {
     list: () => Object.keys(CONNECTORS).map(status),
-    status, signIn, serversFor, accessToken,
+    status, signIn, serversFor, serversForRun, reaches, accessToken,
     cancel: (app) => { const held = pending.get(app); if (held) held.cancel(); },
     signOut: (app) => { if (!CONNECTORS[app]) throw new Error(`${app} has no connector`); memory.delete(app); save(app, null); onChange(status(app)); return status(app); },
   };

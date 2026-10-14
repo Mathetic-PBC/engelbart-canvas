@@ -1,7 +1,9 @@
 import React from 'react';
 import { IMPORT_CSS } from './import-css.js';
+import { ROUND3_CSS } from './round3-css.js';
 import { TOOL_LOGOS } from './logos.js';
 import { shownName } from '../../shared/connect-sources.cjs';
+import { catalogTool } from '../../shared/import-flow.cjs';
 
 // "Imports in progress" (2026-10-13, the mockup's work-import-status modal): an Import your context run, in the workspace
 // after Import to Engelbart. Its imports with how each goes, and every step an agent hands the person (a sign-in, a
@@ -12,6 +14,9 @@ import { shownName } from '../../shared/connect-sources.cjs';
 // (View ▸ Agent Trace has it), Stop all on the left and asked again ("Are you sure?", stopping the quiet link and Keep
 // importing the button), and a browser agent's stop in the person's own browser says so: Open brings that browser forward,
 // Done once they have signed in there.
+// Round 3 (2026-10-13, docs/onboarding-round-3.md): the steps for the person are popups of their own (./NeedPopup.jsx),
+// their rows first with a "Needs you" link that brings the popup back; no subtext and no dividing lines; ended, it is
+// "Your imports are complete!" with a tile for each source that brought something in (one tile a logo).
 
 const ENDED = new Set(['done', 'failed', 'stopped']);
 const WORK = new Set(['import', 'recall', 'survey']);
@@ -19,6 +24,15 @@ const WORK = new Set(['import', 'recall', 'survey']);
 const FOLDER = <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 5h7l2 2h11v13H2z" /></svg>;
 const WEB = <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18" /></svg>;
 const logoOf = (apps) => { const app = (apps || [])[0]; return app && TOOL_LOGOS[app] ? <img src={TOOL_LOGOS[app]} alt="" /> : app ? FOLDER : WEB; };
+/** A row's name: the app ("Obsidian", "Google Drive"), not the job's "Notes: Obsidian". */
+const rowName = (job) => {
+  const app = (job.apps || []).length === 1 ? job.apps[0] : null;
+  if (app) return catalogTool(app) ? catalogTool(app).name : shownName(app);
+  return String(job.label || '').replace(/^[^:]{1,30}:\s*/, '');
+};
+/** Whether a job brought anything into the library. */
+const brought = (job) => job.status === 'done' && (job.notes || 0) + (job.items || 0) > 0;
+const RANK = { waiting: 0, running: 1, queued: 2 };
 
 /** A job's state in the list's last column. */
 export function jobState(job) {
@@ -56,46 +70,50 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [onClose, confirmStop]);
-  const jobs = (session.jobs || []).filter((job) => WORK.has(job.kind));
+  // The rows that need the person first, then what is working, queued and ended (a stable sort: their order otherwise).
+  const jobs = (session.jobs || []).filter((job) => WORK.has(job.kind) && job.kind !== 'recall').sort((a, b) => (RANK[a.status] ?? 3) - (RANK[b.status] ?? 3));
   const ended = jobs.length > 0 && jobs.every((job) => ENDED.has(job.status)) && !(session.needs || []).length;
-  const projects = (session.direct && session.direct.projects) || [];
-  const memory = session.memory && session.memory.status;
+  const imported = jobs.filter(brought);
+  const all = ended && imported.length === jobs.length;
+  const needOf = (job) => (session.needs || []).find((need) => (job.needId ? need.id === job.needId : (job.apps || []).includes(need.app)));
+  // An app held on its sign-in has no import yet (it starts once signed in): its row all the same, first.
+  const held = (session.needs || []).filter((need) => !jobs.some((job) => (job.apps || []).includes(need.app)))
+    .map((need) => ({ id: `need-${need.id}`, needId: need.id, kind: 'import', apps: [need.app], label: need.app, status: 'waiting' }));
+  const rows = [...held, ...jobs];
   return (
     <div className="ix ix-overlay" data-overlay="1" data-cover="1" data-import-status={session.id}>
-      <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:140}.ix.ix-overlay .scrim.stop-confirm{z-index:150}.ix .background-job-list small{display:block}.ix .mf .mf-left{margin-right:auto}'}</style>
+      <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:140}.ix.ix-overlay .scrim.stop-confirm{z-index:150}.ix .mf .mf-left{margin-right:auto}'}{ROUND3_CSS}</style>
       <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
-        <section className="modal wide" role="dialog" aria-modal="true" aria-label="Imports in progress">
+        <section className={`modal ${ended ? 'done-modal' : 'wide'}`} role="dialog" aria-modal="true" aria-label={ended ? 'Your imports are complete' : 'Imports in progress'}>
           <div className="modal-head">
-            <h3>{ended ? 'Your imports are done' : 'Imports in progress'}</h3>
+            <h3>{ended ? (all ? 'Your imports are complete!' : 'Your imports have finished') : 'Imports in progress'}</h3>
             <button type="button" className="close" aria-label="Close import status" onClick={onClose}>×</button>
           </div>
-          <p>{`Every agent is limited to the projects you selected${projects.length ? `: ${projects.join(' · ')}` : ''}.`}</p>
-          <div className="background-job-list">
-            {jobs.map((job) => (
-              <div key={job.id} data-background-job={job.id}>
-                {logoOf(job.apps)}
-                <span><b>{job.label}</b><small>{job.activity || job.summary || job.error || projects.join(' · ')}</small></span>
-                <span>{jobState(job)}</span>
+          {ended && <p>{all ? 'All of the sources you have selected are now inside of your Engelbart Library.' : imported.length ? 'These sources are now inside of your Engelbart Library.' : 'Nothing new came into your Engelbart Library.'}</p>}
+          {ended ? (
+            imported.length > 0 && (
+              <div className="review-logos">
+                {completionJobs(imported).map((job) => <div className="review-logo" key={job.id} title={job.label} aria-label={`${job.label} imported`} data-imported={job.label}>{job.apps[0] === '__sites' || !job.apps.length ? WEB : logoOf(job.apps)}</div>)}
               </div>
-            ))}
-          </div>
-          <div className="background-needs-list">
-            {(session.needs || []).map((need) => {
-              const words = needWords(need);
-              return (
-                <div key={need.id} className="needs-card" data-import-need={need.app}>
-                  {logoOf([need.app])}
-                  <span><b>{words.title}</b><small>{need.error || (need.own ? need.note || need.reason : need.busy ? (need.browser ? `Waiting for you to finish in ${need.browser}…` : 'Waiting for you to finish…') : need.reason)}</small></span>
-                  <button type="button" className="link" onClick={() => onSkip(need)}>Skip</button>
-                  <button type="button" className="btn small" data-need-open={need.id} onClick={() => (words.done && onNeedDone ? onNeedDone(need) : onNeed(need))}>{words.button}</button>
-                </div>
-              );
-            })}
-          </div>
-          {memory && memory !== 'waiting' && memory !== 'skipped' && <p style={{ fontSize: 13 }}>{memory === 'saved' ? 'MEMORY.md is saved.' : memory === 'writing' ? 'Writing MEMORY.md from what came in…' : memory === 'failed' ? 'MEMORY.md could not be written.' : ''}</p>}
+            )
+          ) : (
+            <div className="background-job-list">
+              {rows.map((job) => {
+                const need = job.status === 'waiting' ? needOf(job) : null;
+                return (
+                  <div key={job.id} data-background-job={job.id}>
+                    {logoOf(job.apps)}
+                    <span><b>{rowName(job)}</b></span>
+                    {need ? <button type="button" className="need-link" data-need-open={need.id} onClick={() => onNeed(need)}>Needs you</button> : <span>{jobState(job)}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div className="mf">
             {!ended && <button type="button" className="link mf-left" data-import-stop-all="1" onClick={() => setConfirmStop(true)}>Stop all</button>}
-            <button type="button" className="btn" data-import-status-close="1" onClick={ended ? onDone : onClose}>{ended ? 'Done' : 'Continue to project'}</button>
+            <button type="button" className="btn" data-import-status-close="1" onClick={ended ? onDone : onClose}>{ended ? 'Open library' : 'Continue in Engelbart'}</button>
           </div>
           {confirmStop && !ended && (
             <div className="scrim stop-confirm" onMouseDown={(event) => { if (event.target === event.currentTarget) setConfirmStop(false); }}>
@@ -110,4 +128,19 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
       </div>
     </div>
   );
+}
+
+function completionJobs(jobs) {
+  const logos = new Map();
+  for (const job of jobs) {
+    const app = (job.apps || [])[0];
+    const key = TOOL_LOGOS[app] || (app === '__sites' || !app ? 'web' : 'folder');
+    const previous = logos.get(key);
+    if (previous) {
+      previous.apps = [...new Set([...previous.apps, ...(job.apps || [])])];
+      previous.labels = [...new Set([...previous.labels, rowName(job)])];
+      previous.label = previous.labels.join(' · ');
+    } else logos.set(key, { ...job, apps: [...(job.apps || [])], labels: [rowName(job)], label: rowName(job) });
+  }
+  return [...logos.values()];
 }

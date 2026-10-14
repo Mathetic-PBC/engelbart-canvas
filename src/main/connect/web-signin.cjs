@@ -37,7 +37,7 @@
 // an app in (`signedInHere`), its sign-in is never copied over from a browser again while Engelbart runs, not even when an
 // agent finds it signed out: a copy would replace the account the person chose there.
 
-const { appOf, READABLE_NAMES, SIGN_IN_COOKIES } = require('../../shared/connect-sources.cjs');
+const { appOf, READABLE_NAMES, SIGN_IN_COOKIES, signsInThroughBrowser } = require('../../shared/connect-sources.cjs');
 const { SIGN_IN_CHECKS } = require('../browser/import-cookies.cjs');
 
 // Where the default browser is sent to sign in; any other app, its start page (which asks for a sign-in when there is none).
@@ -118,10 +118,13 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   // The browser each sign-in (by its cookie's site) is being waited for in, while signIn waits: "Use another account".
   const waitingIn = new Map();
 
+  // A web app, or a connector app with sites of its own (Notion, round 3: its sign-in was never copied, so its Log in fell
+  // through to Engelbart's window), whose sign-in cookie is known.
+  const onTheWeb = (app) => !!(appOf(app) && (appOf(app).reach === 'web' || (appOf(app).reach === 'connector' && (appOf(app).sites || []).length)));
   /** A web app whose sign-in cookie is known: the only ones whose sign-in can be told apart, so brought over. */
-  const supports = (app) => !!(cookieImport && SIGN_IN_COOKIES[app] && appOf(app) && appOf(app).reach === 'web');
+  const supports = (app) => !!(cookieImport && SIGN_IN_COOKIES[app] && onTheWeb(app));
   /** A web app whose sign-in can be told apart in Engelbart's own session: signed in through Engelbart's window, anywhere. */
-  const canSignIn = (app) => !!(Object.hasOwn(SIGN_IN_COOKIES, app) && appOf(app) && appOf(app).reach === 'web');
+  const canSignIn = (app) => !!(Object.hasOwn(SIGN_IN_COOKIES, app) && onTheWeb(app));
   // The sign-ins (by their cookie's site) Engelbart's window made this run: never copied over from a browser again.
   const here = new Set();
   /** Whether Engelbart's window signed `app` in (or an app sharing its sign-in) while Engelbart runs. */
@@ -270,10 +273,66 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     try { return !!(await cookieImport.ready(source.id)); } catch { return true; }
   }
 
-  /** Open `url` in `source`: the default browser through openExternal, any other with `open -b` (openIn). */
+  /**
+   * Open `url` in `source`: the default browser through openExternal, any other with `open -b` (openIn). The "default"
+   * is the browser the person chose (index.cjs defaultBrowser), and index.cjs's openExternal opens that one, not macOS's
+   * default (round 3: a sign-in opened somewhere other than the browser they selected).
+   */
   async function openPage(source, url) {
     if (source.id === browserIdOf(defaultBrowser()) || !openIn) await openExternal(url);
     else await openIn(source.id, url);
+  }
+
+  /**
+   * The app's sign-in page (else its start page) opened in the browser the person chose (round 3: "no logins should happen
+   * in Engelbart's Chromium browser") → that browser's name, or '' when nothing could open it.
+   */
+  async function openApp(app) {
+    const url = SIGN_IN_PAGES[app] || (appOf(app) && appOf(app).start) || '';
+    if (!url) return '';
+    const sources = readable();
+    if (!sources.length) { try { await openExternal(url); return browserName(); } catch { return ''; } }
+    const target = await openFirst(sources, url);
+    return target ? target.name : '';
+  }
+
+  /**
+   * An app with no known sign-in cookie (OneNote, Evernote…): every cookie of its sites copied from the browser the person
+   * chose, once they say they are signed in there → true when copied. `denied` as signIn's.
+   */
+  async function copyBlind(app, { denied = new Set() } = {}) {
+    return copyDomains(domainsOf(app), { denied });
+  }
+
+  /**
+   * Every cookie of `domains` copied from the browser the person chose (round 3: the other tools they named, Linear or
+   * Figma, read in Engelbart's browser with their sign-ins rather than in their own browser) → true when copied.
+   */
+  async function copyDomains(domains, { denied = new Set() } = {}) {
+    const wanted = [...new Set((domains || []).map((domain) => String(domain).toLowerCase().split('.').filter(Boolean).slice(-2).join('.')).filter((domain) => domain.includes('.')))];
+    if (!cookieImport || !wanted.length) return false;
+    const target = opener(readable());
+    if (!target || denied.has(target.id) || !target.profiles.length) return false;
+    try {
+      await oneAtATime(target.id, () => {
+        if (target.family === 'chromium') asked.add(target.id);
+        return cookieImport.import({ browser: target.id, profile: target.profiles[0].id, domains: wanted, quiet: true });
+      });
+      return true;
+    } catch (error) {
+      if (error && error.denied) denied.add(target.id);
+      return false;
+    }
+  }
+
+  /**
+   * Whether a browser of theirs holds the app's sign-in where a copy can't work in Engelbart (round 3): Google's sign-in
+   * group only, which ties a session to the browser that made it ("I know I am signed into Gmail in my browser"). Another
+   * app's copy that doesn't work means that sign-in has ended there too, and the person signs in again.
+   */
+  function heldThere(app) {
+    if (!supports(app) || !signsInThroughBrowser(app)) return false;
+    try { return readable().some((source) => holders(app, source).length > 0); } catch { return false; }
   }
 
   /**
@@ -378,6 +437,10 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     if (first.browser) return { status: 'signed-in', ...from(first), opened: false };
     if (first.refused) return { status: 'denied', browser: first.refused, browserId: first.refusedId };
     if (signal && signal.aborted) return { status: 'cancelled' };
+    // Signed in there already, but the copy doesn't work in Engelbart (Google ties a session to the browser that made it):
+    // opening its sign-in page would only show them they are signed in (round 3: "it always just brings me to this
+    // page"). Said instead, for the run to read it some other way.
+    if (first.dead && heldThere(app)) { const holder = opener(sources); return { status: 'held-elsewhere', browser: holder ? holder.name : browserName() }; }
     const url = SIGN_IN_PAGES[app] || appOf(app).start;
     const target = await openFirst(sources, url);
     if (!target) return { status: 'no-browser' };
@@ -429,7 +492,9 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     const sources = readable();
     if (!sources.length) return { signedIn: false, browser: '', noBrowser: true };
     const found = await bringOver(app, sources, denied, new Map(), { askedOnly }).catch(() => ({}));
-    return found.browser ? { signedIn: true, ...from(found) } : { signedIn: false, browser: '', refused: found.refused || '', refusedId: found.refusedId || '' };
+    if (found.browser) return { signedIn: true, ...from(found) };
+    // `held`: their browser is signed in (the copy was refused by the site, or not tried for a browser not asked yet).
+    return { signedIn: false, browser: '', refused: found.refused || '', refusedId: found.refusedId || '', ...(!found.refused && !askedOnly && found.dead && heldThere(app) ? { held: true } : {}) };
   }
 
   /**
@@ -502,7 +567,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     return target ? `macOS will ask to use ${target.name}'s sign-ins. Choose Allow.` : '';
   }
 
-  return { supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount, keychainTarget, keychainNote, holdersOf, picked, choose, opensIn, readableCount: () => readable().length };
+  return { supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount, keychainTarget, keychainNote, holdersOf, heldThere, openApp, copyBlind, copyDomains, picked, choose, opensIn, readableCount: () => readable().length };
 }
 
 module.exports = { createWebSignIn, SIGN_IN_COOKIES, SIGN_IN_PAGES, ANOTHER_ACCOUNT_PAGE, READABLE_NAMES, domainsOf, browserIdOf };

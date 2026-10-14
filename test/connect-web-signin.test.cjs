@@ -177,7 +177,10 @@ test('which apps and browsers it knows', () => {
   const { web } = fixture();
   assert.equal(web.supports('ChatGPT'), true);
   assert.equal(web.supports('Claude'), true);
-  assert.equal(web.supports('Notion'), false, 'a connector signs in through OAuth');
+  // Round 3 (2026-10-13): Notion's sign-in is copied too when no connector reaches it (its Log in fell through to
+  // Engelbart's window before).
+  assert.equal(web.supports('Notion'), true, 'a connector app with sites of its own');
+  assert.equal(web.supports('Granola'), false, 'a connector app with no site: its connector only');
   assert.equal(web.supports('Evernote'), false, 'no known sign-in cookie: the agent\'s window');
   assert.deepEqual(['Google Chrome', 'Brave Browser', 'Arc', 'Firefox', 'Microsoft Edge', 'Safari', 'Google Chrome Canary'].map(browserIdOf), ['chrome', 'brave', 'arc', 'firefox', 'edge', null, null]);
   assert.deepEqual(domainsOf('Gemini'), ['google.com']);
@@ -253,20 +256,19 @@ test('a dead copy held already: checked, copied again from Chrome, checked again
   assert.equal(calls.removed, 1, 'the dead one taken out first');
 });
 
-test('dead in Chrome too: not signed in, nothing left counting as held, and Sign in waits for Chrome to sign in anew', async () => {
-  const { web, calls, jar, browsers } = google({ held: true, checks: [false, false, false, true], browsers: { chrome: { profiles: [me({ stamp: 5 })] } } });
-  assert.deepEqual(await web.signInQuiet('Gmail'), { signedIn: false, browser: '', refused: '', refusedId: '' });
+test('dead in Engelbart though Chrome holds it (Google ties a session to its browser): said, and no sign-in page opened', async () => {
+  // Round 3 (2026-10-13), Hudson: "It often asks me to sign into Gmail, but it always just brings me to this page … I know I
+  // am signed into Gmail in my browser". Chrome holds the Google sign-in and every copy of it is dead in Engelbart: that is
+  // Google's binding, not a signed-out browser, so Sign in no longer opens accounts.google.com to wait on it.
+  const { web, calls, jar } = google({ held: true, checks: [false, false, false, true], browsers: { chrome: { profiles: [me({ stamp: 5 })] } } });
+  assert.deepEqual(await web.signInQuiet('Gmail'), { signedIn: false, browser: '', refused: '', refusedId: '', held: true });
   assert.deepEqual(jar(), [], 'the dead copy is gone from Engelbart\'s browser');
   assert.equal(await web.signedIn('Gmail'), false);
-  // Sign in: the dead copy is not copied over and over while waiting; once Chrome sets the sign-in again, it comes over.
+  assert.equal(web.heldThere('Gmail'), true);
   calls.imports.length = 0;
-  let looks = 0;
-  const out = await web.signIn('Gmail', { timeoutMs: Infinity, onOpened: () => {}, signal: { get aborted() { looks += 1; if (looks === 6) browsers.chrome.profiles[0].stamp = 9; return false; } } });
-  assert.equal(out.status, 'signed-in');
-  assert.equal(out.opened, true);
-  assert.deepEqual(calls.imports.map((each) => each.profile), ['Default', 'Default'], 'once before the page opened, once after Chrome signed in again');
-  assert.deepEqual(calls.opened, ['https://accounts.google.com/']);
-  assert.equal(calls.checks, 4, 'Google asked once per new copy, not at every look');
+  const out = await web.signIn('Gmail', { timeoutMs: Infinity, onOpened: () => { throw new Error('nothing opens'); } });
+  assert.deepEqual(out, { status: 'held-elsewhere', browser: 'Chrome' });
+  assert.deepEqual(calls.opened, [], 'no sign-in page: they are signed in there');
 });
 
 test('the check not answering (offline, timed out): held, said, and the log notes it', async () => {

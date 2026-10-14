@@ -2,6 +2,7 @@ import React from 'react';
 import { createRoot } from 'react-dom/client';
 import ImportFlow, { COPY } from './ImportFlow.jsx';
 import ImportStatus from './ImportStatus.jsx';
+import NeedPopup from './NeedPopup.jsx';
 import { IMPORT_CSS } from './import-css.js';
 import { CATALOG, BROWSERS } from '../../shared/import-flow.cjs';
 import diskHelperPage from '../../main/onboarding/disk-helper.html';
@@ -119,6 +120,7 @@ function createMockApi(getConfig) {
     toolsInstall: async (ids) => { setTimeout(() => { for (const id of ids) installed[id] = true; emit('tools', snapTools()); }, 900); return true; },
     toolsSignIn: async (id) => { setTimeout(() => { installed[id] = true; emit('tools', snapTools()); }, 900); return true; },
     detect: async () => ({ apps: { Obsidian: { found: true }, 'Claude Code': { found: true }, Codex: { found: true }, Cursor: { found: true }, [CATALOG.find((tool) => tool.id === 'PDFs on this Mac').id]: { found: true } }, sites: { found: true }, github: { found: false }, localRepos: [] }),
+    pickFiles: async () => [{ path: '/Users/you/Documents/Engelbart notes.md', name: 'Engelbart notes.md' }],
     pickDirectory: async () => `/Users/you/Documents/${['Papers', 'Research vault', 'Recordings'][Math.floor(Math.random() * 3)]}`,
     connectStart: async (choices) => { lastChoices = choices; return { id: 'sample-session', ...sampleSession(choices) }; },
     startProject: async (input) => ({ project: { id: `project-${input.name}`, name: input.name }, workspaceId: 'welcome' }),
@@ -127,35 +129,29 @@ function createMockApi(getConfig) {
 }
 
 let lastChoices = null;
-// The browser agents' web apps (connect/session.cjs browseApp): every web app but Gmail.
-const BROWSED = ['Google Docs', 'ChatGPT', 'Claude', 'Overleaf', 'OneNote', 'Evernote', 'Google Meet', 'Grok', 'Gemini', 'Perplexity'];
+// Round 3 (2026-10-13): every web app in Engelbart's own browser with the copied sign-ins; one signed out (ChatGPT here,
+// when picked) waits on its sign-in popup, which opens the person's browser.
+const SIGNED_OUT = ['ChatGPT'];
 
-/** A run's status as the workspace shows it, from what was chosen; `browser` the browser agents use, or ''. */
+/** A run's status as the workspace shows it, from what was chosen; `browser` the browser the person chose. */
 function sampleSession(choices, browser = 'Chrome') {
-  const direct = (choices && choices.direct) || { projects: [{ title: 'Engelbart context import' }], apps: ['Obsidian', 'Google Docs', 'Notion', 'ChatGPT', 'PDFs on this Mac'] };
-  const apps = direct.apps.length ? direct.apps : ['Obsidian', 'Google Docs', 'Notion', 'ChatGPT'];
+  const direct = (choices && choices.direct) || { projects: [{ title: 'Engelbart context import' }], apps: ['Obsidian', 'Google Docs', 'Granola', 'ChatGPT', 'PDFs on this Mac'] };
+  const apps = direct.apps.length ? direct.apps : ['Obsidian', 'Google Docs', 'Granola', 'ChatGPT'];
   const name = (app) => (CATALOG.find((tool) => tool.id === app) || { name: app }).name;
-  const inBrowser = (app) => !!browser && BROWSED.includes(app);
-  const jobs = apps.slice(0, 8).map((app, index) => ({
-    id: `job-${index}`, kind: 'import', label: name(app), apps: [app], ...(inBrowser(app) ? { route: 'browser' } : {}),
-    status: inBrowser(app) && index === apps.findIndex(inBrowser) ? 'waiting' : ['running', 'running', 'queued', 'done', 'running', 'queued', 'queued', 'queued'][index],
-    notes: index === 3 ? 12 : index === 0 ? 4 : 0, items: 0,
-    activity: index === 0 ? 'Reading notes about the projects' : inBrowser(app) ? `Reading ${name(app)} in ${browser}, in a tab of its own` : '',
-  }));
-  const own = apps.filter(inBrowser).slice(0, 1).map((app) => ({ id: 'need-own', app, kind: 'signin', reason: `Sign in to ${name(app)} in ${browser}`, own: true, browser, opened: false, note: `Sign in on its tab in ${browser}, then press Done. The agent never types a password.`, busy: false }));
-  const connector = apps.includes('Notion') ? [{ id: 'need-notion', app: 'Notion', kind: 'connector', reason: 'Connect Notion so its agent can bring in what pertains to your projects', busy: false }] : [];
-  return { id: 'sample-session', direct: { mode: direct.mode || 'auto', projects: direct.projects.map((project) => project.title || project) }, jobs, needs: [...own, ...connector], memory: { status: 'waiting' } };
+  const jobs = apps.filter((app) => !SIGNED_OUT.includes(app)).slice(0, 8).map((app, index) => ({ id: `job-${index}`, kind: 'import', label: name(app), apps: [app], status: 'running', notes: 0, items: 0, progress: 0 }));
+  const needs = apps.filter((app) => SIGNED_OUT.includes(app)).map((app) => ({ id: `need-${app}`, app, kind: 'signin', reason: `Sign in to ${name(app)}`, browser, opened: false, busy: false }));
+  return { id: 'sample-session', direct: { mode: direct.mode || 'auto', projects: direct.projects.map((project) => project.title || project) }, jobs, needs, memory: { status: 'waiting' } };
 }
 
 const POPUPS = [
   ['intro', 'Import intro'], ['privacy', 'Privacy'], ['apps', 'All apps'], ['scratch-confirm', 'Start confirmation'], ['project', 'New project'],
   ['provider-choice', 'Choose provider (both subscribed)'], ['tools-setup', 'Tools setup'], ['import-mode', 'Import method'],
-  ['keychain', 'Keychain'], ['keychain-browser', 'Browser picker'], ['keychain-confirm', 'Decline Keychain'],
-  ['folders', 'Full Disk Access'], ['disk-wait', 'Waiting for Settings'], ['disk-helper', 'Settings helper (beside System Settings)'], ['disk-relaunch', 'Restarting'], ['folder-fallback', 'Deny Full Disk Access'], ['folder-results', 'Folder permissions'],
+  ['keychain', 'Browser sign-ins'], ['keychain-browser', 'Browser picker'], ['keychain-confirm', 'Decline browser sign-ins'],
+  ['folders', 'Full Disk Access'], ['disk-wait', 'Waiting for Settings'], ['disk-helper', 'Toggle Setting (beside System Settings)'], ['disk-relaunch', 'Restarting'], ['folder-fallback', 'Deny Full Disk Access'], ['folder-results', 'Folder permissions'],
   ['screen:roles', 'Roles'], ['screen:work', 'What are you working on'], ['screen:projects', 'Recent projects'], ['work-add-project', 'Add a project'],
-  ['screen:tools', 'Confirm tools'], ['work-add-tool', 'Add a tool'], ['screen:picker', 'Sources (manual)'], ['screen:scopes', 'Manual scopes'],
+  ['screen:tools', 'Confirm tools'], ['work-add-tool', 'Add a tool'], ['screen:picker', 'Sources & context (manual)'],
   ['browser-agents', 'Let agents use your browser'], ['browser-agents-confirm', 'Decline browser agents'],
-  ['starting', 'Starting imports'], ['workspace', 'The project after Import to Engelbart'], ['status', 'Imports in progress (workspace)'], ['status-stop', 'Stop all confirmation'], ['trace', 'Agent trace window'],
+  ['starting', 'Starting imports'], ['workspace', 'The project after Import to Engelbart'], ['status', 'Imports in progress (workspace)'], ['signin', 'Sign-in popup'], ['complete', 'Your imports are complete'], ['status-stop', 'Stop all confirmation'], ['trace', 'Agent trace window'],
 ];
 const PREVIEW_STATE = { provider: 'anthropic', picked: ['engelbart', 'requirements'], roles: ['Researcher'], folderAnswers: { Desktop: 'allowed', Documents: 'allowed', Downloads: 'denied', 'iCloud Drive': 'allowed' }, agentsBrowser: 'Chrome', agentsApps: ['Google Docs', 'ChatGPT', 'Overleaf'] };
 
@@ -176,13 +172,23 @@ function Standalone() {
   const [workspace, setWorkspace] = React.useState(null); // { name } | null
   const [status, setStatus] = React.useState(null); // the run's snapshot, changed by its buttons here
   const [stopAsk, setStopAsk] = React.useState(false);
+  const [later, setLater] = React.useState([]); // the sign-in popups put away (Later)
+  // The sample run goes on by itself: each import a quarter further every half second, until done.
+  React.useEffect(() => {
+    if (!status || !status.jobs.some((job) => job.status === 'running')) return undefined;
+    const timer = setInterval(() => setStatus((now) => (now ? { ...now, jobs: now.jobs.map((job) => (job.status === 'running' ? (job.progress >= 75 ? { ...job, status: 'done', notes: 3 + (job.id.length % 5), progress: 100 } : { ...job, progress: (job.progress || 0) + 25 }) : job)) } : now)), 500);
+    return () => clearInterval(timer);
+  }, [status && status.id, status && status.jobs.some((job) => job.status === 'running')]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Everything ended: the completion opens by itself, as in the app.
+  const ended = !!status && status.jobs.length > 0 && status.jobs.every((job) => ['done', 'failed', 'stopped'].includes(job.status)) && !status.needs.length;
+  React.useEffect(() => { if (ended && workspace) setOverlay('status'); }, [ended]); // eslint-disable-line react-hooks/exhaustive-deps
   const [message, setMessage] = React.useState('');
   const [json, setJson] = React.useState({ projects: JSON.stringify(config.projects, null, 2), tools: JSON.stringify(config.tools, null, 2) });
   toast = (text) => { setMessage(text); setTimeout(() => setMessage(''), 2600); };
   const keep = (next) => { setConfig(next); try { localStorage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch { /* private window */ } };
   const setCopy = (key, value) => keep({ ...configRef.current, copy: { ...configRef.current.copy, [key]: value } });
 
-  const agentsBrowser = () => (configRef.current.agents === 'none' ? '' : 'Chrome');
+  const agentsBrowser = () => 'Chrome';
   const openWorkspace = (name) => { setWorkspace({ name: name || 'Engelbart context import' }); setStatus(sampleSession(lastChoices, agentsBrowser())); setOverlay('status'); };
   const pick = (value) => {
     if (!value) return;
@@ -190,6 +196,8 @@ function Standalone() {
     setStopAsk(false);
     if (value === 'workspace') { openWorkspace(); setOverlay(null); return; }
     if (value === 'status' || value === 'status-stop') { if (!status) setStatus(sampleSession(lastChoices, agentsBrowser())); setStopAsk(value === 'status-stop'); setOverlay('status'); return; }
+    if (value === 'signin') { if (!workspace) setWorkspace({ name: 'Engelbart context import' }); setLater([]); setStatus(sampleSession({ direct: { projects: [{ title: 'Engelbart context import' }], apps: ['Obsidian', 'ChatGPT'] } }, agentsBrowser())); return; }
+    if (value === 'complete') { if (!workspace) setWorkspace({ name: 'Engelbart context import' }); const done = sampleSession(lastChoices, agentsBrowser()); setStatus({ ...done, needs: [], jobs: done.jobs.map((job) => ({ ...job, status: 'done', notes: 4 })) }); setOverlay('status'); return; }
     if (value === 'disk-helper' || value === 'trace') { setOverlay(value); return; }
     setWorkspace(null);
     if (value.startsWith('screen:')) { setPreview({ screen: value.slice(7), dialog: null, state: { ...PREVIEW_STATE, mode: value === 'screen:picker' || value === 'screen:scopes' ? 'manual' : 'auto' }, at: Date.now() }); return; }
@@ -215,15 +223,14 @@ function Standalone() {
       toast('Discovery data saved. Reset to run the flow with it.');
     } catch { toast('Use 1–5 projects with ids and titles, and a tools list.'); }
   };
-  const reset = () => { setPreview(null); setOverlay(null); setWorkspace(null); setStatus(null); setRun((n) => n + 1); };
+  const reset = () => { setPreview(null); setOverlay(null); setWorkspace(null); setStatus(null); setLater([]); setRun((n) => n + 1); };
   // The status modal's buttons, played out on the sample run.
   const changeStatus = (fn) => setStatus((now) => (now ? fn(now) : now));
-  const needOpen = (need) => {
-    if (need.own) { changeStatus((now) => ({ ...now, needs: now.needs.map((one) => (one.id === need.id ? { ...one, opened: true } : one)) })); toast(`${need.browser} would come to the front, on the agent’s tab.`); return; }
-    toast(`${need.app}: its sign-in would open in your browser.`);
-  };
-  const needDone = (need) => changeStatus((now) => ({ ...now, needs: now.needs.filter((one) => one.id !== need.id), jobs: now.jobs.map((job) => (job.apps.includes(need.app) ? { ...job, status: 'running', activity: `Reading ${need.app} in ${need.browser}, in a tab of its own` } : job)) }));
-  const needSkip = (need) => changeStatus((now) => ({ ...now, needs: now.needs.filter((one) => one.id !== need.id), jobs: now.jobs.map((job) => (job.apps.includes(need.app) ? { ...job, skipped: true, status: 'stopped' } : job)) }));
+  const needOpen = (need) => { changeStatus((now) => ({ ...now, needs: now.needs.map((one) => (one.id === need.id ? { ...one, opened: true } : one)) })); toast(`${need.app}'s sign-in would open in ${need.browser}.`); };
+  // "I'm signed in": its sign-in copied over, and its import starts.
+  const needDone = (need) => changeStatus((now) => ({ ...now, needs: now.needs.filter((one) => one.id !== need.id), jobs: [...now.jobs, { id: `job-${need.app}`, kind: 'import', label: need.app, apps: [need.app], status: 'running', notes: 0, items: 0, progress: 0 }] }));
+  const needSkip = (need) => changeStatus((now) => ({ ...now, needs: now.needs.filter((one) => one.id !== need.id) }));
+  const pendingNeed = workspace && status ? status.needs.find((need) => !later.includes(need.id)) : null;
   const stopAll = () => { changeStatus((now) => ({ ...now, needs: [], jobs: now.jobs.map((job) => (job.status === 'done' ? job : { ...job, status: 'stopped', activity: '' })) })); toast('Every import stopped. What came in stays.'); };
 
   const helperDoc = diskHelperPage.replace('<script>', `<script>window.diskHelper={onState:(cb)=>setTimeout(()=>cb({app:'Engelbart',icon:${JSON.stringify(APP_ICON)}}),0),action:(name)=>parent.postMessage({helper:name},'*')};</script><script>`);
@@ -256,10 +263,11 @@ body{margin:0}
         <ImportFlow key={run} api={api} mode="new" edit={edit} copy={config.copy} setCopy={setCopy} preview={preview} platform="darwin"
           onDone={async (made) => { openWorkspace(made && made.project ? made.project.name : ''); toast('Projects made: the first opens, and the imports run in the background.'); }} />
       )}
-      {overlay === 'status' && status && <ImportStatus key={stopAsk ? 'stop' : 'status'} session={status} previewStop={stopAsk} onClose={() => { setOverlay(null); setStopAsk(false); if (!workspace) openWorkspace(); setOverlay(null); }} onNeed={needOpen} onNeedDone={needDone} onSkip={needSkip} onStop={stopAll} onDone={() => { setOverlay(null); setStatus(null); }} />}
+      {overlay === 'status' && status && <ImportStatus key={stopAsk ? 'stop' : 'status'} session={status} previewStop={stopAsk} onClose={() => { setOverlay(null); setStopAsk(false); if (!workspace) openWorkspace(); setOverlay(null); }} onNeed={(need) => setLater((now) => now.filter((id) => id !== need.id))} onNeedDone={needDone} onSkip={needSkip} onStop={stopAll} onDone={() => { setOverlay(null); setStatus(null); toast('The library would open.'); }} />}
+      {pendingNeed && <NeedPopup key={pendingNeed.id} need={pendingNeed} onOpen={() => needOpen(pendingNeed)} onDone={() => needDone(pendingNeed)} onSkip={() => needSkip(pendingNeed)} onLater={() => setLater((now) => [...now, pendingNeed.id])} />}
       {overlay === 'disk-helper' && (
         <div className="overlay-frame" onClick={() => setOverlay(null)}>
-          <iframe title="Full Disk Access helper" srcDoc={helperDoc} style={{ width: 340, height: 470 }} onClick={(event) => event.stopPropagation()} />
+          <iframe title="Full Disk Access helper" srcDoc={helperDoc} style={{ width: 330, height: 150 }} onClick={(event) => event.stopPropagation()} />
           <button type="button" className="close-preview" onClick={() => setOverlay(null)}>×</button>
         </div>
       )}
