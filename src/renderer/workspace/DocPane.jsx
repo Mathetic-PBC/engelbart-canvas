@@ -3,7 +3,7 @@ import DocEditor from './DocEditor.jsx';
 import { isUntitled } from '../model/names.js';
 
 // One document of the middle column (MATH-23): its title, the notice when another window saved over edits here, and its
-// editor. Pane 0 is the document in front (the tab), with Copy, Build and Clear in its ⋯ menu; pane 1 is a note or a
+// editor. Pane 0 is the document in front (the tab), with the footer's Copy, Build and Clear; pane 1 is a note or a
 // workspace's document opened beside it from a mention (model/panes.js), Andy Matuschak's working notes style, with a ×
 // in its header instead. The two sit side by side, each half the column (Workspace.jsx): neither covers the other.
 

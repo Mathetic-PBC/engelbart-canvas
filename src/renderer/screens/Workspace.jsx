@@ -101,6 +101,7 @@ function Separator({ onDown, onMove, onUp, onReset, bare = false }) {
 
 const WS_TAB = { id: 'ws', title: 'Workspace' };
 const ARCHIVE_TAB = 'archive:'; // an archived version's tab (2026-09-27: it opens in the middle, read-only, not on the Stage)
+const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 const VIEW_SAVE_DELAY = 400;
 const PANE_MIN = 240; // px: a column too narrow for two of these side by side scrolls sideways instead (MATH-23)
 const NO_PANES = [];
@@ -1850,18 +1851,29 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     />
   ) : null;
 
-  // The document's ⋯ menu, top right of its pane (2026-10-13; DocEditor props.menu): Copy, then (on the Workspace tab: a
-  // workspace is one Build) Build and Clear (2026-09-25), which were a strip under the page. An archived version has
-  // Restore alone. Build's panel opens from the ⋯ button.
-  const docMenu = docArchive
-    ? [{ key: 'restore', label: 'Restore', title: "Make this version the workspace's document again", data: { 'data-restore-doc': '1' }, onSelect: () => restoreVersion(docArchive) }]
-    : [
-      { key: 'copy', label: 'Copy', title: docWorkspaceId ? 'Copy current workspace' : 'Copy current note', data: { 'data-copy-doc': '1' }, onSelect: () => copyDoc() },
-      ...(docWorkspaceId ? [
-        { key: 'build', label: 'Build', title: 'Hand this workspace to a coding agent', data: { 'data-build-doc': '1' }, onSelect: (anchor) => setBuildDialog((now) => (now ? null : { anchor })) },
-        { key: 'clear', label: 'Clear', title: 'Archive this document and start it blank', data: { 'data-clear-doc': '1' }, onSelect: () => clearDoc() },
-      ] : []),
-    ];
+  const footer = (
+    // Copy, then (on the Workspace tab: a workspace is one Build) Build and Clear (2026-09-25). Build sits beside
+    // Copy until it replaces it.
+    // An archived version has Restore alone.
+    docArchive ? (
+      <button type="button" className="hov-ink" data-restore-doc="1" onClick={() => restoreVersion(docArchive)} title="Make this version the workspace's document again" style={{ ...FOOT_BUTTON, marginLeft: -6 }}>Restore</button>
+    ) : (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+      <button
+        type="button"
+        className="hov-ink"
+        data-copy-doc="1"
+        onClick={copyDoc}
+        title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
+        style={{ ...FOOT_BUTTON, marginLeft: -6, color: copied ? '#171717' : '#8f8f8f' }}
+      >
+        {copied ? copiedLabel(copied) : 'Copy'}
+      </button>
+      {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setBuildDialog((now) => (now ? null : { anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } })); }} aria-expanded={!!buildDialog} title="Hand this workspace to a coding agent" style={FOOT_BUTTON}>Build</button>}
+      {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-clear-doc="1" onClick={clearDoc} title="Archive this document and start it blank" style={FOOT_BUTTON}>Clear</button>}
+    </span>
+    )
+  );
   const noWorkspace = topics.length === 0 ? (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
       <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f', textAlign: 'center' }}>This project has no workspace yet. A workspace holds a document, its context, and any workspaces nested inside it.</span>
@@ -2011,8 +2023,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   viewScope: pane ? null : (topic ? topic.id : null),
                   viewOf: pane ? noView : viewOf,
                   onView: pane ? null : recordPosition,
-                  menu: pane ? null : docMenu,
-                  menuNote: !pane && copied ? copiedLabel(copied) : null,
+                  footer: pane ? null : footer,
                   above: pane ? null : walkCard,
                   emptyHint: !pane && walkCard && !doc.archive ? EMPTY_HINT : null,
                 }}

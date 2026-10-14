@@ -892,14 +892,23 @@ function rowOf(html, i) {
 const clickAct = (m, dataset, disabled = false) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset, disabled, closest: () => null } : null) }, preventDefault() {} });
 const TITLED = ['bart# [chat 2026-10-13T09:00:00Z] Retry logic', '@chat why retry?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*', ''];
 
-test('an answered question has no Collapse in its corner (2026-10-13): it is on the button row, the conversation\'s in a titled one, the turn\'s otherwise', () => {
-  // Titled: the foot's Collapse collapses the conversation (foldthread, the title's row), and a click does.
+test('an answered question has no Collapse in its corner (2026-10-13): it is on the button row and folds that exchange; a titled conversation\'s last open one collapses the conversation', () => {
+  // Titled, its only exchange: the foot's Collapse collapses the conversation to its title's row.
   const titled = mounted(TITLED);
   const html = titled.editor.editorHtml();
   assert.ok(!rowOf(html, 1).includes('data-corner') && !rowOf(html, 1).includes('data-chip'), 'nothing beside an answered question');
-  assert.match(html, /data-foot="1"[\s\S]*data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true">/);
-  clickAct(titled, { act: 'foldthread', row: '0' });
+  assert.match(html, /data-foot="1"[\s\S]*data-act="fold" data-turn="1" aria-label="Collapse" aria-expanded="true">/);
+  clickAct(titled, { act: 'fold', turn: '1' });
   assert.equal(titled.lines()[0], 'bart#+ [chat 2026-10-13T09:00:00Z] Retry logic', 'collapsed to its title');
+  assert.deepEqual(titled.lines().slice(1), TITLED.slice(1), 'its exchange is not folded as well');
+  // Titled, two answered: the first folds alone; then the second, the last open one, collapses the conversation.
+  const two = mounted([...TITLED.slice(0, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', '']);
+  clickAct(two, { act: 'fold', turn: '1' });
+  assert.equal(two.lines()[0], TITLED[0], 'the conversation stays open');
+  assert.match(two.lines()[2], /^bart\+> because$/, 'the first exchange folded');
+  clickAct(two, { act: 'fold', turn: '4' });
+  assert.match(two.lines()[0], /^bart#\+ /, 'the last open one collapses the conversation');
+  assert.equal(two.lines()[5], 'bart> those too', 'and is left open inside it');
   // Untitled: it folds that turn.
   const untitled = mounted(TITLED.slice(1));
   const plain = untitled.editor.editorHtml();
@@ -907,9 +916,12 @@ test('an answered question has no Collapse in its corner (2026-10-13): it is on 
   assert.match(plain, /data-foot="0"[\s\S]*data-act="fold" data-turn="0" aria-label="Collapse" aria-expanded="true">/);
   clickAct(untitled, { act: 'fold', turn: '0' });
   assert.match(untitled.lines()[1], /^bart\+> because$/, 'folded');
-  // A turn of it at work: disabled, and says why.
+  // A turn of it at work: the earlier exchange still collapses, alone.
   const running = mounted([...TITLED.slice(0, 4), '@chat and timeouts?', 'bart~> r1', '']);
-  assert.match(running.editor.editorHtml(), /data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true" disabled>[^]*?Collapse once it answers/);
+  assert.ok(!running.editor.editorHtml().includes('Collapse once it answers'));
+  clickAct(running, { act: 'fold', turn: '1' });
+  assert.equal(running.lines()[0], TITLED[0]);
+  assert.match(running.lines()[2], /^bart\+> because$/);
 });
 
 test('three turns, the first two folded: two one-line rows (no foot, no answer), then the open turn; a click expands one', () => {

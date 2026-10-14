@@ -113,7 +113,7 @@ test('drawn: the reply\'s card closes, and the box is a card of its own: "Resear
   assert.ok(!head.replace(/ data-raw="[^"]*"/, '').includes('how do tutors'), 'the first box does not repeat the question above it');
   const foot = html.slice(html.indexOf(`data-foot="${box}"`));
   assert.match(foot.slice(0, foot.indexOf('</div>')), /data-act="fold" data-turn="\d+" aria-label="Collapse"/, 'the box collapses alone');
-  assert.match(replyFoot.slice(0, replyFoot.indexOf('</div>')), /data-act="foldthread"/, 'the reply\'s foot still collapses the conversation');
+  assert.match(replyFoot.slice(0, replyFoot.indexOf('</div>')), /data-act="fold" data-turn="1" aria-label="Collapse"/, 'the reply\'s foot collapses the reply alone (2026-10-13)');
   // Collapsed, the box keeps its head and foot, on no grey.
   m.click('fold', { turn: String(box) });
   assert.match(rowOf(m.html(), box), /background:none/);

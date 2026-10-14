@@ -4,7 +4,7 @@
 // Runs the real app, hidden, against disposable project/user data and the fake agents (src/main/bart/ask.cjs), on a
 // document drawn as the middle panel's threads are since 2026-10-13 (Hudson's screenshot): one conversation collapsed to
 // a line, one open with its earlier exchanges folded to lines at the top of its card and a long answer cut off, and the
-// @bart message box (plain, on the cards' grey). It checks what is drawn, Show more, Reply, the ⋯ menu and Collapse all, and that an answer landing
+// @bart message box (plain, on the cards' grey). It checks what is drawn, Show more, Reply, the strip under the page and Collapse all, and that an answer landing
 // while the document is open shows in full.
 // ENGELBART_PANEL_SHOTS=<dir> saves pictures of the window.
 const { app, BrowserWindow } = require('electron');
@@ -130,7 +130,7 @@ app.whenReady().then(async () => {
       return {folded, q:q&&q.innerText, qColor:q&&getComputedStyle(q).color, more:more&&getComputedStyle(more).display, cut:more&&more.dataset.cut, label:more&&more.innerText.trim(),
         answerColor:answer&&getComputedStyle(answer).color, foot:foot&&foot.innerText.replace(/\\s+/g,' ').trim(), reply:!!(foot&&foot.querySelector('[data-act="reply"]')),
         field:!!document.querySelector('${ED} [data-followup]'), box:box&&{border:getComputedStyle(box).borderTopStyle,bg:getComputedStyle(box).backgroundColor,text:box.querySelector('.t').innerText.trim(),send:send&&getComputedStyle(send).backgroundColor,chip:(box.querySelector('[data-act="pick"]')||{}).textContent||null},
-        top:document.querySelector('[data-fold-all]').textContent, menu:!!document.querySelector('[data-doc-menu]'), footer:!!document.querySelector('[data-doc-footer]')};
+        top:document.querySelector('[data-fold-all]').textContent, footer:[...document.querySelectorAll('[data-doc-footer] button')].map((b)=>b.textContent)};
     })()`);
     assert.equal(card.folded.length, 3, 'three earlier exchanges folded to lines');
     assert.ok(card.folded.every((r) => !/^@/.test(r.text) && r.color === 'rgb(122, 122, 122)'), `no @bart, #7a7a7a: ${JSON.stringify(card.folded)}`);
@@ -141,9 +141,9 @@ app.whenReady().then(async () => {
     assert.ok(card.reply && card.foot.startsWith('Reply') && card.foot.endsWith('Opus · high · 23 s'), `the button row: ${card.foot}`);
     assert.equal(card.field, false, 'no reply field until Reply');
     assert.deepEqual(card.box, { border: 'none', bg: 'rgb(250, 250, 250)', text: '@bart', send: 'rgb(236, 236, 236)', chip: 'Sonnet High' }, 'the @bart box');
-    assert.deepEqual([card.top, card.menu, card.footer], ['Collapse all', true, false], 'Collapse all and ⋯ at the top; no strip at the bottom');
+    assert.deepEqual([card.top, card.footer], ['Collapse all', ['Copy', 'Build', 'Clear']], 'Collapse all at the top; Copy, Build and Clear under the page');
     await shot(wc, '2-open');
-    console.log(`PASS the open card: 3 folded lines, @bart, a dark answer cut off with Show more, "${card.foot}", the @bart box, Collapse all and ⋯`);
+    console.log(`PASS the open card: 3 folded lines, @bart, a dark answer cut off with Show more, "${card.foot}", the @bart box, Collapse all, and Copy, Build and Clear under the page`);
 
     /* ------------------------------------------------ Show more, Show less */
     await press(wc, `${ED} [data-act="more"]`);
@@ -164,15 +164,11 @@ app.whenReady().then(async () => {
     assert.equal(await js(wc, `!!document.querySelector('${ED} [data-act="reply"]')`), true);
     console.log('PASS Reply opens the field with the caret in it; Escape with nothing typed shuts it');
 
-    /* ------------------------------------------------ the ⋯ menu */
-    await press(wc, '[data-doc-menu]', true);
-    const items = await until(() => js(wc, `(()=>{const l=document.querySelector('[data-doc-menu-list]');return l?[...l.querySelectorAll('[role=menuitem]')].map((b)=>b.textContent):null})()`), 'the menu');
-    assert.deepEqual(items, ['Copy', 'Build', 'Clear']);
-    await shot(wc, '5-menu');
+    /* ------------------------------------------------ the strip under the page */
     await press(wc, '[data-copy-doc]', true);
-    assert.equal(await js(wc, `!!document.querySelector('[data-doc-menu-list]')`), false, 'a pick closes it');
-    await until(() => js(wc, `(document.querySelector('[data-doc-note]')||{}).textContent==='Copied'`), 'Copied beside it');
-    console.log('PASS ⋯ holds Copy, Build and Clear; Copy closes it and says Copied');
+    await until(() => js(wc, `(document.querySelector('[data-copy-doc]')||{}).textContent==='Copied'`), 'Copied');
+    await shot(wc, '5-copied');
+    console.log('PASS Copy under the page says Copied');
 
     /* ------------------------------------------------ the @bart box: typing turns its send blue; asked, the answer lands whole */
     await press(wc, `${ED} [data-message-box] .t`, true); // past the end of `@bart`

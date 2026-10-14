@@ -175,7 +175,7 @@ test('the answer replaces its pending line with the title line above it, and the
   assert.deepEqual(r.props.text.split('\n').slice(0, 3).map((l) => l.replace(/\[[^\]]+\] /, '')), ['bart# Retry logic', '@chat why retry?', 'bart> because']);
 });
 
-test('an open titled conversation draws no title row; its question opens the card, rounded; Collapse is on the foot', () => {
+test('an open titled conversation draws no title row; its question opens the card, rounded; Collapse is on the foot, and on its last open exchange it collapses the conversation', () => {
   const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), ''];
   const m = mounted(lines);
   const html = m.html(), head = rowOf(html, 0);
@@ -183,11 +183,11 @@ test('an open titled conversation draws no title row; its question opens the car
   assert.ok(!/data-title-row|data-thread-row/.test(html));
   assert.ok(!html.replace(/ data-raw="[^"]*"/g, '').includes('Retry logic'), 'the title is not shown');
   assert.match(rowOf(html, 1), /border-radius:10px 10px 0 0/, 'the first question has the card\'s rounded top');
-  assert.ok(html.includes('data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true">'), 'the foot\'s Collapse is the conversation\'s');
-  assert.ok(!html.includes('data-act="fold" data-turn="1"'), 'not the turn\'s');
+  assert.ok(html.includes('data-act="fold" data-turn="1" aria-label="Collapse" aria-expanded="true">'), 'the foot\'s Collapse is the exchange\'s (2026-10-13)');
+  assert.ok(!html.includes('data-act="foldthread"'), 'not the conversation\'s');
   assert.deepEqual(m.lines(), lines, 'the `bart#` line is as it was');
-  // Collapse from the foot folds it to one row, a link; an ⌥-click on the foot's Collapse is a click, not a rename.
-  m.click('foldthread', { row: '0' }, false, { alt: true });
+  // Its only exchange: Collapse from the foot folds the conversation to one row, a link; an ⌥-click is a click, not a rename.
+  m.click('fold', { turn: '1' }, false, { alt: true });
   assert.equal(m.lines()[0], 'bart#+ [chat 2026-10-12T21:41:00Z] Retry logic');
   assert.deepEqual(m.lines().slice(1), lines.slice(1));
   assert.equal(m.editor.titleEdit, null);
@@ -240,14 +240,18 @@ test('collapsed: one 42px line, the pointer and the title as a link, when it was
   assert.match(rowOf(mounted([`bart#+ [chat ${iso}] Retry logic`, '@chat why?', ...answer('x'), '']).html(), 0), /data-thread-when="1"[^>]*>Yesterday</);
 });
 
-test('a conversation at work cannot be collapsed: its Collapse is disabled, and `bart#+` on it is drawn open', () => {
+test('a conversation at work stays open; an earlier exchange in it collapses alone (2026-10-13), and `bart#+` on it is drawn open', () => {
   const m = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because'), '@chat and more?', 'bart~> run1', '']);
   const html = m.html();
-  assert.match(html, /data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true" disabled/);
-  assert.match(html, /Collapse once it answers/);
+  assert.match(html, /data-act="fold" data-turn="1" aria-label="Collapse" aria-expanded="true">/, 'the earlier exchange\'s Collapse, not disabled');
+  assert.ok(!html.includes('Collapse once it answers'));
   m.editor.toggleThread(0);
-  m.click('foldthread', { row: '0' }, true);
+  assert.equal(m.lines()[0], 'bart# Retry logic', 'the conversation does not collapse');
+  m.click('fold', { turn: '1' });
   assert.equal(m.lines()[0], 'bart# Retry logic');
+  assert.ok(m.lines().slice(2, 2 + answer('x').length).every((l) => /^bart\+>/.test(l)), 'that exchange folded');
+  assert.match(rowOf(m.html(), 1), /data-folded-row="1"/, 'drawn as a line at the top of the card');
+  assert.equal(m.lines()[3 + answer('x').length], 'bart~> run1', 'the one at work as it was');
   const open = mounted(['bart#+ Retry logic', '@chat why retry?', 'bart~> run1', '']).html();
   assert.match(rowOf(open, 0), /style="display:none"/, 'drawn open: no header');
   assert.ok(!open.includes('data-thread-row'));
@@ -385,9 +389,9 @@ test('the button row (2026-10-13): Reply, Copy and Regenerate on the left; the m
     assert.match(foot, /<button type="button" class="bart-reply" data-act="reply" data-thread="1"/, 'Reply');
     assert.match(foot, /data-act="copybart" data-turn="1" aria-label="Copy"/, 'Copy');
     assert.match(foot, /data-act="regen" data-turn="1" data-quiet="1" aria-label="Regenerate"/, 'Regenerate, opening no selector');
-    assert.match(foot, /data-act="foldthread" data-row="0" aria-label="Collapse"/, 'Collapse');
+    assert.match(foot, /data-act="fold" data-turn="1" aria-label="Collapse"/, 'Collapse');
     assert.match(foot, /data-act="dropturn" data-turn="1" aria-label="Delete"/, 'Delete');
-    const order = ['data-act="reply"', 'copybart', 'data-act="regen"', 'data-foot-meta', 'foldthread', 'dropturn'].map((k) => foot.indexOf(k));
+    const order = ['data-act="reply"', 'copybart', 'data-act="regen"', 'data-foot-meta', 'data-act="fold"', 'dropturn'].map((k) => foot.indexOf(k));
     assert.deepEqual(order, [...order].sort((a, b) => a - b), 'Reply, Copy, Regenerate, the meta, Collapse, Delete');
     assert.ok(!foot.includes('editturn') && !foot.includes('footbuild'), 'no Edit, no Build');
     assert.equal(m.lines()[3], `bart> ${closing}`, 'the closing line in the file is as it was');
@@ -501,7 +505,7 @@ test('a follow-up collapses the turns before it, in the same edit; each is one r
   m.click('fold', { turn: '1' });
   assert.ok(m.lines().slice(2, second).every((l) => /^bart>/.test(l)));
   const open = m.html();
-  assert.match(open, /data-act="foldthread" data-row="0" aria-label="Collapse"/, 'open again, its foot collapses the conversation');
+  assert.match(open, /data-foot="1"[^>]*>[\s\S]*?data-act="fold" data-turn="1" aria-label="Collapse"/, 'open again, its foot collapses that exchange');
   assert.ok(open.includes('because') && open.includes('data-foot="1"'), 'its answer and foot are drawn');
   assert.ok(!rowOf(open, 1).includes('data-folded-row'), 'its question is a question row again');
   assert.ok(rowOf(open, second).includes('data-folded-row'), 'the other stays one row');

@@ -311,7 +311,7 @@ const MARK_DRAWN = `flex:none;min-width:${MARK_COL};padding-right:0.25em;box-siz
 const MARK_EDITED = `display:inline-block;min-width:${MARK_COL};margin-left:-${MARK_COL};box-sizing:border-box;white-space:pre`;
 
 export default class DocEditor extends React.Component {
-  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null, docMenu: null };
+  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
   syncing = false; wantFocus = false; wantAnchor = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
@@ -985,7 +985,7 @@ export default class DocEditor extends React.Component {
     if (p.type === 'reply') {
       // A folded turn's foot is not drawn: the turn is its question's one row (foldedHtml). A research box keeps its own.
       if (at && at.role === 'foot' && at.turn.answered && !at.turn.pending && at.turn.folded && !at.box) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
-      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), busy: isRunning(at.thread, this.props.builds), thread: at.thread, box: at.box, reply: at.reply });
+      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), busy: isRunning(at.thread, this.props.builds), box: at.box, reply: at.reply });
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.card) return this.cardHtml(raw, at.card);
@@ -1701,7 +1701,7 @@ export default class DocEditor extends React.Component {
       + (said ? `<span data-thread-when="1" style="flex:none;margin-left:auto;font:12px/1 var(--font-sans);color:#8f8f8f;white-space:nowrap">${esc(said)}</span>` : '')
       + '</div>';
   }
-  // The Collapse in an answered question's top-right corner (2026-10-13): what its card's foot Collapse does. In a titled
+  // The Collapse in an answered question's top-right corner (2026-10-13; only a titled Build's now). In a titled
   // conversation it folds all of it to its title's row (foldthread), not while a turn of it runs; otherwise it folds the
   // turn (fold). Out of the text (contenteditable=false, as the chip is), so it is never in the caret's way or a copy, and
   // pulled into the padding so the row is no taller for it.
@@ -1744,10 +1744,10 @@ export default class DocEditor extends React.Component {
   // asks again on the model that answered (ranWith); it opens no selector.
   // `raw` is set when the answer's closing line is this foot; an answer without one (a run that failed) gets the same foot.
   // `plain`: an @brainstorm or @discover turn, whose Regenerate asks again on its one model (BS-08).
-  // `busy`: a turn of the thread is at work. `thread`: the turn's; in one with a title (2026-10-12) Collapse folds all of
-  // it to its title's row, once nothing in it runs. A research box (`box`, 2026-10-13) has its own Collapse. A turn folded
-  // by a follow-up has no foot: it is one row (lineHtml's bare question).
-  footHtml({ raw, q, text, folded, closes, plain = false, busy = false, thread = null, box = false, reply = null }) {
+  // `busy`: a turn of the thread is at work. Collapse folds this exchange alone (collapseTurn), even while another in its
+  // conversation runs. A research box (`box`, 2026-10-13) has its own Collapse. A turn folded by a follow-up has no foot:
+  // it is one row (lineHtml's bare question).
+  footHtml({ raw, q, text, folded, closes, plain = false, busy = false, box = false, reply = null }) {
     const wrap = (inner, extra = '') => `<span style="flex:none;position:relative;display:inline-flex;${extra}">${inner}</span>`;
     const tip = (label, side) => `<span class="bart-tip" style="${side}:0">${label}</span>`;
     const copied = this.copied === `bart${q}`;
@@ -1762,10 +1762,7 @@ export default class DocEditor extends React.Component {
       ...(answering && fixedStep(live.agent) ? [`<button type="button" class="bart-text" data-act="cardwrap" data-turn="${q}" style="user-select:none;flex:none;margin-left:6px">Wrap up</button>`] : []),
     ];
     const meta = footMeta(text), right = meta ? '' : 'margin-left:auto';
-    const whole = !!thread && thread.titleLine >= 0, running = whole && isRunning(thread, this.props.builds);
-    const fold = whole && !folded && !box
-      ? wrap(`<button class="bart-ic" data-act="foldthread" data-row="${thread.titleLine}" aria-label="Collapse" aria-expanded="true"${running ? ' disabled' : ''}>${ICON.collapse}</button>${tip(running ? 'Collapse once it answers' : 'Collapse', 'right')}`, right)
-      : wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`, right);
+    const fold = wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`, right);
     return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:2px;padding:12px 10px ${closes ? 10 : 6}px 16px;background:${folded ? 'none' : '#fafafa'};border-radius:${radius(false, closes)};margin-bottom:${closes ? '8px' : '0'}">`
       + lefts.join('')
       + (meta ? `<span data-foot-meta="1" style="flex:none;margin-left:auto;padding-right:6px;font:12px/1 var(--font-sans);color:#8f8f8f;white-space:nowrap">${esc(meta)}</span>` : '')
@@ -1896,7 +1893,7 @@ export default class DocEditor extends React.Component {
       out += dimmed(this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i)));
       // Under an answer's last line, its Show more (2026-10-13), shown by applyClips once it is long enough to cut.
       if (where && where.lastBody && where.role === 'answer' && !where.box && !where.turn.pending && !where.turn.folded && !where.turn.build && !cards.byQ.has(where.turn.q)) out += this.moreHtml(ls, where.turn);
-      if (where && where.footAfter && !(where.turn.folded && !where.box)) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), thread: where.thread, box: where.box, reply: where.reply }));
+      if (where && where.footAfter && !(where.turn.folded && !where.box)) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), box: where.box, reply: where.reply }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
       // card (MATH-31; under it, not above, since 2026-10-05: the agent's own field comes first).
       const recap = !!where && where.followAfter && this.endsInRecap(ls, where.thread);
@@ -2552,7 +2549,7 @@ export default class DocEditor extends React.Component {
       if (k === 'cardopt') { this.pickCard(Number(act.dataset.turn), Number(act.dataset.opt)); return; }
       if (k === 'cardskip') { this.sendCard(Number(act.dataset.turn), 'skip'); return; }
       if (k === 'cardwrap') { this.sendCard(Number(act.dataset.turn), 'wrap'); return; }
-      if (k === 'fold') { this.toggleFold(Number(act.dataset.turn)); return; }
+      if (k === 'fold') { this.collapseTurn(Number(act.dataset.turn)); return; }
       if (k === 'foldthread') { if (act.disabled) return; if (e.altKey && !this.props.readOnly && act.closest && act.closest('[data-thread-row]')) this.startTitle(i); else this.toggleThread(i); return; }
       if (k === 'edittitle') { if (this.props.readOnly) this.toggleThread(i); else this.startTitle(i); return; }
       if (k === 'dropturn') { this.closePicker(); this.deleteTurn(Number(act.dataset.turn)); return; }
@@ -3184,6 +3181,16 @@ export default class DocEditor extends React.Component {
     this.setLines((x) => x.map((l, j) => { if (j < turn.from || j > turn.to) return l; const p = parseLine(l); return p.type === 'reply' ? replyLine(p.text, to).trimEnd() : l; }));
     this.setState({ activeLine: null, mention: null });
   }
+  // A turn's Collapse (2026-10-13, David): it folds that exchange alone, to a line at the top of its card, whatever else in
+  // its conversation is at work. The last exchange left open in a titled conversation collapses the conversation to its
+  // title's row instead (toggleThread), once nothing in it runs. A folded turn's line expands it (toggleFold).
+  collapseTurn(q) {
+    const ls = this.lines(), found = this.findTurn(ls, q); if (!found) return;
+    const { thread, turn } = found;
+    const last = !turn.folded && thread.titleLine >= 0 && !isRunning(thread, this.props.builds)
+      && thread.turns.every((t) => t === turn || !t.answered || t.pending || t.folded);
+    if (last) this.toggleThread(thread.titleLine); else this.toggleFold(q);
+  }
   // A titled conversation (2026-10-12) collapses whole, to its title's row, and expands again: the fold is its title line's
   // `bart#+`, its answers' lines stay as they are. One at work stays open.
   toggleThread(line) {
@@ -3517,26 +3524,10 @@ export default class DocEditor extends React.Component {
     if (!current || !models.providers[current.provider]) return null;
     return <BartPicker models={models} current={current} anchor={pk} onPick={this.pickModel} onSend={pk.kind === 'regen' ? this.sendPicked : undefined} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
   }
-  // The ⋯ menu (2026-10-13): its items under the button, right-aligned to it; a pick closes it and hands the item the
-  // button's place (Build's panel opens from there). A press outside, or Escape, closes it.
-  docMenuView(menu) {
-    const at = this.state.docMenu, shut = () => this.setState({ docMenu: null });
-    return (
-      <>
-        <div data-doc-menu-shade="1" onMouseDown={shut} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
-        <div role="menu" data-doc-menu-list="1" onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); shut(); } }} style={{ position: 'fixed', top: at.bottom + 4, right: Math.max(8, (window.innerWidth || 1200) - at.right), zIndex: 61, minWidth: 140, padding: 4, border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', boxShadow: '0 4px 14px #0000000f' }}>
-          {menu.map((item, n) => (
-            <button key={item.key} type="button" role="menuitem" autoFocus={n === 0} className="hov-wash" {...(item.data || {})} title={item.title} onClick={() => { shut(); item.onSelect(at); }} style={{ display: 'block', width: '100%', padding: '6px 10px', border: 0, borderRadius: 6, background: '#fff', textAlign: 'left', cursor: 'pointer', font: '400 13px/1.4 var(--font-sans)', color: '#171717', outline: 'none' }}>{item.label}</button>
-          ))}
-        </div>
-      </>
-    );
-  }
   render() {
     const s = this.state;
     const compact = this.props.compact;
     const answers = compact || this.props.readOnly ? [] : this.foldable(this.lines()), anyOpen = answers.some((turn) => !turn.folded);
-    const menu = compact ? [] : this.props.menu || [];
     // Compact (a post-it, 2026-09-22) never scrolls: it is as tall as its lines, and the card fits the type to its size.
     return (
       <>
@@ -3561,26 +3552,26 @@ export default class DocEditor extends React.Component {
             />
           </div>
         </div>
-        {/* Top right of the page: every answer folded or unfolded at once, as plain words (2026-09-29), and since 2026-10-13
-            the document's ⋯ menu (props.menu: Copy, Build and Clear, which were a strip under the page), with what the
-            last of them said (props.menuNote: "Copied") before it. */}
-        {!compact && (answers.length > 0 || menu.length > 0) && (
-          <div data-doc-top="1" style={{ position: 'absolute', top: 8, right: 16, zIndex: 2, display: 'flex', alignItems: 'center', gap: 2, background: '#fff', borderRadius: 6 }}>
-            {this.props.menuNote && <span data-doc-note="1" style={{ padding: '4px 6px', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>{this.props.menuNote}</span>}
-            {answers.length > 0 && <button type="button" className="hov-ink" data-fold-all={anyOpen ? 'collapse' : 'expand'} onClick={() => this.foldAll(anyOpen)} title={anyOpen ? 'Collapse every @bart answer' : 'Expand every @bart answer'} style={{ padding: '4px 6px', border: 0, borderRadius: 6, background: '#fff', cursor: 'pointer', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>{anyOpen ? 'Collapse all' : 'Expand all'}</button>}
-            {menu.length > 0 && (
-              <button type="button" className="hov-wash" data-doc-menu="1" aria-label="More" aria-haspopup="menu" aria-expanded={!!s.docMenu} title="More" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); this.setState({ docMenu: s.docMenu ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } }); }} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 6, background: s.docMenu ? '#f2f2f2' : '#fff', cursor: 'pointer', color: '#4d4d4d' }}>
-                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>
-              </button>
-            )}
+        {/* The footer (the document's Copy, 2026-09-23) sits under the text's left edge, not the pane's: this column
+            repeats the scroller's padding and 65ch measure, so it stays with the note when panes split. Since 2026-09-27 it
+            is a strip of its own under the page ("the text editor stops above these buttons"), no longer floating over it.
+            (2026-10-13: back from a ⋯ menu at the top, David.) */}
+        {!compact && this.props.footer && (
+          <div data-doc-footer="1" style={{ flex: 'none', borderTop: '1px solid #eaeaea', background: '#fff', paddingInline: 'clamp(12px, 4%, 40px)' }}>
+            <div style={{ maxWidth: '65ch', minHeight: 44, marginInline: 'auto', paddingInline: 'clamp(0px, 3%, 24px)', boxSizing: 'border-box', fontSize: 17, display: 'flex', alignItems: 'center' }}>
+              {this.props.footer}
+            </div>
           </div>
+        )}
+        {/* Top right of the page: every answer folded or unfolded at once, as plain words (2026-09-29). */}
+        {answers.length > 0 && (
+          <button type="button" className="hov-ink" data-fold-all={anyOpen ? 'collapse' : 'expand'} onClick={() => this.foldAll(anyOpen)} title={anyOpen ? 'Collapse every @bart answer' : 'Expand every @bart answer'} style={{ position: 'absolute', top: 8, right: 22, zIndex: 2, padding: '4px 6px', border: 0, borderRadius: 6, background: '#fff', cursor: 'pointer', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>{anyOpen ? 'Collapse all' : 'Expand all'}</button>
         )}
         {this.overPage(
           <>
             {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
             {s.pop && (s.pop.res.ws ? <WorkspacePeek id={s.pop.res.ws} name={s.pop.res.name} anchor={s.pop.anchor} peek={this.props.workspacePeek} /> : <Popover item={s.pop.res} anchor={s.pop.anchor} />)}
             {this.pickerView()}
-            {s.docMenu && menu.length > 0 && this.docMenuView(menu)}
           </>,
         )}
       </>
