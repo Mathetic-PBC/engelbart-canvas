@@ -22,7 +22,7 @@ import { zoteroChipAction } from '../model/zotero.js';
 import { flatWorkspaces, nextPlace } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
-import { buildLine, placeAnswer, placeTitle, askedAt, migrateChatLines } from '../model/doc.js';
+import { buildLine, placeAnswer, placeTitle, askedAt, migrateChatLines, madeKey } from '../model/doc.js';
 import { fallbackAgent } from '../model/route.js';
 import { findAskLine, findBuildLine } from '../model/askLine.js';
 import { openBeside, closePane } from '../model/panes.js';
@@ -148,6 +148,16 @@ function indexWorkspaces(roots) {
   walk(roots, null);
   return map;
 }
+
+// A made file a Stage tab shows (its path, or its file:// address), as the editor knows it: { askId, rel, name } | null.
+const MADE_PLACE = /\/\.created\/([\w-]+)\/(.+)$/;
+function madeAt(place) {
+  let where = String(place || '');
+  if (/^file:/i.test(where)) { try { where = decodeURIComponent(new URL(where).pathname); } catch { return null; } }
+  const m = MADE_PLACE.exec(where.replace(/\\/g, '/'));
+  return m && !m[2].split('/').includes('..') ? { askId: m[1], rel: m[2], name: m[2].split('/').pop() } : null;
+}
+const MADE_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 
 export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onOpenProject, onNewProject, onVisit, onError, connectSessions = [], onOpenConnect = () => {} }) {
   const project = tree.project;
@@ -593,7 +603,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     };
     const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
     // Merged, not replaced (2026-10-13): a routed line's entry shows the level it was sent at until the run's first step.
-    setAsks((current) => askStarted(current, askId, { docKey: key, agent: agent || 'bart' }));
+    setAsks((current) => askStarted(current, askId, { docKey: key, agent: agent || 'bart', at: (current[askId] && current[askId].at) || Date.now() }));
     if (agent === 'brainstorm') tickWalk(2);
     if (agent === 'discover') tickWalk(3);
     // A question that starts a thread has an empty `bart# ` line above it (DocEditor askInline): its title is asked for
@@ -1116,6 +1126,73 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       onError(error);
     }
   }, [showRight, onError]); // eslint-disable-line react-hooks/exhaustive-deps
+  /* ------------------------------------------------- @create's files (2026-10-14) */
+  // What each file a Create answer stands for is (main's bart/create.cjs readCreated), by madeKey: read once when an editor
+  // shows it, its drawing, picture or page's picture as a blob: address for the row's thumbnail and the inline frame.
+  const [madeFiles, setMadeFiles] = React.useState({});
+  const madeAsked = React.useRef(new Set());
+  const madeUrls = React.useRef([]);
+  React.useEffect(() => () => { for (const url of madeUrls.current) URL.revokeObjectURL(url); }, []);
+  const blobOf = (bytes, type) => { const url = URL.createObjectURL(new Blob([bytes], { type })); madeUrls.current.push(url); return url; };
+  const readMade = React.useCallback(async (made) => {
+    const key = madeKey(made);
+    try {
+      const file = await api.createdFile(project.id, made.askId, made.rel);
+      const shown = { name: file.name, type: file.type, ext: file.ext, path: file.path, saved: file.saved, missing: !!file.missing, text: typeof file.text === 'string' ? file.text : null };
+      if (file.ext === 'svg' && typeof file.text === 'string') shown.url = blobOf(file.text, 'image/svg+xml');
+      else if (file.type === 'image' && file.bytes) shown.url = blobOf(file.bytes, MADE_MIME[file.ext] || 'application/octet-stream');
+      if (file.preview) shown.previewUrl = blobOf(file.preview, 'image/png');
+      setMadeFiles((current) => ({ ...current, [key]: { ...(current[key] || {}), ...shown, saving: false } }));
+    } catch (error) {
+      setMadeFiles((current) => ({ ...current, [key]: { name: made.name, error: errorMessage(error) } }));
+    }
+  }, [project.id]);
+  const needMade = React.useCallback((list) => {
+    for (const made of list) {
+      const key = madeKey(made);
+      if (madeAsked.current.has(key)) continue;
+      madeAsked.current.add(key);
+      readMade(made);
+    }
+  }, [readMade]);
+  // Save: into the library, its source `create` (the Assets chip), linked here. It reads Saved wherever the file shows.
+  const saveMade = React.useCallback(async (made) => {
+    const key = madeKey(made);
+    setMadeFiles((current) => ({ ...current, [key]: { ...(current[key] || { name: made.name }), saving: true } }));
+    try {
+      const row = await api.saveCreated(project.id, made.askId, made.rel, topic ? topic.id : null);
+      setMadeFiles((current) => ({ ...current, [key]: { ...(current[key] || { name: made.name }), saving: false, saved: { id: row.id, name: row.name } } }));
+      reload();
+    } catch (error) {
+      setMadeFiles((current) => ({ ...current, [key]: { ...(current[key] || { name: made.name }), saving: false } }));
+      onError(error);
+    }
+  }, [project.id, topic, reload, onError]);
+  // The name, or Open in Stage: the file in a Stage tab (one already showing it comes to the front).
+  const openMade = React.useCallback(async (made) => {
+    try {
+      const held = madeFiles[madeKey(made)];
+      const file = held && held.path ? held : await api.createdFile(project.id, made.askId, made.rel);
+      if (file.missing) { onError(new Error(`"${made.name}" is no longer there`)); return; }
+      if (!stageRef.current) return;
+      showRight('stage');
+      stageRef.current.openFile(file.path, {});
+    } catch (error) {
+      onError(error);
+    }
+  }, [madeFiles, project.id, showRight, onError]);
+  // Which made files a Stage tab shows (the editor greys their rows), and the one in front, whose Save is the row's.
+  const [stagePlaces, setStagePlaces] = React.useState([]);
+  const madeOpen = React.useMemo(() => new Set(stagePlaces.map(madeAt).filter(Boolean).map(madeKey)), [stagePlaces]);
+  const pageMade = openPage ? madeAt(openPage.input) : null;
+  const pageMadeFile = pageMade ? madeFiles[madeKey(pageMade)] : null;
+  React.useEffect(() => { if (pageMade && !pageMadeFile) needMade([pageMade]); }); // eslint-disable-line react-hooks/exhaustive-deps
+  const madeSave = pageMade && pageMadeFile && !pageMadeFile.missing && !pageMadeFile.error
+    ? pageMadeFile.saved
+      ? { state: 'made-saved', crumb: `Library / Assets / ${pageMadeFile.saved.name}`, onSave: () => {} }
+      : { state: 'made', busy: !!pageMadeFile.saving, crumb: '', onSave: () => saveMade({ ...pageMade, name: pageMadeFile.name || pageMade.name }) }
+    : null;
+
   const openZoteroPdf = React.useCallback((file) => {
     if (!stageRef.current || !file) return;
     showRight('stage');
@@ -1810,6 +1887,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     onSavePaper: saveGuidePaper,
     repoState: guideRepoState,
     onTryRepo: tryGuideRepo,
+    madeFiles,
+    madeOpen,
+    onMadeNeeded: needMade,
+    onOpenMade: openMade,
+    onSaveMade: saveMade,
     onError,
   };
   // The walkthrough's card, above the document of a workspace that shows steps (model/getting-started.js stepsHere), and
@@ -2059,7 +2141,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onDismissAsk={dropPaperAsk}
           onContinueAsk={topic ? continueAsk : undefined}
           onCopyText={(value) => api.copyText(value).catch((error) => onError(error))}
-          save={topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null}
+          onTabs={setStagePlaces}
+          save={madeSave || (topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null)}
           style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: docFull ? 'none' : 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />
         </div>

@@ -190,6 +190,9 @@ const engelbartAPI = Object.freeze({
   routeLine: invoke('route-line'),
   routeHanded: invoke('route-handed'),
   stopBart: invoke('stop-bart'),
+  // A file @create made, kept with the project (2026-10-14): read it ({ name, rel, type, path, saved, text | bytes, … }), or save it to the library.
+  createdFile: invoke('created-file'),
+  saveCreated: invoke('created-save'),
   bartModels: invoke('bart-models'),
   // A new thread's title ({ text, agent } → { title, provider, model, modelName, effort, ms, named }; bart/name-chat.cjs).
   nameChat: invoke('name-chat'),

@@ -16,6 +16,7 @@ const folderFiles = require('./store/folder-files.cjs');
 const zoteroMirror = require('./zotero/mirror.cjs');
 const { expandDoc } = require('./context/expand-mentions.cjs');
 const { failureLines } = require('./bart/reply.cjs');
+const createdFiles = require('./bart/create.cjs');
 const { clipMiddle } = require('./bart/clip.cjs');
 const { askEntry } = require('../shared/mark-answers.cjs');
 const { readShellHistory } = require('./shell-history.cjs');
@@ -273,7 +274,8 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, agentMap = null }) {
+// `snapshotHtml(file, out)`: a picture of a page @create made (bart/created-preview.cjs); null in the tests.
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, agentMap = null, snapshotHtml = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -859,6 +861,20 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Where a routed line went when it was not an ask: `build:<id>`, on the router's record.
   handle('route-handed', (id, to) => { if (bart.routeHanded) bart.routeHanded(str(id, 'route id', 80), str(to, 'handed to', 80)); return true; });
   handle('stop-bart', (askId) => bart.stop(str(askId, 'ask id', 64)));
+  // A file @create made (2026-10-14, bart/create.cjs): kept with the project until the person saves it. `created-file`
+  // reads one for its row, its expanded view and the Stage's Save ({ name, rel, type, ext, path, size, saved, missing } and
+  // its text or bytes); `created-save` puts it in the library (its source `create`, the Assets chip), linked to the
+  // workspace, once: saved again, it answers the row it was saved as.
+  const createdArgs = (pid, askId, rel) => {
+    const id = str(askId, 'ask id', 64);
+    if (!/^[\w-]+$/.test(id)) throw new TypeError('ask id is invalid');
+    return [str(pid, 'project id', 64), id, str(rel, 'file', 1024)];
+  };
+  handle('created-file', withCtx((ctx, pid, askId, rel) => createdFiles.readCreated(ctx, ...createdArgs(pid, askId, rel), { snapshot: snapshotHtml })));
+  saving('created-save', withCtx(async (ctx, pid, askId, rel, workspaceId) => {
+    const [projectId, id, file] = createdArgs(pid, askId, rel);
+    return createdFiles.saveCreated(ctx, projectId, workspaceId == null ? null : str(workspaceId, 'workspace id', 64), id, file, { inspectPdf });
+  }), { project: first, library: true });
   // A new thread's title (2026-10-12, ./bart/name-chat.cjs): asked while its question runs, never in its way. `agent` says
   // which line asked, so the title comes from the provider the question runs on. The fallback (the opening message, at
   // most 60 characters) answers when no model can.

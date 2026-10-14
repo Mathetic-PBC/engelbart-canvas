@@ -23,6 +23,7 @@ const { createSweeper } = require('./context/sweeper.cjs');
 const { inspectPdf, pdfTitle } = require('./context/pdf-kind.cjs');
 const { createCliSummarizer, createFakeSummarizer } = require('./context/summarizer.cjs');
 const { createBart, createFakeBart, createThreads, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS } = require('./bart/ask.cjs');
+const { createSnapshotter } = require('./bart/created-preview.cjs');
 const { createNameChat, createFakeNameChat } = require('./bart/name-chat.cjs');
 const { rememberChoice } = require('./bart/choices.cjs');
 const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
@@ -1072,6 +1073,8 @@ if (!hasSingleInstanceLock) {
     app.on('will-quit', () => connect.suspendAll());
     registerEngelbartIpc({
       agentMap,
+      // A page @create made, as a picture for its row (2026-10-14, bart/created-preview.cjs).
+      snapshotHtml: createSnapshotter({ BrowserWindow }),
       connect,
       connectors,
       appleNotes,

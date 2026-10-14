@@ -122,6 +122,10 @@ function glyphItem(tab, rowOf) {
 /* ------------------------------------------------------------------------------------------------- small views */
 
 // Three books on a shelf, one of them banded (Hudson's reference, Add - Mention.dc.html).
+// Lucide's folder-plus, a Create file's Save (2026-10-14).
+const FolderPlus = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 10v6" /><path d="M9 13h6" /><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
+);
 const Shelf = () => (
   <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'currentColor', stroke: 'none' }}>
     <rect x="1.5" y="3" width="3.2" height="11" rx="1" />
@@ -407,7 +411,7 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 // The pdf an answer is for, as the workspace keeps it ({ rowId } or { url }), and whether a tab's pdf is it.
 const pdfWhere = (p) => (p.rowId ? { rowId: p.rowId } : { url: p.url });
 const samePdf = (p, where) => !!p && !!where && (where.rowId ? p.rowId === where.rowId : !p.rowId && !!where.url && p.url === where.url);
-const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText }, ref) {
+const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText, onTabs }, ref) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -504,6 +508,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   }, []);
   React.useEffect(() => { if (onPage) onPage(savable ? { input: pageInput, title: pageTitle || stripScheme(pageInput), bytes: pdfBytes || null, tabId: tab.id, webPage } : null); }, [savable, pageInput, pageTitle, pdfBytes, tab.id, webPage, onPage]);
   React.useEffect(() => { if (onFront) onFront(tab.item || null); }, [tab.item, onFront]);
+  // Where every tab is, a file by its path (2026-10-14): the editor greys a Create row while its file is open here.
+  const tabPlaces = tabs.map((t) => (t.file && t.file.path) || (t.pdf && t.pdf.input) || (/^file:/i.test(t.url || '') ? t.url : '') || '').join('\n');
+  React.useEffect(() => { if (onTabs) onTabs(tabPlaces ? tabPlaces.split('\n').filter(Boolean) : []); }, [tabPlaces, onTabs]);
   React.useEffect(() => { setSaving(false); }, [tab.id, pageInput]);
   // The card closes on a press anywhere else.
   React.useEffect(() => {
@@ -513,7 +520,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     return () => document.removeEventListener('mousedown', away, true);
   }, [saving]);
   const saveState = save && savable ? save.state : null;
+  // A file @create made (2026-10-14): Save puts it in the library at once (no card); once there it is "✓ Saved", and the
+  // address reads where the library keeps it ("Library / Assets / <name>", save.crumb) until the address is typed in.
+  const made = saveState === 'made' || saveState === 'made-saved';
   const onSaveClick = () => {
+    if (saveState === 'made') { save.onSave(); return; }
     if (saveState === 'none') setSaving((open) => !open);
     else if (saveState === 'lib') save.onLink().catch(() => {});
   };
@@ -1282,6 +1293,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         <button type="button" className="hov-wash" onClick={reload} aria-label={loading ? 'Stop' : 'Reload'} style={{ ...ICON_BUTTON, color: '#4d4d4d' }}>{loading ? '×' : '↻'}</button>
         <div style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, height: 30, boxSizing: 'border-box', padding: saveState && !typing ? '0 3px 0 10px' : '0 10px', border: `1px solid ${typing ? '#c9c9c9' : 'transparent'}`, borderRadius: 8, background: '#fafafa', transition: 'border-color 120ms' }}>
           <KindGlyph item={glyphItem(tab, rowOf)} box={14} color="#8f8f8f" />
+          {made && save.crumb && !typing && (
+            <span data-stage-crumb="1" onMouseDown={(event) => { event.preventDefault(); setTyping(true); setTimeout(() => { if (addressRef.current) { addressRef.current.focus(); addressRef.current.select(); } }, 0); }} style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '400 13px/1.4 var(--font-sans)', color: '#171717', cursor: 'text' }}>{save.crumb}</span>
+          )}
           <input
             ref={addressRef}
             value={draft}
@@ -1291,18 +1305,19 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
             onKeyDown={onAddressKey}
             spellCheck={false}
             aria-label="Open on stage"
-            style={{ flex: 1, minWidth: 0, padding: 0, border: 0, outline: 'none', background: 'transparent', font: '400 13px/1.4 var(--font-sans)', color: '#171717', textAlign: 'left' }}
+            style={{ flex: 1, minWidth: 0, padding: 0, border: 0, outline: 'none', background: 'transparent', font: '400 13px/1.4 var(--font-sans)', color: '#171717', textAlign: 'left', ...(made && save.crumb && !typing ? { position: 'absolute', width: 1, opacity: 0, pointerEvents: 'none' } : {}) }}
           />
           {saveState && !typing && (
             <button
               ref={saveButton}
               type="button"
               data-page-save={saveState}
-              className={saveState === 'here' ? undefined : 'hov-ink'}
+              className={saveState === 'here' || saveState === 'made-saved' ? undefined : 'hov-ink'}
               onClick={onSaveClick}
-              aria-expanded={saving}
-              style={{ flex: 'none', height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: saving ? '#eaeaea' : 'transparent', cursor: saveState === 'here' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'here' ? '#8f8f8f' : saving ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
-            >{SAVE_LABEL[saveState]}</button>
+              disabled={saveState === 'made-saved' || (made && !!save.busy)}
+              aria-expanded={made ? undefined : saving}
+              style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: saving ? '#eaeaea' : 'transparent', cursor: saveState === 'here' || saveState === 'made-saved' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'here' || saveState === 'made-saved' ? '#8f8f8f' : saving ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
+            >{saveState === 'made' ? <><FolderPlus />{save.busy ? 'Saving…' : 'Save'}</> : saveState === 'made-saved' ? '✓ Saved' : SAVE_LABEL[saveState]}</button>
           )}
         </div>
         {boxRemoved && boxRemoved.id === tab.id && (

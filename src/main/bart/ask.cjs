@@ -75,7 +75,7 @@ const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('./brainstorm-system-prompt.cjs');
 const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
 const { CREATE_SYSTEM_PROMPT } = require('./create-system-prompt.cjs');
-const { CREATE_TIMEOUT_MS, openDraft, dropDraft, keepCreated, createdBody } = require('./create.cjs');
+const { CREATE_TIMEOUT_MS, openDraft, dropDraft, keepCreated, createdBody, firstSentence, createdSentence } = require('./create.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
 const { readMode, readProvider } = require('./question.cjs');
 const { OPENING, SKIPPED, NEXT_ID, NEXT_PLACEHOLDER, AGAIN_ID, AGAIN_TITLE, cardBody, cardOfAnswer, questionOf, readCard, readAnswer, resultText, nextLead, sameWords, NEXT_TITLE } = require('./card.cjs');
@@ -535,7 +535,8 @@ async function loggedTurn(log, logId, input, turn) {
 }
 
 /** A row @create kept, as its run's meta and record name it. */
-const createdRow = (row) => ({ id: row.id, name: row.name, type: row.type, path: row.path || null });
+// (2026-10-14: a file kept with the project, not yet a row: its name, its type and where it is in its run's folder.)
+const createdRow = (file) => ({ name: file.name, type: file.type, path: file.rel });
 
 /**
  * @create's Claude Code permission rules: its read and web tools, and Write and Edit on `draft` (an absolute, real path)
@@ -702,6 +703,9 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       const controller = new AbortController();
       running.set(askId, controller);
       const feed = createFeed({ onProgress });
+      // @create's first sentence, what it is making (./create.cjs firstSentence): shown above its row while it works.
+      const making = create ? firstSentence((text) => onProgress && onProgress({ making: text })) : null;
+      const updated = making ? (update) => { making.take(update); feed.take(update); } : feed.take;
       const once = async (session) => {
         let cli = null;
         try {
@@ -711,7 +715,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
             discover: { home: discoverCodexHome, mcp: true, timeout: mode === 'deep' ? DEEP_DISCOVER_TIMEOUT_MS : DISCOVER_TIMEOUT_MS },
             create: { allowed: CREATE_TOOLS, rules: draft && createRules(draft), home: createCodexHome, write: true, timeout: CREATE_TIMEOUT_MS },
           }[agent];
-          cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd: draft || cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: feed.take, resume: session, logId, ...only });
+          cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd: draft || cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: updated, resume: session, logId, ...only });
           return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed, agent, intro }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
         } finally { if (cli) cli.done(); }
       };
@@ -737,11 +741,12 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned, ...(routed ? { routed } : {}) };
         // @create's files kept in the library, each answered with a mention of its row (./create.cjs); stopped, it keeps none.
         if (create && stopped(controller.signal)) throw new BartError('stopped', 'Stopped.');
-        const made = create ? await keepCreated(ctx, projectId, workspaceId, draft, { inspectPdf, onAdded }) : null;
-        if (made) { meta.created = made.rows.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
+        // (2026-10-14: kept with the project, <project>/.created/<id>/, each answered with a line the editor draws as its row.)
+        const made = create ? await keepCreated(ctx, projectId, logId, draft) : null;
+        if (made) { meta.created = made.files.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
         // A card is written as its JSON in a fence; a reply that is not one, as it came (the editor draws it as an answer).
         // @brainstorm's next card always reads the same (brainstormReply).
-        const body = made ? createdBody(out.text, made) : replyBody(agent, plan.brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
+        const body = made ? createdBody(createdSentence(making.text, out.text, question), made, logId) : replyBody(agent, plan.brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
         // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
         if (out.session && store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent: intro === 'discover' ? 'discover' : agent }), meta };
@@ -952,20 +957,21 @@ function fakeDiscover(context, plan) {
 }
 
 /**
- * The fake @create's run (2026-10-13), as a model would do it: files written in its working folder, `draft`, then a sentence
- * naming them. A request to change something it has ("change", "fix", "rename", "edit", "delete", "make the … different",
- * or a Build) gets no file and the one sentence that it is a Build. Anything else: report.md, chart.html (a page that
- * draws its chart itself) and data.csv, from fake numbers. → the reply
+ * The fake @create's run (2026-10-13), as a model would do it: a sentence saying what it is making (2026-10-14), files
+ * written in its working folder, `draft`, then "Done.". A request to change something it has ("change", "fix", "rename",
+ * "edit", "delete", "make the … different", or a Build) gets no file and the one sentence that it is a Build. Anything
+ * else: report.md, chart.html (a page that draws its chart itself) and data.csv, from fake numbers.
+ * → { first, files, last }: what it says first, the files it writes, as the run's steps name them, and its last message
  */
 function fakeCreate(draft, question) {
-  if (/\b(?:build|change|fix|rename|edit|delete|remove)\b|\bmake (?:the|my)\b[^.]*\bdifferent\b/i.test(question)) return 'This is a Build: it changes something you already have, so I made nothing.';
+  if (/\b(?:build|change|fix|rename|edit|delete|remove)\b|\bmake (?:the|my)\b[^.]*\bdifferent\b/i.test(question)) return { first: '', files: [], last: 'This is a Build: it changes something you already have, so I made nothing.' };
   const rows = [[2021, 3], [2022, 5], [2023, 4], [2024, 7]];
   const bars = rows.map(([year, n], at) => `<rect x="${20 + at * 60}" y="${150 - n * 18}" width="40" height="${n * 18}" fill="#4a6fa5"><title>${year}: ${n}</title></rect><text x="${40 + at * 60}" y="168" text-anchor="middle">${year}</text>`).join('');
   const title = String(question).replace(/[<>&"]/g, '').trim().slice(0, 80) || 'Fake chart';
   fs.writeFileSync(path.join(draft, 'report.md'), `# Fake report\n\nA fake report for “${title}”. Nothing was read: every number here is fake.\n`);
   fs.writeFileSync(path.join(draft, 'chart.html'), `<!doctype html>\n<html><head><meta charset="utf-8"><title>${title}</title><style>body{font:14px system-ui;margin:24px}text{font-size:11px}</style></head>\n<body><h1>${title}</h1><svg width="280" height="180" role="img" aria-label="fake bars">${bars}</svg><p id="n"></p><script>document.getElementById('n').textContent = 'Fake data, drawn by the page itself.';</script></body></html>\n`);
   fs.writeFileSync(path.join(draft, 'data.csv'), `year,count\n${rows.map((row) => row.join(',')).join('\n')}\n`);
-  return 'I made a fake report, a chart page and its data: report.md, chart.html and data.csv.';
+  return { first: 'A fake report, a chart page and its data, from made-up numbers.', files: ['report.md', 'chart.html', 'data.csv'], last: 'Done.' };
 }
 
 /** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. @brainstorm runs fakeCard, @discover fakeDiscover, @create fakeCreate. */
@@ -991,6 +997,8 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed, agent, intro });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
+      const making = create ? firstSentence((said) => onProgress && onProgress({ making: said })) : null;
+      const take = making ? (update) => { making.take(update); feed.take(update); } : feed.take;
       // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces. An
       // @brainstorm exchange on a paper opens it first, on its first turn.
       const opens = brainstorm && plan.paper && cardsFrom(prior) === prior.length ? [`Reading ${path.basename(plan.paper.path || plan.paper.name)}`] : [];
@@ -1002,6 +1010,15 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
         for (const delta of pieces) { feed.take({ delta }); await pause(delayMs / 2 / pieces.length); }
         return text;
       };
+      // @create's (2026-10-14): what it is making first, then what it reads and writes, then its last message.
+      const write = async (text) => { take({ textStart: true }); const pieces = text.match(/[\s\S]{1,24}/g) || []; for (const delta of pieces) { take({ delta }); await pause(delayMs / 4 / pieces.length); } };
+      const actCreate = async ({ first, files, last }) => {
+        feed.reset();
+        if (first) await write(first);
+        for (const activity of ['Reading notes.md', ...files.map((file) => `Writing ${file}`)]) { take({ activity, log: true }); await pause(delayMs / 4); }
+        await write(last);
+        return last;
+      };
       const draft = create ? openDraft(ctx.dataRoot, logId) : null;
       try {
         const out = await climb({
@@ -1009,12 +1026,12 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
           first: message, session: held ? held.session : null,
           // What it was sent is what it reports: a resumed session gets the question alone (an @bart one, the Stage and
           // highlights as well), a new one gets everything.
-          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: await act(intro ? `FAKE INTRO to "${question}": Discover is looking for what to read on it.` : create ? fakeCreate(draft, question) : brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
+          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: create && !intro ? await actCreate(fakeCreate(draft, question)) : await act(intro ? `FAKE INTRO to "${question}": Discover is looking for what to read on it.` : brainstorm ? fakeCard(context, { ...plan, text }, models) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned, ...(routed ? { routed } : {}) };
-        const made = create ? await keepCreated(ctx, projectId, workspaceId, draft, { inspectPdf, onAdded }) : null;
-        if (made) { meta.created = made.rows.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
-        const body = made ? createdBody(out.text, made) : replyBody(agent, brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
+        const made = create ? await keepCreated(ctx, projectId, logId, draft) : null;
+        if (made) { meta.created = made.files.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
+        const body = made ? createdBody(createdSentence(making.text, out.text, question), made, logId) : replyBody(agent, brainstorm ? brainstormReply(out.text, plan.stage, plan.welcome) : out.text);
         if (store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent: intro === 'discover' ? 'discover' : agent }), meta };
         ended('done', result);

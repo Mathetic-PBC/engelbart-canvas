@@ -38,6 +38,7 @@ export const LIBRARY_CHIPS = [
   { id: 'repos', label: 'Repos', noun: 'repos' },
   { id: 'web', label: 'Web', noun: 'web pages' },
   { id: 'files', label: 'Files', noun: 'files' },
+  { id: 'assets', label: 'Assets', noun: 'assets' },
 ];
 
 const CHIP_KINDS = { notes: ['note'], papers: ['pdf'], repos: ['git'], web: ['website', 'html'] };
@@ -46,9 +47,12 @@ const CHIPPED = new Set(Object.values(CHIP_KINDS).flat());
 /**
  * Whether `row` is under `chip`, by its kindKey: a repository whether address or folder (a website tagged git is a repo,
  * not web); Files is everything no other chip takes (an md that is not a note, docx, a folder, data). A picture is
- * under none, All included: it is its document's.
+ * under none, All included: it is its document's. What @create made and was saved (source `create`, 2026-10-14) is under
+ * All and Assets only, a picture too.
  */
 export function libraryFilter(row, chip = 'all') {
+  if (row && row.source === 'create') return chip === 'all' || chip === 'assets';
+  if (chip === 'assets') return false;
   const key = kindKey(row);
   if (key === 'image') return false;
   if (chip === 'all') return true;
@@ -56,7 +60,7 @@ export function libraryFilter(row, chip = 'all') {
   return (CHIP_KINDS[chip] || []).includes(key);
 }
 
-/** How many rows each chip holds: { all, notes, papers, repos, web, files }. */
+/** How many rows each chip holds: { all, notes, papers, repos, web, files, assets }. */
 export function libraryCounts(rows) {
   const counts = Object.fromEntries(LIBRARY_CHIPS.map((chip) => [chip.id, 0]));
   for (const row of rows || []) for (const chip of LIBRARY_CHIPS) if (libraryFilter(row, chip.id)) counts[chip.id] += 1;

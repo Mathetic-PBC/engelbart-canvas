@@ -659,7 +659,7 @@ test('@create: the classifier\'s create pick stands at 0.8 or more; at 0.7 it go
   assert.deepEqual([route.CREATE_SURE, route.decide({ agent: 'create', sure: 0.79 }).agent], [0.8, 'chat']);
 });
 
-test('@create: a line Bart sent to Create waits 5 s ("Creating in 5 s · Cancel"), then asks create, titled [create <when>]', async (t) => {
+test('@create: a line Bart sent to Create waits 5 s ("Creating a chart · Starts in 5 s · Cancel"), then asks create, titled [create <when>]', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const m = mounted(['# Notes', '@bart make a chart of CHI submissions by year'], { route: async () => ({ id: 'route-c', agent: 'create', sure: 0.9, by: 'model' }) });
   m.editor.askInline(1);
@@ -669,11 +669,11 @@ test('@create: a line Bart sent to Create waits 5 s ("Creating in 5 s · Cancel"
   const askId = m.lines()[3].replace(/^bart~> /, '');
   assert.equal(m.asks.length, 0, 'not asked yet');
   let html = m.editor.editorHtml();
-  assert.match(html, /Creating in 5 s/);
+  assert.match(html, /Creating a chart<\/span>.*Starts in 5 s/);
   assert.match(html, new RegExp(`data-act="cancelwait" data-ask="${askId}"[^>]*>Cancel<`));
   const seconds = (n) => { for (let k = 0; k < n; k++) t.mock.timers.tick(1000); }; // a tick fires no timer set during it
   seconds(2);
-  assert.match(m.editor.editorHtml(), /Creating in 3 s/, 'it counts down');
+  assert.match(m.editor.editorHtml(), /Starts in 3 s/, 'it counts down');
   seconds(2);
   t.mock.timers.tick(999);
   assert.equal(m.asks.length, 0);
@@ -681,7 +681,7 @@ test('@create: a line Bart sent to Create waits 5 s ("Creating in 5 s · Cancel"
   assert.equal(m.asks.length, 1, 'asked after 5 s');
   assert.deepEqual([m.asks[0].askId, m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name], [askId, 'create', 'make a chart of CHI submissions by year', { id: 'route-c' }, true]);
   html = m.editor.editorHtml();
-  assert.ok(!/Creating in|cancelwait/.test(html), 'the countdown is gone');
+  assert.ok(!/Starts in|cancelwait/.test(html), 'the countdown is gone');
   assert.equal(m.editor.cancelCreate(askId), false, 'too late to cancel: Stop stops it now');
 });
 
@@ -1036,10 +1036,10 @@ test('a line being routed names, from the start, the level it would start on; th
   assert.equal(label(m, d), 'Thinking · Opus max');
   const b = { r1: askProgressed(askStarted({ r1: { docKey: 'k', agent: 'router', name: 'Sonnet', effort: 'high' } }, 'r1', { docKey: 'k', agent: 'brainstorm' }).r1, { step: 1, of: 1, movedUp: 0 }) };
   assert.equal(b.r1.name, '', 'Brainstorm\'s step drops the level it was routed with');
-  // "Creating in 5 s" and "Starting a Build" are as they were; Workspace wires the router's level and merges.
+  // Create's wait ("Starts in 5 s") and "Starting a Build" are as they were; Workspace wires the router's level and merges.
   const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
   assert.match(workspace, /\[askId\]: \{ docKey: key, agent: 'router', \.\.\.\(level \? \{ name: level\.name, effort: level\.effort \} : \{\}\) \}/);
-  assert.match(workspace, /setAsks\(\(current\) => askStarted\(current, askId, \{ docKey: key, agent: agent \|\| 'bart' \}\)\)/);
+  assert.match(workspace, /setAsks\(\(current\) => askStarted\(current, askId, \{ docKey: key, agent: agent \|\| 'bart', at: \(current\[askId\] && current\[askId\]\.at\) \|\| Date\.now\(\) \}\)\)/);
   assert.match(workspace, /\[askId\]: askProgressed\(ask, progress\)/);
   assert.ok(workspace.includes("activity: 'Starting a Build'"));
 });

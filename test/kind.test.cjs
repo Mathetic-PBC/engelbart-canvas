@@ -34,7 +34,7 @@ test('how a row is shown: the type says what it is, the tags say the rest, and n
   assert.deepEqual([kindKey({ type: 'note' }), kindKey({ type: 'chat' }), kindKey({ type: 'task' }), kindKey({ type: 'workspace' }), kindKey(undefined)], ['note', 'chat', 'task', 'workspace', 'note']);
 });
 
-test('the Library panel\'s chips: each kind under one chip, a repository address under Repos not Web, pictures under none', async () => {
+test('the Library panel\'s chips: each kind under one chip, a repository address under Repos not Web, pictures under none, what @create made under Assets', async () => {
   const { libraryFilter, libraryCounts, LIBRARY_CHIPS } = await load();
   const rows = {
     note: { type: 'md', tags: ['note'] },
@@ -48,15 +48,17 @@ test('the Library panel\'s chips: each kind under one chip, a repository address
     folder: { type: 'folder', tags: [] },
     csv: { type: 'csv', tags: [] },
     image: { type: 'image', tags: [] },
+    madeSvg: { type: 'image', tags: [], source: 'create' },
+    madeHtml: { type: 'html', tags: [], source: 'create' },
   };
   const chips = LIBRARY_CHIPS.map((chip) => chip.id).filter((id) => id !== 'all');
-  assert.deepEqual(chips, ['notes', 'papers', 'repos', 'web', 'files']);
+  assert.deepEqual(chips, ['notes', 'papers', 'repos', 'web', 'files', 'assets']);
   const under = Object.fromEntries(Object.entries(rows).map(([name, row]) => [name, chips.filter((chip) => libraryFilter(row, chip))]));
   assert.deepEqual(under, {
     note: ['notes'], mdFile: ['files'], pdf: ['papers'], gitFolder: ['repos'], gitAddress: ['repos'], website: ['web'], html: ['web'],
-    docx: ['files'], folder: ['files'], csv: ['files'], image: [],
+    docx: ['files'], folder: ['files'], csv: ['files'], image: [], madeSvg: ['assets'], madeHtml: ['assets'],
   });
-  assert.equal(Object.values(rows).filter((row) => libraryFilter(row, 'all')).length, 10, 'All is everything but the picture');
+  assert.equal(Object.values(rows).filter((row) => libraryFilter(row, 'all')).length, 12, 'All is everything but the picture (one @create made is in)');
   assert.equal(libraryFilter(rows.pdf), true, 'no chip is All');
-  assert.deepEqual(libraryCounts(Object.values(rows)), { all: 10, notes: 1, papers: 1, repos: 2, web: 2, files: 4 });
+  assert.deepEqual(libraryCounts(Object.values(rows)), { all: 12, notes: 1, papers: 1, repos: 2, web: 2, files: 4, assets: 2 });
 });

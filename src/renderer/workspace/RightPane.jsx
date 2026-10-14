@@ -13,10 +13,10 @@ export const RIGHT_MODES = [
 // `onOpenItem`, `mentionItems` and `onMentionOpen` (MATH-21) are for a pdf's margin notes, which mention library items;
 // `listFolder`, `fileState` and `onOpenFile` (MATH-22) for the files inside library folders they mention.
 // `pendingAsks`, `onAsk`, `onStopAsk`, `onDismissAsk`, `onContinueAsk` and `onCopyText` (MATH-27) are @bart on a highlight.
-const RightPane = React.forwardRef(function RightPane({ mode, projectDir, projectId, full, onFull, onShowStage, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText, style }, stageRef) {
+const RightPane = React.forwardRef(function RightPane({ mode, projectDir, projectId, full, onFull, onShowStage, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText, onTabs, style }, stageRef) {
   return (
     <section aria-label="Right pane" style={style}>
-      <Stage ref={stageRef} projectId={projectId} visible={mode === 'stage'} full={full} onFull={onFull} onShow={onShowStage} onPage={onPage} onFront={onFront} save={save} library={library} inRail={inRail} onError={onError} onOpenItem={onOpenItem} mentionItems={mentionItems} onMentionOpen={onMentionOpen} listFolder={listFolder} fileState={fileState} onOpenFile={onOpenFile} pendingAsks={pendingAsks} onAsk={onAsk} onStopAsk={onStopAsk} onDismissAsk={onDismissAsk} onContinueAsk={onContinueAsk} onCopyText={onCopyText} />
+      <Stage ref={stageRef} projectId={projectId} visible={mode === 'stage'} full={full} onFull={onFull} onShow={onShowStage} onPage={onPage} onFront={onFront} save={save} library={library} inRail={inRail} onError={onError} onOpenItem={onOpenItem} mentionItems={mentionItems} onMentionOpen={onMentionOpen} listFolder={listFolder} fileState={fileState} onOpenFile={onOpenFile} pendingAsks={pendingAsks} onAsk={onAsk} onStopAsk={onStopAsk} onDismissAsk={onDismissAsk} onContinueAsk={onContinueAsk} onCopyText={onCopyText} onTabs={onTabs} />
       <TerminalPane cwd={projectDir} projectId={projectId} visible={mode === 'terminal'} full={full} onFull={onFull} />
     </section>
   );

@@ -108,9 +108,10 @@ const sourceOfApp = (name) => (name === 'GitHub' ? 'code' : (SOURCES.find((sourc
 // What a library row knows about where it came from (Library Phase B, 2026-10-11). `source`: an app above (GitHub excepted:
 // a repository's source is `github`), or one of the four ways something reaches the library without an import:
 // `engelbart` (written here), `mac` (a file or folder on this Mac), `web` (an address, or a copy of one), `github` (a
-// repository). Null is unknown. `category`: what the row is to the person, whatever its file type; an import's default is
+// repository). `create` (2026-10-14): a file @create made that the person saved (bart/create.cjs saveCreated), the Library's
+// Assets chip. Null is unknown. `category`: what the row is to the person, whatever its file type; an import's default is
 // its group's (GROUP_CATEGORIES), other groups (sites, code) have none.
-const ITEM_SOURCES = Object.freeze([...new Set([...SOURCES.flatMap((source) => source.apps), ...Object.keys(APPS).filter((app) => app !== 'GitHub')]), 'engelbart', 'mac', 'web', 'github']);
+const ITEM_SOURCES = Object.freeze([...new Set([...SOURCES.flatMap((source) => source.apps), ...Object.keys(APPS).filter((app) => app !== 'GitHub')]), 'engelbart', 'mac', 'web', 'github', 'create']);
 const ITEM_CATEGORIES = Object.freeze(['chat', 'meeting', 'email', 'note', 'paper', 'repo', 'web', 'data', 'document', 'image', 'file']);
 const GROUP_CATEGORIES = Object.freeze({ transcripts: 'meeting', chats: 'chat', email: 'email', notes: 'note', papers: 'paper' });
 /** The category an import from `app` gets unless it knows better: its group's ('chat' for Claude), else null. */

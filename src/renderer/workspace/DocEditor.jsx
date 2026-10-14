@@ -51,7 +51,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { HAMMER_PATHS } from '../model/hammer.js';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchLine, researchText, wsMention, fileMention, zoteroMention, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, whenShown, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchLine, researchText, wsMention, fileMention, zoteroMention, madeMentionOf, madeKey, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, whenShown, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, isResultOffer, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -66,7 +66,8 @@ import Popover from './Popover.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
 import { guideTitle, guideRepo, repoOf } from '../model/guide.js';
-import { guideSections, splitTarget } from '../model/stage.js';
+import { guideSections, splitTarget, parseTable } from '../model/stage.js';
+import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
 import { isNote } from '../model/kind.js';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
@@ -79,7 +80,7 @@ export const BART_ITEM = { id: 'bart', type: 'chat', name: 'bart', title: 'Bart'
 export const CHAT_ITEM = { id: 'chat', type: 'chat', name: 'chat', title: 'Chat', summary: 'Ask a question about this document, the project\'s code or the web. Add --opus or --high to pick the model or the effort by hand.', facts: 'reads, never edits' };
 export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', title: 'Discover', summary: 'Find what to read about a problem, and where in it to look: it traces the citations of the papers in your library and the pages of the people you follow. Pick Quick, Standard or Deep on the line\'s chip.', facts: 'finds, never concludes' };
 // @create (2026-10-13; main/bart/create.cjs): makes a new thing and keeps it in the library. It adds files, never changes one.
-export const CREATE_ITEM = { id: 'create', type: 'chat', name: 'create', title: 'Create', summary: 'Makes a new file (a page, a chart, a document) and saves it to your library.', facts: 'adds, never edits' };
+export const CREATE_ITEM = { id: 'create', type: 'chat', name: 'create', title: 'Create', summary: 'Makes a new file (a page, a chart, a document) under your line; Save puts the ones you want in your library.', facts: 'adds, never edits' };
 export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Think out loud about a topic, a paper or what is on your mind, then write what you want to dig into next.', facts: 'asks, never proposes' };
 
 const UNDER_BART = ['pending', 'reply'];
@@ -171,7 +172,7 @@ const mentionBeside = (text, at, before) => {
 // A link ⌘-clicked (Ctrl-clicked off macOS, where Ctrl-click is the context menu) opens in a new Stage tab (2026-10-02).
 const newTabClick = (e) => e.metaKey || (e.ctrlKey && !/^(darwin|mac)/i.test(document.documentElement.dataset.platform || navigator.platform || ''));
 
-const RISE_CSS = '@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes thinking{0%,100%{opacity:.25}50%{opacity:1}}';
+const RISE_CSS = '@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes thinking{0%,100%{opacity:.25}50%{opacity:1}}@keyframes made-spin{to{transform:rotate(360deg)}}';
 // The hint on a document's last line while it is empty (2026-10-09, the Welcome walkthrough's "Write your thoughts…"):
 // drawn by CSS where the line's <br> is, so it is never in the text and the caret stays put.
 const cssString = (text) => `"${String(text).replace(/["\\]/g, '\\$&').replace(/[\n\r]+/g, ' ')}"`;
@@ -222,7 +223,12 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.bart-reply{display:inline-flex;align-items:center;height:28px;padding:0 10px;border:1px solid #e6e6e6;border-radius:6px;background:#fff;color:#4d4d4d;font:12.5px/1 var(--font-sans);cursor:pointer;transition:border-color 120ms}.bart-reply:hover{border-color:#c9c9c9;color:#171717}'
   + '.bart-more{display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;color:#4d4d4d;font:500 13px/1.6 var(--font-sans);cursor:pointer}.bart-more:hover{color:#171717}'
   + '[data-more][data-cut]::before{content:"";position:absolute;left:18px;right:16px;bottom:100%;height:56px;background:linear-gradient(rgba(250,250,250,0),#fafafa);pointer-events:none}'
-  + '[data-folded-row]:hover .t{color:#4d4d4d}';
+  + '[data-folded-row]:hover .t{color:#4d4d4d}'
+  // @create's row (2026-10-14, the boards): the file's name a blue link, Save a white bordered button, Saved grey words.
+  + '.made-name{color:#0070f3;cursor:pointer;text-decoration:none}.made-name:hover{text-decoration:underline;text-underline-offset:3px}'
+  + '.made-btn{flex:none;display:inline-flex;align-items:center;gap:6px;height:28px;padding:0 10px;border:1px solid #e3e3e3;border-radius:6px;background:#fff;color:#262626;font:13px/1 var(--font-sans);cursor:pointer;transition:border-color 120ms}.made-btn:hover{border-color:#c9c9c9}.made-btn:disabled{cursor:default;opacity:.6}'
+  + '.made-saved{flex:none;display:inline-flex;align-items:center;gap:5px;height:28px;padding:0 6px;color:#8f8f8f;font:13px/1 var(--font-sans)}'
+  + '.made-frame img{display:block;width:100%;height:auto}.made-frame table{border-collapse:collapse;font:13px/1.5 var(--font-sans)}.made-frame td,.made-frame th{padding:4px 10px;border-bottom:1px solid #eee;text-align:left;white-space:nowrap}';
 // A Zotero chip's hover text while its paper's download is waited for (MATH-65 build 4).
 const WAITING_TIP = "Opened in your browser. Download the PDF and it'll open here.";
 // Lucide's drawings at the design's weight: 16px, 1.5px stroke, round caps.
@@ -281,6 +287,52 @@ const foldTurns = (ls, turns, to = true) => {
   const under = (j) => turns.some((turn) => turn.answered && !turn.pending && j >= turn.from && j <= turn.to);
   return ls.map((l, j) => { if (!under(j)) return l; const p = parseLine(l); return p.type === 'reply' && p.folded !== to ? replyLine(p.text, to).trimEnd() : l; });
 };
+// @create's row (2026-10-14; main/bart/create.cjs). A file it made is a line of its answer, `@[name](made:<askId>/<path>)`,
+// drawn as one row: a 46×32 thumbnail, the name in blue (a click opens it in the Stage), its kind in grey, then Save (or
+// Saved) and a chevron that opens it inline in a frame the width of the document. While Create works, the same row says
+// what it is making ("Creating a diagram"), what it is doing, how long it has taken, and Stop. What a file holds comes
+// from props.madeFiles (Workspace, by madeKey): { name, type, ext, path, saved, url, previewUrl, text, missing, error }.
+const MADE_NOUN = { svg: 'Diagram', html: 'Page', htm: 'Page', md: 'Document', markdown: 'Document', csv: 'Dataset', tsv: 'Dataset', json: 'Data', jsonl: 'Data', ndjson: 'Data', png: 'Image', jpg: 'Image', jpeg: 'Image', gif: 'Image', webp: 'Image', pdf: 'PDF', parquet: 'Data', xlsx: 'Spreadsheet', docx: 'Document' };
+const extOf = (name) => (/\.([^./]+)$/.exec(String(name || '')) || ['', ''])[1].toLowerCase();
+// A Markdown file that is one fenced block with a line or two around it is a script (Create's prompt: "a .md file holding
+// the script in one fenced code block").
+const isScript = (text) => { const ls = String(text || '').split('\n'), fences = ls.filter((l) => /^\s*```/.test(l)).length; return fences === 2 && ls.filter((l) => l.trim() && !/^\s*```/.test(l)).length > 0 && ls.slice(0, ls.findIndex((l) => /^\s*```/.test(l))).filter((l) => l.trim()).length <= 3; };
+export const madeNoun = (name, file) => ((/^(md|markdown)$/.test(extOf(name)) && file && isScript(file.text)) ? 'Script' : MADE_NOUN[extOf(name)] || 'File');
+// What Create is making, as its running row says it ("Creating a diagram"): the first of these words in what it said it is
+// making, else in the request, else the kind of the file it is writing; else "Create".
+const MAKING_WORDS = ['slide deck', 'slides', 'presentation', 'diagram', 'flowchart', 'chart', 'graph', 'plot', 'map', 'timeline', 'page', 'website', 'site', 'dashboard', 'document', 'report', 'essay', 'summary', 'outline', 'plan', 'list', 'table', 'dataset', 'spreadsheet', 'script', 'image', 'picture', 'poster', 'svg', 'csv'];
+export function makingLabel(said, request, writing) {
+  for (const text of [said, request]) {
+    const t = String(text || '').toLowerCase(); let best = null;
+    for (const word of MAKING_WORDS) { const at = t.search(new RegExp(`\\b${word}\\b`)); if (at >= 0 && (!best || at < best.at)) best = { at, word }; }
+    if (best) { const word = best.word === 'svg' ? 'diagram' : best.word === 'csv' ? 'dataset' : best.word; return /s$/.test(word) && word !== 'analysis' ? `Creating ${word}` : `Creating ${/^[aeiou]/.test(word) ? 'an' : 'a'} ${word}`; }
+  }
+  const noun = writing ? MADE_NOUN[extOf(writing)] : null;
+  return noun ? `Creating ${/^[AEIOU]/.test(noun) ? 'an' : 'a'} ${noun.toLowerCase()}` : 'Create';
+}
+// m:ss since `at`.
+const clockOf = (at, now = Date.now()) => { const s = Math.max(0, Math.floor((now - (at || now)) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+const MADE_ICON = {
+  folderPlus: icon('<path d="M12 10v6"></path><path d="M9 13h6"></path><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"></path>', 15),
+  check: icon('<path d="M20 6 9 17l-5-5"></path>', 14, 2),
+  down: icon('<path d="m6 9 6 6 6-6"></path>', 16, 1.75),
+  up: icon('<path d="m18 15-6-6-6 6"></path>', 16, 1.75),
+  stage: icon('<rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M15 3v18"></path>', 15),
+  doc: icon('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"></path><path d="M14 2v4a2 2 0 0 0 2 2h4"></path><path d="M10 9H8"></path><path d="M16 13H8"></path><path d="M16 17H8"></path>', 15),
+  table: icon('<rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M3 9h18"></path><path d="M3 15h18"></path><path d="M9 3v18"></path>', 15),
+  code: icon('<path d="m16 18 6-6-6-6"></path><path d="m8 6-6 6 6 6"></path>', 15),
+  image: icon('<rect width="18" height="18" x="3" y="3" rx="2"></rect><circle cx="9" cy="9" r="2"></circle><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"></path>', 15),
+};
+const madeGlyph = (noun) => (noun === 'Script' ? MADE_ICON.code : noun === 'Dataset' || noun === 'Data' || noun === 'Spreadsheet' ? MADE_ICON.table : noun === 'Image' || noun === 'Diagram' ? MADE_ICON.image : MADE_ICON.doc);
+const THUMB_BOX = 'flex:none;position:relative;display:inline-flex;align-items:center;justify-content:center;width:46px;height:32px;box-sizing:border-box;border:1px solid #e3e3e3;border-radius:5px;background:#fafafa;overflow:hidden;color:#a3a3a3';
+const SPINNER = '<span aria-hidden="true" style="display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #d6d6d6;border-top-color:#8f8f8f;border-radius:50%;animation:made-spin .8s linear infinite"></span>';
+// A Markdown file shown in its frame: blocks and runs read as data (model/markdown.js), every character escaped.
+const runsHtml = (text) => inlineRuns(text).map((r) => (r.code ? `<code style="font:.92em var(--font-mono);background:#f2f2f2;padding:1px 4px;border-radius:4px">${esc(r.text)}</code>` : r.bold ? `<strong>${esc(r.text)}</strong>` : r.italic ? `<em>${esc(r.text)}</em>` : r.href ? `<span style="color:#0070f3">${esc(r.text)}</span>` : esc(r.text))).join('');
+const mdFrameHtml = (text) => markdownBlocks(text).map((b) => (b.type === 'h' ? `<div style="font:600 ${[20, 17, 15, 15, 15, 15][b.level - 1]}px/1.4 var(--font-sans);margin:10px 0 4px">${runsHtml(b.text)}</div>`
+  : b.type === 'li' ? `<div style="display:flex;gap:8px;padding-left:${b.depth * 18}px"><span style="color:#8f8f8f">${b.ordered ? esc(b.marker) : '•'}</span><span>${runsHtml(b.text)}</span></div>`
+    : b.type === 'code' ? `<pre style="margin:8px 0;padding:10px 12px;background:#f5f5f5;border-radius:6px;font:12.5px/1.55 var(--font-mono);white-space:pre-wrap">${esc(b.text)}</pre>`
+      : b.type === 'quote' ? `<div style="padding-left:12px;border-left:2px solid #dcdcdc;color:#4d4d4d">${runsHtml(b.text)}</div>`
+        : b.type === 'hr' ? '<hr style="border:0;border-top:1px solid #eaeaea;margin:12px 0">' : `<p style="margin:6px 0">${runsHtml(b.text)}</p>`)).join('');
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
 // A flag the models file recognises is a little bolder than the text around it; a `--word` it does not know stays plain.
 const FLAG_LOOK = 'font-weight:500';
@@ -316,6 +368,8 @@ export default class DocEditor extends React.Component {
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
   syncing = false; wantFocus = false; wantAnchor = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
   openLogs = new Set(); // asks whose list of steps is open
+  madeOpen = new Set(); // @create's files opened inline in their frame (madeKey); clock: the timer that moves running rows' m:ss
+  clock = null;
   waits = new Map(); // routed Create asks counting down (waitCreate): askId → { ask, left, timer }
   streamFollow = new Map(); // askId → false while the person has scrolled up in its answer-so-far box (streamScrolled)
   pickerT = null;
@@ -400,7 +454,7 @@ export default class DocEditor extends React.Component {
         this.nearA = null; this.downGap = null;
         if (!inEd(e)) return;
         this.downOnRoot = e.target === this.editorEl();
-        if (e.target.closest('button[data-act], [data-build-icon][data-act], .bart-chip, a[data-link], [data-mention], [data-folded-row]')) { e.preventDefault(); return; }
+        if (e.target.closest('button[data-act], [data-build-icon][data-act], .bart-chip, a[data-link], [data-mention], [data-folded-row], .made-name, [data-made-folded]')) { e.preventDefault(); return; }
         this.downGap = e.button === 0 && !inFollow(e) ? this.gapAt(e.target, e.clientY) : null;
         if (this.downGap && !this.downOnRoot) { e.preventDefault(); return; }
         const near = e.button === 0 && !inFollow(e) ? this.nearLink(e.target, e.clientX, e.clientY) : null;
@@ -435,6 +489,8 @@ export default class DocEditor extends React.Component {
     document.addEventListener('scroll', this.streamScrolled, true); // so does an answer so far (placeStreams)
     window.addEventListener('resize', this.fitFollows);
     this.syncEditor();
+    this.needMade();
+    Promise.resolve().then(() => this.runClock());
     this.wantView = true; this.maybeRestoreView();
     if (typeof ResizeObserver === 'function' && this.editorEl()) {
       this.resizeObs = new ResizeObserver(() => { const s = this.settle; if (s && s.key === this.key() && Date.now() < s.until) this.applyView(s.pos); });
@@ -448,8 +504,21 @@ export default class DocEditor extends React.Component {
     return null;
   }
 
+  // A Create run's m:ss moves once a second, on its row alone (patchPending), only while one is drawn: no timer otherwise.
+  runClock() {
+    const ed = this.editorEl(), running = !!(this.mounted && ed && typeof ed.querySelector === 'function' && ed.querySelector('[data-made-clock]'));
+    if (running && !this.clock) {
+      this.clock = setInterval(() => { if (!this.runClock()) return; this.patchPending(); }, 1000);
+      if (this.clock && typeof this.clock.unref === 'function') this.clock.unref(); // under node (the tests), never what keeps it running
+    }
+    else if (!running && this.clock) { clearInterval(this.clock); this.clock = null; }
+    return running;
+  }
+
   componentDidUpdate(prevProps, prevState) {
     this.autoCollapse();
+    Promise.resolve().then(() => this.runClock()); // once this update has drawn (or patched) the rows
+    if (prevProps.text !== this.props.text || prevProps.madeFiles !== this.props.madeFiles || prevProps.docKey !== this.props.docKey) this.needMade();
     // The @ menu opening and closing (a line's or a follow-up field's): the workspace asks for what things say then (MATH-29).
     if (prevState && !prevState.mention !== !this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(!!this.state.mention);
     if (!this.state.mention && this.state.browse) this.setState({ browse: null }); // a folder opened in the menu closes with it (MATH-22)
@@ -467,7 +536,7 @@ export default class DocEditor extends React.Component {
     const finished = prevProps.builds !== this.props.builds && prevProps.text === this.props.text && this.buildsDone(prevProps.builds) !== this.buildsDone(this.props.builds);
     // Builds first: each patch ends by redrawing the editor's HTML in memory, which is where the cards' parts are remembered.
     // A guide's paper buttons (paperState) and Try marks (repoState) are not patched: a change there redraws the editor.
-    if ((asked || built) && !finished && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && prevProps.paperState === this.props.paperState && prevProps.repoState === this.props.repoState && (!built || this.patchBuilds()) && (!asked || this.patchPending())) { this.markBeside(); return; }
+    if ((asked || built) && !finished && prevProps.text === this.props.text && prevProps.docKey === this.props.docKey && prevProps.models === this.props.models && prevProps.paperState === this.props.paperState && prevProps.repoState === this.props.repoState && prevProps.madeFiles === this.props.madeFiles && prevProps.madeOpen === this.props.madeOpen && (!built || this.patchBuilds()) && (!asked || this.patchPending())) { this.markBeside(); return; }
     this.syncEditor();
     this.maybeRestoreView();
     this.markBeside();
@@ -477,7 +546,7 @@ export default class DocEditor extends React.Component {
     if (this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(false);
     if (this.lastKey === this.key()) this.reportView(this.props, true);
     this.dropEdit(this.props);
-    this.mounted = false; clearTimeout(this.pickerT); clearTimeout(this.viewT);
+    this.mounted = false; clearTimeout(this.pickerT); clearTimeout(this.viewT); clearInterval(this.clock);
     if (this.resizeObs) this.resizeObs.disconnect();
     window.removeEventListener('resize', this.fitFollows);
     Object.entries(this.docListeners || {}).forEach(([k, f]) => document.removeEventListener(k, f));
@@ -946,6 +1015,8 @@ export default class DocEditor extends React.Component {
       // it is doing, the things it has done (behind the count, closed until clicked) and the answer so far. None of that is
       // in the document: it comes from props.asks, and the row's `data-raw` stays the bare pending line.
       const ask = (this.props.asks || {})[p.id], wait = this.waits.get(p.id);
+      // A Create run (2026-10-14): the row its file will have (createPendingHtml).
+      if ((ask && ask.agent === 'create') || (wait && !wait.ask.research) || (!ask && !wait && at && at.agent === 'create')) return this.createPendingHtml(raw, p, at, ask, wait);
       const doing = wait ? `${wait.ask.research ? 'Searching' : 'Creating'} in ${wait.left} s` : ask ? (ask.activity || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
       const label = wait ? esc(doing) : ask ? `${esc(doing)}${ask.name ? ` · ${esc(ask.name)} ${esc(ask.effort)}` : ''}` : 'No answer came back: the run was interrupted.';
       const log = (ask && ask.log) || [], open = this.openLogs.has(p.id);
@@ -989,6 +1060,9 @@ export default class DocEditor extends React.Component {
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.card) return this.cardHtml(raw, at.card);
+      // A file @create made (2026-10-14): its row, never edited in place.
+      const madeHere = at && at.role === 'answer' && !at.box ? madeMentionOf(p.text) : null;
+      if (madeHere) return this.madeLineHtml(raw, madeHere, at);
       // One line of an answer, in the grey card with one continuous rule down its left. The caret's line shows its source
       // on a light focus tint; the rule and the card stay where they are.
       // (An answer with no question above it, left by an edit outside the app, is a card of its own.)
@@ -1683,23 +1757,27 @@ export default class DocEditor extends React.Component {
   titleHtml(i, raw, p, at) {
     if (!at.collapsed) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
     const { thread } = at, title = p.text.trim();
+    const editingTitle = !!this.titleEdit && this.titleEdit.line === i;
+    const made = editingTitle ? [] : thread.turns.flatMap((turn) => this.madeInTurn(this.lines(), turn));
     const name = agentName(thread), when = whenShown(thread.at);
     const first = thread.turns && thread.turns[0], shown = title || (first ? questionLine(turnText(this.lines(), first).question, 60) : '') || name;
     // On the right (2026-10-13): when it was asked, the agent before it only when it is not Chat ("Build · 2:37 PM").
     const said = [name === CHAT_ITEM.title ? '' : name, when].filter(Boolean).join(' · ');
     const editing = !!this.titleEdit && this.titleEdit.line === i;
-    const row = `<div ${raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" style="user-select:none;display:flex;align-items:center;gap:12px;min-width:0;height:42px;box-sizing:border-box;font:15px/1.4 var(--font-sans)">`;
+    const row = `<div ${made.length ? '' : raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" style="user-select:none;display:flex;align-items:center;gap:12px;min-width:0;height:42px;box-sizing:border-box;font:15px/1.4 var(--font-sans)">`;
     if (editing) {
       return row + `<span style="flex:none;display:inline-flex;color:#0070f3;margin-right:-4px">${ICON.pointer}</span>`
         + `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:15px/1.4 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
         + '</div>';
     }
-    return row + `<span class="bart-link" data-act="foldthread" data-row="${i}" role="button" tabindex="0" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" title="⌥-click to rename" style="flex:0 1 auto;display:inline-flex;align-items:center;gap:8px;min-width:0">`
+    const link = row + `<span class="bart-link" data-act="foldthread" data-row="${i}" role="button" tabindex="0" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" title="⌥-click to rename" style="flex:0 1 auto;display:inline-flex;align-items:center;gap:8px;min-width:0">`
       + `<span style="flex:none;display:inline-flex">${ICON.pointer}</span>`
       + `<span class="bart-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span>`
       + '</span>'
       + (said ? `<span data-thread-when="1" style="flex:none;margin-left:auto;font:12px/1 var(--font-sans);color:#8f8f8f;white-space:nowrap">${esc(said)}</span>` : '')
       + '</div>';
+    // A Create conversation (2026-10-14): its files' rows stay under its title, in line with the title's words.
+    return made.length ? `<div ${raw} contenteditable="false" data-readonly="1" data-made-folded="1" style="user-select:none">${link}<div style="padding:0 0 6px 24px">${made.map((one) => this.madeHtml(one)).join('')}</div></div>` : link;
   }
   // The Collapse in an answered question's top-right corner (2026-10-13; only a titled Build's now). In a titled
   // conversation it folds all of it to its title's row (foldthread), not while a turn of it runs; otherwise it folds the
@@ -1718,12 +1796,16 @@ export default class DocEditor extends React.Component {
   // Since 2026-10-13 it is a line at the top of its card: a chevron, the question without its `@bart`, 6px to the next
   // and 18px to the question under the last of them.
   foldedHtml(i, raw, line, p, at) {
+    const made = this.madeInTurn(this.lines(), at.turn);
     const shown = (at.answers && this.answerShown(at.answers)) || esc(questionLine(p.text, 300) || leadOf(line, agentOf(p)));
     const below = at.closes ? 10 : at.lastBare ? 18 : 6;
-    return `<div ${raw} contenteditable="false" data-readonly="1" data-folded-row="${at.turn.q}" data-act="fold" data-turn="${at.turn.q}" role="button" aria-expanded="false" aria-label="Expand" style="user-select:none;cursor:pointer;display:flex;align-items:center;gap:6px;min-width:0;padding:${at.top ? 14 : 0}px 16px ${below}px;background:#fafafa;border-radius:${radius(at.top, at.closes)};margin-bottom:${at.closes ? '8px' : '0'};font:14px/1.5 var(--font-sans);color:#7a7a7a">`
+    const card = `background:#fafafa;border-radius:${radius(at.top, at.closes)};margin-bottom:${at.closes ? '8px' : '0'}`;
+    const head = `<div ${made.length ? '' : raw} contenteditable="false" data-readonly="1" data-folded-row="${at.turn.q}" data-act="fold" data-turn="${at.turn.q}" role="button" aria-expanded="false" aria-label="Expand" style="user-select:none;cursor:pointer;display:flex;align-items:center;gap:6px;min-width:0;padding:${at.top ? 14 : 0}px 16px ${made.length ? 4 : below}px;${made.length ? '' : `${card};`}font:14px/1.5 var(--font-sans);color:#7a7a7a">`
       + `<span style="flex:none;display:inline-flex;color:#a3a3a3">${ICON.folded}</span>`
       + `<span class="t" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${shown}</span>`
       + '</div>';
+    // A Create turn (2026-10-14): its files' rows stay under its folded question, in its card.
+    return made.length ? `<div ${raw} contenteditable="false" data-readonly="1" data-made-folded="1" style="user-select:none;${card};padding-bottom:${below}px">${head}<div style="padding:0 16px 0 38px">${made.map((one) => this.madeHtml(one)).join('')}</div></div>` : head;
   }
   // An @discover research box's head (2026-10-13; doc.js isResearch): its line, drawn as "Research · Standard", the level
   // it runs at (discoverLabel); a box that refines an earlier one in its conversation also says what it was asked. The
@@ -1904,6 +1986,108 @@ export default class DocEditor extends React.Component {
       if (p.type === 'todo' && (next == null || ps[i + 1].type !== 'todo')) { out += this.groupHtml(group); group = []; }
     });
     return out;
+  }
+  /* ---------------------------------------------------------------- @create's rows (2026-10-14) */
+  // The files a turn's answer stands for, in order: its lines that are a made file's token alone.
+  madeInTurn(ls, turn) {
+    const out = [];
+    for (let j = turn.from; j <= turn.to; j++) { const p = parseLine(ls[j] ?? ''); const made = p.type === 'reply' ? madeMentionOf(p.text) : null; if (made) out.push({ ...made, line: j }); }
+    return out;
+  }
+  madeFile(made) { return (this.props.madeFiles || {})[madeKey(made)] || null; }
+  // The thumbnail: the drawing, a picture, or a page's picture, scaled down to fill it; a file of words gets its glyph.
+  madeThumbHtml(made, file) {
+    const src = file && (file.url || file.previewUrl);
+    const inner = src ? `<img src="${esc(src)}" alt="" draggable="false" style="display:block;width:100%;height:100%;object-fit:cover;object-position:left top">` : file && !file.error && !file.missing ? madeGlyph(madeNoun(made.name, file)) : file ? madeGlyph(madeNoun(made.name, null)) : '';
+    return `<span aria-hidden="true" style="${THUMB_BOX}">${inner}</span>`;
+  }
+  // Save, or Saved once the library has it: the same everywhere the file shows (its row, its frame, the Stage).
+  madeSaveHtml(made, file) {
+    const key = esc(madeKey(made));
+    if (file && file.saved) return `<span class="made-saved" data-made-saved="${key}" title="${esc(`In your library as ${file.saved.name}`)}">${MADE_ICON.check}Saved</span>`;
+    const off = !file || !!file.error || !!file.missing || !!file.saving || !this.props.onSaveMade;
+    return `<button type="button" class="made-btn" data-act="madesave" data-made="${key}" data-name="${esc(made.name)}"${off ? ' disabled' : ''} title="Save to your library (Assets)">${MADE_ICON.folderPlus}<span>${file && file.saving ? 'Saving…' : 'Save'}</span></button>`;
+  }
+  // One file's row, or its frame while it is opened inline. `inCard`: inside its answer's grey card (open); folded, it
+  // stands alone. The row is grey (#f3f3f3) while its file is open in a Stage tab.
+  madeHtml(made, { inCard = true } = {}) {
+    const file = this.madeFile(made), key = madeKey(made), noun = madeNoun(made.name, file);
+    const stage = !!(this.props.madeOpen && this.props.madeOpen.has && this.props.madeOpen.has(key));
+    const name = `<span class="made-name" data-act="madeopen" data-made="${esc(key)}" data-name="${esc(made.name)}" role="link" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:15.5px/1.4 var(--font-sans)">${esc(made.name)}</span>`;
+    const chevron = (open) => `<button class="bart-ic" data-act="madeexpand" data-made="${esc(key)}" aria-label="${open ? 'Fold' : 'Open here'}" aria-expanded="${open}">${open ? MADE_ICON.up : MADE_ICON.down}</button>`;
+    if (this.madeOpen.has(key)) {
+      const body = !file ? '<div style="padding:24px;color:#8f8f8f;font:13px/1.5 var(--font-sans)">Loading…</div>'
+        : file.missing ? '<div style="padding:24px;color:#8f8f8f;font:13px/1.5 var(--font-sans)">This file is no longer there.</div>'
+          : file.error ? `<div style="padding:24px;color:#8f8f8f;font:13px/1.5 var(--font-sans)">${esc(file.error)}</div>`
+            : file.url ? `<img src="${esc(file.url)}" alt="${esc(made.name)}" draggable="false">`
+              : file.type === 'html' ? (file.previewUrl ? `<img src="${esc(file.previewUrl)}" alt="${esc(made.name)}" draggable="false">` : '<div style="padding:24px;color:#8f8f8f;font:13px/1.5 var(--font-sans)">No picture of this page: open it in the Stage.</div>')
+                : file.type === 'md' && typeof file.text === 'string' ? `<div style="padding:14px 18px;color:#262626;font:14px/1.6 var(--font-sans)">${mdFrameHtml(file.text)}</div>`
+                  : (file.type === 'csv' || file.type === 'tsv') && typeof file.text === 'string' ? `<div style="overflow:auto"><table>${parseTable(file.text, file.type === 'tsv' ? '\t' : ',', 200).map((cells, r) => `<tr>${cells.map((cell) => `<${r ? 'td' : 'th'}>${esc(cell)}</${r ? 'td' : 'th'}>`).join('')}</tr>`).join('')}</table></div>`
+                    : typeof file.text === 'string' ? `<pre style="margin:0;padding:14px 18px;font:12.5px/1.55 var(--font-mono);white-space:pre-wrap;color:#262626">${esc(file.text.slice(0, 20000))}</pre>`
+                      : '<div style="padding:24px;color:#8f8f8f;font:13px/1.5 var(--font-sans)">Open it in the Stage to see it.</div>';
+      return `<div class="made-frame" data-made-frame="${esc(key)}" style="border:1px solid #e3e3e3;border-radius:10px;overflow:hidden;background:#fff">`
+        + `<div style="max-height:min(640px,70vh);overflow:auto">${body}</div>`
+        + `<div style="display:flex;align-items:center;gap:8px;min-width:0;padding:8px 8px 8px 14px;background:#fafafa;border-top:1px solid #e3e3e3">`
+        + `<span style="flex:none;display:inline-flex;color:#8f8f8f">${madeGlyph(noun)}</span>`
+        + `<span class="made-name" data-act="madeopen" data-made="${esc(key)}" data-name="${esc(made.name)}" role="link" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#262626;font:14px/1.4 var(--font-sans)">${esc(made.name)}</span>`
+        + this.madeSaveHtml(made, file)
+        + `<button type="button" class="made-btn" data-act="madestage" data-made="${esc(key)}" data-name="${esc(made.name)}">${MADE_ICON.stage}<span>Open in Stage</span></button>`
+        + chevron(true) + '</div></div>';
+    }
+    return `<div data-made-row="${esc(key)}" style="display:flex;align-items:center;gap:12px;min-width:0;height:48px;box-sizing:border-box;padding:0 6px 0 ${inCard ? 0 : 6}px;margin:0 -6px;border-radius:8px;background:${stage ? '#f3f3f3' : 'transparent'}">`
+      + this.madeThumbHtml(made, file) + name
+      + `<span style="flex:none;font:13px/1 var(--font-sans);color:#8f8f8f">${esc(noun)}</span>`
+      + `<span style="flex:1"></span>${this.madeSaveHtml(made, file)}${chevron(false)}</div>`;
+  }
+  // A made file's line in an open answer: its row in the card, where the answer's text stands (inside the rule's margin).
+  madeLineHtml(raw, made, at) {
+    const first = at.first, closes = at.closes;
+    return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:${first ? 12 : 2}px 16px ${closes ? 10 : 2}px 32px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? 8 : 0}px">${this.madeHtml(made)}</div>`;
+  }
+  // A Create run at work (board 1): what it said it is making, as the answer's text will stand, then the row that will
+  // become the file's: a spinner in the thumbnail, "Creating a diagram", what it is doing in grey, m:ss and Stop. Waiting
+  // the five seconds a line Bart sent here waits (waitCreate), it says so and offers Cancel.
+  createPendingHtml(raw, p, at, ask, wait) {
+    const turnLine = at && at.turn ? parseLine(this.lines()[at.turn.q] ?? '').text : '';
+    const request = wait ? wait.ask.text : turnLine.replace(/^(?:--\S+\s+)*/, '');
+    const writing = ask && ask.log ? [...ask.log].reverse().map((entry) => (/^Writing (.+)$/.exec(entry) || [])[1]).find(Boolean) : null;
+    const coming = ask && !ask.making && !(ask.log && ask.log.length) && ask.lines && ask.lines.length ? ask.lines.join(' ') : '';
+    const said = (ask && ask.making) || coming;
+    const label = makingLabel(said, request, writing);
+    const doing = wait ? `Starts in ${wait.left} s` : ask ? (ask.activity && ask.activity !== 'Writing' ? ask.activity : ask.movedUp ? 'Thinking harder' : 'Thinking') : 'No answer came back: the run was interrupted.';
+    const closes = !at || at.closes;
+    const sentence = said ? `<div style="padding:0 0 6px;color:#262626;font-size:16px;line-height:1.65">${esc(said)}</div>` : '';
+    const button = wait ? `<button type="button" class="made-btn" data-act="cancelwait" data-ask="${esc(p.id)}">Cancel</button>`
+      : ask ? `<button type="button" class="made-btn" data-act="stopask" data-ask="${esc(p.id)}">Stop</button>`
+        : `<button type="button" class="made-btn" data-act="dropline" data-row="${raw.match(/data-line="(\d+)"/)[1]}">Hide</button>`;
+    return `<div ${raw} data-pending="${esc(p.id)}" data-create-pending="1" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:${at ? 12 : 2}px 16px 10px 32px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '8px' : '0'}">`
+      + sentence
+      + '<div style="display:flex;align-items:center;gap:12px;min-width:0;height:48px">'
+      + `<span aria-hidden="true" style="${THUMB_BOX}">${ask || wait ? SPINNER : ''}</span>`
+      + `<span style="flex:none;font:15.5px/1.4 var(--font-sans);color:#262626;white-space:nowrap">${esc(label)}</span>`
+      + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:13px/1.4 var(--font-sans);color:#8f8f8f">${esc(doing)}</span>`
+      + (ask && !wait ? `<span data-made-clock="1" style="flex:none;font:13px/1 var(--font-sans);color:#8f8f8f;font-variant-numeric:tabular-nums">${clockOf(ask.at)}</span>` : '')
+      + button + '</div></div>';
+  }
+  // The made files the document shows that the window has not read yet are asked for (props.onMadeNeeded).
+  needMade() {
+    if (!this.props.onMadeNeeded) return;
+    const held = this.props.madeFiles || {}, want = [], seen = new Set();
+    for (const line of this.lines()) {
+      const p = parseLine(line); if (p.type !== 'reply') continue;
+      const made = madeMentionOf(p.text); if (!made) continue;
+      const key = madeKey(made); if (held[key] || seen.has(key)) continue;
+      seen.add(key); want.push(made);
+    }
+    if (want.length) this.props.onMadeNeeded(want);
+  }
+  // A press on a row's name, Save, Open in Stage or chevron.
+  madeAct(k, act) {
+    const key = act.dataset.made || '', cut = key.indexOf('/'); if (cut < 1) return;
+    const made = { askId: key.slice(0, cut), rel: key.slice(cut + 1), name: act.dataset.name || key.slice(cut + 1).split('/').pop() };
+    if (k === 'madeexpand') { if (!this.madeOpen.delete(key)) this.madeOpen.add(key); this.lastHtml = null; this.syncEditor(); return; }
+    if (k === 'madesave') { if (!act.disabled && this.props.onSaveMade) this.props.onSaveMade(made); return; }
+    if (this.props.onOpenMade) this.props.onOpenMade(made);
   }
   /* Long answers (2026-10-13). An answer is known by its question and closing lines (answerKey); those in the document
      when it opened (seenAnswers, noted once per docKey) start cut at CLIP_OLD lines; one that lands while it is open is
@@ -2576,6 +2760,7 @@ export default class DocEditor extends React.Component {
       if (k.startsWith('build') && act.dataset.buildId) { this.buildAct(k, act.dataset.buildId, act.dataset.runName); return; }
       if (k === 'cancelwait') { this.cancelCreate(act.dataset.ask); return; }
       if (k === 'stopask') { if (this.props.onStopAsk) this.props.onStopAsk(act.dataset.ask); return; }
+      if (k === 'madeopen' || k === 'madestage' || k === 'madesave' || k === 'madeexpand') { this.madeAct(k, act); return; }
       if (k === 'toggle') this.toggleTodo(i);
       else if (k === 'remove') this.removeLine(i);
       return;
@@ -2590,6 +2775,8 @@ export default class DocEditor extends React.Component {
       return;
     }
     const m = e.target.closest('[data-mention]');
+    // A file @create made, mentioned in a line (2026-10-14): it opens in the Stage, as its row's name does.
+    if (m && m.dataset.made) { e.preventDefault(); this.hidePop(); this.madeAct('madeopen', m); return; }
     // A Zotero item (MATH-65 build 2) opens its pdf in the Stage, or its address when it has none.
     if (m && m.dataset.zotero) {
       e.preventDefault(); this.hidePop();
@@ -2618,7 +2805,7 @@ export default class DocEditor extends React.Component {
     }
   };
   editorOver = (e) => {
-    const m = e.target.closest('[data-mention]'), res = m && m.dataset.file == null && m.dataset.zotero == null && (m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention, m.dataset.lib));
+    const m = e.target.closest('[data-mention]'), res = m && m.dataset.file == null && m.dataset.zotero == null && m.dataset.made == null && (m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention, m.dataset.lib));
     if (res) this.showPop(res, { currentTarget: m });
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;

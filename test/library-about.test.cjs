@@ -78,11 +78,11 @@ test('the migration adds the columns and keeps every row and every value it had'
   await db.closeDb(path.join(root, 'library.pglite'));
 });
 
-test('a source is one of connect-sources\' apps or engelbart, mac, web, github; anything else is refused', async () => {
-  for (const source of ['Zotero', 'Claude', 'PDFs on this Mac', 'Google Docs', 'engelbart', 'mac', 'web', 'github']) assert.ok(ITEM_SOURCES.includes(source), source);
+test('a source is one of connect-sources\' apps or engelbart, mac, web, github, create; anything else is refused', async () => {
+  for (const source of ['Zotero', 'Claude', 'PDFs on this Mac', 'Google Docs', 'engelbart', 'mac', 'web', 'github', 'create']) assert.ok(ITEM_SOURCES.includes(source), source);
   assert.ok(!ITEM_SOURCES.includes('GitHub'), 'a repository is github, not the app GitHub');
   const insert = (fields) => ctx.libraryDb.insert({ id: randomUUID(), name: 'x', type: 'website', url: `https://example.org/${randomUUID()}`, ...fields });
-  await assert.rejects(insert({ source: 'Dropbox' }), /Unknown library source: Dropbox \(one of Obsidian, .*engelbart, mac, web, github\)/);
+  await assert.rejects(insert({ source: 'Dropbox' }), /Unknown library source: Dropbox \(one of Obsidian, .*engelbart, mac, web, github, create\)/);
   await assert.rejects(insert({ source: 'GitHub' }), /Unknown library source: GitHub/);
   await assert.rejects(insert({ category: 'kind' }), /Unknown library category: kind/);
   await assert.rejects(insert({ item_date: '2026-13-01' }), /YYYY or YYYY-MM-DD/);

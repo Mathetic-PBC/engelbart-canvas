@@ -448,6 +448,12 @@ async function openLibraryDb(testRoot) {
       if (!result.rows.length) throw new Error('Unknown library item');
       return plain(result.rows[0]);
     },
+    // Where a row came from, set over what it was added with (2026-10-14: a file @create made, saved by the person, is
+    // `create`, bart/create.cjs saveCreated). Not an edit: last_edited stays. → the row, or null when there is none.
+    async setSource(id, source) {
+      const result = await db.query('update library set source = $2 where id = $1 returning *', [requireText(id, 'id', { max: 64 }), optionalSource(source)]);
+      return result.rows.length ? plain(result.rows[0]) : null;
+    },
     // What is known about a repository, all on its one row: its GitHub id, its address, its clone on
     // disk, the name GitHub gives it. Every value is the one to store. Learning one is not an edit:
     // last_edited stays. A repository that has a folder is a folder; one that has only its address

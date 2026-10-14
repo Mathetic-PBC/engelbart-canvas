@@ -119,7 +119,7 @@ export const ATTACH_RE = /^!\[([^\]\n]*)\]\(img:([\w-]+)\)$/;
 // Math (2026-10-12): `$…$` inline by Pandoc's rule (no space just inside either `$`, the closing `$` not followed by a
 // digit, so "$5 and $10" stays text), `$$…$$` display, and `\$` a dollar as typed. Drawn with KaTeX (renderMath).
 const MATH_SRC = String.raw`\$\$(?:[^$\n\\]|\\.)+?\$\$|\$(?=[^\s$])(?:[^$\n\\]|\\.)+?(?<!\s)\$(?!\d)|\\\$`;
-export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|\[\[build\]\]|@(?:[Bb]art|[Cc]hat|[Bb]rainstorm|[Oo]rient|[Dd]iscover|[Cc]reate)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
+export const INLINE = new RegExp(String.raw`(${MATH_SRC}|` + /!\[[^\]\n]*\]\(img:[\w-]+\)|\[\[build\]\]|@(?:[Bb]art|[Cc]hat|[Bb]rainstorm|[Oo]rient|[Dd]iscover|[Cc]reate)(?=\s|$)|\*\*[^*\n]+\*\*|\*[^*\n]+\*|`[^`\n]+`|\[[^\]\n]+\]\([^)\s]+\)|@\[[^\]\n]+\]\(ws:[\w-]+\)|@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%\/-]+)?\)|@\[[^\]\n]+\]\(zotero:(?:g[0-9]+:)?[A-Za-z0-9]+\)|@\[[^\]\n]+\]\(made:[\w-]+\/[\w.~%\/-]+\)|@\[[^\]\n]+\]|https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"*`]/.source + ')', 'g');
 const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 // Build, named in an answer (2026-10-12): a routed build's answer ended "Press [[build]] Build to build it." (main/bart/
 // ask.cjs ROUTED_BUILD) until 2026-10-13, when it began asking "Want me to build it?" instead, a "yes" being routed to
@@ -226,6 +226,17 @@ export function zoteroMentionOf(tok) {
   const m = String(tok ?? '').match(ZOTERO_MENTION_RE);
   return m ? { name: m[1], key: m[2], group: (/^g([0-9]+):/.exec(m[2]) || ['', ''])[1] } : null;
 }
+// A file @create made (2026-10-14; main/bart/create.cjs madeMention): `@[name](made:<askId>/<path>)`, the run's id and the
+// file's path in its folder (<project>/.created/<askId>/), encoded as a file mention's is. On a line of its own in an
+// answer it is drawn as Create's row (DocEditor madeRowHtml); anywhere else, as a mention that opens it in the Stage.
+export const MADE_MENTION_RE = /^@\[([^\]\n]+)\]\(made:([\w-]+)\/([\w.~%/-]+)\)$/;
+/** A made file's token → { name, askId, rel } (`rel` decoded), or null. */
+export function madeMentionOf(tok) {
+  const m = String(tok ?? '').trim().match(MADE_MENTION_RE);
+  return m ? { name: m[1], askId: m[2], rel: decodeRel(m[3]) } : null;
+}
+/** Its key, as the editor and the window hold what they read of it: `<askId>/<rel>`. */
+export const madeKey = (made) => `${made.askId}/${made.rel}`;
 // What kind of file a name is, by its extension, as the library tells (store/library.cjs FILE_TYPES): the chip's glyph.
 const FILE_KINDS = { md: 'md', markdown: 'md', pdf: 'pdf', html: 'html', htm: 'html', csv: 'data', tsv: 'data', json: 'data', jsonl: 'data', ndjson: 'data', parquet: 'data', xlsx: 'data', docx: 'md', png: 'image', jpg: 'image', jpeg: 'image', gif: 'image', webp: 'image', heic: 'image', svg: 'image' };
 export const fileKindOf = (name) => { const ext = /\.([^./]+)$/.exec(String(name || '')); return (ext && FILE_KINDS[ext[1].toLowerCase()]) || 'file'; };
@@ -451,6 +462,7 @@ export function tokShown(tok, opts) {
   const ws = tok.match(WS_MENTION_RE); if (ws) return { shown: '@' + ws[1], pre: 1 }; // the icon after the @ is not text
   const file = tok.match(FILE_MENTION_RE); if (file) return { shown: '@' + file[1], pre: 1 }; // nor a file's glyph
   const zotero = tok.match(ZOTERO_MENTION_RE); if (zotero) return { shown: '@' + zotero[1], pre: 1 }; // nor a Zotero item's
+  const made = tok.match(MADE_MENTION_RE); if (made) return { shown: '@' + made[1], pre: 1 };
   const lib = tok.match(LIB_MENTION_RE); if (lib) return { shown: '@' + libShown(lib[1], lib[2], opts && opts.libName), pre: 1 };
   if (tok.startsWith('@[')) { const nm = tok.slice(2, -1), chat = chatMention(nm); return { shown: '@' + (chat ? chat.shown : nm), pre: 1 }; }
   const m = tok.match(LINK_RE); if (m) return { shown: m[1], pre: 1 };
@@ -723,6 +735,8 @@ export function inlineHtml(text, opts) {
     if (FILE_MENTION_RE.test(p)) return fileHtml(p, opts);
     const zotero = p.match(ZOTERO_MENTION_RE);
     if (zotero) return zoteroHtml(zotero[1], zotero[2]);
+    const made = madeMentionOf(p);
+    if (made) return `<span data-mention="${esc(made.name)}" data-made="${esc(madeKey(made))}" style="${MENTION_LOOK};white-space:nowrap">@${esc(made.name)}</span>`;
     if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named, opts && opts.trashed);
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="${LINK_LOOK}">${esc(m[1])}</a>`;

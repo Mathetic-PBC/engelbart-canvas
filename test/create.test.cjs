@@ -1,9 +1,10 @@
 'use strict';
 
 // @create (2026-10-13; src/main/bart/create.cjs, ask.cjs): an agent that makes a new thing as files in a draft folder of
-// its own, <dataRoot>/.create/<askId>/, the only place it may write, and has them kept in the library after the run. The
-// line's syntax, the CLIs' arguments, the files kept (and not), and the answer that mentions them. The router's pick and
-// the editor's five-second wait are in route.test.cjs.
+// its own, <dataRoot>/.create/<askId>/, the only place it may write. The line's syntax, the CLIs' arguments, the files
+// kept (and not), and the answer that stands for them. The router's pick and the editor's five-second wait are in
+// route.test.cjs. Since 2026-10-14 the files are kept with the project (<project>/.created/<askId>/), not in the library:
+// the answer has one `@[name](made:<askId>/<path>)` line per file, and Save (saveCreated) adds one to the library.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -16,7 +17,7 @@ const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
 const { normalizeModels } = require('../src/main/bart/models.cjs');
 const { createBart, createFakeBart, CLAUDE_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, AGENTS } = require('../src/main/bart/ask.cjs');
-const { CREATE_DIR, CREATE_TIMEOUT_MS, MAX_CREATED, draftPath, openDraft, keepCreated, createdBody } = require('../src/main/bart/create.cjs');
+const { CREATE_DIR, CREATE_TIMEOUT_MS, MAX_CREATED, SAVED_FILE, draftPath, openDraft, createdDir, createdFile, keepCreated, createdBody, firstSentence, createdSentence, requestSentence, readCreated, saveCreated } = require('../src/main/bart/create.cjs');
 const { CREATE_SYSTEM_PROMPT } = require('../src/main/bart/create-system-prompt.cjs');
 const { stripAgentReplies, OMITTED } = require('../src/main/bart/strip.cjs');
 const { createRunLog } = require('../src/main/bart/runlog.cjs');
@@ -106,8 +107,10 @@ test('Claude Code: Write and Edit on the draft folder alone (dontAsk refuses any
   assert.equal(call.timeout, CREATE_TIMEOUT_MS);
   assert.equal(CREATE_TIMEOUT_MS, 10 * 60_000);
   assert.equal(call.prompt, CREATE_SYSTEM_PROMPT);
-  assert.equal(out.meta.created.length, 1);
-  assert.deepEqual(added, [out.meta.created[0].id], 'announced');
+  assert.deepEqual(out.meta.created, [{ name: 'chi-by-year.html', type: 'html', path: 'chi-by-year.html' }]);
+  assert.deepEqual(added, [], 'nothing is in the library until it is saved');
+  assert.ok(fs.existsSync(path.join(createdDir(ctx, project.id, 'cc1'), 'chi-by-year.html')), 'kept with the project');
+  assert.ok(out.lines.includes('bart> @[chi-by-year.html](made:cc1/chi-by-year.html)'), 'its row\'s line');
   assert.ok(!fs.existsSync(call.cwd), 'the draft folder is gone');
   assert.match(out.lines[out.lines.length - 1], /^bart> \*Create · Sonnet · high · \d+ s\*$/, 'the foot: Create · model · effort · time');
 });
@@ -125,7 +128,7 @@ test('Codex: a workspace-write sandbox rooted at the draft folder, no other writ
   assert.equal(call.env.CODEX_HOME, path.join(homeDir, 'codex-home-create'));
   assert.equal(fs.readFileSync(path.join(homeDir, 'codex-home-create', 'AGENTS.md'), 'utf8').trim(), CREATE_SYSTEM_PROMPT.trim());
   assert.equal(call.timeout, CREATE_TIMEOUT_MS);
-  assert.deepEqual(out.meta.created.map((row) => row.name), ['chi-by-year']);
+  assert.deepEqual(out.meta.created.map((file) => file.name), ['chi-by-year.html']);
   assert.ok(!fs.existsSync(call.cwd));
   // An @chat line keeps its read-only sandbox.
   await bart.ask(ctx, project.id, { askId: 'cx2', ref: ref(), workspaceId: workspace.id, text: 'why?', agent: 'bart' });
@@ -135,36 +138,95 @@ test('Codex: a workspace-write sandbox rooted at the draft folder, no other writ
 
 /* ------------------------------------------------------------------ what is kept */
 
-test('a fake run writing report.md, chart.html and data.csv: three rows (assets/md, assets/files twice), linked, announced, the draft gone, one mention each', async () => {
+test('a fake run writing report.md, chart.html and data.csv: kept with the project, no row until Save; its first sentence, then one row line each', async () => {
   const runLog = createRunLog({ file: path.join(homeDir, 'runs-fake', 'agent-runs.jsonl') });
-  const added = [];
+  const added = [], progress = [];
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2, runLog, onAdded: (row) => added.push(row.id) });
   const before = (await rowsNow()).length;
-  const out = await bart.ask(ctx, project.id, { askId: 'fk1', ref: ref(), workspaceId: workspace.id, text: 'make an html page summarizing the papers in my library on AI-assisted programming', agent: 'create' });
-  const rows = out.meta.created;
-  assert.deepEqual(rows.map((row) => [row.name, row.type]), [['chart', 'html'], ['data', 'csv'], ['report', 'md']]);
-  assert.equal((await rowsNow()).length, before + 3);
-  const held = new Map((await rowsNow()).map((row) => [row.id, row]));
-  assert.match(held.get(rows[2].id).path, /(^|\/)assets\/md\//, 'Markdown is a note of the library\'s own');
-  for (const row of rows.slice(0, 2)) assert.match(held.get(row.id).path, /(^|\/)assets\/files\/[0-9a-f-]{36}\//, `${row.name}: under assets/files/<uuid>/`);
-  assert.ok(rows.every((row) => linked().includes(row.id)), 'linked to the workspace');
-  assert.deepEqual(added, rows.map((row) => row.id), 'each announced');
+  const out = await bart.ask(ctx, project.id, { askId: 'fk1', ref: ref(), workspaceId: workspace.id, text: 'make an html page summarizing the papers in my library on AI-assisted programming', agent: 'create' }, { onProgress: (p) => progress.push(p) });
+  assert.deepEqual(out.meta.created, [['chart.html', 'html'], ['data.csv', 'csv'], ['report.md', 'md']].map(([name, type]) => ({ name, type, path: name })));
+  assert.equal((await rowsNow()).length, before, 'nothing added to the library');
+  assert.deepEqual(added, []);
   assert.deepEqual(draftsLeft(), [], 'the draft folder is gone');
-  const mentions = out.lines.filter((line) => /^bart> @\[[^\]]+\]\(lib:[^)]+\)$/.test(line));
-  assert.deepEqual(mentions, rows.map((row) => `bart> @[${row.name}](lib:${row.id})`), 'one mention per file, after the sentences');
-  assert.match(out.lines[0], /^bart> I made a fake report, a chart page and its data/);
+  const kept = createdDir(ctx, project.id, 'fk1');
+  assert.equal(kept, path.join(projects.findProject(ctx, project.id).dir, '.created', 'fk1'));
+  assert.deepEqual(fs.readdirSync(kept).sort(), ['chart.html', 'data.csv', 'report.md']);
+  // While it works, the window is told what it is making, once, before it reads or writes anything.
+  const said = progress.findIndex((p) => p.making), wrote = progress.findIndex((p) => /^Writing /.test(p.activity || ''));
+  assert.deepEqual(progress.filter((p) => p.making).map((p) => p.making), ['A fake report, a chart page and its data, from made-up numbers.']);
+  assert.ok(said >= 0 && said < wrote, 'said before the first file is written');
+  // The answer: that sentence ("Done." is not said), then one line per file, then the foot.
+  assert.deepEqual(out.lines.slice(0, 5), ['bart> A fake report, a chart page and its data, from made-up numbers.', 'bart>', 'bart> @[chart.html](made:fk1/chart.html)', 'bart> @[data.csv](made:fk1/data.csv)', 'bart> @[report.md](made:fk1/report.md)']);
   assert.match(out.lines[out.lines.length - 1], /^bart> \*Create · Sonnet · high · \d+ s\*$/);
-  assert.ok(!out.lines.some((line) => /Not kept/.test(line)));
-  // A mention clicked opens its row in the Stage (Stage.jsx readPath → stage-file): the page as a page, the note, the table.
-  const shown = await Promise.all(rows.map((row) => projects.readStageFile(ctx, project.id, held.get(row.id).path)));
+  assert.ok(!out.lines.some((line) => /Not kept|Done\./.test(line)));
+  // A row's file as the editor reads it: its text, not saved yet.
+  const page = await readCreated(ctx, project.id, 'fk1', 'chart.html');
+  assert.deepEqual([page.name, page.type, page.ext, page.saved, page.missing], ['chart.html', 'html', 'html', null, false]);
+  assert.match(page.text, /^<!doctype html>/);
+  assert.equal(page.path, path.join(kept, 'chart.html'));
+  assert.equal((await readCreated(ctx, project.id, 'fk1', 'gone.svg')).missing, true);
+  // The Stage opens it as it opens any file: the page as a page, the table, the document.
+  const shown = await Promise.all(['chart.html', 'data.csv', 'report.md'].map((rel) => projects.readStageFile(ctx, project.id, path.join(kept, rel))));
   assert.deepEqual(shown.map((one) => one.kind), ['page', 'table', 'md']);
-  assert.match(shown[0].url, /^file:\/\/.*\/assets\/files\/[0-9a-f-]{36}\/chart\.html$/);
   // Its record lists them, as the Agent Viewer shows a Create run's output.
   await runLog.flush();
   const record = runLog.list().find((run) => run.agent === 'create');
-  assert.deepEqual(record.created.map((row) => row.id), rows.map((row) => row.id));
+  assert.deepEqual(record.created.map((file) => file.name), ['chart.html', 'data.csv', 'report.md']);
   const { createdLines } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/agent-map/runText.js')).href);
-  assert.match(createdLines(record), /^chart · html · .*\ndata · csv · .*\nreport · md · /);
+  assert.match(createdLines(record), /^chart\.html · html · chart\.html\ndata\.csv · csv · data\.csv\nreport\.md · md · report\.md$/);
+});
+
+test('Save: a kept file into the library once, its source create, linked to the workspace and announced; Saved after a restart; a file outside the run refused', async () => {
+  const draft = openDraft(ctx.dataRoot, 'sv1');
+  fs.writeFileSync(path.join(draft, 'agent-prompts.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>');
+  fs.writeFileSync(path.join(draft, 'notes.md'), '# Notes\n');
+  await keepCreated(ctx, project.id, 'sv1', draft);
+  const added = [], before = (await rowsNow()).length;
+  const row = await saveCreated(ctx, project.id, workspace.id, 'sv1', 'agent-prompts.svg', { onAdded: (one) => added.push(one.id) });
+  assert.deepEqual([row.name, row.type, row.source], ['agent-prompts', 'image', 'create']);
+  assert.equal((await rowsNow()).length, before + 1);
+  assert.ok(linked().includes(row.id), 'linked to the workspace');
+  assert.deepEqual(added, [row.id], 'announced');
+  assert.notEqual(row.path, path.join(createdDir(ctx, project.id, 'sv1'), 'agent-prompts.svg'), 'the library keeps a copy of its own');
+  assert.equal((await saveCreated(ctx, project.id, workspace.id, 'sv1', 'agent-prompts.svg')).id, row.id, 'saved again: the same row');
+  assert.equal((await rowsNow()).length, before + 1);
+  // What was saved is kept beside the files: read again (as after a restart), it says Saved, by the row's name now.
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(createdDir(ctx, project.id, 'sv1'), SAVED_FILE), 'utf8')), { 'agent-prompts.svg': row.id });
+  assert.deepEqual((await readCreated(ctx, project.id, 'sv1', 'agent-prompts.svg')).saved, { id: row.id, name: 'agent-prompts' });
+  assert.equal((await readCreated(ctx, project.id, 'sv1', 'notes.md')).saved, null);
+  const note = await saveCreated(ctx, project.id, workspace.id, 'sv1', 'notes.md');
+  assert.deepEqual([note.type, note.source], ['md', 'create']);
+  // A row taken out of the library is no longer Saved, and Save adds it again.
+  await ctx.libraryDb.remove(row.id);
+  assert.equal((await readCreated(ctx, project.id, 'sv1', 'agent-prompts.svg')).saved, null);
+  assert.notEqual((await saveCreated(ctx, project.id, workspace.id, 'sv1', 'agent-prompts.svg')).id, row.id);
+  for (const rel of ['../sv1/notes.md', '/etc/hosts', SAVED_FILE, '', 'a/../../x']) assert.throws(() => createdFile(ctx, project.id, 'sv1', rel), /file is invalid/, rel);
+  assert.throws(() => createdDir(ctx, project.id, '../x'), /ask id is invalid/);
+  await assert.rejects(saveCreated(ctx, project.id, workspace.id, 'sv1', 'nothing.svg'), /ENOENT|gone/);
+});
+
+test('the sentence above the rows: the first message, the last one too unless it is "Done.", else the request as a sentence', () => {
+  const told = [];
+  const first = firstSentence((text) => told.push(text));
+  first.take({ activity: 'Thinking' });
+  first.take({ textStart: true });
+  for (const delta of ['A diagram of the ', 'agent prompts.']) first.take({ delta });
+  assert.equal(first.text, '', 'not taken while it may still be coming');
+  first.take({ activity: 'Reading route.cjs', log: true });
+  assert.equal(first.text, 'A diagram of the agent prompts.');
+  first.take({ textStart: true }); first.take({ delta: 'Done.' });
+  assert.deepEqual(told, ['A diagram of the agent prompts.'], 'told once');
+  const codex = firstSentence();
+  codex.take({ text: 'ESCALATE: too big' });
+  assert.equal(codex.text, '', 'the harness\'s line is not one');
+  codex.take({ text: 'A chart of CHI submissions by year.' });
+  assert.equal(codex.text, 'A chart of CHI submissions by year.');
+  assert.equal(createdSentence('A chart.', 'Done.', 'x'), 'A chart.');
+  assert.equal(createdSentence('A chart.', 'A chart.', 'x'), 'A chart.');
+  assert.equal(createdSentence('A chart.', 'The 2019 numbers were not on the page, so that bar is missing.', 'x'), 'A chart.\n\nThe 2019 numbers were not on the page, so that bar is missing.');
+  assert.equal(createdSentence('', 'This is a Build: it changes something you already have.', 'x'), 'This is a Build: it changes something you already have.');
+  assert.equal(createdSentence('', 'Done.', 'make an SVG diagram of the agent prompts'), 'An SVG diagram of the agent prompts.');
+  assert.equal(requestSentence('can you create a diagram showing all the agent prompts?'), 'A diagram showing all the agent prompts.');
 });
 
 test('a fake run answering "this is a Build" keeps nothing; a stopped run keeps nothing and its draft is gone', async () => {
@@ -173,7 +235,7 @@ test('a fake run answering "this is a Build" keeps nothing; a stopped run keeps 
   const out = await bart.ask(ctx, project.id, { askId: 'fk2', ref: ref(), workspaceId: workspace.id, text: 'make the file icons different', agent: 'create' });
   assert.match(out.lines[0], /^bart> This is a Build/);
   assert.deepEqual(out.meta.created, []);
-  assert.ok(!out.lines.some((line) => /lib:/.test(line)));
+  assert.ok(!out.lines.some((line) => /made:|lib:/.test(line)));
   assert.equal((await rowsNow()).length, before);
 
   const slow = createFakeBart({ readModels: () => DEFAULTS, delayMs: 5000 });
@@ -187,20 +249,36 @@ test('a fake run answering "this is a Build" keeps nothing; a stopped run keeps 
   await assert.rejects(slow.ask(ctx, project.id, { askId: 'fk4', ref: ref(), workspaceId: workspace.id, text: '   ', agent: 'create' }), /nothing on the line to make/);
 });
 
-test('keepCreated: only the library\'s formats, at most five, each at most 20 MB; a link is skipped; what is skipped is said', async () => {
+test('keepCreated: only the library\'s formats, at most five, each at most 20 MB; a link is skipped; what is skipped is said; nothing in the library', async () => {
   const dir = openDraft(ctx.dataRoot, 'kc1');
   for (const name of ['a.md', 'b.csv', 'c.json', 'd.svg', 'e.tsv', 'f.jsonl']) fs.writeFileSync(path.join(dir, name), name.endsWith('.svg') ? '<svg xmlns="http://www.w3.org/2000/svg"/>' : name.endsWith('.md') ? '# A\n' : 'x\n');
   fs.writeFileSync(path.join(dir, 'run.sh'), 'echo hi\n');
   fs.symlinkSync('/etc/hosts', path.join(dir, 'hosts.txt'));
-  const made = await keepCreated(ctx, project.id, workspace.id, dir);
-  assert.equal(made.rows.length, MAX_CREATED);
+  fs.mkdirSync(path.join(dir, 'sub dir'));
+  fs.writeFileSync(path.join(dir, 'sub dir', 'z (1).md'), '# Z\n');
+  const before = (await rowsNow()).length;
+  const made = await keepCreated(ctx, project.id, 'kc1', dir);
+  assert.equal((await rowsNow()).length, before, 'no row');
+  assert.equal(made.files.length, MAX_CREATED);
+  assert.deepEqual(made.files.map((file) => file.rel), ['a.md', 'b.csv', 'c.json', 'd.svg', 'e.tsv']);
+  assert.deepEqual(made.files[3], { name: 'd.svg', rel: 'd.svg', type: 'image', size: 41 });
   assert.ok(made.skipped.some((why) => /^run\.sh: \.sh is not a format/.test(why)));
   assert.ok(made.skipped.some((why) => /^hosts\.txt: not a plain file/.test(why)));
   assert.ok(made.skipped.some((why) => /past the 5 files/.test(why)));
-  assert.match(createdBody('Made.', made), /^Made\.\n\n@\[a\]\(lib:[^)]+\)\n@\[b\]/);
-  assert.match(createdBody('Made.', made), /\n\nNot kept: .*run\.sh/);
+  assert.match(createdBody('Made.', made, 'kc1'), /^Made\.\n\n@\[a\.md\]\(made:kc1\/a\.md\)\n@\[b\.csv\]\(made:kc1\/b\.csv\)/);
+  assert.match(createdBody('Made.', made, 'kc1'), /\n\nNot kept: .*run\.sh/);
+  // A file in a folder keeps its path, each part encoded as the editor reads it.
+  const nested = openDraft(ctx.dataRoot, 'kc3');
+  fs.mkdirSync(path.join(nested, 'sub dir'));
+  fs.writeFileSync(path.join(nested, 'sub dir', 'z (1).md'), '# Z\n');
+  const deep = await keepCreated(ctx, project.id, 'kc3', nested);
+  assert.deepEqual(deep.files.map((file) => file.rel), ['sub dir/z (1).md']);
+  assert.equal(createdBody('', deep, 'kc3'), '@[z (1).md](made:kc3/sub%20dir/z%20%281%29.md)');
+  assert.ok(fs.existsSync(path.join(createdDir(ctx, project.id, 'kc3'), 'sub dir', 'z (1).md')));
+  const { madeMentionOf } = await loadDoc();
+  assert.deepEqual(madeMentionOf('@[z (1).md](made:kc3/sub%20dir/z%20%281%29.md)'), { name: 'z (1).md', askId: 'kc3', rel: 'sub dir/z (1).md' });
   const big = openDraft(ctx.dataRoot, 'kc2');
   fs.writeFileSync(path.join(big, 'huge.csv'), Buffer.alloc(20 * 1024 * 1024 + 1));
-  assert.deepEqual((await keepCreated(ctx, project.id, workspace.id, big)).skipped, ['huge.csv: larger than 20 MB']);
+  assert.deepEqual((await keepCreated(ctx, project.id, 'kc2', big)).skipped, ['huge.csv: larger than 20 MB']);
   assert.throws(() => draftPath(ctx.dataRoot, '../x'), /ask id is invalid/);
 });
