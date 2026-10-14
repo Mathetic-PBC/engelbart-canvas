@@ -133,8 +133,10 @@ test('two Chat questions in a note, one a follow-up, are two entries with their 
   assert.ok(!first.message.includes('<conversation>'));
   assert.ok(!first.message.includes('And Y?'));
 
-  // Kept by note path and question, with the prompt's hash; nothing else written.
-  const kept = JSON.parse(fs.readFileSync(file, 'utf8')).entries;
+  // Kept by run (its first), note path and question, with the prompt's hash; nothing else written.
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.deepEqual([stored.runs.map((run) => [run.id, run.name]), stored.current], [[['run-1', 'Run 1']], 'run-1']);
+  const kept = stored.runs[0].entries;
   const rel = path.relative(ctx.dataRoot, noteFile);
   assert.deepEqual(Object.keys(kept).sort(), [`${rel}\nAnd Y?`, `${rel}\nWhat is X?`]);
   for (const value of Object.values(kept)) assert.match(value.promptHash, /^[0-9a-f]{16}$/);
@@ -274,6 +276,60 @@ test('the Viewer\'s benchmark channels: list, Run, Run again, Stop, a note, and 
   assert.equal(await handlers['engelbart:agentMap:benchmark-stop']({}), true);
   await bench.idle();
   assert.equal(entriesOf(await handlers['engelbart:agentMap:benchmark']({}))[0].note, 'a note');
+  // A new run (2026-10-14), and a run named by its id: the list shows it, a note goes to it.
+  assert.equal(await handlers['engelbart:agentMap:benchmark-new']({}), 'run-2');
+  assert.equal(entriesOf(await handlers['engelbart:agentMap:benchmark']({}, 'run-2'))[0].note, '');
+  assert.equal(await handlers['engelbart:agentMap:benchmark-note']({}, x.key, 'in run 1', 'run-1'), true);
+  assert.equal(entriesOf(await handlers['engelbart:agentMap:benchmark']({}, 'run-1'))[0].note, 'in run 1');
+  assert.equal(await handlers['engelbart:agentMap:benchmark-run']({}, null, 'run-1'), false, 'an earlier run is not asked into');
+});
+
+test('runs (2026-10-14): a file from before runs is Run 1; a new run starts empty and is the one asked into; an earlier one keeps its answers and notes', async () => {
+  const file = path.join(tmp('runs'), 'chat-benchmark.json');
+  const rel = path.relative(ctx.dataRoot, noteFile);
+  const x = `${rel}\nWhat is X?`, y = `${rel}\nAnd Y?`;
+  fs.writeFileSync(file, JSON.stringify({ entries: { [x]: { answer: 'first X', promptHash: 'aaaaaaaaaaaaaaaa', at: '2026-10-13T22:00:00.000Z', note: 'X note' }, [y]: { answer: 'first Y', promptHash: 'aaaaaaaaaaaaaaaa', at: '2026-10-13T21:00:00.000Z' } } }));
+  const { chat, jobs } = fakeChat();
+  const bench = benchmark(file, chat);
+  const changes = [];
+  bench.subscribe((change) => changes.push(change));
+
+  let listed = await bench.list();
+  assert.deepEqual([listed.runs, listed.current, listed.live], [[{ id: 'run-1', name: 'Run 1', at: '2026-10-13T21:00:00.000Z' }], 'run-1', true], 'Run 1, dated by its first answer');
+  assert.deepEqual(entriesOf(listed).map((entry) => [entry.new.answer, entry.note]), [['first X', 'X note'], ['first Y', '']]);
+  assert.equal(await bench.run(), false, 'everything in Run 1 is answered: nothing to ask');
+
+  // A new run: empty, shown, and the one Run fills.
+  assert.equal(bench.newRun(), 'run-2');
+  listed = await bench.list();
+  assert.deepEqual([listed.runs.map((run) => run.name), listed.current, listed.live], [['Run 1', 'Run 2'], 'run-2', true]);
+  assert.deepEqual(entriesOf(listed).map((entry) => [entry.new, entry.note]), [[{}, ''], [{}, '']]);
+  assert.equal(await bench.run(), true);
+  await bench.idle();
+  assert.deepEqual(entriesOf(await bench.list()).map((entry) => entry.new.answer).sort(), ['NEW 1: What is X?', 'NEW 2: And Y?'].sort());
+  assert.ok(changes.length && changes.every((change) => change.run === 'run-2'), 'each change names its run');
+  assert.ok(bench.setNote(x, 'better now'));
+
+  // Run 1 shown again: as it was, its own notes, and nothing asked into it.
+  listed = await bench.list('run-1');
+  assert.deepEqual([listed.current, listed.live], ['run-1', false]);
+  assert.deepEqual(entriesOf(listed).map((entry) => [entry.new.answer, entry.note]), [['first X', 'X note'], ['first Y', '']]);
+  const asked = jobs.length;
+  assert.equal(await bench.run(), false);
+  assert.equal(await bench.runOne(x), false);
+  assert.equal(jobs.length, asked, 'no replay into an earlier run');
+  assert.ok(bench.setNote(y, 'Y was fine'), 'its notes can still be written');
+
+  // Kept: both runs, the one shown, each with its own answers and notes; read again by a new benchmark.
+  const again = await benchmark(file, chat).list();
+  assert.equal(again.current, 'run-1');
+  assert.deepEqual(entriesOf(again).map((entry) => entry.note), ['X note', 'Y was fine']);
+  const second = await benchmark(file, chat).list('run-2');
+  assert.deepEqual(entriesOf(second).map((entry) => entry.note), ['better now', '']);
+  const stored = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(stored.entries, undefined, 'no entries outside a run');
+  assert.equal(stored.runs[0].entries[x].promptHash, 'aaaaaaaaaaaaaaaa', 'Run 1 kept as it was answered');
+  assert.match(stored.runs[1].entries[x].promptHash, /^[0-9a-f]{16}$/);
 });
 
 /* ------------------------------------------------------------- the tab */
@@ -300,7 +356,7 @@ test('the Benchmark tab: Run at the top, each question over Old and New, the not
     ] }],
   };
   const page = renderToStaticMarkup(React.createElement(BenchmarkList, { data, onRun() {}, onStop() {}, onRunOne() {}, onNote() {} }));
-  assert.deepEqual([...page.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]), ['Run', 'Run again', 'Run again', 'Run again']);
+  assert.deepEqual([...page.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1]), ['Run', 'Export', 'Run again', 'Run again', 'Run again']);
   assert.ok(page.includes('>Fixture<'));
   assert.ok(page.includes('What is X?') && page.includes('And Y?'));
   assert.equal((page.match(/>Old</g) || []).length, 3);
@@ -318,6 +374,46 @@ test('the Benchmark tab: Run at the top, each question over Old and New, the not
   assert.match(busy, /<button[^>]*>Stop<\/button>/);
   assert.ok(!/<button[^>]*>Run<\/button>/.test(busy));
   assert.match(busy, /new <strong[^>]*>x<\/strong>/);
+
+  // Runs (2026-10-14): a tab each and "+ New run"; an earlier run has no Run or Run again; a change in another run leaves the
+  // one shown as it is.
+  const runs = [{ id: 'run-1', name: 'Run 1', at: '2026-10-13T21:00:00.000Z' }, { id: 'run-2', name: 'Run 2', at: '2026-10-14T15:02:00.000Z' }];
+  const newest = renderToStaticMarkup(React.createElement(BenchmarkList, { data: { ...data, runs, current: 'run-2', live: true }, onRun() {}, onStop() {}, onRunOne() {}, onNote() {} }));
+  assert.deepEqual([...newest.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1].replace(/ · .*/, '')), ['Run 1', 'Run 2', '+ New run', 'Run', 'Export', 'Run again', 'Run again', 'Run again']);
+  assert.match(newest, /data-run="run-2"[^>]*>Run 2 · Oct 14,/);
+  assert.match(newest, /aria-selected="true" data-run="run-2"/);
+  const earlier = renderToStaticMarkup(React.createElement(BenchmarkList, { data: { ...data, runs, current: 'run-1', live: false }, onRun() {}, onStop() {}, onRunOne() {}, onNote() {} }));
+  assert.deepEqual([...earlier.matchAll(/<button[^>]*>([^<]*)<\/button>/g)].map((match) => match[1].replace(/ · .*/, '')), ['Run 1', 'Run 2', '+ New run', 'Export'], 'an earlier run can still be exported');
+  assert.ok(earlier.includes('Kept as it was answered.'));
+  assert.equal((earlier.match(/<textarea/g) || []).length, 3, 'its notes stay editable');
+  const shown = { ...data, runs, current: 'run-1', live: false };
+  const elsewhere = applyChange(shown, { run: 'run-2', key: 'a', new: { answer: 'not here' }, running: true });
+  assert.deepEqual([elsewhere.running, elsewhere.groups[0].entries[0].new], [true, {}]);
+});
+
+test('Export (2026-10-14): the run shown as one page: its name, each question with Old, New and the note, and the same as JSON', () => {
+  const { benchmarkPage } = compile('src/renderer/screens/Benchmark.jsx', 'benchmark-export');
+  const data = {
+    running: false, current: 'run-2', live: true,
+    runs: [{ id: 'run-1', name: 'Run 1', at: '2026-10-13T21:00:00.000Z' }, { id: 'run-2', name: 'Run 2', at: '2026-10-14T15:02:00.000Z' }],
+    groups: [{ name: 'Fixture <1>', rel: 'bench/Fixture.md', entries: [
+      { key: 'a', question: 'What is <X>?', old: '## Head\n- **one** thing', new: { answer: 'new `code`' }, note: 'kept note' },
+      { key: 'b', question: 'And Y?', old: 'old', new: { error: 'It failed.' }, note: '' },
+      { key: 'c', question: 'And Z?', old: 'old', new: {}, note: '' },
+    ] }],
+  };
+  const page = benchmarkPage(data, { b: 'typed, not saved yet' }, '2026-10-14T16:00:00.000Z');
+  assert.match(page, /^<!doctype html>.*<title>Chat benchmark: Run 2<\/title>/s);
+  assert.match(page, /<h1>Chat benchmark: Run 2<\/h1><div class="dim">Run Oct 14, [^.]*\. Exported from Engelbart's Agent Viewer, 2026-10-14T16:00:00\.000Z\.<\/div>/);
+  assert.ok(page.includes('<h2>Fixture &lt;1&gt;</h2>') && page.includes('<div class="q">What is &lt;X&gt;?</div>'), 'escaped');
+  assert.match(page, /<div class="label">Old<\/div><div class="answer">[^]*<strong[^>]*>one<\/strong>/, 'Old drawn as markdown');
+  assert.match(page, /<div class="label">New<\/div><div class="answer"><div>new <code[^>]*>code<\/code><\/div><\/div>/);
+  assert.ok(page.includes('<div class="error">It failed.</div>') && page.includes('Not asked in this run.'));
+  assert.ok(page.includes('<div class="note">kept note</div>') && page.includes('<div class="note">typed, not saved yet</div>'), 'notes, what is typed first');
+  const json = JSON.parse(page.match(/<script type="application\/json" id="chat-benchmark">(.*)<\/script>/s)[1]);
+  assert.deepEqual(json.run, { id: 'run-2', name: 'Run 2', at: '2026-10-14T15:02:00.000Z' });
+  assert.deepEqual(json.entries.map((entry) => [entry.question, entry.new, entry.error, entry.notes]), [['What is <X>?', 'new `code`', null, 'kept note'], ['And Y?', null, 'It failed.', 'typed, not saved yet'], ['And Z?', null, null, '']]);
+  assert.ok(!/<\/script>[^]*<\/script>/.test(page.slice(page.indexOf('<script'))) && !page.slice(page.indexOf('<script')).includes('<X>'), 'the JSON cannot end its script early');
 });
 
 test('the Viewer\'s tab bar: Runs, Design, then Benchmark', () => {

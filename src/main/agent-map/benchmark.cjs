@@ -15,7 +15,9 @@
 // the run log (../bart/runlog.cjs) recorded a run of the same question, the message that run was sent.
 //
 // The new answers and the notes are kept in <userData>/chat-benchmark.json, by note path and question text, each answer
-// with the hash of the prompt it was made under.
+// with the hash of the prompt it was made under. Since 2026-10-14 (David's) they are kept by run: { runs: [{ id, name, at,
+// entries }], current }, a tab each. Only the newest run is asked into (Run, Run again); an earlier one is kept as it was
+// answered, its notes still editable. A new run starts empty. A file from before runs is read as its "Run 1".
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -206,20 +208,30 @@ function choiceOf(models, foot) {
 }
 
 /**
- * → { list, run, runOne, stop, setNote, subscribe }. `file`: chat-benchmark.json; `context()`: the open data root's ctx;
- * `chat(ctx, job, { signal })`: one replay's answer (askChat, or a fake in tests); `runLog`: the recorded runs.
+ * → { list, run, runOne, newRun, stop, setNote, subscribe }. `file`: chat-benchmark.json; `context()`: the open data root's
+ * ctx; `chat(ctx, job, { signal })`: one replay's answer (askChat, or a fake in tests); `runLog`: the recorded runs.
+ * `run` arguments name a run by its id; left out, it is the one shown (`current`).
  */
 function createChatBenchmark({ file, context, chat, runLog = null, now = () => new Date().toISOString(), atOnce = AT_ONCE }) {
   let kept = null;
   let groups = null;
-  const running = new Map(); // key → AbortController
+  const running = new Map(); // slot (run and key) → AbortController
   const listeners = new Set();
-  let queue = [];
+  let queue = []; // slots
   let workers = 0;
 
+  const freshRun = (n, at) => ({ id: `run-${n}`, name: `Run ${n}`, at, entries: {} });
+  /** The file as runs; one from before runs ({ entries }) is its Run 1, dated by its first answer. */
   const load = () => {
     if (kept) return kept;
-    try { const value = JSON.parse(fs.readFileSync(file, 'utf8')); kept = value && typeof value.entries === 'object' && value.entries ? value : { entries: {} }; } catch { kept = { entries: {} }; }
+    let value = null;
+    try { value = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { value = null; }
+    if (value && Array.isArray(value.runs) && value.runs.length) kept = value;
+    else if (value && value.entries && typeof value.entries === 'object' && Object.keys(value.entries).length) {
+      const dates = Object.values(value.entries).map((entry) => entry && entry.at).filter((at) => typeof at === 'string').sort();
+      kept = { runs: [{ ...freshRun(1, dates[0] || now()), entries: value.entries }], current: 'run-1' };
+    } else kept = { runs: [freshRun(1, now())], current: 'run-1' };
+    if (!kept.runs.some((one) => one.id === kept.current)) kept.current = kept.runs[kept.runs.length - 1].id;
     return kept;
   };
   const save = () => {
@@ -230,30 +242,34 @@ function createChatBenchmark({ file, context, chat, runLog = null, now = () => n
       fs.renameSync(tmp, file);
     } catch { /* kept in memory for this run */ }
   };
-  const held = (key) => load().entries[key] || {};
-  const put = (key, patch) => { const entries = load().entries; entries[key] = { ...(entries[key] || {}), ...patch }; save(); };
+  const runOf = (id) => load().runs.find((one) => one.id === id) || null;
+  const latest = () => { const { runs } = load(); return runs[runs.length - 1]; };
+  const which = (id) => (id == null ? load().current : id);
+  const held = (id, key) => { const one = runOf(id); return (one && one.entries[key]) || {}; };
+  const put = (id, key, patch) => { const one = runOf(id); if (!one) return; one.entries[key] = { ...(one.entries[key] || {}), ...patch }; save(); };
+  const slot = (id, key) => JSON.stringify([id, key]);
 
-  const shownNew = (key) => {
-    if (running.has(key)) return { running: true };
-    const entry = held(key);
+  const shownNew = (id, key) => {
+    if (running.has(slot(id, key))) return { running: true };
+    const entry = held(id, key);
     if (typeof entry.answer === 'string') return { answer: entry.answer };
     if (typeof entry.error === 'string') return { error: entry.error };
     return {};
   };
   const tell = (change) => { for (const listener of listeners) { try { listener(change); } catch { /* the window's problem */ } } };
-  const changed = (key) => tell({ key, new: shownNew(key), running: running.size > 0 });
+  const changed = (id, key) => tell({ run: id, key, new: shownNew(id, key), running: running.size > 0 });
 
   const find = (key) => {
     for (const group of groups || []) for (const entry of group.entries) if (entry.key === key) return { group, entry };
     return null;
   };
 
-  async function replay(key) {
-    const found = find(key);
-    if (!found || running.has(key)) return;
+  async function replay(id, key) {
+    const found = find(key), at = slot(id, key);
+    if (!found || running.has(at) || !runOf(id)) return;
     const controller = new AbortController();
-    running.set(key, controller);
-    changed(key);
+    running.set(at, controller);
+    changed(id, key);
     const { group, entry } = found;
     try {
       const ctx = await context();
@@ -262,60 +278,81 @@ function createChatBenchmark({ file, context, chat, runLog = null, now = () => n
       const message = recordedMessage(runLog, entry.question) || await messageFor(ctx, group, entry);
       const answer = await chat(ctx, { projectId: group.projectId, workspaceId: group.workspaceId, ref: group.ref, question: entry.question, turns: entry.turns, foot: entry.foot, message }, { signal: controller.signal });
       if (controller.signal.aborted) return;
-      const { error, ...rest } = held(key);
-      load().entries[key] = { ...rest, answer: String(answer || ''), promptHash: hashOf(system), at: now() };
-      save();
+      const one = runOf(id);
+      if (one) { const { error, ...rest } = one.entries[key] || {}; one.entries[key] = { ...rest, answer: String(answer || ''), promptHash: hashOf(system), at: now() }; save(); }
     } catch (error) {
       if (controller.signal.aborted || (error && error.kind === 'stopped')) return;
-      const { answer, ...rest } = held(key);
       let promptHash = null;
       try { promptHash = hashOf(loadSystemPrompt((await context()).dataRoot, 'bart')); } catch { promptHash = null; }
-      load().entries[key] = { ...rest, error: String((error && error.message) || error || 'The run failed.'), promptHash, at: now() };
-      save();
+      const one = runOf(id);
+      if (one) { const { answer, ...rest } = one.entries[key] || {}; one.entries[key] = { ...rest, error: String((error && error.message) || error || 'The run failed.'), promptHash, at: now() }; save(); }
     } finally {
-      running.delete(key);
-      changed(key);
+      running.delete(at);
+      changed(id, key);
     }
   }
 
   const pump = () => {
     while (workers < atOnce && queue.length) {
-      const key = queue.shift();
+      const [id, key] = JSON.parse(queue.shift());
       workers += 1;
-      replay(key).finally(() => { workers -= 1; pump(); });
+      replay(id, key).finally(() => { workers -= 1; pump(); });
     }
   };
 
   return {
-    /** Every entry by note, with its old answer, its new one ({ answer } | { error } | { running } | {}) and its note. */
-    async list() {
+    /**
+     * Every entry by note, with its old answer, its new one in the run shown ({ answer } | { error } | { running } | {}) and
+     * its note there; the runs (newest last), which one is shown, and whether it can be asked into (only the newest).
+     * `id`: the run to show from now on.
+     */
+    async list(id) {
+      if (id != null && runOf(id) && load().current !== id) { load().current = id; save(); }
       groups = await collectQuestions(await context());
+      const current = load().current;
       return {
         running: running.size > 0,
+        runs: load().runs.map((one) => ({ id: one.id, name: one.name, at: one.at })),
+        current,
+        live: current === latest().id,
         groups: groups.map((group) => ({
           name: group.name,
           rel: group.rel,
-          entries: group.entries.map((entry) => ({ key: entry.key, question: entry.question, old: entry.old, new: shownNew(entry.key), note: held(entry.key).note || '' })),
+          entries: group.entries.map((entry) => ({ key: entry.key, question: entry.question, old: entry.old, new: shownNew(current, entry.key), note: held(current, entry.key).note || '' })),
         })),
       };
     },
-    /** Replays every question with no new answer yet, `atOnce` at a time. → whether anything runs */
-    async run() {
+    /** Replays every question with no new answer yet in the newest run, `atOnce` at a time. → whether anything runs */
+    async run(id) {
       if (!groups) await this.list();
+      const into = which(id);
+      if (into !== latest().id) return false;
       const waiting = new Set(queue);
       for (const group of groups) for (const entry of group.entries) {
-        if (typeof held(entry.key).answer !== 'string' && !running.has(entry.key) && !waiting.has(entry.key)) queue.push(entry.key);
+        const at = slot(into, entry.key);
+        if (typeof held(into, entry.key).answer !== 'string' && !running.has(at) && !waiting.has(at)) queue.push(at);
       }
       pump();
       return running.size > 0;
     },
-    /** Replays one question again, whatever it has. */
-    async runOne(key) {
+    /** Replays one question again in the newest run, whatever it has. */
+    async runOne(key, id) {
       if (!groups) await this.list();
-      if (typeof key !== 'string' || !find(key)) return false;
-      queue = queue.filter((waiting) => waiting !== key);
-      void replay(key);
+      const into = which(id);
+      if (typeof key !== 'string' || !find(key) || into !== latest().id) return false;
+      const at = slot(into, key);
+      queue = queue.filter((waiting) => waiting !== at);
+      void replay(into, key);
       return true;
+    },
+    /** A new run, empty, after the others, and shown. → its id */
+    newRun() {
+      const { runs } = load();
+      const n = runs.reduce((most, one) => Math.max(most, Number(String(one.id).replace(/^run-/, '')) || 0), 0) + 1;
+      runs.push(freshRun(n, now()));
+      load().current = `run-${n}`;
+      save();
+      return `run-${n}`;
     },
     /** Stops every replay running and every one waiting. */
     stop() {
@@ -323,13 +360,13 @@ function createChatBenchmark({ file, context, chat, runLog = null, now = () => n
       for (const controller of running.values()) controller.abort();
       return true;
     },
-    /** The note written under an entry. */
-    setNote(key, text) {
-      if (typeof key !== 'string' || !key) return false;
-      put(key, { note: String(text == null ? '' : text).slice(0, 100000) });
+    /** The note written under an entry, in the run shown or the run named. */
+    setNote(key, text, id) {
+      if (typeof key !== 'string' || !key || !runOf(which(id))) return false;
+      put(which(id), key, { note: String(text == null ? '' : text).slice(0, 100000) });
       return true;
     },
-    /** Each change: { key, new, running }. → unsubscribe */
+    /** Each change: { run, key, new, running }. → unsubscribe */
     subscribe(listener) { listeners.add(listener); return () => listeners.delete(listener); },
     /** Resolves when nothing runs or waits (tests). */
     async idle() { while (running.size || queue.length) await new Promise((resolve) => setTimeout(resolve, 10)); },

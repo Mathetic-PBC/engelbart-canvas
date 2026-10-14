@@ -219,9 +219,11 @@ const engelbartAPI = Object.freeze({
   onAgentRun: (callback) => subscribe('engelbart:agent-run', callback),
   // Its Benchmark tab (2026-10-13, src/main/agent-map/benchmark.cjs): every Chat question in the notes with its old and new
   // answers and its note; Run (no key: every one with no new answer; a key: that one again), Stop, a note saved, and each
-  // change as a replay starts or ends ({ key, new, running }).
+  // change as a replay starts or ends ({ run, key, new, running }). Since 2026-10-14 the new answers are kept by run, a
+  // tab each: each call takes the run's id last (left out, the one shown), and a new run starts empty.
   chatBenchmark: invoke('agentMap:benchmark'),
   runChatBenchmark: invoke('agentMap:benchmark-run'),
+  newChatBenchmarkRun: invoke('agentMap:benchmark-new'),
   stopChatBenchmark: invoke('agentMap:benchmark-stop'),
   saveChatBenchmarkNote: invoke('agentMap:benchmark-note'),
   onChatBenchmark: (callback) => subscribe('engelbart:chat-benchmark', callback),

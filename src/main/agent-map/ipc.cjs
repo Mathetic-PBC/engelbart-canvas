@@ -81,10 +81,13 @@ function registerAgentMapIpc({ ipcMain, trustedHandler, mapWindow, runLog, desig
   });
   if (benchmark) benchmark.subscribe((change) => mapWindow.send('engelbart:chat-benchmark', change));
   const benched = (fn) => (...args) => { if (!benchmark) throw new Error('The benchmark is not available.'); return fn(...args); };
-  handle('agentMap:benchmark', benched(() => benchmark.list()));
-  handle('agentMap:benchmark-run', benched((key) => (key == null ? benchmark.run() : benchmark.runOne(key))));
+  // A run is named by its id (2026-10-14: a tab each); left out, it is the one shown.
+  const runId = (id) => (typeof id === 'string' ? id : undefined);
+  handle('agentMap:benchmark', benched((id) => benchmark.list(runId(id))));
+  handle('agentMap:benchmark-run', benched((key, id) => (key == null ? benchmark.run(runId(id)) : benchmark.runOne(key, runId(id)))));
+  handle('agentMap:benchmark-new', benched(() => benchmark.newRun()));
   handle('agentMap:benchmark-stop', benched(() => benchmark.stop()));
-  handle('agentMap:benchmark-note', benched((key, text) => (typeof key === 'string' && typeof text === 'string' ? benchmark.setNote(key, text) : false)));
+  handle('agentMap:benchmark-note', benched((key, text, id) => (typeof key === 'string' && typeof text === 'string' ? benchmark.setNote(key, text, runId(id)) : false)));
 }
 
 module.exports = { registerAgentMapIpc, revealTarget, placeNames };
