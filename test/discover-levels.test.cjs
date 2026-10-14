@@ -102,7 +102,7 @@ test('bart-models also returns @discover\'s levels per provider, cut to the prov
 test('the chip on an @discover line: Standard, Quick, Deep, or the model and effort a flag pins (L-03)', async () => {
   const m = mounted(['@discover how tools point a reader to a passage', '', '@discover --quick why', '', '@Discover why --deep', '', '@discover --opus --high why', '', '@discover', '', '@discover why --deep --high']);
   assert.deepEqual(await Promise.all([0, 2, 4, 6, 8, 10].map((i) => m.chip(i))), ['Standard', 'Quick', 'Deep', 'Opus High', 'Standard', 'Sonnet High'], 'an effort alone pins the step it pairs with, as on @chat');
-  assert.match(await m.lineOf(0), /data-act="pick" data-row="0" role="button" aria-haspopup="dialog" aria-expanded="false"[^>]*>Standard<span[^>]*><span[^>]*>⌄<\/span><\/span><\/span><button contenteditable="false" data-act="ask"/, 'the chip, then send (A-01)');
+  assert.match(await m.lineOf(0), /data-act="pick" data-row="0" role="button" aria-haspopup="dialog" aria-expanded="false"[^>]*>Standard<span style="display:inline-flex;color:#8f8f8f"><svg width="12"[^>]*><path d="m6 9 6 6 6-6"><\/path><\/svg><\/span><\/span><button contenteditable="false" data-act="ask"/, 'the chip, a chevron, then send (A-01; 2026-10-13)');
   assert.equal(await mounted(['@discover why'], null).chip(0), null, 'no chip before the models load');
 });
 
@@ -159,7 +159,7 @@ test('the chip opens DiscoverLevels on @discover lines and BartPicker on @chat l
   assert.deepEqual(picker.props.current, { provider: 'anthropic', model: 'sonnet', effort: 'high' });
   assert.equal(await m.chip(2), 'Sonnet High');
   assert.equal(await m.chip(4), null, '@brainstorm: no chip');
-  assert.match(await m.lineOf(4), /<span contenteditable="false" style="flex:none;margin-top:3px"><button contenteditable="false" data-act="ask"/, 'only the send button');
+  assert.match(await m.lineOf(4), /<span contenteditable="false" style="user-select:none;flex:none;display:inline-flex"><button contenteditable="false" data-act="ask"/, 'only the send button');
   m.editor.state.picker = { kind: 'line', i: 6, left: null, right: 0, top: 0, bottom: 0, choice: null };
   m.editor.pickModel({ model: 'fable', effort: 'xhigh' });
   assert.equal(m.lines()[6], '@Chat --fable --xhigh why', '@chat\'s pick still writes model and effort, its lead as written');

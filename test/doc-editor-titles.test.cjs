@@ -197,20 +197,19 @@ test('an open titled conversation draws no title row; its question opens the car
   assert.match(row, /class="bart-link" data-act="foldthread" data-row="0"/);
 });
 
-test('collapsed: a link, the Agents pointer and the title, the agent and when its tooltip; every line of it hidden; a click expands', () => {
+test('collapsed: one 42px line, the pointer and the title as a link, when it was asked on the right (the agent first unless Chat); every line of it hidden; a click expands', () => {
   const at = new Date(); at.setHours(21, 41, 0, 0);
   const lines = ['Notes', `bart#+ [discover ${at.toISOString().replace(/\.\d{3}Z$/, 'Z')}] Retry logic`, '@bart why retry?', ...answer('because'), '@bart timeouts?', ...answer('those too'), '', 'After'];
   const m = mounted(lines);
   const html = m.html(), row = rowOf(html, 1), open = row.slice(0, row.indexOf('>'));
   assert.match(open, /data-thread-row="1"/);
-  assert.ok(!/data-act|background|border/.test(open), 'the row is not the button, and nothing is drawn around it');
-  assert.match(open, /margin-bottom:8px;font:16px\/1\.5 var\(--font-sans\)/, 'the document\'s 16px');
+  assert.ok(!/data-act|background|border:|border-radius/.test(open), 'the row is not the button, and nothing is drawn around it');
+  assert.match(open, /height:42px;box-sizing:border-box;font:15px\/1\.4 var\(--font-sans\)/, 'one 42px line, 15px');
   const link = row.slice(row.indexOf('<span class="bart-link"'));
-  assert.match(link, /^<span class="bart-link" data-act="foldthread" data-row="1" role="button" tabindex="0" aria-label="Expand Retry logic" aria-expanded="false" title="Discover · 9:41 PM · ⌥-click to rename"/, 'the link is the button; the agent and when are its tooltip');
-  assert.match(link, /<span style="flex:none;display:inline-flex"><svg width="16"[^>]*><path d="M4\.04 4\.69/, 'the sidebar\'s Agents pointer, in the link\'s colour');
+  assert.match(link, /^<span class="bart-link" data-act="foldthread" data-row="1" role="button" tabindex="0" aria-label="Expand Retry logic" aria-expanded="false" title="⌥-click to rename"/, 'the link is the button');
+  assert.match(link, /<span style="flex:none;display:inline-flex"><svg width="15"[^>]*><path d="M4\.04 4\.69/, 'the mouse-pointer-2, 15px, in the link\'s colour');
   assert.equal((row.match(/<svg/g) || []).length, 1, 'no other icon: no chevron');
-  assert.match(link, /class="bart-thread-name"[^>]*text-overflow:ellipsis[^>]*>Retry logic<\/span><\/span><\/div>$/, 'the title, and nothing after it');
-  assert.ok(!/Discover · 9:41 PM</.test(row), 'the agent and when are not drawn');
+  assert.match(link, /class="bart-thread-name"[^>]*text-overflow:ellipsis[^>]*>Retry logic<\/span><\/span><span data-thread-when="1" style="[^"]*font:12px\/1 var\(--font-sans\);color:#8f8f8f[^"]*">Discover · 9:41 PM<\/span><\/div>$/, 'the title, then the agent and when on the right, no count');
   const last = lines.indexOf('After') - 2;
   for (let i = 2; i <= last; i++) assert.match(rowOf(html, i), /^<div[^>]*display:none/, `line ${i} hidden`);
   const drawn = html.replace(/ data-raw="[^"]*"/g, '');
@@ -234,9 +233,11 @@ test('collapsed: a link, the Agents pointer and the title, the agent and when it
     'bart#+ Papers on assessment', '@discover retries', ...answer('x'), '',
   ]).html();
   const n = answer('x').length + 2;
-  assert.match(rowOf(many, 0), /title="Build · Yesterday · ⌥-click to rename"/);
-  assert.match(rowOf(many, n), /title="Brainstorm · Yesterday · ⌥-click to rename"/);
-  assert.match(rowOf(many, 2 * n), /title="Discover · ⌥-click to rename"/);
+  assert.match(rowOf(many, 0), /data-thread-when="1"[^>]*>Build · Yesterday</);
+  assert.match(rowOf(many, n), /data-thread-when="1"[^>]*>Brainstorm · Yesterday</);
+  assert.match(rowOf(many, 2 * n), /data-thread-when="1"[^>]*>Discover</);
+  // Chat's: the time alone.
+  assert.match(rowOf(mounted([`bart#+ [chat ${iso}] Retry logic`, '@chat why?', ...answer('x'), '']).html(), 0), /data-thread-when="1"[^>]*>Yesterday</);
 });
 
 test('a conversation at work cannot be collapsed: its Collapse is disabled, and `bart#+` on it is drawn open', () => {
@@ -362,27 +363,33 @@ test('a title with no question under it is the text it is; deleting a titled con
   assert.deepEqual(m.lines(), ['Notes', '', 'After']);
 });
 
-test('cards are compact: question 8px 12px (6px after an answer), foot 4px 10px 6px, follow-up 10px 12px, 8px under a card', () => {
+test('the card (2026-10-13): question 14px 16px, answer 12px under it in a 14px rule, button row 12px 10px 10px 16px closing it, 8px under a card; no reply field until Reply', () => {
   const html = mounted(['@chat first?', ...answer('one'), '@chat second?', ...answer('two'), '']).html();
-  assert.match(rowOf(html, 0), /padding:8px 12px/);
-  assert.match(rowOf(html, 4), /padding:6px 12px/);
-  assert.match(html, /padding:4px 10px 6px/);
-  assert.match(html, /padding:10px 12px;margin-bottom:8px/);
+  assert.match(rowOf(html, 0), /padding:14px 16px 0px;background:#fafafa;border-radius:10px 10px 0 0/);
+  assert.match(rowOf(html, 0), /color:#171717/);
+  assert.match(rowOf(html, 1), /padding:12px 16px 0px;[^"]*color:#262626;font-size:16px;line-height:1\.65[^"]*"><span style="display:block;padding:2px 0 2px 14px;border-left:2px solid #d6d6d6"/);
+  assert.match(rowOf(html, 4), /padding:14px 16px 0px/, 'a question under an open answer');
+  assert.match(html, /padding:12px 10px 6px 16px/);
+  assert.match(html, /padding:12px 10px 10px 16px;background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:8px/);
+  assert.ok(!html.includes('data-followup=') && html.includes('data-act="reply" data-thread="0"'), 'Reply, no field');
 });
 
-test('the foot draws no label (2026-10-13): not the agent, the time or "via Bart"; Copy on the left, Collapse and Delete on the right; the closing line is kept', () => {
+test('the button row (2026-10-13): Reply, Copy and Regenerate on the left; the model, effort and time on the right (the agent first unless Chat, never "via Bart"), then Collapse and Delete; the closing line is kept', () => {
   const footOf = (html) => { const at = html.indexOf('data-foot='); assert.ok(at >= 0, 'a foot is drawn'); const start = html.lastIndexOf('<div', at); return html.slice(start, html.indexOf('</div>', at) + 6); };
   const shown = (html) => html.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
-  for (const [line, closing] of [['@bart make the icons bigger', '*Build · Opus · high · 39 s*'], ['@chat why retry?', '*Chat · Opus · high · 17 s*'], ['@bart why retry?', '*Chat · 48 s · via Bart*']]) {
+  for (const [line, closing, meta] of [['@bart make the icons bigger', '*Build · Opus · high · 39 s*', 'Build · Opus · high · 39 s'], ['@chat why retry?', '*Chat · Opus · high · 17 s*', 'Opus · high · 17 s'], ['@bart why retry?', '*Chat · 48 s · via Bart*', '48 s'], ['@chat why retry?', '*Opus · high · 9 s · moved up from Sonnet medium*', 'Opus · high · 9 s']]) {
     const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', line, 'bart> because', `bart> ${closing}`, ''];
     const m = mounted(lines), foot = footOf(m.html());
-    assert.equal(shown(foot), '', `${closing}: nothing of the closing line is drawn`);
-    for (const word of ['Build', 'Chat', '39 s', '17 s', '48 s', 'via Bart']) assert.ok(!shown(foot).includes(word), `${closing}: no ${word}`);
-    assert.ok(!foot.includes('class="t"') && !foot.includes('data-act="viabart"') && !foot.includes('bart-who'), `${closing}: no label, no picker button`);
+    assert.equal(shown(foot), `Reply${meta}`, `${closing}: Reply, then ${meta}`);
+    assert.match(foot, /<span data-foot-meta="1" style="flex:none;margin-left:auto;padding-right:6px;font:12px\/1 var\(--font-sans\);color:#8f8f8f;white-space:nowrap">/, 'the meta, pushed right, 12px grey');
+    assert.match(foot, /<button type="button" class="bart-reply" data-act="reply" data-thread="1"/, 'Reply');
     assert.match(foot, /data-act="copybart" data-turn="1" aria-label="Copy"/, 'Copy');
-    assert.match(foot, /<span style="flex:none;position:relative;display:inline-flex;margin-left:auto"><button class="bart-ic" data-act="foldthread" data-row="0" aria-label="Collapse"/, 'Collapse, pushed right');
+    assert.match(foot, /data-act="regen" data-turn="1" data-quiet="1" aria-label="Regenerate"/, 'Regenerate, opening no selector');
+    assert.match(foot, /data-act="foldthread" data-row="0" aria-label="Collapse"/, 'Collapse');
     assert.match(foot, /data-act="dropturn" data-turn="1" aria-label="Delete"/, 'Delete');
-    assert.ok(foot.indexOf('copybart') < foot.indexOf('foldthread') && foot.indexOf('foldthread') < foot.indexOf('dropturn'), 'Copy, then Collapse, then Delete');
+    const order = ['data-act="reply"', 'copybart', 'data-act="regen"', 'data-foot-meta', 'foldthread', 'dropturn'].map((k) => foot.indexOf(k));
+    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'Reply, Copy, Regenerate, the meta, Collapse, Delete');
+    assert.ok(!foot.includes('editturn') && !foot.includes('footbuild'), 'no Edit, no Build');
     assert.equal(m.lines()[3], `bart> ${closing}`, 'the closing line in the file is as it was');
   }
   // What reads the closing line still does: a routed turn's agent is the one it names.
@@ -396,6 +403,8 @@ test('the follow-up field says @bart whichever agent answered, since what is typ
   for (const line of ['@chat why retry?', '@discover retries', '@brainstorm a plan']) {
     const m = mounted([line, ...answer('x'), '']);
     m.props.onRoute = () => {};
+    assert.ok(!m.html().includes('data-followup='), `${line}: shut until Reply`);
+    m.click('reply', { thread: '0' });
     const routed = field(m.html());
     assert.match(routed, /font-size:16px;line-height:24px">@bart<\/span>/, `${line}: @bart`);
     assert.ok(!/>@(chat|discover|brainstorm)</.test(routed), `${line}: not the agent that answered`);
@@ -467,18 +476,19 @@ test('a follow-up collapses the turns before it, in the same edit; each is one r
       const row = rowOf(html, q), open = row.slice(0, row.indexOf('>') + 1);
       assert.match(open, /contenteditable="false" data-readonly="1" data-folded-row="\d+" data-act="fold" data-turn="\d+"/, `${tag}: question ${q} is a read-only row a click expands`);
       assert.match(open, /cursor:pointer;display:flex;align-items:center/, `${tag}: one row`);
-      assert.match(open, /font:14px\/1\.6 var\(--font-sans\);color:#8f8f8f/, `${tag}: grey, 14px`);
+      assert.match(open, /background:#fafafa;[^"]*font:14px\/1\.5 var\(--font-sans\);color:#7a7a7a/, `${tag}: on the card, grey, 14px`);
+      assert.match(row, /<span style="flex:none;display:inline-flex;color:#a3a3a3"><svg width="14"[^>]*><path d="m9 18 6-6-6-6">/, `${tag}: a chevron first`);
       assert.match(row, /<span class="t" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/, `${tag}: its question on one line, cut off`);
-      assert.match(row, new RegExp(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="Expand" aria-expanded="false">`), `${tag}: Expand at its right`);
-      assert.match(row, /<span class="bart-tip" style="right:0">Expand<\/span>/);
+      assert.ok(!row.includes('<button') && !/@(chat|bart)/.test(row.replace(/ data-raw="[^"]*"/, '')), `${tag}: no Expand button, no @bart`);
       assert.ok(!row.includes('editturn') && !row.includes('data-chip') && !row.includes('data-corner'), `${tag}: no edit, chip or corner Collapse`);
       assert.ok(!html.includes(`data-foot="${q}"`), `${tag}: no foot drawn for ${q}`);
     }
     assert.ok(rowOf(html, 1).includes('why retry?') && rowOf(html, second).includes('and timeouts, and what happens'), `${tag}: the questions, as said`);
     const asked = second + 1 + answer('x').length;
-    assert.match(rowOf(html, asked), /background:#fafafa;border-radius:10px 10px/, `${tag}: the new question opens the card again, rounded`);
-    // Two folded rows a few pixels apart, then the open turn.
-    assert.match(rowOf(html, 1).slice(0, 400), /margin-bottom:3px/, `${tag}: 3px under the first row`);
+    assert.match(rowOf(html, asked), /padding:0px 16px 0px;background:#fafafa;border-radius:0 0 0 0/, `${tag}: the new question goes on in the same card`);
+    // Folded lines at the top of the card, 6px apart, then 18px to the question.
+    assert.match(rowOf(html, 1).slice(0, 600), /padding:14px 16px 6px;background:#fafafa;border-radius:10px 10px 0 0/, `${tag}: the first at the card's top, 6px under it`);
+    assert.match(rowOf(html, second).slice(0, 600), /padding:0px 16px 18px/, `${tag}: 18px under the last`);
     assert.ok(html.indexOf(`data-line="${second}"`) < html.indexOf(`data-line="${asked}"`));
   }
   // The foot rows of the folded turns are hidden; their lines stay in the file.
@@ -616,7 +626,7 @@ test('an open Build conversation draws its question and the Build\'s card as bef
 test('a collapsed Build conversation is one row named Build; `bart#+` on one still running is drawn open', () => {
   const folded = BUILD_DOC.map((l, j) => (j === 1 ? l.replace('bart#', 'bart#+') : l));
   const done = mounted(folded, { builds: { [BUILT]: task('accepted') } }), html = done.html();
-  assert.match(rowOf(html, 1), /data-thread-row="1"[\s\S]*title="Build · [^"]*⌥-click to rename"[\s\S]*>Make X</);
+  assert.match(rowOf(html, 1), /data-thread-row="1"[\s\S]*>Make X<[\s\S]*data-thread-when="1"[^>]*>Build · /);
   for (const i of [2, 3]) assert.match(rowOf(html, i), /^<div[^>]*style="display:none"/, `line ${i} hidden`);
   assert.match(rowOf(html, 5), />After</);
   // The Build's record arriving finished collapses it; one that starts again opens it.
@@ -626,7 +636,7 @@ test('a collapsed Build conversation is one row named Build; `bart#+` on one sti
   later.props.builds = { [BUILT]: task('accepted') };
   assert.match(rowOf(later.html(), 1), /data-thread-row/, 'finished: collapsed');
   // An @chat line's: Build too.
-  assert.match(rowOf(mounted(['bart#+ [chat build 2026-10-13T09:00:00Z] Make X', '@bart --build make X', `build> ${BUILT}`, ''], { builds: { [BUILT]: task('discarded') } }).html(), 0), /title="Build · /);
+  assert.match(rowOf(mounted(['bart#+ [chat build 2026-10-13T09:00:00Z] Make X', '@bart --build make X', `build> ${BUILT}`, ''], { builds: { [BUILT]: task('discarded') } }).html(), 0), /data-thread-when="1"[^>]*>Build · /);
 });
 
 test('the editor is drawn again, not patched, when a Build that answers a conversation finishes', () => {

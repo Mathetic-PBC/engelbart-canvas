@@ -56,7 +56,9 @@ async function shot(wc, name) {
   const picture = await wc.capturePage(undefined, { stayHidden: true, stayAwake: true });
   fs.writeFileSync(path.join(SHOTS, `${name}.png`), picture.toPNG());
 }
+// The reply field is shut until Reply opens it (2026-10-13).
 const reply = async (wc, text) => {
+  await press(wc, `${ED} [data-act="reply"]`);
   await press(wc, `${ED} [data-follow-input]`);
   await typeKeys(wc, `${text}\n`);
 };
@@ -134,8 +136,9 @@ app.whenReady().then(async () => {
     // Typed under the answer, the line starts a conversation of its own (2026-10-13): that one has no follow-up field over
     // the card; the @chat conversation above keeps its own.
     const from = built.indexOf('@chat show the code config');
-    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-followup="${line}"]').length`), 0, 'no follow-up field over the card');
-    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-followup="${from}"]').length`), 1, 'the conversation above keeps its own');
+    // (Since 2026-10-13 a field is opened by its Reply: what is drawn is the Reply.)
+    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-followup="${line}"], ${ED} [data-act="reply"][data-thread="${line}"]').length`), 0, 'no follow-up field or Reply over the card');
+    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-act="reply"][data-thread="${from}"]').length`), 1, 'the conversation above keeps its own Reply');
     await shot(wc, '4-build');
     console.log('PASS a Build Bart picks is Chat\'s reply first, closing as Build\'s, with the Build\'s card under it');
     app.exit(0);

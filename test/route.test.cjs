@@ -491,24 +491,26 @@ test('handoff: when routing fails the line is asked of Chat saying so (by: error
   assert.equal(picked.nodes[1].error, 'thread question must be a string of at most 400 characters');
 });
 
-test('footer: Copy as an icon with its name; Collapse and Delete on the right; no label (2026-10-13); no Regenerate, Edit or Build', () => {
+test('the button row (2026-10-13): Copy and Regenerate as icons with their names; the model, effort and time on the right (the agent first unless Chat, never "via Bart"), then Collapse and Delete; no Edit or Build', () => {
   const m = mounted([...SPEC, '']);
-  const html = m.editor.footHtml({ q: 0, text: 'Chat · Sonnet · high · 3 s', closes: true, edit: true });
+  const html = m.editor.footHtml({ q: 0, text: 'Chat · Sonnet · high · 3 s', closes: true });
   assert.match(html, /<button class="bart-ic" data-act="copybart" data-turn="0"[^>]*aria-label="Copy"[^>]*>[\s\S]*?<\/button><span class="bart-tip"[^>]*>Copy<\/span>/, 'Copy: an icon with its tip');
-  for (const act of ['regen', 'editturn', 'footbuild', 'viabart']) assert.ok(!html.includes(`data-act="${act}"`), `no ${act}`);
+  assert.match(html, /<button class="bart-ic" data-act="regen" data-turn="0" data-quiet="1" aria-label="Regenerate">[\s\S]*?<\/button><span class="bart-tip"[^>]*>Regenerate<\/span>/, 'Regenerate: an icon with its tip, opening no selector');
+  for (const act of ['editturn', 'footbuild', 'viabart']) assert.ok(!html.includes(`data-act="${act}"`), `no ${act}`);
   const text = (h) => h.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
-  assert.equal(text(html), '', 'no agent, model, effort or time');
-  assert.ok(html.indexOf('copybart') < html.indexOf('data-act="fold"') && html.indexOf('data-act="fold"') < html.indexOf('dropturn'), 'Copy, then Collapse and Delete');
-  assert.match(html, /<span style="flex:none;position:relative;display:inline-flex;margin-left:auto"><button class="bart-ic" data-act="fold"/, 'Collapse pushed right');
-  // Routed by Bart, or an older closing line saying "via Bart": still nothing drawn of it.
+  assert.equal(text(html), 'Sonnet · high · 3 s', 'the model, effort and time; not Chat');
+  const order = ['copybart', 'data-act="regen"', 'data-foot-meta', 'data-act="fold"', 'dropturn'].map((k) => html.indexOf(k));
+  assert.deepEqual(order, [...order].sort((x, y) => x - y), 'Copy, Regenerate, the meta, Collapse, Delete');
+  assert.match(html, /<span data-foot-meta="1" style="flex:none;margin-left:auto;/, 'the meta pushed right');
+  // Routed by Bart: Build named; an older closing line's "via Bart" is not drawn.
   const routed = mounted(['bart# [chat build 2026-10-12T21:41:00Z] Haiku', '@bart build the haiku entry', ...SPEC.slice(1), '']);
   const foot = routed.editor.footHtml({ q: 1, text: 'Build · Sonnet · high · 3 s' });
-  assert.equal(text(foot), ''); assert.ok(!foot.includes('bart-who') && !foot.includes('viabart'));
+  assert.equal(text(foot), 'Build · Sonnet · high · 3 s'); assert.ok(!foot.includes('bart-who') && !foot.includes('viabart'));
   const discover = mounted(['bart# [discover 2026-10-12T21:41:00Z] Tutors', '@bart papers?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '']);
   const drawn = discover.editor.editorHtml().replace(/ data-raw="[^"]*"/g, '');
-  assert.ok(!/viabart|Opus|9 s|via Bart/.test(drawn), 'the closing line stays in the file, not on the page');
+  assert.ok(drawn.includes('>Discover · Opus · high · 9 s<') && !/viabart|via Bart/.test(drawn), 'Discover named, before its model');
   const dark = m.editor.footHtml({ q: 0, text: 'Sonnet · 3 s · via Bart · build' });
-  assert.equal(text(dark), '');
+  assert.equal(text(dark), 'Sonnet · 3 s');
 
   // Build is still there for the [[build]] hammer in a routed build's answer.
   assert.equal(m.editor.footBuild(0), true);
@@ -890,41 +892,24 @@ function rowOf(html, i) {
 const clickAct = (m, dataset, disabled = false) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset, disabled, closest: () => null } : null) }, preventDefault() {} });
 const TITLED = ['bart# [chat 2026-10-13T09:00:00Z] Retry logic', '@chat why retry?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*', ''];
 
-test('an answered question that opens its card has Collapse in its top-right corner: its foot\'s, out of the text', () => {
-  // Titled: it collapses the conversation (foldthread, the title's row), and a click does.
+test('an answered question has no Collapse in its corner (2026-10-13): it is on the button row, the conversation\'s in a titled one, the turn\'s otherwise', () => {
+  // Titled: the foot's Collapse collapses the conversation (foldthread, the title's row), and a click does.
   const titled = mounted(TITLED);
-  const row = rowOf(titled.editor.editorHtml(), 1);
-  assert.match(row, /why retry\?<\/span><span contenteditable="false" data-corner="1" style="user-select:none;flex:none;position:relative;display:inline-flex;margin:-2px -6px -2px 0;height:28px"><button class="bart-ic" data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true">/);
-  assert.match(row, /<span class="bart-tip" style="right:0">Collapse<\/span>/);
-  const text = row.slice(row.indexOf('<span class="t"'), row.indexOf('<span contenteditable="false" data-corner'));
-  assert.ok(!text.includes('Collapse') && !text.includes('bart-ic'), 'not part of the question\'s text');
-  assert.ok(!row.includes('data-chip'), 'no chip on an answered row');
+  const html = titled.editor.editorHtml();
+  assert.ok(!rowOf(html, 1).includes('data-corner') && !rowOf(html, 1).includes('data-chip'), 'nothing beside an answered question');
+  assert.match(html, /data-foot="1"[\s\S]*data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true">/);
   clickAct(titled, { act: 'foldthread', row: '0' });
   assert.equal(titled.lines()[0], 'bart#+ [chat 2026-10-13T09:00:00Z] Retry logic', 'collapsed to its title');
   // Untitled: it folds that turn.
   const untitled = mounted(TITLED.slice(1));
-  assert.match(rowOf(untitled.editor.editorHtml(), 0), /data-corner="0"[^>]*><button class="bart-ic" data-act="fold" data-turn="0" aria-label="Collapse" aria-expanded="true">/);
+  const plain = untitled.editor.editorHtml();
+  assert.ok(!plain.includes('data-corner'));
+  assert.match(plain, /data-foot="0"[\s\S]*data-act="fold" data-turn="0" aria-label="Collapse" aria-expanded="true">/);
   clickAct(untitled, { act: 'fold', turn: '0' });
   assert.match(untitled.lines()[1], /^bart\+> because$/, 'folded');
   // A turn of it at work: disabled, and says why.
   const running = mounted([...TITLED.slice(0, 4), '@chat and timeouts?', 'bart~> r1', '']);
-  assert.match(rowOf(running.editor.editorHtml(), 1), /data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true" disabled>[^]*?Collapse once it answers/);
-  // Not on: an unanswered or pending question, one being edited, a follow-up that does not open the card, a research box,
-  // a folded turn.
-  assert.ok(!mounted(['@chat why retry?', '']).editor.editorHtml().includes('data-corner'), 'unanswered');
-  assert.ok(!rowOf(running.editor.editorHtml(), 4).includes('data-corner'), 'pending, and not opening the card');
-  const second = mounted([...TITLED.slice(0, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', '']);
-  assert.ok(!rowOf(second.editor.editorHtml(), 4).includes('data-corner'), 'a follow-up inside the card');
-  const edited = mounted(TITLED);
-  edited.editor.editing = { q: 1, line: TITLED[1] };
-  assert.ok(!rowOf(edited.editor.editorHtml(), 1).includes('data-corner'), 'edited in place');
-  const box = mounted(['bart# [discover 2026-10-13T09:00:00Z] Tutors', '@bart papers?', 'bart> Looking.', 'bart> *Discover · Sonnet · high · 3 s*', '@discover --research papers?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '']);
-  const boxHtml = box.editor.editorHtml();
-  assert.ok(rowOf(boxHtml, 4).includes('data-research') && !rowOf(boxHtml, 4).includes('data-corner'), 'a research box');
-  const folded = mounted(['@chat why retry?', 'bart+> because', 'bart+> *Chat · Sonnet · high · 3 s*', '@chat and?', 'bart> sure', 'bart> *Chat · Sonnet · high · 2 s*', '']);
-  const foldedHtml = folded.editor.editorHtml();
-  assert.ok(rowOf(foldedHtml, 0).includes('data-folded-row') && !rowOf(foldedHtml, 0).includes('data-corner'), 'a folded turn');
-  assert.match(rowOf(foldedHtml, 3), /data-corner="3"[^>]*><button class="bart-ic" data-act="fold" data-turn="3"/, 'the turn under a folded one opens its card again, and has it');
+  assert.match(running.editor.editorHtml(), /data-act="foldthread" data-row="0" aria-label="Collapse" aria-expanded="true" disabled>[^]*?Collapse once it answers/);
 });
 
 test('three turns, the first two folded: two one-line rows (no foot, no answer), then the open turn; a click expands one', () => {
@@ -940,7 +925,8 @@ test('three turns, the first two folded: two one-line rows (no foot, no answer),
   }
   assert.ok(!drawn.includes('because') && !drawn.includes('it depends'), 'no answer text');
   assert.ok(rowOf(html, 3).includes(long.slice(0, 60)), 'the long question, in its one line');
-  assert.match(rowOf(html, 6), /background:#fafafa;border-radius:10px 10px 0 0/, 'the open turn starts the grey again');
+  assert.match(rowOf(html, 6), /padding:0px 16px 0px;background:#fafafa;border-radius:0 0 0 0/, 'the open turn goes on in the same card, under the folded lines (2026-10-13)');
+  assert.match(rowOf(html, 0), /padding:14px 16px 6px;background:#fafafa;border-radius:10px 10px 0 0/, 'the folded lines open the card');
   assert.ok(drawn.includes('exponential') && html.includes('data-foot="6"'));
   clickAct(m, { act: 'fold', turn: '3' });
   assert.deepEqual(m.lines().slice(4, 6), ['bart> it depends', 'bart> *Chat · Sonnet · high · 4 s*']);

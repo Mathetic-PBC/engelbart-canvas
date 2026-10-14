@@ -215,7 +215,14 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   // is drawn, since beside it went unseen: David, 2026-10-07); and a file dragged over it.
   + '[data-zotero][data-waiting]{position:relative}'
   + '[data-zotero][data-waiting]::after{content:"Download the PDF in your browser to open it in the Stage";position:absolute;left:0;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#4d4d4d;font:12px/1.2 var(--font-sans);font-style:normal;white-space:nowrap;pointer-events:none}'
-  + '[data-zotero][data-drop]{background:#e8f0fe;border-radius:3px;box-shadow:0 0 0 1px #9bb6e8}';
+  + '[data-zotero][data-drop]{background:#e8f0fe;border-radius:3px;box-shadow:0 0 0 1px #9bb6e8}'
+  // The middle panel's threads (2026-10-13, Hudson's screenshot): an answer's inline code, the button row's Reply, a long
+  // answer's fade and its Show more, and an earlier exchange folded to one line.
+  + '[data-answer-of] code{font:13.5px/1.5 var(--font-mono)!important;background:#efefef!important;padding:1px 4px!important;border-radius:4px!important}'
+  + '.bart-reply{display:inline-flex;align-items:center;height:28px;padding:0 10px;border:1px solid #e6e6e6;border-radius:6px;background:#fff;color:#4d4d4d;font:12.5px/1 var(--font-sans);cursor:pointer;transition:border-color 120ms}.bart-reply:hover{border-color:#c9c9c9;color:#171717}'
+  + '.bart-more{display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;color:#4d4d4d;font:500 13px/1.6 var(--font-sans);cursor:pointer}.bart-more:hover{color:#171717}'
+  + '[data-more][data-cut]::before{content:"";position:absolute;left:18px;right:16px;bottom:100%;height:56px;background:linear-gradient(rgba(250,250,250,0),#fafafa);pointer-events:none}'
+  + '[data-folded-row]:hover .t{color:#4d4d4d}';
 // A Zotero chip's hover text while its paper's download is waited for (MATH-65 build 4).
 const WAITING_TIP = "Opened in your browser. Download the PDF and it'll open here.";
 // Lucide's drawings at the design's weight: 16px, 1.5px stroke, round caps.
@@ -232,10 +239,14 @@ const ICON = {
   // Build (2026-10-12): Lucide's hammer.
   hammer: icon(HAMMER_PATHS),
   chevronRight: icon('<path d="m9 18 6-6-6-6"></path>'),
+  // A folded exchange's row (2026-10-13): Lucide's chevron-right at 14px; a collapsed conversation's mouse-pointer-2 at 15px.
+  folded: icon('<path d="m9 18 6-6-6-6"></path>', 14, 1.75),
+  pointer: icon(`<path d="${AGENTS_PATH}"></path>`, 15, 1.75),
   expand: icon('<path d="m7 15 5 5 5-5"></path><path d="m7 9 5-5 5 5"></path>'),
   trash: icon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
   chevron: `<span style="display:inline-flex;color:#8f8f8f">${icon('<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`,
   send: icon('<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>', 13, 2.2),
+  sendBox: icon('<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>', 14, 2.2),
   // A research box's head (2026-10-13): Lucide's search.
   search: icon('<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path>', 14, 2),
   discoverOut: icon('<path d="M7 17 17 7"></path><path d="M8 7h9v9"></path>', 12, 2),
@@ -273,6 +284,25 @@ const foldTurns = (ls, turns, to = true) => {
 const radius = (top, closes) => `${top ? '10px 10px' : '0 0'} ${closes ? '10px 10px' : '0 0'}`;
 // A flag the models file recognises is a little bolder than the text around it; a `--word` it does not know stays plain.
 const FLAG_LOOK = 'font-weight:500';
+// The middle panel's threads (2026-10-13): a question shows `@bart` whichever agent its line names, an answer's text is
+// dark (#262626) in a rule 14px from it, and a long one is cut off (applyClips). An answer already in the document when it
+// opened starts cut at about CLIP_OLD lines; one that lands while it is open (the exchange being had) is never cut
+// (2026-10-13, David). Measured in the answer's own lines, 16px at 1.65.
+const BART_LEAD = '<span style="color:#0070f3;font-weight:500">@bart</span>';
+const ANSWER_LINE_PX = 16 * 1.65;
+const CLIP_OLD = 6;
+// The words of a closing line its button row shows (2026-10-13): the model, effort and time, the agent before them only
+// when it is not Chat ("Build · Opus · high · 23 s"); never an older line's "via Bart" or what the run moved up from.
+export const footMeta = (said) => {
+  const parts = String(said || '').replace(VIA_RE, '').split(' · ').map((part) => part.trim()).filter((part) => part && !/^moved up from /.test(part));
+  if (parts[0] === 'Chat') parts.shift();
+  return parts.join(' · ');
+};
+// The round send of a message box (2026-10-13): blue with a white arrow once there is something to send, grey until then.
+const boxSend = (ready) => `background:${ready ? '#0070f3' : '#ececec'};color:${ready ? '#fff' : '#a3a3a3'}`;
+// A message box (2026-10-13): one line on the cards' grey, no outline (David: the plain look, as before), growing as its
+// text wraps with its controls kept bottom-right.
+const MESSAGE_BOX = 'display:flex;align-items:flex-end;gap:8px;padding:9px 10px 9px 16px;border-radius:10px;background:#fafafa';
 // An answer's bullet or number stands in a column of its own (MATH-69), as wide drawn as edited: the `•` or `10.` drawn,
 // the `- ` or `10. ` faint while the caret is on the line, so its text starts at the same place either way. A mark wider
 // than the column (`100.`, a todo's `- [ ] `) widens it, the drawn one by about the space the edited one has after it.
@@ -281,7 +311,7 @@ const MARK_DRAWN = `flex:none;min-width:${MARK_COL};padding-right:0.25em;box-siz
 const MARK_EDITED = `display:inline-block;min-width:${MARK_COL};margin-left:-${MARK_COL};box-sizing:border-box;white-space:pre`;
 
 export default class DocEditor extends React.Component {
-  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null };
+  state = { activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null, docMenu: null };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
   syncing = false; wantFocus = false; wantAnchor = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
@@ -303,6 +333,9 @@ export default class DocEditor extends React.Component {
   cardState = new Map(); cardCache = new WeakMap(); collapseCache = new WeakMap();
   // The conversation title being renamed in its header (2026-10-12): { line, value }.
   titleEdit = null;
+  // The threads whose reply field is open (2026-10-13: Reply opens it), by first line. The answers that were in the document
+  // when it opened (answerKey), for the document they were read in (seenDoc), and the answers opened past their cut.
+  replyOpen = new Set(); seenDoc = {}; seenAnswers = new Set(); moreOpen = new Set();
   // A Build card's reply being typed (by Build id) and the images pasted into it ([{ n, id }]), which cards show their
   // earlier messages, their steps and their prompt, where each card's diff is scrolled to, and the HTML each part of each card was last
   // drawn with (patchBuilds compares these).
@@ -393,7 +426,7 @@ export default class DocEditor extends React.Component {
       drop: (e) => { this.markDropChip(null); if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
       // Leaving it otherwise puts back a question being edited (2026-10-03).
-      focusout: (e) => { if (inEd(e) && inTitle(e) && document.hasFocus()) { if (!this.syncing) this.commitTitle(e.target); return; } if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
+      focusout: (e) => { if (inEd(e) && inTitle(e) && document.hasFocus()) { if (!this.syncing) this.commitTitle(e.target); return; } if (inEd(e) && inAsk(e) && document.hasFocus()) this.leftReply(Number(e.target.dataset.followInput)); if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
       compositionstart: () => { this.composing = true; },
       compositionend: (e) => { this.composing = false; if (inEd(e) && !inFollow(e)) this.editorInput(); },
     };
@@ -869,27 +902,40 @@ export default class DocEditor extends React.Component {
       if (at && at.box && at.role === 'question') return this.researchHtml(i, raw, p, at);
       if (at && at.bare && at.role === 'question') return this.foldedHtml(i, raw, line, p, at);
       const { tokens, flags } = this.bartTokens(line, p), models = this.props.models;
+      // An asked question says `@bart` (2026-10-13), whichever agent its line names: the line keeps its own token.
+      const asked = !!at && !!at.turn && at.turn.answered, said = (tok, k) => (k === 0 && asked && AGENT_TOKEN.test(tok) ? BART_LEAD : null);
       const shown = at && at.answers && !(active && !locked) ? this.answerShown(at.answers) : '';
-      const content = shown ? `${inlineHtml(leadOf(line, agentOf(p)), this.mentionOpts)} ${shown}` : active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok, this.mentionOpts))).join('');
-      // @brainstorm and @discover run on one model (BS-08) and may be asked with nothing after them.
-      const agent = agentOf(p), plain = oneModel(agent);
-      const read = models && !plain ? readQuestion(p.text, models) : null, ready = plain || !!(read ? read.question : p.text).trim();
+      const content = shown ? `${asked ? BART_LEAD : inlineHtml(leadOf(line, agentOf(p)), this.mentionOpts)} ${shown}` : active && !locked ? this.activeHtml(tokens, flags) : tokens.map((tok, k) => said(tok, k) || (flags.has(k) ? `<span style="${FLAG_LOOK}">${esc(tok)}</span>` : inlineHtml(tok, this.mentionOpts))).join('');
+      // @brainstorm and @discover run on one model (BS-08) and may be asked with nothing after them. An `@bart` line names
+      // the model Chat would answer on (2026-10-13), and needs words before it can be sent.
+      const agent = agentOf(p), plain = oneModel(agent), routes = agent === 'router';
+      const read = models && (!plain || routes) ? readQuestion(p.text, models) : null, ready = (plain && !routes) || !!(read ? read.question : p.text).trim();
       // The question opens its card, or follows an answer inside one. Once it is answered its chip goes: the foot says who answered.
       // Being edited (2026-10-03), it has its chip and send again, as an unasked line has.
       const top = !at || at.top, closes = !at || at.closes, editing = !!this.editing && this.editing.q === i, chipped = closes || editing;
-      const send = `<button contenteditable="false" data-act="ask" data-row="${i}" aria-label="Send" ${ready ? '' : 'disabled'} style="user-select:none;flex:none;width:26px;height:26px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;background:${ready ? '#0070f3' : '#eaeaea'};color:${ready ? '#fff' : '#8f8f8f'};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms"><svg viewBox="0 0 16 16" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="square"><path d="M8 13.5V3.2M3.6 7.4 8 3l4.4 4.4"/></svg></button>`;
+      const send = `<button contenteditable="false" data-act="ask" data-row="${i}" aria-label="Send" ${ready ? '' : 'disabled'} style="user-select:none;flex:none;width:28px;height:28px;padding:0;border:0;border-radius:50%;display:flex;align-items:center;justify-content:center;${boxSend(ready)};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms">${ICON.sendBox}</button>`;
       // The chip: what the question starts on, and (hovered) where that is changed. The arrow sits inside it, one unit.
       const open = !!(this.state.picker && this.state.picker.kind === 'line' && this.state.picker.i === i);
       // An unanswered @discover line's chip (2026-10-03) names its level instead, the one it would run at now (carried from
       // an earlier turn of its exchange when the line names none), with its provider when that is not the default ("Codex ·
       // Deep"), or the model and effort a flag pins it to; its menu is DiscoverLevels. @brainstorm runs on one model: no chip.
       const label = read ? `${read.steps[0].name} ${EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort}` : models && agent === 'discover' && chipped ? this.discoverLabel(i) : null;
-      const chip = label ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:8px;margin:-2px -6px 0 0;padding:2px 2px 2px 12px;border:1px solid #eaeaea;border-radius:999px;background:#fff"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:7px;height:26px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;align-items:center;justify-content:center;width:10px;height:12px;font:12px/1 var(--font-sans);color:#8f8f8f"><span style="position:relative;top:${open ? '3px' : '-3px'}">${open ? '⌃' : '⌄'}</span></span></span>${send}</span>` : `<span contenteditable="false" style="flex:none;margin-top:3px">${send}</span>`;
-      // An answered question that opens its card (2026-10-13) has Collapse in its top-right corner, the one its foot has.
+      // The chip (2026-10-13): the model and effort as plain words with a chevron, no border, then the round send.
+      const chip = label ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:10px"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:4px;height:28px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;color:#8f8f8f">${icon(open ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span></span>${send}</span>` : `<span contenteditable="false" style="user-select:none;flex:none;display:inline-flex">${send}</span>`;
       // A titled conversation's `--build` line (2026-10-13) keeps its chip, and has the conversation's Collapse after it.
-      const buildTurn = !!at && !!at.turn.build, corner = at && top && at.turn.answered && !at.turn.pending && !editing && (!buildTurn || at.thread.titleLine >= 0) ? this.cornerHtml(at) : '';
-      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''}${editing ? ' data-editing="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${top ? 8 : 6}px 12px ${closes ? '8px' : '4px'};min-height:35px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '8px' : '0'};font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
-        + (chipped ? chip : '') + (!chipped || buildTurn ? corner : '')
+      // Any other asked question's Collapse is on its button row (2026-10-13), not in its corner.
+      const buildTurn = !!at && !!at.turn.build, corner = buildTurn && top && at.thread.titleLine >= 0 && at.turn.answered && !at.turn.pending && !editing ? this.cornerHtml(at) : '';
+      // Not asked yet (or being edited), the line is the message box (2026-10-13): one line, white, bordered, growing as it
+      // wraps with the chip and send kept bottom-right.
+      if (!asked || editing) {
+        return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''}${editing ? ' data-editing="1"' : ''} data-message-box="1" style="${MESSAGE_BOX};margin:${top ? 0 : 8}px 0 8px;font-size:16px;line-height:1.6;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0;align-self:center">${content || '<br>'}</span>`
+          + (chipped ? chip : '') + '</div>';
+      }
+      // Asked, it is the card's question: flush with the card's 16px, 14px under its top, or under an earlier exchange
+      // folded to a line (whose own space is under it).
+      const pad = top ? 14 : at.afterBare ? 0 : 14;
+      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} style="display:flex;align-items:flex-start;gap:10px;padding:${pad}px 16px ${closes ? 10 : 0}px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '8px' : '0'};font-size:16px;line-height:1.6;color:#171717;${locked ? 'user-select:text;cursor:default' : ''}"><span class="t" style="flex:1;min-width:0">${content || '<br>'}</span>`
+        + (chipped ? chip : '') + corner
         + '</div>';
     }
     if (p.type === 'pending') {
@@ -923,7 +969,7 @@ export default class DocEditor extends React.Component {
       // inside it, on its newest line unless the person scrolled up in it (placeStreams), and the card does not grow to
       // fill the pane or push the line being typed below it out of view. The log and the activity row stay under it.
       const box = written ? `<div data-stream="${esc(p.id)}" style="max-height:${STREAM_CAP};overflow-y:auto">${written}</div>` : '';
-      return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:2px 16px 12px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '8px' : '0'};color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
+      return `<div ${raw} data-pending="${esc(p.id)}" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:${at ? 12 : 2}px 16px 12px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '8px' : '0'};color:#8f8f8f;font:13px/1.5 var(--font-sans)">`
         + box
         + (open && log.length ? `<div style="margin:0 0 8px 16px;font:12px/1.7 var(--font-sans);color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '')
         + '<div style="display:flex;align-items:center;gap:10px">'
@@ -936,7 +982,7 @@ export default class DocEditor extends React.Component {
     if (p.type === 'reply') {
       // A folded turn's foot is not drawn: the turn is its question's one row (foldedHtml). A research box keeps its own.
       if (at && at.role === 'foot' && at.turn.answered && !at.turn.pending && at.turn.folded && !at.box) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
-      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), edit: at.editable, busy: isRunning(at.thread, this.props.builds), thread: at.thread, box: at.box });
+      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), busy: isRunning(at.thread, this.props.builds), thread: at.thread, box: at.box, reply: at.reply });
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.card) return this.cardHtml(raw, at.card);
@@ -944,7 +990,8 @@ export default class DocEditor extends React.Component {
       // on a light focus tint; the rule and the card stay where they are.
       // (An answer with no question above it, left by an edit outside the app, is a card of its own.)
       const near = at ? null : this.lines(), first = at ? at.first : parseLine(near[i - 1] ?? '').type !== 'reply', closes = at ? at.closes : parseLine(near[i + 1] ?? '').type !== 'reply', last = at ? at.lastBody : closes;
-      if (p.code) return this.answerCodeHtml(i, raw, p, active, first, closes, last, !at);
+      const rawA = at && at.role === 'answer' && !at.box ? `${raw} data-answer-of="${at.turn.q}"` : raw;
+      if (p.code) return this.answerCodeHtml(i, rawA, p, active, first, closes, last, !at);
       // A brainstorm recap's lines ("What you know: …", "Your question: …") as sections: the label in bold on a line
       // of its own, the words under it. An older recap's "Look for:" line too (MATH-31), no longer a button.
       const recap = at && fixedStep(at.agent) && !active ? recapLine(p.text) : null;
@@ -963,7 +1010,7 @@ export default class DocEditor extends React.Component {
       const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
       const hang = cut && q.type !== 'h' ? `padding-left:calc(${q.depth * 18}px + ${MARK_COL});` : '';
       const own = at && at.turn && !isRunning(at.thread, this.props.builds) ? at.turn.q : null, a = this.answerLook(p.text, own), shut = active && this.linksShut(p), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`, shut, this.answerOpts(own)) : this.activeHtml(tokensOf(p, line), null, null, shut, this.answerOpts(own))) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : (run ? a.content.replace('<a ', `${run}<a `) : a.content) + mark;
-      return `<div ${raw}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 8 : 0}px;color:#4d4d4d;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
+      return `<div ${rawA}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 12 : 0}px 16px ${closes ? 10 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 8 : 0}px;color:#262626;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 14px;border-left:2px solid #d6d6d6"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
       // The prototype's replies: read-only, as they were.
@@ -1005,11 +1052,11 @@ export default class DocEditor extends React.Component {
   // the way a block in the document is (language and Copy at its head, a fence as typed while the caret is on it).
   answerCodeHtml(i, raw, p, active, first, closes, last, alone) {
     const mono = 'font:14px/1.7 var(--font-mono)', sides = 'border-left:1px solid #eaeaea;border-right:1px solid #eaeaea';
-    const math = this.mathBlock(p), card = `padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 8 : 0}px`;
+    const math = this.mathBlock(p), card = `padding:${first ? 12 : 0}px 16px ${closes ? 10 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 8 : 0}px`;
     // A math block in an answer: the equation on the card, inside the rule; its closing fence keeps the card's foot.
     if (math && p.code === 'body') return `<div ${raw} data-kind="code" data-math-block="1" style="display:none"><span class="t"></span></div>`;
-    if (math && p.code === 'close') return `<div ${raw} data-kind="fence" data-math-block="1" style="${card};cursor:text"><span style="display:block;padding:0 0 ${last ? 2 : 0}px 12px;border-left:2px solid #dcdcdc"><span class="t" style="display:block;font:4px/1 var(--font-sans)"><br></span></span></div>`;
-    if (math) return `<div ${raw} data-kind="fence" data-math-block="1" style="${card};cursor:text"><span style="display:flex;align-items:center;gap:8px;padding:${first ? 2 : 0}px 0 0 12px;border-left:2px solid #dcdcdc"><span class="t" style="flex:1;min-width:0;overflow-x:auto;overflow-y:hidden">${math}</span>${this.copyCodeHtml(i)}</span></div>`;
+    if (math && p.code === 'close') return `<div ${raw} data-kind="fence" data-math-block="1" style="${card};cursor:text"><span style="display:block;padding:0 0 ${last ? 2 : 0}px 14px;border-left:2px solid #d6d6d6"><span class="t" style="display:block;font:4px/1 var(--font-sans)"><br></span></span></div>`;
+    if (math) return `<div ${raw} data-kind="fence" data-math-block="1" style="${card};cursor:text"><span style="display:flex;align-items:center;gap:8px;padding:${first ? 2 : 0}px 0 0 14px;border-left:2px solid #d6d6d6"><span class="t" style="flex:1;min-width:0;overflow-x:auto;overflow-y:hidden">${math}</span>${this.copyCodeHtml(i)}</span></div>`;
     let inner;
     if (p.code === 'body') inner = `<span class="t" style="display:block;min-height:24px;padding:0 12px;background:#fff;${sides};${mono};color:#171717;tab-size:2">${highlight(p.text, p.lang) || '<br>'}</span>`;
     else if (p.code === 'close') inner = `<span class="t" style="display:block;padding:0 12px ${active ? 6 : 4}px;background:#fff;${sides};border-bottom:1px solid #eaeaea;border-radius:0 0 8px 8px;${active ? `${mono};color:#8f8f8f` : 'font:8px/1 var(--font-sans)'}">${active ? esc(p.text) : '<br>'}</span>`;
@@ -1017,7 +1064,7 @@ export default class DocEditor extends React.Component {
     // The space around the box is the rule's padding, not a margin: a margin would fall through the line's wrappers and
     // cut a white strip across the card.
     const above = first ? 2 : p.code === 'open' ? 6 : 0, below = last ? 2 : p.code === 'close' ? 6 : 0;
-    return `<div ${raw} data-kind="${p.code === 'body' ? 'code' : 'fence'}" style="padding:${first ? 8 : 0}px 16px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 8 : 0}px;cursor:text"><span style="display:block;padding:${above}px 0 ${below}px 12px;border-left:2px solid #dcdcdc">${inner}</span></div>`;
+    return `<div ${raw} data-kind="${p.code === 'body' ? 'code' : 'fence'}" style="padding:${first ? 12 : 0}px 16px ${closes ? 10 : 0}px;background:#fafafa;border-radius:${radius(alone && first, closes)};margin-bottom:${closes ? 8 : 0}px;cursor:text"><span style="display:block;padding:${above}px 0 ${below}px 14px;border-left:2px solid #d6d6d6">${inner}</span></div>`;
   }
   copyCodeHtml(i) {
     const copied = this.copied === `code${i}`;
@@ -1497,18 +1544,25 @@ export default class DocEditor extends React.Component {
       // where it goes on: the conversation has no follow-up field above it.
       const built = (ps[thread.to + 1] || {}).type === 'build';
       const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !built && !end.build;
-      // A collapsed turn (2026-10-13) is drawn bare, as one row on no grey (foldedHtml) with no foot: the card starts again
-      // under it.
+      // Under the last turn (2026-10-13): its reply field once Reply opened it (replyOpen), or always under a live card,
+      // whose answer is typed there; after an @brainstorm recap, Send to Discover's row. Without either the button row
+      // closes the card.
+      const endCard = cards.byQ.get(end.q), live = !!endCard && endCard.live;
+      const field = follow && (live || this.replyOpen.has(thread.from)), after = field || (follow && this.endsInRecap(ls, thread));
+      // A collapsed turn (2026-10-13) is drawn bare, as one row (foldedHtml) with no foot, at the top of the card: the
+      // question under it starts 18px below the last of them.
       // An @discover research box (2026-10-13, doc.js isResearch) is a card of its own: the turn above it closes its card,
       // and its line is the box's head (researchHtml). `cut`: the turn's last row closes the card, a box coming next.
       let afterBare = false;
       thread.turns.forEach((turn, n) => {
         const agent = this.turnAgent(thread, turn), card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
-        const bare = turn.answered && !turn.pending && turn.folded, box = isResearch(ps[turn.q]), next = thread.turns[n + 1], cut = !!next && isResearch(ps[next.q]);
+        // A line not asked yet is a message box of its own (2026-10-13): the card above it closes, as above a research box.
+        const bare = turn.answered && !turn.pending && turn.folded, box = isResearch(ps[turn.q]), next = thread.turns[n + 1], cut = !!next && (isResearch(ps[next.q]) || !next.answered);
+        const nextBare = !!next && next.answered && !next.pending && next.folded && !isResearch(ps[next.q]);
         const answers = n > 0 ? cards.byQ.get(thread.turns[n - 1].q) || null : null;
-        const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end, shuts = (tail && !follow) || cut;
+        const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end, shuts = (tail && !after) || cut;
         // A folded turn's row (lineHtml foldedHtml) closes the card when its foot would have: its foot is not drawn.
-        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || afterBare || box, closes: !turn.answered || !!turn.build || (bare && !box && shuts), editable: editable && !box, bare, box, answers });
+        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || box || !turn.answered, afterBare, lastBare: !nextBare, closes: !turn.answered || !!turn.build || (bare && !box && shuts), editable: editable && !box, bare, box, answers });
         afterBare = bare;
         if (turn.build) return; // its answer is the Build's card, drawn as a card is (buildHtml), not as an answer's rows
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
@@ -1516,7 +1570,8 @@ export default class DocEditor extends React.Component {
         for (let i = turn.from; i <= turn.to; i++) {
           const role = i === turn.foot ? 'foot' : parseLine(ls[i]).type === 'pending' ? 'pending' : 'answer', ends = i === turn.to;
           const drawn = card && i <= card.last ? { card: i === turn.from ? card : null, underCard: i !== turn.from } : {};
-          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, tail, cut, box, editable: editable && !box, ...drawn });
+          // `reply`: the thread whose Reply the turn's button row has, the last turn's while its field is shut.
+          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && after, reply: tail && follow && !field ? thread.from : null, tail, cut, box, editable: editable && !box, ...drawn });
         }
       });
     }
@@ -1568,8 +1623,8 @@ export default class DocEditor extends React.Component {
         return `<button type="button" class="bs-row" ${live ? `data-act="cardopt" data-turn="${q}" data-opt="${n}"` : 'disabled'} role="${many ? 'checkbox' : 'radio'}" aria-checked="${on}"><span aria-hidden="true" class="bs-mark">${on ? '✓' : '•'}</span><span class="bs-label">${textMathHtml(option.label)}${option.why ? `<span class="bs-why"> · ${textMathHtml(option.why)}</span>` : ''}</span></button>`;
       }).join('') + '</span>');
     }
-    return `<div ${raw} data-card="${q}" contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:8px 16px 0;background:#fafafa;color:#4d4d4d;font-size:16px;line-height:1.65">`
-      + `<span style="display:block;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">`
+    return `<div ${raw} data-card="${q}" contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:12px 16px 0;background:#fafafa;color:#262626;font-size:16px;line-height:1.65">`
+      + `<span style="display:block;padding:2px 0 2px 14px;border-left:2px solid #d6d6d6">`
       + parts.join('<span aria-hidden="true" style="display:block;height:10px"></span>')
       + '</span></div>';
   }
@@ -1608,7 +1663,7 @@ export default class DocEditor extends React.Component {
     const { flags } = this.followStep(ls, thread), text = [flags, said].filter(Boolean).join(' ');
     const askId = newAskId(), add = [`@${tokenOf(agent)} ${text}`, `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
     const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => withAgent(turnText(ls, turn), turn));
-    this.cardState.delete(q); this.followText.delete(thread.from); this.followImages.delete(thread.from);
+    this.cardState.delete(q); this.followText.delete(thread.from); this.followImages.delete(thread.from); this.replyOpen.delete(thread.from);
     const ed = this.editorEl(); if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     this.setLines((x) => { const out = foldTurns(x, thread.turns); out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
@@ -1627,18 +1682,21 @@ export default class DocEditor extends React.Component {
     const { thread } = at, title = p.text.trim();
     const name = agentName(thread), when = whenShown(thread.at);
     const first = thread.turns && thread.turns[0], shown = title || (first ? questionLine(turnText(this.lines(), first).question, 60) : '') || name;
-    const said = [name, when].filter(Boolean).join(' · ');
+    // On the right (2026-10-13): when it was asked, the agent before it only when it is not Chat ("Build · 2:37 PM").
+    const said = [name === CHAT_ITEM.title ? '' : name, when].filter(Boolean).join(' · ');
     const editing = !!this.titleEdit && this.titleEdit.line === i;
-    const row = `<div ${raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" style="user-select:none;display:flex;align-items:center;min-width:0;padding:2px 0;margin-bottom:8px;font:16px/1.5 var(--font-sans)">`;
+    const row = `<div ${raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" style="user-select:none;display:flex;align-items:center;gap:12px;min-width:0;height:42px;box-sizing:border-box;font:15px/1.4 var(--font-sans)">`;
     if (editing) {
-      return row + `<span style="flex:none;display:inline-flex;color:#0070f3;margin-right:8px">${ICON.agents}</span>`
-        + `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
+      return row + `<span style="flex:none;display:inline-flex;color:#0070f3;margin-right:-4px">${ICON.pointer}</span>`
+        + `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:15px/1.4 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
         + '</div>';
     }
-    return row + `<span class="bart-link" data-act="foldthread" data-row="${i}" role="button" tabindex="0" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" title="${esc(said ? `${said} · ⌥-click to rename` : '⌥-click to rename')}" style="display:inline-flex;align-items:center;gap:8px;min-width:0;max-width:100%">`
-      + `<span style="flex:none;display:inline-flex">${ICON.agents}</span>`
+    return row + `<span class="bart-link" data-act="foldthread" data-row="${i}" role="button" tabindex="0" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" title="⌥-click to rename" style="flex:0 1 auto;display:inline-flex;align-items:center;gap:8px;min-width:0">`
+      + `<span style="flex:none;display:inline-flex">${ICON.pointer}</span>`
       + `<span class="bart-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span>`
-      + '</span></div>';
+      + '</span>'
+      + (said ? `<span data-thread-when="1" style="flex:none;margin-left:auto;font:12px/1 var(--font-sans);color:#8f8f8f;white-space:nowrap">${esc(said)}</span>` : '')
+      + '</div>';
   }
   // The Collapse in an answered question's top-right corner (2026-10-13): what its card's foot Collapse does. In a titled
   // conversation it folds all of it to its title's row (foldthread), not while a turn of it runs; otherwise it folds the
@@ -1654,11 +1712,14 @@ export default class DocEditor extends React.Component {
   // A turn folded by a follow-up (2026-10-13): one row, its question on one line cut off with an ellipsis, grey and small,
   // and Expand at its right. Read-only (no caret, no edit in place, no chip, no corner Collapse); a click on it, or on
   // Expand, unfolds the turn (toggleFold). Its answer and foot are not drawn; its lines in the file are as they were.
+  // Since 2026-10-13 it is a line at the top of its card: a chevron, the question without its `@bart`, 6px to the next
+  // and 18px to the question under the last of them.
   foldedHtml(i, raw, line, p, at) {
     const shown = (at.answers && this.answerShown(at.answers)) || esc(questionLine(p.text, 300) || leadOf(line, agentOf(p)));
-    return `<div ${raw} contenteditable="false" data-readonly="1" data-folded-row="${at.turn.q}" data-act="fold" data-turn="${at.turn.q}" role="button" aria-expanded="false" aria-label="Expand" style="user-select:none;cursor:pointer;display:flex;align-items:center;gap:8px;min-width:0;padding:0 6px 0 12px;margin-bottom:${at.closes ? '8px' : '3px'};font:14px/1.6 var(--font-sans);color:#8f8f8f">`
+    const below = at.closes ? 10 : at.lastBare ? 18 : 6;
+    return `<div ${raw} contenteditable="false" data-readonly="1" data-folded-row="${at.turn.q}" data-act="fold" data-turn="${at.turn.q}" role="button" aria-expanded="false" aria-label="Expand" style="user-select:none;cursor:pointer;display:flex;align-items:center;gap:6px;min-width:0;padding:${at.top ? 14 : 0}px 16px ${below}px;background:#fafafa;border-radius:${radius(at.top, at.closes)};margin-bottom:${at.closes ? '8px' : '0'};font:14px/1.5 var(--font-sans);color:#7a7a7a">`
+      + `<span style="flex:none;display:inline-flex;color:#a3a3a3">${ICON.folded}</span>`
       + `<span class="t" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${shown}</span>`
-      + `<span style="flex:none;position:relative;display:inline-flex"><button class="bart-ic" data-act="fold" data-turn="${at.turn.q}" aria-label="Expand" aria-expanded="false">${ICON.expand}</button><span class="bart-tip" style="right:0">Expand</span></span>`
       + '</div>';
   }
   // An @discover research box's head (2026-10-13; doc.js isResearch): its line, drawn as "Research · Standard", the level
@@ -1673,18 +1734,17 @@ export default class DocEditor extends React.Component {
     return `<div ${raw} contenteditable="false" data-readonly="1" data-research="${i}" style="user-select:none;cursor:default;display:flex;align-items:center;min-width:0;padding:10px 16px ${at.closes ? 10 : 2}px;background:${at.bare ? 'none' : '#fafafa'};border-radius:${radius(true, at.closes)};margin-bottom:${at.closes ? '8px' : '0'};font:500 13px/1.6 var(--font-sans);color:#4d4d4d">`
       + `<span style="flex:none;display:inline-flex;margin-right:8px;color:#8f8f8f">${ICON.search}</span><span style="flex:none">Research</span>${said}</div>`;
   }
-  // The foot of one turn (Answer Card), as icons, each with its name under it on hover: Copy on the left (2026-10-13:
-  // Regenerate, Edit and Build are no longer on it), with a live card's Skip and Wrap up; Collapse or Expand and Delete on
-  // the right. Nothing of the closing line is drawn (2026-10-13: no "Chat · 9 s", no agent, no "via Bart"); the line keeps
-  // the agent, model, effort and time, and what reads it (turnAgent, routed builds) still does. The handlers for regen,
-  // editturn and footbuild stay: the build icon in a question still asks footbuild.
+  // The foot of one turn (Answer Card): its button row (2026-10-13, inside the card, under the answer, no line above it).
+  // On the left Reply (`reply`: the thread whose reply field it opens, on its last turn while that field is shut), then
+  // Copy and Regenerate as icons, with a live card's Skip and Wrap up; on the right what the closing line says
+  // (footMeta: "Opus · high · 23 s", the agent first when it is not Chat), then Collapse or Expand and Delete. Regenerate
+  // asks again on the model that answered (ranWith); it opens no selector.
   // `raw` is set when the answer's closing line is this foot; an answer without one (a run that failed) gets the same foot.
-  // `plain`: an @brainstorm or @discover turn, whose Regenerate asks again on its one model, with no selector (BS-08).
-  // `edit` (2026-10-03): Edit, which makes the question editable in place (startEdit).
+  // `plain`: an @brainstorm or @discover turn, whose Regenerate asks again on its one model (BS-08).
   // `busy`: a turn of the thread is at work. `thread`: the turn's; in one with a title (2026-10-12) Collapse folds all of
   // it to its title's row, once nothing in it runs. A research box (`box`, 2026-10-13) has its own Collapse. A turn folded
   // by a follow-up has no foot: it is one row (lineHtml's bare question).
-  footHtml({ raw, q, text, folded, closes, plain = false, edit = false, busy = false, thread = null, box = false }) {
+  footHtml({ raw, q, text, folded, closes, plain = false, busy = false, thread = null, box = false, reply = null }) {
     const wrap = (inner, extra = '') => `<span style="flex:none;position:relative;display:inline-flex;${extra}">${inner}</span>`;
     const tip = (label, side) => `<span class="bart-tip" style="${side}:0">${label}</span>`;
     const copied = this.copied === `bart${q}`;
@@ -1692,16 +1752,20 @@ export default class DocEditor extends React.Component {
     // A live card's Skip, and @brainstorm's Wrap up (2026-10-13: off the card, which is drawn as an answer, onto its foot).
     const live = this.cardsOf(ls).byQ.get(q), answering = !!live && live.live;
     const lefts = [
+      ...(reply != null ? [`<button type="button" class="bart-reply" data-act="reply" data-thread="${reply}" style="user-select:none;flex:none;margin-right:4px">Reply</button>`] : []),
       wrap(`<button class="bart-ic" data-act="copybart" data-turn="${q}" aria-label="Copy" ${copied ? 'style="color:#8f8f8f"' : ''}>${ICON.copy}</button>${tip(copied ? 'Copied' : 'Copy', 'left')}`),
+      ...(box ? [] : [wrap(`<button class="bart-ic" data-act="regen" data-turn="${q}" data-quiet="1"${plain ? ' data-plain="1"' : ''} aria-label="Regenerate"${busy ? ' disabled' : ''}>${ICON.regenerate}</button>${tip(busy ? 'Regenerate once it answers' : 'Regenerate', 'left')}`)]),
       ...(answering ? [`<button type="button" class="bart-text" data-act="cardskip" data-turn="${q}" style="user-select:none;flex:none;margin-left:6px">Skip</button>`] : []),
       ...(answering && fixedStep(live.agent) ? [`<button type="button" class="bart-text" data-act="cardwrap" data-turn="${q}" style="user-select:none;flex:none;margin-left:6px">Wrap up</button>`] : []),
     ];
+    const meta = footMeta(text), right = meta ? '' : 'margin-left:auto';
     const whole = !!thread && thread.titleLine >= 0, running = whole && isRunning(thread, this.props.builds);
     const fold = whole && !folded && !box
-      ? wrap(`<button class="bart-ic" data-act="foldthread" data-row="${thread.titleLine}" aria-label="Collapse" aria-expanded="true"${running ? ' disabled' : ''}>${ICON.collapse}</button>${tip(running ? 'Collapse once it answers' : 'Collapse', 'right')}`, 'margin-left:auto')
-      : wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`, 'margin-left:auto');
-    return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:4px;padding:4px 10px 6px;background:${folded ? 'none' : '#fafafa'};border-radius:${radius(false, closes)};margin-bottom:${closes ? '8px' : '0'}">`
+      ? wrap(`<button class="bart-ic" data-act="foldthread" data-row="${thread.titleLine}" aria-label="Collapse" aria-expanded="true"${running ? ' disabled' : ''}>${ICON.collapse}</button>${tip(running ? 'Collapse once it answers' : 'Collapse', 'right')}`, right)
+      : wrap(`<button class="bart-ic" data-act="fold" data-turn="${q}" aria-label="${folded ? 'Expand' : 'Collapse'}" aria-expanded="${!folded}">${folded ? ICON.expand : ICON.collapse}</button>${tip(folded ? 'Expand' : 'Collapse', 'right')}`, right);
+    return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:2px;padding:12px 10px ${closes ? 10 : 6}px 16px;background:${folded ? 'none' : '#fafafa'};border-radius:${radius(false, closes)};margin-bottom:${closes ? '8px' : '0'}">`
       + lefts.join('')
+      + (meta ? `<span data-foot-meta="1" style="flex:none;margin-left:auto;padding-right:6px;font:12px/1 var(--font-sans);color:#8f8f8f;white-space:nowrap">${esc(meta)}</span>` : '')
       + fold
       + wrap(`<button class="bart-ic" data-danger="1" data-act="dropturn" data-turn="${q}" aria-label="Delete">${ICON.trash}</button>${tip('Delete', 'right')}`)
       + '</div>';
@@ -1715,14 +1779,15 @@ export default class DocEditor extends React.Component {
     const flags = choice && modelOf(choice.model, models) ? `--${choice.model} --${choice.effort}` : readFlags(last, models).spans.map(([a, b]) => last.slice(a, b)).join(' ');
     return { flags, step: readQuestion(flags, models).steps[0] };
   }
-  // The field that asks a follow-up, closing the card: `@bart`, the text, and one pill with the model and a round send.
-  // What is typed is not in this string (restoreFollow puts it back), so typing never redraws the editor.
+  // The field that asks a follow-up (2026-10-13: opened by Reply, or always under a live card): the message box on the
+  // card's grey, `@bart`, the text, the model and effort with a chevron, and a round send. What is typed is not in this
+  // string (restoreFollow puts it back), so typing never redraws the editor.
   // After an @brainstorm recap the field asks that agent again, on its one model: no chip, and it may be sent empty. After
   // an @discover guide it asks @discover for more, which needs words.
   // `closes: false`: a row follows it inside the card (Send to Discover after a recap), so it leaves the card's end to that.
   followHtml(ls, thread, { closes = true } = {}) {
     const live = this.cardsOf(ls).byQ.get(thread.turns[thread.turns.length - 1].q);
-    if (live && live.live) return this.answerFieldHtml(thread, live);
+    if (live && live.live) return this.answerFieldHtml(thread, live, closes);
     const { step } = this.followStep(ls, thread), from = thread.from;
     const agent = answeredBy(thread);
     // What is typed goes to Bart, who picks the agent (sendFollow, 2026-10-13), so the field says @bart whoever answered
@@ -1730,39 +1795,56 @@ export default class DocEditor extends React.Component {
     const lead = this.props.onRoute ? '@bart' : `@${tokenOf(agent)}`;
     if (FOLLOW[agent]) {
       const { placeholder, label, empty } = FOLLOW[agent];
-      const end = closes ? 'padding:10px 12px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px' : 'padding:10px 12px;background:#fafafa';
-      return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;${end}">`
-        + `<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">${lead}</span>`
-        + `<textarea data-follow-input="${from}" data-agent="${agent}"${empty ? ' data-empty="1"' : ''} rows="1" placeholder="${esc(placeholder)}" aria-label="${esc(label)}" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
-        + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:${empty ? '#0070f3' : '#f2f2f2'};color:${empty ? '#fff' : '#8f8f8f'};cursor:pointer">${ICON.send}</button>`
-        + '</div>';
+      return this.fieldBox(from, { lead, closes, ready: empty, input: this.fieldInput(from, `data-agent="${agent}"${empty ? ' data-empty="1"' : ''} placeholder="${esc(placeholder)}" aria-label="${esc(label)}"`) });
     }
     const open = !!(this.state.picker && this.state.picker.kind === 'follow' && this.state.picker.i === from);
-    // A textarea one line tall that grows as it wraps, as the @bart line above it does (2026-09-22); the question is still
-    // one line of the document, so Enter sends and a pasted line break becomes a space. The chip sits on the first line.
-    return `<div contenteditable="false" data-followup="${from}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;padding:10px 12px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px">`
-      + `<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">${lead}</span>`
-      + `<textarea data-follow-input="${from}" rows="1" placeholder="Respond…" aria-label="Ask a follow-up" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
-      + `<span data-chip="f${from}" style="flex:none;position:relative;display:inline-flex;margin-top:-6px"><span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:6px;padding:5px 6px 5px 12px;border:1px solid ${open ? '#c9c9c9' : '#eaeaea'};border-radius:999px;background:#fff;cursor:pointer;font:13px/1 var(--font-sans);color:#171717">`
-      + (step ? `<span>${esc(step.name)} ${esc(EFFORT_LABELS[step.effort] || step.effort)}</span>${ICON.chevron}<span style="width:1px;height:14px;background:#eaeaea;margin:0 2px"></span>` : '')
-      + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:#f2f2f2;color:#8f8f8f;cursor:pointer">${ICON.send}</button>`
-      + '</span></span></div>';
+    const chip = step ? `<span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:4px;height:28px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(step.name)} ${esc(EFFORT_LABELS[step.effort] || step.effort)}<span style="display:inline-flex;color:#8f8f8f">${icon(open ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span></span>` : '';
+    return this.fieldBox(from, { lead, closes, chip, input: this.fieldInput(from, 'placeholder="Respond…" aria-label="Ask a follow-up"') });
   }
-  // The follow-up field under a live card (2026-10-13), where it is answered (sendCard): the card's agent, no chip, and a
-  // send that is blue once something is typed, or (a select-all) once a row is ticked. A free or open question's own
-  // placeholder; on a choice, what is typed is their own words in place of a pick (on @brainstorm's versions card, round 7,
-  // their question rewritten), or a note to what is ticked.
-  answerFieldHtml(thread, entry) {
+  // A reply's textarea: one line tall, growing as it wraps (fitFollow); the question is still one line of the document,
+  // so Enter sends and a pasted line break becomes a space.
+  fieldInput(from, attrs) {
+    return `<textarea data-follow-input="${from}" ${attrs} rows="1" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:2px 0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`;
+  }
+  // The field a reply is typed in (2026-10-13), plain on the card's grey under its button row, flush with the question:
+  // the blue lead on the first line, the field, then (bottom-right) the chip and the round send.
+  fieldBox(from, { lead, input, chip = '', ready = false, closes = true, extra = '' }) {
+    return `<div contenteditable="false" data-followup="${from}"${extra} style="user-select:none;padding:4px 10px ${closes ? 10 : 6}px 16px;background:#fafafa;border-radius:${closes ? '0 0 10px 10px' : '0'};margin-bottom:${closes ? 8 : 0}px"><div style="display:flex;align-items:flex-end;gap:8px">`
+      + `<span style="flex:none;align-self:flex-start;margin:2px 0;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">${lead}</span>`
+      + input
+      + `<span data-chip="f${from}" style="flex:none;display:inline-flex;align-items:center;gap:10px">${chip}<button class="bart-send" data-act="sendfollow" data-thread="${from}" data-box="1" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:50%;${boxSend(ready)};cursor:pointer">${ICON.sendBox}</button></span>`
+      + '</div></div>';
+  }
+  // The follow-up field under a live card (2026-10-13), where it is answered (sendCard): `@bart`, no chip, and a send that
+  // is blue once something is typed, or (a select-all) once a row is ticked. A free or open question's own placeholder; on
+  // a choice, what is typed is their own words in place of a pick (on @brainstorm's versions card, round 7, their question
+  // rewritten), or a note to what is ticked.
+  answerFieldHtml(thread, entry, closes = true) {
     const from = thread.from, asked = questionOf(entry.card), many = asked.type === 'select_all';
     const ticked = many && ((this.cardState.get(entry.turn.q) || {}).picks || []).length > 0;
     const placeholder = !isChoice(asked.type) ? asked.placeholder || 'Respond…'
       : entry.agent === 'brainstorm' && asked.id === 'versions' ? 'Or rewrite it yourself…'
         : many ? 'Pick any, or say it in your own words…' : 'Pick one, or say it in your own words…';
-    return `<div contenteditable="false" data-followup="${from}" data-answers="${entry.turn.q}" style="user-select:none;display:flex;align-items:flex-start;gap:10px;padding:10px 12px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px">`
-      + `<span style="flex:none;color:#0070f3;font-weight:500;font-size:16px;line-height:24px">@${tokenOf(entry.agent)}</span>`
-      + `<textarea data-follow-input="${from}" data-agent="${entry.agent}"${ticked ? ' data-empty="1"' : ''} rows="1" placeholder="${esc(placeholder)}" aria-label="Answer" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`
-      + `<button class="bart-send" data-act="sendfollow" data-thread="${from}" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;background:${ticked ? '#0070f3' : '#f2f2f2'};color:${ticked ? '#fff' : '#8f8f8f'};cursor:pointer">${ICON.send}</button>`
-      + '</div>';
+    return this.fieldBox(from, { lead: '@bart', closes, ready: ticked, extra: ` data-answers="${entry.turn.q}"`, input: this.fieldInput(from, `data-agent="${entry.agent}"${ticked ? ' data-empty="1"' : ''} placeholder="${esc(placeholder)}" aria-label="Answer"`) });
+  }
+  // Reply (2026-10-13) opens its thread's field, the caret in it; it shuts again when it is left empty (focusout, Escape)
+  // or sent.
+  openReply(from) {
+    this.replyOpen.add(from); this.lastHtml = null; this.syncEditor();
+    const input = this.followField(from); if (!input) return;
+    input.focus({ preventScroll: true });
+    if (input.scrollIntoView) input.scrollIntoView({ block: 'nearest' });
+  }
+  closeReply(from) { if (this.replyOpen.delete(from)) { this.lastHtml = null; this.syncEditor(); } }
+  // A reply field left: shut when it holds nothing, once the keyboard has not come back to it (a redraw puts it back) and
+  // no selector or @ menu of its own is open.
+  leftReply(from) {
+    this.timer(() => {
+      if (!this.replyOpen.has(from) || this.syncing || (this.followText.get(from) || '').trim()) return;
+      const input = this.followField(from);
+      if ((input && document.activeElement === input) || (this.state.picker && this.state.picker.kind === 'follow') || (this.state.mention && this.state.mention.field === from)) return;
+      this.closeReply(from);
+    }, 150);
   }
   // After a redraw: what was being typed goes back into its field, the send turns blue again, and a field that had the
   // keyboard takes it back with its selection.
@@ -1796,26 +1878,78 @@ export default class DocEditor extends React.Component {
   // A follow-up's send, or Send to Discover's: blue when it can send, grey until then.
   paintSend(input) {
     const send = input.parentElement && input.parentElement.querySelector('[data-act="sendfollow"], [data-act="senddiscover"]'); if (!send) return;
-    const ready = input.dataset.empty === '1' || !!input.value.trim(); send.style.background = ready ? '#0070f3' : '#f2f2f2'; send.style.color = ready ? '#fff' : '#8f8f8f';
+    const ready = input.dataset.empty === '1' || !!input.value.trim();
+    const box = !!(send.dataset && send.dataset.box);
+    send.style.background = ready ? '#0070f3' : box ? '#ececec' : '#f2f2f2'; send.style.color = ready ? '#fff' : box ? '#a3a3a3' : '#8f8f8f';
   }
   editorHtml() {
     const ls = this.lines(), ps = this.parsedOf(ls), active = this.state.activeLine, at = this.layout(ls), editing = this.editing; let out = '', group = [];
+    this.noteAnswers(ls);
+    const cards = this.cardsOf(ls);
     ls.forEach((line, i) => {
       const p = ps[i], where = at.get(i);
       // Under a question being edited (2026-10-03), its answer and the answer's foot are dimmed.
       const dim = !!editing && !!where && !!where.turn && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
       out += dimmed(this.lineHtml(i, line, p, active === i, p.type === 'todo' && !group.length, where, this.lockedAt(ls, i)));
-      if (where && where.footAfter && !(where.turn.folded && !where.box)) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.followAfter) || where.cut, plain: oneModel(where.agent), edit: where.editable, busy: isRunning(where.thread, this.props.builds), thread: where.thread, box: where.box }));
+      // Under an answer's last line, its Show more (2026-10-13), shown by applyClips once it is long enough to cut.
+      if (where && where.lastBody && where.role === 'answer' && !where.box && !where.turn.pending && !where.turn.folded && !where.turn.build && !cards.byQ.has(where.turn.q)) out += this.moreHtml(ls, where.turn);
+      if (where && where.footAfter && !(where.turn.folded && !where.box)) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), thread: where.thread, box: where.box, reply: where.reply }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
       // card (MATH-31; under it, not above, since 2026-10-05: the agent's own field comes first).
       const recap = !!where && where.followAfter && this.endsInRecap(ls, where.thread);
-      if (where && where.followAfter) out += this.followHtml(ls, where.thread, { closes: !recap });
+      if (where && where.fieldAfter) out += this.followHtml(ls, where.thread, { closes: !recap });
       if (recap) out += `<div contenteditable="false" data-recap-discover="${where.thread.from}" style="user-select:none;padding:0 12px 10px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px">${this.sendDiscoverHtml(`t${where.thread.from}`)}</div>`;
       if (p.type === 'todo') group.push({ i, p });
       const next = ls[i + 1];
       if (p.type === 'todo' && (next == null || ps[i + 1].type !== 'todo')) { out += this.groupHtml(group); group = []; }
     });
     return out;
+  }
+  /* Long answers (2026-10-13). An answer is known by its question and closing lines (answerKey); those in the document
+     when it opened (seenAnswers, noted once per docKey) start cut at CLIP_OLD lines; one that lands while it is open is
+     shown whole, with no toggle. Show more (moreOpen) shows a cut one whole, Show less cuts it again. */
+  answerKey(ls, turn) { return `${hashLine(ls[turn.q])}.${hashLine(ls[turn.foot >= 0 ? turn.foot : turn.to])}`; }
+  noteAnswers(ls) {
+    if (this.seenDoc === this.props.docKey) return;
+    this.seenDoc = this.props.docKey; this.seenAnswers = new Set(); this.moreOpen = new Set();
+    for (const thread of threads(ls, this.parsedOf(ls))) for (const turn of thread.turns) if (turn.answered && !turn.pending) this.seenAnswers.add(this.answerKey(ls, turn));
+  }
+  // The toggle under an answer that was there when the document opened, inside its rule, hidden until applyClips finds
+  // the answer long enough to cut. None under one that landed since.
+  moreHtml(ls, turn) {
+    const key = this.answerKey(ls, turn);
+    if (this.props.compact || !this.seenAnswers.has(key)) return '';
+    return `<div contenteditable="false" data-readonly="1" data-more="${turn.q}" data-key="${key}" data-cut-at="${CLIP_OLD}" data-cut-over="${CLIP_OLD + 2}" style="display:none;position:relative;user-select:none;cursor:default;padding:0 16px;background:#fafafa">`
+      + `<span style="display:block;padding:4px 0 2px 14px;border-left:2px solid #d6d6d6"><button type="button" class="bart-more" data-act="more" data-key="${key}" aria-expanded="false">Show more</button></span></div>`;
+  }
+  // After a redraw, each answer with a toggle is measured: one over its limit is cut at its cut (rows past it hidden, the
+  // row across it held to what is left of it, a 56px fade over the end) and its toggle says Show more; opened, it is whole
+  // and says Show less. Not the answer the caret is in. All rows are measured before any is changed.
+  applyClips(ed) {
+    const toggles = ed && ed.querySelectorAll ? [...ed.querySelectorAll('[data-more]')] : []; if (!toggles.length) return;
+    const active = this.state.activeLine;
+    const plans = toggles.map((more) => {
+      const rows = [...ed.querySelectorAll(`[data-answer-of="${more.dataset.more}"]`)];
+      if (!rows.length || rows.some((row) => Number(row.dataset.line) === active)) return null;
+      const rects = rows.map((row) => row.getBoundingClientRect()), top = rects[0].top;
+      if (rects[rects.length - 1].bottom - top <= Number(more.dataset.cutOver) * ANSWER_LINE_PX + 16) return null;
+      return { more, rows, rects, top };
+    });
+    const chevron = (up) => `<span style="display:inline-flex;color:#8f8f8f">${icon(up ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`;
+    for (const plan of plans) {
+      if (!plan) continue;
+      const { more, rows, rects, top } = plan, open = this.moreOpen.has(more.dataset.key), button = more.querySelector('[data-act="more"]');
+      more.style.display = 'block';
+      if (button) { button.innerHTML = `${open ? 'Show less' : 'Show more'}${chevron(open)}`; button.setAttribute('aria-expanded', String(open)); }
+      if (open) continue;
+      const cut = 14 + Number(more.dataset.cutAt) * ANSWER_LINE_PX;
+      more.dataset.cut = '1';
+      rows.forEach((row, k) => {
+        const from = rects[k].top - top, to = rects[k].bottom - top;
+        if (from >= cut) row.style.display = 'none';
+        else if (to > cut) { row.style.boxSizing = 'border-box'; row.style.maxHeight = `${Math.max(0, Math.round(cut - from))}px`; row.style.overflow = 'hidden'; }
+      });
+    }
   }
   patchPending() {
     const ed = this.editorEl(); if (!ed || this.lastKey !== this.key()) return false;
@@ -1927,7 +2061,7 @@ export default class DocEditor extends React.Component {
     const menu = this.state.mention && this.state.mention.field != null ? this.state.mention : null;
     const tops = this.streamTops(ed);
     this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.drawnLines = this.lines(); this.markBeside();
-    this.placeStreams([ed], tops); this.pruneStreams(); this.restoreFollow(ed, had && !had.discover ? had : null); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
+    this.placeStreams([ed], tops); this.applyClips(ed); this.pruneStreams(); this.restoreFollow(ed, had && !had.discover ? had : null); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
     if (titleField) { const input = ed.querySelector(`[data-title-input="${titleField.line}"]`); if (input) { input.focus({ preventScroll: true }); try { input.setSelectionRange(titleField.a, titleField.b); } catch { /* not a text field */ } } }
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
@@ -2402,6 +2536,8 @@ export default class DocEditor extends React.Component {
       if (k === 'pick') { this.openPicker(act, 'line'); return; }
       if (k === 'pickfollow') { this.openPicker(act, 'follow'); return; }
       if (k === 'sendfollow') { this.closePicker(); this.sendFollow(Number(act.dataset.thread)); return; }
+      if (k === 'reply') { this.closePicker(); this.openReply(Number(act.dataset.thread)); return; }
+      if (k === 'more') { const key = act.dataset.key; if (!this.moreOpen.delete(key)) this.moreOpen.add(key); this.lastHtml = null; this.syncEditor(); return; }
       if (k === 'senddiscover') { this.closePicker(); this.sendDiscover(act.dataset.target); return; }
       if (k === 'opendiscover') { this.closePicker(); this.openDiscover(act.dataset.target); return; }
       if (k === 'resultask') { this.closePicker(); this.askResult(i, act.dataset.agent); return; }
@@ -2487,7 +2623,7 @@ export default class DocEditor extends React.Component {
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
     if (ic && ic.parentElement && box) ic.parentElement.toggleAttribute('data-tip-up', ic.getBoundingClientRect().bottom + 32 > Math.min(box.getBoundingClientRect().bottom, window.innerHeight || 800));
-    const pick = e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]:not([data-plain])'); if (pick) this.openPicker(pick, { pick: 'line', pickfollow: 'follow', regen: 'regen' }[pick.dataset.act]);
+    const pick = e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]:not([data-plain]):not([data-quiet])'); if (pick) this.openPicker(pick, { pick: 'line', pickfollow: 'follow', regen: 'regen' }[pick.dataset.act]);
   };
   // Leaving what opened the selector starts its closing clock, unless the pointer went straight onto the selector: React has
   // by then already handled that same event (the selector's onMouseEnter stops the clock), and this would start it again.
@@ -2809,7 +2945,7 @@ export default class DocEditor extends React.Component {
     // A pasted image goes into the line as its [Attachment n] token stood; one whose token was deleted is not sent.
     const text = withAttachments(typed, this.followImages.get(from) || []);
     const { flags } = this.followStep(ls, thread), asked = [flags, text].filter(Boolean).join(' ');
-    this.followText.delete(from); this.followImages.delete(from);
+    this.followText.delete(from); this.followImages.delete(from); this.replyOpen.delete(from);
     const ed = this.editorEl();
     const routed = typed && this.props.onRoute, question = routed ? `@bart ${asked}` : `@${tokenOf(agent)} ${asked}`.trimEnd();
     this.holdField(ed, from, thread.to + 1, question);
@@ -2845,7 +2981,7 @@ export default class DocEditor extends React.Component {
     }
     if (e.key === 'Enter' && e.shiftKey) e.preventDefault(); // one line of the document: no line breaks
     else if (e.key === 'Enter' && !e.isComposing) { e.preventDefault(); this.sendFollow(Number(e.target.dataset.followInput)); }
-    else if (e.key === 'Escape') { e.preventDefault(); e.target.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); const from = Number(e.target.dataset.followInput); e.target.blur(); if (!(this.followText.get(from) || '').trim()) this.closeReply(from); }
   }
   // Send to Discover's keys (MATH-31): Enter sends, Shift+Enter puts in nothing (what is sent is one line of the document),
   // Escape leaves the field.
@@ -3378,10 +3514,26 @@ export default class DocEditor extends React.Component {
     if (!current || !models.providers[current.provider]) return null;
     return <BartPicker models={models} current={current} anchor={pk} onPick={this.pickModel} onSend={pk.kind === 'regen' ? this.sendPicked : undefined} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
   }
+  // The ⋯ menu (2026-10-13): its items under the button, right-aligned to it; a pick closes it and hands the item the
+  // button's place (Build's panel opens from there). A press outside, or Escape, closes it.
+  docMenuView(menu) {
+    const at = this.state.docMenu, shut = () => this.setState({ docMenu: null });
+    return (
+      <>
+        <div data-doc-menu-shade="1" onMouseDown={shut} style={{ position: 'fixed', inset: 0, zIndex: 60 }} />
+        <div role="menu" data-doc-menu-list="1" onKeyDown={(e) => { if (e.key === 'Escape') { e.preventDefault(); shut(); } }} style={{ position: 'fixed', top: at.bottom + 4, right: Math.max(8, (window.innerWidth || 1200) - at.right), zIndex: 61, minWidth: 140, padding: 4, border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', boxShadow: '0 4px 14px #0000000f' }}>
+          {menu.map((item, n) => (
+            <button key={item.key} type="button" role="menuitem" autoFocus={n === 0} className="hov-wash" {...(item.data || {})} title={item.title} onClick={() => { shut(); item.onSelect(at); }} style={{ display: 'block', width: '100%', padding: '6px 10px', border: 0, borderRadius: 6, background: '#fff', textAlign: 'left', cursor: 'pointer', font: '400 13px/1.4 var(--font-sans)', color: '#171717', outline: 'none' }}>{item.label}</button>
+          ))}
+        </div>
+      </>
+    );
+  }
   render() {
     const s = this.state;
     const compact = this.props.compact;
     const answers = compact || this.props.readOnly ? [] : this.foldable(this.lines()), anyOpen = answers.some((turn) => !turn.folded);
+    const menu = compact ? [] : this.props.menu || [];
     // Compact (a post-it, 2026-09-22) never scrolls: it is as tall as its lines, and the card fits the type to its size.
     return (
       <>
@@ -3406,25 +3558,26 @@ export default class DocEditor extends React.Component {
             />
           </div>
         </div>
-        {/* The footer (the document's Copy, 2026-09-23) sits under the text's left edge, not the pane's: this column
-            repeats the scroller's padding and 65ch measure, so it stays with the note when panes split. Since 2026-09-27 it
-            is a strip of its own under the page ("the text editor stops above these buttons"), no longer floating over it. */}
-        {!compact && this.props.footer && (
-          <div data-doc-footer="1" style={{ flex: 'none', borderTop: '1px solid #eaeaea', background: '#fff', paddingInline: 'clamp(12px, 4%, 40px)' }}>
-            <div style={{ maxWidth: '65ch', minHeight: 44, marginInline: 'auto', paddingInline: 'clamp(0px, 3%, 24px)', boxSizing: 'border-box', fontSize: 17, display: 'flex', alignItems: 'center' }}>
-              {this.props.footer}
-            </div>
+        {/* Top right of the page: every answer folded or unfolded at once, as plain words (2026-09-29), and since 2026-10-13
+            the document's ⋯ menu (props.menu: Copy, Build and Clear, which were a strip under the page), with what the
+            last of them said (props.menuNote: "Copied") before it. */}
+        {!compact && (answers.length > 0 || menu.length > 0) && (
+          <div data-doc-top="1" style={{ position: 'absolute', top: 8, right: 16, zIndex: 2, display: 'flex', alignItems: 'center', gap: 2, background: '#fff', borderRadius: 6 }}>
+            {this.props.menuNote && <span data-doc-note="1" style={{ padding: '4px 6px', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>{this.props.menuNote}</span>}
+            {answers.length > 0 && <button type="button" className="hov-ink" data-fold-all={anyOpen ? 'collapse' : 'expand'} onClick={() => this.foldAll(anyOpen)} title={anyOpen ? 'Collapse every @bart answer' : 'Expand every @bart answer'} style={{ padding: '4px 6px', border: 0, borderRadius: 6, background: '#fff', cursor: 'pointer', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>{anyOpen ? 'Collapse all' : 'Expand all'}</button>}
+            {menu.length > 0 && (
+              <button type="button" className="hov-wash" data-doc-menu="1" aria-label="More" aria-haspopup="menu" aria-expanded={!!s.docMenu} title="More" onClick={(e) => { const r = e.currentTarget.getBoundingClientRect(); this.setState({ docMenu: s.docMenu ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } }); }} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 28, height: 28, padding: 0, border: 0, borderRadius: 6, background: s.docMenu ? '#f2f2f2' : '#fff', cursor: 'pointer', color: '#4d4d4d' }}>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" /></svg>
+              </button>
+            )}
           </div>
-        )}
-        {/* Top right of the page: every answer folded or unfolded at once, as plain words (2026-09-29). */}
-        {answers.length > 0 && (
-          <button type="button" className="hov-ink" data-fold-all={anyOpen ? 'collapse' : 'expand'} onClick={() => this.foldAll(anyOpen)} title={anyOpen ? 'Collapse every @bart answer' : 'Expand every @bart answer'} style={{ position: 'absolute', top: 8, right: 22, zIndex: 2, padding: '4px 6px', border: 0, borderRadius: 6, background: '#fff', cursor: 'pointer', font: '400 12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>{anyOpen ? 'Collapse all' : 'Expand all'}</button>
         )}
         {this.overPage(
           <>
             {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
             {s.pop && (s.pop.res.ws ? <WorkspacePeek id={s.pop.res.ws} name={s.pop.res.name} anchor={s.pop.anchor} peek={this.props.workspacePeek} /> : <Popover item={s.pop.res} anchor={s.pop.anchor} />)}
             {this.pickerView()}
+            {s.docMenu && menu.length > 0 && this.docMenuView(menu)}
           </>,
         )}
       </>

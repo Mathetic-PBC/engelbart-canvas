@@ -96,7 +96,7 @@ function mounted(lines, { models = MODELS, deferred = false, readOnly = false } 
 
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
-test('the foot no longer has Edit or Regenerate (2026-10-13): not on any turn, any agent, a Build line or a card', () => {
+test('the foot has no Edit (2026-10-13), and has Regenerate again (the panel redesign, 2026-10-13): on any turn, any agent, a Build line or a card', () => {
   const docs = [
     THREAD,
     ['@bart --build make it', 'build> 0123456789', '', '@bart --build', 'bart> **No Build.** Write what to build after --build.', ''],
@@ -107,7 +107,8 @@ test('the foot no longer has Edit or Regenerate (2026-10-13): not on any turn, a
   for (const lines of docs) {
     const html = mounted(lines).html();
     assert.ok(html.includes('data-act="dropturn"'), `${lines[0]}: a foot is drawn`);
-    assert.ok(!html.includes('data-act="editturn"') && !html.includes('data-act="regen"'), `${lines[0]}: no Edit, no Regenerate`);
+    assert.ok(!html.includes('data-act="editturn"') && html.includes('data-act="regen"'), `${lines[0]}: no Edit, Regenerate`);
+    assert.ok(!html.includes('data-act="footbuild"'), `${lines[0]}: no Build`);
   }
 });
 

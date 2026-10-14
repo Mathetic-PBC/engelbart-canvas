@@ -113,7 +113,7 @@ test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap
   const m = mounted(['@discover', ...answer({ ...FOCUS, lookFor: LOOK }), '']);
   assert.equal(m.entry(0).live, true);
   const shown = m.editor.editorHtml();
-  assert.ok(shown.includes('data-act="cardskip"') && shown.includes('data-act="cardopt"') && />@discover<\/span><textarea data-follow-input="0" data-agent="discover"/.test(shown));
+  assert.ok(shown.includes('data-act="cardskip"') && shown.includes('data-act="cardopt"') && />@bart<\/span><textarea data-follow-input="0" data-agent="discover"/.test(shown));
   assert.ok(!shown.includes('data-act="cardwrap"') && !shown.includes('data-act="senddiscover"') && !shown.includes('data-act="opendiscover"') && !shown.includes('data-discover-input') && !shown.includes('Wrap up'));
   m.click('cardwrap', 0);
   m.typeDiscover('c0', TYPED);
@@ -128,6 +128,10 @@ test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap
   const ls = recap.lines(), drawn = recap.editor.lineHtml(2, ls[2], model.parseLine(ls[2]), false, false, recap.editor.layout(ls).get(2), false);
   assert.match(drawn, />Look for<\/span><span style="display:block;">retry loops<\/span>/, 'drawn as a section');
   assert.ok(!drawn.includes('<button'), 'no button');
+  // Brainstorm again is shut until Reply opens it (2026-10-13); Send to Discover's row is under the foot either way.
+  const shut = recap.editor.editorHtml();
+  assert.ok(!shut.includes('data-followup="0"') && shut.indexOf('data-recap-discover="0"') > shut.indexOf('data-foot="0"') && shut.includes('data-act="reply" data-thread="0"'), 'Reply on the foot, then Send to Discover');
+  recap.editor.replyOpen.add(0);
   const page = recap.editor.editorHtml();
   assert.ok(page.indexOf('data-recap-discover="0"') > page.indexOf('data-followup="0"') && page.indexOf('data-followup="0"') > page.indexOf('data-foot="0"'), 'a row of its own, under Brainstorm again');
   recap.typeDiscover('t0', TYPED);
@@ -168,13 +172,13 @@ test('a live @brainstorm card is drawn as an answer: what it says, then its ques
   assert.equal(entry(1).live, true);
   assert.equal(entry(1).card.lookFor, undefined, 'an older card\'s search is not kept');
   const shown = html(1);
-  assert.match(shown, /^<div [^>]*data-card="1"[^>]*background:#fafafa;color:#4d4d4d;font-size:16px;line-height:1\.65"><span style="display:block;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">/, 'an answer\'s grey, rule and type');
+  assert.match(shown, /^<div [^>]*data-card="1"[^>]*background:#fafafa;color:#262626;font-size:16px;line-height:1\.65"><span style="display:block;padding:2px 0 2px 14px;border-left:2px solid #d6d6d6">/, 'an answer\'s grey, rule and type');
   for (const gone of ['data-card-box', 'data-card-input', 'cardsend', 'cardskip', 'cardwrap', 'Submit', 'border:1px solid', 'font:600']) assert.ok(!shown.includes(gone), `no ${gone} on the card`);
   const said = shown.indexOf('You said “it stops when the lock frees”.');
   assert.ok(said > 0 && said < shown.indexOf('Within “Retries”'), 'its say, then the question');
   const page = editor.editorHtml(), foot = page.slice(page.indexOf('data-foot="1"'));
   assert.ok(foot.indexOf('data-act="copybart"') < foot.indexOf('data-act="cardskip"') && foot.indexOf('data-act="cardskip"') < foot.indexOf('data-act="cardwrap"'), 'Copy, Skip, Wrap up on the foot');
-  assert.match(page, /data-followup="1" data-answers="1"[^>]*><span[^>]*>@brainstorm<\/span><textarea data-follow-input="1" data-agent="brainstorm" rows="1" placeholder="Respond…" aria-label="Answer"/, 'the field under it answers it, as @brainstorm');
+  assert.match(page, /data-followup="1" data-answers="1"[^>]*><div[^>]*><span[^>]*>@bart<\/span><textarea data-follow-input="1" data-agent="brainstorm" placeholder="Respond…" aria-label="Answer"/, 'the field under it answers it, always open, saying @bart (2026-10-13)');
   assert.ok(!page.includes('opendiscover') && !page.includes('data-discover-input') && !page.includes('Send to Discover'), 'no Send to Discover under a card');
   // A field it no longer draws sends nothing.
   typeDiscover('c1', TYPED);
@@ -183,7 +187,7 @@ test('a live @brainstorm card is drawn as an answer: what it says, then its ques
   assert.ok(!shown.includes(LOOK) && !shown.includes('cardlook') && !shown.includes('discoverlook'), 'no suggested search, no old button');
   // A card with nothing said: its question first. The next card: its lead-in said, then the question; its field asks for one thing.
   const bare = mounted(['@brainstorm', ...answer({ ...FREE, say: '' }), '']).html(0);
-  assert.match(bare, /border-left:2px solid #dcdcdc"><span data-card-question="1"/, 'nothing above the question');
+  assert.match(bare, /border-left:2px solid #d6d6d6"><span data-card-question="1"/, 'nothing above the question');
   const NEXT = { say: 'You kept coming back to “correct”.', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: card.NEXT_TITLE, placeholder: card.NEXT_PLACEHOLDER }] }, ready: false };
   const next = mounted(['@brainstorm', ...answer(NEXT), '']);
   assert.match(next.html(0), /<span data-card-say="1"[^>]*>You kept coming back to “correct”\.<\/span><span [^>]*><\/span><span data-card-question="1"[^>]*>So what do you want to dig into next\?<\/span>/, 'the lead-in, then the question');
@@ -217,7 +221,7 @@ test('a single choice answers with the row clicked, with what is typed as a note
   const many = mounted(['@brainstorm', ...answer(MANY), '']);
   many.editor.forceUpdate = () => {};
   assert.ok(many.html(0).includes('Pick any, then press Enter.'), 'says how');
-  assert.match(many.editor.editorHtml(), /data-agent="brainstorm" rows="1" placeholder="Pick any, or say it in your own words…"/, 'send grey until a row is ticked');
+  assert.match(many.editor.editorHtml(), /data-agent="brainstorm" placeholder="Pick any, or say it in your own words…"/, 'send grey until a row is ticked');
   opt(many, 0, 0); opt(many, 0, 2); opt(many, 0, 1); opt(many, 0, 1);
   assert.deepEqual(many.asks, [], 'ticking sends nothing');
   const ticked = many.html(0);
@@ -231,7 +235,7 @@ test('a single choice answers with the row clicked, with what is typed as a note
   const done = mounted(['@brainstorm', ...answer(MANY), '@brainstorm picked "Retries", "Deadlocks"; note: mostly at night', 'bart> FAKE', 'bart> *3 s*', '']);
   const row = done.lines().indexOf('@brainstorm picked "Retries", "Deadlocks"; note: mostly at night');
   const line = await lineOf(done, row);
-  assert.ok(line.includes('<span class="t" style="flex:1;min-width:0"><span style="color:#0070f3;font-weight:500">@brainstorm</span> Retries, Deadlocks · mostly at night</span>'), 'their picks and note');
+  assert.ok(line.includes('<span class="t" style="flex:1;min-width:0"><span style="color:#0070f3;font-weight:500">@bart</span> Retries, Deadlocks · mostly at night</span>'), 'their picks and note, after @bart (2026-10-13)');
   assert.match(line, /data-raw="@brainstorm picked &quot;Retries&quot;, &quot;Deadlocks&quot;; note: mostly at night"/, 'the line as main reads it');
   assert.match(done.html(0), /class="bs-row" disabled role="checkbox" aria-checked="true">/, 'still, ticked');
   const skipped = await lineOf(mounted(['@brainstorm', ...answer(FREE), '@brainstorm (skipped)', 'bart> x', '']), answer(FREE).length + 1);
@@ -305,8 +309,9 @@ test('a recap is drawn as sections, the paper path\'s "What you took from it" an
     assert.match(await lineOf(m, row('bart> What draws you: the gap')), />What draws you<\/span>/, 'an older recap\'s label still draws');
     const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
     const follow = m.editor.followHtml(m.lines(), model.threads(m.lines())[0]);
-    assert.match(follow, /data-agent="brainstorm" data-empty="1" rows="1" placeholder="Respond…" aria-label="Brainstorm again"/, 'Brainstorm again, as it is today');
+    assert.match(follow, /data-agent="brainstorm" data-empty="1" placeholder="Respond…" aria-label="Brainstorm again"/, 'Brainstorm again, as it is today');
     assert.match(follow, />@brainstorm<\/span>/);
+    m.editor.replyOpen.add(0); // Reply opened it (2026-10-13)
     const page = m.editor.editorHtml();
     assert.ok(page.indexOf('data-recap-discover="0"') > page.indexOf('data-followup="0"'), 'Send to Discover, a row of its own under it');
     assert.ok(!page.includes('Orient again'));
@@ -358,7 +363,9 @@ test('Send to Discover is not drawn after @bart or @discover answers, under a re
   bart.editor.discoverText.set('t0', 'x');
   bart.editor.sendDiscover('t0');
   assert.deepEqual(bart.asks, [], 'a target that is not drawn sends nothing');
-  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, '@bart\'s follow-up field is as it was');
+  assert.ok(!bart.editor.editorHtml().includes('aria-label="Ask a follow-up"'), 'the follow-up field is shut until Reply (2026-10-13)');
+  bart.editor.replyOpen.add(0);
+  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, '@bart\'s follow-up field, once Reply opened it');
 });
 
 test('the @ menu no longer offers Orient: the editor, the rail model and the workspace list Bart, Chat, Brainstorm and Discover; the rail names no Orient (M-01)', async () => {
