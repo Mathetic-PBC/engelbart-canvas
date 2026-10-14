@@ -579,8 +579,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, [topic, project.id, flush]);
 
   // `intro`: Chat's reply that comes first, 'discover' over an @discover question's search (`research`, the box under it;
-  // DocEditor splitsDiscover) or 'build' over the card of a Build Bart picked (DocEditor handOff), 2026-10-13. A research
-  // box stopped by hand says so, so it stays a turn of its conversation.
+  // DocEditor splitsDiscover), 2026-10-13. A research box stopped by hand says so, so it stays a turn of its conversation.
   const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, intro = null, research = false }) => {
     if (!key || !ref || !topic) return;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.

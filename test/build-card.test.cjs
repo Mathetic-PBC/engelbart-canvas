@@ -34,7 +34,7 @@ const DocEditor = load('DocEditor.jsx').default;
 /** The card's parts as { part: text } (tags out), and the acts its buttons carry. */
 function card(task) {
   const editor = Object.create(DocEditor.prototype);
-  Object.assign(editor, { props: {}, buildOpen: new Set(), buildSteps: new Set() });
+  Object.assign(editor, { props: {}, buildOpen: new Set(), buildSteps: new Set(), buildPrompt: new Set() });
   const parts = Object.fromEntries(editor.buildParts(task.id, { id: task.id, title: 'Add a page', messages: [], modelName: 'Opus', effort: 'high', ...task }));
   const text = Object.fromEntries(Object.entries(parts).map(([key, html]) => [key, html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()]));
   const acts = [...Object.values(parts).join('').matchAll(/<button[^>]*>/g)].map(([tag]) => [/data-act="([^"]+)"/.exec(tag), /data-run-name="([^"]+)"/.exec(tag)]).filter(([act]) => act).map(([act, run]) => (run ? `${act[1]}:${run[1]}` : act[1]));
@@ -127,4 +127,34 @@ test('before Accept the card lists what runs without opening it (Review does); a
   const released = card({ id: 'b1', status: 'accepted', final: true, keptCopy: false, accepted: { sha: 'abc' }, runStep: { status: 'done', runnables: runnables.map((item) => ({ ...item, status: item.status === 'running' ? 'stopped' : item.status })) } });
   assert.equal(released.parts.run, '', 'nothing runs: no section');
   assert.ok(released.acts.includes('buildremove'));
+});
+
+test('the card\'s Prompt row (2026-10-13): closed under the head when the Build was given a prompt, opened and closed by a click, drawn as an agent message; none without one; there in every state', () => {
+  const editor = Object.create(DocEditor.prototype);
+  let patched = 0;
+  Object.assign(editor, { props: {}, buildOpen: new Set(), buildSteps: new Set(), buildPrompt: new Set(), patchBuilds: () => { patched += 1; return true; } });
+  const asked = 'Add Haiku 5.5 to models.cjs.\n\n```js\nconst haiku = 1;\n```';
+  const task = { id: 'b9', title: 'Add Haiku', messages: [], modelName: 'Opus', effort: 'high', status: 'running', postIt: asked };
+  const parts = () => Object.fromEntries(editor.buildParts('b9', task));
+  const shut = parts();
+  assert.match(shut.prompt, /<button class="bart-text" data-act="buildprompt" data-build-id="b9" aria-expanded="false"[^>]*>Prompt<svg/, 'a text button with the steps chevron');
+  assert.ok(!shut.prompt.includes('Add Haiku 5.5') && !shut.prompt.includes('data-build-prompt'), 'closed by default');
+  assert.deepEqual(Object.keys(shut).slice(0, 3), ['head', 'prompt', 'body'], 'under the head');
+  // A click, as the editor's click listener sends it (buildAct; no onBuildAction needed to read it).
+  editor.buildAct('buildprompt', 'b9');
+  const open = parts();
+  assert.equal(patched, 1, 'redrawn with patchBuilds');
+  assert.match(open.prompt, /aria-expanded="true"/);
+  assert.match(open.prompt, /data-build-prompt="b9" style="[^"]*max-height:320px;overflow:auto/);
+  assert.ok(open.prompt.includes('Add Haiku 5.5 to models.cjs.'), 'the prompt in full');
+  assert.match(open.prompt, /font:13px\/1\.7 var\(--font-mono\)[^>]*>const haiku = 1;/, 'its fenced block as code');
+  editor.buildAct('buildprompt', 'b9');
+  assert.ok(!parts().prompt.includes('Add Haiku 5.5'), 'a second click hides it');
+  // In every state, final included.
+  for (const status of ['queued', 'review', 'needs-you', 'accepted', 'rejected', 'failed']) {
+    assert.match(Object.fromEntries(editor.buildParts('b9', { ...task, status, final: ['accepted', 'rejected'].includes(status) })).prompt, /data-act="buildprompt"/, status);
+  }
+  // No prompt (an older record), or an empty one: no row.
+  for (const postIt of [undefined, null, '', '  ']) assert.equal(Object.fromEntries(editor.buildParts('b9', { ...task, postIt })).prompt, '', String(postIt));
+  assert.equal(card({ id: 'b2', status: 'review' }).text.prompt, '');
 });

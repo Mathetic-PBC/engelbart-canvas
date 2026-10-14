@@ -375,19 +375,19 @@ test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec start
   assert.deepEqual([sure.builds[0].text, sure.builds[0].routedFrom], ['Add Haiku 5.5 to models.cjs.', 'route-b']);
   assert.equal(sure.lines()[SPEC.length], '@bart ok build it', 'the @bart line stays');
   assert.deepEqual([sure.routes[0].specAbove, sure.routes[0].specTitle], [true, 'Add Haiku 5.5 to models.cjs.'], 'the router is told what the spec is');
-  // Chat replies first (2026-10-13, main's BUILD_INTRO), under the line; the card takes a pending line of its own under it.
-  assert.equal(sure.asks.length, 1);
-  assert.deepEqual([sure.asks[0].agent, sure.asks[0].intro, sure.asks[0].routed, sure.asks[0].text], ['bart', 'build', { id: 'route-b', build: true }, 'ok build it']);
-  assert.deepEqual(sure.lines().slice(SPEC.length + 1, SPEC.length + 3), [`bart~> ${sure.asks[0].askId}`, `bart~> ${sure.builds[0].askId}`]);
-  // Answered, and the card in: the reply closes its card, with no follow-up field; the Build's card is the conversation now.
-  const placed = sure.lines().flatMap((l) => (l === `bart~> ${sure.asks[0].askId}` ? ['bart> Building the Haiku entry from the spec above.', 'bart> *Build · 3 s*'] : l === `bart~> ${sure.builds[0].askId}` ? ['build> 0123456789'] : [l]));
+  // No reply of Chat's (2026-10-13): the Build takes the line's own pending line, and no second one is put in.
+  assert.equal(sure.asks.length, 0, 'Chat is not asked');
+  assert.equal(sure.lines()[SPEC.length + 1], `bart~> ${sure.builds[0].askId}`, 'the line\'s own pending line');
+  assert.equal(sure.lines().filter((l) => l.startsWith('bart~> ')).length, 1, 'no second pending line');
+  assert.deepEqual(sure.builds[0].place, { line: SPEC.length, text: '@bart ok build it' });
+  // The card in: it is that turn's answer, right under the line, with no follow-up field over it.
+  const placed = sure.lines().map((l) => (l === `bart~> ${sure.builds[0].askId}` ? 'build> 0123456789' : l));
   sure.props.text = placed.join('\n');
   const drawn = sure.editor.editorHtml();
   assert.ok(!drawn.includes('data-followup='), 'no follow-up field over the card');
-  const foot = drawn.slice(drawn.indexOf(`data-foot="${SPEC.length}"`));
-  assert.match(foot.slice(0, foot.indexOf('>')), /border-radius:0 0 10px 10px;margin-bottom:8px/);
   const { threads } = await loadDoc();
-  assert.deepEqual(threads(placed).map((t) => t.turns.length), [2], 'the reply is the next turn of the spec\'s conversation');
+  const turns = threads(placed)[0].turns;
+  assert.deepEqual([threads(placed).length, turns.length, turns[1].q, turns[1].build], [1, 2, SPEC.length, '0123456789'], 'the card is the line\'s answer');
 
   // A request of its own under a spec (2026-10-13, the Agent Viewer line built as the spec above it): sure it is a build,
   // but not of that spec, so Chat writes its Build prompt.
@@ -418,6 +418,20 @@ test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec start
   assert.deepEqual([noSpec.builds.length, noSpec.asks[0].routed.build], [0, true]);
   assert.match(noSpec.lines()[0], /^bart# \[chat build [^\]]+\] $/, 'wanted built: kept on the title line');
   assert.equal(noSpec.lines()[1], '@bart build a hello page');
+});
+
+test('an older document with Chat\'s reply over the Build\'s card (BUILD_INTRO, before 2026-10-13) parses and draws as it did', async () => {
+  const old = [...SPEC, '@bart ok build it', 'bart> Building the Haiku entry from the spec above; I expect it to change models.cjs.', 'bart> *Build · 3 s*', 'build> 0123456789'];
+  const m = mounted(old);
+  const drawn = m.editor.editorHtml();
+  assert.ok(!drawn.includes('data-followup='), 'no follow-up field over the card');
+  const foot = drawn.slice(drawn.indexOf(`data-foot="${SPEC.length}"`));
+  assert.match(foot.slice(0, foot.indexOf('>')), /border-radius:0 0 10px 10px;margin-bottom:8px/, 'the reply closes its card');
+  assert.ok(drawn.includes('data-build="0123456789"'), 'the card under it');
+  const { threads } = await loadDoc();
+  const all = threads(old);
+  assert.deepEqual(all.map((t) => t.turns.length), [2], 'the reply is the next turn of the spec\'s conversation');
+  assert.equal(all[0].turns[1].build, undefined, 'the card is not the turn\'s answer: the reply is');
 });
 
 test('handoff: a line Bart routes under a conversation that has a title, or as a follow-up, gets none', async () => {
@@ -936,21 +950,31 @@ test('three turns, the first two folded: two one-line rows (no foot, no answer),
 /* "yes" builds: a routed build's answer asks, and the reply under it is a line for Build with the answer's spec above. */
 const ASKED_BUILD = ['bart# [chat build 2026-10-13T09:00:00Z] Haiku', '@bart add Haiku 5.5 to the models', 'bart> Here it is:', 'bart> ```', 'bart> Add Haiku 5.5 to models.cjs.', 'bart> ```', 'bart> Want me to build it?', 'bart> *Build · Sonnet · high · 3 s*', ''];
 
-test('"yes" under an answer that asks "Want me to build it?": from the reply field or typed under it, Bart is sent the spec, and a build pick starts the Build after Chat\'s reply', async () => {
+test('"yes" under an answer that asks "Want me to build it?": from the reply field or typed under it, Bart is sent the spec, and a build pick starts the Build with no reply of Chat\'s', async () => {
   // The reply field.
   const field = mounted(ASKED_BUILD, { route: async () => ({ id: 'route-y', agent: 'build', sure: 0.95, spec: true, by: 'model' }) });
   field.editor.followText.set(1, 'yes');
   field.editor.sendFollow(1);
   await settled();
   assert.deepEqual([field.routes[0].text, field.routes[0].specAbove, field.routes[0].current], ['yes', true, 'chat']);
-  assert.deepEqual([field.asks[0].intro, field.asks[0].agent, field.asks[0].routed], ['build', 'bart', { id: 'route-y', build: true }], 'Chat replies with BUILD_INTRO');
+  assert.equal(field.asks.length, 0, 'no reply of Chat\'s');
   assert.deepEqual([field.builds.length, field.builds[0].text], [1, 'Add Haiku 5.5 to models.cjs.'], 'the Build, of the answer\'s fenced block');
+  assert.equal(field.lines().filter((l) => l.startsWith('bart~> ')).length, 1, 'on the "yes" line\'s own pending line');
+  assert.equal(field.lines()[field.lines().indexOf(`bart~> ${field.builds[0].askId}`) - 1], '@bart yes');
+  // The card in: the "yes" turn's answer, in the titled conversation, which collapses to its title as Builds' do.
+  const carded = field.lines().map((l) => (l === `bart~> ${field.builds[0].askId}` ? 'build> 0123456789' : l));
+  const { threads: threadsOf } = await loadDoc(), [one, ...rest] = threadsOf(carded);
+  assert.deepEqual([rest.length, one.titleLine, one.turns.length, one.turns[1].build], [0, 0, 2, '0123456789']);
+  field.props.text = carded.join('\n'); field.props.builds = { '0123456789': { id: '0123456789', status: 'accepted', final: true } };
+  assert.deepEqual(field.editor.foldable(carded), [{ title: 0, folded: false }], 'it collapses once the Build is done');
+  field.props.builds = { '0123456789': { id: '0123456789', status: 'running' } };
+  assert.deepEqual(field.editor.foldable(carded), [], 'not while it runs');
   // A line typed under the answer: a conversation of its own, but the spec above is the same.
   const typed = mounted([...ASKED_BUILD.slice(0, -1), '@bart yes', ''], { route: async () => ({ id: 'route-t', agent: 'build', sure: 0.9, spec: true, by: 'model' }) });
   typed.editor.askInline(ASKED_BUILD.length - 1);
   await settled();
   assert.deepEqual([typed.routes[0].text, typed.routes[0].specAbove], ['yes', true]);
-  assert.equal(typed.asks[0].intro, 'build');
+  assert.equal(typed.asks.length, 0);
   assert.deepEqual([typed.builds.length, typed.builds[0].text], [1, 'Add Haiku 5.5 to models.cjs.']);
   // No fenced block above: Bart is told so, and a "yes" there is Chat's (nothing is built even if he says build).
   const plain = ['@bart should we add Haiku?', 'bart> It would help. Want a plan?', 'bart> *Chat · Sonnet · high · 3 s*', ''];

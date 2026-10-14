@@ -86,6 +86,8 @@ function publicTask(task) {
     workspaceId: task.workspaceId || null,
     postItId: task.postItId || null,
     title: task.title,
+    // what it was given to do (2026-10-13): a line's request, a post-it's text, the panel's; the card's Prompt row shows it
+    postIt: typeof task.postIt === 'string' ? task.postIt : null,
     provider: task.provider,
     model: task.model,
     modelName: task.modelName,

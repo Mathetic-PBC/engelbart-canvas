@@ -588,9 +588,10 @@ export function threads(lines, ps = parseLines(lines)) {
       // A question line goes on with a thread once it is asked (a pending line or an answer under it), whatever its agent
       // (2026-10-13): one still being typed under a card is no turn of it, and asked from the document it starts a
       // conversation of its own (DocEditor askInline). The card's reply field, its cards and its research boxes put the
-      // pending line in with the question.
+      // pending line in with the question. A Build's card in place of that pending line (2026-10-13: a "yes" Bart sent to
+      // Build with the spec above, DocEditor handOff) is its answer, and the question a turn of the thread as well.
       if (!turn.answered || turn.build || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || !followsIn(ps[i + 1], ps[thread.from], thread)) break;
-      if (!(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply'))) break;
+      if (!(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply' || ps[i + 2].type === 'build'))) break;
       i += 1;
     }
     out.push(thread);

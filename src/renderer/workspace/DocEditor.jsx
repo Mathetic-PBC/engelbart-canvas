@@ -304,9 +304,9 @@ export default class DocEditor extends React.Component {
   // The conversation title being renamed in its header (2026-10-12): { line, value }.
   titleEdit = null;
   // A Build card's reply being typed (by Build id) and the images pasted into it ([{ n, id }]), which cards show their
-  // earlier messages and their steps, where each card's diff is scrolled to, and the HTML each part of each card was last
+  // earlier messages, their steps and their prompt, where each card's diff is scrolled to, and the HTML each part of each card was last
   // drawn with (patchBuilds compares these).
-  buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildScroll = new Map(); buildDrawn = new Map();
+  buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildPrompt = new Set(); buildScroll = new Map(); buildDrawn = new Map();
   // A follow-up just sent (2026-10-13): its question's row to be put where its reply field was (holdFollow),
   // { key, line, text, top, until }. `wheelAt`: when the person last scrolled the pane with the wheel (caretLineBelow).
   followHold = null; wheelAt = 0;
@@ -1281,6 +1281,11 @@ export default class DocEditor extends React.Component {
       + `<span style="flex:none;font-size:12.5px;color:#8f8f8f">${esc(task.modelName || task.model)} · ${esc(EFFORT_LABELS[task.effort] || task.effort)}</span>`
       + `<span data-build-status="${esc(stepping ? 'getting-it-running' : status)}" style="flex:none;font-size:12.5px;font-weight:500;color:${statusColor}">${esc(stepping ? 'Getting it running…' : BUILD_STATUS[status] || status)}</span>`
       + '</div>';
+    // What it was given (2026-10-13, task.postIt): a line's request, a post-it's text, the panel's. Closed, one dim row;
+    // open, the prompt in full, drawn as the agent's messages are, in a box that scrolls.
+    const asked = typeof task.postIt === 'string' && task.postIt.trim() ? task.postIt : '', shows = !!asked && this.buildPrompt.has(id);
+    const prompt = asked ? `<div style="margin-top:6px;font:13px/1.5 var(--font-sans);color:#8f8f8f"><button class="bart-text" data-act="buildprompt" data-build-id="${esc(id)}" aria-expanded="${shows}" style="user-select:none;display:inline-flex;align-items:center;gap:6px;padding-left:0;font-weight:400">Prompt${shows ? ICON.stepsOpen : ICON.stepsShut}</button></div>`
+      + (shows ? `<div data-build-prompt="${esc(id)}" style="margin-top:4px;max-height:320px;overflow:auto;overscroll-behavior:contain;padding:2px 12px;background:#fff;border-radius:8px;user-select:text">${this.buildMessageHtml({ role: 'agent', text: asked })}</div>` : '') : '';
     // The conversation: from the agent's last message on; the earlier ones behind a count. A closed Build shows only its last note.
     const messages = task.messages || [];
     let from = 0;
@@ -1332,7 +1337,7 @@ export default class DocEditor extends React.Component {
     const lastNote = messages.length ? messages[messages.length - 1].text : '';
     const errorLine = task.error && !final && !lastNote.includes(task.error) ? `<div style="margin-top:8px;font:12.5px/1.5 var(--font-sans);color:#e70022">${esc(task.error)}</div>` : '';
     const actions = acts.length || errorLine ? `${errorLine}<div style="display:flex;align-items:center;gap:8px;margin-top:12px">${acts.join('')}</div>` : '';
-    return [['head', head], ['body', body], ['run', this.buildRunHtml(id, task)], ['live', live], ['diff', this.buildDiffHtml(id, task)], ['reply', reply], ['actions', actions]];
+    return [['head', head], ['prompt', prompt], ['body', body], ['run', this.buildRunHtml(id, task)], ['live', live], ['diff', this.buildDiffHtml(id, task)], ['reply', reply], ['actions', actions]];
   }
   // Its run step (main/build/run-step.cjs): while the Build is open, what the repository runs and where each stands (Review
   // opens them, 2026-09-29); while it gets them running, "Getting it running…" with its phase. An accepted Build whose copy
@@ -1445,6 +1450,8 @@ export default class DocEditor extends React.Component {
     }).catch(() => {});
   }
   buildAct(k, id, runName) {
+    // Its prompt opens and closes where nothing can be done with the Build (a read-only document) too.
+    if (k === 'buildprompt') { if (this.buildPrompt.has(id)) this.buildPrompt.delete(id); else this.buildPrompt.add(id); this.patchBuilds(); return; }
     const act = this.props.onBuildAction; if (!act) return;
     if (k === 'buildrunshow') { act(id, 'runshow', { name: runName }); return; }
     if (k === 'buildrunstop') { act(id, 'runstop'); return; }
@@ -2657,8 +2664,8 @@ export default class DocEditor extends React.Component {
   //   create (main sends it only when sure ≥ 0.8, else chat): as chat, brainstorm and discover are, after five seconds in
   //     which its pending line says "Creating in 5 s" and offers Cancel (waitCreate), which asks Chat instead.
   //   build, with a spec above, sure ≥ 0.8, and the router saying the line asks for that spec (pick.spec, 2026-10-13: a
-  //     request of its own was built as the unrelated spec above it): a Build of that fenced block as it reads now; the
-  //     line stays, its card under it.
+  //     request of its own was built as the unrelated spec above it): a Build of that fenced block as it reads now, with no
+  //     reply of Chat's; the line stays, its card in place of its pending line.
   //   build otherwise: asked of Chat, told it is wanted built (routed.build, ` build` on the title line), so it writes the
   //     Build prompt.
   //   `--build` on the line (a rule): a Build of the line, as `@chat --build` makes (Workspace askBart); one starting a
@@ -2679,14 +2686,9 @@ export default class DocEditor extends React.Component {
     if (pick.agent === 'build') {
       const spec = routeInputs(ls, q).spec;
       if (spec != null && pick.spec === true && pick.sure >= 0.8 && this.props.onBuild) {
-        // Chat replies first (2026-10-13, main's bart/ask.cjs BUILD_INTRO; its closing line names Build), under the line,
-        // and the Build's card takes a pending line of its own under that reply. The card is the conversation from there:
-        // the reply has no follow-up field (layout).
-        if (!this.props.onAsk) { this.props.onBuild({ text: spec, askId, routedFrom: id, place: typed }); return 'build'; }
-        const card = newAskId();
-        this.setLines((x) => { const out = [...x], at = out.indexOf(`bart~> ${askId}`); if (at >= 0) out.splice(at + 1, 0, `bart~> ${card}`); return out; });
-        this.props.onAsk({ askId, text, turns: this.turnsBefore(ls, q), agent: 'bart', intro: 'build', routed: { id, ...failed, build: true }, place: typed });
-        this.props.onBuild({ text: spec, askId: card, routedFrom: id, place: typed });
+        // No reply of Chat's (2026-10-13): the Build's card takes the line's own pending line, so it is that turn's answer
+        // (doc.js turn.build) and collapses as other Builds do; the card's Prompt row shows what it was given.
+        this.props.onBuild({ text: spec, askId, routedFrom: id, place: typed });
         return 'build';
       }
     }
