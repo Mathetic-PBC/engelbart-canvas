@@ -82,9 +82,10 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   const all = ended && imported.length === jobs.length;
   // The sources that ended without bringing anything in, named once each (the completion said nothing about them).
   const missed = [...new Set(jobs.filter((job) => !brought(job) && !job.skipped).map(rowName))].filter((name) => !imported.some((job) => rowName(job) === name));
-  const needOf = (job) => (session.needs || []).find((need) => (job.needId ? need.id === job.needId : (job.apps || []).includes(need.app)));
+  // A step belongs to the jobs that asked for it (jobIds), else to a job of its app.
+  const needOf = (job) => (session.needs || []).find((need) => (job.needId ? need.id === job.needId : (need.jobIds || []).includes(job.id) || (job.apps || []).includes(need.app)));
   // An app held on its sign-in has no import yet (it starts once signed in): its row all the same, first.
-  const held = (session.needs || []).filter((need) => !jobs.some((job) => (job.apps || []).includes(need.app)))
+  const held = (session.needs || []).filter((need) => !(need.jobIds || []).length && !jobs.some((job) => (job.apps || []).includes(need.app)))
     .map((need) => ({ id: `need-${need.id}`, needId: need.id, kind: 'import', apps: [need.app], label: need.app, status: 'waiting' }));
   const rows = [...held, ...jobs];
   return (

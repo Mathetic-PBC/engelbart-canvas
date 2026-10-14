@@ -398,7 +398,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended, ...(job.route ? { route: job.route } : {}) });
   const chosenBrowser = () => { try { return webSignIn && webSignIn.browserName ? webSignIn.browserName() : ''; } catch { return ''; } };
-  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, browser: need.browser || need.own || chosenBrowser(), error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}) });
+  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, jobIds: [...need.jobs], opened: need.opened, busy: need.busy, browser: need.browser || need.own || chosenBrowser(), error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}) });
   function snapshot(s) {
     return {
       id: s.id, mode: s.mode, chat: s.chat, thinking: s.thinking, activity: s.activity, waiting: s.waitingForSurvey, done: s.done, error: s.error, finished: s.finished, stopped: s.stopped, minimized: s.minimized, dismissed: s.dismissed,
@@ -1257,7 +1257,15 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const said = String(reason || '').toLowerCase();
     const edge = (ch) => !/[a-z0-9-]/.test(ch || '');
     const names = (site) => { const want = site.toLowerCase(); for (let at = said.indexOf(want); at >= 0; at = said.indexOf(want, at + 1)) if (edge(said[at - 1]) && edge(said[at + want.length])) return true; return false; };
-    return job.apps.find((app) => web(app) && (appOf(app).sites || []).some(names)) || first;
+    const site = job.apps.find((app) => web(app) && (appOf(app).sites || []).some(names));
+    if (site) return site;
+    // The reason names another app outright (2026-10-14: the Folders on this Mac job asked "Sign in to GitHub", and the
+    // popup said "Sign in to Folders on this Mac" and offered Chrome): that app, when the job's own isn't named.
+    if (!names(shownName(first))) {
+      const named = ['GitHub', 'Zotero', ...Object.keys(APPS)].filter((app) => app !== first && names(shownName(app))).sort((a, b) => shownName(b).length - shownName(a).length)[0];
+      if (named) return named;
+    }
+    return first;
   }
 
   /** An agent hands the person a step (a sign-in, a code, a permission): one request per app and kind, then waits for it. */
@@ -2300,6 +2308,16 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
     sessions.set(id, s);
     s.dirs = dirsOf(s);
+    // An app held on its sign-in (no import of its own yet) gets its popup again (2026-10-14: Notion's step and its import
+    // were gone after a restart: the steps are not kept, and nothing queued the app again).
+    if (s.choices.direct) {
+      for (const need of Array.isArray(saved.needs) ? saved.needs : []) {
+        const app = need && typeof need.app === 'string' ? need.app : '';
+        if (!app || need.closed || !SIGNIN_KINDS.has(need.kind) || !APPS[app] || !s.choices.direct.apps.includes(app)) continue;
+        if (s.skipped.has(app) || s.jobs.some((job) => job.kind === 'import' && job.apps.includes(app))) continue;
+        signInCard(s, app);
+      }
+    }
     logAction(s, null, 'Picked up again after Engelbart closed');
     emit(s);
     pump(s);

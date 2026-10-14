@@ -7,7 +7,7 @@ import Settings from './Settings.jsx';
  *  `children` adds (the test mode pill in a developer's copy). */
 export default function WindowControls({ test = null, children }) {
   return (
-    <div data-no-drag="1" data-window-controls="1" style={{ position: 'fixed', top: 18, right: 16, zIndex: 200, display: 'flex', alignItems: 'center', gap: 8 }}>
+    <div data-no-drag="1" data-window-controls="1" style={{ position: 'fixed', top: 13, right: 16, zIndex: 200, display: 'flex', alignItems: 'center', gap: 8 }}>
       <SandboxNotifications />
       <Settings test={test} />
       {children}

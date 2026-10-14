@@ -1234,6 +1234,22 @@ test('a sign-in need from a job filed under Codex that names claude.ai goes to C
   }
 });
 
+test('a sign-in the reason names (GitHub) from a job filed under another app (Folders on this Mac) is that app\'s, tied to the job (2026-10-14)', async () => {
+  const { agents } = claimingAgents({ kind: 'import', reason: 'Sign in to GitHub' });
+  const { connect, state } = fakeConnect({ agents });
+  let started = null;
+  try {
+    started = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: [{ id: 'p', title: 'Memex' }], apps: ['Folders on this Mac'], scopes: {} } });
+    const now = await until(state(started.id), (s) => s.needs.length > 0, 'the step');
+    const need = now.needs[0];
+    assert.equal(need.app, 'GitHub', 'not "Sign in to Folders on this Mac"');
+    const job = now.jobs.find((one) => one.kind === 'import');
+    assert.deepEqual(need.jobIds, [job.id], 'the status ties it to its job (no second row)');
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
 test('a Keychain refusal in the check: no cards that cannot succeed, macOS asked once; both skipped and said so in the chat', async () => {
   const { webSignIn, calls } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT', 'Claude'], deny: true } } });
   const { connect, state } = fakeConnect({ webSignIn });

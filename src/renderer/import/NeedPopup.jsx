@@ -14,6 +14,8 @@ import { shownName } from '../../shared/connect-sources.cjs';
 export function needCopy(need) {
   const app = shownName(need.app);
   const browser = need.browser || 'your browser';
+  // GitHub and Zotero sign in through Engelbart's own sign-in (App.jsx engelbartSignIn), not a browser's.
+  if ((need.app === 'GitHub' || need.app === 'Zotero') && (need.kind === 'signin' || need.kind === 'password')) return { title: `Sign in to ${app}`, text: '', primary: 'Sign in', secondary: 'Later' };
   if (need.kind === 'permission') return { title: `Allow Engelbart to read ${app}?`, text: '', primary: 'Allow', secondary: 'Don’t allow' };
   if (need.kind === 'folder') return { title: `Choose your ${app} folder`, text: '', primary: 'Choose folder', secondary: 'Later' };
   if (need.kind === 'connector') return { title: `Connect ${app}`, text: `Continue in ${browser}.`, primary: need.busy ? `Waiting for ${browser}…` : `Open ${browser}`, secondary: 'Later' };

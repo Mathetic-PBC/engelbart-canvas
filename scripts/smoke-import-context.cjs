@@ -284,22 +284,19 @@ app.whenReady().then(async () => {
     assert.equal(await text(wc, '[data-need-popup] p'), 'Continue in Arc.');
     assert.equal(await text(wc, '[data-need-popup] [data-need-primary]'), 'Open Arc');
     await shot(wc, '13-signin-popup');
-    // Later puts it away; the status shows the row first, with "Needs you" that brings it back.
+    // Later puts the step away for good (2026-10-14): skipped, no "Needs you" left anywhere.
     const first = await text(wc, '[data-need-popup] h3');
+    const firstId = await js(wc, 'document.querySelector("[data-need-popup]").dataset.needPopup');
     await pressText(wc, '[data-need-popup] .mf', 'Later');
     await until(async () => (await text(wc, '[data-need-popup] h3')) !== first, 'the next popup, or none');
+    await until(() => js(wc, `window.engelbartAPI.connectState(${JSON.stringify(run.id)}).then((s)=>!s.needs.some((need)=>need.id===${JSON.stringify(firstId)}))`), 'Later skipped it');
     while (await has(wc, '[data-need-popup]')) { await pressText(wc, '[data-need-popup] .mf', 'Later'); await pause(200); }
     if (!(await has(wc, '[data-import-status]'))) await js(wc, `document.querySelector("[data-connect-dock-open]") && document.querySelector("[data-connect-dock-open]").click()`);
     await until(() => has(wc, '[data-import-status]'), 'the status');
-    await until(() => has(wc, '[data-need-open]'), 'a "Needs you" row');
     await shot(wc, '14-status');
+    assert.equal(await has(wc, '[data-need-open]'), false, 'no "Needs you" row once every step was put away');
     assert.equal(await js(wc, '[...document.querySelectorAll("[data-background-job]")].filter((row)=>getComputedStyle(row).borderBottomWidth!=="0px"||getComputedStyle(row).borderTopWidth!=="0px").length'), 0, 'no dividing lines');
     assert.equal(await subtext(wc, '[data-background-job]'), 0, 'no subtext under the rows');
-    const order = await js(wc, '[...document.querySelectorAll("[data-background-job]")].map((row)=>!!row.querySelector("[data-need-open]"))');
-    assert.ok(order.indexOf(false) === -1 || order.slice(order.indexOf(false)).every((needs) => !needs), `the ones that need you at the top (${order})`);
-    assert.equal(await text(wc, '[data-import-status-close]'), 'Continue in Engelbart');
-    await press(wc, '[data-need-open]');
-    await until(() => has(wc, '[data-need-popup]'), 'its popup again');
     // Skip each sign-in (this Mac has no browser to sign in with): the run ends.
     for (let i = 0; i < 20; i++) {
       const open = await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(run.id)}).then((s)=>s.needs.map((need)=>need.id))`);

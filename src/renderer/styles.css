@@ -160,6 +160,8 @@ html[data-sidebar-gear] [data-window-controls] .notification-control{display:non
    left to right, the way a model's "thinking" is shown. The text keeps its colour as the band's floor, so it reads as
    grey text with a wave, never as a highlight. Reusable: any text with class eb-wave. */
 .eb-wave{color:transparent!important;background-image:linear-gradient(90deg,#a8a8a8 0%,#a8a8a8 38%,#171717 50%,#a8a8a8 62%,#a8a8a8 100%);background-size:260% 100%;background-repeat:no-repeat;-webkit-background-clip:text;background-clip:text;animation:eb-wave 2s cubic-bezier(.45,.05,.55,.95) infinite}
+/* The same wave in red: an import that needs the person (its popup says what). */
+.eb-wave.eb-wave-red{background-image:linear-gradient(90deg,#e0a39b 0%,#e0a39b 38%,#b42318 50%,#e0a39b 62%,#e0a39b 100%)}
 @keyframes eb-wave{from{background-position:100% 0}to{background-position:0 0}}
 @media(prefers-reduced-motion:reduce){.eb-wave{animation:none;background-position:50% 0}}
 /* A popup that covers the window (data-cover: the import's status and its sign-in popups, Import your context over the

@@ -630,7 +630,9 @@ export default function App() {
           onOpen={() => needOpen(pendingNeed.session, pendingNeed.need)}
           onDone={() => api.connectNeed(pendingNeed.session.id, pendingNeed.need.id, 'done').catch(fail)}
           onSkip={() => { api.connectNeed(pendingNeed.session.id, pendingNeed.need.id, 'skip').catch(fail); setNeedShown(null); }}
-          onLater={() => needLater(pendingNeed.need)} />
+          // Later puts the step away for good (2026-10-14: "clicking later should dismiss the needs you, too"): skipped for
+          // this run, so no "Needs you" is left in the title bar or the status.
+          onLater={() => { const { session, need } = pendingNeed; needLater(need); api.connectNeed(session.id, need.id, 'skip').catch(fail); }} />
       )}
       {connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>
