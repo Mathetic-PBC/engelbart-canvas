@@ -9,18 +9,22 @@
   What it follows, top to bottom:
     title bar   traffic lights, the sidebar toggle and the clock (Recent pages) on one row, their centre on the same line
                 as the tabs and Stage / Terminal; the project head right under it, no gap.
-    head        the top-level project and its chevron: Switch project ›, Rename, Project page ↗; then Settings and Search.
-    fixed rows  Agents (Inbox folded in: a count of what waits for you, 9+, and a breathing dot while one runs), Library,
-                Add sources. Connections and Starred are gone.
-    Projects    what were workspaces, nested to a fourth level (level 1 is the switcher). No fixed row count: the window's
-                height sets the room, the way down to where you are and a few other projects always get rows, and the rest
-                go to what is most worth seeing (sectionPlan). The branch you are in comes first, a faint grey behind it.
-                A level shows at most 5 rows; past that 4 and "··· More", which opens every sibling and its children beside
-                the sidebar. Opening a project folds the others at its level and opens it; opening one folds its siblings.
-                The guide line runs only beside the level you are on. Hovering a folded project for a beat shows what is
-                in it beside the sidebar; the pointer leaving closes it. Blue dot: an agent finished there and you have not
-                looked; it rolls up onto anything folded over it. No ticks.
-    Your sources  folded unless this project has something; Notes with a + (and "+ Note" when there are none), then
+    head        the top-level project and its chevron: Switch project ›, Rename, Project page ↗; then Settings and New note.
+    fixed rows  Agents, Library, Search. Connections and Starred are gone. Agents use a number in a rectangle:
+                an unfilled pulsing outline while any agent is running, a solid grey fill when only results await viewing.
+                Projects use bare counts: pulsing grey while running, steady dark when ready, without a box or border.
+                Both count running and unviewed agents together and cap at 9+.
+    Projects    nested to a fourth level (level 1 is the switcher). At most three direct children of the root, and ten
+                rows altogether, counting descendants and More. The shortlist and tree order stay put when clicked.
+                Only one branch at each level can be expanded. More opens the rest beside the sidebar.
+                Ctrl+1–9 opens only second-level projects, in their root's order, including projects in More.
+                Second-level projects keep their icon; number hints appear only in the shortcuts menu. Cmd+J opens the next agent needing attention.
+                Both commands are shown in the sidebar and in Keyboard shortcuts under the project menu.
+                Only the deepest open group's children get a guide line. A plus appears on hover.
+                Counts stay visible, aligned immediately before the chevron column.
+                Every parent includes all descendants in its total, expanded or folded, including the root picker.
+                Hovering a folded project for a beat shows its children; leaving closes it.
+    Sources     folded unless this project has something; Add sources, Notes with a + (and "+ Note" when there are none), then
                 the rest with their own icons: picture, code (html), globe (website), folder, paper (pdf), repository.
     foot        stickies shown or hidden, and the trash.
   Chevrons: down while open, up while folded.
@@ -30,7 +34,7 @@
   --font-sans:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
   --font-mono:'Source Code Pro',ui-monospace,SFMono-Regular,Menlo,monospace;
   --ink:#171717;--body:#262626;--mut:#4d4d4d;--icon:#5c5c5c;--fnt:#8f8f8f;--bd:#eaeaea;--bd2:#c9c9c9;
-  --rail:#fafafa;--hov:#efefef;--active:#e6e6e6;--branch:#f1f1f1;--blue:#0070f3;--red:#e70022;
+  --rail:#fafafa;--hov:#efefef;--active:#e6e6e6;--blue:#0070f3;--red:#e70022;
   --ease:cubic-bezier(.25,.1,.25,1);
   --rail-w:288px;--line:30px;
 }
@@ -41,9 +45,10 @@ button{border:0;background:transparent;padding:0;cursor:pointer;text-align:left}
 button:focus-visible,[tabindex]:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(0,112,243,.28)}
 svg{flex:none;display:block}
 @keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
-@keyframes pulse{0%,100%{opacity:.3}50%{opacity:1}}
+@keyframes status-outline{0%,100%{border-color:#8f8f8f}50%{border-color:#eaeaea}}
+@keyframes number-pulse{0%,100%{opacity:1}50%{opacity:.4}}
 @keyframes added{0%{background:#e6f0fd}100%{background:transparent}}
-@media(prefers-reduced-motion:reduce){.pulse{animation:none!important}}
+@media(prefers-reduced-motion:reduce){.status-pill.running,.project-count.in-progress{animation:none!important}}
 
 /* ---------------------------------------------------------------- frame */
 .app{display:flex;height:100vh;min-width:0}
@@ -122,14 +127,33 @@ svg{flex:none;display:block}
 .chev{flex:none;display:flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:2px;border-radius:4px;color:#9b9b9b}
 .chev:hover{background:#e0e0e0;color:var(--mut)}
 .chev svg{transition:transform 160ms var(--ease)}
+.chev.on-hover{opacity:0;pointer-events:none}
+:is(.row,.prow):is(:hover,:focus-within) .chev.on-hover{opacity:1;pointer-events:auto}
 /* Down while open, up while folded (Hudson: "the chevrons should point up when they point down and vice versa"). */
-.chev[data-open="0"] svg,.sec-toggle[data-open="0"] .chev-mark svg,.picker[aria-expanded="false"] .chev-mark svg{transform:rotate(180deg)}
+.chev[data-open="0"] svg,.sec-toggle[data-open="0"] .chev-mark svg{transform:rotate(180deg)}
 .chev-mark{display:flex;color:#9b9b9b}
 .more .lb,.more .ic{color:var(--fnt)!important}
 .more:hover .lb,.more:hover .ic{color:var(--mut)!important}
-.dot{flex:none;width:6px;height:6px;border-radius:50%;background:var(--blue)}
-.pulse{animation:pulse 1.6s ease-in-out infinite}
-.count{flex:none;min-width:18px;height:18px;padding:0 5px;border-radius:9px;background:var(--blue);color:#fff;font:600 11px/18px var(--font-sans);text-align:center;font-variant-numeric:tabular-nums}
+.status-pill{flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:22px;height:22px;padding:0 3px;border:1px solid transparent;border-radius:4px;font:400 12px/1 var(--font-sans);font-variant-numeric:tabular-nums;text-align:center}
+.status-pill.ready{background:var(--bd);color:var(--ink)}
+.status-pill.running{background:transparent;color:var(--mut);border-color:var(--bd2);animation:status-outline 1.8s ease-in-out infinite}
+.project-count{flex:none;display:inline-block;min-width:12px;text-align:center;font:400 12px/16px var(--font-sans);font-variant-numeric:tabular-nums}
+.project-count.done{color:var(--ink)}
+.library-count{flex:none;color:var(--fnt);font:400 12px/16px var(--font-sans);font-variant-numeric:tabular-nums;margin-left:6px}
+.project-count.in-progress{color:var(--fnt);animation:number-pulse 1.8s ease-in-out infinite}
+.shortcut{flex:none;color:var(--fnt);font:12px/1.4 var(--font-sans);white-space:nowrap;font-variant-numeric:tabular-nums}
+.project-tools{flex:none;display:flex;align-items:center;gap:5px;margin-left:6px}
+.status-slot{display:flex;align-items:center;justify-content:center;flex:none;width:22px}
+.chevron-slot{display:flex;align-items:center;justify-content:center;flex:none;width:18px}
+.chevron-slot .chev{margin-left:0}
+.project-slot{display:grid;place-items:center;flex:none;width:22px;height:22px}
+.project-slot>*{grid-area:1/1}.project-slot .act{visibility:hidden;pointer-events:none}
+.row:hover .project-slot.can-add .act,.row:focus-within .project-slot.can-add .act{visibility:visible;pointer-events:auto}
+.more .ic{width:auto;height:auto;display:block;line-height:30px;margin-right:4px!important}
+.more-mark{font:400 14px/30px var(--font-sans);letter-spacing:0;display:inline}
+.sec-command{margin-left:auto;margin-right:8px;border-radius:4px;padding:2px 3px}.sec-command:hover{background:var(--hov);color:var(--mut)}
+.command-row{display:flex;align-items:center;gap:20px;min-height:38px;padding:8px 14px;font-size:13.5px}.command-row .shortcut{margin-left:auto}
+.agent-detail{width:100%;align-self:stretch;padding:20px 16px;color:var(--ink);outline:none}.agent-detail h2{margin:8px 0 12px;font:500 16px/1.4 var(--font-sans)}.agent-detail p{margin:12px 0;font:13px/1.6 var(--font-sans);color:var(--mut)}.agent-detail .path{font:12px/1.5 var(--font-sans);color:var(--fnt)}.agent-detail .state{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--fnt)}
 
 .sec{flex:none;display:flex;flex-direction:column}
 .sec-head{flex:none;display:flex;align-items:center;height:var(--line);padding:0 6px 0 8px;margin-top:12px}
@@ -144,10 +168,8 @@ svg{flex:none;display:block}
 .kids[data-guide="1"]::before{content:"";position:absolute;left:15.5px;top:2px;bottom:2px;width:1px;background:#dcdcdc}
 .kids.l4[data-guide="1"]::before{left:10.5px}
 .kids.l4{padding-left:22px}
-/* The branch you are in, behind a faint grey. */
-.branch{display:flex;flex-direction:column;margin:1px -4px;padding:2px 4px;border-radius:9px;background:var(--branch)}
-.branch .row:hover{background:#e8e8e8}
-.branch .row[data-active="1"]{background:#e2e2e2}
+/* The tree keeps its ordinary surface; only the selected row is highlighted. */
+.branch{display:flex;flex-direction:column}
 .ws-list{display:flex;flex-direction:column;gap:0}
 
 .group-head{flex:none;display:flex;align-items:center;height:var(--line);padding:0 6px 0 8px;border-radius:6px}
@@ -158,11 +180,19 @@ svg{flex:none;display:block}
 .plus-note{display:flex;align-items:center;gap:6px;height:var(--line);padding:0 10px;border-radius:6px;font:13.5px/1 var(--font-sans);color:var(--fnt)}
 .plus-note:hover{background:var(--hov);color:var(--ink)}
 .files{display:flex;flex-direction:column;margin-top:4px}
+.source-children{display:flex;flex-direction:column;padding-left:24px}
+.source-folder .source-tools{display:flex;align-items:center;gap:2px}
+.source-folder .source-tools .act{visibility:hidden}
+.source-folder:is(:hover,:focus-within) .source-tools .act{visibility:visible}
+.source-folder .chev{margin-left:0}
+.source-create .ic{position:relative}
+.source-create .folder-plus{position:absolute;right:-3px;bottom:-2px;background:var(--rail);font:16px/12px var(--font-sans)}
+.row:focus-within .hv{opacity:1}
 .foot{flex:none;display:flex;align-items:center;gap:2px;margin:6px 0 10px}
 .foot .row{flex:1}
 
 /* ---------------------------------------------------------------- floating */
-#layer>*{position:fixed}
+#layer>*,#hover-layer>*,#tooltip-layer>*{position:fixed}
 .panel{z-index:80;display:flex;flex-direction:column;background:#fff;border:1px solid #e6e6e6;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.08),0 2px 6px rgba(0,0,0,.04);animation:rise 140ms var(--ease);overflow:hidden}
 .panel-head{flex:none;display:flex;align-items:center;gap:8px;padding:12px 14px 6px}
 .panel-head b{font:600 13px/1.4 var(--font-sans)}
@@ -197,8 +227,19 @@ svg{flex:none;display:block}
 .btn.dark{background:var(--ink);border-color:var(--ink);color:#fff}
 .btn.dark:hover{background:#333}
 .btn[disabled]{opacity:.35;cursor:default}
+.library-filters{display:flex;align-items:center;gap:4px;margin:0 10px 6px}
+.library-filter{flex:none;padding:2px 8px;border:1px solid #eaeaea;border-radius:6px;background:transparent;color:#4d4d4d;cursor:pointer;white-space:nowrap;font:400 12px/1.4 var(--font-sans)}
+.library-filter:hover{background:var(--hov)}
+.library-filter[aria-pressed="true"]{border-color:#efefef;background:#efefef;color:#171717;font-weight:500}
+.picker-item-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .flyout{z-index:82;width:270px;padding:5px}
 .fly-kids{position:relative;display:flex;flex-direction:column;padding-left:18px}
+.fly-kids[data-guide="1"]::before{content:"";position:absolute;left:9px;top:2px;bottom:2px;width:1px;background:#e3e3e3}
+.flyout .fly-context .t1{font-weight:500}
+.project-tooltip{z-index:120;display:flex;align-items:center;gap:8px;width:240px;max-width:calc(100vw - 16px);padding:9px 10px;background:#fff;border:1px solid var(--bd);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.08);color:var(--mut);font:12px/1.4 var(--font-sans);pointer-events:none}
+.project-tooltip .tip-key{flex:none;display:flex;align-items:center;justify-content:center;min-width:28px;height:24px;padding:0 4px;border:1px solid var(--bd);border-radius:4px;background:var(--rail);color:var(--ink);font:12px/1 var(--font-sans)}
+.project-tooltip kbd{font:inherit;color:var(--ink);white-space:nowrap}
+.project-tooltip.action-tooltip{width:auto;max-width:240px;white-space:nowrap}
 .peek{z-index:95;width:340px;padding:14px 16px 16px;background:#fff;border:1px solid var(--bd2);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.06);animation:rise 160ms var(--ease)}
 .peek .k{display:flex;align-items:center;gap:7px;font:500 9px/1 var(--font-sans);letter-spacing:1.6px;text-transform:uppercase;color:var(--fnt)}
 .peek .n{margin-top:9px;font:500 14.5px/1.4 var(--font-sans)}
@@ -258,6 +299,8 @@ svg{flex:none;display:block}
   </div>
 </div>
 <div id="layer"></div>
+<div id="hover-layer"></div>
+<div id="tooltip-layer"></div>
 <div class="mock" id="mock" data-folded="0">
   <b data-act="mock-fold" style="cursor:pointer">Mockup · sample data ▾</b>
   <div class="r">
@@ -294,6 +337,7 @@ const P = {
   gear: '<path d="M10.25 4.5V1.95h3.5V4.5A7.7 7.7 0 0 1 16.06 5.46l1.81-1.8 2.47 2.47-1.8 1.81A7.7 7.7 0 0 1 19.5 10.25h2.55v3.5H19.5a7.7 7.7 0 0 1-.96 2.31l1.8 1.81-2.47 2.47-1.81-1.8a7.7 7.7 0 0 1-2.31.96v2.55h-3.5V19.5a7.7 7.7 0 0 1-2.31-.96l-1.81 1.8-2.47-2.47 1.8-1.81a7.7 7.7 0 0 1-.96-2.31H1.95v-3.5H4.5a7.7 7.7 0 0 1 .96-2.31l-1.8-1.81 2.47-2.47 1.81 1.8a7.7 7.7 0 0 1 2.31-.96z"/><circle cx="12" cy="12" r="3"/>',
   panelClose: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/>',
   panelOpen: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/>',
+  compose: '<path d="M12 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-7"/><path transform="translate(0 -2)" d="M10 14l-1 4 4-1 9-9a2.12 2.12 0 0 0-3-3z"/>',
   clock: '<circle cx="12" cy="12" r="9.5"/><path d="M12 7v5l3 2"/>',
   plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
   check: '<path d="M20 6 9 17l-5-5"/>',
@@ -310,9 +354,9 @@ const P = {
   zotero: '<path d="M5 4h14L5 20h14"/>',
 };
 const I = (name, size = 18, stroke = 2) => svg(P[name], size, name === 'library' ? 2.8 : stroke);
-P.library = '<path d="M5 4v16"/><path d="M11.5 7v13"/><path d="m16.5 6.5 3.5 13.5"/>';
+P.library = '<path d="M5 4v16"/><path d="M11 4v16"/><path d="m16 5 3.5 15"/>';
 const STICKY = (hidden) => { const d = hidden ? ' stroke-dasharray="2.6 2.4"' : ''; return svg(`<path d="M13 20.5 20.5 13"${d}/><path d="M13 20.5V14a1 1 0 0 1 1-1h6.5V5.5a2 2 0 0 0-2-2h-13a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"${d}/>`); };
-const DOTS = (size = 18) => `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/></svg>`;
+const DOTS = () => '<span class="more-mark" aria-hidden="true">...</span>';
 const CHEV = (size = 13) => svg(P.chevron, size, 2.4);
 const KIND_ICON = { note: 'note', md: 'file', image: 'image', html: 'code', website: 'globe', folder: 'folder', pdf: 'paper', git: 'git' };
 const KIND_WORD = { note: 'Note', md: 'Markdown', image: 'Picture', html: 'HTML', website: 'Website', folder: 'Folder', pdf: 'PDF · paper', git: 'Repository' };
@@ -355,7 +399,9 @@ const TOPS = [
   { id: 'test-3', name: 'test', desc: '' },
 ];
 const MAX_DEPTH = 4;       // level 1 is the switcher's project; the Projects section holds levels 2 to 4
-const LEVEL_ROWS = 5;      // a level shows at most 5; past that 4 and More
+const ROOT_ROWS = 3;       // direct children of the highest-level project
+const PROJECT_ROWS = 10;   // all displayed rows, including descendants and More
+const LEVEL_ROWS = 5;      // a larger sibling group shows four projects followed by More
 const RECENT_ROWS = 10;    // the clock's list, the project page included
 const PEEK_OPEN = 350, PEEK_SWITCH = 90, PEEK_CLOSE = 180; // the sidebar's note previews (SidebarPanels.jsx)
 
@@ -433,6 +479,8 @@ function seed() {
     railHidden: false,
     stickiesHidden: false,
     sourcesOpen: {},   // scope id → true/false, once the person folds or opens it
+    sharedSourceFolders: [...new Set(Object.values(SOURCES).flat().filter(id => ITEMS[id].kind === 'folder'))],
+    sourceFoldersOpen: {}, // project folder expansion is scoped; shared folder expansion follows the folder
     projectsOpen: true,
     recent: [],        // { kind, id, at }, newest last
     trash: ['Call Graham back about telemetry', 'Ask Annapurna for the backprop sketch'],
@@ -441,7 +489,10 @@ function seed() {
     settingsPage: 'models',
     models: { claude: { quick: ['Sonnet', 'Medium'], standard: ['Opus', 'High'], deep: ['Opus', 'Max'] }, codex: { quick: ['Sol', 'Medium'], standard: ['Astra', 'High'], deep: ['Astra', 'Ultra'] } },
     lastIn: {},        // top id → the project you were last in there
+    projectSlots: {},  // stable shortlist per root; clicking a visible project never reorders it
+    agentId: null,
   };
+  for (const sc of Object.keys(SOURCES)) SOURCES[sc] = SOURCES[sc].filter(id => !S.sharedSourceFolders.includes(id));
   [['project', 'engelbart/user-studies/graham-amitav'], ['note', 'iconography'], ['project', 'engelbart/agents/bart-build-agents/sandbox'], ['note', 'copy-button'], ['project', 'engelbart/onboarding/agent-onboarding'],
     ['project', 'engelbart/user-interface/middle-canvas'], ['project', 'engelbart/user-interface/sidebar/notifications'], ['note', 'sb-reqs'], ['project', here]]
     .forEach(([kind, id]) => S.recent.push({ kind, id, at: tick() }));
@@ -461,17 +512,34 @@ const descends = (id, from) => pathIds(id).includes(from);
 const branchOf = (id) => (N[id] && N[id].level >= 2 ? N[pathIds(id)[1]] : null);
 const pageName = (p) => (p.kind === 'note' ? ITEMS[p.id].name : N[p.id].name);
 const since = (at) => { const m = Math.round((Date.now() - at) / 60e3); return m < 1 ? 'now' : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
-const RANK = { needs: 3, unseen: 2, running: 1 };
-// What a node shows on the right: its own agents', and, while it is folded, everything's under it (the most urgent wins).
-function statusOf(id, rollUp) {
-  let best = null;
-  for (const a of AGENTS) {
-    if (!RANK[a.state]) continue;
-    if (a.node === id || (rollUp && descends(a.node, id))) if (!best || RANK[a.state] > RANK[best]) best = a.state;
-  }
-  return best;
+const RANK = { failed: 4, needs: 3, unseen: 2, running: 1 };
+// One pill for running and unviewed agents. Roll-ups count each agent once, even for overlapping branches.
+function summarizeAgents(list) {
+  const running = list.filter(a => a.state === 'running').length;
+  const ready = list.filter(a => ['needs', 'unseen', 'failed'].includes(a.state)).length;
+  return { total: ready + running, ready, running };
 }
-const mark = (state) => (state === 'running' ? '<span class="dot pulse" title="An agent is working here"></span>' : state ? `<span class="dot" title="${state === 'needs' ? 'An agent needs you here' : 'An agent finished here'}"></span>` : '');
+function agentSummary(ids = null, rollUp = false) {
+  const nodes = ids == null ? null : Array.isArray(ids) ? ids : [ids];
+  return summarizeAgents(AGENTS.filter(a => !nodes || nodes.some(id => a.node === id || (rollUp && descends(a.node, id)))));
+}
+// Shortcuts are tied to the root's ordered immediate children, independent of tree expansion or recency.
+const numberedProjects = () => N[S.top].children.slice(0, 9);
+function shortcutFor(id) {
+  if (N[id].level !== 2) return 0;
+  const index = N[N[id].parent].children.indexOf(id);
+  return index >= 0 && index < 9 ? index + 1 : 0;
+}
+function projectLead() {
+  return `<span class="ic">${I('project')}</span>`;
+}
+function mark(summary, plain = false) {
+  if (!summary || !summary.total) return '';
+  const text = summary.total > 9 ? '9+' : summary.total;
+  const label = `${summary.ready} to view, ${summary.running} running`;
+  const style = plain ? `project-count ${summary.running ? 'in-progress' : 'done'}` : `status-pill ${summary.running ? 'running' : 'ready'}`;
+  return `<span class="${style}" title="${label}" aria-label="${label}">${text}</span>`;
+}
 function see(id) { // opening a project reads what finished there; what needs you stays until it is answered
   for (const a of AGENTS) if (a.node === id && a.state === 'unseen') a.state = 'done';
 }
@@ -484,29 +552,44 @@ function openPath(id) {
   S.expanded = new Set(pathIds(id).filter((x) => N[x].level >= 2));
   if (!N[id].children.length) S.expanded.delete(id);
 }
-function go(p, { newTab = false } = {}) {
+function go(p, { newTab = false, agentId = null } = {}) {
+  if (p.kind !== 'note') S.top = N[p.id].top;
+  S.agentId = agentId;
   const sc = p.kind === 'note' ? scope() : p.id;
   if (newTab) {
     const at = S.tabs.findIndex((t) => t.page.kind === p.kind && t.page.id === p.id);
     if (at >= 0) S.tab = at; else { S.tabs.push({ page: p, scope: sc }); S.tab = S.tabs.length - 1; }
   } else S.tabs[S.tab] = { page: p, scope: sc };
-  if (p.kind !== 'note') { N[p.id].touched = tick(); see(p.id); if (N[p.id].level >= 2) { openPath(p.id); S.lastIn[S.top] = p.id; } else S.expanded = new Set(); }
+  if (p.kind !== 'note') {
+    N[p.id].touched = tick();
+    if (agentId) { const a = AGENTS.find(a => a.id === agentId); if (a && a.state === 'unseen') a.state = 'done'; }
+    else see(p.id);
+    if (N[p.id].level >= 2) { openPath(p.id); S.lastIn[S.top] = p.id; } else S.expanded = new Set();
+  }
   remember(p.kind, p.id);
   closeAll();
   render();
 }
 const goProject = (id, opts) => go({ kind: N[id].level === 1 ? 'top' : 'project', id }, opts);
 
+function goAgent(id) {
+  const agent = AGENTS.find(a => a.id === id);
+  if (!agent || !N[agent.node]) return;
+  goProject(agent.node, { agentId: id });
+  const target = $('#active-agent');
+  if (target) target.focus({ preventScroll: true });
+}
+function nextAgent() {
+  const queue = AGENTS.filter(a => a.id !== S.agentId && N[a.node] && ['needs', 'unseen', 'failed'].includes(a.state))
+    .sort((a, b) => RANK[b.state] - RANK[a.state] || a.at - b.at);
+  if (queue.length) { goAgent(queue[0].id); return; }
+  const previous = S.recent.slice().reverse().find(r => !(r.kind === page().kind && r.id === page().id) && (r.kind === 'note' || N[r.id]));
+  if (previous) go({ kind: previous.kind, id: previous.id }, { newTab: true });
+  else toast('No agents need your attention.');
+}
+
 /* ======================================================== the Projects rows */
-// How many rows the section gets, and which, is no fixed number. Rows go to whatever is most worth seeing, the way a fisheye
-// view chooses (Furnas 1986: degree of interest = importance − distance from where you are):
-//   the room: what the window's height leaves after the fixed rows, about 60% of it while Your sources has something to
-//     show, 85% while it is folded or empty (11 rows in a 900px window, 7 for the branch and 3 others and More);
-//   always: the way down to the project you are in, and a few other top projects (about 30% of the room, never fewer than
-//     2), the ones you were in last or where an agent waits;
-//   then, row by row, whatever has the most interest: near the project you are in (its children and siblings before its
-//     cousins), recently visited, an agent waiting or finished there. Room left after the branch goes to more projects.
-// A level never shows more than 5 rows: past that, at most 4 and More. A level that cannot show all of it ends in More.
+// A stable three-project shortlist, a single expanded path, and one budget shared by all tree rows.
 const isOpen = (id) => S.expanded.has(id) && N[id].children.length > 0;
 // Opening one folds its siblings (and what is under them): "If I expand this, subproject 3 should auto-collapse".
 function toggle(id) {
@@ -520,67 +603,59 @@ function toggle(id) {
 }
 // When you were last anywhere in a project: in it, or in one within it.
 const lastIn = (id) => Math.max(N[id].touched, ...N[id].children.map(lastIn));
-const steps = (a, b) => { const pa = pathIds(a), pb = pathIds(b); let i = 0; while (i < pa.length && i < pb.length && pa[i] === pb[i]) i++; return pa.length + pb.length - 2 * i; };
-const WAIT_WEIGHT = { needs: 1.5, unseen: 1, running: 0.4 };
-function room() {
-  const sc = scope(), ids = SOURCES[sc] || [];
-  const sourcesShow = (sc in S.sourcesOpen ? S.sourcesOpen[sc] : ids.length > 0) && ids.length > 0;
-  const free = window.innerHeight - 40 - 36 - 46 - 4 /* title bar, head, foot */ - 97 /* Agents, Library, Add sources */ - 84 /* two section heads */;
-  return Math.max(5, Math.min(18, Math.floor((free * (sourcesShow ? 0.6 : 0.85)) / 30)));
-}
 function sectionPlan() {
   const top = N[S.top];
   const focus = scopeNode() ? scope() : null;
   const branch = focus ? pathIds(focus)[1] : null;
-  const budget = room();
-  const inSection = Object.values(N).filter((n) => n.top === S.top && n.level >= 2).map((n) => n.id);
-  // How recently, by rank among the projects you have been in: 0 (longest ago) to 1 (just now); never, 0. Among equals the
-  // one higher in its list comes first.
-  const visited = inSection.filter((id) => lastIn(id) > 0).sort((a, b) => lastIn(a) - lastIn(b));
-  const recency = new Map(inSection.map((id) => [id, -0.001 * N[N[id].parent].children.indexOf(id)]));
-  visited.forEach((id, i) => recency.set(id, (visited.length > 1 ? i / (visited.length - 1) : 1) + recency.get(id)));
-  const waits = (id) => WAIT_WEIGHT[statusOf(id, true)] || 0;
-  const interest = (id) => (focus ? 4 - steps(id, focus) : 1) + recency.get(id) + waits(id);
-  const visible = (id) => ancestors(id).every((a) => a.level < 2 || isOpen(a.id));
-  const shown = new Set();
-  const cap = (parent) => (N[parent].level < 2 ? Infinity : N[parent].children.length <= LEVEL_ROWS ? LEVEL_ROWS : LEVEL_ROWS - 1);
-  const kidsShown = (parent) => N[parent].children.filter((k) => shown.has(k)).length;
+  let slots = S.projectSlots[S.top];
+  if (!slots) {
+    const recent = top.children.slice().sort((a, b) => lastIn(b) - lastIn(a));
+    slots = S.projectSlots[S.top] = top.children.filter(id => recent.slice(0, ROOT_ROWS).includes(id));
+  }
+  slots = slots.filter(id => top.children.includes(id));
+  // A project reached through More replaces one slot. Existing visible projects keep their positions and tree order.
+  if (branch && !slots.includes(branch)) slots = [...slots.slice(0, ROOT_ROWS - 1), branch];
+  const order = S.projectSlots[S.top] = top.children.filter(id => slots.includes(id)).slice(0, ROOT_ROWS);
+  const shown = new Set(order);
+  const visible = id => ancestors(id).every(a => a.level < 2 || isOpen(a.id));
+  const hidden = top.children.filter(id => !shown.has(id));
   const rows = () => {
-    let n = shown.size;
-    for (const id of shown) { const k = kidsShown(id); if (isOpen(id) && k > 0 && k < N[id].children.length) n++; } // its More (none shown: it shows folded)
-    if (top.children.some((k) => !shown.has(k))) n++;                                      // the section's More
-    return n;
-  };
-  // Always: the way down to where you are, and a few other top projects.
-  if (focus) for (const id of pathIds(focus)) if (N[id].level >= 2 && visible(id)) shown.add(id);
-  const others = top.children.filter((id) => id !== branch).sort((a, b) => (recency.get(b) + waits(b)) - (recency.get(a) + waits(a)));
-  const reserve = focus ? Math.min(others.length, Math.max(2, Math.round(budget * 0.3))) : 0;
-  const held = others.slice(0, reserve);
-  // The branch first, keeping the reserve's rows free; then everything, the reserve included, by interest.
-  const fill = (pool, limit) => {
-    let grew = true;
-    while (grew) {
-      grew = false;
-      for (const id of pool.filter((x) => !shown.has(x) && visible(x)).sort((a, b) => interest(b) - interest(a))) {
-        const parent = N[id].parent;
-        if (N[id].level > 2 && !shown.has(parent)) continue;
-        if (kidsShown(parent) >= cap(parent)) continue;
-        shown.add(id);
-        if (rows() > limit) { shown.delete(id); continue; }
-        grew = true;
-      }
+    let count = shown.size + Number(hidden.length > 0);
+    for (const id of shown) {
+      const countShown = N[id].children.filter(k => shown.has(k)).length;
+      if (isOpen(id) && countShown > 0 && countShown < N[id].children.length) count++;
     }
+    return count;
   };
-  if (branch) fill(inSection.filter((id) => descends(id, branch)), budget - held.length);
-  held.forEach((id) => shown.add(id));
-  fill(inSection, budget);
-  const order = [...(branch ? [branch] : []), ...others.filter((id) => shown.has(id))];
-  return { branch, order, shown, hidden: top.children.filter((id) => !shown.has(id)), budget };
+  // Allocate siblings before descending. Selecting a deep project must never evict
+  // its earlier siblings to make room for its children; overflow stays in More.
+  const candidates = [];
+  const append = ids => ids.forEach(id => { if (!candidates.includes(id)) candidates.push(id); });
+  for (const id of order) {
+    const visit = node => { if (isOpen(node)) { append(N[node].children); N[node].children.forEach(visit); } };
+    visit(id);
+  }
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const id of candidates) {
+      if (shown.has(id) || !visible(id) || !shown.has(N[id].parent)) continue;
+      const siblings = N[N[id].parent].children;
+      const limit = siblings.length > LEVEL_ROWS ? LEVEL_ROWS - 1 : LEVEL_ROWS;
+      if (siblings.filter(k => shown.has(k)).length >= limit) continue;
+      shown.add(id);
+      if (rows() > PROJECT_ROWS) shown.delete(id); else grew = true;
+    }
+  }
+  const visibleIds = [];
+  const walk = id => { visibleIds.push(id); if (isOpen(id)) N[id].children.filter(k => shown.has(k)).forEach(walk); };
+  order.forEach(walk);
+  return { branch, order, shown, hidden, budget: PROJECT_ROWS, visible: visibleIds };
 }
 let PLAN = null;
 
 /* ================================================================ rendering */
-function render() { renderRail(); renderTabs(); renderCanvas(); renderLayer(); }
+function render() { clearShortcutTip(); renderRail(); renderTabs(); renderCanvas(); renderStage(); renderLayer(); }
 
 function titlebar() {
   return `<div class="titlebar">
@@ -596,8 +671,6 @@ function renderRail() {
   $('#app').dataset.stickies = S.stickiesHidden ? 'hidden' : 'shown';
   if (S.railHidden) { rail.innerHTML = ''; return; }
   const top = N[S.top];
-  const toView = AGENTS.filter((a) => a.state === 'needs' || a.state === 'unseen').length;
-  const running = AGENTS.some((a) => a.state === 'running');
   const menuOpen = !!(open && open.kind === 'project');
   rail.innerHTML = `
     ${titlebar()}
@@ -606,17 +679,17 @@ function renderRail() {
         ? `<div class="field" style="flex:1;height:30px;border-color:#c9c9c9"><input data-rename-top value="${esc(top.name)}" style="font:600 15px/1.4 var(--font-sans)"></div>`
         : `<button class="picker" data-act="project-menu" data-trigger="project" aria-haspopup="menu" aria-expanded="${menuOpen}" title="${esc(top.name)}"><span class="n">${esc(top.name)}</span><span class="chev-mark">${CHEV(14)}</span></button>`}
       <span class="grow"></span>
-      <button class="icon-btn" data-act="settings" title="Settings" aria-label="Settings">${I('gear')}</button>
-      <button class="icon-btn" data-act="search" title="Search" aria-label="Search">${I('search')}</button>
+      <button class="icon-btn" data-act="settings" data-trigger="settings" title="Settings" aria-label="Settings">${I('gear')}</button>
+      <button class="icon-btn" data-act="new-note" data-trigger="new-note" title="New note" aria-label="New note">${I('compose')}</button>
     </div>
     <div class="scroll" id="rail-scroll">
       <nav class="fixed" aria-label="Places">
-        <div class="row" data-act="agents" data-trigger="agents" data-active="${open && open.kind === 'agents' ? 1 : 0}" role="button" tabindex="0">
+        <div class="row" data-act="agents" data-trigger="agents" data-active="${open && open.kind === 'agents' ? 1 : 0}" role="button" tabindex="0" title="Agents">
           <span class="ic">${I('agents')}</span><span class="lb">Agents</span><span class="sp"></span>
-          <span class="rt">${running ? '<span class="dot pulse" title="An agent is working"></span>' : ''}${toView ? `<span class="count" title="${toView} to look at">${toView > 9 ? '9+' : toView}</span>` : ''}</span>
+          <span class="rt">${mark(agentSummary())}</span>
         </div>
-        <div class="row" data-act="library" data-trigger="library" data-active="${open && open.kind === 'library' ? 1 : 0}" role="button" tabindex="0"><span class="ic">${I('library')}</span><span class="lb">Library</span></div>
-        <div class="row" data-act="add" data-trigger="add" data-active="${open && open.kind === 'add' ? 1 : 0}" role="button" tabindex="0"><span class="ic">${I('add')}</span><span class="lb">Add sources</span></div>
+        <div class="row" data-act="library" data-trigger="library" data-active="${open && open.kind === 'library' ? 1 : 0}" role="button" tabindex="0"><span class="ic">${I('library')}</span><span class="lb">Library</span><span class="sp"></span><span class="library-count">${libraryCount()}</span></div>
+        <div class="row" data-act="search" data-trigger="search" data-active="${open && open.kind === 'search' ? 1 : 0}" role="button" tabindex="0"><span class="ic">${I('search')}</span><span class="lb">Search</span></div>
       </nav>
       ${projectsSection()}
       ${sourcesSection()}
@@ -638,40 +711,43 @@ function projectsSection() {
       body += id === plan.branch ? `<div class="branch" data-branch="${esc(id)}">${block}</div>` : block;
     }
     if (plan.hidden.length) {
-      const st = plan.hidden.map((id) => statusOf(id, true)).sort((a, b) => (RANK[b] || 0) - (RANK[a] || 0))[0];
-      body += `<div class="row more" data-act="all-projects" data-trigger="all-projects" data-active="${open && open.kind === 'all-projects' ? 1 : 0}" role="button" tabindex="0"><span class="ic">${DOTS()}</span><span class="lb">More</span><span class="sp"></span><span class="rt">${mark(st)}</span></div>`;
+      const st = agentSummary(plan.hidden, true);
+      body += `<div class="row more" data-act="all-projects" data-trigger="all-projects" data-active="${open && open.kind === 'all-projects' ? 1 : 0}" role="button" tabindex="0"><span class="ic">${DOTS()}</span><span class="lb">More</span><span class="sp"></span><span class="project-tools"><span class="project-slot"></span><span class="status-slot">${mark(st, true)}</span><span class="chevron-slot"></span></span></div>`;
     }
   }
   return `<section class="sec" data-sec="projects">
     <div class="sec-head">
       <button class="sec-toggle" data-act="sec-projects" data-open="${S.projectsOpen ? 1 : 0}" aria-expanded="${S.projectsOpen}">Projects<span class="chev-mark">${CHEV()}</span></button>
       <span class="grow"></span>
-      <button class="act" data-act="create" data-parent="${esc(S.top)}" title="Create project within ${esc(top.name)}" aria-label="Create project within ${esc(top.name)}">${I('plus', 15)}</button>
+      <button class="shortcut sec-command" data-act="next-agent" data-trigger="next-agent" title="Next agent needing attention (⌘J)" aria-label="Next agent needing attention (⌘J)">⌘J</button>
+      <button class="act" data-act="create" data-parent="${esc(S.top)}" data-create-tooltip="${esc(S.top)}" aria-label="Create project within ${esc(top.name)}">${I('plus', 15)}</button>
     </div>
     <div class="ws-list">${body}</div>
   </section>`;
 }
 
-// The level whose rows get the guide line: the one the project you are on sits in, or, for a level-2 project, its children.
+// Only the deepest expanded group with visible children gets a guide line.
 function guideParent() {
-  const sn = scopeNode();
-  if (!sn) return null;
-  return sn.level === 2 ? (isOpen(sn.id) ? sn.id : null) : sn.parent;
+  if (!PLAN) return null;
+  return PLAN.visible.filter(id => isOpen(id) && N[id].children.some(k => PLAN.shown.has(k)))
+    .sort((a, b) => N[b].level - N[a].level)[0] || null;
 }
 
 function projectRow(id) {
   const n = N[id];
+  const shortcut = shortcutFor(id);
   const opened = isOpen(id) && n.children.some((k) => PLAN.shown.has(k)); // open with no room for any child: shown folded
   const here = page().kind === 'project' && page().id === id;
   const holds = !here && scopeNode() && descends(scope(), id) && (!opened || scope() === id); // you are in it, out of sight
-  const st = statusOf(id, !opened);
+  const st = agentSummary(id, true);
   const indent = n.level > 2;
   const canAdd = n.level < MAX_DEPTH;
-  const chevron = n.children.length ? `<button class="chev" data-act="toggle" data-id="${esc(id)}" data-open="${opened ? 1 : 0}" aria-expanded="${opened}" aria-label="${opened ? 'Fold' : 'Open'} ${esc(n.name)}">${CHEV()}</button>` : '';
-  let html = `<div class="row${indent ? ' in' : ''}" data-act="open-project" data-id="${esc(id)}" data-hover-project="${n.children.length && !opened ? esc(id) : ''}" data-active="${here ? 1 : 0}" data-holds="${holds ? 1 : 0}" data-flash="${S.flash === id ? 1 : 0}" role="button" tabindex="0" title="${esc(n.name)}">
-    ${indent ? '' : `<span class="ic">${I('project')}</span>`}<span class="lb">${esc(n.name)}</span>${chevron}<span class="sp"></span>
-    ${canAdd ? `<span class="hv"><button class="act" data-act="create" data-parent="${esc(id)}" title="Create project within ${esc(n.name)}" aria-label="Create project within ${esc(n.name)}">${I('plus', 15)}</button></span>` : ''}
-    <span class="rt">${mark(st)}</span>
+  const chevron = n.children.length ? `<button class="chev${n.level > 1 && !descends(scope(), id) ? ' on-hover' : ''}" data-act="toggle" data-id="${esc(id)}" data-open="${opened ? 1 : 0}" aria-expanded="${opened}" aria-label="${opened ? 'Fold' : 'Open'} ${esc(n.name)}">${CHEV()}</button>` : '';
+  let html = `<div class="row${indent ? ' in' : ''}" data-act="open-project" data-id="${esc(id)}" data-hover-project="${n.children.length && !opened ? esc(id) : ''}" ${shortcut ? `data-shortcut-project="${esc(id)}" aria-label="${esc(n.name)} · Toggle project with Ctrl + ${shortcut}"` : `title="${esc(n.name)}"`} data-active="${here ? 1 : 0}" data-holds="${holds ? 1 : 0}" data-flash="${S.flash === id ? 1 : 0}" role="button" tabindex="0">
+    ${indent ? '' : projectLead(id)}<span class="lb">${esc(n.name)}</span><span class="sp"></span>
+    <span class="project-tools"><span class="project-slot${canAdd ? ' can-add' : ''}">
+      ${canAdd ? `<button class="act" data-act="create" data-parent="${esc(id)}" data-create-tooltip="${esc(id)}" aria-label="Create project within ${esc(n.name)}">${I('plus', 15)}</button>` : ''}
+    </span><span class="status-slot">${mark(st, true)}</span><span class="chevron-slot">${chevron}</span></span>
   </div>`;
   if (opened) {
     const kids = n.children.filter((k) => PLAN.shown.has(k));
@@ -680,49 +756,78 @@ function projectRow(id) {
     html += `<div class="kids l${n.level + 1}" data-guide="${guide ? 1 : 0}">${kids.map((k) => projectRow(k)).join('')}`;
     if (more) {
       const hiddenKids = n.children.filter((k) => !kids.includes(k));
-      const st2 = hiddenKids.map((k) => statusOf(k, true)).sort((a, b) => (RANK[b] || 0) - (RANK[a] || 0))[0];
+      const st2 = agentSummary(hiddenKids, true);
       const on = open && open.kind === 'siblings' && open.id === id;
-      html += `<div class="row in more" data-act="siblings" data-id="${esc(id)}" data-trigger="siblings:${esc(id)}" data-active="${on ? 1 : 0}" role="button" tabindex="0"><span class="ic" style="margin-right:6px">${DOTS(16)}</span><span class="lb">More</span><span class="sp"></span><span class="rt">${mark(st2)}</span></div>`;
+      html += `<div class="row in more" data-act="siblings" data-id="${esc(id)}" data-trigger="siblings:${esc(id)}" data-active="${on ? 1 : 0}" role="button" tabindex="0"><span class="ic">${DOTS()}</span><span class="lb">More</span><span class="sp"></span><span class="project-tools"><span class="project-slot"></span><span class="status-slot">${mark(st2, true)}</span><span class="chevron-slot"></span></span></div>`;
     }
     html += '</div>';
   }
   return html;
 }
 
+function sourceFolderKey(id) { return id === 'project' ? `${scope()}:project` : `shared:${id}`; }
+function sourceFolderOpen(id) {
+  const key = sourceFolderKey(id);
+  return key in S.sourceFoldersOpen ? S.sourceFoldersOpen[key] : id === 'project';
+}
+function sourceChildren(id) {
+  return id === 'project' ? (SOURCES[scope()] || []).filter(key => ITEMS[key].kind !== 'folder') : (ITEMS[id].children || []);
+}
+function sourceItemRow(id, folder) {
+  const it = ITEMS[id];
+  const active = page().kind === 'note' && page().id === id;
+  const container = folder === 'project' ? 'this project' : ITEMS[folder].name;
+  return `<div class="row" data-act="open-item" data-id="${esc(id)}" data-peek="${esc(id)}" data-active="${active ? 1 : 0}" role="button" tabindex="0" title="${esc(it.name)}">
+    <span class="ic">${I(KIND_ICON[it.kind])}</span><span class="lb">${esc(it.name)}</span><span class="sp"></span>
+    <span class="hv"><button class="act" data-act="remove-item" data-id="${esc(id)}" data-folder="${esc(folder)}" title="Remove from ${esc(container)}" aria-label="Remove ${esc(it.name)} from ${esc(container)}">${I('minus', 15)}</button></span>
+  </div>`;
+}
+function sourceFolderRow(id) {
+  const name = id === 'project' ? N[scope()].name : ITEMS[id].name;
+  const expanded = sourceFolderOpen(id);
+  const children = sourceChildren(id);
+  const shown = children.slice(0, children.length > 5 ? 4 : 5);
+  return `<div class="source-group">
+    <div class="row source-folder" data-act="source-toggle" data-id="${esc(id)}" aria-expanded="${expanded}" role="button" tabindex="0">
+      <span class="ic">${I('folder')}</span><span class="lb">${esc(name)}</span><span class="sp"></span>
+      <span class="source-tools">${expanded ? `<button class="act" data-act="add" data-folder="${esc(id)}" data-trigger="add-folder:${esc(id)}" title="Add sources to ${esc(name)}" aria-label="Add sources to ${esc(name)}">${I('plus', 15)}</button>` : ''}<button class="chev" data-act="source-toggle" data-id="${esc(id)}" data-open="${expanded ? 1 : 0}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${esc(name)}">${CHEV()}</button></span>
+    </div>
+    ${expanded ? `<div class="source-children">${shown.map(child => ITEMS[child].kind === 'folder' ? sourceFolderRow(child) : sourceItemRow(child, id)).join('')}${children.length > shown.length ? `<div class="row more" data-act="sources-more" data-folder="${esc(id)}" data-trigger="source-folder:${esc(id)}" role="button" tabindex="0"><span class="ic">${DOTS()}</span><span class="lb">More</span></div>` : ''}</div>` : ''}
+  </div>`;
+}
 function sourcesSection() {
   const sc = scope();
   const ids = SOURCES[sc] || [];
-  const opened = sc in S.sourcesOpen ? S.sourcesOpen[sc] : ids.length > 0; // folded unless this project holds something
-  const notes = ids.filter((id) => ITEMS[id].kind === 'note');
-  const files = ids.filter((id) => ITEMS[id].kind !== 'note');
-  const activeNote = page().kind === 'note' ? page().id : null;
-  const cut = (list, n, label) => {
-    let shown = list.slice(0, n);
-    if (activeNote && list.includes(activeNote) && !shown.includes(activeNote)) shown = [...list.slice(0, n - 1), activeNote];
-    return { shown, more: list.length > shown.length, label };
-  };
-  const NOTE_CAP = 5, FILE_CAP = 5;
-  const n = cut(notes, notes.length > NOTE_CAP ? NOTE_CAP - 1 : NOTE_CAP);
-  const f = cut(files, files.length > FILE_CAP ? FILE_CAP - 1 : FILE_CAP);
-  const src = (id, indent) => {
-    const it = ITEMS[id];
-    return `<div class="row${indent ? ' in' : ''}" data-act="open-item" data-id="${id}" data-peek="${id}" data-active="${activeNote === id ? 1 : 0}" data-flash="${it.flash && Date.now() - it.flash < 1600 ? 1 : 0}" role="button" tabindex="0" title="${esc(it.name)}">
-      ${indent ? '' : `<span class="ic">${I(KIND_ICON[it.kind])}</span>`}<span class="lb${/^Untitled/.test(it.name) ? ' faint' : ''}">${esc(it.name)}</span><span class="sp"></span>
-      <span class="hv"><button class="act" data-act="remove-item" data-id="${id}" title="Take it out of this project" aria-label="Take ${esc(it.name)} out of this project">${I('minus', 15)}</button></span>
-    </div>`;
-  };
-  let body = '';
-  if (opened) {
-    body += `<div class="group-head"><span class="ic">${I('note')}</span><span class="lb">Notes</span><span class="grow"></span><button class="act" data-act="new-note" title="New note" aria-label="New note">${I('plus', 15)}</button></div>`;
-    if (notes.length) {
-      body += `<div class="notes">${n.shown.map((id) => src(id, true)).join('')}${n.more ? `<div class="row in more" data-act="sources-more" data-key="notes" data-trigger="sources:notes" role="button" tabindex="0"><span class="ic" style="margin-right:6px">${DOTS(16)}</span><span class="lb">More</span></div>` : ''}</div>`;
-    } else body += `<div class="notes"><button class="plus-note" data-act="new-note">${I('plus', 14)}Note</button></div>`;
-    if (files.length) body += `<div class="files">${f.shown.map((id) => src(id, false)).join('')}${f.more ? `<div class="row more" data-act="sources-more" data-key="files" data-trigger="sources:files" role="button" tabindex="0"><span class="ic">${DOTS()}</span><span class="lb">More</span></div>` : ''}</div>`;
-  }
+  const opened = sc in S.sourcesOpen ? S.sourcesOpen[sc] : true;
   return `<section class="sec" data-sec="sources" style="flex:1 0 auto">
-    <div class="sec-head"><button class="sec-toggle" data-act="sec-sources" data-open="${opened ? 1 : 0}" aria-expanded="${opened}">Your sources<span class="chev-mark">${CHEV()}</span></button></div>
-    ${body}
+    <div class="sec-head"><button class="sec-toggle" data-act="sec-sources" data-open="${opened ? 1 : 0}" aria-expanded="${opened}">Sources<span class="chev-mark">${CHEV()}</span></button><span class="grow"></span><button class="act" data-act="add" data-trigger="add" title="Add sources to this project and library" aria-label="Add sources to this project and library">${I('plus', 15)}</button></div>
+    ${opened ? `${sourceFolderRow('project')}${S.sharedSourceFolders.map(sourceFolderRow).join('')}<button class="row source-create" data-act="new-source-folder"><span class="ic">${I('folder')}<span class="folder-plus">+</span></span><span class="lb">Create new</span></button>` : ''}
   </section>`;
+}
+function attachSource(id, folder = 'project') {
+  const sc = scope();
+  if (folder !== 'project' && ITEMS[folder] && ITEMS[folder].kind === 'folder') {
+    ITEMS[folder].children = [...new Set([...(ITEMS[folder].children || []), id])];
+  } else if (ITEMS[id].kind === 'folder') S.sharedSourceFolders = [...new Set([...S.sharedSourceFolders, id])];
+  else SOURCES[sc] = [...new Set([...(SOURCES[sc] || []), id])];
+  S.sourcesOpen[sc] = true;
+  S.sourceFoldersOpen[sourceFolderKey(folder)] = true;
+}
+function sourceFolderDialog() {
+  return `<div class="veil top" data-veil="1"><div class="dialog" role="dialog" aria-label="Create folder" style="width:min(440px,calc(100vw - 32px));padding:18px">
+    <h3 style="margin:0;font:500 15px/1.4 var(--font-sans)">Create folder</h3>
+    <div class="field" style="margin-top:14px"><input data-autofocus data-input="source-folder-name" placeholder="Folder name" value="${esc(open.value || '')}"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px"><button class="btn" data-act="close">Cancel</button><button class="btn dark" data-act="create-source-folder" ${(open.value || '').trim() ? '' : 'disabled'}>Create folder</button></div>
+  </div></div>`;
+}
+function createSourceFolder() {
+  const name = (open.value || '').trim();
+  if (!name) return;
+  const id = `folder-${tick()}`;
+  ITEMS[id] = { id, name, kind: 'folder', children: [], excerpt: '', flash: 0 };
+  attachSource(id);
+  S.sourceFoldersOpen[sourceFolderKey(id)] = true;
+  closeAll(); render();
 }
 
 function iconOf(p) { return p.kind === 'note' ? I(KIND_ICON[ITEMS[p.id].kind]) : p.kind === 'top' ? I('layers') : I('project'); }
@@ -754,12 +859,78 @@ function renderCanvas() {
   c.innerHTML = `<div class="page">${html}</div><div class="sticky">Ask Graham: does a status clear when you open it, or when you act on it?</div>`;
 }
 
+function renderStage() {
+  const stage = $('.stage-body');
+  const agent = AGENTS.find(a => a.id === S.agentId && a.node === scope());
+  if (!agent) { stage.innerHTML = 'Nothing on the Stage'; return; }
+  const state = { needs: 'Needs you', failed: 'Failed', running: 'Running', unseen: 'Finished', done: 'Finished' }[agent.state];
+  stage.innerHTML = `<section class="agent-detail" id="active-agent" tabindex="-1" aria-label="${esc(agent.title)}">
+    <div class="path">${esc([...ancestors(agent.node).map(n => n.name), N[agent.node].name].join(' › '))}</div>
+    <h2>${esc(agent.title)}</h2><div class="state">${mark(summarizeAgents([agent]))}${state}<span class="grow"></span>${esc(agent.model)}</div>
+    <p>${agent.state === 'needs' || agent.state === 'failed' ? 'This agent needs your input.' : agent.state === 'running' ? 'This agent is working in this project.' : 'This agent has returned its work for review.'}</p>
+  </section>`;
+}
+
 /* ================================================================ floating */
 let open = null;   // the one panel or dialog open: { kind, ... }
 let hover = null;  // { kind: 'fly'|'peek', id, rect }
 let hoverTimer = null;
+let addDismissTimer = null;
+let shortcutTip = null, shortcutTimer = null, shortcutAnchor = null;
 const railRight = () => ($('#rail').getBoundingClientRect().right || 0);
-function closeAll() { open = null; hover = null; clearTimeout(hoverTimer); }
+function clearShortcutTip() { clearTimeout(shortcutTimer); shortcutTimer = null; shortcutAnchor = null; shortcutTip = null; }
+function clearAddDismissal() { clearTimeout(addDismissTimer); addDismissTimer = null; }
+function closeAll() { clearAddDismissal(); open = null; hover = null; clearTimeout(hoverTimer); clearShortcutTip(); }
+function scheduleAddDismissal() {
+  if (!open || open.kind !== 'add' || addDismissTimer != null) return;
+  const picker = open;
+  addDismissTimer = setTimeout(() => {
+    addDismissTimer = null;
+    if (open !== picker) return;
+    closeAll(); render();
+  }, PEEK_CLOSE);
+}
+function updateAddBoundary(event) {
+  if (!open || open.kind !== 'add') { clearAddDismissal(); return; }
+  const rects = [...document.querySelectorAll('[data-add-picker], [data-picker-library], #hover-layer [data-hover-layer]')].map(el => el.getBoundingClientRect());
+  if (open.anchor) rects.push(open.anchor);
+  const inside = rects.some(rect => event.clientX >= rect.left - 12 && event.clientX <= rect.right + 12 && event.clientY >= rect.top - 12 && event.clientY <= rect.bottom + 12);
+  if (inside) clearAddDismissal(); else scheduleAddDismissal();
+}
+function renderProjectTooltip() {
+  $('#tooltip-layer').innerHTML = shortcutTip && (!open || shortcutTip.kind === 'create') ? projectShortcutTip() : '';
+}
+function updateShortcutTip(event) {
+  const row = event.target.closest('#rail [data-shortcut-project]');
+  const action = event.target.closest('[data-create-tooltip]');
+  const anchor = action || row;
+  if (!anchor || (open && !action) || (!action && event.target.closest('.chev, .act'))) {
+    const changed = !!shortcutTip;
+    clearShortcutTip();
+    if (changed) renderProjectTooltip();
+    return;
+  }
+  if (shortcutAnchor === anchor) return;
+  const changed = !!shortcutTip;
+  clearShortcutTip();
+  shortcutAnchor = anchor;
+  if (changed) renderProjectTooltip();
+  shortcutTimer = setTimeout(() => {
+    if (!anchor.isConnected) return;
+    shortcutTip = { id: action ? action.dataset.createTooltip : row.dataset.shortcutProject, kind: action ? 'create' : 'switch', rect: rectOf(anchor) };
+    renderProjectTooltip();
+  }, PEEK_OPEN);
+}
+function projectShortcutTip() {
+  if (!shortcutTip) return '';
+  const number = shortcutFor(shortcutTip.id);
+  if (!number && shortcutTip.kind !== 'create') return '';
+  const rect = shortcutTip.rect;
+  const left = Math.max(8, Math.min(rect.left + 28, window.innerWidth - 248));
+  const top = rect.bottom + 48 <= window.innerHeight ? rect.bottom + 5 : Math.max(8, rect.top - 45);
+  if (shortcutTip.kind === 'create') return `<div class="project-tooltip action-tooltip" role="tooltip" style="left:${left}px;top:${top}px">Create project within ${esc(N[shortcutTip.id].name)}</div>`;
+  return `<div class="project-tooltip" role="tooltip" style="left:${left}px;top:${top}px"><span class="tip-key">⌃${number}</span><span>Toggle project with <kbd>Ctrl + ${number}</kbd></span></div>`;
+}
 function place(anchorRect, { side = 'right', width, gap = 8, maxH = 560 }) {
   const vh = window.innerHeight, vw = window.innerWidth;
   let left, top;
@@ -769,16 +940,22 @@ function place(anchorRect, { side = 'right', width, gap = 8, maxH = 560 }) {
   top = Math.max(8, Math.min(top, vh - Math.min(maxH, vh * 0.7) - 8)); // at the row's height, unless that leaves it too little room
   return `left:${left}px;top:${top}px;width:${width}px;max-height:${Math.min(maxH, vh - top - 8)}px`;
 }
+function renderHoverLayer() {
+  const hidden = open && ['settings', 'search', 'create', 'source-folder'].includes(open.kind);
+  $('#hover-layer').innerHTML = hover && !hidden ? (hover.kind === 'fly' ? flyout() : peekCard()) : '';
+}
 function renderLayer() {
   const L = $('#layer');
   let html = '';
-  if (open) html += ({ project: projectMenu, agents: agentsPanel, library: libraryPanel, add: addPanel, clock: clockPanel, 'all-projects': allProjectsPanel, siblings: siblingsPanel, sources: sourcesPanel, trash: trashPanel, settings: settingsDialog, search: searchDialog, create: createDialog, menu: contextMenu }[open.kind] || (() => ''))();
-  if (hover && !(open && open.kind !== 'project' && open.kind !== 'clock' && ['settings', 'search', 'create'].includes(open.kind))) html += hover.kind === 'fly' ? flyout() : peekCard();
+  if (open) html += ({ project: projectMenu, agents: agentsPanel, library: libraryPanel, add: addPanel, clock: clockPanel, 'all-projects': allProjectsPanel, siblings: siblingsPanel, sources: sourcesPanel, trash: trashPanel, settings: settingsDialog, search: searchDialog, create: createDialog, 'source-folder': sourceFolderDialog, commands: commandsDialog, menu: contextMenu }[open.kind] || (() => ''))();
+  if (open && open.kind === 'add' && open.library) html += libraryPanel(open.library, true);
   if (toastText) html += `<div class="toast">${esc(toastText)}</div>`;
   // Whatever field was being typed in keeps its caret through the redraw; a panel's first field takes the keyboard once.
   const was = document.activeElement, key = was && was.dataset && was.dataset.input;
   const caret = key ? [was.selectionStart, was.selectionEnd] : null;
   L.innerHTML = html;
+  renderHoverLayer();
+  renderProjectTooltip();
   fitCrumbs();
   const again = key && L.querySelector(`[data-input="${key}"]`);
   if (again) { again.focus(); again.setSelectionRange(caret[0], caret[1]); return; }
@@ -793,10 +970,11 @@ function projectMenu() {
     <button class="mi" data-act="switch-sub" data-open="${open.sub ? 1 : 0}"><span>Switch project</span><span class="r">${I('chevronRight', 13)}</span></button>
     <button class="mi" data-act="rename-top" data-hover-close-sub="1"><span>Rename</span></button>
     <button class="mi" data-act="project-page" data-hover-close-sub="1"><span>Project page</span><span class="r">${I('out', 14)}</span></button>
+    <div class="sep"></div><button class="mi" data-act="commands"><span>Keyboard shortcuts</span><span class="r shortcut">⌃1–9 · ⌘J</span></button>
   </div>`;
   if (open.sub) {
     html += `<div class="panel menu" data-layer="1" style="${place(open.sub, { side: 'right', width: 250, gap: 6, maxH: 460 })};left:${open.sub.right + 6}px">
-      <div style="overflow-y:auto;display:flex;flex-direction:column;gap:1px">${TOPS.map((t) => `<button class="mi" data-act="switch-top" data-id="${t.id}"><span class="ic">${I('layers', 15)}</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${t.id === S.top ? 'font-weight:500' : ''}">${esc(t.name)}</span>${t.id === S.top ? `<span class="r" style="color:#171717">${I('check', 14)}</span>` : ''}</button>`).join('')}</div>
+      <div style="overflow-y:auto;display:flex;flex-direction:column;gap:1px">${TOPS.map((t) => `<button class="mi" data-act="switch-top" data-id="${t.id}"><span class="ic">${I('layers', 15)}</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${t.id === S.top ? 'font-weight:500' : ''}">${esc(t.name)}</span>${mark(agentSummary(t.id, true), true)}<span class="chevron-slot">${t.id === S.top ? I('check', 14) : ''}</span></button>`).join('')}</div>
       <div class="sep"></div>
       <button class="mi" data-act="new-top"><span class="ic">${I('plus', 15)}</span><span>New project</span></button>
       <button class="mi" data-act="toast" data-text="Opens All projects and the library."><span class="ic">${I('library', 15)}</span><span>All projects and library</span></button>
@@ -811,43 +989,85 @@ function agentsPanel() {
   const row = (a) => `<div class="prow" data-act="go-agent" data-id="${a.id}">
     <span class="ic">${I(a.state === 'running' ? 'agents' : 'agents', 15)}</span>
     <div class="tx"><div class="t1">${esc(a.title)}</div><div class="t2" data-crumb="${esc(crumb(a.node))}">${esc(crumb(a.node))}</div></div>
-    <span class="rt">${since(a.at)}${a.state === 'running' ? '<span class="dot pulse"></span>' : a.state === 'done' ? '' : '<span class="dot"></span>'}</span>
+    <span class="rt">${since(a.at)}${mark(summarizeAgents([a]))}</span>
   </div>`;
-  const groups = [['Needs you', 'needs'], ['Finished', 'unseen'], ['Running', 'running'], ['Earlier', 'done']]
+  const groups = [['Failed', 'failed'], ['Needs you', 'needs'], ['Finished', 'unseen'], ['Running', 'running'], ['Earlier', 'done']]
     .map(([title, state]) => [title, AGENTS.filter((a) => a.state === state).sort((x, y) => y.at - x.at)]).filter(([, list]) => list.length);
-  const toView = AGENTS.filter((a) => a.state === 'needs' || a.state === 'unseen').length;
+  const toView = agentSummary().ready;
   return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 360 })}">
     <div class="panel-head"><b>Agents</b>${toView ? `<i>${toView} to look at</i>` : ''}<span class="grow"></span>${AGENTS.some((a) => a.state === 'unseen') ? '<button class="btn" style="height:26px;font-size:12px" data-act="seen-all">Mark all as seen</button>' : ''}</div>
     <div class="panel-scroll">${groups.length ? groups.map(([title, list]) => `<div class="pgroup">${title}</div>${list.map(row).join('')}`).join('') : '<div style="padding:6px 14px 14px;font-size:12.5px;color:#8f8f8f">Nothing yet. When an agent finishes or asks you something, it shows here.</div>'}</div>
+    <button class="command-row" style="width:100%;border-top:1px solid var(--bd)" data-act="next-agent"><span>Next agent needing attention</span><span class="shortcut">⌘J</span></button>
   </div>`;
 }
 
-function libraryPanel() {
-  const q = (open.q || '').toLowerCase();
-  const list = Object.values(ITEMS).filter((it) => !q || it.name.toLowerCase().includes(q));
-  const inHere = new Set(SOURCES[scope()] || []);
-  return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 360 })}">
-    <div class="panel-head"><b>Library</b><i>${Object.keys(ITEMS).length}</i></div>
-    <div style="padding:2px 12px 6px"><div class="field">${I('search', 14, 2.4)}<input data-autofocus data-input="library-q" placeholder="Search the library" value="${esc(open.q || '')}"></div></div>
-    <div class="panel-scroll">${list.map((it) => `<div class="prow" data-act="open-item" data-id="${it.id}" data-peek="${it.id}"><span class="ic">${I(KIND_ICON[it.kind], 16)}</span><div class="tx"><div class="t1">${esc(it.name)}</div></div><span class="rt">${inHere.has(it.id) ? 'In this project' : `<button class="act" data-act="link-item" data-id="${it.id}" title="Bring into this project" aria-label="Bring ${esc(it.name)} into this project">${I('plus', 14)}</button>`}</span></div>`).join('') || '<div style="padding:8px 14px;color:#8f8f8f;font-size:13px">Nothing matches</div>'}</div>
+const LIBRARY_FILTERS = [
+  ['all', 'All'], ['notes', 'Notes'], ['papers', 'Papers'],
+  ['repos', 'Repos'], ['web', 'Web'], ['files', 'Files'],
+];
+function libraryItems(q = '', filter = 'all') {
+  const categories = { notes: ['note'], papers: ['pdf'], repos: ['git'], web: ['website', 'html'] };
+  const categorized = Object.values(categories).flat();
+  const query = q.trim().toLowerCase();
+  return Object.values(ITEMS).filter(it => it.kind !== 'image'
+    && (filter === 'all' || (filter === 'files' ? !categorized.includes(it.kind) : (categories[filter] || []).includes(it.kind)))
+    && (!query || it.name.toLowerCase().includes(query)));
+}
+function libraryCount() {
+  const total = libraryItems().length;
+  return total > 999 ? '999+' : total;
+}
+function folderContains(id, target, seen = new Set()) {
+  if (id === target) return true;
+  if (seen.has(id)) return false;
+  seen.add(id);
+  return (ITEMS[id]?.children || []).some(child => folderContains(child, target, seen));
+}
+function canPickSource(id) {
+  if (!ITEMS[id]) return false;
+  const folder = open.folder || 'project';
+  const attached = folder === 'project' ? [...(SOURCES[scope()] || []), ...S.sharedSourceFolders] : sourceChildren(folder);
+  return !attached.includes(id) && !folderContains(id, folder);
+}
+function libraryPanel(state = open, picking = false) {
+  const q = (state.q || '').toLowerCase();
+  const filter = state.filter || 'all';
+  const list = libraryItems(q, filter).filter(it => !picking || canPickSource(it.id));
+  const inHere = new Set([...(SOURCES[scope()] || []), ...S.sharedSourceFolders]);
+  return `<div class="panel" data-layer="1" ${picking ? 'data-picker-library="1"' : ''} style="${place(state.anchor, { width: 360 })}">
+    <div class="panel-head"><b>Library</b><i>${libraryCount()}</i>${picking ? '<span class="grow"></span><button class="act" data-act="close-picker-library" aria-label="Close library">' + I('close', 14) + '</button>' : ''}</div>
+    <div style="padding:2px 12px 6px"><div class="field">${I('search', 14, 2.4)}<input data-autofocus data-input="${picking ? 'picker-library-q' : 'library-q'}" placeholder="Search the library" value="${esc(state.q || '')}"></div></div>
+    <div class="library-filters" role="toolbar" aria-label="Show only">${LIBRARY_FILTERS.map(([id, label]) => `<button class="library-filter" data-act="${picking ? 'picker-library-filter' : 'library-filter'}" data-id="${id}" aria-pressed="${filter === id}">${label}</button>`).join('')}</div>
+    ${!q ? `<div class="pgroup">Recent${filter === 'all' ? '' : ` ${filter === 'web' ? 'web pages' : filter}`}</div>` : ''}
+    <div class="panel-scroll">${list.map((it) => `<div class="prow" data-act="${picking ? 'pick-source' : 'open-item'}" data-id="${it.id}" data-peek="${it.id}" role="button" tabindex="0"><span class="ic">${I(KIND_ICON[it.kind], 16)}</span><div class="tx"><div class="t1">${esc(it.name)}</div></div>${picking ? '' : `<span class="rt">${inHere.has(it.id) ? 'In this project' : `<button class="act" data-act="link-item" data-id="${it.id}" title="Bring into this project" aria-label="Bring ${esc(it.name)} into this project">${I('plus', 14)}</button>`}</span>`}</div>`).join('') || '<div style="padding:8px 14px;color:#8f8f8f;font-size:13px">Nothing matches</div>'}</div>
     <div style="border-top:1px solid #efefef;padding:8px 12px"><button class="btn" data-act="toast" data-text="Opens the whole library.">Open full library</button></div>
   </div>`;
 }
 
-/* Add sources: a link or a path, a note, a sticky, from disk, from GitHub. Nothing is wrong until Enter is pressed. */
+/* The add-source picker keeps its destination while browsing the library beside it. */
 function addPanel() {
+  const list = libraryItems(open.q || '').filter(it => canPickSource(it.id));
+  const shown = list.slice(0, 5);
   const v = open.value || '';
   const addable = /^(https?:\/\/|www\.)\S+\.\S+|^(~|\/)\S/.test(v.trim());
-  return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 300 })};padding:8px">
-    <div class="field" data-error="${open.error ? 1 : 0}" style="background:#fafafa"><input data-autofocus data-input="add-value" placeholder="Upload URL or path" value="${esc(v)}" spellcheck="false"></div>
-    ${open.error ? `<div class="err">${esc(open.error)}</div>` : ''}
-    ${addable ? '<div style="display:flex;justify-content:flex-end;padding:8px 0 2px"><button class="btn dark" data-act="add-link">Add to library</button></div>' : ''}
-    <div style="height:4px"></div>
-    <button class="mi" data-act="new-note">${I('note', 16)}<span>Note</span></button>
-    <button class="mi" data-act="toast" data-text="A sticky lands on the canvas.">${STICKY(false).replace('width="18" height="18"', 'width="16" height="16"')}<span>Sticky</span></button>
-    <button class="mi" data-act="toast" data-text="Opens the file picker.">${I('folder', 16)}<span>Choose from disk…</span></button>
-    <button class="mi" data-act="toast" data-text="Signs in to GitHub, then lists your repositories.">${I('github', 16)}<span>Add from GitHub…</span></button>
+  return `<div class="panel" data-layer="1" data-add-picker="1" style="${place(open.anchor, { width: 320 })};padding:8px">
+    <div class="field" style="margin-bottom:6px">${I('search', 14, 2.4)}<input data-autofocus data-input="add-library-q" placeholder="Search library" aria-label="Search library" value="${esc(open.q || '')}"></div>
+    <div class="panel-scroll" style="padding:0">${shown.map(it => `<button class="mi" data-act="pick-source" data-id="${esc(it.id)}" data-peek="${esc(it.id)}"><span class="ic">${I(KIND_ICON[it.kind], 16)}</span><span class="picker-item-name">${esc(it.name)}</span></button>`).join('') || '<div class="empty-line">Nothing matches</div>'}</div>
+    ${list.length > 5 ? `<button class="row more" data-act="picker-more"><span class="ic">${DOTS()}</span><span class="lb">More</span></button>` : ''}
+    <div class="sep"></div>
+    <button class="mi" data-act="show-upload"><span class="ic">${I('add', 16)}</span><span>Upload URL or path</span></button>
+    ${open.upload ? `<div style="padding:4px 8px 8px"><div class="field" data-error="${open.error ? 1 : 0}"><input data-input="add-value" placeholder="URL or path" aria-label="URL or path" value="${esc(v)}" spellcheck="false"></div>${open.error ? `<div class="err">${esc(open.error)}</div>` : ''}${addable ? '<button class="btn" style="margin-top:6px" data-act="add-link">Add source</button>' : ''}</div>` : ''}
+    <button class="mi" data-act="toast" data-text="Signs in to GitHub, then lists your repositories."><span class="ic">${I('github', 16)}</span><span>Add from GitHub</span></button>
+    <button class="mi" data-act="new-note"><span class="ic">${I('compose', 16)}</span><span>New note</span></button>
   </div>`;
+}
+function showPickerLibrary(rect) {
+  if (!open || open.kind !== 'add') return;
+  open.library = open.library ? null : { q: open.q || '', filter: 'all', anchor: rect };
+  hover = null;
+  renderLayer();
+  const field = $('[data-input="picker-library-q"]');
+  if (field && open.library) field.focus();
 }
 
 /* The clock: the project page first, then the last pages you opened (projects at any level, and notes), tabs included. */
@@ -857,12 +1077,12 @@ function clockPanel() {
   const row = (r) => {
     const name = r.kind === 'note' ? ITEMS[r.id].name : N[r.id].name;
     const crumb = r.kind === 'project' ? ancestors(r.id).map((a) => a.name).join('/') : '';
-    const st = r.kind === 'project' ? statusOf(r.id, false) : null;
+    const st = r.kind === 'note' ? null : agentSummary(r.id, true);
     const onTab = S.tabs.some((t) => t.page.kind === r.kind && t.page.id === r.id);
     return `<div class="prow" data-act="go-recent" data-kind="${r.kind}" data-id="${esc(r.id)}" title="${onTab ? 'Open in a tab: goes to it' : 'Opens in a new tab'}">
       <span class="ic">${r.kind === 'top' ? I('layers', 17) : r.kind === 'note' ? I(KIND_ICON[ITEMS[r.id].kind], 17) : I('project', 17)}</span>
       <div class="tx"><div class="t1">${esc(name)}</div>${crumb ? `<div class="t2" data-crumb="${esc(crumb)}">${esc(crumb)}</div>` : ''}</div>
-      <span class="rt">${st === 'unseen' || st === 'needs' ? '<span class="dot"></span>' : ''}</span>
+      <span class="rt">${mark(st, true)}</span>
     </div>`;
   };
   return `<div class="panel" data-layer="1" style="${place(open.anchor, { side: 'below', width: 330, gap: 4 })}">
@@ -880,19 +1100,18 @@ function fitCrumbs() {
 }
 
 /* The section's More: every project here, as a tree, findable */
-function treeRows(ids, depth, { q = '', folded = new Set(), expandAll = false } = {}) {
+function treeRows(ids, depth, { q = '', folded = new Set(), expandAll = false, guideLevel = null, contextRoot = null } = {}) {
   return ids.map((id) => {
     const n = N[id];
     const match = !q || n.name.toLowerCase().includes(q) || n.children.some((k) => pathMatches(k, q));
     if (!match) return '';
-    const isFolded = folded.has(id) && !q;
+    const isFolded = !expandAll && folded.has(id) && !q;
     const here = page().kind === 'project' && page().id === id;
-    const kids = n.children.length && !isFolded ? `<div class="fly-kids" style="padding-left:${depth ? 18 : 22}px">${treeRows(n.children, depth + 1, { q, folded, expandAll })}</div>` : '';
-    return `<div class="prow" style="min-height:30px;padding:0 8px;gap:8px" data-act="open-project" data-id="${esc(id)}" data-active="${here ? 1 : 0}">
-      ${depth === 0 ? `<span class="ic" style="width:16px">${I('project', 15)}</span>` : ''}
+    const kids = n.children.length && !isFolded ? `<div class="fly-kids" data-parent="${esc(id)}" data-guide="${n.level === guideLevel ? 1 : 0}" style="padding-left:${depth ? 18 : 22}px">${treeRows(n.children, depth + 1, { q, folded, expandAll, guideLevel, contextRoot })}</div>` : '';
+    return `<div class="prow${id === contextRoot ? ' fly-context' : ''}" style="min-height:30px;padding:0 8px;gap:8px" data-act="open-project" data-id="${esc(id)}" data-active="${here ? 1 : 0}">
+      ${n.level === 2 ? projectLead(id) : depth === 0 ? `<span class="ic" style="width:16px">${I('project', 15)}</span>` : ''}
       <div class="tx"><div class="t1" style="font-size:${depth ? 13.5 : 14}px;color:${depth ? '#4d4d4d' : '#171717'}">${esc(n.name)}</div></div>
-      ${n.children.length ? `<button class="chev" data-act="tree-fold" data-id="${esc(id)}" data-open="${isFolded ? 0 : 1}" aria-label="${isFolded ? 'Open' : 'Fold'} ${esc(n.name)}">${CHEV()}</button>` : ''}
-      <span class="rt">${mark(statusOf(id, isFolded))}</span>
+      <span class="project-tools"><span class="status-slot">${mark(agentSummary(id, true), true)}</span>${expandAll ? '' : `<span class="chevron-slot">${n.children.length ? `<button class="chev${n.level > 1 && !descends(scope(), id) ? ' on-hover' : ''}" data-act="tree-fold" data-id="${esc(id)}" data-open="${isFolded ? 0 : 1}" aria-label="${isFolded ? 'Open' : 'Fold'} ${esc(n.name)}">${CHEV()}</button>` : ''}</span>`}</span>
     </div>${kids}`;
   }).join('');
 }
@@ -901,7 +1120,7 @@ function allProjectsPanel() {
   const top = N[S.top];
   const count = Object.values(N).filter((n) => n.top === S.top && n.level >= 2).length;
   return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 340, maxH: 620 })}">
-    <div class="panel-head"><b>Projects</b><i>${count}</i><span class="grow"></span><button class="act" data-act="create" data-parent="${esc(S.top)}" title="Create project within ${esc(top.name)}">${I('plus', 15)}</button></div>
+    <div class="panel-head"><b>Projects</b><i>${count}</i><span class="grow"></span><button class="act" data-act="create" data-parent="${esc(S.top)}" data-create-tooltip="${esc(S.top)}" aria-label="Create project within ${esc(top.name)}">${I('plus', 15)}</button></div>
     <div style="padding:2px 12px 6px"><div class="field">${I('search', 14, 2.4)}<input data-autofocus data-input="tree-q" placeholder="Find a project" value="${esc(open.q || '')}"></div></div>
     <div class="panel-scroll">${treeRows(top.children, 0, { q: (open.q || '').toLowerCase(), folded: open.folded })}</div>
   </div>`;
@@ -914,9 +1133,9 @@ function siblingsPanel() {
   </div>`;
 }
 function sourcesPanel() {
-  const ids = (SOURCES[scope()] || []).filter((id) => (open.key === 'notes') === (ITEMS[id].kind === 'note'));
+  const ids = sourceChildren(open.folder || 'project');
   return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 330 })}">
-    <div class="panel-head"><b>${open.key === 'notes' ? 'Notes' : 'Files and links'}</b><i>${ids.length}</i></div>
+    <div class="panel-head"><b>${esc(open.folder && open.folder !== 'project' ? ITEMS[open.folder].name : N[scope()].name)}</b><i>${ids.length}</i></div>
     <div class="panel-scroll">${ids.map((id) => `<div class="prow" data-act="open-item" data-id="${id}" data-peek="${id}" data-active="${page().kind === 'note' && page().id === id ? 1 : 0}"><span class="ic">${I(KIND_ICON[ITEMS[id].kind], 16)}</span><div class="tx"><div class="t1">${esc(ITEMS[id].name)}</div></div></div>`).join('')}</div>
   </div>`;
 }
@@ -930,8 +1149,10 @@ function trashPanel() {
 /* hovering: a folded project's children, and a source's peek, after a beat */
 function flyout() {
   const n = N[hover.id];
+  const parents = Object.values(N).filter(node => node.id !== n.id && descends(node.id, n.id) && node.children.length);
+  const guideLevel = parents.length ? Math.max(...parents.map(node => node.level)) : null;
   return `<div class="panel flyout" data-layer="1" data-hover-layer="1" style="${place(hover.rect, { width: 270, gap: 6, maxH: 440 })}">
-    <div style="overflow-y:auto">${treeRows(n.children, 1, { folded: hover.folded || new Set() })}</div>
+    <div style="overflow-y:auto">${treeRows([n.id], 0, { expandAll: true, guideLevel, contextRoot: n.id })}</div>
   </div>`;
 }
 function peekCard() {
@@ -1001,6 +1222,17 @@ function searchDialog() {
     ${q ? `<div class="panel-scroll" style="max-height:50vh">${projects.length ? `<div class="pgroup">Projects</div>${results.filter((r) => r.kind !== 'note').map(row).join('')}` : ''}${items.length ? `<div class="pgroup">Library</div>${results.filter((r) => r.kind === 'note').map(row).join('')}` : ''}${!results.length ? '<div style="padding:10px 14px;color:#8f8f8f;font-size:13px">Nothing matches</div>' : ''}</div>` : ''}
   </div></div>`;
 }
+function commandsDialog() {
+  const ids = numberedProjects();
+  return `<div class="veil top" data-veil="1"><div class="dialog" role="dialog" aria-label="Keyboard shortcuts" style="width:min(480px,calc(100vw - 32px));padding:14px 6px">
+    <div class="panel-head"><b>Keyboard shortcuts</b><span class="grow"></span><button class="icon-btn" data-act="close" aria-label="Close">${I('close', 14)}</button></div>
+    <button class="command-row" style="width:100%" data-act="next-agent"><span>Next agent needing attention</span><span class="shortcut">⌘J</span></button>
+    <div style="padding:0 14px 12px;font-size:12px;color:var(--fnt)">Needs you first, then finished work. With nothing waiting, returns to your previous page.</div>
+    <div class="sep"></div><div class="pgroup">Second-level projects</div>
+    ${ids.map((id, i) => `<button class="command-row" style="width:100%" data-act="open-project" data-id="${esc(id)}"><span>${esc(N[id].name)}</span><span class="shortcut">Ctrl+${i + 1}</span></button>`).join('')}
+    <div class="sep"></div><button class="command-row" style="width:100%" data-act="rail"><span>${S.railHidden ? 'Show' : 'Hide'} sidebar</span><span class="shortcut">⌘\\</span></button>
+  </div></div>`;
+}
 function createDialog() {
   const parent = N[open.parent];
   return `<div class="veil top" data-veil="1"><div class="dialog" role="dialog" aria-label="Create project within ${esc(parent.name)}" style="width:min(440px,calc(100vw - 32px));padding:18px 18px 16px">
@@ -1026,7 +1258,8 @@ function toast(t) { toastText = t; clearTimeout(toastTimer); toastTimer = setTim
 /* ================================================================== events */
 const rectOf = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }; };
 function openPanel(kind, el, extra = {}) {
-  if (open && open.kind === kind && (extra.id == null || open.id === extra.id) && (extra.key == null || open.key === extra.key)) { open = null; render(); return; }
+  clearAddDismissal();
+  if (open && open.kind === kind && (extra.id == null || open.id === extra.id) && (extra.key == null || open.key === extra.key) && (extra.folder == null || open.folder === extra.folder)) { open = null; render(); return; }
   hover = null;
   open = { kind, anchor: el ? rectOf(el.closest('.row, button') || el) : null, ...extra };
   render();
@@ -1060,15 +1293,26 @@ document.addEventListener('click', (e) => {
     case 'settings': hover = null; open = { kind: 'settings' }; render(); break;
     case 'settings-page': S.settingsPage = id; renderLayer(); break;
     case 'search': hover = null; open = { kind: 'search', q: '', idx: 0 }; render(); break;
+    case 'commands': hover = null; open = { kind: 'commands' }; render(); break;
+    case 'next-agent': nextAgent(); break;
     case 'agents': openPanel('agents', t); break;
     case 'library': openPanel('library', t, { q: '' }); break;
-    case 'add': openPanel('add', t, { value: '', error: '' }); break;
+    case 'library-filter': if (open && open.kind === 'library' && LIBRARY_FILTERS.some(([key]) => key === id)) { open.filter = id; hover = null; renderLayer(); } break;
+    case 'picker-library-filter': if (open && open.kind === 'add' && open.library && LIBRARY_FILTERS.some(([key]) => key === id)) { open.library.filter = id; hover = null; renderLayer(); } break;
+    case 'picker-more': showPickerLibrary(rectOf(t.closest('[data-add-picker]'))); break;
+    case 'close-picker-library': if (open && open.kind === 'add') { open.library = null; renderLayer(); } break;
+    case 'pick-source': if (open && open.kind === 'add' && canPickSource(id)) { attachSource(id, open.folder || 'project'); closeAll(); render(); } break;
+    case 'show-upload': if (open && open.kind === 'add') { open.upload = !open.upload; open.library = null; renderLayer(); const field = $('[data-input="add-value"]'); if (field && open.upload) field.focus(); } break;
+    case 'add': openPanel('add', t, { value: '', error: '', folder: t.dataset.folder || 'project' }); break;
     case 'all-projects': { const b = scopeNode() ? branchOf(scope()).id : null; openPanel('all-projects', t, { q: '', folded: new Set(N[S.top].children.filter((x) => x !== b && N[x].children.length)) }); break; }
     case 'siblings': openPanel('siblings', t, { id, folded: new Set() }); break;
-    case 'sources-more': openPanel('sources', t, { key: t.dataset.key }); break;
+    case 'sources-more': openPanel('sources', t, { folder: t.dataset.folder || 'project' }); break;
+    case 'source-toggle': S.sourceFoldersOpen[sourceFolderKey(id)] = !sourceFolderOpen(id); hover = null; render(); break;
+    case 'new-source-folder': closeAll(); open = { kind: 'source-folder', value: '' }; render(); break;
+    case 'create-source-folder': createSourceFolder(); break;
     case 'trash': openPanel('trash', t); break;
     case 'sec-projects': S.projectsOpen = !S.projectsOpen; render(); break;
-    case 'sec-sources': { const sc = scope(); const ids = SOURCES[sc] || []; const now = sc in S.sourcesOpen ? S.sourcesOpen[sc] : ids.length > 0; S.sourcesOpen[sc] = !now; render(); break; }
+    case 'sec-sources': { const sc = scope(); const ids = SOURCES[sc] || []; const now = sc in S.sourcesOpen ? S.sourcesOpen[sc] : true; S.sourcesOpen[sc] = !now; render(); break; }
     case 'toggle': hover = null; clearTimeout(hoverTimer); if (isOpen(id) && !N[id].children.some((k) => PLAN.shown.has(k))) { openPanel('siblings', t, { id, folded: new Set() }); break; } toggle(id); break;
     case 'tree-fold': {
       const holder = open && (open.kind === 'all-projects' || open.kind === 'siblings') ? open : hover;
@@ -1083,19 +1327,19 @@ document.addEventListener('click', (e) => {
       else { closeAll(); render(); toast(it.kind === 'website' ? `Opens ${it.excerpt || it.name} on the Stage.` : `Opens ${it.name} on the Stage.`); }
       break;
     }
-    case 'remove-item': { const sc = scope(); SOURCES[sc] = (SOURCES[sc] || []).filter((x) => x !== id); render(); toast(`${ITEMS[id].name} is out of this project; it stays in the library.`); break; }
-    case 'link-item': { const sc = scope(); SOURCES[sc] = [...(SOURCES[sc] || []), id]; ITEMS[id].flash = Date.now(); S.sourcesOpen[sc] = true; render(); break; }
+    case 'remove-item': { const sc = scope(); const folder = t.dataset.folder; if (folder && folder !== 'project') ITEMS[folder].children = (ITEMS[folder].children || []).filter(x => x !== id); else SOURCES[sc] = (SOURCES[sc] || []).filter((x) => x !== id); render(); toast(`Removed ${ITEMS[id].name} from ${folder && folder !== 'project' ? ITEMS[folder].name : 'this project'}; it stays in the library.`); break; }
+    case 'link-item': { attachSource(id); ITEMS[id].flash = Date.now(); render(); break; }
     case 'new-note': {
       const sc = scope(); const nid = `note-${++S.notesMade}`;
       ITEMS[nid] = { id: nid, name: `Untitled Note ${S.notesMade}`, kind: 'note', excerpt: '', flash: Date.now() };
-      SOURCES[sc] = [nid, ...(SOURCES[sc] || [])]; S.sourcesOpen[sc] = true;
+      attachSource(nid, open && open.kind === 'add' ? open.folder : 'project');
       go({ kind: 'note', id: nid }); break;
     }
     case 'add-link': addLink(); break;
     case 'stickies': S.stickiesHidden = !S.stickiesHidden; render(); break;
     case 'restore': S.trash.splice(Number(t.dataset.i), 1); if (!S.trash.length) open = null; render(); break;
     case 'empty-trash': S.trash = []; open = null; render(); break;
-    case 'go-agent': { const a = AGENTS.find((x) => x.id === id); goProject(a.node); break; }
+    case 'go-agent': goAgent(id); break;
     case 'seen-all': AGENTS.forEach((a) => { if (a.state === 'unseen') a.state = 'done'; }); render(); break;
     case 'go-recent': go({ kind: t.dataset.kind, id }, { newTab: true }); break;
     case 'tab': if (!e.target.closest('[data-act="close-tab"]')) { S.tab = Number(t.dataset.i); const p = page(); if (p.kind === 'project') { openPath(p.id); see(p.id); } closeAll(); render(); } break;
@@ -1119,7 +1363,7 @@ document.addEventListener('click', (e) => {
 // A press outside what is open closes it (what opened it toggles it instead, above).
 document.addEventListener('mousedown', (e) => {
   if (!open) return;
-  if (e.target.closest('#layer [data-layer], #layer .dialog, #mock')) return;
+  if (e.target.closest('#layer [data-layer], #layer .dialog, #hover-layer, #mock')) return;
   if (e.target.closest('[data-veil]') && !e.target.closest('.dialog')) { open = null; render(); return; }
   const trig = e.target.closest('[data-trigger]');
   if (trig) return; // its click toggles it
@@ -1138,7 +1382,8 @@ document.addEventListener('input', (e) => {
   const k = e.target.dataset.input;
   if (!k || !open) return;
     if (k === 'add-value') { open.value = e.target.value; open.error = ''; }
-  else if (k === 'create-name') { open.value = e.target.value; }
+  else if (k === 'picker-library-q' && open.kind === 'add' && open.library) { open.library.q = e.target.value; }
+  else if (k === 'create-name' || k === 'source-folder-name') { open.value = e.target.value; }
   else { open.q = e.target.value; open.idx = 0; }
   renderLayer();
 });
@@ -1160,27 +1405,38 @@ function endRename(keep) {
 }
 document.addEventListener('focusout', (e) => { if (e.target.matches && e.target.matches('[data-rename-top]')) endRename(true); });
 document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+    const id = numberedProjects()[Number(e.key) - 1];
+    if (id) { e.preventDefault(); e.stopPropagation(); if (!e.repeat) goProject(id); }
+    return;
+  }
+  if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'j') {
+    e.preventDefault(); e.stopPropagation(); if (!e.repeat) nextAgent(); return;
+  }
   if (e.target.matches && e.target.matches('[data-rename-top]')) { if (e.key === 'Enter') { e.preventDefault(); endRename(true); } else if (e.key === 'Escape') { e.preventDefault(); endRename(false); } return; }
   if ((e.metaKey || e.ctrlKey) && e.key === '\\') { e.preventDefault(); S.railHidden = !S.railHidden; closeAll(); render(); return; }
   if (e.key === 'Escape') {
+    if (open && open.kind === 'add' && open.library) { open.library = null; renderLayer(); return; }
     if (open && open.kind === 'project' && open.sub) { open.sub = null; renderLayer(); return; }
-    if (open || hover) { closeAll(); render(); }
+    if (open || hover || shortcutTip) { closeAll(); render(); }
     return;
   }
   const k = e.target.dataset && e.target.dataset.input;
   if (k === 'add-value' && e.key === 'Enter') { e.preventDefault(); addLink(); }
+  if (k === 'source-folder-name' && e.key === 'Enter') { e.preventDefault(); createSourceFolder(); }
   if (k === 'create-name' && e.key === 'Enter') { e.preventDefault(); createProject(); }
   if (k === 'search-q') {
     const rows = [...document.querySelectorAll('#layer [data-act="go-recent"]')];
     if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = rows.length; if (n) { open.idx = ((open.idx || 0) + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; renderLayer(); $('[data-input="search-q"]').focus(); } }
     if (e.key === 'Enter' && rows.length) { e.preventDefault(); const r = rows[Math.min(open.idx || 0, rows.length - 1)]; go({ kind: r.dataset.kind, id: r.dataset.id }); }
   }
-  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.row[role="button"], .row[role="switch"]')) { e.preventDefault(); e.target.click(); }
-});
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.row[role="button"], .row[role="switch"], .prow[role="button"]')) { e.preventDefault(); e.target.click(); }
+}, true);
 
 // Hovering: a folded project with children shows them beside the sidebar after a beat; a source shows its peek. Both close
 // a beat after the pointer leaves the row and the card (the bug was that the children stayed until a press elsewhere).
 document.addEventListener('mouseover', (e) => {
+  updateShortcutTip(e);
   const inCard = e.target.closest('[data-hover-layer]');
   if (inCard) { clearTimeout(hoverTimer); return; }
   const proj = e.target.closest('#rail [data-hover-project]');
@@ -1188,16 +1444,17 @@ document.addEventListener('mouseover', (e) => {
   const want = proj && proj.dataset.hoverProject && !e.target.closest('.chev, .act') ? { kind: 'fly', id: proj.dataset.hoverProject, el: proj }
     : src && !e.target.closest('.act') ? { kind: 'peek', id: src.dataset.peek, el: src } : null;
   if (want && hover && hover.kind === want.kind && hover.id === want.id) { clearTimeout(hoverTimer); return; }
-  if (want && !(open && ['settings', 'search', 'create', 'menu'].includes(open.kind))) {
+  if (want && !(open && ['settings', 'search', 'create', 'source-folder', 'menu'].includes(open.kind))) {
     if (want.kind === 'fly' && open && open.kind !== 'clock' && open.kind !== 'project') return;
     clearTimeout(hoverTimer);
-    hoverTimer = setTimeout(() => { if (!want.el.isConnected) return; hover = { kind: want.kind, id: want.id, rect: rectOf(want.el) }; renderLayer(); }, hover ? PEEK_SWITCH : PEEK_OPEN);
+    hoverTimer = setTimeout(() => { if (!want.el.isConnected) return; hover = { kind: want.kind, id: want.id, rect: rectOf(want.el) }; renderHoverLayer(); }, hover ? PEEK_SWITCH : PEEK_OPEN);
     return;
   }
-  if (hover) { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { hover = null; renderLayer(); }, PEEK_CLOSE); }
+  if (hover) { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { hover = null; renderHoverLayer(); }, PEEK_CLOSE); }
   else clearTimeout(hoverTimer);
 });
-document.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); if (hover) { hover = null; renderLayer(); } });
+document.addEventListener('mousemove', updateAddBoundary, true);
+document.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); hover = null; clearShortcutTip(); renderHoverLayer(); renderProjectTooltip(); scheduleAddDismissal(); });
 window.addEventListener('resize', () => { hover = null; render(); }); // the room is the window's
 
 function addLink() {
@@ -1212,8 +1469,7 @@ function addLink() {
   const kind = web ? 'website' : /\.pdf$/i.test(v) ? 'pdf' : /\.(png|jpe?g|heic|gif)$/i.test(v) ? 'image' : /\.html?$/i.test(v) ? 'html' : /\.md$/i.test(v) ? 'md' : /\.\w+$/.test(v) ? 'md' : 'folder';
   ITEMS[id] = { id, name, kind, excerpt: web ? v : '', flash: Date.now() };
   const sc = scope();
-  SOURCES[sc] = [...(SOURCES[sc] || []), id];
-  S.sourcesOpen[sc] = true;
+  attachSource(id, open.folder || 'project');
   open = null; render();
 }
 function createProject() {
