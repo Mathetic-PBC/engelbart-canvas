@@ -340,6 +340,24 @@ export default class DocEditor extends React.Component {
       if (s.activeLine != null || s.mention || s.pop || s.picker) { this.setState({ activeLine: null, mention: null, pop: null, picker: null }); return; }
     }
     if (this.editing && prevProps.text !== this.props.text) this.trackEdit();
+    // An answer arriving above the line being typed changes its index. The DOM still has the old indices here;
+    // restore its caret on the same unchanged line, rather than inside the newly inserted answer. Local edits already
+    // supplied their destination caret in setDoc and must not be shifted again.
+    if (prevProps.docKey === this.props.docKey && prevProps.text !== this.props.text && !this.caret) {
+      const ed = this.editorEl(), c = ed && document.activeElement === ed ? this.caretInfo() : null;
+      if (c) {
+        const before = String(prevProps.text ?? '').split('\n'), after = this.lines();
+        let head = 0, tail = 0;
+        while (head < before.length && head < after.length && before[head] === after[head]) head++;
+        while (tail < before.length - head && tail < after.length - head && before[before.length - 1 - tail] === after[after.length - 1 - tail]) tail++;
+        const moved = (line) => line < head ? line : line >= before.length - tail ? line + after.length - before.length : null;
+        const a = moved(c.anchor.line), b = moved(c.focus.line);
+        if (a != null && a === b) {
+          this.caret = { line: a, sel: [Math.min(c.anchor.offset, c.focus.offset), Math.max(c.anchor.offset, c.focus.offset)], back: c.focus.offset < c.anchor.offset };
+          if (a !== this.state.activeLine) { this.setState({ activeLine: a, mention: null }); return; }
+        }
+      }
+    }
     // Progress of a run arrives many times a second. It changes pending rows and Build cards only, and those are replaced
     // where they stand: the rest of the editor, the caret and a selection in it are not touched.
     const asked = prevProps.asks !== this.props.asks, built = prevProps.builds !== this.props.builds || prevProps.buildProgress !== this.props.buildProgress || prevProps.buildDiffs !== this.props.buildDiffs;
