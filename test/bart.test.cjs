@@ -296,6 +296,17 @@ test('Chat\'s answers have a voice and five pillars (2026-10-13), shown by examp
   assert.ok(at('# Moving up a step') < at('<tone_preference>') && BART_SYSTEM_PROMPT.trimEnd().endsWith('</tone_preference>'), 'the tone preference closes the prompt');
 });
 
+test('Chat has an example for each kind of question, and three for the highlight box (2026-10-13)', () => {
+  const at = (s) => BART_SYSTEM_PROMPT.indexOf(s);
+  const highlight = at('# Asked from a highlight');
+  const moveUp = at('# Moving up a step');
+  assert.ok(at('Q: how do the agents work?') >= 0 && at('Q: how do the agents work?') < highlight, 'the explanation example sits under "# The answer"');
+  assert.ok(highlight < at('Q: what does .726 mean here?') && at('Q: what does .726 mean here?') < moveUp, 'the box examples sit under "# Asked from a highlight"');
+  assert.ok(at('These show the shape of an answer in the box only.') > highlight, 'the box examples have their own lead-in');
+  assert.ok(BART_SYSTEM_PROMPT.includes('(`src/main/bart/route.cjs`)'), 'the template literal leaves real backticks');
+  assert.ok(!BART_SYSTEM_PROMPT.includes('\\`'), 'no escaped backtick survives into the prompt');
+});
+
 /* ------------------------------------------------------------- with the store */
 
 const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-bart-'));
