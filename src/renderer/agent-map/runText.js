@@ -28,7 +28,7 @@ export const BUILD_AGENTS = ['build', 'run step'];
 /** A run's name in the export: its agent in plain words, then a Build turn's title; the run step "Build · run step <title>". */
 export function runLabel(run) {
   if (!run) return '';
-  if (run.agent === 'build') return `Build ${run.kind === 'quick' ? run.title || 'quick task' : run.title || ''} · turn ${run.turn == null ? '?' : run.turn}${run.routedFrom ? ' · via Bart' : ''}`;
+  if (run.agent === 'build') return `Build ${run.kind === 'quick' ? run.title || 'quick task' : run.title || ''} · turn ${run.turn == null ? '?' : run.turn}`;
   if (run.agent === 'run step') return `Build · run step ${run.title || ''}`;
   return agentLabel(run);
 }
@@ -71,21 +71,59 @@ export const msLabel = (ms) => (ms == null ? '' : ms < 1000 ? `${ms} ms` : ms < 
 const WORDS = { bart: 'Chat', chat: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover', create: 'Create', build: 'Build' };
 const agentWord = (agent) => WORDS[agent] || agentInfo(agent).name;
 
+/** Where a router's record sent its line, in words: "Build" when it started one, else its pick ('…' before it picked). */
+const routedWord = (router) => (router.handedTo && /^build:/.test(router.handedTo) ? 'Build' : router.pick ? agentWord(router.pick) : '…');
+
+/** A run's agent alone, in words: "Chat", "Build · turn 1", "Build · run step" (the detail's "2. Agent: …"). */
+export function agentWords(run) {
+  if (!run) return '';
+  if (run.agent === 'run step') return 'Build · run step';
+  if (run.agent === 'build') return `Build · turn ${run.turn == null ? '?' : run.turn}`;
+  return agentWord(run.agent);
+}
+
 /**
- * A run's agent as the runs list names it (2026-10-13, plain words): "Chat", "Brainstorm", "Discover", "Create"; a
- * router's record where it sent the line ("Bart → Chat · 0.85", the model's sureness; none for a rule's pick), "Build ·
- * turn n", "Build · run step"; "· via Bart" on a run Bart handed over, and what the person corrected or Bart failed to route.
+ * A run's agent as the runs list names it (2026-10-13, plain words): "Chat", "Brainstorm", "Discover", "Create", "Build ·
+ * turn n", "Build · run step", and "· Bart failed to route" on a run Bart could not route. One row per question
+ * (2026-10-13): a run Bart handed over says nothing of it (its detail does); a router's record still listed reads where
+ * it sent the line ("Bart → Chat · 0.85", the model's sureness; none for a rule's pick), or "Bart couldn't route this".
  */
 export function agentLabel(run) {
   if (!run) return '';
   if (run.agent === 'router') {
-    const to = run.handedTo && /^build:/.test(run.handedTo) ? 'Build' : run.pick ? agentWord(run.pick) : '…';
-    return `Bart → ${to}${run.corrected ? `, corrected to ${agentWord(run.corrected)}` : ''}${run.by !== 'rule' && run.sure != null ? ` · ${run.sure}` : ''}`;
+    if (run.status === 'failed') return "Bart couldn't route this";
+    return `Bart → ${routedWord(run)}${run.corrected ? `, corrected to ${agentWord(run.corrected)}` : ''}${run.by !== 'rule' && run.sure != null ? ` · ${run.sure}` : ''}`;
   }
-  if (run.agent === 'run step') return 'Build · run step';
-  const via = run.routedBy === 'error' ? ' · Bart failed to route' : run.routedFrom ? ' · via Bart' : '';
-  if (run.agent === 'build') return `Build · turn ${run.turn == null ? '?' : run.turn}${via}`;
-  return `${agentWord(run.agent)}${via}${run.corrected ? ' · corrected from Bart' : ''}`;
+  return `${agentWords(run)}${run.routedBy === 'error' ? ' · Bart failed to route' : ''}`;
+}
+
+/**
+ * The router's record for a run (2026-10-13), from all of `runs` (a rule's pick too, which the list leaves out): the one
+ * its `routedFrom` names, or for a Build's first turn the router whose `handedTo` is "build:<its id>". A later Build turn,
+ * a run step, a run asked directly and a router's own record have none: null.
+ */
+export function routerFor(run, runs) {
+  if (!run || run.agent === 'router' || run.agent === 'run step') return null;
+  if (run.agent === 'build' && run.turn !== 1) return null;
+  const list = runs || [];
+  if (run.routedFrom) return list.find((held) => held.agent === 'router' && held.id === run.routedFrom) || null;
+  if (run.agent === 'build' && run.buildId) return list.find((held) => held.agent === 'router' && held.handedTo === `build:${run.buildId}`) || null;
+  return null;
+}
+
+/**
+ * The line under "1. Classification": "Bart sent this to Chat (0.85 sure)", "Bart sent this to Build (rule: --build)",
+ * "Bart sent this to Build; you changed it to Chat", or "Bart couldn't route this; it went to Chat". `run` is the
+ * agent's run, whose agent a correction names when the router's record does not.
+ */
+export function classificationLine(router, run = null) {
+  if (!router) return '';
+  const went = run ? agentWord(run.agent) : '';
+  if (router.status === 'failed') return `Bart couldn't route this${went ? `; it went to ${went}` : ''}`;
+  const corrected = router.corrected || (run && run.corrected);
+  if (corrected) return `Bart sent this to ${routedWord(router)}; you changed it to ${agentWord(corrected)}`;
+  const why = router.by === 'rule' ? `rule: ${router.rule || '?'}` : router.sure != null ? `${router.sure} sure` : '';
+  return `Bart sent this to ${routedWord(router)}${why ? ` (${why})` : ''}`;
 }
 
 /**
@@ -116,17 +154,29 @@ export function rowText(run) {
   return String(text || '').replace(/\s+/g, ' ').trim() || '(empty line)';
 }
 
-/** A row's second line, before its time: the agent, first message or reply, how it ended if it failed (no model since 2026-10-13). */
-export const rowLine = (run) => [agentLabel(run), turnLabel(run), outcomeLabel(run)].filter(Boolean).join(' · ');
+/**
+ * A row's second line: the agent, its time (next to it since 2026-10-13), first message or reply, how it ended if it
+ * failed or escalated (no model since 2026-10-13). "Chat · 14:59:02 · reply 2", "Build · turn 1 · 15:02:10 · first message".
+ */
+export const rowLine = (run, now = Date.now()) => (run ? [agentLabel(run), timeLabel(run.at, now), turnLabel(run), outcomeLabel(run)].filter(Boolean).join(' · ') : '');
 
 /**
  * The runs the list shows, newest first by `at` (2026-10-13: the first load, live updates, j/k and the filters all use
- * this order, whatever order the log gave them in). A rule's pick made no model call and the run it handed to is listed,
- * so it is left out unless it failed.
+ * this order, whatever order the log gave them in). One row per question (2026-10-13): a router's record is left out
+ * when a listed run is the one it handed the line to (that run's `routedFrom` is its id, or it started the Build whose
+ * turn is listed: `handedTo` "build:<id>"), and a rule's pick, which made no model call, is left out too. A router's
+ * record that failed, or that no listed run points to, stays.
  */
-export const listedRuns = (runs) => (runs || [])
-  .filter((run) => !(run.agent === 'router' && run.by === 'rule' && run.status !== 'failed'))
-  .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+export function listedRuns(runs) {
+  const list = runs || [];
+  const others = list.filter((run) => run.agent !== 'router');
+  const pointed = new Set(others.map((run) => run.routedFrom).filter(Boolean));
+  const builds = new Set(others.filter((run) => run.agent === 'build' && run.buildId).map((run) => `build:${run.buildId}`));
+  const answered = (router) => pointed.has(router.id) || (typeof router.handedTo === 'string' && builds.has(router.handedTo));
+  return list
+    .filter((run) => run.agent !== 'router' || run.status === 'failed' || (run.by !== 'rule' && !answered(run)))
+    .sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));
+}
 
 /**
  * "Project / Workspace" for a run, in a row's hover title. A router's record keeps no project name, so `names`

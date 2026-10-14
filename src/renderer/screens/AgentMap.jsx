@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, errorMessage } from '../api.js';
 import Benchmark from './Benchmark.jsx';
-import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msLabel, sectionText, exportPage, runLabel, agentInfo, createdLines, rowText, rowLine, listedRuns, placeLabel, projectNames, filterRuns, filterOptions } from '../agent-map/runText.js';
+import { contextBlocks, sizeLabel, json, firstWords, writtenText, msLabel, sectionText, exportPage, runLabel, agentInfo, agentWords, routerFor, classificationLine, createdLines, rowText, rowLine, listedRuns, placeLabel, projectNames, filterRuns, filterOptions } from '../agent-map/runText.js';
 
 // The Agent Viewer (2026-10-12; it was the Agent map, and the internal names stay: src/main/agent-map): a window for developers only, the app's renderer at ?view=agent-map.
 // Its first design again (2026-10-13: the Agent Viewer's asks and pipeline sections were taken out; main's asks, reveal and
@@ -13,8 +13,10 @@ import { contextBlocks, sizeLabel, json, firstWords, writtenText, timeLabel, msL
 // Benchmark (2026-10-13, ./Benchmark.jsx): every Chat question in the notes, its saved answer beside it asked again now.
 // Plain and dense on purpose: one font, small type, thin rules. Less text (2026-10-13): no filter tabs, status dots, size
 // notes beside the sections, run header, router line or key legend; a failed run still says why. A row reads as the person's
-// words over the agent in plain words, first message or reply and the time (RunList; no model, no place headers since
+// words over the agent in plain words, its time, first message or reply (RunList; no model, no place headers since
 // 2026-10-13). Above the list, Project, Workspace and Date filters; a run opens with its sections closed.
+// One row per question (2026-10-13): an @bart line is the run that answered it; its detail is in two parts, "1.
+// Classification" (Bart's router record, its sections' ids "route:…") and "2. Agent: …" (the run), opened separately.
 // Keys, not shown: j/k the next and previous run, 1–4 a section, c copies the open section, e exports the run (E every run).
 
 const SECTIONS = [['system', 'System prompt'], ['context', 'Context'], ['steps', 'Steps'], ['written', 'Written']];
@@ -37,6 +39,7 @@ const S = {
   head: { cursor: 'pointer', padding: '3px 0', borderTop: RULE, marginTop: 6, userSelect: 'none' },
   sub: { margin: '2px 0 2px 14px' },
   error: { color: '#a00', border: '1px solid #e6b8b8', padding: 4, margin: '6px 0' },
+  part: { fontWeight: 600, margin: '4px 0 2px' },
 };
 
 /** Text shown only once it is opened: a block of documents can be large. */
@@ -93,25 +96,48 @@ function Step({ step, n }) {
   );
 }
 
-export function RunDetail({ record, open, onToggle }) {
+/** A run's sections. `prefix` (the router's part: 'route:') goes before each section's id, so `open` is e.g. 'route:system'. */
+export function RunDetail({ record, open, onToggle, prefix = '' }) {
   const blocks = contextBlocks(record);
+  const steps = record.steps || [];
   return (
     <div>
-      {record.routedFrom && <div style={S.dim}>handed over by Bart: {record.routedFrom}{record.corrected ? ` · the person picked ${record.corrected} instead` : ''}</div>}
       {record.error && <div style={S.error}>{record.status}: {record.error}</div>}
-      <Section n={1} id="system" title="System prompt" open={open === 'system'} onToggle={onToggle}>
+      <Section n={1} id={`${prefix}system`} title="System prompt" open={open === `${prefix}system`} onToggle={onToggle}>
         <pre style={S.pre}>{record.system}</pre>
       </Section>
-      <Section n={2} id="context" title="Context" open={open === 'context'} onToggle={onToggle}>
+      <Section n={2} id={`${prefix}context`} title="Context" open={open === `${prefix}context`} onToggle={onToggle}>
         {blocks.map((block) => <Expand key={block.key} label={<>{block.label} <span style={S.dim}>{block.text ? sizeLabel(block.text) : 'none'}</span></>} text={block.text} />)}
       </Section>
-      <Section n={3} id="steps" title="Steps" open={open === 'steps'} onToggle={onToggle}>
-        {record.steps.length ? record.steps.map((step, i) => <Step key={i} step={step} n={i + 1} />) : <div style={{ ...S.sub, ...S.dim }}>no model run</div>}
+      <Section n={3} id={`${prefix}steps`} title="Steps" open={open === `${prefix}steps`} onToggle={onToggle}>
+        {steps.length ? steps.map((step, i) => <Step key={i} step={step} n={i + 1} />) : <div style={{ ...S.sub, ...S.dim }}>no model run</div>}
       </Section>
-      <Section n={4} id="written" title="Written" open={open === 'written'} onToggle={onToggle}>
+      <Section n={4} id={`${prefix}written`} title="Written" open={open === `${prefix}written`} onToggle={onToggle}>
         <pre style={S.pre}>{writtenText(record) || '(nothing)'}</pre>
         {record.agent === 'create' && <><div style={{ ...S.sub, ...S.dim }}>kept in the library</div><pre style={S.pre}>{createdLines(record)}</pre></>}
       </Section>
+    </div>
+  );
+}
+
+export const ROUTE = 'route:';
+
+/**
+ * The right-hand panel (2026-10-13). With a router's record (`route`: { record } loaded, { record: undefined } loading,
+ * null for none or not found): "1. Classification", where Bart sent the line and the router's own sections (ids
+ * "route:…", `routeOpen`), then "2. Agent: …" and the run's (`open`). Without one, the run's sections alone, no headings.
+ */
+export function RunPanel({ record, route = null, open, routeOpen, onToggle }) {
+  if (!route) return <RunDetail record={record} open={open} onToggle={onToggle} />;
+  return (
+    <div>
+      <div style={S.part}>1. Classification</div>
+      {route.record ? <>
+        <div style={S.dim}>{classificationLine(route.record, record)}</div>
+        <RunDetail record={route.record} open={routeOpen} onToggle={onToggle} prefix={ROUTE} />
+      </> : <div style={S.dim}>Loading…</div>}
+      <div style={{ ...S.part, marginTop: 14 }}>2. Agent: {agentWords(record)}</div>
+      <RunDetail record={record} open={open} onToggle={onToggle} />
     </div>
   );
 }
@@ -198,8 +224,9 @@ function DesignBody({ agent }) {
 
 /**
  * The list of runs, newest first by `at` (listedRuns), the filters applied (filterRuns): each row the person's words,
- * then the agent in plain words, first message or reply, and the time. No place headers (2026-10-13): hover gives the
- * project and workspace, the Build id and the whole text. A rule's router pick is not listed.
+ * then one dim line: the agent in plain words, its time, first message or reply (rowLine). No place headers (2026-10-13):
+ * hover gives the project and workspace, the Build id and the whole text. One row per question: a router's record the
+ * listed run answered for is not listed, nor a rule's pick.
  */
 export function RunList({ runs, filter, selected, onSelect }) {
   const names = projectNames(runs), listed = listedRuns(runs), shown = filterRuns(listed, filter, names);
@@ -212,7 +239,7 @@ export function RunList({ runs, filter, selected, onSelect }) {
         return (
           <div key={run.id} style={S.row(run.id === selected)} title={hover} onClick={() => onSelect(run.id)}>
             <div style={S.line}>{rowText(run)}</div>
-            <div style={{ display: 'flex', gap: 8, ...S.dim }}><span style={{ ...S.line, flex: 1, minWidth: 0 }}>{rowLine(run)}</span><span style={{ flex: 'none' }}>{timeLabel(run.at)}</span></div>
+            <div style={{ ...S.line, ...S.dim }}>{rowLine(run)}</div>
           </div>
         );
       })}
@@ -250,14 +277,19 @@ export default function AgentMap({ seed } = {}) {
   const [runs, setRuns] = useState(() => (seed && seed.runs) || []);
   const [selected, setSelected] = useState(() => (seed && seed.record && seed.record.id) || null);
   const [record, setRecord] = useState(() => (seed && seed.record) || null);
-  // No section open when a run opens (2026-10-13); the one opened stays open from run to run.
+  // No section open when a run opens (2026-10-13); the one opened stays open from run to run. The router's part has its own.
   const [open, setOpen] = useState(null);
+  const [routeOpen, setRouteOpen] = useState(null);
+  // The selected run's router record (2026-10-13): { id, record } (record undefined while it loads, null when not found).
+  const [route, setRoute] = useState(() => (seed && seed.route ? { id: seed.route.id, record: seed.route } : null));
   const [filter, setFilter] = useState(ALL_RUNS);
   const [design, setDesign] = useState(null);
   const [note, setNote] = useState('');
   const [agent, setAgent] = useState(null);
   const selectedRef = useRef(null);
   const refetch = useRef(null);
+  const routeRef = useRef(null);
+  const routeRefetch = useRef(null);
   selectedRef.current = selected;
 
   useEffect(() => { document.title = 'Agent Viewer'; }, []);
@@ -271,8 +303,12 @@ export default function AgentMap({ seed } = {}) {
       if (summary.id === selectedRef.current && !refetch.current) {
         refetch.current = setTimeout(() => { refetch.current = null; api.agentRun(summary.id).then((full) => { if (full && full.id === selectedRef.current) setRecord(full); }).catch(() => {}); }, 400);
       }
+      // So is its router record.
+      if (summary.id === routeRef.current && !routeRefetch.current) {
+        routeRefetch.current = setTimeout(() => { routeRefetch.current = null; api.agentRun(summary.id).then((full) => { if (full && full.id === routeRef.current) setRoute({ id: full.id, record: full }); }).catch(() => {}); }, 400);
+      }
     });
-    return () => { live = false; off(); clearTimeout(refetch.current); refetch.current = null; };
+    return () => { live = false; off(); clearTimeout(refetch.current); refetch.current = null; clearTimeout(routeRefetch.current); routeRefetch.current = null; };
   }, []);
   // The rows the list shows, newest first, the filters applied: j/k move over them, and when the selected run is not
   // among them (filtered out, or none picked yet) the first is selected, or none when there are none.
@@ -286,9 +322,22 @@ export default function AgentMap({ seed } = {}) {
     api.agentRun(selected).then((full) => { if (live) setRecord(full); }).catch((error) => setNote(errorMessage(error)));
     return () => { live = false; };
   }, [selected]);
+  // The selected run's router record, from every run (a rule's pick too): fetched in full beside it, none for a run asked
+  // directly, a later Build turn or a run step.
+  const routeId = useMemo(() => { const router = routerFor(runs.find((run) => run.id === selected), runs); return router ? router.id : null; }, [runs, selected]);
+  routeRef.current = routeId;
+  useEffect(() => {
+    if (!routeId) { setRoute(null); return; }
+    let live = true;
+    setRoute((held) => (held && held.id === routeId ? held : { id: routeId, record: undefined }));
+    api.agentRun(routeId).then((full) => { if (live) setRoute({ id: routeId, record: full || null }); }).catch(() => { if (live) setRoute({ id: routeId, record: null }); });
+    return () => { live = false; };
+  }, [routeId]);
   useEffect(() => { if (tab === 'design') api.agentDesign().then(setDesign).catch((error) => setNote(errorMessage(error))); }, [tab]);
 
-  const toggle = useCallback((id) => setOpen((current) => (current === id ? null : id)), []);
+  // The router part only for the run it belongs to, and left out when its record can't be found.
+  const panelRoute = record && record.id === selected && route && route.id === routeId && route.record !== null ? route : null;
+  const toggle = useCallback((id) => (id.startsWith(ROUTE) ? setRouteOpen : setOpen)((current) => (current === id ? null : id)), []);
   const exportRuns = useCallback(async (all) => {
     try {
       const records = all ? (await Promise.all(runs.map((run) => api.agentRun(run.id)))).filter(Boolean) : record ? [record] : [];
@@ -337,7 +386,7 @@ export default function AgentMap({ seed } = {}) {
             <RunFilters runs={runs} filter={filter} onChange={setFilter} />
             <div style={S.rows}>{list}</div>
           </div>
-          <div style={S.detail}>{record ? <RunDetail record={record} open={open} onToggle={toggle} /> : <div style={S.dim}>{shown.length ? 'Loading…' : ''}</div>}</div>
+          <div style={S.detail}>{record ? <RunPanel record={record} route={panelRoute} open={open} routeOpen={routeOpen} onToggle={toggle} /> : <div style={S.dim}>{shown.length ? 'Loading…' : ''}</div>}</div>
         </div>
       ) : tab === 'design' ? (
         <div style={{ ...S.detail, flex: 1 }}><Design design={design} agent={agent} onPick={setAgent} /></div>

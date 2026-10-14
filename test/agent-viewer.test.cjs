@@ -256,9 +256,9 @@ test('viewer: the runs list shows every run, newest first, the person\'s words o
   const order = ['a chart of the results', 'papers on X', 'Build · turn 1', 'Build · run step'].map((label) => html.indexOf(label));
   assert.ok(order.every((at) => at >= 0), 'each row is there');
   assert.deepEqual([...order].sort((a, b) => a - b), order, 'in the order given, newest first');
-  assert.match(html, /<span[^>]*>Create<\/span>/, 'no model in the row (2026-10-13)');
+  assert.match(html, />Create · [^<·]+<\/div>/, 'no model in the row (2026-10-13), only the time after the agent');
   assert.doesNotMatch(html, /claude-sonnet-5-5|· high/);
-  assert.match(html, /Build · turn 1 · first message · failed/);
+  assert.match(html, /Build · turn 1 · [^<·]+ · first message · failed/);
   assert.doesNotMatch(html, />Questions</);
   assert.doesNotMatch(html, />Builds</);
   assert.doesNotMatch(html, />All</);
@@ -269,13 +269,14 @@ test('viewer: the runs list shows every run, newest first, the person\'s words o
 /** The list's rows as text: each header, and each row's two lines, in order. */
 function listRows(html) {
   const rows = [];
-  const re = /<div style="[^"]*font-size:11px[^"]*">([^<]*)<\/div>|<div style="[^"]*cursor:pointer[^"]*" title="([^"]*)"><div[^>]*>([^<]*)<\/div><div[^>]*><span[^>]*>([^<]*)<\/span><span[^>]*>([^<]*)<\/span><\/div><\/div>/g;
-  for (const match of html.matchAll(re)) rows.push(match[1] != null ? { header: match[1] } : { title: match[2], first: match[3], second: match[4], time: match[5] });
+  // A row (2026-10-13): its first line, then one dim line with the time in it; no element of its own for the time.
+  const re = /<div style="[^"]*font-size:11px[^"]*">([^<]*)<\/div>|<div style="[^"]*cursor:pointer[^"]*" title="([^"]*)"><div[^>]*>([^<]*)<\/div><div[^>]*>([^<]*)<\/div><\/div>/g;
+  for (const match of html.matchAll(re)) rows.push(match[1] != null ? { header: match[1] } : { title: match[2], first: match[3], second: match[4] });
   return rows;
 }
 const unescape = (text) => text.replace(/&amp;/g, '&').replace(/&#x27;/g, "'").replace(/&quot;/g, '"').replace(/&gt;/g, '>').replace(/&lt;/g, '<');
 
-test('viewer: a row is the person\'s words, then the agent, first message or reply and the time; a rule\'s router pick is not listed; no place headers (2026-10-13)', () => {
+test('viewer: a row is the person\'s words, then the agent, its time, first message or reply; one row per question; no place headers (2026-10-13)', () => {
   const W = { projectId: 'p1', workspaceName: 'Concision in Agent Responses' };
   const runs = [
     { id: 'rt-1', agent: 'router', at: 5, status: 'done', by: 'model', sure: 0.85, pick: 'chat', question: 'why is the sky blue?', projectName: '', ...W, model: 'claude-haiku-5-5', effort: 'low' },
@@ -288,27 +289,27 @@ test('viewer: a row is the person\'s words, then the agent, first message or rep
   const rows = listRows(html).map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, unescape(value)])));
   assert.deepEqual(rows.filter((row) => row.header), [], 'no place header');
   const items = rows.filter((row) => !row.header);
-  assert.equal(items.length, 4, 'the rule\'s pick is gone');
-  assert.deepEqual(items.map((row) => row.first), ['why is the sky blue?', 'why is the sky blue?', 'Make the list readable', 'Make the list readable']);
-  assert.equal(items[0].second, 'Bart → Chat · 0.85 · first message');
-  assert.equal(items[1].first, 'why is the sky blue?');
-  assert.equal(items[1].second, 'Chat · via Bart · first message');
-  assert.equal(items[2].second, 'Build · turn 1 · first message');
-  assert.equal(items[3].second, 'Build · run step', 'a run step is no message');
+  assert.equal(items.length, 3, 'the router\'s records whose runs are listed are gone, the rule\'s pick too');
+  assert.deepEqual(items.map((row) => row.first), ['why is the sky blue?', 'Make the list readable', 'Make the list readable']);
+  const at = (n) => runText.timeLabel(n);
+  assert.equal(items[0].second, `Chat · ${at(4)} · first message`);
+  assert.equal(items[1].second, `Build · turn 1 · ${at(2)} · first message`);
+  assert.equal(items[2].second, `Build · run step · ${at(1)}`, 'a run step is no message');
   for (const row of items) {
-    assert.ok(row.time, 'a time on the right');
+    assert.ok(!/via Bart|Bart →/.test(row.second), row.second);
     assert.ok(!/@run|@bart|@chat|@/.test(row.first + row.second), `no "@" in ${row.second}`);
     assert.ok(!(row.first + row.second).includes('9f3e2a1b7c'), 'no Build id in the row');
     assert.ok(!/tools/.test(row.second), 'no tool count');
   }
-  assert.match(items[2].title, /^Engelbart \/ Concision in Agent Responses\nBuild 9f3e2a1b7c\nMake the list readable$/, 'hover: place, Build id, the whole text');
-  assert.match(items[0].title, /^Engelbart \/ Concision in Agent Responses\n/, 'the router\'s record gets its project name from the other runs');
+  assert.match(items[1].title, /^Engelbart \/ Concision in Agent Responses\nBuild 9f3e2a1b7c\nMake the list readable$/, 'hover: place, Build id, the whole text');
+  const alone = renderToStaticMarkup(React.createElement(view.RunList, { runs: [runs[0]], selected: null, onSelect() {} }));
+  assert.match(unescape(listRows(alone)[0].title), /^Engelbart \/ Concision in Agent Responses\n|^Concision in Agent Responses\n/, 'a router\'s record alone has its workspace');
   assert.ok(!html.includes('picked by') && !html.includes('rule:'), 'no internal labels');
 
   // A failed rule pick is listed.
   const failed = renderToStaticMarkup(React.createElement(view.RunList, { runs: [{ ...runs[2], status: 'failed' }], selected: null, onSelect() {} }));
-  assert.match(unescape(failed), /Bart → Build · first message · failed/);
-  assert.deepEqual(runText.listedRuns(runs).map((run) => run.id), ['rt-1', 'ch-1', '9f3e2a1b7c:1', 'rs-1'], 'j/k move over these');
+  assert.match(unescape(failed), /Bart couldn't route this · .* · first message · failed/);
+  assert.deepEqual(runText.listedRuns(runs).map((run) => run.id), ['ch-1', '9f3e2a1b7c:1', 'rs-1'], 'j/k move over these');
 
   // Two workspaces: no header row; the place is only in the rows' hover titles.
   const two = renderToStaticMarkup(React.createElement(view.RunList, { runs: [
@@ -379,7 +380,7 @@ test('viewer: an open run has no header and no size notes beside its sections; a
   const failed = renderToStaticMarkup(React.createElement(view.RunDetail, { record: { ...record, status: 'failed', error: 'the model timed out' }, open: null, onToggle() {} }));
   assert.match(failed, /failed: the model timed out/);
   const routed = renderToStaticMarkup(React.createElement(view.RunDetail, { record: { ...record, routedFrom: 'route-1' }, open: null, onToggle() {} }));
-  assert.match(routed, /handed over by Bart: route-1/);
+  assert.ok(!routed.includes('handed over by Bart') && !routed.includes('route-'), 'no route id (2026-10-13)');
   const router = renderToStaticMarkup(React.createElement(view.RunDetail, { record: { ...record, agent: 'router', by: 'model', sure: 0.85, pick: 'chat', sectionSize: 4000, specAbove: true, threads: [{ agent: 'bart', up: 292 }], context: { input: 'IN' } }, open: null, onToggle() {} }));
   assert.ok(!router.includes('picked by') && !router.includes('threads:') && !router.includes('spec above'), 'no router line');
 });
@@ -465,4 +466,99 @@ test('viewer: a run opens with its sections closed; a step row shows once Steps 
   const opened = renderToStaticMarkup(React.createElement(view.RunDetail, { record, open: 'steps', onToggle() {} }));
   assert.match(opened, /<b>step 1<\/b>/);
   assert.match(opened, /\(claude-sonnet-5-5\) · high/, 'a step still names its model');
+});
+
+/* ------------------------------------------------------------- one row per question, the detail in two parts (2026-10-13) */
+
+const ROUTER = { id: 'r1', agent: 'router', at: 10, status: 'done', by: 'model', sure: 0.85, pick: 'chat', question: 'why blue?', system: 'ROUTER SYS', context: { input: 'ROUTER IN' }, steps: [step('{"agent":"chat","sure":0.85}')], written: ['@chat'] };
+const CHAT = { id: 'c1', agent: 'bart', at: 11, status: 'done', question: 'why blue?', routedFrom: 'r1', reply: 0, system: 'CHAT SYS', context: { head: 'H' }, steps: [step('blue')], written: ['bart> blue'] };
+const detail = (props) => unescape(renderToStaticMarkup(React.createElement(view.RunPanel, { open: null, routeOpen: null, onToggle() {}, ...props })));
+
+test('viewer: an @bart question is one row, "Chat · <time>"; its detail is the Classification, then the agent', () => {
+  const runs = [ROUTER, CHAT];
+  const rows = listRows(renderToStaticMarkup(React.createElement(view.RunList, { runs, selected: null, onSelect() {} }))).map((row) => ({ ...row, second: unescape(row.second) }));
+  assert.equal(rows.length, 1);
+  assert.ok(rows[0].second.startsWith(`Chat · ${runText.timeLabel(11)}`), rows[0].second);
+  assert.ok(!rows[0].second.includes('via Bart'));
+  assert.equal(runText.routerFor(CHAT, runs).id, 'r1');
+  const html = detail({ record: CHAT, route: { id: 'r1', record: ROUTER } });
+  const one = html.indexOf('1. Classification'), two = html.indexOf('2. Agent: Chat');
+  assert.ok(one >= 0 && two > one, 'the Classification part, then the agent\'s');
+  assert.ok(html.includes('Bart sent this to Chat (0.85 sure)'));
+  const part1 = html.slice(one, two), part2 = html.slice(two);
+  assert.match(part1, /<b>3 Steps<\/b>/, 'the router\'s Steps');
+  assert.match(part2, /<b>1 System prompt<\/b>/, 'the chat\'s sections');
+  assert.ok(!html.includes('handed over by Bart') && !html.includes('route-') && !html.includes('>r1<'), 'no route id in the panel');
+});
+
+test('viewer: a row has no time element of its own; the time comes right after the agent', () => {
+  const html = renderToStaticMarkup(React.createElement(view.RunList, { runs: [CHAT], selected: null, onSelect() {} }));
+  assert.ok(!/<span/.test(html), 'no span in a row');
+  const [row] = listRows(html);
+  assert.equal(unescape(row.second), `Chat · ${runText.timeLabel(11)} · first message`);
+});
+
+test('viewer: a rule\'s Build pick and its Build: one row "Build · turn 1 · <time>"; turn 1 has the Classification, turn 2 none', () => {
+  const rule = { id: 'r2', agent: 'router', at: 20, status: 'done', by: 'rule', rule: '--build', pick: 'build', handedTo: 'build:b1', question: 'make it', system: '', context: { input: '' }, steps: [], written: ['@build'] };
+  const t1 = { id: 'b1:1', agent: 'build', at: 21, status: 'done', buildId: 'b1', turn: 1, title: 'Make it', system: 'BUILD SYS', context: {}, steps: [], written: [] };
+  const t2 = { ...t1, id: 'b1:2', at: 30, turn: 2 };
+  const one = listRows(renderToStaticMarkup(React.createElement(view.RunList, { runs: [rule, t1], selected: null, onSelect() {} })));
+  assert.equal(one.length, 1);
+  assert.ok(unescape(one[0].second).startsWith(`Build · turn 1 · ${runText.timeLabel(21)}`), one[0].second);
+  assert.equal(runText.routerFor(t1, [rule, t1, t2]).id, 'r2');
+  assert.equal(runText.routerFor(t2, [rule, t1, t2]), null, 'a later turn has none');
+  const html = detail({ record: t1, route: { id: 'r2', record: rule } });
+  assert.ok(html.includes('1. Classification') && html.includes('Bart sent this to Build (rule: --build)') && html.includes('2. Agent: Build · turn 1'));
+  assert.ok(!detail({ record: t2 }).includes('Classification'));
+  // Also with a model router, both kept as the run log has them.
+  const model = { ...rule, id: 'r3', by: 'model', sure: 0.9, handedTo: 'build:b2' };
+  assert.deepEqual(runText.listedRuns([model, { ...t1, id: 'b2:1', buildId: 'b2' }]).map((run) => run.id), ['b2:1']);
+});
+
+test('viewer: a chat asked directly has no headings, its sections as before; Loading… until the router record comes', () => {
+  const direct = { ...CHAT, routedFrom: undefined };
+  assert.equal(runText.routerFor(direct, [ROUTER, direct]), null);
+  const html = detail({ record: direct });
+  assert.ok(!html.includes('Classification') && !html.includes('2. Agent'));
+  assert.equal(html, unescape(renderToStaticMarkup(React.createElement(view.RunDetail, { record: direct, open: null, onToggle() {} }))));
+  const loading = detail({ record: CHAT, route: { id: 'r1', record: undefined } });
+  assert.match(loading, /1\. Classification<\/div><div[^>]*>Loading…<\/div>/);
+  assert.ok(loading.includes('2. Agent: Chat'));
+});
+
+test('viewer: opening the router\'s System prompt leaves the agent\'s closed, and the other way round', () => {
+  const routeOpen = detail({ record: CHAT, route: { id: 'r1', record: ROUTER }, routeOpen: 'route:system' });
+  assert.ok(routeOpen.includes('ROUTER SYS') && !routeOpen.includes('CHAT SYS'));
+  const agentOpen = detail({ record: CHAT, route: { id: 'r1', record: ROUTER }, open: 'system' });
+  assert.ok(agentOpen.includes('CHAT SYS') && !agentOpen.includes('ROUTER SYS'));
+  assert.equal(view.ROUTE, 'route:', 'the router\'s sections are "route:system" and so on');
+});
+
+test('viewer: a failed router is listed as "Bart couldn\'t route this"; a router no listed run points to is listed, its detail as today', () => {
+  const failed = { ...ROUTER, id: 'r9', status: 'failed', error: 'timed out' };
+  const handed = { ...CHAT, id: 'c9', routedFrom: 'r9', routedBy: 'error' };
+  const rows = listRows(renderToStaticMarkup(React.createElement(view.RunList, { runs: [failed, handed], selected: null, onSelect() {} }))).map((row) => unescape(row.second));
+  assert.equal(rows.length, 2, 'a failed router stays');
+  assert.ok(rows.some((line) => line.startsWith("Bart couldn't route this")), rows.join(' | '));
+  assert.ok(rows.some((line) => line.startsWith('Chat · Bart failed to route')), rows.join(' | '));
+  // Its error under the part it belongs to.
+  const html = detail({ record: handed, route: { id: 'r9', record: failed } });
+  assert.ok(html.indexOf('failed: timed out') > html.indexOf('1. Classification') && html.indexOf('failed: timed out') < html.indexOf('2. Agent'));
+  assert.ok(html.includes("Bart couldn't route this; it went to Chat"));
+
+  const lone = { ...ROUTER, id: 'r10' };
+  assert.deepEqual(runText.listedRuns([lone]).map((run) => run.id), ['r10']);
+  assert.equal(unescape(listRows(renderToStaticMarkup(React.createElement(view.RunList, { runs: [lone], selected: null, onSelect() {} })))[0].second), `Bart → Chat · 0.85 · ${runText.timeLabel(10)} · first message`);
+  assert.equal(runText.routerFor(lone, [lone]), null, 'a router\'s own record has none');
+  const own = detail({ record: lone });
+  assert.ok(!own.includes('Classification'));
+  assert.equal(own, unescape(renderToStaticMarkup(React.createElement(view.RunDetail, { record: lone, open: null, onToggle() {} }))));
+});
+
+test('viewer: a corrected pick says "you changed it to …"', () => {
+  const corrected = { ...ROUTER, pick: 'build', corrected: 'chat' };
+  assert.equal(runText.classificationLine(corrected, { ...CHAT, corrected: 'chat' }), 'Bart sent this to Build; you changed it to Chat');
+  assert.equal(runText.classificationLine({ ...ROUTER, pick: 'build' }, { ...CHAT, corrected: 'chat' }), 'Bart sent this to Build; you changed it to Chat', 'the run\'s own correction when the router\'s record has none');
+  assert.equal(runText.agentLabel({ ...CHAT, corrected: 'chat' }), 'Chat', 'no "corrected from Bart" in the row');
+  assert.equal(runText.runLabel({ agent: 'build', title: 'x', turn: 1, routedFrom: 'route-1' }), 'Build x · turn 1');
 });
