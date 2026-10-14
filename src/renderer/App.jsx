@@ -423,7 +423,7 @@ export default function App() {
     setError('');
     setGuided(false);
     await loadHome();
-    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: made.gettingStarted ? null : { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
+    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: made.gettingStarted || made.welcomePage || !made.noteId ? null : { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
     // Import your context's run: its status is not opened over the project on landing (2026-10-14, Hudson: "There were
     // two popups, there should only be one"). A step that needs the person comes up as its own popup; the progress is
     // the "Importing i/n" words in the title bar, which open the status.

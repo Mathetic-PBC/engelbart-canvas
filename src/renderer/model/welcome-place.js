@@ -12,7 +12,7 @@ export function welcomePlace(tree, { given = null, current = null } = {}) {
   walk(tree && tree.workspaces);
   const byId = (id) => (id ? all.find((node) => node.id === id) : null) || null;
   const number = (node) => Number((/ (\d+)$/.exec(String(node.name || '').trim()) || [0, 1])[1]);
-  const welcome = all.filter((node) => /^welcome( \d+)?$/i.test(String(node.name || '').trim())).sort((a, b) => number(b) - number(a))[0] || null;
+  const welcome = all.filter((node) => /^welcome!?( \d+)?$/i.test(String(node.name || '').trim())).sort((a, b) => number(b) - number(a))[0] || null;
   const workspace = byId(given) || welcome || byId(current) || all[0] || null;
   if (!workspace) return { workspaceId: null, tab: null };
   const note = /^welcome/i.test(String(workspace.name || '')) ? null

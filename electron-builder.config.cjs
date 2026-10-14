@@ -59,6 +59,7 @@ module.exports = {
     // src/main/**/*.html: pages main opens itself (2026-10-13: the Full Disk Access helper, the Agent trace).
     // The E2B sandbox's helpers (src/main/sandbox): uploaded into each sandbox and run there, never on the Mac.
     'src/main/sandbox/*.py',
+    'src/main/store/welcome.png', // the Welcome! page's picture (store/projects.cjs createProjectWithWelcomePage)
     'dist/**/*',
     '!dist/**/*.map',
     'fixtures/**/*', // test mode's seed library

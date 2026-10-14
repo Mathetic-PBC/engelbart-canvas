@@ -73,7 +73,7 @@ function existingFolder(ctx, value) {
  * not have, and notes (they belong to their own project), are left out. A new user's first project calls its first
  * workspace "Welcome" (`workspaceName`, 2026-10-09: the walkthrough's title).
  */
-async function startProject(ctx, { name, description = '', folder = 'new', directory = '', context = [], workspaceName = 'Getting started' } = {}) {
+async function startProject(ctx, { name, description = '', folder = 'new', directory = '', context = [], workspaceName = 'Getting started', welcomePage = false } = {}) {
   let dir;
   if (folder === 'new') {
     dir = freeFolder(ctx, name).path;
@@ -82,6 +82,7 @@ async function startProject(ctx, { name, description = '', folder = 'new', direc
     dir = existingFolder(ctx, directory);
   }
   const chosen = await contextIds(ctx, context);
+  if (welcomePage) return projects.createProjectWithWelcomePage(ctx, { name, description, directory: dir }, { context: chosen });
   return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName, context: chosen });
 }
 

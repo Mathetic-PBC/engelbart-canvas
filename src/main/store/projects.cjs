@@ -336,6 +336,35 @@ async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting s
   return { project, workspaceId: workspace.id, noteId: note.id, noteName: note.name };
 }
 
+// A new user's first project (2026-10-14, Hudson's placeholder: "replaces the welcome screen and the get started and all
+// that crap with this"): a second-level project "Welcome!" whose page is this, with the picture of Engelbart at work. No
+// Welcome! note and no Get started walkthrough. `context`: what the onboarding brought in, in the Welcome! folder.
+const WELCOME_IMAGE = path.join(__dirname, 'welcome.png');
+const welcomePageText = (imageId) => [
+  '# Welcome to Engelbart!',
+  ...(imageId ? [`![Attachment 1](img:${imageId})`] : []),
+  'Engelbart is a **research notebook** that *remembers where all of your thoughts came from.*',
+  '',
+  'This welcome screen is still in beta, but we\'re working on improving it within the next couple days!',
+  '',
+  '*Thanks for being a beta user* :)',
+  '<3 Hudson + David',
+  '',
+  'P.S. If you have any questions, feedback, or need help, never hesitate to reach out!',
+  '[founders@mathetic.com](mailto:founders@mathetic.com)',
+  '',
+].join('\n');
+
+async function createProjectWithWelcomePage(ctx, input, { context = [] } = {}) {
+  const project = await createProject(ctx, input);
+  const workspace = await createWorkspace(ctx, project.id, { name: 'Welcome!' });
+  let image = null;
+  try { image = await saveImage(ctx, project.id, { bytes: fs.readFileSync(WELCOME_IMAGE), mime: 'image/png', name: 'Attachment 1' }); } catch { image = null; }
+  await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, welcomePageText(image && image.id));
+  if (context.length) await setWorkspaceContext(ctx, project.id, workspace.id, context);
+  return { project, workspaceId: workspace.id, welcomePage: true };
+}
+
 async function setProjectDirectory(ctx, id, directory) {
   const project = findProject(ctx, id);
   const resolved = checkDirectory(directory);
@@ -1503,6 +1532,8 @@ module.exports = {
   STATUSES,
   MAX_TREE_ENTRIES,
   WELCOME_NOTE,
+  createProjectWithWelcomePage,
+  welcomePageText,
   validateTree,
   treeIds,
   treeContains,

@@ -465,14 +465,14 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
     const imported = optStr(value.connect, 'import id', 64);
     const welcome = value.onboarding === true; // a new user's onboarding, not + Project: the Welcome walkthrough
-    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context, ...(welcome ? { workspaceName: 'Welcome' } : {}) }).then(async (made) => {
+    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context, ...(welcome ? { welcomePage: true } : {}) }).then(async (made) => {
       // A folder Engelbart made gets its Build repository and first commit now, in the background, once the tool check
       // has found Git (build/manager.cjs prepareDefault): the first Build never meets a folder without a history.
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
       // Connect your library's notes, held until there was a project (connect/session.cjs attachProject), go into this one,
       // and what it brought into the library joins the Welcome workspace's context, now and as more comes in.
       if (imported && connect) made.importedNotes = await connect.attachProject(ctx, imported, made.project.id, made.workspaceId).catch(() => 0);
-      if (welcome) made.gettingStarted = gettingStarted.startGettingStarted(ctx, made.project.id, { workspaceId: made.workspaceId });
+      // 2026-10-14: the Welcome! page in place of the walkthrough (store/projects.cjs createProjectWithWelcomePage).
       // A new user's onboarding is the guided setup: it is not offered to them afterwards.
       if (welcome) { try { gettingStarted.markGuidedOffer(ctx, 'onboarded'); } catch { /* offered once more at worst */ } }
       return made;
