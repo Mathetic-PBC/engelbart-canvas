@@ -485,9 +485,10 @@ test('viewer: an @bart question is one row, "Chat · <time>"; its detail is the 
   const one = html.indexOf('1. Classification'), two = html.indexOf('2. Agent: Chat');
   assert.ok(one >= 0 && two > one, 'the Classification part, then the agent\'s');
   assert.ok(html.includes('Bart sent this to Chat (0.85 sure)'));
-  const part1 = html.slice(one, two), part2 = html.slice(two);
-  assert.match(part1, /<b>3 Steps<\/b>/, 'the router\'s Steps');
+  const part2 = html.slice(two);
   assert.match(part2, /<b>1 System prompt<\/b>/, 'the chat\'s sections');
+  const opened = detail({ record: CHAT, route: { id: 'r1', record: ROUTER }, parts: { route: true, agent: true } });
+  assert.match(opened.slice(opened.indexOf('1. Classification'), opened.indexOf('2. Agent')), /<b>3 Steps<\/b>/, 'the router\'s Steps, once opened');
   assert.ok(!html.includes('handed over by Bart') && !html.includes('route-') && !html.includes('>r1<'), 'no route id in the panel');
 });
 
@@ -521,13 +522,15 @@ test('viewer: a chat asked directly has no headings, its sections as before; Loa
   const html = detail({ record: direct });
   assert.ok(!html.includes('Classification') && !html.includes('2. Agent'));
   assert.equal(html, unescape(renderToStaticMarkup(React.createElement(view.RunDetail, { record: direct, open: null, onToggle() {} }))));
-  const loading = detail({ record: CHAT, route: { id: 'r1', record: undefined } });
-  assert.match(loading, /1\. Classification<\/div><div[^>]*>Loading…<\/div>/);
+  const loading = detail({ record: CHAT, route: { id: 'r1', record: undefined }, parts: { route: true, agent: true } });
+  assert.match(loading, /1\. Classification<\/b><\/div><div[^>]*>Loading…<\/div>/);
   assert.ok(loading.includes('2. Agent: Chat'));
+  const closed = detail({ record: CHAT, route: { id: 'r1', record: undefined } });
+  assert.ok(closed.includes('1. Classification') && !closed.includes('Loading…'), 'Loading… only while Classification is open');
 });
 
 test('viewer: opening the router\'s System prompt leaves the agent\'s closed, and the other way round', () => {
-  const routeOpen = detail({ record: CHAT, route: { id: 'r1', record: ROUTER }, routeOpen: 'route:system' });
+  const routeOpen = detail({ record: CHAT, route: { id: 'r1', record: ROUTER }, routeOpen: 'route:system', parts: { route: true, agent: true } });
   assert.ok(routeOpen.includes('ROUTER SYS') && !routeOpen.includes('CHAT SYS'));
   const agentOpen = detail({ record: CHAT, route: { id: 'r1', record: ROUTER }, open: 'system' });
   assert.ok(agentOpen.includes('CHAT SYS') && !agentOpen.includes('ROUTER SYS'));
@@ -542,7 +545,8 @@ test('viewer: a failed router is listed as "Bart couldn\'t route this"; a router
   assert.ok(rows.some((line) => line.startsWith("Bart couldn't route this")), rows.join(' | '));
   assert.ok(rows.some((line) => line.startsWith('Chat · Bart failed to route')), rows.join(' | '));
   // Its error under the part it belongs to.
-  const html = detail({ record: handed, route: { id: 'r9', record: failed } });
+  const html = detail({ record: handed, route: { id: 'r9', record: failed }, parts: { route: true, agent: true } });
+  assert.ok(!detail({ record: handed, route: { id: 'r9', record: failed } }).includes('failed: timed out'), 'closed, its error line is hidden too');
   assert.ok(html.indexOf('failed: timed out') > html.indexOf('1. Classification') && html.indexOf('failed: timed out') < html.indexOf('2. Agent'));
   assert.ok(html.includes("Bart couldn't route this; it went to Chat"));
 
@@ -561,4 +565,70 @@ test('viewer: a corrected pick says "you changed it to …"', () => {
   assert.equal(runText.classificationLine({ ...ROUTER, pick: 'build' }, { ...CHAT, corrected: 'chat' }), 'Bart sent this to Build; you changed it to Chat', 'the run\'s own correction when the router\'s record has none');
   assert.equal(runText.agentLabel({ ...CHAT, corrected: 'chat' }), 'Chat', 'no "corrected from Bart" in the row');
   assert.equal(runText.runLabel({ agent: 'build', title: 'x', turn: 1, routedFrom: 'route-1' }), 'Build x · turn 1');
+});
+
+/* ------------------------------------------------------------- the two parts open and close (2026-10-13) */
+
+const SECTION_TITLES = ['1 System prompt', '2 Context', '3 Steps', '4 Written'];
+const titlesIn = (html) => SECTION_TITLES.filter((title) => html.includes(`<b>${title}</b>`));
+/** Each part's html, split at the Agent part's heading. */
+const partsOf = (html) => { const two = html.indexOf('2. Agent'); return { route: html.slice(0, two), agent: html.slice(two) }; };
+/** The heading the panel draws for a part (no DOM here: the element tree RunPanel returns). */
+function headingOf(element, name) {
+  if (!element || typeof element !== 'object') return null;
+  if (Array.isArray(element)) { for (const child of element) { const found = headingOf(child, name); if (found) return found; } return null; }
+  if (element.props && element.props['data-part'] === name) return element;
+  return element.props ? headingOf(element.props.children, name) : null;
+}
+
+test('parts: Classification is closed and its heading says where Bart sent it; the Agent part is open with its four sections', () => {
+  assert.deepEqual(view.PARTS, { route: false, agent: true });
+  const { route, agent } = partsOf(detail({ record: CHAT, route: { id: 'r1', record: ROUTER } }));
+  assert.match(route, /▸ <b>1\. Classification<\/b><span[^>]*> · Bart sent this to Chat \(0\.85 sure\)<\/span>/);
+  assert.deepEqual(titlesIn(route), [], 'none of the router\'s sections');
+  assert.ok(!route.includes('ROUTER SYS'));
+  assert.match(agent, /^2\. Agent: Chat/);
+  assert.match(detail({ record: CHAT, route: { id: 'r1', record: ROUTER } }), /▾ <b>2\. Agent: Chat<\/b>/);
+  assert.deepEqual(titlesIn(agent), SECTION_TITLES);
+});
+
+test('parts: clicking the Classification heading shows its sections; clicking "2. Agent" hides the agent\'s', () => {
+  let parts = view.PARTS;
+  const clicked = [];
+  const props = () => ({ record: CHAT, route: { id: 'r1', record: ROUTER }, open: null, routeOpen: null, parts, onToggle() {}, onPart: (name) => { clicked.push(name); parts = view.togglePart(parts, name); } });
+  const draw = () => partsOf(unescape(renderToStaticMarkup(React.createElement(view.RunPanel, props()))));
+
+  headingOf(view.RunPanel(props()), 'route').props.onClick();
+  assert.deepEqual(clicked, ['route']);
+  let shown = draw();
+  assert.deepEqual(titlesIn(shown.route), SECTION_TITLES, 'the router\'s four sections');
+  assert.match(shown.route, /▾ <b>1\. Classification<\/b>/);
+  assert.deepEqual(titlesIn(shown.agent), SECTION_TITLES);
+
+  headingOf(view.RunPanel(props()), 'agent').props.onClick();
+  shown = draw();
+  assert.deepEqual(titlesIn(shown.agent), [], 'the agent\'s sections hidden');
+  assert.match(shown.agent, /^2\. Agent: Chat<\/b><\/div><\/div>$/, 'nothing under its heading');
+  assert.deepEqual(titlesIn(shown.route), SECTION_TITLES, 'Classification stays open');
+});
+
+test('parts: pressing "3" with the Agent part closed opens it and opens Steps', () => {
+  const next = view.sectionKey({ route: false, agent: false }, 3);
+  assert.deepEqual(next, { parts: { route: false, agent: true }, open: 'steps' });
+  const html = detail({ record: CHAT, route: { id: 'r1', record: ROUTER }, ...next });
+  const { agent } = partsOf(html);
+  assert.ok(agent.includes('<b>step 1</b>'), 'the agent\'s Steps open');
+  assert.match(agent, /▾ <b>3 Steps<\/b>/);
+  assert.equal(view.sectionKey(next.parts, 1).parts, next.parts, 'an open part is left as it is');
+  // AgentMap's keys go through it.
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/AgentMap.jsx'), 'utf8');
+  assert.match(source, /sectionKey\(parts, Number\(event\.key\)\)/);
+});
+
+test('parts: without a router record, no part headings, and the sections as before whatever the parts say', () => {
+  const direct = { ...CHAT, routedFrom: undefined };
+  const html = detail({ record: direct, parts: { route: false, agent: false } });
+  assert.ok(!html.includes('Classification') && !html.includes('2. Agent') && !html.includes('data-part'));
+  assert.deepEqual(titlesIn(html), SECTION_TITLES);
+  assert.equal(html, unescape(renderToStaticMarkup(React.createElement(view.RunDetail, { record: direct, open: null, onToggle() {} }))));
 });

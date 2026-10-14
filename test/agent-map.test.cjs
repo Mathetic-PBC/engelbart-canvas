@@ -489,18 +489,54 @@ test('the Design tab draws one agent at a time, picked from a row of tabs, each 
     pages[NAMES[i]] = page;
   });
 
+  const groups = (page) => [...page.matchAll(/<div style="font-weight:600;[^"]*">([^<]*)<\/div>/g)].map((match) => match[1]);
+  const ORDER = ['How it routes', 'What it sees', 'Prompt', 'Tools', 'Models', 'Limits', 'Ends', 'Hands work to', 'Started from'];
+  for (const name of NAMES) {
+    const seen = groups(pages[name]);
+    assert.deepEqual(seen, ORDER.filter((group) => seen.includes(group)), `${name}: its groups in order`);
+  }
+  // A row: a dim label 160px wide, its value beside it.
+  const row = (label) => new RegExp(`<div style="width:160px;[^"]*">${label}</div><div[^>]*>`);
+
   const bart = pages['Bart (classifier)'];
-  assert.match(bart, /rules, in order: an empty @bart → @brainstorm/);
-  assert.match(bart, /calls: <span><b>Chat<\/b>.*<b>Brainstorm<\/b>.*<b>Discover<\/b>.*<b>Create<\/b>.*<b>Build<\/b>/, 'Bart calls Chat, Brainstorm, Discover, Create and Build');
+  assert.deepEqual(groups(bart), ['How it routes', 'What it sees', 'Prompt', 'Tools', 'Models', 'Limits', 'Hands work to']);
+  assert.match(bart, /<div><b>Bart \(classifier\)<\/b><span[^>]*> · @bart · internally &#x27;router&#x27;<\/span><\/div><div style="border-top:1px solid #ddd/, 'the header, then a thin rule');
+  const rules = [...bart.match(/<ol[^>]*>(.*?)<\/ol>/)[1].matchAll(/<li>(.*?)<\/li>/g)].map((match) => match[1]);
+  const router = design.agents[0];
+  assert.equal(rules.length, 9);
+  assert.deepEqual(rules, router.rules.map((rule) => `${rule.when.replace(/</g, '&lt;')} <b>→ ${rule.to.replace(/</g, '&lt;').replace(/≥/g, '≥')}</b>`), 'one item per rule, in order, the → part bold');
+  for (const rule of router.rules) assert.ok(!bart.includes(`${rule.to} · `) && !bart.includes(` · ${rule.when}`), `"${rule.when}" is not joined to another rule`);
+  assert.match(bart, row('Inputs'));
+  for (const input of router.inputs) assert.ok(bart.includes(`<div>${input.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</div>`), `input on its own line: ${input}`);
+  assert.match(bart, /width:160px;[^"]*">Claude<\/div><div[^>]*><div><code>--tools &quot;&quot;<\/code><\/div><\/div>/, 'Claude | --tools ""');
+  assert.match(bart, /<div style="width:160px;[^"]*">anthropic \(in force\)<\/div><div[^>]*><div>Haiku \(claude-haiku-[^)]*\) at low<\/div>/);
+  const hands = bart.slice(bart.indexOf('>Hands work to<'));
+  const calls = [...hands.matchAll(/<div style="margin:2px 0 2px 14px"><b>([^<]*)<\/b> <span[^>]*>([^<]*)<\/span><\/div>/g)].map((match) => match[1]);
+  assert.deepEqual(calls, ['Chat', 'Brainstorm', 'Discover', 'Create', 'Build'], 'one row per agent Bart hands work to');
+
+  const chat = pages.Chat;
+  assert.match(chat, row('New session'));
+  assert.match(chat, /<div><div>&lt;context_json&gt;<\/div><div style="color:#777">[^<]+<\/div><\/div>/, 'a block on its own line, its note dim under it');
+  assert.match(chat, row('Resumed'));
+  assert.match(chat, row('Folders'));
+  assert.match(chat, />Codex<\/div><div[^>]*>web search on · paper MCP off · sandbox read-only</);
+
   const create = pages.Create;
   assert.ok(!/Planned, not built yet/.test(create), 'Create is built (2026-10-13)');
-  assert.match(create, /<b>Create<\/b>[^]*?Write,Edit[^]*?--permission-mode dontAsk[^]*?draft folder alone[^]*?assets\/files[^]*?calls: <span[^>]*>none/, 'Create: its tools, where it writes, where its files go, and it calls nothing');
+  assert.match(create, /<b>Create<\/b>[^]*?Write,Edit[^]*?--permission-mode dontAsk[^]*?draft folder alone[^]*?assets\/files/, 'Create: its tools, where it writes, where its files go');
+  assert.ok(!create.includes('Hands work to'), 'Create hands work to no one: no group');
+
   const build = pages.Build;
   assert.match(build, /a quick task&#x27;s system prompt/);
   assert.match(build, /what codexOverrides sets/);
-  assert.match(build, /NEEDS YOU: &lt;question&gt;/);
-  assert.match(build, /slots at once: build 3 · quick 1/);
-  assert.match(build, /<b>Build<\/b>[^]*?calls: <span><b>Run step<\/b>/, 'Build calls the run step');
-  assert.match(pages['Run step'], /tools · Codex: <span[^>]*>none \(Claude Code only\)/);
+  const limits = build.slice(build.indexOf('>Limits<'), build.indexOf('>Ends<'));
+  assert.match(limits, /Slots at once<\/div><div[^>]*><div>build 3<\/div><div>quick 1<\/div><\/div>/, 'Limits shows its slots, one per line');
+  const ends = build.slice(build.indexOf('>Ends<'), build.indexOf('>Hands work to<'));
+  const endLines = [...ends.matchAll(/<code>([^<]*)<\/code>/g)].map((match) => match[1]);
+  assert.deepEqual(endLines, ['NEEDS YOU: &lt;question&gt;', 'ESCALATE: &lt;why&gt;', '(anything else)'], 'Ends lists each end line');
+  assert.match(build, />Hands work to<\/div><div[^>]*><b>Run step<\/b>/, 'Build hands work to the run step');
+  assert.match(build, />Started from<\/div>(<div style="margin:2px 0 2px 14px">[^<]+<\/div>){5}/, 'what starts a Build, one per line');
+  assert.match(pages['Run step'], />Codex<\/div><div[^>]*><span[^>]*>none \(Claude Code only\)/);
+  assert.match(pages['Run step'], /Turns<\/div><div[^>]*>at most \d+/);
   for (const name of NAMES) assert.ok(!/Planned, not built yet/.test(pages[name]), `${name} is built`);
 });
