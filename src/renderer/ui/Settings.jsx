@@ -81,7 +81,7 @@ export function IntelligenceLevels({ initial = null }) {
             {LEVELS.map((level) => {
               const step = defaultStep(settings.models, 'discover', provider, level.id);
               return (
-                <Row key={level.id} label={level.name} hint={level.hint} data-level={`${provider}:${level.id}`}>
+                <Row key={level.id} label={level.name} data-level={`${provider}:${level.id}`}>
                   <Choice label={`${entry.name} ${level.name} model`} field="model" width={96} value={step.model} options={models} onChange={(model) => save(provider, level.id, { model, effort: step.effort })} />
                   <Choice label={`${entry.name} ${level.name} effort`} field="effort" width={110} value={step.effort} options={efforts} onChange={(effort) => save(provider, level.id, { model: step.model, effort })} />
                 </Row>
@@ -118,8 +118,8 @@ function TestData({ test, close }) {
 // opens it over the workspace (App.jsx), its imports going to the project you're in; from All projects, onboarding's.
 function GuidedSetupPage({ close }) {
   return (
-    <Group title="Onboarding" data-guided-setup="1">
-      <Row label="Import your context" hint="Agents bring in the notes, chats, papers and other context of the projects you pick, into your library and the project you’re in. Nothing you have is removed.">
+    <Group title="Your context" data-guided-setup="1">
+      <Row label="Import your context">
         <button type="button" className="hov-bd2" data-settings-item="guided-setup" onClick={() => { close(); startGuidedSetup(); }} style={BUTTON}>Start</button>
       </Row>
     </Group>
@@ -127,24 +127,25 @@ function GuidedSetupPage({ close }) {
 }
 
 // Lucide's "cpu" (the model; its "sparkles" until 2026-10-07, too busy at this size: David) and "flask-conical", at the nav's
-// size; the plug Connections' own icon was (its 16-unit path at this grid's scale). Lucide is ISC; its paths are pasted in.
+// size. Lucide is ISC; its paths are pasted in.
 const icon = (paths) => (
   <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" style={{ flex: 'none', display: 'block' }}>{paths}</svg>
 );
 const MODEL_ICON = icon(<><rect x="4" y="4" width="16" height="16" rx="2" /><rect x="8" y="8" width="8" height="8" rx="1" /><path d="M12 2v2M12 20v2M17 2v2M17 20v2M7 2v2M7 20v2M2 12h2M2 17h2M2 7h2M20 12h2M20 17h2M20 7h2" /></>);
-const PLUG_ICON = icon(<path d="M8.25 2.25v4.5M15.75 2.25v4.5M6 6.75h12v3a6 6 0 0 1-12 0zM12 15.75v3a3 3 0 0 1-3 3H6" />);
-// Lucide's "compass".
-const COMPASS_ICON = icon(<><circle cx="12" cy="12" r="10" /><path d="m16.24 7.76-1.804 5.411a2 2 0 0 1-1.265 1.265L7.76 16.24l1.804-5.411a2 2 0 0 1 1.265-1.265z" /></>);
+// Connections' four blocks, the sidebar's Connections icon until Connections moved here (2026-10-13), and Import context's
+// circled plus, the sidebar's Add sources icon.
+const BLOCKS_ICON = icon(<><rect width="7" height="7" x="14" y="3" rx="1" /><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3" /></>);
+const ADD_ICON = icon(<><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /><path d="M12 8v8" /></>);
 const FLASK_ICON = icon(<><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2" /><path d="M8.5 2h7" /><path d="M7 16h10" /></>);
 
 // The settings window's pages, in order, under their headings in the left column. `shown` (optional) decides from the
 // window's props whether a page is there. `keywords`: the names on the page a person would search the column for.
 export const PAGES = Object.freeze([
-  { id: 'model', section: 'Settings', title: 'Model', icon: MODEL_ICON, Body: () => <IntelligenceLevels />,
+  { id: 'model', section: 'Settings', title: 'Models', icon: MODEL_ICON, Body: () => <IntelligenceLevels />,
     keywords: [...LEVELS.flatMap((level) => [level.name, level.hint]), 'model', 'effort', 'intelligence', 'discover', 'Claude', 'Codex'] },
-  { id: 'connections', section: 'Settings', title: 'Connections', icon: PLUG_ICON, Body: ConnectionsPage,
+  { id: 'connections', section: 'Settings', title: 'Connections', icon: BLOCKS_ICON, Body: ConnectionsPage,
     keywords: ['GitHub', 'Zotero', 'accounts', 'sign in', 'sign out', ...TOOL_CONNECTIONS.map((id) => TOOL_NAME[id])] },
-  { id: 'guided-setup', section: 'Settings', title: 'Import your context', icon: COMPASS_ICON, Body: GuidedSetupPage,
+  { id: 'guided-setup', section: 'Settings', title: 'Import context', icon: ADD_ICON, Body: GuidedSetupPage,
     keywords: ['onboarding', 'setup', 'guided setup', 'import', 'context', 'walkthrough', 'getting started', 'welcome', 'library'] },
   { id: 'test-data', section: 'Developer', title: 'Test data', icon: FLASK_ICON, shown: ({ test }) => !!(test && test.testMode), Body: TestData,
     keywords: ['reveal', 'reset', 'start over', 'test library'] },

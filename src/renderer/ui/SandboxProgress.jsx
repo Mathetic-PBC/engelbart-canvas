@@ -65,7 +65,7 @@ export default function SandboxProgress({ dataRoot, library, inWorkspace, childr
   // adopts it; `show`: and brings the pane forward). Only a workspace has a terminal pane.
   const openTerminal = React.useCallback((run, { show = true } = {}) => {
     if (!canOpenTerminal(run)) return;
-    if (!workspace.current) { setError('Open a workspace to use the sandbox terminal.'); return; }
+    if (!workspace.current) { setError('Open a project to use the sandbox terminal.'); return; }
     dispatch({ type: 'read', ids: notifications.filter((row) => row.runId === run.id).map((row) => row.id) });
     void act(run, async () => {
       const session = await api.sandboxTerminal(run.library_id);

@@ -197,9 +197,9 @@ const ICON = {
 // An @discover guide's bookmark by where its paper is (2026-10-03): its drawing and the words its title and label carry.
 const BOOKMARK = '<path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"></path>';
 const PAPER_MARK = {
-  none: { icon: icon(BOOKMARK), words: 'Save to library and this workspace' },
-  lib: { icon: icon(`${BOOKMARK}<path d="M12 7v6"></path><path d="M9 10h6"></path>`), words: 'Add to this workspace (already in the library)' },
-  here: { icon: icon(BOOKMARK.replace('<path ', '<path fill="currentColor" ')), words: 'Saved in this workspace' },
+  none: { icon: icon(BOOKMARK), words: 'Save to library and this project' },
+  lib: { icon: icon(`${BOOKMARK}<path d="M12 7v6"></path><path d="M9 10h6"></path>`), words: 'Add to this project (already in the library)' },
+  here: { icon: icon(BOOKMARK.replace('<path ', '<path fill="currentColor" ')), words: 'Saved in this project' },
 };
 // A Try line's mark by where its repository is (2026-10-04): the words it shows and its title.
 const RUN_WORDS = 'Opens the repository and adds it to this workspace, which starts building it';

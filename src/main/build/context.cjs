@@ -78,6 +78,8 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
   ].join('\n'));
   const instructions = instructionsBlock(ctx.dataRoot);
   if (instructions) parts.push(instructions);
+  const page = projects.projectPageBlock(project); // the project page (2026-10-13): project-wide instructions
+  if (page) parts.push(page);
   const remembered = memoryBlock(ctx.dataRoot); // MEMORY.md, when Connect your library wrote one (2026-10-07)
   if (remembered) parts.push(remembered);
   parts.push(request

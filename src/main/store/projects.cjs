@@ -6,6 +6,7 @@
 // `ctx.dataRoot` is ~/.engelbart (test off) or ~/.engelbart/test (test on).
 //
 //   <dataRoot>/<slug>/project.json                   { id, name, created, directory }
+//   <dataRoot>/<slug>/.project.md                    the project page: project-wide instructions, its name and description
 //   <dataRoot>/<slug>/notes.pglite/
 //   <dataRoot>/<slug>/<Note>.md
 //   <dataRoot>/<slug>/assets/<id>.<ext>
@@ -54,6 +55,12 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // over it is read cut to it (contextOf) rather than emptied.
 const MAX_TREE_ENTRIES = 2000;
 const MAX_TREE_DEPTH = 6;
+// Projects nest four levels deep (2026-10-13, the "Sidebar" project: "we will give projects recursion to a fourth level of
+// depth"): the top-level project the switcher picks is the first, so what used to be workspaces go three deep under it.
+const MAX_NESTING = 3;
+// The project page (2026-10-13): the top-level project's own document, project-wide instructions like a PROJECT.md. A dot
+// file, so no note (whose names never start with a dot: home.cjs sanitizeName) and no workspace folder can take its name.
+const PROJECT_PAGE = '.project.md';
 const MAX_DESCRIPTION = 4000;
 
 const WELCOME_NOTE = [
@@ -311,6 +318,7 @@ async function createProject(ctx, input) {
   fs.mkdirSync(dir, { mode: DIR_MODE });
   const meta = { id: randomUUID(), name, created: nowIso(), ...(directory ? { directory } : {}), ...(description ? { description } : {}) };
   writeJson(path.join(dir, 'project.json'), meta);
+  writeTextAtomic(path.join(dir, PROJECT_PAGE), projectPageText(description));
   migrated.add(dir);
   await db.openNotesDb(dir);
   return publicProject(projectRecord(dir), { workspaceCount: 0, lastEdited: meta.created });
@@ -626,8 +634,16 @@ function workspaceDirName(parentDir, name, fallback) {
   return uniqueName(parentDir, base);
 }
 
+/** How deep a workspace is under its project: 1 for one at the project's top. */
+const nestingOf = (projectDir, dir) => path.relative(projectDir, dir).split(path.sep).filter(Boolean).length;
+
 async function createWorkspace(ctx, projectId, { name, parentId } = {}) {
-  const parentDir = parentId ? findWorkspace(ctx, projectId, parentId).workspace.dir : findProject(ctx, projectId).dir;
+  let parentDir;
+  if (parentId) {
+    const found = findWorkspace(ctx, projectId, parentId);
+    if (nestingOf(found.project.dir, found.workspace.dir) >= MAX_NESTING) throw new Error('Projects go four levels deep: there is no room for one inside this one.');
+    parentDir = found.workspace.dir;
+  } else parentDir = findProject(ctx, projectId).dir;
   const dir = path.join(parentDir, workspaceDirName(parentDir, name, 'Untitled Workspace 1'));
   fs.mkdirSync(dir, { mode: DIR_MODE });
   writeJson(path.join(dir, 'meta.json'), { id: randomUUID(), status: 'open', context: [], created: nowIso(), chars: 0 });
@@ -919,11 +935,33 @@ async function resolveDoc(ctx, projectId, ref) {
     const { workspace } = findWorkspace(ctx, projectId, ref.workspaceId);
     return { file: path.join(workspace.dir, 'workspace.md'), workspace };
   }
+  if (ref.kind === 'project') {
+    const project = findProject(ctx, projectId);
+    return { file: path.join(project.dir, PROJECT_PAGE), project };
+  }
   throw new TypeError('Unknown doc kind');
 }
 
+/** A new project page's text: the description given at onboarding or on + Project (its title is the project's name). */
+const projectPageText = (description) => (description ? `${description}\n` : '');
+
+/**
+ * What every agent in the project reads first (2026-10-13: the project page "serves more as project-wide instructions,
+ * like a PROJECT.md file"): the page as a block, or '' while it is empty or still says only the project's description,
+ * which the <engelbart> head already carries.
+ */
+function projectPageBlock(project) {
+  if (!project || !project.dir) return '';
+  let text = '';
+  try { text = fs.readFileSync(path.join(project.dir, PROJECT_PAGE), 'utf8').trim(); } catch { text = ''; }
+  if (!text || text.replace(/\s+/g, ' ') === String(project.description || '').trim().replace(/\s+/g, ' ')) return '';
+  return `<project_page name="${String(project.name || '').replace(/[<>"\n\r]/g, ' ').slice(0, 200)}" note="The project page: what the person wants every agent in this project to know.">\n${text.slice(0, 20000)}\n</project_page>`;
+}
+
 async function readDoc(ctx, projectId, ref) {
-  const { file } = await resolveDoc(ctx, projectId, ref);
+  const { file, project } = await resolveDoc(ctx, projectId, ref);
+  // A project made before its page existed gets one the first time it is opened, from what it was described as.
+  if (project && !fs.existsSync(file)) writeTextAtomic(file, projectPageText(project.description));
   try {
     return fs.readFileSync(file, 'utf8');
   } catch {
@@ -1167,6 +1205,89 @@ function setStarred(ctx, projectId, itemId, on) {
   return next;
 }
 
+/* ----------------------------------------------------------------- folders */
+
+// The sidebar's folders (2026-10-13, the "Sidebar" project): "global folders that show on every project basically and can
+// contain the subset of the library items". Kept in state.json `folders`, in the order they were made, each { id, name,
+// items, created }: `items` library ids, oldest first. A folder is the person's, not a project's: every project's Sources
+// lists the same ones. Taking an item out of a folder leaves it in the library.
+const MAX_FOLDERS = 200;
+const MAX_FOLDER_ITEMS = 2000;
+const FOLDER_NAME_MAX = 120;
+
+function cleanFolders(value) {
+  const out = [];
+  for (const entry of Array.isArray(value) ? value : []) {
+    const input = plainObject(entry) || {};
+    const id = idOrNull(input.id);
+    const name = typeof input.name === 'string' ? sanitizeName(input.name).slice(0, FOLDER_NAME_MAX) : '';
+    if (!id || !name || out.some((held) => held.id === id)) continue;
+    const items = [...new Set((Array.isArray(input.items) ? input.items : []).map(idOrNull).filter(Boolean))].slice(-MAX_FOLDER_ITEMS);
+    out.push({ id, name, items, created: isoOrNull(input.created) });
+    if (out.length >= MAX_FOLDERS) break;
+  }
+  return out;
+}
+
+function readFolders(ctx) {
+  return cleanFolders(readState(ctx).folders);
+}
+
+function writeFolders(ctx, folders) {
+  const next = cleanFolders(folders);
+  writeState(ctx, { folders: next });
+  return next;
+}
+
+function folderAt(folders, folderId) {
+  const id = idOrNull(folderId);
+  const at = id ? folders.findIndex((folder) => folder.id === id) : -1;
+  if (at < 0) throw new Error('Unknown folder');
+  return at;
+}
+
+/** A new folder, named; it starts empty. → { folder, folders } */
+function createFolder(ctx, name) {
+  const given = typeof name === 'string' ? name.trim() : '';
+  if (!given) throw new TypeError('A folder needs a name');
+  const folders = readFolders(ctx);
+  if (folders.length >= MAX_FOLDERS) throw new RangeError(`At most ${MAX_FOLDERS} folders`);
+  const folder = { id: randomUUID(), name: sanitizeName(given).slice(0, FOLDER_NAME_MAX), items: [], created: nowIso() };
+  return { folder, folders: writeFolders(ctx, [...folders, folder]) };
+}
+
+function renameFolder(ctx, folderId, name) {
+  const given = typeof name === 'string' ? name.trim() : '';
+  if (!given) throw new TypeError('A folder needs a name');
+  const folders = readFolders(ctx);
+  const at = folderAt(folders, folderId);
+  folders[at] = { ...folders[at], name: sanitizeName(given).slice(0, FOLDER_NAME_MAX) };
+  return writeFolders(ctx, folders);
+}
+
+function deleteFolder(ctx, folderId) {
+  const folders = readFolders(ctx);
+  const at = folderAt(folders, folderId);
+  return writeFolders(ctx, folders.filter((_, i) => i !== at));
+}
+
+/** Library items into a folder, after what it holds; one it holds already stays where it is. */
+function addToFolder(ctx, folderId, ids) {
+  const adding = (Array.isArray(ids) ? ids : [ids]).map(idOrNull).filter(Boolean);
+  const folders = readFolders(ctx);
+  const at = folderAt(folders, folderId);
+  folders[at] = { ...folders[at], items: [...new Set([...folders[at].items, ...adding])] };
+  return writeFolders(ctx, folders);
+}
+
+function removeFromFolder(ctx, folderId, id) {
+  const gone = idOrNull(id);
+  const folders = readFolders(ctx);
+  const at = folderAt(folders, folderId);
+  folders[at] = { ...folders[at], items: folders[at].items.filter((held) => held !== gone) };
+  return writeFolders(ctx, folders);
+}
+
 /* ------------------------------------------------------------- where to next */
 
 // What the sidebar's "next" row and ⌘J go to (2026-09-22), kept in state.json beside the views:
@@ -1370,6 +1491,15 @@ async function loadProject(ctx, projectId) {
 }
 
 module.exports = {
+  MAX_NESTING,
+  projectPageBlock,
+  PROJECT_PAGE,
+  readFolders,
+  createFolder,
+  renameFolder,
+  deleteFolder,
+  addToFolder,
+  removeFromFolder,
   STATUSES,
   MAX_TREE_ENTRIES,
   WELCOME_NOTE,

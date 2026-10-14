@@ -1,26 +1,26 @@
-// What the workspace sidebar (Rail.jsx, 2026-10-07) opens beside itself: Hudson's "(not centered) scrollable modal next to
-// that (to the right) that shows all of the options". Inbox, Agents, Connections and Library from the fixed rows; every
-// workspace (Workspaces' "More"); a group of Your sources whole (its "More"); the project's menu under its name; and, in
-// the middle of the window, Search and a new workspace's name. One is open at a time; Escape or a press anywhere else
-// closes it, and Escape never goes on to leave the workspace.
+// What the sidebar (Rail.jsx; redone 2026-10-13 from design/sidebar-mockup/Sidebar.html) opens beside itself: Hudson's
+// "(not centered) scrollable modal next to that (to the right) that shows all of the options". Agents (the Inbox folded in)
+// and Library from the fixed rows; every project here (Projects' More) and a level's siblings (its More); a folded
+// project's children while the pointer rests on it; a folder of Sources whole (its More); what + adds to a folder; the
+// project's menu under its name; and, in the middle of the window, Search, Keyboard shortcuts, a new project's name and a
+// new folder's. One is open at a time; Escape or a press anywhere else closes it, and Escape never goes on to leave the
+// project.
 
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
-import { GH, KindGlyph as Glyph } from '../ui/Icons.jsx';
+import { KIND, KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
 import { libraryPanelRows, looksAddable, searchRows } from '../model/rail.js';
 import { LIBRARY_CHIPS, libraryCounts } from '../model/kind.js';
 import { findWorkspaces } from '../model/nav.js';
-import { sinceWords } from '../model/sidebar.js';
+import { countLabel, sinceWords, sourceIcon, shortcutProjects } from '../model/sidebar.js';
 import { NotificationRows, useBuildNotifications } from '../ui/SandboxNotifications.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
 import { useBodies } from './useBodies.js';
-import { useGithubStatus } from './useGithubStatus.js';
-import { useZoteroStatus } from './useZoteroStatus.js';
-import { zoteroSyncLine } from './Connections.jsx';
+import { useAddRun } from './useAddRun.js';
+import GithubPane from './GithubPane.jsx';
 import { ItemPeek } from '../screens/Home.jsx';
-import { openSettings } from '../ui/Settings.jsx';
 import * as I from '../ui/SidebarIcons.jsx';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
@@ -75,12 +75,13 @@ export function useDismiss(ref, onClose, { ignore = null, layer }) {
 }
 
 /** A panel beside what opened it (`anchor`, a rect; `side` 'right', or 'below' for a menu), placed to stay in the window. */
-export function Floating({ anchor, side = 'right', gap = 8, cap = 560, width = 340, onClose, ignore = null, label, style, children, ...rest }) {
+export function Floating({ anchor, side = 'right', gap = 8, cap = 560, width = 340, onClose, ignore = null, label, style, children, panelRef = null, ...rest }) {
   const layer = useLayer();
   const [ref, placed] = usePlaced(anchor, { side, gap, cap });
   useDismiss(ref, onClose, { ignore, layer });
+  const setRef = (element) => { ref.current = element; if (panelRef) panelRef.current = element; };
   return createPortal(
-    <div ref={ref} role="dialog" aria-label={label} data-overlay="1" data-sb-layer={layer} {...rest} style={{ ...placed, zIndex: 80, width, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #e6e6e6', borderRadius: 10, boxShadow: SHADOW, animation: `rise 140ms ${EASE}`, ...(placed.maxHeight != null ? { overflowY: 'hidden' } : {}), ...style }}>
+    <div ref={setRef} role="dialog" aria-label={label} data-overlay="1" data-sb-layer={layer} {...rest} style={{ ...placed, zIndex: 80, width, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #e6e6e6', borderRadius: 10, boxShadow: SHADOW, animation: `rise 140ms ${EASE}`, ...(placed.maxHeight != null ? { overflowY: 'hidden' } : {}), ...style }}>
       {children}
     </div>,
     document.body,
@@ -104,11 +105,12 @@ function Centered({ onClose, label, width = 560, top = '14vh', children, ...rest
 
 /* ------------------------------------------------------------- the pieces */
 
-export function PanelHead({ title, count, children }) {
+export function PanelHead({ title, count, note = null, children }) {
   return (
     <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: '12px 14px 6px' }}>
       <span style={{ ...text(13, '#171717', 600), whiteSpace: 'nowrap' }}>{title}</span>
       {count != null && count > 0 && <span style={text(12, '#8f8f8f')}>{count}</span>}
+      {note && <span style={{ ...text(12, '#8f8f8f'), whiteSpace: 'nowrap' }}>{note}</span>}
       <span style={{ flex: 1 }} />
       {children}
     </div>
@@ -251,114 +253,105 @@ export function PeekCard({ peek, more, onHold, onClose, onOpenWorkspace }) {
   );
 }
 
-/* ------------------------------------------------------------------ Inbox */
+/* ----------------------------------------------------------------- counts */
 
-const agentIcon = (kind) => (kind === 'build' || kind === 'quick' ? <I.AgentsIcon size={15} /> : kind === 'connect' ? <I.LibraryIcon size={15} /> : <I.ChatIcon size={15} />);
+/** The Agents row's count (2026-10-13): a number in a rounded square, its outline breathing while any agent runs, filled grey once all of them wait to be looked at; 9+ past nine. */
+export function Pill({ summary, ...rest }) {
+  if (!summary || !summary.total) return null;
+  const label = `${summary.ready} to look at, ${summary.running} running`;
+  return <span className={`sb-pill ${summary.running ? 'running' : 'ready'}`} title={label} aria-label={label} {...rest}>{countLabel(summary.total)}</span>;
+}
+
+/** A project's count: the bare number, grey and breathing while something under it runs, dark once all of it is ready. */
+export function Count({ summary, ...rest }) {
+  if (!summary || !summary.total) return null;
+  const label = `${summary.ready} to look at, ${summary.running} running`;
+  return <span className={`sb-count ${summary.running ? 'running' : 'done'}`} title={label} aria-label={label} {...rest}>{countLabel(summary.total)}</span>;
+}
+
+/** How long ago, short: now, 4m, 2h, 3d. */
+export function since(iso, now = Date.now()) {
+  const at = Date.parse(iso || '');
+  if (Number.isNaN(at)) return '';
+  const m = Math.round(Math.max(0, now - at) / 60000);
+  return m < 1 ? 'now' : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`;
+}
 
 /**
- * The agents that finished and wait for you to look, newest first (a press goes to their workspace, which clears them),
- * and under them the repository builds the notification bell held before it moved here (2026-10-08): Building… → Build
- * finished / Build failed. Opening the Inbox reads them. Connect your library's notes (needs you, done) come first; a
- * press opens its popup.
+ * A path that does not fit loses its front, a level at a time, to "./" (Engelbart/User Interface → ./User Interface).
+ * `parts`: the names, outermost first.
  */
-export function InboxPanel({ anchor, entries, nameOf, onGo, onClear, onClose, ignore }) {
-  const { sandboxes, rows: builds } = useBuildNotifications();
-  const unread = builds.filter((row) => !row.read).map((row) => row.id);
-  React.useEffect(() => { if (sandboxes && unread.length) sandboxes.markNotificationsRead(unread); }, [sandboxes, unread.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
-  const total = entries.length + builds.length;
-  return (
-    <Floating anchor={anchor} width={340} label="Inbox" onClose={onClose} ignore={ignore} data-sb-panel="inbox">
-      <PanelHead title="Inbox" count={total}>
-        {entries.length > 0 && <FootButton onClick={onClear} data-inbox-clear="1">Mark all as seen</FootButton>}
-        {builds.length > 0 && <FootButton onClick={() => sandboxes.clearNotifications(builds.map((row) => row.id))} data-inbox-clear-builds="1">Clear builds</FootButton>}
-      </PanelHead>
-      {total === 0 && !(sandboxes && sandboxes.error)
-        ? <Empty>Nothing new. When an agent finishes or asks you something, it lands here.</Empty>
-        : (
-          <Scroll>
-            {entries.map((entry) => (
-              <PanelRow
-                key={entry.id}
-                data-inbox-entry={entry.id}
-                icon={agentIcon(entry.kind)}
-                title={nameOf(entry.workspaceId) || entry.name || 'A workspace'}
-                meta={`${entry.did}${entry.at ? ` · ${sinceWords(entry.at)}` : ''}`}
-                onClick={() => onGo(entry)}
-              />
-            ))}
-            {sandboxes && (builds.length > 0 || sandboxes.error) && (
-              <div data-inbox-builds="1">
-                {entries.length > 0 && <div style={{ padding: '10px 10px 4px', ...text(12, '#8f8f8f', 500) }}>Builds</div>}
-                <NotificationRows sandboxes={sandboxes} rows={builds} onClose={onClose} />
-              </div>
-            )}
-          </Scroll>
-        )}
-    </Floating>
-  );
+export function FitCrumb({ parts, style, ...rest }) {
+  const ref = React.useRef(null);
+  const [dropped, setDropped] = React.useState(0);
+  const key = parts.join('\n');
+  React.useLayoutEffect(() => { setDropped(0); }, [key]);
+  React.useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || dropped >= parts.length - 1) return;
+    if (el.scrollWidth > el.clientWidth + 1) setDropped(dropped + 1);
+  });
+  return <span ref={ref} data-crumb={parts.join('/')} {...rest} style={{ display: 'block', overflow: 'hidden', whiteSpace: 'nowrap', textOverflow: 'clip', ...text(12, '#8f8f8f'), ...style }}>{dropped ? `./${parts.slice(dropped).join('/')}` : parts.join('/')}</span>;
 }
 
 /* ----------------------------------------------------------------- Agents */
 
-/** The project's agents by where they stand: running, waiting on you, done. A press goes to where each was asked. */
-export function AgentsPanel({ anchor, groups, nameOf, onGo, onClose, ignore }) {
-  const total = groups.running.length + groups.waiting.length + groups.done.length;
-  const where = (entry) => (entry.workspaceId ? nameOf(entry.workspaceId) || 'A workspace' : entry.kind === 'quick' ? 'A post-it' : '');
-  const row = (entry) => (
-    <PanelRow
-      key={entry.id}
-      data-agent-entry={entry.id}
-      icon={agentIcon(entry.kind)}
-      title={entry.title}
-      meta={[where(entry), entry.state, sinceWords(entry.at)].filter(Boolean).join(' · ')}
-      onClick={() => onGo(entry)}
-    />
-  );
-  return (
-    <Floating anchor={anchor} width={360} label="Agents" onClose={onClose} ignore={ignore} data-sb-panel="agents">
-      <PanelHead title="Agents" count={groups.running.length}>{groups.running.length > 0 && <span style={text(12, '#8f8f8f')}>running</span>}</PanelHead>
-      {total === 0
-        ? <Empty>No agents yet. Ask @bart in a document, or press Build under it to hand the workspace to a coding agent.</Empty>
-        : (
-          <Scroll>
-            {groups.running.length > 0 && <Group title="Running">{groups.running.map(row)}</Group>}
-            {groups.waiting.length > 0 && <Group title="Waiting on you">{groups.waiting.map(row)}</Group>}
-            {groups.done.length > 0 && <Group title="Done">{groups.done.map(row)}</Group>}
-          </Scroll>
-        )}
-    </Floating>
-  );
-}
-
-/* ------------------------------------------------------------ Connections */
-
-const ZoteroGlyph = () => <svg aria-hidden="true" viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 3h9l-9 10h9" /></svg>;
-// Overleaf's leaf, plainly drawn.
-const OverleafGlyph = () => <svg aria-hidden="true" viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 13c0-6 4-10 10-10 0 6-4 10-10 10z" /><path d="M3 13 9 7" /></svg>;
-export const OVERLEAF_URL = 'https://www.overleaf.com/project';
+const AGENT_GROUPS = [['Failed', 'failed'], ['Needs you', 'needs'], ['Finished', 'unseen'], ['Running', 'running'], ['Earlier', 'done']];
+const EARLIER_SHOWN = 12;
+const agentIcon = (kind) => (kind === 'connect' ? <I.LibraryIcon size={15} /> : kind === 'bart' || kind === 'brainstorm' || kind === 'discover' ? <I.ChatIcon size={15} /> : <I.AgentsIcon size={15} />);
 
 /**
- * Connections (requirement 5: Zotero, Overleaf, GitHub): where each stands. GitHub and Zotero are signed in to in
- * Settings' Connections page, which a press opens; their libraries are reached from the + and the @ menu. Overleaf is
- * read from the Stage, where a press opens its projects.
+ * Agents, with what was the Inbox (2026-10-13: "Combine inbox and Agents into just Agents"): what failed, what needs you,
+ * what finished and was not looked at, what runs, and the last few done, newest first in each; under them the repositories'
+ * builds the notification bell held (Building… → Build finished / Build failed), read once the panel opens. A row says
+ * where it is and how long ago, with its own count; a press goes to it. "Next agent needing attention" is ⌘J's.
+ * `entries`: model/sidebar.js agentEntries. `crumbOf(node)`: the project's path, names outermost first.
  */
-export function ConnectionsPanel({ anchor, onOverleaf, onClose, ignore }) {
-  const [github] = useGithubStatus();
-  const [zotero] = useZoteroStatus();
-  const manage = () => { onClose(); openSettings('connections'); };
-  const gh = !github ? 'Checking…' : github.connected ? `Connected${github.login ? ` · @${github.login}` : ''}` : github.pending ? 'Waiting for sign-in…' : 'Not connected';
-  const sync = zotero && zotero.connected ? zoteroSyncLine(zotero.sync) : null;
-  const zt = !zotero ? 'Checking…' : zotero.connected ? [`Connected${zotero.username ? ` · ${zotero.username}` : ''}`, sync && !sync.error ? sync.text.replace(/^Synced · /, '') : ''].filter(Boolean).join(' · ') : zotero.pending ? 'Finish signing in in your browser' : 'Not connected';
-  const dot = (on) => <span aria-hidden="true" title={on ? 'Connected' : 'Not connected'} style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: on ? '#0070f3' : '#d4d4d4' }} />; // the one accent
+export function AgentsPanel({ anchor, entries, crumbOf, onGo, onNext, onSeenAll, onClose, ignore }) {
+  const { sandboxes, rows: repoBuilds } = useBuildNotifications();
+  const unread = repoBuilds.filter((row) => !row.read).map((row) => row.id);
+  React.useEffect(() => { if (sandboxes && unread.length) sandboxes.markNotificationsRead(unread); }, [sandboxes, unread.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [, tick] = React.useState(0);
+  React.useEffect(() => { const timer = setInterval(() => tick((n) => n + 1), 30000); return () => clearInterval(timer); }, []);
+  const groups = AGENT_GROUPS.map(([title, state]) => [title, state, entries.filter((entry) => entry.state === state)])
+    .map(([title, state, list]) => [title, state, state === 'done' ? list.slice(0, EARLIER_SHOWN) : list])
+    .filter(([, , list]) => list.length);
+  const toLook = entries.filter((entry) => entry.state === 'needs' || entry.state === 'unseen' || entry.state === 'failed').length;
+  const unseen = entries.some((entry) => entry.state === 'unseen');
+  const row = (entry) => {
+    const crumb = entry.node ? crumbOf(entry.node) : entry.kind === 'quick' ? ['A post-it'] : entry.did ? [entry.did] : [];
+    return (
+      <div key={entry.id} role="button" tabIndex={-1} className="sb-prow" data-agent-entry={entry.id} data-agent-state={entry.state} onClick={() => onGo(entry)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, minHeight: 34, boxSizing: 'border-box', padding: '6px 10px', borderRadius: 6, cursor: 'pointer' }}>
+        <span style={{ flex: 'none', width: 18, display: 'flex', justifyContent: 'center', color: '#4d4d4d' }}>{agentIcon(entry.kind)}</span>
+        <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
+          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(14, '#171717'), lineHeight: 1.35 }}>{entry.title}</span>
+          {crumb.length > 0 && <FitCrumb parts={crumb} style={{ marginTop: 1, lineHeight: 1.35 }} />}
+        </span>
+        <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 6, ...text(12, '#8f8f8f') }}>{since(entry.at)}<Pill summary={{ total: entry.state === 'done' ? 0 : 1, running: entry.state === 'running' ? 1 : 0, ready: entry.state === 'running' ? 0 : 1 }} /></span>
+      </div>
+    );
+  };
   return (
-    <Floating anchor={anchor} width={330} label="Connections" onClose={onClose} ignore={ignore} data-sb-panel="connections">
-      <PanelHead title="Connections" />
-      <Scroll>
-        <PanelRow data-sb-connection="github" icon={<span className="glyph-fit" style={{ display: 'flex', width: 14, height: 14 }}><GH /></span>} title="GitHub" meta={gh} onClick={manage} actions={dot(!!(github && github.connected))} />
-        <PanelRow data-sb-connection="zotero" icon={<ZoteroGlyph />} title="Zotero" meta={zt} onClick={manage} actions={dot(!!(zotero && zotero.connected))} />
-        <PanelRow data-sb-connection="overleaf" icon={<OverleafGlyph />} title="Overleaf" meta="Open your projects on the Stage" onClick={() => { onClose(); onOverleaf(); }} actions={<I.ExternalIcon size={13} style={{ color: '#8f8f8f' }} />} />
-      </Scroll>
-      <PanelFoot><FootButton onClick={manage} data-sb-manage-connections="1"><I.GearIcon size={14} />Manage connections</FootButton></PanelFoot>
+    <Floating anchor={anchor} width={360} cap={620} label="Agents" onClose={onClose} ignore={ignore} data-sb-panel="agents">
+      <PanelHead title="Agents" note={toLook > 0 ? <span data-agents-to-look="1">{toLook} to look at</span> : null}>
+        {unseen && <button type="button" className="hov-bd2" data-agents-seen-all="1" onClick={onSeenAll} style={{ height: 26, padding: '0 10px', border: '1px solid #e4e4e4', borderRadius: 7, background: '#fff', boxShadow: '0 1px 1px #0000000a', cursor: 'pointer', ...text(12, '#171717', 500) }}>Mark all as seen</button>}
+      </PanelHead>
+      {!groups.length && !(repoBuilds.length || (sandboxes && sandboxes.error))
+        ? <Empty>Nothing yet. When an agent finishes or asks you something, it shows here.</Empty>
+        : (
+          <Scroll style={{ padding: '4px 6px 8px' }}>
+            {groups.map(([title, state, list]) => <Group key={state} title={title}>{list.map(row)}</Group>)}
+            {sandboxes && (repoBuilds.length > 0 || sandboxes.error) && (
+              <div data-agents-repositories="1">
+                <div style={{ padding: '10px 10px 4px', ...text(12, '#8f8f8f', 500) }}>Repositories</div>
+                <NotificationRows sandboxes={sandboxes} rows={repoBuilds} onClose={onClose} />
+              </div>
+            )}
+          </Scroll>
+        )}
+      <button type="button" className="hov-wash" data-agents-next="1" onClick={() => { onClose(); onNext(); }} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 20, width: '100%', minHeight: 38, boxSizing: 'border-box', padding: '8px 14px', border: 0, borderTop: '1px solid #eaeaea', background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13.5) }}>
+        <span>Next agent needing attention</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>⌘J</span>
+      </button>
     </Floating>
   );
 }
@@ -426,7 +419,7 @@ function LibraryChips({ chip, counts, onPick, chipsRef }) {
  * the keyboard; before anything is typed, what was worked on last. A press opens a row; its + brings it into this
  * workspace; an address or a path typed is added. Hovering one peeks at it. "Open full library" goes to the projects screen.
  */
-export function LibraryPanel({ anchor, chip: openOn = 'all', projectId, library, inRail, onOpen, onLink, onAddInput, onOpenFull, onOpenWorkspace, onClose, ignore }) {
+export function LibraryPanel({ anchor, chip: openOn = 'all', projectId, library, inRail, onOpen, onLink, onAddInput, onOpenFull, onOpenWorkspace, onClose, ignore, picking = null, panelRef = null }) {
   const [q, setQ] = React.useState('');
   const [idx, setIdx] = React.useState(0);
   const [found, setFound] = React.useState(null);
@@ -459,9 +452,12 @@ export function LibraryPanel({ anchor, chip: openOn = 'all', projectId, library,
     setIdx(0);
     if (inputRef.current) inputRef.current.focus({ preventScroll: true });
   };
+  // Picking (2026-10-13, + on Sources: its More opens the whole library beside it): a press adds the row to where + was
+  // pressed (`picking.onPick`), and what is there already is left out.
+  const listed = React.useMemo(() => (picking ? library.filter((row) => !picking.has(row.id)) : library), [library, picking]);
   const rows = React.useMemo(
-    () => libraryPanelRows({ query: typed, library, chip, inRail, found: answer, bodies }),
-    [typed, library, chip, inRail, answer, bodies],
+    () => libraryPanelRows({ query: typed, library: listed, chip, inRail, found: answer, bodies }),
+    [typed, listed, chip, inRail, answer, bodies],
   );
   const at = rows.length ? Math.min(idx, rows.length - 1) : -1;
   const peek = usePeek();
@@ -473,6 +469,7 @@ export function LibraryPanel({ anchor, chip: openOn = 'all', projectId, library,
   const pick = (result) => {
     if (!result) return;
     if (result.kind === 'fresh') void run(async () => { await onAddInput(typed); setQ(''); });
+    else if (picking) void run(async () => { await picking.onPick(result.row); });
     else { onClose(); onOpen(result.row); }
   };
   const onKey = (event) => {
@@ -486,8 +483,10 @@ export function LibraryPanel({ anchor, chip: openOn = 'all', projectId, library,
     }
   };
   return (
-    <Floating anchor={anchor} width={360} cap={600} label="Library" onClose={onClose} ignore={ignore} data-sb-panel="library">
-      <PanelHead title="Library" count={counts.all} />
+    <Floating anchor={anchor} width={360} cap={600} label="Library" onClose={onClose} ignore={ignore} panelRef={panelRef} data-sb-panel="library" data-picking={picking ? '1' : undefined}>
+      <PanelHead title="Library" count={counts.all}>
+        {picking && <RowAction label="Close library" shown onClick={onClose} data-close-picker-library="1"><I.CloseIcon size={14} /></RowAction>}
+      </PanelHead>
       <SearchField value={q} onChange={(value) => { setQ(value); setIdx(0); setProblem(''); }} onKeyDown={onKey} inputRef={inputRef} placeholder="Search the library, or paste a link" />
       {counts.all > 0 && <LibraryChips chip={chip} counts={counts} onPick={pickChip} chipsRef={chipsRef} />}
       {!typed && <div data-library-heading="1" style={{ padding: '2px 14px 2px', ...text(12, '#8f8f8f', 500) }}>{chipNoun ? `Recent ${chipNoun}` : 'Recent'}</div>}
@@ -507,8 +506,9 @@ export function LibraryPanel({ anchor, chip: openOn = 'all', projectId, library,
               onLeave={peek.close}
               actions={result.kind === 'fresh'
                 ? <span style={text(12, '#8f8f8f')}>Add</span>
-                : here ? <span style={{ ...text(11.5, '#8f8f8f'), padding: '0 4px' }}>here</span>
-                  : <RowAction label="Add to this workspace" onClick={() => void run(async () => { await onLink(row); })}><I.PlusIcon size={14} /></RowAction>}
+                : picking ? null
+                  : here ? <span style={{ ...text(11.5, '#8f8f8f'), padding: '0 4px' }}>In this project</span>
+                    : <RowAction label="Add to this project" onClick={() => void run(async () => { await onLink(row); })}><I.PlusIcon size={14} /></RowAction>}
             />
           );
         })}
@@ -517,20 +517,13 @@ export function LibraryPanel({ anchor, chip: openOn = 'all', projectId, library,
           : (typed ? 'Nothing in the library by that name.' : 'The library is empty. Add a source to start it.')}</Empty>}
         {(problem || (answer && answer.error)) && <div style={{ padding: '4px 10px', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{problem || answer.error}</div>}
       </Scroll>
-      <PanelFoot><FootButton onClick={() => { onClose(); onOpenFull(); }} data-sb-open-library="1"><I.LibraryIcon size={14} />Open full library</FootButton></PanelFoot>
+      {!picking && <PanelFoot><FootButton onClick={() => { onClose(); onOpenFull(); }} data-sb-open-library="1"><I.LibraryIcon size={14} />Open full library</FootButton></PanelFoot>}
       {peek.peek && <PeekCard peek={peek.peek} more={peek.more} onHold={peek.hold} onClose={peek.close} onOpenWorkspace={(pid, wid) => { peek.drop(); onClose(); onOpenWorkspace(pid, wid); }} />}
     </Floating>
   );
 }
 
-/* ------------------------------------------------------------- Workspaces */
-
-function flatten(roots) {
-  const out = [];
-  const walk = (list, depth, above) => { for (const node of list || []) { out.push({ node, depth, above }); walk(node.children, depth + 1, [...above, node.name]); } };
-  walk(roots, 0, []);
-  return out;
-}
+/* --------------------------------------------------------------- projects */
 
 /** A name typed in place: Enter or leaving it keeps it, Escape keeps the old one. */
 export function RenameField({ initial, onDone, style }) {
@@ -555,66 +548,81 @@ export function RenameField({ initial, onDone, style }) {
   );
 }
 
+const CHEVRON = (size = 13) => <I.ChevronDown size={size} stroke={2.4} />;
+
 /**
- * Every workspace of the project (Workspaces' "More"), as the tree has them, the one open here marked: a press goes there,
- * a double-click renames it, its + makes a sub-workspace in it and its can puts it in the trash (with what is nested in
- * it; the sidebar's trash brings it back for a week). Under them, every archived version (one per Clear), newest first.
+ * Projects as a tree in a panel (the mockup's treeRows): the section's More, a level's More and the card a folded project
+ * shows on hover. A level-2 project has its icon; each row has its count and, unless `expandAll`, a chevron that folds it
+ * (`folded`, a Set; `onFold(id)`). `guideLevel`: the level whose children get the guide line; `contextRoot`: the project the
+ * card is about, in bold. `q`: what the panel's search holds; a row shows when it or something in it matches.
  */
-export function WorkspacesPanel({ anchor, roots, hereId, versions, onGo, onNew, onRename, onDelete, onOpenVersion, onClose, ignore }) {
-  const [q, setQ] = React.useState('');
-  const [renaming, setRenaming] = React.useState(null);
-  const all = React.useMemo(() => flatten(roots), [roots]);
-  const found = q.trim() ? findWorkspaces(all.map(({ node, above }) => ({ id: node.id, name: node.name, above })), q) : null;
-  const list = found ? found.map((hit) => ({ node: all.find((entry) => entry.node.id === hit.id).node, depth: 0, above: hit.above })) : all;
-  const go = (id) => { onClose(); onGo(id); };
-  // The workspace open here in sight when the list opens.
-  React.useEffect(() => {
-    const here = hereId && document.querySelector(`[data-sb-all-workspace="${hereId}"]`);
-    if (here && here.scrollIntoView) here.scrollIntoView({ block: 'nearest' });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-  return (
-    <Floating anchor={anchor} width={340} cap={620} label="All workspaces" onClose={onClose} ignore={ignore} data-sb-panel="workspaces">
-      <PanelHead title="Workspaces" count={all.length}>
-        <RowAction label="Add workspace" shown onClick={() => { onClose(); onNew(null); }} data-sb-panel-new="1"><I.PlusIcon size={14} /></RowAction>
-      </PanelHead>
-      {all.length > 8 && <SearchField value={q} onChange={setQ} placeholder="Find a workspace" />}
-      <Scroll>
-        {list.map(({ node, depth, above }) => (
-          <div key={node.id} style={{ display: 'flex', alignItems: 'stretch' }}>
-            {/* a level in: a faint line under the icon above, and the name in line with that one's */}
-            {Array.from({ length: depth }, (_, i) => <span key={i} aria-hidden="true" style={{ flex: 'none', position: 'relative', width: 26 }}><span style={{ position: 'absolute', left: 17.5, top: 0, bottom: 0, width: 1, background: '#e6e6e6' }} /></span>)}
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <PanelRow
-                data-sb-all-workspace={node.id}
-                icon={depth === 0 ? <I.WorkspaceIcon size={15} /> : null}
-                title={renaming === node.id ? <RenameField initial={node.name} onDone={(name) => { setRenaming(null); if (name) onRename(node.id, name); }} /> : node.name}
-                meta={found && above.length ? above.join(' / ') : null}
-                faint={isUntitled(node.name)}
-                active={node.id === hereId}
-                onClick={() => { if (renaming !== node.id) go(node.id); }}
-                onDoubleClick={() => setRenaming(node.id)}
-                actions={renaming === node.id ? null : (
-                  <>
-                    <RowAction label="Add sub-workspace" onClick={() => { onClose(); onNew(node.id); }}><I.PlusIcon size={14} /></RowAction>
-                    <RowAction label={`Delete ${node.name}`} onClick={() => onDelete(node.id)} data-sb-delete-workspace={node.id}><I.TrashIcon size={14} /></RowAction>
-                  </>
-                )}
-              />
-            </div>
+export function ProjectTree({ ids, depth = 0, tree, counts, hereId, folded = null, onFold = null, expandAll = false, guideLevel = null, contextRoot = null, q = '', onGo, onMenu = null }) {
+  const matches = (id) => { const n = tree.get(id).node; return !q || n.name.toLowerCase().includes(q) || (n.children || []).some((child) => matches(child.id)); };
+  return ids.filter((id) => tree.has(id) && matches(id)).map((id) => {
+    const at = tree.get(id), n = at.node;
+    const kids = (n.children || []).map((child) => child.id);
+    const isFolded = !expandAll && !q && !!folded && folded.has(id);
+    const here = id === hereId;
+    const inHere = hereId && tree.has(hereId) && tree.get(hereId).path.includes(id);
+    return (
+      <React.Fragment key={id}>
+        <div
+          role="button"
+          tabIndex={-1}
+          className={`sb-prow${id === contextRoot ? ' sb-fly-context' : ''}`}
+          data-tree-project={id}
+          data-active={here ? '1' : undefined}
+          onClick={() => onGo(id)}
+          onContextMenu={onMenu ? (event) => onMenu(event, id) : undefined}
+          style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, minHeight: 30, boxSizing: 'border-box', padding: '0 8px', borderRadius: 6, cursor: 'pointer', background: here ? '#ececec' : undefined }}
+        >
+          {at.level === 2 ? <span style={{ flex: 'none', width: 18, height: 18, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#5c5c5c' }}><I.WorkspaceIcon size={18} /></span>
+            : depth === 0 ? <span style={{ flex: 'none', width: 16, display: 'flex', justifyContent: 'center', color: '#4d4d4d' }}><I.WorkspaceIcon size={15} /></span> : null}
+          <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(depth ? 13.5 : 14, depth ? '#4d4d4d' : '#171717', id === contextRoot || here ? 500 : 400), ...(isUntitled(n.name) ? { color: '#8f8f8f' } : {}) }}>{n.name}</span>
+          <span className="sb-tools" style={{ marginLeft: 0 }}>
+            <span className="sb-slot-count"><Count summary={counts.get(id)} /></span>
+            {!expandAll && <span className="sb-slot-chev">{kids.length > 0 && <button type="button" className={`sb-chev${at.level > 1 && !inHere ? ' sb-on-hover' : ''}`} data-tree-fold={id} data-open={isFolded ? '0' : '1'} aria-label={`${isFolded ? 'Open' : 'Fold'} ${n.name}`} onClick={(event) => { event.stopPropagation(); if (onFold) onFold(id); }}>{CHEVRON()}</button>}</span>}
+          </span>
+        </div>
+        {kids.length > 0 && !isFolded && (
+          <div className="sb-fly-kids" data-parent={id} data-guide={at.level === guideLevel ? '1' : '0'} style={{ paddingLeft: depth ? 18 : 22 }}>
+            <ProjectTree ids={kids} depth={depth + 1} tree={tree} counts={counts} hereId={hereId} folded={folded} onFold={onFold} expandAll={expandAll} guideLevel={guideLevel} contextRoot={contextRoot} q={q} onGo={onGo} onMenu={onMenu} />
           </div>
-        ))}
-        {found && !found.length && <Empty>No workspace by that name.</Empty>}
-        {!found && versions.length > 0 && (
+        )}
+      </React.Fragment>
+    );
+  });
+}
+
+const useFolded = (initial) => {
+  const [folded, setFolded] = React.useState(() => new Set(initial));
+  const flip = React.useCallback((id) => setFolded((now) => { const next = new Set(now); if (next.has(id)) next.delete(id); else next.add(id); return next; }), []);
+  return [folded, flip];
+};
+
+/**
+ * Every project here (Projects' More): a search, the tree with every level-2 project folded but the one you are in, each
+ * row's count, a + that makes one at the top; under it every archived version (one per Clear), newest first.
+ */
+export function ProjectsPanel({ anchor, roots, tree, counts, hereId, versions = [], onGo, onNew, onMenu, onOpenVersion, onClose, ignore }) {
+  const [q, setQ] = React.useState('');
+  const branch = hereId && tree.has(hereId) ? tree.get(hereId).path[0] : null;
+  const [folded, flip] = useFolded(roots.filter((node) => node.id !== branch && (node.children || []).length).map((node) => node.id));
+  const go = (id) => { onClose(); onGo(id); };
+  const needle = q.trim().toLowerCase();
+  return (
+    <Floating anchor={anchor} width={340} cap={620} label="Projects" onClose={onClose} ignore={ignore} data-sb-panel="projects">
+      <PanelHead title="Projects" count={tree.size}>
+        <RowAction label="Create project" shown onClick={() => { onClose(); onNew(null); }} data-sb-panel-new="1"><I.PlusIcon size={15} /></RowAction>
+      </PanelHead>
+      <SearchField value={q} onChange={setQ} placeholder="Find a project" />
+      <Scroll style={{ padding: '4px 6px 8px' }}>
+        <ProjectTree ids={roots.map((node) => node.id)} tree={tree} counts={counts} hereId={hereId} folded={folded} onFold={flip} q={needle} onGo={go} onMenu={onMenu} />
+        {needle && ![...tree.values()].some((entry) => entry.node.name.toLowerCase().includes(needle)) && <Empty>No project by that name.</Empty>}
+        {!needle && versions.length > 0 && (
           <Group title="Archived">
             {versions.map((version) => (
-              <PanelRow
-                key={`${version.workspaceId}/${version.file}`}
-                data-sb-version={version.file}
-                icon={<I.ArchiveIcon size={15} />}
-                title={version.title}
-                meta={`${version.name}${version.clearedAt ? ` · cleared ${sinceWords(version.clearedAt)}` : ''}`}
-                onClick={() => { onClose(); onOpenVersion(version); }}
-              />
+              <PanelRow key={`${version.workspaceId}/${version.file}`} data-sb-version={version.file} icon={<I.ArchiveIcon size={15} />} title={version.title} meta={`${version.name}${version.clearedAt ? ` · cleared ${sinceWords(version.clearedAt)}` : ''}`} onClick={() => { onClose(); onOpenVersion(version); }} />
             ))}
           </Group>
         )}
@@ -623,58 +631,245 @@ export function WorkspacesPanel({ anchor, roots, hereId, versions, onGo, onNew, 
   );
 }
 
-/* ---------------------------------------------------------- a source group */
+/** A level's More: every sibling there and what is in each, open, each foldable; nothing above them. */
+export function SiblingsPanel({ anchor, parentId, roots, tree, counts, hereId, onGo, onMenu, onClose, ignore }) {
+  const [folded, flip] = useFolded([]);
+  const ids = parentId ? (tree.get(parentId).node.children || []).map((child) => child.id) : roots.map((node) => node.id);
+  return (
+    <Floating anchor={anchor} width={320} cap={560} label="More projects" onClose={onClose} ignore={ignore} data-sb-panel="siblings">
+      <Scroll style={{ padding: '6px 6px 8px' }}>
+        <ProjectTree ids={ids} depth={1} tree={tree} counts={counts} hereId={hereId} folded={folded} onFold={flip} onGo={(id) => { onClose(); onGo(id); }} onMenu={onMenu} />
+      </Scroll>
+    </Floating>
+  );
+}
 
 /**
- * One group of Your sources whole (its "More"): every row with its kind, the one open marked; a press opens it, its star
- * stars it, its minus takes it out of this workspace (the library keeps it). Long groups get a search.
+ * What a folded project holds, beside the sidebar while the pointer rests on its row (2026-10-13: "when I hover over a
+ * project that has children I can see its children"): the project, then everything in it, open, with no chevrons; a
+ * guide line only beside the deepest group, and none when there are only children.
  */
-export function SourcesPanel({ anchor, group, activeId, starred, inRail, onOpen, onStar, onRemove, onOpenWorkspace, onClose, ignore }) {
+export function ProjectFlyout({ flyout, tree, counts, hereId, onGo, onHold, onLeave }) {
+  const layer = useLayer({ stack: false });
+  const [ref, placed] = usePlaced(flyout.anchor, { side: 'right', gap: 6, cap: 440 });
+  const at = tree.get(flyout.id);
+  if (!at) return null;
+  let deepest = null;
+  const walk = (node, level) => { for (const child of node.children || []) { if ((child.children || []).length) deepest = Math.max(deepest || 0, level + 1); walk(child, level + 1); } };
+  walk(at.node, at.level);
+  return createPortal(
+    <div ref={ref} data-overlay="1" data-hover="1" data-sb-flyout={flyout.id} data-sb-layer={layer} onMouseEnter={onHold} onMouseLeave={onLeave} style={{ ...placed, zIndex: 82, width: 270, boxSizing: 'border-box', padding: 5, display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #e6e6e6', borderRadius: 10, boxShadow: SHADOW, animation: `rise 140ms ${EASE}`, overflowY: 'auto' }}>
+      <ProjectTree ids={[flyout.id]} tree={tree} counts={counts} hereId={hereId} expandAll guideLevel={deepest} contextRoot={flyout.id} onGo={onGo} />
+    </div>,
+    document.body,
+  );
+}
+
+/** A tooltip in the app's own look, under what it is about (`at`, a rect), after the sidebar's beat. */
+export function Tip({ at, children, ...rest }) {
+  const width = 240;
+  const left = Math.max(8, Math.min(at.left + 28, (window.innerWidth || 1200) - width - 8));
+  const top = at.bottom + 48 <= (window.innerHeight || 800) ? at.bottom + 5 : Math.max(8, at.top - 45);
+  return createPortal(<div role="tooltip" data-overlay="1" className="sb-tip" {...rest} style={{ left, top }}>{children}</div>, document.body);
+}
+
+/* ------------------------------------------------------------ the sources */
+
+/**
+ * A folder of Sources whole (its More): every source in it, the one open marked; a press opens it, its minus takes it out
+ * of the folder (the library keeps it). Long folders get a search.
+ */
+export function SourcesPanel({ anchor, title, rows, activeId, removeLabel, onOpen, onRemove, onOpenWorkspace, onClose, ignore }) {
   const [q, setQ] = React.useState('');
   const needle = q.trim().toLowerCase();
-  const rows = needle ? group.rows.filter((row) => `${row.name} ${row.url || ''}`.toLowerCase().includes(needle)) : group.rows;
+  const listed = needle ? rows.filter((row) => `${row.name} ${row.url || ''}`.toLowerCase().includes(needle)) : rows;
   const peek = usePeek();
   return (
-    <Floating anchor={anchor} width={340} cap={620} label={group.label} onClose={onClose} ignore={ignore} data-sb-panel={`sources-${group.key}`}>
-      <PanelHead title={group.label} count={group.rows.length} />
-      {group.rows.length > 8 && <SearchField value={q} onChange={setQ} placeholder={`Find in ${group.label}`} />}
+    <Floating anchor={anchor} width={330} cap={620} label={title} onClose={onClose} ignore={ignore} data-sb-panel="sources">
+      <PanelHead title={title} count={rows.length} />
+      {rows.length > 8 && <SearchField value={q} onChange={setQ} placeholder={`Find in ${title}`} />}
       <Scroll>
-        {rows.map((row) => {
-          const on = starred.has(row.id);
-          return (
-            <PanelRow
-              key={row.id}
-              data-sb-source-all={row.id}
-              icon={<Glyph item={row} box={16} color="#4d4d4d" />}
-              title={row.name}
-              faint={isUntitled(row.name)}
-              active={row.id === activeId}
-              onClick={(event) => { peek.drop(); onClose(); onOpen(row, event); }}
-              onEnter={(event) => peek.open(row, event.currentTarget, panelEdge(event.currentTarget))}
-              onLeave={peek.close}
-              actions={(
-                <>
-                  <RowAction label={on ? 'Unstar' : 'Star'} shown={on} onClick={() => onStar(row, !on)}><I.StarIcon size={14} filled={on} /></RowAction>
-                  {inRail(row.id) && <RowAction label={`Take ${row.name} out of this workspace`} onClick={() => onRemove(row)}><I.MinusCircleIcon size={14} /></RowAction>}
-                </>
-              )}
-            />
-          );
-        })}
-        {!rows.length && <Empty>{needle ? 'Nothing by that name.' : 'Nothing here yet.'}</Empty>}
+        {listed.map((row) => (
+          <PanelRow
+            key={row.id}
+            data-sb-source-all={row.id}
+            icon={<I.SourceIcon kind={sourceIcon(row)} size={16} />}
+            title={row.name}
+            faint={isUntitled(row.name)}
+            active={row.id === activeId}
+            onClick={(event) => { peek.drop(); onClose(); onOpen(row, event); }}
+            onEnter={(event) => peek.open(row, event.currentTarget, panelEdge(event.currentTarget))}
+            onLeave={peek.close}
+            actions={onRemove ? <RowAction label={removeLabel(row)} onClick={() => onRemove(row)}><I.MinusCircleIcon size={14} /></RowAction> : null}
+          />
+        ))}
+        {!listed.length && <Empty>{needle ? 'Nothing by that name.' : 'Nothing here yet.'}</Empty>}
       </Scroll>
       {peek.peek && <PeekCard peek={peek.peek} more={peek.more} onHold={peek.hold} onClose={peek.close} onOpenWorkspace={(pid, wid) => { peek.drop(); onClose(); onOpenWorkspace(pid, wid); }} />}
     </Floating>
   );
 }
 
+const PICKER_SHOWN = 5;
+const PICKER_LEAVE = 180; // ms after the pointer leaves the picker (and the library beside it) before it hides
+const PICKER_MARGIN = 12;
+
+/**
+ * What + on Sources adds (2026-10-13, the mockup's add picker): a search over the library, its first five that are not
+ * there yet, More (the whole library beside it, with its chips), then Upload URL or path, Add from GitHub and New note.
+ * `into`: what the + belongs to ({ name } of the project or of a folder); `has(id)`: whether it holds that row already.
+ * `onPick(row)`, `onAddInput(input)`, `onPickDisk()`, `onPickRepo(entry)`, `onNewNote()` add to it. It hides by itself a
+ * beat after the pointer leaves it, the library beside it and the + it came from (2026-10-13: "if I move my cursor outside
+ * the obvious area … it should auto hide").
+ */
+export function AddPicker({ anchor, from, into, projectId, library, inRail, has, onPick, onAddInput, onPickDisk, onPickRepo, onNewNote, onLibraryChange, onClose, ignore }) {
+  const [q, setQ] = React.useState('');
+  const [idx, setIdx] = React.useState(0);
+  const [upload, setUpload] = React.useState(false);
+  const [value, setValue] = React.useState('');
+  const [view, setView] = React.useState('menu');
+  const [side, setSide] = React.useState(null); // the library beside it: { anchor } while open
+  const ref = React.useRef(null);
+  const sideRef = React.useRef(null);
+  const fieldRef = React.useRef(null);
+  const searchRef = React.useRef(null);
+  const { busy, error, setError, run } = useAddRun(onClose);
+  // Nothing closes it while it is adding. It does not hide by itself while GitHub's sign-in or list is in it, or while a
+  // link or a path is typed in it; Escape and a press elsewhere still close it then.
+  const busyRef = React.useRef(false);
+  busyRef.current = busy;
+  const stayRef = React.useRef(false);
+  stayRef.current = busy || view === 'github' || !!value.trim();
+  React.useEffect(() => { const timer = setTimeout(() => { if (searchRef.current) searchRef.current.focus({ preventScroll: true }); }, 0); return () => clearTimeout(timer); }, []);
+  React.useEffect(() => { if (onLibraryChange) onLibraryChange(!!side); }, [side, onLibraryChange]);
+  // Hiding by itself: the pointer more than a little outside the picker, the library beside it, a peek and the + itself.
+  React.useEffect(() => {
+    let timer = null;
+    const inside = (event) => {
+      const boxes = [ref.current, sideRef.current, ...document.querySelectorAll('[data-sb-peek]')].filter(Boolean).map((el) => el.getBoundingClientRect());
+      if (from) boxes.push(from);
+      return boxes.some((r) => event.clientX >= r.left - PICKER_MARGIN && event.clientX <= r.right + PICKER_MARGIN && event.clientY >= r.top - PICKER_MARGIN && event.clientY <= r.bottom + PICKER_MARGIN);
+    };
+    const move = (event) => {
+      if (inside(event) || stayRef.current) { clearTimeout(timer); timer = null; return; }
+      if (!timer) timer = setTimeout(() => { timer = null; if (!stayRef.current) onClose(); }, PICKER_LEAVE);
+    };
+    const leave = () => { if (!timer && !stayRef.current) timer = setTimeout(() => { timer = null; if (!stayRef.current) onClose(); }, PICKER_LEAVE); };
+    document.addEventListener('mousemove', move, true);
+    document.documentElement.addEventListener('mouseleave', leave);
+    return () => { clearTimeout(timer); document.removeEventListener('mousemove', move, true); document.documentElement.removeEventListener('mouseleave', leave); };
+  }, [from, onClose]);
+  const typed = q.trim();
+  const candidates = React.useMemo(() => library.filter((row) => !has(row.id) && row.type !== 'image'), [library, has]);
+  const results = React.useMemo(() => {
+    if (!typed) return [...candidates].sort((a, b) => (Date.parse(b.last_edited || b.created || '') || 0) - (Date.parse(a.last_edited || a.created || '') || 0)).map((row) => ({ kind: 'item', key: row.id, row, name: row.name }));
+    return searchRows({ query: typed, library: candidates, inRail: () => false, found: undefined }).filter((result) => result.kind === 'item');
+  }, [typed, candidates]);
+  const shown = results.slice(0, PICKER_SHOWN);
+  const at = shown.length ? Math.min(idx, shown.length - 1) : -1;
+  const peek = usePeek();
+  const pick = (row) => { if (row && !busy) void run(async () => { peek.drop(); await onPick(row); return []; }); };
+  const commit = () => { const input = value.trim(); if (input && !busy) void run(async () => { await onAddInput(input); return []; }); };
+  const openSide = () => {
+    if (side) { setSide(null); return; }
+    const r = ref.current ? ref.current.getBoundingClientRect() : null;
+    if (r) setSide({ anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } });
+  };
+  const onSearchKey = (event) => {
+    const n = shown.length;
+    if (event.key === 'ArrowDown') { event.preventDefault(); if (n) setIdx((at + 1) % n); }
+    else if (event.key === 'ArrowUp') { event.preventDefault(); if (n) setIdx((at - 1 + n) % n); }
+    else if (event.key === 'Enter') { event.preventDefault(); if (at >= 0) pick(shown[at].row); else if (looksAddable(typed)) { setUpload(true); setValue(typed); } }
+  };
+  const mi = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', height: 32, boxSizing: 'border-box', padding: '0 10px', border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13.5) };
+  // A path may hold spaces (every screenshot's name does), which looksAddable leaves out of a search's guesses.
+  const addable = looksAddable(value) || /^(~\/|\/)\S/.test(value.trim());
+  return (
+    <>
+      <Floating anchor={anchor} width={320} cap={620} label={`Add sources to ${into.name}`} onClose={() => { if (!busyRef.current) onClose(); }} ignore={ignore} panelRef={ref} data-sb-panel="add" data-add-picker="1" style={{ padding: 8 }}>
+        {view === 'github' ? (
+          <>
+            <GithubPane library={library} inRail={inRail} busy={busy} onBack={() => { setView('menu'); setError(''); }} onPick={(entry) => { if (!busy) void run(async () => { await onPickRepo(entry); return []; }); }} />
+            {error && <div style={{ padding: '6px 2px 0', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}
+          </>
+        ) : (
+          <>
+            <div className="rail-field" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, height: 32, boxSizing: 'border-box', padding: '0 10px', marginBottom: 6, border: `1px solid ${q ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 6, background: '#fff' }}>
+              <I.SearchIcon size={14} stroke={2.4} style={{ color: '#171717' }} />
+              <input ref={searchRef} value={q} onChange={(event) => { setQ(event.target.value); setIdx(0); }} onKeyDown={onSearchKey} placeholder="Search library" aria-label="Search library" spellCheck={false} data-add-search="1" style={{ flex: 1, minWidth: 0, padding: 0, border: 0, outline: 'none', background: 'transparent', ...text(14) }} />
+            </div>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {shown.map((result, i) => (
+                <button key={result.key} type="button" data-add-result={result.key} disabled={busy} onMouseDown={(event) => event.preventDefault()} onClick={() => pick(result.row)} onMouseEnter={(event) => { if (idx !== i) setIdx(i); peek.open(result.row, event.currentTarget, panelEdge(event.currentTarget)); }} onMouseLeave={peek.close} style={{ ...mi, background: i === at && typed ? '#f2f2f2' : 'transparent' }} className="hov-wash">
+                  <span style={{ flex: 'none', display: 'flex', color: '#4d4d4d' }}><I.SourceIcon kind={sourceIcon(result.row)} size={16} /></span>
+                  <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{result.name}</span>
+                </button>
+              ))}
+              {!shown.length && <div style={{ height: 30, display: 'flex', alignItems: 'center', paddingLeft: 10, ...text(13, '#a3a3a3') }}>Nothing matches</div>}
+              {results.length > PICKER_SHOWN && (
+                <button type="button" className="sb-row sb-more" data-add-more="1" onClick={openSide} style={{ display: 'flex', alignItems: 'center', height: 30, boxSizing: 'border-box', padding: '0 6px 0 8px', border: 0, borderRadius: 6, background: side ? '#e6e6e6' : 'transparent', cursor: 'pointer', ...text(14, '#8f8f8f'), lineHeight: '30px' }}>
+                  <span aria-hidden="true" style={{ marginRight: 4 }}>...</span><span>More</span>
+                </button>
+              )}
+            </div>
+            <div style={{ height: 1, margin: '4px 6px', background: '#efefef' }} />
+            <button type="button" className="hov-wash" data-add-upload="1" aria-expanded={upload} onClick={() => { setUpload((now) => !now); setError(''); setTimeout(() => { if (fieldRef.current) fieldRef.current.focus(); }, 0); }} style={mi}>
+              <span style={{ flex: 'none', display: 'flex', color: '#4d4d4d' }}><I.AddIcon size={16} /></span><span>Upload URL or path</span>
+            </button>
+            {upload && (
+              <div style={{ padding: '4px 8px 8px' }}>
+                <div className="rail-field" style={{ display: 'flex', alignItems: 'center', height: 32, boxSizing: 'border-box', padding: '0 10px', border: `1px solid ${error && value ? '#e70022' : value ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 6, background: '#fff' }}>
+                  <input ref={fieldRef} value={value} readOnly={busy} onChange={(event) => { setValue(event.target.value); setError(''); }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit(); } }} placeholder="URL or path" aria-label="URL or path" spellCheck={false} data-add-value="1" style={{ flex: 1, minWidth: 0, padding: 0, border: 0, outline: 'none', background: 'transparent', ...text(14) }} />
+                </div>
+                {error && value && <div data-add-error="1" style={{ padding: '6px 2px 0', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+                  <button type="button" className="hov-ink" data-add-disk="1" disabled={busy} onClick={() => { if (!busy) void run(async () => { await onPickDisk(); return []; }); }} style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', ...text(12.5, '#8f8f8f') }}>Choose from disk…</button>
+                  <span style={{ flex: 1 }} />
+                  <button type="button" className="hov-dim" data-add-link="1" disabled={busy || !addable} onClick={commit} style={{ height: 28, padding: '0 12px', border: 0, borderRadius: 6, background: '#171717', cursor: addable ? 'pointer' : 'default', opacity: addable ? 1 : 0.35, ...text(12.5, '#fff', 500) }}>Add source</button>
+                </div>
+              </div>
+            )}
+            {error && !value && !upload && <div data-add-error="1" style={{ padding: '2px 10px 4px', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}
+            <button type="button" className="hov-wash" data-add-github="1" disabled={busy} onClick={() => { setError(''); setView('github'); setSide(null); }} style={mi}>
+              <span className="glyph-fit" style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4d4d4d' }}><span style={{ display: 'flex', width: 14, height: 14 }}>{KIND.git.glyph}</span></span><span>Add from GitHub</span>
+            </button>
+            <button type="button" className="hov-wash" data-add-note="1" disabled={busy} onClick={() => { if (!busy) void run(async () => { await onNewNote(); return []; }); }} style={mi}>
+              <span style={{ flex: 'none', display: 'flex', color: '#4d4d4d' }}><I.ComposeIcon size={16} /></span><span>New note</span>
+            </button>
+          </>
+        )}
+      </Floating>
+      {side && (
+        <LibraryPanel
+          anchor={side.anchor}
+          projectId={projectId}
+          library={library}
+          inRail={inRail}
+          panelRef={sideRef}
+          picking={{ has: (id) => has(id), onPick: async (row) => { await onPick(row); onClose(); } }}
+          onOpen={() => {}}
+          onLink={() => {}}
+          onAddInput={async (input) => { await onAddInput(input); onClose(); }}
+          onOpenFull={() => {}}
+          onOpenWorkspace={() => {}}
+          onClose={() => setSide(null)}
+          ignore="[data-add-more]"
+        />
+      )}
+      {peek.peek && <PeekCard peek={peek.peek} more={peek.more} onHold={peek.hold} onClose={peek.close} onOpenWorkspace={() => {}} />}
+    </>
+  );
+}
+
 /* -------------------------------------------------------------- the project */
 
 /**
- * The project's menu, under its name (Switch Projects: Linear's workspace menu with only "Switch workspace", and Rename):
- * Switch project opens the list beside it, every project with this one ticked, then New project and All projects.
+ * The top-level project's menu, under its name (Switch Projects: Linear's workspace menu): Switch project opens the list
+ * beside it, every top-level project with its count and this one ticked, then New project and All projects; Rename;
+ * Project page, the project's own page, which opens in the middle; and Keyboard shortcuts.
+ * `counts`: project id → summary (model/sidebar.js summarize) for the switcher's list.
  */
-export function ProjectMenu({ anchor, project, onSwitch, onNewProject, onAllProjects, onRename, onClose, ignore }) {
+export function ProjectMenu({ anchor, project, counts = new Map(), onSwitch, onNewProject, onAllProjects, onRename, onProjectPage, onShortcuts, onClose, ignore }) {
   const [list, setList] = React.useState(null);
   const [sub, setSub] = React.useState(null); // the Switch row's rect while its list is open
   const switchRef = React.useRef(null);
@@ -683,7 +878,13 @@ export function ProjectMenu({ anchor, project, onSwitch, onNewProject, onAllProj
     api.listProjects().then((projects) => { if (live) setList(projects); }).catch(() => { if (live) setList([]); });
     return () => { live = false; };
   }, []);
-  const openSub = () => { if (switchRef.current) { const r = switchRef.current.getBoundingClientRect(); setSub({ left: r.left, right: r.right, top: r.top - 5, bottom: r.bottom }); } };
+  // The list beside closes a moment after the pointer moves onto another row, and not at all when it reaches the list:
+  // the way there crosses Rename on a slant (2026-10-13, found driving it: the list was gone before the pointer got there).
+  const shutTimer = React.useRef(null);
+  React.useEffect(() => () => clearTimeout(shutTimer.current), []);
+  const keepSub = () => { clearTimeout(shutTimer.current); shutTimer.current = null; };
+  const shutSub = () => { keepSub(); shutTimer.current = setTimeout(() => setSub(null), 300); };
+  const openSub = () => { keepSub(); if (switchRef.current) { const r = switchRef.current.getBoundingClientRect(); setSub({ left: r.left, right: r.right, top: r.top - 5, bottom: r.bottom }); } };
   const item = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', height: 32, boxSizing: 'border-box', padding: '0 10px', border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13.5) };
   return (
     <>
@@ -692,19 +893,29 @@ export function ProjectMenu({ anchor, project, onSwitch, onNewProject, onAllProj
           <span style={{ flex: 1 }}>Switch project</span>
           <I.ChevronRight size={13} style={{ color: '#8f8f8f' }} />
         </button>
-        <button type="button" className="hov-wash" data-sb-rename-project="1" onMouseEnter={() => setSub(null)} onClick={() => { onClose(); onRename(); }} style={item}>
+        <button type="button" className="hov-wash" data-sb-rename-project="1" onMouseEnter={shutSub} onClick={() => { onClose(); onRename(); }} style={item}>
           <span style={{ flex: 1 }}>Rename</span>
+        </button>
+        <button type="button" className="hov-wash" data-sb-project-page="1" onMouseEnter={shutSub} onClick={() => { onClose(); onProjectPage(); }} style={item}>
+          <span style={{ flex: 1 }}>Project page</span>
+          <I.ArrowOutIcon size={14} style={{ color: '#8f8f8f' }} />
+        </button>
+        <div style={{ height: 1, margin: '4px 6px', background: '#efefef' }} />
+        <button type="button" className="hov-wash" data-sb-shortcuts="1" onMouseEnter={shutSub} onClick={() => { onClose(); onShortcuts(); }} style={item}>
+          <span style={{ flex: 1 }}>Keyboard shortcuts</span>
+          <span className="sb-shortcut">⌃1–9 · ⌘J</span>
         </button>
       </Floating>
       {sub && (
-        <Floating anchor={sub} side="right" gap={6} width={250} cap={460} label="Switch project" onClose={() => setSub(null)} ignore="[data-sb-switch-project]" data-sb-panel="projects" style={{ padding: 5, gap: 1 }}>
+        <Floating anchor={sub} side="right" gap={6} width={250} cap={460} label="Switch project" onClose={() => setSub(null)} ignore="[data-sb-switch-project]" data-sb-panel="switch" onMouseEnter={keepSub} style={{ padding: 5, gap: 1 }}>
           <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 1 }}>
             {list === null && <div style={{ padding: '7px 10px', ...text(13, '#8f8f8f') }}>Loading…</div>}
             {(list || []).map((candidate) => (
               <button key={candidate.id} type="button" className="hov-wash" data-sb-project={candidate.id} onClick={() => { onClose(); if (candidate.id !== project.id) onSwitch(candidate.id); }} style={item}>
                 <I.ProjectIcon size={15} style={{ color: '#4d4d4d' }} />
                 <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', fontWeight: candidate.id === project.id ? 500 : 400 }}>{candidate.name}</span>
-                {candidate.id === project.id && <I.CheckIcon size={14} style={{ color: '#171717' }} />}
+                <Count summary={counts.get(candidate.id)} />
+                <span className="sb-slot-chev">{candidate.id === project.id && <I.CheckIcon size={14} style={{ color: '#171717' }} />}</span>
               </button>
             ))}
           </div>
@@ -717,14 +928,45 @@ export function ProjectMenu({ anchor, project, onSwitch, onNewProject, onAllProj
   );
 }
 
+/** Keyboard shortcuts (the project menu's last row): ⌘J, Ctrl+1–9 for this top-level project's level-2 projects, ⌘\. */
+export function ShortcutsDialog({ roots, railHidden = false, onNext, onGo, onToggleRail, onClose }) {
+  const ids = shortcutProjects(roots);
+  const row = { display: 'flex', alignItems: 'center', gap: 20, width: '100%', minHeight: 38, boxSizing: 'border-box', padding: '8px 14px', border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13.5) };
+  return (
+    <Centered onClose={onClose} label="Keyboard shortcuts" width={480} data-sb-shortcuts-dialog="1">
+      <div style={{ padding: '14px 6px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', padding: '0 8px 6px 14px' }}>
+          <span style={text(13, '#171717', 600)}>Keyboard shortcuts</span>
+          <span style={{ flex: 1 }} />
+          <button type="button" className="sb-icon" aria-label="Close" onClick={onClose}><I.CloseIcon size={14} /></button>
+        </div>
+        <button type="button" className="hov-wash" onClick={() => { onClose(); onNext(); }} style={row}><span>Next agent needing attention</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>⌘J</span></button>
+        <div style={{ padding: '0 14px 12px', ...text(12, '#8f8f8f') }}>Needs you first, then finished work. With nothing waiting, returns to where you were before.</div>
+        {ids.length > 0 && (
+          <>
+            <div style={{ height: 1, margin: '4px 6px', background: '#efefef' }} />
+            <div style={{ padding: '10px 14px 4px', ...text(12, '#8f8f8f', 500) }}>Projects</div>
+            {ids.map((id, i) => {
+              const node = roots.find((candidate) => candidate.id === id);
+              return <button key={id} type="button" className="hov-wash" data-shortcut-project={id} onClick={() => { onClose(); onGo(id); }} style={row}><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node ? node.name : ''}</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>Ctrl+{i + 1}</span></button>;
+            })}
+          </>
+        )}
+        <div style={{ height: 1, margin: '4px 6px', background: '#efefef' }} />
+        <button type="button" className="hov-wash" onClick={() => { onClose(); onToggleRail(); }} style={row}><span>{railHidden ? 'Show' : 'Hide'} sidebar</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>⌘\</span></button>
+      </div>
+    </Centered>
+  );
+}
+
 /* ----------------------------------------------------------------- Search */
 
 const MAX_EACH = 6;
 
 /**
- * Search (the head's magnifier): the project's workspaces, this workspace's sources, and the library, as words are typed;
- * an address or a path can be added. ↑↓ and Enter, or a press: a workspace goes there, a source opens; a library row's +
- * brings it into this workspace.
+ * Search (the fixed row under Library): the projects here, this project's sources, and the library, as words are typed;
+ * an address or a path can be added. ↑↓ and Enter, or a press: a project goes there, a source opens; a library row's +
+ * brings it into this project.
  */
 export function SearchDialog({ projectId, workspaces, rows, library, inRail, onGoWorkspace, onOpen, onLink, onAddInput, onClose }) {
   const [q, setQ] = React.useState('');
@@ -749,9 +991,9 @@ export function SearchDialog({ projectId, workspaces, rows, library, inRail, onG
     if (!typed) return [];
     const out = [];
     const spaces = findWorkspaces(workspaces, typed).slice(0, MAX_EACH).map((workspace) => ({ kind: 'workspace', key: `ws:${workspace.id}`, workspace }));
-    if (spaces.length) out.push({ title: 'Workspaces', items: spaces });
+    if (spaces.length) out.push({ title: 'Projects', items: spaces });
     const here = searchRows({ query: typed, library: rows, inRail: () => true, bodies }).slice(0, MAX_EACH).map((result) => ({ kind: 'source', key: `here:${result.key}`, result }));
-    if (here.length) out.push({ title: 'In this workspace', items: here });
+    if (here.length) out.push({ title: 'In this project', items: here });
     const held = new Set(rows.map((row) => row.id));
     const lib = searchRows({ query: typed, library: library.filter((row) => !held.has(row.id)), inRail, found: answer, bodies }).slice(0, MAX_EACH).map((result) => ({ kind: result.kind === 'fresh' ? 'fresh' : 'library', key: `lib:${result.key}`, result }));
     if (lib.length) out.push({ title: 'Library', items: lib });
@@ -800,7 +1042,7 @@ export function SearchDialog({ projectId, workspaces, rows, library, inRail, onG
                   active={i === at}
                   onEnter={() => setIdx(i)}
                   onClick={() => activate(item)}
-                  actions={item.kind === 'library' && row && !inRail(row.id) ? <RowAction label="Add to this workspace" shown={i === at} onClick={() => { onClose(); void onLink(row); }}><I.PlusIcon size={14} /></RowAction> : null}
+                  actions={item.kind === 'library' && row && !inRail(row.id) ? <RowAction label="Add to this project" shown={i === at} onClick={() => { onClose(); void onLink(row); }}><I.PlusIcon size={14} /></RowAction> : null}
                 />
               );
             })}
@@ -819,40 +1061,51 @@ export function SearchDialog({ projectId, workspaces, rows, library, inRail, onG
 function SearchInput({ value, onChange, onKeyDown }) {
   const ref = React.useRef(null);
   React.useEffect(() => { const timer = setTimeout(() => { if (ref.current) ref.current.focus(); }, 0); return () => clearTimeout(timer); }, []);
-  return <input ref={ref} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} placeholder="Search workspaces, sources and the library" aria-label="Search" spellCheck={false} data-sb-search-input="1" style={{ flex: 1, minWidth: 0, height: 52, padding: 0, border: 0, background: 'transparent', ...text(15) }} />;
+  return <input ref={ref} value={value} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} placeholder="Search projects, sources and the library" aria-label="Search" spellCheck={false} data-sb-search-input="1" style={{ flex: 1, minWidth: 0, height: 52, padding: 0, border: 0, background: 'transparent', ...text(15) }} />;
 }
 
-/* ------------------------------------------------------- a new workspace */
+/* ----------------------------------------------------- naming a new thing */
 
-/** Its name (Workspaces' +, a workspace's +): Enter or Create makes it, in `parent` when there is one; left empty it is untitled. */
-export function NewWorkspaceDialog({ parent = null, onCreate, onClose }) {
+/**
+ * A name for something new, in the middle of the window (2026-10-13: "when creating it should always be Create project
+ * within {PARENT NAME}"): `title` over a field, Cancel and `action`; Create waits for a name. Enter makes it.
+ */
+function NameDialog({ title, placeholder, action, onCreate, onClose, ...rest }) {
   const [name, setName] = React.useState('');
   const [busy, setBusy] = React.useState(false);
   const [problem, setProblem] = React.useState('');
   const ref = React.useRef(null);
   React.useEffect(() => { const timer = setTimeout(() => { if (ref.current) ref.current.focus(); }, 0); return () => clearTimeout(timer); }, []);
+  const given = name.trim();
   const create = async () => {
-    if (busy) return;
+    if (busy || !given) return;
     setBusy(true); setProblem('');
-    try { await onCreate(name.trim()); onClose(); } catch (error) { setProblem(errorMessage(error)); setBusy(false); }
+    try { await onCreate(given); onClose(); } catch (error) { setProblem(errorMessage(error)); setBusy(false); }
   };
-  const button = { minHeight: 32, padding: '0 14px', borderRadius: 7, cursor: 'pointer', ...text(13, '#171717', 500) };
+  const button = { height: 30, padding: '0 12px', borderRadius: 7, cursor: 'pointer', ...text(13, '#171717', 500) };
   return (
-    <Centered onClose={() => { if (!busy) onClose(); }} label={parent ? 'New sub-workspace' : 'New workspace'} width={420} top="18vh" data-sb-new-workspace-dialog="1">
-      <div style={{ padding: '18px 20px 6px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <div style={text(15, '#171717', 600)}>{parent ? 'New sub-workspace' : 'New workspace'}</div>
-        <div style={text(12.5, '#8f8f8f')}>{parent ? <>Inside <span style={{ color: '#4d4d4d' }}>{parent.name}</span>. A workspace holds a research question or goal: its document, notes and sources.</> : 'A workspace holds a research question or goal: its document, notes and sources.'}</div>
-      </div>
-      <div style={{ padding: '10px 20px 4px' }}>
-        <input ref={ref} value={name} onChange={(event) => setName(event.target.value.replace(/[/\\]/g, '-'))} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void create(); } }} placeholder={parent ? 'Sub-workspace name' : 'Workspace name'} aria-label="Name" spellCheck={false} data-sb-new-workspace-name="1" style={{ width: '100%', boxSizing: 'border-box', height: 36, padding: '0 11px', border: '1px solid #e2e2e2', borderRadius: 8, background: '#fff', ...text(14) }} />
+    <Centered onClose={() => { if (!busy) onClose(); }} label={title} width={440} top="14vh" {...rest}>
+      <div style={{ padding: '18px 18px 16px' }}>
+        <div style={text(15, '#171717', 500)}>{title}</div>
+        <input ref={ref} value={name} onChange={(event) => { setName(event.target.value.replace(/[/\\]/g, '-')); setProblem(''); }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void create(); } }} placeholder={placeholder} aria-label={placeholder} spellCheck={false} data-name-field="1" style={{ display: 'block', width: '100%', boxSizing: 'border-box', height: 36, marginTop: 14, padding: '0 10px', border: `1px solid ${given ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 6, background: '#fff', outline: 'none', ...text(14) }} />
         {problem && <div style={{ marginTop: 6, ...text(12, '#e70022') }}>{problem}</div>}
-      </div>
-      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '12px 20px 18px' }}>
-        <button type="button" className="hov-bd2" onClick={onClose} disabled={busy} style={{ ...button, border: '1px solid #e5e5e5', background: '#fff', color: '#4d4d4d', fontWeight: 400 }}>Cancel</button>
-        <button type="button" className="hov-dim" onClick={create} disabled={busy} data-sb-create-workspace="1" style={{ ...button, border: 0, background: '#171717', color: '#fff', opacity: busy ? 0.6 : 1 }}>{busy ? 'Creating…' : 'Create'}</button>
+        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 16 }}>
+          <button type="button" className="hov-bd2" onClick={onClose} disabled={busy} style={{ ...button, border: '1px solid #e4e4e4', background: '#fff', boxShadow: '0 1px 1px #0000000a' }}>Cancel</button>
+          <button type="button" className="hov-dim" onClick={create} disabled={busy || !given} data-name-create="1" style={{ ...button, border: '1px solid #171717', background: '#171717', color: '#fff', opacity: busy || !given ? 0.35 : 1, cursor: busy || !given ? 'default' : 'pointer' }}>{busy ? 'Creating…' : action}</button>
+        </div>
       </div>
     </Centered>
   );
+}
+
+/** A project's name, made inside `parent` (the top-level project, or one in it). */
+export function CreateProjectDialog({ parent, onCreate, onClose }) {
+  return <NameDialog title={`Create project within ${parent.name}`} placeholder="Name" action="Create" onCreate={onCreate} onClose={onClose} data-sb-create-project-dialog="1" />;
+}
+
+/** A new folder of Sources: the person's, in every project. */
+export function FolderDialog({ onCreate, onClose }) {
+  return <NameDialog title="Create folder" placeholder="Folder name" action="Create folder" onCreate={onCreate} onClose={onClose} data-sb-folder-dialog="1" />;
 }
 
 /* ----------------------------------------------------------- right-click */
@@ -873,7 +1126,7 @@ export function ContextMenu({ at, items, onClose }) {
       {items.map((item, i) => (item.separator
         ? <div key={`s${i}`} style={{ height: 1, margin: '4px 6px', background: '#efefef' }} />
         : (
-          <button key={item.label} type="button" role="menuitem" className="hov-wash" onClick={() => { onClose(); item.onClick(); }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 30, padding: '0 10px', border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13, item.danger ? '#e70022' : '#171717') }}>
+          <button key={item.label} type="button" role="menuitem" className={item.disabled ? undefined : 'hov-wash'} disabled={!!item.disabled} title={item.title} onClick={() => { if (item.disabled) return; onClose(); item.onClick(); }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 30, padding: '0 10px', border: 0, borderRadius: 6, background: 'transparent', cursor: item.disabled ? 'default' : 'pointer', opacity: item.disabled ? 0.4 : 1, textAlign: 'left', ...text(13, item.danger ? '#e70022' : '#171717') }}>
             {item.icon && <span style={{ width: 15, display: 'flex', justifyContent: 'center', color: item.danger ? '#e70022' : '#4d4d4d' }}>{item.icon}</span>}
             {item.label}
           </button>

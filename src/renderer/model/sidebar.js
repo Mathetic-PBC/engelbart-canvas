@@ -259,3 +259,279 @@ export function versionsOf(node) {
     .map((entry) => ({ workspaceId: node.id, name: node.name, file: entry.file, title: entry.title || 'Untitled', clearedAt: entry.clearedAt || null }))
     .sort((a, b) => time(b.clearedAt) - time(a.clearedAt));
 }
+
+/* ===================================================== the redone sidebar */
+
+// 2026-10-13, the "Sidebar" project and its mockup (design/sidebar-mockup/Sidebar.html, "exactly how I want it"). What
+// were workspaces are projects now, nested under the top-level project the switcher picks, four levels in all: level 1 the
+// switcher's, levels 2 to 4 the Projects section's (roots are level 2). The section shows at most three level-2 projects,
+// a stable shortlist that a click never reorders, and ten rows in all, counting what is open under them and every More;
+// a group of siblings shows five, or four and More; one path is open at a time. Every row counts the agents running or
+// waiting under it, each agent once.
+
+export const MAX_DEPTH = 4;
+export const ROOT_ROWS = 3;
+export const PROJECT_ROWS = 10;
+export const LEVEL_ROWS = 5;
+export const RECENT_PAGES = 10;
+export const SHORTCUTS = 9;
+
+/**
+ * Every project of the tree by id: { node, parent (an id or null), level (2 at the top of the section), path (ids from
+ * level 2 down to it) }.
+ */
+export function indexTree(roots) {
+  const index = new Map();
+  const walk = (list, parent, level, above) => {
+    for (const node of list || []) {
+      const path = [...above, node.id];
+      index.set(node.id, { node, parent, level, path });
+      walk(node.children, node.id, level + 1, path);
+    }
+  };
+  walk(roots, null, 2, []);
+  return index;
+}
+
+const kidsOf = (index, id) => ((index.get(id) || {}).node || {}).children || [];
+const childIds = (index, id) => kidsOf(index, id).map((child) => child.id);
+
+/** Whether `id` is `from` or lies under it. */
+export function within(index, id, from) {
+  const at = index.get(id);
+  return !!at && at.path.includes(from);
+}
+
+/** What is open when `id` is gone to: the way down to it, and it too when it has projects in it. Everything else folds. */
+export function openPath(index, id) {
+  const at = index.get(id);
+  if (!at) return new Set();
+  const open = new Set(at.path);
+  if (!kidsOf(index, id).length) open.delete(id);
+  return open;
+}
+
+/** A chevron's press: open folds what is under it; folded opens, folding its siblings and what is under them ("If I expand this, subproject 3 should auto-collapse"). */
+export function toggleOpen(index, expanded, id) {
+  const next = new Set(expanded);
+  const at = index.get(id);
+  if (!at) return next;
+  if (next.has(id) && kidsOf(index, id).length) {
+    for (const held of [...next]) if (within(index, held, id)) next.delete(held);
+    return next;
+  }
+  const siblings = at.parent ? childIds(index, at.parent) : [...index.values()].filter((entry) => entry.level === 2).map((entry) => entry.node.id);
+  for (const sibling of siblings) if (sibling !== id) for (const held of [...next]) if (within(index, held, sibling)) next.delete(held);
+  next.add(id);
+  return next;
+}
+
+/**
+ * The level-2 projects the section shows (at most `rootRows`), in the tree's order. `held` is the shortlist as it was (kept
+ * by the sidebar), so a click never moves a row: a project reached from elsewhere (More, a search, ⌘J) takes the last
+ * place; an empty place is filled by the project worked in last (`recency`: id → ms, for everything within it).
+ */
+export function projectSlots({ roots = [], index, focusId = null, held = null, recency = new Map(), rootRows = ROOT_ROWS }) {
+  const tops = (roots || []).map((node) => node.id);
+  const branch = focusId && index.get(focusId) ? index.get(focusId).path[0] : null;
+  let slots = (held || []).filter((id) => tops.includes(id));
+  if (branch && !slots.includes(branch)) slots = [...slots.slice(0, rootRows - 1), branch];
+  if (slots.length < rootRows) {
+    const rest = tops.filter((id) => !slots.includes(id)).map((id, i) => ({ id, i, at: recency.get(id) || 0 })).sort((a, b) => b.at - a.at || a.i - b.i);
+    slots = [...slots, ...rest.slice(0, rootRows - slots.length).map((entry) => entry.id)];
+  }
+  return tops.filter((id) => slots.includes(id)).slice(0, rootRows);
+}
+
+/**
+ * The section's rows (the mockup's sectionPlan). `order`: the shortlist (projectSlots); `expanded`: what is open. Siblings
+ * are dealt rows before what is under them, in the tree's order, so opening a deep project never pushes its earlier
+ * siblings out to make room for its children; what does not fit is behind a More. A group of more than `levelRows`
+ * siblings shows one fewer and More. → { order, shown: Set, hidden (level-2 ids behind the section's More), visible (ids
+ * in the order drawn), opened (Set: open rows that show some of what is in them), guide (the deepest of those: the one
+ * whose children get the guide line), rows (lines used) }
+ */
+export function projectPlan({ index, order, expanded, rows: budget = PROJECT_ROWS, levelRows = LEVEL_ROWS }) {
+  const isOpen = (id) => expanded.has(id) && kidsOf(index, id).length > 0;
+  const tops = [...index.values()].filter((entry) => entry.level === 2).map((entry) => entry.node.id);
+  const shown = new Set(order);
+  const hidden = tops.filter((id) => !shown.has(id));
+  const visible = (id) => index.get(id).path.slice(0, -1).every((above) => isOpen(above));
+  const lines = () => {
+    let count = shown.size + (hidden.length ? 1 : 0);
+    for (const id of shown) {
+      const kids = childIds(index, id), seen = kids.filter((kid) => shown.has(kid)).length;
+      if (isOpen(id) && seen > 0 && seen < kids.length) count += 1; // its More
+    }
+    return count;
+  };
+  const candidates = [];
+  const add = (ids) => { for (const id of ids) if (!candidates.includes(id)) candidates.push(id); };
+  const visit = (id) => { if (isOpen(id)) { add(childIds(index, id)); childIds(index, id).forEach(visit); } };
+  order.forEach(visit);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const id of candidates) {
+      const at = index.get(id);
+      if (shown.has(id) || !visible(id) || !shown.has(at.parent)) continue;
+      const siblings = childIds(index, at.parent);
+      const limit = siblings.length > levelRows ? levelRows - 1 : levelRows;
+      if (siblings.filter((sibling) => shown.has(sibling)).length >= limit) continue;
+      shown.add(id);
+      if (lines() > budget) shown.delete(id); else grew = true;
+    }
+  }
+  const drawn = [];
+  const opened = new Set();
+  const walk = (id) => {
+    drawn.push(id);
+    if (!isOpen(id)) return;
+    const kids = childIds(index, id).filter((kid) => shown.has(kid));
+    if (kids.length) opened.add(id);
+    kids.forEach(walk);
+  };
+  order.forEach(walk);
+  const guide = [...opened].sort((a, b) => index.get(b).level - index.get(a).level)[0] || null;
+  return { order, shown, hidden, visible: drawn, opened, guide, rows: lines() };
+}
+
+/** Ctrl+1–9: the level-2 projects, in the tree's order (each top-level project has its own). → [id] */
+export const shortcutProjects = (roots) => (roots || []).slice(0, SHORTCUTS).map((node) => node.id);
+
+/** A level-2 project's number for Ctrl+number, or 0. */
+export function shortcutOf(roots, id) {
+  const at = shortcutProjects(roots).indexOf(id);
+  return at >= 0 ? at + 1 : 0;
+}
+
+/* ------------------------------------------------------- agents and counts */
+
+const BUILD_RUNNING = new Set(['setting-up', 'queued', 'running', 'accepting']);
+const BUILD_NEEDS = new Set(['needs-you', 'review']);
+const BUILD_FAILED = new Set(['failed', 'conflict', 'interrupted', 'escalated']);
+/** A Build's place in the Agents list: running, needs (waits on you: a question, or a review), failed, or done. */
+export function buildState(status) {
+  if (BUILD_RUNNING.has(status)) return 'running';
+  if (BUILD_NEEDS.has(status)) return 'needs';
+  if (BUILD_FAILED.has(status)) return 'failed';
+  return 'done';
+}
+
+/**
+ * The Agents list, the Inbox folded into it (2026-10-13: "Combine inbox and Agents into just Agents"): this project's
+ * questions asked inline (state.json `agents`: running, or finished and `waiting` for you to look, which is `unseen`), its
+ * Builds by where they stand, and Connect your library's notes (`connect`: model/connect.js connectInbox's, each with its
+ * dockLine `tone`). Newest first.
+ * → [{ id, kind, title, node (the project it is in, or null), state: running|needs|unseen|failed|done, at, task?, sessionId? }]
+ */
+export function agentEntries({ agents = [], builds = [], connect = [], projectId }) {
+  const out = [];
+  for (const agent of agents) {
+    if (!agent || agent.projectId !== projectId || agent.kind === 'build') continue;
+    if (agent.status !== 'running' && agent.status !== 'waiting') continue;
+    out.push({ id: `agent:${agent.id}`, kind: agent.kind, title: AGENT_NAME[agent.kind] || 'Agent', node: agent.workspaceId || null, state: agent.status === 'running' ? 'running' : 'unseen', at: agent.status === 'running' ? agent.started : (agent.finished || agent.started) });
+  }
+  for (const task of builds) {
+    if (!task || task.projectId !== projectId) continue;
+    out.push({ id: `build:${task.id}`, kind: task.kind === 'quick' ? 'quick' : 'build', title: task.title || 'Untitled Build', node: task.workspaceId || null, state: buildState(task.status), status: BUILD_STATE[task.status] || task.status, at: task.updated || task.created, task });
+  }
+  for (const note of connect) {
+    if (!note) continue;
+    out.push({ id: note.id, kind: 'connect', title: note.name || 'Import your context', did: note.did || '', node: null, state: note.tone === 'warn' || note.tone === 'needs' ? 'needs' : 'unseen', at: note.at || null, sessionId: note.sessionId });
+  }
+  return out.sort((a, b) => time(b.at) - time(a.at));
+}
+
+export const READY_STATES = new Set(['needs', 'unseen', 'failed']);
+
+/** One count for a list of agents: the running ones and the ones to look at (needs you, finished unseen, failed). */
+export function summarize(list = []) {
+  let running = 0, ready = 0;
+  for (const entry of list) {
+    if (entry.state === 'running') running += 1;
+    else if (READY_STATES.has(entry.state)) ready += 1;
+  }
+  return { total: running + ready, running, ready };
+}
+
+/**
+ * Each project's count, with everything under it (a parent's total counts each agent once, open or folded): id → summary.
+ * Agents in no project are left out (they count on the Agents row only).
+ */
+export function rollUp(index, entries = []) {
+  const lists = new Map();
+  for (const entry of entries) {
+    const at = entry.node && index.get(entry.node);
+    if (!at) continue;
+    for (const id of at.path) { if (!lists.has(id)) lists.set(id, []); lists.get(id).push(entry); }
+  }
+  const out = new Map();
+  for (const [id, list] of lists) out.set(id, summarize(list));
+  return out;
+}
+
+/** The count of several projects together (a More's), each agent once. */
+export function summaryOf(index, entries, ids) {
+  const set = new Set(ids);
+  return summarize(entries.filter((entry) => entry.node && index.get(entry.node) && index.get(entry.node).path.some((id) => set.has(id))));
+}
+
+/** A count as it is drawn: at most "9+". */
+export const countLabel = (n) => (n > 9 ? '9+' : String(n));
+/** The library's size beside Library: at most "999+". */
+export const libraryLabel = (n) => (n > 999 ? '999+' : String(n));
+
+/* ------------------------------------------------------------ recent pages */
+
+/**
+ * The clock's list (2026-10-13: "the last ten (or less) opened notes or projects"): the top-level project's page first,
+ * then the pages opened last, newest first, once each: projects of this top-level project still in its tree and notes
+ * still in the library. `visits`: [{ kind: 'project'|'note', id, at }], any order.
+ * → [{ kind: 'top'|'project'|'note', id }]
+ */
+export function recentPages({ visits = [], index, notes = new Map(), count = RECENT_PAGES }) {
+  const out = [{ kind: 'top', id: 'top' }];
+  const seen = new Set();
+  for (const visit of [...visits].sort((a, b) => time(b.at) - time(a.at))) {
+    if (out.length >= count) break;
+    const key = `${visit.kind}:${visit.id}`;
+    if (seen.has(key)) continue;
+    if (visit.kind === 'project' ? !index.has(visit.id) : visit.kind === 'note' ? !notes.has(visit.id) : true) continue;
+    seen.add(key);
+    out.push({ kind: visit.kind, id: visit.id });
+  }
+  return out;
+}
+
+/** A visit recorded: it moves to the front; the list keeps `max`. */
+export function visited(visits = [], page, at = new Date().toISOString(), max = 60) {
+  return [{ kind: page.kind, id: page.id, at }, ...visits.filter((held) => !(held.kind === page.kind && held.id === page.id))].slice(0, max);
+}
+
+/** A crumb cut from the front, a level at a time, to "./": ["Engelbart", "User Interface"] → "./User Interface". */
+export function crumbFrom(parts, dropped) {
+  if (!dropped) return parts.join('/');
+  return `./${parts.slice(dropped).join('/')}`;
+}
+
+/* ----------------------------------------------------------------- sources */
+
+/** A source's icon (2026-10-13: "image attachments have the image icon, html have code icon, websites have website icon"). */
+export function sourceIcon(row) {
+  if (!row) return 'file';
+  if (isNote(row)) return 'note';
+  if (hasTag(row, 'git')) return 'git';
+  if (row.type === 'website') return 'website';
+  if (row.type === 'image') return 'image';
+  if (row.type === 'html') return 'html';
+  if (row.type === 'pdf') return 'pdf';
+  if (row.type === 'folder') return 'folder';
+  return 'file';
+}
+
+/** A folder's rows as the sidebar draws them: five, or four and More. → { shown, more } */
+export function folderRows(rows, cap = LEVEL_ROWS) {
+  const shown = rows.length > cap ? rows.slice(0, cap - 1) : rows;
+  return { shown, more: rows.length > shown.length };
+}

@@ -152,18 +152,18 @@ test('the connected options are Repository access and Disconnect, and no Refresh
   assert.deepEqual(elements.find(element => element.props.provider === 'github').props.items.map(item => item.action), ['disconnect']);
 });
 
-test('Connections is a page of the Settings window, not an icon in the top-right controls (MATH-64); the sidebar\'s Connections row shows where each stands and opens that page (2026-10-07)', () => {
+test('Connections is a page of the Settings window, not an icon in the top-right controls (MATH-64), nor a row of the sidebar (2026-10-13: "it should just be in settings")', () => {
   const controls = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/WindowControls.jsx'), 'utf8');
   assert.doesNotMatch(controls, /<Connections|import Connections/);
   assert.match(controls, /<SandboxNotifications \/>\s*<Settings test=\{test\} \/>/);
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
   assert.doesNotMatch(css, /connections-trigger/);
   const rail = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Rail.jsx'), 'utf8');
-  assert.match(rail, /<ConnectionsPanel /);
-  assert.doesNotMatch(rail, /ConnectionsPage|GithubConnection|ZoteroConnection/, 'no second set of account controls in the sidebar');
+  assert.doesNotMatch(rail, /ConnectionsPanel|ConnectionsPage|GithubConnection|ZoteroConnection|data-sb-fixed-row="connections"/, 'no Connections in the sidebar');
   const panels = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/SidebarPanels.jsx'), 'utf8');
-  assert.match(panels, /const manage = \(\) => \{ onClose\(\); openSettings\('connections'\); \};/, 'its rows open Settings at Connections');
-  assert.doesNotMatch(panels, /githubConnect|zoteroConnect|githubDisconnect|zoteroDisconnect/, 'it only shows where each stands');
+  assert.doesNotMatch(panels, /ConnectionsPanel|githubConnect|zoteroConnect|githubDisconnect|zoteroDisconnect/);
+  const settings = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
+  assert.match(settings, /\{ id: 'connections', section: 'Settings', title: 'Connections', icon: BLOCKS_ICON, Body: ConnectionsPage,/, 'the page wears the four blocks the sidebar\'s row had');
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Connections.jsx'), 'utf8');
   assert.doesNotMatch(source, /createPortal|usePlaced|export default/, 'no popover left: no portal, no placing, no trigger');
 });
