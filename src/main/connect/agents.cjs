@@ -24,7 +24,8 @@
 //                              read, scroll, search, download and export; never send, post, delete, archive, change
 //                              settings, type a password or close tabs; a sign-in page is needs_you); the CLI's own review
 //                              (Claude Code's auto mode classifier decides each browser call, every prompt it would raise is
-//                              refused; Codex's sandbox is read-only and nothing is approved for it); no tool that runs a
+//                              refused; Codex's sandbox is read-only, its Chrome plugin's per-site questions go to
+//                              Codex's auto-review and every other approval is refused: CODEX_BROWSE_APPROVALS); no tool that runs a
 //                              script in a page, uploads a file or closes a tab; none of the person's own MCP servers or
 //                              ChatGPT apps; every step and every screenshot kept for the Agent trace; Stop all ends the
 //                              terminal session. ../onboarding/browser-agents.cjs says when it may run.
@@ -61,6 +62,25 @@ const CHROME_REFUSED = Object.freeze(['javascript_tool', 'upload_image', 'file_u
 // The MCP servers of the person's own Codex a browser agent keeps: node_repl, which its Chrome plugin runs in. Every other
 // one of theirs is turned off for the run, Computer Use among them: it drives apps by bringing them to the front.
 const CODEX_KEPT_SERVERS = new Set(['node_repl']);
+// A Codex browser agent's approvals (2026-10-14). Its Chrome plugin asks before it opens each site ("Allow Chrome to access
+// https://mail.google.com?"), as an MCP elicitation. Under approval_policy "never" `codex exec` declines every elicitation
+// itself, and the plugin reads that as the person's no: Hudson's run brought nothing in from Gmail or Google Drive ("Browser
+// Use rejected this action … The user declined permission for this action") and no question ever reached him. Nobody is
+// at a `codex exec` to answer, so, as Claude Code's browser agent leaves each browser call to its auto mode classifier,
+// those questions go to Codex's own auto-review (approvals_reviewer "auto_review"), and every other kind of approval
+// (a command outside the read-only sandbox, a rule, a skill, more permissions) stays refused as under "never". Checked on
+// this Mac (codex-cli 0.162.1) with a stand-in server asking the plugin's question: "never" → decline; this → accept,
+// `_meta.approvals_reviewer: "auto_review"` (which the plugin takes as auto-review's yes).
+const CODEX_BROWSE_APPROVALS = `-c 'approval_policy={ granular = { sandbox_approval = false, rules = false, skill_approval = false, request_permissions = false, mcp_elicitations = true } }' -c 'approvals_reviewer="auto_review"'`;
+// A turn the model's service turned away for a moment (2026-10-14: Hudson's Granola import ended at once on Codex's
+// "Selected model is at capacity. Please try a different model.", shown as "Left out", and nothing tried it again) is run
+// again after these waits, on the same model (the run's model is pinned). What it brought in before is not brought in twice
+// (./tools.cjs keeps what came in). Not a usage limit, a sign-in or a bad request: those do not pass by waiting.
+const RETRY_WAITS_MS = Object.freeze([15_000, 45_000]);
+const TRANSIENT_RE = /at capacity|overloaded|\b(?:429|500|502|503|504|529)\b|rate.?limit|too many requests|temporarily unavailable|service unavailable|internal server error|bad gateway|gateway time-?out|stream (?:disconnected|error|closed)|connection (?:reset|refused|closed|error)|ECONNRESET|ETIMEDOUT|EAI_AGAIN|socket hang up|try again (?:later|shortly|in a)/i;
+const LASTING_RE = /usage.?limit|hit your limit|quota|billing|credits?\b|not signed in|log ?in|unauthori[sz]ed|\b40[13]\b|forbidden|invalid (?:api )?key|context (?:window|length)|(?:prompt|input|message) is too long|not found|unsupported|invalid_request/i;
+/** Whether a turn's failure is the service's passing refusal (worth the same turn again a little later). */
+const transientFailure = (error) => !!error && error.kind === 'failed' && TRANSIENT_RE.test(String(error.message || '')) && !LASTING_RE.test(String(error.message || ''));
 const MAX_STEP_PICTURES = 80;
 const INTERVIEW_TIMEOUT_MS = TIMEOUTS.interview;
 const IMPORT_TIMEOUT_MS = TIMEOUTS.import;
@@ -77,6 +97,13 @@ class ConnectError extends Error {
 
 const quote = (value) => { const text = String(value || '').replace(/\s+/g, ' ').trim(); return text.length > 40 ? `${text.slice(0, 39)}…` : text; };
 const line = (text, max) => { const value = String(text == null ? '' : text).replace(/\s+/g, ' ').trim(); return value.length > max ? `${value.slice(0, max - 1)}…` : value; };
+/** `ms` waited, or less when `signal` aborts. */
+const waitFor = (ms, signal) => new Promise((resolve) => {
+  if (signal && signal.aborted) { resolve(); return; }
+  const timer = setTimeout(done, ms);
+  function done() { clearTimeout(timer); if (signal) signal.removeEventListener('abort', done); resolve(); }
+  if (signal) signal.addEventListener('abort', done, { once: true });
+});
 const tokenEnv = (name) => `ENGELBART_CONNECTOR_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 
 /**
@@ -303,7 +330,7 @@ function claudeToolsFor(kind, connectors = []) {
  * homes (their AGENTS.md is the agent's instructions; an import's is `${importHome}-<turn>`, removed after it).
  * `tools`: ../tools/manager.cjs, for the CLI's path and its lock.
  */
-function createConnectAgents({ environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-connect-runs'), interviewHome = path.join(os.tmpdir(), 'engelbart-codex-home-connect'), importHome = `${interviewHome}-import`, codexAuthFile, run = execFile, tools = null, node = process.execPath, server = IMPORT_SERVER, terminal = null } = {}) {
+function createConnectAgents({ environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-connect-runs'), interviewHome = path.join(os.tmpdir(), 'engelbart-codex-home-connect'), importHome = `${interviewHome}-import`, codexAuthFile, run = execFile, tools = null, node = process.execPath, server = IMPORT_SERVER, terminal = null, retryWaits = RETRY_WAITS_MS, sleep = waitFor } = {}) {
   // The Engelbart terminal's agent sessions, for browser agents (made when one first runs: node-pty loads with it).
   let agentTerminal = terminal;
   const terminalNow = () => {
@@ -464,7 +491,8 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
   /**
    * Codex with its Chrome plugin and computer use, in the Engelbart terminal: the person's own Codex home (its plugins,
    * Computer Use app and sign-in live there), with everything of theirs that could act on their behalf turned off for the
-   * run (their MCP servers but node_repl, ChatGPT apps), its shell read-only, nothing approved, Engelbart's tools added.
+   * run (their MCP servers but node_repl, ChatGPT apps), its shell read-only, its Chrome plugin's per-site questions left
+   * to Codex's auto-review and every other approval refused (CODEX_BROWSE_APPROVALS), Engelbart's tools added.
    */
   async function codexBrowse({ kind, system, message, model, effort, signal, onUpdate, bridge, timeout, stem, cwd, dirs, browse }) {
     const home = environment.CODEX_HOME || path.join(os.homedir(), '.codex');
@@ -473,10 +501,10 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     if (bridge) fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind }), { mode: 0o600 });
     const off = [...codexServersOff(home).map((name) => `-c 'mcp_servers.${name}.enabled=false'`), ...codexPluginsOff(home).map((name) => `-c 'plugins."${name}".enabled=false'`)].join(' ');
     const enable = `${browse.enable ? ' --enable browser_use' : ''} --disable computer_use`;
-    const command = `exec ${program('codex')} exec --skip-git-repo-check --color never -m "$ENGELBART_CONNECT_MODEL" -c 'model_reasoning_effort="${effort}"' -c 'sandbox_mode="read-only"' -c 'approval_policy="never"' -c project_doc_max_bytes=0 -c "developer_instructions=$ENGELBART_CONNECT_INSTRUCTIONS" ${off}${bridge ? ' -c "mcp_servers.engelbart=$ENGELBART_CONNECT_SERVER"' : ''} --disable apps${enable} --json -o "$ENGELBART_CONNECT_OUTPUT" - < "$ENGELBART_CONNECT_INPUT"`;
+    const command = `exec ${program('codex')} exec --skip-git-repo-check --color never -m "$ENGELBART_CONNECT_MODEL" -c 'model_reasoning_effort="${effort}"' -c 'sandbox_mode="read-only"' ${CODEX_BROWSE_APPROVALS} -c project_doc_max_bytes=0 -c "developer_instructions=$ENGELBART_CONNECT_INSTRUCTIONS" ${off}${bridge ? ' -c "mcp_servers.engelbart=$ENGELBART_CONNECT_SERVER"' : ''} --disable apps${enable} --json -o "$ENGELBART_CONNECT_OUTPUT" - < "$ENGELBART_CONNECT_INPUT"`;
     const serverToml = bridge ? tomlValue({ command: node, args: [server, connection], env: { ELECTRON_RUN_AS_NODE: '1' }, startup_timeout_sec: 30, tool_timeout_sec: 240, default_tools_approval_mode: 'approve' }) : '';
     const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: home, ENGELBART_CONNECT_MODEL: model, ENGELBART_CONNECT_OUTPUT: outFile, ENGELBART_CONNECT_INPUT: inputFile, ENGELBART_CONNECT_INSTRUCTIONS: tomlValue(system), ...(bridge ? { ENGELBART_CONNECT_SERVER: serverToml } : {}) });
-    onUpdate({ command: `codex exec -m ${model} -c model_reasoning_effort="${effort}" -c sandbox_mode="read-only" -c approval_policy="never" -c developer_instructions=<the system prompt> ${off.replace(/'/g, '')}${bridge ? ' -c mcp_servers.engelbart=<Engelbart\'s import tools>' : ''} --disable apps${enable}` });
+    onUpdate({ command: `codex exec -m ${model} -c model_reasoning_effort="${effort}" -c sandbox_mode="read-only" ${CODEX_BROWSE_APPROVALS.replace(/'/g, '')} -c developer_instructions=<the system prompt> ${off.replace(/'/g, '')}${bridge ? ' -c mcp_servers.engelbart=<Engelbart\'s import tools>' : ''} --disable apps${enable}` });
     try {
       const { stdout, out } = await inTerminal({ provider: 'openai', command, env, cwd, signal, timeout, onUpdate, dirs, steps: browse.steps });
       let text = '';
@@ -505,12 +533,26 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     const cli = choice.provider === 'openai' ? 'codex' : 'claude';
     const fn = kind === 'browse' ? (cli === 'codex' ? codexBrowse : claudeBrowse) : (cli === 'codex' ? codexTurn : claudeTurn);
     const once = () => fn({ kind, system, message, session, dirs, model: choice.modelId, effort: choice.effort, signal, onUpdate, bridge: BRIDGED.has(kind) ? bridge : null, connectors, timeout, stem, cwd, browse: browse || {} });
-    if (!tools) return once();
-    await tools.ensure(cli);
-    try { return await tools.use(cli, once); } catch (error) { if (error && error.kind === 'unavailable') void tools.check([cli]).catch(() => {}); throw error; }
+    const attempt = async () => {
+      if (!tools) return once();
+      await tools.ensure(cli);
+      try { return await tools.use(cli, once); } catch (error) { if (error && error.kind === 'unavailable') void tools.check([cli]).catch(() => {}); throw error; }
+    };
+    // The service's passing refusals (RETRY_WAITS_MS) tried again, the person told what is happening meanwhile.
+    for (let tries = 0; ; tries += 1) {
+      try {
+        return await attempt();
+      } catch (error) {
+        if (tries >= retryWaits.length || !transientFailure(error) || (signal && signal.aborted)) throw error;
+        const seconds = Math.round(retryWaits[tries] / 1000);
+        onUpdate({ activity: `The model is busy: trying again${seconds ? ` in ${seconds} s` : ''}`, retry: { attempt: tries + 2, of: retryWaits.length + 1, reason: line(error.message, 200) } });
+        await sleep(retryWaits[tries], signal);
+        if (signal && signal.aborted) throw new ConnectError('stopped', 'Stopped.');
+      }
+    }
   }
 
   return { turn };
 }
 
-module.exports = { createConnectAgents, writeImportConfig, claudeServers, claudeToolsFor, importToolLabel, updateOf, browseUpdateOf, chromeToolLabel, replLabel, codexServersOff, codexPluginsOff, tomlValue, ConnectError, IMPORT_SERVER, TIMEOUTS, INTERVIEW_TIMEOUT_MS, IMPORT_TIMEOUT_MS, CHROME_REFUSED, CODEX_KEPT_SERVERS };
+module.exports = { createConnectAgents, writeImportConfig, claudeServers, claudeToolsFor, importToolLabel, updateOf, browseUpdateOf, chromeToolLabel, replLabel, codexServersOff, codexPluginsOff, tomlValue, ConnectError, IMPORT_SERVER, TIMEOUTS, INTERVIEW_TIMEOUT_MS, IMPORT_TIMEOUT_MS, CHROME_REFUSED, CODEX_KEPT_SERVERS, CODEX_BROWSE_APPROVALS, RETRY_WAITS_MS, transientFailure };

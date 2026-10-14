@@ -404,7 +404,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       id: s.id, mode: s.mode, chat: s.chat, thinking: s.thinking, activity: s.activity, waiting: s.waitingForSurvey, done: s.done, error: s.error, finished: s.finished, stopped: s.stopped, minimized: s.minimized, dismissed: s.dismissed,
       jobs: s.jobs.filter((job) => job.kind !== 'redact').map(publicJob), needs: s.needs.filter((need) => !need.closed).map(publicNeed), log: s.log.slice(-SHOWN_LOG),
       provider: s.choice.provider, choice: { provider: s.choice.provider, name: PROVIDER_NAMES[s.choice.provider], modelName: s.choice.modelName, effort: s.choice.effort },
-      permissions: s.choices.permissions, projectId: s.projectId, staged: s.projectId ? 0 : notes.stagedCount(s.dir), memory: { ...s.memory }, created: s.created,
+      permissions: s.choices.permissions, projectId: s.projectId, workspaceId: s.workspaceId || null, staged: s.projectId ? 0 : notes.stagedCount(s.dir), memory: { ...s.memory }, created: s.created,
       counts: { notes: s.jobs.reduce((n, job) => n + job.notes, 0), items: s.jobs.reduce((n, job) => n + job.items, 0) },
       placed: { project: s.inProject.size, workspace: s.inWorkspace.size },
       // Import your context's run (2026-10-13): how it was chosen and the projects every agent keeps to, for its status modal
@@ -771,7 +771,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }) : null;
     let bridge = null;
     try {
-      const onUpdate = ({ activity }) => { if (activity && activity !== job.activity) { job.activity = activity; emit(s, { soon: true }); } };
+      // `retry`: the model's service turned the turn away for a moment and it runs again (agents.cjs RETRY_WAITS_MS), kept
+      // in the job's log so the Agent trace says why it took longer.
+      const onUpdate = ({ activity, retry }) => {
+        if (retry) logAction(s, job, `Trying again (${retry.attempt} of ${retry.of}): ${retry.reason}`);
+        if (activity && activity !== job.activity) { job.activity = activity; emit(s, { soon: true }); }
+      };
       if (browse) logAction(s, job, `In ${browse.browserName}, in a tab of its own`);
       const connectorsNow = bridged && !browse && connectors ? await (typeof connectors.serversForRun === 'function' ? connectors.serversForRun(covered, s.choice.provider) : connectors.serversFor(covered)).catch(() => []) : [];
       if (bridged) bridge = await openBridge(callTool, { signal: controller.signal, maxBody: 1_000_000 });
@@ -2155,7 +2160,18 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const listed = projects.keepInProject(ctx, s.projectId, ids);
       const { removed } = projects.findProject(ctx, s.projectId);
       for (const row of ids.filter((one) => !removed.includes(one))) s.inProject.add(row);
-      if (listed.length) placed(s.projectId);
+      // The Welcome project's folder holds everything the run brought in, for every project picked (2026-10-14: "the
+      // welcome project folder should be a complete set of their project files"). Not what the person threw out of it.
+      // Onboarding's run only: an import started inside a project stays on its list (2026-10-13, "library only").
+      let linked = 0;
+      if (s.workspaceId && s.mode === 'onboarding') {
+        try {
+          const { workspace } = projects.findWorkspace(ctx, s.projectId, s.workspaceId);
+          const adding = ids.filter((one) => !workspace.removed.includes(one) && !workspace.context.includes(one) && !s.inWorkspace.has(one));
+          if (adding.length) { await projects.linkToWorkspace(ctx, s.projectId, s.workspaceId, adding); for (const row of adding) s.inWorkspace.add(row); linked = adding.length; }
+        } catch { /* the workspace gone or full: the rows stay in the project and the library */ }
+      }
+      if (listed.length || linked) placed(s.projectId);
     }).catch(() => {}); // the project gone, or the library closed: what came in stays in the library
     return s.placing;
   }

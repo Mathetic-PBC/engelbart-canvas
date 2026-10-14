@@ -646,6 +646,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('import-flow', () => (ix().prefs.get().flow || null));
   handle('import-flow-save', (flow) => { if (flow === null) { ix().prefs.set({ flow: null }); return true; } ix().prefs.set({ flow: plainObject(flow, 'flow') }); return true; });
   handle('import-trace-open', () => ix().openTrace());
+  // Choose files under Obsidian (2026-10-14): its vaults as its file explorer shows them (./onboarding/obsidian-tree.cjs).
+  handle('import-obsidian-tree', withCtx((ctx) => require('./onboarding/obsidian-tree.cjs').obsidianTree(ctx.homeDir)));
   handle('connect-memory', withCtx((ctx) => { const file = path.join(ctx.dataRoot, 'MEMORY.md'); try { const stat = fs.statSync(file); return { exists: true, path: file, updated: stat.mtime.toISOString(), bytes: stat.size }; } catch { return { exists: false, path: file }; } }));
   // A repository's sandbox is stopped (and its runs forgotten) before its row can go.
   saving('discard-library-item', (id) => queued(async () => {

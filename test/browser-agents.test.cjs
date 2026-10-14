@@ -186,7 +186,11 @@ test('a browser agent\'s run: Claude in Chrome with the risky tools refused and 
   assert.equal(codex.text, 'Brought in 1 document.');
   const codexCommand = runs[1].command;
   assert.match(codexCommand, /sandbox_mode="read-only"/);
-  assert.match(codexCommand, /approval_policy="never"/);
+  // 2026-10-14: not approval_policy="never", which declined the Chrome plugin's every per-site question as if the person
+  // had (Hudson's Gmail and Google Drive). Those go to Codex's auto-review; every other approval is still refused.
+  assert.doesNotMatch(codexCommand, /approval_policy="never"/);
+  assert.match(codexCommand, /approval_policy=\{ granular = \{ sandbox_approval = false, rules = false, skill_approval = false, request_permissions = false, mcp_elicitations = true \} \}/);
+  assert.match(codexCommand, /approvals_reviewer="auto_review"/);
   assert.match(codexCommand, /mcp_servers\.research\.enabled=false/);
   assert.doesNotMatch(codexCommand, /node_repl\.enabled=false/, 'node_repl stays: the Chrome plugin runs in it');
   assert.match(codexCommand, /plugins\."slack@openai-curated"\.enabled=false/);

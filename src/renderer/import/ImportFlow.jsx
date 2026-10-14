@@ -1,7 +1,9 @@
 import React from 'react';
 import { IMPORT_CSS } from './import-css.js';
 import { ROUND3_CSS } from './round3-css.js';
+import { ROUND4_CSS } from './round4-css.js';
 import { TOOL_LOGOS, WORKS, BROWSER_LOGOS, PROVIDER_LOGOS } from './logos.js';
+import ObsidianPicker from './ObsidianPicker.jsx';
 import {
   CATALOG, CATALOG_IDS, ROLES, GROUPS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp,
   scopeKind, emptyScope, scopeReady, scopeOptions,
@@ -26,6 +28,32 @@ import { LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, cleanDays, shownName } from '
 // relaunch Full Disk Access needs comes back to the same step.
 
 const FILE_TOOLS = ['Obsidian', 'Zoom', LOCAL_PDFS, LOCAL_FOLDERS];
+/** The sources whose Specify context has Choose files (Obsidian's opens a picker over its vaults, the others the Mac's). */
+const FILE_SOURCES = ['Obsidian', 'Zoom', 'Zotero', LOCAL_PDFS, LOCAL_FOLDERS];
+// "Specific things to import from {app} (optional)": the hint is the category's (2026-10-14, Hudson's words).
+const GROUP_HINTS = {
+  notes: 'Only bring in notes relating to the Memex and my research',
+  transcripts: 'Only bring in transcripts relating to meetings with professors on the Memex',
+  email: 'Pull in emails from my professor',
+  chats: 'Only include the chats that discussed Memex and the history of computing',
+  sites: "Pull in the essays and paper links I've added to some of my research notes",
+  papers: 'Include the papers in my local Memex folder',
+  code: 'Bring in the digital Memex prototype I was hacking on last week',
+};
+// Websites holds a "Saved websites from {app}" row for each notes app picked (2026-10-14): the links saved in its notes.
+const LINKS = 'links:';
+const linksOf = (app) => `${LINKS}${app}`;
+const isLinks = (id) => typeof id === 'string' && id.startsWith(LINKS);
+const linkedApp = (id) => id.slice(LINKS.length);
+/** A source as the Specify context lines name it ("websites saved in Obsidian", not "Saved websites from Obsidian"). */
+const spokenName = (id) => (isLinks(id) ? `websites saved in ${toolName(linkedApp(id))}` : toolName(id));
+/** A category in a sentence: "all notes", "all meeting transcripts", "all AI chats". */
+const spokenGroup = (label) => label.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLowerCase());
+const NOTES_APPS = (GROUPS.find((group) => group.id === 'notes') || { apps: [] }).apps;
+const groupOf = (id) => (isLinks(id) || id === SITES ? 'sites' : (GROUPS.find((group) => group.apps.includes(id)) || {}).id || null);
+const LINKS_NOTE = 'Also bring in the web links saved in these notes (essays, papers, articles and other pages): add each one to the library with add_to_library.';
+/** "A", "A and B", "A, B, and C". */
+const listed = (names) => (names.length <= 1 ? names[0] || '' : names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`);
 const DEFAULT_PICKS = [];
 const ANSWERS = [
   ['Does my context leave my computer?', 'No. All files, both saved locally and located in the cloud through a 3rd-party are all saved locally and are not uploaded to any of our servers. However, your text will be sent to model providers during the retrieval process and is subject to their own data retention guidelines, just like any other AI chat.'],
@@ -42,7 +70,7 @@ export const COPY = {
   pickerTitle: 'What should go in your library?',
   bring: 'Bring these in',
 };
-const FLOW_VERSION = 2;
+const FLOW_VERSION = 3; // 3 (2026-10-14): Import your context is a screen of its own, not a dialog over the picker
 
 /* ------------------------------------------------------------------------------------------------- small pieces */
 
@@ -52,6 +80,7 @@ const DOWN = <Svg d={'<path d="m6 9 6 6 6-6"/>'} />;
 const CHECK = <Svg d={'<path d="m5 12 4 4 10-10"/>'} />;
 const KEY = <Svg d={'<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8m-3 3 2 2"/>'} />;
 const FOLDER = <Svg d={'<path d="M2 5h7l2 2h11v13H2z"/>'} />;
+const FILE = <Svg d={'<path d="M6 2h8l5 5v15H6z"/><path d="M14 2v5h5"/>'} />;
 const GLOBE = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 17 0 0 0 0 18 17 17 0 0 0 0-18"/>'} />;
 const WEB = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18"/>'} />;
 const PLUS = <Svg d={'<path d="M12 5v14M5 12h14"/>'} />;
@@ -61,8 +90,10 @@ const CURSOR = <Svg d={'<path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1
 
 const Check = ({ on }) => <span className={`cb ${on ? 'on' : ''}`}>{on ? CHECK : null}</span>;
 const Logo = ({ src, name = '' }) => (src ? <img src={src} alt={name} /> : FOLDER);
-const toolName = (id, added = []) => (catalogTool(id) ? catalogTool(id).name : (added.find((tool) => tool.id === id) || {}).name || id);
+const toolName = (id, added = []) => (isLinks(id) ? `Saved websites from ${toolName(linkedApp(id))}` : catalogTool(id) ? catalogTool(id).name : (added.find((tool) => tool.id === id) || {}).name || id);
 function ToolLogo({ id }) {
+  // A notes app's saved websites: its logo with a globe in the corner.
+  if (isLinks(id)) return <span className="links-logo">{TOOL_LOGOS[linkedApp(id)] ? <img src={TOOL_LOGOS[linkedApp(id)]} alt="" /> : FOLDER}<span className="links-globe">{GLOBE}</span></span>;
   if (TOOL_LOGOS[id]) return <img src={TOOL_LOGOS[id]} alt="" />;
   if (id === LOCAL_PDFS || id === LOCAL_FOLDERS) return FOLDER;
   return WEB;
@@ -83,13 +114,13 @@ function T({ k, tag = 'span', fallback, className, ...rest }) {
 
 const fresh = () => ({
   v: FLOW_VERSION,
-  screen: 'picker', dialog: 'intro', purpose: null,
+  screen: 'intro', dialog: null, purpose: null,
   mode: null, modeChoice: null, modeFirst: false, scopeOpen: null, notesConsent: false,
   provider: null, providerChoice: null,
   roles: [], work: '', customProjects: [], picked: [],
   confirmed: [], touched: [], added: [], toolOrder: [],
   picks: [...DEFAULT_PICKS], open: ['notes'], period: DEFAULT_PERIOD_DAYS, consent: true, leaves: false, menu: null,
-  scopes: {}, browserChoice: null, folderAnswers: null, pendingRun: false,
+  scopes: {}, groupScopes: {}, groupScopeClosed: [], browserChoice: null, folderAnswers: null, pendingRun: false, firstProject: null,
   scratchName: '', scratchDesc: '',
 });
 
@@ -224,6 +255,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   React.useEffect(() => {
     if (!preview) return;
     if (preview.screen) set({ screen: preview.screen, dialog: preview.dialog || null, ...(preview.state || {}) });
+    else if (preview.dialog === 'intro') set({ screen: 'intro', dialog: null, ...(preview.state || {}) });
     else set({ dialog: preview.dialog, ...(preview.state || {}) });
   }, [preview]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -276,8 +308,10 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       // Round 3: the method is asked after the projects, so the work questions come next. The next screen is drawn behind the
       // browser question ("advance to next screen before immediately showing [the popup]"), and the tool agent starts once
       // it is answered, so Confirm your tools is ready by the time the person gets there.
-      set({ screen: 'roles', modeFirst: false });
-      keychainGate(() => set({ dialog: null }), 'auto');
+      // 2026-10-14: the popups the intro's buttons bring up stay over the intro ("the background should never change when a
+      // new popup comes"); the work questions come once they are answered, with no popup over them.
+      set({ modeFirst: false });
+      keychainGate(() => set({ dialog: null, screen: 'roles' }), 'auto');
     } else if (purpose === 'run') void run(provider);
     else set({ dialog: null });
   };
@@ -363,6 +397,9 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     const now = latest.current;
     const apps = runApps(now);
     if (!apps.length || !now.picked.length) return;
+    // Which project opens (2026-10-14, "Right now I think it opens a random project"): asked when more than one was picked.
+    // It gets the Welcome project holding every source the run brings in, for all the projects.
+    if (mode === 'new' && now.picked.length > 1 && !now.picked.includes(now.firstProject)) { set({ dialog: 'first-project', firstChoice: now.picked[0] }); return; }
     if (apps.includes('Apple Notes') && !now.notesConsent) { set({ dialog: 'notes-permission' }); return; }
     const files = apps.some((id) => FILE_TOOLS.includes(id));
     if (platform === 'darwin' && files && !(disk && (disk.granted || disk.grantedFresh)) && !now.folderAnswers) { set({ dialog: 'folders' }); return; }
@@ -381,19 +418,33 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     const now = latest.current;
     const provider = providerNow || now.provider;
     if (!provider) { void needProvider('run'); return; }
-    const projects = selectedProjects(now, discovery).map((project) => ({ id: project.id, title: project.title, description: project.description || '', folder: project.folder || '' }));
+    // The project chosen to start with first: it is the one that opens, with the run attached to it.
+    const projects = selectedProjects(now, discovery).map((project) => ({ id: project.id, title: project.title, description: project.description || '', folder: project.folder || '' }))
+      .sort((a, b) => (b.id === now.firstProject) - (a.id === now.firstProject));
     const apps = runApps(now).filter((id) => CATALOG_IDS.includes(id));
     const scopes = {};
     if (now.mode === 'manual') {
+      const titles = (ids) => projects.filter((project) => ids.includes(project.id)).map((project) => project.title);
       for (const id of apps) {
         const scope = now.scopes[id] || emptyScope(id);
-        // The project pills (round 3): a project is ticked when its options are; none ticked means every project picked.
-        const only = projects.filter((project) => { const mine = scopeOptions(id, [project]); return mine.length > 0 && mine.every((option) => scope.items.includes(option.id)); }).map((project) => project.title);
-        scopes[id] = { ...scope, items: [], labels: [], projects: only.length === projects.length ? [] : only };
+        const group = { note: '', projects: [], people: [], ...(now.groupScopes[groupOf(id)] || {}) };
+        // The project pills (round 3): a project is ticked when its options are; the source's own ticks, else its
+        // category's (2026-10-14); none ticked means every project picked.
+        const mine = projects.filter((project) => { const options = scopeOptions(id, [project]); return options.length > 0 && options.every((option) => scope.items.includes(option.id)); }).map((project) => project.title);
+        const only = mine.length ? mine : titles(group.projects);
+        // A notes app's saved websites (2026-10-14), ticked under Websites: its import also brings in the links in its notes.
+        const links = now.picks.includes(linksOf(id));
+        const linkScope = now.scopes[linksOf(id)] || null;
+        const sites = links ? { note: '', ...(now.groupScopes.sites || {}) } : null;
+        const note = [group.note, scope.note, links ? LINKS_NOTE : '', sites && sites.note ? `For those links: ${sites.note}` : '', linkScope && linkScope.note ? `For those links: ${linkScope.note}` : '']
+          .map((line) => String(line || '').trim()).filter(Boolean).map((line) => (/[.!?]$/.test(line) ? line : `${line}.`)).join(' ');
+        scopes[id] = { ...scope, note, people: [...new Set([...(group.people || []), ...scope.people])], items: [], labels: [], projects: only.length === projects.length ? [] : only };
       }
     }
     const additional = now.mode === 'auto' ? now.added.filter((tool) => now.confirmed.includes(tool.id)).map((tool) => ({ name: tool.name, website: tool.website || '' })) : [];
-    set({ dialog: 'starting', pendingRun: false });
+    // No "Starting your imports" popup (2026-10-14: one popup at most between here and the project): the button says it.
+    set({ dialog: null, pendingRun: false });
+    setBusy('run');
     setError('');
     try {
       if (apps.includes('Apple Notes')) await api.notesPermission().catch(() => null);
@@ -419,11 +470,12 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       }
       if (!first) first = await api.startProject({ name: 'My research', description: '', folder: 'new', directory: '', context: [], onboarding: true, connect: session.id });
       await onDone(first, { session });
-      // Off the screen once the project has opened: the flow is never left on Starting your imports over the workspace.
       set({ dialog: null });
     } catch (failure) {
       say(failure);
       set({ dialog: null });
+    } finally {
+      setBusy('');
     }
   }
 
@@ -461,17 +513,39 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   /* -------- picks */
   /** A supported tool added from "+ Add a tool": selected, and placed with the selected ones. */
   const pickTool = (id) => set((now) => ({ confirmed: [...new Set([...now.confirmed, id])], touched: [...new Set([...now.touched, id])], toolOrder: placeSelected(orderedTools(now), id, now.confirmed), dialog: null }));
-  const keysOf = (group) => (group.apps.length ? group.apps : [`__${group.id}`]).map((key) => (key === '__sites' ? SITES : key));
-  const allKeys = GROUPS.flatMap(keysOf);
+  const keysOf = (group, now = F) => {
+    const keys = (group.apps.length ? group.apps : [`__${group.id}`]).map((key) => (key === '__sites' ? SITES : key));
+    return group.id === 'sites' ? [...keys, ...NOTES_APPS.filter((app) => now.picks.includes(app)).map(linksOf)] : keys;
+  };
+  const allKeys = GROUPS.flatMap((group) => keysOf(group));
   const toggle = (list, id) => (list.includes(id) ? list.filter((one) => one !== id) : [...list, id]);
-  const toggleGroup = (group) => set((now) => { const keys = keysOf(group); const on = keys.every((key) => now.picks.includes(key)); return { picks: on ? now.picks.filter((key) => !keys.includes(key)) : [...new Set([...now.picks, ...keys])] }; });
-  const scopeOf = (id) => F.scopes[id] || emptyScope(id);
+  const toggleGroup = (group) => set((now) => { const keys = keysOf(group, now); const on = keys.every((key) => now.picks.includes(key)); return { picks: on ? now.picks.filter((key) => !keys.includes(key)) : [...new Set([...now.picks, ...keys])] }; });
+  const scopeOf = (id) => F.scopes[id] || emptyScope(isLinks(id) ? SITES : id);
+  const groupScopeOf = (gid) => ({ note: '', projects: [], people: [], ...(F.groupScopes[gid] || {}) });
+  const setGroupScope = (gid, patch) => set((now) => ({ groupScopes: { ...now.groupScopes, [gid]: { note: '', projects: [], people: [], ...(now.groupScopes[gid] || {}), ...patch } } }));
+  /** A source ticked or unticked. Ticking opens its category's Specify context (unless the person closed it there) and closes
+   *  any one source's; unticking opens nothing. A notes app unticked takes its saved websites with it. */
+  const pickSource = (id) => set((now) => {
+    const adding = !now.picks.includes(id);
+    let picks = toggle(now.picks, id);
+    if (!adding && NOTES_APPS.includes(id)) picks = picks.filter((one) => one !== linksOf(id));
+    const gid = groupOf(id);
+    return adding
+      ? { picks, scopeOpen: null, groupScopeClosed: now.groupScopeClosed.filter((one) => one !== gid) }
+      : { picks, scopeOpen: now.scopeOpen === id ? null : now.scopeOpen };
+  });
   const setScope = (id, patch) => set((now) => ({ scopes: { ...now.scopes, [id]: { ...(now.scopes[id] || emptyScope(id)), ...patch } } }));
-  const chooseFolder = async (id) => {
-    const dir = await api.pickDirectory().catch(() => null);
-    if (!dir) return;
-    const scope = scopeOf(id);
-    if (!scope.folders.some((folder) => folder.path === dir)) setScope(id, { folders: [...scope.folders, { path: dir, name: dir.split('/').filter(Boolean).pop() || dir }] });
+  // Choose files (2026-10-14: "choose folder and choose files should just be the same thing"): files and folders in one
+  // picker; Obsidian's is a picker of its own over the vaults, drawn like Obsidian's file explorer (./ObsidianPicker.jsx).
+  const addFolders = (id, chosenFiles) => set((now) => {
+    const scope = now.scopes[id] || emptyScope(id);
+    const folders = [...scope.folders, ...chosenFiles.filter((file) => !scope.folders.some((folder) => folder.path === file.path))];
+    return { scopes: { ...now.scopes, [id]: { ...scope, folders } } };
+  });
+  const chooseFiles = async (id) => {
+    if (id === 'Obsidian' && api.obsidianTree) { set({ dialog: 'obsidian-picker', pickerFor: id }); return; }
+    const files = await api.pickFiles().catch(() => []);
+    if (files.length) addFolders(id, files);
   };
 
   const projects = allProjects(F, discovery);
@@ -493,7 +567,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   );
 
   const lowerBack = () => <button type="button" className="link work-back" onClick={() => {
-    if (F.screen === 'roles') set({ screen: 'picker', dialog: 'intro' });
+    if (F.screen === 'roles') set({ screen: 'intro', dialog: null });
     else if (F.screen === 'work') set({ screen: 'roles' });
     else if (F.screen === 'projects') set({ screen: 'work' });
     else if (F.screen === 'tools') set({ dialog: 'import-mode', modeChoice: 'auto', modeFirst: false });
@@ -524,10 +598,32 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     </div>
   ) : null);
 
+  // Import your context (2026-10-14: "Instead of a popup, this should actually be its own screen"): the first screen, not a
+  // dialog over the picker the person had not seen yet. Its buttons' popups (provider, tools, the browser's sign-ins, Start
+  // from scratch) open over it and it stays behind them; the work questions follow once they are answered.
+  const introPage = () => (
+    <main className="page intro-page" data-import-screen="intro">
+      {mode === 'modal' && <button type="button" className="close intro-close" aria-label="Close" onClick={() => { api.saveFlow(null).catch(() => {}); onClose({}); }}>×</button>}
+      <div className="welcome">
+        <T k="title" tag="h1" />
+        <T k="subtitle" tag="p" className="lead" />
+        <div className="icons">
+          {WORKS.map(([name, src]) => <span key={name} className="ic" title={shownName(name)}><img src={src} alt={shownName(name)} /></span>)}
+          <button type="button" className="ic" aria-label="Show all supported apps" onClick={() => set({ dialog: 'apps' })}>+12</button>
+        </div>
+        <div className="trust"><T k="privacy" /><button type="button" className="link under" onClick={() => set({ dialog: 'privacy' })}>Learn more</button></div>
+        <div className="actions">
+          <a className="link scratch-link" href="#start-from-scratch" onClick={(event) => { event.preventDefault(); set({ dialog: 'scratch-confirm' }); }}><T k="secondary" /></a>
+          <button type="button" className="btn" data-import-start="1" onClick={importContext}><T k="primary" /></button>
+        </div>
+      </div>
+    </main>
+  );
+
   const rolesPage = () => (
     <main className="work-page" data-import-screen="roles">
       <div className="work-column">
-        {flowHeader('What kind of work do you do?', 'role-title', () => set({ screen: 'picker', dialog: 'intro' }), 'Choose all that apply.')}
+        {flowHeader('What kind of work do you do?', 'role-title', () => set({ screen: 'intro', dialog: null }), 'Choose all that apply.')}
         <div className="role-grid">
           {ROLES.map((role) => (
             <button key={role.name} type="button" className="role-card" role="checkbox" aria-checked={F.roles.includes(role.name)} data-work-role={role.name} onClick={() => set((now) => ({ roles: toggle(now.roles, role.name) }))}>
@@ -541,12 +637,16 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   );
 
   // Not optional (2026-10-13, second round: "Dont make this optional"); the project agent is already running, so what is
-  // written here goes to the import agents with the projects picked.
+  // written here goes to the import agents with the projects picked. 2026-10-14: "What are you interested in?", Enter
+  // continues and Shift+Enter starts a new paragraph, with no line saying so ("we wanna keep it clean").
+  const workNext = () => { if (latest.current.work.trim()) set({ screen: 'projects' }); };
   const workPage = () => (
     <main className="work-page review-work" data-import-screen="work"><div className="work-column">
-      {flowHeader('What are you working on?', 'work-description-title', () => set({ screen: 'roles' }))}
-      <textarea id="work-description" className="field" rows={1} ref={growReviewInput} aria-label="What are you working on?" placeholder="Understanding the Memex..." value={F.work} onChange={event => { growReviewInput(event.currentTarget); set({ work: event.target.value.slice(0, 2000) }); }} />
-      <footer className="work-foot">{lowerBack()}<button type="button" className="btn" disabled={!F.work.trim()} onClick={() => set({ screen: 'projects' })}>Continue{CHEV}</button></footer>
+      {flowHeader('What are you interested in?', 'work-description-title', () => set({ screen: 'roles' }))}
+      <textarea id="work-description" className="field" rows={1} ref={growReviewInput} autoFocus aria-label="What are you interested in?" placeholder="Understanding the Memex..." value={F.work}
+        onChange={event => { growReviewInput(event.currentTarget); set({ work: event.target.value.slice(0, 2000) }); }}
+        onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); workNext(); } }} />
+      <footer className="work-foot">{lowerBack()}<button type="button" className="btn" disabled={!F.work.trim()} onClick={workNext}>Continue{CHEV}</button></footer>
     </div></main>
   );
 
@@ -614,11 +714,68 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           </div>
           <footer className="work-foot">{lowerBack()}
             <span className="muted">{F.confirmed.length} tools selected</span>
-            <button type="button" className="btn" data-import-run="1" disabled={!(scanned || F.skipWait) || !F.confirmed.length} onClick={runGate}>{RUN_LABEL}{CHEV}</button>
+            <button type="button" className="btn" data-import-run="1" disabled={!(scanned || F.skipWait) || !F.confirmed.length || busy === 'run'} onClick={runGate}>{busy === 'run' ? 'Starting…' : RUN_LABEL}{busy === 'run' ? null : CHEV}</button>
           </footer>
         </div>
       </main>
     );
+  };
+
+  /**
+   * A Specify context panel (round 3, reworked 2026-10-14): the projects first, under one line saying what they are for
+   * ("a header just under the app selection"), then "Specific things to import from {names} (optional)" with the
+   * category's hint, then Choose files for a file source, and the people for email (Enter adds one). A category's panel
+   * speaks for every source ticked in it; a source's own, opened from its row, for that source alone.
+   */
+  const contextPanel = ({ id, names, hint, note, onNote, projectOn, onProject, chooser = null, people = null, onPeople = null, folders = [], onRemoveFolder = null }) => (
+    <div className="review-context" data-context-panel={id}>
+      {chosen.length > 0 && <p className="review-projects-note">Select all projects you want Engelbart to import from {listed(names)}.</p>}
+      {chosen.length > 0 && <div className="review-projects" role="group" aria-label={`Projects to import from ${listed(names)}`}>
+        {chosen.map((project) => {
+          const on = projectOn(project);
+          return <button key={project.id} type="button" className="review-project" data-source-project={project.id} role="checkbox" aria-checked={on} onClick={() => onProject(project, on)}>{on && <span className="review-project-check" aria-hidden="true">✓</span>}{project.title}</button>;
+        })}
+      </div>}
+      <label className="review-context-label" htmlFor={`review-context-${id}`}>{`Specific things to import from ${listed(names)} (optional)`}</label>
+      <textarea id={`review-context-${id}`} className="field" rows={1} ref={growReviewInput} data-scope-note={id} placeholder={hint} value={note} onChange={(event) => { growReviewInput(event.currentTarget); onNote(event.target.value.slice(0, 2000)); }} />
+      {people && <>
+        <div className="sender-input">
+          <input className="field" aria-label="Name or email address" placeholder="Name or email address" value={sender[id] || ''} data-sender-input={id}
+            onChange={(event) => setSender((now) => ({ ...now, [id]: event.target.value }))}
+            onKeyDown={(event) => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) { event.preventDefault(); const person = (sender[id] || '').trim(); if (person) onPeople([...new Set([...people, person])]); setSender((now) => ({ ...now, [id]: '' })); } }} />
+          <button type="button" className="link" onClick={() => { const person = (sender[id] || '').trim(); if (person) onPeople([...new Set([...people, person])]); setSender((now) => ({ ...now, [id]: '' })); }}>Add person</button>
+        </div>
+        {people.length > 0 && <div className="sender-chips">{people.map((person) => <button type="button" key={person} onClick={() => onPeople(people.filter((one) => one !== person))}>{person} ×</button>)}</div>}
+      </>}
+      {chooser && <div className="folder-upload"><button type="button" className="link under" data-choose-files={id} onClick={chooser}>Choose files</button></div>}
+      {folders.length > 0 && <div className="selected-folder-list">{folders.map((folder) => <div key={folder.path} title={folder.path}>{folder.file ? FILE : FOLDER}<span>{folder.name}</span><button type="button" className="link" aria-label={`Remove ${folder.name}`} onClick={() => onRemoveFolder(folder)}>×</button></div>)}</div>}
+    </div>
+  );
+
+  /** A source's own Specify context (opened from its row). */
+  const sourcePanel = (id) => {
+    const scope = scopeOf(id);
+    const optionsOf = (project) => scopeOptions(isLinks(id) ? SITES : id, [project]).map((option) => option.id.replace(/^[^:]+/, id));
+    return contextPanel({
+      id, names: [spokenName(id)], hint: GROUP_HINTS[groupOf(id)] || '', note: scope.note, onNote: (note) => setScope(id, { note }),
+      projectOn: (project) => optionsOf(project).every((item) => scope.items.includes(item)),
+      onProject: (project, on) => { const options = optionsOf(project); setScope(id, { items: on ? scope.items.filter((item) => !options.includes(item)) : [...new Set([...scope.items, ...options])] }); },
+      chooser: FILE_SOURCES.includes(id) ? () => chooseFiles(id) : null,
+      people: scope.kind === 'email' ? scope.people : null, onPeople: (people) => setScope(id, { people }),
+      folders: scope.folders, onRemoveFolder: (folder) => setScope(id, { folders: scope.folders.filter((one) => one.path !== folder.path) }),
+    });
+  };
+
+  /** A category's Specify context: for every source ticked in it. A category of one source is that source's own. */
+  const groupPanel = (group, keys) => {
+    const on = keys.filter((id) => F.picks.includes(id));
+    if (keys.length === 1) return sourcePanel(keys[0]);
+    const scope = groupScopeOf(group.id);
+    return contextPanel({
+      id: `group:${group.id}`, names: on.map((id) => spokenName(id)), hint: GROUP_HINTS[group.id] || '', note: scope.note, onNote: (note) => setGroupScope(group.id, { note }),
+      projectOn: (project) => scope.projects.includes(project.id),
+      onProject: (project, was) => setGroupScope(group.id, { projects: was ? scope.projects.filter((one) => one !== project.id) : [...scope.projects, project.id] }),
+    });
   };
 
   const picker = () => (
@@ -628,45 +785,41 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           <T k="pickerTitle" tag="h2" />
           {GROUPS.map((group) => {
             const keys = keysOf(group), open = F.open.includes(group.id);
+            const nOn = keys.filter((id) => F.picks.includes(id)).length;
+            // The category's Specify context opens by itself (2026-10-14: "do not auto-expand on an app level, only a
+            // category level"): shown open once something in it is ticked, until the person closes it.
+            const groupOpen = nOn > 0 && !F.groupScopeClosed.includes(group.id);
             return <section key={group.id}>
               <div className="group-head">
                 <button type="button" className="expand" data-group={group.id} aria-expanded={open} onClick={() => set({ open: open ? [] : [group.id], scopeOpen: null })}>{CHEV}<span>{group.label}</span></button>
-                <span className="muted review-count">{keys.filter(id => F.picks.includes(id)).length ? `${keys.filter(id => F.picks.includes(id)).length} selected` : ''}</span>
+                <span className="muted review-count">{nOn ? `${nOn} selected` : ''}</span>
               </div>
               {open && <div className="apps">
-                {keys.map(id => {
-                  const selected = F.picks.includes(id), scope = scopeOf(id);
-                  const files = ['Obsidian', 'Zoom', 'Zotero', LOCAL_PDFS, LOCAL_FOLDERS].includes(id);
+                {keys.map((id) => {
+                  const selected = F.picks.includes(id);
+                  const own = keys.length > 1; // a category of one source has only the category's panel
                   return <section key={id} className={`review-source ${selected ? 'selected' : ''}`}>
                     <div className="review-source-row">
-                      <button type="button" className="app-row" data-app={id} role="checkbox" aria-checked={selected} onClick={() => set(now => ({ picks: toggle(now.picks, id), scopeOpen: now.scopeOpen === id ? id : null }))}>
+                      <button type="button" className="app-row" data-app={id} role="checkbox" aria-checked={selected} onClick={() => pickSource(id)}>
                         <ToolLogo id={id} /><span className="app-text">{toolName(id)}</span><Check on={selected} />
                       </button>
-                      {selected && <button type="button" className={`review-specify ${F.scopeOpen === id ? 'is-open' : ''}`} data-specify-context={id} aria-expanded={F.scopeOpen === id} onClick={() => set({ scopeOpen: F.scopeOpen === id ? null : id })}>Specify context{DOWN}</button>}
+                      {selected && own && <button type="button" className={`review-specify ${F.scopeOpen === id ? 'is-open' : ''}`} data-specify-context={id} aria-expanded={F.scopeOpen === id} onClick={() => set({ scopeOpen: F.scopeOpen === id ? null : id })}>Specify context{DOWN}</button>}
                     </div>
-                    {selected && F.scopeOpen === id && <div className="review-context">
-                      <div className="review-projects" role="group" aria-label={`Projects to import from ${toolName(id)}`}>
-                        {chosen.map(project => {
-                          const options = scopeOptions(id, [project]);
-                          const selected = options.every(option => scope.items.includes(option.id));
-                          return <button key={project.id} type="button" className="review-project" data-source-project={project.id} role="checkbox" aria-checked={selected} onClick={() => setScope(id, { items: selected ? scope.items.filter(item => !options.some(option => option.id === item)) : [...new Set([...scope.items, ...options.map(option => option.id)])] })}>{selected && <span className="review-project-check" aria-hidden="true">✓</span>}{project.title}</button>;
-                        })}
-                      </div>
-                      {chosen.length > 0 && <p className="review-projects-note">Select all projects you want Engelbart to import from {toolName(id)}.</p>}
-                      <label className="review-context-label" htmlFor={`review-context-${id}`}>Further specify</label>
-                      <textarea id={`review-context-${id}`} className="field" rows={1} ref={growReviewInput} data-scope-note={id} aria-label={`Optional context for ${toolName(id)}`} placeholder={id === LOCAL_FOLDERS ? 'e.g. Research notes and PDFs about the Memex in Documents' : id === 'Obsidian' ? 'e.g. My notes about Engelbart and context engineering' : 'e.g. Only context related to my current projects'} value={scope.note} onChange={event => { growReviewInput(event.currentTarget); setScope(id, { note: event.target.value.slice(0, 2000) }); }} />
-                      {files && <div className="folder-upload"><button type="button" className="link under" onClick={() => chooseFolder(id)}>Choose a folder</button><button type="button" className="link under" onClick={async () => { const files = await api.pickFiles(); setScope(id, { folders: [...scope.folders, ...files.filter(file => !scope.folders.some(folder => folder.path === file.path))] }); }}>Choose files</button></div>}
-                      {scope.kind === 'email' && <><div className="sender-input"><input className="field" aria-label="Name or email address" placeholder="Name or email address" value={sender[id] || ''} onChange={event => setSender(now => ({ ...now, [id]: event.target.value }))} /><button type="button" className="link" onClick={() => { const person = (sender[id] || '').trim(); if (person) setScope(id, { people: [...new Set([...scope.people, person])] }); setSender(now => ({ ...now, [id]: '' })); }}>Add person</button></div><div className="sender-chips">{scope.people.map(person => <button type="button" key={person} onClick={() => setScope(id, { people: scope.people.filter(one => one !== person) })}>{person} ×</button>)}</div></>}
-                      <div className="selected-folder-list">{scope.folders.map(folder => <div key={folder.path}>{FOLDER}<span>{folder.name}</span><button type="button" className="link" aria-label={`Remove ${folder.name}`} onClick={() => setScope(id, { folders: scope.folders.filter(one => one.path !== folder.path) })}>×</button></div>)}</div>
-                    </div>}
+                    {selected && own && F.scopeOpen === id && sourcePanel(id)}
                   </section>;
                 })}
+                {nOn > 0 && <section className="group-context" data-group-context={group.id}>
+                  <div className="group-context-row">
+                    <button type="button" className={`review-specify ${groupOpen ? 'is-open' : ''}`} data-specify-group={group.id} aria-expanded={groupOpen} onClick={() => set((now) => ({ groupScopeClosed: groupOpen ? [...now.groupScopeClosed, group.id] : now.groupScopeClosed.filter((one) => one !== group.id) }))}>{`Specify context for ${keys.length === 1 ? toolName(keys[0]) : `all ${spokenGroup(group.label)}`}`}{DOWN}</button>
+                  </div>
+                  {groupOpen && groupPanel(group, keys)}
+                </section>}
               </div>}
             </section>;
           })}
         </div>
       </main>
-      <footer className="foot"><div className="foot-inner"><div className="back-skip"><button type="button" className="link" onClick={() => set({ dialog: 'import-mode', modeFirst: false })}>Back</button></div><span className="muted review-count">{F.picks.length} selected</span><div className="foot-right"><button type="button" className="btn" data-import-run="1" disabled={!F.picks.length || !F.picked.length} onClick={runGate}>{RUN_LABEL}{CHEV}</button></div></div></footer>
+      <footer className="foot"><div className="foot-inner"><div className="back-skip"><button type="button" className="link" onClick={() => set({ dialog: 'import-mode', modeFirst: false })}>Back</button></div><span className="muted review-count">{F.picks.length} selected</span><div className="foot-right"><button type="button" className="btn" data-import-run="1" disabled={!F.picks.length || !F.picked.length || busy === 'run'} onClick={runGate}>{busy === 'run' ? 'Starting…' : RUN_LABEL}{busy === 'run' ? null : CHEV}</button></div></div></footer>
     </>
   );
 
@@ -707,31 +860,11 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   const dialogBody = () => {
     const d = F.dialog;
-    if (d === 'intro') {
-      return (
-        <>
-          {mode === 'modal' && <button type="button" className="close intro-close" aria-label="Close" onClick={() => { api.saveFlow(null).catch(() => {}); onClose({}); }}>×</button>}
-          <div className="welcome">
-            <T k="title" tag="h1" />
-            <T k="subtitle" tag="p" className="lead" />
-            <div className="icons">
-              {WORKS.map(([name, src]) => <span key={name} className="ic" title={shownName(name)}><img src={src} alt={shownName(name)} /></span>)}
-              <button type="button" className="ic" aria-label="Show all supported apps" onClick={() => set({ dialog: 'apps' })}>+12</button>
-            </div>
-            <div className="trust"><T k="privacy" /><button type="button" className="link under" onClick={() => set({ dialog: 'privacy' })}>Learn more</button></div>
-            <div className="actions">
-              <a className="link scratch-link" href="#start-from-scratch" onClick={(event) => { event.preventDefault(); set({ dialog: 'scratch-confirm' }); }}><T k="secondary" /></a>
-              <button type="button" className="btn" data-import-start="1" onClick={importContext}><T k="primary" /></button>
-            </div>
-          </div>
-        </>
-      );
-    }
-    if (d === 'privacy') return (<><div className="modal-head"><h3>About your context</h3><button type="button" className="close" aria-label="Close" onClick={() => set({ dialog: 'intro' })}>×</button></div>{ANSWERS.map(([q, a]) => <div key={q} className="faq-item"><b>{q}</b><p>{a}</p></div>)}{buttons('', 'Got it', null, () => set({ dialog: 'intro' }))}</>);
+    if (d === 'privacy') return (<><div className="modal-head"><h3>About your context</h3><button type="button" className="close" aria-label="Close" onClick={close}>×</button></div>{ANSWERS.map(([q, a]) => <div key={q} className="faq-item"><b>{q}</b><p>{a}</p></div>)}{buttons('', 'Got it', null, close)}</>);
     if (d === 'apps') {
       const seen = new Set();
       const list = [...WORKS.map(([name, src]) => [shownName(name), src]), ...CATALOG.filter((tool) => TOOL_LOGOS[tool.id]).map((tool) => [tool.name, TOOL_LOGOS[tool.id]])].filter(([name]) => (seen.has(name) ? false : seen.add(name)));
-      return (<><div className="modal-head"><h3>Works with your tools</h3><button type="button" className="close" aria-label="Close" onClick={() => set({ dialog: 'intro' })}>×</button></div><div className="all-apps">{list.map(([name, src]) => <span key={name} className="supported-app"><img src={src} alt="" />{name}</span>)}</div>{buttons('', 'Done', null, () => set({ dialog: 'intro' }))}</>);
+      return (<><div className="modal-head"><h3>Works with your tools</h3><button type="button" className="close" aria-label="Close" onClick={close}>×</button></div><div className="all-apps">{list.map(([name, src]) => <span key={name} className="supported-app"><img src={src} alt="" />{name}</span>)}</div>{buttons('', 'Done', null, close)}</>);
     }
     if (d === 'scratch-confirm') return (<><h3>Are you sure?</h3><p>{mode === 'modal' ? 'Nothing will be imported. You can import your context later.' : 'Your project will start with an empty library. You can import your context later.'}</p><div className="mf"><button type="button" className="link" onClick={() => (mode === 'modal' ? startFromScratch() : set({ dialog: 'project' }))}>{mode === 'modal' ? 'Close' : 'Start from scratch'}</button><button type="button" className="btn small" onClick={importContext}>Keep importing</button></div></>);
     if (d === 'project') {
@@ -757,7 +890,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
               </button>
             ))}
           </div>
-          <div className="mf mf-start"><button type="button" className="link" onClick={() => set({ dialog: F.purpose === 'start' ? 'intro' : null })}>Back</button></div>
+          <div className="mf mf-start"><button type="button" className="link" onClick={() => set({ dialog: null })}>Back</button></div>
         </>
       );
     }
@@ -765,14 +898,14 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       const ready = readyProviders().length > 0;
       return (
         <>
-          <div className="modal-head"><h3>Set up your tools</h3><button type="button" className="close" aria-label="Close tool setup" onClick={() => set({ dialog: F.purpose === 'start' ? 'intro' : null })}>×</button></div>
+          <div className="modal-head"><h3>Set up your tools</h3><button type="button" className="close" aria-label="Close tool setup" onClick={() => set({ dialog: null })}>×</button></div>
           <p>Engelbart’s agents run on Claude Code or Codex with the subscription you already have. One is enough.</p>
           <div className="tool-list">
             {toolsSnap && toolsSnap.tools && toolsSnap.tools.git ? <div><span>Git</span><small>{toolsSnap.tools.git.status === 'ready' ? 'Installed' : 'Not installed'}</small>{toolsSnap.tools.git.status === 'ready' ? CHECK : <button type="button" className="btn secondary small" onClick={() => api.toolsInstall(['git']).catch(say)}>Install</button>}</div> : null}
             {toolRow('claude', 'Claude Code')}
             {toolRow('codex', 'Codex')}
           </div>
-          <div className="mf"><button type="button" className="link" onClick={() => set({ dialog: F.purpose === 'start' ? 'intro' : null })}>Back</button><button type="button" className="btn" disabled={!ready} onClick={() => needProvider(F.purpose || 'start')}>Continue</button></div>
+          <div className="mf"><button type="button" className="link" onClick={() => set({ dialog: null })}>Back</button><button type="button" className="btn" disabled={!ready} onClick={() => needProvider(F.purpose || 'start')}>Continue</button></div>
         </>
       );
     }
@@ -828,6 +961,26 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
     if (d === 'browser-agents-confirm') return (<><h3>Are you sure?</h3><p>{`Without ${F.agentsBrowser || 'your browser'}, agents bring in your web apps through Engelbart’s own browser instead, with the sign-ins it copied or those you make inside Engelbart.`}</p><div className="mf"><button type="button" className="link" onClick={() => browserAgentsAnswer('declined')}>Continue without it</button><button type="button" className="btn small" onClick={() => browserAgentsAnswer('allowed')}>{`Allow ${F.agentsBrowser || 'your browser'}`}</button></div></>);
     if (d === 'starting') return (<><h3>Starting your imports</h3><p>{`Each agent will bring in only what pertains to ${chosen.map((project) => project.title).join(' and ') || 'your projects'}.`}</p><div className="discovery-line" role="status"><span className="activity-dot" /><span>{mode === 'modal' ? 'Starting…' : 'Setting up your projects…'}</span></div></>);
+    if (d === 'first-project') {
+      const pick = F.firstChoice || F.picked[0];
+      return (
+        <>
+          <h3>Which project do you want to start with?</h3>
+          <div className="profiles first-projects" role="radiogroup" aria-label="Project to start with">
+            {chosen.map((project) => (
+              <button key={project.id} type="button" className="prof first-project" role="radio" aria-checked={pick === project.id} data-first-project={project.id} onClick={() => set({ firstChoice: project.id })}>
+                <span className="project-symbol">{PROJECT}</span><span>{project.title}</span>{pick === project.id ? CHECK : null}
+              </button>
+            ))}
+          </div>
+          <div className="mf"><button type="button" className="link" onClick={close}>Back</button><button type="button" className="btn small" data-first-project-open="1" disabled={!pick} onClick={() => { latest.current = { ...latest.current, firstProject: pick, dialog: null }; set({ firstProject: pick, dialog: null }); setTimeout(runGate, 0); }}>Continue</button></div>
+        </>
+      );
+    }
+    if (d === 'obsidian-picker') {
+      return <ObsidianPicker api={api} chosen={(scopeOf(F.pickerFor || 'Obsidian').folders || []).map((folder) => folder.path)} onCancel={close}
+        onChoose={(picks) => { addFolders(F.pickerFor || 'Obsidian', picks); close(); }} />;
+    }
     if (d === 'work-add-project') {
       const save = () => {
         const title = draft.title.trim();
@@ -880,17 +1033,17 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   const d = F.dialog;
   const body = d ? dialogBody() : null;
-  const modalClass = d === 'folder-fallback' ? 'disk-deny-modal' : (d === 'folders' || d === 'disk-wait') ? 'disk-modal' : d === 'intro' ? 'intro-modal' : d === 'privacy' ? 'context-modal' : '';
-  const screen = F.screen === 'roles' ? rolesPage() : F.screen === 'work' ? workPage() : F.screen === 'projects' ? projectsPage() : F.screen === 'tools' ? toolsPage() : F.screen === 'scopes' ? scopesPage() : picker();
+  const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'folder-fallback' ? 'disk-deny-modal' : (d === 'folders' || d === 'disk-wait') ? 'disk-modal' : d === 'privacy' ? 'context-modal' : '';
+  const screen = F.screen === 'intro' ? introPage() : F.screen === 'roles' ? rolesPage() : F.screen === 'work' ? workPage() : F.screen === 'projects' ? projectsPage() : F.screen === 'tools' ? toolsPage() : F.screen === 'scopes' ? scopesPage() : picker();
 
   return (
     <CopyContext.Provider value={{ edit, copy, setCopy }}>
       <div className={`ix ${edit ? 'editing' : ''} ${mode === 'modal' ? 'ix-in-modal' : ''}`} data-import-flow={mode} data-screen={F.screen} data-dialog={d || ''}>
-        <style>{IMPORT_CSS}{EXTRA_CSS}{ROUND3_CSS}</style>
+        <style>{IMPORT_CSS}{EXTRA_CSS}{ROUND3_CSS}{ROUND4_CSS}</style>
         <div className="ix-app" inert={d ? true : undefined}>{screen}</div>
         {error && <div className="ix-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
         {body && (
-          <div className={`scrim ${d === 'intro' ? 'intro-scrim' : ''}`} onMouseDown={(event) => { if (event.target === event.currentTarget && !['intro', 'starting', 'disk-wait', 'folders-asking', 'browser-agents', 'browser-agents-confirm'].includes(d)) set({ dialog: d === 'privacy' || d === 'apps' ? 'intro' : null }); }}>
+          <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget && !['starting', 'disk-wait', 'folders-asking', 'browser-agents', 'browser-agents-confirm'].includes(d)) set({ dialog: null }); }}>
             <section className={`modal ${modalClass}`} role="dialog" aria-modal="true" aria-label={d}>{body}</section>
           </div>
         )}

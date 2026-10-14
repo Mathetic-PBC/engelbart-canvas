@@ -641,12 +641,15 @@ test('a session with the fake agents: a folder button, a question card, imports 
   assert.equal(await connect.attachProject(ctx, started.id, project.id, workspaceId), 0, 'no notes were held for it');
   const names = (await ctx.libraryDb.list()).filter((row) => row.project_id === project.id && row.tags.includes('note')).map((row) => row.name);
   assert.deepEqual(names, ['Welcome!']);
-  // What it brought into the library goes on the project's list (2026-10-11), never into the Welcome workspace's context
-  // (2026-10-13: "imports go only to the library for now, not the workspace").
+  // What it brought into the library goes on the project's list (2026-10-11) and, for onboarding's run, into the Welcome
+  // project's folder too (2026-10-14: "the welcome project folder should be a complete set of their project files"; it
+  // replaced 2026-10-13's "imports go only to the library for now, not the workspace", which still holds for an import
+  // started inside a project).
   const brought = (await mdFiles()).filter((row) => !earlier.has(row.id)).map((row) => row.id);
   assert.equal(brought.length, 5);
   const held = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
-  assert.deepEqual(held, [noteId], 'the Welcome! note alone');
+  assert.equal(held[0], noteId, 'the Welcome! note first');
+  assert.deepEqual([...held.slice(1)].sort(), [...brought].sort(), 'and everything that came in');
   assert.deepEqual(brought.filter((id) => !projects.findProject(ctx, project.id).library.includes(id)), [], 'every note it brought in is the project\'s');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8')).rows.sort(), [...brought].sort(), 'kept with the session, for a resume');
   connect.dismiss(started.id);

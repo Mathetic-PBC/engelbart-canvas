@@ -1,6 +1,7 @@
 import React from 'react';
 import { IMPORT_CSS } from './import-css.js';
 import { ROUND3_CSS } from './round3-css.js';
+import { ROUND4_CSS } from './round4-css.js';
 import { TOOL_LOGOS } from './logos.js';
 import { shownName } from '../../shared/connect-sources.cjs';
 import { catalogTool } from '../../shared/import-flow.cjs';
@@ -30,6 +31,7 @@ const rowName = (job) => {
   if (app) return catalogTool(app) ? catalogTool(app).name : shownName(app);
   return String(job.label || '').replace(/^[^:]{1,30}:\s*/, '');
 };
+const listNames = (names) => (names.length <= 1 ? names[0] || '' : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
 /** Whether a job brought anything into the library. */
 const brought = (job) => job.status === 'done' && (job.notes || 0) + (job.items || 0) > 0;
 const RANK = { waiting: 0, running: 1, queued: 2 };
@@ -41,6 +43,9 @@ export function jobState(job) {
   if (job.status === 'running') { const n = (job.notes || 0) + (job.items || 0); return n ? `${n} added` : 'Working'; }
   if (job.status === 'queued') return 'Queued';
   if (job.status === 'done') { const n = (job.notes || 0) + (job.items || 0); return n ? `Done · ${n}` : 'Done'; }
+  // A failed import is not one the person left out (2026-10-14: Granola's "model at capacity" read as "Left out").
+  if (job.status === 'failed') return 'Couldn’t import';
+  if (job.status === 'stopped') return 'Stopped';
   return 'Left out';
 }
 
@@ -75,6 +80,8 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   const ended = jobs.length > 0 && jobs.every((job) => ENDED.has(job.status)) && !(session.needs || []).length;
   const imported = jobs.filter(brought);
   const all = ended && imported.length === jobs.length;
+  // The sources that ended without bringing anything in, named once each (the completion said nothing about them).
+  const missed = [...new Set(jobs.filter((job) => !brought(job) && !job.skipped).map(rowName))].filter((name) => !imported.some((job) => rowName(job) === name));
   const needOf = (job) => (session.needs || []).find((need) => (job.needId ? need.id === job.needId : (job.apps || []).includes(need.app)));
   // An app held on its sign-in has no import yet (it starts once signed in): its row all the same, first.
   const held = (session.needs || []).filter((need) => !jobs.some((job) => (job.apps || []).includes(need.app)))
@@ -82,7 +89,7 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   const rows = [...held, ...jobs];
   return (
     <div className="ix ix-overlay" data-overlay="1" data-cover="1" data-import-status={session.id}>
-      <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:140}.ix.ix-overlay .scrim.stop-confirm{z-index:150}.ix .mf .mf-left{margin-right:auto}'}{ROUND3_CSS}</style>
+      <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:140}.ix.ix-overlay .scrim.stop-confirm{z-index:150}.ix .mf .mf-left{margin-right:auto}.ix .review-logos.one-row{flex-wrap:nowrap;overflow:hidden}.ix .review-logo.more{border:1px dashed #c9c9c9;font-size:14px;color:var(--mute)}.ix .modal p.missed-line{margin:0 0 4px;font-size:13px;color:var(--mute)}'}{ROUND3_CSS}{ROUND4_CSS}</style>
       <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
         <section className={`modal ${ended ? 'done-modal' : 'wide'}`} role="dialog" aria-modal="true" aria-label={ended ? 'Your imports are complete' : 'Imports in progress'}>
           <div className="modal-head">
@@ -91,17 +98,16 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
           </div>
           {ended && <p>{all ? 'All of the sources you have selected are now inside of your Engelbart Library.' : imported.length ? 'These sources are now inside of your Engelbart Library.' : 'Nothing new came into your Engelbart Library.'}</p>}
           {ended ? (
-            imported.length > 0 && (
-              <div className="review-logos">
-                {completionJobs(imported).map((job) => <div className="review-logo" key={job.id} title={job.label} aria-label={`${job.label} imported`} data-imported={job.label}>{job.apps[0] === '__sites' || !job.apps.length ? WEB : logoOf(job.apps)}</div>)}
-              </div>
-            )
+            <>
+              {imported.length > 0 && <CompletionLogos jobs={completionJobs(imported)} />}
+              {!all && missed.length > 0 && <p className="missed-line" data-imported-none={missed.join('|')}>{`Nothing came in from ${listNames(missed)}.`}</p>}
+            </>
           ) : (
             <div className="background-job-list">
               {rows.map((job) => {
                 const need = job.status === 'waiting' ? needOf(job) : null;
                 return (
-                  <div key={job.id} data-background-job={job.id}>
+                  <div key={job.id} data-background-job={job.id} title={job.status === 'failed' && job.error ? String(job.error).slice(0, 300) : undefined}>
                     {logoOf(job.apps)}
                     <span><b>{rowName(job)}</b></span>
                     {need ? <button type="button" className="need-link" data-need-open={need.id} onClick={() => onNeed(need)}>Needs you</button> : <span>{jobState(job)}</span>}
@@ -130,11 +136,25 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   );
 }
 
+// One row of logos (2026-10-14: "we only wanna show one row of logos"): as many as fit, the rest a dashed "+N" tile.
+const ROW = 8;
+function CompletionLogos({ jobs }) {
+  const shown = jobs.length > ROW ? jobs.slice(0, ROW - 1) : jobs;
+  const rest = jobs.slice(shown.length);
+  return (
+    <div className="review-logos one-row">
+      {shown.map((job) => <div className="review-logo" key={job.id} title={job.label} aria-label={`${job.label} imported`} data-imported={job.label}>{job.apps[0] === '__sites' || !job.apps.length ? WEB : logoOf(job.apps)}</div>)}
+      {rest.length > 0 && <div className="review-logo more" title={rest.map((job) => job.label).join(', ')} data-imported-more={rest.length}>{`+${rest.length}`}</div>}
+    </div>
+  );
+}
+
+/** A tile for each source that brought something in: one per source (2026-10-14: the folder and web logos had merged
+ *  different sources into one tile, so "not everything is being showed"), the same source's jobs as one. */
 function completionJobs(jobs) {
   const logos = new Map();
   for (const job of jobs) {
-    const app = (job.apps || [])[0];
-    const key = TOOL_LOGOS[app] || (app === '__sites' || !app ? 'web' : 'folder');
+    const key = rowName(job);
     const previous = logos.get(key);
     if (previous) {
       previous.apps = [...new Set([...previous.apps, ...(job.apps || [])])];

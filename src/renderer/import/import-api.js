@@ -33,6 +33,8 @@ export const importApi = {
   pickDirectory: () => window.terminalAPI.pickDirectory(undefined),
   // "Choose files" under Specify context (round 3): files and folders, several at once (the sidebar's Choose from disk…).
   pickFiles: async () => (await api.pickLibraryPaths('any').catch(() => [])).map((file) => ({ path: file, name: file.split('/').filter(Boolean).pop() || file })),
+  // Obsidian's vaults for its own Choose files picker (./ObsidianPicker.jsx).
+  obsidianTree: () => api.importObsidianTree(),
   connectStart: (choices) => api.connectStart(choices),
   startProject: (input) => api.startProject(input),
   openTrace: () => api.importTraceOpen(),

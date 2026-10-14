@@ -36,10 +36,13 @@ export function useConnectSessions(enabled, dataRoot = '') {
   return sessions;
 }
 
+// 2026-10-14 (Hudson: "Remove the pill and blinking blue dot but keep the 'Importing i/n' text. To show it is in progress,
+// it should 'wave gradient'"): plain text in the title bar, no border, fill or dot. Working, the words carry the
+// left-to-right wave (styles.css .eb-wave); needing the person, amber; done, ink.
 const TONES = {
-  busy: { border: '#eaeaea', background: '#fff', color: '#4d4d4d', dot: '#0070f3' },
-  warn: { border: '#f5c26b', background: '#fffaf0', color: '#a35200', dot: '#e8a317' },
-  done: { border: '#eaeaea', background: '#fff', color: '#171717', dot: '#1f9d55' },
+  busy: { color: '#8f8f8f', wave: true },
+  warn: { color: '#a35200', wave: false },
+  done: { color: '#171717', wave: false },
 };
 
 /** The chip: the newest session not shown in this window, what it is doing, a click to open it. */
@@ -62,12 +65,11 @@ export function ConnectChip({ sessions, onOpen }) {
   if (!view) return null;
   const tone = TONES[view.tone] || TONES.busy;
   return (
-    <span data-connect-dock={view.tone} style={{ display: 'inline-flex', alignItems: 'center', height: 28, border: `1px solid ${tone.border}`, borderRadius: 999, background: tone.background, animation: 'rise 200ms cubic-bezier(.25,.1,.25,1)' }}>
-      <button type="button" data-connect-dock-open={top.id} data-connect-dock-text={view.text} onClick={() => onOpen(top.id)} title={`${view.text}: open it`} style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: '100%', maxWidth: 140, padding: view.tone === 'done' ? '0 2px 0 10px' : '0 11px 0 10px', border: 0, background: 'transparent', cursor: 'pointer', font: '12px/1 var(--font-sans)', color: tone.color }}>
-        <span aria-hidden="true" style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: tone.dot, animation: view.tone === 'busy' ? 'github-wait 1.4s ease-in-out infinite' : 'none' }} />
-        <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{view.short}{view.tone === 'done' ? ' ✓' : ''}</span>
+    <span data-connect-dock={view.tone} style={{ display: 'inline-flex', alignItems: 'center', height: 28, animation: 'rise 200ms cubic-bezier(.25,.1,.25,1)' }}>
+      <button type="button" className="hov-dim" data-connect-dock-open={top.id} data-connect-dock-text={view.text} onClick={() => onOpen(top.id)} title={`${view.text}: open it`} style={{ display: 'inline-flex', alignItems: 'center', height: '100%', maxWidth: 160, padding: '0 4px', border: 0, background: 'transparent', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: tone.color }}>
+        <span className={tone.wave ? 'eb-wave' : undefined} data-connect-dock-wave={tone.wave ? '1' : undefined} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '2px 0' }}>{view.short}{view.tone === 'done' ? ' ✓' : ''}</span>
       </button>
-      {view.tone === 'done' && <button type="button" data-connect-dock-dismiss={top.id} aria-label="Dismiss" title="Dismiss" onClick={() => api.connectDismiss(top.id).catch(() => {})} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 22, height: '100%', padding: '0 6px 0 0', border: 0, background: 'transparent', cursor: 'pointer', color: '#c9c9c9', font: '14px/1 var(--font-sans)' }}>×</button>}
+      {view.tone === 'done' && <button type="button" className="hov-ink" data-connect-dock-dismiss={top.id} aria-label="Dismiss" title="Dismiss" onClick={() => api.connectDismiss(top.id).catch(() => {})} style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 18, height: '100%', padding: 0, border: 0, background: 'transparent', cursor: 'pointer', color: '#c9c9c9', font: '14px/1 var(--font-sans)' }}>×</button>}
     </span>
   );
 }

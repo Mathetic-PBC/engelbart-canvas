@@ -192,7 +192,7 @@ export function SearchField({ value, onChange, onKeyDown, placeholder = 'Search'
 const Scroll = ({ children, style }) => <div style={{ flex: '1 1 auto', minHeight: 0, overflowY: 'auto', padding: '2px 4px 6px', display: 'flex', flexDirection: 'column', gap: 1, ...style }}>{children}</div>;
 
 export function PanelFoot({ children }) {
-  return <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 4, padding: '6px 8px', borderTop: '1px solid #f0f0f0' }}>{children}</div>;
+  return <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 4, padding: '6px 8px' }}>{children}</div>;
 }
 
 export function FootButton({ onClick, children, ...rest }) {
@@ -349,7 +349,7 @@ export function AgentsPanel({ anchor, entries, crumbOf, onGo, onNext, onSeenAll,
             )}
           </Scroll>
         )}
-      <button type="button" className="hov-wash" data-agents-next="1" onClick={() => { onClose(); onNext(); }} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 20, width: '100%', minHeight: 38, boxSizing: 'border-box', padding: '8px 14px', border: 0, borderTop: '1px solid #eaeaea', background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13.5) }}>
+      <button type="button" className="hov-wash" data-agents-next="1" onClick={() => { onClose(); onNext(); }} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 20, width: '100%', minHeight: 38, boxSizing: 'border-box', padding: '8px 14px', border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13.5) }}>
         <span>Next agent needing attention</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>⌘J</span>
       </button>
     </Floating>
@@ -940,19 +940,19 @@ export function ShortcutsDialog({ roots, railHidden = false, onNext, onGo, onTog
           <span style={{ flex: 1 }} />
           <button type="button" className="sb-icon" aria-label="Close" onClick={onClose}><I.CloseIcon size={14} /></button>
         </div>
+        {/* 2026-10-14, Hudson: no subtext and no horizontal dividing lines here ("they are useless"); the groups are set
+            apart by space alone. */}
         <button type="button" className="hov-wash" onClick={() => { onClose(); onNext(); }} style={row}><span>Next agent needing attention</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>⌘J</span></button>
-        <div style={{ padding: '0 14px 12px', ...text(12, '#8f8f8f') }}>Needs you first, then finished work. With nothing waiting, returns to where you were before.</div>
         {ids.length > 0 && (
           <>
-            <div style={{ height: 1, margin: '4px 6px', background: '#efefef' }} />
-            <div style={{ padding: '10px 14px 4px', ...text(12, '#8f8f8f', 500) }}>Projects</div>
+            <div style={{ padding: '14px 14px 4px', ...text(12, '#8f8f8f', 500) }}>Projects</div>
             {ids.map((id, i) => {
               const node = roots.find((candidate) => candidate.id === id);
               return <button key={id} type="button" className="hov-wash" data-shortcut-project={id} onClick={() => { onClose(); onGo(id); }} style={row}><span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{node ? node.name : ''}</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>Ctrl+{i + 1}</span></button>;
             })}
           </>
         )}
-        <div style={{ height: 1, margin: '4px 6px', background: '#efefef' }} />
+        <div style={{ height: 10 }} />
         <button type="button" className="hov-wash" onClick={() => { onClose(); onToggleRail(); }} style={row}><span>{railHidden ? 'Show' : 'Hide'} sidebar</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>⌘\</span></button>
       </div>
     </Centered>
@@ -1018,7 +1018,7 @@ export function SearchDialog({ projectId, workspaces, rows, library, inRail, onG
   let n = -1;
   return (
     <Centered onClose={onClose} label="Search" data-sb-search-dialog="1">
-      <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px', borderBottom: '1px solid #f0f0f0' }}>
+      <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, padding: '0 16px' }}>
         <I.SearchIcon size={16} style={{ color: '#8f8f8f' }} />
         <SearchInput value={q} onChange={(value) => { setQ(value); setIdx(0); setProblem(''); }} onKeyDown={onKey} />
       </div>
@@ -1051,7 +1051,7 @@ export function SearchDialog({ projectId, workspaces, rows, library, inRail, onG
         {typed && !flat.length && <Empty>Nothing matches “{typed}”.</Empty>}
         {(problem || (answer && answer.error)) && <div style={{ padding: '4px 14px 8px', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{problem || answer.error}</div>}
       </div>
-      <div style={{ flex: 'none', display: 'flex', gap: 14, padding: '8px 16px', borderTop: '1px solid #f0f0f0', ...text(11.5, '#8f8f8f') }}>
+      <div style={{ flex: 'none', display: 'flex', gap: 14, padding: '8px 16px', ...text(11.5, '#8f8f8f') }}>
         <span>↑↓ to move</span><span>↵ to open</span><span>esc to close</span>
       </div>
     </Centered>

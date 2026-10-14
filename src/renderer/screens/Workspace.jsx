@@ -40,6 +40,11 @@ import PostItBuild from '../post-its/PostItBuild.jsx';
 import PostItTask from '../post-its/PostItTask.jsx';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
 import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
+import SidebarTour, { TOUR_STEPS, tourSeen, markTourSeen } from '../workspace/SidebarTour.jsx';
+
+// The import's "Open library" requests (App.jsx tourRequest) already taken, by their n: a project opened again later
+// must not go back to its Welcome page or start the tour again.
+let tourTaken = 0;
 
 // The workspace screen (design 2026-09-17): a header in three columns — over the sidebar the window's lights and the
 // sidebar's toggle (2026-10-07; Engelbart / project / parent workspaces until the sidebar took the project's name and the
@@ -159,7 +164,7 @@ function indexWorkspaces(roots) {
   return map;
 }
 
-export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onOpenProject, onNewProject, onVisit, onError, connectSessions = [], onOpenConnect = () => {} }) {
+export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onOpenProject, onNewProject, onVisit, onError, connectSessions = [], onOpenConnect = () => {}, tourRequest = null, tourPaused = false }) {
   const project = tree.project;
   const index = React.useMemo(() => indexWorkspaces(tree.workspaces), [tree.workspaces]);
   const notesById = React.useMemo(() => new Map(library.filter(isNote).map((row) => [row.id, row])), [library]);
@@ -1720,6 +1725,31 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     setRailHidden((now) => !now);
   };
   const toggleRailRef = React.useRef(toggleRail);
+
+  /* ------------------------------------------------------- the sidebar tour */
+
+  // After an import's "Open library" (2026-10-14, workspace/SidebarTour.jsx): its Welcome workspace's page (or the note App
+  // chose), then three cards over the sidebar, once. The sidebar comes back from hiding for it. window.__engelbartTour
+  // starts it by hand (start() ignores whether it was seen), for testing.
+  const [tourStep, setTourStep] = React.useState(null);
+  const startTour = React.useCallback(() => { setDocFull(false); setRailHidden(false); setTourStep(0); }, []);
+  const endTour = React.useCallback(() => { markTourSeen(); setTourStep(null); }, []);
+  const nextTour = React.useCallback(() => {
+    if (tourStep == null) return;
+    if (tourStep >= TOUR_STEPS.length - 1) endTour(); else setTourStep(tourStep + 1);
+  }, [tourStep, endTour]);
+  React.useEffect(() => {
+    if (!tourRequest || tourTaken === tourRequest.n) return;
+    tourTaken = tourRequest.n;
+    const id = tourRequest.workspaceId;
+    if (id && index.has(id) && id !== topicId) selectTopic(id);
+    if (tourRequest.tab) openTab(tourRequest.tab.id, tourRequest.tab.title); else showWs();
+    if (!tourSeen()) startTour();
+  }, [tourRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    window.__engelbartTour = { start: startTour, stop: () => setTourStep(null), next: nextTour, step: () => tourStep, seen: tourSeen };
+    return () => { if (window.__engelbartTour && window.__engelbartTour.start === startTour) delete window.__engelbartTour; };
+  }, [startTour, nextTour, tourStep]);
   toggleRailRef.current = toggleRail;
   React.useEffect(() => {
     if (!active) return undefined;
@@ -1988,6 +2018,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           postItDrag={postItDrag}
           trashRef={trashRef}
           libraryRequest={libraryRequest}
+          tourStep={tourStep != null && !tourPaused ? tourStep : null}
           onPanel={(kind) => { if (kind === 'library') tickWalk(1); }}
         />
 
@@ -2114,6 +2145,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       )}
       {rejecting && <BuildReject title={rejecting.title} onConfirm={() => onBuildAction(rejecting.id, 'discard')} onClose={() => setRejecting(null)} />}
       {review && <BuildReview key={review.id} title={review.title} review={review.review} error={review.error} task={builds[review.id] || null} aside={full || docFull ? 0 : paneWidth + 1} onOpen={(name) => { void onBuildAction(review.id, 'runshow', { name }); }} onClose={() => setReview(null)} />}
+
+      <SidebarTour step={tourStep} paused={tourPaused} onNext={nextTour} onClose={endTour} />
 
       <ProjectPostIts
         projectId={project.id}

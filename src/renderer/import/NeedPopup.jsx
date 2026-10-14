@@ -1,6 +1,7 @@
 import React from 'react';
 import { IMPORT_CSS } from './import-css.js';
 import { ROUND3_CSS } from './round3-css.js';
+import { ROUND4_CSS } from './round4-css.js';
 import { shownName } from '../../shared/connect-sources.cjs';
 
 // A step an Import your context run hands the person (round 3, 2026-10-13: "the permission prompts … should be popups
@@ -35,7 +36,7 @@ export default function NeedPopup({ need, onOpen, onDone, onSkip, onLater }) {
   }, [onLater]);
   return (
     <div className="ix ix-overlay" data-overlay="1" data-cover="1" data-need-popup={need.id} data-need-kind={need.kind}>
-      <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:160}'}{ROUND3_CSS}</style>
+      <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:160}'}{ROUND3_CSS}{ROUND4_CSS}</style>
       <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) onLater(); }}>
         <section className="modal need-modal" role="dialog" aria-modal="true" aria-label={words.title}>
           <h3>{words.title}</h3>

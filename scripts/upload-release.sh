@@ -15,9 +15,12 @@
 set -uo pipefail
 
 BUCKET=engelbart-releases
-PREFIX=engelbart
-PUBLIC=${ENGELBART_R2_PUBLIC:-https://pub-a9bcd559068e4e0e9f1e04b4d9b85df7.r2.dev/engelbart} # the bucket's r2.dev URL
-FEED=https://mathetic.com/engelbart/latest-mac.yml
+# ENGELBART_R2_PREFIX=engelbart/testing (2026-10-14) puts a testing build in its own folder, served at
+# https://mathetic.com/bart/testing/<file>, so the live release's latest-mac.yml is never touched.
+PREFIX=${ENGELBART_R2_PREFIX:-engelbart}
+PUBLIC=${ENGELBART_R2_PUBLIC:-https://pub-a9bcd559068e4e0e9f1e04b4d9b85df7.r2.dev/$PREFIX} # the bucket's r2.dev URL
+FEED=${ENGELBART_FEED:-$PUBLIC/latest-mac.yml}
+[ "$PREFIX" = engelbart ] && FEED=${ENGELBART_FEED:-https://mathetic.com/engelbart/latest-mac.yml}
 PART=5242880 # R2's smallest part: all parts but the last are this size
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)

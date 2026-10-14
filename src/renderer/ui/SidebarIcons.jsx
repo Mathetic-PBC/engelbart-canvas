@@ -39,8 +39,18 @@ export function InboxIcon({ dot = false, ...rest }) {
 export const AgentsIcon = (props) => <Svg {...props}><path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.44l-1.58 6.12a.5.5 0 0 1-.95.07z" /></Svg>;
 export const ConnectionsIcon = (props) => <Svg {...props}><rect width="7" height="7" x="14" y="3" rx="1" /><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3" /></Svg>;
 // Three books, one fewer than Lucide's four, and drawn thicker (2026-10-08); the first two stand straight and as tall as
-// each other (2026-10-13: "the first two should be perfectly vertical").
-export const LibraryIcon = (props) => <Svg stroke={2.8} {...props}><path d="M5 4v16" /><path d="M11 4v16" /><path d="m16 5 3.5 15" /></Svg>;
+// each other (2026-10-13: "the first two should be perfectly vertical"). 2026-10-14: "the middle book should be slightly
+// shorter than the left one. the corners should be slightly sharper": each book is a filled bar (2.8 wide, as the stroke
+// was) with a 0.7 corner instead of the stroke's round cap (1.4); the middle one starts 2 units lower, the bottoms level.
+export const LibraryIcon = (props) => (
+  <Svg stroke={0} {...props}>
+    <g fill="currentColor" stroke="none" data-library-books="1">
+      <rect x="3.6" y="2.6" width="2.8" height="18.8" rx="0.7" />
+      <rect x="9.6" y="4.6" width="2.8" height="16.8" rx="0.7" />
+      <rect x="16.35" y="3.4" width="2.8" height="18.2" rx="0.7" transform="rotate(-13.13 17.75 12.5)" />
+    </g>
+  </Svg>
+);
 export const AddIcon = (props) => <Svg {...props}><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /><path d="M12 8v8" /></Svg>;
 export const ProjectIcon = (props) => <Svg {...props}><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></Svg>;
 // "B · small on bottom": a tall pane on the left, a square over a short one on the right.

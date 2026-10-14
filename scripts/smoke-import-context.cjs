@@ -106,16 +106,17 @@ app.whenReady().then(async () => {
     await press(wc, '[data-onboarding-continue] button');
 
     /* the intro */
-    await until(async () => { const f = await flow(wc); return f && f.dialog === 'intro'; }, 'Import your context, its intro');
+    await until(async () => { const f = await flow(wc); return f && f.screen === 'intro' && !f.dialog; }, 'Import your context, a screen of its own');
     await shot(wc, '01-intro');
     assert.match(await text(wc, '[data-copy=privacy]'), /Remove anything at any time\.$/, 'the period after "time"');
     await press(wc, '[data-import-start]');
     /* both subscribed: asked which, choosing is continuing */
-    await until(async () => (await flow(wc)).dialog === 'provider-choice', 'Which provider?');
+    await until(async () => { const f = await flow(wc); return f.dialog === 'provider-choice' && f.screen === 'intro'; }, 'Which provider? (over the intro)');
     await shot(wc, '02-provider');
     await press(wc, '[data-onboarding-provider="anthropic"]');
     /* the browser's sign-ins, over the first work question */
-    await until(async () => { const f = await flow(wc); return f.dialog === 'keychain' && f.screen === 'roles'; }, 'the browser\'s sign-ins over "What kind of work do you do?"');
+    // 2026-10-14: the intro stays behind its popups ("the background should never change when a new popup comes").
+    await until(async () => { const f = await flow(wc); return f.dialog === 'keychain' && f.screen === 'intro'; }, 'the browser\'s sign-ins, over the intro');
     assert.match(await text(wc, '[role=dialog] h3'), /Arc sign-ins/, 'the default browser, Arc');
     assert.equal(await js(wc, 'document.querySelectorAll("[role=dialog] p").length'), 0, 'no text under the question (Attachment 1)');
     await shot(wc, '03-keychain');
@@ -129,7 +130,9 @@ app.whenReady().then(async () => {
     await shot(wc, '04-roles');
     await pressText(wc, '.work-foot', 'Continue');
     /* the work: one line that grows, never resized by hand */
-    await until(async () => (await flow(wc)).screen === 'work', 'What are you working on?');
+    await until(async () => (await flow(wc)).screen === 'work', 'What are you interested in?');
+    assert.equal(await text(wc, '.work-head h1'), 'What are you interested in?');
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-import-screen=work] p, [data-import-screen=work] small").length'), 0, 'no line about the keys');
     assert.equal(await js(wc, 'getComputedStyle(document.querySelector("#work-description")).resize'), 'none', 'not expandable (Attachment 2)');
     assert.equal(await js(wc, 'document.querySelector("#work-description").placeholder'), 'Understanding the Memex...');
     assert.equal(await js(wc, '[...document.querySelectorAll(".work-foot button")].find((b)=>b.textContent.trim().startsWith("Continue")).disabled'), true, 'Continue waits for a description');
@@ -141,7 +144,17 @@ app.whenReady().then(async () => {
     assert.ok(tall > short && tall <= 141, `it grows to a point, then scrolls (${short} → ${tall})`);
     await type(wc, '#work-description', 'I study how students ask for help.');
     await shot(wc, '05-work');
-    await pressText(wc, '.work-foot', 'Continue');
+    // Shift+Enter is a new paragraph; Enter continues.
+    await js(wc, 'document.querySelector("#work-description").focus()');
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Return', modifiers: ['shift'] });
+    wc.sendInputEvent({ type: 'char', keyCode: '\r', modifiers: ['shift'] });
+    wc.sendInputEvent({ type: 'keyUp', keyCode: 'Return', modifiers: ['shift'] });
+    await pause(150);
+    assert.equal((await flow(wc)).screen, 'work', 'Shift+Enter stays');
+    assert.match(await js(wc, 'document.querySelector("#work-description").value'), /\n$/, 'Shift+Enter, a new line');
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+    wc.sendInputEvent({ type: 'char', keyCode: '\r' });
+    wc.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
     /* projects */
     await until(async () => (await flow(wc)).screen === 'projects', 'What project do you want to work on first?');
     await until(() => has(wc, '[data-work-project]'), 'the projects the agent found');
@@ -183,21 +196,41 @@ app.whenReady().then(async () => {
       assert.equal(await js(wc, 'document.querySelector("[data-group=notes]").getAttribute("aria-expanded")'), 'false', 'Notes folded when Meeting transcripts opens');
       await press(wc, '[data-group="notes"]');
       if (await js(wc, 'document.querySelector("[data-app=Obsidian]").getAttribute("aria-checked")') !== 'true') await press(wc, '[data-app="Obsidian"]');
-      // Specify context: optional, collapsed, its chevron level with its words (Attachment 19).
-      assert.equal(await has(wc, '.review-context'), false, 'Specify context starts collapsed');
+      // 2026-10-14: the category's Specify context opens by itself once something in it is ticked; a source's own stays
+      // closed until its row's Specify context is clicked.
+      await until(() => has(wc, '[data-context-panel="group:notes"]'), 'Notes\' Specify context, open');
+      assert.equal(await has(wc, '[data-context-panel="Obsidian"]'), false, 'Obsidian\'s own stays closed');
+      const groupLabel = await text(wc, '[data-context-panel="group:notes"] .review-context-label');
+      assert.match(groupLabel, /^Specific things to import from .*Obsidian.* \(optional\)$/, groupLabel);
+      assert.equal(await js(wc, 'document.querySelector("[data-scope-note=\'group:notes\']").placeholder'), 'Only bring in notes relating to the Memex and my research');
+      // The projects' line is above the pills.
+      assert.equal(await js(wc, '(()=>{const p=document.querySelector("[data-context-panel=\'group:notes\'] .review-projects-note"),g=document.querySelector("[data-context-panel=\'group:notes\'] .review-projects");return !!p&&!!g&&p.getBoundingClientRect().top<g.getBoundingClientRect().top})()'), true, 'the projects\' line is a header over the pills');
       const level = await js(wc, '(()=>{const b=document.querySelector("[data-specify-context=Obsidian]");const t=b.getBoundingClientRect(),s=b.querySelector("svg").getBoundingClientRect();return Math.abs((t.top+t.bottom)/2-(s.top+s.bottom)/2)})()');
       assert.ok(level <= 2, `the chevron is level with "Specify context" (${level}px off)`);
       await press(wc, '[data-specify-context="Obsidian"]');
-      await until(() => has(wc, '.review-context'), 'its context open');
-      assert.match(await text(wc, '.review-projects-note'), /^Select all projects you want Engelbart to import from Obsidian\.$/);
-      assert.equal(await text(wc, '.review-context-label'), 'Further specify');
-      assert.equal(await js(wc, 'document.querySelectorAll(".review-project").length'), 2, 'a pill for each project picked');
-      await js(wc, 'document.querySelector(".review-project").click()');
+      await until(() => has(wc, '[data-context-panel="Obsidian"]'), 'Obsidian\'s own context open');
+      assert.match(await text(wc, '[data-context-panel="Obsidian"] .review-projects-note'), /^Select all projects you want Engelbart to import from Obsidian\.$/);
+      assert.equal(await text(wc, '[data-context-panel="Obsidian"] .review-context-label'), 'Specific things to import from Obsidian (optional)');
+      assert.equal(await js(wc, 'document.querySelectorAll("[data-context-panel=Obsidian] .review-project").length'), 2, 'a pill for each project picked');
+      await js(wc, 'document.querySelector("[data-context-panel=Obsidian] .review-project").click()');
       await type(wc, '[data-scope-note="Obsidian"]', 'Only my notes about help-seeking');
-      await pressText(wc, '.review-context .folder-upload', 'Choose a folder');
+      // One Choose files; Obsidian's opens a picker over its vaults.
+      assert.deepEqual(await js(wc, '[...document.querySelectorAll("[data-context-panel=Obsidian] .folder-upload button")].map((b)=>b.textContent)'), ['Choose files']);
+      await press(wc, '[data-choose-files="Obsidian"]');
+      await until(async () => (await flow(wc)).dialog === 'obsidian-picker', 'Choose from Obsidian');
+      await until(() => has(wc, '[data-obsidian-path$="/Research"]'), 'the vault\'s folders');
+      await shot(wc, '08a-obsidian-picker');
+      await js(wc, 'document.querySelector("[data-obsidian-path$=\'/Research\'] .ob-box").click()');
+      await press(wc, '[data-obsidian-add]');
       await until(() => has(wc, '.selected-folder-list > div'), 'the folder chosen');
-      await pressText(wc, '.review-context .folder-upload', 'Choose files');
-      await until(() => js(wc, 'document.querySelectorAll(".selected-folder-list > div").length===2'), 'the file chosen');
+      // Saved websites from Obsidian, under Websites.
+      await press(wc, '[data-group="sites"]');
+      await until(() => has(wc, '[data-app="links:Obsidian"]'), 'Saved websites from Obsidian');
+      assert.equal(await text(wc, '[data-app="links:Obsidian"] .app-text'), 'Saved websites from Obsidian');
+      if (await js(wc, 'document.querySelector("[data-app=\'links:Obsidian\']").getAttribute("aria-checked")') !== 'true') await press(wc, '[data-app="links:Obsidian"]');
+      await until(() => has(wc, '[data-context-panel="group:sites"] textarea'), 'Websites\' context, typed into');
+      await shot(wc, '08c-websites');
+      await press(wc, '[data-group="notes"]');
       await shot(wc, '08-picker-context');
       // Another source in another group: Notes folds.
       await press(wc, '[data-group="chats"]');
@@ -206,6 +239,14 @@ app.whenReady().then(async () => {
       await shot(wc, '08b-picker-chats');
       await press(wc, '[data-import-run]');
     }
+
+    /* two projects picked: which one opens (2026-10-14) */
+    await until(async () => (await flow(wc)).dialog === 'first-project', 'Which project do you want to start with?');
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-first-project]").length'), 2);
+    await shot(wc, '08d-first-project');
+    await js(wc, 'document.querySelectorAll("[data-first-project]")[1].click()');
+    const startWith = await js(wc, 'document.querySelectorAll("[data-first-project]")[1].textContent');
+    await press(wc, '[data-first-project-open]');
 
     /* Full Disk Access: one line each */
     await until(async () => (await flow(wc)).dialog === 'folders', 'Allow Full Disk Access');
@@ -277,11 +318,12 @@ app.whenReady().then(async () => {
     assert.equal(await js(wc, 'document.querySelectorAll("[data-import-status] .cb, [data-import-status] .review-logo > span").length'), 0, 'no checkmarks on the tiles');
     assert.doesNotMatch(await text(wc, '[data-import-status]'), /MEMORY/);
     assert.equal(await has(wc, '[data-connect-dock="done"]'), false, 'no Done pill in the header');
-    /* library only: nothing in the workspace's context */
+    /* the Welcome project's folder: everything that came in */
     const files = (dir, name, out = []) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const full = path.join(dir, entry.name); if (entry.isDirectory() && !['node_modules', 'worktrees'].includes(entry.name)) files(full, name, out); else if (entry.name === name) out.push(full); } return out; };
     const contexts = files(path.join(root, '.engelbart'), 'meta.json').flatMap((file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')).context || []; } catch { return []; } }).flat(Infinity).filter((id) => typeof id === 'string');
     const md = (await js(wc, 'window.engelbartAPI.library()')).filter((row) => row.type === 'md' && !row.tags.includes('note')).map((row) => row.id);
-    assert.equal(md.filter((id) => contexts.includes(id)).length, 0, 'what came in is in the library, not a workspace\'s context');
+    // 2026-10-14: the Welcome project's folder holds everything the run brought in.
+    assert.ok(md.length > 0 && md.every((id) => contexts.includes(id)), 'what came in is in the Welcome project\'s folder');
     await press(wc, '[data-import-status-close]');
     await until(() => js(wc, '!document.querySelector("[data-import-status]")'), 'Open library closes it');
     console.log(`smoke-import-context (${MODE}): ok (${titles.length} projects found, ${ticked.length} ${MODE === 'auto' ? 'tools' : 'sources'} ticked, ${logos.length} imported tiles)`);

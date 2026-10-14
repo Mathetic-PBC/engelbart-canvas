@@ -194,6 +194,7 @@ const engelbartAPI = Object.freeze({
   importFlow: invoke('import-flow'), // → where the flow was, or null
   importFlowSave: invoke('import-flow-save'), // (flow | null)
   importTraceOpen: invoke('import-trace-open'),
+  importObsidianTree: invoke('import-obsidian-tree'), // → { vaults: [{ name, path, tree }], truncated }
   onDiscovery: (callback) => subscribe('engelbart:discovery', callback),
   onDiskAccess: (callback) => subscribe('engelbart:disk-access', callback),
   onConnectors: (callback) => subscribe('engelbart:connectors', callback),

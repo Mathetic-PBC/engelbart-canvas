@@ -122,6 +122,15 @@ function createMockApi(getConfig) {
     detect: async () => ({ apps: { Obsidian: { found: true }, 'Claude Code': { found: true }, Codex: { found: true }, Cursor: { found: true }, [CATALOG.find((tool) => tool.id === 'PDFs on this Mac').id]: { found: true } }, sites: { found: true }, github: { found: false }, localRepos: [] }),
     pickFiles: async () => [{ path: '/Users/you/Documents/Engelbart notes.md', name: 'Engelbart notes.md' }],
     pickDirectory: async () => `/Users/you/Documents/${['Papers', 'Research vault', 'Recordings'][Math.floor(Math.random() * 3)]}`,
+    obsidianTree: async () => {
+      const v = '/Users/you/Documents/Research vault';
+      const note = (dir, name) => ({ name, path: `${dir}/${name}.md`, dir: false });
+      return { truncated: false, vaults: [{ name: 'Research vault', path: v, tree: [
+        { name: 'Memex', path: `${v}/Memex`, dir: true, children: [note(`${v}/Memex`, 'As We May Think'), note(`${v}/Memex`, 'Trails and associative indexing')] },
+        { name: 'Meetings', path: `${v}/Meetings`, dir: true, children: [note(`${v}/Meetings`, '2026-10-02 Advisor')] },
+        note(v, 'Engelbart Canvas'), note(v, 'Reading list'),
+      ] }] };
+    },
     connectStart: async (choices) => { lastChoices = choices; return { id: 'sample-session', ...sampleSession(choices) }; },
     startProject: async (input) => ({ project: { id: `project-${input.name}`, name: input.name }, workspaceId: 'welcome' }),
     openTrace: async () => true,
@@ -144,7 +153,7 @@ function sampleSession(choices, browser = 'Chrome') {
 }
 
 const POPUPS = [
-  ['intro', 'Import intro'], ['privacy', 'Privacy'], ['apps', 'All apps'], ['scratch-confirm', 'Start confirmation'], ['project', 'New project'],
+  ['intro', 'Import intro (screen)'], ['first-project', 'Which project to start with'], ['obsidian-picker', 'Choose from Obsidian'], ['privacy', 'Privacy'], ['apps', 'All apps'], ['scratch-confirm', 'Start confirmation'], ['project', 'New project'],
   ['provider-choice', 'Choose provider (both subscribed)'], ['tools-setup', 'Tools setup'], ['import-mode', 'Import method'],
   ['keychain', 'Browser sign-ins'], ['keychain-browser', 'Browser picker'], ['keychain-confirm', 'Decline browser sign-ins'],
   ['folders', 'Full Disk Access'], ['disk-wait', 'Waiting for Settings'], ['disk-helper', 'Toggle Setting (beside System Settings)'], ['disk-relaunch', 'Restarting'], ['folder-fallback', 'Deny Full Disk Access'], ['folder-results', 'Folder permissions'],
@@ -279,7 +288,7 @@ body{margin:0}
       )}
       {chrome ? (
         <nav className="dev" aria-label="Mockup controls">
-          <button type="button" onClick={() => pick('intro')}>Intro popup</button>
+          <button type="button" onClick={() => pick('intro')}>Intro</button>
           <button type="button" onClick={() => pick('screen:roles')}>Work flow</button>
           <button type="button" onClick={() => pick('screen:picker')}>Sources</button>
           <button type="button" onClick={() => pick('screen:tools')}>Tools</button>

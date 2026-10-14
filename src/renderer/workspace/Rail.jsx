@@ -434,6 +434,7 @@ export default function Rail({
   folders = [], onCreateFolder = async () => {}, onRenameFolder = () => {}, onDeleteFolder = () => {}, onAddToFolder = async () => {}, onRemoveFromFolder = () => {},
   postItsHidden = false, onTogglePostIts, postItTrash = null, workspaceTrash = null, trashFull = false, postItDrag = null, trashRef,
   libraryRequest = null, onPanel = () => {}, // the Welcome walkthrough (2026-10-09): a new { n, chip } opens Library on that tab; onPanel(kind) when one opens
+  tourStep = null, // the sidebar tour's card (workspace/SidebarTour.jsx, 2026-10-14): 0 holds Library's popup open; 1 and 2 show Sources
 }) {
   const [opened, setOpened] = useStored(OPEN_KEY, {});
   const [panel, setPanel] = React.useState(null); // { kind, anchor, key?, ... }: one beside the sidebar at a time
@@ -470,6 +471,18 @@ export default function Rail({
     if (row) { peek.drop(); setPanel({ kind: 'library', anchor: anchorOf(row), chip: libraryRequest.chip || 'all' }); }
   }, [libraryRequest]); // eslint-disable-line react-hooks/exhaustive-deps
   const ignore = (kind, key) => `[data-sb-trigger="${key ? `${kind}:${key}` : kind}"]`;
+  // The tour's first card shows the Library row and the popup it opens, so the popup is opened for it, and shut again when
+  // the tour moves on (only the one the tour opened). Its other cards point at Sources, which is unfolded if it was folded.
+  const tourOpened = React.useRef(false);
+  React.useEffect(() => {
+    if (tourStep === 0) {
+      const row = asideRef.current && asideRef.current.querySelector('[data-sb-trigger="library"]');
+      if (row) { peek.drop(); setFlyout(null); setPanel({ kind: 'library', anchor: anchorOf(row), chip: 'all' }); tourOpened.current = true; }
+      return;
+    }
+    if (tourOpened.current) { tourOpened.current = false; setPanel((now) => (now && now.kind === 'library' ? null : now)); }
+    if (tourStep != null && !(opened['section:sources'] ?? true)) setOpened((now) => ({ ...now, 'section:sources': true }));
+  }, [tourStep]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* ------------------------------------------------------------ projects */
   const tree = React.useMemo(() => indexTree(roots), [roots]);
