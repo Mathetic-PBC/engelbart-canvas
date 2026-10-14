@@ -15,6 +15,7 @@ const { climb, levelBlock, createBart, createFakeBart, createThreads, threadKey,
 const { PENDING_RE, replyLines, answerText, failureLines, attribution } = require('../src/main/bart/reply.cjs');
 const { buildContext, markPlace, conversationBlock, catalogEntries, HERE } = require('../src/main/bart/context.cjs');
 const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
+const { CORE_PERSONALITY } = require('../src/main/bart/personality.cjs');
 
 const DEFAULTS = normalizeModels(null);
 // Most tests below were written while Codex was the default provider (until 2026-09-29). They test flags, the loop and
@@ -285,26 +286,101 @@ test('the system prompt says what the harness relies on', () => {
   assert.ok(BART_SYSTEM_PROMPT.indexOf('# Asked from a highlight') < BART_SYSTEM_PROMPT.indexOf('# Moving up a step'), 'the highlight rules come before moving up');
 });
 
-test('Chat\'s answers have a voice and five pillars (2026-10-13), shown by examples, with no length to aim at', () => {
+test('Chat opens with the shared personality, then its role: the answer first, at the level asked (2026-10-13)', () => {
   const at = (s) => BART_SYSTEM_PROMPT.indexOf(s);
-  for (const phrase of ['well-read colleague', 'Direct:', 'Succinct:', 'Conversational:', 'Polite:', 'Grounded:', '<examples>', '</examples>', '<tone_preference>']) assert.ok(at(phrase) >= 0, phrase);
-  for (const pillar of ['Direct:', 'Succinct:', 'Conversational:', 'Polite:', 'Grounded:']) assert.ok(at('# The answer') < at(pillar) && at(pillar) < at('fenced code blocks'), `${pillar} comes first under "# The answer"`);
-  assert.ok(!BART_SYSTEM_PROMPT.includes('1,500'), 'no character count to aim at');
-  assert.ok(!/Lead with the answer\. No preamble/.test(BART_SYSTEM_PROMPT) && !/Length follows the question/.test(BART_SYSTEM_PROMPT), 'the bullets the pillars replace are gone');
+  assert.ok(BART_SYSTEM_PROMPT.startsWith(`${CORE_PERSONALITY}\n\n# Your role: Chat\n`), 'personality, then the role');
+  for (const phrase of [
+    'You answer questions, explain things, evaluate choices, retrieve context, and give recommendations. You never change anything.',
+    'Put the answer first. Give only the reasoning or evidence needed to understand or trust it, then stop.',
+    'Match the abstraction level of the question:\n- If they ask about an idea, discuss the idea.\n- If they ask about product behavior, discuss the behavior.\n- If they ask about architecture, discuss the architecture.\n- If they ask about implementation, implementation detail is appropriate.\n- Write a specification or Build prompt only when they ask for one.',
+    'Investigate deeply when useful, but do not narrate the investigation.',
+    'For a yes/no question, start with Yes or No.',
+    'In a follow-up, say only what is new.',
+    'If they ask for a reformat, reformat and stop.',
+    '# Examples of response shape',
+    'The examples deliberately vary in length and structure.',
+  ]) assert.ok(at(phrase) >= 0, phrase);
+  assert.ok(at('# Your role: Chat') < at('Put the answer first') && at('Put the answer first') < at('# Examples of response shape') && at('# Examples of response shape') < at('# What you are given'), 'role, then examples, then what Chat is given');
+  // One statement of each rule: the personality's, or the role's, not a third.
+  assert.ok(!BART_SYSTEM_PROMPT.includes('1,500') && !BART_SYSTEM_PROMPT.includes('1500'), 'no character count to aim at');
+  for (const gone of ['# How to answer', '# The answer', '<tone_preference>', 'Lead with the answer. No preamble', 'Length follows the question', 'name the source of each claim', 'Say what the change would be and where', 'Caveats are proportional too', 'well-read colleague'])
+    assert.ok(!BART_SYSTEM_PROMPT.includes(gone), `gone: ${gone}`);
+  assert.equal(BART_SYSTEM_PROMPT.split('Never operationalize farther than the person asked').length, 2, 'said once, in the personality');
+  // What stays: observed/inferred, exists/planned, the blocking question, markdown, the footer, the box, moving up.
+  assert.match(BART_SYSTEM_PROMPT, /Observed is what you read \("src\/main\/ipc\.cjs registers the handler"\); inferred is what follows from it/);
+  assert.match(BART_SYSTEM_PROMPT, /Keep what exists apart from what is only planned: the documents are often plans; the code is what exists\./);
+  assert.match(BART_SYSTEM_PROMPT, /end with the one question that blocks the rest, under 250 characters/);
   assert.match(BART_SYSTEM_PROMPT, /Never write a closing line like `\*Chat · …\*`; the app adds it\./);
   assert.match(BART_SYSTEM_PROMPT, /# Asked from a highlight\n\nThe same voice applies; the box is just smaller\.\n/);
-  assert.ok(at('# Moving up a step') < at('<tone_preference>') && BART_SYSTEM_PROMPT.trimEnd().endsWith('</tone_preference>'), 'the tone preference closes the prompt');
+  assert.match(BART_SYSTEM_PROMPT, /these rules replace the answer rules under "Your role: Chat" where they differ/);
+  assert.ok(BART_SYSTEM_PROMPT.trimEnd().endsWith('answer as well as you can.'), 'moving up closes the prompt');
 });
 
-test('Chat has an example for each kind of question, and three for the highlight box (2026-10-13)', () => {
+test('Chat writes a Build prompt only when asked, or when Bart routed a build to it (2026-10-13)', () => {
+  assert.match(BART_SYSTEM_PROMPT, /You cannot directly make a change to code or documents\. When they ask for one:\n- answer any product or design question first\n- explain implementation only if they asked how\n/);
+  assert.match(BART_SYSTEM_PROMPT, /- write a Build prompt only if they asked for a Build prompt or spec[^\n]*When the message carries <routed>, do what it says\./);
+  assert.match(BART_SYSTEM_PROMPT, /- if they explicitly asked you to implement something you cannot execute, say so briefly and give the minimum useful next step/);
+});
+
+test('Chat has nine examples of response shape, and three for the highlight box (2026-10-13)', () => {
   const at = (s) => BART_SYSTEM_PROMPT.indexOf(s);
+  const examples = at('# Examples of response shape');
   const highlight = at('# Asked from a highlight');
   const moveUp = at('# Moving up a step');
-  assert.ok(at('Q: how do the agents work?') >= 0 && at('Q: how do the agents work?') < highlight, 'the explanation example sits under "# The answer"');
+  for (const person of [
+    'do you see the html file on my desktop called linear-tasks-david.html',
+    'how does the agents modal work, in terms of intercepting the agent calls',
+    'while these are building is there anything else i can work on?',
+    'how do the agents work?',
+    'how does the router work?',
+    'how does the Create agent work?',
+    'which agent task should I start with?',
+    'do we support Arc?',
+    'should Chat and Build be separate?',
+  ]) assert.ok(at(`Person:\n${person}\n\nChat:\n`) > examples && at(person) < at('# What you are given'), person);
+  assert.ok(at('never reuse them as facts in another conversation') > examples, 'the examples say their facts are not facts');
   assert.ok(highlight < at('Q: what does .726 mean here?') && at('Q: what does .726 mean here?') < moveUp, 'the box examples sit under "# Asked from a highlight"');
   assert.ok(at('These show the shape of an answer in the box only.') > highlight, 'the box examples have their own lead-in');
-  assert.ok(BART_SYSTEM_PROMPT.includes('(`src/main/bart/route.cjs`)'), 'the template literal leaves real backticks');
+  assert.ok(BART_SYSTEM_PROMPT.includes('pipeline already sees the Claude/Codex stream') && BART_SYSTEM_PROMPT.includes('`ask()`'), 'the template literal leaves real backticks');
   assert.ok(!BART_SYSTEM_PROMPT.includes('\\`'), 'no escaped backtick survives into the prompt');
+});
+
+test('Chat: technical detail is progressive disclosure; investigate deeply, report selectively (2026-10-14)', () => {
+  const at = (s) => BART_SYSTEM_PROMPT.indexOf(s);
+  for (const phrase of [
+    'Technical detail is progressive disclosure',
+    'An overview means a conceptual map, not an exhaustive inventory',
+    'Investigate deeply; report selectively',
+    'What is the highest-level answer that fully answers what they asked?',
+    'Do not print this check.',
+    'Use structure in proportion to the problem.',
+    'Use headings when the answer genuinely has distinct parts or the person asked for a detailed breakdown.',
+    'Do not cite code locations by default in a conceptual explanation.',
+  ]) assert.ok(at(phrase) >= 0, phrase);
+  assert.ok(at('Technical detail is progressive disclosure') < at('# Examples of response shape'), 'in the role, before the examples');
+  assert.ok(at('These examples show the voice, not phrases to copy.') > at('Example 9') && at('These examples show the voice, not phrases to copy.') < at('The examples deliberately vary'), 'right after the examples');
+  assert.ok(at('Investigate deeply; report selectively') > at('# Grounding and format'), 'in Chat\'s grounding rules');
+  assert.equal(BART_SYSTEM_PROMPT.split('Investigate deeply; report selectively').length, 2, 'said once');
+  // No length budget: no character, sentence or bullet limit.
+  assert.ok(!/\b\d+ (sentences|bullets|characters)\b/.test(BART_SYSTEM_PROMPT.slice(at('# Your role: Chat'), at('# What you are given'))), 'no count to aim at in the role or its examples');
+});
+
+test('Chat stops when the question is answered; the person pulls more (2026-10-14, after Chat Benchmark Run 2)', () => {
+  const at = (s) => BART_SYSTEM_PROMPT.indexOf(s);
+  for (const phrase of [
+    'Answer the question being asked, not the follow-up questions you predict the person might ask.',
+    'Once those are present, stop.',
+    'it answers a likely next question.',
+    'Let the person pull additional detail from you.',
+    'A technically complete investigation does not require a technically exhaustive reply.',
+    '"I found this while investigating" is not a reason to report it.',
+    'Do not end with a question merely to keep the conversation going.',
+    'the running app may be older than the code on disk',
+    'Say what you could not verify only when it materially changes how confident they should be',
+  ]) assert.ok(at(phrase) > at('# Your role: Chat') && at(phrase) < at('# Examples of response shape'), phrase);
+  // The implementation details that wait for a follow-up.
+  for (const detail of ['confidence thresholds', 'timeouts', 'session windows', 'concurrency limits', 'file-count limits', 'internal function names', 'edge-case fallbacks'])
+    assert.ok(at(detail) < at('# Examples of response shape'), detail);
 });
 
 /* ------------------------------------------------------------- with the store */
@@ -1216,7 +1292,7 @@ test('@brainstorm\'s system prompt says what the harness relies on, and a file r
     '- On the first card, with writing of theirs about the subject, "say" may pick up what they wrote nearest the line, in your own words',
     'A correction in the note ("; note: …") overrides your reading for the rest of the exchange.', 'Ask only what the person alone can answer.', 'A skip is not an answer: ask the card <stage> names, with a different move than the one they skipped, and nothing about the skip. Nothing is graded',
     '- If they ask about the session itself (why this question, what comes next, how many are left), answer it plainly in one short sentence in "say" and go on with the card. A question about the topic gets one short sentence in "say" pointing to @bart ("That\'s one for @bart: put it on its own line.").',
-    '# Register\n\nTalk like a friendly PhD student who\'s been where they are, sitting next to them: not a user researcher running an interview, and not a survey.', 'A good mentor here has been told not to give answers.', 'Plain and warm, without praise. No product-spec language. Plain text inside every string: no markdown.',
+    '# Register\n\nTalk like someone who\'s been where they are, sitting next to them: not a user researcher running an interview, and not a survey.', 'A good mentor here has been told not to give answers.', 'Plain and warm, without praise. No product-spec language. Plain text inside every string: no markdown.',
     'no code fence.\n{"say": "<your reply to what they just said, one to three sentences; may be empty on the first card>",\n "card": "questions" | "focus",\n "questions":']) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
   for (const gone of ['# "say"', '"say" is required', '"say" is empty', 'No "say"', 'Fine, let\'s leave that.', 'three times']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.split('\n').some((line) => line.includes(gone)), `MATH-40 follow-up: ${gone}`);
   for (const gone of ['about 15 words', 'one short question', 'Nothing goes above the card', 'whatever you pick up of theirs is in the title', 'A title may open with a few words of plain reaction', 'Short, plain', 'But: When did you last have to figure out', 'Which of the in-between stuff was the fuzziest', 'ask what draws them to it,']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `MATH-40 round 3, tone not shortness: ${gone}`);
