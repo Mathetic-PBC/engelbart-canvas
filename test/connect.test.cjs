@@ -708,6 +708,30 @@ test('Import your context: one import a tool told the projects picked, a manual 
   connect.dismiss(started.id);
 });
 
+test('"I\'m signed in" while Open still waits for the sign-in: the wait ends and the check runs now (2026-10-14, Notion: "nothing happened")', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'wait-'));
+  let signedInThere = false;
+  let aborted = false;
+  // Open's wait never sees the sign-in (as with Notion's), until it is called off.
+  const signIn = (app, { signal, onOpened }) => new Promise((resolve) => { onOpened('Chrome'); signal.addEventListener('abort', () => { aborted = true; resolve({ status: 'cancelled' }); }); });
+  const webSignIn = { supports: () => true, canSignIn: () => true, signIn, signInQuiet: async () => ({ signedIn: signedInThere, browser: signedInThere ? 'Chrome' : '' }), signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome' };
+  const { connect, state } = fakeConnect({ home: fresh, webSignIn });
+  const started = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: [{ id: 'p', title: 'Memex' }], apps: ['ChatGPT'], scopes: {} } });
+  const now = await until(state(started.id), (s) => s.needs.some((need) => need.app === 'ChatGPT'), 'the sign-in popup');
+  const card = now.needs.find((need) => need.app === 'ChatGPT');
+  await connect.need(started.id, card.id, 'open');
+  const waiting = connect.state(started.id).needs.find((need) => need.id === card.id);
+  assert.equal(waiting.busy, true, 'Open waits for the sign-in');
+  assert.equal(waiting.opened, true);
+  signedInThere = true;
+  await connect.need(started.id, card.id, 'done');
+  assert.equal(aborted, true, 'the wait was called off');
+  assert.equal(connect.state(started.id).needs.some((need) => need.id === card.id), false, 'the step closed');
+  await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.apps.includes('ChatGPT')), 'ChatGPT queued');
+  connect.stop(started.id);
+  connect.dismiss(started.id);
+});
+
 /* Browser agents (2026-10-13, second round: "We will use computer use in my real browser"). */
 
 test('Import your context, round 3: web apps in Engelbart\'s browser with the copied sign-ins; the person\'s browser only for a sign-in Engelbart can\'t use; a signed-out app is a popup', async () => {

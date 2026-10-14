@@ -1979,6 +1979,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       emit(s);
       const opened = (name) => { found.opened = true; found.browser = name; logAction(s, null, `Opened ${shownName(found.app)}'s sign-in in ${name}`, 'You'); emit(s); };
       webSignIn.signIn(found.app, { signal: controller.signal, onOpened: opened }).catch((error) => ({ status: 'failed', error: error.message })).then((out) => {
+        // Ended by "I'm signed in" (signedInNow), which owns the step now.
+        if (controller.signal.aborted && out.status === 'cancelled') return;
         found.busy = false;
         found.cancel = null;
         found.note = noteFor(found.app, found.kind); // macOS has been asked now, or will be by the next browser
@@ -2012,6 +2014,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * done; signed in there but refused by Engelbart's browser → their browser or left out; not yet → the popup says so.
    */
   async function signedInNow(s, found) {
+    // 2026-10-14 (Notion: "i clicked im signed in but then nothing happend"): Open's wait for the sign-in (busy) used to
+    // swallow this press. The person's word ends that wait and the check runs now.
+    if (found.busy && typeof found.cancel === 'function') { found.cancel(); found.cancel = null; found.busy = false; }
     if (found.busy) return snapshot(s);
     found.busy = true;
     found.error = '';
@@ -2031,6 +2036,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
     if (out.held) { closeNeed(s, found, readElsewhere(s, found.app, found.browser) ? 'done' : 'skip'); return snapshot(s); }
     if (out.refused) { if (out.refusedId) signInDenied.add(out.refusedId); closeNeed(s, found, 'skip'); s.chat.push({ role: 'agent', text: skippedLine(out.refused, [found.app]), ask: null, authorize: null, at: now() }); emit(s); return snapshot(s); }
+    // They say they are signed in there and agents may use that browser: read it there (the copy can't be told apart).
+    if (found.opened && s.choices.browserAgents && readElsewhere(s, found.app, found.browser)) { closeNeed(s, found, 'done'); return snapshot(s); }
     found.error = `Still not signed in to ${shownName(found.app)}${found.browser ? ` in ${found.browser}` : ''}.`;
     emit(s);
     return snapshot(s);
