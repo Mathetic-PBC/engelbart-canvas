@@ -313,7 +313,8 @@ test('each kind of agent is served its own tools: a survey brings nothing in, a 
 test('the librarian\'s reply as it is read: one-line options with their why, buttons and imports checked against what was picked', () => {
   const choices = cleanChoices({ sources: { notes: { on: true, apps: ['Obsidian', 'Nope'], folders: ['/etc', '~/Vault'] }, papers: { on: false } }, permissions: { browser: false } }, homeDir);
   assert.deepEqual(choices.sources.notes, { on: true, apps: ['Obsidian'], folders: [vault], repos: [] });
-  assert.deepEqual(choices.permissions, { files: true, browser: false, recall: true, notes: false });
+  assert.deepEqual(choices.permissions, { files: true, browser: false, recall: false, notes: false }, 'asking an assistant what it remembers is never on: it writes in their account (2026-10-15)');
+  assert.equal(cleanChoices({ sources: {}, permissions: { recall: true } }, homeDir).permissions.recall, false);
   const reply = readReply('```json\n{"say":"Found it.","ask":{"source":"notes","kind":"multi","title":"Which folders?","options":["Research",{"label":"Essays","why":"12 notes"},{"label":"Essays"}]},"authorize":{"app":"Zotero","kind":"signin"},"dispatch":[{"source":"notes","apps":["Obsidian"],"label":"Obsidian","plan":"Research only"},{"source":"papers","plan":"all"}],"done":false}\n```', choices);
   assert.deepEqual(reply.ask, { source: 'notes', kind: 'multi', title: 'Which folders?', options: [{ label: 'Research', why: '', detail: '', checked: false }, { label: 'Essays', why: '12 notes', detail: '', checked: false }], placeholder: '' });
   assert.equal(reply.authorize, null, 'one thing at a time: the question wins');
@@ -345,19 +346,27 @@ test('the librarian\'s reply as it is read: one-line options with their why, but
 test('the agents\' tools per kind, and the connectors handed to Claude Code and Codex for one run', () => {
   assert.deepEqual(claudeToolsFor('interview'), { tools: 'Read,Grep,Glob', allowed: 'Read,Grep,Glob' });
   assert.deepEqual(claudeToolsFor('redact'), { tools: '', allowed: '' }, 'taking secrets out needs no tools');
-  assert.deepEqual(claudeToolsFor('import', [{ name: 'granola' }, { name: 'bad name' }]), { tools: 'Read,Grep,Glob,WebSearch,WebFetch', allowed: 'Read,Grep,Glob,WebSearch,WebFetch,mcp__engelbart__*,mcp__granola__*' });
-  assert.deepEqual(claudeServers({ node: '/bin/node', server: '/x/import-mcp.cjs', connection: '/x/c.json', connectors: [{ name: 'granola', url: 'https://mcp.granola.ai/mcp', token: 'tok' }, { name: 'engelbart', url: 'https://evil', token: 't' }] }).mcpServers, {
+  // A connector's reading tools only, by name (2026-10-15): never mcp__granola__* (switch_workspace, sign_out), never a
+  // connector Engelbart has no reading list for.
+  const granolaReads = 'mcp__granola__list_meetings,mcp__granola__list_meeting_folders,mcp__granola__get_account_info';
+  assert.deepEqual(claudeToolsFor('import', [{ app: 'Granola', name: 'granola' }, { app: 'Granola', name: 'bad name' }, { app: 'Linear', name: 'linear' }]), { tools: 'Read,Grep,Glob,WebSearch,WebFetch', allowed: `Read,Grep,Glob,WebSearch,WebFetch,mcp__engelbart__*,${granolaReads},mcp__granola__get_meetings,mcp__granola__get_meeting_transcript,mcp__granola__get_meeting_attachment,mcp__granola__query_granola_meetings` });
+  assert.deepEqual(claudeToolsFor('survey', [{ app: 'Granola', name: 'granola' }]).allowed, `Read,Grep,Glob,WebSearch,WebFetch,mcp__engelbart__*,${granolaReads}`, 'a survey lists the meetings; it reads none');
+  assert.ok(!claudeToolsFor('import', [{ app: 'Granola', name: 'granola' }]).allowed.includes('switch_workspace'));
+  assert.ok(!claudeToolsFor('import', [{ app: 'Notion', name: 'notion' }]).allowed.match(/notion-(create|update|delete|move|duplicate)/));
+  assert.deepEqual(claudeServers({ node: '/bin/node', server: '/x/import-mcp.cjs', connection: '/x/c.json', connectors: [{ app: 'Granola', name: 'granola', url: 'https://mcp.granola.ai/mcp', token: 'tok' }, { app: 'Granola', name: 'engelbart', url: 'https://evil', token: 't' }, { app: 'Linear', name: 'linear', url: 'https://mcp.linear.app/mcp', token: 'l' }] }).mcpServers, {
     engelbart: { command: '/bin/node', args: ['/x/import-mcp.cjs', '/x/c.json'], env: { ELECTRON_RUN_AS_NODE: '1' } },
     granola: { type: 'http', url: 'https://mcp.granola.ai/mcp', headers: { Authorization: 'Bearer tok' } },
   });
   // Codex's import home: Engelbart's tools approved in advance (codex exec cannot ask anyone), its own browser and computer
   // use off, a connector's token read from the environment, nothing else.
   const codexHome = fs.mkdtempSync(path.join(os.tmpdir(), 'connect-codex-'));
-  writeImportConfig(codexHome, { command: '/bin/node', args: ['/x/import-mcp.cjs', '/x/c.json'], env: { ELECTRON_RUN_AS_NODE: '1' } }, [{ name: 'granola', url: 'https://mcp.granola.ai/mcp' }]);
+  writeImportConfig(codexHome, { command: '/bin/node', args: ['/x/import-mcp.cjs', '/x/c.json'], env: { ELECTRON_RUN_AS_NODE: '1' } }, [{ app: 'Granola', name: 'granola', url: 'https://mcp.granola.ai/mcp' }, { app: 'Linear', name: 'linear', url: 'https://mcp.linear.app/mcp' }]);
   const config = fs.readFileSync(path.join(codexHome, 'config.toml'), 'utf8');
   assert.match(config, /\[features\]\ncomputer_use = false\nbrowser_use = false\nbrowser_use_external = false/);
   assert.match(config, /\[mcp_servers\.engelbart\]\ncommand = "\/bin\/node"\nargs = \["\/x\/import-mcp\.cjs", "\/x\/c\.json"\][\s\S]*default_tools_approval_mode = "approve"/);
   assert.match(config, /\[mcp_servers\.granola\]\nurl = "https:\/\/mcp\.granola\.ai\/mcp"\nbearer_token_env_var = "ENGELBART_CONNECTOR_GRANOLA"/);
+  assert.match(config, /enabled_tools = \["list_meetings", "list_meeting_folders", "get_account_info", "get_meetings", "get_meeting_transcript", "get_meeting_attachment", "query_granola_meetings"\]/, 'Codex is given only the reading tools');
+  assert.doesNotMatch(config, /switch_workspace|sign_out|mcp_servers\.linear/);
 });
 
 test('the models are pinned: Sonnet high on Claude Code, Sol high on Codex, ids from Build\'s list', () => {
@@ -1576,7 +1585,7 @@ test('no browser whose sign-ins can be read (Safari only): a sign-in lost mid-ru
   }
 });
 
-test('the priority queue: surveys first, then the recalls, three at a time (a limit of 3 here; 6 in the app), MEMORY.md after everything; a survey waits on the person', async () => {
+test('the priority queue: surveys first, three at a time (a limit of 3 here; 6 in the app), MEMORY.md after everything, no assistant asked what it remembers; a survey waits on the person', async () => {
   const order = [];
   const inner = createFakeConnectAgents({ delayMs: 30 });
   const agents = { turn: (input) => { if (input.meta && input.meta.job) order.push(`${input.meta.job.kind}:${input.meta.job.apps.join(',')}`); return inner.turn(input); } };
@@ -1586,7 +1595,7 @@ test('the priority queue: surveys first, then the recalls, three at a time (a li
     const started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude', 'Gemini', 'Grok'] } } });
     const first = await until(state(started.id), (s) => s.jobs.filter((job) => job.status === 'running' || job.status === 'waiting').length === 3, 'three running');
     assert.deepEqual(first.jobs.filter((job) => job.status !== 'queued').map((job) => job.kind), ['survey', 'survey', 'survey'], 'surveys take the first places');
-    assert.equal(first.jobs.filter((job) => job.kind === 'recall').length, 4, 'every assistant will be asked what it remembers');
+    assert.equal(first.jobs.filter((job) => job.kind === 'recall').length, 0, 'no assistant is asked what it remembers: that writes a chat in their account (2026-10-15)');
     // Claude's survey hands the person its sign-in: one request, then done.
     const asked = await until(state(started.id), (s) => s.needs.length === 1, 'Claude\'s sign-in');
     assert.deepEqual([asked.needs[0].app, asked.needs[0].kind, asked.needs[0].reason], ['Claude', 'signin', 'Sign in to Claude']);
@@ -1594,7 +1603,7 @@ test('the priority queue: surveys first, then the recalls, three at a time (a li
     const answered = await connect.need(started.id, asked.needs[0].id, 'done');
     assert.equal(answered.needs.length, 0);
     await until(state(started.id), (s) => s.jobs.filter((job) => job.kind === 'survey').every((job) => job.status === 'done'), 'every survey');
-    assert.deepEqual(order.slice(0, 4).map((entry) => entry.split(':')[0]), ['survey', 'survey', 'survey', 'survey'], 'no recall before the surveys have their places');
+    assert.deepEqual(order.slice(0, 4).map((entry) => entry.split(':')[0]), ['survey', 'survey', 'survey', 'survey'], 'the surveys first');
     // The librarian waited for the surveys, then asks about what they found, one item per line.
     const card = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask && entry.ask.kind === 'multi'), 'the chats question');
     const chatsAsk = card.chat.find((entry) => entry.ask).ask;
@@ -1602,10 +1611,11 @@ test('the priority queue: surveys first, then the recalls, three at a time (a li
     connect.answer(started.id, { picked: chatsAsk.options.filter((option) => option.checked).map((option) => option.label) });
     const ended = await until(state(started.id), (s) => s.memory.status === 'saved', 'MEMORY.md', 2000);
     const memoryAt = order.indexOf('memory:');
-    assert.ok(memoryAt > order.lastIndexOf('import:') && memoryAt > order.lastIndexOf('recall:Grok'), `MEMORY.md waits for every import and recall: ${order.join(' ')}`);
+    assert.ok(memoryAt > order.lastIndexOf('import:'), `MEMORY.md waits for every import: ${order.join(' ')}`);
+    assert.ok(!order.some((entry) => entry.startsWith('recall:')), 'no recall ran');
     assert.equal(order[order.length - 1], 'redact:', 'then one agent takes the secrets out');
-    assert.ok(ended.log.some((entry) => /Kept what ChatGPT remembers/.test(entry.text)));
-    assert.ok(fs.existsSync(path.join(ctx.dataRoot, '.connect', started.id, 'memories', 'ChatGPT.md')));
+    assert.ok(!ended.log.some((entry) => /Kept what ChatGPT remembers/.test(entry.text)));
+    assert.ok(!fs.existsSync(path.join(ctx.dataRoot, '.connect', started.id, 'memories', 'ChatGPT.md')));
     fs.rmSync(memory.memoryPath(ctx.dataRoot));
   } finally {
     delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
@@ -1685,15 +1695,13 @@ test('Skip holds for the run: the app is never put to the person again, and its 
   const { connect, state } = fakeConnect({ delayMs: 150, deps: { maxRunning: 3 } });
   let started = null;
   try {
-    // three surveys take the three places (a limit of 3 here), so the recalls wait their turn
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Gemini', 'Claude'] } } });
     const asked = await until(state(started.id), (s) => s.needs.length === 1, 'Claude\'s sign-in');
     const after = await connect.need(started.id, asked.needs[0].id, 'skip');
     assert.equal(after.needs.length, 0);
-    // queued or already started, Claude's recall ends as skipped
-    const ended = await until(state(started.id), (s) => ['stopped', 'done', 'failed'].includes(s.jobs.find((job) => job.kind === 'recall' && job.apps[0] === 'Claude').status), 'Claude\'s recall ended');
-    const recall = ended.jobs.find((job) => job.kind === 'recall' && job.apps[0] === 'Claude');
-    assert.deepEqual([recall.status, recall.skipped], ['stopped', true], 'Claude\'s recall is not run');
+    // Claude's survey, waiting on the sign-in, ends with nothing of it run again
+    const ended = await until(state(started.id), (s) => ['stopped', 'done', 'failed'].includes(s.jobs.find((job) => job.kind === 'survey' && job.apps[0] === 'Claude').status), 'Claude\'s survey ended');
+    assert.equal(ended.jobs.filter((job) => job.apps.includes('Claude')).length, 1, 'nothing else of Claude is started');
     assert.ok(!fs.existsSync(path.join(ctx.dataRoot, '.connect', started.id, 'memories', 'Claude.md')));
     // Import hands nothing over for a skipped app, and an agent that asks again hears "skipped" with no card.
     await until(state(started.id), (s) => !s.thinking, 'the librarian');

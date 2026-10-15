@@ -3,10 +3,13 @@
 // npx electron scripts/smoke-connect-browser.cjs
 // The agents' browser of Connect your library (src/main/connect/browser.cjs) in real Electron, hidden, against a page
 // served on this machine: it opens only its job's sites (a link, a new window and browser_open elsewhere are refused and
-// logged), reads the page's text and controls with refs (a password field's value never), types into a field and into an
-// editor (contenteditable, as ChatGPT's and Claude's composers are), refuses to type into a password field, clicks, waits
-// for text, runs a script in the page (a same-origin fetch, with the page's cookies), takes a picture, downloads a file
-// with the session's cookies, and never shows a window when headless. Then ChatGPT's listing script
+// logged), reads the page's text and controls with refs (a password field's value never), types into a search box and
+// refuses to type into an editor (contenteditable, as ChatGPT's and Claude's composers are), a form's field or a password
+// field, clicks what only opens or shows and refuses what could change the account (Delete, Share, a trash menu item, a
+// checkbox, a switch, a form's submit, a sign-out link), refuses Enter in an editor and Delete outside a search box, never
+// opens a sign-out page, waits for text, runs Engelbart's own script in the page (a same-origin fetch, with the page's
+// cookies: the fixed readers' way, never an agent's), takes a picture, downloads a file with the session's cookies, and
+// never shows a window when headless. Then ChatGPT's listing script
 // (src/main/connect/web-chats.cjs) runs against a fake of the endpoints its page uses.
 const { app, BrowserWindow, session } = require('electron');
 const assert = require('node:assert/strict');
@@ -29,6 +32,13 @@ const PAGE = `<!doctype html><meta charset="utf-8"><title>Agent page</title>
 <div contenteditable="true" aria-label="Message" id="composer"></div>
 <button id="go" onclick="document.getElementById('out').textContent='Clicked!'">Go</button>
 <p id="out"></p>
+<button aria-label="Delete" onclick="document.getElementById('out').textContent='Deleted!'">🗑</button>
+<button onclick="document.getElementById('out').textContent='Shared!'">Share</button>
+<div role="menuitem" onclick="document.getElementById('out').textContent='Trashed!'">Move to trash</div>
+<input type="checkbox" aria-label="Select Thesis draft">
+<div role="switch" aria-label="Dark mode" aria-checked="false">Dark mode</div>
+<form onsubmit="event.preventDefault(); document.getElementById('out').textContent='Sent!'"><input name="title" aria-label="Title"><button>Go on</button></form>
+<a href="/logout">Sign out</a>
 <a href="/next">Next page</a>
 <a id="away" href="http://localhost:PORT2/">Elsewhere</a>`;
 
@@ -77,11 +87,23 @@ app.whenReady().then(async () => {
 
     await page.type(byName('Search drive').ref, 'thesis');
     assert.equal(await page.evaluate("return document.querySelector('input[name=q]').value"), 'thesis');
-    await page.type(byName('Message').ref, 'What do you remember about me?');
-    assert.equal(await page.evaluate("return document.getElementById('composer').textContent"), 'What do you remember about me?', 'typed into an editor');
+    await page.press('Backspace');
+    await page.press('Enter');
+    // Read-only (2026-10-15): nothing that writes, sends or changes the account.
+    await assert.rejects(page.type(byName('Message').ref, 'What do you remember about me?'), /Refused: That is an editor/);
+    assert.equal(await page.evaluate("return document.getElementById('composer').textContent"), '', 'nothing typed into the editor');
+    await assert.rejects(page.type(byName('Title').ref, 'x'), /Refused: “Title” is not a search box/);
     await assert.rejects(page.type(byName('Password').ref, 'x'), /password field/);
+    for (const name of ['Delete', 'Share', 'Move to trash', 'Select Thesis draft', 'Dark mode', 'Go on', 'Sign out']) {
+      await assert.rejects(page.click(byName(name).ref), /Refused/, name);
+    }
+    assert.equal(await page.evaluate("return document.getElementById('out').textContent"), '', 'no refused control was pressed');
+    await page.click(byName('Message').ref); // focusing the editor is reading; Enter in it is not
+    await assert.rejects(page.press('Enter'), /Refused: Enter there would send/);
+    await assert.rejects(page.press('Delete'), /Refused: Delete could delete/);
     await page.click(byName('Go').ref);
     assert.deepEqual(await page.wait({ untilText: 'Clicked!', seconds: 5 }), { done: true, after: 0 });
+    await assert.rejects(page.open(`${base}/logout`), /signs out/);
 
     const fetched = await page.evaluate("return await (await fetch('/api/data')).json()");
     assert.equal(fetched.cookie, 'sid=abc', 'the page\'s own fetch carries its cookies');
@@ -103,6 +125,7 @@ app.whenReady().then(async () => {
     assert.deepEqual(await page.wait({ untilText: 'Second page', seconds: 5 }).then((out) => out.done), true, 'a link on its own site is followed');
     assert.equal(browser.show(job.id, { title: 'Sign in' }), false, 'headless: never shown');
     assert.ok(log.includes('Opened 127.0.0.1') && log.some((line) => /^Typed into “Search drive”/.test(line)) && log.some((line) => /^Clicked “Go”/.test(line)), log.join(' | '));
+    assert.ok(log.some((line) => /^Didn't: “Delete” could change something/.test(line)), log.join(' | '));
 
     // ChatGPT's listing and reading scripts, against the same endpoints on this page's origin.
     const chatPage = { ...page, ensure: () => page.open(`${base}/`) };

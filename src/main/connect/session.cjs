@@ -48,7 +48,7 @@ const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
 const folderAccess = require('./folder-access.cjs');
 const notes = require('./notes.cjs');
-const { createImportTools } = require('./tools.cjs');
+const { createImportTools, toolNamesFor, browseSitesFor } = require('./tools.cjs');
 const { skillsFor } = require('./skills.cjs');
 const memory = require('./memory.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
@@ -273,7 +273,9 @@ function cleanChoices(input, homeDir, { alsoPicked = [] } = {}) {
     picked,
     custom: typeof given.custom === 'string' ? given.custom.trim().slice(0, 4000) : '',
     computer,
-    permissions: { files: computer, browser: allowed.browser !== false, recall: allowed.recall !== false, notes: allowed.notes === true },
+    // recall: never (From Amitav, 2026-10-15). Asking ChatGPT or Claude what it remembers sends a message and makes a chat
+    // in the person's account, then deletes it: that changes their account, and the agents only read.
+    permissions: { files: computer, browser: allowed.browser !== false, recall: false, notes: allowed.notes === true },
     project: cleanProject(given.project),
     days: cleanDays(given.days), // how far back to look (2026-10-10): 182, 365, or null for all time
     direct: cleanDirect(given.direct, homeDir), // Import your context (2026-10-13): no librarian, one import a tool
@@ -794,12 +796,17 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const covered = appsOfJob(s, job);
     const sites = [...new Set([...sitesOf(covered), ...((job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [])])];
     const page = bridged && !browse && browser && s.choices.permissions.browser && sites.length ? browser.tools({ id: job.id, label: job.label, sites }) : null;
+    // Its tools (2026-10-15): no browser for a job of apps Engelbart reads with readers of its own (ChatGPT, Claude,
+    // Overleaf), and the browser held to the sites of the apps it browses.
+    const extraSites = (job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [];
+    const toolNames = bridged && !browse ? toolNamesFor(turnKind, { apps: covered, extraSites, page: !!page }) : null;
+    const browseSites = browseSitesFor(turnKind, covered, extraSites);
     const session = {
       dataRoot: s.dataRoot, homeDir, dir: s.dir, downloads: s.downloads, projectId: () => s.projectId,
       // what macOS let Engelbart read of its protected folders (MATH-110): the file tools keep out of the rest
       readable: (dir) => accessOf(s).readable(dir),
       // the apps the job covers and its source group, for what each row it brings in knows about itself (Library Phase B)
-      apps: covered, group: job.source,
+      apps: covered, group: job.source, browseSites,
       get exports() { return s.picked.exports; },
       get folders() { return s.picked.folders; },
       get days() { return s.choices.days || null; }, // the period picked (2026-10-10): the listing tools hold to it
@@ -808,7 +815,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       set gmailThreads(n) { s.gmailThreads = Math.max(0, Number(n) || 0); save(s); },
     };
     const callTool = bridged ? createImportTools({
-      session, context, zotero, github, deps, env, kind: turnKind, page, appleNotes,
+      session, context, zotero, github, deps, env, kind: turnKind, page, appleNotes, only: toolNames,
       needs: { ask: (request) => askPerson(s, job, request), wait: () => waitAgain(s, job) },
       recall: (app, text) => keepRecall(s, app, text),
       // the chat the memory question opened (2026-10-12), deleted by the tools once its answer is kept
@@ -834,7 +841,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const dirs = job.kind === 'memory' ? [s.dir, path.join(s.dataRoot, 'assets', 'md'), ...(s.projectDir ? [s.projectDir] : [])].filter((dir) => fs.existsSync(dir)) : job.kind === 'redact' ? [] : s.dirs;
       const message = job.kind === 'memory' ? await memoryMessage(s) : job.kind === 'redact' ? `<memory_md>\n${s.memoryDraft}\n</memory_md>` : jobMessage(s, job);
       const browseOptions = browse ? { steps: path.join(s.dir, 'steps', job.id), enable: browse.enable, browser: browse.browserName } : null;
-      const out = await agents.turn({ choice, kind: turnKind, system: systemOf(s, turnKind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: browse ? [] : connectorsNow, onUpdate, browse: browseOptions, meta: { kind: turnKind, session: s, job, callTool } });
+      const out = await agents.turn({ choice, kind: turnKind, system: systemOf(s, turnKind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: browse ? [] : connectorsNow, onUpdate, browse: browseOptions, tools: toolNames, meta: { kind: turnKind, session: s, job, callTool } });
       if (job.kind === 'survey') await surveyed(s, job, out.text);
       else if (job.kind === 'memory') drafted(s, out.text);
       else if (job.kind === 'redact') await finishMemory(s, out.text);

@@ -26,7 +26,7 @@
 //                              (Claude Code's auto mode classifier decides each browser call, every prompt it would raise is
 //                              refused; Codex's sandbox is read-only, its Chrome plugin's per-site questions go to
 //                              Codex's auto-review and every other approval is refused: CODEX_BROWSE_APPROVALS); no tool that runs a
-//                              script in a page, uploads a file or closes a tab; none of the person's own MCP servers or
+//                              script in a page, uploads a file or closes a tab, nor (Claude in Chrome) one that clicks or types; none of the person's own MCP servers or
 //                              ChatGPT apps; every step and every screenshot kept for the Agent trace; Stop all ends the
 //                              terminal session. ../onboarding/browser-agents.cjs says when it may run.
 // The other kinds are given neither computer use nor Claude in Chrome (--no-chrome; Codex's own browser and computer use
@@ -56,9 +56,12 @@ const TIMEOUTS = Object.freeze({ interview: 10 * 60_000, survey: 15 * 60_000, im
 const BRIDGED = new Set(['survey', 'import', 'recall', 'discover', 'browse']);
 // Claude in Chrome's tools a browser agent is never given: a script in the page, a file sent up, a form filled, a saved
 // shortcut run, a recording, another browser or window chosen, a window resized (round 3: "it shifted my window to the
-// chrome window … This should also NEVER happen"). What is left opens its own tabs, reads, finds, scrolls, clicks, types
-// and closes the tabs it opened (round 3: "The agents need to close all of the tabs and tab groups when they're done").
-const CHROME_REFUSED = Object.freeze(['javascript_tool', 'upload_image', 'file_upload', 'form_input', 'shortcuts_execute', 'shortcuts_list', 'gif_creator', 'switch_browser', 'select_browser', 'resize_window'].map((name) => `mcp__claude-in-chrome__${name}`));
+// chrome window … This should also NEVER happen"), and (From Amitav, 2026-10-15: "ensure agents cant fuck w their shit, but
+// if they poke around and read that is fine") no clicking or typing at all: `computer`, and `browser_batch` that runs its
+// steps, are the only tools that click, type or press keys in the person's own browser, where Engelbart can't look at a
+// control before it is pressed. What is left opens its own tabs, goes to addresses, reads and finds, and closes the tabs it
+// opened (round 3: "The agents need to close all of the tabs and tab groups when they're done").
+const CHROME_REFUSED = Object.freeze(['javascript_tool', 'computer', 'browser_batch', 'upload_image', 'file_upload', 'form_input', 'shortcuts_execute', 'shortcuts_list', 'gif_creator', 'switch_browser', 'select_browser', 'resize_window'].map((name) => `mcp__claude-in-chrome__${name}`));
 // The MCP servers of the person's own Codex a browser agent keeps: node_repl, which its Chrome plugin runs in. Every other
 // one of theirs is turned off for the run, Computer Use among them: it drives apps by bringing them to the front.
 const CODEX_KEPT_SERVERS = new Set(['node_repl']);
@@ -106,13 +109,31 @@ const waitFor = (ms, signal) => new Promise((resolve) => {
 });
 const tokenEnv = (name) => `ENGELBART_CONNECTOR_${name.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
 
+// A connector's tools an agent may call (From Amitav, 2026-10-15: they were approved whole, `mcp__notion__*` and Codex's
+// "approve", so an agent could have created, moved or deleted pages): its reading tools, by name, and nothing else. Claude
+// Code is allowed only these (--allowedTools; any other is a prompt, and --permission-prompts none refuses it), Codex is
+// given only these (enabled_tools). Granola's switch_workspace is not reading: it changes the workspace in the Granola app
+// and every other client (docs.granola.ai). A survey gets the tools that list what is there; an import those that read it
+// too. A connector with no list here is not given to an agent at all.
+const CONNECTOR_READS = Object.freeze({
+  Granola: Object.freeze({ list: ['list_meetings', 'list_meeting_folders', 'get_account_info'], read: ['get_meetings', 'get_meeting_transcript', 'get_meeting_attachment', 'query_granola_meetings'] }),
+  Notion: Object.freeze({ list: ['notion-search', 'notion-list-recent-pages', 'notion-list-shared-pages', 'notion-list-private-pages', 'notion-list-favorite-pages', 'notion-get-self'], read: ['notion-fetch', 'notion-query-data-sources', 'notion-query-meeting-notes'] }),
+});
+
+/** The tools of `connector` ({ app }) an agent of `kind` may call: a survey's list, an import's list and read. */
+function connectorTools(connector, kind) {
+  const reads = connector && CONNECTOR_READS[connector.app];
+  if (!reads) return [];
+  return kind === 'survey' || kind === 'discover' ? [...reads.list] : [...reads.list, ...reads.read];
+}
+
 /**
  * The config.toml of an import agent's private Codex home: Engelbart's import tools (`server` { command, args, env }) and
  * the connectors' servers (`connectors` [{ name, url }], their tokens read from ENGELBART_CONNECTOR_<NAME>), nothing else.
  * `codex exec` cannot ask anyone, so the tools are approved in advance: Engelbart's only write into its data root
- * (./tools.cjs), the connectors' only read. Its own browser and computer use stay off: the agent uses Engelbart's.
+ * (./tools.cjs), and of the connectors' only those that read (connectorTools, for `kind`). Its own browser and computer use stay off: the agent uses Engelbart's.
  */
-function writeImportConfig(home, server, connectors = []) {
+function writeImportConfig(home, server, connectors = [], kind = 'import') {
   const toml = (value) => (Array.isArray(value) ? `[${value.map(toml).join(', ')}]` : JSON.stringify(String(value)));
   const lines = ['# Written by Engelbart (src/main/connect/agents.cjs). Replaced on every run.', '', '[features]', 'computer_use = false', 'browser_use = false', 'browser_use_external = false', '',
     '[mcp_servers.engelbart]', `command = ${toml(server.command)}`, `args = ${toml(server.args)}`,
@@ -121,7 +142,9 @@ function writeImportConfig(home, server, connectors = []) {
     if (!SERVER_NAME_RE.test(connector.name) || connector.name === 'engelbart') continue;
     // The person's own server (./own-connectors.cjs): no token here, Codex finds its own sign-in for it by name and address.
     const auth = connector.own ? [] : [`bearer_token_env_var = ${toml(tokenEnv(connector.name))}`];
-    lines.push('', `[mcp_servers.${connector.name}]`, `url = ${toml(connector.url)}`, ...auth, 'startup_timeout_sec = 30', 'tool_timeout_sec = 120', 'default_tools_approval_mode = "approve"');
+    const reads = connectorTools(connector, kind);
+    if (!reads.length) continue;
+    lines.push('', `[mcp_servers.${connector.name}]`, `url = ${toml(connector.url)}`, ...auth, 'startup_timeout_sec = 30', 'tool_timeout_sec = 120', `enabled_tools = ${toml(reads)}`, 'default_tools_approval_mode = "approve"');
   }
   const text = `${lines.join('\n')}\n`;
   const file = path.join(home, 'config.toml');
@@ -131,10 +154,10 @@ function writeImportConfig(home, server, connectors = []) {
 }
 
 /** Claude Code's --mcp-config for a bridged turn: Engelbart's tools and the connectors, each token in its header. */
-function claudeServers({ node, server, connection, connectors = [] }) {
+function claudeServers({ node, server, connection, connectors = [], kind = 'import' }) {
   const servers = { engelbart: { command: node, args: [server, connection], env: { ELECTRON_RUN_AS_NODE: '1' } } };
   for (const connector of connectors) {
-    if (!SERVER_NAME_RE.test(connector.name) || connector.name === 'engelbart') continue;
+    if (!SERVER_NAME_RE.test(connector.name) || connector.name === 'engelbart' || !connectorTools(connector, kind).length) continue;
     // The person's own server: as their Claude Code has it, which finds its sign-in by that name and address.
     servers[connector.name] = connector.own ? { type: connector.type === 'sse' ? 'sse' : 'http', url: connector.url } : { type: 'http', url: connector.url, headers: { Authorization: `Bearer ${connector.token}` } };
   }
@@ -321,7 +344,7 @@ function claudeToolsFor(kind, connectors = []) {
   if (kind === 'redact' || kind === 'projects') return { tools: '', allowed: '' };
   if (!BRIDGED.has(kind)) return { tools: READ_TOOLS, allowed: READ_TOOLS };
   const tools = `${READ_TOOLS},${WEB_TOOLS}`;
-  const extra = connectors.filter((connector) => SERVER_NAME_RE.test(connector.name)).map((connector) => `mcp__${connector.name}__*`);
+  const extra = connectors.filter((connector) => SERVER_NAME_RE.test(connector.name)).flatMap((connector) => connectorTools(connector, kind).map((tool) => `mcp__${connector.name}__${tool}`));
   return { tools, allowed: [tools, IMPORT_TOOLS_PREFIX, ...extra].join(',') };
 }
 
@@ -351,13 +374,13 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
   });
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');
 
-  async function claudeTurn({ kind, system, message, session, dirs, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd }) {
+  async function claudeTurn({ kind, system, message, session, dirs, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, tools }) {
     const promptFile = `${stem}.system.md`, inputFile = `${stem}.input.txt`, mcpFile = `${stem}.mcp.json`, connection = `${stem}.engelbart.json`;
     fs.writeFileSync(promptFile, system, { mode: 0o600 });
     fs.writeFileSync(inputFile, message, { mode: 0o600 });
     if (bridge) {
-      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind }), { mode: 0o600 });
-      fs.writeFileSync(mcpFile, JSON.stringify(claudeServers({ node, server, connection, connectors })), { mode: 0o600 });
+      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(tools ? { tools } : {}) }), { mode: 0o600 });
+      fs.writeFileSync(mcpFile, JSON.stringify(claudeServers({ node, server, connection, connectors, kind })), { mode: 0o600 });
     }
     const id = session || randomUUID();
     const grants = dirs.map((_, n) => `--add-dir "$ENGELBART_CONNECT_DIR${n}"`).join(' ');
@@ -380,7 +403,7 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     }
   }
 
-  async function codexTurn({ kind, system, message, session, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, dirs }) {
+  async function codexTurn({ kind, system, message, session, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, dirs, tools }) {
     // A home of its own for every bridged turn and every discovery turn: the librarian's is shared turn to turn, and a
     // discovery agent starting while it talks would rewrite its instructions (AGENTS.md) under it.
     const own = bridge || kind === 'projects' ? `${importHome}-${path.basename(stem)}` : interviewHome;
@@ -389,8 +412,8 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     const inputFile = `${stem}.input.txt`, outFile = `${stem}.out.txt`, connection = `${stem}.engelbart.json`;
     fs.writeFileSync(inputFile, message, { mode: 0o600 });
     if (bridge) {
-      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind }), { mode: 0o600 });
-      writeImportConfig(own, { command: node, args: [server, connection], env: { ELECTRON_RUN_AS_NODE: '1' } }, connectors);
+      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(tools ? { tools } : {}) }), { mode: 0o600 });
+      writeImportConfig(own, { command: node, args: [server, connection], env: { ELECTRON_RUN_AS_NODE: '1' } }, connectors, kind);
     } else writeCodexConfig(own, {});
     const web = bridge ? 'true' : 'false'; // an app's help pages, when its skill is out of date
     const shared = `--skip-git-repo-check -m "$ENGELBART_CONNECT_MODEL" -c 'model_reasoning_effort="${effort}"' -c 'sandbox_mode="read-only"' -c 'tools.web_search=${web}' -c project_doc_max_bytes=0 --json -o "$ENGELBART_CONNECT_OUTPUT" - < "$ENGELBART_CONNECT_INPUT"`;
@@ -461,13 +484,13 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
   }
 
   /** Claude Code with Claude in Chrome (`-p --chrome`), in the Engelbart terminal. */
-  async function claudeBrowse({ kind, system, message, dirs, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, browse }) {
+  async function claudeBrowse({ kind, system, message, dirs, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, browse, tools }) {
     const promptFile = `${stem}.system.md`, inputFile = `${stem}.input.txt`, mcpFile = `${stem}.mcp.json`, connection = `${stem}.engelbart.json`;
     fs.writeFileSync(promptFile, system, { mode: 0o600 });
     fs.writeFileSync(inputFile, message, { mode: 0o600 });
     if (bridge) {
-      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind }), { mode: 0o600 });
-      fs.writeFileSync(mcpFile, JSON.stringify(claudeServers({ node, server, connection, connectors })), { mode: 0o600 });
+      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(tools ? { tools } : {}) }), { mode: 0o600 });
+      fs.writeFileSync(mcpFile, JSON.stringify(claudeServers({ node, server, connection, connectors, kind })), { mode: 0o600 });
     }
     const id = randomUUID();
     const grants = dirs.map((_, n) => `--add-dir "$ENGELBART_CONNECT_DIR${n}"`).join(' ');
@@ -496,11 +519,11 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
    * run (their MCP servers but node_repl, ChatGPT apps), its shell read-only, its Chrome plugin's per-site questions left
    * to Codex's auto-review and every other approval refused (CODEX_BROWSE_APPROVALS), Engelbart's tools added.
    */
-  async function codexBrowse({ kind, system, message, model, effort, signal, onUpdate, bridge, timeout, stem, cwd, dirs, browse }) {
+  async function codexBrowse({ kind, system, message, model, effort, signal, onUpdate, bridge, timeout, stem, cwd, dirs, browse, tools }) {
     const home = environment.CODEX_HOME || path.join(os.homedir(), '.codex');
     const inputFile = `${stem}.input.txt`, outFile = `${stem}.out.txt`, connection = `${stem}.engelbart.json`;
     fs.writeFileSync(inputFile, message, { mode: 0o600 });
-    if (bridge) fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind }), { mode: 0o600 });
+    if (bridge) fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(tools ? { tools } : {}) }), { mode: 0o600 });
     const off = [...codexServersOff(home).map((name) => `-c 'mcp_servers.${name}.enabled=false'`), ...codexPluginsOff(home).map((name) => `-c 'plugins."${name}".enabled=false'`)].join(' ');
     const enable = `${browse.enable ? ' --enable browser_use' : ''} --disable computer_use`;
     // --ephemeral: the run is not kept in the person's Codex history (their own CODEX_HOME), as Claude's above.
@@ -528,14 +551,14 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
    * `bridge` { url, token } for the kinds that have Engelbart's tools; `connectors` [{ name, url, token }]; `browse` (kind
    * browse) { steps: the folder its screenshots go to, enable: Codex's browser use turned on for the run }.
    */
-  async function turn({ choice, kind = 'interview', system, message, session = null, dirs = [], signal, onUpdate = () => {}, bridge = null, connectors = [], browse = null }) {
+  async function turn({ choice, kind = 'interview', system, message, session = null, dirs = [], signal, onUpdate = () => {}, bridge = null, connectors = [], browse = null, tools = null }) {
     fs.mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
     const stem = path.join(runDirectory, `${kind}-${randomUUID()}`);
     const cwd = runDirectory;
     const timeout = TIMEOUTS[kind] || TIMEOUTS.import;
     const cli = choice.provider === 'openai' ? 'codex' : 'claude';
     const fn = kind === 'browse' ? (cli === 'codex' ? codexBrowse : claudeBrowse) : (cli === 'codex' ? codexTurn : claudeTurn);
-    const once = () => fn({ kind, system, message, session, dirs, model: choice.modelId, effort: choice.effort, signal, onUpdate, bridge: BRIDGED.has(kind) ? bridge : null, connectors, timeout, stem, cwd, browse: browse || {} });
+    const once = () => fn({ kind, system, message, session, dirs, model: choice.modelId, effort: choice.effort, signal, onUpdate, bridge: BRIDGED.has(kind) ? bridge : null, connectors, timeout, stem, cwd, browse: browse || {}, tools: Array.isArray(tools) ? tools : null });
     const attempt = async () => {
       if (!tools) return once();
       await tools.ensure(cli);
@@ -558,4 +581,4 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
   return { turn };
 }
 
-module.exports = { createConnectAgents, writeImportConfig, claudeServers, claudeToolsFor, importToolLabel, updateOf, browseUpdateOf, chromeToolLabel, replLabel, codexServersOff, codexPluginsOff, tomlValue, ConnectError, IMPORT_SERVER, TIMEOUTS, INTERVIEW_TIMEOUT_MS, IMPORT_TIMEOUT_MS, CHROME_REFUSED, CODEX_KEPT_SERVERS, CODEX_BROWSE_APPROVALS, RETRY_WAITS_MS, transientFailure };
+module.exports = { createConnectAgents, writeImportConfig, claudeServers, claudeToolsFor, CONNECTOR_READS, connectorTools, importToolLabel, updateOf, browseUpdateOf, chromeToolLabel, replLabel, codexServersOff, codexPluginsOff, tomlValue, ConnectError, IMPORT_SERVER, TIMEOUTS, INTERVIEW_TIMEOUT_MS, IMPORT_TIMEOUT_MS, CHROME_REFUSED, CODEX_KEPT_SERVERS, CODEX_BROWSE_APPROVALS, RETRY_WAITS_MS, transientFailure };

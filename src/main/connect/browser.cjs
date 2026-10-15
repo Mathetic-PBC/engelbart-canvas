@@ -14,6 +14,9 @@
 //   · passwords: it never reads a password field's value, and the prompt tells it never to type one. A page that wants a
 //     sign-in, a code or a password is shown to the person (show: "Needs you"), who does it in that same window; while it
 //     is shown the person goes where they like, and hiding it hands it back.
+//   · read-only (2026-10-15): an agent's clicks, typing and keys are held to reading (clickRefusal, typeRefusal,
+//     pressRefusal), and no page that signs out is opened. A script of its own never runs in a page: evaluate() is for
+//     Engelbart's fixed readers (./web-chats.cjs, ./gmail.cjs), never an agent's tool.
 //   · every step is told to `log` (the visible action log) in the person's words, never what came back.
 // `headless` (ENGELBART_HEADLESS, the smoke runs): show() does nothing, so no window ever appears.
 
@@ -87,13 +90,84 @@ const READ_SCRIPT = (offset, max) => `(() => {
   return { url: location.href, title: document.title, text: text.slice(${offset}, ${offset + max}), textTotal: text.length, elements: out };
 })()`;
 
-const SPOT_SCRIPT = (ref) => `(() => {
-  const el = document.querySelector('[data-eb-ref=${JSON.stringify(String(ref))}]');
+// What a control is, for the read-only rules below (readOnly): the control `ref` names, or the one that has the focus when
+// `ref` is null (what a key goes to). `spot` also scrolls it into view and says where its middle is, to click.
+const INFO_SCRIPT = (ref, spot = false) => `(() => {
+  const el = ${ref == null ? 'document.activeElement' : `document.querySelector('[data-eb-ref=${JSON.stringify(String(ref))}]')`};
   if (!el) return null;
-  el.scrollIntoView({ block: 'center', inline: 'center' });
-  const r = el.getBoundingClientRect();
-  return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2), name: (el.getAttribute('aria-label') || el.innerText || el.getAttribute('placeholder') || el.value || '').replace(/\\s+/g, ' ').trim().slice(0, 60) };
+  const clean = (value, n) => String(value || '').replace(/\\s+/g, ' ').trim().slice(0, n);
+  const tag = el.tagName.toLowerCase();
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  const labelled = el.getAttribute('aria-labelledby') ? el.getAttribute('aria-labelledby').split(/\\s+/).map((id) => (document.getElementById(id) || {}).innerText || '').join(' ') : '';
+  const name = clean(el.getAttribute('aria-label') || labelled || el.getAttribute('title') || el.getAttribute('placeholder') || el.getAttribute('alt') || (tag === 'input' ? el.value : el.innerText) || el.getAttribute('name') || '', 120);
+  const words = [el.getAttribute('aria-label'), labelled, el.getAttribute('placeholder'), el.getAttribute('aria-placeholder'), el.getAttribute('name'), el.id, el.getAttribute('title')].join(' ');
+  const form = el.form || el.closest('form');
+  const formSearch = !!(form && (form.getAttribute('role') === 'search' || form.querySelector('input[type=search],[role=searchbox]') || /search|[?&]q=/i.test(form.getAttribute('action') || '')));
+  const search = el.type === 'search' || role === 'searchbox' || !!el.closest('[role=search],search') || /search|find|filter|query|look ?up|jump to/i.test(words) || formSearch;
+  const href = tag === 'a' && el.href && !/^javascript:/i.test(el.href) && !/#$/.test(el.getAttribute('href') || '') ? el.href.slice(0, 400) : '';
+  const out = { tag, role, type: String(el.type || '').toLowerCase(), name, href, editable: !!el.isContentEditable, search, form: !!form, formSearch, submit: (tag === 'button' && (el.getAttribute('type') || 'submit').toLowerCase() === 'submit' && !!form) || (tag === 'input' && /^(submit|image)$/i.test(el.type || '')) };
+  if (${spot ? 'true' : 'false'}) {
+    el.scrollIntoView({ block: 'center', inline: 'center' });
+    const r = el.getBoundingClientRect();
+    out.x = Math.round(r.left + r.width / 2);
+    out.y = Math.round(r.top + r.height / 2);
+  }
+  return out;
 })()`;
+
+// Read-only (From Amitav, 2026-10-15: "ensure agents cant fuck w their shit, but if they poke around and read that is fine"):
+// an agent in Engelbart's browser opens, reads, scrolls and searches; it never changes anything in the person's accounts.
+// That is held here, in code, whatever the model decides: a click on a control that would change something (by its name:
+// Delete, Share, Send, Rename, Move, Save…), a switch, a checkbox or a form's submit is refused; text goes only into a search
+// box (never a composer, a document or a form); Enter and Space only where they search, open or read; Delete and
+// Backspace only in a search box; and no page that signs out is opened. Links that go somewhere are reading.
+const CHANGES_RE = /\b(?:delete|remove|trash|bin|discard|archive|unarchive|send|reply|forward|share|unshare|publish|unpublish|post|comment|submit|save|rename|move|edit|create|new|add|upload|import|duplicate|copy|clone|make a copy|restore|empty|clear|reset|change|update|apply|confirm|approve|accept|decline|reject|invite|leave|join|subscribe|unsubscribe|follow|unfollow|block|report|mute|pin|unpin|star|unstar|favou?rite|bookmark|like|vote|rate|install|uninstall|enable|disable|turn on|turn off|connect|disconnect|revoke|grant|allow|deny|transfer|pay|buy|purchase|checkout|upgrade|downgrade|cancel|regenerate|retry|branch|fork|lock|unlock|mark|label|snooze|draft|compose|write|schedule|record|start|stop|download|export|print|sync|request|verify|log ?out|sign ?out|log ?off|sign ?off)\b/i;
+const SIGN_OUT_RE = /(?:log|sign)[-_ ]?(?:out|off)\b|logout|signout|logoff/i;
+const CHOOSES_ROLES = new Set(['switch', 'checkbox', 'radio', 'menuitemcheckbox', 'menuitemradio', 'slider', 'spinbutton']);
+const ACTION_ROLES = new Set(['button', 'menuitem']);
+const TEXT_TYPES = new Set(['', 'text', 'search']);
+
+/** Whether `url` is a page that signs the person out (its path or query says so). */
+function signsOut(url) {
+  try { const parsed = new URL(String(url)); return SIGN_OUT_RE.test(decodeURIComponent(`${parsed.pathname}${parsed.search}`)); } catch { return false; }
+}
+
+const isAction = (info) => info.tag === 'button' || ACTION_ROLES.has(info.role) || (info.tag === 'input' && /^(submit|button|reset|image)$/.test(info.type)) || (info.tag === 'a' && !info.href);
+const isField = (info) => info.editable || info.tag === 'textarea' || (info.tag === 'input' && !/^(submit|button|reset|image|checkbox|radio|file|hidden|range|color)$/.test(info.type)) || ['textbox', 'searchbox', 'combobox'].includes(info.role);
+
+/** Why a click on the control `info` describes is refused (it could change something), or null when it only reads. */
+function clickRefusal(info) {
+  if (!info) return null;
+  const quoted = info.name ? `“${quote(info.name, 40)}”` : 'That control';
+  if (SIGN_OUT_RE.test(info.name) || (info.href && signsOut(info.href))) return `${quoted} signs out`;
+  if (info.tag === 'select' || CHOOSES_ROLES.has(info.role) || (info.tag === 'input' && /^(checkbox|radio|file|range|color)$/.test(info.type))) return `${quoted} changes a setting, a selection or a file`;
+  if (!isAction(info)) return null;
+  if (!info.name) return 'A control with no name could change something';
+  if (CHANGES_RE.test(info.name)) return `${quoted} could change something in the account`;
+  if (info.submit && !info.formSearch) return `${quoted} sends a form`;
+  return null;
+}
+
+/** Why typing into the control `info` describes is refused (only a search box takes text), or null. */
+function typeRefusal(info) {
+  if (!info) return null;
+  if (info.type === 'password') return 'That is a password field: call needs_you so the person signs in themselves';
+  if (info.editable) return 'That is an editor (a message, a document): agents only type into search boxes';
+  if (!isField(info)) return 'That control does not take text';
+  if (info.tag === 'input' && !TEXT_TYPES.has(info.type)) return 'Agents only type into search boxes';
+  if (!info.search) return `${info.name ? `“${quote(info.name, 40)}”` : 'That field'} is not a search box: agents only type into search boxes`;
+  return null;
+}
+
+/** Why pressing `key` where the focus is (`info`, the focused control, null for the page) is refused, or null. */
+function pressRefusal(key, info) {
+  const inSearch = !!info && isField(info) && !typeRefusal(info);
+  if (key === 'Delete' || key === 'Backspace') return inSearch ? null : `${key} could delete something: it is only pressed in a search box`;
+  if (key !== 'Enter' && key !== 'Space') return null;
+  if (!info) return null;
+  if (isField(info)) return inSearch || (key === 'Space' && !info.editable && info.tag !== 'textarea' && info.role !== 'textbox') ? null : `${key} there would send or write something: it is only pressed in a search box`;
+  return clickRefusal(info);
+}
 
 // Text typed into a field: an input's value set as typing sets it (React and the like follow), an editor's
 // (contenteditable: ChatGPT's and Claude's composers) through the editing commands a person's typing uses.
@@ -179,9 +253,9 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
     windows.set(job.id, entry);
     // Where the page may take itself: the job's hosts while an agent drives it, anywhere on https while the person does.
     const guard = (event, url) => {
-      if (entry.showing ? /^(https:|about:blank)/i.test(url) : hostAllowed(url, entry.hosts)) return;
+      if (entry.showing ? /^(https:|about:blank)/i.test(url) : hostAllowed(url, entry.hosts) && !signsOut(url)) return;
       event.preventDefault();
-      log(job.id, `Kept away from ${hostOf(url) || 'a page'} (not one of ${job.label || 'this app'}'s sites)`);
+      log(job.id, signsOut(url) ? `Didn't open ${hostOf(url)}'s sign-out page` : `Kept away from ${hostOf(url) || 'a page'} (not one of ${job.label || 'this app'}'s sites)`);
     };
     wc.on('will-navigate', guard);
     wc.on('will-redirect', guard);
@@ -202,12 +276,19 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
     return entry;
   }
 
+  /** A step refused as it could change the person's account: said in the action log, and to the agent. */
+  const refuse = (job, why) => {
+    log(job.id, `Didn't: ${why}`);
+    return Object.assign(new Error(`Refused: ${why}. Engelbart's agents only open, read, scroll and search; nothing in the person's accounts is changed.`), { code: 'READ_ONLY' });
+  };
+
   const wcOf = (job) => entryOf(job).win.webContents;
   const run = (job, code, ms = EVAL_TIMEOUT_MS) => withTimeout(wcOf(job).executeJavaScript(code, true), ms, 'The page');
 
   async function open(job, url) {
     const entry = entryOf(job);
     if (!hostAllowed(url, entry.hosts)) throw new Error(`${hostOf(url) || url} is not one of the sites this import may open (${(job.sites || []).join(', ') || 'none'})`);
+    if (signsOut(url)) throw refuse(job, 'that page signs out');
     log(job.id, `Opened ${hostOf(url)}`);
     const wc = entry.win.webContents;
     await withTimeout(wc.loadURL(url).catch((error) => { if (!/ERR_ABORTED/.test(String(error && error.message))) throw error; }), LOAD_TIMEOUT_MS, 'Loading the page').catch((error) => { if (!/longer than/.test(error.message)) throw error; });
@@ -231,8 +312,10 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
   }
 
   async function click(job, ref) {
-    const spot = await run(job, SPOT_SCRIPT(ref));
+    const spot = await run(job, INFO_SCRIPT(ref, true));
     if (!spot) throw new Error(`No control ${ref} on the page now: browser_read again`);
+    const why = clickRefusal(spot);
+    if (why) throw refuse(job, why);
     const wc = wcOf(job);
     wc.sendInputEvent({ type: 'mouseMove', x: spot.x, y: spot.y });
     wc.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, x: spot.x, y: spot.y });
@@ -243,6 +326,11 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
   }
 
   async function type(job, ref, text, { submit = false, replace = false } = {}) {
+    const field = await run(job, INFO_SCRIPT(ref));
+    if (!field) throw new Error(`No control ${ref} on the page now: browser_read again`);
+    const why = typeRefusal(field);
+    if (why && field.type === 'password') throw new Error(why);
+    if (why) throw refuse(job, why);
     const out = await run(job, TYPE_SCRIPT(ref, text, replace));
     if (out && out.error === 'password') throw new Error('That is a password field: call needs_you so the person signs in themselves');
     if (out && out.error) throw new Error(out.error === 'gone' ? `No control ${ref} on the page now: browser_read again` : 'That control does not take text');
@@ -253,6 +341,8 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
 
   async function press(job, key, { quiet = false } = {}) {
     if (!KEYS.has(key)) throw new Error(`key must be one of ${[...KEYS].join(', ')}`);
+    const why = pressRefusal(key, await run(job, INFO_SCRIPT(null)).catch(() => null));
+    if (why) throw refuse(job, why);
     const wc = wcOf(job);
     const code = key === 'Space' ? ' ' : key;
     wc.sendInputEvent({ type: 'keyDown', keyCode: code });
@@ -311,6 +401,7 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
    */
   async function download(job, url, dir, { name = '', maxBytes = MAX_DOWNLOAD_BYTES, quiet = false } = {}) {
     if (!hostAllowed(url, hostsFor(job.sites))) throw new Error(`${hostOf(url) || url} is not one of the sites this import may open`);
+    if (signsOut(url)) throw refuse(job, 'that address signs out');
     const response = await withTimeout(getSession().fetch(url, { redirect: 'follow' }), 180_000, 'The download');
     if (!response.ok) throw new Error(`${hostOf(url)} answered ${response.status}`);
     const length = Number(response.headers.get('content-length')) || 0;
@@ -361,4 +452,4 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
   };
 }
 
-module.exports = { createAgentBrowser, hostAllowed, hostsFor, fileNameOf, freePath, READ_SCRIPT, KEYS };
+module.exports = { createAgentBrowser, hostAllowed, hostsFor, fileNameOf, freePath, READ_SCRIPT, INFO_SCRIPT, KEYS, clickRefusal, typeRefusal, pressRefusal, signsOut };

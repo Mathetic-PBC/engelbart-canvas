@@ -34,7 +34,8 @@ const { readZip, safeName } = require('../overleaf/copy.cjs');
 const { mcpContent } = require('../sandbox/local-tools.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
 const { sanitizeName } = require('../store/home.cjs');
-const { ITEM_SOURCES, GROUP_CATEGORIES, LOCAL_PDFS, categoryOfApp } = require('../../shared/connect-sources.cjs');
+const { ITEM_SOURCES, GROUP_CATEGORIES, LOCAL_PDFS, APPS, categoryOfApp } = require('../../shared/connect-sources.cjs');
+const { hostAllowed, hostsFor } = require('./browser.cjs');
 
 const str = { type: 'string' };
 const num = { type: 'number' };
@@ -79,13 +80,12 @@ const IMPORT_TOOLS = [
   { name: 'import_web_chats', description: `Bring chats from web_chats into Engelbart's library, each as a Markdown file of its turns, named by its title. ids: up to ${MAX_WEB_CHATS_A_CALL} a call (what did not fit in the time is returned as left). A chat brought in before is skipped.`, inputSchema: schema({ app: str, ids: strs }, ['app', 'ids']) },
   { name: 'browser_open', description: 'Open a page in Engelbart\'s hidden browser (the person\'s sign-ins; only this job\'s apps\' sites). Returns its address and title.', inputSchema: schema({ url: str }, ['url']) },
   { name: 'browser_read', description: 'What the page shows now: its text (from offset, at most max_chars, default 8000) and its controls (links, buttons, fields, rows), each with a ref to click or type into, a link\'s href and an item\'s id (Drive file ids) when it has one.', inputSchema: schema({ offset: num, max_chars: num }) },
-  { name: 'browser_click', description: 'Click a control by its ref from browser_read.', inputSchema: schema({ ref: str }, ['ref']) },
-  { name: 'browser_type', description: 'Type text into a field or editor by its ref. replace: clear it first. submit: press Enter after. Never a password: call needs_you instead.', inputSchema: schema({ ref: str, text: str, submit: bool, replace: bool }, ['ref', 'text']) },
-  { name: 'browser_press', description: 'Press a key: Enter, Tab, Escape, Backspace, Delete, ArrowDown, ArrowUp, ArrowLeft, ArrowRight, PageDown, PageUp, Home, End, Space.', inputSchema: schema({ key: str }, ['key']) },
+  { name: 'browser_click', description: 'Click a control by its ref from browser_read: a link, a folder, a list item, a tab, or a button that opens or shows something. Read-only: a control that could change anything in the account (delete, share, send, rename, move, save, download, a switch or checkbox, a form) is refused.', inputSchema: schema({ ref: str }, ['ref']) },
+  { name: 'browser_type', description: 'Type words into a search box by its ref (only a search box: never a message, a document or a form). replace: clear it first. submit: press Enter after, to search. Never a password: call needs_you instead.', inputSchema: schema({ ref: str, text: str, submit: bool, replace: bool }, ['ref', 'text']) },
+  { name: 'browser_press', description: 'Press a key: Enter, Tab, Escape, Backspace, Delete, ArrowDown, ArrowUp, ArrowLeft, ArrowRight, PageDown, PageUp, Home, End, Space. Enter and Space only search or open (never send), Backspace and Delete only in a search box.', inputSchema: schema({ key: str }, ['key']) },
   { name: 'browser_scroll', description: 'Scroll the page (or the control ref) down or up by amount pixels (default 800), to load more of a list.', inputSchema: schema({ ref: str, direction: str, amount: num }) },
   { name: 'browser_wait', description: 'Wait for the page: until_text appears, until_gone disappears, or stable (its text stops changing, as an assistant\'s answer does when it is finished); seconds at most (default 5, up to 120).', inputSchema: schema({ seconds: num, until_text: str, until_gone: str, stable: bool }) },
   { name: 'browser_screenshot', description: 'A picture of the page as it is now, when its text is not enough.', inputSchema: schema({}) },
-  { name: 'browser_eval', description: 'Run a script in the page (an async function body: use await and return a value that is JSON). For what the page itself can ask its own site for (fetch with its sign-in). Never to type passwords or change anything in the account.', inputSchema: schema({ script: str }, ['script']) },
   { name: 'browser_download', description: 'Download a file with the person\'s sign-in (an export, a zip, a pdf) into Engelbart\'s imports. Returns its path, to unpack or bring in.', inputSchema: schema({ url: str, name: str }, ['url']) },
   { name: 'import_google_files', description: `Bring Google Drive files in by id, with the person's Google sign-in: items [{ id, kind, name }], kind doc (a Google Doc: a Markdown file with its pictures), sheet (a Markdown file with its first sheet as a table), slides (a Markdown file of its text), or file / pdf (a file in Drive: into the library). Up to ${MAX_GOOGLE_A_CALL} a call; a file brought in before is skipped.`, inputSchema: schema({ items: objs }, ['items']) },
   { name: 'gmail_accounts', description: `The Gmail accounts signed in to in Engelbart's browser: [{ n, address }], n being the account's place in that browser's sign-in order (never assume 0). Says when the person must sign in.`, inputSchema: schema({}) },
@@ -109,7 +109,7 @@ const IMPORT_TOOLS = [
 ];
 
 // What each kind of agent may call: a survey looks, a recall asks and saves its answer, an import brings things in.
-const LOOK = ['folder_overview', 'list_note_files', 'list_pdfs', 'list_chats', 'read_chat', 'web_chats', 'web_chat_read', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'browser_eval', 'overleaf_projects', 'gmail_accounts', 'gmail_search', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
+const LOOK = ['folder_overview', 'list_note_files', 'list_pdfs', 'list_chats', 'read_chat', 'web_chats', 'web_chat_read', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'overleaf_projects', 'gmail_accounts', 'gmail_search', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
 const TOOLS_FOR = Object.freeze({
   survey: LOOK,
   recall: ['browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'needs_you', 'wait_for_you', 'save_memory'],
@@ -125,8 +125,43 @@ const TOOLS_FOR = Object.freeze({
 });
 const WRITING = new Set(['import_note_files', 'import_pdfs', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_gmail_threads', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
 
-/** The tool definitions an agent of `kind` is served. */
-const toolsFor = (kind) => { const names = new Set(TOOLS_FOR[kind] || TOOLS_FOR.import); return IMPORT_TOOLS.filter((tool) => names.has(tool.name)); };
+// Engelbart's browser, as an agent drives it: opens, reads, scrolls and searches, never changes anything (./browser.cjs
+// clickRefusal, typeRefusal, pressRefusal).
+const BROWSING = Object.freeze(['browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'browser_download']);
+// The web apps Engelbart reads with fixed readers of its own (From Amitav, 2026-10-15: AI chats "through tools restricted
+// to … conversation IDs, without receiving browser clicks, typing, arbitrary JavaScript or browser plugins … when they
+// break, the import should stop rather than fall back to unrestricted browsing"; "Overleaf … should follow the same
+// fixed-reader approach"): a job of only these gets none of the browser tools, and those tools never open their sites.
+const FIXED_READER_APPS = Object.freeze(new Set(['ChatGPT', 'Claude', 'Overleaf', 'Gmail']));
+
+/** The web apps of `apps` an agent may browse: reached on the web, and not read by a fixed reader. */
+const browsedApps = (apps) => (apps || []).filter((app) => APPS[app] && APPS[app].reach === 'web' && !FIXED_READER_APPS.has(app));
+
+// The sites an agent browses for an app, where its window may open more (a Google sign-in is all of google.com): Google
+// Drive's are Drive and its documents, never Gmail's or the Google account's pages. A survey lists what is there and
+// reads nothing yet (From Amitav, 2026-10-15: "permission to list candidate files versus permission to read their
+// contents"), so a survey of Google Drive stays on Drive's lists and never opens a document.
+const BROWSE_SITES = Object.freeze({ 'Google Docs': ['drive.google.com', 'docs.google.com'], 'Google Meet': ['drive.google.com', 'docs.google.com'], Gemini: ['gemini.google.com'] });
+const SURVEY_SITES = Object.freeze({ 'Google Docs': ['drive.google.com'], 'Google Meet': ['drive.google.com'] });
+
+/** The sites an agent of `kind` may browse for `apps` (and `extraSites`), the sign-in pages aside. */
+function browseSitesFor(kind, apps, extraSites = []) {
+  const sites = browsedApps(apps).flatMap((app) => (kind === 'survey' && SURVEY_SITES[app]) || BROWSE_SITES[app] || APPS[app].sites || []);
+  return [...new Set([...sites, ...extraSites])];
+}
+
+/**
+ * The tools one job's agent gets (2026-10-15): its kind's, without the browser's when it has no browser (`page` false) or
+ * nothing it covers is browsed (`apps`, and `extraSites` for tools Engelbart has no import of its own for).
+ */
+function toolNamesFor(kind, { apps = [], extraSites = [], page = true } = {}) {
+  const names = TOOLS_FOR[kind] || TOOLS_FOR.import;
+  const browses = page && (browsedApps(apps).length > 0 || extraSites.length > 0);
+  return names.filter((name) => browses || !BROWSING.includes(name));
+}
+
+/** The tool definitions an agent of `kind` is served; `only` the names of them its job gets, when given. */
+const toolsFor = (kind, only = null) => { const names = new Set(TOOLS_FOR[kind] || TOOLS_FOR.import); return IMPORT_TOOLS.filter((tool) => names.has(tool.name) && (!only || only.includes(tool.name))); };
 
 /** Arguments as a tool's schema says, or an error. */
 function validateImportTool(name, args) {
@@ -233,13 +268,17 @@ const gmailSignedOut = () => Object.assign(new Error('Not signed in to Google in
  * none; `needs` { ask({ kind, reason }), wait() }; `recall(app, text)` keeps an assistant's answer; `appleNotes`
  * (./apple-notes.cjs); `log(text)` the action log. → call(name, args)
  */
-function createImportTools({ session, context, added = () => {}, kept = () => {}, zotero = null, github = null, deps = {}, env = process.env, kind = 'import', page = null, needs = null, recall = null, asked = () => {}, question = '', appleNotes = null, log = () => {} }) {
+function createImportTools({ session, context, added = () => {}, kept = () => {}, zotero = null, github = null, deps = {}, env = process.env, kind = 'import', page = null, needs = null, recall = null, asked = () => {}, question = '', appleNotes = null, log = () => {}, only = null }) {
   const library = require('../store/library.cjs');
   const mirror = require('../zotero/mirror.cjs');
   const imported = createImported(session.dataRoot);
   const index = notes.createIndex();
   const homeDir = session.homeDir;
-  const allowed = new Set(TOOLS_FOR[kind] || TOOLS_FOR.import);
+  const allowed = new Set((TOOLS_FOR[kind] || TOOLS_FOR.import).filter((name) => !only || only.includes(name)));
+  // Where the browser tools may go (2026-10-15): the sites of the apps this job browses (session.browseSites, with the
+  // sign-in pages they send people through), never a fixed reader's (FIXED_READER_APPS) nor, in a survey of Google
+  // Drive, a document's own page: a survey lists, the import reads what the person approved.
+  const browseHosts = Array.isArray(session.browseSites) ? hostsFor(session.browseSites) : null;
   const downloads = (part) => path.join(session.downloads || path.join(session.dir, 'downloads'), part);
   // The period (2026-10-10): the listing tools use the session's when `days` is left out, and cut a longer one down to it;
   // a shorter one is kept. import_pdfs by path is not held to it, so an older paper the person agreed to still comes in.
@@ -274,6 +313,13 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   const browser = () => {
     if (!page) throw new Error('Engelbart\'s browser is not available to this agent. Say so in your reply.');
     return page;
+  };
+  /** The browser for an agent's own step: refused on (or to) a page outside the sites this job browses. */
+  const browsing = (url = null) => {
+    const pageNow = browser();
+    const at = url || pageNow.url();
+    if (browseHosts && at && at !== 'about:blank' && !hostAllowed(at, browseHosts)) throw new Error(`${hostOf(at) || 'That page'} is not one this agent may browse${url ? '' : ' (open one of its sites first)'}: ${hostOf(at) && Object.keys(APPS).some((app) => FIXED_READER_APPS.has(app) && hostAllowed(at, APPS[app].sites || [])) ? 'that app is read only with its own tools' : 'only its own sites'}.`);
+    return pageNow;
   };
 
   // What a row an import brings in knows about itself (Library Phase B, 2026-10-11): which app it is from — `app` when the
@@ -500,17 +546,16 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       if (count) log(`Brought in ${count} ${app} chat${count === 1 ? '' : 's'}`);
       return { added: count, skipped: skipped.slice(0, 30), skippedCount: skipped.length, ...(left.length ? { left } : {}) };
     },
-    browser_open: ({ url }) => browser().open(url),
-    browser_read: ({ offset = 0, max_chars: maxChars = 8000 }) => browser().read({ offset, maxChars }),
-    browser_click: ({ ref }) => browser().click(ref),
-    browser_type: ({ ref, text, submit = false, replace = false }) => browser().type(ref, text, { submit, replace }),
-    browser_press: ({ key }) => browser().press(key),
-    browser_scroll: ({ ref = '', direction = 'down', amount = 800 }) => browser().scroll({ ref, direction, amount }),
-    browser_wait: ({ seconds = 5, until_text: untilText = '', until_gone: untilGone = '', stable = false }) => browser().wait({ seconds, untilText, untilGone, stable }),
-    browser_screenshot: async () => { const shot = await browser().screenshot(); return mcpContent([{ type: 'image', data: shot.data, mimeType: shot.mimeType }]); },
-    browser_eval: ({ script }) => browser().evaluate(script),
+    browser_open: ({ url }) => browsing(url).open(url),
+    browser_read: ({ offset = 0, max_chars: maxChars = 8000 }) => browsing().read({ offset, maxChars }),
+    browser_click: ({ ref }) => browsing().click(ref),
+    browser_type: ({ ref, text, submit = false, replace = false }) => browsing().type(ref, text, { submit, replace }),
+    browser_press: ({ key }) => browsing().press(key),
+    browser_scroll: ({ ref = '', direction = 'down', amount = 800 }) => browsing().scroll({ ref, direction, amount }),
+    browser_wait: ({ seconds = 5, until_text: untilText = '', until_gone: untilGone = '', stable = false }) => browsing().wait({ seconds, untilText, untilGone, stable }),
+    browser_screenshot: async () => { const shot = await browsing().screenshot(); return mcpContent([{ type: 'image', data: shot.data, mimeType: shot.mimeType }]); },
     browser_download: async ({ url, name = '' }) => {
-      const out = await browser().download(url, downloads('files'), { name });
+      const out = await browsing(url).download(url, downloads('files'), { name });
       return { path: out.path, bytes: out.bytes, type: out.type };
     },
     import_google_files: async ({ items }) => {
@@ -873,4 +918,4 @@ function findMainTex(folder) {
   return ordered.find((file) => { try { return /\\documentclass/.test(fs.readFileSync(file, 'utf8').slice(0, 20000)); } catch { return false; } }) || null;
 }
 
-module.exports = { IMPORT_TOOLS, TOOLS_FOR, toolsFor, CHAT_APPS, NEEDS_KINDS, validateImportTool, createImported, createImportTools, chatNote, googleMarkdown, csvTable };
+module.exports = { IMPORT_TOOLS, TOOLS_FOR, BROWSING, FIXED_READER_APPS, toolsFor, toolNamesFor, browsedApps, browseSitesFor, CHAT_APPS, NEEDS_KINDS, validateImportTool, createImported, createImportTools, chatNote, googleMarkdown, csvTable };

@@ -11,7 +11,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const BROWSER = `Engelbart's browser (browser_open, browser_read, browser_click, browser_type, browser_press, browser_scroll, browser_wait, browser_screenshot, browser_eval, browser_download) is a real Chromium window kept hidden, with the sign-ins the person made in Engelbart. It opens only this app's sites. browser_read lists what is on the page with a ref for each control (use the ref to click or type) and the page's text; browser_screenshot shows it when the text is not enough.`;
+const BROWSER = `Engelbart's browser (browser_open, browser_read, browser_click, browser_type, browser_press, browser_scroll, browser_wait, browser_screenshot, browser_download) is a real Chromium window kept hidden, with the sign-ins the person made in Engelbart. It opens only this app's sites, and it only reads: click links, folders, list items, tabs and buttons that open or show something; type only into the app's search box. Anything that could change the account is refused. browser_read lists what is on the page with a ref for each control (use the ref to click or type) and the page's text; browser_screenshot shows it when the text is not enough.`;
 
 const SIGN_IN = 'If the page asks to sign in (a login form, "Log in" button, a redirect to an accounts page), call needs_you with kind "signin" and wait: never type a password yourself. After it returns done, reload the start page and go on.';
 
@@ -22,8 +22,7 @@ const SKILLS = {
 - Leave out by default: the daily-notes folder, folders named Personal, Journal, Private, Templates, Archive, .trash, and anything the person said to leave out.`,
 
   Notion: `# Notion
-- Prefer Notion's own tools (the MCP server "notion": search, fetch a page). Search for the pages and databases the plan names (or the person's research workspace), fetch each page, and add it with add_note (title = the page's title, markdown = its content, source = the page's link).
-- Without those tools, use Engelbart's browser at https://www.notion.so/: the sidebar lists the workspace's pages; open each one the plan wants, browser_read its text, add_note it. ${SIGN_IN}
+- Notion is reached only through its own reading tools, never a browser: Notion's tools (the MCP server "notion": notion-search, notion-fetch). Search for the pages and databases the plan names (or the person's research workspace), fetch each page, and add it with add_note (title = the page's title, markdown = its content, source = the page's link). Without those tools, bring nothing in and say Notion is not connected.
 - Bring in pages, not every database row: a database becomes one note listing its rows unless the plan says otherwise.`,
 
   'Apple Notes': `# Apple Notes
@@ -57,7 +56,7 @@ const SKILLS = {
 
   Granola: `# Granola
 - Granola keeps its notes encrypted on this Mac and has no web app, so it is reached only through its own tools: the Granola MCP server (usually named "granola"), signed in either through Engelbart or through the person's own Claude Code or Codex, where they are signed in already. Its tools list or search meetings, get a meeting's notes and get its transcript. Use them; never ask the person to export or download anything.
-- List the meetings in the plan's time range; for each one the plan wants, get its notes and, if the plan asks for transcripts, its transcript; add_note one note per meeting: title = the meeting's title and date, markdown = the notes (then the transcript under a "Transcript" heading), source = "granola:<meeting id>".
+- Use only its tools that read (listing meetings and folders, getting a meeting's notes or transcript); never switch the workspace or sign out. List the meetings in the plan's time range; for each one the plan wants, get its notes and, if the plan asks for transcripts, its transcript; add_note one note per meeting: title = the meeting's title and date, markdown = the notes (then the transcript under a "Transcript" heading), source = "granola:<meeting id>".
 - Only if there are no Granola tools at all, or they say the sign-in expired, call needs_you with kind "connector" and reason "Connect Granola".
 - Leave out by default: 1:1s about hiring or personal matters, standups, and meetings the person said to skip.`,
 
@@ -71,13 +70,12 @@ const SKILLS = {
   ChatGPT: `# ChatGPT
 - web_chats lists the person's ChatGPT conversations (id, title, date, project) straight from their signed-in account, with days, query and limit; web_chat_read reads one; import_web_chats brings chats in by id, each as a note of its turns. These work through ChatGPT's own page in Engelbart's browser, so nothing needs exporting.
 - To bring chats in by topic: web_chats, judge each from its title (web_chat_read when the title is not enough), then import_web_chats with the ids that match. Projects: the project field names the ChatGPT project a chat is in.
-- If web_chats says the person is not signed in, call needs_you with kind "signin". If it fails another way (ChatGPT changed its page), fall back to the sidebar in the browser: browser_open https://chatgpt.com/, browser_read lists the chats; open each and add_note its text.
-- What ChatGPT remembers (Settings → Personalization → Memory) is asked for by the memory step, not here.`,
+- If web_chats says the person is not signed in, call needs_you with kind "signin". If it fails another way (ChatGPT changed its page), stop: bring nothing more in and say that ChatGPT's chats could not be read. There is no other way in: never open ChatGPT in a browser.`,
 
   Claude: `# Claude (claude.ai)
 - web_chats lists the person's Claude conversations (id, title, date, project) straight from their signed-in account at claude.ai, with days, query, project and limit; web_chat_read reads one; import_web_chats brings chats in by id, each as a note of its turns.
 - Projects: the project field names the Claude project a chat belongs to; to import one project, web_chats with project set to its name.
-- If web_chats says the person is not signed in, call needs_you with kind "signin". If it fails another way, fall back to the browser: browser_open https://claude.ai/recents, read the list, open each chat and add_note its text.`,
+- If web_chats says the person is not signed in, call needs_you with kind "signin". If it fails another way, stop: bring nothing more in and say that Claude's chats could not be read. There is no other way in: never open claude.ai in a browser.`,
 
   'Claude Code': `# Claude Code
 - Sessions are on this Mac (~/.claude/projects). list_chats with app "Claude Code" (days, project = a folder's name, query), read_chat to judge one, import_chats by id. Runs a program started are left out unless the plan says otherwise.`,
@@ -111,9 +109,8 @@ const SKILLS = {
 - Each PDF stays where it is: the library points at it, and one that reads as a research paper is tagged paper.`,
 
   Overleaf: `# Overleaf
-- ${BROWSER}
-- overleaf_projects lists the person's projects (id, name, last updated, owner) from https://www.overleaf.com/project in Engelbart's browser; import_overleaf_projects brings projects in by id: each is downloaded as its source zip with the person's sign-in, unpacked into Engelbart, and kept in the library as a folder, its main .tex file and compiled pdf too when there is one.
-- ${SIGN_IN}
+- overleaf_projects lists the person's projects (id, name, last updated, owner) from their signed-in Overleaf account; import_overleaf_projects brings projects in by id: each is downloaded as its source zip with the person's sign-in, unpacked into Engelbart, and kept in the library as a folder, its main .tex file and compiled pdf too when there is one.
+- If overleaf_projects says the person is not signed in, call needs_you with kind "signin". If it fails another way, stop and say so: there is no other way in.
 - Leave out by default: archived and trashed projects, and templates the person never edited.`,
 
   GitHub: `# GitHub
