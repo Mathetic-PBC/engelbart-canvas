@@ -231,8 +231,20 @@ async function readSignIn(runner, name, file, where = {}) {
   if (out.marked === false) return { signedIn: null, account: null };
   const read = AUTH[name].read(out.stdout);
   if (read.signedIn !== true) return { ...read, account: null };
+  // Codex signed in with its sign-in in the keychain (2026-10-15: a fresh `codex login` on a new account keeps it there,
+  // no ~/.codex/auth.json): Engelbart's agents run Codex in homes of their own that read that file, so every one of them
+  // failed. Counted as not signed in, so Connect signs in again with the file (./sign-in.cjs).
+  if (name === 'codex' && !codexAuthFile(where)) return { signedIn: false, account: null, error: 'Codex keeps its sign-in in the keychain, where Engelbart’s agents can’t use it. Connect it again.' };
   if (!read.account && AUTH[name].account) return { ...read, account: AUTH[name].account(where) };
   return read;
+}
+
+/** Whether Codex's sign-in file is there, with a ChatGPT sign-in in it. */
+function codexAuthFile({ env = process.env, home = os.homedir() } = {}) {
+  try {
+    const auth = JSON.parse(fs.readFileSync(path.join(env.CODEX_HOME || path.join(home, '.codex'), 'auth.json'), 'utf8'));
+    return !!(auth && auth.tokens);
+  } catch { return false; }
 }
 
 /** Whether the person turned the CLI's own updater off: then Engelbart asks before updating it too (design D11). */

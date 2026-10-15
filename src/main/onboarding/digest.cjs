@@ -3,6 +3,7 @@
 // The project digest (moved out of ./discover.cjs on 2026-10-13 so the scanner process can run it without loading
 // Connect's session): what the person worked on lately, read from this Mac without a model.
 
+const fs = require('node:fs');
 const path = require('node:path');
 const readers = require('../connect/readers.cjs');
 const scan = require('../connect/scan.cjs');
@@ -10,10 +11,52 @@ const scan = require('../connect/scan.cjs');
 const DIGEST_DAYS = 120;
 const dayOf = (iso) => String(iso || '').slice(0, 10);
 
+// Never looked in for repositories: what macOS guards (asked about only once the person connects it), apps and media.
+const REPO_SKIP = new Set(['Library', 'Applications', 'Pictures', 'Movies', 'Music', 'Public', 'node_modules']);
+const GUARDED = new Set(['Desktop', 'Documents', 'Downloads']);
+
 /**
- * What the person worked on lately, read from this Mac without a model → { folders, vaults, zotero, projects }:
+ * The git repositories in the home folder worked on lately (2026-10-15: a new account with no Claude Code or Codex sessions
+ * yet had nothing to name, though ~/testing and ~/personal-website had been committed to two weeks before): up to `depth`
+ * folders down, a repository not looked inside, a folder macOS guards only when `access` says it may be read. Each one's
+ * folder, the day its history last changed (.git's logs/HEAD, index or HEAD) and its README's first heading.
+ */
+function recentRepos(homeDir, { days = DIGEST_DAYS, access = null, max = 15, depth = 3, now = Date.now() } = {}) {
+  const since = now - days * 86_400_000;
+  const found = [];
+  let level = [homeDir];
+  for (let n = 0; n < depth && level.length; n += 1) {
+    const next = [];
+    for (const dir of level) {
+      let entries = [];
+      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
+      for (const entry of entries) {
+        if (!entry.isDirectory() || entry.name.startsWith('.') || REPO_SKIP.has(entry.name)) continue;
+        const full = path.join(dir, entry.name);
+        if (dir === homeDir && GUARDED.has(entry.name) && !(access && access.readable(full))) continue;
+        if (access && !access.readable(full)) continue;
+        let stamp = 0;
+        for (const part of [['logs', 'HEAD'], ['index'], ['HEAD']]) { try { stamp = Math.max(stamp, fs.statSync(path.join(full, '.git', ...part)).mtimeMs); } catch { /* none */ } }
+        if (stamp) { if (stamp >= since) found.push({ full, stamp }); continue; }
+        next.push(full);
+      }
+    }
+    level = next.slice(0, 400);
+  }
+  return found.sort((a, b) => b.stamp - a.stamp).slice(0, max).map(({ full, stamp }) => {
+    let readme = '';
+    for (const name of ['README.md', 'readme.md', 'README']) {
+      try { readme = (fs.readFileSync(path.join(full, name), 'utf8').split(/\r?\n/).find((line) => line.trim()) || '').replace(/^#+\s*/, '').trim().slice(0, 120); break; } catch { /* none */ }
+    }
+    return { shown: readers.shownPath(homeDir, full), path: full, name: path.basename(full), last: new Date(stamp).toISOString().slice(0, 10), ...(readme ? { readme } : {}) };
+  });
+}
+
+/**
+ * What the person worked on lately, read from this Mac without a model → { folders, repos, vaults, zotero, projects }:
  *   folders  the folders their Claude Code and Codex sessions ran in, the busiest and most recent first, each with how
  *            many sessions, the last day, the repository it is in, and the newest sessions' titles
+ *   repos    the git repositories in their home folder committed to or changed lately (recentRepos)
  *   vaults   each Obsidian vault's notes changed lately (title and folder)
  *   zotero   the collections of their Zotero library (Engelbart's copy), when signed in
  *   projects the Engelbart projects they have already (so a project is not offered twice)
@@ -56,7 +99,12 @@ function projectDigest({ homeDir, env = process.env, access = null, zoteroRoot =
   }
   let zotero = [];
   if (zoteroRoot) { try { zotero = readers.zoteroCollections(zoteroRoot).collections.slice(0, 40).map((one) => ({ name: one.path, items: one.items })); } catch { zotero = []; } }
-  return { folders, vaults, zotero, projects: existing.slice(0, 30) };
+  let recent = [];
+  try { recent = recentRepos(homeDir, { days, access }).filter((repo) => !folders.some((folder) => folder.repository === repo.shown || folder.shown === repo.shown)); } catch { recent = []; }
+  return { folders, repos: recent, vaults, zotero, projects: existing.slice(0, 30) };
 }
 
-module.exports = { projectDigest, DIGEST_DAYS };
+/** Whether a digest holds anything to name projects from (the Engelbart projects they have already aside). */
+const digestEmpty = (digest) => !digest || !((digest.folders || []).length || (digest.repos || []).length || (digest.vaults || []).some((vault) => vault.notes && vault.notes.length) || (digest.zotero || []).length);
+
+module.exports = { projectDigest, recentRepos, digestEmpty, DIGEST_DAYS };

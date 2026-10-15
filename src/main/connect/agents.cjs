@@ -135,7 +135,7 @@ function connectorTools(connector, kind) {
  */
 function writeImportConfig(home, server, connectors = [], kind = 'import') {
   const toml = (value) => (Array.isArray(value) ? `[${value.map(toml).join(', ')}]` : JSON.stringify(String(value)));
-  const lines = ['# Written by Engelbart (src/main/connect/agents.cjs). Replaced on every run.', '', '[features]', 'computer_use = false', 'browser_use = false', 'browser_use_external = false', '',
+  const lines = ['# Written by Engelbart (src/main/connect/agents.cjs). Replaced on every run.', 'cli_auth_credentials_store = "file"', '', '[features]', 'computer_use = false', 'browser_use = false', 'browser_use_external = false', '',
     '[mcp_servers.engelbart]', `command = ${toml(server.command)}`, `args = ${toml(server.args)}`,
     `env = { ${Object.entries(server.env || {}).map(([key, value]) => `${key} = ${toml(value)}`).join(', ')} }`, 'startup_timeout_sec = 30', 'tool_timeout_sec = 240', 'default_tools_approval_mode = "approve"'];
   for (const connector of connectors) {
@@ -151,6 +151,22 @@ function writeImportConfig(home, server, connectors = [], kind = 'import') {
   let current = null;
   try { current = fs.readFileSync(file, 'utf8'); } catch { current = null; }
   if (current !== text) fs.writeFileSync(file, text, { mode: 0o600 });
+}
+
+/**
+ * The model an agent's Codex runs (2026-10-15: on an account whose ChatGPT plan has no Sol, every Codex agent was turned
+ * away, recent projects and imports alike): the pinned `model` when the person's Codex lists it (its models_cache.json in
+ * `home`), else the first it lists of the same family (-sol, -luna…), else the first it lists. Nothing listed: `model`.
+ */
+function codexModel(model, home) {
+  let listed = [];
+  try {
+    const cache = JSON.parse(fs.readFileSync(path.join(home, 'models_cache.json'), 'utf8'));
+    listed = (Array.isArray(cache && cache.models) ? cache.models : []).filter((one) => one && one.visibility === 'list' && typeof one.slug === 'string' && /^[\w.-]{1,80}$/.test(one.slug)).map((one) => one.slug);
+  } catch { return model; }
+  if (!listed.length || listed.includes(model)) return model;
+  const family = (/-([a-z]+)$/.exec(String(model)) || [])[1];
+  return (family && listed.find((slug) => slug.endsWith(`-${family}`))) || listed[0];
 }
 
 /** Claude Code's --mcp-config for a bridged turn: Engelbart's tools and the connectors, each token in its header. */
@@ -419,7 +435,7 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     const shared = `--skip-git-repo-check -m "$ENGELBART_CONNECT_MODEL" -c 'model_reasoning_effort="${effort}"' -c 'sandbox_mode="read-only"' -c 'tools.web_search=${web}' -c project_doc_max_bytes=0 --json -o "$ENGELBART_CONNECT_OUTPUT" - < "$ENGELBART_CONNECT_INPUT"`;
     const command = session ? `exec ${program('codex')} exec resume "$ENGELBART_CONNECT_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${shared}`;
     const tokens = Object.fromEntries((bridge ? connectors : []).filter((connector) => SERVER_NAME_RE.test(connector.name) && !connector.own && connector.token).map((connector) => [tokenEnv(connector.name), connector.token]));
-    const env = childEnvironment({ ...programEnv('codex'), ...tokens, CODEX_HOME: own, ENGELBART_CONNECT_SESSION: session || '', ENGELBART_CONNECT_MODEL: model, ENGELBART_CONNECT_OUTPUT: outFile, ENGELBART_CONNECT_INPUT: inputFile });
+    const env = childEnvironment({ ...programEnv('codex'), ...tokens, CODEX_HOME: own, ENGELBART_CONNECT_SESSION: session || '', ENGELBART_CONNECT_MODEL: codexModel(model, environment.CODEX_HOME || path.join(os.homedir(), '.codex')), ENGELBART_CONNECT_OUTPUT: outFile, ENGELBART_CONNECT_INPUT: inputFile });
     try {
       const short = pathLabeller(dirs);
       const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { const update = updateOf('openai', event, short); if (update) onUpdate(update); }, timeout);
@@ -529,7 +545,7 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     // --ephemeral: the run is not kept in the person's Codex history (their own CODEX_HOME), as Claude's above.
     const command = `exec ${program('codex')} exec --ephemeral --skip-git-repo-check --color never -m "$ENGELBART_CONNECT_MODEL" -c 'model_reasoning_effort="${effort}"' -c 'sandbox_mode="read-only"' ${CODEX_BROWSE_APPROVALS} -c project_doc_max_bytes=0 -c "developer_instructions=$ENGELBART_CONNECT_INSTRUCTIONS" ${off}${bridge ? ' -c "mcp_servers.engelbart=$ENGELBART_CONNECT_SERVER"' : ''} --disable apps${enable} --json -o "$ENGELBART_CONNECT_OUTPUT" - < "$ENGELBART_CONNECT_INPUT"`;
     const serverToml = bridge ? tomlValue({ command: node, args: [server, connection], env: { ELECTRON_RUN_AS_NODE: '1' }, startup_timeout_sec: 30, tool_timeout_sec: 240, default_tools_approval_mode: 'approve' }) : '';
-    const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: home, ENGELBART_CONNECT_MODEL: model, ENGELBART_CONNECT_OUTPUT: outFile, ENGELBART_CONNECT_INPUT: inputFile, ENGELBART_CONNECT_INSTRUCTIONS: tomlValue(system), ...(bridge ? { ENGELBART_CONNECT_SERVER: serverToml } : {}) });
+    const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: home, ENGELBART_CONNECT_MODEL: codexModel(model, home), ENGELBART_CONNECT_OUTPUT: outFile, ENGELBART_CONNECT_INPUT: inputFile, ENGELBART_CONNECT_INSTRUCTIONS: tomlValue(system), ...(bridge ? { ENGELBART_CONNECT_SERVER: serverToml } : {}) });
     onUpdate({ command: `codex exec -m ${model} -c model_reasoning_effort="${effort}" -c sandbox_mode="read-only" ${CODEX_BROWSE_APPROVALS.replace(/'/g, '')} -c developer_instructions=<the system prompt> ${off.replace(/'/g, '')}${bridge ? ' -c mcp_servers.engelbart=<Engelbart\'s import tools>' : ''} --disable apps${enable}` });
     try {
       const { stdout, out } = await inTerminal({ provider: 'openai', command, env, cwd, signal, timeout, onUpdate, dirs, steps: browse.steps });
@@ -581,4 +597,4 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
   return { turn };
 }
 
-module.exports = { createConnectAgents, writeImportConfig, claudeServers, claudeToolsFor, CONNECTOR_READS, connectorTools, importToolLabel, updateOf, browseUpdateOf, chromeToolLabel, replLabel, codexServersOff, codexPluginsOff, tomlValue, ConnectError, IMPORT_SERVER, TIMEOUTS, INTERVIEW_TIMEOUT_MS, IMPORT_TIMEOUT_MS, CHROME_REFUSED, CODEX_KEPT_SERVERS, CODEX_BROWSE_APPROVALS, RETRY_WAITS_MS, transientFailure };
+module.exports = { createConnectAgents, writeImportConfig, codexModel, claudeServers, claudeToolsFor, CONNECTOR_READS, connectorTools, importToolLabel, updateOf, browseUpdateOf, chromeToolLabel, replLabel, codexServersOff, codexPluginsOff, tomlValue, ConnectError, IMPORT_SERVER, TIMEOUTS, INTERVIEW_TIMEOUT_MS, IMPORT_TIMEOUT_MS, CHROME_REFUSED, CODEX_KEPT_SERVERS, CODEX_BROWSE_APPROVALS, RETRY_WAITS_MS, transientFailure };

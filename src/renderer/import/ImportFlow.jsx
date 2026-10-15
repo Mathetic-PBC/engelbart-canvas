@@ -640,7 +640,9 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     const named = connect === 'openai' ? 'Codex' : connect === 'anthropic' ? 'Claude Code' : '';
     // Its CLI says it is signed in, yet it turned the agent away (no subscription, say): connecting is signing in again.
     const refused = projectStatus === 'failed' && !!connect && ((providers && providers.providers) || []).some((one) => one.id === connect && one.installed && one.signedIn);
-    const text = projectStatus === 'done' ? 'Recent projects found'
+    // Nothing on this Mac to name projects from (2026-10-15: a new account): said plainly, not as a failure to try again.
+    const text = projectStatus === 'done' && found.empty ? 'No recent projects found. Add your own below.'
+      : projectStatus === 'done' ? 'Recent projects found'
       : projectStatus === 'running' ? 'Finding recent projects in the background…'
         : projectStatus === 'failed' ? (connect ? `Couldn’t reach ${named}.` : 'Couldn’t find recent projects. Add your own below.')
           : projectStatus === 'waiting-provider' ? `Waiting for ${named || 'your AI provider'}…`

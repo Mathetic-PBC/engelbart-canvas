@@ -205,6 +205,18 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
       .sort((a, b) => (b.id === defaultId) - (a.id === defaultId));
   }
 
+  /**
+   * Where a sign-in page can open when no browser can be read yet (2026-10-15: Safari chosen, Chrome installed but never
+   * opened on a new account): the installed Chromium browsers, profiles or none; signed in there, `readable` lists it.
+   */
+  function openable() {
+    const now = readable();
+    if (now.length) return now;
+    let found = [];
+    try { found = (cookieImport && typeof cookieImport.installedChromium === 'function' && cookieImport.installedChromium()) || []; } catch { found = []; }
+    return found;
+  }
+
   /** The sign-in cookie a profile holds for the app → { stamp } | null (names only: no Keychain). */
   function holding(app, source, profile) {
     const [domain, pattern] = SIGN_IN_COOKIES[app];
@@ -355,7 +367,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   /** The browser `app`'s sign-in page would open in (signIn), by name, or '' when none can be read. */
   function opensIn(app) {
     if (!copies(app)) return '';
-    const target = opener(readable());
+    const target = opener(openable());
     return target ? target.name : '';
   }
 
@@ -430,10 +442,11 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     if (held.live) return { status: 'signed-in', browser: '', opened: false, ...(held.unchecked ? { unchecked: true } : {}) };
     if (!copies(app) || !cookieImport) return { status: 'unsupported', browser: browserName() };
     const sources = readable();
-    if (!sources.length) return { status: 'no-browser' };
+    const targets = sources.length ? sources : openable(); // none read yet: one to sign in in, read once it is signed in
+    if (!targets.length) return { status: 'no-browser' };
     const denied = deniedBefore || new Set();
     const seen = new Map();
-    const first = await bringOver(app, sources, denied, seen);
+    const first = sources.length ? await bringOver(app, sources, denied, seen) : {};
     if (first.browser) return { status: 'signed-in', ...from(first), opened: false };
     if (first.refused) return { status: 'denied', browser: first.refused, browserId: first.refusedId };
     if (signal && signal.aborted) return { status: 'cancelled' };
@@ -442,7 +455,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     // page"). Said instead, for the run to read it some other way.
     if (first.dead && heldThere(app)) { const holder = opener(sources); return { status: 'held-elsewhere', browser: holder ? holder.name : browserName() }; }
     const url = SIGN_IN_PAGES[app] || appOf(app).start;
-    const target = await openFirst(sources, url);
+    const target = await openFirst(targets, url);
     if (!target) return { status: 'no-browser' };
     onOpened(target.name);
     const key = pickKey(app);
@@ -457,7 +470,8 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
         if (signal && signal.aborted) return { status: 'cancelled' };
         // Signed in through Engelbart's window meanwhile ("Sign in here instead"): that sign-in stands.
         if (isHere(app)) return (await signedIn(app)) ? { status: 'signed-in', browser: '', opened: true } : { status: 'cancelled' };
-        const found = await bringOver(app, sources, denied, seen);
+        const now_ = sources.length ? sources : readable(); // a browser opened for the first time has a profile now
+        const found = now_.length ? await bringOver(app, now_, denied, seen) : {};
         if (found.browser) return { status: 'signed-in', ...from(found), opened: true };
         if (found.refused) return { status: 'denied', browser: found.refused, browserId: found.refusedId };
       }

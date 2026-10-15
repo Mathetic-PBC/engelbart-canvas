@@ -18,7 +18,8 @@ const { shellSilent } = require('./detect.cjs');
 
 const COMMANDS = Object.freeze({
   claude: 'exec "$ENGELBART_TOOL" auth login --claudeai',
-  codex: 'exec "$ENGELBART_TOOL" login',
+  // its sign-in kept in ~/.codex/auth.json, never only the keychain: Engelbart's agents read that file (./detect.cjs)
+  codex: 'exec "$ENGELBART_TOOL" login -c \'cli_auth_credentials_store="file"\'',
 });
 const SIGN_OUT_COMMANDS = Object.freeze({
   claude: 'exec "$ENGELBART_TOOL" auth logout 2>&1',

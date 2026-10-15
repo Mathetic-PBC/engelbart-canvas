@@ -573,6 +573,20 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     return out;
   }
 
+  /**
+   * The installed Chromium browsers, with their profiles or none yet (2026-10-15: a new account with Chrome installed but
+   * never opened has no profile, so no browser could be read and a web app's sign-in could never be made). A sign-in page
+   * opened in one makes its first profile, which `sources` then lists.
+   */
+  function installedChromium() {
+    const out = [];
+    for (const browser of BY_ID.values()) {
+      if (browser.family !== 'chromium' || !browser.bundle || !has(browser)) continue;
+      out.push({ id: browser.id, name: browser.name, family: browser.family, bundle: browser.bundle, profiles: profilesFor(browser, supportDir).map((p) => ({ id: p.id, name: p.name })) });
+    }
+    return out;
+  }
+
   /** Whether the browser's app is installed (`installed`), or no check was given. */
   function has(browser) {
     if (typeof installed !== 'function') return true;
@@ -749,7 +763,7 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     return { browser: browser.id, profile: profile.name, imported, skipped, sessionOnly, checks };
   }
 
-  return { sources, domains, cookieNames, check, import: run, unlock, ready };
+  return { sources, installedChromium, domains, cookieNames, check, import: run, unlock, ready };
 }
 
 // `security` exits with the low byte of the Keychain's OSStatus (2026-10-06): 44 is errSecItemNotFound (-25300), no key of

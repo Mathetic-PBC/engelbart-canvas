@@ -441,7 +441,8 @@ async function climb({ steps, pinned, first, turn, session: resumed = null, onPr
  */
 function writeCodexConfig(home, servers) {
   const toml = (value) => (Array.isArray(value) ? `[${value.map(toml).join(', ')}]` : JSON.stringify(String(value)));
-  const lines = ['# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.'];
+  // the sign-in linked into this home (auth.json), never a keychain entry of another home's
+  const lines = ['# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.', 'cli_auth_credentials_store = "file"'];
   for (const [name, server] of Object.entries(servers)) {
     lines.push('', `[mcp_servers.${name}]`, `command = ${toml(server.command)}`, `args = ${toml(server.args)}`, `env = { ${Object.entries(server.env || {}).map(([key, value]) => `${key} = ${toml(value)}`).join(', ')} }`, 'startup_timeout_sec = 30', 'tool_timeout_sec = 90');
   }

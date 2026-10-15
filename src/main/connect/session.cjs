@@ -447,7 +447,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended, ...(job.route ? { route: job.route } : {}) });
   const chosenBrowser = () => { try { return webSignIn && webSignIn.browserName ? webSignIn.browserName() : ''; } catch { return ''; } };
-  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, jobIds: [...need.jobs], opened: need.opened, busy: need.busy, browser: need.browser || need.own || chosenBrowser(), error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}), ...(need.code ? { code: need.code } : {}) });
+  // The browser its sign-in opens in (2026-10-15: "Open Safari" on a card whose sign-in Safari can never give Engelbart).
+  const opensIn = (app) => { try { return (webSignIn && typeof webSignIn.opensIn === 'function' && webSignIn.opensIn(app)) || ''; } catch { return ''; } };
+  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, jobIds: [...need.jobs], opened: need.opened, busy: need.busy, browser: need.browser || need.own || (SIGNIN_KINDS.has(need.kind) && opensIn(need.app)) || chosenBrowser(), error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}), ...(need.code ? { code: need.code } : {}) });
   // What was left out of the run and why, in the person's words (2026-10-14: "when she finally hit later, nothing was
   // imported, so she was super confused"): the status's completion names each, with its reason.
   const publicLeftOut = (s) => [...(s.leftOut || new Map())].map(([app, why]) => ({ app, why }));

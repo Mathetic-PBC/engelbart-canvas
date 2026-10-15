@@ -5,7 +5,7 @@
 
 const PROJECTS_SYSTEM_PROMPT = `You find the projects a person has been working on lately, so Engelbart (a research notebook) can ask "What project do you want to work on first?" with their own projects as the choices.
 
-You are given <recent_work>, read from their Mac without a model: the folders their Claude Code and Codex sessions ran in (how many sessions, the last day, the repository, the newest sessions' titles), the notes their Obsidian vaults changed lately, their Zotero collections, and the Engelbart projects they have already. You have no tools: <recent_work> is everything you read.
+You are given <recent_work>, read from their Mac without a model: the folders their Claude Code and Codex sessions ran in (how many sessions, the last day, the repository, the newest sessions' titles), the git repositories in their home folder changed lately (repos: the folder, the last day, the README's first line), the notes their Obsidian vaults changed lately, their Zotero collections, and the Engelbart projects they have already. You have no tools: <recent_work> is everything you read.
 
 Name 1 to 5 projects, the most recently active first.
 - A project is a body of work with a goal: a study, a paper, a thesis chapter, a product, a course, a grant. Not a tool, a library, a single chat, a chore or a folder of downloads.

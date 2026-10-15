@@ -32,7 +32,7 @@ const { connectChoice } = require('../connect/session.cjs');
 const { APPS, SIGN_IN_COOKIES, shownName } = require('../../shared/connect-sources.cjs');
 const { CATALOG, GROUPS, LOCAL_FOLDERS, SITES, PROVIDER_IDS, browserById, readProjects, readTools } = require('../../shared/import-flow.cjs');
 const prompts = require('./prompts.cjs');
-const { projectDigest, DIGEST_DAYS } = require('./digest.cjs');
+const { projectDigest, digestEmpty, DIGEST_DAYS } = require('./digest.cjs');
 const { accessSpec } = require('../connect/offthread.cjs');
 const { needsProvider } = require('../connect/provider-failure.cjs');
 
@@ -230,7 +230,15 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
         ? await scanner.run('projectDigest', { ...args, access: accessSpec(access(ctx), ctx.dataRoot) }).catch(() => projectDigest({ ...args, env, access: access(ctx) }))
         : projectDigest({ ...args, env, access: access(ctx) });
       if (controller.signal.aborted) return;
-      say('discovery', `Looking for recent projects with ${chosen === 'openai' ? 'Codex' : 'Claude Code'}`, { folders: digest.folders.length, vaults: digest.vaults.length, zotero: digest.zotero.length });
+      say('discovery', `Looking for recent projects with ${chosen === 'openai' ? 'Codex' : 'Claude Code'}`, { folders: digest.folders.length, repos: (digest.repos || []).length, vaults: digest.vaults.length, zotero: digest.zotero.length });
+      // Nothing on this Mac to name projects from (a new account, 2026-10-15): no model asked, and not a failure: the
+      // person adds their own. Try again would only find nothing again.
+      if (digestEmpty(digest)) {
+        st.projects = { status: 'done', provider: chosen, projects: [], empty: true, started: st.projects.started, ended: now() };
+        if (st.controllers.projects === controller) st.controllers.projects = null;
+        changed(ctx.dataRoot);
+        return;
+      }
       const choice = connectChoice(chosen, (() => { try { return models(); } catch { return null; } })());
       const message = [
         `<recent_work note="Read on this Mac without a model, the last ${DIGEST_DAYS} days.">\n${JSON.stringify(digest, null, 1)}\n</recent_work>`,
@@ -241,7 +249,8 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
         const out = await agents.turn({ choice, kind: 'projects', system: prompts.PROJECTS_SYSTEM_PROMPT, message, session: null, dirs: [], signal: controller.signal, meta: { kind: 'projects', label: 'Recent projects', digest } });
         const read = readProjects(out.text);
         if (controller.signal.aborted) return;
-        st.projects = read ? { status: 'done', provider: chosen, projects: read.projects, started: st.projects.started, ended: now() } : { status: 'failed', provider: chosen, projects: [], error: 'The agent did not name any projects.', ended: now() };
+        // Named none (nothing it saw was a project): done with none, as an empty Mac is, not a failure to try again.
+        st.projects = read ? { status: 'done', provider: chosen, projects: read.projects, ...(read.projects.length ? {} : { empty: true }), started: st.projects.started, ended: now() } : { status: 'failed', provider: chosen, projects: [], error: 'The agent did not answer as asked.', ended: now() };
       } catch (error) {
         if (controller.signal.aborted) return;
         // What an earlier run found stays on screen (2026-10-14: a run again that failed emptied the list).
