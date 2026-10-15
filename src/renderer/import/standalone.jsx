@@ -5,9 +5,7 @@ import ImportStatus from './ImportStatus.jsx';
 import NeedPopup from './NeedPopup.jsx';
 import { IMPORT_CSS } from './import-css.js';
 import { CATALOG, BROWSERS } from '../../shared/import-flow.cjs';
-import diskHelperPage from '../../main/onboarding/disk-helper.html';
 import tracePage from '../../main/onboarding/trace.html';
-import { APP_ICON } from './logos.js';
 
 // The standalone page of Import your context as built (2026-10-13, the workspace: "output a similar HTML as this w same
 // like edit features and way to see popups and stuff but with the exact UI you implement"): the app's own ImportFlow and
@@ -52,14 +50,13 @@ function decide(list, remembered) {
 
 /** main, in this page: timers in place of agents, nothing read or sent. */
 function createMockApi(getConfig) {
-  const listeners = { discovery: new Set(), disk: new Set(), tools: new Set() };
+  const listeners = { discovery: new Set(), tools: new Set() };
   const emit = (kind, value) => listeners[kind].forEach((fn) => fn(value));
   let remembered = null;
   let flow = null;
   let disc = { projects: { status: 'idle' }, tools: { status: 'idle' } };
   let keychain = null;
   let browserChosen = null;
-  let diskGranted = getConfig().disk;
   let installed = { claude: SCENARIOS[getConfig().scenario][0].installed, codex: SCENARIOS[getConfig().scenario][1].installed };
   // Set up and signed in from the tools dialog: each with its subscription, so both done asks which (the workspace: "if
   // not authenticated, show the login then choose").
@@ -105,14 +102,9 @@ function createMockApi(getConfig) {
       return disc;
     },
     onDiscovery: (fn) => { listeners.discovery.add(fn); return () => listeners.discovery.delete(fn); },
-    diskAccess: async () => ({ platform: 'darwin', granted: diskGranted, grantedFresh: diskGranted, app: 'Engelbart', needsRelaunch: false }),
-    diskAccessOpen: async () => {
-      setTimeout(() => { diskGranted = true; emit('disk', { platform: 'darwin', granted: false, grantedFresh: true, app: 'Engelbart', needsRelaunch: true, done: true }); }, 2600);
-      return { platform: 'darwin', granted: false, grantedFresh: false, app: 'Engelbart', needsRelaunch: false };
-    },
-    diskAccessRelaunch: async () => { emit('disk', { platform: 'darwin', granted: true, grantedFresh: true, app: 'Engelbart', needsRelaunch: false, relaunched: true }); toast('Engelbart would quit and reopen here, on this step.'); return true; },
-    diskAccessStop: async () => true,
-    onDiskAccess: (fn) => { listeners.disk.add(fn); return () => listeners.disk.delete(fn); },
+    diskAccess: async () => ({ platform: 'darwin', granted: false }),
+    // The folders asked about before (the panel's "Folders asked before"): Allow Engelbart to organize your research is skipped.
+    foldersAsked: async () => (getConfig().disk ? { Desktop: 'allowed', Documents: 'allowed', Downloads: 'allowed' } : {}),
     foldersAsk: async (ids) => Object.fromEntries(ids.map((id) => [id, id === 'Downloads' ? 'denied' : 'allowed'])),
     notesPermission: async () => ({ allowed: true }),
     tools: async () => snapTools(),
@@ -159,7 +151,7 @@ const POPUPS = [
   ['intro', 'Import intro (screen)'], ['first-project', 'Which project to start with'], ['obsidian-picker', 'Choose from Obsidian'], ['scratch-confirm', 'Start confirmation'], ['project', 'New project'],
   ['provider-choice', 'Choose provider (both subscribed)'], ['tools-setup', 'Tools setup'], ['import-method', 'How to import'], ['agents-consent', 'Background agents'],
   ['keychain', 'Browser sign-ins'], ['keychain-browser', 'Browser picker'],
-  ['folders', 'Full Disk Access'], ['disk-wait', 'Waiting for Settings'], ['disk-helper', 'Toggle Setting (beside System Settings)'], ['disk-relaunch', 'Restarting'], ['folder-fallback', 'Deny Full Disk Access'], ['folder-results', 'Folder permissions'],
+  ['organize', 'Allow Engelbart to organize your research'],
   ['screen:roles', 'Roles'], ['screen:work', 'What are you working on'], ['screen:projects', 'Recent projects'], ['work-add-project', 'Add a project'],
   ['work-add-tool', 'Add a tool'], ['screen:picker', 'Tools (categories)'],
   ['browser-agents', 'Let agents use your browser'], ['browser-agents-confirm', 'Decline browser agents'],
@@ -178,7 +170,7 @@ function Standalone() {
   const [edit, setEdit] = React.useState(false);
   const [chrome, setChrome] = React.useState(true);
   const [preview, setPreview] = React.useState(null);
-  const [overlay, setOverlay] = React.useState(null); // 'status' | 'disk-helper' | 'trace'
+  const [overlay, setOverlay] = React.useState(null); // 'status' | 'trace'
   // After Import to Engelbart: the project opens (a stand-in workspace here) with the run's status over it, which the
   // person can put away and work under (2026-10-13, second round: the flow had stayed on "Starting your imports").
   const [workspace, setWorkspace] = React.useState(null); // { name } | null
@@ -210,7 +202,7 @@ function Standalone() {
     if (value === 'status' || value === 'status-stop') { if (!status) setStatus(sampleSession(lastChoices, agentsBrowser())); setStopAsk(value === 'status-stop'); setOverlay('status'); return; }
     if (value === 'signin') { if (!workspace) setWorkspace({ name: 'Engelbart context import' }); setLater([]); setStatus(sampleSession({ direct: { projects: [{ title: 'Engelbart context import' }], apps: ['Obsidian', 'ChatGPT'] } }, agentsBrowser())); return; }
     if (value === 'complete') { if (!workspace) setWorkspace({ name: 'Engelbart context import' }); const done = sampleSession(lastChoices, agentsBrowser()); setStatus({ ...done, needs: [], jobs: done.jobs.map((job) => ({ ...job, status: 'done', notes: 4 })) }); setOverlay('status'); return; }
-    if (value === 'disk-helper' || value === 'trace') { setOverlay(value); return; }
+    if (value === 'trace') { setOverlay(value); return; }
     setWorkspace(null);
     if (value.startsWith('screen:')) { setPreview({ screen: value.slice(7), dialog: null, state: { ...PREVIEW_STATE, mode: value === 'screen:picker' || value === 'screen:scopes' ? 'manual' : 'auto' }, at: Date.now() }); return; }
     setPreview({ dialog: value, state: PREVIEW_STATE, at: Date.now() });
@@ -245,7 +237,6 @@ function Standalone() {
   const pendingNeed = workspace && status ? status.needs.find((need) => !later.includes(need.id)) : null;
   const stopAll = () => { changeStatus((now) => ({ ...now, needs: [], jobs: now.jobs.map((job) => (job.status === 'done' ? job : { ...job, status: 'stopped', activity: '' })) })); toast('Every import stopped. What came in stays.'); };
 
-  const helperDoc = diskHelperPage.replace('<script>', `<script>window.diskHelper={onState:(cb)=>setTimeout(()=>cb({app:'Engelbart',icon:${JSON.stringify(APP_ICON)}}),0),action:(name)=>parent.postMessage({helper:name},'*')};</script><script>`);
   const traceDoc = tracePage.replace('<script id="trace-render">', `<script>window.TRACE_SAVED=${JSON.stringify(sampleTrace()).replace(/</g, '\\u003c')};</script><script id="trace-render">`);
 
   return (
@@ -277,12 +268,6 @@ body{margin:0}
       )}
       {overlay === 'status' && status && <ImportStatus key={stopAsk ? 'stop' : 'status'} session={status} previewStop={stopAsk} onClose={() => { setOverlay(null); setStopAsk(false); if (!workspace) openWorkspace(); setOverlay(null); }} onNeed={(need) => setLater((now) => now.filter((id) => id !== need.id))} onNeedDone={needDone} onSkip={needSkip} onStop={stopAll} onDone={() => { setOverlay(null); setStatus(null); toast('The library would open.'); }} />}
       {pendingNeed && <NeedPopup key={pendingNeed.id} need={pendingNeed} onOpen={() => needOpen(pendingNeed)} onDone={() => needDone(pendingNeed)} onSkip={() => needSkip(pendingNeed)} onLater={() => setLater((now) => [...now, pendingNeed.id])} />}
-      {overlay === 'disk-helper' && (
-        <div className="overlay-frame" onClick={() => setOverlay(null)}>
-          <iframe title="Full Disk Access helper" srcDoc={helperDoc} style={{ width: 330, height: 150 }} onClick={(event) => event.stopPropagation()} />
-          <button type="button" className="close-preview" onClick={() => setOverlay(null)}>×</button>
-        </div>
-      )}
       {overlay === 'trace' && (
         <div className="overlay-frame" style={{ background: '#00000059' }}>
           <iframe title="Agent trace" srcDoc={traceDoc} style={{ width: 'min(980px, 92vw)', height: '88vh', background: '#fff', borderRadius: 10 }} />
@@ -331,7 +316,7 @@ body{margin:0}
             <option value="allowed">Already allowed in their CLI: not asked</option>
             <option value="none">No browser has the extension</option>
           </select>
-          <label><input type="checkbox" checked={config.disk} onChange={(event) => keep({ ...config, disk: event.target.checked })} style={{ width: 'auto', marginRight: 6 }} />Full Disk Access already on</label>
+          <label><input type="checkbox" checked={config.disk} onChange={(event) => keep({ ...config, disk: event.target.checked })} style={{ width: 'auto', marginRight: 6 }} />Folders asked before</label>
           <label htmlFor="projects-json">Project discovery JSON (the agent’s answer)</label>
           <textarea id="projects-json" spellCheck={false} value={json.projects} onChange={(event) => setJson((now) => ({ ...now, projects: event.target.value }))} />
           <label htmlFor="tools-json">Tool discovery JSON (the agent’s answer)</label>

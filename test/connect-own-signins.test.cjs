@@ -213,7 +213,8 @@ test('Zotero: Later leaves it out with its reason, the run ends with nothing to 
   assert.deepEqual(nothingLines(now, [], []), [{ name: 'Zotero', line: 'Nothing came in from Zotero: you skipped signing in.' }]);
   const html = renderStatus(now);
   assert.match(html, /Your imports have finished/, 'ended, though nothing was left to run');
-  assert.match(html, /Nothing came in from Zotero: you skipped signing in\./);
+  // The completion says nothing about what did not come in (2026-10-15: "no one will read any of it").
+  assert.doesNotMatch(html, /Nothing came in from/);
   assert.doesNotMatch(html, /border-(top|bottom)/, 'no dividing lines');
   connect.stop(started.id);
 });
@@ -415,6 +416,16 @@ test('the step popups: Zotero\'s and GitHub\'s never name a browser they don\'t 
   assert.match(renderStatus({ id: 's', jobs: [], needs: [], leftOut: [] }), /<div class="scrim" data-overlay="1" data-cover="1">/);
 });
 
+test('the completion: what came in as a list, an icon and a name a row, each logo once (2026-10-15: "no duplicate globe icons or claude")', () => {
+  const job = (id, apps, label) => ({ id, kind: 'import', apps, label, status: 'done', notes: 2, items: 0 });
+  const jobs = [job('1', ['Obsidian'], 'Notes: Obsidian'), job('2', ['Claude'], 'AI chats: Claude'), job('3', ['Claude Code'], 'AI chats: Claude Code'), job('4', ['__sites'], 'Websites: Saved URLs'), job('5', [], 'Other tools: Linear')];
+  const html = renderStatus({ id: 's', finished: true, jobs, needs: [], leftOut: [] });
+  assert.match(html, /Your imports are complete!/);
+  assert.deepEqual([...html.matchAll(/data-imported="([^"]+)"/g)].map((m) => m[1]), ['Obsidian', 'Claude, Claude Code', 'Saved URLs, Linear']);
+  assert.equal((html.match(/class="imported-row"/g) || []).length, 3);
+  assert.doesNotMatch(html, /review-logo/, 'no tiles');
+});
+
 test('the status: each source that ended with nothing says why, in one line, and an app left out before it ran has its row', () => {
   const { nothingLines } = status();
   const jobs = [
@@ -432,7 +443,9 @@ test('the status: each source that ended with nothing says why, in one line, and
   ]);
   const html = renderStatus(session);
   assert.match(html, /Your imports have finished/);
-  assert.equal((html.match(/class="missed-line"/g) || []).length, 4, 'one line each');
+  // 2026-10-15: only what came in, as a list; nothing about the rest.
+  assert.equal((html.match(/class="missed-line"/g) || []).length, 0);
+  assert.deepEqual([...html.matchAll(/data-imported="([^"]+)"/g)].map((m) => m[1]), ['Obsidian']);
   // During the run, the app left out before it ran is a row of its own.
   const running = renderStatus({ ...session, jobs: [{ ...jobs[2], status: 'running' }] });
   assert.match(running, /data-background-job="left-GitHub"[\s\S]*?Left out/);

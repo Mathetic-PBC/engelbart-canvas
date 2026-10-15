@@ -7,7 +7,7 @@ import { looksAddable, searchRows } from '../model/rail.js';
 import { flatWorkspaces } from '../model/nav.js';
 import {
   LEVEL_ROWS, MAX_DEPTH, archivedVersions, folderRows, indexTree, libraryLabel, openPath, projectPlan, projectSlots, rollUp,
-  shortcutOf, sourceIcon, summarize, summaryOf, toggleOpen, workspaceActivity,
+  shortcutOf, summarize, summaryOf, toggleOpen, workspaceActivity,
 } from '../model/sidebar.js';
 import { libraryCounts } from '../model/kind.js';
 import GithubPane from './GithubPane.jsx';
@@ -660,7 +660,8 @@ export default function Rail({
     <Row
       key={row.id}
       data-sb-source={row.id}
-      icon={<I.SourceIcon kind={sourceIcon(row)} />}
+      // No icon beside a file in a folder (2026-10-15, Hudson: "get rid of these icons next to the files within folders").
+      icon={null}
       label={renaming === row.id ? <RenameField initial={row.name} onDone={(name) => { setRenaming(null); if (name) onRenameRow(row, name); }} style={text(SIZE.row)} /> : row.name}
       title={row.name}
       faint={isUntitled(row.name)}

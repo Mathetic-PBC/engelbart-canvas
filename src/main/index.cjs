@@ -95,8 +95,8 @@ const { createChatBenchmark, askChat } = require('./agent-map/benchmark.cjs');
 const { createUpdates } = require('./updates.cjs');
 const projects = require('./store/projects.cjs');
 const { createWindows, placement } = require('./windows.cjs');
-// Import your context (2026-10-13, the "Onboarding" workspace): its provider rule, browsers, discovery agents, Full Disk
-// Access and the Agent trace.
+// Import your context (2026-10-13, the "Onboarding" workspace): its provider rule, browsers, discovery agents, whether the
+// folders macOS guards may already be read, and the Agent trace.
 const onboardingPrefs = require('./onboarding/prefs.cjs');
 const { createProviders } = require('./onboarding/providers.cjs');
 const { createBrowsers } = require('./onboarding/browsers.cjs');
@@ -133,9 +133,6 @@ let windows = null; // every window's context (./windows.cjs): its Stage tabs, p
 let manager = null;
 let settings = null;
 let scanner = null;
-// Full Disk Access (round 3): the watch for its switch, and how to mark onboarding's run pending, for before-quit.
-let diskAccessRef = null;
-let markFlowPending = () => {};
 // A relaunch asked for while a quit was already under way (macOS's Quit & Reopen racing Engelbart's own): kept, not dropped.
 let relaunchWanted = false;
 let store = null;
@@ -231,7 +228,7 @@ function runningSessionCount() {
 // `update`: Restart to Update from the ready dialog (updates.cjs), which has said already that terminal sessions end; it
 // quits without asking again (from the menu or a banner it asks, as any quit does). True once it goes on to quit; false
 // when it does not: a quit already under way, Cancel, or a shutdown that failed.
-// `relaunch` (Full Disk Access, 2026-10-13): Engelbart opens again once it has quit; only when the quit goes on.
+// `relaunch`: Engelbart opens again once it has quit; only when the quit goes on.
 async function requestQuit({ update = false, relaunch = false } = {}) {
   if (quitPending || quitReady) { if (relaunch) relaunchWanted = true; return false; }
   quitPending = true;
@@ -606,17 +603,6 @@ if (!hasSingleInstanceLock) {
   app.on('before-quit', (event) => {
     if (quitReady) return;
     event.preventDefault();
-    // macOS's "“Engelbart” will not have full disk access until it is quit. Quit & Reopen" (round 3: it did nothing, this
-    // handler cancelling every quit Engelbart didn't start): while the switch is waited for and a new process can read,
-    // the quit goes through at once, asks nothing, and Engelbart opens again on onboarding's step with its run pending.
-    // A quit while the switch is still off is an ordinary one.
-    if (diskAccessRef && diskAccessRef.waiting()) {
-      void diskAccessRef.status().then((status) => {
-        if (status && (status.grantedFresh || status.granted)) { try { markFlowPending(); } catch { /* the flow asks again */ } return requestQuit({ update: true, relaunch: true }); }
-        return requestQuit();
-      }, () => requestQuit());
-      return;
-    }
     requestQuit();
   });
   app.on('window-all-closed', () => {
@@ -1186,27 +1172,13 @@ if (!hasSingleInstanceLock) {
       return out;
     };
     // Import your context (2026-10-13): which provider runs its agents (both subscribed: asked once), the project and
-    // tool discovery agents (started the moment Import context is pressed), and Full Disk Access in place of four folder
-    // prompts. ENGELBART_PROVIDERS_FAKE and ENGELBART_DISK_ACCESS stand in for this Mac in scripted runs.
+    // tool discovery agents (started the moment Import context is pressed). ENGELBART_PROVIDERS_FAKE and
+    // ENGELBART_DISK_ACCESS stand in for this Mac in scripted runs.
     const onboardingProviders = createProviders({ tools, prefs, homeDir, fake: process.env.ENGELBART_PROVIDERS_FAKE || (connectFake && !cliFake ? 'both' : ''), ...(toolsFake ? { run: toolsFake.execFile } : {}) });
-    // Full Disk Access granted: the agents may read every folder macOS guards (MATH-110's four asked one by one before).
+    // Already allowed to read every folder macOS guards (the person granted it on their own; nothing asks for it, 2026-10-15):
+    // the folders count as allowed for Connect's guard, and the import's folder popup is not needed.
     let diskGranted = false;
-    const diskAccess = createDiskAccess({
-      BrowserWindow, screen: require('electron').screen, shell: electronShell, homeDir,
-      requestQuit,
-      notify: (status) => {
-        if (status && status.granted) diskGranted = true;
-        sendToWindow('engelbart:disk-access', status);
-      },
-      iconPath: path.join(__dirname, '../../build/icon.png'),
-    });
-    diskAccessRef = diskAccess;
-    // The flow saved with its run pending, so the relaunch starts the imports (ImportFlow's restore): what the window would
-    // have saved itself, had macOS's Quit & Reopen not come first.
-    markFlowPending = () => {
-      const now = prefs.get() || {};
-      if (now.flow && typeof now.flow === 'object') prefs.set({ flow: { ...now.flow, pendingRun: true, dialog: null } });
-    };
+    const diskAccess = createDiskAccess({ homeDir });
     // Granted (this process can read what it guards): the four folders count as allowed for Connect's guard too (MATH-110),
     // so no agent is kept out of them and no folder prompt comes up.
     void diskAccess.status().then((status) => {
@@ -1239,12 +1211,6 @@ if (!hasSingleInstanceLock) {
       if (!traceWindow || !traceWindow.isOpen() || BrowserWindow.fromWebContents(event.sender) == null || !event.sender.getURL().startsWith('file:') || !event.sender.getURL().endsWith('/trace.html')) throw new Error('Not the trace window');
       return handler(...args);
     };
-    // The Full Disk Access helper's buttons (./onboarding/disk-helper.html): from that page only.
-    ipcMain.on('disk-helper:action', (event, name) => {
-      const url = event.sender.getURL();
-      if (!url.startsWith('file:') || !url.endsWith('/disk-helper.html')) return;
-      diskAccess.helperAction(String(name || ''));
-    });
     ipcMain.handle('trace:list', fromTrace(() => traceWindow.list()));
     ipcMain.handle('trace:save', fromTrace((html) => traceWindow.save(html)));
     ipcMain.handle('trace:reveal', fromTrace(() => traceWindow.revealFolder()));

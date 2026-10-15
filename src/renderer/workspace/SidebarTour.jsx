@@ -4,7 +4,8 @@ import { createPortal } from 'react-dom';
 // The sidebar tour (2026-10-14): three coach marks after an import's "Open library", on the project's Welcome page. Hudson:
 // "this card should highlight the library section of sidebar the button and then the popup that shows up when they click
 // it, all of that should be opened and highlighted, like how some onboarding has guided onboarding". Each card spotlights
-// part of the sidebar (the rest of the window dimmed, the parts cut out of the veil with a ring round them) and sits beside
+// part of the sidebar (the rest of the window dimmed, the parts cut out of the veil; no ring round them, 2026-10-15:
+// "get rid of the ugly border around the highlighted sections") and sits beside
 // it; → goes on, Finish ends it, × ends it early. Shown once: TOUR_SEEN in this machine's storage once it ends (App's
 // "Start as a new user…" clears every engelbart.* key, so a fresh start sees it again). No dividing lines anywhere.
 // What the cards point at is found in the page by these selectors and measured every frame while a card is up, so the
@@ -144,7 +145,7 @@ export default function SidebarTour({ step, paused = false, onNext, onClose }) {
         <rect x="0" y="0" width="100%" height="100%" fill={VEIL} mask="url(#eb-tour-veil)" />
       </svg>
       {holes.map((hole, i) => (
-        <div key={i} data-tour-hole={i} aria-hidden="true" style={{ position: 'absolute', left: hole.left, top: hole.top, width: hole.width, height: hole.height, boxSizing: 'border-box', borderRadius: 10, boxShadow: '0 0 0 2px #fff, 0 0 0 3.5px rgba(23,23,23,.16), 0 10px 30px rgba(0,0,0,.10)', pointerEvents: 'none', transition: 'all 220ms cubic-bezier(.25,.1,.25,1)' }} />
+        <div key={i} data-tour-hole={i} aria-hidden="true" style={{ position: 'absolute', left: hole.left, top: hole.top, width: hole.width, height: hole.height, boxSizing: 'border-box', borderRadius: 10, pointerEvents: 'none', transition: 'all 220ms cubic-bezier(.25,.1,.25,1)' }} />
       ))}
       <section
         ref={cardRef}

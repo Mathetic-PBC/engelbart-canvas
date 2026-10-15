@@ -180,6 +180,12 @@ app.whenReady().then(async () => {
     await press(wc, '[data-import-method="agents"]');
     await until(async () => (await flow(wc)).dialog === 'agents-consent', 'Import context using background agents');
     await press(wc, '[data-import-understood]');
+    // Allow Engelbart to organize your research (2026-10-15): Connect desktop, then Continue.
+    for (let i = 0; i < 80 && !(await has(wc, '[data-provider-popup]')); i++) {
+      const f = await flow(wc);
+      if (f && f.dialog === 'organize') { if (await has(wc, '[data-organize-connect]')) await press(wc, '[data-organize-connect]'); else if (await has(wc, '[data-organize-continue]:not([disabled])')) await press(wc, '[data-organize-continue]'); }
+      await pause(150);
+    }
     await until(() => has(wc, '[data-provider-popup="anthropic"]'), '"Connect Claude Code" over the workspace', 3600);
     const run = (await js(wc, 'window.engelbartAPI.connectList()')).find((entry) => entry.direct);
     assert.equal(run.blocked.provider, 'anthropic');

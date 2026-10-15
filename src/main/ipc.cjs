@@ -606,6 +606,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // (Desktop, Documents, Downloads, iCloud Drive, the drives) these choices would read and never asked about → [{ id, name }];
   // connect-folders-ask: reads each in turn so macOS asks, → { [id]: 'allowed' | 'denied' }, kept in .connect/folders.json.
   handle('connect-folders-needed', withCtx((ctx, choices) => folderAccess.needed(plainObject(choices, 'choices'), { homeDir: ctx.homeDir, dataRoot: ctx.dataRoot })));
+  // connect-folders-asked: what folders.json holds, { [id]: 'allowed' | 'denied' } (Import your context asks once, 2026-10-15).
+  handle('connect-folders-asked', withCtx((ctx) => folderAccess.readAnswers(ctx.dataRoot)));
   handle('connect-folders-ask', withCtx((ctx, ids) => {
     if (!Array.isArray(ids) || ids.length > 40 || !ids.every((id) => typeof id === 'string' && id.length < 400)) throw new Error('ids must be a list of folder ids');
     return folderAccess.ask(ids, { homeDir: ctx.homeDir, dataRoot: ctx.dataRoot });
@@ -692,10 +694,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   });
   handle('import-discovery-stop', () => ix().discovery.stop());
   handle('import-discovery-reset', () => ix().discovery.reset());
+  // Whether the folders macOS guards may already be read (granted on the person's own; nothing asks for it, 2026-10-15).
   handle('import-disk-access', () => ix().diskAccess.status());
-  handle('import-disk-access-open', () => ix().diskAccess.open());
-  handle('import-disk-access-relaunch', (confirm) => ix().diskAccess.relaunch({ confirm: confirm === true }));
-  handle('import-disk-access-stop', () => { ix().diskAccess.stopWatching(); ix().diskAccess.closeHelper(); return true; });
   handle('import-flow', () => (ix().prefs.get().flow || null));
   handle('import-flow-save', (flow) => { if (flow === null) { ix().prefs.set({ flow: null }); return true; } ix().prefs.set({ flow: plainObject(flow, 'flow') }); return true; });
   handle('import-trace-open', () => ix().openTrace());

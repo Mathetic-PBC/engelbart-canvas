@@ -17,7 +17,8 @@ import { catalogTool } from '../../shared/import-flow.cjs';
 // Done once they have signed in there.
 // Round 3 (2026-10-13, docs/onboarding-round-3.md): the steps for the person are popups of their own (./NeedPopup.jsx),
 // their rows first with a "Needs you" link that brings the popup back; no subtext and no dividing lines; ended, it is
-// "Your imports are complete!" with a tile for each source that brought something in (one tile a logo).
+// "Your imports are complete!" with what came in. 2026-10-15: a list, an icon and a name a row, each logo once, and
+// nothing about what did not come in ("no one will read any of it").
 
 const ENDED = new Set(['done', 'failed', 'stopped']);
 const WORK = new Set(['import', 'recall', 'survey']);
@@ -119,9 +120,6 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   const ended = (jobs.length > 0 || (leftOnly.length > 0 && session.finished && !session.thinking)) && jobs.every((job) => ENDED.has(job.status)) && !(session.needs || []).length;
   const imported = jobs.filter(brought);
   const all = ended && imported.length === jobs.length && !leftOnly.length;
-  // The sources that ended without bringing anything in, each named once with why (the completion said nothing about the
-  // ones left out, and only "Nothing came in from …" about the rest).
-  const missed = ended ? nothingLines(session, jobs, imported) : [];
   // A step belongs to the jobs that asked for it (jobIds), else to a job of its app.
   const needOf = (job) => (session.needs || []).find((need) => (job.needId ? need.id === job.needId : (need.jobIds || []).includes(job.id) || (job.apps || []).includes(need.app)));
   // An app held on its sign-in has no import yet (it starts once signed in): its row all the same, first.
@@ -130,7 +128,7 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   const rows = [...held, ...jobs, ...leftOnly];
   return (
     <div className="ix ix-overlay" data-cover="1" data-import-status={session.id}>
-      <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:140}.ix.ix-overlay .scrim.stop-confirm{z-index:150}.ix .mf .mf-left{margin-right:auto}.ix .review-logos.one-row{flex-wrap:nowrap;overflow:hidden}.ix .review-logo.more{border:1px dashed #c9c9c9;font-size:14px;color:var(--mute)}.ix .modal p.missed-line{margin:0 0 4px;font-size:13px;color:var(--mute)}'}{ROUND3_CSS}{ROUND4_CSS}</style>
+      <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:140}.ix.ix-overlay .scrim.stop-confirm{z-index:150}.ix .mf .mf-left{margin-right:auto}.ix .review-logos.one-row{flex-wrap:nowrap;overflow:hidden}.ix .review-logo.more{border:1px dashed #c9c9c9;font-size:14px;color:var(--mute)}.ix .imported-list{display:flex;flex-direction:column;gap:2px;margin:10px 0 2px}.ix .imported-row{display:flex;align-items:center;gap:12px;min-height:36px;font-size:14.5px;color:var(--ink)}.ix .imported-row>img,.ix .imported-row>svg{width:20px;height:20px;flex:none}.ix .imported-row>svg{fill:none;stroke:currentColor;stroke-width:1.6}'}{ROUND3_CSS}{ROUND4_CSS}</style>
       {/* the scrim is the overlay (as NeedPopup's): the outer element has no height, and the Stage's page and the post-it
           cards, native views, only step aside for an overlay they can see is over them */}
       <div className="scrim" data-overlay="1" data-cover="1" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
@@ -142,8 +140,7 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
           {ended && <p>{all ? 'All of the sources you have selected are now inside of your Engelbart Library.' : imported.length ? 'These sources are now inside of your Engelbart Library.' : 'Nothing new came into your Engelbart Library.'}</p>}
           {ended ? (
             <>
-              {imported.length > 0 && <CompletionLogos jobs={completionJobs(imported)} />}
-              {!all && missed.map((entry) => <p key={entry.name} className="missed-line" data-imported-none={entry.name}>{entry.line}</p>)}
+              {imported.length > 0 && <CompletionList rows={completionRows(imported)} />}
             </>
           ) : (
             <div className="background-job-list">
@@ -179,31 +176,26 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   );
 }
 
-// One row of logos (2026-10-14: "we only wanna show one row of logos"): as many as fit, the rest a dashed "+N" tile.
-const ROW = 8;
-function CompletionLogos({ jobs }) {
-  const shown = jobs.length > ROW ? jobs.slice(0, ROW - 1) : jobs;
-  const rest = jobs.slice(shown.length);
+/** What came in, one row a logo (2026-10-15: "max of one logo, no duplicate globe icons or claude"): an icon and a name,
+ *  stacked; sources sharing a logo (Claude and Claude Code, the web's) share a row, named together. */
+function CompletionList({ rows }) {
   return (
-    <div className="review-logos one-row">
-      {shown.map((job) => <div className="review-logo" key={job.id} title={job.label} aria-label={`${job.label} imported`} data-imported={job.label}>{job.apps[0] === '__sites' || !job.apps.length ? WEB : logoOf(job.apps)}</div>)}
-      {rest.length > 0 && <div className="review-logo more" title={rest.map((job) => job.label).join(', ')} data-imported-more={rest.length}>{`+${rest.length}`}</div>}
+    <div className="imported-list">
+      {rows.map((row) => <div className="imported-row" key={row.key} data-imported={row.name}>{row.icon}<span>{row.name}</span></div>)}
     </div>
   );
 }
 
-/** A tile for each source that brought something in: one per source (2026-10-14: the folder and web logos had merged
- *  different sources into one tile, so "not everything is being showed"), the same source's jobs as one. */
-function completionJobs(jobs) {
-  const logos = new Map();
+/** The rows of CompletionList: each job that brought something in, by its logo. */
+function completionRows(jobs) {
+  const rows = new Map();
   for (const job of jobs) {
-    const key = rowName(job);
-    const previous = logos.get(key);
-    if (previous) {
-      previous.apps = [...new Set([...previous.apps, ...(job.apps || [])])];
-      previous.labels = [...new Set([...previous.labels, rowName(job)])];
-      previous.label = previous.labels.join(' · ');
-    } else logos.set(key, { ...job, apps: [...(job.apps || [])], labels: [rowName(job)], label: rowName(job) });
+    const app = (job.apps || [])[0];
+    const key = app && TOOL_LOGOS[app] ? TOOL_LOGOS[app] : !app || app === '__sites' ? 'web' : 'folder';
+    const row = rows.get(key) || { key, names: [], icon: key === 'web' ? WEB : logoOf(job.apps) };
+    const name = rowName(job);
+    if (!row.names.includes(name)) row.names.push(name);
+    rows.set(key, row);
   }
-  return [...logos.values()];
+  return [...rows.values()].map((row) => ({ ...row, name: row.names.join(', ') }));
 }

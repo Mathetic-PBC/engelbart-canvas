@@ -346,8 +346,7 @@ const welcomePageText = (imageId) => [
   ...(imageId ? [`![Attachment 1](img:${imageId})`] : []),
   'Engelbart is a **research notebook** that *remembers where all of your thoughts came from.*',
   '',
-  'This welcome screen is still in beta, but we\'re working on improving it within the next couple days!',
-  '',
+  // No "still in beta" line (2026-10-15: "the line below thanks them for being a beta user").
   '*Thanks for being a beta user* :)',
   '<3 Hudson + David',
   '',

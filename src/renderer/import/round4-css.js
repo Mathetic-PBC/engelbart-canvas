@@ -92,4 +92,12 @@ export const ROUND4_CSS = `
 .ix.ix .review-context .review-projects-note{margin:0 0 10px}
 .ix.ix .review-context .review-context-label{margin:22px 0 10px}
 .ix.ix .review-context>.review-context-label:first-child{margin-top:6px}
+/* Allow Engelbart to organize your research (2026-10-15): Granola's card in Engelbart's look, no lines between its rows */
+.ix .modal.organize-modal{width:min(480px,100%)}
+.ix .organize-rows{display:flex;flex-direction:column;gap:2px;margin:18px 0 4px;padding:6px 0;border:1px solid var(--line);border-radius:12px}
+.ix .organize-row{display:flex;align-items:center;justify-content:space-between;gap:16px;min-height:52px;padding:0 16px;font-size:14.5px;color:var(--ink)}
+.ix .organize-connect{display:inline-flex;align-items:center;gap:8px;background:transparent}
+.ix .organize-connect svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7}
+.ix .organize-enabled{display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:0 14px;border-radius:999px;background:#f2f2f2;font-size:13.5px;font-weight:500;color:var(--ink)}
+.ix .organize-enabled svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2}
 `;

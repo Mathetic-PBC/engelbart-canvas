@@ -149,6 +149,7 @@ const engelbartAPI = Object.freeze({
   connectSignInCheck: invoke('connect-signin-check'), // (app, retry?) → { status, browser }
   connectFoldersNeeded: invoke('connect-folders-needed'), // (choices) → [{ id, name }] protected folders not asked about yet (MATH-110)
   connectFoldersAsk: invoke('connect-folders-ask'), // (ids) → { [id]: 'allowed' | 'denied' }, macOS asking for each in turn
+  connectFoldersAsked: invoke('connect-folders-asked'), // → { [id]: 'allowed' | 'denied' }, what was asked before
   connectSignInWindow: invoke('connect-signin-window'), // (app) → { status: 'signed-in' | 'rejected' | 'closed' }: signs in in Engelbart's own browser ('rejected': Google refused it)
   connectSignInWindowClose: invoke('connect-signin-window-close'), // closes that window
   connectNeed: invoke('connect-need'),
@@ -174,8 +175,8 @@ const engelbartAPI = Object.freeze({
   guidedOfferSeen: invoke('guided-offer-seen'),
   connectMemory: invoke('connect-memory'),
   onConnect: (callback) => subscribe('engelbart:connect', callback),
-  // Import your context (2026-10-13, src/main/onboarding): the provider rule, the browsers, the discovery agents, Full Disk
-  // Access, where the flow was (kept across Full Disk Access's relaunch), and View ▸ Agent Trace.
+  // Import your context (2026-10-13, src/main/onboarding): the provider rule, the browsers, the discovery agents, whether
+  // the folders macOS guards may already be read, where the flow was, and View ▸ Agent Trace.
   importProviders: invoke('import-providers'), // (fresh?) → { providers, decision: { pick, ask, choices, setup }, remembered }
   importProviderRemember: invoke('import-provider-remember'), // (provider) → the same, that one remembered
   importBrowsers: invoke('import-browsers'), // → { browsers: [{ id, name, keychain, isDefault }], defaultId, chosenId, keychain }
@@ -188,16 +189,12 @@ const engelbartAPI = Object.freeze({
   importDiscoverTools: invoke('import-discover-tools'), // ({ provider?, browserId?, keychain?, again? }) → the same
   importDiscoveryStop: invoke('import-discovery-stop'),
   importDiscoveryReset: invoke('import-discovery-reset'),
-  importDiskAccess: invoke('import-disk-access'), // → { granted, grantedFresh, app, needsRelaunch }
-  importDiskAccessOpen: invoke('import-disk-access-open'), // System Settings, the helper beside it, the watch
-  importDiskAccessRelaunch: invoke('import-disk-access-relaunch'),
-  importDiskAccessStop: invoke('import-disk-access-stop'),
+  importDiskAccess: invoke('import-disk-access'), // → { platform, granted }
   importFlow: invoke('import-flow'), // → where the flow was, or null
   importFlowSave: invoke('import-flow-save'), // (flow | null)
   importTraceOpen: invoke('import-trace-open'),
   importObsidianTree: invoke('import-obsidian-tree'), // → { vaults: [{ name, path, tree }], truncated }
   onDiscovery: (callback) => subscribe('engelbart:discovery', callback),
-  onDiskAccess: (callback) => subscribe('engelbart:disk-access', callback),
   onConnectors: (callback) => subscribe('engelbart:connectors', callback),
   renameProject: invoke('rename-project'),
   // Delete on the all-projects screen: into the trash for a week; Recently deleted lists it (and purges older ones), Restore brings it back.

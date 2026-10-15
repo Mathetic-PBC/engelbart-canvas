@@ -213,7 +213,7 @@ app.whenReady().then(async () => {
       await press(wc, '[data-import-understood]');
       for (let i = 0; i < 40 && !(await has(wc, '[data-provider-popup]')); i++) {
         const f = await flow(wc);
-        if (f && f.dialog === 'folders') await press(wc, '[data-import-disk-open]');
+        if (f && f.dialog === 'organize') { if (await has(wc, '[data-organize-connect]')) await press(wc, '[data-organize-connect]'); else if (await has(wc, '[data-organize-continue]:not([disabled])')) await press(wc, '[data-organize-continue]'); }
         await pause(150);
       }
       await until(() => has(wc, '[data-provider-popup="anthropic"]'), '"Connect Claude Code" over the workspace', 800);

@@ -144,14 +144,10 @@ test('manual "Specify context" is optional: nothing said reads like an automatic
   assert.match(narrowed, /only these folders and files: \/Users\/x\/vault\/Memex/);
 });
 
-test('the Full Disk Access helper docks against System Settings: right of it, else left of it, else the screen edge', () => {
-  const screen = { getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 25, width: 1440, height: 875 } }), getCursorScreenPoint: () => ({ x: 0, y: 0 }) };
-  const disk = createDiskAccess({ screen, platform: 'darwin', fake: 'denied' });
-  assert.deepEqual(disk.placement({ x: 100, y: 100, width: 700, height: 600 }), { x: 804, y: 277, side: 'left' });
-  assert.equal(disk.placement({ x: 700, y: 100, width: 700, height: 600 }).side, 'right');
-  assert.equal(disk.placement({ x: 700, y: 100, width: 700, height: 600 }).x, 700 - 4 - 330);
-  const wide = disk.placement({ x: 100, y: 100, width: 1300, height: 600 });
-  assert.equal(wide.side, 'left');
-  assert.equal(wide.x, 1440 - 330 - 12);
-  assert.equal(disk.waiting(), false);
+test('whether the folders macOS guards may already be read, and nothing that asks for it (2026-10-15: no Full Disk Access)', async () => {
+  const disk = createDiskAccess({ platform: 'darwin', fake: 'denied' });
+  assert.deepEqual(await disk.status(), { platform: 'darwin', granted: false });
+  assert.deepEqual(await createDiskAccess({ platform: 'darwin', fake: 'granted' }).status(), { platform: 'darwin', granted: true });
+  assert.deepEqual(Object.keys(disk), ['status'], 'no System Settings, no helper beside it, no relaunch');
+  assert.equal(fs.existsSync(path.join(__dirname, '../src/main/onboarding/disk-helper.html')), false);
 });

@@ -17,8 +17,10 @@ import { LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, cleanDays, shownName } from '
 //   sign-ins) → What kind of work do you do? → What are you interested in researching right now? → What project do you
 //   want to work on first? → What should go in your library? (the categories, with the tools the agents found added to
 //   them) → Import to Engelbart → How should Engelbart import your sources?
-//     in the background with agents → Import context using background agents (I understand) → (Full Disk Access) → the run
-//     manually, with fine-grained permissions → the librarian's chat (Connect your library's, ../screens/ConnectLibrary.jsx)
+//     in the background with agents → Import context using background agents (I understand) → (Allow Engelbart to
+//     organize your research) → the run
+//     manually, with fine-grained permissions → (Allow Engelbart to organize your research) → the librarian's chat
+//     (Connect your library's, ../screens/ConnectLibrary.jsx)
 //
 // The project agent starts the moment the provider is known; the tool agent once the browser's sign-ins are answered
 // (src/main/onboarding/discover.cjs). In the background, Import to Engelbart starts Connect's pipeline in its direct mode
@@ -26,10 +28,12 @@ import { LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, cleanDays, shownName } from '
 // session from the same choices, which asks before anything comes in (From Amitav, 2026-10-15). In a new user's onboarding (`mode` 'new') a project is made for every project picked
 // and the first opens; over a workspace (`mode` 'modal', the redo that replaced "guided setup") the imports go to that
 // project and the modal closes. Everything it talks to goes through `api` (./import-api.js in the app, the standalone
-// page's mock), so the same component is the app's and the HTML's. Where the flow is, is saved (`saveFlow`) so the
-// relaunch Full Disk Access needs comes back to the same step.
+// page's mock), so the same component is the app's and the HTML's. Where the flow is, is saved (`saveFlow`), so
+// onboarding opened again comes back to the same step.
 
-const FILE_TOOLS = ['Obsidian', 'Zoom', LOCAL_PDFS, LOCAL_FOLDERS];
+// What "Connect desktop" asks macOS for (2026-10-15, in place of Full Disk Access): one prompt each, at once, rather than
+// whenever an agent first reaches into one of them.
+const DESKTOP_FOLDERS = ['Desktop', 'Documents', 'Downloads'];
 /** The sources whose Specify context has Choose files (Obsidian's opens a picker over its vaults, the others the Mac's). */
 const FILE_SOURCES = ['Obsidian', 'Zoom', 'Zotero', LOCAL_PDFS, LOCAL_FOLDERS];
 // "Specific things to import from {app} (optional)": the hint is the category's (2026-10-14, Hudson's words).
@@ -67,7 +71,7 @@ export const COPY = {
 // tools screen for both ways of importing, the way asked at Import to Engelbart (a flow saved before starts over).
 const FLOW_VERSION = 4;
 // Dialogs taken out (From Amitav, 2026-10-15): a flow saved on one of them opens on what took its place.
-const GONE_DIALOGS = { 'keychain-confirm': 'keychain', privacy: null, apps: null };
+const GONE_DIALOGS = { 'keychain-confirm': 'keychain', privacy: null, apps: null, folders: null, 'disk-wait': null, 'disk-relaunch': null, 'folder-fallback': null, 'folders-asking': null, 'folder-results': null };
 // The intro's logos (From Amitav, 2026-10-15: "get rid of the +12, just show everything"): every supported app with a
 // logo, the mockup's eight first, each logo once (Claude Code has Claude's).
 const SUPPORTED = (() => {
@@ -124,7 +128,7 @@ const fresh = () => ({
   roles: [], work: '', customProjects: [], picked: [],
   touched: [], added: [],
   picks: [...DEFAULT_PICKS], open: ['notes'], period: DEFAULT_PERIOD_DAYS, consent: true, leaves: false, menu: null,
-  scopes: {}, groupScopes: {}, groupScopeClosed: [], browserChoice: null, folderAnswers: null, pendingRun: false, firstProject: null,
+  scopes: {}, groupScopes: {}, groupScopeClosed: [], browserChoice: null, folderAnswers: null, organized: false, firstProject: null,
   scratchName: '', scratchDesc: '',
 });
 
@@ -147,15 +151,6 @@ function rememberNotesConsent() { try { window.localStorage.setItem(NOTES_KEY, '
 /** A source that is an app (a category of apps says "these apps"; one with folders, files or links "these sources"). */
 const isApp = (id) => !isLinks(id) && ![SITES, LOCAL_PDFS, LOCAL_FOLDERS].includes(id);
 
-/** A source's hint under its name in the picker (the mockup's third column). */
-function sourceHint(app, diskGranted) {
-  const reach = reachOf(app);
-  if (reach === 'web' || reach === 'connector' || reach === 'signin') return 'Needs sign-in';
-  if (reach === 'automation') return 'macOS will ask';
-  if ((app === LOCAL_PDFS || app === LOCAL_FOLDERS) && !diskGranted) return 'macOS will ask';
-  return '';
-}
-
 /* ======================================================================================================== the flow */
 
 /**
@@ -168,7 +163,7 @@ function sourceHint(app, diskGranted) {
 export default function ImportFlow({ api, mode = 'new', into = null, workspaceId = null, intoProject = null, onDone = () => {}, onClose = () => {}, edit = false, copy = {}, setCopy = () => {}, preview = null, platform = 'darwin', renderLibrarian = null }) {
   // Import context from inside a project (2026-10-14: "it should just basically start from if they picked manual import"):
   // the source picker at once, for this project; no intro, work questions or project list again. The permissions already
-  // answered are not asked again (the browser's sign-ins, Full Disk Access, agents in the browser are kept by main; Apple
+  // answered are not asked again (the browser's sign-ins, the folders, agents in the browser are kept by main; Apple
   // Notes' consent below).
   const [F, setF] = React.useState(() => (mode === 'modal' && into ? {
     ...fresh(), screen: 'picker', dialog: null,
@@ -179,11 +174,11 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const latest = React.useRef(F);
   latest.current = F;
   const [restored, setRestored] = React.useState(false);
-  const restoredPending = React.useRef(false);
   const [providers, setProviders] = React.useState(null);
   const [browsers, setBrowsers] = React.useState(null);
   const [discovery, setDiscovery] = React.useState(null);
-  const [disk, setDisk] = React.useState(null);
+  const [disk, setDisk] = React.useState(null); // { granted }: the folders macOS guards may already be read
+  const [asked, setAsked] = React.useState(null); // { [folder]: 'allowed' | 'denied' } asked before (folders.json)
   const [toolsSnap, setToolsSnap] = React.useState(null);
   const [found, setFound] = React.useState(null);
   const [error, setError] = React.useState('');
@@ -198,25 +193,25 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     let live = true;
     api.flow().then((saved) => {
       if (!live) return;
-      // In a project, only a run that Full Disk Access's relaunch left pending comes back; otherwise the picker, fresh.
-      if (saved && saved.v === FLOW_VERSION && (mode === 'new' || (saved.into === into && saved.pendingRun))) { restoredPending.current = !!saved.pendingRun; setF({ ...fresh(), ...saved, menu: null, ...(Object.hasOwn(GONE_DIALOGS, saved.dialog) ? { dialog: GONE_DIALOGS[saved.dialog] } : {}) }); }
+      // In a project the picker comes fresh every time; a new user's onboarding opens where it was.
+      if (saved && saved.v === FLOW_VERSION && mode === 'new') { setF({ ...fresh(), ...saved, menu: null, ...(Object.hasOwn(GONE_DIALOGS, saved.dialog) ? { dialog: GONE_DIALOGS[saved.dialog] } : {}) }); }
       setRestored(true);
     }).catch(() => setRestored(true));
     api.providers(false).then((out) => { if (live) setProviders(out); }).catch(() => {});
     api.browsers().then((out) => { if (live) { setBrowsers(out); set((now) => (now.browserChoice ? {} : { browserChoice: out.chosenId })); } }).catch(() => {});
     api.discovery().then((out) => { if (live) setDiscovery(out); }).catch(() => {});
     api.diskAccess().then((out) => { if (live) setDisk(out); }).catch(() => {});
+    if (api.foldersAsked) api.foldersAsked().then((out) => { if (live) setAsked(out || {}); }).catch(() => {});
     api.tools().then((out) => { if (live) setToolsSnap(out); }).catch(() => {});
     api.detect().then((out) => { if (live) setFound(out); }).catch(() => {});
     const offs = [
       api.onDiscovery((out) => setDiscovery(out)),
-      api.onDiskAccess((out) => setDisk((now) => ({ ...(now || {}), ...out }))),
       api.onTools((out) => { if (out && out.tools) { setToolsSnap(out); api.providers(true).then(setProviders).catch(() => {}); } }),
     ];
     return () => { live = false; offs.forEach((off) => off && off()); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Where the flow is, kept for the relaunch Full Disk Access needs (and nothing else: closing the flow forgets it).
+  // Where the flow is, kept so onboarding opened again comes back to it (and nothing else: closing the flow forgets it).
   React.useEffect(() => {
     if (!restored || preview) return undefined;
     const timer = setTimeout(() => { api.saveFlow({ ...F, into, menu: null }).catch(() => {}); }, 300);
@@ -255,33 +250,6 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     else if (preview.dialog === 'intro') set({ screen: 'intro', dialog: null, ...(preview.state || {}) });
     else set({ dialog: preview.dialog, ...(preview.state || {}) });
   }, [preview]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Back from Full Disk Access's relaunch with a run pending (as the flow was saved, not this launch's): it starts.
-  const resumed = React.useRef(false);
-  React.useEffect(() => {
-    if (!restored || resumed.current || !restoredPending.current || !disk) return;
-    resumed.current = true;
-    if (disk.granted || disk.grantedFresh || F.folderAnswers) void run();
-    else set({ pendingRun: false, dialog: 'folders' });
-  }, [restored, disk]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Full Disk Access granted while the flow waits: a relaunch when this process can't read yet, else the run.
-  React.useEffect(() => {
-    if (!disk || !disk.done || latest.current.dialog !== 'disk-wait') return;
-    // Restarting is not a decision (the bart chat: "The window blinks and reopens on the same step … The user never sees a
-    // decision"): said, then done, the run pending so it starts when Engelbart is back.
-    if (disk.needsRelaunch) { set({ pendingRun: true, dialog: 'disk-relaunch' }); setTimeout(() => { void relaunch(); }, 120); return; }
-    void run();
-  }, [disk]); // eslint-disable-line react-hooks/exhaustive-deps
-  React.useEffect(() => {
-    if (!disk) return;
-    // A stand-in Mac (ENGELBART_DISK_ACCESS, the standalone page) "relaunched" without quitting: the run goes on here.
-    if (disk.relaunched && latest.current.dialog === 'disk-relaunch') { void run(); return; }
-    if (disk.fallback && latest.current.dialog === 'disk-wait') set({ dialog: 'folder-fallback' });
-    if (disk.cancelled && latest.current.dialog === 'disk-wait') set({ dialog: 'folders' });
-    // Fifteen minutes without the switch: asked again rather than waiting forever.
-    if (disk.gaveUp && latest.current.dialog === 'disk-wait') set({ dialog: 'folders' });
-  }, [disk]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /* -------- the provider */
   const decision = providers && providers.decision;
@@ -425,8 +393,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const understood = () => { latest.current = { ...latest.current, mode: 'auto', agentsConsent: true, dialog: null }; set({ mode: 'auto', agentsConsent: true, dialog: null }); runGate(); };
   const manually = () => { latest.current = { ...latest.current, mode: 'manual', dialog: null }; set({ mode: 'manual', dialog: null }); runGate(); };
 
-  /** What comes before an import starts, either way: which project opens first, Apple Notes' permission; then in the
-   *  background Full Disk Access and the run, manually the librarian (which asks for each folder itself). */
+  /** What comes before an import starts, either way: which project opens first, Apple Notes' permission, Allow Engelbart
+   *  to organize your research (the folders macOS guards, asked once); then the run, or the librarian. */
   const runGate = () => {
     const now = latest.current;
     const apps = runApps(now);
@@ -435,9 +403,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     // It gets the Welcome project holding every source the run brings in, for all the projects.
     if (mode === 'new' && now.picked.length > 1 && !now.picked.includes(now.firstProject)) { set({ dialog: 'first-project', firstChoice: now.picked[0] }); return; }
     if (apps.includes('Apple Notes') && !now.notesConsent && !notesConsented()) { set({ dialog: 'notes-permission' }); return; }
+    if (platform === 'darwin' && !foldersReady(now)) { set({ dialog: 'organize' }); return; }
     if (now.mode === 'manual') { if (!now.provider) { void needProvider('librarian'); return; } void startLibrarian(); return; }
-    const files = apps.some((id) => FILE_TOOLS.includes(id));
-    if (platform === 'darwin' && files && !(disk && (disk.granted || disk.grantedFresh)) && !now.folderAnswers) { set({ dialog: 'folders' }); return; }
     if (!now.provider) { void needProvider('run'); return; }
     void run();
   };
@@ -513,7 +480,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     if (!provider) { void needProvider('run'); return; }
     const choices = runChoices(now);
     // No "Starting your imports" popup (2026-10-14: one popup at most between here and the project): the button says it.
-    set({ dialog: null, pendingRun: false });
+    set({ dialog: null });
     setBusy('run');
     setError('');
     try {
@@ -541,7 +508,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     const provider = providerNow || now.provider;
     if (!provider) { void needProvider('librarian'); return; }
     const choices = runChoices(now);
-    set({ dialog: null, pendingRun: false });
+    set({ dialog: null });
     setBusy('run');
     setError('');
     try {
@@ -580,23 +547,19 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     } catch (failure) { say(failure); } finally { setBusy(''); }
   };
 
-  /* -------- Full Disk Access */
-  const openDisk = async () => {
-    set({ dialog: 'disk-wait' });
-    try { setDisk(await api.diskAccessOpen()); } catch (failure) { say(failure); }
-  };
-  const relaunch = async () => {
-    set({ pendingRun: true });
-    await api.saveFlow({ ...latest.current, pendingRun: true, dialog: null, into }).catch(() => {});
-    try { await api.diskAccessRelaunch(mode === 'modal'); } catch (failure) { say(failure); }
-  };
-  const askFolders = async () => {
-    set({ dialog: 'folders-asking' });
-    api.diskAccessStop().catch(() => {});
-    const ids = ['Desktop', 'Documents', 'Downloads', 'iCloud Drive'];
+  /* -------- the folders macOS guards */
+  // Allow Engelbart to organize your research (2026-10-15, Hudson: no Full Disk Access, "by bypassing the FDA gate we will
+  // just have the popups, and that is ok. however, instead of them showing up randomly have a popup"): asked once, unless
+  // they were asked before (folders.json) or may be read already.
+  const foldersReady = (now) => now.organized || !!now.folderAnswers || !!(disk && disk.granted) || DESKTOP_FOLDERS.every((id) => asked && asked[id]);
+  const connectDesktop = async () => {
+    setBusy('folders');
     let answers = {};
-    try { answers = await api.foldersAsk(ids); } catch (failure) { say(failure); }
-    set({ folderAnswers: answers || {}, dialog: 'folder-results' });
+    try { answers = (await api.foldersAsk(DESKTOP_FOLDERS)) || {}; } catch (failure) { say(failure); }
+    setBusy('');
+    setAsked((now) => ({ ...(now || {}), ...answers }));
+    latest.current = { ...latest.current, folderAnswers: answers };
+    set({ folderAnswers: answers });
   };
 
   /* -------- picks */
@@ -648,8 +611,6 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const projectStatus = discovery && discovery.projects ? discovery.projects.status : 'idle';
   const toolStatus = discovery && discovery.tools ? discovery.tools.status : 'idle';
   const results = discovery && discovery.tools && discovery.tools.results;
-  const diskGranted = !!(disk && (disk.granted || disk.grantedFresh));
-  const diskApp = (disk && disk.app) || 'Engelbart';
 
   /* ================================================================================================== the screens */
 
@@ -1030,18 +991,28 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         </>
       );
     }
-    // Full Disk Access (round 3): one line each; System Settings and the small "Toggle Setting" panel beside it do the
-    // rest (../../main/onboarding/disk-helper.html). The simulated Settings guide of the review mockup was left out.
-    if (d === 'folders') return (<><div className="key">{FOLDER}</div><h3>Allow Full Disk Access</h3><p>{`Turn on ${diskApp} in System Settings so agents can find your files.`}</p><div className="mf"><button type="button" className="link" onClick={() => set({ dialog: 'folder-fallback' })}>Don’t allow</button><button type="button" className="btn small" data-import-disk-open="1" onClick={openDisk}>Open System Settings</button></div></>);
-    if (d === 'disk-wait') return (<><div className="key">{FOLDER}</div><h3>{`Turn on ${diskApp}`}</h3><div className="discovery-line" role="status"><span className="activity-dot" /><span>Waiting for System Settings…</span></div><div className="mf"><button type="button" className="link" onClick={() => { api.diskAccessStop().catch(() => {}); set({ dialog: 'folder-fallback' }); }}>Don’t allow</button><button type="button" className="btn small" onClick={openDisk}>Open System Settings</button></div></>);
-
-    if (d === 'disk-relaunch') return (<><h3>Reopening Engelbart…</h3><p>Your imports resume automatically.</p></>);
-    if (d === 'folder-fallback') return (<><h3>Are you sure?</h3><p>macOS will ask about each folder instead.</p><div className="mf"><button type="button" className="link" onClick={askFolders}>Use individual permissions</button><button type="button" className="btn" onClick={openDisk}>Grant Full Disk Access</button></div></>);
-    if (d === 'folders-asking') return (<><div className="key">{FOLDER}</div><h3>macOS is asking about your folders</h3><p>Choose Allow for each folder you want included.</p></>);
-    if (d === 'folder-results') {
-      const answers = F.folderAnswers || {};
-      const list = Object.keys(answers).length ? Object.keys(answers) : ['Desktop', 'Documents', 'Downloads', 'iCloud Drive'];
-      return (<><h3>Folder permissions</h3><p>Only folders you allowed will be included.</p><div className="folder-results">{list.map((folder) => <div key={folder}><span>{folder}</span><span className={answers[folder] === 'allowed' ? 'allowed' : 'failed'}>{answers[folder] === 'allowed' ? 'Allowed' : 'Left out'}</span></div>)}</div><div className="mf">{list.some((folder) => answers[folder] !== 'allowed') && <button type="button" className="link" onClick={askFolders}>Review left-out folders</button>}<button type="button" className="btn" onClick={() => { set({ dialog: null }); runGate(); }}>Continue</button></div></>);
+    // Allow Engelbart to organize your research (2026-10-15, drawn after Granola's "Allow Granola to transcribe your
+    // meetings", in Engelbart's own look): Connect desktop asks macOS for Desktop, Documents and Downloads, one prompt
+    // each; the agents' part is on already. Continue once the folders were asked about, whatever macOS was told.
+    if (d === 'organize') {
+      const done = !!F.folderAnswers;
+      return (
+        <>
+          <h3>Allow Engelbart to organize your research</h3>
+          <div className="organize-rows">
+            <div className="organize-row" data-organize-row="files">
+              <span>View my files locally</span>
+              {done ? <span className="organize-enabled" data-organize-enabled="files">{CHECK}Enabled</span>
+                : <button type="button" className="btn secondary small organize-connect" data-organize-connect="1" disabled={busy === 'folders'} onClick={connectDesktop}>{FOLDER}{busy === 'folders' ? 'Connecting…' : 'Connect desktop'}</button>}
+            </div>
+            <div className="organize-row" data-organize-row="agents">
+              <span>Analyze using agents</span>
+              <span className="organize-enabled" data-organize-enabled="agents">{CHECK}Enabled</span>
+            </div>
+          </div>
+          <div className="mf"><button type="button" className="btn small" data-organize-continue="1" disabled={!done} onClick={() => { latest.current = { ...latest.current, organized: true, dialog: null }; set({ organized: true, dialog: null }); setTimeout(runGate, 0); }}>Continue</button></div>
+        </>
+      );
     }
     if (d === 'browser-agents') return (<><h3>{`Let agents use ${browserNow}?`}</h3><p>They’ll read your selected sources in the background.</p><div className="mf"><button type="button" className="link" onClick={() => browserAgentsAnswer('declined')}>Don’t allow</button><button type="button" className="btn small" data-import-browser-agents-allow="1" onClick={() => browserAgentsAnswer('allowed')}>Allow</button></div></>);
 
@@ -1119,7 +1090,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   const d = F.dialog;
   const body = d ? dialogBody() : null;
-  const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'folder-fallback' ? 'disk-deny-modal' : (d === 'folders' || d === 'disk-wait') ? 'disk-modal' : '';
+  const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'organize' ? 'organize-modal' : '';
   const screen = F.screen === 'intro' ? introPage() : F.screen === 'roles' ? rolesPage() : F.screen === 'work' ? workPage() : F.screen === 'projects' ? projectsPage() : picker();
 
   // Import manually: the librarian's chat, Connect your library's own page, outside this flow's styles; put away, the
@@ -1141,7 +1112,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         <div className="ix-app" inert={d ? true : undefined}>{screen}</div>
         {error && <div className="ix-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
         {body && (
-          <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget && !['starting', 'disk-wait', 'folders-asking', 'browser-agents', 'browser-agents-confirm'].includes(d)) set({ dialog: null }); }}>
+          <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget && !['starting', 'organize', 'browser-agents', 'browser-agents-confirm'].includes(d)) set({ dialog: null }); }}>
             <section className={`modal ${modalClass}`} role="dialog" aria-modal="true" aria-label={d}>{body}</section>
           </div>
         )}

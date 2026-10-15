@@ -309,6 +309,20 @@ app.whenReady().then(async () => {
     const startWith = await js(wc, 'document.querySelectorAll("[data-first-project]")[1].textContent');
     await press(wc, '[data-first-project-open]');
 
+    /* Allow Engelbart to organize your research (2026-10-15, in place of Full Disk Access), either way */
+    await until(async () => (await flow(wc)).dialog === 'organize', 'Allow Engelbart to organize your research');
+    assert.equal(await text(wc, '[role=dialog] h3'), 'Allow Engelbart to organize your research');
+    assert.deepEqual(await js(wc, '[...document.querySelectorAll("[data-organize-row] > span:first-child")].map((s)=>s.textContent)'), ['View my files locally', 'Analyze using agents']);
+    assert.equal(await text(wc, '[data-organize-connect]'), 'Connect desktop');
+    assert.equal(await text(wc, '[data-organize-enabled="agents"]'), 'Enabled');
+    assert.equal(await js(wc, 'document.querySelector("[data-organize-continue]").disabled'), true, 'Continue once the folders were asked about');
+    assert.doesNotMatch(await js(wc, 'document.body.innerText'), /Full Disk Access|System Settings/);
+    await shot(wc, '10-organize');
+    await press(wc, '[data-organize-connect]');
+    await until(() => has(wc, '[data-organize-enabled="files"]'), 'View my files locally: Enabled');
+    await shot(wc, '10b-organize-enabled');
+    await press(wc, '[data-organize-continue]');
+
     if (MODE === 'manual') {
       /* Import manually: the librarian's chat (Connect your library's page) on the same choices; no Full Disk Access */
       await until(async () => (await flow(wc)).screen === 'librarian', 'the librarian\'s chat', 1200);
@@ -343,18 +357,12 @@ app.whenReady().then(async () => {
 
     let logos = [];
     if (MODE === 'auto') {
-    /* Full Disk Access: one line each */
-    await until(async () => (await flow(wc)).dialog === 'folders', 'Allow Full Disk Access');
-    assert.equal(await js(wc, 'document.querySelectorAll("[role=dialog] p").length'), 1, 'one line (Attachment 5)');
-    await shot(wc, '09-disk');
-    await press(wc, '[data-import-disk-open]');
-    await until(async () => (await flow(wc)).dialog === 'disk-wait', 'waiting for the switch');
-    await shot(wc, '10-disk-wait');
     // No "Let agents use Chrome?" any more: I understand said it (From Amitav, 2026-10-15).
 
     /* the project opens; the status, then the sign-in popups one at a time */
     await until(() => has(wc, '[data-need-popup], [data-import-status]'), 'the status or a sign-in popup over the workspace', 1200);
     await shot(wc, '12-after-run');
+    assert.doesNotMatch(await js(wc, 'document.body.innerText'), /still in beta/, 'no "still in beta" line on the welcome page (2026-10-15)');
     const projects = await js(wc, 'window.engelbartAPI.listProjects()');
     for (const title of titles.slice(0, 2)) assert.ok(projects.some((project) => project.name === title), `a project named for ${title}`);
     const list = await js(wc, 'window.engelbartAPI.connectList()');
@@ -409,10 +417,12 @@ app.whenReady().then(async () => {
     await shot(wc, '15-complete');
     assert.equal(await text(wc, '[data-import-status-close]'), 'Open library');
     logos = await js(wc, '[...document.querySelectorAll("[data-imported]")].map((el)=>el.dataset.imported)');
-    assert.ok(logos.length >= 1, 'a tile for what came in');
-    assert.equal(new Set(logos).size, logos.length, 'one tile a logo');
-    assert.equal(await js(wc, 'document.querySelectorAll("[data-import-status] .cb, [data-import-status] .review-logo > span").length'), 0, 'no checkmarks on the tiles');
-    assert.doesNotMatch(await text(wc, '[data-import-status]'), /MEMORY/);
+    // 2026-10-15: what came in as a list, an icon and a name a row, each logo once, and nothing about the rest.
+    assert.ok(logos.length >= 1, 'a row for what came in');
+    assert.equal(new Set(logos).size, logos.length, 'one row a logo');
+    assert.equal(await js(wc, '(()=>{const rows=[...document.querySelectorAll("[data-import-status] .imported-row")].map((r)=>r.getBoundingClientRect());return rows.every((r,i)=>i===0||r.top>=rows[i-1].bottom-1)})()'), true, 'stacked');
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-import-status] .review-logo, [data-import-status] .missed-line").length'), 0, 'no tiles, no lines about the rest');
+    assert.doesNotMatch(await text(wc, '[data-import-status]'), /MEMORY|Nothing came in/);
     assert.equal(await has(wc, '[data-connect-dock="done"]'), false, 'no Done pill in the header');
     /* the Welcome project's folder: everything that came in */
     const files = (dir, name, out = []) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const full = path.join(dir, entry.name); if (entry.isDirectory() && !['node_modules', 'worktrees'].includes(entry.name)) files(full, name, out); else if (entry.name === name) out.push(full); } return out; };
