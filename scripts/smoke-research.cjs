@@ -121,6 +121,15 @@ app.whenReady().then(async () => {
     assert.ok(ls.slice(ls.indexOf(picked)).some((l) => /^bart> ## Start here/.test(l)), 'the guide is in the box');
     await until(async () => (await rows(wc)).some((l) => /^bart#\+? \[discover [^\]]+\] Fake theme two/i.test(l)), 'named from the pick');
     await shot(wc, '1c-picked');
+    // Another theme picked on the answered card (2026-10-15, David): the restart is asked first; Cancel leaves it as it was.
+    const asIs = (await rows(wc)).join('\n');
+    await press(wc, `${ED} [data-act="cardrepick"][data-opt="2"]`);
+    await until(() => js(wc, `!!document.querySelector('${ED} [data-repick-confirm]')`), 'the restart asked');
+    assert.match(await js(wc, `document.querySelector('${ED} [data-repick-confirm]').innerText`), /Pick Fake theme three instead\? Everything after this will be asked again from that pick\.[\s\S]*Cancel[\s\S]*Restart from here/);
+    await shot(wc, '1d-repick');
+    await press(wc, `${ED} [data-act="cardrepickno"]`);
+    await until(() => js(wc, `!document.querySelector('${ED} [data-repick-confirm]')`), 'cancelled');
+    assert.equal((await rows(wc)).join('\n'), asIs, 'nothing changed');
     console.log('PASS an empty @discover asks "What would you like to research?" on a card of themes; a pick gets one question, and the answer is searched in its box');
 
     /* ------------------------------------------------ a new conversation under it */
@@ -183,7 +192,7 @@ app.whenReady().then(async () => {
 
     /* ------------------------------------------------ Refine: the new direction waits in its box until Restart research */
     const refines = await js(wc, `document.querySelectorAll('${ED} [data-act="refine"]').length`);
-    assert.equal(refines, 2, 'Refine on the reply that said what it will look for, where it is not collapsed (Tutors\' is, under Chat\'s turn)');
+    assert.equal(refines, 3, 'Refine on each reply that said what it will look for: a Discover conversation collapses nothing, Tutors\' with Chat\'s turn under it too (2026-10-15)');
     await js(wc, `(()=>{const all=document.querySelectorAll('${ED} [data-act="refine"]');all[all.length-1].setAttribute('data-last','1')})()`);
     await press(wc, `${ED} [data-act="refine"][data-last]`);
     const field = await until(() => js(wc, `(()=>{const f=[...document.querySelectorAll('${ED} [data-follow-input]')].pop();return f&&f.getAttribute('placeholder')})()`), 'the Refine field');
@@ -200,7 +209,7 @@ app.whenReady().then(async () => {
     assert.equal(ls[refined + 1], 'bart> FAKE DISCOVER will now look for work on “only studies of open source agents”.');
     assert.ok(!ls.slice(ls.indexOf(waiting) + 1).some((l) => /^bart.?> ## Start here/.test(l)), 'nothing searched yet');
     const before = ls.indexOf('@discover --research find papers on why coding agents retry');
-    assert.ok(ls.slice(before + 1, refined).some((l) => /^bart\+> ## Start here/.test(l)), 'the earlier guide stays, collapsed');
+    assert.ok(ls.slice(before + 1, refined).some((l) => /^bart> ## Start here/.test(l)), 'the earlier guide stays, open: nothing collapses (2026-10-15)');
     const start = await js(wc, `(()=>{const b=document.querySelector('${ED} [data-act="startresearch"]');return b&&b.innerText.trim()})()`);
     assert.equal(start, 'Restart research');
     await shot(wc, '4-refined');
@@ -208,7 +217,7 @@ app.whenReady().then(async () => {
     await until(async () => (await rows(wc)).slice((await rows(wc)).indexOf(waiting) + 1).some((l) => /^bart> ## /.test(l)), 'the restarted search', 600);
     assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-act="startresearch"]').length`), 0, 'started: no button');
     await shot(wc, '4-restarted');
-    console.log('PASS Refine settles a new direction that waits in its box; Restart research searches it, the earlier guide collapsed');
+    console.log('PASS Refine settles a new direction that waits in its box; Restart research searches it, the earlier guide still open');
     app.exit(0);
   } catch (error) {
     console.error(error);

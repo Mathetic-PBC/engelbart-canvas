@@ -507,26 +507,27 @@ test('handoff: when routing fails the line is asked of Chat saying so (by: error
   assert.equal(picked.nodes[1].error, 'thread question must be a string of at most 400 characters');
 });
 
-test('the button row (2026-10-13): Copy and Regenerate as icons with their names; the model, effort and time on the right (the agent first unless Chat, never "via Bart"), then Collapse and Delete; no Edit or Build', () => {
+test('the button row (2026-10-13): Copy and Regenerate as icons with their names; then Collapse and Delete on the right, the closing line\'s words not drawn (2026-10-15); no Edit or Build', () => {
   const m = mounted([...SPEC, '']);
   const html = m.editor.footHtml({ q: 0, text: 'Chat · Sonnet · high · 3 s', closes: true });
   assert.match(html, /<button class="bart-ic" data-act="copybart" data-turn="0"[^>]*aria-label="Copy"[^>]*>[\s\S]*?<\/button><span class="bart-tip"[^>]*>Copy<\/span>/, 'Copy: an icon with its tip');
   assert.match(html, /<button class="bart-ic" data-act="regen" data-turn="0" data-quiet="1" aria-label="Regenerate">[\s\S]*?<\/button><span class="bart-tip"[^>]*>Regenerate<\/span>/, 'Regenerate: an icon with its tip, opening no selector');
   for (const act of ['editturn', 'footbuild', 'viabart']) assert.ok(!html.includes(`data-act="${act}"`), `no ${act}`);
   const text = (h) => h.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
-  assert.equal(text(html), 'Sonnet · high · 3 s', 'the model, effort and time; not Chat');
-  const order = ['copybart', 'data-act="regen"', 'data-foot-meta', 'data-act="fold"', 'dropturn'].map((k) => html.indexOf(k));
-  assert.deepEqual(order, [...order].sort((x, y) => x - y), 'Copy, Regenerate, the meta, Collapse, Delete');
-  assert.match(html, /<span data-foot-meta="1" style="flex:none;margin-left:auto;/, 'the meta pushed right');
-  // Routed by Bart: Build named; an older closing line's "via Bart" is not drawn.
+  assert.equal(text(html), '', 'no model, effort, time or agent');
+  const order = ['copybart', 'data-act="regen"', 'data-act="fold"', 'dropturn'].map((k) => html.indexOf(k));
+  assert.deepEqual(order, [...order].sort((x, y) => x - y), 'Copy, Regenerate, Collapse, Delete');
+  assert.ok(!html.includes('data-foot-meta'));
+  assert.match(html, /<span style="flex:none;position:relative;display:inline-flex;margin-left:auto"><button class="bart-ic" data-act="fold"/, 'Collapse pushed right');
+  // Routed by Bart: neither Build nor an older closing line's "via Bart" is drawn.
   const routed = mounted(['bart# [chat build 2026-10-12T21:41:00Z] Haiku', '@bart build the haiku entry', ...SPEC.slice(1), '']);
   const foot = routed.editor.footHtml({ q: 1, text: 'Build · Sonnet · high · 3 s' });
-  assert.equal(text(foot), 'Build · Sonnet · high · 3 s'); assert.ok(!foot.includes('bart-who') && !foot.includes('viabart'));
+  assert.equal(text(foot), '', 'no agent (2026-10-15)'); assert.ok(!foot.includes('bart-who') && !foot.includes('viabart'));
   const discover = mounted(['bart# [discover 2026-10-12T21:41:00Z] Tutors', '@bart papers?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', '']);
   const drawn = discover.editor.editorHtml().replace(/ data-raw="[^"]*"/g, '');
-  assert.ok(drawn.includes('>Discover · Opus · high · 9 s<') && !/viabart|via Bart/.test(drawn), 'Discover named, before its model');
+  assert.ok(!drawn.includes('Opus · high · 9 s') && !drawn.includes('>Discover · Opus') && !/viabart|via Bart/.test(drawn), 'no model, no agent (2026-10-15)');
   const dark = m.editor.footHtml({ q: 0, text: 'Sonnet · 3 s · via Bart · build' });
-  assert.equal(text(dark), 'Sonnet · 3 s');
+  assert.equal(text(dark), '');
 
   // Build is still there for the [[build]] hammer in a routed build's answer.
   assert.equal(m.editor.footBuild(0), true);
@@ -704,49 +705,55 @@ test('routing regression (2026-10-14): "can you make a file going over the chang
   }
 });
 
-test('@create: a line Bart sent to Create waits 5 s ("Creating a chart · Starts in 5 s · Cancel"), then asks create, titled [create <when>]', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
+test('@create: a line Bart sent to Create is asked at once (2026-10-15, David: no "Create · Starts in 5 s"), titled [create <when>]', async () => {
   const m = mounted(['# Notes', '@bart make a chart of CHI submissions by year'], { route: async () => ({ id: 'route-c', agent: 'create', sure: 0.9, by: 'model' }) });
   m.editor.askInline(1);
   await new Promise((resolve) => setImmediate(resolve));
   assert.match(m.lines()[1], /^bart# \[create \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\] $/, 'the pick on its title line');
   assert.equal(m.lines()[2], '@bart make a chart of CHI submissions by year', '@bart stays @bart');
   const askId = m.lines()[3].replace(/^bart~> /, '');
-  assert.equal(m.asks.length, 0, 'not asked yet');
-  let html = m.editor.editorHtml();
-  assert.match(html, /Creating a chart<\/span>.*Starts in 5 s/);
-  assert.match(html, new RegExp(`data-act="cancelwait" data-ask="${askId}"[^>]*>Cancel<`));
-  const seconds = (n) => { for (let k = 0; k < n; k++) t.mock.timers.tick(1000); }; // a tick fires no timer set during it
-  seconds(2);
-  assert.match(m.editor.editorHtml(), /Starts in 3 s/, 'it counts down');
-  seconds(2);
-  t.mock.timers.tick(999);
-  assert.equal(m.asks.length, 0);
-  t.mock.timers.tick(1);
-  assert.equal(m.asks.length, 1, 'asked after 5 s');
+  assert.equal(m.asks.length, 1, 'asked at once');
   assert.deepEqual([m.asks[0].askId, m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name], [askId, 'create', 'make a chart of CHI submissions by year', { id: 'route-c' }, true]);
-  html = m.editor.editorHtml();
-  assert.ok(!/Starts in|cancelwait/.test(html), 'the countdown is gone');
-  assert.equal(m.editor.cancelCreate(askId), false, 'too late to cancel: Stop stops it now');
+  // Until it says what it is making, its row is a run thinking like any other: no countdown, no Cancel, no file row.
+  m.props.asks = { [askId]: { agent: 'create', name: 'Opus', effort: 'high', activity: 'Thinking', at: Date.now(), lines: [], log: [] } };
+  m.editor.lastHtml = null;
+  const html = m.editor.editorHtml();
+  assert.ok(!/Starts in|cancelwait|data-create-pending/.test(html));
+  assert.match(html, /Thinking · Opus high/);
 });
 
-test('@create at work (2026-10-14): a thinking line until it says what it is making, then "Creating an HTML page…" and what it is doing under it', () => {
+test('@create at work (2026-10-15, David): a thinking line until its line on what it is making comes, then that line, in the words the answer keeps, and what it is doing under it', () => {
   const m = mounted(['# Notes', 'bart# [create 2026-10-14T20:00:00Z] ', '@create create a html page descriing everyting weve worked on', 'bart~> c1', '']);
   const run = { agent: 'create', name: 'Opus', effort: 'high', activity: 'Thinking', at: Date.now(), lines: [], log: [] };
   const html = (ask) => { m.props.asks = { c1: ask }; m.editor.lastHtml = null; return m.editor.editorHtml(); };
   const thinking = html(run);
-  assert.ok(!thinking.includes('data-create-pending'), 'no file row before the sentence');
+  assert.ok(!thinking.includes('data-create-pending'), 'no file row before the line');
   assert.match(thinking, /Thinking · Opus high/);
-  const sentence = 'An HTML page covering the work in this workspace.';
-  const arriving = html({ ...run, activity: 'Writing', lines: [sentence] });
-  assert.ok(arriving.includes('data-create-pending'));
-  // Succinct (2026-10-15): "Creating an HTML page…" in place of the model's sentence, then a row saying what it is doing.
-  assert.ok(!arriving.includes(sentence), 'not the model\'s sentence');
-  assert.equal((arriving.match(/Creating an HTML page/g) || []).length, 1, 'said once');
-  assert.match(arriving, />Creating an HTML page…<\/div><div[^>]*>[\s\S]*?align-items:baseline[^>]*><span[^>]*>Thinking<\/span><\/span>/, 'the line, then the row');
-  assert.ok(html({ ...run, making: sentence, log: ['Reading notes.md'] }).includes('data-create-pending'), 'its sentence whole, and reading on');
-  assert.ok(html({ ...run, log: ['Writing summary.html'] }).includes('data-create-pending'), 'no sentence, but writing a file');
-  const { makingLabel } = EDITOR;
+  assert.ok(!html({ ...run, activity: 'Writing', lines: ['Done.'] }).includes('data-create-pending'), 'the model\'s own text is not the line');
+  const line = 'An HTML page on the work in this workspace: the agents, the five pillars and what is still open.';
+  const told = html({ ...run, making: line, activity: 'Writing work-summary.html · 9 KB' });
+  assert.ok(told.includes('data-create-pending'));
+  assert.equal((told.match(/an HTML page on the work in this workspace/g) || []).length, 1, 'said once');
+  assert.ok(!told.includes('>Creating an HTML page…<'), 'the line itself, not a few words for it');
+  // Starting "Creating" (2026-10-15, David), the acronym's capital kept.
+  assert.match(told, new RegExp(`>Creating an HTML page on the work in this workspace: the agents, the five pillars and what is still open…</div><div[^>]*>[\\s\\S]*?align-items:baseline[^>]*><span[^>]*>Building the page · 9 KB so far</span></span>`), 'the line, then the row saying what it is doing, in words: no file name (2026-10-15, David)');
+  // No line, but a file being written: the few words its kind gives.
+  const writing = html({ ...run, log: ['Writing summary.html'] });
+  assert.ok(writing.includes('data-create-pending') && writing.includes('>Creating an HTML page…</div>'));
+  const { makingLabel, creatingLine } = EDITOR;
+  assert.equal(creatingLine('A diagram of the highlighting, Stage, and browser-window problems we discussed.'), 'Creating a diagram of the highlighting, Stage, and browser-window problems we discussed…');
+  assert.equal(creatingLine('Two charts of CHI submissions.'), 'Creating two charts of CHI submissions…');
+  assert.equal(creatingLine('Creating a page on tutors.'), 'Creating a page on tutors…');
+  assert.equal(creatingLine(''), '');
+  const { createDoing } = EDITOR;
+  for (const [activity, kind, wrote, said] of [
+    ['Thinking', 'diagram', false, 'Planning the diagram'], ['Thinking', 'diagram', true, 'Finishing up'], ['Writing', 'HTML page', false, 'Planning the HTML page'], ['Thinking', null, false, 'Thinking it through'],
+    ['Writing ui-workspace-conversation-diagram.svg', 'diagram', false, 'Drawing the diagram'], ['Writing summary.html · 12 KB', 'page', false, 'Building the page · 12 KB so far'],
+    ['Writing data.csv', 'dataset', false, 'Filling in the dataset'], ['Editing summary.html', 'page', true, 'Revising the page'],
+    ['Reading …/Concision in Agent Responses/workspace.md', 'diagram', false, 'Reading your notes'], ['Reading src/main/bart/ask.cjs', 'diagram', false, 'Reading the code'], ['Reading tutors.pdf', 'diagram', false, 'Reading a paper'],
+    ['Reading arxiv.org', 'diagram', false, 'Reading a page on arxiv.org'], ['Searching code for “stage”', 'diagram', false, 'Searching the code'], ['Listing **/*.md', 'diagram', false, 'Looking through your files'],
+    ['Searching the web for “tutors”', 'diagram', false, 'Searching the web for “tutors”'],
+  ]) assert.equal(createDoing(activity, kind, wrote), said, activity);
   assert.equal(makingLabel('', 'create a html page descriing everyting weve worked on', null), 'Creating an HTML page');
   assert.equal(makingLabel('An HTML page covering the work', '', null), 'Creating an HTML page');
   assert.equal(makingLabel('', 'make an html of the results', null), 'Creating an HTML page');
@@ -761,7 +768,7 @@ test('@create at work (2026-10-14): a thinking line until it says what it is mak
   assert.ok(!made.editor.editorHtml().includes('#f3f3f3'));
 });
 
-test('a made file opened by a rest of the pointer (2026-10-15, David): its name and icon open it in its frame, as the chevron does, after a rest; leaving the frame folds it, unless something in it was pressed', (t) => {
+test('a made file\'s peek (2026-10-15, David): a rest of the pointer on its name or icon shows the file in a small card over the page, nothing in the document moves; leaving or a press hides it', (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const made = mounted(['bart#+ [create 2026-10-14T20:00:00Z] A diagram', '@create make an svg of the agents', 'bart> A diagram.', 'bart>', 'bart> @[agents.svg](made:c1/agents.svg)', 'bart>', 'bart> *Create · Opus · high · 9 s*', '']);
   made.props.madeFiles = { 'c1/agents.svg': { name: 'agents.svg', type: 'svg', url: 'file:///made/agents.svg', saved: { name: 'agents' } } };
@@ -769,50 +776,45 @@ test('a made file opened by a rest of the pointer (2026-10-15, David): its name 
   const html = made.editor.editorHtml();
   assert.equal((html.match(/data-made-peek="c1\/agents\.svg"/g) || []).length, 2, 'on the name and the icon');
   const framed = () => { made.editor.lastHtml = null; return made.editor.editorHtml().includes('data-made-frame="c1/agents.svg"'); };
-  const el = { dataset: { madePeek: 'c1/agents.svg', name: 'agents.svg' }, isConnected: true };
+  const peeked = () => made.editor.state.pop && made.editor.state.pop.made;
+  const el = { dataset: { madePeek: 'c1/agents.svg', name: 'agents.svg' }, isConnected: true, getBoundingClientRect: () => ({ left: 10, right: 90, top: 100, bottom: 120 }) };
   made.editor.peekMade(el);
-  assert.ok(!framed(), 'nothing while the pointer only passes');
+  assert.ok(!peeked(), 'nothing while the pointer only passes');
   t.mock.timers.tick(400);
-  assert.ok(framed(), 'a rest: its frame, where the chevron opens it');
-  assert.ok(made.editor.editorHtml().includes('<img src="file:///made/agents.svg" alt="agents.svg" draggable="false">'), 'showing the file');
-  assert.equal(made.editor.state.pop, null, 'no peek over the page');
-  made.editor.unpeekFrame('c1/agents.svg');
-  assert.ok(!framed(), 'leaving the frame folds it');
+  assert.deepEqual(peeked(), { key: 'c1/agents.svg', name: 'agents.svg' }, 'a rest: the peek');
+  assert.deepEqual(made.editor.state.pop.anchor, { left: 10, right: 90, top: 100, bottom: 120 }, 'under the name');
+  assert.ok(!framed(), 'the document is as it was: no frame opens in it');
+  assert.equal(made.editor.madeBodyHtml(peeked(), made.props.madeFiles['c1/agents.svg']), '<img src="file:///made/agents.svg" alt="agents.svg" draggable="false">', 'the peek shows the file as its frame would');
+  made.editor.unpeekMade();
+  assert.equal(made.editor.state.pop, null, 'leaving hides it');
   made.editor.peekMade(el); made.editor.unpeekMade(); t.mock.timers.tick(400);
-  assert.ok(!framed(), 'left before the rest: it never opens');
+  assert.equal(made.editor.state.pop, null, 'left before the rest: it never shows');
   made.editor.peekMade(el); t.mock.timers.tick(400);
   made.editor.madeAct('madestage', { dataset: { made: 'c1/agents.svg', name: 'agents.svg' } });
-  made.editor.unpeekFrame('c1/agents.svg');
-  assert.ok(framed(), 'pressed in it: it stays open');
+  assert.equal(made.editor.state.pop, null, 'a press hides it');
+  // A file whose frame is open (the chevron) gets no peek.
   made.editor.madeAct('madeexpand', { dataset: { made: 'c1/agents.svg', name: 'agents.svg' } });
-  assert.ok(!framed(), 'and its chevron folds it');
-  // Opened by the chevron, leaving does not fold it.
-  made.editor.madeAct('madeexpand', { dataset: { made: 'c1/agents.svg', name: 'agents.svg' } });
-  made.editor.unpeekFrame('c1/agents.svg');
   assert.ok(framed());
+  made.editor.peekMade(el); t.mock.timers.tick(400);
+  assert.equal(made.editor.state.pop, null);
 });
 
-test('@create: Cancel during the wait asks @chat instead, marks the router corrected, and the title line names Chat', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const m = mounted(['# Notes', '@bart make a page on tutors'], { route: async () => ({ id: 'route-k', agent: 'create', sure: 0.95, by: 'model' }) });
-  m.editor.askInline(1);
-  await new Promise((resolve) => setImmediate(resolve));
-  const askId = m.lines()[3].replace(/^bart~> /, '');
-  t.mock.timers.tick(1000);
-  assert.equal(m.editor.cancelCreate(askId), true);
-  assert.equal(m.asks.length, 1);
-  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].routed], ['bart', 'make a page on tutors', { id: 'route-k', corrected: 'chat' }]);
-  assert.match(m.lines()[1], /^bart# \[chat \d{4}-[^\]]+\] $/);
-  t.mock.timers.tick(10_000);
-  assert.equal(m.asks.length, 1, 'Create is never asked');
-  // Main marks the router's record corrected: chat, as for a pick changed under "via Bart".
-  const runLog = createRunLog({ file: path.join(tmp('create-cancel'), 'agent-runs.jsonl') });
-  const picked = await router('{"agent":"create","sure":0.9}', { runLog }).route({ ...LINE, text: 'make a page on tutors' });
-  route.markCorrected(runLog, { id: picked.id, agent: m.asks[0].routed.corrected });
-  assert.deepEqual([runLog.get(picked.id).pick, runLog.get(picked.id).corrected], ['create', 'chat']);
+test('a made file\'s card is small (2026-10-15, David): 280 by 168, floating over the page', () => {
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, '../src/renderer/workspace/MadePeek.jsx'), 'utf8');
+  assert.ok(src.includes('data-overlay="1"') && src.includes('width: 280,') && src.includes('height: 168,'));
 });
 
-test('@create: a typed @create starts at once; a line deleted during the wait asks nothing', async (t) => {
+test('a collapsed Create conversation\'s files stand on lines of their own, flush with its title\'s icon, not indented (2026-10-15, David)', () => {
+  const made = mounted(['bart#+ [create 2026-10-14T20:00:00Z] A page', '@create make a page', 'bart> A page.', 'bart>', 'bart> @[page.html](made:c1/page.html)', 'bart>', 'bart> *Create · Opus · high · 9 s*', '']);
+  made.editor.lastHtml = null;
+  const html = made.editor.editorHtml(), at = html.indexOf('data-made-folded="1"');
+  assert.ok(at >= 0);
+  const block = html.slice(at, html.indexOf('data-made-row=', at));
+  assert.ok(block.includes('<div style="padding:0 0 6px">'), 'no left padding under the title');
+  assert.match(html, /data-made-row="c1\/page\.html" style="[^"]*padding:0 6px 0 6px;margin:0 -6px/, 'the row\'s own 6px taken back: flush');
+});
+
+test('@create: a typed @create starts at once', () => {
   const typed = mounted(['@create make a chart of CHI submissions by year']);
   typed.editor.askInline(0);
   assert.equal(typed.routes.length, 0);
@@ -821,14 +823,6 @@ test('@create: a typed @create starts at once; a line deleted during the wait as
   const empty = mounted(['@create']);
   empty.editor.askInline(0);
   assert.equal(empty.asks.length, 0, 'nothing on the line: nothing to make');
-
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  const g = mounted(['@bart make a chart of x'], { route: async () => ({ id: 'route-g2', agent: 'create', sure: 0.9 }) });
-  g.editor.askInline(0);
-  await new Promise((resolve) => setImmediate(resolve));
-  g.props.text = 'gone';
-  t.mock.timers.tick(5000);
-  assert.deepEqual([g.asks.length, g.gone.length], [0, 1]);
 });
 
 /* ------------------------------------------- a conversation across agents (2026-10-13) */
@@ -1005,36 +999,42 @@ function rowOf(html, i) {
 const clickAct = (m, dataset, disabled = false) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset, disabled, closest: () => null } : null) }, preventDefault() {} });
 const TITLED = ['bart# [chat 2026-10-13T09:00:00Z] Retry logic', '@chat why retry?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*', ''];
 
-test('an answered question has its Collapse in its corner (2026-10-15; on the button row from 2026-10-13): it folds that exchange; a titled conversation\'s last open one collapses the conversation', () => {
+test('a conversation\'s Collapse is in its first open question\'s corner, the fold icon (2026-10-15, David), and collapses all of it; a click on any open question does the same', () => {
   // Titled, its only exchange: the corner's Collapse collapses the conversation to its title's row.
   const titled = mounted(TITLED);
   const html = titled.editor.editorHtml();
   assert.ok(!rowOf(html, 1).includes('data-chip'), 'no chip beside an answered question');
-  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="fold" data-turn="1" aria-label="Collapse" aria-expanded="true">/, 'its Collapse, top right');
+  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="foldall" data-turn="1" aria-label="Collapse" aria-expanded="true"><svg[^>]*><path d="m7 20 5-5 5 5">/, 'its Collapse, top right, the fold icon');
   assert.ok(!/data-foot="1"[^>]*>(?:(?!<\/div><div data-line)[\s\S])*data-act="fold"/.test(html), 'not on the button row');
-  clickAct(titled, { act: 'fold', turn: '1' });
+  clickAct(titled, { act: 'foldall', turn: '1' });
   assert.equal(titled.lines()[0], 'bart#+ [chat 2026-10-13T09:00:00Z] Retry logic', 'collapsed to its title');
   assert.deepEqual(titled.lines().slice(1), TITLED.slice(1), 'its exchange is not folded as well');
-  // Titled, two answered: the first folds alone; then the second, the last open one, collapses the conversation.
-  const two = mounted([...TITLED.slice(0, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', '']);
-  clickAct(two, { act: 'fold', turn: '1' });
-  assert.equal(two.lines()[0], TITLED[0], 'the conversation stays open');
-  assert.match(two.lines()[2], /^bart\+> because$/, 'the first exchange folded');
-  clickAct(two, { act: 'fold', turn: '4' });
-  assert.match(two.lines()[0], /^bart#\+ /, 'the last open one collapses the conversation');
-  assert.equal(two.lines()[5], 'bart> those too', 'and is left open inside it');
-  // Untitled: it folds that turn.
-  const untitled = mounted(TITLED.slice(1));
-  const plain = untitled.editor.editorHtml();
-  assert.match(rowOf(plain, 0), /data-corner="0"[^>]*><button class="bart-ic" data-act="fold" data-turn="0" aria-label="Collapse" aria-expanded="true">/);
-  clickAct(untitled, { act: 'fold', turn: '0' });
-  assert.match(untitled.lines()[1], /^bart\+> because$/, 'folded');
-  // A turn of it at work: the earlier exchange still collapses, alone.
-  const running = mounted([...TITLED.slice(0, 4), '@chat and timeouts?', 'bart~> r1', '']);
+  // Titled, two answered: the corner is on the first alone, and either collapses the whole conversation.
+  const twoLines = [...TITLED.slice(0, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', ''];
+  const two = mounted(twoLines), drawn = two.editor.editorHtml();
+  assert.ok(rowOf(drawn, 1).includes('data-corner="1"') && !rowOf(drawn, 4).includes('data-corner'), 'one Collapse, on the first question');
+  assert.match(rowOf(drawn, 4), /data-fold-turn="4"/, 'the second can still be clicked');
+  clickAct(two, { act: 'foldall', turn: '4' });
+  assert.match(two.lines()[0], /^bart#\+ /, 'the conversation collapses');
+  assert.deepEqual(two.lines().slice(1), twoLines.slice(1), 'its exchanges as they were');
+  // Untitled: every answered exchange of it folds.
+  const untitled = mounted([...TITLED.slice(1, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', '']);
+  assert.match(rowOf(untitled.editor.editorHtml(), 0), /data-corner="0"[^>]*><button class="bart-ic" data-act="foldall" data-turn="0"/);
+  clickAct(untitled, { act: 'foldall', turn: '0' });
+  assert.match(untitled.lines()[1], /^bart\+> because$/, 'the first folded');
+  assert.match(untitled.lines()[4], /^bart\+> those too$/, 'and the second');
+  // A turn of it at work: it collapses all the same (2026-10-15, David), its lines as they were; the answer lands hidden.
+  const runLines = [...TITLED.slice(0, 4), '@chat and timeouts?', 'bart~> r1', ''];
+  const running = mounted(runLines);
   assert.ok(!running.editor.editorHtml().includes('Collapse once it answers'));
-  clickAct(running, { act: 'fold', turn: '1' });
-  assert.equal(running.lines()[0], TITLED[0]);
-  assert.match(running.lines()[2], /^bart\+> because$/);
+  clickAct(running, { act: 'foldall', turn: '1' });
+  assert.match(running.lines()[0], /^bart#\+ /, 'the conversation collapses');
+  assert.deepEqual(running.lines().slice(1), runLines.slice(1), 'the one at work as it was');
+  // Untitled, a turn at work: there is no title to collapse to, so its answered exchanges fold and the one at work is left.
+  const bare = mounted([...runLines.slice(1)]);
+  clickAct(bare, { act: 'foldall', turn: '0' });
+  assert.match(bare.lines()[1], /^bart\+> because$/);
+  assert.equal(bare.lines()[4], 'bart~> r1');
 });
 
 test('three turns, the first two folded: two one-line rows (no foot, no answer), then the open turn; a click expands one', () => {
@@ -1148,7 +1148,7 @@ test('a line being routed names, from the start, the level it would start on; th
   assert.equal(label(m, d), 'Thinking · Opus max');
   const b = { r1: askProgressed(askStarted({ r1: { docKey: 'k', agent: 'router', name: 'Sonnet', effort: 'high' } }, 'r1', { docKey: 'k', agent: 'brainstorm' }).r1, { step: 1, of: 1, movedUp: 0 }) };
   assert.equal(b.r1.name, '', 'Brainstorm\'s step drops the level it was routed with');
-  // Create's wait ("Starts in 5 s") and "Starting a Build" are as they were; Workspace wires the router's level and merges.
+  // "Starting a Build" is as it was; Workspace wires the router's level and merges.
   const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
   assert.match(workspace, /\[askId\]: \{ docKey: key, agent: 'router', \.\.\.\(level \? \{ name: level\.name, effort: level\.effort \} : \{\}\) \}/);
   assert.match(workspace, /setAsks\(\(current\) => askStarted\(current, askId, \{ docKey: key, agent: agent \|\| 'bart', at: \(current\[askId\] && current\[askId\]\.at\) \|\| Date\.now\(\) \}\)\)/);

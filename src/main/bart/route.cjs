@@ -7,8 +7,8 @@
 // tools and no session, which agent it is for. Anything that goes wrong (bad JSON, a timeout, an error) or a pick it is
 // less than 0.6 sure of goes to chat: a misrouted line costs more than a plain answer. @create (2026-10-13, ./create.cjs)
 // adds files to the library and starts by itself, so a create pick needed 0.8; since 2026-10-14 it needs 0.6 as the others
-// do: Chat makes no files, so a create pick it was sent ended in "ask @create", and the editor's 5 s countdown with Cancel
-// (DocEditor waitCreate) already stops a Create nobody wanted. A follow-up in a thread (2026-10-13)
+// do: Chat makes no files, so a create pick it was sent ended in "ask @create", and Stop stops a Create nobody wanted
+// (it keeps nothing; the editor's 5 s countdown with Cancel was taken out on 2026-10-15). A follow-up in a thread (2026-10-13)
 // comes with `current`, the agent that answered the thread last: it stays there unless the model is at least 0.8 sure
 // the line wants another agent, and anything that goes wrong leaves it there too.
 //

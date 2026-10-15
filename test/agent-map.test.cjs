@@ -280,7 +280,7 @@ test('design: the router and the three agents, the calls between them, their too
   assert.match(create.keeps, /at most 5 .*20 MB.*assets\/md.*assets\/files\/<uuid>\/.*deleted/);
   assert.match(create.models.rule, /@chat's models and efforts/);
   assert.deepEqual(create.calls, []);
-  assert.ok(agents[0].calls.some((call) => call.to === 'create' && /Creating in 5 s · Cancel/.test(call.how)), 'Bart calls Create');
+  assert.ok(agents[0].calls.some((call) => call.to === 'create' && /asked @create at once/.test(call.how)), 'Bart calls Create');
   const [router, bart, brainstorm, discover] = agents;
   assert.deepEqual(router.models.providers.anthropic.steps.map((step) => `${step.name} ${step.effort}`), ['Haiku low']);
   assert.deepEqual(router.models.providers.openai.steps.map((step) => `${step.name} ${step.effort}`), ['Luna low']);

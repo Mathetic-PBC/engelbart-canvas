@@ -450,15 +450,17 @@ function runInPage() {
     try { got = selected(); } catch { got = null; }
     ipcRenderer.send(CHANNELS.selection, { nonce, quote: got ? got.quote : null, pageText: got ? got.pageText : '' });
   });
-  // A guide's section: found in the text, run to its next heading (sectionEnd) or its paragraph's end, and tinted.
+  // A guide's section: found in the text, run to its next heading (sectionEnd) or its paragraph's end, tinted, and scrolled
+  // to its start, a little below the window's top (2026-10-15, David: the tint alone, not find's orange on its first
+  // words, which Stage no longer runs once this has shown it). → whether it was found and shown
   function showSection(words) {
     const h = registry();
-    if (!h) return;
+    if (!h) return false;
     h.delete(SECTION);
     const map = textMap(textNodes()), start = findWords(map.text, words);
-    if (!words || start < 0) return;
+    if (!words || start < 0) return false;
     const range = domRange(rangeOf(map, start, start + String(words).replace(/\s+/g, ' ').trim().length));
-    if (!range) return;
+    if (!range) return false;
     // The section stays inside what holds both its words and the heading above them (an article's body), else inside the
     // page's article or main: a sidebar, the tags or the footer are no part of it, even inside the same <article>.
     const from = range.startContainer.parentElement;
@@ -481,10 +483,22 @@ function runInPage() {
       if (block) tint.setEndAfter(block.lastChild || block); else tint.setEnd(range.endContainer, range.endOffset);
     }
     const shown = new Highlight(tint);
-    shown.priority = -1; // under find's matches, as a pdf's section is
+    shown.priority = -1; // under find's matches (⌘F's), as a pdf's section is
     h.set(SECTION, shown);
+    const at = from && from.closest(BLOCKS) || from;
+    if (at && typeof at.scrollIntoView === 'function') {
+      at.scrollIntoView({ block: 'start', inline: 'nearest' });
+      window.scrollBy(0, -Math.round(Math.min(120, window.innerHeight / 6))); // the date or heading above it in view too
+    }
+    return true;
   }
-  ipcRenderer.on(CHANNELS.section, (_event, words) => { try { showSection(typeof words === 'string' ? words.slice(0, MAX_EXACT) : ''); } catch { /* the page's own tints stay */ } });
+  // { nonce, words } → { nonce, shown } (a bare string, as before 2026-10-15: no reply).
+  ipcRenderer.on(CHANNELS.section, (_event, asked) => {
+    const nonce = asked && typeof asked === 'object' ? asked.nonce : null, words = nonce ? asked.words : asked;
+    let shown = false;
+    try { shown = showSection(typeof words === 'string' ? words.slice(0, MAX_EXACT) : ''); } catch { /* the page's own tints stay */ }
+    if (nonce) ipcRenderer.send(CHANNELS.section, { nonce, shown: !!shown });
+  });
   ipcRenderer.on(CHANNELS.add, (_event, value) => {
     const { nonce, mark } = value || {};
     if (!mark || typeof mark.id !== 'string') return;
