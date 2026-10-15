@@ -23,7 +23,7 @@ const projects = require('../src/main/store/projects.cjs');
 const library = require('../src/main/store/library.cjs');
 const readers = require('../src/main/connect/readers.cjs');
 const notes = require('../src/main/connect/notes.cjs');
-const { createImportTools, validateImportTool, chatNote, toolsFor, googleMarkdown, csvTable, IMPORT_TOOLS } = require('../src/main/connect/tools.cjs');
+const { createImportTools, validateImportTool, chatNote, toolsFor, googleMarkdown, csvTable, IMPORT_TOOLS, toolNamesFor } = require('../src/main/connect/tools.cjs');
 const { createConnect, readReply, readSurvey, cleanChoices, projectBlock, connectChoice } = require('../src/main/connect/session.cjs');
 const { createFakeConnectAgents } = require('../src/main/connect/fake.cjs');
 const { createWebSignIn } = require('../src/main/connect/web-signin.cjs');
@@ -597,9 +597,12 @@ test('MEMORY.md: secrets of a known shape masked, the old version kept, and @bar
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
 });
 
-function fakeConnect({ home = homeDir, delayMs = 5, agents = null, ...rest } = {}) {
+// `ask`: the librarian asks before each web app or connector is read (its consent cards); left out, every app was allowed
+// before the run (deps.allowed), as most of these tests are about what happens after.
+function fakeConnect({ home = homeDir, delayMs = 5, agents = null, ask = false, ...rest } = {}) {
   const snapshots = [];
-  const connect = createConnect({ agents: agents || createFakeConnectAgents({ delayMs }), ready: () => ALL, context: async () => ctx, homeDir: home, env: {}, notify: (snapshot) => snapshots.push(snapshot), openBridge: openToolBridge, ...rest });
+  const deps = { ...(ask ? {} : { allowed: true }), ...(rest.deps || {}) };
+  const connect = createConnect({ agents: agents || createFakeConnectAgents({ delayMs }), ready: () => ALL, context: async () => ctx, homeDir: home, env: {}, notify: (snapshot) => snapshots.push(snapshot), openBridge: openToolBridge, ...rest, deps });
   return { connect, snapshots, state: (id) => () => connect.state(id) };
 }
 
@@ -1104,11 +1107,12 @@ function fakeSignIn({ browsers = {}, later = {} } = {}) {
   const COOKIES = { 'chatgpt.com': '__Secure-next-auth.session-token', 'claude.ai': 'sessionKey' };
   const NAMES = { chrome: ['Chrome', 'chromium', 'com.google.Chrome'], firefox: ['Firefox', 'firefox', 'org.mozilla.firefox'] };
   const held = [];
-  const calls = { keychain: [], openedIn: [], looks: 0 };
+  const calls = { keychain: [], openedIn: [], looks: 0, checked: [] };
   const cookieImport = {
     sources: () => Object.keys(browsers).map((id) => ({ id, name: NAMES[id][0], family: NAMES[id][1], bundle: NAMES[id][2], profiles: [{ id: 'Default', name: 'Me' }] })),
     cookieNames: (id, profile, domains) => {
       const app = domains[0] === 'chatgpt.com' ? 'ChatGPT' : domains[0] === 'claude.ai' ? 'Claude' : '';
+      calls.checked.push(app);
       if (later[app] != null && calls.openedIn.length) calls.looks += 1;
       const signedIn = browsers[id].apps.includes(app) || (later[app] != null && calls.looks > later[app]);
       return signedIn ? [{ domain: domains[0], name: COOKIES[domains[0]] }] : [];
@@ -1150,6 +1154,88 @@ test('sign-ins sorted before the run: one signed in is surveyed; one still signe
     if (started) connect.stop(started.id);
     delete process.env.ENGELBART_CONNECT_FAKE_NEEDS;
   }
+});
+
+test('the librarian must ask: no sign-in looked at and no survey before Allow; Allow starts it, Skip leaves it out (From Amitav, 2026-10-15)', async () => {
+  const { webSignIn, calls } = fakeSignIn({ browsers: { chrome: { apps: ['ChatGPT', 'Claude'] } } });
+  const { connect, state } = fakeConnect({ webSignIn, ask: true, delayMs: 150 });
+  let started = null;
+  try {
+    started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } }, provider: 'anthropic' });
+    let now = await until(state(started.id), (s) => s.needs.length === 2 && !s.thinking && s.chat.length > 1, 'the two prompts');
+    assert.deepEqual(now.needs.map((need) => [need.app, need.kind, need.reason]), [['ChatGPT', 'consent', 'Allow Engelbart to search and read your ChatGPT?'], ['Claude', 'consent', 'Allow Engelbart to search and read your Claude?']]);
+    assert.equal(now.needs[0].note, 'What the agents read there may be sent to Anthropic for processing.');
+    assert.deepEqual(calls.checked, [], 'no sign-in of theirs is looked at before Allow');
+    assert.deepEqual(calls.keychain, [], 'nor copied');
+    assert.deepEqual(now.jobs.filter((job) => job.apps.some((app) => app === 'ChatGPT' || app === 'Claude')).map((job) => job.kind), [], 'no survey before Allow');
+    // The librarian asks nothing about the apps it may not look at yet (it waits on them, as on a survey).
+    assert.ok(!now.chat.some((entry) => entry.ask && entry.ask.source === 'chats'), 'nothing asked about the chats yet');
+    now = await connect.need(started.id, now.needs.find((need) => need.app === 'ChatGPT').id, 'open');
+    now = await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'ChatGPT'), 'ChatGPT\'s survey');
+    assert.ok(calls.checked.includes('ChatGPT'), 'Allow: its sign-in is looked at');
+    assert.ok(!calls.checked.includes('Claude'), 'not Claude\'s, still asked about');
+    assert.ok(now.log.some((entry) => entry.text === 'Allowed Engelbart to search and read ChatGPT' && entry.who === 'You'), JSON.stringify(now.log.map((entry) => entry.text)));
+    now = await connect.need(started.id, now.needs.find((need) => need.app === 'Claude').id, 'skip');
+    assert.deepEqual(now.needs, []);
+    assert.ok(now.leftOut.some((entry) => entry.app === 'Claude' && /didn’t allow Engelbart to search and read it/.test(entry.why)));
+    // Import now hands nothing of Claude over, even as the whole source.
+    await until(state(started.id), (s) => !s.thinking, 'the librarian');
+    const imported = connect.importNow(started.id);
+    connect.stop(started.id); // what was handed over is what is checked; nothing of it needs to come in
+    assert.ok(imported.jobs.every((job) => !job.apps.includes('Claude')), JSON.stringify(imported.jobs.map((job) => [job.kind, job.apps])));
+    assert.deepEqual(calls.checked.filter((app) => app === 'Claude'), [], 'Claude was never looked at');
+    // Import pressed while an app is still asked about: it is left out and its prompt put away.
+    const third = fakeConnect({ ask: true });
+    const other = await third.connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude Code'] } } });
+    await until(third.state(other.id), (s) => s.needs.length === 1 && !s.thinking, 'ChatGPT\'s prompt');
+    const pressed = third.connect.importNow(other.id);
+    third.connect.stop(other.id);
+    assert.deepEqual(pressed.needs, []);
+    assert.ok(pressed.leftOut.some((entry) => entry.app === 'ChatGPT' && /Import before allowing it/.test(entry.why)));
+    assert.ok(pressed.jobs.every((job) => !job.apps.includes('ChatGPT')));
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('the librarian\'s prompts come back after a quit for the apps not yet answered; an app allowed before is not asked again', async () => {
+  const first = fakeConnect({ ask: true, delayMs: 40 });
+  const started = await first.connect.start({ sources: { notes: { on: true, apps: ['Obsidian', 'Google Docs', 'OneNote'] } }, provider: 'openai' });
+  let now = await until(first.state(started.id), (s) => s.needs.length === 2 && !s.thinking, 'the prompts');
+  assert.equal(now.needs[0].note, 'What the agents read there may be sent to OpenAI for processing.');
+  await first.connect.need(started.id, now.needs.find((need) => need.app === 'Google Docs').id, 'open');
+  await until(first.state(started.id), (s) => s.jobs.some((job) => job.kind === 'survey' && job.apps[0] === 'Google Docs'), 'Drive\'s survey');
+  first.connect.suspendAll();
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.deepEqual(saved.allowed, ['Google Docs']);
+  const second = fakeConnect({ ask: true, delayMs: 5 });
+  second.connect.resume(ctx);
+  now = await until(second.state(started.id), (s) => s.needs.length >= 1, 'asked again');
+  assert.deepEqual(now.needs.map((need) => [need.app, need.kind]), [['OneNote', 'consent']], 'only OneNote is asked again');
+  for (const one of second.connect.list(ctx.dataRoot)) second.connect.stop(one.id);
+});
+
+test('what the person ticks is what may be read: Drive ids from the survey kept as approved, and an import reads nothing else (librarian only)', async () => {
+  const { connect, state } = fakeConnect({ delayMs: 5 });
+  const started = await connect.start({ sources: { notes: { on: true, apps: ['Google Docs'] } } });
+  const card = await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.ask && entry.ask.kind === 'multi'), 'the Drive question');
+  const ask = card.chat.find((entry) => entry.ask).ask;
+  assert.deepEqual(ask.options.map((option) => option.label), ['Google Drive item 1', 'Google Drive item 2', 'Google Drive item 3']);
+  connect.answer(started.id, { picked: ['Google Drive item 2'] });
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  assert.deepEqual(saved.approved, { 'Google Docs': ['google-docs-2'] }, 'matched to the survey\'s item by its name');
+  connect.stop(started.id);
+  // The tools: an id the person did not tick is skipped, before anything is fetched.
+  const fetched = [];
+  const page = { url: () => 'about:blank', download: async (url) => { fetched.push(url); throw new Error('not in this test'); } };
+  const tools = createImportTools({ session: { dataRoot: ctx.dataRoot, homeDir, dir: path.join(ctx.dataRoot, '.connect', 'approved-test'), projectId: () => null, apps: ['Google Docs'], approvedFor: (app) => (app === 'Google Docs' ? new Set(['google-docs-2']) : null) }, context: async () => ctx, kind: 'import', page });
+  const out = await tools('import_google_files', { items: [{ id: 'google-docs-1', kind: 'doc', name: 'One' }, { id: 'google-docs-3', kind: 'doc', name: 'Three' }] });
+  assert.deepEqual(out.skipped.map((entry) => [entry.id, entry.why]), [['google-docs-1', 'the person did not approve it: only what they ticked comes in'], ['google-docs-3', 'the person did not approve it: only what they ticked comes in']]);
+  assert.deepEqual(fetched, [], 'nothing of them was fetched');
+  // In the librarian's run a Drive import has no browser to find more; in the background it browses freely.
+  assert.deepEqual(toolNamesFor('import', { apps: ['Google Docs'], approvals: true }).filter((name) => name.startsWith('browser_open')), []);
+  assert.deepEqual(toolNamesFor('survey', { apps: ['Google Docs'], approvals: true }).filter((name) => name === 'browser_open'), ['browser_open'], 'its survey lists Drive');
+  assert.deepEqual(toolNamesFor('import', { apps: ['Google Docs'] }).filter((name) => name === 'browser_open'), ['browser_open']);
 });
 
 /** A sign-in window (main/connect/signin-window.cjs) that answers `status`, its calls in `opened`. */

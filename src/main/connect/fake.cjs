@@ -41,7 +41,8 @@ function interviewReply(s, message) {
       const kind = found[needs].needs;
       return { say: `${needs} needs a step from you first.`, ask: null, authorize: { source, app: needs, kind, label: kind === 'connector' || kind === 'signin' ? `Sign in to ${needs}` : kind === 'permission' ? `Allow Engelbart to read ${needs}` : `Choose your ${needs} folder…` }, dispatch, waiting: false, done: false };
     }
-    if (choice.apps.some((app) => found[app] && found[app].survey === 'running')) { waitFor = waitFor || source; continue; }
+    // An app still being looked through, or one Engelbart is asking the person to allow (the prompt's rule 0): wait for it.
+    if (choice.apps.some((app) => found[app] && (found[app].survey === 'running' || found[app].consent))) { waitFor = waitFor || source; continue; }
     const label = LABELS[source];
     const surveyed = choice.apps.map((app) => found[app] && found[app].survey && found[app].survey.items).find((items) => Array.isArray(items) && items.length);
     state.asked.push({ source, label });

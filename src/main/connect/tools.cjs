@@ -109,7 +109,10 @@ const IMPORT_TOOLS = [
 ];
 
 // What each kind of agent may call: a survey looks, a recall asks and saves its answer, an import brings things in.
-const LOOK = ['folder_overview', 'list_note_files', 'list_pdfs', 'list_chats', 'read_chat', 'web_chats', 'web_chat_read', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'overleaf_projects', 'gmail_accounts', 'gmail_search', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
+// A survey lists what is there and reads no web app's contents (From Amitav, 2026-10-15: "permission to list candidate
+// files versus permission to read their contents"): web_chats, never web_chat_read; Drive's lists, never a document
+// (browseSitesFor). Files on this Mac it may read, as the person let Engelbart view them.
+const LOOK = ['folder_overview', 'list_note_files', 'list_pdfs', 'list_chats', 'read_chat', 'web_chats', 'browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'overleaf_projects', 'gmail_accounts', 'gmail_search', 'apple_notes_folders', 'apple_notes_list', 'browser_history', 'browser_bookmarks', 'links_in_notes', 'zotero_collections', 'zotero_items', 'github_repos', 'needs_you', 'wait_for_you'];
 const TOOLS_FOR = Object.freeze({
   survey: LOOK,
   recall: ['browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'needs_you', 'wait_for_you', 'save_memory'],
@@ -134,8 +137,17 @@ const BROWSING = Object.freeze(['browser_open', 'browser_read', 'browser_click',
 // fixed-reader approach"): a job of only these gets none of the browser tools, and those tools never open their sites.
 const FIXED_READER_APPS = Object.freeze(new Set(['ChatGPT', 'Claude', 'Overleaf', 'Gmail']));
 
-/** The web apps of `apps` an agent may browse: reached on the web, and not read by a fixed reader. */
-const browsedApps = (apps) => (apps || []).filter((app) => APPS[app] && APPS[app].reach === 'web' && !FIXED_READER_APPS.has(app));
+// The apps whose items the person approves one by one when the librarian asks (From Amitav, 2026-10-15: "if in library
+// brainstorm mode they should be prompted with individual files and asked to bring those in"): in the librarian's run
+// an import of these reads only what the person ticked (session.approvedFor), by the ids its survey reported, and is not
+// given the browser to find more. In the background they are read freely, as before.
+const APPROVAL_APPS = Object.freeze(new Set(['Google Docs', 'Google Meet', 'Overleaf']));
+
+/**
+ * The web apps of `apps` an agent may browse: reached on the web, and not read by a fixed reader; with `approvals` (the
+ * librarian's run, an import) not one whose items the person approves either.
+ */
+const browsedApps = (apps, { approvals = false } = {}) => (apps || []).filter((app) => APPS[app] && APPS[app].reach === 'web' && !FIXED_READER_APPS.has(app) && !(approvals && APPROVAL_APPS.has(app)));
 
 // The sites an agent browses for an app, where its window may open more (a Google sign-in is all of google.com): Google
 // Drive's are Drive and its documents, never Gmail's or the Google account's pages. A survey lists what is there and
@@ -145,8 +157,8 @@ const BROWSE_SITES = Object.freeze({ 'Google Docs': ['drive.google.com', 'docs.g
 const SURVEY_SITES = Object.freeze({ 'Google Docs': ['drive.google.com'], 'Google Meet': ['drive.google.com'] });
 
 /** The sites an agent of `kind` may browse for `apps` (and `extraSites`), the sign-in pages aside. */
-function browseSitesFor(kind, apps, extraSites = []) {
-  const sites = browsedApps(apps).flatMap((app) => (kind === 'survey' && SURVEY_SITES[app]) || BROWSE_SITES[app] || APPS[app].sites || []);
+function browseSitesFor(kind, apps, extraSites = [], { approvals = false } = {}) {
+  const sites = browsedApps(apps, { approvals: approvals && kind !== 'survey' }).flatMap((app) => (kind === 'survey' && SURVEY_SITES[app]) || BROWSE_SITES[app] || APPS[app].sites || []);
   return [...new Set([...sites, ...extraSites])];
 }
 
@@ -154,9 +166,9 @@ function browseSitesFor(kind, apps, extraSites = []) {
  * The tools one job's agent gets (2026-10-15): its kind's, without the browser's when it has no browser (`page` false) or
  * nothing it covers is browsed (`apps`, and `extraSites` for tools Engelbart has no import of its own for).
  */
-function toolNamesFor(kind, { apps = [], extraSites = [], page = true } = {}) {
+function toolNamesFor(kind, { apps = [], extraSites = [], page = true, approvals = false } = {}) {
   const names = TOOLS_FOR[kind] || TOOLS_FOR.import;
-  const browses = page && (browsedApps(apps).length > 0 || extraSites.length > 0);
+  const browses = page && (browsedApps(apps, { approvals: approvals && kind !== 'survey' }).length > 0 || extraSites.length > 0);
   return names.filter((name) => browses || !BROWSING.includes(name));
 }
 
@@ -279,6 +291,13 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
   // sign-in pages they send people through), never a fixed reader's (FIXED_READER_APPS) nor, in a survey of Google
   // Drive, a document's own page: a survey lists, the import reads what the person approved.
   const browseHosts = Array.isArray(session.browseSites) ? hostsFor(session.browseSites) : null;
+  /** The ids the person approved for the job's `apps` (the librarian's run), or null where anything may be read. */
+  const approvedFor = (apps) => {
+    if (typeof session.approvedFor !== 'function') return null;
+    const sets = apps.map((app) => session.approvedFor(app)).filter(Boolean);
+    return sets.length ? new Set(sets.flatMap((set) => [...set])) : null;
+  };
+  const NOT_APPROVED = 'the person did not approve it: only what they ticked comes in';
   const downloads = (part) => path.join(session.downloads || path.join(session.dir, 'downloads'), part);
   // The period (2026-10-10): the listing tools use the session's when `days` is left out, and cut a longer one down to it;
   // a shorter one is kept. import_pdfs by path is not held to it, so an older paper the person agreed to still comes in.
@@ -564,10 +583,12 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       let count = 0;
       const skipped = [], left = [];
       const deadline = Date.now() + CALL_BUDGET_MS;
+      const approved = approvedFor(['Google Docs', 'Google Meet']);
       for (const item of items) {
         if (Date.now() > deadline) { left.push(item.id); continue; }
         const id = String(item.id || ''), kindOf = String(item.kind || 'doc').toLowerCase(), named = String(item.name || '').trim();
         if (!GOOGLE_ID_RE.test(id)) { skipped.push({ id, why: 'not a Drive id' }); continue; }
+        if (approved && !approved.has(id)) { skipped.push({ id, why: NOT_APPROVED }); continue; }
         if (!GOOGLE_KINDS.includes(kindOf)) { skipped.push({ id, why: `kind must be one of ${GOOGLE_KINDS.join(', ')}` }); continue; }
         const key = `google:${id}`;
         if (imported.has(key)) { skipped.push({ id, why: 'brought in before' }); continue; }
@@ -711,9 +732,11 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       let count = 0;
       const skipped = [], left = [];
       const deadline = Date.now() + CALL_BUDGET_MS;
+      const approved = approvedFor(['Overleaf']);
       for (const id of ids.slice(0, 20)) {
         if (Date.now() > deadline) { left.push(id); continue; }
         if (!OVERLEAF_ID_RE.test(id)) { skipped.push({ id, why: 'not an Overleaf project id' }); continue; }
+        if (approved && !approved.has(id)) { skipped.push({ id, why: NOT_APPROVED }); continue; }
         const key = `overleaf:${id}`;
         if (imported.has(key)) { skipped.push({ id, why: 'brought in before' }); continue; }
         try {
@@ -918,4 +941,4 @@ function findMainTex(folder) {
   return ordered.find((file) => { try { return /\\documentclass/.test(fs.readFileSync(file, 'utf8').slice(0, 20000)); } catch { return false; } }) || null;
 }
 
-module.exports = { IMPORT_TOOLS, TOOLS_FOR, BROWSING, FIXED_READER_APPS, toolsFor, toolNamesFor, browsedApps, browseSitesFor, CHAT_APPS, NEEDS_KINDS, validateImportTool, createImported, createImportTools, chatNote, googleMarkdown, csvTable };
+module.exports = { IMPORT_TOOLS, TOOLS_FOR, BROWSING, FIXED_READER_APPS, APPROVAL_APPS, toolsFor, toolNamesFor, browsedApps, browseSitesFor, CHAT_APPS, NEEDS_KINDS, validateImportTool, createImported, createImportTools, chatNote, googleMarkdown, csvTable };

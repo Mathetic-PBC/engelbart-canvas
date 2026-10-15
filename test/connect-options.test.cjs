@@ -51,7 +51,8 @@ test('optionOf keeps an option\'s detail with its line breaks, cut at 600 charac
 });
 
 test('the librarian is asked for an option\'s detail, from <found> only', () => {
-  assert.match(INTERVIEW_SYSTEM_PROMPT, /"options": \[\{"label": "<short>", "why": "<optional, a few words>", "detail": "<optional, from <found> only:[^"]*>", "checked": true \| false \(multi only[^)]*\)\}\]/, 'the ask format');
+  assert.match(INTERVIEW_SYSTEM_PROMPT, /"options": \[\{"label": "<short>", "why": "<optional, a few words>", "detail": "<optional, from <found> only:[^"]*>", "checked": true \| false \(multi only[^)]*\), "ids": \["<Google Drive and Overleaf: the survey ids it stands for>"\]\}\]/, 'the ask format');
+  assert.deepEqual(optionOf({ label: 'Thesis draft', ids: ['1abcDEF_ghij', '1abcDEF_ghij', 7, ''] }, true).ids, ['1abcDEF_ghij'], 'an option\'s survey ids (2026-10-15), kept once each');
   const rule = INTERVIEW_SYSTEM_PROMPT.split('\n').find((text) => text.startsWith('- Fill an option\'s "detail"'));
   assert.ok(rule, 'a question rule about detail');
   assert.match(rule, /from <found> only, never invent/);

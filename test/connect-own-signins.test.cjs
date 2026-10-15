@@ -99,7 +99,7 @@ function skilledAgents(calls) {
 }
 
 function connectWith(rest) {
-  return createConnect({ ready: () => ['anthropic', 'openai'], context: async () => ctx, homeDir, env: {}, notify: () => {}, openBridge: openToolBridge, deps: { stepPollMs: 15 }, ...rest });
+  return createConnect({ ready: () => ['anthropic', 'openai'], context: async () => ctx, homeDir, env: {}, notify: () => {}, openBridge: openToolBridge, deps: { stepPollMs: 15, allowed: true }, ...rest });
 }
 const imports = (s, app) => s.jobs.filter((job) => job.kind === 'import' && job.apps.includes(app));
 

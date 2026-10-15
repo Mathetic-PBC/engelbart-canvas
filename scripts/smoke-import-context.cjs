@@ -327,9 +327,31 @@ app.whenReady().then(async () => {
       /* Import manually: the librarian's chat (Connect your library's page) on the same choices; no Full Disk Access */
       await until(async () => (await flow(wc)).screen === 'librarian', 'the librarian\'s chat', 1200);
       await until(() => has(wc, '[data-connect-agent]'), 'the librarian\'s first words', 1200);
-      await shot(wc, '11-librarian');
-      // Its back arrow stops that chat and brings back the tools screen, not Connect your library's own choose screen.
+      // The librarian must ask (From Amitav, 2026-10-15): a popup for each web app or connector before anything of it is
+      // looked at; no survey of it runs before Allow; Allow starts its survey, Skip leaves it out.
       const firstChat = (await js(wc, 'window.engelbartAPI.connectList()')).find((entry) => !entry.direct && !entry.stopped);
+      await until(() => has(wc, '[data-need-popup][data-need-kind="consent"]'), 'Allow Engelbart to search and read your …?');
+      await shot(wc, '11-librarian');
+      const asked = (await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(firstChat.id)})`)).needs.filter((need) => need.kind === 'consent').map((need) => need.app);
+      assert.ok(asked.length >= 2, `a prompt for each web app or connector: ${asked.join(', ')}`);
+      const webJobs = async () => (await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(firstChat.id)})`)).jobs.filter((job) => job.apps.some((app) => asked.includes(app)));
+      assert.deepEqual(await webJobs(), [], 'nothing of them runs before Allow');
+      const title = await js(wc, 'document.querySelector("[data-need-popup] h3").textContent');
+      const first = asked.find((app) => title.includes(app === 'Google Docs' ? 'Google Drive' : app)) || asked[0];
+      assert.match(title, /^Allow Engelbart to search and read your .+\?$/);
+      assert.match(await js(wc, 'document.querySelector("[data-need-popup] p").textContent'), /may be sent to (Anthropic|OpenAI) for processing\./);
+      await press(wc, '[data-need-popup] [data-need-primary]');
+      // Allowed: its sign-in is looked at and its survey starts (here, signed out of the test browser, it is left out; a
+      // connector not connected yet is offered by the librarian as a button).
+      await until(async () => (await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(firstChat.id)})`)).log.some((entry) => entry.text === `Allowed Engelbart to search and read ${first}`), `${first} allowed`);
+      for (let n = 0; n < 12 && await has(wc, '[data-need-popup][data-need-kind="consent"]'); n += 1) {
+        await press(wc, '[data-need-popup] [data-need-later]');
+        await new Promise((resolve) => { setTimeout(resolve, 300); });
+      }
+      assert.equal(await has(wc, '[data-need-popup]'), false, 'every prompt answered');
+      assert.deepEqual((await webJobs()).filter((job) => !job.apps.includes(first)), [], 'what was skipped never ran');
+      await shot(wc, '11b-librarian-asked');
+      // Its back arrow stops that chat and brings back the tools screen, not Connect your library's own choose screen.
       await press(wc, 'button.bart-ic[aria-label="Back"]');
       await until(async () => { const f = await flow(wc); return f && f.screen === 'picker' && !f.dialog; }, 'the tools screen again');
       await until(() => js(wc, `window.engelbartAPI.connectState(${JSON.stringify(firstChat.id)}).then((s)=>s.stopped)`), 'that chat stopped');
@@ -346,6 +368,11 @@ app.whenReady().then(async () => {
       // What was specified, its saved websites' line among it, for the librarian.
       assert.match(choices.custom, /- Obsidian: Only my notes about help-seeking\. Also bring in the web links saved in these notes.*; only these folders and files: .*Research; only for these of the projects: /, choices.custom);
       // Put away, the chat goes on in the background; the projects are made and the first opens.
+      await until(() => has(wc, '[data-need-popup][data-need-kind="consent"]'), 'the prompts, again');
+      for (let n = 0; n < 12 && await has(wc, '[data-need-popup][data-need-kind="consent"]'); n += 1) {
+        await press(wc, '[data-need-popup] [data-need-later]');
+        await new Promise((resolve) => { setTimeout(resolve, 300); });
+      }
       await press(wc, '[data-connect-import]');
       await until(() => has(wc, '[data-connect-done]'), 'Continue', 1200);
       await press(wc, '[data-connect-done]');

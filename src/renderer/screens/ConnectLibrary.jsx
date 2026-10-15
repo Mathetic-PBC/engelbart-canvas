@@ -6,6 +6,7 @@ import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
+import NeedPopup from '../import/NeedPopup.jsx';
 import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, afterSignInWindowClosed, signInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, placedLine, unsignedWeb, signInGate, shownSignIn, signInChain, signInWindows, opensSignIn, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
@@ -519,7 +520,7 @@ function NeedsCard({ needs, onOpen, onSkip }) {
         {needs.map((need, i) => {
           const view = needView(need);
           return (
-            <div key={need.id} data-connect-need={need.kind} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '10px 12px 10px 14px', borderTop: i ? '1px solid #f2f2f2' : 0 }}>
+            <div key={need.id} data-connect-need={need.kind} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '10px 12px 10px 14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}>{logoOf(need.app) || ALERT}</span>
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
@@ -1457,7 +1458,10 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const allOn = picks ? allPicked(picks, found) : false;
   const ready = providers === null || providers.some((entry) => entry.ready); // unknown until the list comes: no flash of "sign in first"
   const jobs = session ? workJobs(session.jobs) : [];
-  const needs = session ? session.needs : [];
+  // The librarian's prompt to search and read an app (2026-10-15, From Amitav: it must ask before anything of it is
+  // touched) is a popup over the chat, one at a time; the agents' other steps stay in the chat.
+  const asking = session ? session.needs.find((need) => need.kind === 'consent') || null : null;
+  const needs = session ? session.needs.filter((need) => need.kind !== 'consent') : [];
   const last = session ? session.chat.length - 1 : -1;
   const running = jobs.filter((job) => !statusOf(job).done).length;
   const done = !!(session && session.done);
@@ -1804,7 +1808,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             </div>
         </>
       )}
-
+      {asking && <NeedPopup key={asking.id} need={asking} onOpen={() => openNeed(asking)} onDone={() => openNeed(asking)} onSkip={() => needSkip(asking)} onLater={() => needSkip(asking)} />}
     </div>
   );
 }

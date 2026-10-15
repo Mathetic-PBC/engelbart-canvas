@@ -24,6 +24,8 @@ export function needCopy(need) {
     if (need.opened) return { title: `Sign in to ${app}`, text: need.code ? `Enter ${need.code} on GitHub, then come back.` : 'Finish signing in in your browser.', primary: 'Open again', secondary: 'Skip' };
     return { title: `Sign in to ${app}`, text: '', primary: 'Sign in', secondary: 'Skip' };
   }
+  // The librarian's prompt before an app is searched or read (2026-10-15, From Amitav): whose model reads it, Allow / Skip.
+  if (need.kind === 'consent') return { title: need.reason || `Allow Engelbart to search and read your ${app}?`, text: need.note || '', primary: 'Allow', secondary: 'Skip' };
   if (need.kind === 'permission') return { title: `Allow Engelbart to read ${app}?`, text: '', primary: 'Allow', secondary: 'Don’t allow' };
   if (need.kind === 'folder') return { title: `Choose your ${app} folder`, text: '', primary: 'Choose folder', secondary: 'Skip' };
   // A connector's sign-in opens in the default browser (connectors.cjs), whichever browser was chosen for the copies.

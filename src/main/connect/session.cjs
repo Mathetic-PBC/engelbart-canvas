@@ -48,7 +48,7 @@ const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
 const folderAccess = require('./folder-access.cjs');
 const notes = require('./notes.cjs');
-const { createImportTools, toolNamesFor, browseSitesFor } = require('./tools.cjs');
+const { createImportTools, toolNamesFor, browseSitesFor, APPROVAL_APPS } = require('./tools.cjs');
 const { skillsFor } = require('./skills.cjs');
 const memory = require('./memory.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
@@ -72,6 +72,10 @@ const REPOS_ASK = /\bwhich\b.*\brepo(?:s|sitory|sitories)?\b/i;
 const AUTHORIZE_KINDS = new Set(['signin', 'connector', 'permission', 'folder']);
 // The steps that are a sign-in, a code or a check on a site (round 3): made in the person's browser, then copied over.
 const SIGNIN_KINDS = new Set(['signin', 'password', 'code', '2fa', 'captcha']);
+// Who processes what an agent reads, by provider: said on the librarian's prompt to search and read an app (consentCard).
+const PROVIDER_COMPANIES = Object.freeze({ anthropic: 'Anthropic', openai: 'OpenAI' });
+/** Whether the librarian's run must ask before `app` is touched (consentCard): an app on the web or behind a connector. */
+const asksFirst = (app) => !!(APPS[app] && (APPS[app].reach === 'web' || APPS[app].reach === 'connector'));
 const SIGNIN_APPS = new Set(['Zotero', 'GitHub']);
 // A step whose sign-in Engelbart can see for itself (Zotero's and GitHub's own, a connector's) is looked at this often
 // while it is open, so a sign-in finished anywhere closes it and starts what waited on it (2026-10-14, the Zotero beta report).
@@ -332,7 +336,9 @@ function detailOf(value) {
  */
 function optionOf(option, multi = false) {
   const checked = multi ? { checked: !!(option && typeof option === 'object' && option.checked === true) } : {};
-  if (option && typeof option === 'object') { const label = line(option.label, 160); return label ? { label, why: line(option.why, 140), detail: detailOf(option.detail), ...checked } : null; }
+  // The survey ids it stands for (2026-10-15), for an app whose items the person approves (tools.cjs APPROVAL_APPS).
+  const ids = option && typeof option === 'object' && Array.isArray(option.ids) ? [...new Set(option.ids.filter((id) => typeof id === 'string' && id.trim()).map((id) => line(id, 300)))].slice(0, 200) : [];
+  if (option && typeof option === 'object') { const label = line(option.label, 160); return label ? { label, why: line(option.why, 140), detail: detailOf(option.detail), ...checked, ...(ids.length ? { ids } : {}) } : null; }
   const label = line(option, 160);
   return label ? { label, why: '', detail: '', ...checked } : null;
 }
@@ -469,7 +475,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
         ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped], skippedSources: [...s.skippedSources],
-        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, fallback: [...(s.fallback || [])], connected: [...(s.connected || [])], rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles, ...(job.find ? { find: true } : {}), ...(job.extra && job.extra.sites ? { extra: { sites: job.extra.sites } } : {}) })),
+        suspended: !!s.suspended, allowed: [...(s.allowed || [])], approved: Object.fromEntries([...(s.approved || new Map())].map(([app, ids]) => [app, [...ids]])), gmailThreads: s.gmailThreads || 0, fallback: [...(s.fallback || [])], connected: [...(s.connected || [])], rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles, ...(job.find ? { find: true } : {}), ...(job.extra && job.extra.sites ? { extra: { sites: job.extra.sites } } : {}) })),
       }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
   }
@@ -675,7 +681,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /** A job queued: started when a place is free, the most urgent kind first. The same kind, source and apps go once. */
   function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null, find = false, route = null, again = false }) {
     if (kind === 'import' && s.skippedSources.has(source)) return null; // the person skipped it: nothing of it comes in
-    const apps = kind === 'import' && given.length ? given.filter((app) => !s.skipped.has(app)) : given;
+    const apps = (kind === 'import' && given.length ? given.filter((app) => !s.skipped.has(app)) : given).filter((app) => mayReach(s, app));
     if (given.length && !apps.length) return null;
     // `again`: an import run once more because a connector was signed in after its agent had started (rerunJob).
     const key = `${find ? 'find' : kind}:${source}:${[...apps].sort().join(',')}${again ? ':again' : ''}`;
@@ -704,7 +710,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   const sitesOf = (apps) => [...new Set(apps.flatMap((app) => (appOf(app) && appOf(app).sites) || []))];
   /** The apps a job covers: those it names, else every app picked for its source (a whole source handed over). */
-  const appsOfJob = (s, job) => (job.apps.length ? job.apps : ((s.choices.sources[job.source] || {}).apps || []));
+  // A whole source handed over reaches its apps, but in the librarian's run never one the person hasn't allowed (consentCard).
+  const appsOfJob = (s, job) => (job.apps.length ? job.apps : ((s.choices.sources[job.source] || {}).apps || [])).filter((app) => job.apps.includes(app) || mayReach(s, app));
 
   function jobMessage(s, job) {
     const custom = instructionsText(s.dataRoot);
@@ -799,14 +806,18 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // Its tools (2026-10-15): no browser for a job of apps Engelbart reads with readers of its own (ChatGPT, Claude,
     // Overleaf), and the browser held to the sites of the apps it browses.
     const extraSites = (job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [];
-    const toolNames = bridged && !browse ? toolNamesFor(turnKind, { apps: covered, extraSites, page: !!page }) : null;
-    const browseSites = browseSitesFor(turnKind, covered, extraSites);
+    // In the librarian's run an app whose items the person approves is read by id only (approvedFor), never browsed.
+    const approvals = !s.choices.direct;
+    const toolNames = bridged && !browse ? toolNamesFor(turnKind, { apps: covered, extraSites, page: !!page, approvals }) : null;
+    const browseSites = browseSitesFor(turnKind, covered, extraSites, { approvals });
     const session = {
       dataRoot: s.dataRoot, homeDir, dir: s.dir, downloads: s.downloads, projectId: () => s.projectId,
       // what macOS let Engelbart read of its protected folders (MATH-110): the file tools keep out of the rest
       readable: (dir) => accessOf(s).readable(dir),
       // the apps the job covers and its source group, for what each row it brings in knows about itself (Library Phase B)
       apps: covered, group: job.source, browseSites,
+      // what the person ticked for an app whose items they approve (approvePicked), in the librarian's run; null: anything
+      approvedFor: (app) => (approvals && APPROVAL_APPS.has(app) ? (s.approved.get(app) || new Set()) : null),
       get exports() { return s.picked.exports; },
       get folders() { return s.picked.folders; },
       get days() { return s.choices.days || null; }, // the period picked (2026-10-10): the listing tools hold to it
@@ -997,10 +1008,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * The surveys and recalls a session starts with: every web or connector app it may reach, every assistant it may ask.
    * An app in `held` is still signed out or refused (signInsFirst): its survey and recall are held, then left out (releaseHeld).
    */
-  function startWork(s, held = new Set()) {
+  function startWork(s, held = new Set(), only = null) {
     for (const [source, choice] of Object.entries(s.choices.sources)) {
       if (!choice.on) continue;
       for (const app of choice.apps) {
+        if (only && !only.includes(app)) continue;
+        if (!mayReach(s, app)) continue; // not allowed yet (consentCard)
         const reach = appOf(app) ? appOf(app).reach : null;
         if (reach === 'web') {
           if (!s.choices.permissions.browser) { s.found[source] = { ...(s.found[source] || {}), [app]: { reach, left: 'They did not let the agents use their accounts, so this app is left out.' } }; continue; }
@@ -1020,6 +1033,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
     if (s.choices.permissions.recall && s.choices.permissions.browser) {
       for (const app of recallApps((s.choices.sources.chats || {}).on ? s.choices.sources.chats.apps : [])) {
+        if ((only && !only.includes(app)) || !mayReach(s, app)) continue;
         if (s.held.has(app)) s.held.get(app).recall = true;
         else dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
       }
@@ -1239,12 +1253,14 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * → { signedOut: Set, refused: Map(app → browser), signedIn: Map(app → browser, '' when held already),
    *     checking: Map(app → Promise of its answer) }
    */
-  async function signInsFirst(s) {
+  async function signInsFirst(s, only = null) {
     const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map(), checking: new Map(), elsewhere: new Map() };
     if (!webSignIn || !s.choices.permissions.browser) return out;
-    // Every web app, and a connector app with sites (Notion) when no connector of Engelbart's or the person's reaches it.
+    // Every web app, and a connector app with sites (Notion) when no connector of Engelbart's or the person's reaches it;
+    // in the librarian's run only those the person allowed (consentCard): no sign-in of theirs is looked at before.
     const reached = s.connected || new Set();
     const apps = Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps)
+      .filter((app) => (!only || only.includes(app)) && mayReach(s, app))
       .filter((app) => appOf(app) && (appOf(app).reach === 'web' || (appOf(app).reach === 'connector' && !reached.has(app) && webSignIn.supports(app))) && signsInAtAll(app));
     if (!apps.length) return out;
     const results = new Map();
@@ -1443,6 +1459,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /** What the person's Later (or Don't allow) on a step means, in words. */
   function laterWhy(need) {
     if (need.kind === 'permission') return 'you didn’t allow Engelbart to read it';
+    if (need.kind === 'consent') return 'you didn’t allow Engelbart to search and read it';
     if (need.kind === 'connector') return 'you skipped connecting it';
     if (need.kind === 'confirm') return 'you skipped it';
     return 'you skipped signing in';
@@ -1806,6 +1823,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       jobs: [], seq: 0, needs: [], log: [], controllers: new Set(), interviewSession: null, interviewController: null, found: {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
       skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(), fallback: new Set(), connected: new Set(), rows: new Set(), inProject: new Set(), inWorkspace: new Set(), workspaceId, placing: Promise.resolve(),
+      allowed: new Set(), approved: new Map(), // the librarian's run (2026-10-15): the apps the person let be read, the items they ticked
     };
     // A folder the person chose for an app on this Mac (Import your context's manual scopes): the app's, as if found.
     const scoped = choices.direct || asked;
@@ -1838,11 +1856,77 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     opener.text = foundSentence(s);
     s.dirs = dirsOf(s);
     emit(s);
-    const checked = await signInsFirst(s);
+    // The librarian must ask (From Amitav, 2026-10-15: "Fix/change this so the librarian must ask!"): nothing of a web app
+    // or a connector is touched, no sign-in copied from their browser or reused and no survey run, until the person has
+    // said Allow on Engelbart's own prompt for it (consentCard). Those allowed before (a session picked up again) go on.
+    // (deps.allowed, the tests: every app allowed before the run, as a session picked up again has them.)
+    if (deps.allowed === true) for (const app of askedApps(s)) s.allowed.add(app);
+    for (const app of askedApps(s)) if (!s.allowed.has(app)) consentCard(s, app);
+    const { lines } = await beginApps(s, askedApps(s).filter((app) => s.allowed.has(app)));
     if (s.stopped || s.suspended) return;
-    startWork(s, new Set([...checked.signedOut, ...checked.refused.keys(), ...checked.checking.keys()]));
-    for (const [app, answer] of checked.checking) if (s.held.has(app)) lateSignIn(s, app, answer);
     lookForFolders(s);
+    if (lines) opener.text = `${opener.text}\n\n${lines}`;
+    emit(s);
+    await interviewTurn(s, 'Start.');
+  }
+
+  /** The apps of the librarian's run on the web or behind a connector, ticked and not skipped. */
+  function askedApps(s) {
+    return [...new Set(Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps))].filter((app) => asksFirst(app) && !s.skipped.has(app));
+  }
+
+  /** Whether an agent may reach `app` now: in the librarian's run, an app it must ask about only once allowed. */
+  const mayReach = (s, app) => !!s.choices.direct || !asksFirst(app) || (s.allowed || new Set()).has(app);
+
+  /**
+   * The librarian's prompt for an app (2026-10-15, From Amitav: before copying cookies or reusing a session, "Allow
+   * Engelbart to search and read your Google Drive?", saying that what is read may reach the model provider, Allow /
+   * Skip): a popup over the chat. Until it is answered the app is held: no sign-in is looked at, no survey runs, and the
+   * librarian is told not to ask about or dispatch it. Allow starts its sign-in check and survey (allowApp); Skip leaves
+   * it out for the run.
+   */
+  function consentCard(s, app) {
+    if (s.skipped.has(app) || s.allowed.has(app) || s.needs.some((need) => !need.closed && need.app === app && need.kind === 'consent')) return;
+    const source = sourceOfApp(app);
+    const need = { id: randomUUID(), app, kind: 'consent', reason: `Allow Engelbart to search and read your ${shownName(app)}?`, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: `What the agents read there may be sent to ${PROVIDER_COMPANIES[s.choice.provider] || 'the model provider'} for processing.`, closed: false, held: true, at: now() };
+    s.needs.push(need);
+    s.held.set(app, { source, recall: false, consent: true });
+    if (source) s.found[source] = { ...(s.found[source] || {}), [app]: { reach: appOf(app).reach, consent: 'asking: Engelbart asks the person to allow it to search and read this app. Nothing of it has been looked at. Do not ask about it, offer it or dispatch it.' } };
+    logAction(s, null, `Asking you: ${need.reason}`);
+  }
+
+  /** Allow on an app's consentCard: kept for the run, then its sign-in is looked at and its survey starts. */
+  function allowApp(s, need) {
+    need.closed = true;
+    need.outcome = 'done';
+    s.allowed.add(need.app);
+    s.held.delete(need.app);
+    const source = sourceOfApp(need.app);
+    if (source) {
+      const { consent: _consent, ...entry } = (s.found[source] || {})[need.app] || {};
+      s.found[source] = { ...(s.found[source] || {}), [need.app]: entry };
+    }
+    logAction(s, null, `Allowed Engelbart to search and read ${shownName(need.app)}`, 'You');
+    save(s);
+    emit(s);
+    void beginApps(s, [need.app]).then(({ leftOut }) => {
+      if (leftOut.length) s.chat.push({ role: 'agent', text: leftOutLine(leftOut), ask: null, authorize: null, at: now() });
+      // The librarian hears it was allowed only when it waits on nothing else; the survey's report wakes it otherwise.
+      emit(s);
+    }).catch(() => {});
+  }
+
+  /**
+   * The apps a run may reach now, started: their sign-ins looked at (copied from the person's browser when Engelbart's
+   * has none), their surveys started (a signed-out one left out, one whose browser macOS refused skipped). → { lines: the
+   * opener's sign-in lines, leftOut: the apps left out signed out }
+   */
+  async function beginApps(s, apps) {
+    if (!apps.length) return { lines: '', leftOut: [] };
+    const checked = await signInsFirst(s, apps);
+    if (s.stopped || s.suspended) return { lines: '', leftOut: [] };
+    startWork(s, new Set([...checked.signedOut, ...checked.refused.keys(), ...checked.checking.keys()]), apps);
+    for (const [app, answer] of checked.checking) if (s.held.has(app)) lateSignIn(s, app, answer);
     // A ticked web app still signed out (the choose screen signs each in before it starts, so a race, or a session resumed
     // after a quit) gets no card on this screen (2026-10-11): it is left out, and the opener says where to add it.
     const leftOut = [...checked.signedOut].filter((app) => s.held.has(app));
@@ -1857,10 +1941,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       releaseHeld(s, app, 'skip');
       logAction(s, null, `Skipped ${shownName(app)}: macOS didn't allow ${name || 'your browser'}'s sign-ins`);
     }
-    const lines = [signInLines(checked), leftOut.length ? leftOutLine(leftOut) : ''].filter(Boolean).join('\n');
-    if (lines) opener.text = `${opener.text}\n\n${lines}`;
     emit(s);
-    await interviewTurn(s, 'Start.');
+    return { lines: [signInLines(checked), leftOut.length ? leftOutLine(leftOut) : ''].filter(Boolean).join('\n'), leftOut };
   }
 
   /* ------------------------------------------------------------------------------------- Import your context (direct) */
@@ -2053,9 +2135,40 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (!clean.skipped && !clean.picked && !clean.text) throw new Error('Say something first');
     if (typeof value.provider === 'string') setProvider(s, value.provider);
     if (clean.skipped) clean.left = skipAsked(s);
+    if (clean.picked) approvePicked(s, clean.picked);
     s.chat.push({ role: 'user', text: shownOf(clean), at: now() });
     void interviewTurn(s, messageOf(clean));
     return snapshot(s);
+  }
+
+  /**
+   * What the person ticked is what may be read (From Amitav, 2026-10-15: "if in library brainstorm mode they should be
+   * prompted with individual files and asked to bring those in"): the items of the librarian's last question about an app
+   * whose items are approved (tools.cjs APPROVAL_APPS) that they picked, by the ids its survey reported, kept for the run;
+   * that app's imports read nothing else. An option with no ids is matched to the survey's item of the same name; an id
+   * no survey reported is not kept.
+   */
+  function approvePicked(s, labels) {
+    const last = [...s.chat].reverse().find((entry) => entry.role === 'agent');
+    const ask = last && last.ask;
+    if (!ask || !Array.isArray(ask.options) || !sourceOf(ask.source)) return;
+    const apps = (Array.isArray(ask.apps) && ask.apps.length ? ask.apps : sourceOf(ask.source).apps).filter((app) => APPROVAL_APPS.has(app));
+    const same = (a, b) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase();
+    for (const app of apps) {
+      const report = ((s.found[ask.source] || {})[app] || {}).survey;
+      const items = report && Array.isArray(report.items) ? report.items : [];
+      const known = new Set(items.map((item) => item.id).filter(Boolean));
+      for (const option of ask.options) {
+        if (!labels.includes(option.label)) continue;
+        const ids = Array.isArray(option.ids) && option.ids.length ? option.ids : items.filter((item) => same(item.label, option.label)).map((item) => item.id);
+        for (const id of ids) {
+          if (!known.has(id)) continue;
+          if (!s.approved.has(app)) s.approved.set(app, new Set());
+          s.approved.get(app).add(id);
+        }
+      }
+    }
+    if (apps.length) save(s);
   }
 
   /** The provider chosen under the chat: the next turns and jobs run there (its pinned model); a new librarian session. */
@@ -2138,6 +2251,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const s = get(id);
     s.finished = true;
     if (s.interviewController) s.interviewController.abort();
+    // An app still asked about (consentCard) was never allowed: it is left out, its prompt put away.
+    for (const need of s.needs) if (!need.closed && need.kind === 'consent') closeNeed(s, need, 'skip', 'you pressed Import before allowing it');
     for (const [source, choice] of Object.entries(s.choices.sources)) {
       const sent = s.jobs.filter((job) => job.kind === 'import' && job.source === source);
       if (!choice.on || s.skippedSources.has(source) || sent.some((job) => !job.apps.length)) continue;
@@ -2173,6 +2288,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const found = s.needs.find((entry) => entry.id === needId && !entry.closed);
     if (!found) return snapshot(s);
     if (!['open', 'done', 'skip'].includes(action)) throw new Error('Unknown action');
+    // The librarian's prompt to search and read an app (consentCard): Allow (open, done) starts it, Skip leaves it out.
+    if (found.kind === 'consent') {
+      if (action === 'skip') closeNeed(s, found, 'skip');
+      else allowApp(s, found);
+      return snapshot(s);
+    }
     // Zotero's and GitHub's own sign-ins (2026-10-14): run here, not in the window, and closed once the account is connected.
     if (SIGNIN_APPS.has(found.app) && !found.own && action !== 'skip') {
       if (action === 'open') return ownSignIn(s, found);
@@ -2593,6 +2714,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       inWorkspace: new Set((Array.isArray(saved.inWorkspace) ? saved.inWorkspace : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
       workspaceId: projectId && typeof saved.workspaceId === 'string' && ID_RE.test(saved.workspaceId) ? saved.workspaceId : null, placing: Promise.resolve(),
       gmailThreads: Number.isInteger(saved.gmailThreads) && saved.gmailThreads > 0 ? saved.gmailThreads : 0,
+      allowed: new Set((Array.isArray(saved.allowed) ? saved.allowed : []).filter((app) => typeof app === 'string' && APPS[app])),
+      approved: new Map(Object.entries(saved.approved && typeof saved.approved === 'object' ? saved.approved : {}).filter(([app, ids]) => APPROVAL_APPS.has(app) && Array.isArray(ids)).map(([app, ids]) => [app, new Set(ids.filter((id) => typeof id === 'string').slice(0, 2000))])),
       leftOut: new Map((Array.isArray(saved.leftOut) ? saved.leftOut : []).filter((entry) => entry && typeof entry.app === 'string' && (APPS[entry.app] || entry.app === 'GitHub') && typeof entry.why === 'string').map((entry) => [entry.app, line(entry.why, 200)])),
     };
     // Closed before the librarian's first word, with only the opening line said: the opening again.
@@ -2645,6 +2768,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         signInCard(s, app, need.kind === 'connector' ? 'connector' : 'signin');
       }
     }
+    // The librarian's prompts are not kept either: an app it was still asking about is asked about again.
+    if (!s.choices.direct && !s.finished && !s.stopped && (s.chat.length || s.jobs.length)) for (const app of askedApps(s)) if (!s.allowed.has(app)) consentCard(s, app);
     logAction(s, null, 'Picked up again after Engelbart closed');
     emit(s);
     pump(s);
