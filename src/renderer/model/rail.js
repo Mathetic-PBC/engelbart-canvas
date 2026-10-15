@@ -21,6 +21,24 @@ export function looksAddable(value) {
 
 const bareAddress = (v) => BARE_HOST.test(v) && !FILE_NAME.test(v);
 
+/**
+ * What is pasted into the add picker's "Upload URL or path" (the sidebar mockup, Hudson 2026-10-15: several at once):
+ * split on commas, lines and spaces, each judged by its spelling → [{ text, ok, why, split }]. A path from ~/ or / whose
+ * words are not all links or paths may be one name with spaces (a screenshot's has them): it is tried whole, and `split`
+ * holds its words, judged, for when nothing is at it. The main process decides for real.
+ */
+export function parseSources(raw) {
+  const shaped = (text) => looksAddable(text) || /^(~\/|\/)\S/.test(text);
+  const judged = (text) => (shaped(text) ? { text, ok: true } : { text, ok: false, why: `"${text}" is not a link or a path` });
+  const out = [];
+  for (const chunk of String(raw || '').split(/[\n,]+/).map((one) => one.trim()).filter(Boolean)) {
+    const pieces = chunk.split(/\s+/);
+    if (pieces.length > 1 && /^(~\/|\/|file:\/\/)/.test(chunk) && !pieces.every(shaped)) out.push({ text: chunk, ok: true, split: pieces.map(judged) });
+    else out.push(...pieces.map(judged));
+  }
+  return out;
+}
+
 /** What a row is searched by: its name, where it is, the words shown beside it, and its summary. */
 const hay = (row) => [row.name, row.url || '', row.path || '', row.folder_path || '', kindLabel(row), row.summary || ''].join(' ').toLowerCase();
 

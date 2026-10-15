@@ -11,7 +11,7 @@ import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KIND, KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
-import { libraryPanelRows, looksAddable, searchRows } from '../model/rail.js';
+import { libraryPanelRows, looksAddable, parseSources, searchRows } from '../model/rail.js';
 import { LIBRARY_CHIPS, libraryCounts } from '../model/kind.js';
 import { findWorkspaces } from '../model/nav.js';
 import { countLabel, sinceWords, sourceIcon, shortcutProjects } from '../model/sidebar.js';
@@ -715,25 +715,27 @@ const PICKER_LEAVE = 180; // ms after the pointer leaves the picker (and the lib
 const PICKER_MARGIN = 12;
 
 /**
- * What + on Sources adds (2026-10-13, the mockup's add picker): a search over the library, its first five that are not
- * there yet, More (the whole library beside it, with its chips), then Upload URL or path, Add from GitHub and New note.
+ * What + on Sources adds (2026-10-13, the mockup's add picker; its latest, Hudson 2026-10-15, desktop
+ * engelbart-sidebar-mockup.html): a search over the library, its first five that are not there yet, More (the whole
+ * library beside it, with its chips), then "Upload URL or path" always open (several pasted at once: model/rail.js
+ * parseSources), what was added so far listed under it, Add from GitHub and "Upload or add files" (the file picker). It
+ * stays open while things are added, each one listed; it hides by itself a beat after the pointer leaves it, the library
+ * beside it and the + it came from (2026-10-13: "if I move my cursor outside the obvious area … it should auto hide").
  * `into`: what the + belongs to ({ name } of the project or of a folder); `has(id)`: whether it holds that row already.
- * `onPick(row)`, `onAddInput(input)`, `onPickDisk()`, `onPickRepo(entry)`, `onNewNote()` add to it. It hides by itself a
- * beat after the pointer leaves it, the library beside it and the + it came from (2026-10-13: "if I move my cursor outside
- * the obvious area … it should auto hide").
+ * `onPick(row)`, `onAddInput(input)` (→ the row), `onPickRepo(entry)` add to it.
  */
-export function AddPicker({ anchor, from, into, projectId, library, inRail, has, onPick, onAddInput, onPickDisk, onPickRepo, onNewNote, onLibraryChange, onClose, ignore }) {
+export function AddPicker({ anchor, from, into, projectId, library, inRail, has, onPick, onAddInput, onPickRepo, onLibraryChange, onClose, ignore }) {
   const [q, setQ] = React.useState('');
   const [idx, setIdx] = React.useState(0);
-  const [upload, setUpload] = React.useState(false);
   const [value, setValue] = React.useState('');
+  const [added, setAdded] = React.useState([]); // [{ key, name, row }] added while it was open
   const [view, setView] = React.useState('menu');
   const [side, setSide] = React.useState(null); // the library beside it: { anchor } while open
   const ref = React.useRef(null);
   const sideRef = React.useRef(null);
   const fieldRef = React.useRef(null);
   const searchRef = React.useRef(null);
-  const { busy, error, setError, run } = useAddRun(onClose);
+  const { busy, error, setError, run } = useAddRun(null);
   // Nothing closes it while it is adding. It does not hide by itself while GitHub's sign-in or list is in it, or while a
   // link or a path is typed in it; Escape and a press elsewhere still close it then.
   const busyRef = React.useRef(false);
@@ -768,8 +770,40 @@ export function AddPicker({ anchor, from, into, projectId, library, inRail, has,
   const shown = results.slice(0, PICKER_SHOWN);
   const at = shown.length ? Math.min(idx, shown.length - 1) : -1;
   const peek = usePeek();
-  const pick = (row) => { if (row && !busy) void run(async () => { peek.drop(); await onPick(row); return []; }); };
-  const commit = () => { const input = value.trim(); if (input && !busy) void run(async () => { await onAddInput(input); return []; }); };
+  const remember = (row, text = '') => setAdded((now) => { const key = (row && row.id) || text; return !key || now.some((one) => one.key === key) ? now : [...now, { key, name: (row && row.name) || text, row: row || null }]; });
+  const pick = (row) => { if (row && !busy) void run(async () => { peek.drop(); await onPick(row); remember(row); return []; }); };
+  // Each link or path typed or pasted is added in turn; what could not be stays in the field, saying why.
+  const parsed = parseSources(value);
+  const good = parsed.filter((one) => one.ok);
+  const commit = () => {
+    if (!good.length || busy) return;
+    void run(async () => {
+      const left = [], problems = [];
+      const add = async (one) => {
+        if (!one.ok) { left.push(one.text); problems.push(one.why); return; }
+        try { remember(await onAddInput(one.text), one.text); } catch (failure) {
+          // A path with spaces that is not one: its words, one by one.
+          if (one.split) { for (const piece of one.split) await add(piece); return; }
+          left.push(one.text); problems.push(errorMessage(failure));
+        }
+      };
+      for (const one of parsed) await add(one);
+      setValue(left.join(' '));
+      setTimeout(() => { if (fieldRef.current) fieldRef.current.focus(); }, 0);
+      return problems;
+    });
+  };
+  // Upload or add files: the file picker, every file and folder chosen added as a typed path is.
+  const chooseFiles = () => {
+    if (busy) return;
+    void run(async () => {
+      const problems = [];
+      for (const file of (await api.pickLibraryPaths()) || []) {
+        try { remember(await onAddInput(file), file); } catch (failure) { problems.push(errorMessage(failure)); }
+      }
+      return problems;
+    });
+  };
   const openSide = () => {
     if (side) { setSide(null); return; }
     const r = ref.current ? ref.current.getBoundingClientRect() : null;
@@ -779,11 +813,9 @@ export function AddPicker({ anchor, from, into, projectId, library, inRail, has,
     const n = shown.length;
     if (event.key === 'ArrowDown') { event.preventDefault(); if (n) setIdx((at + 1) % n); }
     else if (event.key === 'ArrowUp') { event.preventDefault(); if (n) setIdx((at - 1 + n) % n); }
-    else if (event.key === 'Enter') { event.preventDefault(); if (at >= 0) pick(shown[at].row); else if (looksAddable(typed)) { setUpload(true); setValue(typed); } }
+    else if (event.key === 'Enter') { event.preventDefault(); if (at >= 0) pick(shown[at].row); else if (looksAddable(typed)) { setValue(typed); setTimeout(() => { if (fieldRef.current) fieldRef.current.focus(); }, 0); } }
   };
   const mi = { display: 'flex', alignItems: 'center', gap: 10, width: '100%', height: 32, boxSizing: 'border-box', padding: '0 10px', border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13.5) };
-  // A path may hold spaces (every screenshot's name does), which looksAddable leaves out of a search's guesses.
-  const addable = looksAddable(value) || /^(~\/|\/)\S/.test(value.trim());
   return (
     <>
       <Floating anchor={anchor} width={320} cap={620} label={`Add sources to ${into.name}`} onClose={() => { if (!busyRef.current) onClose(); }} ignore={ignore} panelRef={ref} data-sb-panel="add" data-add-picker="1" style={{ padding: 8 }}>
@@ -812,29 +844,30 @@ export function AddPicker({ anchor, from, into, projectId, library, inRail, has,
                 </button>
               )}
             </div>
-            <div style={{ height: 1, margin: '4px 6px', background: '#efefef' }} />
-            <button type="button" className="hov-wash" data-add-upload="1" aria-expanded={upload} onClick={() => { setUpload((now) => !now); setError(''); setTimeout(() => { if (fieldRef.current) fieldRef.current.focus(); }, 0); }} style={mi}>
-              <span style={{ flex: 'none', display: 'flex', color: '#4d4d4d' }}><I.AddIcon size={16} /></span><span>Upload URL or path</span>
-            </button>
-            {upload && (
-              <div style={{ padding: '4px 8px 8px' }}>
-                <div className="rail-field" style={{ display: 'flex', alignItems: 'center', height: 32, boxSizing: 'border-box', padding: '0 10px', border: `1px solid ${error && value ? '#e70022' : value ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 6, background: '#fff' }}>
-                  <input ref={fieldRef} value={value} readOnly={busy} onChange={(event) => { setValue(event.target.value); setError(''); }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit(); } }} placeholder="URL or path" aria-label="URL or path" spellCheck={false} data-add-value="1" style={{ flex: 1, minWidth: 0, padding: 0, border: 0, outline: 'none', background: 'transparent', ...text(14) }} />
-                </div>
-                {error && value && <div data-add-error="1" style={{ padding: '6px 2px 0', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
-                  <button type="button" className="hov-ink" data-add-disk="1" disabled={busy} onClick={() => { if (!busy) void run(async () => { await onPickDisk(); return []; }); }} style={{ padding: 0, border: 0, background: 'transparent', cursor: 'pointer', ...text(12.5, '#8f8f8f') }}>Choose from disk…</button>
-                  <span style={{ flex: 1 }} />
-                  <button type="button" className="hov-dim" data-add-link="1" disabled={busy || !addable} onClick={commit} style={{ height: 28, padding: '0 12px', border: 0, borderRadius: 6, background: '#171717', cursor: addable ? 'pointer' : 'default', opacity: addable ? 1 : 0.35, ...text(12.5, '#fff', 500) }}>Add source</button>
-                </div>
+            {/* No line between the library and the rest (2026-10-14: "I never want horizontal dividing lines"): a gap. */}
+            <div style={{ padding: '10px 0 4px' }}>
+              <div className="rail-field" style={{ display: 'flex', alignItems: 'center', gap: 8, height: 32, boxSizing: 'border-box', padding: '0 10px', border: `1px solid ${error && value ? '#e70022' : value ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 6, background: '#fff' }}>
+                <I.PlusIcon size={14} stroke={2.4} style={{ flex: 'none', color: '#171717' }} />
+                <input ref={fieldRef} value={value} readOnly={busy} onChange={(event) => { setValue(event.target.value); setError(''); }} onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); commit(); } }} placeholder="Upload URL or path" aria-label="Upload URL or path" spellCheck={false} data-add-value="1" style={{ flex: 1, minWidth: 0, padding: 0, border: 0, outline: 'none', background: 'transparent', ...text(14) }} />
+              </div>
+              {error && <div data-add-error="1" style={{ padding: '6px 2px 2px', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}
+              {good.length > 0 && <button type="button" className="hov-ink" data-add-link="1" disabled={busy} onClick={commit} style={{ display: 'block', height: 30, marginTop: 6, padding: '0 12px', border: '1px solid #e4e4e4', borderRadius: 7, background: '#fff', boxShadow: '0 1px 1px #0000000a', cursor: 'pointer', ...text(13, '#171717', 500) }}>{good.length > 1 ? 'Add sources' : 'Add source'}</button>}
+            </div>
+            {added.length > 0 && (
+              <div data-add-added="1" style={{ display: 'flex', flexDirection: 'column', paddingBottom: 4 }}>
+                {added.map((one) => (
+                  <div key={one.key} data-add-added-row={one.key} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 32, padding: '0 10px', ...text(13.5) }}>
+                    <span style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}><I.SourceIcon kind={one.row ? sourceIcon(one.row) : 'website'} size={16} /></span>
+                    <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{one.name}</span>
+                  </div>
+                ))}
               </div>
             )}
-            {error && !value && !upload && <div data-add-error="1" style={{ padding: '2px 10px 4px', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{error}</div>}
             <button type="button" className="hov-wash" data-add-github="1" disabled={busy} onClick={() => { setError(''); setView('github'); setSide(null); }} style={mi}>
               <span className="glyph-fit" style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#4d4d4d' }}><span style={{ display: 'flex', width: 14, height: 14 }}>{KIND.git.glyph}</span></span><span>Add from GitHub</span>
             </button>
-            <button type="button" className="hov-wash" data-add-note="1" disabled={busy} onClick={() => { if (!busy) void run(async () => { await onNewNote(); return []; }); }} style={mi}>
-              <span style={{ flex: 'none', display: 'flex', color: '#4d4d4d' }}><I.ComposeIcon size={16} /></span><span>New note</span>
+            <button type="button" className="hov-wash" data-add-files="1" disabled={busy} onClick={chooseFiles} style={mi}>
+              <span style={{ flex: 'none', display: 'flex', color: '#4d4d4d' }}><I.PaperclipIcon size={16} /></span><span>Upload or add files</span>
             </button>
           </>
         )}
@@ -846,10 +879,10 @@ export function AddPicker({ anchor, from, into, projectId, library, inRail, has,
           library={library}
           inRail={inRail}
           panelRef={sideRef}
-          picking={{ has: (id) => has(id), onPick: async (row) => { await onPick(row); onClose(); } }}
+          picking={{ has: (id) => has(id), onPick: async (row) => { await onPick(row); remember(row); } }}
           onOpen={() => {}}
           onLink={() => {}}
-          onAddInput={async (input) => { await onAddInput(input); onClose(); }}
+          onAddInput={async (input) => { remember(await onAddInput(input), input); }}
           onOpenFull={() => {}}
           onOpenWorkspace={() => {}}
           onClose={() => setSide(null)}

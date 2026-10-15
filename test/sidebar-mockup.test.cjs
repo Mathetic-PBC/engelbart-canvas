@@ -12,7 +12,7 @@ function preview(height = 1000) {
   let timerId = 0;
   const element = (selector) => {
     if (!elements.has(selector)) elements.set(selector, {
-      innerHTML: '', dataset: {}, querySelector: () => null,
+      innerHTML: '', dataset: {}, querySelector: () => null, querySelectorAll: () => [],
       getBoundingClientRect: () => ({ left: 8, right: 288, top: 80, bottom: 110, width: 280 }),
       focus() {}, scrollIntoView() {},
     });
@@ -202,9 +202,9 @@ test('source folder creation and adding a note preserve the folder destination',
   p.click('create-source-folder');
   const id = p.read('S.sharedSourceFolders.find(id => ITEMS[id].name === "Reading")');
   assert.ok(id);
-  p.run(`open={kind:"add",folder:${JSON.stringify(id)},value:"https://example.com"}; addLink()`);
+  p.run(`open={kind:"add",folder:${JSON.stringify(id)},value:"https://example.com",anchor:{left:8,right:280,top:100,bottom:130}}; addLink()`);
   assert.equal(p.read(`ITEMS[${JSON.stringify(id)}].children.length`), 1);
-  p.run(`open={kind:"add",folder:${JSON.stringify(id)}}`);
+  p.run(`open={kind:"add",folder:${JSON.stringify(id)},anchor:{left:8,right:280,top:100,bottom:130}}`);
   p.click('new-note');
   assert.equal(p.read(`ITEMS[${JSON.stringify(id)}].children.length`), 2);
   assert.ok(!p.read('SOURCES[scope()].includes(page().id)'));
@@ -213,7 +213,7 @@ test('source folder creation and adding a note preserve the folder destination',
 test('shared source folders and their contents and expansion persist across nested and top-level projects', () => {
   const p = preview();
   p.click('source-toggle', 'refs');
-  p.run('open={kind:"add",folder:"refs",value:"https://example.com"}; addLink()');
+  p.run('open={kind:"add",folder:"refs",value:"https://example.com",anchor:{left:8,right:280,top:100,bottom:130}}; addLink()');
   const child = p.read('ITEMS.refs.children[0]');
   for (const id of ['engelbart/onboarding', 'memex/reading-trails', 'engelbart/user-interface/sidebar']) {
     p.run(`goProject(${JSON.stringify(id)})`);
@@ -365,9 +365,12 @@ test('add-source picker searches library items and limits the quick list to five
   assert.match(html, /placeholder="Search library"/);
   assert.equal((html.match(/data-act="pick-source"/g) || []).length, 5);
   assert.match(html, /data-act="picker-more"/);
-  assert.ok(html.indexOf('data-act="picker-more"') < html.indexOf('data-act="show-upload"'));
+  // 2026-10-15 (Hudson's latest mockup): the field is there at once, then Add from GitHub and Upload or add files.
+  assert.ok(html.indexOf('data-act="picker-more"') < html.indexOf('data-input="add-value"'));
+  assert.match(html, /placeholder="Upload URL or path"/);
   assert.ok(html.indexOf('Upload URL or path') < html.indexOf('Add from GitHub'));
-  assert.ok(html.indexOf('Add from GitHub') < html.indexOf('New note'));
+  assert.ok(html.indexOf('Add from GitHub') < html.indexOf('Upload or add files'));
+  assert.doesNotMatch(html, /New note/);
   assert.doesNotMatch(html, />Sticky<|>Choose from disk/);
   p.run('open.q="Canvas"');
   html = p.read('addPanel()');
@@ -385,21 +388,23 @@ test('the picker Library opens beside the picker and adds results to the selecte
   p.click('pick-source', 'canvas-focus');
   assert.ok(p.read('ITEMS.refs.children.includes("canvas-focus")'));
   assert.ok(!p.read('SOURCES[scope()].includes("canvas-focus")'));
-  assert.equal(p.read('open'), null);
+  // It stays open and lists what was added (2026-10-15).
+  assert.equal(p.read('open.kind'), 'add');
+  assert.ok(p.read('open.added.includes("canvas-focus")'));
 });
 
-test('upload and new-note actions in the picker retain their destination', () => {
+test('the picker adds several links at once to its destination, stays open listing them, and keeps what it could not add', () => {
   const p = preview();
   p.run('open={kind:"add",folder:"refs",q:"",anchor:{left:8,right:280,top:100,bottom:130}}');
-  assert.doesNotMatch(p.read('addPanel()'), /data-input="add-value"/);
-  p.click('show-upload');
-  assert.match(p.read('addPanel()'), /data-input="add-value"/);
-  p.run('open.value="https://example.com/from-picker"');
+  assert.match(p.read('addPanel()'), /data-input="add-value"/, 'the field at once, no "Upload URL or path" to press first');
+  p.run('open.value="https://example.com/from-picker, example.org notes.md"');
+  assert.match(p.read('addPanel()'), />Add sources</);
   p.click('add-link');
-  assert.equal(p.read('ITEMS.refs.children.length'), 1);
-  p.run('open={kind:"add",folder:"refs",q:"",anchor:{left:8,right:280,top:100,bottom:130}}');
-  p.click('new-note');
-  assert.ok(p.read('ITEMS.refs.children.includes(page().id)'));
+  assert.equal(p.read('ITEMS.refs.children.length'), 2);
+  assert.equal(p.read('open.kind'), 'add');
+  assert.equal(p.read('open.value'), 'notes.md');
+  assert.equal(p.read('open.error'), '"notes.md" is not a link or a path');
+  assert.equal((p.read('addPanel()').match(/class="added-row"/g) || []).length, 2);
 });
 
 test('side Library filters and search work independently and Escape returns to the picker', () => {

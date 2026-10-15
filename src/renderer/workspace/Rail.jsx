@@ -874,9 +874,7 @@ export default function Rail({
           has={addHas}
           onPick={(row) => (addFolder ? onAddToFolder(addFolder.id, [row.id]) : onLinkRow(row))}
           onAddInput={(input) => onAddInput(input, addFolder ? addFolder.id : null)}
-          onPickDisk={() => onPickDisk(addFolder ? addFolder.id : null)}
           onPickRepo={(entry) => onPickRepo(entry, addFolder ? addFolder.id : null)}
-          onNewNote={() => onNewNote(addFolder ? addFolder.id : null)}
           onClose={close}
           ignore={ignore('add', addPanel.key)}
         />

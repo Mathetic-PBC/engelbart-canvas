@@ -74,6 +74,8 @@ export const GearIcon = (props) => <Svg {...props}><path d={GEAR_PATH} /><circle
 export const PanelCloseIcon = (props) => <Svg {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m16 15-3-3 3-3" /></Svg>;
 export const PanelOpenIcon = (props) => <Svg {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><path d="M9 3v18" /><path d="m14 9 3 3-3 3" /></Svg>;
 export const PlusIcon = (props) => <Svg {...props}><path d="M5 12h14" /><path d="M12 5v14" /></Svg>;
+// The add picker's "Upload or add files" (the sidebar mockup, 2026-10-15).
+export const PaperclipIcon = (props) => <Svg {...props}><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" /></Svg>;
 export const CheckIcon = (props) => <Svg {...props}><path d="M20 6 9 17l-5-5" /></Svg>;
 export const CloseIcon = (props) => <Svg {...props}><path d="M18 6 6 18" /><path d="m6 6 12 12" /></Svg>;
 export const MinusCircleIcon = (props) => <Svg {...props}><circle cx="12" cy="12" r="9.5" /><path d="M8 12h8" /></Svg>;

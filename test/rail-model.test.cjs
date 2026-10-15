@@ -300,3 +300,22 @@ test('the Library panel with a chip on (2026-10-09): Recent is the last edited o
   const fresh = libraryPanelRows({ query: 'https://example.org/new', library: all, chip: 'papers', inRail, found: { row: null, found: { name: 'New page', type: 'website', tags: [] } } });
   assert.deepEqual(fresh.map((r) => r.kind), ['fresh']);
 });
+
+// The sidebar mockup's add picker (Hudson, 2026-10-15: desktop engelbart-sidebar-mockup.html): several links or paths
+// pasted into "Upload URL or path" at once, each judged by its spelling; what is not one says why.
+test('parseSources: several at once, split on commas, lines or spaces; a path keeps its spaces; each one that is not says why', async () => {
+  const { parseSources } = await load();
+  const of = (raw) => parseSources(raw).map((one) => [one.text, one.ok]);
+  assert.deepEqual(of('example.org, https://a.com/x\n~/papers/x.pdf'), [['example.org', true], ['https://a.com/x', true], ['~/papers/x.pdf', true]]);
+  assert.deepEqual(of('github.com/o/r arxiv:2310.05292 doi:10.1145/3544548.3580919'), [['github.com/o/r', true], ['arxiv:2310.05292', true], ['doi:10.1145/3544548.3580919', true]]);
+  assert.deepEqual(of('~/Desktop/Screen Shot 2026-10-15.png'), [['~/Desktop/Screen Shot 2026-10-15.png', true]], 'a screenshot\'s name has spaces');
+  assert.deepEqual(of('~/a.pdf ~/b.pdf'), [['~/a.pdf', true], ['~/b.pdf', true]]);
+  assert.deepEqual(of('github.com notes.md'), [['github.com', true], ['notes.md', false]], 'a file\'s bare name is not an address');
+  // A path with spaces is tried whole first; if nothing is there, its words are tried one by one (`split`).
+  const [both] = parseSources('~/notes/plan.md notes.md');
+  assert.equal(both.text, '~/notes/plan.md notes.md');
+  assert.deepEqual(both.split.map((one) => [one.text, one.ok]), [['~/notes/plan.md', true], ['notes.md', false]]);
+  assert.equal(parseSources('~/a.pdf').at(0).split, undefined);
+  assert.equal(parseSources('notes.md')[0].why, '"notes.md" is not a link or a path');
+  assert.deepEqual(parseSources('  \n , '), []);
+});
