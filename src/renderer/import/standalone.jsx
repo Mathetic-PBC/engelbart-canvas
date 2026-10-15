@@ -157,11 +157,11 @@ function sampleSession(choices, browser = 'Chrome') {
 
 const POPUPS = [
   ['intro', 'Import intro (screen)'], ['first-project', 'Which project to start with'], ['obsidian-picker', 'Choose from Obsidian'], ['scratch-confirm', 'Start confirmation'], ['project', 'New project'],
-  ['provider-choice', 'Choose provider (both subscribed)'], ['tools-setup', 'Tools setup'], ['import-mode', 'Import method'],
+  ['provider-choice', 'Choose provider (both subscribed)'], ['tools-setup', 'Tools setup'], ['import-method', 'How to import'], ['agents-consent', 'Background agents'],
   ['keychain', 'Browser sign-ins'], ['keychain-browser', 'Browser picker'],
   ['folders', 'Full Disk Access'], ['disk-wait', 'Waiting for Settings'], ['disk-helper', 'Toggle Setting (beside System Settings)'], ['disk-relaunch', 'Restarting'], ['folder-fallback', 'Deny Full Disk Access'], ['folder-results', 'Folder permissions'],
   ['screen:roles', 'Roles'], ['screen:work', 'What are you working on'], ['screen:projects', 'Recent projects'], ['work-add-project', 'Add a project'],
-  ['screen:tools', 'Confirm tools'], ['work-add-tool', 'Add a tool'], ['screen:picker', 'Sources & context (manual)'],
+  ['work-add-tool', 'Add a tool'], ['screen:picker', 'Tools (categories)'],
   ['browser-agents', 'Let agents use your browser'], ['browser-agents-confirm', 'Decline browser agents'],
   ['starting', 'Starting imports'], ['workspace', 'The project after Import to Engelbart'], ['status', 'Imports in progress (workspace)'], ['signin', 'Sign-in popup'], ['complete', 'Your imports are complete'], ['status-stop', 'Stop all confirmation'], ['trace', 'Agent trace window'],
 ];

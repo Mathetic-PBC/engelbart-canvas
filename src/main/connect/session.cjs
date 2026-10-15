@@ -221,7 +221,7 @@ function directInput(input, homeDir) {
  */
 /** An extra tool as an agent is told it: its name, its website, and what the person specified for it. */
 function toolSaid(tool) {
-  const said = [tool.note, tool.projects && tool.projects.length ? `only for these of the projects: ${tool.projects.join('; ')}` : ''].filter(Boolean).join('; ');
+  const said = [String(tool.note || '').replace(/[.\s]+$/, ''), tool.projects && tool.projects.length ? `only for these of the projects: ${tool.projects.join('; ')}` : ''].filter(Boolean).join('; ');
   return `${tool.name}${tool.website ? ` (${tool.website})` : ''}${said ? `: ${said}` : ''}`;
 }
 
@@ -234,7 +234,7 @@ function librarianNotes(direct) {
     const scope = direct.scopes[id];
     if (!scope) return '';
     const parts = [
-      scope.note,
+      String(scope.note || '').replace(/[.\s]+$/, ''),
       scope.folders.length ? `only these folders and files: ${scope.folders.map((folder) => folder.path).join('; ')}` : '',
       scope.people.length ? `only with these people: ${scope.people.join('; ')}` : '',
       scope.projects.length ? `only for these of the projects: ${scope.projects.join('; ')}` : '',

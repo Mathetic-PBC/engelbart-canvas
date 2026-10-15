@@ -5,23 +5,25 @@ import { ROUND4_CSS } from './round4-css.js';
 import { TOOL_LOGOS, WORKS, BROWSER_LOGOS, PROVIDER_LOGOS } from './logos.js';
 import ObsidianPicker from './ObsidianPicker.jsx';
 import {
-  CATALOG, CATALOG_IDS, ROLES, GROUPS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp,
-  scopeKind, emptyScope, scopeReady, scopeOptions,
+  CATALOG, CATALOG_IDS, ROLES, GROUPS, GROUP_IDS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp,
+  scopeKind, emptyScope, scopeReady,
 } from '../../shared/import-flow.cjs';
 import { LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, cleanDays, shownName } from '../../shared/connect-sources.cjs';
 
 // Import your context (2026-10-13, the "Onboarding" workspace): the work-first import flow, a port of the mockup
 // design/onboarding-mockup/Onboarding.html with its markup and classes (its CSS is import-css.js, scoped under .ix).
 //
-//   Import context → (the provider: asked when both are subscribed; tools set up when neither can run) → How would you
-//   like to import context? → (the browser's sign-ins) → What kind of work do you do? → What are you working on?
-//   → What project do you want to work on first? → agents: Confirm your tools | myself: the sources, then exactly what
-//   to bring in → (Full Disk Access) → (Let agents use your browser?) → Import to Engelbart
+//   Import context → (the provider: asked when both are subscribed; tools set up when neither can run) → (the browser's
+//   sign-ins) → What kind of work do you do? → What are you interested in researching right now? → What project do you
+//   want to work on first? → What should go in your library? (the categories, with the tools the agents found added to
+//   them) → Import to Engelbart → How should Engelbart import your sources?
+//     in the background with agents → Import context using background agents (I understand) → (Full Disk Access) → the run
+//     manually, with fine-grained permissions → the librarian's chat (Connect your library's, ../screens/ConnectLibrary.jsx)
 //
-// The project agent starts the moment the provider is known, before the method is chosen; the tool agent once the
-// method is "Let agents choose" and the browser's sign-ins are answered (src/main/onboarding/discover.cjs). Import to
-// Engelbart starts Connect's pipeline in its direct mode (src/main/connect/session.cjs): one import agent a tool, each
-// told only the projects picked. In a new user's onboarding (`mode` 'new') a project is made for every project picked
+// The project agent starts the moment the provider is known; the tool agent once the browser's sign-ins are answered
+// (src/main/onboarding/discover.cjs). In the background, Import to Engelbart starts Connect's pipeline in its direct mode
+// (src/main/connect/session.cjs): one import agent a tool, each told only the projects picked; manually, a librarian
+// session from the same choices, which asks before anything comes in (From Amitav, 2026-10-15). In a new user's onboarding (`mode` 'new') a project is made for every project picked
 // and the first opens; over a workspace (`mode` 'modal', the redo that replaced "guided setup") the imports go to that
 // project and the modal closes. Everything it talks to goes through `api` (./import-api.js in the app, the standalone
 // page's mock), so the same component is the app's and the HTML's. Where the flow is, is saved (`saveFlow`) so the
@@ -34,11 +36,11 @@ const FILE_SOURCES = ['Obsidian', 'Zoom', 'Zotero', LOCAL_PDFS, LOCAL_FOLDERS];
 const GROUP_HINTS = {
   notes: 'Only bring in notes relating to the Memex and my research',
   transcripts: 'Only bring in transcripts relating to meetings with professors on the Memex',
-  email: 'Pull in emails from my professor',
   chats: 'Only include the chats that discussed Memex and the history of computing',
   sites: "Pull in the essays and paper links I've added to some of my research notes",
   papers: 'Include the papers in my local Memex folder',
   code: 'Bring in the digital Memex prototype I was hacking on last week',
+  other: 'Only bring in what I made for the Memex project',
 };
 // Websites holds a "Saved websites from {app}" row for each notes app picked (2026-10-14): the links saved in its notes.
 const LINKS = 'links:';
@@ -52,8 +54,6 @@ const spokenGroup = (label) => label.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLow
 const NOTES_APPS = (GROUPS.find((group) => group.id === 'notes') || { apps: [] }).apps;
 const groupOf = (id) => (isLinks(id) || id === SITES ? 'sites' : (GROUPS.find((group) => group.apps.includes(id)) || {}).id || null);
 const LINKS_NOTE = 'Also bring in the web links saved in these notes (essays, papers, articles and other pages): add each one to the library with add_to_library.';
-/** "A", "A and B", "A, B, and C". */
-const listed = (names) => (names.length <= 1 ? names[0] || '' : names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`);
 const DEFAULT_PICKS = [];
 export const COPY = {
   title: 'Import your context',
@@ -63,7 +63,9 @@ export const COPY = {
   pickerTitle: 'What should go in your library?',
   bring: 'Bring these in',
 };
-const FLOW_VERSION = 3; // 3 (2026-10-14): Import your context is a screen of its own, not a dialog over the picker
+// 3 (2026-10-14): Import your context is a screen of its own, not a dialog over the picker. 4 (From Amitav, 2026-10-15): one
+// tools screen for both ways of importing, the way asked at Import to Engelbart (a flow saved before starts over).
+const FLOW_VERSION = 4;
 // Dialogs taken out (From Amitav, 2026-10-15): a flow saved on one of them opens on what took its place.
 const GONE_DIALOGS = { 'keychain-confirm': 'keychain', privacy: null, apps: null };
 // The intro's logos (From Amitav, 2026-10-15: "get rid of the +12, just show everything"): every supported app with a
@@ -86,7 +88,6 @@ const GLOBE = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 
 const WEB = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18"/>'} />;
 const PLUS = <Svg d={'<path d="M12 5v14M5 12h14"/>'} />;
 // A project's symbol is the workspace icon (../ui/SidebarIcons.jsx WorkspaceIcon): workspaces become projects (2026-10-13).
-const CURSOR = <Svg d={'<path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.44l-1.58 6.12a.5.5 0 0 1-.95.07z"/>'} />;
 
 const Check = ({ on }) => <span className={`cb ${on ? 'on' : ''}`}>{on ? CHECK : null}</span>;
 const Logo = ({ src, name = '' }) => (src ? <img src={src} alt={name} /> : FOLDER);
@@ -96,7 +97,10 @@ function ToolLogo({ id }) {
   if (isLinks(id)) return <span className="links-logo">{TOOL_LOGOS[linkedApp(id)] ? <img src={TOOL_LOGOS[linkedApp(id)]} alt="" /> : FOLDER}<span className="links-globe">{GLOBE}</span></span>;
   if (TOOL_LOGOS[id]) return <img src={TOOL_LOGOS[id]} alt="" />;
   if (id === LOCAL_PDFS || id === LOCAL_FOLDERS) return FOLDER;
-  return WEB;
+  if (id === SITES) return WEB;
+  // A tool the agents found or the person added: no icon (From Amitav, 2026-10-15: "they should just have no icon"), its
+  // room kept so the names line up.
+  return <span className="no-logo" aria-hidden="true" />;
 }
 const browserName = (id) => ((BROWSERS.find((browser) => browser.id === id) || {}).name || 'your browser');
 
@@ -115,10 +119,10 @@ function T({ k, tag = 'span', fallback, className, ...rest }) {
 const fresh = () => ({
   v: FLOW_VERSION,
   screen: 'intro', dialog: null, purpose: null,
-  mode: null, modeChoice: null, modeFirst: false, scopeOpen: null, notesConsent: false,
+  mode: null, scopeOpen: null, notesConsent: false, agentsConsent: false, librarian: null,
   provider: null, providerChoice: null,
   roles: [], work: '', customProjects: [], picked: [],
-  confirmed: [], touched: [], added: [], toolOrder: [],
+  touched: [], added: [],
   picks: [...DEFAULT_PICKS], open: ['notes'], period: DEFAULT_PERIOD_DAYS, consent: true, leaves: false, menu: null,
   scopes: {}, groupScopes: {}, groupScopeClosed: [], browserChoice: null, folderAnswers: null, pendingRun: false, firstProject: null,
   scratchName: '', scratchDesc: '',
@@ -127,8 +131,10 @@ const fresh = () => ({
 const selectedProjects = (F, discovery) => [...((discovery && discovery.projects && discovery.projects.projects) || []), ...F.customProjects].filter((project) => F.picked.includes(project.id));
 const allProjects = (F, discovery) => [...((discovery && discovery.projects && discovery.projects.projects) || []), ...F.customProjects];
 
-/** The apps a run imports from: the tools confirmed (agents), else the sources picked (myself). */
-const runApps = (F) => (F.mode === 'auto' ? F.confirmed : F.picks);
+/** The catalog's apps a run imports from: those ticked on the tools screen. */
+const runApps = (F) => F.picks.filter((id) => CATALOG_IDS.includes(id));
+/** The tools the agents found (or the person added) that are ticked: what the run's "Other tools" import reads. */
+const runAdded = (F) => F.added.filter((tool) => F.picks.includes(tool.id));
 
 const RUN_LABEL = 'Import to Engelbart';
 
@@ -138,30 +144,8 @@ const NOTES_KEY = 'engelbart.import.notesConsent';
 function notesConsented() { try { return window.localStorage.getItem(NOTES_KEY) === '1'; } catch { return false; } }
 function rememberNotesConsent() { try { window.localStorage.setItem(NOTES_KEY, '1'); } catch { /* asked again next time */ } }
 
-/** Every tool the tools page lists (the catalog's, then those added), its ids. */
-const toolIds = (F) => [...CATALOG.map((tool) => tool.id), ...F.added.map((tool) => tool.id).filter((id) => !CATALOG_IDS.includes(id))];
-
-/** The tools page's order settled now: the selected tools first, then the rest, each in the catalog's order. */
-function settleTools(F) {
-  const all = toolIds(F);
-  return [...all.filter((id) => F.confirmed.includes(id)), ...all.filter((id) => !F.confirmed.includes(id))];
-}
-
-/** The tools page's order: what was settled (settleTools), then any tool it does not hold yet, the selected ones first. */
-function orderedTools(F) {
-  const all = toolIds(F);
-  const settled = (F.toolOrder || []).filter((id) => all.includes(id));
-  const rest = all.filter((id) => !settled.includes(id));
-  return [...settled, ...rest.filter((id) => F.confirmed.includes(id)), ...rest.filter((id) => !F.confirmed.includes(id))];
-}
-
-/** `order` with `id` placed after the last selected tool (a tool added by name, selected as it is added). */
-function placeSelected(order, id, confirmed) {
-  const without = order.filter((one) => one !== id);
-  let at = 0;
-  without.forEach((one, index) => { if (confirmed.includes(one)) at = index + 1; });
-  return [...without.slice(0, at), id, ...without.slice(at)];
-}
+/** A source that is an app (a category of apps says "these apps"; one with folders, files or links "these sources"). */
+const isApp = (id) => !isLinks(id) && ![SITES, LOCAL_PDFS, LOCAL_FOLDERS].includes(id);
 
 /** A source's hint under its name in the picker (the mockup's third column). */
 function sourceHint(app, diskGranted) {
@@ -178,15 +162,16 @@ function sourceHint(app, diskGranted) {
  * `api` the flow's calls (./import-api.js); `mode` 'new' (a new user's onboarding, full window) or 'modal' (over a
  * workspace, into project `into`); `onDone(made)` a project was made (new); `onClose()` the modal closed; `edit` and
  * `copy`/`setCopy` the standalone page's editing; `preview` a dialog or screen to show at once (the standalone page's
- * Popups); `platform` 'darwin' or another.
+ * Popups); `platform` 'darwin' or another. `renderLibrarian({ sessionId, project, onDone, onBack })`: the librarian's chat
+ * (Import manually, in a new user's onboarding), drawn by the host (Onboarding.jsx: Connect your library's page).
  */
-export default function ImportFlow({ api, mode = 'new', into = null, workspaceId = null, intoProject = null, onDone = () => {}, onClose = () => {}, edit = false, copy = {}, setCopy = () => {}, preview = null, platform = 'darwin' }) {
+export default function ImportFlow({ api, mode = 'new', into = null, workspaceId = null, intoProject = null, onDone = () => {}, onClose = () => {}, edit = false, copy = {}, setCopy = () => {}, preview = null, platform = 'darwin', renderLibrarian = null }) {
   // Import context from inside a project (2026-10-14: "it should just basically start from if they picked manual import"):
   // the source picker at once, for this project; no intro, work questions or project list again. The permissions already
   // answered are not asked again (the browser's sign-ins, Full Disk Access, agents in the browser are kept by main; Apple
   // Notes' consent below).
   const [F, setF] = React.useState(() => (mode === 'modal' && into ? {
-    ...fresh(), screen: 'picker', dialog: null, mode: 'manual', modeChoice: 'manual',
+    ...fresh(), screen: 'picker', dialog: null,
     customProjects: [{ id: `project:${into}`, title: (intoProject && intoProject.name) || 'This project', description: (intoProject && intoProject.description) || '', recent: '' }],
     picked: [`project:${into}`], notesConsent: notesConsented(),
   } : fresh()));
@@ -238,23 +223,28 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     return () => clearTimeout(timer);
   }, [F, restored]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The picker starts with nothing ticked (2026-10-14: "it should not preselect anything on manual import, including
-  // obsidian"); what was found on this Mac only informs the agents' tools page.
-
-  // The tool agent's answer ticks what it found, unless the person touched it.
+  // One tools screen (From Amitav, 2026-10-15: "when they get to the screen of selecting tools they see the different
+  // categories, but if the agents have found any additional tools they are added"): the tool agent's answer adds each
+  // tool it found to its category (Other when none fits) and, in a new user's onboarding, ticks what it found in use,
+  // unless the person touched it. Importing into a project from Settings ticks nothing (2026-10-14: "it should not
+  // preselect anything on manual import").
   React.useEffect(() => {
     const results = discovery && discovery.tools && discovery.tools.results;
     if (!results) return;
     set((now) => {
-      const confirmed = new Set(now.confirmed.filter(id => now.touched.includes(id) || (results.tools || []).some(tool => tool.id === id && tool.used && tool.evidence)));
-      for (const tool of results.tools) if (!now.touched.includes(tool.id)) { if (tool.used && tool.evidence) confirmed.add(tool.id); else confirmed.delete(tool.id); }
+      const tick = mode === 'new';
+      const picks = new Set(now.picks);
+      for (const tool of results.tools || []) {
+        if (!tick || !CATALOG_IDS.includes(tool.id) || now.touched.includes(tool.id)) continue;
+        if (tool.used && tool.evidence) picks.add(tool.id); else picks.delete(tool.id);
+      }
       const added = [...now.added];
       for (const extra of results.additional || []) {
         const id = `custom:${extra.name.toLowerCase()}`;
-        if (!added.some((tool) => tool.id === id)) added.push({ id, name: extra.name, website: extra.website || '', source: 'agent' });
-        if (extra.used && extra.evidence && !now.touched.includes(id)) confirmed.add(id);
+        if (!added.some((tool) => tool.id === id)) added.push({ id, name: extra.name, website: extra.website || '', source: 'agent', group: GROUP_IDS.includes(extra.category) ? extra.category : 'other' });
+        if (tick && extra.used && extra.evidence && !now.touched.includes(id)) picks.add(id);
       }
-      return { confirmed: [...confirmed], added, toolOrder: settleTools({ ...now, confirmed: [...confirmed], added }) };
+      return { picks: [...picks], added };
     });
   }, [discovery && discovery.tools && discovery.tools.results]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -350,14 +340,12 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     if (purpose === 'start') {
       // Recent projects, found in the background from now on: not waiting for the method (the workspace's ask).
       api.discoverProjects({ provider }).then(setDiscovery).catch(() => {});
-      // Round 3: the method is asked after the projects, so the work questions come next. The next screen is drawn behind the
-      // browser question ("advance to next screen before immediately showing [the popup]"), and the tool agent starts once
-      // it is answered, so Confirm your tools is ready by the time the person gets there.
-      // 2026-10-14: the popups the intro's buttons bring up stay over the intro ("the background should never change when a
-      // new popup comes"); the work questions come once they are answered, with no popup over them.
-      set({ modeFirst: false });
-      keychainGate(() => set({ dialog: null, screen: 'roles' }), 'auto');
+      // The work questions come next; the tool agent starts once the browser question is answered, so the tools screen
+      // has what it found by the time the person gets there. 2026-10-14: the popups the intro's buttons bring up stay over
+      // the intro ("the background should never change when a new popup comes").
+      keychainGate(() => set({ dialog: null, screen: 'roles' }));
     } else if (purpose === 'run') void run(provider);
+    else if (purpose === 'librarian') void startLibrarian(provider);
     else set({ dialog: null });
   };
   // Choosing is continuing, as the import method is (one click).
@@ -370,22 +358,12 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   /* -------- the start */
   const importContext = () => { setError(''); void needProvider('start'); };
-  // Choosing a method is continuing (2026-10-13, second round: "clicking either let agents choose or choose sources myself
-  // should act as continuing, no need for two clicks").
-  const chooseMode = (choice) => {
-    if (!choice) return;
-    const first = latest.current.modeFirst;
-    set({ mode: choice, modeChoice: choice, modeFirst: false });
-    if (first) { keychainGate(() => set({ dialog: null, screen: 'roles' }), choice); return; }
-    if (choice === 'auto') keychainGate(() => { set((now) => ({ dialog: null, screen: 'tools', toolOrder: settleTools(now) })); }, choice);
-    else set({ dialog: null, screen: 'picker' });
-  };
 
   /** The browser's sign-ins asked about once (Keychain), then `then`; the tool agent starts once it is answered. */
   const afterKeychain = React.useRef(null);
-  const keychainGate = (then, method = latest.current.mode) => {
+  const keychainGate = (then) => {
     const answered = (browsers && browsers.keychain) || null;
-    const go = (answer) => { then(); if (method === 'auto') startTools(answer); };
+    const go = (answer) => { then(); startTools(answer); };
     if (answered || !browsers || !browsers.browsers.length) { go(answered || 'declined'); return; }
     afterKeychain.current = go;
     set({ dialog: 'keychain' });
@@ -419,12 +397,14 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const afterBrowserAgents = React.useRef(null);
   const browserAgentsGate = async (provider, then) => {
     const now = latest.current;
-    const web = runApps(now).filter((id) => isWebApp(id) && id !== 'Gmail');
-    const others = now.mode === 'auto' ? now.added.filter((tool) => now.confirmed.includes(tool.id)) : [];
+    const web = runApps(now).filter((id) => isWebApp(id));
+    const others = runAdded(now);
     if (!web.length && !others.length) { then(); return; }
     let status = null;
     try { status = await api.browserAgents({ provider, browserId: (browsers && browsers.chosenId) || null }); } catch { status = null; }
     if (!status || !status.ask) { then(); return; }
+    // "Import context using background agents" said they use the signed-in browser, and the person said I understand.
+    if (now.agentsConsent) { try { await api.browserAgentsAnswer('allowed'); } catch (failure) { say(failure); } then(); return; }
     afterBrowserAgents.current = then;
     set({ dialog: 'browser-agents', agentsBrowser: status.browser ? status.browser.name : 'your browser', agentsApps: [...web.map((id) => shownName(id)), ...others.map((tool) => tool.name)].slice(0, 6) });
   };
@@ -438,14 +418,24 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   };
 
   /* -------- the run */
+  // How should Engelbart import your sources? (From Amitav, 2026-10-15), asked at Import to Engelbart: in the background
+  // with agents (after what that means is said and understood), or manually, the librarian asking before anything comes in.
+  const chooseMethod = () => { const now = latest.current; if ((runApps(now).length || runAdded(now).length) && now.picked.length) set({ dialog: 'import-method' }); };
+  const inBackground = () => set({ mode: 'auto', dialog: 'agents-consent' });
+  const understood = () => { latest.current = { ...latest.current, mode: 'auto', agentsConsent: true, dialog: null }; set({ mode: 'auto', agentsConsent: true, dialog: null }); runGate(); };
+  const manually = () => { latest.current = { ...latest.current, mode: 'manual', dialog: null }; set({ mode: 'manual', dialog: null }); runGate(); };
+
+  /** What comes before an import starts, either way: which project opens first, Apple Notes' permission; then in the
+   *  background Full Disk Access and the run, manually the librarian (which asks for each folder itself). */
   const runGate = () => {
     const now = latest.current;
     const apps = runApps(now);
-    if (!apps.length || !now.picked.length) return;
+    if ((!apps.length && !runAdded(now).length) || !now.picked.length) return;
     // Which project opens (2026-10-14, "Right now I think it opens a random project"): asked when more than one was picked.
     // It gets the Welcome project holding every source the run brings in, for all the projects.
     if (mode === 'new' && now.picked.length > 1 && !now.picked.includes(now.firstProject)) { set({ dialog: 'first-project', firstChoice: now.picked[0] }); return; }
     if (apps.includes('Apple Notes') && !now.notesConsent && !notesConsented()) { set({ dialog: 'notes-permission' }); return; }
+    if (now.mode === 'manual') { if (!now.provider) { void needProvider('librarian'); return; } void startLibrarian(); return; }
     const files = apps.some((id) => FILE_TOOLS.includes(id));
     if (platform === 'darwin' && files && !(disk && (disk.granted || disk.grantedFresh)) && !now.folderAnswers) { set({ dialog: 'folders' }); return; }
     if (!now.provider) { void needProvider('run'); return; }
@@ -459,62 +449,79 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     return browserAgentsGate(provider, () => { void startRun(provider); });
   }
 
+  /**
+   * What an import is told, either way (From Amitav, 2026-10-15: one tools screen): the projects (the one to start with
+   * first), the catalog's apps ticked, what was specified for each (its own Specify context and its category's: the note,
+   * the people, the projects it is kept to, none meaning every one picked), and the extra tools ticked with theirs.
+   */
+  const runChoices = (now) => {
+    const projects = selectedProjects(now, discovery).map((project) => ({ id: project.id, title: project.title, description: project.description || '', folder: project.folder || '' }))
+      .sort((a, b) => (b.id === now.firstProject) - (a.id === now.firstProject));
+    const titlesOf = (ids) => projects.filter((project) => ids.includes(project.id)).map((project) => project.title);
+    const sentence = (lines) => lines.map((line) => String(line || '').trim()).filter(Boolean).map((line) => (/[.!?]$/.test(line) ? line : `${line}.`)).join(' ');
+    const said = (id, group) => {
+      const scope = now.scopes[id] || emptyScope(isLinks(id) ? SITES : id);
+      const category = { note: '', people: [], ...(now.groupScopes[group] || {}) };
+      const only = Array.isArray(scope.only) ? titlesOf(scope.only) : [];
+      return { scope, category, only: only.length === projects.length ? [] : only };
+    };
+    const apps = runApps(now);
+    const scopes = {};
+    for (const id of apps) {
+      const { scope, category, only } = said(id, groupOf(id));
+      // A notes app's saved websites (2026-10-14), ticked under Websites: its import also brings in the links in its notes.
+      const links = now.picks.includes(linksOf(id));
+      const linkScope = now.scopes[linksOf(id)] || null;
+      const sites = links ? { note: '', ...(now.groupScopes.sites || {}) } : null;
+      const note = sentence([category.note, scope.note, links ? LINKS_NOTE : '', sites && sites.note ? `For those links: ${sites.note}` : '', linkScope && linkScope.note ? `For those links: ${linkScope.note}` : '']);
+      scopes[id] = { kind: scope.kind, folders: scope.folders, note, people: [...new Set([...(category.people || []), ...scope.people])], items: [], labels: [], projects: only };
+    }
+    const additional = runAdded(now).map((tool) => {
+      const { scope, category, only } = said(tool.id, tool.group || 'other');
+      return { name: tool.name, website: tool.website || '', note: sentence([category.note, scope.note]), projects: only };
+    });
+    return { projects, apps, scopes, additional };
+  };
+  const startInput = (now, provider, { projects, apps, scopes, additional }, extra = {}) => ({
+    provider,
+    permissions: { files: true, browser: true, recall: true, notes: apps.includes('Apple Notes') },
+    keychain: !browsers || browsers.keychain !== 'declined',
+    browser: (browsers && browsers.chosenId) || null,
+    days: cleanDays(now.period),
+    ...(mode === 'modal' && into ? { projectId: into, ...(workspaceId ? { workspaceId } : {}) } : {}),
+    direct: { mode: now.mode || 'auto', projects, roles: now.roles, work: now.work, apps, scopes, additional },
+    ...extra,
+  });
+
+  /** A project for every project picked; the first (the one to start with) holds session `sessionId` and opens. */
+  const openProjects = async (sessionId, projects) => {
+    let first = null;
+    for (const [index, project] of projects.entries()) {
+      const input = { name: project.title, description: project.description, folder: 'new', directory: '', context: [], onboarding: index === 0, ...(index === 0 ? { connect: sessionId } : {}) };
+      let made = null;
+      if (project.folder) made = await api.startProject({ ...input, folder: 'existing', directory: project.folder }).catch(() => null);
+      if (!made) made = await api.startProject(input);
+      if (!first) first = made;
+    }
+    if (!first) first = await api.startProject({ name: 'My research', description: '', folder: 'new', directory: '', context: [], onboarding: true, connect: sessionId });
+    await onDone(first, { session: { id: sessionId } });
+  };
+
   async function startRun(providerNow = null) {
     const now = latest.current;
     const provider = providerNow || now.provider;
     if (!provider) { void needProvider('run'); return; }
-    // The project chosen to start with first: it is the one that opens, with the run attached to it.
-    const projects = selectedProjects(now, discovery).map((project) => ({ id: project.id, title: project.title, description: project.description || '', folder: project.folder || '' }))
-      .sort((a, b) => (b.id === now.firstProject) - (a.id === now.firstProject));
-    const apps = runApps(now).filter((id) => CATALOG_IDS.includes(id));
-    const scopes = {};
-    if (now.mode === 'manual') {
-      const titles = (ids) => projects.filter((project) => ids.includes(project.id)).map((project) => project.title);
-      for (const id of apps) {
-        const scope = now.scopes[id] || emptyScope(id);
-        const group = { note: '', projects: [], people: [], ...(now.groupScopes[groupOf(id)] || {}) };
-        // The project pills (round 3): a project is ticked when its options are; the source's own ticks, else its
-        // category's (2026-10-14); none ticked means every project picked.
-        const mine = projects.filter((project) => { const options = scopeOptions(id, [project]); return options.length > 0 && options.every((option) => scope.items.includes(option.id)); }).map((project) => project.title);
-        const only = mine.length ? mine : titles(group.projects);
-        // A notes app's saved websites (2026-10-14), ticked under Websites: its import also brings in the links in its notes.
-        const links = now.picks.includes(linksOf(id));
-        const linkScope = now.scopes[linksOf(id)] || null;
-        const sites = links ? { note: '', ...(now.groupScopes.sites || {}) } : null;
-        const note = [group.note, scope.note, links ? LINKS_NOTE : '', sites && sites.note ? `For those links: ${sites.note}` : '', linkScope && linkScope.note ? `For those links: ${linkScope.note}` : '']
-          .map((line) => String(line || '').trim()).filter(Boolean).map((line) => (/[.!?]$/.test(line) ? line : `${line}.`)).join(' ');
-        scopes[id] = { ...scope, note, people: [...new Set([...(group.people || []), ...scope.people])], items: [], labels: [], projects: only.length === projects.length ? [] : only };
-      }
-    }
-    const additional = now.mode === 'auto' ? now.added.filter((tool) => now.confirmed.includes(tool.id)).map((tool) => ({ name: tool.name, website: tool.website || '' })) : [];
+    const choices = runChoices(now);
     // No "Starting your imports" popup (2026-10-14: one popup at most between here and the project): the button says it.
     set({ dialog: null, pendingRun: false });
     setBusy('run');
     setError('');
     try {
-      if (apps.includes('Apple Notes')) await api.notesPermission().catch(() => null);
-      const session = await api.connectStart({
-        provider,
-        permissions: { files: true, browser: true, recall: true, notes: apps.includes('Apple Notes') },
-        keychain: !browsers || browsers.keychain !== 'declined',
-        browser: (browsers && browsers.chosenId) || null,
-        days: cleanDays(now.period),
-        ...(mode === 'modal' && into ? { projectId: into, ...(workspaceId ? { workspaceId } : {}) } : {}),
-        direct: { mode: now.mode || 'auto', projects, roles: now.roles, work: now.work, apps, scopes, additional },
-      });
+      if (choices.apps.includes('Apple Notes')) await api.notesPermission().catch(() => null);
+      const session = await api.connectStart(startInput(now, provider, choices));
       await api.saveFlow(null).catch(() => {});
       if (mode === 'modal') { onClose({ session }); return; }
-      // A project for every project picked; the first opens with the run attached to it (its rows on its list).
-      let first = null;
-      for (const [index, project] of projects.entries()) {
-        const input = { name: project.title, description: project.description, folder: 'new', directory: '', context: [], onboarding: index === 0, ...(index === 0 ? { connect: session.id } : {}) };
-        let made = null;
-        if (project.folder) made = await api.startProject({ ...input, folder: 'existing', directory: project.folder }).catch(() => null);
-        if (!made) made = await api.startProject(input);
-        if (!first) first = made;
-      }
-      if (!first) first = await api.startProject({ name: 'My research', description: '', folder: 'new', directory: '', context: [], onboarding: true, connect: session.id });
-      await onDone(first, { session });
+      await openProjects(session.id, choices.projects);
       set({ dialog: null });
     } catch (failure) {
       say(failure);
@@ -523,6 +530,43 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       setBusy('');
     }
   }
+
+  // Import manually with fine-grained permissions (From Amitav, 2026-10-15: "Clicking pill two should do the library
+  // brainstorm import process, and right now just reuse the exact code"): the same choices start a librarian session
+  // (connect/session.cjs `librarian`), whose chat (Connect your library's) asks before anything comes in. In a new user's
+  // onboarding the chat is this flow's last screen and the projects are made when it is put away; over a project, the
+  // chat opens over the workspace (App.jsx).
+  async function startLibrarian(providerNow = null) {
+    const now = latest.current;
+    const provider = providerNow || now.provider;
+    if (!provider) { void needProvider('librarian'); return; }
+    const choices = runChoices(now);
+    set({ dialog: null, pendingRun: false });
+    setBusy('run');
+    setError('');
+    try {
+      if (choices.apps.includes('Apple Notes')) await api.notesPermission().catch(() => null);
+      const session = await api.connectStart(startInput(now, provider, choices, { librarian: true }));
+      if (mode === 'modal') { await api.saveFlow(null).catch(() => {}); onClose({ session }); return; }
+      latest.current = { ...latest.current, screen: 'librarian', librarian: session.id, dialog: null };
+      set({ screen: 'librarian', librarian: session.id, dialog: null });
+    } catch (failure) {
+      say(failure);
+      set({ dialog: null });
+    } finally {
+      setBusy('');
+    }
+  }
+  /** The librarian's chat put away (it goes on in the background): the projects are made and the first opens. */
+  const librarianDone = async () => {
+    const now = latest.current;
+    if (!now.librarian || busy === 'project') return;
+    setBusy('project');
+    try {
+      await api.saveFlow(null).catch(() => {});
+      await openProjects(now.librarian, runChoices(now).projects);
+    } catch (failure) { say(failure); } finally { setBusy(''); }
+  };
 
   const startFromScratch = async () => {
     if (mode === 'modal') { await api.saveFlow(null).catch(() => {}); onClose({}); return; }
@@ -556,28 +600,34 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   };
 
   /* -------- picks */
-  /** A supported tool added from "+ Add a tool": selected, and placed with the selected ones. */
-  const pickTool = (id) => set((now) => ({ confirmed: [...new Set([...now.confirmed, id])], touched: [...new Set([...now.touched, id])], toolOrder: placeSelected(orderedTools(now), id, now.confirmed), dialog: null }));
+  /** A tool from "+ Add a tool": ticked, as the person's own choice. */
+  const pickTool = (id) => set((now) => ({ picks: [...new Set([...now.picks, id])], touched: [...new Set([...now.touched, id])], open: [groupOfId(id, now)], dialog: null }));
+  /** The category a source is shown in: the catalog's, else (a tool the agents found or the person added) its own. */
+  const groupOfId = (id, now = F) => groupOf(id) || ((now.added.find((tool) => tool.id === id) || {}).group) || 'other';
+  /** A category's rows: its apps (Websites: the browser's saved URLs, then each notes app's saved websites), then the tools
+   *  the agents found in it. Other has only those, and is shown only when it has one. */
   const keysOf = (group, now = F) => {
-    const keys = (group.apps.length ? group.apps : [`__${group.id}`]).map((key) => (key === '__sites' ? SITES : key));
-    return group.id === 'sites' ? [...keys, ...NOTES_APPS.filter((app) => now.picks.includes(app)).map(linksOf)] : keys;
+    const own = group.id === 'other' ? [] : (group.apps.length ? group.apps : [`__${group.id}`]).map((key) => (key === '__sites' ? SITES : key));
+    const links = group.id === 'sites' ? NOTES_APPS.filter((app) => now.picks.includes(app)).map(linksOf) : [];
+    const found = now.added.filter((tool) => groupOfId(tool.id, now) === group.id).map((tool) => tool.id);
+    return [...own, ...links, ...found];
   };
-  const allKeys = GROUPS.flatMap((group) => keysOf(group));
   const toggle = (list, id) => (list.includes(id) ? list.filter((one) => one !== id) : [...list, id]);
-  const toggleGroup = (group) => set((now) => { const keys = keysOf(group, now); const on = keys.every((key) => now.picks.includes(key)); return { picks: on ? now.picks.filter((key) => !keys.includes(key)) : [...new Set([...now.picks, ...keys])] }; });
   const scopeOf = (id) => F.scopes[id] || emptyScope(isLinks(id) ? SITES : id);
-  const groupScopeOf = (gid) => ({ note: '', projects: [], people: [], ...(F.groupScopes[gid] || {}) });
-  const setGroupScope = (gid, patch) => set((now) => ({ groupScopes: { ...now.groupScopes, [gid]: { note: '', projects: [], people: [], ...(now.groupScopes[gid] || {}), ...patch } } }));
-  /** A source ticked or unticked. Ticking opens its category's Specify context (unless the person closed it there) and closes
-   *  any one source's; unticking opens nothing. A notes app unticked takes its saved websites with it. */
+  const groupScopeOf = (gid) => ({ note: '', people: [], ...(F.groupScopes[gid] || {}) });
+  const setGroupScope = (gid, patch) => set((now) => ({ groupScopes: { ...now.groupScopes, [gid]: { note: '', people: [], ...(now.groupScopes[gid] || {}), ...patch } } }));
+  /** A source ticked or unticked (the person's own, so the tool agent's answer leaves it). Ticking opens its category's
+   *  Specify context (unless the person closed it there) and closes any one source's; unticking opens nothing. A notes app
+   *  unticked takes its saved websites with it. */
   const pickSource = (id) => set((now) => {
     const adding = !now.picks.includes(id);
     let picks = toggle(now.picks, id);
     if (!adding && NOTES_APPS.includes(id)) picks = picks.filter((one) => one !== linksOf(id));
-    const gid = groupOf(id);
+    const gid = groupOfId(id, now);
+    const touched = [...new Set([...now.touched, id])];
     return adding
-      ? { picks, scopeOpen: null, groupScopeClosed: now.groupScopeClosed.filter((one) => one !== gid) }
-      : { picks, scopeOpen: now.scopeOpen === id ? null : now.scopeOpen };
+      ? { picks, touched, scopeOpen: null, groupScopeClosed: now.groupScopeClosed.filter((one) => one !== gid) }
+      : { picks, touched, scopeOpen: now.scopeOpen === id ? null : now.scopeOpen };
   });
   const setScope = (id, patch) => set((now) => ({ scopes: { ...now.scopes, [id]: { ...(now.scopes[id] || emptyScope(id)), ...patch } } }));
   // Choose files (2026-10-14: "choose folder and choose files should just be the same thing"): files and folders in one
@@ -615,8 +665,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     if (F.screen === 'roles') set({ screen: 'intro', dialog: null });
     else if (F.screen === 'work') set({ screen: 'roles' });
     else if (F.screen === 'projects') set({ screen: 'work' });
-    else if (F.screen === 'tools') set({ dialog: 'import-mode', modeChoice: 'auto', modeFirst: false });
-    else set({ screen: 'picker' });
+    else set({ screen: 'projects' });
   }}>{CHEV} Back</button>;
 
   // 2026-10-14 (a beta tester: "it said try again but it didn't work ever"): a failure its provider's CLI caused (not
@@ -644,14 +693,6 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       </div>
     );
   };
-
-  const projectScopeStrip = () => (chosen.length ? (
-    <div className="project-scope-strip">
-      <span>For</span>
-      {chosen.map((project) => <span key={project.id} className="scope-project">{project.title}</span>)}
-      <button type="button" className="link under" onClick={() => set({ screen: 'projects' })}>Edit</button>
-    </div>
-  ) : null);
 
   // Import your context (2026-10-14: "Instead of a popup, this should actually be its own screen"): the first screen, not a
   // dialog over the picker the person had not seen yet. Its buttons' popups (provider, tools, the browser's sign-ins, Start
@@ -724,7 +765,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           <footer className="work-foot">{lowerBack()}
             <span className="muted">{F.picked.length} selected</span>
             <button type="button" className="btn" disabled={!F.picked.length} onClick={() => {
-              set({ screen: 'picker', dialog: 'import-mode', modeFirst: false });
+              set({ screen: 'picker', dialog: null });
               window.scrollTo(0, 0);
             }}>Continue{CHEV}</button>
           </footer>
@@ -733,62 +774,23 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     );
   };
 
-  const toolsPage = () => {
-    const scanned = toolStatus === 'done';
-    const detected = (id) => results && (results.tools.find((tool) => tool.id === id) || {});
-    // Every supported tool, the selected ones first (2026-10-13, second round: "dont have the toggle … show all
-    // automatically but all the selected ones should be shown on top"). The order is settled when the page opens and when
-    // the agent answers (toolOrder), not on every click, so a tool never jumps away from the pointer that ticked it.
-    const byId = new Map([...CATALOG, ...F.added].map((tool) => [tool.id, tool]));
-    const shown = orderedTools(F).map((id) => byId.get(id)).filter(Boolean);
-    return (
-      <main className="work-page tools-page" data-import-screen="tools">
-        <div className="work-column">
-          {flowHeader('Confirm your tools', 'tools-title', () => set({ dialog: 'import-mode', modeChoice: 'auto', modeFirst: false }))}
-          <div className="flow-step-label">Automatic import</div>
-          {projectScopeStrip()}
-          {!scanned && <div className="discovery-line" role="status"><span className="activity-dot" />Checking the tools you use in your browser…{results ? <button type="button" className="link under" onClick={() => set({ skipWait: true })}>Don’t wait</button> : null}</div>}
-          {discovery && discovery.tools && discovery.tools.error && <div className="discovery-line" role="status"><span>{`The agent didn’t finish (${discovery.tools.error}). What was found on this Mac is ticked.`}</span></div>}
-          <div className="tool-scroll" role="region" aria-label="Available tools" tabIndex={0}>
-            <div className="tool-grid">
-              {shown.map((tool) => (
-                <button key={tool.id} type="button" className="tool-choice" data-work-tool={tool.id} role="checkbox" aria-checked={F.confirmed.includes(tool.id)} title={(detected(tool.id) || {}).evidence || ''} onClick={() => set((now) => ({ touched: [...new Set([...now.touched, tool.id])], confirmed: toggle(now.confirmed, tool.id) }))}>
-                  <ToolLogo id={tool.id} />
-                  <span><b>{tool.name}</b></span>
-                  <Check on={F.confirmed.includes(tool.id)} />
-                </button>
-              ))}
-            </div>
-          </div>
-          <div className="tool-list-actions">
-            <span />
-            <button type="button" className="link under" onClick={() => { setCatalogQuery(''); setDraft({ title: '', description: '', tool: '', website: '' }); set({ dialog: 'work-add-tool' }); }}>+ Add a tool</button>
-          </div>
-          <footer className="work-foot">{lowerBack()}
-            <span className="muted">{F.confirmed.length} tools selected</span>
-            <button type="button" className="btn" data-import-run="1" disabled={!(scanned || F.skipWait) || !F.confirmed.length || busy === 'run'} onClick={runGate}>{busy === 'run' ? 'Starting…' : RUN_LABEL}{busy === 'run' ? null : CHEV}</button>
-          </footer>
-        </div>
-      </main>
-    );
-  };
-
   /**
-   * A Specify context panel (round 3, reworked 2026-10-14): the projects first, under one line saying what they are for
-   * ("a header just under the app selection"), then "Specific things to import from {names} (optional)" with the
-   * category's hint, then Choose files for a file source, and the people for email (Enter adds one). A category's panel
-   * speaks for every source ticked in it; a source's own, opened from its row, for that source alone.
+   * A Specify context panel (round 3, reworked 2026-10-14). A source's own: the projects first, every one picked ticked
+   * until the person narrows it (From Amitav, 2026-10-15: "default should be all selected projects, unless overridden on a
+   * tool level"), under one line saying what they are for; then "Specific things to import from {source} (optional)" with
+   * its category's hint, Choose files for a file source, and the people for email (Enter adds one). A category's: no
+   * projects, and "these apps" (or "these sources") rather than every name ticked in it.
    */
-  const contextPanel = ({ id, names, hint, note, onNote, projectOn, onProject, chooser = null, people = null, onPeople = null, folders = [], onRemoveFolder = null }) => (
+  const contextPanel = ({ id, name, label, hint, note, onNote, projectOn = null, onProject = null, chooser = null, people = null, onPeople = null, folders = [], onRemoveFolder = null }) => (
     <div className="review-context" data-context-panel={id}>
-      {chosen.length > 0 && <p className="review-projects-note">Select all projects you want Engelbart to import from {listed(names)}.</p>}
-      {chosen.length > 0 && <div className="review-projects" role="group" aria-label={`Projects to import from ${listed(names)}`}>
+      {projectOn && chosen.length > 0 && <p className="review-projects-note">Select all projects you want Engelbart to import from {name}.</p>}
+      {projectOn && chosen.length > 0 && <div className="review-projects" role="group" aria-label={`Projects to import from ${name}`}>
         {chosen.map((project) => {
           const on = projectOn(project);
           return <button key={project.id} type="button" className="review-project" data-source-project={project.id} role="checkbox" aria-checked={on} onClick={() => onProject(project, on)}>{on && <span className="review-project-check" aria-hidden="true">✓</span>}{project.title}</button>;
         })}
       </div>}
-      <label className="review-context-label" htmlFor={`review-context-${id}`}>{`Specific things to import from ${listed(names)} (optional)`}</label>
+      <label className="review-context-label" htmlFor={`review-context-${id}`}>{label}</label>
       <textarea id={`review-context-${id}`} className="field" rows={1} ref={growReviewInput} data-scope-note={id} placeholder={hint} value={note} onChange={(event) => { growReviewInput(event.currentTarget); onNote(event.target.value.slice(0, 2000)); }} />
       {people && <>
         <div className="sender-input">
@@ -804,14 +806,25 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     </div>
   );
 
-  /** A source's own Specify context (opened from its row). */
+  /** A source's name as its row says it (a tool the agents found by its own name). */
+  const nameOf = (id) => toolName(id, F.added);
+  const spokenOf = (id) => (isLinks(id) ? spokenName(id) : nameOf(id));
+
+  /** A source's own Specify context (opened from its row). `only`: the projects it is kept to, null for every one picked. */
   const sourcePanel = (id) => {
     const scope = scopeOf(id);
-    const optionsOf = (project) => scopeOptions(isLinks(id) ? SITES : id, [project]).map((option) => option.id.replace(/^[^:]+/, id));
+    const name = spokenOf(id);
+    const every = chosen.map((project) => project.id);
+    const only = Array.isArray(scope.only) ? scope.only.filter((one) => every.includes(one)) : null;
     return contextPanel({
-      id, names: [spokenName(id)], hint: GROUP_HINTS[groupOf(id)] || '', note: scope.note, onNote: (note) => setScope(id, { note }),
-      projectOn: (project) => optionsOf(project).every((item) => scope.items.includes(item)),
-      onProject: (project, on) => { const options = optionsOf(project); setScope(id, { items: on ? scope.items.filter((item) => !options.includes(item)) : [...new Set([...scope.items, ...options])] }); },
+      id, name, label: `Specific things to import from ${name} (optional)`, hint: GROUP_HINTS[groupOfId(id)] || '', note: scope.note, onNote: (note) => setScope(id, { note }),
+      projectOn: (project) => !only || !only.length || only.includes(project.id),
+      onProject: (project, on) => {
+        const now = only && only.length ? only : every;
+        const next = on ? now.filter((one) => one !== project.id) : [...new Set([...now, project.id])];
+        if (!next.length) return; // a source is for one project at least
+        setScope(id, { only: next.length === every.length ? null : next });
+      },
       chooser: FILE_SOURCES.includes(id) ? () => chooseFiles(id) : null,
       people: scope.kind === 'email' ? scope.people : null, onPeople: (people) => setScope(id, { people }),
       folders: scope.folders, onRemoveFolder: (folder) => setScope(id, { folders: scope.folders.filter((one) => one.path !== folder.path) }),
@@ -823,11 +836,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     const on = keys.filter((id) => F.picks.includes(id));
     if (keys.length === 1) return sourcePanel(keys[0]);
     const scope = groupScopeOf(group.id);
-    return contextPanel({
-      id: `group:${group.id}`, names: on.map((id) => spokenName(id)), hint: GROUP_HINTS[group.id] || '', note: scope.note, onNote: (note) => setGroupScope(group.id, { note }),
-      projectOn: (project) => scope.projects.includes(project.id),
-      onProject: (project, was) => setGroupScope(group.id, { projects: was ? scope.projects.filter((one) => one !== project.id) : [...scope.projects, project.id] }),
-    });
+    const name = on.every(isApp) ? 'these apps' : 'these sources';
+    return contextPanel({ id: `group:${group.id}`, name, label: `Specific things to import from ${name} (optional)`, hint: GROUP_HINTS[group.id] || '', note: scope.note, onNote: (note) => setGroupScope(group.id, { note }) });
   };
 
   const picker = () => (
@@ -835,7 +845,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       <main className="page picker-page review-picker" data-import-screen="picker">
         <div className="col">
           <T k="pickerTitle" tag="h2" />
-          {GROUPS.map((group) => {
+          {mode === 'new' && toolStatus === 'checking' && <div className="discovery-line picker-discovery" role="status" data-tools-status="checking"><span className="activity-dot" /><span>Finding the tools you use…</span></div>}
+          {GROUPS.filter((group) => keysOf(group).length > 0).map((group) => {
             const keys = keysOf(group), open = F.open.includes(group.id);
             const nOn = keys.filter((id) => F.picks.includes(id)).length;
             // The category's Specify context opens by itself (2026-10-14: "do not auto-expand on an app level, only a
@@ -853,7 +864,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
                   return <section key={id} className={`review-source ${selected ? 'selected' : ''}`}>
                     <div className="review-source-row">
                       <button type="button" className="app-row" data-app={id} role="checkbox" aria-checked={selected} onClick={() => pickSource(id)}>
-                        <ToolLogo id={id} /><span className="app-text">{toolName(id)}</span><Check on={selected} />
+                        <ToolLogo id={id} /><span className="app-text">{nameOf(id)}</span><Check on={selected} />
                       </button>
                       {selected && own && <button type="button" className={`review-specify ${F.scopeOpen === id ? 'is-open' : ''}`} data-specify-context={id} aria-expanded={F.scopeOpen === id} onClick={() => set({ scopeOpen: F.scopeOpen === id ? null : id })}>Specify context{DOWN}</button>}
                     </div>
@@ -862,22 +873,19 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
                 })}
                 {nOn > 0 && <section className="group-context" data-group-context={group.id}>
                   <div className="group-context-row">
-                    <button type="button" className={`review-specify ${groupOpen ? 'is-open' : ''}`} data-specify-group={group.id} aria-expanded={groupOpen} onClick={() => set((now) => ({ groupScopeClosed: groupOpen ? [...now.groupScopeClosed, group.id] : now.groupScopeClosed.filter((one) => one !== group.id) }))}>{`Specify context for ${keys.length === 1 ? toolName(keys[0]) : `all ${spokenGroup(group.label)}`}`}{DOWN}</button>
+                    <button type="button" className={`review-specify ${groupOpen ? 'is-open' : ''}`} data-specify-group={group.id} aria-expanded={groupOpen} onClick={() => set((now) => ({ groupScopeClosed: groupOpen ? [...now.groupScopeClosed, group.id] : now.groupScopeClosed.filter((one) => one !== group.id) }))}>{`Specify context for ${keys.length === 1 ? nameOf(keys[0]) : `all ${spokenGroup(group.label)}`}`}{DOWN}</button>
                   </div>
                   {groupOpen && groupPanel(group, keys)}
                 </section>}
               </div>}
             </section>;
           })}
+          <div className="picker-add"><button type="button" className="link under" data-add-tool="1" onClick={() => { setCatalogQuery(''); setDraft({ title: '', description: '', tool: '', website: '' }); set({ dialog: 'work-add-tool' }); }}>+ Add a tool</button></div>
         </div>
       </main>
-      <footer className="foot"><div className="foot-inner"><div className="back-skip"><button type="button" className="link" onClick={() => { if (mode === 'modal') { api.saveFlow(null).catch(() => {}); onClose({}); } else set({ dialog: 'import-mode', modeFirst: false }); }}>{mode === 'modal' ? 'Cancel' : 'Back'}</button></div><span className="muted review-count">{F.picks.length} selected</span><div className="foot-right"><button type="button" className="btn" data-import-run="1" disabled={!F.picks.length || !F.picked.length || busy === 'run'} onClick={runGate}>{busy === 'run' ? 'Starting…' : RUN_LABEL}{busy === 'run' ? null : CHEV}</button></div></div></footer>
+      <footer className="foot"><div className="foot-inner"><div className="back-skip"><button type="button" className="link" onClick={() => { if (mode === 'modal') { api.saveFlow(null).catch(() => {}); onClose({}); } else set({ screen: 'projects', dialog: null }); }}>{mode === 'modal' ? 'Cancel' : 'Back'}</button></div><span className="muted review-count">{F.picks.length} selected</span><div className="foot-right"><button type="button" className="btn" data-import-run="1" disabled={!F.picks.length || !F.picked.length || busy === 'run'} onClick={chooseMethod}>{busy === 'run' ? 'Starting…' : RUN_LABEL}{busy === 'run' ? null : CHEV}</button></div></div></footer>
     </>
   );
-
-  const scopesPage = () => picker();
-
-
 
   /* ================================================================================================== the dialogs */
 
@@ -967,23 +975,44 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         </>
       );
     }
-    if (d === 'import-mode') {
+    // How should Engelbart import your sources? (From Amitav, 2026-10-15): choosing is continuing, as the legacy question's
+    // was. In the background: what that means first (agents-consent). Manually: the librarian.
+    if (d === 'import-method') {
       return (
         <>
-          <h3>How would you like to import context?</h3>
-          <div className="profiles import-modes" role="group" aria-label="Import method">
-            {[['auto', 'Let agents choose'], ['manual', 'Choose sources myself']].map(([value, label]) => (
-              <button key={value} type="button" className="prof import-mode" data-import-mode={value} onClick={() => chooseMode(value)}>
-                <span className="mode-icon">{value === 'auto' ? CURSOR : FOLDER}</span><span className="import-mode-copy"><b>{label}</b></span>
-              </button>
-            ))}
+          <h3>How should Engelbart import your sources?</h3>
+          <div className="profiles import-modes" role="group" aria-label="How to import">
+            <button type="button" className="prof import-mode" data-import-method="agents" onClick={inBackground}>
+              <span className="import-mode-copy"><b>Import in the background with agents.</b><small>Engelbart will dispatch local background agents to bring in your approved sources with minimal intervention (recommended).</small></span>
+            </button>
+            <button type="button" className="prof import-mode" data-import-method="manual" onClick={manually}>
+              <span className="import-mode-copy"><b>Import manually with fine-grained permissions.</b><small>Engelbart will ask for your input before importing anything and will use permission prompts to ask for explicit permission before accessing anything.</small></span>
+            </button>
           </div>
-          <div className="mf mf-start"><button type="button" className="link" onClick={() => set({ dialog: null, screen: 'projects' })}>Back</button></div>
+          <div className="mf mf-start"><button type="button" className="link" onClick={close}>Back</button></div>
+        </>
+      );
+    }
+    // What the agents do, said before they start (From Amitav, 2026-10-15). Import manually is the second option's, not a
+    // way back to the question.
+    if (d === 'agents-consent') {
+      const cli = F.provider === 'openai' ? 'Codex' : F.provider === 'anthropic' ? 'Claude Code' : 'Claude Code or Codex';
+      const company = F.provider === 'openai' ? 'OpenAI' : F.provider === 'anthropic' ? 'Anthropic' : 'Anthropic or OpenAI';
+      const browser = browsers && browsers.chosenId && browsers.keychain !== 'declined' ? browserName(browsers.chosenId) : 'browser';
+      return (
+        <>
+          <h3>Import context using background agents</h3>
+          <p>{`Engelbart will use ${cli} and your signed-in ${browser} to find and import context from the sources you selected. Agents run in the background, and imported files are saved locally on your device. Content the agents read may be sent to ${company} for processing.`}</p>
+          <div className="mf agents-consent-actions">
+            <button type="button" className="link mf-left" onClick={() => set({ dialog: 'import-method' })}>Back</button>
+            <button type="button" className="btn secondary small" data-import-manually="1" onClick={manually}>Import manually</button>
+            <button type="button" className="btn small" data-import-understood="1" onClick={understood}>I understand</button>
+          </div>
         </>
       );
     }
     if (d === 'keychain') return (<><h3>{`Allow Engelbart to use your ${browserNow} sign-ins`}</h3><p>Everything is stored locally on your own device.</p><div className="mf keychain-actions"><button type="button" className="link under" onClick={() => set({ dialog: 'keychain-browser', browserChoice: (browsers && browsers.chosenId) || null })}>Use another browser</button><button type="button" className="btn small" data-import-keychain-allow="1" onClick={() => keychainAnswer('allowed')}>Allow</button></div></>);
-    if (d === 'notes-permission') return (<><h3>Allow Engelbart to read Apple Notes?</h3><div className="mf"><button type="button" className="link" onClick={() => { const now = latest.current; const next = { ...now, picks: now.picks.filter(id => id !== 'Apple Notes'), confirmed: now.confirmed.filter(id => id !== 'Apple Notes'), dialog: null }; latest.current = next; set(next); setTimeout(runGate, 0); }}>Don’t allow</button><button type="button" className="btn" onClick={() => { rememberNotesConsent(); latest.current = { ...latest.current, notesConsent: true, dialog: null }; set({ notesConsent: true, dialog: null }); setTimeout(runGate, 0); }}>Allow</button></div></>);
+    if (d === 'notes-permission') return (<><h3>Allow Engelbart to read Apple Notes?</h3><div className="mf"><button type="button" className="link" onClick={() => { const now = latest.current; const next = { ...now, picks: now.picks.filter(id => id !== 'Apple Notes'), dialog: null }; latest.current = next; set(next); setTimeout(runGate, 0); }}>Don’t allow</button><button type="button" className="btn" onClick={() => { rememberNotesConsent(); latest.current = { ...latest.current, notesConsent: true, dialog: null }; set({ notesConsent: true, dialog: null }); setTimeout(runGate, 0); }}>Allow</button></div></>);
 
     if (d === 'keychain-browser') {
       const list = (browsers && browsers.browsers) || [];
@@ -1064,10 +1093,10 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         const known = CATALOG.find((tool) => tool.name.toLowerCase() === name.toLowerCase());
         if (known) { pickTool(known.id); return; }
         const id = `custom:${name.toLowerCase()}`;
+        // A tool the person adds goes in Other, ticked, and that category opens on it.
         set((now) => {
-          const added = now.added.some((tool) => tool.id === id) ? now.added : [...now.added, { id, name, website, source: 'user' }];
-          const confirmed = [...new Set([...now.confirmed, id])];
-          return { added, confirmed, touched: [...new Set([...now.touched, id])], toolOrder: placeSelected(orderedTools({ ...now, added }), id, now.confirmed), dialog: null };
+          const added = now.added.some((tool) => tool.id === id) ? now.added : [...now.added, { id, name, website, source: 'user', group: 'other' }];
+          return { added, picks: [...new Set([...now.picks, id])], touched: [...new Set([...now.touched, id])], open: [groupOfId(id, { ...now, added })], dialog: null };
         });
       };
       return (
@@ -1075,7 +1104,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           <h3>Add a tool</h3>
           <input id="catalog-search" className="field" placeholder="Search supported tools…" aria-label="Search supported tools" value={catalogQuery} onChange={(event) => setCatalogQuery(event.target.value)} />
           <div className="catalog-tool-list">
-            {CATALOG.filter((tool) => !F.confirmed.includes(tool.id) && tool.name.toLowerCase().includes(catalogQuery.toLowerCase())).map((tool) => (
+            {CATALOG.filter((tool) => !F.picks.includes(tool.id) && tool.name.toLowerCase().includes(catalogQuery.toLowerCase())).map((tool) => (
               <button key={tool.id} type="button" onClick={() => pickTool(tool.id)}><ToolLogo id={tool.id} />{tool.name}</button>
             ))}
           </div>
@@ -1091,7 +1120,19 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const d = F.dialog;
   const body = d ? dialogBody() : null;
   const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'folder-fallback' ? 'disk-deny-modal' : (d === 'folders' || d === 'disk-wait') ? 'disk-modal' : '';
-  const screen = F.screen === 'intro' ? introPage() : F.screen === 'roles' ? rolesPage() : F.screen === 'work' ? workPage() : F.screen === 'projects' ? projectsPage() : F.screen === 'tools' ? toolsPage() : F.screen === 'scopes' ? scopesPage() : picker();
+  const screen = F.screen === 'intro' ? introPage() : F.screen === 'roles' ? rolesPage() : F.screen === 'work' ? workPage() : F.screen === 'projects' ? projectsPage() : picker();
+
+  // Import manually: the librarian's chat, Connect your library's own page, outside this flow's styles; put away, the
+  // projects are made and the first opens.
+  if (F.screen === 'librarian' && F.librarian && renderLibrarian) {
+    const titles = chosen.map((project) => project.title);
+    return (
+      <div data-import-flow={mode} data-screen="librarian" data-dialog="" style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '54px 24px 24px', boxSizing: 'border-box' }}>
+        {renderLibrarian({ sessionId: F.librarian, project: { name: titles.join(', '), description: chosen.map((one) => `${one.title}${one.description ? `: ${one.description}` : ''}`).join('\n') }, onDone: librarianDone, onBack: () => set({ screen: 'picker', librarian: null, mode: null, dialog: null }) })}
+        {error && <div role="alert" style={{ marginTop: 10, font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</div>}
+      </div>
+    );
+  }
 
   return (
     <CopyContext.Provider value={{ edit, copy, setCopy }}>

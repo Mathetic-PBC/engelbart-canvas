@@ -545,7 +545,7 @@ function NeedsCard({ needs, onOpen, onSkip }) {
  * it, on white with a hairline over it, so Submit is there without scrolling; at the card's end it sits under the last
  * option, never over it (the chat's scroll-padding keeps a focused option clear of it too).
  */
-const CARD_ACTIONS = { position: 'sticky', bottom: 0, zIndex: 1, display: 'flex', alignItems: 'center', gap: 8, margin: '12px -16px -14px', padding: '10px 16px 14px', borderTop: '1px solid #eaeaea', borderRadius: '0 0 10px 10px', background: '#fff' };
+const CARD_ACTIONS = { position: 'sticky', bottom: 0, zIndex: 1, display: 'flex', alignItems: 'center', gap: 8, margin: '12px -16px -14px', padding: '10px 16px 14px', borderRadius: '0 0 10px 10px', background: '#fff' };
 
 /**
  * The librarian asking which GitHub repositories: the GitHub list onboarding and the choose screen use, with its search
@@ -675,7 +675,7 @@ function NeedCard({ need, onOpen, onSkip }) {
 function JobRow({ job, onStop }) {
   const status = statusOf(job);
   return (
-    <div data-connect-job={job.status} data-connect-job-kind={job.kind} style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '9px 0', borderBottom: '1px solid #f2f2f2' }}>
+    <div data-connect-job={job.status} data-connect-job-kind={job.kind} style={{ display: 'flex', flexDirection: 'column', gap: 3, padding: '9px 0' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         {logoOf(job.apps[0]) || <span style={{ width: 14 }} />}
         <span style={{ flex: 1, minWidth: 0, font: '13.5px/1.4 var(--font-sans)', color: status.done ? '#4d4d4d' : '#171717', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{job.label}</span>
@@ -853,9 +853,10 @@ export const engelbartSignIn = (app) => (app === 'Zotero' ? waitFor(api.zoteroCo
  * `project` { name, description }: what the librarian is told the project is (onboarding sends it without an id, so its
  * session stays an onboarding one, picked up again after a quit).
  * `onSession(id)` when a session begins; `onAdded(row)` for a library row added here (a GitHub repository); `onSkip`: Skip
- * for now / Not now before anything began.
+ * for now / Not now before anything began. `onBack`: the chat's back arrow, for a session Import your context started
+ * (From Amitav, 2026-10-15): the session stops and that flow's tools screen comes back, not this window's choose screen.
  */
-export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, projectId = null, workspaceId = null, project = null, pager = null, onSession = () => {}, onContinue = () => {}, onClose = () => {}, onSkip = () => {}, onAdded = () => {} }) {
+export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, projectId = null, workspaceId = null, project = null, pager = null, onSession = () => {}, onContinue = () => {}, onClose = () => {}, onSkip = () => {}, onAdded = () => {}, onBack = null }) {
   const popup = mode === 'popup';
   const page = !popup; // onboarding: a page of the window, not a box on it
   const [found, setFound] = React.useState(null);
@@ -1433,6 +1434,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     try { setSession(await api.connectImport(session.id)); setView('working'); } catch (failure) { setError(errorMessage(failure)); }
   };
   const back = () => {
+    if (onBack) { if (session) api.connectStop(session.id).catch(() => {}); onBack(); return; }
     if (session) api.connectStop(session.id).catch(() => {});
     idRef.current = null;
     setSession(null);
@@ -1463,7 +1465,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   // On the page the chat and the progress read in a column of their own width, centred; their scrollbars at the edge.
   const gutter = page ? 'max(20px, calc((100% - 760px) / 2))' : '20px';
   const header = (title, { backButton = false, lead = null } = {}) => (
-    <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: backButton ? '12px 12px 12px 12px' : '16px 14px 10px 20px', borderBottom: wide ? '1px solid #eaeaea' : 0 }}>
+    <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: backButton ? '12px 12px 12px 12px' : '16px 14px 10px 20px' }}>
       {backButton && <button type="button" className="bart-ic" onClick={back} aria-label="Back" title="Back">{BACK}</button>}
       {lead}
       <div style={{ flex: 1, minWidth: 0, font: '500 15px/1.4 var(--font-sans)', color: '#171717' }}>{title}</div>
@@ -1624,7 +1626,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
           </div>
         );
         const send = (
-          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, ...(page ? { paddingTop: 4 } : { padding: '12px 20px', borderTop: '1px solid #eaeaea' }) }}>
+          <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 12, ...(page ? { paddingTop: 4 } : { padding: '12px 20px' }) }}>
             {error && <span data-connect-error="1" style={{ flex: 1, minWidth: 0, font: '12.5px/1.4 var(--font-sans)', color: '#e70022' }}>{error}</span>}
             <ProviderChip lead="Refine with" providers={providers} provider={provider} onPick={pickProvider} onSend={start} sendOn={anyOn && !!provider} sendLabel="Refine" />
           </div>
@@ -1782,7 +1784,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
               {(() => {
                 const line = memoryLine(session.memory);
                 return (
-                  <div data-connect-memory={session.memory ? session.memory.status : ''} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0', borderBottom: '1px solid #f2f2f2' }}>
+                  <div data-connect-memory={session.memory ? session.memory.status : ''} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 0' }}>
                     <span style={{ width: 14, display: 'flex', color: '#8f8f8f' }}>{FILE}</span>
                     <span style={{ flex: 1, minWidth: 0, font: '13.5px/1.4 var(--font-sans)', color: '#171717' }}>MEMORY.md</span>
                     <span style={{ font: '12.5px/1 var(--font-sans)', color: line.failed ? '#e70022' : line.done ? '#171717' : '#8f8f8f' }}>{line.text}</span>
@@ -1794,7 +1796,7 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             </div>
             {error && <span data-connect-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</span>}
           </div>
-            <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: `12px ${gutter}`, borderTop: '1px solid #eaeaea' }}>
+            <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12, padding: `12px ${gutter}` }}>
               {!session.stopped && (running > 0 || (session.memory && !memoryLine(session.memory).done)) && <button type="button" className="cx-ghost" data-connect-stop-all="1" onClick={stopAll}>Stop all</button>}
               <span style={{ flex: 1 }} />
               {/* "Run in background" while anything runs; once everything has ended, Done (2026-10-13: it stayed after all was imported) */}

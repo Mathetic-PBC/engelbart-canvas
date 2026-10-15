@@ -164,12 +164,22 @@ app.whenReady().then(async () => {
     await until(() => has(wc, '[data-work-project]'), 'the projects shown');
     await js(wc, 'document.querySelectorAll("[data-work-project]")[0].click()');
     await pressText(wc, '.work-foot', 'Continue');
-    await until(async () => (await flow(wc)).dialog === 'import-mode', 'How would you like to import context?');
-    await press(wc, '[data-import-mode="manual"]');
     await until(async () => { const f = await flow(wc); return f.screen === 'picker' && !f.dialog; }, 'the picker');
+    // Obsidian alone: the tools screen ticks what the tool agent found (From Amitav, 2026-10-15), and a connector's step
+    // (Granola's) would come before the provider's popup.
+    for (const group of await js(wc, '[...document.querySelectorAll("[data-group]")].map((b)=>b.dataset.group)')) {
+      if (await js(wc, `document.querySelector('[data-group="${group}"]').getAttribute('aria-expanded')`) !== 'true') await press(wc, `[data-group="${group}"]`);
+      await js(wc, '[...document.querySelectorAll("[data-app][aria-checked=true]")].filter((b)=>b.dataset.app!=="Obsidian").forEach((b)=>b.click())');
+    }
+    if (await js(wc, 'document.querySelector("[data-group=notes]").getAttribute("aria-expanded")') !== 'true') await press(wc, '[data-group="notes"]');
     if (await js(wc, 'document.querySelector("[data-app=Obsidian]").getAttribute("aria-checked")') !== 'true') await press(wc, '[data-app="Obsidian"]');
     signOut(); // no check: Engelbart still thinks it can run, as when a sign-in lapses
     await press(wc, '[data-import-run]');
+    // How should Engelbart import your sources? In the background, understood (From Amitav, 2026-10-15).
+    await until(async () => (await flow(wc)).dialog === 'import-method', 'How should Engelbart import your sources?');
+    await press(wc, '[data-import-method="agents"]');
+    await until(async () => (await flow(wc)).dialog === 'agents-consent', 'Import context using background agents');
+    await press(wc, '[data-import-understood]');
     await until(() => has(wc, '[data-provider-popup="anthropic"]'), '"Connect Claude Code" over the workspace', 3600);
     const run = (await js(wc, 'window.engelbartAPI.connectList()')).find((entry) => entry.direct);
     assert.equal(run.blocked.provider, 'anthropic');

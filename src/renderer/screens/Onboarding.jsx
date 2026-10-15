@@ -538,7 +538,12 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
         <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, zIndex: 5, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
           {onBack && <button type="button" className="hov-ink" onClick={onBack} title={backTitle} style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
         </div>
-        <ImportFlow api={importApi} mode="new" platform={IS_MAC ? 'darwin' : 'other'} onDone={(made, extra = {}) => onDone(made, { stageLinks: [...stageLinks.current], session: extra.session || null })} />
+        <ImportFlow api={importApi} mode="new" platform={IS_MAC ? 'darwin' : 'other'} onDone={(made, extra = {}) => onDone(made, { stageLinks: [...stageLinks.current], session: extra.session || null })}
+          // Import manually (From Amitav, 2026-10-15): the librarian's chat, Connect your library's page as it was here, on
+          // the session the flow started. Put away (or skipped), the flow makes the projects and opens the first.
+          renderLibrarian={({ sessionId, project, onDone: done, onBack: goBack }) => (
+            <ConnectLibrary mode="onboarding" sessionId={sessionId} project={project} onContinue={done} onSkip={done} onBack={goBack} onAdded={(row) => take(row, 'github', true)} />
+          )} />
       </div>
     );
   }

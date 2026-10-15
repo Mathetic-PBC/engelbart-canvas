@@ -4,7 +4,9 @@
 //   - Import your context is a screen of its own (it was a dialog over the picker).
 //   - Specify context per category, "Saved websites from {app}" rows, Choose from Obsidian, the email field's spacing.
 //   - From Amitav (2026-10-15): every logo on the intro, fitted to the window down to its smallest (900×560); Add a
-//     project the size of a project; no project icons.
+//     project the size of a project; no project icons. One tools screen: a found tool has no icon (its room kept), "+ Add a
+//     tool" under the categories, the two ways of importing as option pills with a line each, more room in a tool's Specify
+//     context ("add more whitespace here the ui just looks kind weird").
 export const ROUND4_CSS = `
 .ix.ix{--chosen:#171717}
 .ix.ix .role-card[aria-checked=true],.ix.ix .project-choice[aria-checked=true],.ix.ix .tool-choice[aria-checked=true],.ix.ix .scope-option[aria-checked=true],.ix.ix .prof[aria-checked=true],.ix.ix .question-option[aria-checked=true]{border-color:var(--chosen);box-shadow:inset 0 0 0 .5px var(--chosen)}
@@ -78,4 +80,16 @@ export const ROUND4_CSS = `
 .ix .ob-empty{padding:24px 8px;font-size:13px;color:var(--mute)}
 .ix .ob .mf{margin-top:14px}
 .ix .ob-count{margin-right:auto;font-size:12px}
+
+.ix .no-logo{width:17px;height:17px;flex:none}
+.ix .picker-discovery{margin:-4px 0 16px}
+.ix .picker-add{display:flex;justify-content:flex-end;margin:16px 0 0}
+.ix .picker-add .link{font-size:13px}
+.ix .import-mode-copy small{display:block;font-size:13px;line-height:1.5;color:var(--mute);font-weight:400;margin-top:4px}
+.ix .agents-consent-actions{gap:12px}
+.ix .agents-consent-actions .btn.secondary{background:transparent}
+.ix.ix .review-source>.review-context{padding-top:14px;padding-bottom:22px}
+.ix.ix .review-context .review-projects-note{margin:0 0 10px}
+.ix.ix .review-context .review-context-label{margin:22px 0 10px}
+.ix.ix .review-context>.review-context-label:first-child{margin-top:6px}
 `;
