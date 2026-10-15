@@ -2,6 +2,7 @@ import React from 'react';
 import { api, errorMessage } from './api.js';
 import TestToggle from './ui/TestToggle.jsx';
 import AgentsButton, { agentsAvailable } from './ui/AgentsButton.jsx';
+const AGENTS_BUTTON_SHOWN = false; // true puts the Agent Viewer's button back beside the Test pill
 import WindowEdges from './ui/WindowEdges.jsx';
 import WindowControls from './ui/WindowControls.jsx';
 import SandboxProgress from './ui/SandboxProgress.jsx';
@@ -520,7 +521,8 @@ export default function App() {
         onReveal: () => api.reveal(config.testRoot).catch(fail),
       } : null}>
         <ConnectChip sessions={connectSessions} onOpen={(id) => setConnectPopup({ sessionId: id })} />
-        <AgentsButton available={agentsAvailable(config)} onOpen={() => { void api.openAgentMap().catch(() => {}); }} />
+        {/* The Agents button (./ui/AgentsButton.jsx) is stashed (2026-10-15, David): off the top bar for now. */}
+        {AGENTS_BUTTON_SHOWN && <AgentsButton available={agentsAvailable(config)} onOpen={() => { void api.openAgentMap().catch(() => {}); }} />}
         {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
       {guidedOffer && phase === 'workspace' && (
