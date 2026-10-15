@@ -39,9 +39,8 @@ test('OneNote is not "used" for Outlook visits on live.com; Gemini not for the g
   assert.equal(evidence.OneNote.used, false, JSON.stringify(evidence.OneNote));
   assert.equal(evidence.Gemini.used, false, JSON.stringify(evidence.Gemini));
   assert.equal(evidence['Google Meet'].used, false);
-  // Gmail: visited and signed in, so used.
-  assert.equal(evidence.Gmail.used, true);
-  assert.equal(evidence.Gmail.method, 'cookie');
+  // Gmail is paused (From Amitav, 2026-10-15): not looked for at all.
+  assert.equal(evidence.Gmail, undefined);
 });
 
 test('an app with a sign-in of its own (Notion) still counts on its cookie alone', async () => {

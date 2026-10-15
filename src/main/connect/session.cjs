@@ -173,7 +173,12 @@ function cleanDirect(input, homeDir) {
       note: text(scope.note, 2000),
     };
   }
-  const additional = (Array.isArray(input.additional) ? input.additional : []).filter((one) => one && typeof one === 'object' && text(one.name, 60)).slice(0, 12).map((one) => ({ name: text(one.name, 60), website: hostOfSite(one.website) ? String(one.website).trim().slice(0, 300) : '' }));
+  // An extra tool carries what the person specified for it on the tools screen (From Amitav, 2026-10-15): a note, and the
+  // projects it is kept to.
+  const additional = (Array.isArray(input.additional) ? input.additional : []).filter((one) => one && typeof one === 'object' && text(one.name, 60)).slice(0, 12).map((one) => ({
+    name: text(one.name, 60), website: hostOfSite(one.website) ? String(one.website).trim().slice(0, 300) : '', note: text(one.note, 600),
+    projects: (Array.isArray(one.projects) ? one.projects : []).map((title) => text(title, 120)).filter(Boolean).slice(0, MAX_DIRECT_PROJECTS),
+  }));
   if (!apps.length && !additional.length) return null;
   return { mode, projects, roles: (Array.isArray(input.roles) ? input.roles : []).filter((role) => importFlow.ROLE_NAMES.includes(role)).slice(0, 8), work: text(input.work, 2000), apps, scopes, additional };
 }
@@ -207,6 +212,38 @@ function directInput(input, homeDir) {
   const titles = direct.projects.map((project) => project.title);
   const project = titles.length ? { name: titles.join(', ').slice(0, MAX_PROJECT_NAME), description: direct.projects.map((one) => `${one.title}${one.description ? `: ${one.description}` : ''}`).join('\n').slice(0, MAX_DESCRIPTION) } : null;
   return { ...input, sources, picked: [...new Set([...(Array.isArray(input.picked) ? input.picked : []), ...picked])], project: project || input.project, direct };
+}
+
+/**
+ * Import manually with fine-grained permissions (From Amitav, 2026-10-15): what the person said on Import your context's
+ * tools screen, for the librarian, who asks before anything comes in → the lines of its import instructions: their work,
+ * what they specified for each source, and the tools they use that Engelbart has no source for.
+ */
+/** An extra tool as an agent is told it: its name, its website, and what the person specified for it. */
+function toolSaid(tool) {
+  const said = [tool.note, tool.projects && tool.projects.length ? `only for these of the projects: ${tool.projects.join('; ')}` : ''].filter(Boolean).join('; ');
+  return `${tool.name}${tool.website ? ` (${tool.website})` : ''}${said ? `: ${said}` : ''}`;
+}
+
+function librarianNotes(direct) {
+  const name = (id) => (id === importFlow.SITES ? 'Saved URLs' : shownName(id));
+  const lines = [];
+  if (direct.roles.length) lines.push(`They describe their work as: ${direct.roles.join(', ')}.`);
+  if (direct.work) lines.push(`What they are interested in researching right now, in their words: ${direct.work}`);
+  const said = direct.apps.map((id) => {
+    const scope = direct.scopes[id];
+    if (!scope) return '';
+    const parts = [
+      scope.note,
+      scope.folders.length ? `only these folders and files: ${scope.folders.map((folder) => folder.path).join('; ')}` : '',
+      scope.people.length ? `only with these people: ${scope.people.join('; ')}` : '',
+      scope.projects.length ? `only for these of the projects: ${scope.projects.join('; ')}` : '',
+    ].filter(Boolean);
+    return parts.length ? `- ${name(id)}: ${parts.join('; ')}` : '';
+  }).filter(Boolean);
+  if (said.length) lines.push(`What they said to bring in from each source:\n${said.join('\n')}`);
+  if (direct.additional.length) lines.push(`Other tools they use that Engelbart has no source for:\n${direct.additional.map((tool) => `- ${toolSaid(tool)}`).join('\n')}`);
+  return lines.join('\n');
 }
 
 /**
@@ -1399,9 +1436,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /** What the person's Later (or Don't allow) on a step means, in words. */
   function laterWhy(need) {
     if (need.kind === 'permission') return 'you didn’t allow Engelbart to read it';
-    if (need.kind === 'connector') return 'you chose Later instead of connecting it';
-    if (need.kind === 'confirm') return 'you chose Later';
-    return 'you chose Later instead of signing in';
+    if (need.kind === 'connector') return 'you skipped connecting it';
+    if (need.kind === 'confirm') return 'you skipped it';
+    return 'you skipped signing in';
   }
 
   /** An agent hands the person a step (a sign-in, a code, a permission): one request per app and kind, then waits for it. */
@@ -1722,6 +1759,15 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const ctx = await context();
     input = directInput(input, homeDir);
     const choices = cleanChoices(input, homeDir);
+    // Import manually with fine-grained permissions (From Amitav, 2026-10-15): Import your context's choices, but a
+    // librarian session, which asks before anything comes in. What the person specified is its import instructions; an
+    // extra tool is told to it rather than read as the browser history.
+    const asked = input && input.librarian === true && choices.direct ? choices.direct : null;
+    if (asked) {
+      choices.custom = [choices.custom, librarianNotes(asked)].filter(Boolean).join('\n\n').slice(0, 4000);
+      choices.sources.sites.on = asked.apps.includes(importFlow.SITES);
+      choices.direct = null;
+    }
     if (!Object.values(choices.sources).some((choice) => choice.on)) throw new Error('Pick at least one source.');
     const usable = readyNow();
     // Import your context with neither CLI able to run (2026-10-14): it starts, waiting for the provider the person chose
@@ -1755,7 +1801,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(), fallback: new Set(), connected: new Set(), rows: new Set(), inProject: new Set(), inWorkspace: new Set(), workspaceId, placing: Promise.resolve(),
     };
     // A folder the person chose for an app on this Mac (Import your context's manual scopes): the app's, as if found.
-    if (choices.direct) for (const [app, scope] of Object.entries(choices.direct.scopes)) if (FIND_APPS.has(app) && app !== LOCAL_PDFS && scope.folders.length) s.picked.folders[app] = scope.folders[0].path;
+    const scoped = choices.direct || asked;
+    if (scoped) for (const [app, scope] of Object.entries(scoped.scopes)) if (FIND_APPS.has(app) && app !== LOCAL_PDFS && scope.folders.length) s.picked.folders[app] = scope.folders[0].path;
     if (waitFor) s.blocked = { provider: waitFor, error: `${PROVIDER_NAMES[waitFor]} is not connected`, at: now() };
     sessions.set(id, s);
     s.dirs = dirsOf(s);
@@ -1883,7 +1930,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const copied = s.choices.keychain !== false && sites.length && webSignIn && typeof webSignIn.copyDomains === 'function'
         ? await webSignIn.copyDomains(sites, { denied: signInDenied }).catch(() => false) : false;
       const ba = copied ? null : s.choices.browserAgents;
-      const named = d.additional.map((tool) => `${tool.name}${tool.website ? ` (${tool.website})` : ''}`);
+      const named = d.additional.map(toolSaid);
       const how = ba ? `Open each in a tab of your own in their ${ba.browserName}, where they are signed in, and bring in their pages, documents or items about these projects as notes (add_note).` : 'Open each through their sign-in in Engelbart\'s browser, and bring in their pages, documents or items about these projects as notes (add_note) or saved pages.';
       const plan = [importFlow.importPlan({ app: importFlow.SITES, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, period: periodName(s.choices.days) }), `These are tools they use that Engelbart has no import of its own for: ${named.join('; ')}. ${how} One with no website given: look for it in their browser history first.`].join('\n\n');
       dispatch(s, { kind: 'import', source: 'sites', apps: [], label: `Other tools: ${d.additional.map((tool) => tool.name).join(', ')}`.slice(0, 120), plan, extra: { sites }, route: ba ? 'browser' : null });

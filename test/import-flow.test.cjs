@@ -110,3 +110,41 @@ test('the plan of a browser agent sends it to the person\'s own browser, never t
   assert.equal(flow.isWebApp('Google Docs'), true);
   assert.equal(flow.isWebApp('Obsidian'), false);
 });
+
+// From Amitav (2026-10-15): one tools screen, the categories with the agents' finds added to them.
+
+test('Gmail is paused ("Get rid of Gmail and Calendar imports for now"): no Email category, not in the catalog', () => {
+  assert.equal(flow.GROUPS.some((group) => group.id === 'email'), false);
+  assert.equal(flow.CATALOG_IDS.includes('Gmail'), false);
+  assert.equal(flow.groupOfApp('Gmail'), null);
+});
+
+test('an Other category, last, holds what fits no other', () => {
+  const other = flow.GROUPS[flow.GROUPS.length - 1];
+  assert.deepEqual({ id: other.id, label: other.label, apps: [...other.apps] }, { id: 'other', label: 'Other', apps: [] });
+  assert.ok(flow.GROUP_IDS.includes('other'));
+});
+
+test('tool discovery: every extra tool gets a category the picker has (else Other); calendars and mail are left out', () => {
+  const reply = JSON.stringify({ tools: [], additional: [
+    { name: 'Linear', website: 'https://linear.app', used: true, category: 'code' },
+    { name: 'Figma', used: true, category: 'design' },
+    { name: 'Readwise', used: true, category: 'Notes' },
+    { name: 'Google Calendar', used: true, category: 'other' },
+    { name: 'Calendly', used: true },
+    { name: 'Cal.com', used: true },
+    { name: 'Outlook', used: true, category: 'email' },
+    { name: 'Superhuman Mail', used: true },
+    { name: 'Fantastical', used: true },
+  ] });
+  const out = flow.readTools(reply, {});
+  assert.deepEqual(out.additional.map((tool) => [tool.name, tool.category]), [['Linear', 'code'], ['Figma', 'other'], ['Readwise', 'notes']]);
+});
+
+test('the plan keeps a background run to what the person specified too, not only a manual one', () => {
+  const projects = [{ id: 'a', title: 'Requirements study' }, { id: 'b', title: 'Memex' }];
+  const scope = { kind: 'documents', folders: [], items: [], people: [], labels: [], projects: ['Memex'], note: 'Only the pages about the Memex' };
+  const plan = flow.importPlan({ app: 'Notion', mode: 'auto', projects, scope });
+  assert.match(plan, /For this source, only these of the projects: Memex\./);
+  assert.match(plan, /In their words, what to bring in from it: Only the pages about the Memex/);
+});

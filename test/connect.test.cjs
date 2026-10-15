@@ -673,7 +673,7 @@ test('Import your context: one import a tool told the projects picked, a manual 
       mode: 'manual', projects: projectsPicked, roles: ['Researcher', 'Nobody'], work: 'I study how students solve problems.',
       apps: ['Obsidian', 'ChatGPT', 'Not a tool'],
       scopes: { Obsidian: { folders: [{ path: '~/Vault' }], note: '' } },
-      additional: [{ name: 'Linear', website: 'https://linear.app' }],
+      additional: [{ name: 'Linear', website: 'https://linear.app', note: 'Only the issues about tutoring', projects: ['Calculus tutoring study'] }],
     },
   });
   const now = await until(state(started.id), (s) => s.finished && !s.thinking, 'the run queued');
@@ -693,6 +693,8 @@ test('Import your context: one import a tool told the projects picked, a manual 
   const linear = saved.jobs.find((job) => job.label.startsWith('Other tools'));
   assert.equal(linear.source, 'sites');
   assert.deepEqual(linear.extra, { sites: ['linear.app'] }, 'its agent may open the tool\'s site');
+  // What the person specified for an extra tool on the tools screen (From Amitav, 2026-10-15) goes to its agent too.
+  assert.match(linear.plan, /Linear \(https:\/\/linear\.app\): Only the issues about tutoring; only for these of the projects: Calculus tutoring study/);
   // ChatGPT is signed out: its import waits on a card instead of being left out.
   assert.equal(saved.jobs.some((job) => job.apps.includes('ChatGPT')), false, 'not queued yet');
   const card = now.needs.find((need) => need.app === 'ChatGPT');
@@ -736,9 +738,10 @@ test('"I\'m signed in" while Open still waits for the sign-in: the wait ends and
 
 test('Import your context, round 3: web apps in Engelbart\'s browser with the copied sign-ins; the person\'s browser only for a sign-in Engelbart can\'t use; a signed-out app is a popup', async () => {
   const fresh = fs.mkdtempSync(path.join(homeDir, 'browse-'));
-  // Google Docs and Overleaf come over from Chrome; Gmail is signed in there but its copy is refused (Google's binding);
+  // Google Docs and Overleaf come over from Chrome; Google Meet is signed in there but its copy is refused (Google's binding;
+  // it was Gmail until Gmail was paused, From Amitav 2026-10-15);
   // ChatGPT is signed out everywhere.
-  const quiet = { Gmail: { signedIn: false, held: true }, ChatGPT: { signedIn: false } };
+  const quiet = { 'Google Meet': { signedIn: false, held: true }, ChatGPT: { signedIn: false } };
   const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async (app) => quiet[app] || { signedIn: true, browser: 'Chrome' }, signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome', copyDomains: async () => true };
   const turns = [];
   const fake = createFakeConnectAgents({ delayMs: 5 });
@@ -747,10 +750,10 @@ test('Import your context, round 3: web apps in Engelbart\'s browser with the co
   const agents = {
     async turn(input) {
       turns.push({ kind: input.kind, label: input.meta && input.meta.job ? input.meta.job.label : '', system: input.system, message: input.message, browse: input.browse, connectors: input.connectors });
-      if (input.kind === 'browse' && input.meta.job.apps.includes('Gmail')) {
+      if (input.kind === 'browse' && input.meta.job.apps.includes('Google Meet')) {
         const out = await input.meta.callTool('needs_you', { kind: 'signin', reason: 'Choose an account in Chrome' });
         await gate;
-        return { text: `Gmail: ${out.status}`, session: null };
+        return { text: `Google Meet: ${out.status}`, session: null };
       }
       return fake.turn(input);
     },
@@ -761,7 +764,7 @@ test('Import your context, round 3: web apps in Engelbart\'s browser with the co
   const started = await connect.start({
     provider: 'anthropic',
     browserAgents: { browserId: 'evil', browserName: 'Spoofed', enable: true }, // the window's word is never taken
-    direct: { mode: 'auto', projects: [{ id: 'p', title: 'Calculus study' }], roles: [], work: '', apps: ['Google Docs', 'Overleaf', 'Gmail', 'ChatGPT'], scopes: {}, additional: [{ name: 'Linear', website: 'https://linear.app' }] },
+    direct: { mode: 'auto', projects: [{ id: 'p', title: 'Calculus study' }], roles: [], work: '', apps: ['Google Docs', 'Overleaf', 'Google Meet', 'ChatGPT'], scopes: {}, additional: [{ name: 'Linear', website: 'https://linear.app' }] },
   });
   const saved = () => savedOf(started.id);
   await until(() => saved(), (s) => s.jobs.filter((job) => job.kind === 'import').length >= 4, 'the imports queued');
@@ -770,16 +773,16 @@ test('Import your context, round 3: web apps in Engelbart\'s browser with the co
   const routeOf = (app) => { const job = value.jobs.find((one) => one.kind === 'import' && one.apps.includes(app)); return job ? job.route || 'engelbart' : 'none'; };
   assert.equal(routeOf('Google Docs'), 'engelbart', 'its copied sign-in: no plugin, nothing brought forward, no tab left');
   assert.equal(routeOf('Overleaf'), 'engelbart');
-  assert.equal(routeOf('Gmail'), 'browser', 'signed in in Chrome, refused in Engelbart: read there instead of a Log in loop');
+  assert.equal(routeOf('Google Meet'), 'browser', 'signed in in Chrome, refused in Engelbart: read there instead of a Log in loop');
   assert.equal(routeOf('ChatGPT'), 'none', 'signed out: waits on its sign-in popup');
   assert.equal(value.jobs.find((job) => job.label.startsWith('Other tools')).route, undefined, 'their sites\' sign-ins copied over');
-  assert.match(value.jobs.find((job) => job.apps.includes('Gmail')).plan, /in the person's own Chrome/);
-  let now = await until(state(started.id), (s) => s.needs.some((need) => need.app === 'Gmail'), 'Gmail\'s stop in Chrome');
+  assert.match(value.jobs.find((job) => job.apps.includes('Google Meet')).plan, /in the person's own Chrome/);
+  let now = await until(state(started.id), (s) => s.needs.some((need) => need.app === 'Google Meet'), 'Google Meet\'s stop in Chrome');
   const popup = now.needs.find((need) => need.app === 'ChatGPT');
   assert.equal(popup.kind, 'signin');
   assert.equal(popup.own, undefined, 'a sign-in Engelbart copies once they have signed in, in Chrome');
   assert.equal(popup.browser, 'Chrome');
-  const card = now.needs.find((need) => need.app === 'Gmail');
+  const card = now.needs.find((need) => need.app === 'Google Meet');
   assert.equal(card.own, true);
   assert.equal(card.browser, 'Chrome');
   await connect.need(started.id, card.id, 'open');
@@ -789,7 +792,7 @@ test('Import your context, round 3: web apps in Engelbart\'s browser with the co
   release();
   now = await until(state(started.id), (s) => s.jobs.filter((job) => job.kind === 'import').every((job) => ['done', 'failed', 'stopped'].includes(job.status)), 'every import ended');
   const browse = turns.filter((turn) => turn.kind === 'browse');
-  assert.deepEqual(browse.map((turn) => turn.label), ['Email: Gmail']);
+  assert.deepEqual(browse.map((turn) => turn.label), ['Meeting transcripts: Google Meet']);
   for (const turn of browse) {
     assert.match(turn.system, /Never download or export anything/);
     assert.match(turn.system, /Close every tab you opened before you reply/);
@@ -820,6 +823,38 @@ test('without browser agents allowed, web apps keep Engelbart\'s own browser; at
   const value = savedOf(started.id);
   assert.equal(value.choices.browserAgents, null);
   assert.equal(value.jobs.find((job) => job.apps.includes('Google Docs')).route, undefined);
+  connect.stop(started.id);
+  connect.dismiss(started.id);
+  fs.rmSync(memory.memoryPath(ctx.dataRoot), { force: true });
+});
+
+// Import manually with fine-grained permissions (From Amitav, 2026-10-15): the same choices as a background run, but the
+// librarian asks before anything comes in. What the person specified on the tools screen is its import instructions.
+test('Import manually: the tools screen\'s choices start a librarian session, what the person specified told to the librarian', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'librarian-'));
+  fs.mkdirSync(path.join(fresh, 'Vault'));
+  const { connect, state } = fakeConnect({ home: fresh });
+  const started = await connect.start({
+    provider: 'openai', librarian: true,
+    direct: {
+      mode: 'manual', projects: [{ id: 'p', title: 'Memex', description: 'The history of the Memex' }], roles: ['Researcher'], work: 'How the Memex was imagined',
+      apps: ['Obsidian', 'Notion'], additional: [{ name: 'Figma', website: 'https://figma.com' }],
+      scopes: { Notion: { note: 'Only the pages about the Memex', folders: [], people: [], items: [], projects: [] }, Obsidian: { note: '', folders: [{ path: path.join(fresh, 'Vault') }], people: [], items: [], projects: [] } },
+    },
+  });
+  assert.equal(started.direct, null, 'a librarian session, not a background run');
+  const value = savedOf(started.id);
+  assert.equal(value.choices.direct, null);
+  assert.deepEqual(value.choices.sources.notes, { on: true, apps: ['Obsidian', 'Notion'], folders: [], repos: [] });
+  assert.equal(value.choices.sources.sites.on, false, 'an extra tool is told to the librarian, not read as the browser history');
+  assert.equal(value.choices.project.name, 'Memex');
+  assert.match(value.choices.custom, /They describe their work as: Researcher\./);
+  assert.match(value.choices.custom, /How the Memex was imagined/);
+  assert.match(value.choices.custom, /- Notion: Only the pages about the Memex/);
+  assert.match(value.choices.custom, new RegExp(`- Obsidian: only these folders and files: ${path.join(fresh, 'Vault').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+  assert.match(value.choices.custom, /Figma \(https:\/\/figma\.com\)/);
+  const now = await until(state(started.id), (s) => !s.thinking && s.chat.length > 1, 'the librarian\'s first turn');
+  assert.equal(now.chat[0].opener, true);
   connect.stop(started.id);
   connect.dismiss(started.id);
   fs.rmSync(memory.memoryPath(ctx.dataRoot), { force: true });

@@ -204,16 +204,16 @@ test('Zotero: Later leaves it out with its reason, the run ends with nothing to 
   const now = await connect.need(started.id, step.id, 'skip'); // Later
   assert.deepEqual(now.needs, []);
   assert.deepEqual(imports(now, 'Zotero'), [], 'nothing runs for it');
-  assert.deepEqual(now.leftOut, [{ app: 'Zotero', why: 'you chose Later instead of signing in' }]);
+  assert.deepEqual(now.leftOut, [{ app: 'Zotero', why: 'you skipped signing in' }]);
   assert.equal(now.finished, true);
   zotero.finish(); // signed in after Later (the tab was still open): nothing starts, Later holds
   await new Promise((resolve) => { setTimeout(resolve, 80); });
   assert.deepEqual(imports(connect.state(started.id), 'Zotero'), []);
   const { nothingLines } = status();
-  assert.deepEqual(nothingLines(now, [], []), [{ name: 'Zotero', line: 'Nothing came in from Zotero: you chose Later instead of signing in.' }]);
+  assert.deepEqual(nothingLines(now, [], []), [{ name: 'Zotero', line: 'Nothing came in from Zotero: you skipped signing in.' }]);
   const html = renderStatus(now);
   assert.match(html, /Your imports have finished/, 'ended, though nothing was left to run');
-  assert.match(html, /Nothing came in from Zotero: you chose Later instead of signing in\./);
+  assert.match(html, /Nothing came in from Zotero: you skipped signing in\./);
   assert.doesNotMatch(html, /border-(top|bottom)/, 'no dividing lines');
   connect.stop(started.id);
 });
@@ -260,7 +260,7 @@ test('GitHub signed out: held on its step, the device code on the popup, the imp
   const later = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: project, apps: ['GitHub'], scopes: {} } });
   const card = (await until(() => connect.state(later.id), (s) => s.finished && s.needs.length, 'the step')).needs[0];
   const left = await connect.need(later.id, card.id, 'skip');
-  assert.deepEqual(left.leftOut, [{ app: 'GitHub', why: 'you chose Later instead of signing in' }]);
+  assert.deepEqual(left.leftOut, [{ app: 'GitHub', why: 'you skipped signing in' }]);
   connect.stop(later.id);
 });
 
@@ -296,7 +296,7 @@ test('Granola (a connector nothing reaches): held on a Connect step, the import 
   await connect.need(later.id, card.id, 'open');
   const left = await connect.need(later.id, card.id, 'skip');
   assert.deepEqual(cancelled, ['Granola'], 'its sign-in, still waiting in the browser, called off');
-  assert.deepEqual(left.leftOut, [{ app: 'Granola', why: 'you chose Later instead of connecting it' }]);
+  assert.deepEqual(left.leftOut, [{ app: 'Granola', why: 'you skipped connecting it' }]);
   connect.stop(later.id);
 });
 
@@ -334,11 +334,12 @@ test('the other steps: "confirm" and a folder permission are done on their butto
       return { text: `${app}: ${out.status}`, session: null };
     },
   };
-  // Gmail: signed in in the browser, the copy refused by Engelbart's (Google's binding), and no browser agents.
+  // Google Drive: signed in in the browser, the copy refused by Engelbart's (Google's binding), and no browser agents. (It
+  // was Gmail, the same Google sign-in, until Gmail was paused, From Amitav 2026-10-15.)
   const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: false, held: true }), signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome' };
   const appleNotes = { permission: async () => ({ allowed: false, error: 'macOS did not allow it' }) };
   const connect = connectWith({ agents, webSignIn, appleNotes });
-  const started = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: project, apps: ['Obsidian', 'Apple Notes', 'Gmail', 'PDFs on this Mac'], scopes: {} } });
+  const started = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: project, apps: ['Obsidian', 'Apple Notes', 'Google Docs', 'PDFs on this Mac'], scopes: {} } });
   const state = () => connect.state(started.id);
   await until(state, (s) => s.needs.length === 3, 'three steps');
   for (const need of connect.state(started.id).needs) {
@@ -350,11 +351,11 @@ test('the other steps: "confirm" and a folder permission are done on their butto
   assert.deepEqual(asked.sort(), [['Apple Notes', 'permission', 'skipped'], ['Obsidian', 'confirm', 'done'], ['PDFs on this Mac', 'permission', 'done']]);
   assert.deepEqual(now.leftOut.sort((a, b) => a.app.localeCompare(b.app)), [
     { app: 'Apple Notes', why: 'you didn’t allow Engelbart to read it' },
-    { app: 'Gmail', why: 'you\'re signed in to it in Chrome, but it doesn\'t let Engelbart use that sign-in' },
+    { app: 'Google Docs', why: 'you\'re signed in to it in Chrome, but it doesn\'t let Engelbart use that sign-in' },
   ]);
   const lines = status().nothingLines(now, now.jobs.filter((job) => job.kind === 'import'), []).map((entry) => entry.line);
   assert.ok(lines.includes('Nothing came in from Apple Notes: you didn’t allow Engelbart to read it.'), lines.join('\n'));
-  assert.ok(lines.includes('Nothing came in from Gmail: you\'re signed in to it in Chrome, but it doesn\'t let Engelbart use that sign-in.'), lines.join('\n'));
+  assert.ok(lines.includes('Nothing came in from Google Drive: you\'re signed in to it in Chrome, but it doesn\'t let Engelbart use that sign-in.'), lines.join('\n'));
   assert.ok(lines.includes('Nothing came in from Obsidian. Obsidian: done.'), lines.join('\n'));
   connect.stop(started.id);
 });
@@ -380,22 +381,30 @@ const status = () => components().ImportStatus;
 const renderStatus = (session) => renderToStaticMarkup(React.createElement(components().ImportStatus.default, { session, onClose() {}, onNeed() {}, onSkip() {}, onStop() {}, onDone() {} }));
 const renderNeed = (need) => renderToStaticMarkup(React.createElement(components().NeedPopup.default, { need, onOpen() {}, onDone() {}, onSkip() {}, onLater() {} }));
 
-test('the step popups: Zotero\'s and GitHub\'s never name a browser they don\'t open, "confirm" has words of its own, Later is never disabled, and the scrim is the overlay', () => {
+test('the step popups: Zotero\'s and GitHub\'s never name a browser they don\'t open, "confirm" has words of its own, Skip is never disabled, and the scrim is the overlay', () => {
   const { needCopy } = components().NeedPopup;
   const base = { id: 'n', app: 'Zotero', kind: 'signin', browser: 'Chrome', opened: false, busy: false, error: '' };
-  assert.deepEqual(needCopy(base), { title: 'Sign in to Zotero', text: '', primary: 'Sign in', secondary: 'Later' });
+  assert.deepEqual(needCopy(base), { title: 'Sign in to Zotero', text: '', primary: 'Sign in', secondary: 'Skip' });
   assert.deepEqual(needCopy({ ...base, kind: 'confirm' }).primary, 'Sign in', 'any kind, for Zotero, is its own sign-in');
   assert.equal(needCopy({ ...base, opened: true }).primary, 'Open again');
   assert.equal(needCopy({ ...base, opened: true }).text, 'Finish signing in in your browser.');
   assert.equal(needCopy({ ...base, app: 'GitHub', opened: true, code: 'WDJB-MJHT' }).text, 'Enter WDJB-MJHT on GitHub, then come back.');
   for (const words of [needCopy(base), needCopy({ ...base, opened: true }), needCopy({ ...base, app: 'GitHub' })]) assert.doesNotMatch(JSON.stringify(words), /Chrome/);
-  assert.deepEqual(needCopy({ ...base, app: 'Obsidian', kind: 'confirm', reason: 'Open Obsidian once so its vault is indexed.' }), { title: 'Open Obsidian once so its vault is indexed', text: '', primary: 'Done', secondary: 'Later' });
-  assert.deepEqual(needCopy({ ...base, app: 'Granola', kind: 'connector' }), { title: 'Connect Granola', text: '', primary: 'Connect', secondary: 'Later', waiting: false });
+  assert.deepEqual(needCopy({ ...base, app: 'Obsidian', kind: 'confirm', reason: 'Open Obsidian once so its vault is indexed.' }), { title: 'Open Obsidian once so its vault is indexed', text: '', primary: 'Done', secondary: 'Skip' });
+  assert.deepEqual(needCopy({ ...base, app: 'Granola', kind: 'connector' }), { title: 'Connect Granola', text: '', primary: 'Connect', secondary: 'Skip', waiting: false });
   assert.equal(needCopy({ ...base, app: 'Granola', kind: 'connector', busy: true }).primary, 'Waiting…');
-  // Waiting on a sign-in disables only the primary button; Later always works.
+  // From Amitav (2026-10-15): "get rid of the 'Continue in Chrome' subtext on all these permission prompts, and change
+  // 'Later' to 'Skip'".
+  for (const kind of ['signin', 'code', '2fa', 'captcha', 'confirm', 'folder', 'connector']) {
+    const words = needCopy({ ...base, app: 'Notion', kind });
+    assert.doesNotMatch(words.text, /Continue in/, kind);
+    assert.equal(words.secondary, 'Skip', kind);
+  }
+  assert.equal(needCopy({ ...base, app: 'Notion', kind: 'signin' }).primary, 'Open Chrome', 'the button still says where it goes');
+  // Waiting on a sign-in disables only the primary button; Skip always works.
   for (const need of [{ ...base, busy: true }, { ...base, app: 'Granola', kind: 'connector', busy: true, opened: true }]) {
     const html = renderNeed(need);
-    assert.match(html, /<button type="button" class="link" data-need-later="n">Later<\/button>/);
+    assert.match(html, /<button type="button" class="link" data-need-later="n">Skip<\/button>/);
     assert.match(html, /data-need-primary="n" disabled=""/);
   }
   // The overlay is the scrim (fixed, the whole window), so native views (the Stage's page, post-its) step aside for it;
@@ -414,12 +423,12 @@ test('the status: each source that ended with nothing says why, in one line, and
     { id: '3', kind: 'import', apps: ['Obsidian'], label: 'Notes: Obsidian', status: 'done', notes: 4, items: 0 },
     { id: '4', kind: 'import', apps: ['Overleaf'], label: 'Papers: Overleaf', status: 'done', notes: 0, items: 0, summary: 'No project matched the study. Looked at 12.' },
   ];
-  const session = { id: 's', finished: true, jobs, needs: [], leftOut: [{ app: 'Zotero', why: 'you chose Later instead of signing in' }, { app: 'GitHub', why: 'you chose Later instead of signing in' }] };
+  const session = { id: 's', finished: true, jobs, needs: [], leftOut: [{ app: 'Zotero', why: 'you skipped signing in' }, { app: 'GitHub', why: 'you skipped signing in' }] };
   assert.deepEqual(nothingLines(session, jobs, [jobs[2]]).map((entry) => entry.line), [
-    'Nothing came in from Zotero: you chose Later instead of signing in.',
+    'Nothing came in from Zotero: you skipped signing in.',
     'Nothing came in from Granola: its import failed (The model is at capacity).',
     'Nothing came in from Overleaf. No project matched the study.',
-    'Nothing came in from GitHub: you chose Later instead of signing in.',
+    'Nothing came in from GitHub: you skipped signing in.',
   ]);
   const html = renderStatus(session);
   assert.match(html, /Your imports have finished/);

@@ -57,7 +57,7 @@ const firstSentence = (text, max = 140) => {
 /**
  * Why each source that ended brought nothing in (2026-10-14, a beta tester's Zotero: "when she finally hit later,
  * nothing was imported, so she was super confused") → [{ name, line }], one line each: what the run left out and why
- * (`session.leftOut`, main's words: "you chose Later instead of signing in"), else a failed import's error, else what its
+ * (`session.leftOut`, main's words: "you skipped signing in"), else a failed import's error, else what its
  * agent said it found. `jobs` the status's rows; `imported` those that brought something in.
  */
 export function nothingLines(session, jobs, imported) {
@@ -75,7 +75,7 @@ export function nothingLines(session, jobs, imported) {
     else if (job.summary) add(name, `Nothing came in from ${name}. ${firstSentence(job.summary)}.`);
     else add(name, `Nothing came in from ${name}.`);
   }
-  // An app left out before any import of it started (Later on its sign-in, a sign-in macOS refused): no row of its own.
+  // An app left out before any import of it started (Skip on its sign-in, a sign-in macOS refused): no row of its own.
   for (const entry of leftOut) {
     if (jobs.some((job) => (job.apps || []).includes(entry.app))) continue;
     const name = catalogTool(entry.app) ? catalogTool(entry.app).name : shownName(entry.app);
@@ -112,7 +112,7 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   }, [onClose, confirmStop]);
   // The rows that need the person first, then what is working, queued and ended (a stable sort: their order otherwise).
   const jobs = (session.jobs || []).filter((job) => WORK.has(job.kind) && job.kind !== 'recall').sort((a, b) => (RANK[a.status] ?? 3) - (RANK[b.status] ?? 3));
-  // Apps left out before an import of theirs started (Later on a sign-in held at the start): a row each, "Left out".
+  // Apps left out before an import of theirs started (Skip on a sign-in held at the start): a row each, "Left out".
   const leftOnly = (Array.isArray(session.leftOut) ? session.leftOut : []).filter((entry) => !jobs.some((job) => (job.apps || []).includes(entry.app)) && !(session.needs || []).some((need) => need.app === entry.app))
     .map((entry) => ({ id: `left-${entry.app}`, kind: 'import', apps: [entry.app], label: entry.app, status: 'stopped', skipped: true }));
   // Ended with nothing to run at all (every app left out) is ended too: it said "Imports in progress" for good.

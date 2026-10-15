@@ -19,10 +19,32 @@ const LOCAL_FOLDERS = 'Folders on this Mac';
 /** Websites' one row: the browser's history. */
 const SITES = '__sites';
 
-/** The picker's groups: Connect's sources, Code holding GitHub and the folders on this Mac. */
-const GROUPS = Object.freeze(SOURCES.map((source) => Object.freeze({ id: source.id, label: source.label, apps: Object.freeze(source.id === 'code' ? ['GitHub', LOCAL_FOLDERS] : [...source.apps]) })));
+/** Apps left out of Import your context for now (From Amitav, 2026-10-15: "Get rid of Gmail and Calendar imports for now"). */
+const PAUSED_APPS = Object.freeze(['Gmail']);
+
+/**
+ * The picker's groups: Connect's sources (a paused app taken out, and a category it leaves empty with it), Code holding
+ * GitHub and the folders on this Mac, then Other, for the tools the agents find that fit no category (From Amitav,
+ * 2026-10-15). Websites and Other have no apps of their own.
+ */
+const GROUPS = Object.freeze([
+  ...SOURCES.map((source) => ({ id: source.id, label: source.label, apps: source.id === 'code' ? ['GitHub', LOCAL_FOLDERS] : source.apps.filter((app) => !PAUSED_APPS.includes(app)), emptied: source.apps.length > 0 && source.apps.every((app) => PAUSED_APPS.includes(app)) }))
+    .filter((group) => !group.emptied).map(({ id, label, apps }) => Object.freeze({ id, label, apps: Object.freeze(apps) })),
+  Object.freeze({ id: 'other', label: 'Other', apps: Object.freeze([]) }),
+]);
+const GROUP_IDS = Object.freeze(GROUPS.map((group) => group.id));
 
 const groupOfApp = (app) => (app === SITES ? 'sites' : (GROUPS.find((group) => group.apps.includes(app)) || {}).id || null);
+
+/** A category the tool agent named, as one of GROUPS (its id or its label, any case), else Other. */
+function categoryOf(value) {
+  const said = String(value || '').trim().toLowerCase();
+  const group = GROUPS.find((one) => one.id === said || one.label.toLowerCase() === said);
+  return group ? group.id : 'other';
+}
+
+/** Tools the agents may not bring back while calendars and mail are paused (From Amitav, 2026-10-15). */
+const PAUSED_TOOL = /\b(calendars?|calendly|cal\.com|fantastical|outlook|g?mail)\b/i;
 
 /** How an app is reached, as the picker and the tools page say it: 'local' (read on this Mac), 'web', 'connector', 'signin', 'automation'. */
 function reachOf(app) {
@@ -156,8 +178,9 @@ function readProjects(text) {
 
 /**
  * The tool-discovery agent's reply made safe, over the deterministic evidence `known` ({ [id]: { used, evidence, method } })
- * → { tools: [{ id, used, evidence, method }], additional: [{ name, website, used, evidence }] }. Every catalog tool has an
- * entry: what the agent said, else what was known, else unused. A tool found on this Mac stays used whatever it said.
+ * → { tools: [{ id, used, evidence, method }], additional: [{ name, website, used, evidence, category }] }. Every catalog
+ * tool has an entry: what the agent said, else what was known, else unused. A tool found on this Mac stays used whatever it
+ * said. An extra tool's category is one of GROUPS' (Other when it named none it has); calendars and mail are left out.
  */
 function readTools(text, known = {}) {
   const value = jsonOf(text) || {};
@@ -174,10 +197,10 @@ function readTools(text, known = {}) {
   for (const entry of Array.isArray(value.additional) ? value.additional : []) {
     if (!entry || typeof entry !== 'object') continue;
     const name = clip(entry.name, 60);
-    if (!name || names.has(name.toLowerCase())) continue;
+    if (!name || names.has(name.toLowerCase()) || PAUSED_TOOL.test(name)) continue;
     names.add(name.toLowerCase());
     const website = typeof entry.website === 'string' && /^https?:\/\/[^\s]+$/i.test(entry.website.trim()) ? entry.website.trim().slice(0, 300) : '';
-    additional.push({ name, website, used: entry.used !== false, evidence: clip(entry.evidence, 200) });
+    additional.push({ name, website, used: entry.used !== false, evidence: clip(entry.evidence, 200), category: categoryOf(entry.category) });
     if (additional.length === 12) break;
   }
   return { tools, additional };
@@ -237,15 +260,16 @@ function importPlan({ app, mode, projects, roles = [], work = '', scope = null, 
     period ? `Look back over ${period}.` : '',
     'Leave out unrelated projects, personal files, daily notes, journals, receipts and forms, and tools used every day (mail, calendar, social media) unless they are about these projects.',
   ];
-  // Manual (round 3, 2026-10-13): what the person said under "Specify context" is optional. The projects ticked there
-  // narrow this source to those; the folders and files chosen are where to read; what they wrote says what they want.
-  const said = mode === 'manual' && scope ? [
+  // What the person said under "Specify context" (round 3, 2026-10-13) is optional. The projects ticked there narrow this
+  // source to those; the folders and files chosen are where to read; what they wrote says what they want. It holds for a
+  // background run too (From Amitav, 2026-10-15: one tools screen whichever way the import runs).
+  const said = scope ? [
     scope.folders.length ? `only these folders and files: ${scope.folders.map((folder) => folder.path || folder.name).join('; ')}` : '',
     scope.people.length ? `only email with these people: ${scope.people.join('; ')}` : '',
     scope.labels && scope.labels.length ? `these items: ${scope.labels.join('; ')}` : '',
   ].filter(Boolean) : [];
-  if (mode === 'manual' && scope && Array.isArray(scope.projects) && scope.projects.length) lines.push(`For this source, only these of the projects: ${scope.projects.join('; ')}.`);
-  if (mode === 'manual' && scope && String(scope.note || '').trim()) lines.push(`In their words, what to bring in from it: ${clip(scope.note, 600)}`);
+  if (scope && Array.isArray(scope.projects) && scope.projects.length) lines.push(`For this source, only these of the projects: ${scope.projects.join('; ')}.`);
+  if (scope && String(scope.note || '').trim()) lines.push(`In their words, what to bring in from it: ${clip(scope.note, 600)}`);
   if (said.length) {
     lines.push(`They narrowed it down: read ${said.join(', and ')}. Nothing outside it comes in, even when it looks related.`);
   } else if (browser) {
@@ -260,7 +284,7 @@ function importPlan({ app, mode, projects, roles = [], work = '', scope = null, 
 const isWebApp = (app) => reachOf(app) === 'web';
 
 module.exports = {
-  LOCAL_FOLDERS, SITES, GROUPS, CATALOG, CATALOG_IDS, ROLES, ROLE_NAMES, PROVIDER_IDS, PROVIDER_NAMES, BROWSERS,
+  LOCAL_FOLDERS, SITES, PAUSED_APPS, GROUPS, GROUP_IDS, CATALOG, CATALOG_IDS, categoryOf, ROLES, ROLE_NAMES, PROVIDER_IDS, PROVIDER_NAMES, BROWSERS,
   groupOfApp, reachOf, isLocal, isWebApp, catalogTool, chooseProvider, browserById, browserIdOfName, orderBrowsers,
   jsonOf, readProjects, readTools, scopeKind, emptyScope, scopeReady, scopeOptions, importPlan,
 };

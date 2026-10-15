@@ -291,3 +291,24 @@ test('rows say "Connecting…" for Claude Code and Codex while Engelbart install
   assert.equal(rowOf({ ...base, status: 'checking' }).state, 'Connecting…');
   assert.equal(rowOf({ ...base, id: 'git', name: 'Git', busy: { action: 'install', phase: 'Waiting for Apple’s installer' } }).state, 'Waiting for Apple’s installer', 'Git keeps its installer\'s steps');
 });
+
+// From Amitav (2026-10-15): one tools screen, its categories with what the agents found added to them. The tool agent is
+// told the categories and gives each extra tool one; calendars and mail never come back.
+test('the tool agent is told the categories, every extra tool comes back in one (else Other), calendars and mail left out', async () => {
+  const m = await machine({ claude: '2.1.300', codex: 'missing' });
+  const home = temp();
+  let told = null;
+  let last = null;
+  const reply = { tools: [], additional: [{ name: 'Figma', website: 'https://figma.com', used: true, evidence: 'daily visits', category: 'Other' }, { name: 'Readwise', used: true, evidence: 'highlights', category: 'notes' }, { name: 'Google Calendar', used: true, evidence: 'every day', category: 'other' }] };
+  const gated = createCliGatedAgents({ turn: async (input) => { if (/Say which tools they use now/.test(input.message)) told = input; return { text: JSON.stringify(reply) }; } }, m.fake.state, { delayMs: 1 });
+  const discovery = createDiscovery({ agents: gated, context: async () => ({ dataRoot: path.join(home, 'root') }), homeDir: home, providers: providersOn(m, home), notify: (state) => { last = state; } });
+  await discovery.startTools({ provider: 'anthropic' });
+  const done = await until(() => last, (state) => state && state.tools.status === 'done', 'the tool agent');
+  assert.ok(told, 'the tool agent ran');
+  const categories = told.message.match(/<categories[^>]*>\n([^<]+)\n<\/categories>/);
+  assert.ok(categories, 'a <categories> block');
+  assert.deepEqual(JSON.parse(categories[1]).map((one) => one.id), ['notes', 'transcripts', 'chats', 'sites', 'papers', 'code', 'other']);
+  assert.match(told.system, /"category"/);
+  assert.match(told.system, /calendar/i);
+  assert.deepEqual(done.tools.results.additional.map((tool) => [tool.name, tool.category]), [['Figma', 'other'], ['Readwise', 'notes']]);
+});

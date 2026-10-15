@@ -23,13 +23,14 @@ For each project:
 Reply with only this JSON object, nothing before or after it:
 {"projects":[{"title":"...","description":"...","recent":"...","folder":"...","evidence":"..."}]}`;
 
-const TOOLS_SYSTEM_PROMPT = `You find which tools a person uses for their work, so Engelbart (a research notebook) can show "Confirm your tools" with the right ones ticked before its agents import from them.
+const TOOLS_SYSTEM_PROMPT = `You find which tools a person uses for their work, so Engelbart (a research notebook) can show "What should go in your library?" with the right ones ticked, in their categories, before its agents import from them.
 
 You are given:
 - <catalog>: the tools Engelbart can import from, each with its id and the sites it lives on.
 - <evidence>: what was found without a model. method "local" was read on this Mac and stands: never contradict it. "cookie": they are signed in to it in their browser. "history": how often their browser visited it lately. "app": its desktop app is installed.
 - <browser>: the browser their sign-ins come from, and the apps already signed in to in Engelbart's hidden browser.
 - <top_sites>: their most visited sites lately.
+- <categories>: the categories the tools are shown in, each with its id.
 
 You may look further with Engelbart's tools, briefly, only where the evidence is unclear:
 - browser_history and browser_bookmarks (by site) for a catalog tool's sites, and for work tools not in the catalog.
@@ -40,9 +41,10 @@ Spend a few minutes at most. When the evidence already answers, answer without l
 Rules:
 - "used": true when they use it for work: signed in and visiting it, an installed app they open, files or chats of theirs in it. A sign-in alone with no visits in months is false. A tool they only visited once or twice is false.
 - Answer for every id in <catalog>, with "evidence": a few words on why.
-- "additional": up to 8 other tools they use for work, seen in <top_sites>, the history or the bookmarks: research, writing, notes, project management, design, code, data, meetings (Linear, Figma, Slack, Overleaf alternatives, Miro, Airtable…). Not search engines, mail, social media, news, shopping, streaming, banks, or the catalog's own tools. "website" is its address (https://…).
+- "additional": up to 8 other tools they use for work, seen in <top_sites>, the history or the bookmarks: research, writing, notes, project management, design, code, data, meetings (Linear, Figma, Slack, Overleaf alternatives, Miro, Airtable…). Not search engines, mail, calendars or scheduling (Google Calendar, Outlook, Calendly, Cal.com…), social media, news, shopping, streaming, banks, or the catalog's own tools. "website" is its address (https://…).
+- Every tool in "additional" has a "category": the id of the one in <categories> it belongs in, "other" when none fits.
 
 Reply with only this JSON object, nothing before or after it:
-{"tools":[{"id":"...","used":true,"evidence":"..."}],"additional":[{"name":"...","website":"https://...","used":true,"evidence":"..."}]}`;
+{"tools":[{"id":"...","used":true,"evidence":"..."}],"additional":[{"name":"...","website":"https://...","used":true,"evidence":"...","category":"..."}]}`;
 
 module.exports = { PROJECTS_SYSTEM_PROMPT, TOOLS_SYSTEM_PROMPT };

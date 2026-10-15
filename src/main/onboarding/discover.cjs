@@ -30,7 +30,7 @@ const scan = require('../connect/scan.cjs');
 const { createImportTools } = require('../connect/tools.cjs');
 const { connectChoice } = require('../connect/session.cjs');
 const { APPS, SIGN_IN_COOKIES, shownName } = require('../../shared/connect-sources.cjs');
-const { CATALOG, LOCAL_FOLDERS, SITES, PROVIDER_IDS, browserById, readProjects, readTools } = require('../../shared/import-flow.cjs');
+const { CATALOG, GROUPS, LOCAL_FOLDERS, SITES, PROVIDER_IDS, browserById, readProjects, readTools } = require('../../shared/import-flow.cjs');
 const prompts = require('./prompts.cjs');
 const { projectDigest, DIGEST_DAYS } = require('./digest.cjs');
 const { accessSpec } = require('../connect/offthread.cjs');
@@ -318,6 +318,8 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
         `<evidence note="Found without a model. method local: read on this Mac (it stands); cookie: signed in in their browser; history: visits lately; app: its desktop app is installed.">\n${JSON.stringify(evidence, null, 1)}\n</evidence>`,
         `<browser>${browser ? browser.name : 'none'}${signedIn.length ? `; signed in to ${signedIn.join(', ')} in Engelbart's browser, which browser_open uses` : ''}</browser>`,
         `<top_sites note="Their most visited sites lately, for tools not in the catalog.">\n${JSON.stringify(sites.slice(0, 80))}\n</top_sites>`,
+        // From Amitav (2026-10-15): the tools screen is the picker's categories, with every extra tool put in one of them.
+        `<categories note="Every tool in additional goes in one of these, by id; other when none fits.">\n${JSON.stringify(GROUPS.map((group) => ({ id: group.id, label: group.label })))}\n</categories>`,
         'Say which tools they use now, as the JSON object only.',
       ].join('\n\n');
       let bridge = null;

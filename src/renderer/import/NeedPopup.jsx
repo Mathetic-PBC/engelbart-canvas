@@ -8,7 +8,8 @@ import { shownName } from '../../shared/connect-sources.cjs';
 // instead of like little pills in the popup"): one at a time, over whatever is showing, drawn as the review mockup's
 // "Sign in to Notion · Continue in Arc." Nothing signs in inside Engelbart: Open brings up the app in the browser the
 // person chose, and "I'm signed in" has Engelbart copy that sign-in (connect/session.cjs need 'done' checks it first).
-// Later puts the popup away; the step stays in the status modal's list as "Needs you".
+// Skip (it said Later until From Amitav, 2026-10-15) leaves that app out of the run. No "Continue in {browser}." under
+// any of them (the same notes): the button says where it goes.
 // 2026-10-14 (the beta's Zotero report): Zotero's and GitHub's sign-ins, and a connector's, are Engelbart's own and run in
 // main (session.cjs ownSignIn, watchStep): their popup never offers a browser it does not open, and closes by itself once
 // signed in. A step whose kind the popup had no words for ("confirm") fell through to "Sign in to … · Open Chrome".
@@ -19,24 +20,24 @@ export function needCopy(need) {
   const browser = need.browser || 'your browser';
   // GitHub and Zotero sign in through Engelbart's own sign-in, in the person's default browser.
   if (need.app === 'GitHub' || need.app === 'Zotero') {
-    if (need.busy) return { title: `Sign in to ${app}`, text: '', primary: 'Opening…', secondary: 'Later', waiting: true };
-    if (need.opened) return { title: `Sign in to ${app}`, text: need.code ? `Enter ${need.code} on GitHub, then come back.` : 'Finish signing in in your browser.', primary: 'Open again', secondary: 'Later' };
-    return { title: `Sign in to ${app}`, text: '', primary: 'Sign in', secondary: 'Later' };
+    if (need.busy) return { title: `Sign in to ${app}`, text: '', primary: 'Opening…', secondary: 'Skip', waiting: true };
+    if (need.opened) return { title: `Sign in to ${app}`, text: need.code ? `Enter ${need.code} on GitHub, then come back.` : 'Finish signing in in your browser.', primary: 'Open again', secondary: 'Skip' };
+    return { title: `Sign in to ${app}`, text: '', primary: 'Sign in', secondary: 'Skip' };
   }
   if (need.kind === 'permission') return { title: `Allow Engelbart to read ${app}?`, text: '', primary: 'Allow', secondary: 'Don’t allow' };
-  if (need.kind === 'folder') return { title: `Choose your ${app} folder`, text: '', primary: 'Choose folder', secondary: 'Later' };
+  if (need.kind === 'folder') return { title: `Choose your ${app} folder`, text: '', primary: 'Choose folder', secondary: 'Skip' };
   // A connector's sign-in opens in the default browser (connectors.cjs), whichever browser was chosen for the copies.
-  if (need.kind === 'connector') return { title: `Connect ${app}`, text: need.busy ? 'Finish connecting in your browser.' : '', primary: need.busy ? 'Waiting…' : 'Connect', secondary: 'Later', waiting: !!need.busy };
-  if (need.kind === 'confirm') return { title: String(need.reason || `Finish this in ${app}`).replace(/\.$/, ''), text: '', primary: 'Done', secondary: 'Later' };
-  if (need.kind === 'code' || need.kind === '2fa') return { title: `Enter the code for ${app}`, text: `Continue in ${browser}.`, primary: need.opened ? 'Done' : `Open ${browser}`, secondary: 'Later' };
-  if (need.kind === 'captcha') return { title: `Finish the check for ${app}`, text: `Continue in ${browser}.`, primary: need.opened ? 'Done' : `Open ${browser}`, secondary: 'Later' };
-  return { title: `Sign in to ${app}`, text: `Continue in ${browser}.`, primary: need.opened ? 'I’m signed in' : `Open ${browser}`, secondary: 'Later' };
+  if (need.kind === 'connector') return { title: `Connect ${app}`, text: need.busy ? 'Finish connecting in your browser.' : '', primary: need.busy ? 'Waiting…' : 'Connect', secondary: 'Skip', waiting: !!need.busy };
+  if (need.kind === 'confirm') return { title: String(need.reason || `Finish this in ${app}`).replace(/\.$/, ''), text: '', primary: 'Done', secondary: 'Skip' };
+  if (need.kind === 'code' || need.kind === '2fa') return { title: `Enter the code for ${app}`, text: '', primary: need.opened ? 'Done' : `Open ${browser}`, secondary: 'Skip' };
+  if (need.kind === 'captcha') return { title: `Finish the check for ${app}`, text: '', primary: need.opened ? 'Done' : `Open ${browser}`, secondary: 'Skip' };
+  return { title: `Sign in to ${app}`, text: '', primary: need.opened ? 'I’m signed in' : `Open ${browser}`, secondary: 'Skip' };
 }
 
 /**
  * `need` the step (connect/session.cjs publicNeed); `onOpen()` its primary action before it was opened; `onDone()` once
- * opened ("I'm signed in", Done); `onSkip()` for a permission turned down; `onLater()` puts it away. Later is never
- * disabled, whatever the step is waiting on.
+ * opened ("I'm signed in", Done); `onSkip()` for a permission turned down; `onLater()` (Skip) leaves the app out. Skip is
+ * never disabled, whatever the step is waiting on.
  */
 export default function NeedPopup({ need, onOpen, onDone, onSkip, onLater }) {
   const words = needCopy(need);
