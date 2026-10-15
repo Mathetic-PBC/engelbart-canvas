@@ -159,6 +159,13 @@ function typeRefusal(info) {
   return null;
 }
 
+// The one message an agent may send (2026-10-15, Hudson: "it should still be able to run the prompt asking about me"): a
+// recall job's window is opened with `sendOnly`, Engelbart's own question (prompts.cjs RECALL_PROMPT). Into the
+// assistant's message box goes that text, word for word, and nothing else; then one Enter or one click on Send sends it,
+// once. Every other refusal holds, and Engelbart deletes the chat it opened once the answer is kept (./tools.cjs).
+const sameText = (a, b) => String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim();
+const SEND_RE = /^send\b/i;
+
 /** Why pressing `key` where the focus is (`info`, the focused control, null for the page) is refused, or null. */
 function pressRefusal(key, info) {
   const inSearch = !!info && isField(info) && !typeRefusal(info);
@@ -249,7 +256,7 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
     });
     const wc = win.webContents;
     try { wc.setUserAgent(userAgent(wc.getUserAgent())); } catch { /* the session's own */ }
-    entry = { win, hosts: hostsFor(job.sites), showing: false };
+    entry = { win, hosts: hostsFor(job.sites), showing: false, typed: false, sent: false };
     windows.set(job.id, entry);
     // Where the page may take itself: the job's hosts while an agent drives it, anywhere on https while the person does.
     const guard = (event, url) => {
@@ -314,8 +321,11 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
   async function click(job, ref) {
     const spot = await run(job, INFO_SCRIPT(ref, true));
     if (!spot) throw new Error(`No control ${ref} on the page now: browser_read again`);
-    const why = clickRefusal(spot);
+    const entry = entryOf(job);
+    const sending = job.sendOnly && entry.typed && !entry.sent && SEND_RE.test(spot.name || '');
+    const why = sending ? null : clickRefusal(spot);
     if (why) throw refuse(job, why);
+    if (sending) entry.sent = true;
     const wc = wcOf(job);
     wc.sendInputEvent({ type: 'mouseMove', x: spot.x, y: spot.y });
     wc.sendInputEvent({ type: 'mouseDown', button: 'left', clickCount: 1, x: spot.x, y: spot.y });
@@ -328,9 +338,12 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
   async function type(job, ref, text, { submit = false, replace = false } = {}) {
     const field = await run(job, INFO_SCRIPT(ref));
     if (!field) throw new Error(`No control ${ref} on the page now: browser_read again`);
-    const why = typeRefusal(field);
+    const entry = entryOf(job);
+    const asking = job.sendOnly && !entry.sent && field.type !== 'password' && (field.editable || field.tag === 'textarea' || field.role === 'textbox') && sameText(text, job.sendOnly);
+    const why = asking ? null : typeRefusal(field);
     if (why && field.type === 'password') throw new Error(why);
-    if (why) throw refuse(job, why);
+    if (why) throw refuse(job, job.sendOnly && !asking && (field.editable || field.tag === 'textarea') ? 'only Engelbart\'s own question goes into the message box, word for word' : why);
+    if (asking) entry.typed = true;
     const out = await run(job, TYPE_SCRIPT(ref, text, replace));
     if (out && out.error === 'password') throw new Error('That is a password field: call needs_you so the person signs in themselves');
     if (out && out.error) throw new Error(out.error === 'gone' ? `No control ${ref} on the page now: browser_read again` : 'That control does not take text');
@@ -341,8 +354,12 @@ function createAgentBrowser({ BrowserWindow, getSession, userAgent = (ua) => ua,
 
   async function press(job, key, { quiet = false } = {}) {
     if (!KEYS.has(key)) throw new Error(`key must be one of ${[...KEYS].join(', ')}`);
-    const why = pressRefusal(key, await run(job, INFO_SCRIPT(null)).catch(() => null));
+    const focus = await run(job, INFO_SCRIPT(null)).catch(() => null);
+    const entry = entryOf(job);
+    const sending = key === 'Enter' && job.sendOnly && entry.typed && !entry.sent && !!focus && isField(focus);
+    const why = sending ? null : pressRefusal(key, focus);
     if (why) throw refuse(job, why);
+    if (sending) entry.sent = true;
     const wc = wcOf(job);
     const code = key === 'Space' ? ' ' : key;
     wc.sendInputEvent({ type: 'keyDown', keyCode: code });

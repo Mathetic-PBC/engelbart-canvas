@@ -104,6 +104,19 @@ app.whenReady().then(async () => {
     await page.click(byName('Go').ref);
     assert.deepEqual(await page.wait({ untilText: 'Clicked!', seconds: 5 }), { done: true, after: 0 });
     await assert.rejects(page.open(`${base}/logout`), /signs out/);
+    // A recall's window may send one message: Engelbart's question, word for word, once.
+    const recall = browser.tools({ id: 'job-recall', label: 'Recall', sites: ['127.0.0.1'], sendOnly: 'What do you remember about me?' });
+    await recall.open(`${base}/`);
+    const asked = (await recall.read()).elements;
+    const box = asked.find((el) => el.name === 'Message').ref;
+    await assert.rejects(recall.type(box, 'Delete my account'), /only Engelbart's own question/);
+    await assert.rejects(recall.press('Enter'), /Refused/, 'nothing typed yet: no Enter');
+    await recall.type(box, 'What do you remember about me?');
+    assert.equal(await recall.evaluate("return document.getElementById('composer').textContent"), 'What do you remember about me?');
+    await recall.press('Enter');
+    await assert.rejects(recall.type(box, 'What do you remember about me?'), /Refused/, 'once');
+    await assert.rejects(recall.click(asked.find((el) => el.name === 'Share').ref), /Refused/, 'everything else still refused');
+    browser.close('job-recall');
 
     const fetched = await page.evaluate("return await (await fetch('/api/data')).json()");
     assert.equal(fetched.cookie, 'sid=abc', 'the page\'s own fetch carries its cookies');

@@ -26,7 +26,7 @@
 //                              (Claude Code's auto mode classifier decides each browser call, every prompt it would raise is
 //                              refused; Codex's sandbox is read-only, its Chrome plugin's per-site questions go to
 //                              Codex's auto-review and every other approval is refused: CODEX_BROWSE_APPROVALS); no tool that runs a
-//                              script in a page, uploads a file or closes a tab, nor (Claude in Chrome) one that clicks or types; none of the person's own MCP servers or
+//                              script in a page, uploads a file or closes a tab; none of the person's own MCP servers or
 //                              ChatGPT apps; every step and every screenshot kept for the Agent trace; Stop all ends the
 //                              terminal session. ../onboarding/browser-agents.cjs says when it may run.
 // The other kinds are given neither computer use nor Claude in Chrome (--no-chrome; Codex's own browser and computer use
@@ -56,12 +56,12 @@ const TIMEOUTS = Object.freeze({ interview: 10 * 60_000, survey: 15 * 60_000, im
 const BRIDGED = new Set(['survey', 'import', 'recall', 'discover', 'browse']);
 // Claude in Chrome's tools a browser agent is never given: a script in the page, a file sent up, a form filled, a saved
 // shortcut run, a recording, another browser or window chosen, a window resized (round 3: "it shifted my window to the
-// chrome window … This should also NEVER happen"), and (From Amitav, 2026-10-15: "ensure agents cant fuck w their shit, but
-// if they poke around and read that is fine") no clicking or typing at all: `computer`, and `browser_batch` that runs its
-// steps, are the only tools that click, type or press keys in the person's own browser, where Engelbart can't look at a
-// control before it is pressed. What is left opens its own tabs, goes to addresses, reads and finds, and closes the tabs it
-// opened (round 3: "The agents need to close all of the tabs and tab groups when they're done").
-const CHROME_REFUSED = Object.freeze(['javascript_tool', 'computer', 'browser_batch', 'upload_image', 'file_upload', 'form_input', 'shortcuts_execute', 'shortcuts_list', 'gif_creator', 'switch_browser', 'select_browser', 'resize_window'].map((name) => `mcp__claude-in-chrome__${name}`));
+// chrome window … This should also NEVER happen"). What is left opens its own tabs, reads, finds, scrolls, clicks, types
+// and closes the tabs it opened (round 3: "The agents need to close all of the tabs and tab groups when they're done").
+// Clicking and typing stay (2026-10-15, Hudson: "clicking and typing is important many things are nested"): Engelbart
+// can't look at a control in their browser before it is pressed, so what holds those to reading there is BROWSE_RULES
+// and auto mode's review of each call, not code.
+const CHROME_REFUSED = Object.freeze(['javascript_tool', 'upload_image', 'file_upload', 'form_input', 'shortcuts_execute', 'shortcuts_list', 'gif_creator', 'switch_browser', 'select_browser', 'resize_window'].map((name) => `mcp__claude-in-chrome__${name}`));
 // The MCP servers of the person's own Codex a browser agent keeps: node_repl, which its Chrome plugin runs in. Every other
 // one of theirs is turned off for the run, Computer Use among them: it drives apps by bringing them to the front.
 const CODEX_KEPT_SERVERS = new Set(['node_repl']);

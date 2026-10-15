@@ -277,9 +277,9 @@ function cleanChoices(input, homeDir, { alsoPicked = [] } = {}) {
     picked,
     custom: typeof given.custom === 'string' ? given.custom.trim().slice(0, 4000) : '',
     computer,
-    // recall: never (From Amitav, 2026-10-15). Asking ChatGPT or Claude what it remembers sends a message and makes a chat
-    // in the person's account, then deletes it: that changes their account, and the agents only read.
-    permissions: { files: computer, browser: allowed.browser !== false, recall: false, notes: allowed.notes === true },
+    // recall (2026-10-15, Hudson: "it should still be able to run the prompt asking about me"): the one thing an agent
+    // sends, Engelbart's question word for word (./browser.cjs sendOnly), and the chat it opened is deleted after.
+    permissions: { files: computer, browser: allowed.browser !== false, recall: allowed.recall !== false, notes: allowed.notes === true },
     project: cleanProject(given.project),
     days: cleanDays(given.days), // how far back to look (2026-10-10): 182, 365, or null for all time
     direct: cleanDirect(given.direct, homeDir), // Import your context (2026-10-13): no librarian, one import a tool
@@ -802,7 +802,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const turnKind = browse ? 'browse' : job.kind;
     const covered = appsOfJob(s, job);
     const sites = [...new Set([...sitesOf(covered), ...((job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [])])];
-    const page = bridged && !browse && browser && s.choices.permissions.browser && sites.length ? browser.tools({ id: job.id, label: job.label, sites }) : null;
+    // A recall may send one message, Engelbart's question, word for word (./browser.cjs sendOnly); no other job may send any.
+    const page = bridged && !browse && browser && s.choices.permissions.browser && sites.length ? browser.tools({ id: job.id, label: job.label, sites, ...(job.kind === 'recall' ? { sendOnly: prompts.RECALL_PROMPT } : {}) }) : null;
     // Its tools (2026-10-15): no browser for a job of apps Engelbart reads with readers of its own (ChatGPT, Claude,
     // Overleaf), and the browser held to the sites of the apps it browses.
     const extraSites = (job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [];

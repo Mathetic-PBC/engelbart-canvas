@@ -130,7 +130,7 @@ const RULES_BLOCK = `# Rules
 
 - You work in the background: nobody watches you, and the person is never asked anything except through needs_you.
 - Never type a password, a code or a secret, and never read one out of a page. A sign-in is the person's: needs_you.
-- In the person's accounts, only read. Never send messages, start a chat, delete, rename, move, share, change settings, accept invitations or buy anything. Engelbart refuses those steps; a refused step is not to be tried another way.
+- In the person's accounts, only read. Never send messages, start a chat, delete, rename, move, share, change settings, accept invitations or buy anything. Engelbart refuses those steps; a refused step is not to be tried another way. The one exception is the memory question a recall job sends, word for word, once.
 - Bring in only what the plan and the chat ask for. When unsure about one item, leave it out. Never bring something in twice: the tools skip what came in before; do not work around them.
 - Never bring in secrets: .env files, keys, passwords, credentials, bank or medical records. Never bring in personal or administrative files either (receipts, invoices, statements, tax papers, tickets, forms, résumés), even from a folder the plan names.
 - Work in batches with the tools; do not copy every page by hand when a tool brings things in.
@@ -209,7 +209,7 @@ When you are done, reply with one or two plain sentences: what you brought in an
 // How each provider's agent reaches the person's browser, added to BROWSE_SYSTEM_PROMPT (./session.cjs systemOf).
 const BROWSE_CLAUDE = `# Your browser
 
-You reach the browser through Claude in Chrome (the tools named mcp__claude-in-chrome__*). First call tabs_context_mcp, then open a tab of your own with tabs_create_mcp and work only in your own tabs: navigate, get_page_text, read_page and find. You cannot click, type or press keys there: reach each page by its address (the links read_page lists, a site's own search address such as https://drive.google.com/drive/search?q=<words>). Before you reply, close each tab you opened with tabs_close_mcp. When it says no browser is connected, finish at once and say so: do not try anything else.`;
+You reach the browser through Claude in Chrome (the tools named mcp__claude-in-chrome__*). First call tabs_context_mcp, then open a tab of your own with tabs_create_mcp and work only in your own tabs (navigate, get_page_text, read_page, find, computer for scrolling and clicking, screenshots when a page's text is not enough). Before you reply, close each tab you opened with tabs_close_mcp. When it says no browser is connected, finish at once and say so: do not try anything else.`;
 
 const BROWSE_CODEX = `# Your browser
 

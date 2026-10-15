@@ -451,7 +451,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   };
   const startInput = (now, provider, { projects, apps, scopes, additional }, extra = {}) => ({
     provider,
-    permissions: { files: true, browser: true, recall: false, notes: apps.includes('Apple Notes') },
+    permissions: { files: true, browser: true, recall: true, notes: apps.includes('Apple Notes') },
     keychain: !browsers || browsers.keychain !== 'declined',
     browser: (browsers && browsers.chosenId) || null,
     days: cleanDays(now.period),
