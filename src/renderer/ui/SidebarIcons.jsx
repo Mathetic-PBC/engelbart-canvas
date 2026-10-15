@@ -40,8 +40,19 @@ export function InboxIcon({ dot = false, ...rest }) {
 export const AGENTS_PATH = 'M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.44l-1.58 6.12a.5.5 0 0 1-.95.07z';
 export const AgentsIcon = (props) => <Svg {...props}><path d={AGENTS_PATH} /></Svg>;
 export const ConnectionsIcon = (props) => <Svg {...props}><rect width="7" height="7" x="14" y="3" rx="1" /><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3" /></Svg>;
-// Three books, one fewer than Lucide's four, and drawn thicker (2026-10-08).
-export const LibraryIcon = (props) => <Svg stroke={2.8} {...props}><path d="M5 4v16" /><path d="M11.5 7v13" /><path d="m16.5 6.5 3.5 13.5" /></Svg>;
+// Three books, one fewer than Lucide's four, and drawn thicker (2026-10-08); the first two stand straight and as tall as
+// each other (2026-10-13: "the first two should be perfectly vertical"). 2026-10-14: "the middle book should be slightly
+// shorter than the left one. the corners should be slightly sharper": each book is a filled bar (2.8 wide, as the stroke
+// was) with a 0.7 corner instead of the stroke's round cap (1.4); the middle one starts 2 units lower, the bottoms level.
+export const LibraryIcon = (props) => (
+  <Svg stroke={0} {...props}>
+    <g fill="currentColor" stroke="none" data-library-books="1">
+      <rect x="3.6" y="2.6" width="2.8" height="18.8" rx="0.7" />
+      <rect x="9.6" y="4.6" width="2.8" height="16.8" rx="0.7" />
+      <rect x="16.35" y="3.4" width="2.8" height="18.2" rx="0.7" transform="rotate(-13.13 17.75 12.5)" />
+    </g>
+  </Svg>
+);
 export const AddIcon = (props) => <Svg {...props}><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /><path d="M12 8v8" /></Svg>;
 export const ProjectIcon = (props) => <Svg {...props}><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z" /><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12" /><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17" /></Svg>;
 // "B · small on bottom": a tall pane on the left, a square over a short one on the right.
@@ -83,3 +94,29 @@ export function StickyIcon({ hidden = false, ...props }) {
 export const DotsIcon = ({ size = 16, style }) => (
   <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="currentColor" style={{ flex: 'none', display: 'block', ...style }}><circle cx="5" cy="12" r="1.7" /><circle cx="12" cy="12" r="1.7" /><circle cx="19" cy="12" r="1.7" /></svg>
 );
+
+// The redone sidebar's (2026-10-13, design/sidebar-mockup/Sidebar.html): a new note (a square with a pen over its corner,
+// the pen raised and with no stroke sticking out of it), the clock (Recent pages), and the kinds a source can be: a
+// picture, a web page, a paper, a repository (Lucide's image, globe, book-open and git-branch); the arrow out of a box
+// (Project page), and a folder with a plus (Create new).
+export const ComposeIcon = (props) => <Svg {...props}><path d="M12 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-7" /><path transform="translate(0 -2)" d="M10 14l-1 4 4-1 9-9a2.12 2.12 0 0 0-3-3z" /></Svg>;
+export const ClockIcon = (props) => <Svg {...props}><circle cx="12" cy="12" r="9.5" /><path d="M12 7v5l3 2" /></Svg>;
+export const ImageIcon = (props) => <Svg {...props}><rect width="18" height="18" x="3" y="3" rx="2" /><circle cx="9" cy="9" r="2" /><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21" /></Svg>;
+export const GlobeIcon = (props) => <Svg {...props}><circle cx="12" cy="12" r="10" /><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" /><path d="M2 12h20" /></Svg>;
+export const PaperIcon = (props) => <Svg {...props}><path d="M12 7v14" /><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z" /></Svg>;
+export const GitIcon = (props) => <Svg {...props}><line x1="6" x2="6" y1="3" y2="15" /><circle cx="18" cy="6" r="3" /><circle cx="6" cy="18" r="3" /><path d="M18 9a9 9 0 0 1-9 9" /></Svg>;
+export const ArrowOutIcon = (props) => <Svg {...props}><path d="M7 7h10v10" /><path d="M7 17 17 7" /></Svg>;
+export function FolderPlusIcon(props) {
+  return (
+    <span style={{ position: 'relative', display: 'flex' }}>
+      <FolderIcon {...props} />
+      <span aria-hidden="true" style={{ position: 'absolute', right: -3, bottom: -2, background: '#fafafa', font: '16px/12px var(--font-sans)' }}>+</span>
+    </span>
+  );
+}
+
+/** A source's icon by its kind (model/sidebar.js sourceIcon). */
+export function SourceIcon({ kind, ...props }) {
+  const Icon = { note: NoteIcon, file: FileIcon, image: ImageIcon, html: CodeIcon, website: GlobeIcon, folder: FolderIcon, pdf: PaperIcon, git: GitIcon }[kind] || FileIcon;
+  return <Icon {...props} />;
+}

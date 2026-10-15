@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Engelbart · Library screens mockup</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+/* Tweak here: every colour, size and radius the two screens use. */
+:root{--ink:#171717;--mute:#8f8f8f;--body:#4d4d4d;--line:#eaeaea;--line2:#c9c9c9;--blue:#0070f3;--radius:10px;--col:740px;--font:-apple-system,BlinkMacSystemFont,"Inter","Helvetica Neue",Arial,sans-serif}
+*{box-sizing:border-box}html,body{margin:0;height:100%;font-family:var(--font);color:var(--ink);background:#fff}
+button{font-family:inherit;cursor:pointer}
+#app{position:fixed;inset:0;overflow:auto}
+.top{position:absolute;top:0;right:0;display:flex;gap:18px;align-items:center;padding:24px 20px}
+.top svg{width:17px;height:17px;stroke:#171717;fill:none;stroke-width:1.6}
+.pill{background:#171717;color:#fff;border-radius:99px;padding:9px 18px;font:600 10px/1 var(--font);letter-spacing:2.2px}
+.page{min-height:100%;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:70px 24px 96px}
+h1{margin:0;font:500 38px/1.2 var(--font);letter-spacing:-1px;text-align:center}
+.sub{margin:14px 0 0;font:17px/1.4 var(--font);color:#6b6b6b;text-align:center}
+.foot{position:fixed;left:0;right:0;bottom:0;height:80px;display:flex;justify-content:center;background:#fff}
+.foot>div{width:var(--col);display:flex;align-items:center;justify-content:space-between}
+.foot.wide>div{width:680px}
+.skip{border:0;background:none;color:var(--mute);font:500 14.5px var(--font);padding:0}.skip:hover{color:var(--ink)}
+.right{display:flex;align-items:center;gap:16px}
+.dots{display:flex;gap:6px;align-items:center}.dots i{width:6px;height:6px;border-radius:9px;background:#d9d9d9}.dots i.on{width:24px;background:#171717}
+.of{font-size:13px;color:var(--mute)}
+.btn{display:inline-flex;align-items:center;gap:8px;height:44px;padding:0 20px;border:0;border-radius:9px;background:#171717;color:#fff;font:500 15px var(--font)}.btn:hover{opacity:.88}.btn.sm{height:38px;font-size:14px}
+.btn.ghost{background:none;color:var(--mute);padding:0 12px}.btn.ghost:hover{color:var(--ink)}
+/* screen 1 */
+.faq{width:var(--col);margin-top:50px;border:1px solid var(--line);border-radius:18px;padding:0 30px}
+.q{border-top:1px solid var(--line)}.q:first-child{border-top:0}
+.q>button{width:100%;display:flex;justify-content:space-between;align-items:center;border:0;background:none;padding:22px 0;font:500 17.5px var(--font);color:var(--ink);text-align:left}
+.q .chev{width:14px;height:14px;stroke:#8f8f8f;fill:none;stroke-width:1.7;transition:transform .15s}.q.open .chev{transform:rotate(90deg)}
+.q p{display:none;margin:-6px 0 24px;font:17px/1.65 var(--font);color:var(--body)}.q.open p{display:block}
+.works{margin-top:56px;text-align:center;color:var(--mute);font-size:14.5px;position:relative}
+.icons{display:flex;gap:10px;margin-top:20px;justify-content:center}
+.ic{width:51px;height:51px;border:1px solid var(--line);border-radius:12px;display:flex;align-items:center;justify-content:center;background:#fff;color:var(--mute);font:500 14.5px var(--font)}
+.ic img{width:26px;height:26px}.ic.more{cursor:pointer}.ic.more:hover{border-color:var(--line2)}
+.pop{position:absolute;z-index:5;background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 40px rgba(0,0,0,.12);padding:14px}
+#morePop{top:96px;left:50%;transform:translateX(-50%);width:420px;display:none;text-align:left}
+#morePop.show{display:block}#morePop div{display:grid;grid-template-columns:1fr 1fr;gap:6px 14px}
+#morePop span{display:flex;align-items:center;gap:8px;font-size:13.5px;color:var(--ink);padding:4px 2px}#morePop img{width:16px;height:16px}
+/* screen 2 */
+.col{width:680px}
+h2{margin:0 0 26px;font:500 33px/1.2 var(--font);letter-spacing:-.8px;text-align:center}
+.bar{display:flex;justify-content:space-between;align-items:center;font-size:14.5px;color:var(--mute);margin-bottom:12px}
+.bar .r{display:flex;gap:16px;align-items:center}
+.sel{position:relative}.sel>button{border:1px solid var(--line);border-radius:7px;background:#fff;color:var(--ink);font:14px var(--font);padding:3px 9px 3px 10px}
+.menu{display:none;position:absolute;right:0;top:30px;z-index:6;min-width:170px;background:#fff;border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.12);padding:5px}
+.menu.show{display:block}.menu button{display:flex;width:100%;border:0;background:none;text-align:left;padding:8px 10px;border-radius:7px;font:14px var(--font);color:var(--ink);gap:8px;align-items:center}.menu button:hover{background:#f4f4f4}
+.link{border:0;background:none;color:var(--mute);font:500 14.5px var(--font);padding:0}.link:hover{color:var(--ink)}
+.grp>.row{display:flex;align-items:center;gap:10px;height:40px;cursor:pointer;font:500 16px var(--font)}
+.grp>.row .chev{width:12px;height:12px;stroke:#8f8f8f;fill:none;stroke-width:1.8;transition:transform .15s}.grp.open>.row .chev{transform:rotate(90deg)}
+.grp>.row .l{flex:1}
+.apps{display:none;margin:2px 0 8px 9px;padding-left:20px;border-left:1px solid var(--line)}.grp.open .apps{display:block}
+.app{display:flex;align-items:center;gap:12px;min-height:52px;cursor:pointer}
+.app img,.app .gl{width:16px;height:16px;flex:none}.app .gl{border-radius:4px;background:#e6e6e6}
+.app .t{flex:1;font:15px/1.25 var(--font)}.app small{display:block;font-size:13px;color:var(--mute);margin-top:2px}
+.cb{width:17px;height:17px;border:1.5px solid #c9c9c9;border-radius:4px;background:#fff;display:flex;align-items:center;justify-content:center;flex:none}
+.cb.on{background:#171717;border-color:#171717}.cb.mix{border-color:#8f8f8f}
+.cb svg{width:11px;height:11px;stroke:#fff;fill:none;stroke-width:2.2;display:none}.cb.on svg{display:block}
+.cb.mix::after{content:"";width:8px;height:1.5px;background:#8f8f8f}
+.consent{margin-top:16px;border:1px solid var(--line);border-radius:12px;padding:15px 18px;display:flex;gap:14px;align-items:center}
+.consent .logo{width:36px;height:36px;border:1px solid var(--line);border-radius:9px;display:flex;align-items:center;justify-content:center}.consent .logo img{width:18px}
+.consent b{font-weight:500;font-size:15.5px}.consent p{margin:3px 0 0;font:13.5px/1.6 var(--font);color:var(--mute)}
+.consent .tx{flex:1}.consent .tx .sel{display:inline-block}.consent .tx .sel>button{font-size:15.5px;font-weight:500}.consent .tx .menu{left:0;right:auto;top:30px}
+.consent .link{color:var(--ink);font-size:13.5px}
+.sw{width:38px;height:22px;border-radius:99px;background:#d4d4d4;position:relative;border:0;flex:none;transition:background .15s}.sw.on{background:#171717}
+.sw::after{content:"";position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}.sw.on::after{left:18px}
+.leaves{display:none;margin-top:8px;font:13px/1.55 var(--font);color:var(--mute)}.leaves.show{display:block}
+/* modals */
+.scrim{position:fixed;inset:0;background:rgba(0,0,0,.26);display:none;align-items:center;justify-content:center;z-index:20;padding:20px}.scrim.show{display:flex}
+.modal{background:#fff;border-radius:18px;box-shadow:0 20px 60px rgba(0,0,0,.25);max-height:92vh;overflow:auto}
+.modal h3{margin:0;font:600 20px/1.3 var(--font);letter-spacing:-.2px}.modal p{font:16px/1.65 var(--font);color:#6b6b6b;margin:14px 0 0}
+.mf{display:flex;justify-content:flex-end;align-items:center;gap:20px;margin-top:22px}.mf .nn{border:0;background:none;color:var(--mute);font:500 16px var(--font)}.mf .nn:hover{color:var(--ink)}
+.fold{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:20px}
+.fold button{display:flex;align-items:center;gap:12px;height:44px;padding:0 14px;border:1px solid var(--line);border-radius:8px;background:#fff;font:500 16px var(--font);color:var(--ink)}
+.fold button svg{width:17px;height:15px}.fold button.on{border-color:#171717}
+.key{width:42px;height:42px;border-radius:50%;background:#f2f2f2;display:flex;align-items:center;justify-content:center;margin-bottom:14px}.key svg{width:19px;stroke:#171717;fill:none;stroke-width:1.6}
+.prof{width:100%;text-align:left;margin-top:8px;padding:12px 15px;border:1px solid var(--line);border-radius:10px;background:#fff;display:flex;justify-content:space-between;align-items:center;font:500 15px var(--font)}
+.prof small{display:block;font:400 13.5px var(--font);color:var(--mute);margin-top:3px}.prof.on{border:1.5px solid #171717}.prof .ck{display:none}.prof.on .ck{display:block}
+.toast{position:fixed;left:50%;bottom:100px;transform:translateX(-50%);background:#171717;color:#fff;font:14px var(--font);padding:12px 18px;border-radius:10px;display:none;z-index:30}.toast.show{display:block}
+/* mockup chrome, not part of the design */
+.dev{position:fixed;left:14px;top:14px;z-index:50;display:flex;gap:6px;font:12px var(--font);background:#f5f5f5;border:1px solid var(--line);border-radius:10px;padding:5px}
+.dev button{border:0;background:none;padding:6px 10px;border-radius:7px;color:#555}.dev button.on{background:#171717;color:#fff}
+</style></head><body>
+<div class="dev" id="dev"><button data-go="1">1 · All your context</button><button data-go="2">2 · What should go in your library?</button><button data-reset>Reset</button></div>
+<div id="app"></div>
+<div class="scrim" id="folders"><div class="modal" style="width:568px;padding:30px 30px 24px">
+ <h3>Let Engelbart read your folders?</h3>
+ <p style="margin-top:22px">Engelbart looks here for papers, documents and repos related to your project. Without this, files saved on your Mac are left out.</p>
+ <div class="fold" id="foldGrid"></div>
+ <p style="margin-top:22px;font-size:16px"><b style="color:#171717;font-weight:600">macOS will ask once for each folder.</b> Choose Allow on each.</p>
+ <div class="mf"><button class="nn" data-close="folders" data-undo>Not now</button><button class="btn sm" id="askMac">Ask macOS</button></div></div></div>
+<div class="scrim" id="chrome"><div class="modal" style="width:486px;padding:26px 26px 22px">
+ <div class="key"><svg viewBox="0 0 24 24"><circle cx="8" cy="15" r="4"/><path d="M11 12l8-8M16 7l2 2"/></svg></div>
+ <h3 id="chTitle"></h3>
+ <p id="chPw" style="color:#171717;font-weight:600;font-size:15.5px;margin-top:14px">macOS will ask for your Mac password next.<br>Choose Allow.</p>
+ <p id="chBody" style="font-size:14.5px;line-height:1.6;color:#555;margin-top:14px"></p>
+ <div id="chProfs" style="margin-top:18px"></div>
+ <div class="mf"><button class="nn" data-close="chrome" data-undo>Not now</button><button class="btn sm" id="chGo">Continue</button></div></div></div>
+<div class="scrim" id="skipC"><div class="modal" style="width:430px;padding:26px"><h3>Skip for now?</h3><p style="font-size:15px">You can bring things in later from the Library. Projects start empty and your agents will have no context until you do.</p>
+ <div class="mf"><button class="nn" data-close="skipC">Keep going</button><button class="btn sm" id="skipYes">Skip</button></div></div></div>
+<div class="toast" id="toast"></div>
+<script>
+const LOGOS=__LOGOS__;
+const L=(n)=>LOGOS[n]?`<img src="${LOGOS[n]}" alt="">`:'<span class="gl"></span>';
+const CHEV='<svg class="chev" viewBox="0 0 16 16"><path d="M6 3l5 5-5 5"/></svg>';
+const CHK='<svg viewBox="0 0 12 12"><path d="M2 6.5l2.6 2.6L10 3.5"/></svg>';
+const PROFILES=[['Hudson','hudsonmitchellpullman@gmail.com'],['stu.sandi.net','552382@stu.sandi.net'],['It’s',''],['Jamie','bentleycapital@gmail.com'],['Course','coursetexts.info@gmail.com'],['vt.edu','hudsonmp@vt.edu'],['Hudson','hudsonmpapplications@gmail.com'],['hudson@papertlab.org','hudson@papertlab.org'],['mathetic.com','hudson@mathetic.com'],['downtowncondoguys.com','hudson@downtowncondoguys.com']];
+const GROUPS=[
+ {id:'notes',label:'Notes',apps:[['Obsidian','','obsidian'],['Notion','Needs sign-in','notion'],['Apple Notes','macOS will ask','apple'],['OneNote','Needs sign-in','microsoft-onenote'],['Google Drive','Needs sign-in','google-drive','drive'],['Evernote','Needs sign-in','evernote']]},
+ {id:'meet',label:'Meeting transcripts',apps:[['Granola','Needs sign-in','granola-light'],['Google Meet','Needs sign-in','google-meet'],['Zoom','','zoom']]},
+ {id:'email',label:'Email',apps:[['Gmail','Needs sign-in','gmail']]},
+ {id:'chats',label:'AI chats',apps:[['ChatGPT','Needs sign-in','openai','chrome'],['Codex','','codex_light'],['Claude','Needs sign-in','claude-ai-icon','chrome'],['Claude Code','','claude-ai-icon'],['Grok','Needs sign-in','grok-light'],['Gemini','Needs sign-in','gemini'],['Perplexity','Needs sign-in','perplexity'],['Cursor','','cursor_light']]},
+ {id:'sites',label:'Websites',apps:[]},
+ {id:'papers',label:'Papers',apps:[['Zotero','Needs sign-in','zotero'],['Overleaf','Needs sign-in','overleaf'],['PDFs on this Mac','macOS will ask','','folders']]},
+ {id:'code',label:'Code',apps:[['GitHub','Needs sign-in','github'],['Folders on this Mac','macOS will ask','','folders']]}];
+const WORKS=['zotero','overleaf','obsidian','googledocs','openai','claude-ai-icon','codex_light','github'];
+const ALL=['Zotero','Overleaf','Obsidian','Google Docs','ChatGPT','Claude','Claude Code','GitHub','Notion','Apple Notes','OneNote','Evernote','Granola','Google Meet','Zoom','Gmail','Grok','Gemini','Perplexity','Cursor'];
+let S;const fresh=()=>({screen:1,faq:'where',more:false,period:'the past year',picks:new Set(['Obsidian','__sites']),open:new Set(['notes']),consent:true,provider:'Claude Code',leaves:false,menu:null,grant:new Set(),signed:new Set(),profile:0,pw:true,lastTouched:null});
+S=fresh();
+const $=(q)=>document.querySelector(q),app=$('#app');
+const key=(g,a)=>a[0];
+const gKeys=(g)=>g.apps.length?g.apps.map(a=>a[0]):['__'+g.id];
+const state=(g)=>{const k=gKeys(g),n=k.filter(x=>S.picks.has(x)).length;return n==0?'':n==k.length?'on':'mix'};
+function foot(wide,left,right){return `<div class="foot ${wide?'wide':''}"><div>${left}<div class="right"><div class="dots">${[1,2,3,4].map(i=>`<i class="${i==S.screen+2?'on':''}"></i>`).join('')}</div><span class="of">${S.screen+2} of 4</span>${right}</div></div></div>`}
+const topbar='<div class="top"><svg viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 1112 0v6l1.5 2h-15zM10 21h4"/></svg><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2"/></svg><span class="pill">TEST · ON</span></div>';
+const ANS={where:['Where does my data go?','It’s saved only on this Mac. When Engelbart reads it, it goes through your own Claude or ChatGPT account, so Anthropic or OpenAI sees what it reads, like any other conversation with them.'],else:['Does anyone else see it?','Not us. We never receive anything you bring in. Only Anthropic or OpenAI see what Engelbart reads, through your own account.'],out:['Can I take things out later?','Yes. You can remove anything from a project or your library at any time.']};
+function r1(){return `${topbar}<div class="page"><h1>All your context in one place</h1><p class="sub">Bring in your work once, so you never have to re-explain your project again.</p>
+<div class="faq">${Object.entries(ANS).map(([k,[q,a]])=>`<div class="q ${S.faq==k?'open':''}"><button data-faq="${k}">${q}${CHEV}</button><p>${a}</p></div>`).join('')}</div>
+<div class="works">Works with<div class="icons">${WORKS.map(w=>`<div class="ic">${L(w)}</div>`).join('')}<div class="ic more" id="more">+12</div></div>
+<div class="pop" id="morePop" ${S.more?'':''}><div>${ALL.map(n=>`<span>${L(n=='Google Docs'?'googledocs':n=='Zotero'?'zotero':n=='Overleaf'?'overleaf':n=='ChatGPT'?'openai':n=='Claude'||n=='Claude Code'?'claude-ai-icon':n=='Obsidian'?'obsidian':n=='GitHub'?'github':n=='Notion'?'notion':n=='Apple Notes'?'apple':n=='OneNote'?'microsoft-onenote':n=='Evernote'?'evernote':n=='Granola'?'granola-light':n=='Google Meet'?'google-meet':n=='Zoom'?'zoom':n=='Gmail'?'gmail':n=='Grok'?'grok-light':n=='Gemini'?'gemini':n=='Perplexity'?'perplexity':'cursor_light')}${n}</span>`).join('')}</div></div></div></div>
+${foot(false,'<button class="skip" data-skip>Skip for now</button>','<button class="btn" data-go="2">Continue ›</button>')}`}
+const PERIODS=['the past 6 months','the past year','all time'];
+function r2(){const any=S.picks.size>0;
+ const g=GROUPS.map(g=>{const st=state(g);return `<div class="grp ${S.open.has(g.id)?'open':''}"><div class="row" data-grp="${g.id}">${g.apps.length?CHEV:'<span style="width:12px"></span>'}<span class="l">${g.label}</span><span class="cb ${st}" data-gcb="${g.id}">${CHK}</span></div>
+ ${g.apps.length?`<div class="apps">${g.apps.map(a=>`<div class="app" data-app="${a[0]}" data-gate="${a[3]||''}">${a[2]?L(a[2]):'<span class="gl"></span>'}<span class="t">${a[0]}${a[1]?`<small>${S.signed.has(a[0])?'✓ Signed in with Chrome':a[1]}</small>`:''}</span><span class="cb ${S.picks.has(a[0])?'on':''}">${CHK}</span></div>`).join('')}</div>`:''}</div>`}).join('');
+ return `${topbar}<div class="page" style="justify-content:flex-start;padding-top:96px"><div class="col"><h2>What should go in your library?</h2>
+ <div class="bar"><span>Sources <span style="font-size:10px">·</span></span><span class="r"><span>From <span class="sel"><button data-menu="period">${S.period} ⌄</button><div class="menu ${S.menu=='period'?'show':''}">${PERIODS.map(p=>`<button data-period="${p}">${p}</button>`).join('')}</div></span></span><button class="link" data-all>${any?'Clear':'Select all'}</button></span></div>
+ ${g}
+ <div class="consent"><span class="logo"><img src="${LOGOS[S.provider=='Codex'?'codex_light':'claude-ai-icon']}"></span><div class="tx"><b>Read with your <span class="sel"><button data-menu="prov">${S.provider} ⌄</button><div class="menu ${S.menu=='prov'?'show':''}"><button data-prov="Claude Code">Claude Code</button><button data-prov="Codex">Codex</button></div></span> subscription</b><p>Uses the plan you already have, so there’s no API key to set up. Saved only on your Mac, and Mathetic never receives it. <button class="link" data-leaves>What leaves my Mac?</button></p><div class="leaves ${S.leaves?'show':''}">What the agents read is sent to ${S.provider=='Codex'?'OpenAI':'Anthropic'} through your own account, the way any session is, to be turned into notes. The notes, and everything Engelbart keeps, stay in ~/.engelbart on this Mac. Nothing goes to Mathetic.</div></div><button class="sw ${S.consent?'on':''}" data-consent></button></div></div></div>
+ ${foot(true,'<button class="skip" data-skip>Skip for now</button>',`<button class="btn" data-bring ${S.consent&&any?'':'style="opacity:.45"'}>Bring these in ›</button>`)}`}
+function render(){const keepScroll=app.scrollTop;app.innerHTML=S.screen==1?r1():r2();app.scrollTop=keepScroll;document.querySelectorAll('#dev [data-go]').forEach(b=>b.classList.toggle('on',b.dataset.go==S.screen));
+ if(S.more&&S.screen==1)$('#morePop').classList.add('show')}
+const show=(id,on=true)=>$('#'+id).classList.toggle('show',on);
+function toast(t){const e=$('#toast');e.textContent=t;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),2200)}
+function gate(kind,name){ // the popups a tick can raise
+ if(kind=='folders'&&!S.grant.size){$('#foldGrid').innerHTML=['Desktop','Documents','Downloads','iCloud Drive'].map(f=>`<button data-f="${f}" class="on"><svg viewBox="0 0 18 15"><path d="M1 2h6l2 2h8v9H1z" fill="#7aa7f7"/></svg>${f}</button>`).join('');S.pending=name;show('folders');return true}
+ if(kind=='chrome'||kind=='drive'){if(S.signed.has(name))return false;S.pending=name;const d=kind=='drive';
+  $('#chTitle').innerHTML=d?'Use your Chrome sign-ins for Google Drive?':'Use your Chrome sign-ins for ChatGPT<br>and Claude?';
+  $('#chPw').style.display=S.pw&&!d?'block':'none';
+  $('#chBody').textContent=d?'More than one Chrome profile is signed in. Pick the one to use; Engelbart remembers it. Engelbart copies only this app’s sign-in from Chrome, and only reads from it, so you don’t log in again. Not now lets you sign in to it here instead.':'More than one Chrome profile is signed in. Pick the one to use; Engelbart remembers it. Engelbart copies only these apps’ sign-ins from Chrome, and only reads from them, so you don’t log in again. Not now lets you sign in to them here instead.';
+  const list=d?PROFILES:PROFILES.filter(p=>['Hudson','mathetic.com'].includes(p[0])&&p[1]!='hudsonmpapplications@gmail.com');
+  $('#chProfs').innerHTML=list.map((p,i)=>`<button class="prof ${i==S.profile?'on':''}" data-prof="${i}"><span>${p[0]}${p[1]?`<small>${p[1]}</small>`:''}</span><svg class="ck" width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="#171717" stroke-width="1.7"><path d="M3 8.5l3.2 3.2L13 5"/></svg></button>`).join('');show('chrome');return true}
+ return false}
+document.addEventListener('click',(e)=>{const t=e.target,c=(s)=>t.closest(s);
+ let el;
+ if(el=c('[data-go]')){S.screen=+el.dataset.go;S.menu=null;render();return}
+ if(el=c('[data-reset]')){S=fresh();render();return}
+ if(el=c('[data-faq]')){S.faq=S.faq==el.dataset.faq?'':el.dataset.faq;render();return}
+ if(c('#more')){S.more=!S.more;render();return}
+ if(S.more&&!c('#morePop')){S.more=false;render()}
+ if(c('[data-skip]')){show('skipC');return}
+ if(c('#skipYes')){show('skipC',false);toast('Skipped. Opening your project…');return}
+ if(el=c('[data-close]')){show(el.dataset.close,false);if(el.hasAttribute('data-undo')&&S.pending){S.picks.delete(S.pending);render()}S.pending=null;return}
+ if(el=c('[data-menu]')){S.menu=S.menu==el.dataset.menu?null:el.dataset.menu;render();return}
+ if(el=c('[data-period]')){S.period=el.dataset.period;S.menu=null;render();return}
+ if(el=c('[data-prov]')){S.provider=el.dataset.prov;S.menu=null;render();return}
+ if(S.menu&&!c('.menu')){S.menu=null;render()}
+ if(c('[data-leaves]')){S.leaves=!S.leaves;render();return}
+ if(c('[data-consent]')){S.consent=!S.consent;render();return}
+ if(c('[data-all]')){if(S.picks.size)S.picks.clear();else GROUPS.forEach(g=>gKeys(g).forEach(k=>S.picks.add(k)));render();return}
+ if(el=c('[data-gcb]')){const g=GROUPS.find(g=>g.id==el.dataset.gcb),k=gKeys(g),all=k.every(x=>S.picks.has(x));k.forEach(x=>all?S.picks.delete(x):S.picks.add(x));render();return}
+ if(el=c('[data-grp]')){const id=el.dataset.grp;if(S.open.has(id))S.open.delete(id);else S.open.add(id);if(GROUPS.find(g=>g.id==id).apps.length==0){const k='__'+id;S.picks.has(k)?S.picks.delete(k):S.picks.add(k)}render();return}
+ if(el=c('[data-app]')){const n=el.dataset.app;if(S.picks.has(n)){S.picks.delete(n);render();return}S.picks.add(n);render();gate(el.dataset.gate,n);return}
+ if(el=c('[data-f]')){el.classList.toggle('on');return}
+ if(el=c('[data-prof]')){S.profile=+el.dataset.prof;document.querySelectorAll('.prof').forEach((b,i)=>b.classList.toggle('on',i==S.profile));return}
+ if(c('#askMac')){show('folders',false);document.querySelectorAll('#foldGrid .on').forEach(b=>S.grant.add(b.dataset.f));S.grant.add('x');S.pending=null;toast('macOS asked once per folder · Allowed');render();return}
+ if(c('#chGo')){show('chrome',false);S.signed.add(S.pending);if(S.pending=='ChatGPT')S.signed.add('Claude');if(S.pending=='Claude')S.signed.add('ChatGPT');S.pw=false;S.pending=null;render();return}
+ if(c('[data-bring]')){if(!S.consent||!S.picks.size){toast(!S.consent?'Turn on the subscription to read your sources':'Pick at least one source');return}toast(`Bringing in ${S.picks.size} source${S.picks.size>1?'s':''} from ${S.period}…`)}
+});
+render();
+</script></body></html>

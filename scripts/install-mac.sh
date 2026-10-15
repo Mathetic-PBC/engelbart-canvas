@@ -49,6 +49,17 @@ fail() {
   exit 1
 }
 
+# The Engelbart this script runs inside, when it was started from Engelbart's own terminal: its pid, else empty.
+engelbart_host() {
+  local pid=$PPID command
+  while [ -n "$pid" ] && [ "$pid" -gt 1 ] 2>/dev/null; do
+    command=$(ps -o comm= -p "$pid" 2>/dev/null || true)
+    case "$command" in */Engelbart.app/Contents/MacOS/Engelbart) echo "$pid"; return 0 ;; esac
+    pid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')
+  done
+  return 0
+}
+
 # Returns once no Engelbart is running (or the one being updated has quit); non-zero after $1 seconds. Without $1 it
 # waits as long as that takes.
 wait_for_exit() {
@@ -99,6 +110,26 @@ elif [ -w /Applications ]; then dest=/Applications
 else dest="$HOME/Applications"; mkdir -p "$dest"
 fi
 
+# Another account on this Mac running the copy there (2026-10-14: an install from a second macOS profile moved
+# /Applications/Engelbart.app away from under the first profile's open Engelbart, which then could not start any helper
+# and showed "Uncaught Exception: write EPIPE" every 15 seconds). That copy is left alone; this account gets its own.
+if [ "$dest" != "$HOME/Applications" ] && [ -z "$WAIT_PID" ]; then
+  for pid in $(pgrep -f "^$dest/$APP/Contents/MacOS/Engelbart" 2>/dev/null || true); do
+    if [ "$(ps -o uid= -p "$pid" 2>/dev/null | tr -d ' ')" != "$(id -u)" ]; then
+      say "Engelbart is open in another account on this Mac, so it is installed in ~/Applications for you instead."
+      dest="$HOME/Applications"; mkdir -p "$dest"
+      break
+    fi
+  done
+fi
+
+# What a run cut short before this change may have left beside the app: an old copy whose replacement never arrived is
+# put back; otherwise the leftovers go.
+if [ ! -e "$dest/$APP" ]; then
+  for left in "$dest"/.$APP.old-*; do [ -d "$left" ] && mv "$left" "$dest/$APP" && break; done
+fi
+rm -rf "$dest"/.$APP.new-* "$dest"/.$APP.old-* 2>/dev/null || true
+
 # Already the newest: nothing to do (and Engelbart need not quit). The app's own updater (ENGELBART_WAIT_PID) runs this
 # only when there is a newer version, so it is never skipped; ENGELBART_FORCE=1 installs again anyway.
 if [ -z "$WAIT_PID" ] && [ "${ENGELBART_FORCE:-}" != 1 ] && [ -f "$dest/$APP/Contents/Info.plist" ]; then
@@ -116,23 +147,57 @@ ditto -x -k "$work/$zip" "$work/new" || fail "the download could not be unpacked
 [ -d "$work/new/$APP" ] || fail "the download holds no $APP."
 codesign --verify --deep --strict "$work/new/$APP" 2>/dev/null || fail "the app in the download is not intact (its signature does not verify)."
 
+host=""
+# ENGELBART_HOST_PID: the tests' stand-in for that Engelbart ("none": not inside one).
+if [ -n "${ENGELBART_HOST_PID:-}" ]; then [ "$ENGELBART_HOST_PID" = none ] || host=$ENGELBART_HOST_PID
+elif [ -z "$WAIT_PID" ]; then host=$(engelbart_host); fi
 if [ -n "$WAIT_PID" ]; then
   ready=1
   if [ -n "${ENGELBART_READY_FILE:-}" ]; then : > "$ENGELBART_READY_FILE"; fi
   say "Ready; Engelbart ${version} is installed when Engelbart quits."
   wait_for_exit
+elif [ -n "$host" ]; then
+  # Run from Engelbart's own terminal (2026-10-14): pgrep never sees the Engelbart this runs inside (it leaves out its own
+  # ancestors), and quitting it would end this script with it. The install is handed to a helper outside that terminal,
+  # which waits for Engelbart to quit, then puts the new version in and opens it.
+  mv "$work/new/$APP" "$dest/.$APP.new-$$" || fail "could not write to $dest."
+  helper=$(mktemp "${TMPDIR:-/tmp}/engelbart-install.XXXXXX")
+  cat > "$helper" <<HELPER
+#!/bin/bash
+while kill -0 $host 2>/dev/null; do sleep 1; done
+dest='$dest'; APP='$APP'; stage="\$dest/.\$APP.new-$$"; old="\$dest/.\$APP.old-$$"
+trap '' HUP INT TERM
+if [ -e "\$dest/\$APP" ] && ! mv "\$dest/\$APP" "\$old"; then rm -rf "\$stage"; exit 1; fi
+if ! mv "\$stage" "\$dest/\$APP"; then [ -e "\$old" ] && mv "\$old" "\$dest/\$APP"; rm -rf "\$stage"; exit 1; fi
+rm -rf "\$old"
+xattr -dr com.apple.quarantine "\$dest/\$APP" 2>/dev/null || true
+[ "${ENGELBART_NO_OPEN:-}" = 1 ] || open "\$dest/\$APP"
+rm -f "$helper"
+HELPER
+  /usr/bin/perl -MPOSIX -e 'POSIX::setsid(); exec @ARGV' /bin/bash "$helper" </dev/null >/dev/null 2>&1 &
+  say "Engelbart ${version} is ready. Quit Engelbart (⌘Q) and it opens again as ${version}."
+  exit 0
 elif pgrep -xq -u "$(id -u)" Engelbart; then
   say "Engelbart is open. Quit it (Engelbart ▸ Quit Engelbart, or ⌘Q) and the install will go on."
   wait_for_exit 600 || fail "Engelbart was still open after 10 minutes. Quit it and run the command again."
 fi
 
-if [ -e "$dest/$APP" ]; then mv "$dest/$APP" "$work/previous.app" || fail "could not replace $dest/$APP."; fi
-if ! mv "$work/new/$APP" "$dest/$APP"; then
-  [ -e "$work/previous.app" ] && mv "$work/previous.app" "$dest/$APP"
-  fail "could not write to $dest."
-fi
-installed=1
-xattr -dr com.apple.quarantine "$dest/$APP" 2>/dev/null || true
-
+# The swap (2026-10-14: an interrupted install left no Engelbart at all). The new app is first put beside the old one in
+# the same folder, then two renames there replace it, with interrupts held off between them; the old copy is removed
+# only once the new one is in place. A run cut short anywhere leaves a working Engelbart: the old one, or the new one.
+stage="$dest/.$APP.new-$$"
+old="$dest/.$APP.old-$$"
+mv "$work/new/$APP" "$stage" || fail "could not write to $dest."
+swap() {
+  trap '' HUP INT TERM
+  if [ -e "$dest/$APP" ] && ! mv "$dest/$APP" "$old"; then rm -rf "$stage"; trap - HUP INT TERM; return 1; fi
+  if ! mv "$stage" "$dest/$APP"; then
+    [ -e "$old" ] && mv "$old" "$dest/$APP"
+    rm -rf "$stage"; trap - HUP INT TERM; return 1
+  fi
+  trap - HUP INT TERM
+  rm -rf "$old"
+}
+swap || fail "could not replace $dest/$APP."
 say "Engelbart ${version} is installed in ${dest}."
 if should_open; then open "$dest/$APP"; fi

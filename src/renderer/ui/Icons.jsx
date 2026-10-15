@@ -140,7 +140,7 @@ export const KIND = {
   data: { glyph: <LAYERS />, label: 'data file' },
   chat: { glyph: <CHAT />, label: 'chat', fixed: true },
   task: { glyph: <TASK />, label: 'task', fixed: true },
-  workspace: { glyph: <WS />, label: 'workspace', fixed: true },
+  workspace: { glyph: <WS />, label: 'project', fixed: true }, // what were workspaces are projects (2026-10-13)
   image: { glyph: <IMAGE />, label: 'image' },
 };
 

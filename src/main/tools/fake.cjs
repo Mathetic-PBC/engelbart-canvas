@@ -7,6 +7,10 @@
 // came with Engelbart, standing in: ./bundled-git.cjs). Installing takes `delayMs`
 // and gives the tool its minimum version; updating does the same; signing in takes `delayMs` too; signing out is quick.
 // `failInstall` names tools whose install fails with a network error. A signed-in agent is signed in as FAKE_ACCOUNT.
+// 2026-10-14 (onboarding's connect edge cases): " unknown" after a version is a CLI whose sign-in check does not answer
+// (signedIn null, as `auth status` timing out); " no-plan" one signed in without a subscription; `signInNever` names
+// agents whose sign-in waits in the browser until it is cancelled; `execFile` answers `claude auth status --json` for this
+// machine (../onboarding/providers.cjs).
 
 const { REQUIREMENTS, TOOL_NAMES } = require('./requirements.cjs');
 const { observed } = require('./detect.cjs');
@@ -22,13 +26,13 @@ function parseSpec(value) {
     if (text === 'missing') state[name] = { present: false };
     else if (text === 'bundled' && name === 'git') state[name] = { present: true, bundled: true, version: '2.53.0' };
     else if (text === 'broken') state[name] = { present: true, broken: true };
-    else { const [version, flag] = text.split(/\s+/); state[name] = { present: true, version, signedIn: flag !== 'signed-out' }; }
+    else { const [version, flag] = text.split(/\s+/); state[name] = { present: true, version, signedIn: flag === 'unknown' ? null : flag !== 'signed-out', plan: flag === 'no-plan' ? null : name === 'codex' ? 'plus' : 'max' }; }
   }
-  return { state, failInstall: Array.isArray(input.failInstall) ? input.failInstall : [] };
+  return { state, failInstall: Array.isArray(input.failInstall) ? input.failInstall : [], signInNever: Array.isArray(input.signInNever) ? input.signInNever : [] };
 }
 
 function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => new Date() } = {}) {
-  const { state, failInstall } = parseSpec(spec);
+  const { state, failInstall, signInNever } = parseSpec(spec);
   const fakePath = (name) => (name === 'git' ? (state.git.bundled ? '/Users/fake/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin/git' : '/usr/bin/git') : `/Users/fake/.local/bin/${name}`);
 
   async function detect(only = TOOL_NAMES) {
@@ -57,7 +61,7 @@ function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((re
     async installAgent(name) {
       await sleep(delayMs);
       if (failInstall.includes(name)) return { ok: false, kind: 'network', error: 'The installer could not be reached: no internet connection (curl: (6) Could not resolve host: claude.ai).' };
-      state[name] = { present: true, version: REQUIREMENTS[name].minimum, signedIn: false };
+      state[name] = { present: true, version: REQUIREMENTS[name].minimum, signedIn: false, plan: name === 'codex' ? 'plus' : 'max' };
       return { ok: true };
     },
     async updateAgent(name) {
@@ -74,7 +78,7 @@ function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((re
     let finish = null;
     const done = new Promise((resolve) => { finish = resolve; });
     const timer = setTimeout(() => { onUrl(`https://example.invalid/${name}/sign-in`); }, 200);
-    const complete = setTimeout(() => { state[name] = { ...state[name], signedIn: true }; finish({ code: 0, output: '' }); }, delayMs);
+    const complete = signInNever.includes(name) ? null : setTimeout(() => { state[name] = { ...state[name], signedIn: true }; finish({ code: 0, output: '' }); }, delayMs);
     return { done, kill: () => { clearTimeout(timer); clearTimeout(complete); finish({ code: 130, output: 'Cancelled.' }); } };
   }
 
@@ -84,7 +88,18 @@ function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((re
     return { code: 0, output: '' };
   }
 
-  return { detect, actions, signInProcess, signOutProcess, state };
+  /** `claude auth status --json` as execFile answers it (callback(error, stdout)): what this machine's Claude Code says. */
+  function execFile(_file, args, _options, callback) {
+    const tool = state.claude;
+    setTimeout(() => {
+      if (!tool.present || tool.broken || !Array.isArray(args) || args[0] !== 'auth') { callback(Object.assign(new Error('not found'), { code: 'ENOENT' }), ''); return; }
+      if (tool.signedIn === null) { callback(Object.assign(new Error('timed out'), { killed: true }), ''); return; }
+      callback(null, JSON.stringify(tool.signedIn ? { loggedIn: true, authMethod: 'claude.ai', email: FAKE_ACCOUNT, subscriptionType: tool.plan || null } : { loggedIn: false, authMethod: 'none' }));
+    }, 20);
+    return null;
+  }
+
+  return { detect, actions, signInProcess, signOutProcess, execFile, state };
 }
 
 module.exports = { createFakeTools, parseSpec, FAKE_ACCOUNT };

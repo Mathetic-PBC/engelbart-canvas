@@ -20,6 +20,9 @@ import { useFolderFiles } from '../workspace/useFolderFiles.js';
 import { useZoteroStatus, useZoteroFinding, useZoteroWaiting } from '../workspace/useZoteroStatus.js';
 import { zoteroChipAction } from '../model/zotero.js';
 import { flatWorkspaces, nextPlace } from '../model/nav.js';
+import { READY_STATES, agentEntries, indexTree, rollUp, shortcutProjects, summarize, visited } from '../model/sidebar.js';
+import { connectInbox, dockLine } from '../model/connect.js';
+import RecentPages from '../workspace/RecentPages.jsx';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper } from '../model/guide.js';
 import { buildLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, researchLine } from '../model/doc.js';
@@ -42,6 +45,11 @@ import PostItBuild from '../post-its/PostItBuild.jsx';
 import PostItTask from '../post-its/PostItTask.jsx';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
 import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
+import SidebarTour, { TOUR_STEPS, tourSeen, markTourSeen } from '../workspace/SidebarTour.jsx';
+
+// The import's "Open library" requests (App.jsx tourRequest) already taken, by their n: a project opened again later
+// must not go back to its Welcome page or start the tour again.
+let tourTaken = 0;
 
 // The workspace screen (design 2026-09-17): a header in three columns — over the sidebar the window's lights and the
 // sidebar's toggle (2026-10-07; Engelbart / project / parent workspaces until the sidebar took the project's name and the
@@ -104,14 +112,21 @@ function Separator({ onDown, onMove, onUp, onReset, bare = false }) {
   );
 }
 
-const WS_TAB = { id: 'ws', title: 'Workspace' };
+const WS_TAB = { id: 'ws', title: 'Project' };
 const ARCHIVE_TAB = 'archive:'; // an archived version's tab (2026-09-27: it opens in the middle, read-only, not on the Stage)
+// The top-level project's page (2026-10-13): its own tab, opened from the project menu's Project page or the clock.
+const PROJECT_TAB = 'project';
+const VISITS_KEY = 'engelbart.recentPages'; // top-level project id → the pages opened there, for the clock (RecentPages.jsx)
+const readVisits = (projectId) => { try { const all = JSON.parse(window.localStorage.getItem(VISITS_KEY) || '{}'); return Array.isArray(all[projectId]) ? all[projectId] : []; } catch { return []; } };
+const AGENT_RANK = { failed: 4, needs: 3, unseen: 2 };
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 const VIEW_SAVE_DELAY = 400;
 const PANE_MIN = 240; // px: a column too narrow for two of these side by side scrolls sideways instead (MATH-23)
 const NO_PANES = [];
 const noView = () => null; // a document beside the one in front keeps no scroll position: it opens at its top
 const POST_ITS_HIDDEN = 'engelbart.postIts.hidden';
+const TITLE_LINE = 27; // px from the window's top to the middle of its lights (src/main/index.cjs trafficLightPosition)
+const TITLE_BAR = TITLE_LINE + 17; // a tab is 34px, its title in its middle
 const SIDEBAR_HIDDEN = 'engelbart.sidebar.hidden';
 
 /**
@@ -121,6 +136,7 @@ const SIDEBAR_HIDDEN = 'engelbart.sidebar.hidden';
 const workspaceDoc = (id) => ({ key: `ws:${id}`, ref: { kind: 'workspace', workspaceId: id }, workspaceId: id, archive: null });
 function docOf(tabId, topic) {
   if (tabId === 'ws') return topic ? workspaceDoc(topic.id) : { key: null, ref: null, workspaceId: null, archive: null };
+  if (tabId === PROJECT_TAB) return { key: 'project', ref: { kind: 'project' }, workspaceId: null, archive: null };
   if (tabId.startsWith(ARCHIVE_TAB)) {
     if (!topic) return { key: null, ref: null, workspaceId: null, archive: null };
     const file = tabId.slice(ARCHIVE_TAB.length);
@@ -138,6 +154,7 @@ function restoredTabs(view, notesById, extra) {
   const tabs = [WS_TAB];
   for (const tab of (view && view.tabs) || []) {
     if (tabs.some((held) => held.id === tab.id) || tab.kind === 'workspace') continue;
+    if (tab.id === PROJECT_TAB) { tabs.push({ id: PROJECT_TAB, title: tab.title || 'Project page' }); continue; }
     const row = notesById.get(tab.id);
     if (row) tabs.push({ id: tab.id, title: row.name });
   }
@@ -164,7 +181,7 @@ function madeAt(place) {
 }
 const MADE_MIME = { png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif', webp: 'image/webp' };
 
-export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onOpenProject, onNewProject, onVisit, onError, connectSessions = [], onOpenConnect = () => {} }) {
+export default function Workspace({ tree, library, initialWorkspaceId, initialTab, initialViews, initialStage, style, active, reload, onClose, onHome, onOpenProject, onNewProject, onVisit, onError, connectSessions = [], onOpenConnect = () => {}, tourRequest = null, tourPaused = false }) {
   const project = tree.project;
   const index = React.useMemo(() => indexWorkspaces(tree.workspaces), [tree.workspaces]);
   const notesById = React.useMemo(() => new Map(library.filter(isNote).map((row) => [row.id, row])), [library]);
@@ -853,7 +870,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // Clear does, after the Build froze what it is given: the blank document keeps the new card (2026-09-27).
   const startBuild = React.useCallback(async ({ clear = false, ...input }) => {
     await Promise.all([...pending.current.keys()].map((key) => flush(key)));
-    if (!topic) throw new Error('Open a workspace first');
+    if (!topic) throw new Error('Open a project first');
     const task = await api.buildStart(project.id, { workspaceId: topic.id, ...input });
     setBuilds((current) => ({ ...current, [task.id]: task }));
     const key = `ws:${topic.id}`, ref = { kind: 'workspace', workspaceId: topic.id };
@@ -1100,7 +1117,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // Any note's tab closes; Workspace is always there (2026-09-25; from 2026-09-23 it closed too while another tab was left).
   const closeTab = (id) => {
     if (id === 'ws') return;
-    flush(`note:${id}`);
+    flush(id === PROJECT_TAB ? 'project' : `note:${id}`);
     setTabs((current) => {
       if (current.length < 2 && current.some((tab) => tab.id === id)) return current;
       const next = current.filter((tab) => tab.id !== id);
@@ -1309,7 +1326,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // (model/panes.js), in place of what was there. One already in front is not opened again: the strip shows the pane in
   // front, as it does the pane beside once it is drawn (they move only when the column is too narrow for both). ⌘-click
   // still opens a note's tab and goes to a workspace (DocEditor).
-  const besideFront = activeTab === 'ws' ? (topic ? { kind: 'workspace', id: topic.id } : null) : activeTab.startsWith(ARCHIVE_TAB) ? null : { kind: 'note', id: activeTab };
+  const besideFront = activeTab === 'ws' ? (topic ? { kind: 'workspace', id: topic.id } : null) : activeTab.startsWith(ARCHIVE_TAB) || activeTab === PROJECT_TAB ? null : { kind: 'note', id: activeTab };
   const reveal = React.useRef(null); // the pane to scroll to after the next draw
   const revealPane = (i) => {
     const main = mainRef.current;
@@ -1495,7 +1512,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // ⌘J, wherever the keyboard is: the app's pages see it in the capture phase, before the editor or a terminal can; a
   // Browser page has the main process send it (src/main/browser/views.cjs).
   const goNext = React.useRef(null);
-  goNext.current = () => goTo(next);
+  goNext.current = () => goNextAgentRef.current();
   React.useEffect(() => {
     if (!active) return undefined;
     const onKey = (event) => {
@@ -1515,7 +1532,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const createWorkspace = async ({ name = '', parentId = null } = {}) => {
     const level = parentId ? ((index.get(parentId) || {}).node || {}).children || [] : tree.workspaces;
     const given = String(name || '').trim();
-    const created = await api.createWorkspace(project.id, { name: given || nextUntitled('Workspace', level.map((candidate) => candidate.name)), parentId });
+    const created = await api.createWorkspace(project.id, { name: given || nextUntitled('Project', level.map((candidate) => candidate.name)), parentId });
     await reload();
     if (!given) wantTitleFocus.current = true;
     selectTopic(created.id);
@@ -1573,6 +1590,104 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   };
   // The project's Builds, for the sidebar's Agents.
   const buildList = React.useMemo(() => Object.values(builds), [builds]);
+
+  /* ------------------------------------------------- agents, pages, folders */
+
+  // The Agents list (model/sidebar.js agentEntries, 2026-10-13: the Inbox folded in): this project's asks, Builds and Connect
+  // your library's notes, each counted where it is; the switcher counts the other top-level projects from state.json.
+  const connectHere = React.useMemo(() => connectInbox(connectSessions, project.id).map((entry) => {
+    const line = dockLine(connectSessions.find((session) => session.id === entry.sessionId));
+    return { ...entry, tone: line ? line.tone : 'done' };
+  }), [connectSessions, project.id]);
+  const entries = React.useMemo(() => agentEntries({ agents: navHere.agents, builds: buildList, connect: connectHere, projectId: project.id }), [navHere.agents, buildList, connectHere, project.id]);
+  const treeIndex = React.useMemo(() => indexTree(tree.workspaces), [tree.workspaces]);
+  const projectCounts = React.useMemo(() => {
+    const by = new Map();
+    for (const agent of nav.agents) {
+      if (!agent || agent.projectId === project.id || (agent.status !== 'running' && agent.status !== 'waiting')) continue;
+      if (!by.has(agent.projectId)) by.set(agent.projectId, []);
+      by.get(agent.projectId).push({ state: agent.status === 'running' ? 'running' : 'unseen' });
+    }
+    const out = new Map([...by].map(([id, list]) => [id, summarize(list)]));
+    out.set(project.id, summarize(entries));
+    return out;
+  }, [nav.agents, entries, project.id]);
+  const nodeCounts = React.useMemo(() => rollUp(treeIndex, entries), [treeIndex, entries]);
+  // Going to an agent: a Connect note opens its popup, a Build's version opens read-only, anything else its project.
+  const goAgent = (entry) => {
+    if (!entry) return;
+    if (entry.kind === 'connect') { onOpenConnect(entry.sessionId); return; }
+    if (entry.task && entry.task.version && entry.task.workspaceId) { goToVersion(entry.task.workspaceId, { file: entry.task.version.file, title: entry.task.version.title }).catch(onError); return; }
+    if (entry.node && index.has(entry.node)) selectTopic(entry.node);
+  };
+  // ⌘J (2026-10-13: "Next agent needing attention"): what failed, then what needs you, then what finished, oldest first,
+  // never the one just gone to; with nothing waiting, the project written in before (model/nav.js nextPlace).
+  const lastAgent = React.useRef(null);
+  const goNextAgentRef = React.useRef(() => {});
+  goNextAgentRef.current = () => {
+    const time = (iso) => Date.parse(iso || '') || 0;
+    const queue = entries
+      .filter((entry) => READY_STATES.has(entry.state) && entry.id !== lastAgent.current && (entry.kind === 'connect' || (entry.node && index.has(entry.node))))
+      .sort((a, b) => AGENT_RANK[b.state] - AGENT_RANK[a.state] || time(a.at) - time(b.at));
+    if (queue.length) { lastAgent.current = queue[0].id; goAgent(queue[0]); return; }
+    lastAgent.current = null;
+    goTo(next);
+  };
+  const seenAll = () => {
+    for (const id of new Set(entries.filter((entry) => entry.state === 'unseen' && entry.node).map((entry) => entry.node))) api.seenAgents(project.id, id).catch(() => {});
+    for (const entry of connectHere) if (entry.tone === 'done') api.connectDismiss(entry.sessionId).catch(() => {});
+  };
+  // Ctrl+1–9 (2026-10-13): this top-level project's level-2 projects, in its order, wherever the keyboard is.
+  React.useEffect(() => {
+    if (!active) return undefined;
+    const onKey = (event) => {
+      const digit = /^Digit([1-9])$/.exec(event.code || '') || /^([1-9])$/.exec(event.key || '');
+      if (!digit || !event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return;
+      const id = shortcutProjects(tree.workspaces)[Number(digit[1]) - 1];
+      if (!id) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat && selectRef.current) selectRef.current(id);
+    };
+    window.addEventListener('keydown', onKey, true);
+    return () => window.removeEventListener('keydown', onKey, true);
+  }, [active, tree.workspaces]);
+
+  // The pages opened here, for the clock: projects gone to and notes put in front (this machine's, per top-level project).
+  const [visits, setVisits] = React.useState(() => readVisits(project.id));
+  React.useEffect(() => { if (topic) setVisits((now) => visited(now, { kind: 'project', id: topic.id })); }, [topic && topic.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => { if (notesById.has(activeTab)) setVisits((now) => visited(now, { kind: 'note', id: activeTab })); }, [activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    try { const all = JSON.parse(window.localStorage.getItem(VISITS_KEY) || '{}'); all[project.id] = visits; window.localStorage.setItem(VISITS_KEY, JSON.stringify(all)); } catch { /* not remembered */ }
+  }, [visits, project.id]);
+  const openProjectPage = React.useCallback(() => {
+    setTabs((current) => (current.some((tab) => tab.id === PROJECT_TAB) ? current : [...current, { id: PROJECT_TAB, title: project.name }]));
+    setActiveTab(PROJECT_TAB);
+  }, [project.name]);
+  const openRecent = (page) => {
+    if (page.kind === 'top') openProjectPage();
+    else if (page.kind === 'project') selectTopic(page.id);
+    else if (page.kind === 'note') { const note = notesById.get(page.id); if (note) openTab(note.id, note.name); }
+  };
+
+  // The person's folders (2026-10-13): the same in every project, each a list of library items (main keeps them).
+  const [folders, setFolders] = React.useState([]);
+  React.useEffect(() => {
+    if (!api.folders) return undefined;
+    let live = true;
+    api.folders().then((list) => { if (live && Array.isArray(list)) setFolders(list); }).catch(() => {});
+    const off = api.onFolders ? api.onFolders((change) => { if (live && change && Array.isArray(change.folders)) setFolders(change.folders); }) : () => {};
+    return () => { live = false; off(); };
+  }, []);
+  const addToFolder = async (folderId, ids) => {
+    const next = await api.addToFolder(folderId, ids);
+    if (Array.isArray(next)) setFolders(next);
+    if (ids.length) flash(ids[ids.length - 1]);
+  };
+  const removeFromFolder = (folderId, id) => { api.removeFromFolder(folderId, id).then((next) => { if (Array.isArray(next)) setFolders(next); }).catch(onError); };
+  const createFolder = async (name) => { const made = await api.createFolder(name); if (made && Array.isArray(made.folders)) setFolders(made.folders); };
+  const renameFolder = (folderId, name) => { api.renameFolder(folderId, name).then((next) => { if (Array.isArray(next)) setFolders(next); }).catch(onError); };
+  const deleteFolder = (folderId) => { api.deleteFolder(folderId).then((next) => { if (Array.isArray(next)) setFolders(next); }).catch(onError); };
 
   /* --------------------------------------------------------------- sidebar */
   // Everything that brings a library item into this workspace links it (context, and off `removed`); adding makes the
@@ -1640,6 +1755,37 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const pickRepo = async ({ repo, row }) => {
     if (row) await linkIds([row.id]);
     else await addInput(repo.url);
+  };
+
+  // What + on a folder of Sources adds goes into that folder (the library's row, made or found); with no folder, here.
+  const addInputTo = async (input, folderId) => {
+    if (!folderId) return addInput(input);
+    const row = await addOrFind(api, input);
+    await reload();
+    await addToFolder(folderId, [row.id]);
+    if (row.sandbox_error) onError(new Error(row.sandbox_error));
+    return row;
+  };
+  const pickFromDiskTo = async (folderId) => {
+    if (!folderId) return pickFromDisk();
+    const paths = await api.pickLibraryPaths();
+    const problems = [], ids = [];
+    for (const file of paths || []) {
+      try { ids.push((await addOrFind(api, file)).id); } catch (error) { problems.push(errorMessage(error)); }
+    }
+    if (ids.length) { await reload(); await addToFolder(folderId, ids); }
+    return problems;
+  };
+  const pickRepoTo = async (entry, folderId) => {
+    if (!folderId) return pickRepo(entry);
+    const row = entry.row || await addOrFind(api, entry.repo.url);
+    await reload();
+    await addToFolder(folderId, [row.id]);
+  };
+  const newNoteIn = async (folderId) => {
+    const note = await makeNote('', true);
+    if (folderId && note) await addToFolder(folderId, [note.id]);
+    return note;
   };
 
   // The trash: off this workspace, not out of the library. A note's tab closes and a paper leaves the right pane.
@@ -1733,10 +1879,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   /* ----------------------------------------------------------------- title */
 
   const currentTab = tabs.find((tab) => tab.id === activeTab);
-  const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : (currentTab ? currentTab.title : '');
+  const docTitle = activeTab === 'ws' ? (topic ? topic.name : '') : activeTab === PROJECT_TAB ? project.name : (currentTab ? currentTab.title : '');
   // The title of the document in front named anew (its pane, DocPane, holds the draft): the workspace, or the note.
   const renameDoc = async (next) => {
     if (docArchive) return;
+    if (activeTab === PROJECT_TAB) { await renameProject(next); return; } // the project page's title is the project's name
     if (activeTab !== 'ws') { await renameNoteDoc(activeTab, next); return; }
     try {
       if (docWorkspaceId) await api.renameWorkspace(project.id, docWorkspaceId, next);
@@ -1767,7 +1914,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const onKey = (event) => {
       const target = event.target;
       const inTerminal = target && target.closest && target.closest('[data-terminal]');
-      const mod = event.metaKey || event.ctrlKey;
+      const mod = event.metaKey && !event.ctrlKey; // Ctrl+1–9 goes to the level-2 projects (2026-10-13)
       if (mod && !inTerminal && /^[1-9]$/.test(event.key)) {
         if (lastSide.current === 'terminal' && rightMode === 'terminal') return; // the Terminal's own tabs (TerminalPane)
         if (lastSide.current === 'stage' && rightMode === 'stage' && stageRef.current) {
@@ -1850,6 +1997,31 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     setRailHidden((now) => !now);
   };
   const toggleRailRef = React.useRef(toggleRail);
+
+  /* ------------------------------------------------------- the sidebar tour */
+
+  // After an import's "Open library" (2026-10-14, workspace/SidebarTour.jsx): its Welcome workspace's page (or the note App
+  // chose), then three cards over the sidebar, once. The sidebar comes back from hiding for it. window.__engelbartTour
+  // starts it by hand (start() ignores whether it was seen), for testing.
+  const [tourStep, setTourStep] = React.useState(null);
+  const startTour = React.useCallback(() => { setDocFull(false); setRailHidden(false); setTourStep(0); }, []);
+  const endTour = React.useCallback(() => { markTourSeen(); setTourStep(null); }, []);
+  const nextTour = React.useCallback(() => {
+    if (tourStep == null) return;
+    if (tourStep >= TOUR_STEPS.length - 1) endTour(); else setTourStep(tourStep + 1);
+  }, [tourStep, endTour]);
+  React.useEffect(() => {
+    if (!tourRequest || tourTaken === tourRequest.n) return;
+    tourTaken = tourRequest.n;
+    const id = tourRequest.workspaceId;
+    if (id && index.has(id) && id !== topicId) selectTopic(id);
+    if (tourRequest.tab) openTab(tourRequest.tab.id, tourRequest.tab.title); else showWs();
+    if (!tourSeen()) startTour();
+  }, [tourRequest]); // eslint-disable-line react-hooks/exhaustive-deps
+  React.useEffect(() => {
+    window.__engelbartTour = { start: startTour, stop: () => setTourStep(null), next: nextTour, step: () => tourStep, seen: tourSeen };
+    return () => { if (window.__engelbartTour && window.__engelbartTour.start === startTour) delete window.__engelbartTour; };
+  }, [startTour, nextTour, tourStep]);
   toggleRailRef.current = toggleRail;
   React.useEffect(() => {
     if (!active) return undefined;
@@ -1999,37 +2171,43 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
         className="hov-ink"
         data-copy-doc="1"
         onClick={copyDoc}
-        title={docWorkspaceId ? 'Copy current workspace' : 'Copy current note'}
+        title={docWorkspaceId ? 'Copy current project' : activeTab === PROJECT_TAB ? 'Copy the project page' : 'Copy current note'}
         style={{ ...FOOT_BUTTON, marginLeft: -6, color: copied ? '#171717' : '#8f8f8f' }}
       >
         {copied ? copiedLabel(copied) : 'Copy'}
       </button>
-      {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setBuildDialog((now) => (now ? null : { anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } })); }} aria-expanded={!!buildDialog} title="Hand this workspace to a coding agent" style={FOOT_BUTTON}>Build</button>}
+      {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-build-doc="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setBuildDialog((now) => (now ? null : { anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width } })); }} aria-expanded={!!buildDialog} title="Hand this project to a coding agent" style={FOOT_BUTTON}>Build</button>}
       {docWorkspaceId && !copied && <button type="button" className="hov-ink" data-clear-doc="1" onClick={clearDoc} title="Archive this document and start it blank" style={FOOT_BUTTON}>Clear</button>}
     </span>
     )
   );
   const noWorkspace = topics.length === 0 ? (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
-      <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f', textAlign: 'center' }}>This project has no workspace yet. A workspace holds a document, its context, and any workspaces nested inside it.</span>
-      <button type="button" className="hov-bd2" onClick={addTopic} style={{ padding: '8px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#171717' }}>+ Workspace</button>
+      <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f', textAlign: 'center' }}>Nothing in {project.name} yet. A project holds a document, its sources, and any projects nested inside it.</span>
+      <button type="button" className="hov-bd2" onClick={addTopic} style={{ padding: '8px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)', color: '#171717' }}>+ Project</button>
     </div>
   ) : null;
 
   return (
     <div data-screen-label="Workspace" data-workspace-here={topic ? topic.id : undefined} style={style}>
-      <header className="title-bar" style={{ display: 'flex', alignItems: 'stretch', minHeight: 54, background: '#fafafa', flex: 'none' }}>
+      {/* One line through the window's lights (main's trafficLightPosition puts their middle 27px down), the sidebar's toggle
+          and clock, the tab's title, and Stage · Terminal (2026-10-13: "align all the text at the top and reduce some of the
+          vertical spacing"); the bar is no taller than a tab under that line. */}
+      <header className="title-bar" style={{ display: 'flex', alignItems: 'stretch', height: TITLE_BAR, background: '#fafafa', flex: 'none' }}>
         {/* Over the sidebar: the window's lights, then the sidebar's toggle (Iconography "Toggle sidebar"); folded, only they stay. */}
-        <div className="title-lead" data-title-lead="1" style={{ flex: 'none', width: railShown ? rail : 'auto', boxSizing: 'border-box', display: 'flex', alignItems: 'center', gap: 8, padding: '0 12px 0 14px', minWidth: 0, overflow: 'hidden' }}>
+        <div className="title-lead" data-title-lead="1" style={{ flex: 'none', width: railShown ? rail : 'auto', boxSizing: 'border-box', display: 'flex', alignItems: 'flex-start', gap: 2, padding: `${TITLE_LINE - 14}px 12px 0 14px`, minWidth: 0, overflow: 'hidden' }}>
           <button type="button" className="sb-icon" data-sidebar-toggle={railShown ? 'shown' : 'hidden'} aria-label={railShown ? 'Hide the sidebar' : 'Show the sidebar'} title={`${railShown ? 'Hide' : 'Show'} the sidebar (⌘\\)`} onClick={toggleRail}>
             {railShown ? <PanelCloseIcon /> : <PanelOpenIcon />}
           </button>
+          <RecentPages visits={visits} tree={treeIndex} notes={notesById} counts={nodeCounts} project={project} onOpen={openRecent} />
         </div>
         <div style={{ flex: 'none', width: 1 }} />
         {/* The document's tabs, drawn as the Stage's (2026-09-25): no rule under them; the tab in front runs into the page. */}
-        <div data-doc-strip="1" style={{ flex: '1 1 0', minWidth: 0, boxSizing: 'border-box', display: full ? 'none' : 'flex', alignItems: 'flex-end', padding: `0 ${docFull ? controlsRoom + 8 : 8}px 0 10px`, overflow: 'hidden' }}>
+        {/* The first tab starts past the page's rounded corner, so its foot flares onto the page's straight edge (2026-10-13: "Fix
+            this little UI glitch"). */}
+        <div data-doc-strip="1" style={{ flex: '1 1 0', minWidth: 0, boxSizing: 'border-box', display: full ? 'none' : 'flex', alignItems: 'flex-end', padding: `0 ${docFull ? controlsRoom + 8 : 8}px 0 ${railShown ? 22 : 10}px`, overflow: 'hidden' }}>
           <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
-            <DocTabs tabs={tabs} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} wsName={topic ? topic.name : ''} />
+            <DocTabs tabs={tabs.map((tab) => (tab.id === PROJECT_TAB ? { ...tab, title: project.name } : tab))} activeTab={activeTab} onSelect={setActiveTab} onClose={closeTab} onMove={moveTab} wsName={topic ? topic.name : ''} />
           </div>
           {notePlus && topic && (
             <NotePicker
@@ -2048,7 +2226,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           {topic && <button type="button" className="hov-wash2" onClick={toggleDocFull} aria-label={docFull ? 'Exit full screen' : 'Full screen'} title={docFull ? 'Exit full screen (Esc)' : 'Full screen'} data-doc-full={docFull ? '1' : '0'} style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{docFull ? <Collapse /> : <Expand />}</button>}
         </div>
         <div style={{ flex: 'none', width: 1, display: full || docFull ? 'none' : undefined }} />
-        <div style={{ flex: 'none', width: paneWidth, minWidth: 0, boxSizing: 'border-box', display: docFull ? 'none' : 'flex', alignItems: 'center', gap: 16, padding: '0 20px', overflow: 'hidden' }}>
+        <div style={{ flex: 'none', width: paneWidth, minWidth: 0, boxSizing: 'border-box', display: docFull ? 'none' : 'flex', alignItems: 'flex-start', gap: 16, padding: `${TITLE_LINE - 10.5}px 20px 0`, overflow: 'hidden' }}>
           {RIGHT_MODES.map((mode) => {
             const on = rightMode === mode.id;
             return (
@@ -2069,40 +2247,44 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onNewProject={onNewProject}
           onAllProjects={onHome}
           onRenameProject={renameProject}
+          onOpenProjectPage={openProjectPage}
+          projectCounts={projectCounts}
           roots={tree.workspaces}
           hereId={topic ? topic.id : null}
           recent={navHere.recent}
-          agents={navHere.agents}
-          builds={buildList}
+          visits={visits}
+          entries={entries}
           onSelectWorkspace={selectTopic}
           onCreateWorkspace={createWorkspace}
           onRenameWorkspace={renameWorkspace}
           onDeleteWorkspace={deleteTopic}
           onOpenVersion={(version) => { goToVersion(version.workspaceId, { file: version.file, title: version.title }).catch(onError); }}
-          onRevealBuild={({ workspaceId, buildId }) => revealAsk({ place: { projectId: project.id, ref: { kind: 'workspace', workspaceId } }, buildId, flash: false })}
-          onRejectAgent={(id) => { void onBuildAction(id, 'reject'); }}
-          onSeenAll={(ids) => { for (const id of ids) api.seenAgents(project.id, id).catch(() => {}); }}
-          connectSessions={connectSessions}
-          onOpenConnect={onOpenConnect}
+          onGoAgent={goAgent}
+          onNextAgent={() => goNextAgentRef.current()}
+          onSeenAll={seenAll}
+          onToggleRail={toggleRail}
+          railHidden={railHidden}
           rows={rows}
           activeRowId={activeRowId}
           flashId={flashId}
-          starred={starred}
-          onStar={starRow}
           library={findable}
           inRail={inRail}
           onOpenRow={onRowClick}
           onRenameRow={renameRow}
           onRemoveRow={trashRow}
-          onLinkRow={(row) => linkIds([row.id]).catch(onError)}
+          onLinkRow={(row) => linkIds([row.id])}
           onOpenHeld={(projectId, workspaceId) => { if (projectId === project.id && workspaceId && index.has(workspaceId)) selectTopic(workspaceId); }}
           onDropItems={addDroppedHere}
-          onAddInput={(input) => addInput(input)}
-          onPickDisk={pickFromDisk}
-          onNewNote={topic ? () => makeNote('', true) : null}
-          onNewSticky={active ? () => api.postItsCreate(project.id) : null}
-          onPickRepo={pickRepo}
-          onOpenLink={openLink}
+          onAddInput={(input, folderId) => addInputTo(input, folderId)}
+          onPickDisk={pickFromDiskTo}
+          onNewNote={topic ? newNoteIn : null}
+          onPickRepo={pickRepoTo}
+          folders={folders}
+          onCreateFolder={createFolder}
+          onRenameFolder={renameFolder}
+          onDeleteFolder={deleteFolder}
+          onAddToFolder={addToFolder}
+          onRemoveFromFolder={removeFromFolder}
           postItsHidden={postItsHidden}
           onTogglePostIts={active ? () => setPostItsHidden((now) => !now) : null}
           trashFull={postItTrash > 0 || !!(tree.trash && tree.trash.length)}
@@ -2111,6 +2293,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           postItDrag={postItDrag}
           trashRef={trashRef}
           libraryRequest={libraryRequest}
+          tourStep={tourStep != null && !tourPaused ? tourStep : null}
           onPanel={(kind) => { if (kind === 'library') tickWalk(1); }}
         />
 
@@ -2243,6 +2426,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       )}
       {rejecting && <BuildReject title={rejecting.title} onConfirm={() => onBuildAction(rejecting.id, 'discard')} onClose={() => setRejecting(null)} />}
       {review && <BuildReview key={review.id} title={review.title} review={review.review} error={review.error} task={builds[review.id] || null} aside={full || docFull ? 0 : paneWidth + 1} onOpen={(name) => { void onBuildAction(review.id, 'runshow', { name }); }} onClose={() => setReview(null)} />}
+
+      <SidebarTour step={tourStep} paused={tourPaused} onNext={nextTour} onClose={endTour} />
 
       <ProjectPostIts
         projectId={project.id}

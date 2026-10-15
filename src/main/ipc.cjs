@@ -32,7 +32,6 @@ const { githubRepo } = require('./sandbox/runs.cjs');
 const { candidate: pdfCandidate } = require('./store/web-pdfs.cjs');
 const { detect: detectSources } = require('./connect/scan.cjs');
 const folderAccess = require('./connect/folder-access.cjs');
-const { contextImported, importOfferDue } = require('./connect/imported.cjs');
 
 const BUILD_LINE_RE = /^build> ([a-z0-9]{6,32})$/;
 const buildId = (value) => { if (typeof value !== 'string' || !/^[0-9a-f]{10}$/.test(value)) throw new TypeError('build id is invalid'); return value; };
@@ -59,6 +58,7 @@ function docRef(value) {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new TypeError('doc ref must be an object');
   if (value.kind === 'note') return { kind: 'note', id: str(value.id, 'note id', 64) };
   if (value.kind === 'workspace') return { kind: 'workspace', workspaceId: str(value.workspaceId, 'workspace id', 64) };
+  if (value.kind === 'project') return { kind: 'project' }; // the top-level project's page (projects.cjs PROJECT_PAGE)
   if (value.kind === 'mark') {
     const id = str(value.id, 'mark id', 64);
     if (!/^[\w-]+$/.test(id)) throw new TypeError('mark id is invalid');
@@ -88,7 +88,7 @@ function refOrNull(value) {
 }
 
 /** How the renderer keys a document (`ws:<id>`, `note:<id>`); a highlight is `mark:<id>`, never a note's key. */
-const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : ref.kind === 'mark' ? `mark:${ref.id}` : `note:${ref.id}`);
+const docKeyOf = (ref) => (ref.kind === 'workspace' ? `ws:${ref.workspaceId}` : ref.kind === 'project' ? 'project' : ref.kind === 'mark' ? `mark:${ref.id}` : `note:${ref.id}`);
 
 // A string past `max` cut in the middle (bart/clip.cjs) rather than refused: a passage highlighted across many pages, an
 // earlier turn longer than a turn may be (MATH-27 second pass, 2026-10-06).
@@ -275,7 +275,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
 // `snapshotHtml(file, out)`: a picture of a page @create made (bart/created-preview.cjs); null in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, agentMap = null, snapshotHtml = null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null, scanner = null, agentMap = null, snapshotHtml = null }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -401,6 +401,16 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return ids;
   }));
 
+  // The sidebar's folders (2026-10-13): the person's own, the same in every project, each a list of library items. Every
+  // change is announced on `engelbart:folders` with the whole list, so every window shows it.
+  const foldersChanged = (folders) => { if (notify) notify('engelbart:folders', { folders }); return folders; };
+  handle('folders', withCtx((ctx) => projects.readFolders(ctx)));
+  handle('create-folder', withCtx((ctx, name) => { const out = projects.createFolder(ctx, str(name, 'folder name', 400)); foldersChanged(out.folders); return out; }));
+  handle('rename-folder', withCtx((ctx, id, name) => foldersChanged(projects.renameFolder(ctx, str(id, 'folder id', 64), str(name, 'folder name', 400)))));
+  handle('delete-folder', withCtx((ctx, id) => foldersChanged(projects.deleteFolder(ctx, str(id, 'folder id', 64)))));
+  handle('add-to-folder', withCtx((ctx, id, ids) => foldersChanged(projects.addToFolder(ctx, str(id, 'folder id', 64), (Array.isArray(ids) ? ids : [ids]).slice(0, 200).map((each) => str(each, 'library id', 64))))));
+  handle('remove-from-folder', withCtx((ctx, id, item) => foldersChanged(projects.removeFromFolder(ctx, str(id, 'folder id', 64), str(item, 'library id', 64)))));
+
   // GitHub (src/main/github/connection.cjs): signing in through the default browser, and the repositories the App can read.
   // Every change of the sign-in is announced on `engelbart:github` with the status. `github-open` shows GitHub's device
   // authorization page again, or the App's install page, in the default browser: 'install' with a url opens that one, an
@@ -506,22 +516,22 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
     const imported = optStr(value.connect, 'import id', 64);
     const welcome = value.onboarding === true; // a new user's onboarding, not + Project: the Welcome walkthrough
-    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context, ...(welcome ? { workspaceName: 'Welcome' } : {}) }).then(async (made) => {
+    return onboarding.startProject(ctx, { name: str(value.name, 'name'), description: optStr(value.description, 'description', 8000) || '', folder, directory: folder === 'existing' ? str(value.directory, 'directory', 4096) : '', context, ...(welcome ? { welcomePage: true } : {}) }).then(async (made) => {
       // A folder Engelbart made gets its Build repository and first commit now, in the background, once the tool check
       // has found Git (build/manager.cjs prepareDefault): the first Build never meets a folder without a history.
       if (folder === 'new' && builds) void toolsChecked().then(() => builds.prepareDefault(ctx, made.project.id)).catch(() => {});
       // Connect your library's notes, held until there was a project (connect/session.cjs attachProject), go into this one,
-      // and what it brought into the library goes on the project's own list, now and as more comes in.
+      // and what it brought into the library joins the Welcome workspace's context, now and as more comes in.
       if (imported && connect) made.importedNotes = await connect.attachProject(ctx, imported, made.project.id, made.workspaceId).catch(() => 0);
-      if (welcome) made.gettingStarted = gettingStarted.startGettingStarted(ctx, made.project.id, { workspaceId: made.workspaceId });
+      // 2026-10-14: the Welcome! page in place of the walkthrough (store/projects.cjs createProjectWithWelcomePage).
       // A new user's onboarding is the guided setup: it is not offered to them afterwards.
       if (welcome) { try { gettingStarted.markGuidedOffer(ctx, 'onboarded'); } catch { /* offered once more at worst */ } }
       return made;
     });
   }), { project: (_args, out) => out && out.project && out.project.id, library: true });
   // The guided setup started inside a project (2026-10-10): start-project's end without the project. That project gets a
-  // Welcome workspace (another one on every run; nothing already there is removed), what the setup added on the project's
-  // list, the walkthrough, and Connect your library's session attached as start-project attaches it.
+  // Welcome workspace (another one on every run; nothing already there is removed) with what the setup added in its
+  // context, the walkthrough, and Connect your library's session attached as start-project attaches it.
   saving('welcome-workspace', withCtx((ctx, pid, input) => {
     const value = input && typeof input === 'object' && !Array.isArray(input) ? input : {};
     const context = (Array.isArray(value.context) ? value.context : []).slice(0, 500).map((id) => str(id, 'library id', 64));
@@ -554,7 +564,23 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Spotlight asked in the background which browsers are installed, as Connect opens (./browser/installed-apps.cjs).
   const warm = () => { try { void Promise.resolve(warmBrowsers()).catch(() => {}); } catch { /* not asked */ } };
   // `platform`: off the Mac, web apps' rows say "Not on Windows yet" and can't be ticked (2026-10-12, model/connect.js notOnYet).
-  handle('connect-detect', withCtx(async (ctx) => { cx(); warm(); return { platform: process.platform, ...await detectSources({ homeDir: ctx.homeDir, access: folderAccess.guard({ homeDir: ctx.homeDir, dataRoot: ctx.dataRoot }), zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn: await connectSignedIn().catch(() => []), connectors: (app) => !!(connectors && connectors.status(app).connected), ...(process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {}) }) }; }));
+  // Read in the scanner process when there is one (./connect/scan-child.cjs): on this process it froze the window ~4 s.
+  handle('connect-detect', withCtx(async (ctx) => {
+    cx(); warm();
+    const guard = folderAccess.guard({ homeDir: ctx.homeDir, dataRoot: ctx.dataRoot });
+    const signedIn = await connectSignedIn().catch(() => []);
+    const applications = process.env.ENGELBART_CONNECT_APPLICATIONS != null ? { applications: process.env.ENGELBART_CONNECT_APPLICATIONS.split(':').filter(Boolean) } : {};
+    if (scanner) {
+      const connected = {};
+      for (const [app, entry] of Object.entries(require('../shared/connect-sources.cjs').APPS)) {
+        if (entry.reach !== 'connector') continue;
+        try { connected[app] = !!(connectors && connectors.status(app).connected); } catch { connected[app] = false; }
+      }
+      const found = await scanner.run('detect', { homeDir: ctx.homeDir, access: { dataRoot: ctx.dataRoot, answers: guard.answers }, zotero: zotero ? zotero.status() : null, github: github ? github.status() : null, signedIn, connectors: connected, ...applications }).catch(() => null);
+      if (found) return { platform: process.platform, ...found };
+    }
+    return { platform: process.platform, ...await detectSources({ homeDir: ctx.homeDir, access: guard, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), signedIn, connectors: (app) => !!(connectors && connectors.status(app).connected), ...applications }) };
+  }));
   handle('connect-providers', () => { const out = cx().providers(); warm(); return out; });
   handle('connect-start', (input) => cx().start(plainObject(input, 'choices')));
   handle('connect-answer', (id, input) => cx().answer(importId(id), plainObject(input, 'answer')));
@@ -590,6 +616,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('connect-need', (id, needId, action) => cx().need(importId(id), str(needId, 'request id', 64), str(action, 'action', 8)));
   handle('connect-import', (id) => cx().importNow(importId(id)));
   handle('connect-stop', (id) => cx().stop(importId(id)));
+  // A run waiting for its provider (session.cjs holdForProvider): it goes on, on `provider` when the other one was picked.
+  handle('connect-unblock', (id, provider) => cx().unblock(importId(id), provider === 'anthropic' || provider === 'openai' ? provider : null));
   handle('connect-stop-job', (id, jobId) => cx().stopJob(importId(id), str(jobId, 'job id', 64)));
   handle('connect-provider', (id, provider) => cx().setProvider(importId(id), str(provider, 'provider', 16)));
   handle('connect-retry-memory', (id) => cx().retryMemory(importId(id)));
@@ -618,11 +646,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     fs.writeFileSync(offerFile(ctx), JSON.stringify({ seen: true, how: how === 'started' ? 'started' : 'dismissed', at: new Date().toISOString() }), { mode: 0o600 });
     return true;
   }));
-  // Whether this library's context has been imported: MEMORY.md, or a Connect session that finished (./connect/imported.cjs).
-  handle('context-imported', withCtx((ctx) => ({ imported: contextImported(ctx.dataRoot) })));
-  // The "Import Context" offer over the workspace (2026-10-12, in place of the guided setup's): shown until it is dismissed
-  // or the context is imported (./connect/imported.cjs importOfferDue). ENGELBART_CONNECT_OFFER=off never shows it (the smokes).
-  handle('guided-offer', withCtx((ctx) => ({ show: importOfferDue(ctx) })));
+  // The guided setup's one-time offer to someone with projects (./store/getting-started.cjs guidedOfferDue).
+  // ENGELBART_CONNECT_OFFER=off never shows it, as it never showed Connect your library's popup it replaced (the smokes).
+  handle('guided-offer', withCtx((ctx) => ({ show: process.env.ENGELBART_CONNECT_OFFER !== 'off' && gettingStarted.guidedOfferDue(ctx) })));
   handle('guided-offer-seen', withCtx((ctx, how) => gettingStarted.markGuidedOffer(ctx, typeof how === 'string' ? how : 'dismissed')));
   // The Welcome walkthrough (2026-10-09, ./store/getting-started.cjs): its state, and the steps the window ticked (or a
   // circle unticked by hand) and Hide.
@@ -633,6 +659,48 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     return gettingStarted.setGettingStarted(ctx, str(pid, 'project id', 64), { tick: steps(value.tick), untick: steps(value.untick), hidden: value.hidden === true });
   }));
   // MEMORY.md (./connect/memory.cjs): whether there is one in this data root, for the window to name and reveal.
+  // Import your context (2026-10-13, the "Onboarding" workspace; ./onboarding): which provider runs its agents, the
+  // browsers whose sign-ins it may use, the project and tool discovery agents, Full Disk Access, where the flow was (kept
+  // across the relaunch Full Disk Access needs), and the Agent trace.
+  const ix = () => { if (!importFlow) throw new Error('Import your context is not available'); return importFlow; };
+  const providerId = (value) => { const id = str(value, 'provider', 16); if (id !== 'anthropic' && id !== 'openai') throw new TypeError('provider is invalid'); return id; };
+  handle('import-providers', (fresh) => ix().providers.status({ fresh: fresh === true }));
+  handle('import-provider-remember', (provider) => { ix().providers.remember(providerId(provider)); return ix().providers.status(); });
+  handle('import-browsers', () => ix().browsers.list());
+  handle('import-browser-choose', (id) => ix().browsers.choose(str(id, 'browser', 32)));
+  handle('import-keychain', (answer) => ix().browsers.setKeychain(str(answer, 'answer', 16)));
+  // Browser agents (./onboarding/browser-agents.cjs): whether the web apps' imports can run in the person's own browser,
+  // and their answer to "Let agents use your browser?" ('allowed' | 'declined'; null forgets it).
+  handle('import-browser-agents', (input) => {
+    const value = input == null ? {} : plainObject(input, 'input');
+    if (!ix().browserAgents) return { available: false, use: false, ask: false, browser: null, others: [], allowedByCli: false, consent: null, why: 'Not on this Mac' };
+    return ix().browserAgents.status({ provider: value.provider == null ? null : providerId(value.provider), browserId: value.browserId == null ? null : str(value.browserId, 'browser', 32) });
+  });
+  handle('import-browser-agents-answer', (answer) => {
+    if (answer !== null && answer !== 'allowed' && answer !== 'declined') throw new TypeError('answer is invalid');
+    if (!ix().browserAgents) throw new Error('Browser agents are not available');
+    return ix().browserAgents.consent(answer);
+  });
+  handle('import-discovery', () => ix().discovery.state());
+  handle('import-discover-projects', (input) => {
+    const value = input == null ? {} : plainObject(input, 'input');
+    return ix().discovery.startProjects({ provider: value.provider == null ? null : providerId(value.provider), again: value.again === true });
+  });
+  handle('import-discover-tools', (input) => {
+    const value = input == null ? {} : plainObject(input, 'input');
+    return ix().discovery.startTools({ provider: value.provider == null ? null : providerId(value.provider), browserId: value.browserId == null ? null : str(value.browserId, 'browser', 32), keychain: value.keychain === 'allowed' ? 'allowed' : value.keychain === 'declined' ? 'declined' : null, again: value.again === true });
+  });
+  handle('import-discovery-stop', () => ix().discovery.stop());
+  handle('import-discovery-reset', () => ix().discovery.reset());
+  handle('import-disk-access', () => ix().diskAccess.status());
+  handle('import-disk-access-open', () => ix().diskAccess.open());
+  handle('import-disk-access-relaunch', (confirm) => ix().diskAccess.relaunch({ confirm: confirm === true }));
+  handle('import-disk-access-stop', () => { ix().diskAccess.stopWatching(); ix().diskAccess.closeHelper(); return true; });
+  handle('import-flow', () => (ix().prefs.get().flow || null));
+  handle('import-flow-save', (flow) => { if (flow === null) { ix().prefs.set({ flow: null }); return true; } ix().prefs.set({ flow: plainObject(flow, 'flow') }); return true; });
+  handle('import-trace-open', () => ix().openTrace());
+  // Choose files under Obsidian (2026-10-14): its vaults as its file explorer shows them (./onboarding/obsidian-tree.cjs).
+  handle('import-obsidian-tree', withCtx((ctx) => require('./onboarding/obsidian-tree.cjs').obsidianTree(ctx.homeDir)));
   handle('connect-memory', withCtx((ctx) => { const file = path.join(ctx.dataRoot, 'MEMORY.md'); try { const stat = fs.statSync(file); return { exists: true, path: file, updated: stat.mtime.toISOString(), bytes: stat.size }; } catch { return { exists: false, path: file }; } }));
   // A repository's sandbox is stopped (and its runs forgotten) before its row can go.
   saving('discard-library-item', (id) => queued(async () => {
@@ -913,6 +981,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   }
   // Copy all under an answer: a question and its answer, as they read in the document.
   handle('copy-text', (text) => { writeClipboard(str(text, 'text', 400000)); return true; });
+  // The image of a pasted picture, copied as a picture (2026-10-12): the renderer sends its bytes, main writes the clipboard.
+  handle('copy-image', (bytes) => {
+    const buf = Buffer.from(bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes) ? (ArrayBuffer.isView(bytes) ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes)) : []);
+    if (!buf.length || buf.length > 40e6) throw new Error('image is empty or too large');
+    return !!writeImage(buf);
+  });
 
   // Build (src/main/build; docs/superpowers/specs/2026-09-25-build-workflow-design.md): a workspace handed to Claude Code
   // or Codex in a worktree of its own. Every change of a Build is announced on `engelbart:build` with its public record,
@@ -1147,6 +1221,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('tools-install', (names) => { void tools.install(toolNames(names)).catch(() => {}); return tools.snapshot(); });
     handle('tools-update', (name) => { void tools.update(toolName(name)).catch(() => {}); return tools.snapshot(); });
     handle('tools-sign-in', (name) => { void tools.signIn(toolName(name)).catch(() => {}); return tools.snapshot(); });
+    // Connect (2026-10-14): installed, updated, checked and signed in, whichever it still needs, from one press.
+    handle('tools-connect', (name) => { void tools.connect(toolName(name)).catch(() => {}); return tools.snapshot(); });
     handle('tools-cancel-sign-in', (name) => tools.cancelSignIn(toolName(name)));
     handle('tools-sign-out', (name) => tools.signOut(toolName(name)));
     handle('tools-skip', (names) => tools.skip(toolNames(names)));

@@ -16,10 +16,9 @@ import { launchRows, installable } from './tools.js';
  * Create comes before Connect (2026-10-10): the librarian is told what the project is, so it recommends the person's own
  * files and papers about it rather than "75 PDFs in your Downloads". The project itself is made at the end of the flow
  * ('open', see endOf), so what Connect brings in still lands in it.
- * Intro (2026-10-11, David's mockup "All your context in one place") comes right before Connect and only with it: why
- * Engelbart asks for their tools and where the data goes (MATH-142), so the choose screen can open on the consent.
+ * The intro screen "All your context in one place" (2026-10-11) was deleted (2026-10-12): the choose screen's consent card says where the data goes.
  */
-export const FLOWS = { new: ['welcome', 'tools', 'create', 'intro', 'connect', 'import', 'instructions'], existing: ['create', 'context'], guided: ['welcome', 'tools', 'intro', 'connect', 'import', 'instructions'] };
+export const FLOWS = { new: ['welcome', 'tools', 'create', 'connect', 'import', 'instructions'], existing: ['create', 'context'], guided: ['welcome', 'tools', 'connect', 'import', 'instructions'] };
 
 /**
  * The guided setup started inside a project (2026-10-10, "guided setup shouldn't create a new project"): a new user's
@@ -78,9 +77,16 @@ export function toolsWanted(snapshot, { connect = false } = {}) {
   return connect ? !agentReady(snapshot) : false;
 }
 
-/** Whether Claude Code or Codex is installed and signed in: what Connect your library's agents need. */
+/**
+ * Whether Claude Code or Codex is installed and signed in: what Connect your library's agents need. One updating itself in
+ * the background (or about to: outdated with automatic updates on) counts (2026-10-13: "Codex was also updated before he
+ * could move on. Codex should update automatically in the background"): the update never holds onboarding.
+ */
+export function agentWorks(tool) {
+  return !!tool && (tool.status === 'ready' || (!!tool.installed && (tool.status === 'updating' || (tool.status === 'outdated' && tool.autoUpdate))));
+}
 export function agentReady(snapshot) {
-  return !!(snapshot && snapshot.tools) && ['claude', 'codex'].some((id) => snapshot.tools[id] && snapshot.tools[id].status === 'ready');
+  return !!(snapshot && snapshot.tools) && ['claude', 'codex'].some((id) => agentWorks(snapshot.tools[id]));
 }
 
 /**

@@ -252,7 +252,7 @@ test('an answer landing with the caret above it moves nothing', async () => {
   const lines = replyLines(said(12), { level: { name: 'Opus', effort: 'high' }, trail: [], ms: 3000 }, { model: true });
   m.update((p) => { p.asks = {}; p.text = placeAnswer(p.text, 'a1', lines); });
   assert.equal(m.pane.scrollTop, 0);
-  assert.deepEqual(m.carets.at(-1), { line: 0, offset: 0 });
+  assert.deepEqual(m.carets.at(-1), { line: 0, sel: [0, 0], back: false }, "the selection kept as it was (0faa495d)");
   assert.equal(m.editor.state.activeLine, 0);
 });
 

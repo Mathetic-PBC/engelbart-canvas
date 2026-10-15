@@ -14,12 +14,14 @@ const MARK = '__ENGELBART_TOOLS__';
 function createRunner({ environment = process.env, execFileImpl = execFile } = {}) {
   const shellPath = resolveShell(environment);
   const fish = path.basename(shellPath) === 'fish';
-  const base = sanitizeEnvironment(environment);
+  // Read at each run, not once (2026-10-14): a variable set after launch (CLAUDE_CONFIG_DIR, CODEX_HOME) reaches the checks
+  // as it reaches the agents (../connect/agents.cjs), so both say the same about a sign-in.
+  const base = () => sanitizeEnvironment(environment);
 
   /** → { code, signal, stdout, stderr, timedOut, missing } */
   function exec(file, args, { env = {}, timeout = 20_000, cwd, input } = {}) {
     return new Promise((resolve) => {
-      const child = execFileImpl(file, args, { env: { ...base, ...env }, timeout, cwd, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
+      const child = execFileImpl(file, args, { env: { ...base(), ...env }, timeout, cwd, maxBuffer: 4 * 1024 * 1024 }, (error, stdout, stderr) => {
         const code = error ? (typeof error.code === 'number' ? error.code : null) : 0;
         resolve({
           code,

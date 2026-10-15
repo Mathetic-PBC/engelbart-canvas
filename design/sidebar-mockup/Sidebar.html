@@ -1,0 +1,1515 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Engelbart — Sidebar</title>
+<!--
+  The sidebar, redone from Hudson's "Sidebar" workspace (2026-10-13). One file, no build step, sample data only.
+  What it follows, top to bottom:
+    title bar   traffic lights, the sidebar toggle and the clock (Recent pages) on one row, their centre on the same line
+                as the tabs and Stage / Terminal; the project head right under it, no gap.
+    head        the top-level project and its chevron: Switch project ›, Rename, Project page ↗; then Settings and New note.
+    fixed rows  Agents, Library, Search. Connections and Starred are gone. Agents use a number in a rectangle:
+                an unfilled pulsing outline while any agent is running, a solid grey fill when only results await viewing.
+                Projects use bare counts: pulsing grey while running, steady dark when ready, without a box or border.
+                Both count running and unviewed agents together and cap at 9+.
+    Projects    nested to a fourth level (level 1 is the switcher). At most three direct children of the root, and ten
+                rows altogether, counting descendants and More. The shortlist and tree order stay put when clicked.
+                Only one branch at each level can be expanded. More opens the rest beside the sidebar.
+                Ctrl+1–9 opens only second-level projects, in their root's order, including projects in More.
+                Second-level projects keep their icon; number hints appear only in the shortcuts menu. Cmd+J opens the next agent needing attention.
+                Both commands are shown in the sidebar and in Keyboard shortcuts under the project menu.
+                Only the deepest open group's children get a guide line. A plus appears on hover.
+                Counts stay visible, aligned immediately before the chevron column.
+                Every parent includes all descendants in its total, expanded or folded, including the root picker.
+                Hovering a folded project for a beat shows its children; leaving closes it.
+    Sources     folded unless this project has something; Add sources, Notes with a + (and "+ Note" when there are none), then
+                the rest with their own icons: picture, code (html), globe (website), folder, paper (pdf), repository.
+    foot        stickies shown or hidden, and the trash.
+  Chevrons: down while open, up while folded.
+-->
+<style>
+:root{
+  --font-sans:system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;
+  --font-mono:'Source Code Pro',ui-monospace,SFMono-Regular,Menlo,monospace;
+  --ink:#171717;--body:#262626;--mut:#4d4d4d;--icon:#5c5c5c;--fnt:#8f8f8f;--bd:#eaeaea;--bd2:#c9c9c9;
+  --rail:#fafafa;--hov:#efefef;--active:#e6e6e6;--blue:#0070f3;--red:#e70022;
+  --ease:cubic-bezier(.25,.1,.25,1);
+  --rail-w:288px;--line:30px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden;background:#fff;color:var(--ink);font:14px/1.4 var(--font-sans);-webkit-font-smoothing:antialiased}
+button,input,select{font:inherit;color:inherit}
+button{border:0;background:transparent;padding:0;cursor:pointer;text-align:left}
+button:focus-visible,[tabindex]:focus-visible{outline:none;box-shadow:0 0 0 2px rgba(0,112,243,.28)}
+svg{flex:none;display:block}
+@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@keyframes status-outline{0%,100%{border-color:#8f8f8f}50%{border-color:#eaeaea}}
+@keyframes number-pulse{0%,100%{opacity:1}50%{opacity:.4}}
+@keyframes added{0%{background:#e6f0fd}100%{background:transparent}}
+@media(prefers-reduced-motion:reduce){.status-pill.running,.project-count.in-progress{animation:none!important}}
+
+/* ---------------------------------------------------------------- frame */
+.app{display:flex;height:100vh;min-width:0}
+.rail{flex:none;width:var(--rail-w);display:flex;flex-direction:column;min-height:0;padding:0 8px;background:var(--rail);border-right:1px solid var(--bd);position:relative;z-index:5}
+.app[data-rail="hidden"] .rail{display:none}
+.main{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--rail)}
+.stage{flex:none;width:300px;display:flex;flex-direction:column;border-left:1px solid var(--bd);background:var(--rail)}
+
+/* Every top row is 40px and puts its middle at 23px, so the lights, the toggle, the clock, a tab's name and "Stage" share a line. */
+.titlebar{flex:none;display:flex;align-items:center;gap:2px;height:40px;padding-top:6px}
+.lights{display:flex;gap:8px;padding:0 12px 0 5px}
+.light{width:12px;height:12px;border-radius:50%;box-shadow:inset 0 0 0 .5px rgba(0,0,0,.12)}
+.icon-btn{display:flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:6px;color:var(--icon);transition:background 120ms,color 120ms}
+.icon-btn:hover,.icon-btn[aria-expanded="true"]{background:#ececec;color:var(--ink)}
+
+.tabbar{flex:none;display:flex;align-items:flex-end;height:40px;padding:0 8px;border-bottom:1px solid var(--bd);position:relative}
+.tabbar .titlebar{height:34px;padding:0;align-self:flex-end;margin-bottom:0;margin-right:6px}
+.tab{position:relative;display:flex;align-items:center;gap:7px;height:34px;max-width:200px;padding:0 10px 0 12px;margin-bottom:-1px;border:1px solid transparent;border-bottom:0;border-radius:8px 8px 0 0;color:var(--mut);font:13px/1 var(--font-sans);cursor:pointer;white-space:nowrap}
+.tab span.t{overflow:hidden;text-overflow:ellipsis}
+.tab:hover{color:var(--ink)}
+.tab[data-on="1"]{background:#fff;border-color:var(--bd);color:var(--ink);font-weight:500}
+/* The open tab joins the page under it: no line under it, and its foot flares into the bar on both sides. */
+.tab[data-on="1"]::before,.tab[data-on="1"]::after{content:"";position:absolute;bottom:0;width:8px;height:8px;pointer-events:none}
+.tab[data-on="1"]::before{left:-9px;background:radial-gradient(circle at 0 0,transparent 7.5px,var(--bd) 7.5px,var(--bd) 8.5px,#fff 8.5px)}
+.tab[data-on="1"]::after{right:-9px;background:radial-gradient(circle at 100% 0,transparent 7.5px,var(--bd) 7.5px,var(--bd) 8.5px,#fff 8.5px)}
+.tab .x{display:flex;width:16px;height:16px;align-items:center;justify-content:center;border-radius:4px;color:var(--fnt);opacity:0}
+.tab:hover .x,.tab[data-on="1"] .x{opacity:1}
+.tab .x:hover{background:#ececec;color:var(--ink)}
+.tab-plus{display:flex;align-items:center;justify-content:center;width:26px;height:26px;margin:0 0 4px 4px;border-radius:6px;color:var(--icon)}
+.tab-plus:hover{background:#ececec;color:var(--ink)}
+.canvas{flex:1;min-height:0;overflow:auto;background:#fff;position:relative}
+.page{max-width:620px;margin:0 0 0 max(40px,calc((100% - 860px)/2));padding:56px 0 120px}
+.page h1{margin:0;font:500 28px/1.25 var(--font-sans);letter-spacing:-.4px}
+.page .kicker{display:flex;align-items:center;gap:7px;margin-bottom:14px;font:500 9.5px/1 var(--font-sans);letter-spacing:1.6px;text-transform:uppercase;color:var(--fnt)}
+.page p{margin:14px 0 0;font:15px/1.7 var(--font-sans);color:var(--mut)}
+.page .bar{height:10px;margin-top:16px;border-radius:5px;background:#f2f2f2}
+.page .kids{margin-top:30px;display:flex;flex-wrap:wrap;gap:8px}
+.page .kid{display:flex;align-items:center;gap:8px;height:32px;padding:0 12px;border:1px solid var(--bd);border-radius:8px;font:13.5px/1 var(--font-sans);color:var(--body);cursor:pointer}
+.page .kid:hover{border-color:var(--bd2)}
+.sticky{position:absolute;right:28px;top:64px;width:156px;min-height:136px;padding:14px 14px 16px;background:#fff2a8;border-radius:3px;box-shadow:0 6px 18px rgba(0,0,0,.08),0 1px 2px rgba(0,0,0,.06);font:13px/1.55 var(--font-sans);color:#4a4020;transform:rotate(1.2deg)}
+.app[data-stickies="hidden"] .sticky{display:none}
+.stage-head{flex:none;display:flex;align-items:center;gap:16px;height:40px;padding:7px 16px 0;border-bottom:1px solid var(--bd)}
+.stage-head span{font:13px/1 var(--font-sans);color:var(--fnt);cursor:default}
+.stage-head span[data-on="1"]{color:var(--ink);font-weight:500;text-decoration:underline;text-underline-offset:7px;text-decoration-thickness:1.5px}
+.stage-body{flex:1;display:flex;align-items:center;justify-content:center;font:13px/1.5 var(--font-sans);color:#b3b3b3;background:#fff}
+
+/* ---------------------------------------------------------------- sidebar */
+.head{flex:none;display:flex;align-items:center;gap:2px;height:36px}
+.picker{flex:0 1 auto;min-width:0;display:flex;align-items:center;gap:6px;height:30px;padding:0 8px;border-radius:6px;font:600 15px/1 var(--font-sans);color:var(--ink)}
+.picker:hover,.picker[aria-expanded="true"]{background:#ececec}
+.picker .n{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.grow{flex:1 0 4px}
+.scroll{flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto;scrollbar-width:none;padding-bottom:4px}
+.scroll::-webkit-scrollbar{display:none}
+.fixed{flex:none;display:flex;flex-direction:column;gap:1px;padding-top:4px}
+
+.row{flex:none;position:relative;display:flex;align-items:center;height:var(--line);padding:0 6px 0 8px;border-radius:6px;cursor:pointer;outline:none;transition:background 120ms;user-select:none}
+.row:hover{background:var(--hov)}
+.row[data-active="1"]{background:var(--active)}
+.row[data-active="1"]:hover{background:#e0e0e0}
+.row[data-flash="1"]{animation:added 1600ms ease-out}
+.row .ic{flex:none;width:18px;height:18px;margin-right:10px;display:flex;align-items:center;justify-content:center;color:var(--icon)}
+.row .lb{flex:0 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:400 14.5px/30px var(--font-sans);color:var(--body)}
+.row[data-active="1"] .lb,.row[data-holds="1"] .lb{color:var(--ink);font-weight:500}
+.row[data-active="1"] .ic{color:var(--ink)}
+.row.in{padding-left:10px}
+.row.in .lb{font-size:13.5px;color:var(--mut)}
+.row.in[data-active="1"] .lb,.row.in[data-holds="1"] .lb{color:var(--ink)}
+.row .faint{color:#9b9b9b!important}
+.row .sp{flex:1 0 6px}
+.row .rt{flex:none;display:flex;align-items:center;gap:6px;margin-left:4px}
+.row .hv{flex:none;display:flex;align-items:center;gap:1px;opacity:0;transition:opacity 120ms}
+.row:hover .hv{opacity:1}
+.act{flex:none;display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:4px;color:var(--fnt)}
+.act:hover{background:#e3e3e3;color:var(--ink)}
+.chev{flex:none;display:flex;align-items:center;justify-content:center;width:18px;height:18px;margin-left:2px;border-radius:4px;color:#9b9b9b}
+.chev:hover{background:#e0e0e0;color:var(--mut)}
+.chev svg{transition:transform 160ms var(--ease)}
+.chev.on-hover{opacity:0;pointer-events:none}
+:is(.row,.prow):is(:hover,:focus-within) .chev.on-hover{opacity:1;pointer-events:auto}
+/* Down while open, up while folded (Hudson: "the chevrons should point up when they point down and vice versa"). */
+.chev[data-open="0"] svg,.sec-toggle[data-open="0"] .chev-mark svg{transform:rotate(180deg)}
+.chev-mark{display:flex;color:#9b9b9b}
+.more .lb,.more .ic{color:var(--fnt)!important}
+.more:hover .lb,.more:hover .ic{color:var(--mut)!important}
+.status-pill{flex:none;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:22px;height:22px;padding:0 3px;border:1px solid transparent;border-radius:4px;font:400 12px/1 var(--font-sans);font-variant-numeric:tabular-nums;text-align:center}
+.status-pill.ready{background:var(--bd);color:var(--ink)}
+.status-pill.running{background:transparent;color:var(--mut);border-color:var(--bd2);animation:status-outline 1.8s ease-in-out infinite}
+.project-count{flex:none;display:inline-block;min-width:12px;text-align:center;font:400 12px/16px var(--font-sans);font-variant-numeric:tabular-nums}
+.project-count.done{color:var(--ink)}
+.library-count{flex:none;color:var(--fnt);font:400 12px/16px var(--font-sans);font-variant-numeric:tabular-nums;margin-left:6px}
+.project-count.in-progress{color:var(--fnt);animation:number-pulse 1.8s ease-in-out infinite}
+.shortcut{flex:none;color:var(--fnt);font:12px/1.4 var(--font-sans);white-space:nowrap;font-variant-numeric:tabular-nums}
+.project-tools{flex:none;display:flex;align-items:center;gap:5px;margin-left:6px}
+.status-slot{display:flex;align-items:center;justify-content:center;flex:none;width:22px}
+.chevron-slot{display:flex;align-items:center;justify-content:center;flex:none;width:18px}
+.chevron-slot .chev{margin-left:0}
+.project-slot{display:grid;place-items:center;flex:none;width:22px;height:22px}
+.project-slot>*{grid-area:1/1}.project-slot .act{visibility:hidden;pointer-events:none}
+.row:hover .project-slot.can-add .act,.row:focus-within .project-slot.can-add .act{visibility:visible;pointer-events:auto}
+.more .ic{width:auto;height:auto;display:block;line-height:30px;margin-right:4px!important}
+.more-mark{font:400 14px/30px var(--font-sans);letter-spacing:0;display:inline}
+.sec-command{margin-left:auto;margin-right:8px;border-radius:4px;padding:2px 3px}.sec-command:hover{background:var(--hov);color:var(--mut)}
+.command-row{display:flex;align-items:center;gap:20px;min-height:38px;padding:8px 14px;font-size:13.5px}.command-row .shortcut{margin-left:auto}
+.agent-detail{width:100%;align-self:stretch;padding:20px 16px;color:var(--ink);outline:none}.agent-detail h2{margin:8px 0 12px;font:500 16px/1.4 var(--font-sans)}.agent-detail p{margin:12px 0;font:13px/1.6 var(--font-sans);color:var(--mut)}.agent-detail .path{font:12px/1.5 var(--font-sans);color:var(--fnt)}.agent-detail .state{display:flex;align-items:center;gap:7px;font-size:12px;color:var(--fnt)}
+
+.sec{flex:none;display:flex;flex-direction:column}
+.sec-head{flex:none;display:flex;align-items:center;height:var(--line);padding:0 6px 0 8px;margin-top:12px}
+.sec-toggle{display:flex;align-items:center;gap:5px;min-width:0;padding:2px 0;font:500 13px/1.4 var(--font-sans);color:var(--fnt)}
+.sec-toggle:hover{color:var(--mut)}
+.sec-head .act{opacity:1}
+.empty-line{height:var(--line);display:flex;align-items:center;padding-left:10px;font:13px/1 var(--font-sans);color:#a3a3a3}
+
+/* A project's children: indented under its name; a faint guide line only beside the level you are on. */
+.kids{position:relative;display:flex;flex-direction:column;padding-left:22px}
+.kids.l3{padding-left:24px}
+.kids[data-guide="1"]::before{content:"";position:absolute;left:15.5px;top:2px;bottom:2px;width:1px;background:#dcdcdc}
+.kids.l4[data-guide="1"]::before{left:10.5px}
+.kids.l4{padding-left:22px}
+/* The tree keeps its ordinary surface; only the selected row is highlighted. */
+.branch{display:flex;flex-direction:column}
+.ws-list{display:flex;flex-direction:column;gap:0}
+
+.group-head{flex:none;display:flex;align-items:center;height:var(--line);padding:0 6px 0 8px;border-radius:6px}
+.group-head .ic{flex:none;width:18px;height:18px;margin-right:10px;display:flex;align-items:center;justify-content:center;color:var(--icon)}
+.group-head .lb{font:500 14.5px/30px var(--font-sans);color:var(--body)}
+.notes{position:relative;display:flex;flex-direction:column;padding-left:24px}
+.notes::before{content:"";position:absolute;left:15.5px;top:2px;bottom:2px;width:1px;background:#e3e3e3}
+.plus-note{display:flex;align-items:center;gap:6px;height:var(--line);padding:0 10px;border-radius:6px;font:13.5px/1 var(--font-sans);color:var(--fnt)}
+.plus-note:hover{background:var(--hov);color:var(--ink)}
+.files{display:flex;flex-direction:column;margin-top:4px}
+.source-children{display:flex;flex-direction:column;padding-left:24px}
+.source-folder .source-tools{display:flex;align-items:center;gap:2px}
+.source-folder .source-tools .act{visibility:hidden}
+.source-folder:is(:hover,:focus-within) .source-tools .act{visibility:visible}
+.source-folder .chev{margin-left:0}
+.source-create .ic{position:relative}
+.source-create .folder-plus{position:absolute;right:-3px;bottom:-2px;background:var(--rail);font:16px/12px var(--font-sans)}
+.row:focus-within .hv{opacity:1}
+.foot{flex:none;display:flex;align-items:center;gap:2px;margin:6px 0 10px}
+.foot .row{flex:1}
+
+/* ---------------------------------------------------------------- floating */
+#layer>*,#hover-layer>*,#tooltip-layer>*{position:fixed}
+.panel{z-index:80;display:flex;flex-direction:column;background:#fff;border:1px solid #e6e6e6;border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.08),0 2px 6px rgba(0,0,0,.04);animation:rise 140ms var(--ease);overflow:hidden}
+.panel-head{flex:none;display:flex;align-items:center;gap:8px;padding:12px 14px 6px}
+.panel-head b{font:600 13px/1.4 var(--font-sans)}
+.panel-head i{font:normal 12px/1.4 var(--font-sans);color:var(--fnt)}
+.panel-scroll{flex:1 1 auto;min-height:0;overflow-y:auto;padding:4px 6px 8px}
+.pgroup{padding:10px 10px 4px;font:500 12px/1.4 var(--font-sans);color:var(--fnt)}
+.prow{display:flex;align-items:center;gap:10px;width:100%;min-height:34px;padding:6px 10px;border-radius:6px;cursor:pointer}
+.prow:hover,.prow[data-sel="1"]{background:#f3f3f3}
+.prow[data-active="1"]{background:#ececec}
+.prow .ic{flex:none;width:18px;display:flex;justify-content:center;color:var(--mut)}
+.prow .tx{flex:1;min-width:0}
+.prow .t1{font:14px/1.35 var(--font-sans);color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.prow[data-active="1"] .t1{font-weight:500}
+.prow .t2{margin-top:1px;font:12px/1.35 var(--font-sans);color:var(--fnt);overflow:hidden;white-space:nowrap;text-overflow:clip}
+.prow .rt{flex:none;display:flex;align-items:center;gap:6px;font:12px/1 var(--font-sans);color:var(--fnt)}
+.menu{padding:5px;gap:1px}
+.mi{display:flex;align-items:center;gap:10px;width:100%;height:32px;padding:0 10px;border-radius:6px;font:13.5px/1 var(--font-sans);color:var(--ink);cursor:pointer}
+.mi:hover,.mi[data-open="1"]{background:#f2f2f2}
+.mi .ic{display:flex;color:var(--mut)}
+.mi .r{margin-left:auto;display:flex;color:var(--fnt)}
+.mi[data-danger="1"]:hover{color:var(--red)}
+.mi[disabled]{opacity:.4;cursor:default;background:transparent!important}
+.sep{height:1px;margin:4px 6px;background:#efefef}
+.field{display:flex;align-items:center;gap:8px;height:32px;padding:0 10px;border:1px solid var(--bd);border-radius:6px;background:#fff;transition:border-color 120ms}
+.field:focus-within{border-color:var(--bd2)}
+.field input{flex:1;min-width:0;border:0;outline:none;background:transparent;font:14px/1.5 var(--font-sans);color:var(--ink)}
+.field input::placeholder{color:#a3a3a3}
+.field[data-error="1"]{border-color:var(--red)}
+.err{padding:6px 2px 2px;font:12px/1.5 var(--font-sans);color:var(--red)}
+.btn{height:30px;padding:0 12px;border:1px solid #e4e4e4;border-radius:7px;background:#fff;box-shadow:0 1px 1px #0000000a;font:500 13px/1 var(--font-sans);color:var(--ink);cursor:pointer;flex:none}
+.btn:hover{border-color:var(--bd2)}
+.btn.dark{background:var(--ink);border-color:var(--ink);color:#fff}
+.btn.dark:hover{background:#333}
+.btn[disabled]{opacity:.35;cursor:default}
+.library-filters{display:flex;align-items:center;gap:4px;margin:0 10px 6px}
+.library-filter{flex:none;padding:2px 8px;border:1px solid #eaeaea;border-radius:6px;background:transparent;color:#4d4d4d;cursor:pointer;white-space:nowrap;font:400 12px/1.4 var(--font-sans)}
+.library-filter:hover{background:var(--hov)}
+.library-filter[aria-pressed="true"]{border-color:#efefef;background:#efefef;color:#171717;font-weight:500}
+.picker-item-name{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.flyout{z-index:82;width:270px;padding:5px}
+.fly-kids{position:relative;display:flex;flex-direction:column;padding-left:18px}
+.fly-kids[data-guide="1"]::before{content:"";position:absolute;left:9px;top:2px;bottom:2px;width:1px;background:#e3e3e3}
+.flyout .fly-context .t1{font-weight:500}
+.project-tooltip{z-index:120;display:flex;align-items:center;gap:8px;width:240px;max-width:calc(100vw - 16px);padding:9px 10px;background:#fff;border:1px solid var(--bd);border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,.08);color:var(--mut);font:12px/1.4 var(--font-sans);pointer-events:none}
+.project-tooltip .tip-key{flex:none;display:flex;align-items:center;justify-content:center;min-width:28px;height:24px;padding:0 4px;border:1px solid var(--bd);border-radius:4px;background:var(--rail);color:var(--ink);font:12px/1 var(--font-sans)}
+.project-tooltip kbd{font:inherit;color:var(--ink);white-space:nowrap}
+.project-tooltip.action-tooltip{width:auto;max-width:240px;white-space:nowrap}
+.peek{z-index:95;width:340px;padding:14px 16px 16px;background:#fff;border:1px solid var(--bd2);border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.06);animation:rise 160ms var(--ease)}
+.peek .k{display:flex;align-items:center;gap:7px;font:500 9px/1 var(--font-sans);letter-spacing:1.6px;text-transform:uppercase;color:var(--fnt)}
+.peek .n{margin-top:9px;font:500 14.5px/1.4 var(--font-sans)}
+.peek .x{margin-top:8px;font:12.5px/1.7 var(--font-sans);color:var(--mut)}
+.veil{z-index:300;inset:0;display:flex;align-items:center;justify-content:center;padding:24px;background:rgba(23,23,23,.18)}
+.veil.top{align-items:flex-start;padding-top:14vh;background:rgba(23,23,23,.12)}
+.dialog{position:relative;background:#fff;border:1px solid #e2e2e2;border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.16);animation:rise 160ms var(--ease);overflow:hidden}
+.toast{z-index:400;left:50%;bottom:28px;transform:translateX(-50%);padding:9px 14px;border-radius:8px;background:var(--ink);color:#fff;font:13px/1.4 var(--font-sans);box-shadow:0 8px 24px rgba(0,0,0,.18);animation:rise 160ms var(--ease);pointer-events:none;max-width:520px;text-align:center}
+
+/* Settings: the app's own window (src/renderer/ui/Settings.jsx), in the middle of the window. */
+.settings{display:flex;width:min(780px,calc(100vw - 32px));height:min(540px,calc(100vh - 80px));background:#fcfcfc;border:1px solid #d4d4d4;border-radius:12px;box-shadow:0 16px 48px #00000024}
+.s-nav{flex:none;width:200px;padding:16px 10px;border-right:1px solid #ebebeb;background:#f5f5f5;overflow-y:auto}
+.s-search{position:relative;margin-bottom:12px}
+.s-search input{width:100%;height:30px;padding:0 9px 0 30px;border:1px solid #e4e4e4;border-radius:7px;background:#fff;font:13px/1.4 var(--font-sans);outline:none}
+.s-search svg{position:absolute;left:10px;top:8px;color:var(--fnt)}
+.s-sec{padding:0 9px;margin:0 0 4px;font:500 12.5px/1.4 var(--font-sans);color:var(--fnt)}
+.s-item{display:flex;align-items:center;gap:9px;width:100%;height:30px;padding:0 9px;border-radius:6px;font:13.5px/1.4 var(--font-sans);color:var(--ink)}
+.s-item:hover{background:#ececec}
+.s-item[aria-current="page"]{background:#e8e8e8;font-weight:500}
+.s-item .ic{display:flex;color:#6f6f6f}
+.s-item[aria-current="page"] .ic{color:var(--ink)}
+.s-body{flex:1;min-width:0;overflow-y:auto;padding:30px 40px 36px}
+.s-title{font:500 22px/1.4 var(--font-sans);letter-spacing:-.01em}
+.s-group-head{margin:28px 0 10px;font:500 14px/1.4 var(--font-sans)}
+.s-card{margin:0 -16px;border:1px solid #ebebeb;border-radius:10px;background:#fff;box-shadow:0 1px 2px #00000008}
+.s-row{display:flex;align-items:center;gap:10px;min-height:52px;padding:10px 16px}
+.s-row+.s-row{border-top:1px solid #efefef;margin:0 16px;padding:10px 0}
+.s-row .ic{display:flex;width:18px;color:var(--mut)}
+.s-row .lbl{flex:1;min-width:0;font:500 13.5px/1.4 var(--font-sans)}
+.s-row .st{font:12.5px/1.4 var(--font-sans);color:var(--fnt)}
+.sel{position:relative;display:inline-block}
+.sel select{height:30px;padding:0 26px 0 10px;border:1px solid #e4e4e4;border-radius:7px;background:#fff;box-shadow:0 1px 1px #0000000a;appearance:none;-webkit-appearance:none;cursor:pointer;font:13px/1.4 var(--font-sans);outline:none}
+.sel select:hover{border-color:var(--bd2)}
+.sel svg{position:absolute;right:8px;top:10px;pointer-events:none;color:var(--fnt)}
+.close-x{position:absolute;top:14px;right:16px;width:26px;height:26px;border-radius:6px;font:18px/26px var(--font-sans);color:var(--fnt);text-align:center}
+.close-x:hover{color:var(--ink)}
+
+/* The mockup's own controls, kept out of the way. */
+.mock{position:fixed;z-index:200;right:316px;bottom:14px;display:flex;flex-direction:column;gap:6px;padding:10px;border:1px dashed #d6d6d6;border-radius:10px;background:rgba(255,255,255,.92);font:12px/1.4 var(--font-sans);color:var(--mut)}
+.mock b{font:500 9px/1 var(--font-sans);letter-spacing:1.6px;text-transform:uppercase;color:var(--fnt)}
+.mock .r{display:flex;gap:6px;flex-wrap:wrap;max-width:330px}
+.mock button{height:26px;padding:0 9px;border:1px solid #e4e4e4;border-radius:6px;background:#fff;font:12px/1 var(--font-sans)}
+.mock button:hover{border-color:var(--bd2)}
+.mock[data-folded="1"] .r{display:none}
+</style>
+</head>
+<body>
+<div class="app" id="app">
+  <aside class="rail" id="rail" aria-label="Sidebar"></aside>
+  <div class="main">
+    <div class="tabbar" id="tabbar"></div>
+    <div class="canvas" id="canvas"></div>
+  </div>
+  <div class="stage">
+    <div class="stage-head"><span data-on="1">Stage</span><span>Terminal</span></div>
+    <div class="stage-body">Nothing on the Stage</div>
+  </div>
+</div>
+<div id="layer"></div>
+<div id="hover-layer"></div>
+<div id="tooltip-layer"></div>
+<div class="mock" id="mock" data-folded="0">
+  <b data-act="mock-fold" style="cursor:pointer">Mockup · sample data ▾</b>
+  <div class="r">
+    <button data-act="mock-finish">An agent finishes</button>
+    <button data-act="mock-needs">An agent needs you</button>
+    <button data-act="mock-run">An agent starts</button>
+    <button data-act="mock-ten">Ten finish</button>
+    <button data-act="mock-reset">Start over</button>
+  </div>
+</div>
+<script>
+'use strict';
+/* =================================================================== icons */
+// The sidebar's icons (src/renderer/ui/SidebarIcons.jsx, mostly Lucide, ISC), plus Lucide's image, globe, book-open,
+// git-branch, clock, cpu and arrow-up-right for what the sidebar did not draw yet.
+const svg = (inner, size = 18, stroke = 2) => `<svg aria-hidden="true" width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${stroke}" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;
+const P = {
+  agents: '<path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.44l-1.58 6.12a.5.5 0 0 1-.95.07z"/>',
+  blocks: '<rect width="7" height="7" x="14" y="3" rx="1"/><path d="M10 21V8a1 1 0 0 0-1-1H4a1 1 0 0 0-1 1v12a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-5a1 1 0 0 0-1-1H3"/>',
+  add: '<circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/>',
+  layers: '<path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83z"/><path d="M2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12"/><path d="M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/>',
+  project: '<rect x="3.5" y="3" width="6.5" height="18" rx="2.5"/><rect x="14" y="3" width="6.5" height="10.5" rx="2.5"/><rect x="14" y="16.5" width="6.5" height="4.5" rx="2.25"/>',
+  search: '<circle cx="11" cy="11" r="7.5"/><path d="m21 21-4.5-4.5"/>',
+  chevron: '<path d="m6 9 6 6 6-6"/>',
+  chevronRight: '<path d="m9 18 6-6-6-6"/>',
+  globe: '<circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/>',
+  note: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 13.5h6"/><path d="M9 17.5h6"/>',
+  file: '<path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>',
+  folder: '<path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>',
+  code: '<path d="m18 16 4-4-4-4"/><path d="m6 8-4 4 4 4"/><path d="m14.5 4-5 16"/>',
+  image: '<rect width="18" height="18" x="3" y="3" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.09-3.09a2 2 0 0 0-2.82 0L6 21"/>',
+  paper: '<path d="M12 7v14"/><path d="M3 18a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h5a1 1 0 0 1 1 1v13a1 1 0 0 1-1 1h-6a3 3 0 0 0-3 3 3 3 0 0 0-3-3z"/>',
+  git: '<line x1="6" x2="6" y1="3" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
+  gear: '<path d="M10.25 4.5V1.95h3.5V4.5A7.7 7.7 0 0 1 16.06 5.46l1.81-1.8 2.47 2.47-1.8 1.81A7.7 7.7 0 0 1 19.5 10.25h2.55v3.5H19.5a7.7 7.7 0 0 1-.96 2.31l1.8 1.81-2.47 2.47-1.81-1.8a7.7 7.7 0 0 1-2.31.96v2.55h-3.5V19.5a7.7 7.7 0 0 1-2.31-.96l-1.81 1.8-2.47-2.47 1.8-1.81a7.7 7.7 0 0 1-.96-2.31H1.95v-3.5H4.5a7.7 7.7 0 0 1 .96-2.31l-1.8-1.81 2.47-2.47 1.81 1.8a7.7 7.7 0 0 1 2.31-.96z"/><circle cx="12" cy="12" r="3"/>',
+  panelClose: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m16 15-3-3 3-3"/>',
+  panelOpen: '<rect width="18" height="18" x="3" y="3" rx="2"/><path d="M9 3v18"/><path d="m14 9 3 3-3 3"/>',
+  compose: '<path d="M12 4H5a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2h13a2 2 0 0 0 2-2v-7"/><path transform="translate(0 -2)" d="M10 14l-1 4 4-1 9-9a2.12 2.12 0 0 0-3-3z"/>',
+  clock: '<circle cx="12" cy="12" r="9.5"/><path d="M12 7v5l3 2"/>',
+  plus: '<path d="M5 12h14"/><path d="M12 5v14"/>',
+  check: '<path d="M20 6 9 17l-5-5"/>',
+  close: '<path d="M18 6 6 18"/><path d="m6 6 12 12"/>',
+  trash: '<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M10 11v6"/><path d="M14 11v6"/>',
+  pencil: '<path d="M21.17 6.81a1 1 0 0 0-3.98-3.98L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.35a.5.5 0 0 0 .62.62l4.35-1.32a2 2 0 0 0 .83-.5z"/><path d="m15 5 4 4"/>',
+  out: '<path d="M7 7h10v10"/><path d="M7 17 17 7"/>',
+  minus: '<circle cx="12" cy="12" r="9.5"/><path d="M8 12h8"/>',
+  cpu: '<rect x="4" y="4" width="16" height="16" rx="2"/><rect x="8" y="8" width="8" height="8" rx="1"/><path d="M12 2v2M12 20v2M17 2v2M17 20v2M7 2v2M7 20v2M2 12h2M2 17h2M2 7h2M20 12h2M20 17h2M20 7h2"/>',
+  chat: '<path d="M7.9 20A9 9 0 1 0 4 16.1L2 22z"/>',
+  github: '<path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.4 5.4 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/>',
+  claude: '<path d="M12 2.5v19M2.5 12h19M5.3 5.3l13.4 13.4M18.7 5.3 5.3 18.7"/>',
+  codex: '<rect x="2.5" y="3.5" width="19" height="17" rx="3"/><path d="m7 9 3 3-3 3M12.5 15h4.5"/>',
+  zotero: '<path d="M5 4h14L5 20h14"/>',
+};
+const I = (name, size = 18, stroke = 2) => svg(P[name], size, name === 'library' ? 2.8 : stroke);
+P.library = '<path d="M5 4v16"/><path d="M11 4v16"/><path d="m16 5 3.5 15"/>';
+const STICKY = (hidden) => { const d = hidden ? ' stroke-dasharray="2.6 2.4"' : ''; return svg(`<path d="M13 20.5 20.5 13"${d}/><path d="M13 20.5V14a1 1 0 0 1 1-1h6.5V5.5a2 2 0 0 0-2-2h-13a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2z"${d}/>`); };
+const DOTS = () => '<span class="more-mark" aria-hidden="true">...</span>';
+const CHEV = (size = 13) => svg(P.chevron, size, 2.4);
+const KIND_ICON = { note: 'note', md: 'file', image: 'image', html: 'code', website: 'globe', folder: 'folder', pdf: 'paper', git: 'git' };
+const KIND_WORD = { note: 'Note', md: 'Markdown', image: 'Picture', html: 'HTML', website: 'Website', folder: 'Folder', pdf: 'PDF · paper', git: 'Repository' };
+
+/* ==================================================================== data */
+// Hudson's real project, as it is on disk (~/.engelbart/engelbart), and the other projects in his switcher. Sidebar's
+// Notifications and Project switcher, and the notes and files, are sample data.
+const TREE = {
+  Engelbart: [
+    ['Getting started'],
+    ['User Interface', [
+      ['Improving workspace navigation and creation'],
+      ['Focusing the attention of the user'],
+      ['Middle Canvas'],
+      ['Sidebar', [['Notifications'], ['Project switcher'], ['Recent pages']]],
+      ['Popups'],
+    ]],
+    ['New features or things that require more backend consideration', [['Stage'], ['Post-its']]],
+    ['Agents', [
+      ['Agent panel'], ['Background agent calling upon orchestrator'], ['Bart build agents', [['Sandbox'], ['Escalation'], ['Worktrees']]],
+      ['Brainstorming'], ['Inline chat agent'], ['Research'], ['Skills'],
+    ]],
+    ['Library', [['Importing and accessing library'], ['Library context']]],
+    ['Onboarding', [['Agent onboarding'], ['Downloading and packaging in an app'], ['Gentle onboarding']]],
+    ['User studies', [['Amitav'], ['Bug fixes'], ['David'], ['Graham + Amitav'], ['Memex project 10-3-26'], ['Tom']]],
+  ],
+  Memex: [['Reading trails', [['Trail format'], ['Sharing trails']]], ['Associative indexing']],
+  Fundraising: [['Seed deck'], ['Investor list'], ['Thiel Fellowship']],
+};
+const TOPS = [
+  { id: 'engelbart', name: 'Engelbart', desc: 'A place to think and research alongside AI without losing threads or context. Notes, chats and sources stay linked in one workspace so you can pick a thread back up, and agents work from the same context you do.' },
+  { id: 'memex', name: 'Memex', desc: 'Associative trails through a personal library, after Bush’s “As We May Think”.' },
+  { id: 'fundraising', name: 'Fundraising', desc: 'The seed round for Mathetic.' },
+  { id: 'test-1', name: 'test', desc: '' },
+  { id: 'mathetic', name: 'Mathetic.com homepage', desc: '' },
+  { id: 'augmenting', name: 'Augmenting the human intellect', desc: '' },
+  { id: 'test-2', name: 'Test', desc: '' },
+  { id: 'personal', name: 'Personal', desc: '' },
+  { id: 'berkeley', name: 'Berkeley Engelbart', desc: '' },
+  { id: 'test-3', name: 'test', desc: '' },
+];
+const MAX_DEPTH = 4;       // level 1 is the switcher's project; the Projects section holds levels 2 to 4
+const ROOT_ROWS = 3;       // direct children of the highest-level project
+const PROJECT_ROWS = 10;   // all displayed rows, including descendants and More
+const LEVEL_ROWS = 5;      // a larger sibling group shows four projects followed by More
+const RECENT_ROWS = 10;    // the clock's list, the project page included
+const PEEK_OPEN = 350, PEEK_SWITCH = 90, PEEK_CLOSE = 180; // the sidebar's note previews (SidebarPanels.jsx)
+
+let N, ITEMS, SOURCES, AGENTS, S, clock = 0;
+const tick = () => ++clock;
+const slug = (s) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+
+function seed() {
+  N = {}; // id → { id, name, top, parent, children, level, touched }
+  for (const top of TOPS) {
+    N[top.id] = { id: top.id, name: top.name, top: top.id, parent: null, children: [], level: 1, touched: 0, desc: top.desc };
+    const add = (parent, list) => list.forEach(([name, kids]) => {
+      const id = `${parent.id}/${slug(name)}`;
+      const node = { id, name, top: top.id, parent: parent.id, children: [], level: parent.level + 1, touched: 0 };
+      N[id] = node; parent.children.push(id);
+      if (kids) add(node, kids);
+    });
+    add(N[top.id], TREE[top.name] || []);
+  }
+  ITEMS = {};
+  const item = (id, name, kind, excerpt = '') => { ITEMS[id] = { id, name, kind, excerpt, flash: 0 }; return id; };
+  item('copy-button', 'Copy button', 'note', 'A copy button on every answer card, copying the markdown, not the rendered text.');
+  item('mc-overview', 'Middle Canvas (Workspace overview)', 'note', 'Remembered view state per project or note: the active document, its open tabs and where you were in each.');
+  item('sb-reqs', 'Sidebar requirements', 'note', '1. Display hyperlinks to all of the relevant context to whatever problem the user is currently approaching. 2. Allow for easy navigation between workspaces and sub-workspaces. 3. Easily switch between projects…');
+  item('sb-brainstorm', 'Sidebar brainstorming', 'note', 'A two-zone sidebar: switching and shared tools above; the active project’s children, notes and sources below.');
+  item('iconography', 'Iconography', 'note', 'Agents, Projects, Connectors, Stickies, Toggle sidebar, Workspace, Add, Inbox, Search, Chevrons…');
+  item('switch-projects', 'Switch Projects', 'note', 'The top switcher only moves between siblings: it is always the highest level of abstraction.');
+  item('att-1', 'Attachment 1', 'image');
+  item('nav-board', 'Recursive Nav Idea Board', 'pdf', '78 screenshots from 52 products: switching between siblings, showing depth, working sets, roll-up.');
+  item('mockup', 'Engelbart — Sidebar', 'html');
+  item('nav-patterns', 'Navigation patterns', 'website', 'mobbin.com/patterns/navigation');
+  item('refs', 'sidebar-references', 'folder');
+  item('welcome', 'Welcome!', 'note', 'Start here: what a project is, what a note is, and where agents put what they finish.');
+  item('install', 'Install Instructions', 'note', 'Download the app, drag it to Applications, open it once from Finder.');
+  item('onb-flow', 'New onboarding flow', 'note', 'Welcome to Engelbart, Library, Import context, Add custom instructions, Projects, Project creation…');
+  item('existing-onb', 'Existing onboarding', 'note', 'The 13-step flow: Brainstorm’s Haiku opening and Sonnet follow-ups, the card limits…');
+  item('onb-html', 'Engelbart · Onboarding', 'html');
+  item('berkeley', 'Mathetic-PBC/berkeley-research', 'git');
+  item('canvas-focus', 'Canvas focus regression', 'note', 'Typing in the canvas loses focus after a popup closes.');
+  item('graham', 'Graham', 'note', 'Chats about things, writes something. “I have some vague understanding.”');
+  item('sandbox-note', 'Engelbart sandbox', 'note', 'Builds lack an Engelbart-specific sandbox: E2B in src/main/sandbox/ is for GitHub previews.');
+  item('ws-paper', '“Constant, Constant, Multi-tasking Craziness”', 'pdf', 'People average about three minutes on a task before switching; working spheres last about twelve.');
+  SOURCES = {
+    'engelbart': ['welcome', 'install'],
+    'engelbart/user-interface/sidebar': ['copy-button', 'mc-overview', 'sb-reqs', 'sb-brainstorm', 'iconography', 'switch-projects', 'att-1', 'nav-board', 'mockup', 'nav-patterns', 'refs'],
+    'engelbart/user-interface/middle-canvas': ['mc-overview', 'canvas-focus'],
+    'engelbart/onboarding': ['onb-flow', 'existing-onb', 'onb-html'],
+    'engelbart/onboarding/agent-onboarding': ['onb-flow', 'berkeley'],
+    'engelbart/user-studies/graham-amitav': ['graham'],
+    'engelbart/agents/bart-build-agents/sandbox': ['sandbox-note'],
+    'engelbart/user-interface': ['ws-paper'],
+  };
+  // Agents: needs (waiting on you), unseen (finished, not looked at), running, done (finished and seen).
+  AGENTS = [
+    { id: 'a1', title: 'Roll status up onto folded projects', node: 'engelbart/user-interface/sidebar/notifications', state: 'running', at: Date.now() - 2 * 60e3, model: 'Opus · high' },
+    { id: 'a2', title: 'Recent pages under the clock', node: 'engelbart/user-interface/sidebar/project-switcher', state: 'unseen', at: Date.now() - 4 * 60e3, model: 'Sonnet · high' },
+    { id: 'a3', title: 'Which commands may Builds run outside their copy?', node: 'engelbart/agents/bart-build-agents/sandbox', state: 'needs', at: Date.now() - 12 * 60e3, model: 'Opus · xhigh' },
+    { id: 'a4', title: 'Import counts match what was imported', node: 'engelbart/onboarding/agent-onboarding', state: 'unseen', at: Date.now() - 64 * 60e3, model: 'Codex · Astra' },
+    { id: 'a5', title: 'Canvas keeps focus after a popup', node: 'engelbart/user-interface/middle-canvas', state: 'done', at: Date.now() - 26 * 3600e3, model: 'Opus · high' },
+  ];
+  const touch = (id) => { N[id].touched = tick(); };
+  ['engelbart/getting-started', 'engelbart/library', 'engelbart/new-features-or-things-that-require-more-backend-consideration', 'engelbart/user-studies/graham-amitav',
+    'engelbart/agents/bart-build-agents/sandbox', 'engelbart/onboarding/agent-onboarding', 'engelbart/user-interface/middle-canvas',
+    'engelbart/user-interface/sidebar/notifications', 'engelbart/user-interface/sidebar'].forEach(touch);
+  const here = 'engelbart/user-interface/sidebar';
+  S = {
+    top: 'engelbart',
+    tabs: [
+      { page: { kind: 'top', id: 'engelbart' }, scope: 'engelbart' },
+      { page: { kind: 'project', id: here }, scope: here },
+      { page: { kind: 'note', id: 'sb-reqs' }, scope: here },
+    ],
+    tab: 1,
+    expanded: new Set(),
+    railHidden: false,
+    stickiesHidden: false,
+    sourcesOpen: {},   // scope id → true/false, once the person folds or opens it
+    sharedSourceFolders: [...new Set(Object.values(SOURCES).flat().filter(id => ITEMS[id].kind === 'folder'))],
+    sourceFoldersOpen: {}, // project folder expansion is scoped; shared folder expansion follows the folder
+    projectsOpen: true,
+    recent: [],        // { kind, id, at }, newest last
+    trash: ['Call Graham back about telemetry', 'Ask Annapurna for the backprop sketch'],
+    notesMade: 0,
+    flash: null,
+    settingsPage: 'models',
+    models: { claude: { quick: ['Sonnet', 'Medium'], standard: ['Opus', 'High'], deep: ['Opus', 'Max'] }, codex: { quick: ['Sol', 'Medium'], standard: ['Astra', 'High'], deep: ['Astra', 'Ultra'] } },
+    lastIn: {},        // top id → the project you were last in there
+    projectSlots: {},  // stable shortlist per root; clicking a visible project never reorders it
+    agentId: null,
+  };
+  for (const sc of Object.keys(SOURCES)) SOURCES[sc] = SOURCES[sc].filter(id => !S.sharedSourceFolders.includes(id));
+  [['project', 'engelbart/user-studies/graham-amitav'], ['note', 'iconography'], ['project', 'engelbart/agents/bart-build-agents/sandbox'], ['note', 'copy-button'], ['project', 'engelbart/onboarding/agent-onboarding'],
+    ['project', 'engelbart/user-interface/middle-canvas'], ['project', 'engelbart/user-interface/sidebar/notifications'], ['note', 'sb-reqs'], ['project', here]]
+    .forEach(([kind, id]) => S.recent.push({ kind, id, at: tick() }));
+  openPath(here);
+}
+
+/* ================================================================= helpers */
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const $ = (sel, root = document) => root.querySelector(sel);
+const tab = () => S.tabs[S.tab];
+const page = () => tab().page;
+const scope = () => tab().scope;            // the project the sidebar is about: where you are, or where a note was opened from
+const scopeNode = () => (N[scope()] && N[scope()].level >= 2 ? N[scope()] : null);
+const ancestors = (id) => { const out = []; let n = N[id]; while (n && n.parent) { n = N[n.parent]; out.unshift(n); } return out; }; // level 1 first
+const pathIds = (id) => [...ancestors(id).map((n) => n.id), id];
+const descends = (id, from) => pathIds(id).includes(from);
+const branchOf = (id) => (N[id] && N[id].level >= 2 ? N[pathIds(id)[1]] : null);
+const pageName = (p) => (p.kind === 'note' ? ITEMS[p.id].name : N[p.id].name);
+const since = (at) => { const m = Math.round((Date.now() - at) / 60e3); return m < 1 ? 'now' : m < 60 ? `${m}m` : m < 1440 ? `${Math.round(m / 60)}h` : `${Math.round(m / 1440)}d`; };
+const RANK = { failed: 4, needs: 3, unseen: 2, running: 1 };
+// One pill for running and unviewed agents. Roll-ups count each agent once, even for overlapping branches.
+function summarizeAgents(list) {
+  const running = list.filter(a => a.state === 'running').length;
+  const ready = list.filter(a => ['needs', 'unseen', 'failed'].includes(a.state)).length;
+  return { total: ready + running, ready, running };
+}
+function agentSummary(ids = null, rollUp = false) {
+  const nodes = ids == null ? null : Array.isArray(ids) ? ids : [ids];
+  return summarizeAgents(AGENTS.filter(a => !nodes || nodes.some(id => a.node === id || (rollUp && descends(a.node, id)))));
+}
+// Shortcuts are tied to the root's ordered immediate children, independent of tree expansion or recency.
+const numberedProjects = () => N[S.top].children.slice(0, 9);
+function shortcutFor(id) {
+  if (N[id].level !== 2) return 0;
+  const index = N[N[id].parent].children.indexOf(id);
+  return index >= 0 && index < 9 ? index + 1 : 0;
+}
+function projectLead() {
+  return `<span class="ic">${I('project')}</span>`;
+}
+function mark(summary, plain = false) {
+  if (!summary || !summary.total) return '';
+  const text = summary.total > 9 ? '9+' : summary.total;
+  const label = `${summary.ready} to view, ${summary.running} running`;
+  const style = plain ? `project-count ${summary.running ? 'in-progress' : 'done'}` : `status-pill ${summary.running ? 'running' : 'ready'}`;
+  return `<span class="${style}" title="${label}" aria-label="${label}">${text}</span>`;
+}
+function see(id) { // opening a project reads what finished there; what needs you stays until it is answered
+  for (const a of AGENTS) if (a.node === id && a.state === 'unseen') a.state = 'done';
+}
+function remember(kind, id) {
+  S.recent = S.recent.filter((r) => !(r.kind === kind && r.id === id));
+  S.recent.push({ kind, id, at: tick() });
+}
+// Open the path to a project and the project itself; everything else in the section folds.
+function openPath(id) {
+  S.expanded = new Set(pathIds(id).filter((x) => N[x].level >= 2));
+  if (!N[id].children.length) S.expanded.delete(id);
+}
+function go(p, { newTab = false, agentId = null } = {}) {
+  if (p.kind !== 'note') S.top = N[p.id].top;
+  S.agentId = agentId;
+  const sc = p.kind === 'note' ? scope() : p.id;
+  if (newTab) {
+    const at = S.tabs.findIndex((t) => t.page.kind === p.kind && t.page.id === p.id);
+    if (at >= 0) S.tab = at; else { S.tabs.push({ page: p, scope: sc }); S.tab = S.tabs.length - 1; }
+  } else S.tabs[S.tab] = { page: p, scope: sc };
+  if (p.kind !== 'note') {
+    N[p.id].touched = tick();
+    if (agentId) { const a = AGENTS.find(a => a.id === agentId); if (a && a.state === 'unseen') a.state = 'done'; }
+    else see(p.id);
+    if (N[p.id].level >= 2) { openPath(p.id); S.lastIn[S.top] = p.id; } else S.expanded = new Set();
+  }
+  remember(p.kind, p.id);
+  closeAll();
+  render();
+}
+const goProject = (id, opts) => go({ kind: N[id].level === 1 ? 'top' : 'project', id }, opts);
+
+function goAgent(id) {
+  const agent = AGENTS.find(a => a.id === id);
+  if (!agent || !N[agent.node]) return;
+  goProject(agent.node, { agentId: id });
+  const target = $('#active-agent');
+  if (target) target.focus({ preventScroll: true });
+}
+function nextAgent() {
+  const queue = AGENTS.filter(a => a.id !== S.agentId && N[a.node] && ['needs', 'unseen', 'failed'].includes(a.state))
+    .sort((a, b) => RANK[b.state] - RANK[a.state] || a.at - b.at);
+  if (queue.length) { goAgent(queue[0].id); return; }
+  const previous = S.recent.slice().reverse().find(r => !(r.kind === page().kind && r.id === page().id) && (r.kind === 'note' || N[r.id]));
+  if (previous) go({ kind: previous.kind, id: previous.id }, { newTab: true });
+  else toast('No agents need your attention.');
+}
+
+/* ======================================================== the Projects rows */
+// A stable three-project shortlist, a single expanded path, and one budget shared by all tree rows.
+const isOpen = (id) => S.expanded.has(id) && N[id].children.length > 0;
+// Opening one folds its siblings (and what is under them): "If I expand this, subproject 3 should auto-collapse".
+function toggle(id) {
+  if (isOpen(id)) { for (const x of [...S.expanded]) if (descends(x, id)) S.expanded.delete(x); }
+  else {
+    const n = N[id];
+    for (const sib of N[n.parent].children) if (sib !== id) for (const x of [...S.expanded]) if (descends(x, sib)) S.expanded.delete(x);
+    S.expanded.add(id);
+  }
+  render();
+}
+// When you were last anywhere in a project: in it, or in one within it.
+const lastIn = (id) => Math.max(N[id].touched, ...N[id].children.map(lastIn));
+function sectionPlan() {
+  const top = N[S.top];
+  const focus = scopeNode() ? scope() : null;
+  const branch = focus ? pathIds(focus)[1] : null;
+  let slots = S.projectSlots[S.top];
+  if (!slots) {
+    const recent = top.children.slice().sort((a, b) => lastIn(b) - lastIn(a));
+    slots = S.projectSlots[S.top] = top.children.filter(id => recent.slice(0, ROOT_ROWS).includes(id));
+  }
+  slots = slots.filter(id => top.children.includes(id));
+  // A project reached through More replaces one slot. Existing visible projects keep their positions and tree order.
+  if (branch && !slots.includes(branch)) slots = [...slots.slice(0, ROOT_ROWS - 1), branch];
+  const order = S.projectSlots[S.top] = top.children.filter(id => slots.includes(id)).slice(0, ROOT_ROWS);
+  const shown = new Set(order);
+  const visible = id => ancestors(id).every(a => a.level < 2 || isOpen(a.id));
+  const hidden = top.children.filter(id => !shown.has(id));
+  const rows = () => {
+    let count = shown.size + Number(hidden.length > 0);
+    for (const id of shown) {
+      const countShown = N[id].children.filter(k => shown.has(k)).length;
+      if (isOpen(id) && countShown > 0 && countShown < N[id].children.length) count++;
+    }
+    return count;
+  };
+  // Allocate siblings before descending. Selecting a deep project must never evict
+  // its earlier siblings to make room for its children; overflow stays in More.
+  const candidates = [];
+  const append = ids => ids.forEach(id => { if (!candidates.includes(id)) candidates.push(id); });
+  for (const id of order) {
+    const visit = node => { if (isOpen(node)) { append(N[node].children); N[node].children.forEach(visit); } };
+    visit(id);
+  }
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const id of candidates) {
+      if (shown.has(id) || !visible(id) || !shown.has(N[id].parent)) continue;
+      const siblings = N[N[id].parent].children;
+      const limit = siblings.length > LEVEL_ROWS ? LEVEL_ROWS - 1 : LEVEL_ROWS;
+      if (siblings.filter(k => shown.has(k)).length >= limit) continue;
+      shown.add(id);
+      if (rows() > PROJECT_ROWS) shown.delete(id); else grew = true;
+    }
+  }
+  const visibleIds = [];
+  const walk = id => { visibleIds.push(id); if (isOpen(id)) N[id].children.filter(k => shown.has(k)).forEach(walk); };
+  order.forEach(walk);
+  return { branch, order, shown, hidden, budget: PROJECT_ROWS, visible: visibleIds };
+}
+let PLAN = null;
+
+/* ================================================================ rendering */
+function render() { clearShortcutTip(); renderRail(); renderTabs(); renderCanvas(); renderStage(); renderLayer(); }
+
+function titlebar() {
+  return `<div class="titlebar">
+    <div class="lights"><span class="light" style="background:#ff5f57"></span><span class="light" style="background:#febc2e"></span><span class="light" style="background:#28c840"></span></div>
+    <button class="icon-btn" data-act="rail" title="${S.railHidden ? 'Show' : 'Hide'} sidebar (⌘\\)" aria-label="${S.railHidden ? 'Show' : 'Hide'} sidebar">${I(S.railHidden ? 'panelOpen' : 'panelClose')}</button>
+    <button class="icon-btn" data-act="clock" data-trigger="clock" title="Recent pages" aria-label="Recent pages" aria-expanded="${open && open.kind === 'clock'}">${I('clock')}</button>
+  </div>`;
+}
+
+function renderRail() {
+  const rail = $('#rail');
+  $('#app').dataset.rail = S.railHidden ? 'hidden' : 'shown';
+  $('#app').dataset.stickies = S.stickiesHidden ? 'hidden' : 'shown';
+  if (S.railHidden) { rail.innerHTML = ''; return; }
+  const top = N[S.top];
+  const menuOpen = !!(open && open.kind === 'project');
+  rail.innerHTML = `
+    ${titlebar()}
+    <div class="head">
+      ${S.renamingTop
+        ? `<div class="field" style="flex:1;height:30px;border-color:#c9c9c9"><input data-rename-top value="${esc(top.name)}" style="font:600 15px/1.4 var(--font-sans)"></div>`
+        : `<button class="picker" data-act="project-menu" data-trigger="project" aria-haspopup="menu" aria-expanded="${menuOpen}" title="${esc(top.name)}"><span class="n">${esc(top.name)}</span><span class="chev-mark">${CHEV(14)}</span></button>`}
+      <span class="grow"></span>
+      <button class="icon-btn" data-act="settings" data-trigger="settings" title="Settings" aria-label="Settings">${I('gear')}</button>
+      <button class="icon-btn" data-act="new-note" data-trigger="new-note" title="New note" aria-label="New note">${I('compose')}</button>
+    </div>
+    <div class="scroll" id="rail-scroll">
+      <nav class="fixed" aria-label="Places">
+        <div class="row" data-act="agents" data-trigger="agents" data-active="${open && open.kind === 'agents' ? 1 : 0}" role="button" tabindex="0" title="Agents">
+          <span class="ic">${I('agents')}</span><span class="lb">Agents</span><span class="sp"></span>
+          <span class="rt">${mark(agentSummary())}</span>
+        </div>
+        <div class="row" data-act="library" data-trigger="library" data-active="${open && open.kind === 'library' ? 1 : 0}" role="button" tabindex="0"><span class="ic">${I('library')}</span><span class="lb">Library</span><span class="sp"></span><span class="library-count">${libraryCount()}</span></div>
+        <div class="row" data-act="search" data-trigger="search" data-active="${open && open.kind === 'search' ? 1 : 0}" role="button" tabindex="0"><span class="ic">${I('search')}</span><span class="lb">Search</span></div>
+      </nav>
+      ${projectsSection()}
+      ${sourcesSection()}
+    </div>
+    <div class="foot">
+      <div class="row" data-act="stickies" role="switch" aria-checked="${!S.stickiesHidden}" tabindex="0"><span class="ic">${STICKY(S.stickiesHidden)}</span><span class="lb">${S.stickiesHidden ? 'Show stickies' : 'Hide stickies'}</span></div>
+      ${S.trash.length ? `<button class="act" style="width:28px;height:28px" data-act="trash" data-trigger="trash" title="Trash" aria-label="Trash">${I('trash', 16)}</button>` : ''}
+    </div>`;
+}
+
+function projectsSection() {
+  const top = N[S.top];
+  const plan = PLAN = sectionPlan();
+  let body = '';
+  if (S.projectsOpen) {
+    if (!top.children.length) body = '<div class="empty-line">No projects yet</div>';
+    for (const id of plan.order) {
+      const block = projectRow(id);
+      body += id === plan.branch ? `<div class="branch" data-branch="${esc(id)}">${block}</div>` : block;
+    }
+    if (plan.hidden.length) {
+      const st = agentSummary(plan.hidden, true);
+      body += `<div class="row more" data-act="all-projects" data-trigger="all-projects" data-active="${open && open.kind === 'all-projects' ? 1 : 0}" role="button" tabindex="0"><span class="ic">${DOTS()}</span><span class="lb">More</span><span class="sp"></span><span class="project-tools"><span class="project-slot"></span><span class="status-slot">${mark(st, true)}</span><span class="chevron-slot"></span></span></div>`;
+    }
+  }
+  return `<section class="sec" data-sec="projects">
+    <div class="sec-head">
+      <button class="sec-toggle" data-act="sec-projects" data-open="${S.projectsOpen ? 1 : 0}" aria-expanded="${S.projectsOpen}">Projects<span class="chev-mark">${CHEV()}</span></button>
+      <span class="grow"></span>
+      <button class="shortcut sec-command" data-act="next-agent" data-trigger="next-agent" title="Next agent needing attention (⌘J)" aria-label="Next agent needing attention (⌘J)">⌘J</button>
+      <button class="act" data-act="create" data-parent="${esc(S.top)}" data-create-tooltip="${esc(S.top)}" aria-label="Create project within ${esc(top.name)}">${I('plus', 15)}</button>
+    </div>
+    <div class="ws-list">${body}</div>
+  </section>`;
+}
+
+// Only the deepest expanded group with visible children gets a guide line.
+function guideParent() {
+  if (!PLAN) return null;
+  return PLAN.visible.filter(id => isOpen(id) && N[id].children.some(k => PLAN.shown.has(k)))
+    .sort((a, b) => N[b].level - N[a].level)[0] || null;
+}
+
+function projectRow(id) {
+  const n = N[id];
+  const shortcut = shortcutFor(id);
+  const opened = isOpen(id) && n.children.some((k) => PLAN.shown.has(k)); // open with no room for any child: shown folded
+  const here = page().kind === 'project' && page().id === id;
+  const holds = !here && scopeNode() && descends(scope(), id) && (!opened || scope() === id); // you are in it, out of sight
+  const st = agentSummary(id, true);
+  const indent = n.level > 2;
+  const canAdd = n.level < MAX_DEPTH;
+  const chevron = n.children.length ? `<button class="chev${n.level > 1 && !descends(scope(), id) ? ' on-hover' : ''}" data-act="toggle" data-id="${esc(id)}" data-open="${opened ? 1 : 0}" aria-expanded="${opened}" aria-label="${opened ? 'Fold' : 'Open'} ${esc(n.name)}">${CHEV()}</button>` : '';
+  let html = `<div class="row${indent ? ' in' : ''}" data-act="open-project" data-id="${esc(id)}" data-hover-project="${n.children.length && !opened ? esc(id) : ''}" ${shortcut ? `data-shortcut-project="${esc(id)}" aria-label="${esc(n.name)} · Toggle project with Ctrl + ${shortcut}"` : `title="${esc(n.name)}"`} data-active="${here ? 1 : 0}" data-holds="${holds ? 1 : 0}" data-flash="${S.flash === id ? 1 : 0}" role="button" tabindex="0">
+    ${indent ? '' : projectLead(id)}<span class="lb">${esc(n.name)}</span><span class="sp"></span>
+    <span class="project-tools"><span class="project-slot${canAdd ? ' can-add' : ''}">
+      ${canAdd ? `<button class="act" data-act="create" data-parent="${esc(id)}" data-create-tooltip="${esc(id)}" aria-label="Create project within ${esc(n.name)}">${I('plus', 15)}</button>` : ''}
+    </span><span class="status-slot">${mark(st, true)}</span><span class="chevron-slot">${chevron}</span></span>
+  </div>`;
+  if (opened) {
+    const kids = n.children.filter((k) => PLAN.shown.has(k));
+    const more = kids.length < n.children.length;
+    const guide = guideParent() === id;
+    html += `<div class="kids l${n.level + 1}" data-guide="${guide ? 1 : 0}">${kids.map((k) => projectRow(k)).join('')}`;
+    if (more) {
+      const hiddenKids = n.children.filter((k) => !kids.includes(k));
+      const st2 = agentSummary(hiddenKids, true);
+      const on = open && open.kind === 'siblings' && open.id === id;
+      html += `<div class="row in more" data-act="siblings" data-id="${esc(id)}" data-trigger="siblings:${esc(id)}" data-active="${on ? 1 : 0}" role="button" tabindex="0"><span class="ic">${DOTS()}</span><span class="lb">More</span><span class="sp"></span><span class="project-tools"><span class="project-slot"></span><span class="status-slot">${mark(st2, true)}</span><span class="chevron-slot"></span></span></div>`;
+    }
+    html += '</div>';
+  }
+  return html;
+}
+
+function sourceFolderKey(id) { return id === 'project' ? `${scope()}:project` : `shared:${id}`; }
+function sourceFolderOpen(id) {
+  const key = sourceFolderKey(id);
+  return key in S.sourceFoldersOpen ? S.sourceFoldersOpen[key] : id === 'project';
+}
+function sourceChildren(id) {
+  return id === 'project' ? (SOURCES[scope()] || []).filter(key => ITEMS[key].kind !== 'folder') : (ITEMS[id].children || []);
+}
+function sourceItemRow(id, folder) {
+  const it = ITEMS[id];
+  const active = page().kind === 'note' && page().id === id;
+  const container = folder === 'project' ? 'this project' : ITEMS[folder].name;
+  return `<div class="row" data-act="open-item" data-id="${esc(id)}" data-peek="${esc(id)}" data-active="${active ? 1 : 0}" role="button" tabindex="0" title="${esc(it.name)}">
+    <span class="ic">${I(KIND_ICON[it.kind])}</span><span class="lb">${esc(it.name)}</span><span class="sp"></span>
+    <span class="hv"><button class="act" data-act="remove-item" data-id="${esc(id)}" data-folder="${esc(folder)}" title="Remove from ${esc(container)}" aria-label="Remove ${esc(it.name)} from ${esc(container)}">${I('minus', 15)}</button></span>
+  </div>`;
+}
+function sourceFolderRow(id) {
+  const name = id === 'project' ? N[scope()].name : ITEMS[id].name;
+  const expanded = sourceFolderOpen(id);
+  const children = sourceChildren(id);
+  const shown = children.slice(0, children.length > 5 ? 4 : 5);
+  return `<div class="source-group">
+    <div class="row source-folder" data-act="source-toggle" data-id="${esc(id)}" aria-expanded="${expanded}" role="button" tabindex="0">
+      <span class="ic">${I('folder')}</span><span class="lb">${esc(name)}</span><span class="sp"></span>
+      <span class="source-tools">${expanded ? `<button class="act" data-act="add" data-folder="${esc(id)}" data-trigger="add-folder:${esc(id)}" title="Add sources to ${esc(name)}" aria-label="Add sources to ${esc(name)}">${I('plus', 15)}</button>` : ''}<button class="chev" data-act="source-toggle" data-id="${esc(id)}" data-open="${expanded ? 1 : 0}" aria-label="${expanded ? 'Collapse' : 'Expand'} ${esc(name)}">${CHEV()}</button></span>
+    </div>
+    ${expanded ? `<div class="source-children">${shown.map(child => ITEMS[child].kind === 'folder' ? sourceFolderRow(child) : sourceItemRow(child, id)).join('')}${children.length > shown.length ? `<div class="row more" data-act="sources-more" data-folder="${esc(id)}" data-trigger="source-folder:${esc(id)}" role="button" tabindex="0"><span class="ic">${DOTS()}</span><span class="lb">More</span></div>` : ''}</div>` : ''}
+  </div>`;
+}
+function sourcesSection() {
+  const sc = scope();
+  const ids = SOURCES[sc] || [];
+  const opened = sc in S.sourcesOpen ? S.sourcesOpen[sc] : true;
+  return `<section class="sec" data-sec="sources" style="flex:1 0 auto">
+    <div class="sec-head"><button class="sec-toggle" data-act="sec-sources" data-open="${opened ? 1 : 0}" aria-expanded="${opened}">Sources<span class="chev-mark">${CHEV()}</span></button><span class="grow"></span><button class="act" data-act="add" data-trigger="add" title="Add sources to this project and library" aria-label="Add sources to this project and library">${I('plus', 15)}</button></div>
+    ${opened ? `${sourceFolderRow('project')}${S.sharedSourceFolders.map(sourceFolderRow).join('')}<button class="row source-create" data-act="new-source-folder"><span class="ic">${I('folder')}<span class="folder-plus">+</span></span><span class="lb">Create new</span></button>` : ''}
+  </section>`;
+}
+function attachSource(id, folder = 'project') {
+  const sc = scope();
+  if (folder !== 'project' && ITEMS[folder] && ITEMS[folder].kind === 'folder') {
+    ITEMS[folder].children = [...new Set([...(ITEMS[folder].children || []), id])];
+  } else if (ITEMS[id].kind === 'folder') S.sharedSourceFolders = [...new Set([...S.sharedSourceFolders, id])];
+  else SOURCES[sc] = [...new Set([...(SOURCES[sc] || []), id])];
+  S.sourcesOpen[sc] = true;
+  S.sourceFoldersOpen[sourceFolderKey(folder)] = true;
+}
+function sourceFolderDialog() {
+  return `<div class="veil top" data-veil="1"><div class="dialog" role="dialog" aria-label="Create folder" style="width:min(440px,calc(100vw - 32px));padding:18px">
+    <h3 style="margin:0;font:500 15px/1.4 var(--font-sans)">Create folder</h3>
+    <div class="field" style="margin-top:14px"><input data-autofocus data-input="source-folder-name" placeholder="Folder name" value="${esc(open.value || '')}"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px"><button class="btn" data-act="close">Cancel</button><button class="btn dark" data-act="create-source-folder" ${(open.value || '').trim() ? '' : 'disabled'}>Create folder</button></div>
+  </div></div>`;
+}
+function createSourceFolder() {
+  const name = (open.value || '').trim();
+  if (!name) return;
+  const id = `folder-${tick()}`;
+  ITEMS[id] = { id, name, kind: 'folder', children: [], excerpt: '', flash: 0 };
+  attachSource(id);
+  S.sourceFoldersOpen[sourceFolderKey(id)] = true;
+  closeAll(); render();
+}
+
+function iconOf(p) { return p.kind === 'note' ? I(KIND_ICON[ITEMS[p.id].kind]) : p.kind === 'top' ? I('layers') : I('project'); }
+
+function renderTabs() {
+  const bar = $('#tabbar');
+  bar.innerHTML = `${S.railHidden ? titlebar() : ''}${S.tabs.map((t, i) => `<div class="tab" data-act="tab" data-i="${i}" data-on="${i === S.tab ? 1 : 0}" title="${esc(pageName(t.page))}"><span style="display:flex;color:${i === S.tab ? '#171717' : '#5c5c5c'}">${svg(iconOf(t.page).match(/<svg[^>]*>([\s\S]*)<\/svg>/)[1], 14, 2)}</span><span class="t">${esc(pageName(t.page))}</span>${S.tabs.length > 1 ? `<span class="x" data-act="close-tab" data-i="${i}" aria-label="Close tab">${I('close', 12, 2.2)}</span>` : ''}</div>`).join('')}<button class="tab-plus" data-act="new-tab" title="New tab" aria-label="New tab">${I('plus', 15)}</button>`;
+}
+
+function renderCanvas() {
+  const p = page();
+  const c = $('#canvas');
+  const bars = (n) => Array.from({ length: n }, (_, i) => `<div class="bar" style="width:${[92, 78, 86, 64, 88, 71, 55][i % 7]}%"></div>`).join('');
+  let html;
+  if (p.kind === 'top') {
+    const t = N[p.id];
+    html = `<div class="kicker">${I('layers', 12)} Project page</div><h1>${esc(t.name)}</h1>
+      <p>${esc(t.desc || 'What this project is for, and the instructions every agent in it reads first.')}</p>
+      ${bars(4)}
+      ${t.children.length ? `<div class="kids">${t.children.map((k) => `<div class="kid" data-act="open-project" data-id="${esc(k)}">${I('project', 15)}${esc(N[k].name)}</div>`).join('')}</div>` : ''}`;
+  } else if (p.kind === 'project') {
+    const n = N[p.id];
+    html = `<div class="kicker">${I('project', 12)} ${esc(ancestors(p.id).map((a) => a.name).join(' / '))}</div><h1>${esc(n.name)}</h1>${bars(7)}
+      ${n.children.length ? `<div class="kids">${n.children.map((k) => `<div class="kid" data-act="open-project" data-id="${esc(k)}">${esc(N[k].name)}</div>`).join('')}</div>` : ''}`;
+  } else {
+    const it = ITEMS[p.id];
+    html = `<div class="kicker">${I(KIND_ICON[it.kind], 12)} ${esc(KIND_WORD[it.kind])}</div><h1>${esc(it.name)}</h1>${it.excerpt ? `<p>${esc(it.excerpt)}</p>` : ''}${bars(6)}`;
+  }
+  c.innerHTML = `<div class="page">${html}</div><div class="sticky">Ask Graham: does a status clear when you open it, or when you act on it?</div>`;
+}
+
+function renderStage() {
+  const stage = $('.stage-body');
+  const agent = AGENTS.find(a => a.id === S.agentId && a.node === scope());
+  if (!agent) { stage.innerHTML = 'Nothing on the Stage'; return; }
+  const state = { needs: 'Needs you', failed: 'Failed', running: 'Running', unseen: 'Finished', done: 'Finished' }[agent.state];
+  stage.innerHTML = `<section class="agent-detail" id="active-agent" tabindex="-1" aria-label="${esc(agent.title)}">
+    <div class="path">${esc([...ancestors(agent.node).map(n => n.name), N[agent.node].name].join(' › '))}</div>
+    <h2>${esc(agent.title)}</h2><div class="state">${mark(summarizeAgents([agent]))}${state}<span class="grow"></span>${esc(agent.model)}</div>
+    <p>${agent.state === 'needs' || agent.state === 'failed' ? 'This agent needs your input.' : agent.state === 'running' ? 'This agent is working in this project.' : 'This agent has returned its work for review.'}</p>
+  </section>`;
+}
+
+/* ================================================================ floating */
+let open = null;   // the one panel or dialog open: { kind, ... }
+let hover = null;  // { kind: 'fly'|'peek', id, rect }
+let hoverTimer = null;
+let addDismissTimer = null;
+let shortcutTip = null, shortcutTimer = null, shortcutAnchor = null;
+const railRight = () => ($('#rail').getBoundingClientRect().right || 0);
+function clearShortcutTip() { clearTimeout(shortcutTimer); shortcutTimer = null; shortcutAnchor = null; shortcutTip = null; }
+function clearAddDismissal() { clearTimeout(addDismissTimer); addDismissTimer = null; }
+function closeAll() { clearAddDismissal(); open = null; hover = null; clearTimeout(hoverTimer); clearShortcutTip(); }
+function scheduleAddDismissal() {
+  if (!open || open.kind !== 'add' || addDismissTimer != null) return;
+  const picker = open;
+  addDismissTimer = setTimeout(() => {
+    addDismissTimer = null;
+    if (open !== picker) return;
+    closeAll(); render();
+  }, PEEK_CLOSE);
+}
+function updateAddBoundary(event) {
+  if (!open || open.kind !== 'add') { clearAddDismissal(); return; }
+  const rects = [...document.querySelectorAll('[data-add-picker], [data-picker-library], #hover-layer [data-hover-layer]')].map(el => el.getBoundingClientRect());
+  if (open.anchor) rects.push(open.anchor);
+  const inside = rects.some(rect => event.clientX >= rect.left - 12 && event.clientX <= rect.right + 12 && event.clientY >= rect.top - 12 && event.clientY <= rect.bottom + 12);
+  if (inside) clearAddDismissal(); else scheduleAddDismissal();
+}
+function renderProjectTooltip() {
+  $('#tooltip-layer').innerHTML = shortcutTip && (!open || shortcutTip.kind === 'create') ? projectShortcutTip() : '';
+}
+function updateShortcutTip(event) {
+  const row = event.target.closest('#rail [data-shortcut-project]');
+  const action = event.target.closest('[data-create-tooltip]');
+  const anchor = action || row;
+  if (!anchor || (open && !action) || (!action && event.target.closest('.chev, .act'))) {
+    const changed = !!shortcutTip;
+    clearShortcutTip();
+    if (changed) renderProjectTooltip();
+    return;
+  }
+  if (shortcutAnchor === anchor) return;
+  const changed = !!shortcutTip;
+  clearShortcutTip();
+  shortcutAnchor = anchor;
+  if (changed) renderProjectTooltip();
+  shortcutTimer = setTimeout(() => {
+    if (!anchor.isConnected) return;
+    shortcutTip = { id: action ? action.dataset.createTooltip : row.dataset.shortcutProject, kind: action ? 'create' : 'switch', rect: rectOf(anchor) };
+    renderProjectTooltip();
+  }, PEEK_OPEN);
+}
+function projectShortcutTip() {
+  if (!shortcutTip) return '';
+  const number = shortcutFor(shortcutTip.id);
+  if (!number && shortcutTip.kind !== 'create') return '';
+  const rect = shortcutTip.rect;
+  const left = Math.max(8, Math.min(rect.left + 28, window.innerWidth - 248));
+  const top = rect.bottom + 48 <= window.innerHeight ? rect.bottom + 5 : Math.max(8, rect.top - 45);
+  if (shortcutTip.kind === 'create') return `<div class="project-tooltip action-tooltip" role="tooltip" style="left:${left}px;top:${top}px">Create project within ${esc(N[shortcutTip.id].name)}</div>`;
+  return `<div class="project-tooltip" role="tooltip" style="left:${left}px;top:${top}px"><span class="tip-key">⌃${number}</span><span>Toggle project with <kbd>Ctrl + ${number}</kbd></span></div>`;
+}
+function place(anchorRect, { side = 'right', width, gap = 8, maxH = 560 }) {
+  const vh = window.innerHeight, vw = window.innerWidth;
+  let left, top;
+  if (side === 'right') { left = Math.max(railRight(), anchorRect.right) + gap; top = anchorRect.top - 6; }
+  else { left = anchorRect.left; top = anchorRect.bottom + gap; }
+  left = Math.min(left, vw - width - 8);
+  top = Math.max(8, Math.min(top, vh - Math.min(maxH, vh * 0.7) - 8)); // at the row's height, unless that leaves it too little room
+  return `left:${left}px;top:${top}px;width:${width}px;max-height:${Math.min(maxH, vh - top - 8)}px`;
+}
+function renderHoverLayer() {
+  const hidden = open && ['settings', 'search', 'create', 'source-folder'].includes(open.kind);
+  $('#hover-layer').innerHTML = hover && !hidden ? (hover.kind === 'fly' ? flyout() : peekCard()) : '';
+}
+function renderLayer() {
+  const L = $('#layer');
+  let html = '';
+  if (open) html += ({ project: projectMenu, agents: agentsPanel, library: libraryPanel, add: addPanel, clock: clockPanel, 'all-projects': allProjectsPanel, siblings: siblingsPanel, sources: sourcesPanel, trash: trashPanel, settings: settingsDialog, search: searchDialog, create: createDialog, 'source-folder': sourceFolderDialog, commands: commandsDialog, menu: contextMenu }[open.kind] || (() => ''))();
+  if (open && open.kind === 'add' && open.library) html += libraryPanel(open.library, true);
+  if (toastText) html += `<div class="toast">${esc(toastText)}</div>`;
+  // Whatever field was being typed in keeps its caret through the redraw; a panel's first field takes the keyboard once.
+  const was = document.activeElement, key = was && was.dataset && was.dataset.input;
+  const caret = key ? [was.selectionStart, was.selectionEnd] : null;
+  L.innerHTML = html;
+  renderHoverLayer();
+  renderProjectTooltip();
+  fitCrumbs();
+  const again = key && L.querySelector(`[data-input="${key}"]`);
+  if (again) { again.focus(); again.setSelectionRange(caret[0], caret[1]); return; }
+  const focus = L.querySelector('[data-autofocus]');
+  if (focus && open && !open.focused) { open.focused = true; focus.focus(); }
+}
+
+/* the project's menu: Switch project ›, Rename, Project page ↗ */
+function projectMenu() {
+  const a = open.anchor;
+  let html = `<div class="panel menu" data-layer="1" style="${place(a, { side: 'below', width: 230, gap: 4 })}">
+    <button class="mi" data-act="switch-sub" data-open="${open.sub ? 1 : 0}"><span>Switch project</span><span class="r">${I('chevronRight', 13)}</span></button>
+    <button class="mi" data-act="rename-top" data-hover-close-sub="1"><span>Rename</span></button>
+    <button class="mi" data-act="project-page" data-hover-close-sub="1"><span>Project page</span><span class="r">${I('out', 14)}</span></button>
+    <div class="sep"></div><button class="mi" data-act="commands"><span>Keyboard shortcuts</span><span class="r shortcut">⌃1–9 · ⌘J</span></button>
+  </div>`;
+  if (open.sub) {
+    html += `<div class="panel menu" data-layer="1" style="${place(open.sub, { side: 'right', width: 250, gap: 6, maxH: 460 })};left:${open.sub.right + 6}px">
+      <div style="overflow-y:auto;display:flex;flex-direction:column;gap:1px">${TOPS.map((t) => `<button class="mi" data-act="switch-top" data-id="${t.id}"><span class="ic">${I('layers', 15)}</span><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;${t.id === S.top ? 'font-weight:500' : ''}">${esc(t.name)}</span>${mark(agentSummary(t.id, true), true)}<span class="chevron-slot">${t.id === S.top ? I('check', 14) : ''}</span></button>`).join('')}</div>
+      <div class="sep"></div>
+      <button class="mi" data-act="new-top"><span class="ic">${I('plus', 15)}</span><span>New project</span></button>
+      <button class="mi" data-act="toast" data-text="Opens All projects and the library."><span class="ic">${I('library', 15)}</span><span>All projects and library</span></button>
+    </div>`;
+  }
+  return html;
+}
+
+/* Agents: what was the Inbox (needs you, finished) and what is at work, in one list */
+function agentsPanel() {
+  const crumb = (id) => [...ancestors(id).filter((a) => a.level >= 2).map((a) => a.name), N[id].name].join('/');
+  const row = (a) => `<div class="prow" data-act="go-agent" data-id="${a.id}">
+    <span class="ic">${I(a.state === 'running' ? 'agents' : 'agents', 15)}</span>
+    <div class="tx"><div class="t1">${esc(a.title)}</div><div class="t2" data-crumb="${esc(crumb(a.node))}">${esc(crumb(a.node))}</div></div>
+    <span class="rt">${since(a.at)}${mark(summarizeAgents([a]))}</span>
+  </div>`;
+  const groups = [['Failed', 'failed'], ['Needs you', 'needs'], ['Finished', 'unseen'], ['Running', 'running'], ['Earlier', 'done']]
+    .map(([title, state]) => [title, AGENTS.filter((a) => a.state === state).sort((x, y) => y.at - x.at)]).filter(([, list]) => list.length);
+  const toView = agentSummary().ready;
+  return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 360 })}">
+    <div class="panel-head"><b>Agents</b>${toView ? `<i>${toView} to look at</i>` : ''}<span class="grow"></span>${AGENTS.some((a) => a.state === 'unseen') ? '<button class="btn" style="height:26px;font-size:12px" data-act="seen-all">Mark all as seen</button>' : ''}</div>
+    <div class="panel-scroll">${groups.length ? groups.map(([title, list]) => `<div class="pgroup">${title}</div>${list.map(row).join('')}`).join('') : '<div style="padding:6px 14px 14px;font-size:12.5px;color:#8f8f8f">Nothing yet. When an agent finishes or asks you something, it shows here.</div>'}</div>
+    <button class="command-row" style="width:100%;border-top:1px solid var(--bd)" data-act="next-agent"><span>Next agent needing attention</span><span class="shortcut">⌘J</span></button>
+  </div>`;
+}
+
+const LIBRARY_FILTERS = [
+  ['all', 'All'], ['notes', 'Notes'], ['papers', 'Papers'],
+  ['repos', 'Repos'], ['web', 'Web'], ['files', 'Files'],
+];
+function libraryItems(q = '', filter = 'all') {
+  const categories = { notes: ['note'], papers: ['pdf'], repos: ['git'], web: ['website', 'html'] };
+  const categorized = Object.values(categories).flat();
+  const query = q.trim().toLowerCase();
+  return Object.values(ITEMS).filter(it => it.kind !== 'image'
+    && (filter === 'all' || (filter === 'files' ? !categorized.includes(it.kind) : (categories[filter] || []).includes(it.kind)))
+    && (!query || it.name.toLowerCase().includes(query)));
+}
+function libraryCount() {
+  const total = libraryItems().length;
+  return total > 999 ? '999+' : total;
+}
+function folderContains(id, target, seen = new Set()) {
+  if (id === target) return true;
+  if (seen.has(id)) return false;
+  seen.add(id);
+  return (ITEMS[id]?.children || []).some(child => folderContains(child, target, seen));
+}
+function canPickSource(id) {
+  if (!ITEMS[id]) return false;
+  const folder = open.folder || 'project';
+  const attached = folder === 'project' ? [...(SOURCES[scope()] || []), ...S.sharedSourceFolders] : sourceChildren(folder);
+  return !attached.includes(id) && !folderContains(id, folder);
+}
+function libraryPanel(state = open, picking = false) {
+  const q = (state.q || '').toLowerCase();
+  const filter = state.filter || 'all';
+  const list = libraryItems(q, filter).filter(it => !picking || canPickSource(it.id));
+  const inHere = new Set([...(SOURCES[scope()] || []), ...S.sharedSourceFolders]);
+  return `<div class="panel" data-layer="1" ${picking ? 'data-picker-library="1"' : ''} style="${place(state.anchor, { width: 360 })}">
+    <div class="panel-head"><b>Library</b><i>${libraryCount()}</i>${picking ? '<span class="grow"></span><button class="act" data-act="close-picker-library" aria-label="Close library">' + I('close', 14) + '</button>' : ''}</div>
+    <div style="padding:2px 12px 6px"><div class="field">${I('search', 14, 2.4)}<input data-autofocus data-input="${picking ? 'picker-library-q' : 'library-q'}" placeholder="Search the library" value="${esc(state.q || '')}"></div></div>
+    <div class="library-filters" role="toolbar" aria-label="Show only">${LIBRARY_FILTERS.map(([id, label]) => `<button class="library-filter" data-act="${picking ? 'picker-library-filter' : 'library-filter'}" data-id="${id}" aria-pressed="${filter === id}">${label}</button>`).join('')}</div>
+    ${!q ? `<div class="pgroup">Recent${filter === 'all' ? '' : ` ${filter === 'web' ? 'web pages' : filter}`}</div>` : ''}
+    <div class="panel-scroll">${list.map((it) => `<div class="prow" data-act="${picking ? 'pick-source' : 'open-item'}" data-id="${it.id}" data-peek="${it.id}" role="button" tabindex="0"><span class="ic">${I(KIND_ICON[it.kind], 16)}</span><div class="tx"><div class="t1">${esc(it.name)}</div></div>${picking ? '' : `<span class="rt">${inHere.has(it.id) ? 'In this project' : `<button class="act" data-act="link-item" data-id="${it.id}" title="Bring into this project" aria-label="Bring ${esc(it.name)} into this project">${I('plus', 14)}</button>`}</span>`}</div>`).join('') || '<div style="padding:8px 14px;color:#8f8f8f;font-size:13px">Nothing matches</div>'}</div>
+    <div style="border-top:1px solid #efefef;padding:8px 12px"><button class="btn" data-act="toast" data-text="Opens the whole library.">Open full library</button></div>
+  </div>`;
+}
+
+/* The add-source picker keeps its destination while browsing the library beside it. */
+function addPanel() {
+  const list = libraryItems(open.q || '').filter(it => canPickSource(it.id));
+  const shown = list.slice(0, 5);
+  const v = open.value || '';
+  const addable = /^(https?:\/\/|www\.)\S+\.\S+|^(~|\/)\S/.test(v.trim());
+  return `<div class="panel" data-layer="1" data-add-picker="1" style="${place(open.anchor, { width: 320 })};padding:8px">
+    <div class="field" style="margin-bottom:6px">${I('search', 14, 2.4)}<input data-autofocus data-input="add-library-q" placeholder="Search library" aria-label="Search library" value="${esc(open.q || '')}"></div>
+    <div class="panel-scroll" style="padding:0">${shown.map(it => `<button class="mi" data-act="pick-source" data-id="${esc(it.id)}" data-peek="${esc(it.id)}"><span class="ic">${I(KIND_ICON[it.kind], 16)}</span><span class="picker-item-name">${esc(it.name)}</span></button>`).join('') || '<div class="empty-line">Nothing matches</div>'}</div>
+    ${list.length > 5 ? `<button class="row more" data-act="picker-more"><span class="ic">${DOTS()}</span><span class="lb">More</span></button>` : ''}
+    <div class="sep"></div>
+    <button class="mi" data-act="show-upload"><span class="ic">${I('add', 16)}</span><span>Upload URL or path</span></button>
+    ${open.upload ? `<div style="padding:4px 8px 8px"><div class="field" data-error="${open.error ? 1 : 0}"><input data-input="add-value" placeholder="URL or path" aria-label="URL or path" value="${esc(v)}" spellcheck="false"></div>${open.error ? `<div class="err">${esc(open.error)}</div>` : ''}${addable ? '<button class="btn" style="margin-top:6px" data-act="add-link">Add source</button>' : ''}</div>` : ''}
+    <button class="mi" data-act="toast" data-text="Signs in to GitHub, then lists your repositories."><span class="ic">${I('github', 16)}</span><span>Add from GitHub</span></button>
+    <button class="mi" data-act="new-note"><span class="ic">${I('compose', 16)}</span><span>New note</span></button>
+  </div>`;
+}
+function showPickerLibrary(rect) {
+  if (!open || open.kind !== 'add') return;
+  open.library = open.library ? null : { q: open.q || '', filter: 'all', anchor: rect };
+  hover = null;
+  renderLayer();
+  const field = $('[data-input="picker-library-q"]');
+  if (field && open.library) field.focus();
+}
+
+/* The clock: the project page first, then the last pages you opened (projects at any level, and notes), tabs included. */
+function clockPanel() {
+  const topEntry = { kind: 'top', id: S.top };
+  const rows = [topEntry, ...S.recent.slice().reverse().filter((r) => !(r.kind === 'top') && (r.kind === 'note' || N[r.id].top === S.top))].slice(0, RECENT_ROWS);
+  const row = (r) => {
+    const name = r.kind === 'note' ? ITEMS[r.id].name : N[r.id].name;
+    const crumb = r.kind === 'project' ? ancestors(r.id).map((a) => a.name).join('/') : '';
+    const st = r.kind === 'note' ? null : agentSummary(r.id, true);
+    const onTab = S.tabs.some((t) => t.page.kind === r.kind && t.page.id === r.id);
+    return `<div class="prow" data-act="go-recent" data-kind="${r.kind}" data-id="${esc(r.id)}" title="${onTab ? 'Open in a tab: goes to it' : 'Opens in a new tab'}">
+      <span class="ic">${r.kind === 'top' ? I('layers', 17) : r.kind === 'note' ? I(KIND_ICON[ITEMS[r.id].kind], 17) : I('project', 17)}</span>
+      <div class="tx"><div class="t1">${esc(name)}</div>${crumb ? `<div class="t2" data-crumb="${esc(crumb)}">${esc(crumb)}</div>` : ''}</div>
+      <span class="rt">${mark(st, true)}</span>
+    </div>`;
+  };
+  return `<div class="panel" data-layer="1" style="${place(open.anchor, { side: 'below', width: 330, gap: 4 })}">
+    <div class="panel-head"><b style="font-weight:500;font-size:13.5px">Recent pages</b></div>
+    <div class="panel-scroll" style="padding-top:0">${rows.map(row).join('')}</div>
+  </div>`;
+}
+// A path that does not fit loses its front, a level at a time, to "./": Engelbart/User Interface → ./User Interface.
+function fitCrumbs() {
+  for (const el of document.querySelectorAll('#layer [data-crumb]')) {
+    let parts = el.dataset.crumb.split('/');
+    el.textContent = parts.join('/');
+    while (el.scrollWidth > el.clientWidth + 1 && parts.length > 1) { parts = parts.slice(1); el.textContent = `./${parts.join('/')}`; }
+  }
+}
+
+/* The section's More: every project here, as a tree, findable */
+function treeRows(ids, depth, { q = '', folded = new Set(), expandAll = false, guideLevel = null, contextRoot = null } = {}) {
+  return ids.map((id) => {
+    const n = N[id];
+    const match = !q || n.name.toLowerCase().includes(q) || n.children.some((k) => pathMatches(k, q));
+    if (!match) return '';
+    const isFolded = !expandAll && folded.has(id) && !q;
+    const here = page().kind === 'project' && page().id === id;
+    const kids = n.children.length && !isFolded ? `<div class="fly-kids" data-parent="${esc(id)}" data-guide="${n.level === guideLevel ? 1 : 0}" style="padding-left:${depth ? 18 : 22}px">${treeRows(n.children, depth + 1, { q, folded, expandAll, guideLevel, contextRoot })}</div>` : '';
+    return `<div class="prow${id === contextRoot ? ' fly-context' : ''}" style="min-height:30px;padding:0 8px;gap:8px" data-act="open-project" data-id="${esc(id)}" data-active="${here ? 1 : 0}">
+      ${n.level === 2 ? projectLead(id) : depth === 0 ? `<span class="ic" style="width:16px">${I('project', 15)}</span>` : ''}
+      <div class="tx"><div class="t1" style="font-size:${depth ? 13.5 : 14}px;color:${depth ? '#4d4d4d' : '#171717'}">${esc(n.name)}</div></div>
+      <span class="project-tools"><span class="status-slot">${mark(agentSummary(id, true), true)}</span>${expandAll ? '' : `<span class="chevron-slot">${n.children.length ? `<button class="chev${n.level > 1 && !descends(scope(), id) ? ' on-hover' : ''}" data-act="tree-fold" data-id="${esc(id)}" data-open="${isFolded ? 0 : 1}" aria-label="${isFolded ? 'Open' : 'Fold'} ${esc(n.name)}">${CHEV()}</button>` : ''}</span>`}</span>
+    </div>${kids}`;
+  }).join('');
+}
+const pathMatches = (id, q) => N[id].name.toLowerCase().includes(q) || N[id].children.some((k) => pathMatches(k, q));
+function allProjectsPanel() {
+  const top = N[S.top];
+  const count = Object.values(N).filter((n) => n.top === S.top && n.level >= 2).length;
+  return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 340, maxH: 620 })}">
+    <div class="panel-head"><b>Projects</b><i>${count}</i><span class="grow"></span><button class="act" data-act="create" data-parent="${esc(S.top)}" data-create-tooltip="${esc(S.top)}" aria-label="Create project within ${esc(top.name)}">${I('plus', 15)}</button></div>
+    <div style="padding:2px 12px 6px"><div class="field">${I('search', 14, 2.4)}<input data-autofocus data-input="tree-q" placeholder="Find a project" value="${esc(open.q || '')}"></div></div>
+    <div class="panel-scroll">${treeRows(top.children, 0, { q: (open.q || '').toLowerCase(), folded: open.folded })}</div>
+  </div>`;
+}
+/* A level's More: every sibling there and what is in each, open, foldable; nothing above it */
+function siblingsPanel() {
+  const parent = N[open.id];
+  return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 320, maxH: 560 })}">
+    <div class="panel-scroll" style="padding-top:6px">${treeRows(parent.children, 1, { folded: open.folded })}</div>
+  </div>`;
+}
+function sourcesPanel() {
+  const ids = sourceChildren(open.folder || 'project');
+  return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 330 })}">
+    <div class="panel-head"><b>${esc(open.folder && open.folder !== 'project' ? ITEMS[open.folder].name : N[scope()].name)}</b><i>${ids.length}</i></div>
+    <div class="panel-scroll">${ids.map((id) => `<div class="prow" data-act="open-item" data-id="${id}" data-peek="${id}" data-active="${page().kind === 'note' && page().id === id ? 1 : 0}"><span class="ic">${I(KIND_ICON[ITEMS[id].kind], 16)}</span><div class="tx"><div class="t1">${esc(ITEMS[id].name)}</div></div></div>`).join('')}</div>
+  </div>`;
+}
+function trashPanel() {
+  return `<div class="panel" data-layer="1" style="${place(open.anchor, { width: 300 })}">
+    <div class="panel-head"><b>Trash</b><i>${S.trash.length}</i><span class="grow"></span><button class="btn" style="height:26px;font-size:12px" data-act="empty-trash">Empty</button></div>
+    <div class="panel-scroll">${S.trash.map((t, i) => `<div class="prow"><span class="ic">${STICKY(false).replace('width="18" height="18"', 'width="15" height="15"')}</span><div class="tx"><div class="t1">${esc(t)}</div></div><span class="rt"><button class="btn" style="height:24px;font-size:12px" data-act="restore" data-i="${i}">Restore</button></span></div>`).join('')}</div>
+  </div>`;
+}
+
+/* hovering: a folded project's children, and a source's peek, after a beat */
+function flyout() {
+  const n = N[hover.id];
+  const parents = Object.values(N).filter(node => node.id !== n.id && descends(node.id, n.id) && node.children.length);
+  const guideLevel = parents.length ? Math.max(...parents.map(node => node.level)) : null;
+  return `<div class="panel flyout" data-layer="1" data-hover-layer="1" style="${place(hover.rect, { width: 270, gap: 6, maxH: 440 })}">
+    <div style="overflow-y:auto">${treeRows([n.id], 0, { expandAll: true, guideLevel, contextRoot: n.id })}</div>
+  </div>`;
+}
+function peekCard() {
+  const it = ITEMS[hover.id];
+  if (!it) return '';
+  const rect = hover.rect, width = 340;
+  const left = Math.min(Math.max(railRight(), rect.right) + 8, window.innerWidth - width - 8);
+  const top = Math.max(12, Math.min(rect.top - 12, window.innerHeight - 260));
+  const where = Object.entries(SOURCES).filter(([, ids]) => ids.includes(it.id)).map(([sc]) => (N[sc].level === 1 ? N[sc].name : [...ancestors(sc).map((a) => a.name), N[sc].name].join('/')));
+  return `<div class="peek" data-hover-layer="1" style="left:${left}px;top:${top}px">
+    <div class="k">${I(KIND_ICON[it.kind], 12)}${esc(KIND_WORD[it.kind])}</div>
+    <div class="n">${esc(it.name)}</div>
+    ${it.excerpt ? `<div class="x">${esc(it.excerpt)}</div>` : ''}
+    ${where.length ? `<div style="margin-top:12px;padding-top:10px;border-top:1px solid #eaeaea;font:12px/1.6 var(--font-sans);color:#8f8f8f">${where.map(esc).join('<br>')}</div>` : ''}
+  </div>`;
+}
+
+/* dialogs in the middle of the window */
+function settingsDialog() {
+  const pages = [
+    { id: 'models', title: 'Models', icon: I('cpu', 16, 1.75) },
+    { id: 'connections', title: 'Connections', icon: I('blocks', 16, 1.75) },
+    { id: 'import', title: 'Import context', icon: I('add', 16, 1.75) },
+  ];
+  const q = (open.q || '').toLowerCase();
+  const keywords = { models: 'model effort quick standard deep claude codex discover', connections: 'github zotero claude codex accounts sign in', import: 'onboarding import context library setup' };
+  const listed = pages.filter((p) => !q || p.title.toLowerCase().includes(q) || keywords[p.id].includes(q));
+  const pg = pages.find((p) => p.id === S.settingsPage);
+  const select = (val, opts, key) => `<span class="sel"><select data-model="${key}" style="width:${opts.includes('Medium') ? 110 : 96}px">${opts.map((o) => `<option${o === val ? ' selected' : ''}>${o}</option>`).join('')}</select>${svg('<path d="m6 9 6 6 6-6"/>', 10, 2.4)}</span>`;
+  let body = '';
+  if (pg.id === 'models') {
+    const MODELS = { claude: ['Haiku', 'Sonnet', 'Opus', 'Fable'], codex: ['Sol', 'Astra'] };
+    const EFFORTS = { claude: ['Low', 'Medium', 'High', 'Extra high', 'Max'], codex: ['Low', 'Medium', 'High', 'Ultra'] };
+    body = [['claude', 'Claude Code'], ['codex', 'Codex']].map(([p, name]) => `<div class="s-group-head">${name}</div><div class="s-card">${['quick', 'standard', 'deep'].map((lv) => `<div class="s-row"><div class="lbl">${lv[0].toUpperCase() + lv.slice(1)}</div>${select(S.models[p][lv][0], MODELS[p], `${p}.${lv}.0`)}${select(S.models[p][lv][1], EFFORTS[p], `${p}.${lv}.1`)}</div>`).join('')}</div>`).join('');
+  } else if (pg.id === 'connections') {
+    const rows = [['github', 'GitHub', '<span class="st">hudsonmp</span><button class="btn">Sign out</button>'], ['zotero', 'Zotero', '<button class="btn">Connect</button>'], ['claude', 'Claude Code', '<span class="st">Ready</span>'], ['codex', 'Codex', '<button class="btn">Sign in</button>']];
+    body = `<div class="s-group-head">Accounts</div><div class="s-card">${rows.map(([ic, name, right]) => `<div class="s-row"><span class="ic">${I(ic, 17, 1.6)}</span><div class="lbl">${name}</div>${right}</div>`).join('')}</div>`;
+  } else {
+    body = `<div class="s-group-head">Your context</div><div class="s-card"><div class="s-row"><div class="lbl">Import your context</div><button class="btn" data-act="toast" data-text="Import your context opens over the project you’re in (not part of this mockup).">Start</button></div></div>`;
+  }
+  return `<div class="veil" data-veil="1">
+    <div class="settings dialog" role="dialog" aria-label="Settings">
+      <nav class="s-nav" aria-label="Settings pages">
+        <div class="s-search">${svg('<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>', 14, 1.75)}<input data-autofocus data-input="settings-q" placeholder="Search…" value="${esc(open.q || '')}"></div>
+        ${listed.length ? `<div class="s-sec">Settings</div><div style="display:flex;flex-direction:column;gap:2px">${listed.map((p) => `<button class="s-item" data-act="settings-page" data-id="${p.id}" aria-current="${p.id === pg.id ? 'page' : 'false'}"><span class="ic">${p.icon}</span>${p.title}</button>`).join('')}</div>` : '<div style="padding:0 9px;font-size:13px;color:#8f8f8f">No results</div>'}
+      </nav>
+      <div class="s-body"><div class="s-title">${pg.title}</div>${body}</div>
+      <button class="close-x" data-act="close" aria-label="Close">×</button>
+    </div>
+  </div>`;
+}
+function searchDialog() {
+  const q = (open.q || '').trim().toLowerCase();
+  const projects = q ? Object.values(N).filter((n) => n.top === S.top && n.name.toLowerCase().includes(q)).slice(0, 6) : [];
+  const items = q ? Object.values(ITEMS).filter((it) => it.name.toLowerCase().includes(q)).slice(0, 6) : [];
+  const results = [...projects.map((n) => ({ kind: n.level === 1 ? 'top' : 'project', id: n.id })), ...items.map((it) => ({ kind: 'note', id: it.id }))];
+  const at = results.length ? Math.min(open.idx || 0, results.length - 1) : -1;
+  let i = 0;
+  const row = (r) => {
+    const sel = i++ === at;
+    const name = r.kind === 'note' ? ITEMS[r.id].name : N[r.id].name;
+    const crumb = r.kind === 'project' ? ancestors(r.id).map((a) => a.name).join('/') : '';
+    return `<div class="prow" data-act="go-recent" data-kind="${r.kind}" data-id="${esc(r.id)}" data-sel="${sel ? 1 : 0}"><span class="ic">${r.kind === 'note' ? I(KIND_ICON[ITEMS[r.id].kind], 16) : r.kind === 'top' ? I('layers', 16) : I('project', 16)}</span><div class="tx"><div class="t1">${esc(name)}</div>${crumb ? `<div class="t2">${esc(crumb)}</div>` : ''}</div></div>`;
+  };
+  return `<div class="veil top" data-veil="1"><div class="dialog" role="dialog" aria-label="Search" style="width:min(560px,calc(100vw - 32px))">
+    <div style="display:flex;align-items:center;gap:10px;padding:14px 16px;border-bottom:${q ? '1px solid #eee' : '0'}">${I('search', 16)}<input data-autofocus data-input="search-q" placeholder="Search projects, notes and sources" value="${esc(open.q || '')}" style="flex:1;border:0;outline:none;font:15px/1.4 var(--font-sans)"></div>
+    ${q ? `<div class="panel-scroll" style="max-height:50vh">${projects.length ? `<div class="pgroup">Projects</div>${results.filter((r) => r.kind !== 'note').map(row).join('')}` : ''}${items.length ? `<div class="pgroup">Library</div>${results.filter((r) => r.kind === 'note').map(row).join('')}` : ''}${!results.length ? '<div style="padding:10px 14px;color:#8f8f8f;font-size:13px">Nothing matches</div>' : ''}</div>` : ''}
+  </div></div>`;
+}
+function commandsDialog() {
+  const ids = numberedProjects();
+  return `<div class="veil top" data-veil="1"><div class="dialog" role="dialog" aria-label="Keyboard shortcuts" style="width:min(480px,calc(100vw - 32px));padding:14px 6px">
+    <div class="panel-head"><b>Keyboard shortcuts</b><span class="grow"></span><button class="icon-btn" data-act="close" aria-label="Close">${I('close', 14)}</button></div>
+    <button class="command-row" style="width:100%" data-act="next-agent"><span>Next agent needing attention</span><span class="shortcut">⌘J</span></button>
+    <div style="padding:0 14px 12px;font-size:12px;color:var(--fnt)">Needs you first, then finished work. With nothing waiting, returns to your previous page.</div>
+    <div class="sep"></div><div class="pgroup">Second-level projects</div>
+    ${ids.map((id, i) => `<button class="command-row" style="width:100%" data-act="open-project" data-id="${esc(id)}"><span>${esc(N[id].name)}</span><span class="shortcut">Ctrl+${i + 1}</span></button>`).join('')}
+    <div class="sep"></div><button class="command-row" style="width:100%" data-act="rail"><span>${S.railHidden ? 'Show' : 'Hide'} sidebar</span><span class="shortcut">⌘\\</span></button>
+  </div></div>`;
+}
+function createDialog() {
+  const parent = N[open.parent];
+  return `<div class="veil top" data-veil="1"><div class="dialog" role="dialog" aria-label="Create project within ${esc(parent.name)}" style="width:min(440px,calc(100vw - 32px));padding:18px 18px 16px">
+    <div style="font:500 15px/1.4 var(--font-sans)">Create project within ${esc(parent.name)}</div>
+    <div class="field" style="margin-top:14px;height:36px"><input data-autofocus data-input="create-name" placeholder="Name" value="${esc(open.value || '')}"></div>
+    <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:16px"><button class="btn" data-act="close">Cancel</button><button class="btn dark" data-act="create-go" ${open.value && open.value.trim() ? '' : 'disabled'}>Create</button></div>
+  </div></div>`;
+}
+function contextMenu() {
+  const n = N[open.id];
+  return `<div class="panel menu" data-layer="1" style="left:${Math.min(open.x, window.innerWidth - 230)}px;top:${Math.min(open.y, window.innerHeight - 160)}px;width:220px">
+    <button class="mi" data-act="open-project" data-id="${esc(n.id)}"><span class="ic">${I('project', 14)}</span>Open</button>
+    <button class="mi" data-act="open-project-tab" data-id="${esc(n.id)}"><span class="ic">${I('out', 14)}</span>Open in new tab</button>
+    <button class="mi" data-act="create" data-parent="${esc(n.id)}" ${n.level >= MAX_DEPTH ? 'disabled title="Projects go four levels deep"' : ''}><span class="ic">${I('plus', 14)}</span>Create project within</button>
+    <div class="sep"></div>
+    <button class="mi" data-danger="1" data-act="delete-project" data-id="${esc(n.id)}"><span class="ic">${I('trash', 14)}</span>Delete</button>
+  </div>`;
+}
+
+let toastText = '', toastTimer = null;
+function toast(t) { toastText = t; clearTimeout(toastTimer); toastTimer = setTimeout(() => { toastText = ''; renderLayer(); }, 2400); renderLayer(); }
+
+/* ================================================================== events */
+const rectOf = (el) => { const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }; };
+function openPanel(kind, el, extra = {}) {
+  clearAddDismissal();
+  if (open && open.kind === kind && (extra.id == null || open.id === extra.id) && (extra.key == null || open.key === extra.key) && (extra.folder == null || open.folder === extra.folder)) { open = null; render(); return; }
+  hover = null;
+  open = { kind, anchor: el ? rectOf(el.closest('.row, button') || el) : null, ...extra };
+  render();
+}
+
+document.addEventListener('click', (e) => {
+  const t = e.target.closest('[data-act]');
+  if (!t) return;
+  const act = t.dataset.act, id = t.dataset.id;
+  e.stopPropagation();
+  switch (act) {
+    case 'rail': S.railHidden = !S.railHidden; closeAll(); render(); break;
+    case 'clock': openPanel('clock', t); break;
+    case 'project-menu': openPanel('project', t); break;
+    case 'switch-sub': { const r = rectOf(t); open.sub = { left: r.left, right: r.right, top: r.top - 5, bottom: r.bottom }; renderLayer(); break; }
+    case 'switch-top': {
+      if (id !== S.top) {
+        S.lastIn[S.top] = scopeNode() ? scope() : S.lastIn[S.top];
+        S.top = id;
+        const back = S.lastIn[id];
+        S.tabs = [{ page: { kind: 'top', id }, scope: id }];
+        S.tab = 0;
+        if (back) { S.tabs.push({ page: { kind: 'project', id: back }, scope: back }); S.tab = 1; openPath(back); } else S.expanded = new Set();
+        remember('top', id);
+      }
+      closeAll(); render(); break;
+    }
+    case 'project-page': go({ kind: 'top', id: S.top }, { newTab: true }); break;
+    case 'rename-top': { closeAll(); S.renamingTop = true; render(); const f = $('[data-rename-top]'); if (f) { f.focus(); f.select(); } break; }
+    case 'new-top': closeAll(); render(); toast('Opens New project: a name, a description and a folder.'); break;
+    case 'settings': hover = null; open = { kind: 'settings' }; render(); break;
+    case 'settings-page': S.settingsPage = id; renderLayer(); break;
+    case 'search': hover = null; open = { kind: 'search', q: '', idx: 0 }; render(); break;
+    case 'commands': hover = null; open = { kind: 'commands' }; render(); break;
+    case 'next-agent': nextAgent(); break;
+    case 'agents': openPanel('agents', t); break;
+    case 'library': openPanel('library', t, { q: '' }); break;
+    case 'library-filter': if (open && open.kind === 'library' && LIBRARY_FILTERS.some(([key]) => key === id)) { open.filter = id; hover = null; renderLayer(); } break;
+    case 'picker-library-filter': if (open && open.kind === 'add' && open.library && LIBRARY_FILTERS.some(([key]) => key === id)) { open.library.filter = id; hover = null; renderLayer(); } break;
+    case 'picker-more': showPickerLibrary(rectOf(t.closest('[data-add-picker]'))); break;
+    case 'close-picker-library': if (open && open.kind === 'add') { open.library = null; renderLayer(); } break;
+    case 'pick-source': if (open && open.kind === 'add' && canPickSource(id)) { attachSource(id, open.folder || 'project'); closeAll(); render(); } break;
+    case 'show-upload': if (open && open.kind === 'add') { open.upload = !open.upload; open.library = null; renderLayer(); const field = $('[data-input="add-value"]'); if (field && open.upload) field.focus(); } break;
+    case 'add': openPanel('add', t, { value: '', error: '', folder: t.dataset.folder || 'project' }); break;
+    case 'all-projects': { const b = scopeNode() ? branchOf(scope()).id : null; openPanel('all-projects', t, { q: '', folded: new Set(N[S.top].children.filter((x) => x !== b && N[x].children.length)) }); break; }
+    case 'siblings': openPanel('siblings', t, { id, folded: new Set() }); break;
+    case 'sources-more': openPanel('sources', t, { folder: t.dataset.folder || 'project' }); break;
+    case 'source-toggle': S.sourceFoldersOpen[sourceFolderKey(id)] = !sourceFolderOpen(id); hover = null; render(); break;
+    case 'new-source-folder': closeAll(); open = { kind: 'source-folder', value: '' }; render(); break;
+    case 'create-source-folder': createSourceFolder(); break;
+    case 'trash': openPanel('trash', t); break;
+    case 'sec-projects': S.projectsOpen = !S.projectsOpen; render(); break;
+    case 'sec-sources': { const sc = scope(); const ids = SOURCES[sc] || []; const now = sc in S.sourcesOpen ? S.sourcesOpen[sc] : true; S.sourcesOpen[sc] = !now; render(); break; }
+    case 'toggle': hover = null; clearTimeout(hoverTimer); if (isOpen(id) && !N[id].children.some((k) => PLAN.shown.has(k))) { openPanel('siblings', t, { id, folded: new Set() }); break; } toggle(id); break;
+    case 'tree-fold': {
+      const holder = open && (open.kind === 'all-projects' || open.kind === 'siblings') ? open : hover;
+      if (holder) { holder.folded = holder.folded || new Set(); if (holder.folded.has(id)) holder.folded.delete(id); else holder.folded.add(id); }
+      renderLayer(); break;
+    }
+    case 'open-project': goProject(id); break;
+    case 'open-project-tab': goProject(id, { newTab: true }); break;
+    case 'open-item': {
+      const it = ITEMS[id];
+      if (it.kind === 'note') go({ kind: 'note', id });
+      else { closeAll(); render(); toast(it.kind === 'website' ? `Opens ${it.excerpt || it.name} on the Stage.` : `Opens ${it.name} on the Stage.`); }
+      break;
+    }
+    case 'remove-item': { const sc = scope(); const folder = t.dataset.folder; if (folder && folder !== 'project') ITEMS[folder].children = (ITEMS[folder].children || []).filter(x => x !== id); else SOURCES[sc] = (SOURCES[sc] || []).filter((x) => x !== id); render(); toast(`Removed ${ITEMS[id].name} from ${folder && folder !== 'project' ? ITEMS[folder].name : 'this project'}; it stays in the library.`); break; }
+    case 'link-item': { attachSource(id); ITEMS[id].flash = Date.now(); render(); break; }
+    case 'new-note': {
+      const sc = scope(); const nid = `note-${++S.notesMade}`;
+      ITEMS[nid] = { id: nid, name: `Untitled Note ${S.notesMade}`, kind: 'note', excerpt: '', flash: Date.now() };
+      attachSource(nid, open && open.kind === 'add' ? open.folder : 'project');
+      go({ kind: 'note', id: nid }); break;
+    }
+    case 'add-link': addLink(); break;
+    case 'stickies': S.stickiesHidden = !S.stickiesHidden; render(); break;
+    case 'restore': S.trash.splice(Number(t.dataset.i), 1); if (!S.trash.length) open = null; render(); break;
+    case 'empty-trash': S.trash = []; open = null; render(); break;
+    case 'go-agent': goAgent(id); break;
+    case 'seen-all': AGENTS.forEach((a) => { if (a.state === 'unseen') a.state = 'done'; }); render(); break;
+    case 'go-recent': go({ kind: t.dataset.kind, id }, { newTab: true }); break;
+    case 'tab': if (!e.target.closest('[data-act="close-tab"]')) { S.tab = Number(t.dataset.i); const p = page(); if (p.kind === 'project') { openPath(p.id); see(p.id); } closeAll(); render(); } break;
+    case 'close-tab': { const i = Number(t.dataset.i); S.tabs.splice(i, 1); if (S.tab >= i && S.tab > 0) S.tab--; const p = page(); if (p.kind === 'project') openPath(p.id); closeAll(); render(); break; }
+    case 'new-tab': S.tabs.push({ page: { kind: 'top', id: S.top }, scope: S.top }); S.tab = S.tabs.length - 1; S.expanded = new Set(); remember('top', S.top); closeAll(); render(); break;
+    case 'create': hover = null; open = { kind: 'create', parent: t.dataset.parent, value: '' }; render(); break;
+    case 'create-go': createProject(); break;
+    case 'delete-project': deleteProject(id); break;
+    case 'close': open = null; render(); break;
+    case 'toast': closeAll(); render(); toast(t.dataset.text); break;
+    case 'mock-fold': { const m = $('#mock'); m.dataset.folded = m.dataset.folded === '1' ? '0' : '1'; break; }
+    case 'mock-finish': mockAgent('unseen'); break;
+    case 'mock-needs': mockAgent('needs'); break;
+    case 'mock-run': mockAgent('running'); break;
+    case 'mock-ten': for (let k = 0; k < 10; k++) mockAgent('unseen', true); render(); break;
+    case 'mock-reset': closeAll(); seed(); render(); break;
+    default: break;
+  }
+});
+
+// A press outside what is open closes it (what opened it toggles it instead, above).
+document.addEventListener('mousedown', (e) => {
+  if (!open) return;
+  if (e.target.closest('#layer [data-layer], #layer .dialog, #hover-layer, #mock')) return;
+  if (e.target.closest('[data-veil]') && !e.target.closest('.dialog')) { open = null; render(); return; }
+  const trig = e.target.closest('[data-trigger]');
+  if (trig) return; // its click toggles it
+  if (e.target.closest('#layer')) return;
+  open = null; render();
+}, true);
+
+document.addEventListener('contextmenu', (e) => {
+  const row = e.target.closest('[data-act="open-project"][data-id]');
+  if (!row || !row.closest('#rail')) return;
+  e.preventDefault();
+  hover = null; open = { kind: 'menu', id: row.dataset.id, x: e.clientX, y: e.clientY }; render();
+});
+
+document.addEventListener('input', (e) => {
+  const k = e.target.dataset.input;
+  if (!k || !open) return;
+    if (k === 'add-value') { open.value = e.target.value; open.error = ''; }
+  else if (k === 'picker-library-q' && open.kind === 'add' && open.library) { open.library.q = e.target.value; }
+  else if (k === 'create-name' || k === 'source-folder-name') { open.value = e.target.value; }
+  else { open.q = e.target.value; open.idx = 0; }
+  renderLayer();
+});
+
+document.addEventListener('change', (e) => {
+  const key = e.target.dataset.model;
+  if (!key) return;
+  const [p, lv, i] = key.split('.');
+  S.models[p][lv][Number(i)] = e.target.value;
+});
+
+function endRename(keep) {
+  const f = $('[data-rename-top]');
+  if (!f || !S.renamingTop) return;
+  const name = f.value.trim();
+  S.renamingTop = false;
+  if (keep && name) { N[S.top].name = name; TOPS.find((x) => x.id === S.top).name = name; }
+  render();
+}
+document.addEventListener('focusout', (e) => { if (e.target.matches && e.target.matches('[data-rename-top]')) endRename(true); });
+document.addEventListener('keydown', (e) => {
+  if (e.ctrlKey && !e.metaKey && !e.altKey && !e.shiftKey && /^[1-9]$/.test(e.key)) {
+    const id = numberedProjects()[Number(e.key) - 1];
+    if (id) { e.preventDefault(); e.stopPropagation(); if (!e.repeat) goProject(id); }
+    return;
+  }
+  if (e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'j') {
+    e.preventDefault(); e.stopPropagation(); if (!e.repeat) nextAgent(); return;
+  }
+  if (e.target.matches && e.target.matches('[data-rename-top]')) { if (e.key === 'Enter') { e.preventDefault(); endRename(true); } else if (e.key === 'Escape') { e.preventDefault(); endRename(false); } return; }
+  if ((e.metaKey || e.ctrlKey) && e.key === '\\') { e.preventDefault(); S.railHidden = !S.railHidden; closeAll(); render(); return; }
+  if (e.key === 'Escape') {
+    if (open && open.kind === 'add' && open.library) { open.library = null; renderLayer(); return; }
+    if (open && open.kind === 'project' && open.sub) { open.sub = null; renderLayer(); return; }
+    if (open || hover || shortcutTip) { closeAll(); render(); }
+    return;
+  }
+  const k = e.target.dataset && e.target.dataset.input;
+  if (k === 'add-value' && e.key === 'Enter') { e.preventDefault(); addLink(); }
+  if (k === 'source-folder-name' && e.key === 'Enter') { e.preventDefault(); createSourceFolder(); }
+  if (k === 'create-name' && e.key === 'Enter') { e.preventDefault(); createProject(); }
+  if (k === 'search-q') {
+    const rows = [...document.querySelectorAll('#layer [data-act="go-recent"]')];
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); const n = rows.length; if (n) { open.idx = ((open.idx || 0) + (e.key === 'ArrowDown' ? 1 : n - 1)) % n; renderLayer(); $('[data-input="search-q"]').focus(); } }
+    if (e.key === 'Enter' && rows.length) { e.preventDefault(); const r = rows[Math.min(open.idx || 0, rows.length - 1)]; go({ kind: r.dataset.kind, id: r.dataset.id }); }
+  }
+  if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('.row[role="button"], .row[role="switch"], .prow[role="button"]')) { e.preventDefault(); e.target.click(); }
+}, true);
+
+// Hovering: a folded project with children shows them beside the sidebar after a beat; a source shows its peek. Both close
+// a beat after the pointer leaves the row and the card (the bug was that the children stayed until a press elsewhere).
+document.addEventListener('mouseover', (e) => {
+  updateShortcutTip(e);
+  const inCard = e.target.closest('[data-hover-layer]');
+  if (inCard) { clearTimeout(hoverTimer); return; }
+  const proj = e.target.closest('#rail [data-hover-project]');
+  const src = e.target.closest('[data-peek]');
+  const want = proj && proj.dataset.hoverProject && !e.target.closest('.chev, .act') ? { kind: 'fly', id: proj.dataset.hoverProject, el: proj }
+    : src && !e.target.closest('.act') ? { kind: 'peek', id: src.dataset.peek, el: src } : null;
+  if (want && hover && hover.kind === want.kind && hover.id === want.id) { clearTimeout(hoverTimer); return; }
+  if (want && !(open && ['settings', 'search', 'create', 'source-folder', 'menu'].includes(open.kind))) {
+    if (want.kind === 'fly' && open && open.kind !== 'clock' && open.kind !== 'project') return;
+    clearTimeout(hoverTimer);
+    hoverTimer = setTimeout(() => { if (!want.el.isConnected) return; hover = { kind: want.kind, id: want.id, rect: rectOf(want.el) }; renderHoverLayer(); }, hover ? PEEK_SWITCH : PEEK_OPEN);
+    return;
+  }
+  if (hover) { clearTimeout(hoverTimer); hoverTimer = setTimeout(() => { hover = null; renderHoverLayer(); }, PEEK_CLOSE); }
+  else clearTimeout(hoverTimer);
+});
+document.addEventListener('mousemove', updateAddBoundary, true);
+document.addEventListener('mouseleave', () => { clearTimeout(hoverTimer); hover = null; clearShortcutTip(); renderHoverLayer(); renderProjectTooltip(); scheduleAddDismissal(); });
+window.addEventListener('resize', () => { hover = null; render(); }); // the room is the window's
+
+function addLink() {
+  const v = (open.value || '').trim();
+  if (!v) return;
+  const home = '/Users/hudsonmitchell-pullman';
+  if (v.startsWith('/') && !v.startsWith(home)) { open.error = 'Only files inside your home directory can be added'; renderLayer(); return; }
+  const web = /^(https?:\/\/|www\.)/.test(v);
+  if (!web && !/^(~|\/)/.test(v)) { open.error = 'That is not a link or a path'; renderLayer(); return; }
+  const id = `added-${tick()}`;
+  const name = web ? v.replace(/^https?:\/\//, '').replace(/^www\./, '').split('/')[0] : v.split('/').filter(Boolean).pop();
+  const kind = web ? 'website' : /\.pdf$/i.test(v) ? 'pdf' : /\.(png|jpe?g|heic|gif)$/i.test(v) ? 'image' : /\.html?$/i.test(v) ? 'html' : /\.md$/i.test(v) ? 'md' : /\.\w+$/.test(v) ? 'md' : 'folder';
+  ITEMS[id] = { id, name, kind, excerpt: web ? v : '', flash: Date.now() };
+  const sc = scope();
+  attachSource(id, open.folder || 'project');
+  open = null; render();
+}
+function createProject() {
+  const name = (open.value || '').trim();
+  if (!name) return;
+  const parent = N[open.parent];
+  const id = `${parent.id}/${slug(name)}-${tick()}`;
+  N[id] = { id, name, top: parent.top, parent: parent.id, children: [], level: parent.level + 1, touched: tick() };
+  parent.children.push(id);
+  S.flash = id; setTimeout(() => { S.flash = null; }, 1700);
+  open = null;
+  goProject(id);
+}
+function deleteProject(id) {
+  const n = N[id];
+  if (!confirm(`Delete ${n.name}${n.children.length ? ' and the projects within it' : ''}?`)) return;
+  const gone = Object.keys(N).filter((x) => descends(x, id));
+  N[n.parent].children = N[n.parent].children.filter((x) => x !== id);
+  gone.forEach((x) => { delete N[x]; });
+  AGENTS = AGENTS.filter((a) => N[a.node]);
+  S.recent = S.recent.filter((r) => r.kind === 'note' || N[r.id]);
+  S.tabs = S.tabs.filter((t) => t.page.kind === 'note' || N[t.page.id]);
+  if (!S.tabs.length) S.tabs = [{ page: { kind: 'top', id: S.top }, scope: S.top }];
+  S.tab = Math.min(S.tab, S.tabs.length - 1);
+  S.tabs.forEach((t) => { if (!N[t.scope]) t.scope = S.top; });
+  open = null; render();
+}
+function mockAgent(state, quiet) {
+  const pool = Object.values(N).filter((n) => n.top === S.top && n.level >= 2);
+  if (!pool.length) return;
+  const node = state === 'running' ? 'engelbart/user-interface/popups' : pool[Math.floor(Math.random() * pool.length)].id;
+  const titles = { unseen: ['Breadcrumbs fit the clock', 'Counter says 9+', 'Settings opens in the middle', 'Notes get their own +', 'Folded rows roll up their dot'], needs: ['Which project does + make it in?', 'Clear on open, or on answer?'], running: ['Tab joins the page under it'] };
+  const list = titles[state];
+  AGENTS.push({ id: `m${tick()}`, title: list[Math.floor(Math.random() * list.length)], node: N[node] ? node : pool[0].id, state, at: Date.now(), model: 'Sonnet · high' });
+  if (!quiet) render();
+}
+
+seed();
+render();
+setInterval(() => { if (open && open.kind === 'agents') renderLayer(); }, 30000);
+</script>
+</body>
+</html>

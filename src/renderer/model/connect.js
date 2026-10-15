@@ -24,7 +24,7 @@ export const NEVER_TICKED = Object.freeze(['Gmail']);
  */
 export const START_UNTICKED = Object.freeze([...NEVER_TICKED, 'Google Docs']);
 /** Websites' one row, and Code's second (the first is GitHub). */
-export const BROWSER_ROW = 'Browser history';
+export const BROWSER_ROW = 'Saved URLs'; // 2026-10-14: "Saved URLs" in place of "Browser history" (less off-putting)
 export const LOCAL_REPOS = 'Local repos';
 
 /** The rows a group's header ticks, in order. */
@@ -640,14 +640,15 @@ export function resumable(list) {
 }
 
 /**
- * Where what came in went (2026-10-11), for a session started from a project: `placed.project`, the rows on the project's
- * own list. They go to the project's library, not the workspace's sidebar (2026-10-12); `placed.workspace` is only an
- * older session's count and is not said. '' before anything went in.
+ * Where what came in went (2026-10-11), for a session started from a project: `placed` { project, workspace }, the rows
+ * on the project's own list and those also in the workspace it was started from. '' before anything went in.
  */
 export function placedLine(session) {
   const placed = session && session.projectId && session.placed;
   if (!placed || !placed.project) return '';
-  return `${placed.project} added to the project's library.`;
+  const head = `${placed.project} added to the project.`;
+  if (!placed.workspace) return head;
+  return placed.workspace < placed.project ? `${head} The first ${placed.workspace} are also in this workspace.` : `${head} ${placed.project === 1 ? 'It is' : 'They are'} also in this workspace.`;
 }
 
 /** An import's place in the progress list: its words, whether it is finished, failed, or waits on the person. */
@@ -814,18 +815,6 @@ export function memoryLine(memory) {
   if (status === 'skipped') return { text: 'Nothing to write from', done: true };
   return { text: 'Waits for the imports', done: false };
 }
-
-/**
- * Whether a session is still bringing things in (2026-10-12): not stopped, and an import still going or MEMORY.md not yet
- * written. The progress view's "Bringing everything in", its Stop all, and what its footer button and minus say.
- */
-export function stillBringingIn(session) {
-  if (!session || session.stopped) return false;
-  return workJobs(session.jobs).some((job) => !statusOf(job).done) || !!(session.memory && !memoryLine(session.memory).done);
-}
-
-/** The progress view's footer button: "Run in background" while work goes on, "Done" once it has finished or was stopped. */
-export const putAwayLabel = (session) => (stillBringingIn(session) ? 'Run in background' : 'Done');
 
 /**
  * The dock's line for a session in the background: what needs the person first, else how far it is. `short` is what the

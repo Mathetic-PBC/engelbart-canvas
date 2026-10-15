@@ -56,26 +56,20 @@ function setGettingStarted(ctx, projectId, { tick = [], untick = [], hidden } = 
   return writeFile(ctx, projectId, { ...now, ticked, hidden: now.hidden || hidden === true });
 }
 
-// The offer over the workspace to someone who has projects: "New: a guided setup" (2026-10-10), "Import Context" since
-// 2026-10-12 (renderer ui/GuidedSetup.jsx ImportContextOffer), whose Import opens Connect your library's tick-and-import
-// screen. Kept in <dataRoot>/.guided-setup.json as { seen, how, at }: how it was last answered. Only Not now (dismissed)
-// stops it; shown, started and onboarded (a new user's onboarding made their first project) do not, and it comes back on a
-// later launch until it is dismissed or the context is imported (../connect/imported.cjs importOfferDue).
+// The guided setup offered once to someone who has projects (2026-10-10, "showing this would be better"; it took the
+// place of Connect your library's one-time popup): "New: a guided setup", whose Start runs a new user's onboarding over
+// what they have. Kept in <dataRoot>/.guided-setup.json as { seen, how, at } once it has been answered, or a new user's
+// onboarding has made their first project (they have had it).
 const OFFER_FILE = '.guided-setup.json';
 const OFFER_HOW = new Set(['shown', 'started', 'dismissed', 'onboarded']);
 
-/** Whether the offer was dismissed (Not now) in this data root. */
-function guidedOfferDismissed(ctx) {
-  const value = readJson(path.join(ctx.dataRoot, OFFER_FILE));
-  return !!(value && typeof value === 'object' && value.seen === true && value.how === 'dismissed');
-}
-
-/** Whether the offer may still be shown here, as far as its answers go (not dismissed). */
+/** Whether the offer is still to be shown in this data root. */
 function guidedOfferDue(ctx) {
-  return !guidedOfferDismissed(ctx);
+  const value = readJson(path.join(ctx.dataRoot, OFFER_FILE));
+  return !(value && typeof value === 'object' && value.seen === true);
 }
 
-/** The offer shown or answered (`how`: shown, started, dismissed, or onboarded); dismissed is never shown again here. */
+/** The offer shown or answered (`how`: shown, started, dismissed, or onboarded): it is never shown again here. */
 function markGuidedOffer(ctx, how, now = new Date()) {
   const value = { seen: true, how: OFFER_HOW.has(how) ? how : 'dismissed', at: now.toISOString() };
   fs.mkdirSync(ctx.dataRoot, { recursive: true });
@@ -83,4 +77,4 @@ function markGuidedOffer(ctx, how, now = new Date()) {
   return value;
 }
 
-module.exports = { STEPS, readGettingStarted, startGettingStarted, setGettingStarted, OFFER_FILE, guidedOfferDue, guidedOfferDismissed, markGuidedOffer };
+module.exports = { STEPS, readGettingStarted, startGettingStarted, setGettingStarted, OFFER_FILE, guidedOfferDue, markGuidedOffer };

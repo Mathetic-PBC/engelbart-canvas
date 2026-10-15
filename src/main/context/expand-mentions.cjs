@@ -260,7 +260,7 @@ async function expandDoc(ctx, projectId, ref, { seen = new Set() } = {}) {
   const rows = await ctx.libraryDb.list();
   const body = await projects.readDoc(ctx, projectId, ref);
   const self = ref.kind === 'note' ? rows.find((row) => row.id === ref.id) : null;
-  const title = ref.kind === 'note' ? (self ? self.name : '') : projects.findWorkspace(ctx, projectId, ref.workspaceId).workspace.name;
+  const title = ref.kind === 'note' ? (self ? self.name : '') : ref.kind === 'project' ? projects.findProject(ctx, projectId).name : projects.findWorkspace(ctx, projectId, ref.workspaceId).workspace.name;
   const source = projectSource(ctx, projectId, rows);
   if (self) seen.add(self.id);
   if (ref.kind === 'workspace') seen.add(`ws:${ref.workspaceId}`); // mentioned back from inside, it is already here

@@ -35,6 +35,13 @@ async function minifiedSources() {
     fs.mkdirSync(path.dirname(path.join(out, file)), { recursive: true });
     fs.writeFileSync(path.join(out, file), code);
   }
+  // The pages main opens itself (2026-10-13: onboarding's Full Disk Access helper and the Agent trace), copied as they are.
+  for (const entry of fs.readdirSync(path.join(ROOT, 'src/main'), { recursive: true })) {
+    if (!String(entry).endsWith('.html')) continue;
+    const file = path.join('src/main', String(entry));
+    fs.mkdirSync(path.dirname(path.join(out, file)), { recursive: true });
+    fs.copyFileSync(path.join(ROOT, file), path.join(out, file));
+  }
   return path.join(out, 'src');
 }
 

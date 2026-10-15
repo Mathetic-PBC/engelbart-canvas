@@ -8,7 +8,7 @@ import { REPLY_RE } from './doc.js';
 
 export const STEPS = Object.freeze([
   { n: 1, title: 'See what came in', hint: 'Everything Connect brought in is in Library, in the sidebar, under these tabs.' },
-  { n: 2, title: 'Brainstorm what to do next', hint: 'Type @brainstorm in this workspace and press Enter.' },
+  { n: 2, title: 'Brainstorm what to do next', hint: 'Type @brainstorm in this project and press Enter.' },
   { n: 3, title: 'Find prior work', hint: 'When the brainstorm ends, press @discover under the result. The papers it finds show here.' },
 ]);
 

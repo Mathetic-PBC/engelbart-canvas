@@ -12,8 +12,14 @@ import Workspace from './screens/Workspace.jsx';
 import ToolSetup from './ui/ToolSetup.jsx';
 import UpdateBanner from './ui/UpdateBanner.jsx';
 import { useConnectSessions, ConnectChip, ConnectPopup } from './ui/ConnectDock.jsx';
-import { ImportContextOffer, START_GUIDED_SETUP } from './ui/GuidedSetup.jsx';
+import { GuidedSetupOffer, START_GUIDED_SETUP } from './ui/GuidedSetup.jsx';
 import { launchRows, installedSignedOut, TOOL_ORDER } from './model/tools.js';
+import ImportFlow from './import/ImportFlow.jsx';
+import ImportStatus from './import/ImportStatus.jsx';
+import NeedPopup from './import/NeedPopup.jsx';
+import ProviderPopup from './import/ProviderPopup.jsx';
+import { importApi } from './import/import-api.js';
+import { welcomePlace } from './model/welcome-place.js';
 
 // Screens: the app opens straight into the workspace you were last in, and the first run (no projects yet) is
 // onboarding (screens/Onboarding.jsx, 2026-09-28); + Project runs its last two screens. Onboarding ends in the project
@@ -58,6 +64,7 @@ function DirectoryGate({ project, onChosen, onHome, error }) {
   );
 }
 
+
 export default function App() {
   const [config, setConfig] = React.useState(null);
   const [busy, setBusy] = React.useState(false);
@@ -76,17 +83,20 @@ export default function App() {
   const [launchAsk, setLaunchAsk] = React.useState(null); // what the launch check asks about, until the dialog can open
   const askedAtLaunch = React.useRef(false);
   const lastTools = React.useRef(null);
-  // Connect your library (2026-10-07): its popup ({ sessionId } from the chip, { projectId, workspaceId } from Import
-  // Context's Import).
+  // Connect your library (2026-10-07): its popup ({ sessionId } from the chip, { projectId } the one-time offer).
   const [connectPopup, setConnectPopup] = React.useState(null);
+  // Import your context over the workspace (2026-10-13: the redo of onboarding, "a popup modal in front of the workspace"):
+  // { projectId, workspaceId } the imports go to. And its run's status, open for a session id (ImportStatus).
+  const [importModal, setImportModal] = React.useState(null);
+  const [importStatus, setImportStatus] = React.useState(null);
+  // The import's "Open library": { n, workspaceId, tab } for the workspace to show and its sidebar tour to start.
+  const [tourRequest, setTourRequest] = React.useState(null);
   // The guided setup (ui/GuidedSetup.jsx): a new user's onboarding run for someone with projects, while `guided` (false;
-  // true, started from all projects; or { projectId, workspaceId }, the workspace it was started in). Nothing in the window
-  // starts it since 2026-10-12. "Import Context" (ui/GuidedSetup.jsx ImportContextOffer) is over the workspace while
-  // `guidedOffer`; `offeredIn` is the data root it was offered in this launch (it is offered once a launch).
+  // true, started from all projects; or { projectId, workspaceId }, the workspace it was started in); its one-time offer
+  // over the workspace while `guidedOffer`.
   const [guided, setGuided] = React.useState(false);
   const visited = React.useRef(null); // { projectId, workspaceId }: the workspace on screen now (onVisit)
   const [guidedOffer, setGuidedOffer] = React.useState(false);
-  const offeredIn = React.useRef(null);
 
   const fail = (candidate) => setError(errorMessage(candidate));
 
@@ -233,9 +243,65 @@ export default function App() {
 
   // Connect your library's sessions in this data root (each library its own, 2026-10-08), for the chip and the Inbox.
   const connectSessions = useConnectSessions(!!config, config ? config.dataRoot : '');
-  // "Import Context" (2026-10-12, in place of the guided setup's offer), over the workspace someone opens while this
-  // library's context has not been imported and the offer has not been dismissed (main's guided-offer: ./connect/imported.cjs
-  // importOfferDue). Once a launch: shown, it is not offered again until Engelbart opens again (or the data root changes).
+  // An Import your context run's step for the person (a sign-in, a permission) is a popup of its own, over whatever is
+  // showing (round 3, 2026-10-13: "the permission prompts … should be popups instead of like little pills in the popup"),
+  // one at a time, the oldest first. Later puts one away (`laterNeeds`); the status modal's "Needs you" brings it back.
+  const [needShown, setNeedShown] = React.useState(null); // { sessionId, needId } opened from the status modal
+  const laterNeeds = React.useRef(new Set());
+  const [, setNeedTick] = React.useState(0);
+  const pendingNeed = (() => {
+    if (importModal || phase !== 'workspace') return null;
+    for (const session of connectSessions) {
+      if (!session.direct) continue;
+      for (const need of session.needs || []) {
+        const asked = needShown && needShown.sessionId === session.id && needShown.needId === need.id;
+        if (asked || !laterNeeds.current.has(need.id)) return { session, need };
+      }
+    }
+    return null;
+  })();
+  const needLater = (need) => { laterNeeds.current.add(need.id); setNeedShown(null); setNeedTick((n) => n + 1); };
+  // Everything ended: the run's completion ("Your imports are complete!") opens by itself, once, in place of the header
+  // pill (round 3: "instead of having the pill in the header once it is done a popup should just come").
+  const completedShown = React.useRef(new Set());
+  React.useEffect(() => {
+    if (phase !== 'workspace' || importModal) return;
+    for (const session of connectSessions) {
+      if (!session.direct || completedShown.current.has(session.id)) continue;
+      const work = (session.jobs || []).filter((job) => job.kind === 'import' || job.kind === 'recall' || job.kind === 'survey');
+      // A run whose every app was left out (Later on each sign-in) has no work, and ends too, saying why (ImportStatus).
+      const ended = (work.length > 0 || ((session.leftOut || []).length > 0 && session.finished && !session.thinking)) && work.every((job) => job.status === 'done' || job.status === 'failed' || job.status === 'stopped') && !(session.needs || []).length;
+      if (!ended || session.dismissed) continue;
+      completedShown.current.add(session.id);
+      setImportStatus(session.id);
+    }
+  }, [connectSessions, importModal, phase]);
+  const openSession = (id) => {
+    const session = connectSessions.find((entry) => entry.id === id);
+    if (session && session.direct) setImportStatus(id); else setConnectPopup({ sessionId: id });
+  };
+  const statusSession = importStatus ? connectSessions.find((entry) => entry.id === importStatus) : null;
+  // One popup at a time (2026-10-14, Hudson: "There were two popups, there should only be one … Simplify this."). A step
+  // that needs the person comes first; the status waits behind it (it shows again once that popup is answered or put
+  // away); the guided setup's offer and the tools' setup wait behind both. The sidebar tour pauses under any of them.
+  const needUp = !!pendingNeed;
+  const statusUp = !!(statusSession && !importModal && phase === 'workspace' && !needUp);
+  const closeStatus = () => setImportStatus(null);
+  // Every step's primary action runs in main (connect/session.cjs need 'open'): Zotero's and GitHub's own sign-ins too
+  // (2026-10-14), whose step closes there once the account is connected, so nothing here waits on their events.
+  const needOpen = async (session, need) => {
+    try { await api.connectNeed(session.id, need.id, 'open'); } catch (failure) { fail(failure); }
+  };
+  // The status modal's "Needs you": that step's popup again, over the modal.
+  const needAgain = (session, need) => { laterNeeds.current.delete(need.id); setNeedShown({ sessionId: session.id, needId: need.id }); };
+  // A run waiting for its Claude Code or Codex to be connected (2026-10-14; connect/session.cjs `blocked`): "Connect Claude
+  // Code" over the workspace (./import/ProviderPopup.jsx), after any step above. Later puts it away until the next launch.
+  const laterProvider = React.useRef(new Set());
+  const [, setProviderTick] = React.useState(0);
+  const blockedSession = phase === 'workspace' && !importModal ? connectSessions.find((session) => session.direct && session.blocked && !session.stopped && !session.dismissed && !laterProvider.current.has(session.id)) || null : null;
+
+  // The guided setup offered once to someone who has projects, over the workspace they are in (2026-10-10: it took the
+  // place of Connect your library's one-time popup; Connect is the setup's second screen). Seen once it has been shown.
   const openProjectId = phase === 'workspace' && tree ? tree.project.id : null;
   const dataRoot = config ? config.dataRoot : '';
   // A row clicked in the Agent Viewer (2026-10-12) for a project this window does not show: it opens, at the ask's
@@ -251,31 +317,18 @@ export default function App() {
       .catch(() => setError('This ask\'s project is not in this library (it may have been asked with test mode the other way).'));
   }) : undefined), [openProject]);
   React.useEffect(() => {
-    if (!openProjectId || offeredIn.current === dataRoot) return undefined;
+    if (!openProjectId) return undefined;
     let alive = true;
     const timer = setTimeout(() => {
       api.guidedOffer().then((offer) => {
-        if (!alive || !offer || !offer.show || offeredIn.current === dataRoot) return;
-        offeredIn.current = dataRoot;
+        if (!alive || !offer || !offer.show) return;
         setGuidedOffer(true);
         api.guidedOfferSeen('shown').catch(() => {});
       }).catch(() => {});
     }, 1200); // after the workspace has drawn itself
     return () => { alive = false; clearTimeout(timer); };
-  }, [openProjectId, dataRoot]);
-  // Import: Connect your library's tick-and-import screen over the workspace, for the project and workspace open (what
-  // comes in joins them). Nothing else opens: no onboarding, no welcome screen, no Welcome workspace. Closing it before an
-  // import begins is Not now for this launch only; Not now on the offer is for good.
-  const importContext = React.useCallback(() => {
-    const now = latest.current;
-    const projectId = now.phase === 'workspace' && now.tree ? now.tree.project.id : null;
-    setGuidedOffer(false);
-    api.guidedOfferSeen('started').catch(() => {});
-    if (!projectId) return;
-    const workspaceId = visited.current && visited.current.projectId === projectId ? visited.current.workspaceId : (now.entry && now.entry.workspaceId) || null;
-    setConnectPopup({ projectId, workspaceId });
-  }, []);
-  // The guided setup, started by START_GUIDED_SETUP (nothing in the window sends it since 2026-10-12): onboarding from its first screen, as a new user has it. Inside a
+  }, [openProjectId]);
+  // Start (the offer's, or Settings ▸ Guided setup's): onboarding from its first screen, as a new user has it. Inside a
   // project (2026-10-10, "guided setup shouldn't create a new project") it remembers the workspace it left: its screens
   // have no Create, and it ends in a Welcome workspace added there. Started again during the setup, it keeps where it was from.
   const startGuided = React.useCallback(() => {
@@ -286,6 +339,8 @@ export default function App() {
       : (now.phase === 'create' && now.guided && now.guided.projectId ? now.guided : null);
     setGuidedOffer(false);
     setConnectPopup(null);
+    // In a workspace: Import your context opens over it, the imports going to its project; nothing is left.
+    if (here) { setImportModal({ projectId: here, workspaceId: from.workspaceId || null }); return; }
     setTree(null);
     setEntry(null);
     setGuided(from || true);
@@ -296,6 +351,16 @@ export default function App() {
     window.addEventListener(START_GUIDED_SETUP, startGuided);
     return () => window.removeEventListener(START_GUIDED_SETUP, startGuided);
   }, [startGuided]);
+  // Back from the relaunch Full Disk Access needs (round 3): Import your context had been opened over this project, with
+  // its run pending, so it opens again on its step and starts the imports (ImportFlow's restore).
+  const resumedImport = React.useRef(false);
+  React.useEffect(() => {
+    if (!openProjectId || resumedImport.current || importModal) return;
+    resumedImport.current = true;
+    api.importFlow().then((flow) => {
+      if (flow && flow.pendingRun && flow.into === openProjectId) setImportModal({ projectId: openProjectId, workspaceId: null });
+    }).catch(() => {});
+  }, [openProjectId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Another window saved something here: this project's tree (a workspace or note made, renamed, linked; a document
   // cleared) is read again, or, on the projects screen, the projects. A project another window deleted is left for the
@@ -374,11 +439,15 @@ export default function App() {
   // the sites its sign-in import said to sign in to again on the Stage. A new user's (made.gettingStarted, 2026-10-09)
   // lands on its Welcome workspace's own document instead, under the walkthrough; the note is in its sidebar. The guided
   // setup started inside a project (api.welcomeWorkspace) lands the same way on the Welcome workspace it added there.
-  async function onboarded(made, { stageLinks = [] } = {}) {
+  async function onboarded(made, { stageLinks = [], session = null } = {}) {
     setError('');
     setGuided(false);
     await loadHome();
-    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: made.gettingStarted ? null : { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
+    await openProject(made.project.id, { workspaceId: made.workspaceId, tab: made.gettingStarted || made.welcomePage || !made.noteId ? null : { id: made.noteId, title: made.noteName }, stage: stageLinks.length ? { links: stageLinks } : null });
+    // Import your context's run: its status is not opened over the project on landing (2026-10-14, Hudson: "There were
+    // two popups, there should only be one"). A step that needs the person comes up as its own popup; the progress is
+    // the "Importing i/n" words in the title bar, which open the status.
+    void session;
   }
 
   async function goHome() {
@@ -386,6 +455,29 @@ export default function App() {
     setPhase('home');
     try {
       await loadHome();
+    } catch (candidate) {
+      fail(candidate);
+    }
+  }
+
+  // "Open library" on the import's completion (2026-10-14, Hudson: "the button that says open library should just take
+  // them to the welcome note on their page and should basically highlight the sources part of the sidebar"): the project
+  // the run went to (its snapshot's projectId; else the one open), on its Welcome workspace's page (the session's
+  // workspace when main says which, else the newest workspace called Welcome, else the one open), then the three-card
+  // sidebar tour, once (SidebarTour.jsx).
+  async function openLibrary(session) {
+    const id = session.id;
+    setImportStatus(null);
+    api.connectDismiss(id).catch(() => {});
+    const now = latest.current;
+    const projectId = session.projectId || (now.tree && now.tree.project.id) || null;
+    if (!projectId) { void goHome(); return; }
+    try {
+      const here = now.phase === 'workspace' && now.tree && now.tree.project.id === projectId;
+      const target = here ? now.tree : await api.loadProject(projectId);
+      const place = welcomePlace(target, { given: session.workspaceId || null, current: here && visited.current && visited.current.projectId === projectId ? visited.current.workspaceId : null });
+      if (!here) await openProject(projectId, place.workspaceId ? { workspaceId: place.workspaceId, tab: place.tab } : null);
+      setTourRequest({ n: Date.now(), workspaceId: place.workspaceId, tab: place.tab });
     } catch (candidate) {
       fail(candidate);
     }
@@ -444,6 +536,12 @@ export default function App() {
     else goHome();
   };
 
+  const offerUp = guidedOffer && phase === 'workspace' && !needUp && !statusUp && !importModal && !connectPopup;
+  // A run waiting for its provider asks before the tools' setup does (2026-10-14): it names what is stuck and why.
+  const providerUp = !!blockedSession && !needUp && !statusUp && !offerUp && !connectPopup;
+  const setupUp = !!(setup && tools && !needUp && !statusUp && !providerUp);
+  const popupUp = needUp || statusUp || offerUp || setupUp || providerUp || !!importModal || !!connectPopup;
+
   return (
     <SandboxProgress key={config.dataRoot} dataRoot={config.dataRoot} library={library} inWorkspace={phase === 'workspace' && !!tree}>
     <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', background: '#fff' }}>
@@ -496,7 +594,11 @@ export default function App() {
           onError={fail}
           // Connect your library's sessions, for the sidebar's Inbox: one that needs you or has finished, opened in its popup
           connectSessions={connectSessions}
-          onOpenConnect={(id) => setConnectPopup({ sessionId: id })}
+          onOpenConnect={openSession}
+          // the import's "Open library": its Welcome page, then the sidebar tour (workspace/SidebarTour.jsx), paused
+          // under any popup
+          tourRequest={tourRequest}
+          tourPaused={popupUp}
         />
       )}
       {phase === 'workspace' && tree && !tree.project.directory && (
@@ -510,7 +612,7 @@ export default function App() {
       )}
       {/* a new version downloading, or ready to restart into (src/main/updates.cjs), on every screen */}
       <UpdateBanner />
-      {setup && tools && <ToolSetup snapshot={tools} ids={setup.ids} mode={setup.mode} onClose={() => setSetup(null)} />}
+      {setupUp && <ToolSetup snapshot={tools} ids={setup.ids} mode={setup.mode} onClose={() => setSetup(null)} />}
       <WindowEdges />
       {/* test mode, its pill and Settings' Test data section, only in a developer's copy (src/main/developer.cjs): the app
           people download has no test mode */}
@@ -520,13 +622,47 @@ export default function App() {
         onStartNew: () => resetTest(true),
         onReveal: () => api.reveal(config.testRoot).catch(fail),
       } : null}>
-        <ConnectChip sessions={connectSessions} onOpen={(id) => setConnectPopup({ sessionId: id })} />
+        <ConnectChip sessions={connectSessions} onOpen={openSession} />
         {/* The Agents button (./ui/AgentsButton.jsx) is stashed (2026-10-15, David): off the top bar for now. */}
         {AGENTS_BUTTON_SHOWN && <AgentsButton available={agentsAvailable(config)} onOpen={() => { void api.openAgentMap().catch(() => {}); }} />}
         {config.testModeAvailable && <TestToggle testMode={config.testMode} busy={busy} onToggle={toggleTest} />}
       </WindowControls>
-      {guidedOffer && phase === 'workspace' && (
-        <ImportContextOffer onImport={importContext} onDismiss={() => { setGuidedOffer(false); api.guidedOfferSeen('dismissed').catch(() => {}); }} />
+      {offerUp && (
+        <GuidedSetupOffer onStart={() => { api.guidedOfferSeen('started').catch(() => {}); startGuided(); }} onDismiss={() => { setGuidedOffer(false); api.guidedOfferSeen('dismissed').catch(() => {}); }} />
+      )}
+      {importModal && phase === 'workspace' && (
+        <div data-overlay="1" data-cover="1" data-import-modal="1" style={{ position: 'fixed', inset: 0, zIndex: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(23,23,23,.18)' }}>
+          {/* transform: the flow's fixed parts (its foot, its dialogs) are held inside this panel, not the window */}
+          <div role="dialog" aria-modal="true" aria-label="Import your context" style={{ position: 'relative', width: 'min(1000px, 100%)', height: 'min(800px, 100%)', overflow: 'auto', background: '#fff', borderRadius: 14, boxShadow: '0 20px 60px #00000026', transform: 'translateZ(0)' }}>
+            <ImportFlow api={importApi} mode="modal" into={importModal.projectId} workspaceId={importModal.workspaceId} intoProject={tree && tree.project && tree.project.id === importModal.projectId ? { name: tree.project.name || '', description: tree.project.description || '' } : null} platform={/Mac/i.test(navigator.platform || '') ? 'darwin' : 'other'}
+              // the flow over the workspace ended: as on landing, the status is not opened by itself (the title bar's words open it)
+              onClose={() => setImportModal(null)} />
+          </div>
+        </div>
+      )}
+      {/* in the workspace only: during onboarding the run starts before its project opens, and the modal would cover the flow */}
+      {statusUp && (
+        <ImportStatus session={statusSession} onClose={closeStatus}
+          onNeed={(need) => needAgain(statusSession, need)}
+          onNeedDone={(need) => api.connectNeed(statusSession.id, need.id, 'done').catch(fail)}
+          onSkip={(need) => api.connectNeed(statusSession.id, need.id, 'skip').catch(fail)}
+          onStop={() => api.connectStop(statusSession.id).catch(fail)}
+          onDone={() => { void openLibrary(statusSession); }} />
+      )}
+      {pendingNeed && (
+        <NeedPopup key={pendingNeed.need.id} need={pendingNeed.need}
+          onOpen={() => needOpen(pendingNeed.session, pendingNeed.need)}
+          onDone={() => api.connectNeed(pendingNeed.session.id, pendingNeed.need.id, 'done').catch(fail)}
+          onSkip={() => { api.connectNeed(pendingNeed.session.id, pendingNeed.need.id, 'skip').catch(fail); setNeedShown(null); }}
+          // Later puts the step away for good (2026-10-14: "clicking later should dismiss the needs you, too"): skipped for
+          // this run, so no "Needs you" is left in the title bar or the status.
+          onLater={() => { const { session, need } = pendingNeed; needLater(need); api.connectNeed(session.id, need.id, 'skip').catch(fail); }} />
+      )}
+      {providerUp && (
+        <ProviderPopup key={`${blockedSession.id}:${blockedSession.blocked.at || ''}`} session={blockedSession} tools={tools}
+          onConnect={(cli) => api.toolsConnect(cli)} onSignIn={(cli) => api.toolsSignIn(cli)} onOpenPage={(url) => api.openExternal(url).catch(fail)}
+          onContinue={(provider) => api.connectUnblock(blockedSession.id, provider)}
+          onLater={() => { laterProvider.current.add(blockedSession.id); setProviderTick((n) => n + 1); }} />
       )}
       {connectPopup && <ConnectPopup key={connectPopup.sessionId || connectPopup.projectId} request={connectPopup} onClose={() => setConnectPopup(null)} />}
     </div>

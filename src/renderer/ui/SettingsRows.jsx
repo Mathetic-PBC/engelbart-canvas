@@ -9,7 +9,7 @@ export const text = (size, color = '#171717', weight = 400) => ({ font: `${weigh
 const PAD = 16;
 const GROUP_HEAD = { display: 'flex', alignItems: 'baseline', gap: 8, margin: '28px 0 10px', ...text(14, '#171717', 500) };
 const CARD = { margin: `0 -${PAD}px`, border: '1px solid #ebebeb', borderRadius: 10, background: '#fff', boxShadow: '0 1px 2px #00000008' };
-const ROW = { display: 'flex', alignItems: 'center', gap: 10, minHeight: 60, boxSizing: 'border-box', padding: `12px ${PAD}px` };
+const ROW = { display: 'flex', alignItems: 'center', gap: 10, minHeight: 52, boxSizing: 'border-box', padding: `10px ${PAD}px` };
 const HAIRLINE = { height: 1, margin: `0 ${PAD}px`, background: '#efefef' };
 
 export function Group({ title, note, children, ...rest }) {
@@ -32,7 +32,7 @@ export function Row({ icon, label, hint, detail, children, ...rest }) {
       {icon && <span className="glyph-fit" style={{ flex: 'none', display: 'flex', width: 18, height: 18, marginRight: 2, color: '#4d4d4d' }}>{icon}</span>}
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={text(13.5, '#171717', 500)}>{label}</div>
-        <div style={{ marginTop: 1, ...text(12.5, '#8f8f8f') }}>{hint}</div>
+        {hint && <div style={{ marginTop: 1, ...text(12.5, '#8f8f8f') }}>{hint}</div>}
         {detail}
       </div>
       {children}

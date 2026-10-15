@@ -1818,7 +1818,7 @@ export default class PaperView extends React.Component {
     sec.innerHTML = (asked ? `<div title="${esc(asked)}" style="flex:none;padding:0 12px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8f8f">${esc(asked)}</div>` : '')
       + `<div data-ask-body="1" style="flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 12px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
       + '<div style="flex:none;display:flex;flex-wrap:wrap;gap:2px;padding:2px 6px 4px">'
-      + (this.props.onContinueAsk ? '<button type="button" data-act="continue">Continue in workspace</button>' : '')
+      + (this.props.onContinueAsk ? '<button type="button" data-act="continue">Continue in project</button>' : '')
       + (this.props.onCopyText ? '<button type="button" data-act="copy">Copy</button>' : '')
       + '<button type="button" data-act="delete">Delete</button><button type="button" data-act="collapse">Collapse</button></div>';
     return sec;
@@ -1862,7 +1862,7 @@ export default class PaperView extends React.Component {
     if (what === 'copy') { if (this.props.onCopyText) this.props.onCopyText(a.answer || ''); say('Copied', 'Copy'); return; }
     if (what === 'continue') {
       if (this.props.onContinueAsk) this.props.onContinueAsk({ markId: m.id, page, quote: passageOf(this.marks, m), question: a.question || '', answer: a.answer || '', foot: (a.meta && a.meta.foot) || '' });
-      say('Added', 'Continue in workspace');
+      say('Added', 'Continue in project');
       return;
     }
     // Deleted, an answer is no longer drawn but stays one of the exchange's turns (./canvas.js exchangeOf), and ⌘Z brings it back.

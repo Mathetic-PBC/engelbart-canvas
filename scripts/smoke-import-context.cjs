@@ -1,37 +1,72 @@
 'use strict';
 
-// npm run build && npx electron scripts/smoke-import-context.cjs
-// Runs the real app, hidden, against disposable data in test mode (a data root with no MEMORY.md and no Connect session),
-// and checks "Import Context" (2026-10-12, src/renderer/ui/GuidedSetup.jsx ImportContextOffer): it appears over the
-// workspace a person opens; Import opens Connect your library's tick-and-import screen over that workspace and nothing
-// else (no onboarding, no welcome screen, no Welcome workspace); closing that popup leaves the offer away for this launch;
-// a later launch offers it again; Not now dismisses it for good.
+// npm run build && npx electron scripts/smoke-import-context.cjs            (Let agents choose)
+// npm run build && ENGELBART_SMOKE_MODE=manual npx electron scripts/smoke-import-context.cjs   (Choose sources myself)
+// Import your context, round 3 (2026-10-13, docs/onboarding-round-3.md), walked in the real app, hidden, against a
+// disposable home with stand-ins for this Mac: Connect's fake agents (ENGELBART_CONNECT_FAKE), Claude and Codex both
+// subscribed (ENGELBART_PROVIDERS_FAKE=both: the provider asked), Arc the default browser with Chrome installed
+// (ENGELBART_ONBOARDING_BROWSERS), Full Disk Access off until System Settings is "opened" (ENGELBART_DISK_ACCESS=denied,
+// which grants it 2.5 s later), no browser whose cookies can be read (so every web app is signed out: a sign-in popup),
+// Chrome holding the browser extension though the person's CLI does not let its agents use it yet
+// (ENGELBART_BROWSER_AGENTS=ask).
+//   welcome → Import your context (intro) → Import context → Which provider? (one click) → the browser's sign-ins, over
+//   "What kind of work do you do?" (no subtext) → roles → "What are you working on?" (one line that grows, never resized)
+//   → projects → How would you like to import context? (over the next screen, one click) →
+//     auto:   Confirm your tools (no subtext; nothing ticked that the agent said is not used) → Import to Engelbart
+//     manual: What should go in your library? (no For/Edit, no Sources bar, no subscription card; one group open at a
+//             time; Specify context collapsed, its project pills, "Further specify", Choose a folder / Choose files) →
+//             Import to Engelbart
+//   → Allow Full Disk Access (one line) → Turn on → Let agents use Chrome? (one line) → the project opens → the status
+//   (no subtext, no lines) and the sign-in popups, one at a time, "Continue in Arc." (Later; "Needs you" brings one back)
+//   → Your imports are complete / have finished, with the logos of what came in.
 // ENGELBART_IMPORT_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-import-smoke-'));
+const MODE = process.env.ENGELBART_SMOKE_MODE === 'manual' ? 'manual' : 'auto';
+const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-import-smoke-')));
 app.setPath('userData', path.join(root, 'electron'));
 process.env.ENGELBART_HOME_DIR = root;
 process.env.ENGELBART_SUMMARIES = 'off';
-delete process.env.ENGELBART_CONNECT_OFFER; // the offer is what this smoke is about
-process.env.ENGELBART_TOOLS_FAKE = JSON.stringify({ claude: '2.1.300', codex: '0.155.1' });
+process.env.ENGELBART_TOOLS_FAKE = JSON.stringify({ git: '2.50.0', claude: '2.1.300', codex: '0.160.0' });
 process.env.ENGELBART_WEB_PDFS = 'off';
-process.env.ENGELBART_BART_FAKE = '1';
-process.env.ENGELBART_BUILD_FAKE = '1';
-process.env.ENGELBART_CONNECT_FAKE = process.env.ENGELBART_CONNECT_FAKE || '1';
+process.env.ENGELBART_SANDBOXES = 'off';
+process.env.ENGELBART_UPDATES = 'off';
+process.env.ENGELBART_CONNECT_FAKE = '1';
+process.env.ENGELBART_CONNECT_FAKE_MS = '150';
+process.env.ENGELBART_CONNECT_APPLICATIONS = '';
 process.env.ENGELBART_HEADLESS = '1';
+process.env.ENGELBART_INSTALLED_BROWSERS = '';
+process.env.ENGELBART_PROVIDERS_FAKE = 'both';
+process.env.ENGELBART_BROWSER_AGENTS = 'ask';
+process.env.ENGELBART_ONBOARDING_BROWSERS = 'arc,chrome';
+process.env.ENGELBART_DISK_ACCESS = 'denied';
+process.env.ENGELBART_PICK_DIRECTORY = path.join(root, 'Notes', 'Research');
+process.env.ENGELBART_PICK_PATHS = JSON.stringify([path.join(root, 'Notes', 'Research', 'Help-seeking.md')]);
+
+const home = require('../src/main/store/home.cjs');
+home.writeConfig(home.ensureHome(root).root, { testMode: false });
+const write = (rel, text) => { const file = path.join(root, rel); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
+// A vault Obsidian knows, and Claude Code sessions in two project folders: what the project agent reads.
+write('Notes/.obsidian/daily-notes.json', JSON.stringify({ folder: 'Daily' }));
+write('Notes/Research/Help-seeking.md', 'Novices rarely ask. See [[Tutoring]].\n');
+write('Library/Application Support/obsidian/obsidian.json', JSON.stringify({ vaults: { v: { path: path.join(root, 'Notes'), ts: Date.now(), open: true } } }));
+const session = (dir, id, prompt) => write(`.claude/projects/-${dir.replace(/\//g, '-')}/${id}.jsonl`, `${JSON.stringify({ type: 'user', entrypoint: 'cli', cwd: path.join(root, dir), message: { role: 'user', content: prompt } })}\n`);
+session('tutoring-study', '11111111-1111-4111-8111-111111111111', 'Plan the help-seeking analysis');
+session('tutoring-study', '22222222-2222-4222-8222-222222222222', 'Write the methods section');
+session('reading-guide', '33333333-3333-4333-8333-333333333333', 'Summarize VanLehn 2011');
+fs.mkdirSync(path.join(root, 'tutoring-study'), { recursive: true });
+
 require('../src/main/index.cjs');
 
 const pause = (ms = 50) => new Promise((resolve) => setTimeout(resolve, ms));
-async function until(fn, label, tries = 300) {
+async function until(fn, label, tries = 400) {
   for (let i = 0; i < tries; i++) { const result = await fn(); if (result) return result; await pause(); }
   throw new Error(`Timed out: ${label}`);
 }
 const js = (wc, expression) => wc.executeJavaScript(expression, true);
-const ED = 'main [data-editor]';
 const click = async (wc, { x, y }) => {
   wc.focus();
   await pause();
@@ -40,88 +75,278 @@ const click = async (wc, { x, y }) => {
   wc.sendInputEvent({ type: 'mouseUp', button: 'left', clickCount: 1, x, y });
   await pause(150);
 };
-const spot = (wc, selector) => js(wc, `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return null;const r=el.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);
+const spot = (wc, selector) => js(wc, `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el||el.disabled)return null;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);
 const press = async (wc, selector) => { const at = await until(() => spot(wc, selector), selector); await click(wc, at); };
+const pressText = async (wc, scope, words) => {
+  const at = await until(() => js(wc, `(()=>{const el=[...document.querySelectorAll(${JSON.stringify(`${scope} button`)})].find((b)=>!b.disabled&&b.textContent.trim().startsWith(${JSON.stringify(words)}));if(!el)return null;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`), `"${words}"`);
+  await click(wc, at);
+};
 const has = (wc, selector) => js(wc, `!!document.querySelector(${JSON.stringify(selector)})`);
 const text = (wc, selector) => js(wc, `(document.querySelector(${JSON.stringify(selector)})||{}).textContent||''`);
+const flow = (wc) => js(wc, '(()=>{const el=document.querySelector("[data-import-flow]");return el?{screen:el.dataset.screen,dialog:el.dataset.dialog}:null})()');
+const type = (wc, selector, value) => js(wc, `(()=>{const el=document.querySelector(${JSON.stringify(selector)});const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,"value").set.call(el,${JSON.stringify(value)});el.dispatchEvent(new Event("input",{bubbles:true}))})()`);
+// Text under a choice's name (the round's "get rid of all of this subtext under everything").
+const subtext = (wc, selector) => js(wc, `[...document.querySelectorAll(${JSON.stringify(selector)})].filter((el)=>{const s=el.querySelector('small');return s&&getComputedStyle(s).display!=='none'&&s.textContent.trim()}).length`);
 const SHOTS = process.env.ENGELBART_IMPORT_SHOTS;
 async function shot(wc, name) {
   if (!SHOTS) return;
   fs.mkdirSync(SHOTS, { recursive: true });
   const picture = await wc.capturePage(undefined, { stayHidden: true, stayAwake: true });
-  fs.writeFileSync(path.join(SHOTS, `${name}.png`), picture.toPNG());
-}
-// A fresh launch of the window, as Engelbart opening again: the page reloads and the workspace opens again.
-async function relaunch(wc) {
-  wc.reload();
-  await until(() => js(wc, `!!document.querySelector(${JSON.stringify(ED)})`).catch(() => false), 'the workspace document');
+  fs.writeFileSync(path.join(SHOTS, `${MODE}-${name}.png`), picture.toPNG());
 }
 
 app.whenReady().then(async () => {
   try {
     const win = await until(() => BrowserWindow.getAllWindows()[0], 'app window');
-    win.setFocusable(false); // synthetic input only; do not capture the user's typing
-    assert.equal(win.isVisible(), false, 'smoke runs must not show a desktop window');
+    win.setFocusable(false);
+    win.setSize(1280, 900);
     const wc = win.webContents;
     wc.setBackgroundThrottling(false);
-    await until(() => js(wc, '!!window.engelbartAPI && !!document.querySelector("button")').catch(() => false), 'app bootstrap');
+    await until(() => js(wc, '!!document.querySelector("[data-onboarding=new]")').catch(() => false), 'a new user\'s onboarding');
+    await press(wc, '[data-onboarding-continue] button');
 
-    /* ------------------------------------------------ test mode, a data root with nothing imported */
-    const config = await js(wc, 'window.engelbartAPI.setTestMode(true)');
-    assert.equal(config.testMode, true, 'test mode');
-    const dataRoot = config.dataRoot;
-    assert.ok(dataRoot.endsWith(`${path.sep}test`), dataRoot);
-    assert.equal(fs.existsSync(path.join(dataRoot, 'MEMORY.md')), false, 'no MEMORY.md');
-    assert.deepEqual(await js(wc, 'window.engelbartAPI.contextImported()'), { imported: false });
-    const made = await js(wc, `window.engelbartAPI.createProjectWithWelcome({name:'Import smoke', directory:${JSON.stringify(root)}})`);
-    const projectId = made.project.id;
-    const workspacesBefore = (await js(wc, `window.engelbartAPI.loadProject(${JSON.stringify(projectId)})`)).workspaces.map((w) => w.id);
-    await relaunch(wc);
+    /* the intro */
+    await until(async () => { const f = await flow(wc); return f && f.screen === 'intro' && !f.dialog; }, 'Import your context, a screen of its own');
+    await shot(wc, '01-intro');
+    assert.match(await text(wc, '[data-copy=privacy]'), /Remove anything at any time\.$/, 'the period after "time"');
+    await press(wc, '[data-import-start]');
+    /* both subscribed: asked which, choosing is continuing */
+    await until(async () => { const f = await flow(wc); return f.dialog === 'provider-choice' && f.screen === 'intro'; }, 'Which provider? (over the intro)');
+    await shot(wc, '02-provider');
+    await press(wc, '[data-onboarding-provider="anthropic"]');
+    /* the browser's sign-ins, over the first work question */
+    // 2026-10-14: the intro stays behind its popups ("the background should never change when a new popup comes").
+    await until(async () => { const f = await flow(wc); return f.dialog === 'keychain' && f.screen === 'intro'; }, 'the browser\'s sign-ins, over the intro');
+    assert.match(await text(wc, '[role=dialog] h3'), /Arc sign-ins/, 'the default browser, Arc');
+    assert.equal(await js(wc, 'document.querySelectorAll("[role=dialog] p").length'), 0, 'no text under the question (Attachment 1)');
+    await shot(wc, '03-keychain');
+    await press(wc, '[data-import-keychain-allow]');
+    /* roles */
+    await until(async () => { const f = await flow(wc); return f.screen === 'roles' && !f.dialog; }, 'What kind of work do you do?');
+    assert.equal(await has(wc, '[data-work-role][aria-checked=true]'), false, 'no role ticked for them');
+    assert.equal(await has(wc, '.work-head .work-back'), false, 'Back is at the lower left, not the top');
+    assert.equal(await has(wc, '.work-foot .work-back'), true);
+    await press(wc, '[data-work-role="Researcher"]');
+    await shot(wc, '04-roles');
+    await pressText(wc, '.work-foot', 'Continue');
+    /* the work: one line that grows, never resized by hand */
+    await until(async () => (await flow(wc)).screen === 'work', 'What are you interested in?');
+    assert.equal(await text(wc, '.work-head h1'), 'What are you interested in?');
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-import-screen=work] p, [data-import-screen=work] small").length'), 0, 'no line about the keys');
+    assert.equal(await js(wc, 'getComputedStyle(document.querySelector("#work-description")).resize'), 'none', 'not expandable (Attachment 2)');
+    assert.equal(await js(wc, 'document.querySelector("#work-description").placeholder'), 'Understanding the Memex...');
+    assert.equal(await js(wc, '[...document.querySelectorAll(".work-foot button")].find((b)=>b.textContent.trim().startsWith("Continue")).disabled'), true, 'Continue waits for a description');
+    const centred = await js(wc, '(()=>{const r=document.querySelector("#work-description").getBoundingClientRect();return Math.abs((r.left+r.right)/2-innerWidth/2)<4&&r.width<=400&&Math.abs((r.top+r.bottom)/2-innerHeight/2)<innerHeight*0.2})()');
+    assert.equal(centred, true, 'a small box, centred in the window');
+    const short = await js(wc, 'document.querySelector("#work-description").getBoundingClientRect().height');
+    await type(wc, '#work-description', 'I study how students ask for help. '.repeat(20));
+    const tall = await js(wc, 'document.querySelector("#work-description").getBoundingClientRect().height');
+    assert.ok(tall > short && tall <= 141, `it grows to a point, then scrolls (${short} → ${tall})`);
+    await type(wc, '#work-description', 'I study how students ask for help.');
+    await shot(wc, '05-work');
+    // Shift+Enter is a new paragraph; Enter continues.
+    await js(wc, 'document.querySelector("#work-description").focus()');
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Return', modifiers: ['shift'] });
+    wc.sendInputEvent({ type: 'char', keyCode: '\r', modifiers: ['shift'] });
+    wc.sendInputEvent({ type: 'keyUp', keyCode: 'Return', modifiers: ['shift'] });
+    await pause(150);
+    assert.equal((await flow(wc)).screen, 'work', 'Shift+Enter stays');
+    assert.match(await js(wc, 'document.querySelector("#work-description").value'), /\n$/, 'Shift+Enter, a new line');
+    wc.sendInputEvent({ type: 'keyDown', keyCode: 'Return' });
+    wc.sendInputEvent({ type: 'char', keyCode: '\r' });
+    wc.sendInputEvent({ type: 'keyUp', keyCode: 'Return' });
+    /* projects */
+    await until(async () => (await flow(wc)).screen === 'projects', 'What project do you want to work on first?');
+    await until(() => has(wc, '[data-work-project]'), 'the projects the agent found');
+    const titles = await js(wc, '[...document.querySelectorAll("[data-work-project] b")].map((b)=>b.textContent)');
+    assert.ok(titles.length >= 2 && titles.length <= 5, `2-5 projects: ${titles.join(', ')}`);
+    await js(wc, 'document.querySelectorAll("[data-work-project]")[0].click()');
+    await js(wc, 'document.querySelectorAll("[data-work-project]")[1].click()');
+    await pause(100);
+    await shot(wc, '06-projects');
+    await pressText(wc, '.work-foot', 'Continue');
+    /* the method, after the projects, over the next screen */
+    await until(async () => { const f = await flow(wc); return f.dialog === 'import-mode' && f.screen === 'picker'; }, 'How would you like to import context? (over the picker)');
+    assert.equal(await js(wc, '[...document.querySelectorAll("[role=dialog] button")].some((b)=>b.textContent.trim()==="Continue")'), false, 'no Continue: choosing is continuing');
+    await shot(wc, '07-method');
 
-    /* ------------------------------------------------ the popup appears over the workspace */
-    await until(() => has(wc, '[data-import-offer]'), 'Import Context over the workspace');
-    assert.equal(await text(wc, '#import-offer-title'), 'Import Context');
-    assert.equal(await text(wc, '[data-import-offer] p'), 'Import your AI chats, papers, notes, and local files into Engelbart');
-    assert.equal(await has(wc, ED), true, 'the workspace is under it');
-    await shot(wc, '1-offer');
+    let ticked = [];
+    if (MODE === 'auto') {
+      await press(wc, '[data-import-mode="auto"]');
+      await until(async () => (await flow(wc)).screen === 'tools', 'Confirm your tools');
+      await until(() => spot(wc, '[data-import-run]'), 'the tool agent\'s answer');
+      await shot(wc, '08-tools');
+      assert.equal(await subtext(wc, '[data-work-tool]'), 0, 'no subtext under the tools');
+      ticked = await js(wc, '[...document.querySelectorAll("[data-work-tool][aria-checked=true]")].map((b)=>b.dataset.workTool)');
+      assert.ok(ticked.includes('Obsidian'), 'Obsidian, found on this Mac, ticked');
+      // Nothing ticked that the agent said is not used (Attachment 3: OneNote "Not detected" yet ticked).
+      const said = await js(wc, 'window.engelbartAPI.importDiscovery().then((d)=>d.tools.results.tools)');
+      for (const id of ticked) { const fact = said.find((tool) => tool.id === id); if (fact) assert.equal(fact.used, true, `${id} ticked though the agent said it is not used`); }
+      await press(wc, '[data-import-run]');
+    } else {
+      await press(wc, '[data-import-mode="manual"]');
+      await until(async () => { const f = await flow(wc); return f.screen === 'picker' && !f.dialog; }, 'What should go in your library?');
+      assert.equal(await has(wc, '.project-scope-strip'), false, 'no For/Edit (Attachment 15)');
+      assert.equal(await has(wc, '.bar'), false, 'no Sources / From / Select all (Attachment 16)');
+      assert.equal(await has(wc, '.consent'), false, 'no subscription card (Attachment 17)');
+      assert.equal(await subtext(wc, '[data-app]'), 0, 'no subtext under the sources');
+      assert.equal(await js(wc, 'document.querySelectorAll("[data-app][aria-checked=true]").length'), 0, 'nothing ticked for them (2026-10-14)');
+      // One group open at a time (Attachment 20).
+      assert.equal(await js(wc, 'document.querySelector("[data-group=notes]").getAttribute("aria-expanded")'), 'true', 'Notes open first');
+      await press(wc, '[data-group="transcripts"]');
+      assert.equal(await js(wc, 'document.querySelector("[data-group=notes]").getAttribute("aria-expanded")'), 'false', 'Notes folded when Meeting transcripts opens');
+      await press(wc, '[data-group="notes"]');
+      if (await js(wc, 'document.querySelector("[data-app=Obsidian]").getAttribute("aria-checked")') !== 'true') await press(wc, '[data-app="Obsidian"]');
+      // 2026-10-14: the category's Specify context opens by itself once something in it is ticked; a source's own stays
+      // closed until its row's Specify context is clicked.
+      await until(() => has(wc, '[data-context-panel="group:notes"]'), 'Notes\' Specify context, open');
+      assert.equal(await has(wc, '[data-context-panel="Obsidian"]'), false, 'Obsidian\'s own stays closed');
+      const groupLabel = await text(wc, '[data-context-panel="group:notes"] .review-context-label');
+      assert.match(groupLabel, /^Specific things to import from .*Obsidian.* \(optional\)$/, groupLabel);
+      assert.equal(await js(wc, 'document.querySelector("[data-scope-note=\'group:notes\']").placeholder'), 'Only bring in notes relating to the Memex and my research');
+      // The projects' line is above the pills.
+      assert.equal(await js(wc, '(()=>{const p=document.querySelector("[data-context-panel=\'group:notes\'] .review-projects-note"),g=document.querySelector("[data-context-panel=\'group:notes\'] .review-projects");return !!p&&!!g&&p.getBoundingClientRect().top<g.getBoundingClientRect().top})()'), true, 'the projects\' line is a header over the pills');
+      const level = await js(wc, '(()=>{const b=document.querySelector("[data-specify-context=Obsidian]");const t=b.getBoundingClientRect(),s=b.querySelector("svg").getBoundingClientRect();return Math.abs((t.top+t.bottom)/2-(s.top+s.bottom)/2)})()');
+      assert.ok(level <= 2, `the chevron is level with "Specify context" (${level}px off)`);
+      await press(wc, '[data-specify-context="Obsidian"]');
+      await until(() => has(wc, '[data-context-panel="Obsidian"]'), 'Obsidian\'s own context open');
+      assert.match(await text(wc, '[data-context-panel="Obsidian"] .review-projects-note'), /^Select all projects you want Engelbart to import from Obsidian\.$/);
+      assert.equal(await text(wc, '[data-context-panel="Obsidian"] .review-context-label'), 'Specific things to import from Obsidian (optional)');
+      assert.equal(await js(wc, 'document.querySelectorAll("[data-context-panel=Obsidian] .review-project").length'), 2, 'a pill for each project picked');
+      await js(wc, 'document.querySelector("[data-context-panel=Obsidian] .review-project").click()');
+      await type(wc, '[data-scope-note="Obsidian"]', 'Only my notes about help-seeking');
+      // One Choose files; Obsidian's opens a picker over its vaults.
+      assert.deepEqual(await js(wc, '[...document.querySelectorAll("[data-context-panel=Obsidian] .folder-upload button")].map((b)=>b.textContent)'), ['Choose files']);
+      await press(wc, '[data-choose-files="Obsidian"]');
+      await until(async () => (await flow(wc)).dialog === 'obsidian-picker', 'Choose from Obsidian');
+      await until(() => has(wc, '[data-obsidian-path$="/Research"]'), 'the vault\'s folders');
+      await shot(wc, '08a-obsidian-picker');
+      await js(wc, 'document.querySelector("[data-obsidian-path$=\'/Research\'] .ob-box").click()');
+      await press(wc, '[data-obsidian-add]');
+      await until(() => has(wc, '.selected-folder-list > div'), 'the folder chosen');
+      // Saved websites from Obsidian, under Websites.
+      await press(wc, '[data-group="sites"]');
+      await until(() => has(wc, '[data-app="links:Obsidian"]'), 'Saved websites from Obsidian');
+      assert.equal(await text(wc, '[data-app="links:Obsidian"] .app-text'), 'Saved websites from Obsidian');
+      if (await js(wc, 'document.querySelector("[data-app=\'links:Obsidian\']").getAttribute("aria-checked")') !== 'true') await press(wc, '[data-app="links:Obsidian"]');
+      await until(() => has(wc, '[data-context-panel="group:sites"] textarea'), 'Websites\' context, typed into');
+      await shot(wc, '08c-websites');
+      await press(wc, '[data-group="notes"]');
+      await shot(wc, '08-picker-context');
+      // Another source in another group: Notes folds.
+      await press(wc, '[data-group="chats"]');
+      if (await js(wc, 'document.querySelector("[data-app=ChatGPT]").getAttribute("aria-checked")') !== 'true') await press(wc, '[data-app="ChatGPT"]');
+      ticked = await js(wc, '[...document.querySelectorAll("[data-app][aria-checked=true]")].map((b)=>b.dataset.app)');
+      await shot(wc, '08b-picker-chats');
+      await press(wc, '[data-import-run]');
+    }
 
-    /* ------------------------------------------------ Import: the tick-and-import screen over the workspace, nothing else */
-    await press(wc, '[data-import-offer-import] button');
-    await until(() => has(wc, '[data-connect-popup="offer"] [data-connect-library="choose"]'), 'Connect your library\'s tick-and-import screen');
-    assert.equal(await has(wc, '[data-import-offer]'), false, 'the offer is gone');
-    assert.equal(await has(wc, ED), true, 'the workspace is still open under it');
-    assert.equal(await has(wc, '[data-onboarding]'), false, 'no onboarding');
-    assert.equal(await js(wc, 'document.querySelectorAll("[data-connect-popup]").length'), 1, 'one popup');
-    assert.equal(await js(wc, 'document.querySelectorAll("[role=dialog]").length'), 1, 'one dialog: Connect your library');
-    assert.equal(await js(wc, '/Shown once/.test(document.body.textContent)'), false, 'no "Shown once" line');
-    assert.equal(await js(wc, '/Welcome to Engelbart|guided setup/i.test(document.querySelector("[data-connect-popup]").textContent)'), false);
-    const after = (await js(wc, `window.engelbartAPI.loadProject(${JSON.stringify(projectId)})`)).workspaces.map((w) => w.id);
-    assert.deepEqual(after, workspacesBefore, 'no Welcome workspace added');
-    assert.equal(JSON.parse(fs.readFileSync(path.join(dataRoot, '.guided-setup.json'), 'utf8')).how, 'started');
-    await shot(wc, '2-choose');
+    /* two projects picked: which one opens (2026-10-14) */
+    await until(async () => (await flow(wc)).dialog === 'first-project', 'Which project do you want to start with?');
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-first-project]").length'), 2);
+    await shot(wc, '08d-first-project');
+    await js(wc, 'document.querySelectorAll("[data-first-project]")[1].click()');
+    const startWith = await js(wc, 'document.querySelectorAll("[data-first-project]")[1].textContent');
+    await press(wc, '[data-first-project-open]');
 
-    /* ------------------------------------------------ closed before an import: away for this launch, back on the next */
-    await press(wc, '[data-connect-close]');
-    await until(() => js(wc, '!document.querySelector("[data-connect-popup]")'), 'closed');
-    await pause(1800);
-    assert.equal(await has(wc, '[data-import-offer]'), false, 'not offered again in this launch');
-    assert.deepEqual(await js(wc, 'window.engelbartAPI.guidedOffer()'), { show: true }, 'still due');
-    await relaunch(wc);
-    await until(() => has(wc, '[data-import-offer]'), 'offered again on a later launch');
+    /* Full Disk Access: one line each */
+    await until(async () => (await flow(wc)).dialog === 'folders', 'Allow Full Disk Access');
+    assert.equal(await js(wc, 'document.querySelectorAll("[role=dialog] p").length'), 1, 'one line (Attachment 5)');
+    await shot(wc, '09-disk');
+    await press(wc, '[data-import-disk-open]');
+    await until(async () => (await flow(wc)).dialog === 'disk-wait', 'waiting for the switch');
+    await shot(wc, '10-disk-wait');
+    /* agents in the person's browser, asked once, in a line */
+    await until(async () => (await flow(wc)).dialog === 'browser-agents', 'Let agents use Chrome?', 1200);
+    assert.equal(await js(wc, 'document.querySelector("[role=dialog] p").textContent'), 'They’ll read your selected sources in the background.');
+    await shot(wc, '11-browser-agents');
+    await pressText(wc, '[role=dialog] .mf', 'Allow');
 
-    /* ------------------------------------------------ Not now: for good */
-    await press(wc, '[data-import-offer-dismiss] button');
-    await until(() => js(wc, '!document.querySelector("[data-import-offer]")'), 'dismissed');
-    assert.equal(JSON.parse(fs.readFileSync(path.join(dataRoot, '.guided-setup.json'), 'utf8')).how, 'dismissed');
-    assert.deepEqual(await js(wc, 'window.engelbartAPI.guidedOffer()'), { show: false });
-    await relaunch(wc);
-    await pause(1800);
-    assert.equal(await has(wc, '[data-import-offer]'), false, 'not after Not now');
-
-    console.log('import context smoke: ok');
+    /* the project opens; the status, then the sign-in popups one at a time */
+    await until(() => has(wc, '[data-need-popup], [data-import-status]'), 'the status or a sign-in popup over the workspace', 1200);
+    await shot(wc, '12-after-run');
+    const projects = await js(wc, 'window.engelbartAPI.listProjects()');
+    for (const title of titles.slice(0, 2)) assert.ok(projects.some((project) => project.name === title), `a project named for ${title}`);
+    const list = await js(wc, 'window.engelbartAPI.connectList()');
+    const run = list.find((entry) => entry.direct);
+    assert.ok(run, 'a direct session');
+    // A catalog web app is never sent to the person's browser for being signed out of Engelbart's: a popup asks instead.
+    // (The other tools the agent named — Linear here — may be, when their sign-ins can't be copied: none can, on this Mac.)
+    assert.equal(run.jobs.some((job) => job.route === 'browser' && job.apps.length), false, 'no catalog web app in the person\'s browser');
+    if (MODE === 'manual') {
+      const obsidian = (await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(run.id)})`)).jobs.find((job) => job.apps.includes('Obsidian'));
+      assert.ok(obsidian, 'Obsidian imported');
+    }
+    // A signed-out web app: its popup, never Engelbart's window, never a pill in the status.
+    const popupApp = await until(() => js(wc, '(document.querySelector("[data-need-popup]")||{}).dataset'), 'a sign-in popup', 1200);
+    assert.ok(popupApp.needPopup);
+    assert.equal(BrowserWindow.getAllWindows().filter((one) => one.isVisible() && one !== win).length, 0, 'no other Engelbart window shown');
+    // A connector nothing reaches (Granola, when the tool agent names it) is held on a Connect popup of its own first
+    // (2026-10-14: its import used to start without the connection, and could never use one made mid-run); it opens the
+    // default browser, so it names none. A web app's sign-in continues in Arc.
+    if (/^Connect /.test(await text(wc, '[data-need-popup] h3'))) {
+      assert.equal(await has(wc, '[data-need-popup] .need-modal > p'), false, 'no line under a Connect popup');
+      assert.equal(await text(wc, '[data-need-popup] [data-need-primary]'), 'Connect');
+      await shot(wc, '13a-connect-popup');
+      await pressText(wc, '[data-need-popup] .mf', 'Later');
+      await until(async () => !/^Connect /.test(await text(wc, '[data-need-popup] h3')), 'the next popup');
+    }
+    // The overlay is the scrim (the whole window), so native views step aside for it, and a click on Later lands on Later.
+    assert.equal(await js(wc, '(()=>{const s=document.querySelector("[data-need-popup] .scrim");const r=s.getBoundingClientRect();const l=document.querySelector("[data-need-later]").getBoundingClientRect();return s.dataset.overlay==="1"&&r.width===innerWidth&&r.height===innerHeight&&document.elementFromPoint(l.x+l.width/2,l.y+l.height/2)===document.querySelector("[data-need-later]")})()'), true, 'the scrim is the overlay, Later on top');
+    assert.match(await text(wc, '[data-need-popup] h3'), /^Sign in to /);
+    assert.equal(await text(wc, '[data-need-popup] p'), 'Continue in Arc.');
+    assert.equal(await text(wc, '[data-need-popup] [data-need-primary]'), 'Open Arc');
+    await shot(wc, '13-signin-popup');
+    // Later puts the step away for good (2026-10-14): skipped, no "Needs you" left anywhere.
+    const first = await text(wc, '[data-need-popup] h3');
+    const firstId = await js(wc, 'document.querySelector("[data-need-popup]").dataset.needPopup');
+    await pressText(wc, '[data-need-popup] .mf', 'Later');
+    await until(async () => (await text(wc, '[data-need-popup] h3')) !== first, 'the next popup, or none');
+    await until(() => js(wc, `window.engelbartAPI.connectState(${JSON.stringify(run.id)}).then((s)=>!s.needs.some((need)=>need.id===${JSON.stringify(firstId)}))`), 'Later skipped it');
+    while (await has(wc, '[data-need-popup]')) { await pressText(wc, '[data-need-popup] .mf', 'Later'); await pause(200); }
+    if (!(await has(wc, '[data-import-status]'))) await js(wc, `document.querySelector("[data-connect-dock-open]") && document.querySelector("[data-connect-dock-open]").click()`);
+    await until(() => has(wc, '[data-import-status]'), 'the status');
+    await shot(wc, '14-status');
+    assert.equal(await has(wc, '[data-need-open]'), false, 'no "Needs you" row once every step was put away');
+    assert.equal(await js(wc, '[...document.querySelectorAll("[data-background-job]")].filter((row)=>getComputedStyle(row).borderBottomWidth!=="0px"||getComputedStyle(row).borderTopWidth!=="0px").length'), 0, 'no dividing lines');
+    assert.equal(await subtext(wc, '[data-background-job]'), 0, 'no subtext under the rows');
+    // Skip each sign-in (this Mac has no browser to sign in with): the run ends.
+    for (let i = 0; i < 20; i++) {
+      const open = await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(run.id)}).then((s)=>s.needs.map((need)=>need.id))`);
+      if (!open.length) break;
+      await js(wc, `window.engelbartAPI.connectNeed(${JSON.stringify(run.id)}, ${JSON.stringify(open[0])}, 'skip')`);
+      await pause(200);
+    }
+    await until(() => js(wc, 'window.engelbartAPI.connectList()').then((all) => { const s = all.find((entry) => entry.id === run.id); return s && s.jobs.filter((job) => job.kind !== 'memory' && job.kind !== 'redact').every((job) => ['done', 'failed', 'stopped'].includes(job.status)); }), 'every import ended', 1200);
+    // The completion opens by itself, in place of the header's pill.
+    await until(() => js(wc, '/Your imports (are complete!|have finished)/.test((document.querySelector("[data-import-status] h3")||{}).textContent||"")'), 'Your imports are complete!', 1200);
+    await shot(wc, '15-complete');
+    assert.equal(await text(wc, '[data-import-status-close]'), 'Open library');
+    const logos = await js(wc, '[...document.querySelectorAll("[data-imported]")].map((el)=>el.dataset.imported)');
+    assert.ok(logos.length >= 1, 'a tile for what came in');
+    assert.equal(new Set(logos).size, logos.length, 'one tile a logo');
+    assert.equal(await js(wc, 'document.querySelectorAll("[data-import-status] .cb, [data-import-status] .review-logo > span").length'), 0, 'no checkmarks on the tiles');
+    assert.doesNotMatch(await text(wc, '[data-import-status]'), /MEMORY/);
+    assert.equal(await has(wc, '[data-connect-dock="done"]'), false, 'no Done pill in the header');
+    /* the Welcome project's folder: everything that came in */
+    const files = (dir, name, out = []) => { for (const entry of fs.readdirSync(dir, { withFileTypes: true })) { const full = path.join(dir, entry.name); if (entry.isDirectory() && !['node_modules', 'worktrees'].includes(entry.name)) files(full, name, out); else if (entry.name === name) out.push(full); } return out; };
+    const contexts = files(path.join(root, '.engelbart'), 'meta.json').flatMap((file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')).context || []; } catch { return []; } }).flat(Infinity).filter((id) => typeof id === 'string');
+    const md = (await js(wc, 'window.engelbartAPI.library()')).filter((row) => row.type === 'md' && !row.tags.includes('note')).map((row) => row.id);
+    // 2026-10-14: the Welcome project's folder holds everything the run brought in.
+    assert.ok(md.length > 0 && md.every((id) => contexts.includes(id)), 'what came in is in the Welcome project\'s folder');
+    await press(wc, '[data-import-status-close]');
+    await until(() => js(wc, '!document.querySelector("[data-import-status]")'), 'Open library closes it');
+    /* Import context from Settings, inside the project (2026-10-14): straight to the source picker, nothing ticked */
+    await js(wc, 'window.dispatchEvent(new CustomEvent("engelbart:guided-setup"))'); // Settings ▸ Import context ▸ Start
+    await until(() => js(wc, '!!document.querySelector("[data-import-flow=modal]")'), 'Import context over the project');
+    const modal = await js(wc, '(()=>{const el=document.querySelector("[data-import-flow=modal]");return {screen:el.dataset.screen,dialog:el.dataset.dialog,ticked:document.querySelectorAll("[data-import-flow=modal] [data-app][aria-checked=true]").length}})()');
+    assert.deepEqual(modal, { screen: 'picker', dialog: '', ticked: 0 }, `the picker at once, nothing ticked: ${JSON.stringify(modal)}`);
+    await shot(wc, '16-settings-import');
+    console.log(`smoke-import-context (${MODE}): ok (${titles.length} projects found, ${ticked.length} ${MODE === 'auto' ? 'tools' : 'sources'} ticked, ${logos.length} imported tiles)`);
     app.exit(0);
-  } catch (failure) {
-    console.error(failure);
+  } catch (error) {
+    console.error(error);
+    try { const wc = BrowserWindow.getAllWindows()[0].webContents; await shot(wc, 'failed'); console.error(await flow(wc)); } catch { /* none */ }
     app.exit(1);
   }
 });

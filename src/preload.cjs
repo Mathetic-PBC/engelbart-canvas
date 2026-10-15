@@ -60,6 +60,14 @@ const engelbartAPI = Object.freeze({
   recordEdit: invoke('record-edit'),
   seenAgents: invoke('seen-agents'),
   onNav: (callback) => subscribe('engelbart:nav', callback),
+  // the sidebar's folders: the person's own, the same in every project, and every change of them ({ folders })
+  folders: invoke('folders'),
+  createFolder: invoke('create-folder'),
+  renameFolder: invoke('rename-folder'),
+  deleteFolder: invoke('delete-folder'),
+  addToFolder: invoke('add-to-folder'),
+  removeFromFolder: invoke('remove-from-folder'),
+  onFolders: (callback) => subscribe('engelbart:folders', callback),
   // the sidebar's Starred: a project's starred library ids, and every change of them ({ projectId, ids })
   starred: invoke('starred'),
   setStarred: invoke('set-starred'),
@@ -146,6 +154,7 @@ const engelbartAPI = Object.freeze({
   connectNeed: invoke('connect-need'),
   connectImport: invoke('connect-import'),
   connectStop: invoke('connect-stop'),
+  connectUnblock: invoke('connect-unblock'), // (id, provider?) → snapshot: a run waiting for its provider goes on
   connectStopJob: invoke('connect-stop-job'),
   connectProvider: invoke('connect-provider'),
   connectRetryMemory: invoke('connect-retry-memory'),
@@ -163,9 +172,32 @@ const engelbartAPI = Object.freeze({
   connectOfferSeen: invoke('connect-offer-seen'),
   guidedOffer: invoke('guided-offer'),
   guidedOfferSeen: invoke('guided-offer-seen'),
-  contextImported: invoke('context-imported'),
   connectMemory: invoke('connect-memory'),
   onConnect: (callback) => subscribe('engelbart:connect', callback),
+  // Import your context (2026-10-13, src/main/onboarding): the provider rule, the browsers, the discovery agents, Full Disk
+  // Access, where the flow was (kept across Full Disk Access's relaunch), and View ▸ Agent Trace.
+  importProviders: invoke('import-providers'), // (fresh?) → { providers, decision: { pick, ask, choices, setup }, remembered }
+  importProviderRemember: invoke('import-provider-remember'), // (provider) → the same, that one remembered
+  importBrowsers: invoke('import-browsers'), // → { browsers: [{ id, name, keychain, isDefault }], defaultId, chosenId, keychain }
+  importBrowserChoose: invoke('import-browser-choose'), // (id) → the same
+  importKeychain: invoke('import-keychain'), // ('allowed' | 'declined')
+  importBrowserAgents: invoke('import-browser-agents'), // ({ provider, browserId }) → whether agents can use the person's own browser
+  importBrowserAgentsAnswer: invoke('import-browser-agents-answer'), // ('allowed' | 'declined' | null)
+  importDiscovery: invoke('import-discovery'), // → { projects, tools }
+  importDiscoverProjects: invoke('import-discover-projects'), // ({ provider?, again? }) → the same
+  importDiscoverTools: invoke('import-discover-tools'), // ({ provider?, browserId?, keychain?, again? }) → the same
+  importDiscoveryStop: invoke('import-discovery-stop'),
+  importDiscoveryReset: invoke('import-discovery-reset'),
+  importDiskAccess: invoke('import-disk-access'), // → { granted, grantedFresh, app, needsRelaunch }
+  importDiskAccessOpen: invoke('import-disk-access-open'), // System Settings, the helper beside it, the watch
+  importDiskAccessRelaunch: invoke('import-disk-access-relaunch'),
+  importDiskAccessStop: invoke('import-disk-access-stop'),
+  importFlow: invoke('import-flow'), // → where the flow was, or null
+  importFlowSave: invoke('import-flow-save'), // (flow | null)
+  importTraceOpen: invoke('import-trace-open'),
+  importObsidianTree: invoke('import-obsidian-tree'), // → { vaults: [{ name, path, tree }], truncated }
+  onDiscovery: (callback) => subscribe('engelbart:discovery', callback),
+  onDiskAccess: (callback) => subscribe('engelbart:disk-access', callback),
   onConnectors: (callback) => subscribe('engelbart:connectors', callback),
   renameProject: invoke('rename-project'),
   // Delete on the all-projects screen: into the trash for a week; Recently deleted lists it (and purges older ones), Restore brings it back.
@@ -204,6 +236,7 @@ const engelbartAPI = Object.freeze({
   clearModelChoice: invoke('clear-model-choice'),
   onModelsChanged: (callback) => subscribe('engelbart:models-changed', callback),
   copyText: invoke('copy-text'),
+  copyImage: invoke('copy-image'),
   onBartProgress: (callback) => subscribe('engelbart:bart-progress', callback),
   // The Agent Viewer (2026-10-12, developers only, test mode on or off; src/main/agent-map): open it, its runs, one run
   // whole, the runs grouped one entry per ask and one entry whole, each agent's design, a page of it saved, a row's click
@@ -335,6 +368,7 @@ const engelbartAPI = Object.freeze({
   toolsInstall: invoke('tools-install'),
   toolsUpdate: invoke('tools-update'),
   toolsSignIn: invoke('tools-sign-in'),
+  toolsConnect: invoke('tools-connect'), // (name) → snapshot; installs, updates, checks and signs in, whichever it needs
   toolsCancelSignIn: invoke('tools-cancel-sign-in'),
   toolsSignOut: invoke('tools-sign-out'),
   toolsSkip: invoke('tools-skip'),

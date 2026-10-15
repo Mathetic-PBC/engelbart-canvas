@@ -347,6 +347,12 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     const note = await expandDoc(ctx, projectId, ref, { seen });
     documents.push(block('workspace', space.title, shown(space.body)), block('note', note.title, shown(note.body)));
     from = `the note "${note.title}", opened from the workspace "${workspace.name}"`;
+  } else if (ref.kind === 'project') {
+    // The project page (2026-10-13), asked from: it is the document in front; the workspace it was opened in comes first.
+    const space = await expandDoc(ctx, projectId, { kind: 'workspace', workspaceId }, { seen });
+    const page = await expandDoc(ctx, projectId, ref, { seen });
+    documents.push(block('workspace', space.title, shown(space.body)), block('project_page', page.title, shown(page.body)));
+    from = `the project page of "${project.name}", opened from the workspace "${workspace.name}"`;
   } else {
     const space = await expandDoc(ctx, projectId, ref, { seen });
     documents.push(block('workspace', space.title, shown(space.body)));
@@ -385,6 +391,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     ...(ZOTERO_READERS.has(agent) && ctx.dataRoot ? [zoteroMirror.pointerLine(zoteroMirror.mirrorDir(ctx.dataRoot))].filter(Boolean) : []),
     '</engelbart>',
     instructionsBlock(ctx.dataRoot),
+    ref.kind === 'project' ? '' : projects.projectPageBlock(project), // the project page, unless it is the document asked from
     memoryBlock(ctx.dataRoot), // MEMORY.md, when Connect your library wrote one (2026-10-07)
   ].filter(Boolean).join('\n');
   const granted = [project.directory, ctx.dataRoot].filter(Boolean);

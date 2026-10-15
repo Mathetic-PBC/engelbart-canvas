@@ -17,8 +17,8 @@ import { SEND_ARROW, sendStyle } from './PostItBuild.jsx';
 
 const WIDTH = 420;
 const WORKING = new Set(['setting-up', 'queued', 'running', 'accepting']);
-const TOO_BIG = 'This task was too complex to build outside of a workspace. You must add it to a workspace below to continue.';
-const STOPPED = 'This task was stopped. Add it to a workspace below to continue.';
+const TOO_BIG = 'This task was too complex to build outside of a project. You must add it to a project below to continue.';
+const STOPPED = 'This task was stopped. Add it to a project below to continue.';
 
 const WORKSPACE_ICON = <svg width="14" height="14" viewBox="0 0 16 16" aria-hidden="true" style={{ flex: 'none', fill: 'none', stroke: '#171717', strokeWidth: 1.4, strokeLinejoin: 'round' }}><path d="M2.5 1.5h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M9 1.5h4.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M2.5 8h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1z M11 8h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z" /></svg>;
 const SEARCH = <svg aria-hidden="true" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#171717" strokeWidth="2.6" strokeLinecap="round" style={{ flex: 'none' }}><circle cx="10" cy="10" r="6.5" /><line x1="15" y1="15" x2="21" y2="21" /></svg>;
@@ -33,7 +33,7 @@ const quiet = { padding: '4px 8px', border: 0, background: 'transparent', cursor
 function messageFor(task) {
   if (['stopped', 'interrupted'].includes(task.status)) return STOPPED;
   if (task.status === 'failed') return `This task failed${task.error ? `: ${task.error.replace(/\.$/, '')}` : ''}. Add it to a workspace below to continue.`;
-  if (['review', 'conflict'].includes(task.status)) return 'This task\'s changes could not be merged on their own. Add it to a workspace below to review them.';
+  if (['review', 'conflict'].includes(task.status)) return 'This task\'s changes could not be merged on their own. Add it to a project below to review them.';
   return TOO_BIG;
 }
 
@@ -51,7 +51,7 @@ function WorkspacePick({ workspaces, value, onPick }) {
       <button type="button" data-post-it-ws={value || ''} onClick={() => { setOpen((now) => !now); setQ(''); }} aria-expanded={open}
         style={{ width: '100%', display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', border: `1px solid ${open ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 8, background: '#fafafa', cursor: 'pointer', textAlign: 'left', transition: 'border-color 120ms' }}>
         {WORKSPACE_ICON}
-        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '500 13px/1.4 var(--font-sans)', color: '#171717' }}>{current ? current.name : 'Choose a workspace'}</span>
+        <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '500 13px/1.4 var(--font-sans)', color: '#171717' }}>{current ? current.name : 'Choose a project'}</span>
         <Caret up={open} />
       </button>
       {open && (
@@ -61,7 +61,7 @@ function WorkspacePick({ workspaces, value, onPick }) {
             <input ref={fieldRef} data-post-it-ws-search="1" value={q} onChange={(event) => setQ(event.target.value)} onKeyDown={(event) => {
               if (event.key === 'Enter' && rows.length) { event.preventDefault(); onPick(rows[0].id); setOpen(false); }
               else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); if (q) setQ(''); else setOpen(false); }
-            }} placeholder="Search" aria-label="Search workspaces" spellCheck={false} style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, outline: 'none', background: 'transparent', font: '13px/1.5 var(--font-sans)', color: '#171717' }} />
+            }} placeholder="Search" aria-label="Search projects" spellCheck={false} style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, outline: 'none', background: 'transparent', font: '13px/1.5 var(--font-sans)', color: '#171717' }} />
           </label>
           <div style={{ maxHeight: 200, overflow: 'auto', display: 'flex', flexDirection: 'column', gap: 2 }}>
             {rows.map((held) => {
@@ -78,7 +78,7 @@ function WorkspacePick({ workspaces, value, onPick }) {
                 </button>
               );
             })}
-            {!rows.length && <div style={{ padding: '8px 10px', font: '13px/1.5 var(--font-sans)', color: '#8f8f8f' }}>No workspace matches.</div>}
+            {!rows.length && <div style={{ padding: '8px 10px', font: '13px/1.5 var(--font-sans)', color: '#8f8f8f' }}>No project matches.</div>}
           </div>
         </div>
       )}
@@ -153,7 +153,7 @@ export default function PostItTask({ task, progress, anchor, workspaces, hereId,
         {done && (<>
           <div style={{ height: 1, background: '#eaeaea' }} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '10px 8px 0' }}>
-            <span style={{ padding: '0 8px', font: '500 12.5px/1.3 var(--font-sans)', color: '#4d4d4d' }}>Continue building this task in a workspace.</span>
+            <span style={{ padding: '0 8px', font: '500 12.5px/1.3 var(--font-sans)', color: '#4d4d4d' }}>Continue building this task in a project.</span>
             <WorkspacePick workspaces={workspaces} value={workspaceId} onPick={setWorkspaceId} />
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '10px 8px 8px' }}>
@@ -163,7 +163,7 @@ export default function PostItTask({ task, progress, anchor, workspaces, hereId,
               style={{ display: 'inline-flex', alignItems: 'center', gap: 6, height: 30, padding: '0 10px', border: `1px solid ${modelOpen ? '#c9c9c9' : '#eaeaea'}`, borderRadius: 999, background: '#fff', cursor: 'pointer', font: '12px/1 var(--font-sans)', color: '#4d4d4d', whiteSpace: 'nowrap', transition: 'border-color 120ms' }}>
               <span>{choiceLabel(models, choice) || task.modelName}</span><Caret up={modelOpen} />
             </button>
-            <button type="button" data-quick-act="promote" onClick={promote} disabled={!ready} aria-label={target ? `Continue in ${target.name}` : 'Continue in a workspace'} title={target ? `Continue in ${target.name}` : undefined} className={ready ? 'hov-dim' : undefined} style={sendStyle(ready)}>{SEND_ARROW}</button>
+            <button type="button" data-quick-act="promote" onClick={promote} disabled={!ready} aria-label={target ? `Continue in ${target.name}` : 'Continue in a project'} title={target ? `Continue in ${target.name}` : undefined} className={ready ? 'hov-dim' : undefined} style={sendStyle(ready)}>{SEND_ARROW}</button>
           </div>
         </>)}
       </div>

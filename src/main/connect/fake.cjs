@@ -128,6 +128,31 @@ async function importRun({ session: s, job, callTool }, delayMs, signal) {
   return n ? `Brought in ${n} notes.` : 'Nothing to bring in from the fake agent.';
 }
 
+/**
+ * A browser agent (kind browse, 2026-10-13): says its steps as one in the person's own browser would, stops at the
+ * sign-in when ENGELBART_CONNECT_FAKE_NEEDS names its app, and brings in one note a web app through add_note.
+ */
+async function browseRun({ session: s, job, callTool }, delayMs, signal, onUpdate) {
+  const apps = job.apps.length ? job.apps : ['Other tools'];
+  const browserName = (s.choices.browserAgents && s.choices.browserAgents.browserName) || 'Chrome';
+  onUpdate({ command: `fake browser agent in ${browserName}` });
+  let n = 0;
+  for (const app of apps) {
+    onUpdate({ activity: `Opening ${shownName(app)} in a tab of its own` });
+    await sleep(delayMs, signal);
+    if (String(process.env.ENGELBART_CONNECT_FAKE_NEEDS || '').split(',').includes(app)) {
+      let out = await callTool('needs_you', { kind: 'signin', reason: `Sign in to ${shownName(app)} in ${browserName}` });
+      for (let k = 0; k < 10 && out.status === 'waiting'; k += 1) out = await callTool('wait_for_you', {});
+      if (out.status === 'skipped') continue;
+    }
+    onUpdate({ activity: 'Reading the page' });
+    const out = await callTool('add_note', { title: `${shownName(app)}: a page read in ${browserName}`, markdown: `A page the fake browser agent read in ${shownName(app)}.`, source: `fake-browser:${app}` });
+    if (out.added) n += 1;
+  }
+  await sleep(delayMs, signal);
+  return n ? `Brought in ${n} pages from ${browserName}.` : `Nothing brought in from ${browserName}.`;
+}
+
 async function recallRun({ job, callTool }, delayMs, signal) {
   await sleep(delayMs, signal);
   const app = job.apps[0];
@@ -151,19 +176,71 @@ Their OpenAI key, sk-test-0123456789abcdefghij, was pasted in a chat.
 ## Sources
 - The fake recall, ${new Date().toISOString().slice(0, 10)}.`;
 
+const SAMPLE_PROJECTS = [
+  { title: 'Engelbart context import', description: 'Designing how agents bring project context into a local library.', recent: 'Today' },
+  { title: 'Programming requirements study', description: 'Studying how novice programmers describe and test requirements.', recent: 'Yesterday' },
+  { title: 'Learning sciences reading guide', description: 'Organizing research on learning, agency and programming.', recent: 'This week' },
+  { title: 'Engelbart launch', description: 'Preparing onboarding, outreach and the first user sessions.', recent: 'This week' },
+];
+
+function fakeProjects(meta) {
+  const folders = ((meta && meta.digest && meta.digest.folders) || []).slice(0, 3);
+  const found = folders.map((folder) => ({ title: folder.name, description: `Recent work in ${folder.shown}.`, recent: 'This week', folder: folder.path, evidence: `${folder.sessions} agent sessions` }));
+  return { projects: [...found, ...SAMPLE_PROJECTS].slice(0, 4) };
+}
+
+function fakeTools(meta) {
+  const evidence = (meta && meta.evidence) || {};
+  return {
+    tools: Object.entries(evidence).map(([id, fact]) => ({ id, used: !!fact.used, evidence: fact.evidence || '' })),
+    additional: [{ name: 'Linear', website: 'https://linear.app', used: true, evidence: 'Visited often in the sample history' }],
+  };
+}
+
 function createFakeConnectAgents({ delayMs = 600 } = {}) {
   return {
-    async turn({ meta, signal, kind, message }) {
+    async turn({ meta, signal, kind, message, onUpdate = () => {} }) {
       const what = (meta && meta.kind) || kind;
+      if (what === 'browse') return { text: await browseRun(meta, delayMs, signal, onUpdate), session: null };
       if (what === 'survey') return { text: await surveyRun(meta, delayMs, signal), session: null };
       if (what === 'import') return { text: await importRun(meta, delayMs, signal), session: null };
       if (what === 'recall') return { text: await recallRun(meta, delayMs, signal), session: null };
       if (what === 'memory') { await sleep(delayMs, signal); return { text: MEMORY_DRAFT, session: null }; }
       if (what === 'redact') { await sleep(delayMs, signal); const draft = String(message).replace(/^<memory_md>\n|\n<\/memory_md>$/g, ''); return { text: draft.replace('password: hunter2', 'password: [removed]'), session: null }; }
+      // Import your context's discovery agents (../onboarding/discover.cjs): the projects named from the digest's folders
+      // (or four samples), and the tools from the evidence it was given, with Linear as a tool found besides.
+      if (what === 'projects') { await sleep(delayMs * 2, signal); return { text: JSON.stringify(fakeProjects(meta)), session: null }; }
+      if (what === 'discover') { await sleep(delayMs * 2, signal); return { text: JSON.stringify(fakeTools(meta)), session: null }; }
       await sleep(delayMs, signal);
       return { text: JSON.stringify(interviewReply(meta.session, meta.message)), session: 'fake-session' };
     },
   };
 }
 
-module.exports = { createFakeConnectAgents, interviewReply, MEMORY_DRAFT };
+/**
+ * The fake agents behind the pretend machine's Claude Code and Codex (ENGELBART_CONNECT_FAKE_CLI=1 with
+ * ENGELBART_TOOLS_FAKE, 2026-10-14): a turn fails as the real CLI's does when it is missing ("… was not found on the login
+ * shell PATH.") or not signed in (Claude Code 2.1.300's "Not logged in · Please run /login"; Codex's ChatGPT sign-in
+ * missing), so onboarding's connect edge cases can be driven. `state` is ../tools/fake.cjs's, changed by its installs and
+ * sign-ins. `refuse` names CLIs whose account is turned away though signed in (ENGELBART_CONNECT_FAKE_REFUSE).
+ */
+function createCliGatedAgents(agents, state, { delayMs = 60, refuse = [] } = {}) {
+  const failure = (kind, message) => Object.assign(new Error(message), { kind });
+  return {
+    async turn(input) {
+      const cli = input && input.choice && input.choice.provider === 'openai' ? 'codex' : 'claude';
+      const tool = state[cli] || {};
+      await sleep(delayMs, input && input.signal);
+      if (!tool.present || tool.broken) throw failure('unavailable', `${cli === 'codex' ? 'Codex' : 'Claude Code'} was not found on the login shell PATH.`);
+      if (tool.signedIn !== true) {
+        if (cli === 'codex') throw failure('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`). An API key is never used.');
+        throw failure('failed', 'Not logged in · Please run /login');
+      }
+      // `refuse` (ENGELBART_CONNECT_FAKE_REFUSE): signed in, yet its account is turned away, as one without credits is.
+      if (refuse.includes(cli)) throw failure('failed', 'Credit balance is too low');
+      return agents.turn(input);
+    },
+  };
+}
+
+module.exports = { createFakeConnectAgents, createCliGatedAgents, interviewReply, MEMORY_DRAFT };

@@ -56,7 +56,11 @@ export function rowOf(tool) {
   const busy = tool.busy || null;
   const account = tool.signedIn === true && typeof tool.account === 'string' && tool.account ? tool.account : null;
   const row = { id: tool.id, name: tool.name, state: '', tone: 'muted', action: null, detail: null, detailTone: 'error', page: null, skipped: !!tool.skip, account };
-  if (busy && busy.action === 'install') return { ...row, state: busy.phase || 'Installing…', tone: 'busy' };
+  // Claude Code and Codex are "connected", not installed (2026-10-14, a beta tester: "it says installing claude code, even if
+  // it is already installed. it should say connecting instead"): to the person, an install Engelbart runs in the
+  // background, or a check not answered yet, is connecting what they have. Git keeps Apple's installer's own steps.
+  const agent = AGENTS.includes(tool.id);
+  if (busy && busy.action === 'install') return { ...row, state: agent ? 'Connecting…' : busy.phase || 'Installing…', tone: 'busy' };
   if (busy && busy.action === 'update') return { ...row, state: 'Updating…', tone: 'busy' };
   if (busy && busy.action === 'sign-in') return { ...row, state: 'Finish signing in in your browser', tone: 'busy', action: 'cancel', page: busy.url || null };
   if (busy && busy.action === 'sign-out') return { ...row, state: 'Signing out…', tone: 'busy' }; // Connections' Sign out
@@ -77,7 +81,7 @@ export function rowOf(tool) {
     case 'failed':
       return { ...row, state: 'Not working', tone: 'error', action: 'retry', detail: tool.error };
     default:
-      return { ...row, state: 'Checking…', tone: 'busy' };
+      return { ...row, state: agent ? 'Connecting…' : 'Checking…', tone: 'busy' };
   }
 }
 

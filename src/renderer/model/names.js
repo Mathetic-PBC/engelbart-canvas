@@ -2,7 +2,7 @@
 // lands on disk, but the UI treats it as a hint: grey, and the title field stays empty so typing
 // replaces it.
 
-const UNTITLED_RE = /^Untitled (?:Workspace|Note) \d+$/;
+const UNTITLED_RE = /^Untitled (?:Workspace|Project|Note) \d+$/; // Workspace: named before they were projects (2026-10-13)
 
 export const isUntitled = (name) => UNTITLED_RE.test(String(name || ''));
 

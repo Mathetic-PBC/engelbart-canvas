@@ -107,8 +107,13 @@ function createZotero({
 
   /* -------------------------------------------------------------- sign-in */
 
-  /** Starts signing in (or opens the browser again for a sign-in already waiting). Answers the status. */
+  /**
+   * Starts signing in (or opens the browser again for a sign-in already waiting). Answers the status. Signed in already,
+   * nothing opens (2026-10-14: each press of a Zotero step's button in the beta opened Zotero's authorize page in the
+   * browser again, over Engelbart, though the account was connected).
+   */
   function connect() {
+    if (load()) return Promise.resolve(status());
     if (!starting) starting = begin().finally(() => { starting = null; });
     return starting;
   }

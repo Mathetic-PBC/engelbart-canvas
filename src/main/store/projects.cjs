@@ -6,6 +6,7 @@
 // `ctx.dataRoot` is ~/.engelbart (test off) or ~/.engelbart/test (test on).
 //
 //   <dataRoot>/<slug>/project.json                   { id, name, created, directory }
+//   <dataRoot>/<slug>/.project.md                    the project page: project-wide instructions, its name and description
 //   <dataRoot>/<slug>/notes.pglite/
 //   <dataRoot>/<slug>/<Note>.md
 //   <dataRoot>/<slug>/assets/<id>.<ext>
@@ -48,9 +49,18 @@ const ARCHIVE_RE = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}Z(?:-\d{1,3})?$/;
 const IMAGE_TYPES = Object.freeze({ 'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp' });
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const MAX_TREE_ENTRIES = 500;
+// "Context has too many entries" (2026-10-13, the "Onboarding" workspace): imports filled a workspace's context to the
+// old limit of 500 (Connect's placeRows), so the next link (an @mention, Add, Save) made 501 and every save of that
+// workspace threw. Imports now go to the library only, the limit has room for what was put there before, and a context
+// over it is read cut to it (contextOf) rather than emptied.
+const MAX_TREE_ENTRIES = 2000;
 const MAX_TREE_DEPTH = 6;
-const TOO_MANY = 'context has too many entries';
+// Projects nest four levels deep (2026-10-13, the "Sidebar" project: "we will give projects recursion to a fourth level of
+// depth"): the top-level project the switcher picks is the first, so what used to be workspaces go three deep under it.
+const MAX_NESTING = 3;
+// The project page (2026-10-13): the top-level project's own document, project-wide instructions like a PROJECT.md. A dot
+// file, so no note (whose names never start with a dot: home.cjs sanitizeName) and no workspace folder can take its name.
+const PROJECT_PAGE = '.project.md';
 const MAX_DESCRIPTION = 4000;
 
 const WELCOME_NOTE = [
@@ -125,7 +135,7 @@ function validateTree(entries, depth = 0, counter = { n: 0, seen: new Set() }) {
   const seen = counter.seen;
   for (const entry of entries) {
     counter.n += 1;
-    if (counter.n > MAX_TREE_ENTRIES) throw new TypeError(TOO_MANY);
+    if (counter.n > MAX_TREE_ENTRIES) throw new TypeError('context has too many entries');
     if (typeof entry === 'string') {
       assertId(entry, 'library item');
       if (seen.has(entry)) continue;
@@ -144,24 +154,28 @@ function validateTree(entries, depth = 0, counter = { n: 0, seen: new Set() }) {
   return out;
 }
 
-// An over-long context, flattened as flatContext does: its first MAX_TREE_ENTRIES ids, unknown entries left out.
-function firstContext(entries) {
-  const out = [];
-  const walk = (list, depth) => {
-    for (const entry of Array.isArray(list) ? list : []) {
-      if (out.length >= MAX_TREE_ENTRIES) return;
-      if (typeof entry === 'string') { if (UUID_RE.test(entry) && !out.includes(entry)) out.push(entry); }
-      else if (entry && typeof entry === 'object' && depth < MAX_TREE_DEPTH) walk(entry.children, depth + 1);
-    }
-  };
-  walk(entries, 0);
-  return out;
-}
-
 // A context is a flat list of library ids. Folders existed once; anything that still sends or
 // holds one is flattened to what the folder contained, in order.
 function flatContext(entries) {
   return [...new Set(treeIds(validateTree(entries)))];
+}
+
+/**
+ * A workspace's saved context, read: flatContext's, or, when it does not pass (too many entries, an id that isn't one),
+ * the ids it holds that are, the first MAX_TREE_ENTRIES of them. Never emptied for one bad entry: the next save would
+ * write the empty list over it.
+ */
+function contextOf(entries) {
+  try { return flatContext(entries || []); } catch { /* read what can be */ }
+  const ids = [];
+  const walk = (list, depth) => {
+    if (!Array.isArray(list) || depth > MAX_TREE_DEPTH) return;
+    for (const entry of list) {
+      if (typeof entry === 'string') { if (UUID_RE.test(entry)) ids.push(entry); } else if (entry && typeof entry === 'object') walk(entry.children, depth + 1);
+    }
+  };
+  walk(entries, 0);
+  return [...new Set(ids)].slice(0, MAX_TREE_ENTRIES);
 }
 
 function treeIds(entries, out = []) {
@@ -304,6 +318,7 @@ async function createProject(ctx, input) {
   fs.mkdirSync(dir, { mode: DIR_MODE });
   const meta = { id: randomUUID(), name, created: nowIso(), ...(directory ? { directory } : {}), ...(description ? { description } : {}) };
   writeJson(path.join(dir, 'project.json'), meta);
+  writeTextAtomic(path.join(dir, PROJECT_PAGE), projectPageText(description));
   migrated.add(dir);
   await db.openNotesDb(dir);
   return publicProject(projectRecord(dir), { workspaceCount: 0, lastEdited: meta.created });
@@ -311,16 +326,44 @@ async function createProject(ctx, input) {
 
 // First-run flow: the project, a first workspace, and a "Welcome!" note open in its context. Onboarding
 // (2026-09-28, ./onboarding.cjs) names the workspace "Getting started", starts its document with the project's
-// description, and puts the library rows chosen on its last screen on the project's own list (`library`, 2026-10-12):
-// the project holds them, the workspace's sidebar is left to the note.
-async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting started', library = [] } = {}) {
+// description, and puts the library rows chosen on its last screen in context after the note.
+async function createProjectWithWelcome(ctx, input, { workspaceName = 'Getting started', context = [] } = {}) {
   const project = await createProject(ctx, input);
   const workspace = await createWorkspace(ctx, project.id, { name: workspaceName });
   const note = await createNote(ctx, project.id, { name: 'Welcome!', workspaceId: workspace.id, text: WELCOME_NOTE });
-  await setWorkspaceContext(ctx, project.id, workspace.id, [note.id]);
-  keepInProject(ctx, project.id, library.filter((id) => id !== note.id));
+  await setWorkspaceContext(ctx, project.id, workspace.id, [note.id, ...context.filter((id) => id !== note.id)]);
   if (project.description) await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, `${project.description}\n`);
   return { project, workspaceId: workspace.id, noteId: note.id, noteName: note.name };
+}
+
+// A new user's first project (2026-10-14, Hudson's placeholder: "replaces the welcome screen and the get started and all
+// that crap with this"): a second-level project "Welcome to Engelbart!" whose page is this, with the picture of Engelbart at work. No
+// Welcome! note and no Get started walkthrough. `context`: what the onboarding brought in, in the Welcome! folder.
+const WELCOME_IMAGE = path.join(__dirname, 'welcome.png');
+// 2026-10-14, second pass: the project is "Welcome to Engelbart!" and its page starts with the picture, no title line.
+const WELCOME_NAME = 'Welcome to Engelbart!';
+const welcomePageText = (imageId) => [
+  ...(imageId ? [`![Attachment 1](img:${imageId})`] : []),
+  'Engelbart is a **research notebook** that *remembers where all of your thoughts came from.*',
+  '',
+  'This welcome screen is still in beta, but we\'re working on improving it within the next couple days!',
+  '',
+  '*Thanks for being a beta user* :)',
+  '<3 Hudson + David',
+  '',
+  'P.S. If you have any questions, feedback, or need help, never hesitate to reach out!',
+  '[founders@mathetic.com](mailto:founders@mathetic.com)',
+  '',
+].join('\n');
+
+async function createProjectWithWelcomePage(ctx, input, { context = [] } = {}) {
+  const project = await createProject(ctx, input);
+  const workspace = await createWorkspace(ctx, project.id, { name: WELCOME_NAME });
+  let image = null;
+  try { image = await saveImage(ctx, project.id, { bytes: fs.readFileSync(WELCOME_IMAGE), mime: 'image/png', name: 'Attachment 1' }); } catch { image = null; }
+  await writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, welcomePageText(image && image.id));
+  if (context.length) await setWorkspaceContext(ctx, project.id, workspace.id, context);
+  return { project, workspaceId: workspace.id, welcomePage: true };
 }
 
 async function setProjectDirectory(ctx, id, directory) {
@@ -514,13 +557,7 @@ async function followSlug(ctx, entry, slug, { moveWorktree, removeWorktrees }) {
 function workspaceRecord(dir) {
   const meta = readJson(path.join(dir, 'meta.json'));
   if (!meta || typeof meta.id !== 'string' || !STATUSES.includes(meta.status)) return null;
-  let context = [];
-  try {
-    context = flatContext(meta.context || []);
-  } catch (error) {
-    // Past MAX_TREE_ENTRIES (written before imports stopped filling it, 2026-10-12): its first ones, not an empty sidebar.
-    context = error && error.message === TOO_MANY ? firstContext(meta.context) : [];
-  }
+  const context = contextOf(meta.context);
   // Kept by every save through the app; a workspace last saved before the count existed is measured.
   const chars = Number.isInteger(meta.chars) && meta.chars >= 0 ? meta.chars : docChars(dir);
   const removed = Array.isArray(meta.removed) ? meta.removed.filter((id) => typeof id === 'string' && UUID_RE.test(id)) : [];
@@ -627,8 +664,16 @@ function workspaceDirName(parentDir, name, fallback) {
   return uniqueName(parentDir, base);
 }
 
+/** How deep a workspace is under its project: 1 for one at the project's top. */
+const nestingOf = (projectDir, dir) => path.relative(projectDir, dir).split(path.sep).filter(Boolean).length;
+
 async function createWorkspace(ctx, projectId, { name, parentId } = {}) {
-  const parentDir = parentId ? findWorkspace(ctx, projectId, parentId).workspace.dir : findProject(ctx, projectId).dir;
+  let parentDir;
+  if (parentId) {
+    const found = findWorkspace(ctx, projectId, parentId);
+    if (nestingOf(found.project.dir, found.workspace.dir) >= MAX_NESTING) throw new Error('Projects go four levels deep: there is no room for one inside this one.');
+    parentDir = found.workspace.dir;
+  } else parentDir = findProject(ctx, projectId).dir;
   const dir = path.join(parentDir, workspaceDirName(parentDir, name, 'Untitled Workspace 1'));
   fs.mkdirSync(dir, { mode: DIR_MODE });
   writeJson(path.join(dir, 'meta.json'), { id: randomUUID(), status: 'open', context: [], created: nowIso(), chars: 0 });
@@ -735,7 +780,7 @@ async function linkToWorkspace(ctx, projectId, workspaceId, ids, { picked = fals
   // any other way, it stays when its mentions go.
   const chosen = picked ? [...workspace.picked, ...adding.filter((id) => !context.includes(id) && !workspace.picked.includes(id))] : workspace.picked.filter((id) => !adding.includes(id));
   for (const id of adding) if (!context.includes(id)) context.push(id);
-  if (context.length > MAX_TREE_ENTRIES) throw new Error(`This workspace holds ${MAX_TREE_ENTRIES} items. Remove some from its sidebar first.`);
+  if (context.length > MAX_TREE_ENTRIES) throw new Error(`This workspace's sidebar is full (${MAX_TREE_ENTRIES} items): take some out first. Everything stays in the library.`);
   return patchWorkspaceMeta(workspace, { context: flatContext(context), removed: workspace.removed.filter((id) => !adding.includes(id)), picked: chosen });
 }
 
@@ -920,11 +965,33 @@ async function resolveDoc(ctx, projectId, ref) {
     const { workspace } = findWorkspace(ctx, projectId, ref.workspaceId);
     return { file: path.join(workspace.dir, 'workspace.md'), workspace };
   }
+  if (ref.kind === 'project') {
+    const project = findProject(ctx, projectId);
+    return { file: path.join(project.dir, PROJECT_PAGE), project };
+  }
   throw new TypeError('Unknown doc kind');
 }
 
+/** A new project page's text: the description given at onboarding or on + Project (its title is the project's name). */
+const projectPageText = (description) => (description ? `${description}\n` : '');
+
+/**
+ * What every agent in the project reads first (2026-10-13: the project page "serves more as project-wide instructions,
+ * like a PROJECT.md file"): the page as a block, or '' while it is empty or still says only the project's description,
+ * which the <engelbart> head already carries.
+ */
+function projectPageBlock(project) {
+  if (!project || !project.dir) return '';
+  let text = '';
+  try { text = fs.readFileSync(path.join(project.dir, PROJECT_PAGE), 'utf8').trim(); } catch { text = ''; }
+  if (!text || text.replace(/\s+/g, ' ') === String(project.description || '').trim().replace(/\s+/g, ' ')) return '';
+  return `<project_page name="${String(project.name || '').replace(/[<>"\n\r]/g, ' ').slice(0, 200)}" note="The project page: what the person wants every agent in this project to know.">\n${text.slice(0, 20000)}\n</project_page>`;
+}
+
 async function readDoc(ctx, projectId, ref) {
-  const { file } = await resolveDoc(ctx, projectId, ref);
+  const { file, project } = await resolveDoc(ctx, projectId, ref);
+  // A project made before its page existed gets one the first time it is opened, from what it was described as.
+  if (project && !fs.existsSync(file)) writeTextAtomic(file, projectPageText(project.description));
   try {
     return fs.readFileSync(file, 'utf8');
   } catch {
@@ -1168,6 +1235,89 @@ function setStarred(ctx, projectId, itemId, on) {
   return next;
 }
 
+/* ----------------------------------------------------------------- folders */
+
+// The sidebar's folders (2026-10-13, the "Sidebar" project): "global folders that show on every project basically and can
+// contain the subset of the library items". Kept in state.json `folders`, in the order they were made, each { id, name,
+// items, created }: `items` library ids, oldest first. A folder is the person's, not a project's: every project's Sources
+// lists the same ones. Taking an item out of a folder leaves it in the library.
+const MAX_FOLDERS = 200;
+const MAX_FOLDER_ITEMS = 2000;
+const FOLDER_NAME_MAX = 120;
+
+function cleanFolders(value) {
+  const out = [];
+  for (const entry of Array.isArray(value) ? value : []) {
+    const input = plainObject(entry) || {};
+    const id = idOrNull(input.id);
+    const name = typeof input.name === 'string' ? sanitizeName(input.name).slice(0, FOLDER_NAME_MAX) : '';
+    if (!id || !name || out.some((held) => held.id === id)) continue;
+    const items = [...new Set((Array.isArray(input.items) ? input.items : []).map(idOrNull).filter(Boolean))].slice(-MAX_FOLDER_ITEMS);
+    out.push({ id, name, items, created: isoOrNull(input.created) });
+    if (out.length >= MAX_FOLDERS) break;
+  }
+  return out;
+}
+
+function readFolders(ctx) {
+  return cleanFolders(readState(ctx).folders);
+}
+
+function writeFolders(ctx, folders) {
+  const next = cleanFolders(folders);
+  writeState(ctx, { folders: next });
+  return next;
+}
+
+function folderAt(folders, folderId) {
+  const id = idOrNull(folderId);
+  const at = id ? folders.findIndex((folder) => folder.id === id) : -1;
+  if (at < 0) throw new Error('Unknown folder');
+  return at;
+}
+
+/** A new folder, named; it starts empty. → { folder, folders } */
+function createFolder(ctx, name) {
+  const given = typeof name === 'string' ? name.trim() : '';
+  if (!given) throw new TypeError('A folder needs a name');
+  const folders = readFolders(ctx);
+  if (folders.length >= MAX_FOLDERS) throw new RangeError(`At most ${MAX_FOLDERS} folders`);
+  const folder = { id: randomUUID(), name: sanitizeName(given).slice(0, FOLDER_NAME_MAX), items: [], created: nowIso() };
+  return { folder, folders: writeFolders(ctx, [...folders, folder]) };
+}
+
+function renameFolder(ctx, folderId, name) {
+  const given = typeof name === 'string' ? name.trim() : '';
+  if (!given) throw new TypeError('A folder needs a name');
+  const folders = readFolders(ctx);
+  const at = folderAt(folders, folderId);
+  folders[at] = { ...folders[at], name: sanitizeName(given).slice(0, FOLDER_NAME_MAX) };
+  return writeFolders(ctx, folders);
+}
+
+function deleteFolder(ctx, folderId) {
+  const folders = readFolders(ctx);
+  const at = folderAt(folders, folderId);
+  return writeFolders(ctx, folders.filter((_, i) => i !== at));
+}
+
+/** Library items into a folder, after what it holds; one it holds already stays where it is. */
+function addToFolder(ctx, folderId, ids) {
+  const adding = (Array.isArray(ids) ? ids : [ids]).map(idOrNull).filter(Boolean);
+  const folders = readFolders(ctx);
+  const at = folderAt(folders, folderId);
+  folders[at] = { ...folders[at], items: [...new Set([...folders[at].items, ...adding])] };
+  return writeFolders(ctx, folders);
+}
+
+function removeFromFolder(ctx, folderId, id) {
+  const gone = idOrNull(id);
+  const folders = readFolders(ctx);
+  const at = folderAt(folders, folderId);
+  folders[at] = { ...folders[at], items: folders[at].items.filter((held) => held !== gone) };
+  return writeFolders(ctx, folders);
+}
+
 /* ------------------------------------------------------------- where to next */
 
 // What the sidebar's "next" row and ⌘J go to (2026-09-22), kept in state.json beside the views:
@@ -1371,8 +1521,20 @@ async function loadProject(ctx, projectId) {
 }
 
 module.exports = {
+  MAX_NESTING,
+  projectPageBlock,
+  PROJECT_PAGE,
+  readFolders,
+  createFolder,
+  renameFolder,
+  deleteFolder,
+  addToFolder,
+  removeFromFolder,
   STATUSES,
+  MAX_TREE_ENTRIES,
   WELCOME_NOTE,
+  createProjectWithWelcomePage,
+  welcomePageText,
   validateTree,
   treeIds,
   treeContains,

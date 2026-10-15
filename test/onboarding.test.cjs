@@ -8,7 +8,6 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { randomUUID } = require('node:crypto');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
@@ -47,7 +46,7 @@ test('a folder made for the project sits in the home directory and never takes o
   assert.equal(onboarding.existingFolder(ctx, '~/teachable-agents'), first.path);
 });
 
-test('startProject: folder, Getting started workspace starting with the description, the note in context, chosen rows on the project\'s list', async () => {
+test('startProject: folder, Getting started workspace starting with the description, note first, chosen rows in context', async () => {
   const pdf = path.join(homeDir, 'paper.pdf');
   fs.writeFileSync(pdf, '%PDF-1.4\n%%EOF\n');
   const paper = await library.addItem(ctx, pdf);
@@ -58,8 +57,7 @@ test('startProject: folder, Getting started workspace starting with the descript
   assert.equal(made.project.description, 'How learners find what a system should do.');
   const tree = await projects.loadProject(ctx, made.project.id);
   assert.deepEqual(tree.workspaces.map((w) => w.name), ['Getting started']);
-  assert.deepEqual(tree.workspaces[0].context, [made.noteId]);
-  assert.deepEqual(projects.findProject(ctx, made.project.id).library, [paper.id], 'the chosen row, notes and unknown ids left out');
+  assert.deepEqual(tree.workspaces[0].context, [made.noteId, paper.id]);
   assert.equal(await projects.readDoc(ctx, made.project.id, { kind: 'workspace', workspaceId: made.workspaceId }), 'How learners find what a system should do.\n');
 
   // @bart sees the description and the instructions.
@@ -74,21 +72,6 @@ test('startProject: folder, Getting started workspace starting with the descript
   assert.equal(again.project.directory, made.project.directory);
   assert.equal(again.project.description, '');
   await assert.rejects(onboarding.startProject(ctx, { name: 'Third', folder: 'existing', directory: '~/missing' }), /Nothing is at/);
-});
-
-test('startProject with 500 chosen rows (the guided setup\'s most): they go on the project\'s list, the workspace holds the Welcome! note (2026-10-12)', async () => {
-  const ids = [];
-  for (let n = 0; n < 500; n += 1) ids.push((await ctx.libraryDb.insert({ id: randomUUID(), name: `Site ${n}`, type: 'website', tags: [], url: `https://example.org/five-hundred/${n}` })).id);
-  const made = await onboarding.startProject(ctx, { name: 'Five hundred', folder: 'new', context: ids, workspaceName: 'Welcome' });
-  const listed = projects.findProject(ctx, made.project.id).library;
-  assert.equal(listed.length, 500);
-  assert.deepEqual(ids.filter((id) => !listed.includes(id)), []);
-  assert.deepEqual(projects.findWorkspace(ctx, made.project.id, made.workspaceId).workspace.context, [made.noteId]);
-  // The workspace still takes an @mention or a Save.
-  assert.deepEqual((await projects.linkToWorkspace(ctx, made.project.id, made.workspaceId, [ids[0]])).context, [made.noteId, ids[0]]);
-  // The project holds them: its Library and its agents' catalog see them.
-  const held = new Set((await library.libraryForProject(ctx, made.project.id)).map((row) => row.id));
-  assert.deepEqual(ids.filter((id) => !held.has(id)), []);
 });
 
 test('discardItem removes a row only while nothing holds it', async () => {
@@ -110,19 +93,19 @@ test('the order: parts before screens, a new user\'s flow asking about the proje
   // 2026-10-09: no folder part, and no Project context screen for a new user.
   assert.deepEqual(flow.SUBS.create, ['name', 'desc']);
   // 2026-10-10: Create before Connect, so the librarian is told what the project is; 'open' (the project made) after the last screen.
-  assert.deepEqual(flow.FLOWS.new, ['welcome', 'tools', 'create', 'intro', 'connect', 'import', 'instructions']);
+  assert.deepEqual(flow.FLOWS.new, ['welcome', 'tools', 'create', 'connect', 'import', 'instructions']);
   assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'create', 'import', 'instructions']);
-  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'create', 'intro', 'connect']);
-  assert.ok(!flow.flowOf('new').includes('intro'), 'the intro (2026-10-11) only with Connect');
+  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'create', 'connect']);
+  assert.ok(!flow.flowOf('new', { connect: true }).includes('intro'), 'the intro screen (2026-10-11) was deleted');
   assert.deepEqual(walk('new', { step: 'welcome', sub: 0 }), ['tools', 'create', 'create.1', 'import', 'import.1', 'import.2', 'instructions', 'open']);
-  assert.deepEqual(walk('new', { step: 'welcome', sub: 0 }, { connect: true }), ['tools', 'create', 'create.1', 'intro', 'connect', 'open'], 'the intro right before Connect; Connect last: its Continue makes the project');
+  assert.deepEqual(walk('new', { step: 'welcome', sub: 0 }, { connect: true }), ['tools', 'create', 'create.1', 'connect', 'open'], 'Connect last: its Continue makes the project');
   assert.ok(flow.flowOf('new', { connect: true }).indexOf('create') < flow.flowOf('new', { connect: true }).indexOf('connect'));
   assert.deepEqual(walk('existing', { step: 'create', sub: 0 }), ['create.1', 'context', 'open'], '+ Project keeps its context screen');
   assert.deepEqual(flow.forward('existing', { step: 'import', sub: 2, detour: true }), { step: 'context', sub: 0 });
   assert.deepEqual(flow.pagerOf('new', 'tools'), { count: 5, index: 1 }, 'the count is as before');
   assert.deepEqual(flow.pagerOf('new', 'create'), { count: 5, index: 2 });
   assert.deepEqual(flow.pagerOf('new', 'instructions'), { count: 5, index: 4 });
-  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 5, index: 4 });
+  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 4, index: 3 });
   assert.equal(flow.pagerOf('new', 'context'), null);
   assert.deepEqual(flow.pagerOf('existing', 'context'), { count: 2, index: 1 });
   assert.equal(flow.pagerOf('existing', 'import'), null);
@@ -130,15 +113,15 @@ test('the order: parts before screens, a new user\'s flow asking about the proje
   // The guided setup inside a project (2026-10-10): a new user's screens without Create, 'open' (its Welcome workspace)
   // after the last one, and the pager one fewer.
   assert.deepEqual(flow.flowOf('guided'), ['welcome', 'tools', 'import', 'instructions']);
-  assert.deepEqual(flow.flowOf('guided', { connect: true }), ['welcome', 'tools', 'intro', 'connect']);
+  assert.deepEqual(flow.flowOf('guided', { connect: true }), ['welcome', 'tools', 'connect']);
   assert.ok(!flow.flowOf('guided', { tools: false, connect: true }).includes('create'));
   assert.deepEqual(walk('guided', { step: 'welcome', sub: 0 }), ['tools', 'import', 'import.1', 'import.2', 'instructions', 'open']);
-  assert.deepEqual(walk('guided', { step: 'welcome', sub: 0 }, { connect: true }), ['tools', 'intro', 'connect', 'open'], 'Connect last: its Continue opens the project');
-  assert.deepEqual(walk('guided', { step: 'welcome', sub: 0 }, { tools: false, connect: true }), ['intro', 'connect', 'open']);
-  assert.deepEqual(flow.pagerOf('guided', 'intro', { tools: false, connect: true }), { count: 3, index: 1 }, 'the mockup\'s "2 of 3"');
+  assert.deepEqual(walk('guided', { step: 'welcome', sub: 0 }, { connect: true }), ['tools', 'connect', 'open'], 'Connect last: its Continue opens the project');
+  assert.deepEqual(walk('guided', { step: 'welcome', sub: 0 }, { tools: false, connect: true }), ['connect', 'open']);
+  assert.deepEqual(flow.pagerOf('guided', 'connect', { tools: false, connect: true }), { count: 2, index: 1 }, '"2 of 2"');
   assert.deepEqual(flow.forward('guided', { step: 'tools', sub: 0 }, { connect: false }), { step: 'import', sub: 0 }, 'Connect dropped: its screens come back');
-  assert.deepEqual(flow.pagerOf('guided', 'welcome', { connect: true }), { count: 4, index: 0 });
-  assert.deepEqual(flow.pagerOf('guided', 'connect', { connect: true }), { count: flow.pagerOf('new', 'connect', { connect: true }).count - 1, index: 3 });
+  assert.deepEqual(flow.pagerOf('guided', 'welcome', { connect: true }), { count: 3, index: 0 });
+  assert.deepEqual(flow.pagerOf('guided', 'connect', { connect: true }), { count: flow.pagerOf('new', 'connect', { connect: true }).count - 1, index: 2 });
   assert.deepEqual(flow.pagerOf('guided', 'instructions'), { count: 4, index: 3 });
   assert.equal(flow.pagerOf('guided', 'create'), null);
   assert.equal(flow.isFresh('guided'), true);
@@ -171,10 +154,10 @@ test('the order: parts before screens, a new user\'s flow asking about the proje
 
   // The project is made only once the flow reaches 'open', with Connect's session; the guided setup's end is its Welcome workspace.
   const ends = (mode, options) => { const out = []; let at = { step: 'welcome', sub: 0 }; for (let i = 0; i < 20 && at.step !== 'open'; i += 1) { at = flow.forward(mode, at, options); out.push(flow.endOf(mode, at)); } return out; };
-  assert.deepEqual(ends('new', { connect: true }), [null, null, null, null, null, 'project'], 'nothing is made on Create, nor on the intro');
+  assert.deepEqual(ends('new', { connect: true }), [null, null, null, null, 'project'], 'nothing is made on Create');
   assert.deepEqual(ends('new', {}).filter(Boolean), ['project']);
   assert.equal(ends('new', {}).at(-1), 'project', 'after Custom instructions');
-  assert.deepEqual(ends('guided', { connect: true }), [null, null, null, 'welcome']);
+  assert.deepEqual(ends('guided', { connect: true }), [null, null, 'welcome']);
   assert.equal(flow.endOf('existing', { step: 'open', sub: 0 }), null, '+ Project opens from its context screen');
   assert.deepEqual(flow.projectInput({ name: ' Teachable agents ', desc: ' Debugging with LLMs ', ids: [3], connectId: 'c1' }),
     { name: 'Teachable agents', description: 'Debugging with LLMs', folder: 'new', directory: '', context: [3], connect: 'c1', onboarding: true });

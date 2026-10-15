@@ -15,8 +15,10 @@ const {
   safeStorage,
   session: electronSession,
   shell: electronShell,
+  utilityProcess,
   WebContentsView,
 } = require('electron');
+const { createScanner, accessSpec } = require('./connect/offthread.cjs');
 const { SessionManager } = require('./terminal/session-manager.cjs');
 const { environmentForSessions } = require('./shell-rc.cjs');
 const { createSweeper } = require('./context/sweeper.cjs');
@@ -65,9 +67,10 @@ const { prepareLocalClaude } = require('./sandbox/local-claude.cjs');
 const { createRepoIdentifier, createRemoteFileLister, createDescriber } = require('./store/page-meta.cjs');
 const { createConnect } = require('./connect/session.cjs');
 const { createConnectAgents } = require('./connect/agents.cjs');
-const { createFakeConnectAgents } = require('./connect/fake.cjs');
+const { createFakeConnectAgents, createCliGatedAgents } = require('./connect/fake.cjs');
 const { createAgentBrowser } = require('./connect/browser.cjs');
 const { createConnectors } = require('./connect/connectors.cjs');
+const { createOwnConnectors } = require('./connect/own-connectors.cjs');
 const { createWebSignIn, SIGN_IN_COOKIES } = require('./connect/web-signin.cjs');
 const { createAppleNotes } = require('./connect/apple-notes.cjs');
 const { createSignInWindow } = require('./connect/signin-window.cjs');
@@ -92,6 +95,18 @@ const { createChatBenchmark, askChat } = require('./agent-map/benchmark.cjs');
 const { createUpdates } = require('./updates.cjs');
 const projects = require('./store/projects.cjs');
 const { createWindows, placement } = require('./windows.cjs');
+// Import your context (2026-10-13, the "Onboarding" workspace): its provider rule, browsers, discovery agents, Full Disk
+// Access and the Agent trace.
+const onboardingPrefs = require('./onboarding/prefs.cjs');
+const { createProviders } = require('./onboarding/providers.cjs');
+const { createBrowsers } = require('./onboarding/browsers.cjs');
+const { createTrace } = require('./onboarding/trace.cjs');
+const { createTraceWindow } = require('./onboarding/trace-window.cjs');
+const { createDiscovery } = require('./onboarding/discover.cjs');
+const { createDiskAccess } = require('./onboarding/disk-access.cjs');
+const { createBrowserAgents } = require('./onboarding/browser-agents.cjs');
+const { createAgentTerminal } = require('./terminal/agent-terminal.cjs');
+const { browserById: importBrowserById } = require('../shared/import-flow.cjs');
 
 const DIST = path.join(__dirname, '../../dist');
 const FIXTURES = path.join(__dirname, '../../fixtures');
@@ -117,6 +132,12 @@ const MIME = {
 let windows = null; // every window's context (./windows.cjs): its Stage tabs, post-its, terminal attachment, place
 let manager = null;
 let settings = null;
+let scanner = null;
+// Full Disk Access (round 3): the watch for its switch, and how to mark onboarding's run pending, for before-quit.
+let diskAccessRef = null;
+let markFlowPending = () => {};
+// A relaunch asked for while a quit was already under way (macOS's Quit & Reopen racing Engelbart's own): kept, not dropped.
+let relaunchWanted = false;
 let store = null;
 let sweeper = null;
 let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
@@ -128,6 +149,7 @@ let builds = null;
 let sandbox = null;
 let tools = null;
 let updates = null;
+let traceWindow = null; // View ▸ Agent Trace (./onboarding/trace-window.cjs)
 let connect = null; // Connect your library's sessions (./connect/session.cjs): stopped, their agents' windows closed, at quit
 let quitPending = false;
 let quitReady = false;
@@ -209,8 +231,9 @@ function runningSessionCount() {
 // `update`: Restart to Update from the ready dialog (updates.cjs), which has said already that terminal sessions end; it
 // quits without asking again (from the menu or a banner it asks, as any quit does). True once it goes on to quit; false
 // when it does not: a quit already under way, Cancel, or a shutdown that failed.
-async function requestQuit({ update = false } = {}) {
-  if (quitPending || quitReady) return false;
+// `relaunch` (Full Disk Access, 2026-10-13): Engelbart opens again once it has quit; only when the quit goes on.
+async function requestQuit({ update = false, relaunch = false } = {}) {
+  if (quitPending || quitReady) { if (relaunch) relaunchWanted = true; return false; }
   quitPending = true;
   const runningCount = update ? 0 : runningSessionCount();
   if (runningCount > 0) {
@@ -259,6 +282,7 @@ async function requestQuit({ update = false } = {}) {
     return false;
   }
   quitReady = true;
+  if (relaunch || relaunchWanted) app.relaunch();
   app.quit();
   return true;
 }
@@ -360,6 +384,7 @@ function registerTerminalIpc() {
         // Fall back to the persisted valid directory.
       }
     }
+    if (process.env.ENGELBART_PICK_DIRECTORY) return process.env.ENGELBART_PICK_DIRECTORY; // driver harness only (scripts/smoke-import-context.cjs)
     const result = await dialog.showOpenDialog(ctx.win, {
       title: 'Choose working directory',
       defaultPath,
@@ -448,6 +473,9 @@ function buildMenu() {
       submenu: [
         { role: 'reload' },
         { role: 'toggleDevTools' },
+        { type: 'separator' },
+        // Every prompt, input, output and context of onboarding's agents, and the dispatching around them (2026-10-13).
+        { label: 'Agent Trace', accelerator: 'CmdOrCtrl+Alt+T', click: () => { if (traceWindow) traceWindow.open(); } },
         { type: 'separator' },
         { role: 'togglefullscreen' },
       ],
@@ -578,6 +606,17 @@ if (!hasSingleInstanceLock) {
   app.on('before-quit', (event) => {
     if (quitReady) return;
     event.preventDefault();
+    // macOS's "“Engelbart” will not have full disk access until it is quit. Quit & Reopen" (round 3: it did nothing, this
+    // handler cancelling every quit Engelbart didn't start): while the switch is waited for and a new process can read,
+    // the quit goes through at once, asks nothing, and Engelbart opens again on onboarding's step with its run pending.
+    // A quit while the switch is still off is an ordinary one.
+    if (diskAccessRef && diskAccessRef.waiting()) {
+      void diskAccessRef.status().then((status) => {
+        if (status && (status.grantedFresh || status.granted)) { try { markFlowPending(); } catch { /* the flow asks again */ } return requestQuit({ update: true, relaunch: true }); }
+        return requestQuit();
+      }, () => requestQuit());
+      return;
+    }
     requestQuit();
   });
   app.on('window-all-closed', () => {
@@ -591,6 +630,11 @@ if (!hasSingleInstanceLock) {
     manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => (tools ? tools.environment() : {}), attached: (id) => (windows ? windows.attached(id) : false), sandboxPty: createSandboxPty() });
     settings = new SettingsStore(app.getPath('userData'), app.getPath('home'));
     const homeDir = process.env.ENGELBART_HOME_DIR || app.getPath('home');
+    // What is read from this Mac before anything is picked (the apps here, the repositories, onboarding's digest) runs in
+    // a utility process: on this process it froze every window for seconds (./connect/scan-child.cjs).
+    // ENGELBART_SCANNER=inline runs the scans here, as before (scripts/probe-onboarding-lag.cjs compares the two).
+    scanner = createScanner({ fork: process.env.ENGELBART_SCANNER === 'inline' ? null : () => utilityProcess.fork(path.join(__dirname, 'connect', 'scan-child.cjs'), [], { serviceName: 'Engelbart Scanner', stdio: 'ignore' }) });
+    app.on('will-quit', () => scanner.stop());
     // Pdfs saved as links before the Stage kept copies: every library that opens is checked, and what is left is
     // downloaded in the background with the Stage's cookies (a paper behind a sign-in comes too). A page row added while
     // the app is open is checked straight away (`again`: store.recheck). ENGELBART_WEB_PDFS=off disables it (scripted runs).
@@ -816,12 +860,16 @@ if (!hasSingleInstanceLock) {
     // ~/Desktop, ~/Documents or ~/Downloads is left out unless macOS already let Engelbart read that folder (MATH-110,
     // asked on Connect's choose screen): signing in never makes macOS ask for those folders (Connect's scan adds the ones
     // the person picked).
-    let macRepos = { at: 0, dirs: [] };
+    // Read in the scanner process (./connect/scan-child.cjs): 4 s of session files froze the window here. The last answer
+    // is used while a new one is read.
+    let macRepos = { at: 0, dirs: [], reading: false };
     const macRepoDirs = () => {
-      if (Date.now() - macRepos.at > 5 * 60_000) {
-        let dirs = [];
-        try { dirs = localRepos({ homeDir, access: folderAccess.guard({ homeDir, dataRoot: store.config().dataRoot }) }).filter((repo) => repo.checked).map((repo) => repo.path); } catch { dirs = []; }
-        macRepos = { at: Date.now(), dirs };
+      if (Date.now() - macRepos.at > 5 * 60_000 && !macRepos.reading) {
+        macRepos.reading = true;
+        const dataRoot = store.config().dataRoot;
+        scanner.run('localRepos', { homeDir, access: accessSpec(folderAccess.guard({ homeDir, dataRoot }), dataRoot) })
+          .then((repos) => { macRepos = { at: Date.now(), dirs: (Array.isArray(repos) ? repos : []).filter((repo) => repo.checked).map((repo) => repo.path), reading: false }; })
+          .catch(() => { macRepos = { ...macRepos, at: Date.now(), reading: false }; });
       }
       return macRepos.dirs;
     };
@@ -964,16 +1012,29 @@ if (!hasSingleInstanceLock) {
     // Its events go to the windows directly: the onboarding screen never attaches a terminal. ENGELBART_CONNECT_FAKE=1 (or
     // ENGELBART_BART_FAKE=1) runs it with no model.
     const connectFake = process.env.ENGELBART_CONNECT_FAKE === '1' || process.env.ENGELBART_BART_FAKE === '1';
+    // Scripted runs of onboarding's connect edge cases (2026-10-14): the fake agents run only while the pretend machine's
+    // Claude Code or Codex could (ENGELBART_TOOLS_FAKE), and which can is the tool check's answer, not "both".
+    const cliFake = connectFake && !!toolsFake && process.env.ENGELBART_CONNECT_FAKE_CLI === '1';
     const crypt = {
       available: () => safeStorage.isEncryptionAvailable(),
       encrypt: (text) => safeStorage.encryptString(text).toString('base64'),
       decrypt: (text) => safeStorage.decryptString(Buffer.from(text, 'base64')),
     };
+    // A page Engelbart opens for the person to act on (a connector's consent, round 3): in the browser they chose for their
+    // sign-ins, not macOS's default (which need not be it). Set once that choice is known (onboardingBrowsers, below).
+    let openChosen = (url) => electronShell.openExternal(parseExternalUrl(url).href);
     const connectors = createConnectors({
       file: () => path.join(store.config().dataRoot, 'connectors.json'),
       crypt,
-      openExternal: (url) => electronShell.openExternal(parseExternalUrl(url).href),
+      openExternal: (url) => openChosen(url),
       onChange: (status) => sendToWindow('engelbart:connectors', status),
+      // The connectors the person signed in to in their own Claude Code or Codex (round 3: Granola "headlessly").
+      own: createOwnConnectors({
+        homeDir,
+        codexList: () => new Promise((resolve, reject) => {
+          execFile('codex', ['mcp', 'list', '--json'], { env: { ...process.env, ...(tools ? tools.environment() : {}) }, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
+        }),
+      }),
     });
     const agentBrowser = createAgentBrowser({
       BrowserWindow,
@@ -989,6 +1050,26 @@ if (!hasSingleInstanceLock) {
     // however often it looks again. The person was told macOS would ask (the choose screen's panel, 2026-10-10), so its
     // prompt waits ten minutes for them rather than one.
     const keychainKeys = new Map();
+    // Import your context's remembered answers (./onboarding/prefs.cjs), in the data root open now.
+    const prefs = {
+      get: () => { try { return onboardingPrefs.get(store.config().dataRoot); } catch { return {}; } },
+      set: (patch) => onboardingPrefs.set(store.config().dataRoot, patch),
+    };
+    // The browser whose sign-ins Engelbart uses (2026-10-13): the person's pick, else macOS's default; only installed
+    // ones are offered. ENGELBART_ONBOARDING_BROWSERS (ids, the default first) stands in for this Mac in scripted runs.
+    const macDefaultBrowser = () => { try { return app.getApplicationNameForProtocol('https://'); } catch { return ''; } };
+    const onboardingBrowsers = createBrowsers({
+      installedApps,
+      defaultName: macDefaultBrowser,
+      prefs,
+      override: process.env.ENGELBART_ONBOARDING_BROWSERS != null ? process.env.ENGELBART_ONBOARDING_BROWSERS.split(',').map((id) => id.trim()).filter(Boolean) : null,
+    });
+    openChosen = (url) => new Promise((resolve, reject) => {
+      const remembered = (prefs.get() || {}).browser || null;
+      const bundle = remembered ? bundleOf(remembered) : null;
+      if (!bundle || process.platform !== 'darwin') { electronShell.openExternal(parseExternalUrl(url).href).then(resolve, reject); return; }
+      execFile('open', ['-b', bundle, parseExternalUrl(url).href], (error) => (error ? reject(error) : resolve()));
+    });
     const webSignIn = createWebSignIn({
       cookieImport: process.platform === 'darwin' ? createCookieImport({
         // The home Engelbart was given (ENGELBART_HOME_DIR in scripted runs, so they never read this Mac's browsers).
@@ -1004,8 +1085,11 @@ if (!hasSingleInstanceLock) {
           return keychainKeys.get(name);
         },
       }) : null,
-      defaultBrowser: () => { try { return app.getApplicationNameForProtocol('https://'); } catch { return ''; } },
-      openExternal: (url) => electronShell.openExternal(parseExternalUrl(url).href),
+      // The browser the person picked for their sign-ins (Import your context), else macOS's default (2026-10-13: "Claude
+      // sign-in opened in Chrome, but his keychain credentials were in Arc"): read first, and where sign-in pages open.
+      defaultBrowser: () => onboardingBrowsers.preferredName() || macDefaultBrowser(),
+      // The "default" above is the browser the person chose: its pages open there, not in macOS's default (round 3).
+      openExternal: (url) => openChosen(url),
       // A browser other than the default (Safari's cookies can't be read): `open -b <bundle id> <url>`.
       openIn: (browserId, url) => new Promise((resolve, reject) => {
         const bundle = bundleOf(browserId);
@@ -1029,24 +1113,53 @@ if (!hasSingleInstanceLock) {
     });
     // The providers whose CLI can run now (the tool check), as Connect names them; before the first check, both.
     const connectReady = () => {
-      if (connectFake) return ['anthropic', 'openai'];
+      if (connectFake && !cliFake) return ['anthropic', 'openai'];
       const usable = tools && typeof tools.usableAgents === 'function' ? tools.usableAgents() : null;
-      return usable === null ? ['anthropic', 'openai'] : usable.map((name) => (name === 'claude' ? 'anthropic' : 'openai'));
+      if (usable === null) return ['anthropic', 'openai'];
+      // One updating itself in the background (or about to) can run Connect's agents too (2026-10-13: the update never
+      // holds onboarding).
+      const snap = tools.snapshot();
+      const updating = ['claude', 'codex'].filter((name) => { const tool = snap.tools[name]; return tool && tool.installed && (tool.status === 'updating' || (tool.status === 'outdated' && tool.autoUpdate)); });
+      return [...new Set([...usable, ...updating])].map((name) => (name === 'claude' ? 'anthropic' : 'openai'));
     };
+    // The Agent trace (./onboarding/trace.cjs): every turn of Connect's and Import your context's agents, and the
+    // dispatching around them, in <dataRoot>/.connect/trace; View ▸ Agent Trace shows it.
+    const trace = createTrace({ dataRoot: () => store.config().dataRoot, notify: (entry) => { if (traceWindow) traceWindow.send(entry); } });
+    traceWindow = createTraceWindow({ BrowserWindow, dialog, trace, traceDir: () => path.join(store.config().dataRoot, '.connect', 'trace'), reveal: (dir) => { fs.mkdirSync(dir, { recursive: true }); electronShell.openPath(dir); } });
+    // Browser agents (./onboarding/browser-agents.cjs, 2026-10-13): the web apps' imports in the person's own browser, run in
+    // the Engelbart terminal (./terminal/agent-terminal.cjs) as a terminal pane's session is. ENGELBART_BROWSER_AGENTS
+    // ('allowed' | 'ask' | 'none') stands in for this Mac in scripted runs.
+    const browserAgents = createBrowserAgents({ homeDir, prefs, fake: process.env.ENGELBART_BROWSER_AGENTS || (connectFake ? 'none' : '') });
+    const agentTerminal = createAgentTerminal({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => tools.environment() });
+    // The person's browser brought forward when they press Open on a browser agent's sign-in card: the agent's tab is there.
+    const openBrowserApp = (id) => new Promise((resolve, reject) => {
+      const known = importBrowserById(id);
+      const args = known ? ['-b', known.bundle] : id === 'vivaldi' ? ['-a', 'Vivaldi'] : null;
+      if (!args || process.platform !== 'darwin') { reject(new Error('Unknown browser')); return; }
+      execFile('/usr/bin/open', args, { timeout: 10_000 }, (error) => (error ? reject(error) : resolve(true)));
+    });
+    const connectAgents = trace.wrap(connectFake
+      ? (cliFake ? createCliGatedAgents(createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 }), toolsFake.state, { refuse: String(process.env.ENGELBART_CONNECT_FAKE_REFUSE || '').split(',').filter(Boolean) }) : createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 }))
+      : createConnectAgents({ runDirectory: path.join(app.getPath('userData'), 'connect-runs'), interviewHome: path.join(app.getPath('userData'), 'codex-home-connect'), importHome: path.join(app.getPath('userData'), 'codex-home-connect-import'), tools, terminal: agentTerminal }));
     connect = createConnect({
-      agents: connectFake
-        ? createFakeConnectAgents({ delayMs: Number(process.env.ENGELBART_CONNECT_FAKE_MS) || 700 })
-        : createConnectAgents({ runDirectory: path.join(app.getPath('userData'), 'connect-runs'), interviewHome: path.join(app.getPath('userData'), 'codex-home-connect'), importHome: path.join(app.getPath('userData'), 'codex-home-connect-import'), tools }),
+      agents: connectAgents,
+      trace,
       models: () => readModels('build'),
       ready: connectReady,
+      // a run waiting for its provider (session.cjs holdForProvider): that CLI is checked again, so its rows say why
+      providerCheck: (provider) => tools.check([provider === 'openai' ? 'codex' : 'claude']),
       context: () => store.context(),
       homeDir,
+      // connect(): an import step's Sign in starts Engelbart's own sign-in here in main (2026-10-14); ready(): the
+      // library's sync, which the Zotero tools wait for before a first read
       zotero: {
         status: () => zotero.status(),
         root: () => (zotero.status().connected ? zoteroLibrary.root() : null),
         download: (key, filename) => zoteroLibrary.download(key, filename),
+        connect: () => zotero.connect(),
+        ready: () => zoteroLibrary.autoSync(),
       },
-      github: { status: () => github.status(), repos: (options) => github.repos(options) },
+      github: { status: () => github.status(), repos: (options) => github.repos(options), connect: () => github.connect() },
       deps: { describe: createDescriber(), identifyRepo: createRepoIdentifier({ auth: github.authHeaders }), inspectPdf, onAdded: libraryChanged, onPdf: pdfAdded },
       notify: (snapshot) => sendToWindow('engelbart:connect', snapshot),
       // What came in joined the Welcome workspace (connect/session.cjs placeRows): its sidebar reads it again.
@@ -1057,6 +1170,8 @@ if (!hasSingleInstanceLock) {
       appleNotes,
       webSignIn,
       signInWindow,
+      browserAgents,
+      openBrowserApp,
     });
     // The apps Engelbart's browser holds a sign-in for (their sign-in cookie in the Stage's session): ticked on the choose
     // screen, as an app found on this Mac is.
@@ -1070,11 +1185,76 @@ if (!hasSingleInstanceLock) {
       }
       return out;
     };
+    // Import your context (2026-10-13): which provider runs its agents (both subscribed: asked once), the project and
+    // tool discovery agents (started the moment Import context is pressed), and Full Disk Access in place of four folder
+    // prompts. ENGELBART_PROVIDERS_FAKE and ENGELBART_DISK_ACCESS stand in for this Mac in scripted runs.
+    const onboardingProviders = createProviders({ tools, prefs, homeDir, fake: process.env.ENGELBART_PROVIDERS_FAKE || (connectFake && !cliFake ? 'both' : ''), ...(toolsFake ? { run: toolsFake.execFile } : {}) });
+    // Full Disk Access granted: the agents may read every folder macOS guards (MATH-110's four asked one by one before).
+    let diskGranted = false;
+    const diskAccess = createDiskAccess({
+      BrowserWindow, screen: require('electron').screen, shell: electronShell, homeDir,
+      requestQuit,
+      notify: (status) => {
+        if (status && status.granted) diskGranted = true;
+        sendToWindow('engelbart:disk-access', status);
+      },
+      iconPath: path.join(__dirname, '../../build/icon.png'),
+    });
+    diskAccessRef = diskAccess;
+    // The flow saved with its run pending, so the relaunch starts the imports (ImportFlow's restore): what the window would
+    // have saved itself, had macOS's Quit & Reopen not come first.
+    markFlowPending = () => {
+      const now = prefs.get() || {};
+      if (now.flow && typeof now.flow === 'object') prefs.set({ flow: { ...now.flow, pendingRun: true, dialog: null } });
+    };
+    // Granted (this process can read what it guards): the four folders count as allowed for Connect's guard too (MATH-110),
+    // so no agent is kept out of them and no folder prompt comes up.
+    void diskAccess.status().then((status) => {
+      diskGranted = !!(status && status.granted);
+      if (diskGranted) { try { folderAccess.writeAnswers(store.config().dataRoot, Object.fromEntries(folderAccess.protectedFolders({ homeDir }).map((folder) => [folder.id, 'allowed']))); } catch { /* the guard asks as before */ } }
+    }).catch(() => {});
+    const discovery = createDiscovery({
+      agents: connectAgents,
+      models: () => readModels('build'),
+      context: () => store.context(),
+      homeDir,
+      providers: onboardingProviders,
+      webSignIn,
+      cookieImport: process.platform === 'darwin' ? createCookieImport({ supportDir: path.join(homeDir, 'Library', 'Application Support'), userDataDir: app.getPath('userData'), getSession: () => electronSession.fromPartition(BROWSER_PARTITION), request: (options) => net.request(options), installed: browserInstalled, settled: browserSettled, keychain: (name) => { if (!keychainKeys.has(name)) keychainKeys.set(name, keychainRunner(name, undefined, { timeoutMs: 10 * 60_000 }).catch((error) => { keychainKeys.delete(name); throw error; })); return keychainKeys.get(name); } }) : null,
+      agentBrowser,
+      openBridge: openToolBridge,
+      zotero: { status: () => zotero.status() },
+      zoteroRoot: () => (zotero.status().connected ? zoteroLibrary.root() : null),
+      github: { status: () => github.status(), repos: (options) => github.repos(options) },
+      connectors,
+      deps: { describe: createDescriber(), identifyRepo: createRepoIdentifier({ auth: github.authHeaders }), inspectPdf, onAdded: libraryChanged, onPdf: pdfAdded },
+      notify: (state) => sendToWindow('engelbart:discovery', state),
+      trace,
+      access: (ctx) => folderAccess.guard({ homeDir, dataRoot: ctx.dataRoot, ...(diskGranted ? { answers: Object.fromEntries(folderAccess.protectedFolders({ homeDir }).map((folder) => [folder.id, 'allowed'])) } : {}) }),
+      existingProjects: async (ctx) => (await projects.listProjects(ctx)).map((project) => project.name),
+      scanner,
+    });
+    // The trace window's own calls: from that window only.
+    const fromTrace = (handler) => async (event, ...args) => {
+      if (!traceWindow || !traceWindow.isOpen() || BrowserWindow.fromWebContents(event.sender) == null || !event.sender.getURL().startsWith('file:') || !event.sender.getURL().endsWith('/trace.html')) throw new Error('Not the trace window');
+      return handler(...args);
+    };
+    // The Full Disk Access helper's buttons (./onboarding/disk-helper.html): from that page only.
+    ipcMain.on('disk-helper:action', (event, name) => {
+      const url = event.sender.getURL();
+      if (!url.startsWith('file:') || !url.endsWith('/disk-helper.html')) return;
+      diskAccess.helperAction(String(name || ''));
+    });
+    ipcMain.handle('trace:list', fromTrace(() => traceWindow.list()));
+    ipcMain.handle('trace:save', fromTrace((html) => traceWindow.save(html)));
+    ipcMain.handle('trace:reveal', fromTrace(() => traceWindow.revealFolder()));
     app.on('will-quit', () => connect.suspendAll());
     registerEngelbartIpc({
       agentMap,
       // A page @create made, as a picture for its row (2026-10-14, bart/created-preview.cjs).
       snapshotHtml: createSnapshotter({ BrowserWindow }),
+      scanner,
+      onboarding: { prefs, providers: onboardingProviders, browsers: onboardingBrowsers, browserAgents, discovery, diskAccess, openTrace: () => traceWindow.open() },
       connect,
       connectors,
       appleNotes,
@@ -1105,6 +1285,7 @@ if (!hasSingleInstanceLock) {
         return true;
       },
       writeClipboard: (text) => clipboard.writeText(text),
+      writeImage: (buf) => { const img = require('electron').nativeImage.createFromBuffer(buf); if (img.isEmpty()) return false; clipboard.writeImage(img); return true; },
       bart,
       builds,
       sandbox,

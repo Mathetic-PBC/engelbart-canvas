@@ -406,18 +406,17 @@ test('the rows: each agent\'s default per provider, the default providers as a r
   assert.deepEqual([lastPick(shown(root), 'quick').label, lastPick(shown(root), 'build')], ['Astra Ultra', null]);
 });
 
-test('the gear opens the settings window at Model, then Connections, with Test data only in test mode (Guided setup gone, 2026-10-12)', () => {
+test('the gear opens the settings window at Models, then Connections and Import context (was Guided setup), with Test data only in test mode', () => {
   const { PAGES } = load('ui/Settings.jsx');
   const ids = (props) => PAGES.filter((page) => !page.shown || page.shown(props)).map((page) => page.id);
-  assert.deepEqual(ids({ test: null }), ['model', 'connections']);
-  assert.deepEqual(ids({ test: { testMode: false } }), ['model', 'connections']);
-  assert.deepEqual(ids({ test: { testMode: true } }), ['model', 'connections', 'test-data']);
-  assert.ok(!PAGES.some((page) => page.id === 'guided-setup'), 'no Guided setup page');
-  assert.equal(PAGES[0].title, 'Model');
+  assert.deepEqual(ids({ test: null }), ['model', 'connections', 'guided-setup']);
+  assert.deepEqual(ids({ test: { testMode: false } }), ['model', 'connections', 'guided-setup']);
+  assert.deepEqual(ids({ test: { testMode: true } }), ['model', 'connections', 'guided-setup', 'test-data']);
+  assert.deepEqual([PAGES[2].section, PAGES[2].title, PAGES[2].Body.name], ['Settings', 'Import context', 'GuidedSetupPage']);
+  assert.equal(PAGES[0].title, 'Models', '2026-10-13: "change Model to Models"');
   assert.deepEqual([PAGES[1].section, PAGES[1].title, PAGES[1].Body.name], ['Settings', 'Connections', 'ConnectionsPage']);
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');
   assert.ok(!source.includes('⚙'), 'a drawn gear, not the character');
-  for (const gone of ['GuidedSetupPage', 'startGuidedSetup', 'COMPASS_ICON', "'guided-setup'"]) assert.ok(!source.includes(gone), gone);
   assert.match(source, /className="settings-gear"/);
   assert.match(source, /aria-haspopup="dialog" onClick=\{\(\) => setOpen\(''\)\}/, 'no menu: a press opens the window');
   assert.match(source, /window\.addEventListener\(OPEN_SETTINGS, onOpen\)/, 'and the sidebar\'s gear opens it too, on a page of its choosing');
@@ -446,11 +445,9 @@ test('Escape with a page\'s "…" menu open closes the menu, not Settings; the n
 test('searching the column: title or keyword, any case, trimmed; hidden pages never match (SR-02, A1, A4)', () => {
   const { PAGES, pageMatches } = load('ui/Settings.jsx');
   const listed = (query, test = null) => PAGES.filter((page) => !page.shown || page.shown({ test })).filter((page) => pageMatches(page, query)).map((page) => page.id);
-  assert.deepEqual(listed(''), ['model', 'connections'], 'empty: every page');
-  assert.deepEqual(listed('   '), ['model', 'connections'], 'blank is empty');
-  assert.deepEqual(listed('guided'), [], 'no Guided setup (2026-10-12)');
-  assert.deepEqual(listed('guided', { testMode: true }), []);
-  assert.deepEqual(listed('onboarding'), []);
+  assert.deepEqual(listed(''), ['model', 'connections', 'guided-setup'], 'empty: every page');
+  assert.deepEqual(listed('   '), ['model', 'connections', 'guided-setup'], 'blank is empty');
+  assert.deepEqual(listed('onboarding'), ['guided-setup'], 'Guided setup by what it runs');
   assert.deepEqual(listed('conn'), ['connections'], 'the title');
   assert.deepEqual(listed('zot'), ['connections'], 'a keyword');
   assert.deepEqual(listed('deep'), ['model'], 'a level name');
@@ -472,7 +469,7 @@ test('the column: the search field first, headings only over pages listed, "No r
   assert.match(all, /<input type="text" aria-label="Search settings" data-settings-search="1" placeholder="Search…"/);
   assert.ok(!/autofocus/i.test(all), 'not focused on open');
   assert.ok(all.indexOf('data-settings-search') < all.indexOf('>Settings<'), 'above the first heading');
-  assert.deepEqual(items(all), ['model', 'connections', 'test-data']);
+  assert.deepEqual(items(all), ['model', 'connections', 'guided-setup', 'test-data']);
   assert.ok(all.includes('>Settings<') && all.includes('>Developer<'));
   assert.match(all, /<div style="display:flex;flex-direction:column;gap:2px"><button/, 'a 2px gap between items');
   assert.ok(all.includes('margin:16px 0 4px'), 'a later heading keeps its 16px');
@@ -504,7 +501,7 @@ test('Escape: an open "…" menu first, then the search field\'s text, then the 
   assert.equal(escapeAction({}), 'close');
 });
 
-test('Model\'s icon is Lucide\'s cpu (sparkles until 2026-10-07), drawn as the others are (SR-07, A5)', () => {
+test('Models\' icon is Lucide\'s cpu (sparkles until 2026-10-07), drawn as the others are (SR-07, A5); Connections wears the blocks and Import context the circled plus (2026-10-13)', () => {
   const { PAGES } = load('ui/Settings.jsx');
   const svg = (id) => renderToStaticMarkup(PAGES.find((page) => page.id === id).icon);
   const model = svg('model');
@@ -512,10 +509,11 @@ test('Model\'s icon is Lucide\'s cpu (sparkles until 2026-10-07), drawn as the o
   assert.ok(model.includes('<rect x="4" y="4" width="16" height="16" rx="2"></rect>') && model.includes('<rect x="8" y="8" width="8" height="8" rx="1"></rect>') && model.includes('M12 2v2'));
   assert.ok(!model.includes('M11.017 2.814'), 'not the sparkles');
   assert.ok(!model.includes('m3.3 7 8.7 5 8.7-5'), 'not the box');
-  assert.ok(svg('connections').includes('M8.25 2.25v4.5'), 'Connections keeps its plug');
+  assert.ok(svg('connections').includes('<rect width="7" height="7" x="14" y="3" rx="1"></rect>'), 'Connections: the sidebar\'s four blocks');
+  assert.ok(svg('guided-setup').includes('<circle cx="12" cy="12" r="10"></circle>') && svg('guided-setup').includes('M12 8v8'), 'Import context: the circled plus');
 });
 
-test('Model: Quick, Standard and Deep of the provider @discover runs on, each a model and an effort', () => {
+test('Models: Quick, Standard and Deep of the provider @discover runs on, each a model and an effort, with no line under them (2026-10-13: "Get rid of all this subtext")', () => {
   const { IntelligenceLevels, LEVELS } = load('ui/Settings.jsx');
   assert.deepEqual(LEVELS.map((level) => level.id), ['quick', 'standard', 'deep']);
   const root = home();
@@ -526,7 +524,7 @@ test('Model: Quick, Standard and Deep of the provider @discover runs on, each a 
   assert.ok(!html.includes('role="tab"'), 'every provider shown at once');
   for (const level of ['quick', 'standard', 'deep']) assert.ok(html.includes(`data-level="anthropic:${level}"`), level);
   const row = (markup, key) => { const at = markup.indexOf(`data-level="${key}"`); const next = markup.indexOf('data-level="', at + 1); return markup.slice(at, next < 0 ? undefined : next); };
-  assert.match(row(html, 'anthropic:quick'), /Used by @discover --quick/);
+  assert.doesNotMatch(row(html, 'anthropic:quick'), /Used by @discover/);
   assert.match(row(html, 'anthropic:quick'), /<option value="sonnet" selected="">Sonnet<\/option>/);
   assert.match(row(html, 'anthropic:quick'), /<option value="medium" selected="">Medium<\/option>/);
   assert.match(row(html, 'anthropic:deep'), /<option value="opus" selected="">Opus<\/option>/);

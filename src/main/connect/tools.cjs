@@ -46,6 +46,9 @@ const CHAT_APPS = ['Claude Code', 'Codex', 'Cursor', 'Claude', 'ChatGPT'];
 const MAX_FILES_A_CALL = 300;
 const MAX_CHATS_A_CALL = 100;
 const MAX_ZOTERO_A_CALL = 300;
+// How long a Zotero tool waits for the library's first sync after the person signs in (2026-10-14: the agent read the
+// mirror before it had landed, was told "has not finished its first sync", and asked the person again).
+const ZOTERO_SYNC_WAIT_MS = 180_000;
 const MAX_PDFS_A_CALL = 200;
 const MAX_PDF_CHECKS = 80;
 const MAX_GOOGLE_A_CALL = 25;
@@ -111,6 +114,14 @@ const TOOLS_FOR = Object.freeze({
   survey: LOOK,
   recall: ['browser_open', 'browser_read', 'browser_click', 'browser_type', 'browser_press', 'browser_scroll', 'browser_wait', 'browser_screenshot', 'needs_you', 'wait_for_you', 'save_memory'],
   import: IMPORT_TOOLS.map((tool) => tool.name).filter((name) => name !== 'save_memory'),
+  // Import your context's tool discovery (2026-10-13, ../onboarding/discover.cjs): which tools the person uses, seen
+  // from their browser's history and bookmarks and, signed in, the apps' own pages. It looks; it never asks the person
+  // anything (no needs_you) and never reaches Apple Notes or Gmail (a macOS prompt, someone else's mail).
+  discover: ['browser_history', 'browser_bookmarks', 'browser_open', 'browser_read', 'browser_scroll', 'browser_wait', 'github_repos', 'list_chats', 'web_chats', 'zotero_collections', 'folder_overview'],
+  // A browser agent's import (2026-10-13, ./agents.cjs kind browse): it reads in the person's own browser, so it is given
+  // none of Engelbart's hidden browser (nor what reads through it: web chats, Drive, Gmail, Overleaf), only what brings in
+  // what it read or downloaded, and needs_you for a sign-in page.
+  browse: ['folder_overview', 'list_note_files', 'import_note_files', 'add_note', 'add_to_library', 'list_pdfs', 'import_pdfs', 'unpack', 'browser_history', 'browser_bookmarks', 'needs_you', 'wait_for_you'],
 });
 const WRITING = new Set(['import_note_files', 'import_pdfs', 'add_note', 'add_to_library', 'unpack', 'import_chats', 'import_web_chats', 'browser_download', 'import_google_files', 'import_gmail_threads', 'import_overleaf_projects', 'import_apple_notes', 'import_zotero_items']);
 
@@ -216,7 +227,8 @@ const gmailSignedOut = () => Object.assign(new Error('Not signed in to Google in
  * session brought in, counted against its cap) };
  * `context()` the store's context now; `added(kind, n, what)` counts what this import added ('notes' | 'items'); `kept(row)`
  * each library row it added or found already there (session.cjs keepRow);
- * `zotero` { root(), download? }; `github` (its repos()); `library` deps { describe, identifyRepo, inspectPdf, onAdded,
+ * `zotero` { root(), download?, ready? (the library's sync, waited for before a first read; → its status), syncWaitMs? };
+ * `github` (its repos()); `library` deps { describe, identifyRepo, inspectPdf, onAdded,
  * onPdf }; `kind` 'import' | 'survey' | 'recall'; `page` the job's browser (./browser.cjs tools), null where there is
  * none; `needs` { ask({ kind, reason }), wait() }; `recall(app, text)` keeps an assistant's answer; `appleNotes`
  * (./apple-notes.cjs); `log(text)` the action log. → call(name, args)
@@ -710,11 +722,11 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
       return { browser: found.browser, profile: found.name, bookmarks: readers.browserBookmarks(found.dir) };
     },
     links_in_notes: ({ folder, limit = 200 }) => readers.linksIn(where(folder, 'folder'), { limit: Math.min(Math.max(1, Math.round(limit)), 1000) }),
-    zotero_collections: () => readers.zoteroCollections(zoteroRoot()),
-    zotero_items: ({ collection = '', query = '', limit = 500 }) => readers.zoteroItems(zoteroRoot(), { collection, query, limit: Math.min(Math.max(1, Math.round(limit)), 2000) }),
+    zotero_collections: async () => readers.zoteroCollections(await zoteroRoot()),
+    zotero_items: async ({ collection = '', query = '', limit = 500 }) => readers.zoteroItems(await zoteroRoot(), { collection, query, limit: Math.min(Math.max(1, Math.round(limit)), 2000) }),
     import_zotero_items: async ({ keys }) => {
       if (keys.length > MAX_ZOTERO_A_CALL) throw new Error(`At most ${MAX_ZOTERO_A_CALL} items a call`);
-      const root = zoteroRoot();
+      const root = await zoteroRoot();
       let count = 0, already = 0;
       const skipped = [];
       for (const key of keys) {
@@ -809,10 +821,36 @@ function createImportTools({ session, context, added = () => {}, kept = () => {}
     return appleNotes;
   }
 
-  function zoteroRoot() {
+  /**
+   * The Zotero mirror's folder. Signed in but not synced yet (the first sync runs right after the sign-in): the sync is
+   * waited for, at most ZOTERO_SYNC_WAIT_MS, so the agent never takes a library still on its way for a sign-in to ask for.
+   */
+  let zoteroWait = null;
+  async function zoteroRoot() {
     const root = zotero && zotero.root ? zotero.root() : null;
     if (!root) throw new Error('Zotero is not signed in. Call needs_you with kind "signin" and reason "Sign in to Zotero".');
-    return root;
+    const synced = () => fs.existsSync(path.join(root, 'items.json'));
+    if (synced()) return root;
+    if (!zoteroWait) {
+      log('Waiting for your Zotero library to sync');
+      const limit = zotero.syncWaitMs || ZOTERO_SYNC_WAIT_MS;
+      const ready = typeof zotero.ready === 'function' ? Promise.resolve().then(() => zotero.ready()).catch((error) => ({ state: 'error', error: error && error.message ? error.message : '' })) : null;
+      zoteroWait = new Promise((resolve) => {
+        const started = Date.now();
+        let last = null;
+        if (ready) ready.then((status) => { last = status || { state: 'idle' }; });
+        const look = () => {
+          if (synced() || last || Date.now() - started >= limit) { resolve(last); return; }
+          const timer = setTimeout(look, 250);
+          if (timer.unref) timer.unref();
+        };
+        look();
+      }).finally(() => { zoteroWait = null; });
+    }
+    const status = await zoteroWait;
+    if (synced()) return root;
+    if (status && status.state === 'error') throw new Error(`Your Zotero library could not be synced${status.error ? `: ${status.error}` : ''}. The person is signed in: do not call needs_you for Zotero. Finish and say that Zotero's library could not be synced.`);
+    throw new Error('Your Zotero library is still syncing from zotero.org. The person is signed in: do not call needs_you for Zotero. Try again in a minute.');
   }
 
   return async function callTool(name, args) {

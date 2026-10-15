@@ -40,7 +40,7 @@ const SKILLS = {
 - The person knows this app as Google Drive: call it that in anything they read (needs_you reasons, your summary).
 - ${BROWSER}
 - To see what is there: browser_open https://drive.google.com/drive/recent (recent files), https://drive.google.com/drive/my-drive (folders), or https://drive.google.com/drive/search?q=<words>. Each file row in browser_read carries its Drive id (id) and its name; the row's label says its kind (Google Docs, Google Sheets, Google Slides, PDF, folder). Open a folder by browser_open https://drive.google.com/drive/folders/<id>.
-- To bring files in: import_google_files with items [{ id, kind, name }], kind doc, sheet, slides or file (a pdf or any uploaded file). Docs become notes (exported as Markdown), Sheets notes of their first sheet as a table, Slides notes of their text, pdfs and other files go into the library. Never open files one by one to copy their text.
+- To bring files in: import_google_files with items [{ id, kind, name }], kind doc, sheet, slides or file (a pdf or any uploaded file). Docs become notes (exported as Markdown into the library), Sheets notes of their first sheet as a table, Slides notes of their text, pdfs and other files go into the library. It fetches each file itself, with no prompt. Never use Drive's or Docs' Download or Export menus, and never open files one by one to copy their text.
 - ${SIGN_IN} Google refuses some embedded sign-ins; needs_you lets the person sign in or bring their Chrome sign-in over.
 - Leave out by default: files shared with the person that they never opened, forms, and anything older than the plan's time range.`,
 
@@ -56,9 +56,9 @@ const SKILLS = {
 - Start at https://www.evernote.com/client/web. The Notes list shows titles; open each note the plan wants, browser_read its text and add_note it (title, markdown, source = the note's address). Notebooks are in the sidebar under Notebooks. ${SIGN_IN}`,
 
   Granola: `# Granola
-- Granola keeps its notes encrypted on this Mac and has no web app, so it is reached only through its own tools (the MCP server "granola": list or search meetings, get a meeting's notes, get its transcript).
+- Granola keeps its notes encrypted on this Mac and has no web app, so it is reached only through its own tools: the Granola MCP server (usually named "granola"), signed in either through Engelbart or through the person's own Claude Code or Codex, where they are signed in already. Its tools list or search meetings, get a meeting's notes and get its transcript. Use them; never ask the person to export or download anything.
 - List the meetings in the plan's time range; for each one the plan wants, get its notes and, if the plan asks for transcripts, its transcript; add_note one note per meeting: title = the meeting's title and date, markdown = the notes (then the transcript under a "Transcript" heading), source = "granola:<meeting id>".
-- If the Granola tools are missing or say the sign-in expired, call needs_you with kind "connector" and reason "Sign in to Granola".
+- Only if there are no Granola tools at all, or they say the sign-in expired, call needs_you with kind "connector" and reason "Connect Granola".
 - Leave out by default: 1:1s about hiring or personal matters, standups, and meetings the person said to skip.`,
 
   'Google Meet': `# Google Meet

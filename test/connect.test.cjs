@@ -141,7 +141,7 @@ test('Claude Code and Codex sessions: listed by first typed prompt, programs\' r
     { type: 'assistant', message: { role: 'assistant', content: [{ type: 'text', text: 'And habit.' }] } },
   ]));
   write('.claude/projects/-Users-me-thesis/22222222-2222-4222-8222-222222222222.jsonl', lines([
-    { type: 'user', entrypoint: 'sdk-ts', cwd: '/tmp/run', message: { role: 'user', content: 'Summarize this note' } },
+    { type: 'user', entrypoint: 'sdk-cli', cwd: '/tmp/run', message: { role: 'user', content: 'Summarize this note' } },
   ]));
   write('.codex/sessions/2026/10/01/rollout-2026-10-01T10-00-00-abc.jsonl', lines([
     { type: 'session_meta', payload: { id: 'abc', cwd: path.join(homeDir, 'code'), originator: 'codex-tui', source: 'cli' } },
@@ -157,6 +157,25 @@ test('Claude Code and Codex sessions: listed by first typed prompt, programs\' r
   const claude = readers.localChats('Claude Code', { homeDir, env });
   assert.deepEqual(claude.map((chat) => [chat.id, chat.title, chat.project]), [['-Users-me-thesis/11111111-1111-4111-8111-111111111111', 'Why do novices skip tests?', '~/thesis']]);
   assert.equal(readers.localChats('Claude Code', { homeDir, env, automated: true }).length, 2);
+  // 2026-10-13 ("the number of chats is too low"): a first prompt past the head (attachments before it), an Agent SDK
+  // session run for the person (sdk-ts: Engelbart's Builds), its own title, and a Codex prompt that begins with "<".
+  const far = (n) => Array.from({ length: n }, (_, i) => ({ type: 'attachment', attachment: { content: 'x'.repeat(4000), at: i } }));
+  write('.claude/projects/-Users-me-thesis/33333333-3333-4333-8333-333333333333.jsonl', lines([
+    ...far(60),
+    { type: 'user', entrypoint: 'sdk-ts', cwd: path.join(homeDir, 'thesis'), message: { role: 'user', content: 'Build the study dashboard' } },
+    { type: 'ai-title', aiTitle: 'Study dashboard' },
+  ]));
+  write('.codex/sessions/2026/10/03/rollout-2026-10-03T10-00-00-ghi.jsonl', lines([
+    { type: 'session_meta', payload: { id: 'ghi', cwd: path.join(homeDir, 'code'), originator: 'codex-tui', source: 'cli' } },
+    { type: 'response_item', payload: { type: 'message', role: 'developer', content: [{ type: 'input_text', text: 'y'.repeat(300 * 1024) }] } },
+    { type: 'event_msg', payload: { type: 'user_message', message: '<div>Why does this page not render?</div>' } },
+  ]));
+  const more = readers.localChats('Claude Code', { homeDir, env });
+  assert.deepEqual(more.map((chat) => chat.title).sort(), ['Study dashboard', 'Why do novices skip tests?'], 'past the head, and its own title');
+  const pasted = readers.localChats('Codex', { homeDir, env }).find((chat) => chat.id.endsWith('ghi'));
+  assert.equal(pasted.title, '<div>Why does this page not render?</div>', 'a prompt beginning with "<" past 256 KB');
+  fs.rmSync(path.join(homeDir, '.claude/projects/-Users-me-thesis/33333333-3333-4333-8333-333333333333.jsonl'));
+  fs.rmSync(path.join(homeDir, '.codex/sessions/2026/10/03'), { recursive: true });
   const transcript = readers.localTranscript('Claude Code', claude[0].id, { homeDir, env });
   assert.deepEqual(transcript.turns, [{ role: 'user', text: 'Why do novices skip tests?' }, { role: 'assistant', text: 'Mostly time pressure.\n\nAnd habit.' }]);
   const codex = readers.localChats('Codex', { homeDir, env });
@@ -622,16 +641,198 @@ test('a session with the fake agents: a folder button, a question card, imports 
   assert.equal(await connect.attachProject(ctx, started.id, project.id, workspaceId), 0, 'no notes were held for it');
   const names = (await ctx.libraryDb.list()).filter((row) => row.project_id === project.id && row.tags.includes('note')).map((row) => row.name);
   assert.deepEqual(names, ['Welcome!']);
-  // What it brought into the library goes on the project's own list (2026-10-12), so the project's agents are told of it;
-  // the Welcome workspace's sidebar keeps only its note.
+  // What it brought into the library goes on the project's list (2026-10-11) and, for onboarding's run, into the Welcome
+  // project's folder too (2026-10-14: "the welcome project folder should be a complete set of their project files"; it
+  // replaced 2026-10-13's "imports go only to the library for now, not the workspace", which still holds for an import
+  // started inside a project).
   const brought = (await mdFiles()).filter((row) => !earlier.has(row.id)).map((row) => row.id);
   assert.equal(brought.length, 5);
-  await until(() => projects.findProject(ctx, project.id).library, (listed) => brought.every((id) => listed.includes(id)), 'every note it brought in, on the project\'s list');
-  assert.deepEqual(projects.findWorkspace(ctx, project.id, workspaceId).workspace.context, [noteId], 'the workspace holds the Welcome! note only');
+  const held = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
+  assert.equal(held[0], noteId, 'the Welcome! note first');
+  assert.deepEqual([...held.slice(1)].sort(), [...brought].sort(), 'and everything that came in');
+  assert.deepEqual(brought.filter((id) => !projects.findProject(ctx, project.id).library.includes(id)), [], 'every note it brought in is the project\'s');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8')).rows.sort(), [...brought].sort(), 'kept with the session, for a resume');
   connect.dismiss(started.id);
   assert.equal(connect.list(ctx.dataRoot).some((s) => s.id === started.id), false);
   fs.rmSync(memory.memoryPath(ctx.dataRoot));
+});
+
+/* Import your context (2026-10-13): a "direct" session runs no librarian; one import a tool, kept to the projects picked. */
+
+test('Import your context: one import a tool told the projects picked, a manual folder kept to, a signed-out web app waits on a sign-in card, other tools through the browser', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'direct-'));
+  fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
+  // Signed out until the person signs in in their browser (round 3: "I'm signed in" copies the sign-in and checks it first).
+  let signedInThere = false;
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: signedInThere, browser: signedInThere ? 'Chrome' : '' }), signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome' };
+  const { connect, state } = fakeConnect({ home: fresh, webSignIn });
+  const projectsPicked = [{ id: 'calc', title: 'Calculus tutoring study', description: 'An RCT of an AI tutor in calculus.' }];
+  const started = await connect.start({
+    provider: 'openai',
+    direct: {
+      mode: 'manual', projects: projectsPicked, roles: ['Researcher', 'Nobody'], work: 'I study how students solve problems.',
+      apps: ['Obsidian', 'ChatGPT', 'Not a tool'],
+      scopes: { Obsidian: { folders: [{ path: '~/Vault' }], note: '' } },
+      additional: [{ name: 'Linear', website: 'https://linear.app' }],
+    },
+  });
+  const now = await until(state(started.id), (s) => s.finished && !s.thinking, 'the run queued');
+  assert.equal(now.chat.length, 1, 'no librarian: the opening line alone');
+  assert.ok(now.chat[0].opener);
+  assert.equal(now.chat.some((entry) => entry.ask), false);
+  const saved = savedOf(started.id);
+  assert.deepEqual(saved.choices.direct.roles, ['Researcher'], 'only known roles');
+  assert.deepEqual(saved.choices.direct.apps, ['Obsidian', 'ChatGPT'], 'only catalog tools');
+  assert.equal(saved.choices.project.name, 'Calculus tutoring study', 'every agent is told about the projects picked');
+  const obsidian = saved.jobs.find((job) => job.kind === 'import' && job.apps.includes('Obsidian'));
+  assert.ok(obsidian, 'Obsidian imported');
+  assert.match(obsidian.plan, /only what pertains to these projects/);
+  assert.match(obsidian.plan, /Calculus tutoring study: An RCT/);
+  assert.match(obsidian.plan, /read only these folders and files: .*Vault/, 'the folder the person chose, and nothing else');
+  assert.equal(saved.picked.folders.Obsidian, path.join(fresh, 'Vault'));
+  const linear = saved.jobs.find((job) => job.label.startsWith('Other tools'));
+  assert.equal(linear.source, 'sites');
+  assert.deepEqual(linear.extra, { sites: ['linear.app'] }, 'its agent may open the tool\'s site');
+  // ChatGPT is signed out: its import waits on a card instead of being left out.
+  assert.equal(saved.jobs.some((job) => job.apps.includes('ChatGPT')), false, 'not queued yet');
+  const card = now.needs.find((need) => need.app === 'ChatGPT');
+  assert.equal(card.kind, 'signin');
+  assert.equal(card.browser, 'Chrome', 'the popup says where it continues');
+  // "I'm signed in" before signing in: the copy finds nothing, and the popup says so.
+  await connect.need(started.id, card.id, 'done');
+  assert.match(connect.state(started.id).needs.find((need) => need.id === card.id).error, /Still not signed in to ChatGPT/);
+  signedInThere = true;
+  await connect.need(started.id, card.id, 'done');
+  await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.apps.includes('ChatGPT')), 'ChatGPT queued once signed in');
+  connect.stop(started.id);
+  connect.dismiss(started.id);
+});
+
+test('"I\'m signed in" while Open still waits for the sign-in: the wait ends and the check runs now (2026-10-14, Notion: "nothing happened")', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'wait-'));
+  let signedInThere = false;
+  let aborted = false;
+  // Open's wait never sees the sign-in (as with Notion's), until it is called off.
+  const signIn = (app, { signal, onOpened }) => new Promise((resolve) => { onOpened('Chrome'); signal.addEventListener('abort', () => { aborted = true; resolve({ status: 'cancelled' }); }); });
+  const webSignIn = { supports: () => true, canSignIn: () => true, signIn, signInQuiet: async () => ({ signedIn: signedInThere, browser: signedInThere ? 'Chrome' : '' }), signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome' };
+  const { connect, state } = fakeConnect({ home: fresh, webSignIn });
+  const started = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: [{ id: 'p', title: 'Memex' }], apps: ['ChatGPT'], scopes: {} } });
+  const now = await until(state(started.id), (s) => s.needs.some((need) => need.app === 'ChatGPT'), 'the sign-in popup');
+  const card = now.needs.find((need) => need.app === 'ChatGPT');
+  await connect.need(started.id, card.id, 'open');
+  const waiting = connect.state(started.id).needs.find((need) => need.id === card.id);
+  assert.equal(waiting.busy, true, 'Open waits for the sign-in');
+  assert.equal(waiting.opened, true);
+  signedInThere = true;
+  await connect.need(started.id, card.id, 'done');
+  assert.equal(aborted, true, 'the wait was called off');
+  assert.equal(connect.state(started.id).needs.some((need) => need.id === card.id), false, 'the step closed');
+  await until(state(started.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.apps.includes('ChatGPT')), 'ChatGPT queued');
+  connect.stop(started.id);
+  connect.dismiss(started.id);
+});
+
+/* Browser agents (2026-10-13, second round: "We will use computer use in my real browser"). */
+
+test('Import your context, round 3: web apps in Engelbart\'s browser with the copied sign-ins; the person\'s browser only for a sign-in Engelbart can\'t use; a signed-out app is a popup', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'browse-'));
+  // Google Docs and Overleaf come over from Chrome; Gmail is signed in there but its copy is refused (Google's binding);
+  // ChatGPT is signed out everywhere.
+  const quiet = { Gmail: { signedIn: false, held: true }, ChatGPT: { signedIn: false } };
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async (app) => quiet[app] || { signedIn: true, browser: 'Chrome' }, signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome', copyDomains: async () => true };
+  const turns = [];
+  const fake = createFakeConnectAgents({ delayMs: 5 });
+  let release = null;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const agents = {
+    async turn(input) {
+      turns.push({ kind: input.kind, label: input.meta && input.meta.job ? input.meta.job.label : '', system: input.system, message: input.message, browse: input.browse, connectors: input.connectors });
+      if (input.kind === 'browse' && input.meta.job.apps.includes('Gmail')) {
+        const out = await input.meta.callTool('needs_you', { kind: 'signin', reason: 'Choose an account in Chrome' });
+        await gate;
+        return { text: `Gmail: ${out.status}`, session: null };
+      }
+      return fake.turn(input);
+    },
+  };
+  const opened = [];
+  const browserAgents = { status: ({ provider }) => ({ available: true, use: true, ask: false, allowedByCli: false, consent: 'allowed', provider, browser: { id: 'chrome', name: 'Chrome' }, others: [] }) };
+  const { connect, state } = fakeConnect({ home: fresh, webSignIn, agents, browserAgents, openBrowserApp: async (id) => { opened.push(id); return true; } });
+  const started = await connect.start({
+    provider: 'anthropic',
+    browserAgents: { browserId: 'evil', browserName: 'Spoofed', enable: true }, // the window's word is never taken
+    direct: { mode: 'auto', projects: [{ id: 'p', title: 'Calculus study' }], roles: [], work: '', apps: ['Google Docs', 'Overleaf', 'Gmail', 'ChatGPT'], scopes: {}, additional: [{ name: 'Linear', website: 'https://linear.app' }] },
+  });
+  const saved = () => savedOf(started.id);
+  await until(() => saved(), (s) => s.jobs.filter((job) => job.kind === 'import').length >= 4, 'the imports queued');
+  const value = saved();
+  assert.deepEqual(value.choices.browserAgents, { browserId: 'chrome', browserName: 'Chrome', enable: true }, 'from this Mac and the person\'s answer, not from the window');
+  const routeOf = (app) => { const job = value.jobs.find((one) => one.kind === 'import' && one.apps.includes(app)); return job ? job.route || 'engelbart' : 'none'; };
+  assert.equal(routeOf('Google Docs'), 'engelbart', 'its copied sign-in: no plugin, nothing brought forward, no tab left');
+  assert.equal(routeOf('Overleaf'), 'engelbart');
+  assert.equal(routeOf('Gmail'), 'browser', 'signed in in Chrome, refused in Engelbart: read there instead of a Log in loop');
+  assert.equal(routeOf('ChatGPT'), 'none', 'signed out: waits on its sign-in popup');
+  assert.equal(value.jobs.find((job) => job.label.startsWith('Other tools')).route, undefined, 'their sites\' sign-ins copied over');
+  assert.match(value.jobs.find((job) => job.apps.includes('Gmail')).plan, /in the person's own Chrome/);
+  let now = await until(state(started.id), (s) => s.needs.some((need) => need.app === 'Gmail'), 'Gmail\'s stop in Chrome');
+  const popup = now.needs.find((need) => need.app === 'ChatGPT');
+  assert.equal(popup.kind, 'signin');
+  assert.equal(popup.own, undefined, 'a sign-in Engelbart copies once they have signed in, in Chrome');
+  assert.equal(popup.browser, 'Chrome');
+  const card = now.needs.find((need) => need.app === 'Gmail');
+  assert.equal(card.own, true);
+  assert.equal(card.browser, 'Chrome');
+  await connect.need(started.id, card.id, 'open');
+  assert.deepEqual(opened, ['chrome'], 'Open brings their browser forward');
+  await connect.need(started.id, card.id, 'done');
+  await connect.need(started.id, popup.id, 'skip');
+  release();
+  now = await until(state(started.id), (s) => s.jobs.filter((job) => job.kind === 'import').every((job) => ['done', 'failed', 'stopped'].includes(job.status)), 'every import ended');
+  const browse = turns.filter((turn) => turn.kind === 'browse');
+  assert.deepEqual(browse.map((turn) => turn.label), ['Email: Gmail']);
+  for (const turn of browse) {
+    assert.match(turn.system, /Never download or export anything/);
+    assert.match(turn.system, /Close every tab you opened before you reply/);
+    assert.match(turn.system, /never switch, resize or focus a window/);
+    assert.match(turn.system, /At a login page .*call needs_you/);
+    assert.match(turn.system, /tabs_close_mcp/, 'Claude Code closes its tabs');
+    assert.match(turn.message, /<browser note="The person's own browser/);
+    assert.doesNotMatch(turn.message, /downloadsLandIn/);
+    assert.match(turn.message, /You do not have them: follow the same steps in your own tabs/);
+    assert.deepEqual(turn.connectors, [], 'no connector of the person\'s');
+  }
+  const hidden = turns.filter((turn) => turn.kind === 'import' && turn.label.includes('Google Drive'));
+  assert.equal(hidden.length, 1, 'Google Drive in Engelbart\'s browser');
+  connect.stop(started.id);
+  connect.dismiss(started.id);
+  fs.rmSync(memory.memoryPath(ctx.dataRoot), { force: true }); // the next tests start with no MEMORY.md
+});
+
+test('without browser agents allowed, web apps keep Engelbart\'s own browser; at most 6 agents run at once', async () => {
+  const { MAX_RUNNING } = require('../src/main/connect/session.cjs');
+  assert.equal(MAX_RUNNING, 6);
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'browse-off-'));
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: true, browser: 'Chrome' }), signedIn: async () => true, keychainNote: () => '' };
+  const browserAgents = { status: () => ({ available: true, use: false, ask: false, allowedByCli: false, consent: 'declined', browser: { id: 'chrome', name: 'Chrome' }, others: [] }) };
+  const { connect } = fakeConnect({ home: fresh, webSignIn, browserAgents });
+  const started = await connect.start({ provider: 'openai', direct: { mode: 'auto', projects: [{ id: 'p', title: 'Study' }], roles: [], work: '', apps: ['Google Docs'], scopes: {}, additional: [] } });
+  await until(() => savedOf(started.id), (s) => s.jobs.some((job) => job.apps.includes('Google Docs')), 'Google Docs queued');
+  const value = savedOf(started.id);
+  assert.equal(value.choices.browserAgents, null);
+  assert.equal(value.jobs.find((job) => job.apps.includes('Google Docs')).route, undefined);
+  connect.stop(started.id);
+  connect.dismiss(started.id);
+  fs.rmSync(memory.memoryPath(ctx.dataRoot), { force: true });
+});
+
+test('a browser agent\'s tools: what brings in what it read or downloaded, needs_you, never Engelbart\'s hidden browser', () => {
+  const names = toolsFor('browse').map((tool) => tool.name);
+  for (const name of ['add_note', 'add_to_library', 'import_pdfs', 'unpack', 'import_note_files', 'needs_you', 'wait_for_you']) assert.ok(names.includes(name), name);
+  for (const name of ['browser_open', 'browser_eval', 'browser_type', 'browser_download', 'web_chats', 'import_google_files', 'import_gmail_threads', 'save_memory']) assert.equal(names.includes(name), false, name);
+  assert.match(prompts.browseSystemPrompt('openai'), /search your tools for "node_repl js"/);
+  assert.match(prompts.browseSystemPrompt('anthropic'), /tabs_create_mcp/);
+  assert.match(prompts.BROWSE_RULES, /Close every tab you opened before you reply/);
+  assert.match(prompts.BROWSE_RULES, /Never download or export anything/);
 });
 
 /* MATH-117: an app on this Mac whose folder the scan did not find is looked for by an agent before the button. */
@@ -797,7 +998,7 @@ test('an app\'s folder is looked for once a session, however often the scan runs
   }
 });
 
-test('an import started from a project and a workspace lands on the project\'s list, not the workspace; a row removed from the project is not brought back (2026-10-12)', async () => {
+test('an import started from a project and a workspace lands on the project\'s list, never in the workspace (2026-10-13: library only); a row removed from the project is not brought back (2026-10-11)', async () => {
   const fresh = fs.mkdtempSync(path.join(homeDir, 'placed-'));
   fs.cpSync(vault, path.join(fresh, 'Vault'), { recursive: true });
   const { project, workspaceId } = await projects.createProjectWithWelcome(ctx, { name: 'Imported into' });
@@ -813,7 +1014,7 @@ test('an import started from a project and a workspace lands on the project\'s l
   assert.equal(connect.state(started.id).placed.workspace, 0, 'none in the workspace');
   assert.equal(listed().length, 5, 'on the project\'s own list');
   const context = projects.findWorkspace(ctx, project.id, workspaceId).workspace.context;
-  assert.deepEqual(listed().filter((id) => context.includes(id)), [], 'and not in the workspace it was started from');
+  assert.deepEqual(listed().filter((id) => context.includes(id)), [], 'not in the workspace it was started from: imports go to the library only');
   assert.deepEqual((await library.libraryForProject(ctx, project.id)).map((row) => row.id).filter((id) => listed().includes(id)).sort(), [...listed()].sort(), 'the project holds them');
 
   // Taken out of the project, then the session places what it brought again (as a resumed or repeated import does).
@@ -838,46 +1039,15 @@ test('an import started from a project and a workspace lands on the project\'s l
   connect.dismiss(second.id);
 });
 
-test('an import of 600 rows goes on the project\'s list and leaves the workspace as it was; a saved session with inWorkspace ids resumes (2026-10-12)', async () => {
-  const fresh = fs.mkdtempSync(path.join(homeDir, 'six-hundred-'));
-  const { project, workspaceId, noteId } = await projects.createProjectWithWelcome(ctx, { name: 'Six hundred' });
-  const first = fakeConnect({ home: fresh });
-  const started = await first.connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } }, provider: 'openai', projectId: project.id, workspaceId });
-  const savedAt = path.join(ctx.dataRoot, '.connect', started.id, 'session.json');
-  await until(() => fs.existsSync(savedAt), Boolean, 'the session saved');
-  first.connect.suspendAll();
-  // What an import kept, 600 rows, and the workspace ids an older Engelbart placed (it filled the workspace too).
-  const rows = Array.from({ length: 600 }, () => randomUUID());
-  const older = rows.slice(0, 3);
-  fs.writeFileSync(savedAt, JSON.stringify({ ...JSON.parse(fs.readFileSync(savedAt, 'utf8')), rows, inProject: older, inWorkspace: older }));
-
-  const second = fakeConnect({ home: fresh });
-  second.connect.resume(ctx);
-  assert.ok(second.connect.has(started.id), 'the saved session is picked up again');
-  assert.equal(second.connect.state(started.id).placed.workspace, 3, 'its inWorkspace ids kept');
-  await second.connect.attachProject(ctx, started.id, project.id, workspaceId);
-  const listed = projects.findProject(ctx, project.id).library;
-  assert.equal(listed.length, 600);
-  assert.deepEqual(rows.filter((id) => !listed.includes(id)), [], 'all 600 on project.json `library`');
-  assert.deepEqual(projects.findWorkspace(ctx, project.id, workspaceId).workspace.context, [noteId], 'the workspace\'s context unchanged');
-  assert.deepEqual(second.connect.state(started.id).placed, { project: 600, workspace: 3 }, 'nothing more counted in the workspace');
-  const saved = JSON.parse(fs.readFileSync(savedAt, 'utf8'));
-  assert.deepEqual(saved.inWorkspace, older, 'saved as it was');
-  // The workspace still takes an @mention or a Save.
-  assert.deepEqual((await projects.linkToWorkspace(ctx, project.id, workspaceId, [rows[599]])).context, [noteId, rows[599]]);
-  for (const one of second.connect.list(ctx.dataRoot)) second.connect.stop(one.id);
-});
-
 test('Connect sends the open workspace with its project, and says where what came in went', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const pid = randomUUID(), wid = randomUUID();
   assert.equal(model.choicesOf({ picks: {}, apps: {}, projectId: pid, workspaceId: wid }).workspaceId, wid);
   assert.equal('workspaceId' in model.choicesOf({ picks: {}, apps: {}, workspaceId: wid }), false, 'no project, no workspace');
   const line = (project, workspace) => model.placedLine({ projectId: pid, placed: { project, workspace } });
-  // In the project's library, never "also in this workspace" (2026-10-12): an older session's workspace count is not said.
-  assert.equal(line(742, 500), '742 added to the project\'s library.');
-  assert.equal(line(3, 3), '3 added to the project\'s library.');
-  assert.equal(line(4, 0), '4 added to the project\'s library.');
+  assert.equal(line(742, 500), '742 added to the project. The first 500 are also in this workspace.');
+  assert.equal(line(3, 3), '3 added to the project. They are also in this workspace.');
+  assert.equal(line(4, 0), '4 added to the project.');
   assert.equal(line(0, 0), '');
   assert.equal(model.placedLine({ projectId: null, placed: { project: 3, workspace: 0 } }), '', 'onboarding before its project');
 });
@@ -969,8 +1139,9 @@ test('Sign in in Engelbart\'s own browser: Google Drive signed in there signs in
   const shut = fakeWindow('closed');
   const other = fakeConnect({ webSignIn: google, signInWindow: shut.signInWindow });
   assert.deepEqual(await other.connect.signInWindowOpen('Gmail'), { status: 'closed' });
-  assert.deepEqual(await other.connect.signInWindowOpen('Notion'), { status: 'closed' }, 'not one it can sign in');
-  assert.deepEqual(shut.opened, ['Gmail']);
+  assert.deepEqual(await other.connect.signInWindowOpen('Notion'), { status: 'closed' });
+  // Round 3 (2026-10-13): Notion's sign-in can be told apart now (its token_v2 cookie), so it is one it can sign in.
+  assert.deepEqual(shut.opened, ['Gmail', 'Notion']);
 });
 
 test('a web app\'s sign-in lost mid-run: copied again quietly from the browser, no card, and the agent carries on (2026-10-12)', async () => {
@@ -1058,6 +1229,22 @@ test('a sign-in need from a job filed under Codex that names claude.ai goes to C
     assert.deepEqual(now.needs, [], 'no card for Codex');
     assert.ok(now.log.some((entry) => entry.text === 'Still signed in to Claude: its page or API failed for a moment'));
     assert.deepEqual(quiet, ['Claude']);
+  } finally {
+    if (started) connect.stop(started.id);
+  }
+});
+
+test('a sign-in the reason names (GitHub) from a job filed under another app (Folders on this Mac) is that app\'s, tied to the job (2026-10-14)', async () => {
+  const { agents } = claimingAgents({ kind: 'import', reason: 'Sign in to GitHub' });
+  const { connect, state } = fakeConnect({ agents });
+  let started = null;
+  try {
+    started = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: [{ id: 'p', title: 'Memex' }], apps: ['Folders on this Mac'], scopes: {} } });
+    const now = await until(state(started.id), (s) => s.needs.length > 0, 'the step');
+    const need = now.needs[0];
+    assert.equal(need.app, 'GitHub', 'not "Sign in to Folders on this Mac"');
+    const job = now.jobs.find((one) => one.kind === 'import');
+    assert.deepEqual(need.jobIds, [job.id], 'the status ties it to its job (no second row)');
   } finally {
     if (started) connect.stop(started.id);
   }
@@ -1315,7 +1502,9 @@ test('a dead Google copy at tick time: copied again from Chrome and good; dead t
   assert.deepEqual(await connect.signInCheck('Gmail'), { status: 'signed-in', browser: 'Chrome', profile: 'Work' }, 'Me\'s copy dead, Work\'s good');
   const dead = fakeGoogle({ defaultName: 'Google Chrome', checks: [false], browsers: { chrome: { profiles: [{ id: 'Default', name: 'Me', signedIn: true }] } } });
   const other = fakeConnect({ webSignIn: dead.webSignIn });
-  assert.deepEqual(await other.connect.signInCheck('Gmail'), { status: 'signed-out', browser: '' });
+  // Round 3 (2026-10-13): Chrome holds the Google sign-in and its copy is dead in Engelbart — Google's binding, not a
+  // signed-out browser ("I know I am signed into Gmail in my browser"): said as such, so no Log in loop follows.
+  assert.deepEqual(await other.connect.signInCheck('Gmail'), { status: 'held-elsewhere', browser: 'Chrome' });
 });
 
 test('a refusal when ticked: the browser is not asked again, until Try again', async () => {
@@ -1327,7 +1516,8 @@ test('a refusal when ticked: the browser is not asked again, until Try again', a
   assert.deepEqual(fake.calls.keychain, ['chrome'], 'Chrome is in denied: asked once');
   assert.deepEqual(await connect.signInCheck('ChatGPT', { retry: true }), { status: 'refused', browser: 'Chrome' });
   assert.deepEqual(fake.calls.keychain, ['chrome', 'chrome'], 'Try again asks macOS again');
-  assert.deepEqual(await connect.signInCheck('Notion'), { status: '', browser: '' }, 'a connector is not checked here');
+  // Round 3: Notion's sign-in is checked as a web app's (when no connector reaches it); Chrome doesn't hold it here.
+  assert.deepEqual(await connect.signInCheck('Notion'), { status: 'signed-out', browser: '' });
   const none = fakeConnect({ webSignIn: fakeSignIn({ browsers: {} }).webSignIn });
   assert.deepEqual(await none.connect.signInCheck('ChatGPT'), { status: 'no-browser', browser: '' });
 });
@@ -1351,12 +1541,12 @@ test('no browser whose sign-ins can be read (Safari only): a sign-in lost mid-ru
   }
 });
 
-test('the priority queue: surveys first, then the recalls, three at a time, MEMORY.md after everything; a survey waits on the person', async () => {
+test('the priority queue: surveys first, then the recalls, three at a time (a limit of 3 here; 6 in the app), MEMORY.md after everything; a survey waits on the person', async () => {
   const order = [];
   const inner = createFakeConnectAgents({ delayMs: 30 });
   const agents = { turn: (input) => { if (input.meta && input.meta.job) order.push(`${input.meta.job.kind}:${input.meta.job.apps.join(',')}`); return inner.turn(input); } };
   process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'Claude';
-  const { connect, state } = fakeConnect({ agents });
+  const { connect, state } = fakeConnect({ agents, deps: { maxRunning: 3 } });
   try {
     const started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude', 'Gemini', 'Grok'] } } });
     const first = await until(state(started.id), (s) => s.jobs.filter((job) => job.status === 'running' || job.status === 'waiting').length === 3, 'three running');
@@ -1457,10 +1647,10 @@ test('without Claude Code or Codex signed in nothing starts; the provider can ch
 
 test('Skip holds for the run: the app is never put to the person again, and its queued work ends as skipped', async () => {
   process.env.ENGELBART_CONNECT_FAKE_NEEDS = 'Claude';
-  const { connect, state } = fakeConnect({ delayMs: 150 });
+  const { connect, state } = fakeConnect({ delayMs: 150, deps: { maxRunning: 3 } });
   let started = null;
   try {
-    // three surveys take the three places, so the recalls wait their turn
+    // three surveys take the three places (a limit of 3 here), so the recalls wait their turn
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Gemini', 'Claude'] } } });
     const asked = await until(state(started.id), (s) => s.needs.length === 1, 'Claude\'s sign-in');
     const after = await connect.need(started.id, asked.needs[0].id, 'skip');
@@ -1859,13 +2049,12 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
   const flow = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/onboarding.js')).href);
   // "replace steps 3 and 4 with this, since it will essentially be the same"
   // 2026-10-10: Create before Connect, so the librarian is told what the project is; the project is made after Connect.
-  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'create', 'intro', 'connect']);
-  assert.deepEqual(flow.flowOf('new', { connect: true, tools: false }), ['welcome', 'create', 'intro', 'connect']);
+  assert.deepEqual(flow.flowOf('new', { connect: true }), ['welcome', 'tools', 'create', 'connect']);
+  assert.deepEqual(flow.flowOf('new', { connect: true, tools: false }), ['welcome', 'create', 'connect']);
   assert.deepEqual(flow.flowOf('new'), ['welcome', 'tools', 'create', 'import', 'instructions'], 'without Connect (the tools screen skipped with no agent): Create, then its screens');
   assert.deepEqual(flow.forward('new', { step: 'tools', sub: 0 }, { connect: true }), { step: 'create', sub: 0 });
-  assert.deepEqual(flow.forward('new', { step: 'create', sub: 1 }, { connect: true }), { step: 'intro', sub: 0 });
-  assert.deepEqual(flow.forward('new', { step: 'intro', sub: 0 }, { connect: true }), { step: 'connect', sub: 0 });
-  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 5, index: 4 });
+  assert.deepEqual(flow.forward('new', { step: 'create', sub: 1 }, { connect: true }), { step: 'connect', sub: 0 });
+  assert.deepEqual(flow.pagerOf('new', 'connect', { connect: true }), { count: 4, index: 3 });
   assert.deepEqual(flow.forward('new', { step: 'connect', sub: 0 }, { connect: true }), { step: 'open', sub: 0 }, 'the project is made after Connect');
   assert.equal(flow.pagerOf('new', 'import', { connect: true }), null);
   // "signing into claude code and/or codex must be done before this step"

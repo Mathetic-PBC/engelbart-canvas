@@ -52,8 +52,11 @@ const { createImportTools } = require('./tools.cjs');
 const { skillsFor } = require('./skills.cjs');
 const memory = require('./memory.cjs');
 const { clipMiddle } = require('../bart/clip.cjs');
+const importFlow = require('../../shared/import-flow.cjs');
+const { needsProvider } = require('./provider-failure.cjs');
 
-const MAX_RUNNING = 3;
+// At most this many agents at once (2026-10-13, the "Onboarding" workspace: "Get rid of the max_running=3 and set it to 6").
+const MAX_RUNNING = 6;
 const MAX_JOBS = 40;
 const MAX_LOG = 400;
 const SHOWN_LOG = 150;
@@ -67,7 +70,12 @@ const ASK_KINDS = new Set(['single', 'multi', 'open', 'repos']);
 // asking me which repositories it should use our existing nice github ui"), whether or not the librarian said "repos".
 const REPOS_ASK = /\bwhich\b.*\brepo(?:s|sitory|sitories)?\b/i;
 const AUTHORIZE_KINDS = new Set(['signin', 'connector', 'permission', 'folder']);
+// The steps that are a sign-in, a code or a check on a site (round 3): made in the person's browser, then copied over.
+const SIGNIN_KINDS = new Set(['signin', 'password', 'code', '2fa', 'captcha']);
 const SIGNIN_APPS = new Set(['Zotero', 'GitHub']);
+// A step whose sign-in Engelbart can see for itself (Zotero's and GitHub's own, a connector's) is looked at this often
+// while it is open, so a sign-in finished anywhere closes it and starts what waited on it (2026-10-14, the Zotero beta report).
+const STEP_POLL_MS = 1000;
 const PRIORITY = Object.freeze({ survey: 0, recall: 1, import: 2, memory: 3, redact: 4 });
 const WORK = new Set(['survey', 'recall', 'import']);
 const ENDED = new Set(['done', 'failed', 'stopped']);
@@ -133,6 +141,74 @@ function memoryJobs(s) {
   return { imports, surveys };
 }
 
+const MAX_DIRECT_PROJECTS = 8;
+const hostOfSite = (website) => { try { const url = new URL(String(website || '')); return /^https?:$/.test(url.protocol) ? url.hostname.toLowerCase().replace(/^www\./, '') : ''; } catch { return ''; } };
+
+/**
+ * Import your context's answer (2026-10-13, the "Onboarding" workspace) made safe → { mode, projects, roles, work, apps,
+ * scopes, additional } or null. `apps` are ids of shared/import-flow.cjs CATALOG (the tools confirmed, or the sources
+ * chosen); `scopes` (manual) what exactly to bring in from each; `additional` the tools named that are not in the catalog.
+ */
+function cleanDirect(input, homeDir) {
+  if (!input || typeof input !== 'object') return null;
+  const mode = input.mode === 'manual' ? 'manual' : 'auto';
+  const text = (value, max) => (typeof value === 'string' ? value.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+  const projects = (Array.isArray(input.projects) ? input.projects : []).filter((one) => one && typeof one === 'object' && text(one.title, 120)).slice(0, MAX_DIRECT_PROJECTS).map((one, at) => ({
+    id: text(one.id, 64) || `project-${at + 1}`, title: text(one.title, 120), description: text(one.description, 400),
+    folder: typeof one.folder === 'string' && readers.expandPath(homeDir, one.folder) && readers.expandPath(homeDir, one.folder).startsWith(homeDir + path.sep) ? readers.expandPath(homeDir, one.folder) : '',
+  }));
+  const apps = [...new Set((Array.isArray(input.apps) ? input.apps : []).filter((id) => importFlow.CATALOG_IDS.includes(id)))];
+  const scopes = {};
+  for (const id of apps) {
+    const scope = input.scopes && typeof input.scopes === 'object' ? input.scopes[id] : null;
+    if (!scope || typeof scope !== 'object') continue;
+    const list = (value, max, each) => (Array.isArray(value) ? value : []).map(each).filter(Boolean).slice(0, max);
+    scopes[id] = {
+      kind: importFlow.scopeKind(id),
+      folders: list(scope.folders, 12, (folder) => { const dir = readers.expandPath(homeDir, folder && typeof folder === 'object' ? folder.path : folder); return dir && dir.startsWith(homeDir + path.sep) ? { path: dir, name: path.basename(dir) } : null; }),
+      people: list(scope.people, 20, (person) => text(person, 200)),
+      items: list(scope.items, 40, (item) => text(item, 200)),
+      labels: list(scope.labels, 40, (label) => text(label, 200)),
+      projects: list(scope.projects, MAX_DIRECT_PROJECTS, (title) => text(title, 120)),
+      note: text(scope.note, 2000),
+    };
+  }
+  const additional = (Array.isArray(input.additional) ? input.additional : []).filter((one) => one && typeof one === 'object' && text(one.name, 60)).slice(0, 12).map((one) => ({ name: text(one.name, 60), website: hostOfSite(one.website) ? String(one.website).trim().slice(0, 300) : '' }));
+  if (!apps.length && !additional.length) return null;
+  return { mode, projects, roles: (Array.isArray(input.roles) ? input.roles : []).filter((role) => importFlow.ROLE_NAMES.includes(role)).slice(0, 8), work: text(input.work, 2000), apps, scopes, additional };
+}
+
+/**
+ * The choose screen's answer that Import your context sends (`direct`) → the sources, folders and project Connect's
+ * pipeline runs on: each catalog tool on in its group, Code's GitHub and folders, the browser history as Websites, the
+ * folders the person chose (manual) as the source's folders, and the projects picked as the one project every agent is
+ * told about.
+ */
+function directInput(input, homeDir) {
+  const direct = cleanDirect(input && input.direct, homeDir);
+  if (!direct) return input;
+  const sources = Object.fromEntries(SOURCES.map((source) => [source.id, { on: false, apps: [], folders: [], repos: [] }]));
+  const picked = [];
+  for (const id of direct.apps) {
+    const scope = direct.scopes[id] || null;
+    const dirs = scope ? scope.folders.map((folder) => folder.path) : [];
+    picked.push(...dirs);
+    if (id === importFlow.SITES) { sources.sites.on = true; continue; }
+    if (id === importFlow.LOCAL_FOLDERS) { sources.code.on = true; sources.code.folders.push(...dirs); continue; }
+    if (id === 'GitHub') { sources.code.on = true; continue; }
+    const group = importFlow.groupOfApp(id);
+    if (!group || !sources[group]) continue;
+    sources[group].on = true;
+    sources[group].apps.push(id);
+    if (id === LOCAL_PDFS) sources[group].folders.push(...dirs);
+  }
+  if (direct.additional.length) sources.sites.on = true;
+  for (const source of Object.values(sources)) source.folders = [...new Set(source.folders)];
+  const titles = direct.projects.map((project) => project.title);
+  const project = titles.length ? { name: titles.join(', ').slice(0, MAX_PROJECT_NAME), description: direct.projects.map((one) => `${one.title}${one.description ? `: ${one.description}` : ''}`).join('\n').slice(0, MAX_DESCRIPTION) } : null;
+  return { ...input, sources, picked: [...new Set([...(Array.isArray(input.picked) ? input.picked : []), ...picked])], project: project || input.project, direct };
+}
+
 /**
  * The choose screen's answer made safe → { sources: { id: { on, apps, folders, repos } }, custom, computer, permissions,
  * project }. `project` { name, description } (or null) is what the person is working on; it is kept in session.json with
@@ -163,8 +239,29 @@ function cleanChoices(input, homeDir, { alsoPicked = [] } = {}) {
     permissions: { files: computer, browser: allowed.browser !== false, recall: allowed.recall !== false, notes: allowed.notes === true },
     project: cleanProject(given.project),
     days: cleanDays(given.days), // how far back to look (2026-10-10): 182, 365, or null for all time
+    direct: cleanDirect(given.direct, homeDir), // Import your context (2026-10-13): no librarian, one import a tool
+    keychain: given.keychain !== false, // whether the person let Engelbart copy their browser's sign-ins (2026-10-13)
+    browserAgents: cleanBrowserAgents(given.browserAgents), // the web apps' imports in the person's own browser (2026-10-13)
   };
 }
+
+/**
+ * Browser agents for a run (../onboarding/browser-agents.cjs, set by start from what this Mac and the person allow, never
+ * from the window's word) → { browserId, browserName, enable } | null. `enable`: Codex's browser use turned on for the run,
+ * the person having allowed it in Engelbart rather than in their own Codex.
+ */
+function cleanBrowserAgents(value) {
+  if (!value || typeof value !== 'object' || typeof value.browserId !== 'string' || !/^[a-z]{2,20}$/.test(value.browserId)) return null;
+  const name = typeof value.browserName === 'string' ? value.browserName.replace(/[^\w .-]/g, '').trim().slice(0, 40) : '';
+  return { browserId: value.browserId, browserName: name || 'your browser', enable: value.enable === true };
+}
+
+// The web apps an Import your context run's browser agents bring in, in the person's own browser. Round 3 (2026-10-13):
+// only as a fallback. Every web app is read in Engelbart's hidden browser with the sign-ins copied from the person's (no
+// plugin, nothing brought to the front, no tab left open, files exported rather than downloaded); the person's own browser
+// is used for an app only when it holds the app's sign-in and that sign-in will not work in Engelbart's (Google ties a
+// session to the browser that made it), and only when the person allowed agents to use it: `s.fallback`.
+const browseApp = (s, app) => !!(s && s.choices && s.choices.direct && s.choices.browserAgents && s.fallback && s.fallback.has(app));
 
 /** The <project> block every agent is given when there is a project with a description, else nothing. */
 function projectBlock(choices) {
@@ -290,8 +387,10 @@ function shownOf(input) {
  * change; `openBridge` (../sandbox/local-tools.cjs openToolBridge); `browser` the agents' browser (./browser.cjs, null
  * where there is none); `connectors` (./connectors.cjs); `appleNotes` (./apple-notes.cjs).
  */
-function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, signInWindow = null, now = () => new Date().toISOString() }) {
+function createConnect({ agents, models = () => null, ready = () => [...PROVIDERS], context, homeDir, env = process.env, zotero = {}, github = {}, deps = {}, notify = () => {}, placed = () => {}, openBridge, browser = null, connectors = null, appleNotes = null, webSignIn = null, signInWindow = null, trace = null, browserAgents = null, openBrowserApp = null, providerCheck = null, now = () => new Date().toISOString() }) {
   const sessions = new Map();
+  // The agent trace (../onboarding/trace.cjs): the dispatching around the agents' turns, written down as it happens.
+  const traced = (entry) => { if (trace) { try { trace.event(entry); } catch { /* a record, never in the way */ } } };
   const readyNow = () => { try { return (ready() || []).filter((provider) => PROVIDERS.includes(provider)); } catch { return [...PROVIDERS]; } };
   const choiceFor = (provider) => connectChoice(provider, (() => { try { return models(); } catch { return null; } })());
   // The web apps' sign-ins checked when they were ticked on the choose screen (2026-10-10, signInCheck), kept while Engelbart
@@ -301,16 +400,25 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   const signInChecked = new Map();
   const signInChecking = new Map();
 
-  const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended });
-  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, opened: need.opened, busy: need.busy, browser: need.browser || '', error: need.error, note: need.note || '', at: need.at });
+  const publicJob = (job) => ({ id: job.id, kind: job.kind, source: job.source, label: job.label, apps: job.apps, status: job.status, skipped: !!job.skipped, notes: job.notes, items: job.items, activity: job.activity, summary: job.summary, error: job.error, started: job.started, ended: job.ended, ...(job.route ? { route: job.route } : {}) });
+  const chosenBrowser = () => { try { return webSignIn && webSignIn.browserName ? webSignIn.browserName() : ''; } catch { return ''; } };
+  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, jobIds: [...need.jobs], opened: need.opened, busy: need.busy, browser: need.browser || need.own || chosenBrowser(), error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}), ...(need.code ? { code: need.code } : {}) });
+  // What was left out of the run and why, in the person's words (2026-10-14: "when she finally hit later, nothing was
+  // imported, so she was super confused"): the status's completion names each, with its reason.
+  const publicLeftOut = (s) => [...(s.leftOut || new Map())].map(([app, why]) => ({ app, why }));
   function snapshot(s) {
     return {
       id: s.id, mode: s.mode, chat: s.chat, thinking: s.thinking, activity: s.activity, waiting: s.waitingForSurvey, done: s.done, error: s.error, finished: s.finished, stopped: s.stopped, minimized: s.minimized, dismissed: s.dismissed,
       jobs: s.jobs.filter((job) => job.kind !== 'redact').map(publicJob), needs: s.needs.filter((need) => !need.closed).map(publicNeed), log: s.log.slice(-SHOWN_LOG),
       provider: s.choice.provider, choice: { provider: s.choice.provider, name: PROVIDER_NAMES[s.choice.provider], modelName: s.choice.modelName, effort: s.choice.effort },
-      permissions: s.choices.permissions, projectId: s.projectId, staged: s.projectId ? 0 : notes.stagedCount(s.dir), memory: { ...s.memory }, created: s.created,
+      permissions: s.choices.permissions, projectId: s.projectId, workspaceId: s.workspaceId || null, staged: s.projectId ? 0 : notes.stagedCount(s.dir), memory: { ...s.memory }, created: s.created,
       counts: { notes: s.jobs.reduce((n, job) => n + job.notes, 0), items: s.jobs.reduce((n, job) => n + job.items, 0) },
       placed: { project: s.inProject.size, workspace: s.inWorkspace.size },
+      leftOut: publicLeftOut(s),
+      // waiting for its provider's CLI to be connected (holdForProvider): the workspace's "Connect Claude Code" popup
+      blocked: s.blocked ? { provider: s.blocked.provider, name: PROVIDER_NAMES[s.blocked.provider], error: s.blocked.error, at: s.blocked.at || null } : null,
+      // Import your context's run (2026-10-13): how it was chosen and the projects every agent keeps to, for its status modal
+      direct: s.choices.direct ? { mode: s.choices.direct.mode, projects: s.choices.direct.projects.map((project) => project.title) } : null,
     };
   }
   // What session.json keeps is enough to pick the session up again after Engelbart quits (resume): the chat, the choices,
@@ -322,7 +430,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
         ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped], skippedSources: [...s.skippedSources],
-        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles, ...(job.find ? { find: true } : {}) })),
+        suspended: !!s.suspended, gmailThreads: s.gmailThreads || 0, fallback: [...(s.fallback || [])], connected: [...(s.connected || [])], rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles, ...(job.find ? { find: true } : {}), ...(job.extra && job.extra.sites ? { extra: { sites: job.extra.sites } } : {}) })),
       }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
   }
@@ -421,6 +529,16 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return `<engelbart>\nA person is connecting their library to Engelbart. Their library is at ${s.dataRoot}. ${where}\nPermissions they gave: read files anywhere in their home folder: ${s.choices.permissions.files ? 'yes' : 'no, only the folders of the sources they picked'}; use their accounts in Engelbart's background browser: ${s.choices.permissions.browser ? 'yes' : 'no (web apps are left out)'}; ask their AI assistants what they remember: ${s.choices.permissions.recall ? 'yes' : 'no'}.\n</engelbart>`;
   }
 
+  /**
+   * A browser agent's job (2026-10-13): the browser it works in, the sites of its apps, where what it downloads lands. The
+   * rules it keeps are its system prompt's (prompts.BROWSE_SYSTEM_PROMPT).
+   */
+  function browserBlock(s, job, apps) {
+    const agentsOf = s.choice.provider === 'openai' ? 'Codex\'s Chrome plugin' : 'Claude in Chrome';
+    const sites = [...new Set([...sitesOf(apps), ...((job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [])])];
+    return `<browser note="The person's own browser, where they are signed in. You work in it through ${agentsOf}.">\n${JSON.stringify({ browser: s.choices.browserAgents.browserName, sites })}\n</browser>`;
+  }
+
   const surveying = (s) => s.jobs.some((job) => job.kind === 'survey' && !ENDED.has(job.status)) || !!(s.held && s.held.size);
 
   async function firstMessage(s, message, { again = false } = {}) {
@@ -516,27 +634,29 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /* --------------------------------------------------------------------------------------------- the priority queue */
 
   /** A job queued: started when a place is free, the most urgent kind first. The same kind, source and apps go once. */
-  function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null, find = false }) {
+  function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null, find = false, route = null, again = false }) {
     if (kind === 'import' && s.skippedSources.has(source)) return null; // the person skipped it: nothing of it comes in
     const apps = kind === 'import' && given.length ? given.filter((app) => !s.skipped.has(app)) : given;
     if (given.length && !apps.length) return null;
-    const key = `${find ? 'find' : kind}:${source}:${[...apps].sort().join(',')}`;
+    // `again`: an import run once more because a connector was signed in after its agent had started (rerunJob).
+    const key = `${find ? 'find' : kind}:${source}:${[...apps].sort().join(',')}${again ? ':again' : ''}`;
     if (s.jobs.some((job) => job.key === key) || s.jobs.length >= MAX_JOBS) return null;
     if (apps.length && apps.every((app) => s.skipped.has(app))) return null; // the person skipped them for this run
     if (kind === 'import' && apps.length && s.jobs.some((job) => job.kind === 'import' && job.source === source && !job.apps.length)) return null; // the whole source went already
     s.seq += 1;
-    const job = { id: randomUUID(), key, kind, priority: PRIORITY[kind], seq: s.seq, source, apps, label, plan, extra, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null, ...(find ? { find: true } : {}) };
+    const job = { id: randomUUID(), key, kind, priority: PRIORITY[kind], seq: s.seq, source, apps, label, plan, extra, status: 'queued', notes: 0, items: 0, titles: [], activity: '', summary: '', error: '', started: null, ended: null, ...(find ? { find: true } : {}), ...(route === 'browser' && kind === 'import' ? { route } : {}) };
     s.jobs.push(job);
+    traced({ kind: 'dispatch', sessionId: s.id, jobId: job.id, text: `Queued ${kind}${find ? ' (folder search)' : ''}${job.route ? ` (in ${s.choices.browserAgents.browserName})` : ''}: ${label}`, detail: { kind, source, apps, label, priority: PRIORITY[kind], plan, route: job.route || undefined, sites: extra && extra.sites ? extra.sites : undefined } });
     logAction(s, job, find ? `Will look for your ${folderName(apps[0])}` : kind === 'survey' ? `Will look through ${apps.map(shownName).join(', ')}` : kind === 'recall' ? `Will ask ${apps.map(shownName).join(', ')} what it remembers` : kind === 'import' ? 'Queued' : 'Queued');
     pump(s);
     return job;
   }
 
   function pump(s) {
-    if (s.stopped || s.suspended) return;
+    if (s.stopped || s.suspended || s.blocked) return; // `blocked`: waiting for its provider to be connected (holdForProvider)
     for (;;) {
       const running = s.jobs.filter((job) => job.status === 'running' || job.status === 'waiting').length;
-      if (running >= MAX_RUNNING) break;
+      if (running >= (deps.maxRunning || MAX_RUNNING)) break; // deps.maxRunning: a test's smaller limit
       const next = s.jobs.filter((job) => job.status === 'queued').sort((a, b) => a.priority - b.priority || a.seq - b.seq)[0];
       if (!next) break;
       void runJob(s, next);
@@ -571,6 +691,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       skillsFor({ source: job.source, apps }, s.dataRoot),
       s.choices.custom ? `<import_instructions note="What the person typed on the choose screen for this import.">\n${s.choices.custom}\n</import_instructions>` : '',
       custom ? `<custom_instructions>\n${custom}\n</custom_instructions>` : '',
+      job.route === 'browser' && s.choices.browserAgents ? browserBlock(s, job, apps) : '',
+      // The skills are written for Engelbart's own browser (round 3): in the person's, their reading steps apply, not its tools.
+      job.route === 'browser' && s.choices.browserAgents ? '<note>The skills above name Engelbart\'s own browser tools (browser_*, import_google_files, gmail_*, web_chats). You do not have them: follow the same steps in your own tabs, read each item\'s text and bring it in with add_note. Gmail: at most 50 threads, only about the projects.</note>' : '',
       'Do the import now.',
     ].filter(Boolean).join('\n\n');
   }
@@ -610,6 +733,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   function systemOf(s, kind) {
+    if (kind === 'browse') return prompts.browseSystemPrompt(s.choice.provider, promptOf(s.dataRoot, 'connect-browse-system-prompt.md', prompts.BROWSE_SYSTEM_PROMPT));
     if (kind === 'survey') return prompts.SURVEY_SYSTEM_PROMPT;
     if (kind === 'recall') return prompts.RECALL_SYSTEM_PROMPT;
     if (kind === 'memory') return prompts.MEMORY_SYSTEM_PROMPT;
@@ -626,8 +750,13 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     s.controllers.add(controller);
     job.controller = controller;
     const bridged = WORK.has(job.kind);
+    // A browser agent's import (2026-10-13): in the person's own browser, through the Engelbart terminal, with the import
+    // tools that bring things in from this Mac (what it downloaded or read) and never Engelbart's hidden browser.
+    const browse = job.route === 'browser' && s.choices.browserAgents ? s.choices.browserAgents : null;
+    const turnKind = browse ? 'browse' : job.kind;
     const covered = appsOfJob(s, job);
-    const page = bridged && browser && s.choices.permissions.browser && sitesOf(covered).length ? browser.tools({ id: job.id, label: job.label, sites: sitesOf(covered) }) : null;
+    const sites = [...new Set([...sitesOf(covered), ...((job.extra && Array.isArray(job.extra.sites)) ? job.extra.sites : [])])];
+    const page = bridged && !browse && browser && s.choices.permissions.browser && sites.length ? browser.tools({ id: job.id, label: job.label, sites }) : null;
     const session = {
       dataRoot: s.dataRoot, homeDir, dir: s.dir, downloads: s.downloads, projectId: () => s.projectId,
       // what macOS let Engelbart read of its protected folders (MATH-110): the file tools keep out of the rest
@@ -642,7 +771,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       set gmailThreads(n) { s.gmailThreads = Math.max(0, Number(n) || 0); save(s); },
     };
     const callTool = bridged ? createImportTools({
-      session, context, zotero, github, deps, env, kind: job.kind, page, appleNotes,
+      session, context, zotero, github, deps, env, kind: turnKind, page, appleNotes,
       needs: { ask: (request) => askPerson(s, job, request), wait: () => waitAgain(s, job) },
       recall: (app, text) => keepRecall(s, app, text),
       // the chat the memory question opened (2026-10-12), deleted by the tools once its answer is kept
@@ -652,14 +781,23 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       added: (kind, n, title) => { job[kind === 'notes' ? 'notes' : 'items'] += n; if (title && job.titles.length < 80) job.titles.push(String(title).slice(0, 120)); emit(s, { soon: true }); },
     }) : null;
     let bridge = null;
+    let held = false; // failed as its provider not connected: queued again, the run waiting (holdForProvider)
     try {
-      const onUpdate = ({ activity }) => { if (activity && activity !== job.activity) { job.activity = activity; emit(s, { soon: true }); } };
-      const connectorsNow = bridged && connectors ? await connectors.serversFor(covered).catch(() => []) : [];
+      // `retry`: the model's service turned the turn away for a moment and it runs again (agents.cjs RETRY_WAITS_MS), kept
+      // in the job's log so the Agent trace says why it took longer.
+      const onUpdate = ({ activity, retry }) => {
+        if (retry) logAction(s, job, `Trying again (${retry.attempt} of ${retry.of}): ${retry.reason}`);
+        if (activity && activity !== job.activity) { job.activity = activity; emit(s, { soon: true }); }
+      };
+      if (browse) logAction(s, job, `In ${browse.browserName}, in a tab of its own`);
+      const connectorsNow = bridged && !browse && connectors ? await (typeof connectors.serversForRun === 'function' ? connectors.serversForRun(covered, s.choice.provider) : connectors.serversFor(covered)).catch(() => []) : [];
+      job.connectors = connectorsNow.map((server) => server.app); // what this turn can reach; a connector signed in later is not among them
       if (bridged) bridge = await openBridge(callTool, { signal: controller.signal, maxBody: 1_000_000 });
       const choice = job.kind === 'redact' ? s.redactChoice || s.choice : s.choice;
       const dirs = job.kind === 'memory' ? [s.dir, path.join(s.dataRoot, 'assets', 'md'), ...(s.projectDir ? [s.projectDir] : [])].filter((dir) => fs.existsSync(dir)) : job.kind === 'redact' ? [] : s.dirs;
       const message = job.kind === 'memory' ? await memoryMessage(s) : job.kind === 'redact' ? `<memory_md>\n${s.memoryDraft}\n</memory_md>` : jobMessage(s, job);
-      const out = await agents.turn({ choice, kind: job.kind, system: systemOf(s, job.kind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: connectorsNow, onUpdate, meta: { kind: job.kind, session: s, job, callTool } });
+      const browseOptions = browse ? { steps: path.join(s.dir, 'steps', job.id), enable: browse.enable, browser: browse.browserName } : null;
+      const out = await agents.turn({ choice, kind: turnKind, system: systemOf(s, turnKind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: browse ? [] : connectorsNow, onUpdate, browse: browseOptions, meta: { kind: turnKind, session: s, job, callTool } });
       if (job.kind === 'survey') await surveyed(s, job, out.text);
       else if (job.kind === 'memory') drafted(s, out.text);
       else if (job.kind === 'redact') await finishMemory(s, out.text);
@@ -667,6 +805,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       job.status = 'done';
       logAction(s, job, job.kind === 'import' ? `Finished: ${job.summary}` : job.kind === 'survey' ? `${job.find ? 'Looked for it' : 'Looked'}: ${job.summary}` : job.kind === 'recall' ? (s.recalls[job.apps[0]] ? 'Kept what it remembers' : `Finished: ${job.summary}`) : 'Finished');
     } catch (error) {
+      held = !s.stopped && needsProvider(error) && holdForProvider(s, job, (job.kind === 'redact' ? s.redactChoice || s.choice : s.choice).provider, error);
+      if (held) return;
       job.status = error && error.kind === 'stopped' ? 'stopped' : 'failed';
       job.error = job.status === 'failed' ? line(error && error.message ? error.message : 'The import failed', 300) : '';
       logAction(s, job, job.status === 'stopped' ? 'Stopped' : `Failed: ${job.error}`);
@@ -679,11 +819,67 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (browser) browser.close(job.id);
       releaseNeeds(s, job);
       job.activity = '';
-      job.ended = now();
+      job.ended = held ? null : now();
+      if (!held) rerunJob(s, job);
       emit(s);
       pump(s);
       maybeMemory(s);
     }
+  }
+
+  /**
+   * An import whose app's connector was signed in while its agent ran (2026-10-14): the agent's tools were fixed when its
+   * turn started, so the connection never reached it and nothing came in. Once it ends, the import runs once more, with
+   * the connection.
+   */
+  function rerunJob(s, job) {
+    if (!job.rerun || job.kind !== 'import' || s.stopped || job.status === 'stopped') return;
+    job.rerun = false;
+    if (job.apps.some((app) => s.skipped.has(app))) return;
+    const next = dispatch(s, { kind: 'import', source: job.source, apps: job.apps, label: job.label, plan: job.plan, extra: job.extra, route: job.route || null, again: true });
+    if (next) logAction(s, next, `Again, now that ${job.apps.map(shownName).join(', ')} ${job.apps.length === 1 ? 'is' : 'are'} connected`);
+  }
+
+  /**
+   * A job failed as one its provider's CLI needs the person for (./provider-failure.cjs: not installed, not signed in, its
+   * account refused). 2026-10-14, a beta tester: every job failed the same way one after another, "Failed: Not logged in",
+   * and nothing said what to do. Now the job is queued again and the run waits (`blocked`, which pump honours) until the
+   * person connects that provider or picks the other (unblock, from the workspace's Connect popup). Only an Import your
+   * context run waits: the librarian's chat has its own error line. → whether it was held.
+   */
+  function holdForProvider(s, job, provider, error) {
+    if (!s.choices.direct || !PROVIDERS.includes(provider)) return false;
+    job.status = 'queued';
+    job.error = '';
+    job.started = null;
+    if (!s.blocked) {
+      s.blocked = { provider, error: line(error && error.message ? error.message : error, 200), at: now() };
+      logAction(s, null, `Waiting for ${PROVIDER_NAMES[provider]}: ${s.blocked.error}`);
+      if (providerCheck) void Promise.resolve().then(() => providerCheck(provider)).catch(() => {});
+    } else logAction(s, job, `Waiting for ${PROVIDER_NAMES[provider]}`);
+    return true;
+  }
+
+  /**
+   * The run's provider connected (or `provider`, the other one, picked instead): what waited runs now. Throws while the
+   * provider still can't run (the window keeps its popup). → snapshot
+   */
+  function unblock(id, provider = null) {
+    const s = get(id);
+    if (!s.blocked) return snapshot(s);
+    const want = PROVIDERS.includes(provider) ? provider : s.blocked.provider;
+    if (!readyNow().includes(want)) throw new Error(`${PROVIDER_NAMES[want]} is not connected yet`);
+    if (want !== s.choice.provider) {
+      s.choice = choiceFor(want);
+      logAction(s, null, `Switched to ${PROVIDER_NAMES[want]} (${s.choice.modelName} · ${s.choice.effort})`, 'You');
+    }
+    if (s.redactChoice && s.redactChoice.provider !== want) s.redactChoice = null;
+    s.blocked = null;
+    logAction(s, null, `${PROVIDER_NAMES[want]} connected: going on`);
+    emit(s);
+    pump(s);
+    maybeMemory(s);
+    return snapshot(s);
   }
 
   /* ------------------------------------------------------------------------------------------------------- surveys */
@@ -801,6 +997,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (s.waitingForSurvey && !s.thinking) wake(s);
       return;
     }
+    if (s.choices.direct) {
+      s.found[held.source] = { ...rest, [app]: { ...entry } };
+      directImport(s, app);
+      if (held.recall) dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
+      return;
+    }
     s.found[held.source] = { ...rest, [app]: { ...entry, survey: s.finished ? 'not run: Import was pressed first' : 'running' } };
     if (!s.finished) dispatch(s, { kind: 'survey', source: held.source, apps: [app], label: `Looking through ${shownName(app)}` });
     if (held.recall) dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
@@ -820,6 +1022,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
     if (result && result.refused) return { status: 'refused', browser: result.refused, browserId: result.refusedId || '' };
     if (result && result.noBrowser) return { status: 'no-browser', browser: '', browserId: '' };
+    if (result && result.held) return { status: 'held-elsewhere', browser: (webSignIn && webSignIn.browserName ? webSignIn.browserName() : '') || '', browserId: '' };
     return { status: 'signed-out', browser: '', browserId: '' };
   }
 
@@ -993,14 +1196,24 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    *     checking: Map(app → Promise of its answer) }
    */
   async function signInsFirst(s) {
-    const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map(), checking: new Map() };
+    const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map(), checking: new Map(), elsewhere: new Map() };
     if (!webSignIn || !s.choices.permissions.browser) return out;
+    // Every web app, and a connector app with sites (Notion) when no connector of Engelbart's or the person's reaches it.
+    const reached = s.connected || new Set();
     const apps = Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps)
-      .filter((app) => appOf(app) && appOf(app).reach === 'web' && signsInAtAll(app));
+      .filter((app) => appOf(app) && (appOf(app).reach === 'web' || (appOf(app).reach === 'connector' && !reached.has(app) && webSignIn.supports(app))) && signsInAtAll(app));
     if (!apps.length) return out;
     const results = new Map();
     const waiting = [];
     const quiet = [];
+    // Their browser's sign-ins declined (Import your context's keychain question): only what Engelbart's browser holds counts.
+    if (s.choices.keychain === false) {
+      for (const app of apps) {
+        const here = await Promise.resolve().then(() => webSignIn.signedIn(app)).catch(() => false);
+        if (here) { out.signedIn.set(app, ''); logAction(s, null, `Signed in to ${shownName(app)} already`); } else out.signedOut.add(app);
+      }
+      return out;
+    }
     for (const app of apps) {
       const known = signInChecked.get(app);
       if (signInChecking.has(app)) waiting.push(signInChecking.get(app).then(() => { results.set(app, signInChecked.get(app)); }));
@@ -1027,6 +1240,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         logAction(s, null, result.browser ? `Signed in to ${shownName(app)} from ${result.browser}` : `Signed in to ${shownName(app)} already`);
         if (result.unchecked) logAction(s, null, `Couldn't check the ${shownName(app)} sign-in (no answer): counted as signed in`);
       } else if (result && result.status === 'refused') out.refused.set(app, result.browser);
+      else if (result && result.status === 'held-elsewhere') out.elsewhere.set(app, result.browser);
       else out.signedOut.add(app);
     }
     return out;
@@ -1049,14 +1263,18 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         return;
       }
       if (result && result.status === 'refused') {
+        leaveOut(s, app, `macOS didn't allow ${result.browser || 'your browser'}'s sign-ins`);
         skipApp(s, app);
         releaseHeld(s, app, 'skip');
         s.chat.push({ role: 'agent', text: skippedLine(result.browser, [app]), ask: null, authorize: null, at: now() });
         emit(s);
         return;
       }
+      if (s.choices.direct && result && result.status === 'held-elsewhere') { if (readElsewhere(s, app, result.browser)) releaseHeld(s, app, 'done'); else releaseHeld(s, app, 'skip'); emit(s); return; }
+      if (s.choices.direct) { signInCard(s, app); emit(s); return; }
       // Signed out (2026-10-12): left out quietly, as signInsFirst leaves out an app signed out at the start. Everything
       // about a web app's sign-in is settled on the choose screen; no Log in card comes up later.
+      leaveOut(s, app, 'not signed in');
       skipApp(s, app);
       releaseHeld(s, app, 'skip');
       s.chat.push({ role: 'agent', text: leftOutLine([app]), ask: null, authorize: null, at: now() });
@@ -1112,7 +1330,78 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const said = String(reason || '').toLowerCase();
     const edge = (ch) => !/[a-z0-9-]/.test(ch || '');
     const names = (site) => { const want = site.toLowerCase(); for (let at = said.indexOf(want); at >= 0; at = said.indexOf(want, at + 1)) if (edge(said[at - 1]) && edge(said[at + want.length])) return true; return false; };
-    return job.apps.find((app) => web(app) && (appOf(app).sites || []).some(names)) || first;
+    const site = job.apps.find((app) => web(app) && (appOf(app).sites || []).some(names));
+    if (site) return site;
+    // The reason names another app outright (2026-10-14: the Folders on this Mac job asked "Sign in to GitHub", and the
+    // popup said "Sign in to Folders on this Mac" and offered Chrome): that app, when the job's own isn't named.
+    if (!names(shownName(first))) {
+      const named = ['GitHub', 'Zotero', ...Object.keys(APPS)].filter((app) => app !== first && names(shownName(app))).sort((a, b) => shownName(b).length - shownName(a).length)[0];
+      if (named) return named;
+    }
+    return first;
+  }
+
+  /* Engelbart's own sign-ins (Zotero, GitHub) and the connectors (Granola, Notion's MCP server): Engelbart can tell for
+     itself when one is made, wherever it was made, so their steps close by themselves (watchStep) and never ask the person
+     to say they are done. 2026-10-14, the beta's Zotero report: "she authenticated … but then she still saw the sign into
+     chrome thing": the step had closed, the import agent read the library before its first sync had landed, was told
+     "has not finished its first sync", and asked again with kind "confirm", whose popup fell through to "Sign in to
+     Zotero · Continue in Chrome · Open Chrome". */
+  const ownDep = (app) => (app === 'Zotero' ? zotero : app === 'GitHub' ? github : null);
+  /** Zotero's or GitHub's sign-in status ({ connected, pending, error }), {} when it can't be read. */
+  function ownStatus(app) {
+    const dep = ownDep(app);
+    try { return (dep && typeof dep.status === 'function' && dep.status()) || {}; } catch { return {}; }
+  }
+  const isConnectorApp = (app) => !!(appOf(app) && appOf(app).reach === 'connector');
+  function connectorConnected(app) {
+    try { return !!(connectors && isConnectorApp(app) && connectors.status(app).connected); } catch { return false; }
+  }
+  /** Whether a step's sign-in is made: Zotero's or GitHub's account connected, or a connector signed in. */
+  function stepSignedIn(need) {
+    if (SIGNIN_APPS.has(need.app)) return !!ownStatus(need.app).connected;
+    if (need.kind === 'connector') return connectorConnected(need.app);
+    return false;
+  }
+  /**
+   * While a step Engelbart can check is open, its sign-in is looked at every STEP_POLL_MS: made (in the popup's browser, in
+   * Settings, in another window), the step closes as done, which starts the import held on it or lets its agent go on.
+   * Zotero's or GitHub's sign-in that ended without an account is said on the popup, which offers Sign in again.
+   */
+  function watchStep(s, need) {
+    if (need.watch || need.closed || need.own) return;
+    if (!SIGNIN_APPS.has(need.app) && !(need.kind === 'connector' && isConnectorApp(need.app))) return;
+    const tick = () => {
+      if (need.closed || s.stopped || s.suspended) { clearInterval(need.watch); need.watch = null; return; }
+      if (stepSignedIn(need)) {
+        clearInterval(need.watch);
+        need.watch = null;
+        need.busy = false;
+        logAction(s, null, `Signed in to ${shownName(need.app)}`, 'You');
+        closeNeed(s, need, 'done');
+        return;
+      }
+      if (!SIGNIN_APPS.has(need.app) || !need.opened) return;
+      const now = ownStatus(need.app);
+      if (now.pending && now.pending.userCode && need.code !== now.pending.userCode) { need.code = now.pending.userCode; emit(s); }
+      if (!now.pending && now.error && now.error !== need.error) { need.opened = false; need.code = ''; need.error = line(now.error, 200); emit(s); }
+    };
+    need.watch = setInterval(tick, deps.stepPollMs || STEP_POLL_MS);
+    if (need.watch.unref) need.watch.unref();
+  }
+
+  /** Why an app comes in with nothing, kept for the status's completion (the first reason given holds). */
+  function leaveOut(s, app, why) {
+    if (!app || s.stopped) return;
+    if (!s.leftOut) s.leftOut = new Map();
+    if (!s.leftOut.has(app)) s.leftOut.set(app, String(why || 'left out'));
+  }
+  /** What the person's Later (or Don't allow) on a step means, in words. */
+  function laterWhy(need) {
+    if (need.kind === 'permission') return 'you didn’t allow Engelbart to read it';
+    if (need.kind === 'connector') return 'you chose Later instead of connecting it';
+    if (need.kind === 'confirm') return 'you chose Later';
+    return 'you chose Later instead of signing in';
   }
 
   /** An agent hands the person a step (a sign-in, a code, a permission): one request per app and kind, then waits for it. */
@@ -1121,6 +1410,22 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // Skip holds for the whole run (2026-10-08: "hitting skip should skip it permanently for this run, right now it tries
     // again"): an app the person skipped is never put to them again; the agent hears at once that it was skipped.
     if (s.skipped.has(app)) return Promise.resolve({ status: 'skipped', note: `The person skipped ${shownName(app)} for this run. Do not ask again: finish without it.` });
+    // Zotero's and GitHub's sign-ins are Engelbart's own, whatever kind the agent named ("confirm" while Zotero's library
+    // was still syncing came up as a browser sign-in). Signed in already: no step at all, the agent tries again.
+    if (SIGNIN_APPS.has(app)) {
+      kind = 'signin';
+      if (ownStatus(app).connected) {
+        logAction(s, job, `${shownName(app)} is signed in: trying again`);
+        return Promise.resolve({ status: 'done', note: `${shownName(app)} is signed in already${app === 'Zotero' ? ' (the Zotero tools wait for its library to finish syncing)' : ''}. Try its tools again. Do not call needs_you for ${shownName(app)} again.` });
+      }
+    }
+    // A connector signed in after this agent started (its tools were fixed then): the import runs again with it once this
+    // one ends (rerunJob), so this agent finishes now instead of waiting on a step that can't help it.
+    if (kind === 'connector' && isConnectorApp(app) && connectorConnected(app) && !(job.connectors || []).includes(app)) {
+      job.rerun = true;
+      return Promise.resolve({ status: 'done', note: `${shownName(app)} is connected now, but this import started without it. Finish now with what you have; Engelbart starts the ${shownName(app)} import again with the connection.` });
+    }
+    if (job.route === 'browser' && s.choices.browserAgents) return askInBrowser(s, job, app, { kind, reason });
     // A web app's sign-in lost partway through (2026-10-12): settled here, with no card (Zotero's and GitHub's sign-ins,
     // connectors and folder choices keep theirs).
     if ((kind === 'signin' || kind === 'password') && webSignIn && signsInAtAll(app) && appOf(app) && appOf(app).reach === 'web') return signInAgain(s, job, app);
@@ -1129,6 +1434,27 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, kind), closed: false, at: now() };
       s.needs.push(need);
       logAction(s, job, `Needs you: ${reason}`);
+      traced({ kind: 'need', sessionId: s.id, jobId: job.id, text: `Needs the person (${kind}, ${shownName(app)}): ${reason}` });
+    }
+    if (!need.jobs.includes(job.id)) need.jobs.push(job.id);
+    watchStep(s, need);
+    return waitOn(s, job, need);
+  }
+
+  /**
+   * A browser agent stopped at a sign-in, a code or a check in the person's own browser (2026-10-13: "At a login page it
+   * should call `needs_you`"): a card that says so, whose Open brings that browser forward (the agent's tab is in it), and
+   * Done once they have. Nothing of Engelbart's own sign-ins is involved.
+   */
+  function askInBrowser(s, job, app, { kind, reason }) {
+    const ba = s.choices.browserAgents;
+    let need = s.needs.find((entry) => !entry.closed && entry.app === app && entry.kind === kind && entry.own);
+    if (!need) {
+      const what = kind === 'signin' || kind === 'password' ? 'Sign in' : kind === '2fa' ? 'Enter the code' : kind === 'captcha' ? 'Answer the check' : 'Do it';
+      need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: `${what} on its tab in ${ba.browserName}, then press Done. The agent never types a password.`, closed: false, own: ba.browserName, ownId: ba.browserId, at: now() };
+      s.needs.push(need);
+      logAction(s, job, `Needs you in ${ba.browserName}: ${reason}`);
+      traced({ kind: 'need', sessionId: s.id, jobId: job.id, text: `Needs the person in ${ba.browserName} (${kind}, ${shownName(app)}): ${reason}` });
     }
     if (!need.jobs.includes(job.id)) need.jobs.push(job.id);
     return waitOn(s, job, need);
@@ -1199,6 +1525,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         emit(s);
         return { status: 'done', note: `The ${shownName(app)} sign-in was copied again from the person's browser. Reload the page and carry on.` };
       }
+      leaveOut(s, app, 'its sign-in ended partway through');
       skipApp(s, app, [job.id]);
       logAction(s, job, `Left out ${shownName(app)}: its sign-in ended partway through`);
       s.chat.push({ role: 'agent', text: endedLine(app), ask: null, authorize: null, at: now() });
@@ -1223,16 +1550,25 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     });
   }
 
-  /** The person answered a request: done (the agents go on) or skip (they go on without that app). */
-  function closeNeed(s, need, how) {
+  /**
+   * The person answered a request: done (the agents go on) or skip (they go on without that app). `why`: what a skip
+   * leaves out, in words, for the completion (the person's own Later when not given).
+   */
+  function closeNeed(s, need, how, why = '') {
     if (need.closed) return;
     need.closed = true;
     need.outcome = how;
+    if (need.watch) { clearInterval(need.watch); need.watch = null; }
     if (need.cancel) need.cancel(); // a sign-in still waited for in the default browser
-    if (how === 'skip' && !s.stopped) skipApp(s, need.app, need.jobs);
+    if (how === 'skip' && !s.stopped) { leaveOut(s, need.app, why || laterWhy(need)); skipApp(s, need.app, need.jobs); }
     // A sign-in that came back signed out after the run started (lateSignIn): Log in done lets it join, Skip leaves it out.
     if (need.held) releaseHeld(s, need.app, how === 'skip' ? 'skip' : 'done');
-    for (const [jobId, resolve] of need.waiters) { resolve({ status: how === 'skip' ? 'skipped' : 'done' }); if (browser) browser.hide(jobId); }
+    // A connector signed in while its agents waited: their tools were fixed when they started, so each finishes now and
+    // its import runs again with the connection (rerunJob).
+    const restart = how === 'done' && need.kind === 'connector' && isConnectorApp(need.app);
+    if (restart) for (const job of s.jobs) if (need.jobs.includes(job.id) && job.kind === 'import' && !(job.connectors || []).includes(need.app)) job.rerun = true;
+    const done = restart ? { status: 'done', note: `${shownName(need.app)} is connected now, but this import started without it. Finish now with what you have; Engelbart starts the ${shownName(need.app)} import again with the connection.` } : { status: 'done' };
+    for (const [jobId, resolve] of need.waiters) { resolve(how === 'skip' ? { status: 'skipped' } : done); if (browser) browser.hide(jobId); }
     need.waiters.clear();
     for (const jobId of need.jobs) if (browser) browser.hide(jobId);
     logAction(s, null, how === 'skip' ? `Skipped: ${need.reason}` : `Done: ${need.reason}`, 'You');
@@ -1295,7 +1631,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (need.closed || !need.jobs.includes(job.id)) continue;
       need.waiters.delete(job.id);
       need.jobs = need.jobs.filter((id) => id !== job.id);
-      if (!need.jobs.length) { need.closed = true; if (need.cancel) need.cancel(); }
+      if (!need.jobs.length) { need.closed = true; if (need.watch) { clearInterval(need.watch); need.watch = null; } if (need.cancel) need.cancel(); }
     }
   }
 
@@ -1312,6 +1648,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /** MEMORY.md is written once the questions are over and every survey, recall and import has ended. */
   function maybeMemory(s) {
     if (s.stopped || s.suspended || s.memoryQueued || !(s.done || s.finished)) return;
+    if (s.choices.direct && s.held.size) return; // a sign-in card still up: its import has not run yet
     if (s.jobs.some((job) => WORK.has(job.kind) && !ENDED.has(job.status))) return;
     const worked = s.jobs.some((job) => WORK.has(job.kind) && job.status === 'done') || Object.keys(s.recalls).length;
     if (!worked) { s.memory = { ...s.memory, status: 'skipped' }; return; }
@@ -1383,18 +1720,29 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /** The choose screen sent: the session, the scan, the first surveys, and the librarian's first turn. → snapshot */
   async function start(input) {
     const ctx = await context();
+    input = directInput(input, homeDir);
     const choices = cleanChoices(input, homeDir);
     if (!Object.values(choices.sources).some((choice) => choice.on)) throw new Error('Pick at least one source.');
     const usable = readyNow();
-    if (!usable.length) throw new Error('Sign in to Claude Code or Codex first: the agents run on one of them.');
-    const provider = usable.includes(input && input.provider) ? input.provider : usable[0];
+    // Import your context with neither CLI able to run (2026-10-14): it starts, waiting for the provider the person chose
+    // (the workspace's Connect popup), rather than failing in the flow with nowhere to connect it.
+    const waitFor = !usable.length && choices.direct ? (PROVIDERS.includes(input && input.provider) ? input.provider : 'anthropic') : null;
+    if (!usable.length && !waitFor) throw new Error('Sign in to Claude Code or Codex first: the agents run on one of them.');
+    const provider = waitFor || (usable.includes(input && input.provider) ? input.provider : usable[0]);
+    // Browser agents (2026-10-13): from what this Mac has and what the person answered, never from the window's word.
+    choices.browserAgents = null;
+    if (choices.direct && browserAgents) {
+      try {
+        const status = browserAgents.status({ provider, browserId: input && typeof input.browser === 'string' ? input.browser : null });
+        if (status.use && status.browser) choices.browserAgents = { browserId: status.browser.id, browserName: status.browser.name, enable: !status.allowedByCli };
+      } catch { choices.browserAgents = null; }
+    }
     const id = randomUUID();
     let projectId = null, projectDir = null;
     if (input && typeof input.projectId === 'string' && ID_RE.test(input.projectId)) {
       try { const project = require('../store/projects.cjs').findProject(ctx, input.projectId); projectId = project.id; projectDir = project.dir; } catch { projectId = null; }
     }
-    // The workspace it was started from (2026-10-11), when it is one of the project's: kept with the session. What comes in
-    // goes on the project's list only (placeRows, 2026-10-12), not into this workspace's context.
+    // The workspace it was started from (2026-10-11): what comes in joins its context too (placeRows), when it is one of the project's.
     let workspaceId = null;
     if (projectId && typeof input.workspaceId === 'string' && ID_RE.test(input.workspaceId)) {
       try { workspaceId = require('../store/projects.cjs').findWorkspace(ctx, projectId, input.workspaceId).workspace.id; } catch { workspaceId = null; }
@@ -1404,11 +1752,15 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       picked: { folders: {}, exports: {} }, chat: [], thinking: true, activity: 'Looking at what you picked…', done: false, finished: false, minimized: false, dismissed: false, error: '',
       jobs: [], seq: 0, needs: [], log: [], controllers: new Set(), interviewSession: null, interviewController: null, found: {}, newFound: null, toldImports: '', projectId, projectDir, stopped: false,
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
-      skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(), rows: new Set(), inProject: new Set(), inWorkspace: new Set(), workspaceId, placing: Promise.resolve(),
+      skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(), fallback: new Set(), connected: new Set(), rows: new Set(), inProject: new Set(), inWorkspace: new Set(), workspaceId, placing: Promise.resolve(),
     };
+    // A folder the person chose for an app on this Mac (Import your context's manual scopes): the app's, as if found.
+    if (choices.direct) for (const [app, scope] of Object.entries(choices.direct.scopes)) if (FIND_APPS.has(app) && app !== LOCAL_PDFS && scope.folders.length) s.picked.folders[app] = scope.folders[0].path;
+    if (waitFor) s.blocked = { provider: waitFor, error: `${PROVIDER_NAMES[waitFor]} is not connected`, at: now() };
     sessions.set(id, s);
     s.dirs = dirsOf(s);
     logAction(s, null, `Started with ${PROVIDER_NAMES[s.choice.provider]} (${s.choice.modelName} · ${s.choice.effort})`);
+    traced({ kind: 'start', sessionId: id, text: `Connect session started${choices.direct ? ` (Import your context, ${choices.direct.mode === 'manual' ? 'sources chosen by the person' : 'tools found by agents'})` : ''} on ${PROVIDER_NAMES[s.choice.provider]} (${s.choice.modelName} · ${s.choice.effort})`, detail: { choices } });
     emit(s);
     void opening(s);
     return snapshot(s);
@@ -1420,6 +1772,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * first turn.
    */
   async function opening(s) {
+    if (s.choices.direct) return directOpening(s);
     let opener = s.chat.find((entry) => entry.opener);
     if (!opener) {
       opener = { role: 'agent', text: 'Looking at what you picked…', ask: null, authorize: null, opener: true, at: now() };
@@ -1454,6 +1807,155 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (lines) opener.text = `${opener.text}\n\n${lines}`;
     emit(s);
     await interviewTurn(s, 'Start.');
+  }
+
+  /* ------------------------------------------------------------------------------------- Import your context (direct) */
+
+  /**
+   * Import your context's run (2026-10-13, the workspace: "when they confirm, basically our existing agent + dispatch
+   * architecture should run, instructing each subagent for each platform to only find information pertaining to the
+   * projects the user selected"). No librarian and no questions: the scan, the web apps' sign-ins looked at, then one
+   * import job a tool (shared/import-flow.cjs importPlan: only what pertains to the projects picked; a manual import keeps
+   * to exactly what the person chose), the tools named that are not in the catalog together through the browser, the
+   * assistants asked what they remember, and MEMORY.md once everything has ended. A web app still signed out is not left
+   * out: it waits on a sign-in card (a modal in the workspace) and its import starts once it is signed in.
+   */
+  async function directOpening(s) {
+    const d = s.choices.direct;
+    const titles = d.projects.map((project) => project.title);
+    let opener = s.chat.find((entry) => entry.opener);
+    if (!opener) {
+      opener = { role: 'agent', text: titles.length ? `Bringing in what pertains to ${listed(titles)}…` : 'Bringing in what you picked…', ask: null, authorize: null, opener: true, at: now() };
+      s.chat.push(opener);
+      emit(s);
+    }
+    s.thinking = true;
+    s.activity = 'Looking at what you picked…';
+    try { s.found = await scanFor({ ...s.choices, project: projectFor(s.choices) }, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null, access: accessOf(s) }); } catch (error) { s.found = { error: error.message }; }
+    if (s.stopped || s.suspended) return;
+    s.dirs = dirsOf(s);
+    // The apps a connector reaches (Engelbart's sign-in, or the one the person made in their own Claude Code or Codex):
+    // their tools are used, no sign-in is copied for them.
+    s.connected = new Set();
+    for (const app of d.apps) {
+      if (!connectors || !appOf(app) || appOf(app).reach !== 'connector') continue;
+      const reached = await Promise.resolve().then(() => (typeof connectors.reaches === 'function' ? connectors.reaches(app, s.choice.provider) : connectors.status(app).connected)).catch(() => false);
+      if (reached) s.connected.add(app);
+    }
+    if (s.connected.size) logAction(s, null, `Using your ${listed([...s.connected].map(shownName))} connection${s.connected.size === 1 ? '' : 's'}`);
+    const checked = await signInsFirst(s);
+    if (s.stopped || s.suspended) return;
+    // Their browser's sign-ins declined (the keychain question): a web app Engelbart's browser isn't signed in to is read
+    // in their own browser when they let agents use it, else left out. No sign-in is made in Engelbart's window.
+    if (s.choices.keychain === false) { for (const app of checked.signedOut) checked.elsewhere.set(app, s.choices.browserAgents ? s.choices.browserAgents.browserName : ''); checked.signedOut.clear(); }
+    const held = new Set([...checked.signedOut, ...checked.checking.keys()]);
+    for (const [app, name] of checked.refused) {
+      leaveOut(s, app, `macOS didn't allow ${name || 'your browser'}'s sign-ins`);
+      skipApp(s, app);
+      logAction(s, null, `Skipped ${shownName(app)}: macOS didn't allow ${name || 'your browser'}'s sign-ins`);
+    }
+    for (const [app, name] of checked.elsewhere) readElsewhere(s, app, name);
+    if (s.fallback.size) logAction(s, null, `${listed([...s.fallback].map(shownName))} in ${s.choices.browserAgents.browserName}, in the background`);
+    // Signed out of Engelbart's own sign-in (Zotero, GitHub), or a connector no sign-in of Engelbart's or the person's
+    // reaches and whose sign-in isn't copied from a browser (Granola): held on its step, its import started once signed in.
+    const webChecked = (app) => checked.signedIn.has(app) || checked.refused.has(app) || checked.elsewhere.has(app) || checked.signedOut.has(app) || checked.checking.has(app);
+    const ownHeld = new Map();
+    for (const app of d.apps) {
+      if (s.skipped.has(app) || held.has(app)) continue;
+      if (SIGNIN_APPS.has(app) && ownDep(app) && typeof ownDep(app).status === 'function' && !ownStatus(app).connected) ownHeld.set(app, 'signin');
+      else if (isConnectorApp(app) && connectors && !s.connected.has(app) && !webChecked(app)) ownHeld.set(app, 'connector');
+    }
+    for (const app of d.apps) {
+      if (s.skipped.has(app)) continue;
+      if (held.has(app)) {
+        s.held.set(app, { source: importFlow.groupOfApp(app), recall: false });
+        if (checked.signedOut.has(app)) signInCard(s, app);
+        continue;
+      }
+      if (ownHeld.has(app)) { signInCard(s, app, ownHeld.get(app)); continue; }
+      directImport(s, app);
+    }
+    for (const [app, answer] of checked.checking) lateSignIn(s, app, answer);
+    if (d.additional.length) {
+      const sites = [...new Set(d.additional.map((tool) => hostOfSite(tool.website)).filter(Boolean))];
+      // Their sign-ins for those sites copied into Engelbart's browser (round 3: the hidden browser first); the person's own
+      // browser only when that can't be done and they let agents use it.
+      const copied = s.choices.keychain !== false && sites.length && webSignIn && typeof webSignIn.copyDomains === 'function'
+        ? await webSignIn.copyDomains(sites, { denied: signInDenied }).catch(() => false) : false;
+      const ba = copied ? null : s.choices.browserAgents;
+      const named = d.additional.map((tool) => `${tool.name}${tool.website ? ` (${tool.website})` : ''}`);
+      const how = ba ? `Open each in a tab of your own in their ${ba.browserName}, where they are signed in, and bring in their pages, documents or items about these projects as notes (add_note).` : 'Open each through their sign-in in Engelbart\'s browser, and bring in their pages, documents or items about these projects as notes (add_note) or saved pages.';
+      const plan = [importFlow.importPlan({ app: importFlow.SITES, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, period: periodName(s.choices.days) }), `These are tools they use that Engelbart has no import of its own for: ${named.join('; ')}. ${how} One with no website given: look for it in their browser history first.`].join('\n\n');
+      dispatch(s, { kind: 'import', source: 'sites', apps: [], label: `Other tools: ${d.additional.map((tool) => tool.name).join(', ')}`.slice(0, 120), plan, extra: { sites }, route: ba ? 'browser' : null });
+    }
+    if (s.choices.permissions.recall && s.choices.permissions.browser) {
+      for (const app of recallApps((s.choices.sources.chats || {}).on ? s.choices.sources.chats.apps : [])) {
+        if (s.skipped.has(app)) continue;
+        if (s.fallback.has(app) && !checked.signedIn.has(app)) continue; // a recall asks in Engelbart's browser, signed out there
+        if (s.held.has(app)) s.held.get(app).recall = true;
+        else dispatch(s, { kind: 'recall', source: 'chats', apps: [app], label: `Asking ${shownName(app)} what it remembers` });
+      }
+    }
+    const lines = [signInLines({ signedIn: checked.signedIn, refused: checked.refused }), s.held.size ? `Waiting for you to sign in to ${listed([...s.held.keys()].map(shownName))}.` : ''].filter(Boolean).join('\n');
+    opener.text = `${foundSentence(s).replace(/ Starting with .*$/, '')}${lines ? `\n\n${lines}` : ''}`;
+    s.thinking = false;
+    s.activity = '';
+    s.done = true;
+    s.finished = true;
+    emit(s);
+    maybeMemory(s);
+  }
+
+  /** One tool's import in an Import your context run, with its plan; the whole source when the tool is the source's one row. */
+  function directImport(s, app) {
+    const d = s.choices.direct;
+    const scope = d.scopes[app] || null;
+    const route = browseApp(s, app) ? 'browser' : null;
+    const plan = importFlow.importPlan({ app, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, scope, period: periodName(s.choices.days), browser: route ? s.choices.browserAgents.browserName : '' });
+    const where = (folders) => (folders.length ? `\n\nThe folders: ${folders.map((dir) => readers.shownPath(homeDir, dir)).join(', ')}.` : '');
+    if (app === importFlow.SITES) return dispatch(s, { kind: 'import', source: 'sites', apps: [], label: 'Pages from your browser history', plan });
+    if (app === importFlow.LOCAL_FOLDERS) return dispatch(s, { kind: 'import', source: 'code', apps: [], label: 'Folders on this Mac', plan: `${plan}${where(s.choices.sources.code.folders)}` });
+    if (app === 'GitHub') return dispatch(s, { kind: 'import', source: 'code', apps: ['GitHub'], label: 'GitHub', plan });
+    const source = importFlow.groupOfApp(app);
+    if (!source) return null;
+    const label = `${sourceOf(source).label}: ${shownName(app)}`;
+    return dispatch(s, { kind: 'import', source, apps: [app], label, plan: app === LOCAL_PDFS ? `${plan}${where(s.choices.sources.papers.folders)}` : plan, route });
+  }
+
+  /**
+   * `app` is signed in in the person's browser, but that sign-in won't work in Engelbart's (round 3: Gmail's "Log in" only
+   * showed them they were signed in). Read in their own browser by an agent when they let agents use it (→ true), else
+   * left out with a line in the chat (→ false). Never a sign-in popup: they are signed in already.
+   */
+  function readElsewhere(s, app, browserName = '') {
+    if (s.skipped.has(app)) return false;
+    if (s.choices.browserAgents) {
+      s.fallback.add(app);
+      logAction(s, null, `${shownName(app)}: read in ${s.choices.browserAgents.browserName}, where you're signed in`);
+      return true;
+    }
+    leaveOut(s, app, `you're signed in to it in ${browserName || 'your browser'}, but it doesn't let Engelbart use that sign-in`);
+    skipApp(s, app);
+    s.chat.push({ role: 'agent', text: `Left out ${shownName(app)}: you're signed in to it in ${browserName || 'your browser'}, but it doesn't let Engelbart use that sign-in. Let agents use ${browserName || 'your browser'} to bring it in.`, ask: null, authorize: null, at: now() });
+    logAction(s, null, `Left out ${shownName(app)}: its sign-in in ${browserName || 'your browser'} doesn't work in Engelbart`);
+    return false;
+  }
+
+  /**
+   * An app signed out when an Import your context run starts: a card asks the person to sign in, and its import waits
+   * (held) until they have. A web app's sign-in is copied from their browser; Zotero's and GitHub's are Engelbart's own
+   * (2026-10-14: their imports started signed out, so their agents asked mid-run, raced Zotero's first sync and asked
+   * again); a connector's (`kind` 'connector', Granola) is its OAuth, which an agent already running could never use.
+   */
+  function signInCard(s, app, kind = 'signin') {
+    if (s.needs.some((need) => !need.closed && need.app === app && need.kind === kind)) return;
+    const reason = kind === 'connector' ? `Connect ${shownName(app)} so its agent can bring in what pertains to your projects` : `Sign in to ${shownName(app)} so its agent can bring in what pertains to your projects`;
+    const need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, kind), closed: false, held: true, at: now() };
+    s.needs.push(need);
+    if (!s.held.has(app)) s.held.set(app, { source: importFlow.groupOfApp(app), recall: false });
+    logAction(s, null, `Needs you: ${reason}`);
+    traced({ kind: 'need', sessionId: s.id, text: `Needs the person (${kind}, ${shownName(app)}): ${reason}` });
+    watchStep(s, need);
   }
 
   /** What the scan found, in one plain sentence: "Found 2 Obsidian vaults, 36 PDFs in Downloads and your Claude Code chats. Starting with your notes." */
@@ -1616,13 +2118,50 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const s = get(id);
     const found = s.needs.find((entry) => entry.id === needId && !entry.closed);
     if (!found) return snapshot(s);
+    if (!['open', 'done', 'skip'].includes(action)) throw new Error('Unknown action');
+    // Zotero's and GitHub's own sign-ins (2026-10-14): run here, not in the window, and closed once the account is connected.
+    if (SIGNIN_APPS.has(found.app) && !found.own && action !== 'skip') {
+      if (action === 'open') return ownSignIn(s, found);
+      if (ownStatus(found.app).connected) closeNeed(s, found, 'done');
+      else { found.error = `Still not signed in to ${shownName(found.app)}.`; emit(s); }
+      return snapshot(s);
+    }
+    if (action === 'done' && !found.own && SIGNIN_KINDS.has(found.kind) && webSignIn) return signedInNow(s, found);
     if (action === 'done' || action === 'skip') { closeNeed(s, found, action); return snapshot(s); }
-    if (action !== 'open') throw new Error('Unknown action');
     found.error = '';
-    if (found.kind === 'connector' && connectors && APPS[found.app] && APPS[found.app].reach === 'connector') {
-      found.busy = true;
+    // "confirm" (an agent's step for the person with nothing of Engelbart's to run): Done is the person's word.
+    if (found.kind === 'confirm') { closeNeed(s, found, 'done'); return snapshot(s); }
+    // A browser agent's stop in the person's own browser: that browser brought forward, where its tab is.
+    if (found.own) {
+      const opened = openBrowserApp ? await Promise.resolve().then(() => openBrowserApp(found.ownId)).then(() => true, () => false) : false;
+      found.opened = opened;
+      found.error = opened ? '' : `Open ${found.own} yourself: the agent's tab is there.`;
+      if (opened) logAction(s, null, `Opened ${found.own}`, 'You');
       emit(s);
-      try { await connectors.signIn(found.app); found.busy = false; closeNeed(s, found, 'done'); } catch (error) { found.busy = false; found.error = line(error.message, 200); emit(s); }
+      return snapshot(s);
+    }
+    // A connector's sign-in, in the person's browser: waited for in the background (it can take ten minutes), never in the
+    // way of Later, which calls it off (2026-10-14: Later left its sign-in waiting). Made, the step closes (watchStep too).
+    if (found.kind === 'connector' && connectors && isConnectorApp(found.app)) {
+      if (found.busy) return snapshot(s);
+      if (connectorConnected(found.app)) { closeNeed(s, found, 'done'); return snapshot(s); }
+      found.busy = true;
+      found.opened = true;
+      found.cancel = () => { try { connectors.cancel(found.app); } catch { /* nothing waiting */ } };
+      emit(s);
+      Promise.resolve().then(() => connectors.signIn(found.app)).then(() => {
+        found.busy = false;
+        found.cancel = null;
+        if (!found.closed) { logAction(s, null, `Connected ${shownName(found.app)}`, 'You'); closeNeed(s, found, 'done'); }
+      }, (error) => {
+        found.busy = false;
+        found.cancel = null;
+        if (found.closed) return;
+        found.opened = false;
+        found.error = line(error && error.message ? error.message : `Couldn't connect ${shownName(found.app)}`, 200);
+        emit(s);
+      });
+      watchStep(s, found);
       return snapshot(s);
     }
     if (found.kind === 'permission' && appleNotes && found.app === 'Apple Notes') {
@@ -1633,9 +2172,29 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (out.allowed) { s.choices.permissions.notes = true; closeNeed(s, found, 'done'); } else { found.error = line(out.error, 200); emit(s); }
       return snapshot(s);
     }
-    // A web app's sign-in: in the person's default browser, where they are likely signed in already, then brought over to
+    // Any other permission an agent asks for (a folder macOS guards): Allow is the person's leave; the agent tries again,
+    // and macOS asks for itself if it must. It used to say "Open … in your browser", which no browser could do.
+    if (found.kind === 'permission') { closeNeed(s, found, 'done'); return snapshot(s); }
+    // Round 3 (2026-10-13): "no logins should happen in Engelbart's Chromium browser". Their browser's sign-ins declined:
+    // the app is read in their own browser when agents may use it, else left out; nothing opens in Engelbart.
+    if (SIGNIN_KINDS.has(found.kind) && s.choices.keychain === false && webSignIn) {
+      const name = webSignIn.browserName ? webSignIn.browserName() : '';
+      closeNeed(s, found, readElsewhere(s, found.app, name) ? 'done' : 'skip', 'its sign-in can only be used with your browser’s sign-ins, which you turned down');
+      return snapshot(s);
+    }
+    // An app whose sign-in cookie isn't known (OneNote, Evernote…): its page opens in the browser they chose, and "I'm signed
+    // in" copies its cookies over (signedInNow).
+    if (SIGNIN_KINDS.has(found.kind) && webSignIn && !webSignIn.supports(found.app) && typeof webSignIn.openApp === 'function') {
+      const name = await webSignIn.openApp(found.app).catch(() => '');
+      found.opened = !!name;
+      if (name) { found.browser = name; logAction(s, null, `Opened ${shownName(found.app)} in ${name}`, 'You'); }
+      else found.error = `Couldn't open ${shownName(found.app)}. Open it in your browser, then come back.`;
+      emit(s);
+      return snapshot(s);
+    }
+    // A web app's sign-in: in the browser the person chose, where they are likely signed in already, then brought over to
     // Engelbart's (./web-signin.cjs). The window waits on it in the background; done once Engelbart holds the sign-in.
-    if ((found.kind === 'signin' || found.kind === 'password') && webSignIn && webSignIn.supports(found.app)) {
+    if (SIGNIN_KINDS.has(found.kind) && webSignIn && webSignIn.supports(found.app)) {
       if (found.busy) return snapshot(s);
       const controller = new AbortController();
       found.busy = true;
@@ -1643,17 +2202,21 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       emit(s);
       const opened = (name) => { found.opened = true; found.browser = name; logAction(s, null, `Opened ${shownName(found.app)}'s sign-in in ${name}`, 'You'); emit(s); };
       webSignIn.signIn(found.app, { signal: controller.signal, onOpened: opened }).catch((error) => ({ status: 'failed', error: error.message })).then((out) => {
+        // Ended by "I'm signed in" (signedInNow), which owns the step now.
+        if (controller.signal.aborted && out.status === 'cancelled') return;
         found.busy = false;
         found.cancel = null;
         found.note = noteFor(found.app, found.kind); // macOS has been asked now, or will be by the next browser
         if (out.browser) found.browser = out.browser; // the browser it used, not the default it may have passed over
         if (found.closed || out.status === 'cancelled') return;
         if (out.status === 'signed-in') { logAction(s, null, `Signed in to ${shownName(found.app)} from ${out.browser}`, 'You'); closeNeed(s, found, 'done'); return; }
-        if (out.status === 'unsupported' || out.status === 'no-browser') { showWindow(s, found, out.status === 'no-browser' ? 'Sign in here.' : `${out.browser}'s sign-ins can't be brought into Engelbart: sign in here instead.`); return; }
+        // Signed in there already, the sign-in refused by Engelbart's browser: read in their browser, or left out.
+        if (out.status === 'held-elsewhere') { closeNeed(s, found, readElsewhere(s, found.app, out.browser) ? 'done' : 'skip', 'its sign-in doesn’t work in Engelbart'); emit(s); return; }
+        if (out.status === 'unsupported' || out.status === 'no-browser') { found.error = `Couldn't open ${shownName(found.app)} in your browser. Sign in there, then press I’m signed in.`; emit(s); return; }
         // macOS refused: a card that asks again can't succeed (2026-10-10), so the app is skipped and the chat says so.
         if (out.status === 'denied') {
           if (out.browserId) signInDenied.add(out.browserId);
-          closeNeed(s, found, 'skip');
+          closeNeed(s, found, 'skip', `macOS didn't allow ${out.browser || 'your browser'}'s sign-ins`);
           s.chat.push({ role: 'agent', text: skippedLine(out.browser, [found.app]), ask: null, authorize: null, at: now() });
           emit(s);
           return;
@@ -1663,7 +2226,78 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       });
       return snapshot(s);
     }
-    showWindow(s, found);
+    // Anything else (a step with no browser of theirs to open): said, never shown in Engelbart's window.
+    found.error = `Open ${shownName(found.app)} in your browser to finish this, then come back.`;
+    emit(s);
+    return snapshot(s);
+  }
+
+  /**
+   * "I'm signed in" on a sign-in popup (round 3): the sign-in copied from their browser and checked before the step closes →
+   * done; signed in there but refused by Engelbart's browser → their browser or left out; not yet → the popup says so.
+   */
+  async function signedInNow(s, found) {
+    // 2026-10-14 (Notion: "i clicked im signed in but then nothing happend"): Open's wait for the sign-in (busy) used to
+    // swallow this press. The person's word ends that wait and the check runs now.
+    if (found.busy && typeof found.cancel === 'function') { found.cancel(); found.cancel = null; found.busy = false; }
+    if (found.busy) return snapshot(s);
+    found.busy = true;
+    found.error = '';
+    emit(s);
+    let out = { signedIn: false };
+    try {
+      if (webSignIn.supports(found.app)) out = await webSignIn.signInQuiet(found.app, { denied: signInDenied });
+      else out = { signedIn: await webSignIn.copyBlind(found.app, { denied: signInDenied }).catch(() => false) };
+    } catch { out = { signedIn: false }; }
+    found.busy = false;
+    if (found.closed) return snapshot(s);
+    if (out.signedIn) {
+      for (const other of sharesSignIn(found.app)) signInChecked.set(other, checkedAs(other, out));
+      logAction(s, null, `Signed in to ${shownName(found.app)}${out.browser ? ` from ${out.browser}` : ''}`, 'You');
+      closeNeed(s, found, 'done');
+      return snapshot(s);
+    }
+    if (out.held) { closeNeed(s, found, readElsewhere(s, found.app, found.browser) ? 'done' : 'skip', 'its sign-in doesn’t work in Engelbart'); return snapshot(s); }
+    if (out.refused) { if (out.refusedId) signInDenied.add(out.refusedId); closeNeed(s, found, 'skip', `macOS didn't allow ${out.refused}'s sign-ins`); s.chat.push({ role: 'agent', text: skippedLine(out.refused, [found.app]), ask: null, authorize: null, at: now() }); emit(s); return snapshot(s); }
+    // They say they are signed in there and agents may use that browser: read it there (the copy can't be told apart).
+    if (found.opened && s.choices.browserAgents && readElsewhere(s, found.app, found.browser)) { closeNeed(s, found, 'done'); return snapshot(s); }
+    found.error = `Still not signed in to ${shownName(found.app)}${found.browser ? ` in ${found.browser}` : ''}.`;
+    emit(s);
+    return snapshot(s);
+  }
+
+  /**
+   * Sign in on a Zotero or GitHub step (2026-10-14): Engelbart's own sign-in started here (its page in the person's default
+   * browser, through the broker), not by the window waiting on events it could miss. The step closes once the account is
+   * connected (watchStep), whoever finished it; a sign-in that ends without one says why on the popup, and Sign in starts
+   * it again. Pressed again while it waits, the same sign-in's page opens again. GitHub's device code, when it has one,
+   * is on the popup (`code`).
+   */
+  async function ownSignIn(s, found) {
+    const app = found.app;
+    const dep = ownDep(app);
+    if (ownStatus(app).connected) { closeNeed(s, found, 'done'); return snapshot(s); }
+    if (!dep || typeof dep.connect !== 'function') { found.error = `Sign in to ${shownName(app)} in Settings, then come back.`; emit(s); return snapshot(s); }
+    if (found.busy) return snapshot(s);
+    found.busy = true;
+    found.error = '';
+    emit(s);
+    let out = null;
+    try { out = await dep.connect(); } catch (error) { out = { failed: error && error.message ? error.message : `Couldn't start the ${shownName(app)} sign-in.` }; }
+    found.busy = false;
+    if (found.closed) return snapshot(s);
+    if (out && out.connected) { logAction(s, null, `Signed in to ${shownName(app)}`, 'You'); closeNeed(s, found, 'done'); return snapshot(s); }
+    if (!out || out.failed || !out.pending) {
+      found.opened = false;
+      found.error = line((out && (out.failed || out.error)) || `Couldn't open the ${shownName(app)} sign-in. Try again.`, 200);
+      emit(s);
+      return snapshot(s);
+    }
+    found.opened = true;
+    found.code = out.pending.userCode || '';
+    logAction(s, null, `Opened the ${shownName(app)} sign-in in your browser`, 'You');
+    watchStep(s, found);
+    emit(s);
     return snapshot(s);
   }
 
@@ -1773,11 +2407,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   // What the session brought into the library, or found already there (2026-10-10). Library rows belong to no project,
   // so no agent of the project was told of them (shared/project-holds.cjs): once the session knows its project (started
   // from it, or onboarding's attachProject), each goes on the project's own list (project.json `library`, 2026-10-11),
-  // those that come in later as well, so the project's agents and its Library see the person's library. Not the
-  // workspace's context (2026-10-12): a workspace holds 500 at most, and an import filled it to the limit, so the next
-  // @mention or Save failed. `inWorkspace` is no longer added to; saved sessions keep theirs. Never a row taken out of the
+  // those that come in later as well, so the project's agents see the person's library. Never a row taken out of the
   // project before (project.json `removed`): only adding it again brings it back. One placing at a time: each reads what
-  // it adds to.
+  // it adds to. Never into a workspace's context (2026-10-13, "imports go only to the library for now, not the
+  // workspace"): filling the Welcome workspace's context to its limit was what made "Context has too many entries".
   function keepRow(s, row) {
     if (!row || typeof row.id !== 'string' || !ID_RE.test(row.id) || s.rows.has(row.id)) return;
     s.rows.add(row.id);
@@ -1791,8 +2424,19 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (ctx.dataRoot !== s.dataRoot) return;
       const listed = projects.keepInProject(ctx, s.projectId, ids);
       const { removed } = projects.findProject(ctx, s.projectId);
-      for (const row of ids) if (!removed.includes(row)) s.inProject.add(row);
-      if (listed.length) placed(s.projectId);
+      for (const row of ids.filter((one) => !removed.includes(one))) s.inProject.add(row);
+      // The Welcome project's folder holds everything the run brought in, for every project picked (2026-10-14: "the
+      // welcome project folder should be a complete set of their project files"). Not what the person threw out of it.
+      // Onboarding's run only: an import started inside a project stays on its list (2026-10-13, "library only").
+      let linked = 0;
+      if (s.workspaceId && s.mode === 'onboarding') {
+        try {
+          const { workspace } = projects.findWorkspace(ctx, s.projectId, s.workspaceId);
+          const adding = ids.filter((one) => !workspace.removed.includes(one) && !workspace.context.includes(one) && !s.inWorkspace.has(one));
+          if (adding.length) { await projects.linkToWorkspace(ctx, s.projectId, s.workspaceId, adding); for (const row of adding) s.inWorkspace.add(row); linked = adding.length; }
+        } catch { /* the workspace gone or full: the rows stay in the project and the library */ }
+      }
+      if (listed.length || linked) placed(s.projectId);
     }).catch(() => {}); // the project gone, or the library closed: what came in stays in the library
     return s.placing;
   }
@@ -1825,10 +2469,24 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (!saved || typeof saved !== 'object' || saved.stopped || saved.dismissed) return false;
     const created = Date.parse(saved.created);
     if (!Number.isFinite(created) || Date.now() - created > RESUME_DAYS * 86_400_000) return false;
+    if (saved.blocked || stalledOnProvider(saved)) return true; // waiting for its provider: picked up, its popup asks again
     const jobs = Array.isArray(saved.jobs) ? saved.jobs : [];
     if (!saved.done && !saved.finished) return true;
     if (jobs.some((job) => job && WORK.has(job.kind) && !ENDED.has(job.status))) return true;
     return !!(saved.memory && ['waiting', 'writing', 'cleaning'].includes(saved.memory.status));
+  }
+
+  /**
+   * A run saved before runs waited for their provider (2026-10-14): Import your context, nothing came in, and its agents
+   * failed as their CLI needed the person ("Not logged in"). It is picked up again with those jobs queued, waiting.
+   */
+  function stalledOnProvider(saved) {
+    if (!saved || typeof saved !== 'object' || !saved.direct || saved.stopped) return false;
+    const work = (Array.isArray(saved.jobs) ? saved.jobs : []).filter((job) => job && WORK.has(job.kind));
+    if (!work.length || work.some((job) => job.status === 'done')) return false;
+    const counts = saved.counts && typeof saved.counts === 'object' ? saved.counts : {};
+    if ((Number(counts.notes) || 0) + (Number(counts.items) || 0) > 0) return false;
+    return work.some((job) => job.status === 'failed' && needsProvider(job.error));
   }
 
   /** Paths a saved session kept for an app (a folder chosen, an export), still inside the home folder and still there. */
@@ -1858,6 +2516,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   function revive(ctx, id, saved) {
     const dir = path.join(ctx.dataRoot, '.connect', id);
     const usable = readyNow();
+    const stalled = stalledOnProvider(saved);
     const provider = usable.includes(saved.provider) ? saved.provider : usable[0] || (PROVIDERS.includes(saved.provider) ? saved.provider : 'anthropic');
     let projectId = null, projectDir = null;
     if (typeof saved.projectId === 'string' && ID_RE.test(saved.projectId)) {
@@ -1873,11 +2532,14 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       waitingForSurvey: !!saved.waiting, surveyNews: [], recalls: keptRecalls(dir), memory: kept ? { ...saved.memory } : { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: kept, memoryDraft: null,
       skipped: new Set((Array.isArray(saved.skipped) ? saved.skipped : []).filter((app) => typeof app === 'string')),
       skippedSources: new Set((Array.isArray(saved.skippedSources) ? saved.skippedSources : []).filter((id) => sourceOf(id))), suspended: false, held: new Map(),
+      fallback: new Set((Array.isArray(saved.fallback) ? saved.fallback : []).filter((app) => typeof app === 'string' && APPS[app])),
+      connected: new Set((Array.isArray(saved.connected) ? saved.connected : []).filter((app) => typeof app === 'string' && APPS[app])),
       rows: new Set((Array.isArray(saved.rows) ? saved.rows : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
       inProject: new Set((Array.isArray(saved.inProject) ? saved.inProject : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
       inWorkspace: new Set((Array.isArray(saved.inWorkspace) ? saved.inWorkspace : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
       workspaceId: projectId && typeof saved.workspaceId === 'string' && ID_RE.test(saved.workspaceId) ? saved.workspaceId : null, placing: Promise.resolve(),
       gmailThreads: Number.isInteger(saved.gmailThreads) && saved.gmailThreads > 0 ? saved.gmailThreads : 0,
+      leftOut: new Map((Array.isArray(saved.leftOut) ? saved.leftOut : []).filter((entry) => entry && typeof entry.app === 'string' && (APPS[entry.app] || entry.app === 'GitHub') && typeof entry.why === 'string').map((entry) => [entry.app, line(entry.why, 200)])),
     };
     // Closed before the librarian's first word, with only the opening line said: the opening again.
     if (s.chat.every((entry) => entry.opener)) s.chat = [];
@@ -1885,16 +2547,17 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (!job || !Object.hasOwn(PRIORITY, job.kind)) continue;
       // MEMORY.md is written again once the work has ended, unless it was saved: its draft was never kept on disk.
       if ((job.kind === 'memory' || job.kind === 'redact') && !kept) continue;
-      const again = !ENDED.has(job.status);
+      const again = !ENDED.has(job.status) || (stalled && job.status === 'failed' && needsProvider(job.error));
       const apps = (Array.isArray(job.apps) ? job.apps : []).filter((app) => typeof app === 'string' && (APPS[app] || app === 'GitHub'));
       s.seq += 1;
       const find = job.kind === 'survey' && (job.find === true || (typeof job.key === 'string' && job.key.startsWith('find:')));
       s.jobs.push({
         ...(find ? { find: true } : {}),
         id: typeof job.id === 'string' && ID_RE.test(job.id) ? job.id : randomUUID(), key: typeof job.key === 'string' ? job.key : `${find ? 'find' : job.kind}:${job.source}:${[...apps].sort().join(',')}`,
-        kind: job.kind, priority: PRIORITY[job.kind], seq: s.seq, source: String(job.source || ''), apps, label: line(job.label, 120), plan: typeof job.plan === 'string' ? clip(job.plan, 8000) : '', extra: null,
+        kind: job.kind, priority: PRIORITY[job.kind], seq: s.seq, source: String(job.source || ''), apps, label: line(job.label, 120), plan: typeof job.plan === 'string' ? clip(job.plan, 8000) : '', extra: job.extra && Array.isArray(job.extra.sites) ? { sites: job.extra.sites.filter((host) => typeof host === 'string' && /^[a-z0-9.-]{1,200}$/i.test(host)).slice(0, 12) } : null,
         status: again ? 'queued' : job.status, skipped: !!job.skipped, notes: Number(job.notes) || 0, items: Number(job.items) || 0, titles: (Array.isArray(job.titles) ? job.titles : []).slice(0, 80).map((title) => line(title, 120)),
         activity: '', summary: again ? '' : line(job.summary, 500), error: again ? '' : line(job.error, 300), started: again ? null : job.started || null, ended: again ? null : job.ended || null,
+        ...(job.route === 'browser' && job.kind === 'import' && s.choices.browserAgents ? { route: 'browser' } : {}),
       });
     }
     // A survey that waited on a sign-in card when Engelbart closed (the card is not kept): it runs now, and asks again itself.
@@ -1909,8 +2572,25 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         }
       }
     }
+    // Waiting for its provider when Engelbart closed, or stalled on it before runs waited: it waits still while neither CLI
+    // can run (the popup asks); one that can now runs what waited.
+    const waited = (saved.blocked && PROVIDERS.includes(saved.blocked.provider)) ? saved.blocked : stalled ? { provider: provider, error: `${PROVIDER_NAMES[provider]} is not connected` } : null;
+    s.blocked = waited && !usable.length && s.choices.direct ? { provider: waited.provider, error: line(waited.error || '', 200), at: now() } : null;
+    if (stalled) s.memory = { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' };
     sessions.set(id, s);
     s.dirs = dirsOf(s);
+    // An app held on its sign-in (no import of its own yet) gets its popup again (2026-10-14: Notion's step and its import
+    // were gone after a restart: the steps are not kept, and nothing queued the app again).
+    if (s.choices.direct) {
+      for (const need of Array.isArray(saved.needs) ? saved.needs : []) {
+        const app = need && typeof need.app === 'string' ? need.app : '';
+        if (!app || need.closed || !(SIGNIN_KINDS.has(need.kind) || need.kind === 'connector') || !APPS[app] || !s.choices.direct.apps.includes(app)) continue;
+        if (s.skipped.has(app) || s.jobs.some((job) => job.kind === 'import' && job.apps.includes(app))) continue;
+        // Signed in while Engelbart was closed (Zotero, GitHub, a connector): its import starts now, with no step.
+        if ((SIGNIN_APPS.has(app) && ownStatus(app).connected) || (need.kind === 'connector' && connectorConnected(app))) { directImport(s, app); continue; }
+        signInCard(s, app, need.kind === 'connector' ? 'connector' : 'signin');
+      }
+    }
     logAction(s, null, 'Picked up again after Engelbart closed');
     emit(s);
     pump(s);
@@ -1919,6 +2599,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.thinking = true;
       s.activity = 'Looking at what you picked…';
       void opening(s);
+    } else if (s.choices.direct) {
+      if (!s.finished) void directOpening(s); // Import your context has no librarian: the imports not queued yet are
     } else if (!s.done && !s.finished) {
       const last = s.chat[s.chat.length - 1];
       if (!last) void interviewTurn(s, 'Start.');
@@ -1970,7 +2652,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   return {
-    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose, signInBrowser, signInBrowserCancel, signInUnlock, signInAnotherAccount, signInPick,
+    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, unblock, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose, signInBrowser, signInBrowserCancel, signInUnlock, signInAnotherAccount, signInPick,
     setProvider: (id, provider) => { const s = get(id); setProvider(s, provider); emit(s); return snapshot(s); },
     // the first build's name for authorize
     connected: (id, input) => authorize(id, input),

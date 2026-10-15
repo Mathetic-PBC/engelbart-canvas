@@ -26,7 +26,7 @@ export default function WorkspacePeek({ id, name, anchor, peek }) {
     <div ref={ref} data-overlay="1" data-hover="1" data-ws-peek={id} style={{ ...placed, zIndex: 50, width: 360, boxSizing: 'border-box', padding: '14px 16px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', pointerEvents: 'none', animation: `rise 160ms ${EASE}` }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
         <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>
-          {info && info.above.length ? `Workspace · ${info.above.join(' / ')}` : 'Workspace'}
+          {info && info.above.length ? `Project · ${info.above.join(' / ')}` : 'Project'}
         </span>
       </div>
       <div style={{ marginTop: 8, font: '500 14.5px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere', textWrap: 'pretty' }}>{info ? info.name : name}</div>

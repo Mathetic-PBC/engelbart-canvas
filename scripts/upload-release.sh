@@ -15,9 +15,12 @@
 set -uo pipefail
 
 BUCKET=engelbart-releases
-PREFIX=engelbart
-PUBLIC=${ENGELBART_R2_PUBLIC:-https://pub-a9bcd559068e4e0e9f1e04b4d9b85df7.r2.dev/engelbart} # the bucket's r2.dev URL
-FEED=https://mathetic.com/engelbart/latest-mac.yml
+# ENGELBART_R2_PREFIX=engelbart/testing (2026-10-14) puts a testing build in its own folder, served at
+# https://mathetic.com/bart/testing/<file>, so the live release's latest-mac.yml is never touched.
+PREFIX=${ENGELBART_R2_PREFIX:-engelbart}
+PUBLIC=${ENGELBART_R2_PUBLIC:-https://pub-a9bcd559068e4e0e9f1e04b4d9b85df7.r2.dev/$PREFIX} # the bucket's r2.dev URL
+FEED=${ENGELBART_FEED:-$PUBLIC/latest-mac.yml}
+[ "$PREFIX" = engelbart ] && FEED=${ENGELBART_FEED:-https://mathetic.com/engelbart/latest-mac.yml}
 PART=5242880 # R2's smallest part: all parts but the last are this size
 
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
@@ -107,6 +110,16 @@ put() {
   [ "$got" = "$(size_of "$UPLOAD/$f")" ] || { echo "$f: stored at $got bytes, not $(size_of "$UPLOAD/$f")"; return 1; }
   echo "  ok     $f"
 }
+
+# ENGELBART_UPLOAD_ONLY="beta.sh" (2026-10-14): just these files of the folder, never latest-mac.yml, so a file can go
+# next to the live release (the beta's install command at mathetic.com/engelbart/beta.sh) without touching its feed.
+if [ -n "${ENGELBART_UPLOAD_ONLY:-}" ]; then
+  for f in $ENGELBART_UPLOAD_ONLY; do
+    [ "$f" = latest-mac.yml ] && { echo "Refusing latest-mac.yml with ENGELBART_UPLOAD_ONLY: it would change what installed apps update to."; exit 1; }
+    put "$f" || exit 1
+  done
+  exit 0
+fi
 
 for f in "${VERSIONED[@]}"; do
   if [ "$(remote_size "$f")" = "$(size_of "$UPLOAD/$f")" ]; then echo "  there  $f"; continue; fi

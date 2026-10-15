@@ -7,11 +7,10 @@
 //     during onboarding is discarded (`discardItem`), and only if nothing holds it;
 //   - the custom instructions, `<dataRoot>/instructions.md`, read by @bart and Build (`instructionsBlock`);
 //   - the project (`startProject`): its folder, made under the home directory when Engelbart is asked to make one,
-//     a "Getting started" workspace whose document starts with the description, the "Welcome!" note in its context, and the
-//     chosen library rows on the project's own list (project.json `library`, 2026-10-12: a workspace's context holds 500 at
-//     most, the project's list has no cap);
+//     a "Getting started" workspace whose document starts with the description, the "Welcome!" note, and the chosen library
+//     rows in the workspace's context;
 //   - the guided setup started inside a project (`addWelcomeWorkspace`, 2026-10-10): no project, a "Welcome" workspace in
-//     that one, and what the setup added on the project's list.
+//     that one, with what the setup added in its context.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -74,7 +73,7 @@ function existingFolder(ctx, value) {
  * not have, and notes (they belong to their own project), are left out. A new user's first project calls its first
  * workspace "Welcome" (`workspaceName`, 2026-10-09: the walkthrough's title).
  */
-async function startProject(ctx, { name, description = '', folder = 'new', directory = '', context = [], workspaceName = 'Getting started' } = {}) {
+async function startProject(ctx, { name, description = '', folder = 'new', directory = '', context = [], workspaceName = 'Getting started', welcomePage = false } = {}) {
   let dir;
   if (folder === 'new') {
     dir = freeFolder(ctx, name).path;
@@ -83,10 +82,11 @@ async function startProject(ctx, { name, description = '', folder = 'new', direc
     dir = existingFolder(ctx, directory);
   }
   const chosen = await contextIds(ctx, context);
-  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName, library: chosen });
+  if (welcomePage) return projects.createProjectWithWelcomePage(ctx, { name, description, directory: dir }, { context: chosen });
+  return projects.createProjectWithWelcome(ctx, { name, description, directory: dir }, { workspaceName, context: chosen });
 }
 
-/** Library ids a project can be given: rows the library has, notes left out (they belong to their own project). */
+/** Library ids a workspace can be given: rows the library has, notes left out (they belong to their own project). */
 async function contextIds(ctx, context) {
   const rows = await ctx.libraryDb.list();
   const known = new Map(rows.map((row) => [row.id, row]));
@@ -96,15 +96,14 @@ async function contextIds(ctx, context) {
 
 /**
  * The guided setup started inside a project (2026-10-10, "guided setup shouldn't create a new project"): no project is
- * made; this one gets a workspace named "Welcome" (createWorkspace makes the name unique: a second run's is "Welcome 2"),
- * and `context` goes on the project's list as startProject's does (not a row the project removed). Nothing else the
- * project had is touched. → { project, workspaceId }
+ * made; this one gets a workspace named "Welcome" (createWorkspace makes the name unique: a second run's is "Welcome 2")
+ * holding `context` as startProject's does. Nothing the project had is touched. → { project, workspaceId }
  */
 async function addWelcomeWorkspace(ctx, projectId, { context = [] } = {}) {
   const project = projects.findProject(ctx, projectId);
   const chosen = await contextIds(ctx, context);
   const workspace = await projects.createWorkspace(ctx, project.id, { name: 'Welcome' });
-  if (chosen.length) projects.keepInProject(ctx, project.id, chosen);
+  if (chosen.length) await projects.setWorkspaceContext(ctx, project.id, workspace.id, chosen);
   return { project: { id: project.id, name: project.name }, workspaceId: workspace.id };
 }
 

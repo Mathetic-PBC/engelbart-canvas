@@ -62,7 +62,7 @@ function DeleteProject({ project, onConfirm, onClose }) {
     <div data-overlay="1" data-delete-project-dialog="1" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 90, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(0,0,0,.25)' }}>
       <div role="alertdialog" aria-modal="true" aria-labelledby="delete-project-title" style={{ width: 'min(400px, 100%)', boxSizing: 'border-box', display: 'flex', flexDirection: 'column', gap: 6, padding: 20, background: '#fff', borderRadius: 12, boxShadow: '0 10px 40px rgba(0,0,0,.18)', animation: `rise 160ms ${EASE}` }}>
         <h3 id="delete-project-title" style={{ margin: 0, font: '600 16px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere' }}>Delete {project.name}?</h3>
-        <div style={{ font: '14px/1.6 var(--font-sans)', color: '#4d4d4d' }}>Its workspaces and notes go to the trash for 7 days. Your code folder is not touched.</div>
+        <div style={{ font: '14px/1.6 var(--font-sans)', color: '#4d4d4d' }}>Its projects and notes go to the trash for 7 days. Your code folder is not touched.</div>
         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 12 }}>
           <button type="button" className="hov-ink" onClick={onClose} disabled={busy} autoFocus style={{ ...dialogButton, border: '1px solid #e5e5e5', background: '#fff', color: '#4d4d4d' }}>Cancel</button>
           <button type="button" data-delete-project-confirm="1" onClick={confirm} disabled={busy} className="hov-dim" style={{ ...dialogButton, border: 0, background: '#e70022', color: '#fff', opacity: busy ? 0.6 : 1 }}>{busy ? 'Deleting…' : 'Delete'}</button>
@@ -321,7 +321,7 @@ export default function Home({ projects, trashed = [], library, onCreateScreen, 
                         ? <InlineField initial={project.name} width={220} placeholder="project name…" onCommit={(name) => { setRenaming(null); if (name !== project.name) onRename(project.id, name); }} onCancel={() => setRenaming(null)} style={{ padding: '4px 8px' }} />
                         : <span title="Click to rename" onClick={(event) => { event.stopPropagation(); setRenaming(project.id); }} style={{ alignSelf: 'flex-start', maxWidth: '100%', font: '500 16px/1.4 var(--font-sans)', letterSpacing: '-0.1px', color: '#171717', cursor: 'text', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{project.name}</span>}
                       <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap' }}>
-                        {project.workspaceCount} workspace{project.workspaceCount === 1 ? '' : 's'}{project.lastEdited ? ` · edited ${relative(project.lastEdited)}` : ''}
+                        {project.workspaceCount} project{project.workspaceCount === 1 ? '' : 's'}{project.lastEdited ? ` · edited ${relative(project.lastEdited)}` : ''}
                       </span>
                     </div>
                     <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 12 }}>

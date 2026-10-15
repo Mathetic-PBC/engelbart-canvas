@@ -26,6 +26,9 @@ const APP_NAMES = Object.freeze({
   'org.chromium.Chromium': ['Chromium.app'],
   'company.thebrowser.Browser': ['Arc.app'],
   'org.mozilla.firefox': ['Firefox.app'],
+  // Import your context's browser list (2026-10-13): Safari, and Perplexity's Comet.
+  'com.apple.Safari': ['Safari.app'],
+  'ai.perplexity.comet': ['Comet.app'],
 });
 
 const SETTLE_MS = 2000;
