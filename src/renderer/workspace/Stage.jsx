@@ -35,7 +35,8 @@ const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platfor
 // keeps it as `pendingFind` until what it shows is ready — a pdf drawn (PaperView `target`), a page loaded, a file drawn
 // here — then finds it once: the match in front is scrolled to, and in a pdf the find card opens with the words (a page
 // or a file shows the highlight alone, 2026-10-03, unless the card is open already: it takes the words). `&to=` (round 2)
-// is kept as `pendingTo` beside it, for a pdf only: PaperView tints the section it ends; a page or a file ignores it.
+// is kept as `pendingTo` beside it, for a pdf only: PaperView tints the section it ends; a file ignores it, and a page
+// tints its section to the next heading instead (2026-10-15, main's page-preload.cjs showSection).
 // A link in an @discover guide (2026-10-03) brings the guide's other sections for the same paper (DocEditor, model/stage.js
 // guideSections), kept on the tab as `sections` with the clicked one `activeSection`. In a pdf it opens no find card: the
 // section is scrolled to and tinted, and a Sections menu where the find card sits shows another, or clears it (×).
@@ -1159,7 +1160,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       return;
     }
     // A page that has loaded, at an address: one that turned into a pdf (a download) never commits one, and waits for the viewer.
-    if (page && web && !web.loading && !failed && web.url && web.url !== 'about:blank') land(tab.id, text);
+    // Its section is tinted too, from the words to the next heading (2026-10-15; main's page-preload.cjs showSection).
+    if (page && web && !web.loading && !failed && web.url && web.url !== 'about:blank') { land(tab.id, text); if (api.browserSection) quiet(api.browserSection(tab.id, text)); }
   }, [tab.id, tab.pendingFind, !!pdf, visible, view && view.kind, page, web && web.loading, web && web.url, !!failed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ⌘T while the Stage shows and ⌘W from anywhere but the terminal, bringing the Stage forward; ⌘F while the Stage shows and has the keyboard

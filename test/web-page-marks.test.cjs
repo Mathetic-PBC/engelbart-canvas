@@ -168,8 +168,8 @@ test('the preload is registered once on the browsing session, and tabs a page op
   assert.deepEqual(made.css, [[MARK_CSS, undefined]]); // an author sheet: Chromium paints ::highlight() from no user sheet
 });
 
-test('the tint is the pdf highlight blue, and the preload and main agree on names and limits', () => {
-  assert.match(MARK_CSS, /^::highlight\(engelbart-web-mark\)\{background-color:rgba\(0,112,243,\.14\) !important\}$/);
+test('the tint is the pdf highlight blue, a guide\'s section the pdf section\'s yellow, and the preload and main agree on names and limits', () => {
+  assert.match(MARK_CSS, /^::highlight\(engelbart-web-mark\)\{background-color:rgba\(0,112,243,\.14\) !important\}::highlight\(engelbart-web-section\)\{background-color:rgba\(255,196,0,\.13\) !important\}$/);
   assert.equal(PAGE.HIGHLIGHT, 'engelbart-web-mark');
   const preload = fs.readFileSync(PAGE_PRELOAD, 'utf8').replace(/^\s*\/\/.*$/gm, ''); // its code, not its comments
   assert.doesNotMatch(preload, /contextBridge|exposeInMainWorld/); // the page is given nothing
@@ -311,4 +311,22 @@ test('addWebMark: beside the pdf pages, by the normalized address; on a saved pa
   assert.equal(await library.addWebMark(saved, `file://${fs.realpathSync(copy)}`, mark('s2', 'copy')), true);
   const rowInk = await library.readAnnotations(saved, rowId);
   assert.deepEqual(rowInk.web.map((m) => m.id), ['s1', 's2']);
+});
+
+test('a guide\'s section on a web page (2026-10-15): its words found as find would, run to the next heading at its level or higher, else its paragraph', () => {
+  const { findWords, sectionEnd, SECTION, SECTION_MAX, CHANNELS } = require('../src/main/browser/page-preload.cjs');
+  assert.equal(CHANNELS.section, 'engelbart-page:section');
+  assert.equal(SECTION, 'engelbart-web-section');
+  const text = 'How Users Read on the Web Measuring the Effect of Improved Web Writing To measure the effect of some of the content guidelines, we tested. Results Concise text helped.';
+  const start = findWords(text, 'to  MEASURE the effect\nof some of the content guidelines');
+  assert.equal(start, text.indexOf('To measure'), 'any case, any spacing');
+  assert.equal(findWords(text, 'not on the page'), -1);
+  assert.equal(findWords(text, '   '), -1);
+  // h1 at 0, h2 "Measuring…" above the words, h3 inside the section, h2 "Results" after it.
+  const headings = [{ at: 0, level: 1 }, { at: 26, level: 2 }, { at: 120, level: 3 }, { at: text.indexOf('Results'), level: 2 }];
+  assert.equal(sectionEnd(headings, start), text.indexOf('Results'), 'past a smaller heading, to the next at its level');
+  assert.equal(sectionEnd([{ at: 0, level: 2 }, { at: 400, level: 1 }], 10), 400, 'a higher one ends it too');
+  assert.equal(sectionEnd([{ at: 50, level: 4 }], 10), 50, 'no heading before it: the next one of any level');
+  assert.equal(sectionEnd([{ at: 0, level: 2 }], 10), -1, 'none after it: its paragraph');
+  assert.equal(sectionEnd([{ at: 0, level: 2 }, { at: SECTION_MAX + 20, level: 2 }], 10), -1, 'too far: its paragraph');
 });

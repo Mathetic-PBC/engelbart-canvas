@@ -34,6 +34,13 @@
 // as ⌘⇧4 draws one (boxes.cjs: a flat fill and its size beside the pointer). Over a box's edge, where a click selects it
 // (boxAt's band), the pointer is a hand (EDGE_CURSOR); off it, the page's own again.
 //
+// A guide's section (2026-10-15, David: an essay's Read link lit one line): main gives the words a link's passage starts
+// with (`engelbart-page:section`, views.cjs section); they are found in the page's text as find would (any case, any
+// spacing) and the stretch from them to just before the next heading at the level of the one above them, or higher, is
+// tinted (SECTION) as a pdf's section is; inside what holds both the words and that heading (else the page's <article>
+// or <main>), whose end ends the last section; with no end in SECTION_MAX characters, the paragraph they are in.
+// Another passage, or none, takes its place; a new document has none.
+//
 // Sandboxed, this can require only 'electron'. The finding is plain functions over text, exported below for the tests
 // when Node loads this file; in a page, `module` is no CommonJS module and the page part runs instead.
 
@@ -48,8 +55,14 @@ const CHANNELS = Object.freeze({
   // build 2: a box resized (invoked: { id, rect, box, text } → { box } or null), the selected box's place in the viewport
   // (boxView), a frame drawn (frame: main's nonce back once the page has painted twice), the cursor over a handle (cursor).
   boxResize: 'engelbart-page:box-resize', boxView: 'engelbart-page:box-view', frame: 'engelbart-page:frame', cursor: 'engelbart-page:cursor',
+  // a guide's section (2026-10-15): the words it starts with, or '' to clear it
+  section: 'engelbart-page:section',
 });
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
+const SECTION = 'engelbart-web-section'; // a guide's section, styled by main's insertCSS as a pdf's (PaperView pdf-section)
+const SECTION_MAX = 30000; // characters a section runs to at most before it is taken to be its paragraph alone
+const BLOCKS = 'p,li,blockquote,dd,dt,td,th,figcaption,pre,h1,h2,h3,h4,h5,h6';
+const ARTICLE = 'article,main,[role="main"]';
 const CONTEXT = 32; // characters of prefix and of suffix a new quote keeps
 const MAX_EXACT = 5000; // a longer selection is not highlighted (views.cjs says the same)
 const MAX_AFFIX = 64;
@@ -100,6 +113,24 @@ function textMap(nodes) {
     text += out;
   }
   return { text, segs };
+}
+
+/** Where `words` start in the text, as find matches them (any case, any run of whitespace one space); -1 when nowhere. */
+function findWords(text, words) {
+  const want = String(words || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  return want ? String(text || '').toLowerCase().indexOf(want) : -1;
+}
+
+/**
+ * Where a section ends, from the headings in the page's order ([{ at, level }], `at` the offset in the text where each
+ * starts) and the offset of its start words → the offset it runs to, or -1 for its paragraph alone: just before the first
+ * heading after the start at the level of the last heading before it, or higher (any heading when none is before it),
+ * within SECTION_MAX characters.
+ */
+function sectionEnd(headings, start, max = SECTION_MAX) {
+  const above = [...headings].reverse().find((h) => h.at <= start);
+  const next = headings.find((h) => h.at > start && (!above || h.level <= above.level));
+  return next && next.at - start <= max ? next.at : -1;
 }
 
 /** How many of a seg's characters start before `raw` in its node. */
@@ -419,6 +450,41 @@ function runInPage() {
     try { got = selected(); } catch { got = null; }
     ipcRenderer.send(CHANNELS.selection, { nonce, quote: got ? got.quote : null, pageText: got ? got.pageText : '' });
   });
+  // A guide's section: found in the text, run to its next heading (sectionEnd) or its paragraph's end, and tinted.
+  function showSection(words) {
+    const h = registry();
+    if (!h) return;
+    h.delete(SECTION);
+    const map = textMap(textNodes()), start = findWords(map.text, words);
+    if (!words || start < 0) return;
+    const range = domRange(rangeOf(map, start, start + String(words).replace(/\s+/g, ' ').trim().length));
+    if (!range) return;
+    // The section stays inside what holds both its words and the heading above them (an article's body), else inside the
+    // page's article or main: a sidebar, the tags or the footer are no part of it, even inside the same <article>.
+    const from = range.startContainer.parentElement;
+    const offsetOf = (node) => { const seg = map.segs.find((one) => node.contains(one.node)); return seg ? seg.start : -1; };
+    const headingsIn = (root) => [...root.querySelectorAll('h1,h2,h3,h4,h5,h6')].map((el) => ({ el, at: offsetOf(el), level: Number(el.tagName[1]) })).filter((one) => one.at >= 0).sort((a, b) => a.at - b.at);
+    const above = [...headingsIn(document)].reverse().find((one) => one.at <= start);
+    let holder = from && above ? from : null;
+    while (holder && !holder.contains(above.el)) holder = holder.parentElement;
+    if (!holder || holder === document.body || holder === document.documentElement) holder = (from && from.closest(ARTICLE)) || null;
+    const headings = headingsIn(holder || document), end = sectionEnd(headings, start);
+    const tint = document.createRange();
+    tint.setStart(range.startContainer, range.startOffset);
+    const stop = end >= 0 && headings.find((one) => one.at === end);
+    const inside = holder ? map.segs.filter((one) => holder.contains(one.node)) : [];
+    const last = inside[inside.length - 1], holderEnd = last ? last.start + last.map.length : -1;
+    if (stop) tint.setEndBefore(stop.el);
+    else if (holder && holderEnd - start <= SECTION_MAX) tint.setEndAfter(holder.lastChild || holder); // its last section
+    else {
+      const block = from && from.closest(BLOCKS);
+      if (block) tint.setEndAfter(block.lastChild || block); else tint.setEnd(range.endContainer, range.endOffset);
+    }
+    const shown = new Highlight(tint);
+    shown.priority = -1; // under find's matches, as a pdf's section is
+    h.set(SECTION, shown);
+  }
+  ipcRenderer.on(CHANNELS.section, (_event, words) => { try { showSection(typeof words === 'string' ? words.slice(0, MAX_EXACT) : ''); } catch { /* the page's own tints stay */ } });
   ipcRenderer.on(CHANNELS.add, (_event, value) => {
     const { nonce, mark } = value || {};
     if (!mark || typeof mark.id !== 'string') return;
@@ -717,4 +783,4 @@ function runInPage() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SECTION_MAX, findWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };

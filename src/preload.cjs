@@ -378,6 +378,7 @@ const engelbartAPI = Object.freeze({
   onBrowserFocusAddress: (callback) => subscribe('browser:focus-address', callback),
   browserFind: (id, text, options) => ipcRenderer.invoke('browser:find', id, text, options),
   browserStopFind: (id) => ipcRenderer.invoke('browser:stop-find', id),
+  browserSection: (id, text) => ipcRenderer.invoke('browser:section', id, text), // a guide's section tinted on the page (2026-10-15)
   onBrowserFound: (callback) => subscribe('browser:found', callback),
   // ⌘T / ⌘W from a page, and the Edit menu's Find items: { name, tab } (tab: the page that had the keyboard, else null).
   onBrowserShortcut: (callback) => subscribe('browser:shortcut', callback),

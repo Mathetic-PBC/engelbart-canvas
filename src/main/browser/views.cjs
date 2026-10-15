@@ -105,7 +105,7 @@ const PAGE_PRELOAD_ID = 'engelbart-page';
 // The PDF's highlight blue (pdf/PaperView.jsx renderMarks). An author sheet: Chromium leaves ::highlight() out of a user
 // one (cssOrigin 'user' paints nothing, checked 2026-10-06 on Electron 44). !important, so a page's own rule for the name
 // wins only with !important of its own.
-const MARK_CSS = `::highlight(${PAGE.HIGHLIGHT}){background-color:rgba(0,112,243,.14) !important}`;
+const MARK_CSS = `::highlight(${PAGE.HIGHLIGHT}){background-color:rgba(0,112,243,.14) !important}::highlight(${PAGE.SECTION}){background-color:rgba(255,196,0,.13) !important}`; // a guide's section as a pdf's (PaperView)
 const QUOTE_TIMEOUT_MS = 2000;
 const SELECTION_TIMEOUT_MS = 300; // an @bart turn does not wait on a page that does not answer
 const MAX_PAGE_TEXT = 2 * PAGE.PAGE_TEXT + 2 * PAGE.MAX_EXACT; // the most page text main takes with a selection
@@ -1307,6 +1307,16 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     return true;
   }
 
+  /** A guide's section on the page (2026-10-15; page-preload.cjs showSection): the words it starts with, or '' for none. */
+  function section(id, text) {
+    assertId(id);
+    const entry = entries.get(id);
+    if (!entry) return false;
+    if (typeof text !== 'string' || text.length > FIND_MAX) throw new TypeError('Section text must be a bounded string');
+    entry.view.webContents.send(PAGE.CHANNELS.section, text);
+    return true;
+  }
+
   function stopFind(id) {
     assertId(id);
     const entry = entries.get(id);
@@ -1492,7 +1502,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (shared) shared.members.delete(member);
   }
 
-  return { open, show, hide, command, find, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection, pageSelection, screenshot, overleafTabs, readOverleaf, startBox, endBox, makeBox, removeBox, undoBox, canBox, resizeBox, setBoxAsks };
+  return { open, show, hide, command, find, section, stopFind, shortcut, savePage, close, closeAll, answerLogin, flush, dispose, has: (id) => entries.has(id), highlightSelection, pageSelection, screenshot, overleafTabs, readOverleaf, startBox, endBox, makeBox, removeBox, undoBox, canBox, resizeBox, setBoxAsks };
 }
 
 // Each handler is registered once and acts on the views of the window that called (`viewsFor(event)`, 2026-10-03).
@@ -1512,6 +1522,7 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   handle('browser:command', (mine, id, name) => mine.command(id, name));
   handle('browser:find', (mine, id, text, options) => mine.find(id, text, options));
   handle('browser:stop-find', (mine, id) => mine.stopFind(id));
+  handle('browser:section', (mine, id, text) => mine.section(id, text));
   handle('browser:close', (mine, id) => mine.close(id));
   handle('browser:login-reply', (mine, requestId, credentials) => mine.answerLogin(requestId, credentials));
   handle('browser:close-all', (mine) => { mine.closeAll(); return true; });

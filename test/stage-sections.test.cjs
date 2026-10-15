@@ -520,6 +520,7 @@ test.describe('the Stage: a passage in a page or a drawn file', () => {
     loaded(s, id);
     assert.deepEqual(finds(s), [['browserFind', id, WORDS, { backward: false }]], 'found as ⌘F would, from the first match');
     assert.equal(s.one('FindCard'), null, 'finding stays false');
+    assert.deepEqual(s.calls.filter(([name]) => name === 'browserSection'), [['browserSection', id, WORDS]], 'and its section tinted, to the next heading (2026-10-15)');
 
     s.on.onBrowserFound({ id, matches: 2, active: 1 }); // Chromium counts the matches
     s.rerender();
