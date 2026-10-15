@@ -101,6 +101,9 @@ test('both CLIs there, one signed in: that one runs; a CLI being installed reads
 
 function discoveryOn(m, { fail = null } = {}) {
   const home = temp();
+  // A repository worked on lately, so there is something to name projects from (an empty home asks no model, 2026-10-15).
+  fs.mkdirSync(path.join(home, 'help-seeking', '.git'), { recursive: true });
+  fs.writeFileSync(path.join(home, 'help-seeking', '.git', 'HEAD'), 'ref: refs/heads/main\n');
   let runs = 0;
   let last = null;
   const rechecked = [];

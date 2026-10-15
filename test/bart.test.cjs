@@ -2330,7 +2330,7 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   const second = await ask('d2', '--research why agents loop and how they are stopped', said);
   assert.match(calls[1].command, / resume /);
   assert.match(calls[1].command, /-c 'tools\.web_search=true'/);
-  assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n\n[mcp_servers.papers]\ncommand = "/Apps/Engelbart"\nargs = ["/Apps/papers-mcp.cjs"]\nenv = { ELECTRON_RUN_AS_NODE = "1" }\nstartup_timeout_sec = 30\ntool_timeout_sec = 90\n', 'the search has the paper tools');
+  assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\ncli_auth_credentials_store = "file"\n\n[mcp_servers.papers]\ncommand = "/Apps/Engelbart"\nargs = ["/Apps/papers-mcp.cjs"]\nenv = { ELECTRON_RUN_AS_NODE = "1" }\nstartup_timeout_sec = 30\ntool_timeout_sec = 90\n', 'the search has the paper tools');
   assert.match(calls[1].input, /^<mode>deep\.[^\n]*<\/mode>\n\n<search>The direction is settled[^\n]*<\/search>\n\n/, 'the resumed search still says how far to trace');
   assert.match(calls[1].input, /<question>\nwhy agents loop and how they are stopped\n<\/question>$/, 'the direction, without the flag');
   assert.equal(second.research, undefined, 'a search hands back no direction');
@@ -2354,7 +2354,7 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   assert.match(quick.lines[quick.lines.length - 1], /^bart> \*Discover · Sol · medium · \d+ s\*$/, 'its foot still names the model');
 
   writeCodexConfig(home, {});
-  assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n');
+  assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\ncli_auth_credentials_store = "file"\n');
 });
 
 test('an empty @discover\'s plain reply is the question alone, whatever the model said before it; a card, or any later turn, as it came (2026-10-14)', async () => {

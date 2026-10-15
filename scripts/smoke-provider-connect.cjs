@@ -221,8 +221,8 @@ app.whenReady().then(async () => {
       assert.equal(run.blocked.provider, 'anthropic');
       assert.equal(run.jobs.some((job) => job.status === 'failed'), false, 'nothing failed: it waits');
       assert.equal(await text(wc, '[data-provider-popup] h3'), 'Connect Claude Code');
-      assert.equal(await text(wc, '[data-provider-line]'), 'Your imports are waiting for Claude Code.');
-      assert.equal(await js(wc, 'document.querySelectorAll("[data-provider-popup] .need-modal p").length'), 1, 'one line');
+      assert.equal(await has(wc, '[data-provider-line]'), false, 'no line under the title (no subtext)');
+      assert.equal(await js(wc, 'document.querySelectorAll("[data-provider-popup] .need-modal p").length'), 0, 'no line at all');
       assert.equal(await js(wc, 'getComputedStyle(document.querySelector("[data-provider-popup] .need-modal")).backgroundColor'), 'rgb(255, 255, 255)', 'a white card');
       assert.equal(await js(wc, 'getComputedStyle(document.querySelector("[data-provider-popup] h3")).color'), 'rgb(23, 23, 23)', '#171717 ink');
       assert.equal(await dividers(wc, '[data-provider-popup] .need-modal'), 0, 'no dividing lines');

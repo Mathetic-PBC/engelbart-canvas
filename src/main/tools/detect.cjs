@@ -239,12 +239,9 @@ async function readSignIn(runner, name, file, where = {}) {
   return read;
 }
 
-/** Whether Codex's sign-in file is there, with a ChatGPT sign-in in it. */
+/** Whether Codex's sign-in file is there (a sign-in kept only in the keychain leaves none). */
 function codexAuthFile({ env = process.env, home = os.homedir() } = {}) {
-  try {
-    const auth = JSON.parse(fs.readFileSync(path.join(env.CODEX_HOME || path.join(home, '.codex'), 'auth.json'), 'utf8'));
-    return !!(auth && auth.tokens);
-  } catch { return false; }
+  return fs.existsSync(path.join(env.CODEX_HOME || path.join(home, '.codex'), 'auth.json'));
 }
 
 /** Whether the person turned the CLI's own updater off: then Engelbart asks before updating it too (design D11). */

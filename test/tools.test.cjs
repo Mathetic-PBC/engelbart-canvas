@@ -708,6 +708,8 @@ test('real zsh: an alias is reported to the terminal without its definition, and
   const { root, bin, runner } = realShell();
   fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\ncase "$1" in --version) echo "codex-cli 0.155.1";; login) echo "Logged in using ChatGPT";; esac\n', { mode: 0o700 });
   fs.writeFileSync(path.join(root, '.zshrc'), "alias claude='printf super-secret-definition'\n");
+  fs.mkdirSync(path.join(root, '.codex'), { recursive: true });
+  fs.writeFileSync(path.join(root, '.codex', 'auth.json'), '{}'); // its sign-in in a file, not only the keychain (2026-10-15)
   const found = await detectTools({ runner, only: ['claude', 'codex'], home: root, systemBins: [] });
   assert.deepEqual([found.claude.status, found.aliases], ['missing', ['claude']]);
   assert.deepEqual([found.codex.status, found.codex.version, found.codex.signedIn, found.codex.path], ['ready', '0.155.1', true, path.join(bin, 'codex')]);

@@ -390,12 +390,12 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
   });
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');
 
-  async function claudeTurn({ kind, system, message, session, dirs, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, tools }) {
+  async function claudeTurn({ kind, system, message, session, dirs, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, toolNames }) {
     const promptFile = `${stem}.system.md`, inputFile = `${stem}.input.txt`, mcpFile = `${stem}.mcp.json`, connection = `${stem}.engelbart.json`;
     fs.writeFileSync(promptFile, system, { mode: 0o600 });
     fs.writeFileSync(inputFile, message, { mode: 0o600 });
     if (bridge) {
-      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(tools ? { tools } : {}) }), { mode: 0o600 });
+      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(toolNames ? { tools: toolNames } : {}) }), { mode: 0o600 });
       fs.writeFileSync(mcpFile, JSON.stringify(claudeServers({ node, server, connection, connectors, kind })), { mode: 0o600 });
     }
     const id = session || randomUUID();
@@ -419,7 +419,7 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     }
   }
 
-  async function codexTurn({ kind, system, message, session, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, dirs, tools }) {
+  async function codexTurn({ kind, system, message, session, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, dirs, toolNames }) {
     // A home of its own for every bridged turn and every discovery turn: the librarian's is shared turn to turn, and a
     // discovery agent starting while it talks would rewrite its instructions (AGENTS.md) under it.
     const own = bridge || kind === 'projects' ? `${importHome}-${path.basename(stem)}` : interviewHome;
@@ -428,7 +428,7 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     const inputFile = `${stem}.input.txt`, outFile = `${stem}.out.txt`, connection = `${stem}.engelbart.json`;
     fs.writeFileSync(inputFile, message, { mode: 0o600 });
     if (bridge) {
-      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(tools ? { tools } : {}) }), { mode: 0o600 });
+      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(toolNames ? { tools: toolNames } : {}) }), { mode: 0o600 });
       writeImportConfig(own, { command: node, args: [server, connection], env: { ELECTRON_RUN_AS_NODE: '1' } }, connectors, kind);
     } else writeCodexConfig(own, {});
     const web = bridge ? 'true' : 'false'; // an app's help pages, when its skill is out of date
@@ -500,12 +500,12 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
   }
 
   /** Claude Code with Claude in Chrome (`-p --chrome`), in the Engelbart terminal. */
-  async function claudeBrowse({ kind, system, message, dirs, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, browse, tools }) {
+  async function claudeBrowse({ kind, system, message, dirs, model, effort, signal, onUpdate, bridge, connectors, timeout, stem, cwd, browse, toolNames }) {
     const promptFile = `${stem}.system.md`, inputFile = `${stem}.input.txt`, mcpFile = `${stem}.mcp.json`, connection = `${stem}.engelbart.json`;
     fs.writeFileSync(promptFile, system, { mode: 0o600 });
     fs.writeFileSync(inputFile, message, { mode: 0o600 });
     if (bridge) {
-      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(tools ? { tools } : {}) }), { mode: 0o600 });
+      fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(toolNames ? { tools: toolNames } : {}) }), { mode: 0o600 });
       fs.writeFileSync(mcpFile, JSON.stringify(claudeServers({ node, server, connection, connectors, kind })), { mode: 0o600 });
     }
     const id = randomUUID();
@@ -535,11 +535,11 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
    * run (their MCP servers but node_repl, ChatGPT apps), its shell read-only, its Chrome plugin's per-site questions left
    * to Codex's auto-review and every other approval refused (CODEX_BROWSE_APPROVALS), Engelbart's tools added.
    */
-  async function codexBrowse({ kind, system, message, model, effort, signal, onUpdate, bridge, timeout, stem, cwd, dirs, browse, tools }) {
+  async function codexBrowse({ kind, system, message, model, effort, signal, onUpdate, bridge, timeout, stem, cwd, dirs, browse, toolNames }) {
     const home = environment.CODEX_HOME || path.join(os.homedir(), '.codex');
     const inputFile = `${stem}.input.txt`, outFile = `${stem}.out.txt`, connection = `${stem}.engelbart.json`;
     fs.writeFileSync(inputFile, message, { mode: 0o600 });
-    if (bridge) fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(tools ? { tools } : {}) }), { mode: 0o600 });
+    if (bridge) fs.writeFileSync(connection, JSON.stringify({ url: bridge.url, token: bridge.token, kind, ...(toolNames ? { tools: toolNames } : {}) }), { mode: 0o600 });
     const off = [...codexServersOff(home).map((name) => `-c 'mcp_servers.${name}.enabled=false'`), ...codexPluginsOff(home).map((name) => `-c 'plugins."${name}".enabled=false'`)].join(' ');
     const enable = `${browse.enable ? ' --enable browser_use' : ''} --disable computer_use`;
     // --ephemeral: the run is not kept in the person's Codex history (their own CODEX_HOME), as Claude's above.
@@ -567,14 +567,14 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
    * `bridge` { url, token } for the kinds that have Engelbart's tools; `connectors` [{ name, url, token }]; `browse` (kind
    * browse) { steps: the folder its screenshots go to, enable: Codex's browser use turned on for the run }.
    */
-  async function turn({ choice, kind = 'interview', system, message, session = null, dirs = [], signal, onUpdate = () => {}, bridge = null, connectors = [], browse = null, tools = null }) {
+  async function turn({ choice, kind = 'interview', system, message, session = null, dirs = [], signal, onUpdate = () => {}, bridge = null, connectors = [], browse = null, toolNames = null }) {
     fs.mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
     const stem = path.join(runDirectory, `${kind}-${randomUUID()}`);
     const cwd = runDirectory;
     const timeout = TIMEOUTS[kind] || TIMEOUTS.import;
     const cli = choice.provider === 'openai' ? 'codex' : 'claude';
     const fn = kind === 'browse' ? (cli === 'codex' ? codexBrowse : claudeBrowse) : (cli === 'codex' ? codexTurn : claudeTurn);
-    const once = () => fn({ kind, system, message, session, dirs, model: choice.modelId, effort: choice.effort, signal, onUpdate, bridge: BRIDGED.has(kind) ? bridge : null, connectors, timeout, stem, cwd, browse: browse || {}, tools: Array.isArray(tools) ? tools : null });
+    const once = () => fn({ kind, system, message, session, dirs, model: choice.modelId, effort: choice.effort, signal, onUpdate, bridge: BRIDGED.has(kind) ? bridge : null, connectors, timeout, stem, cwd, browse: browse || {}, toolNames: Array.isArray(toolNames) ? toolNames : null });
     const attempt = async () => {
       if (!tools) return once();
       await tools.ensure(cli);

@@ -92,6 +92,8 @@ function makeMac(scenario, parent) {
     const file = tool === 'claude' ? path.join(home, '.claude', '.pretend-auth') : path.join(home, '.codex', '.pretend-auth');
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, how === true ? (tool === 'claude' ? 'claude.ai' : 'chatgpt') : String(how));
+    // Codex signed in keeps its sign-in in ~/.codex/auth.json (the file store Engelbart signs it in with, 2026-10-15).
+    if (tool === 'codex' && (how === true || how === 'chatgpt')) fs.writeFileSync(path.join(home, '.codex', 'auth.json'), JSON.stringify({ auth_mode: 'chatgpt', tokens: { id_token: 'pretend', access_token: 'pretend' } }));
   }
 
   let bundledGit = null;

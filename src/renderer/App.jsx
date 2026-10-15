@@ -252,7 +252,9 @@ export default function App() {
   const pendingNeed = (() => {
     if (importModal || phase !== 'workspace') return null;
     for (const session of connectSessions) {
-      if (!session.direct) continue;
+      // A manual run (the librarian's) shows its steps in its own chat while that is open; put away, here (2026-10-15:
+      // its "Allow Engelbart to search and read …?" left unanswered held the app with nothing on screen).
+      if (!session.direct && (session.stopped || (connectPopup && connectPopup.sessionId === session.id))) continue;
       for (const need of session.needs || []) {
         const asked = needShown && needShown.sessionId === session.id && needShown.needId === need.id;
         if (asked || !laterNeeds.current.has(need.id)) return { session, need };
@@ -267,7 +269,8 @@ export default function App() {
   React.useEffect(() => {
     if (phase !== 'workspace' || importModal) return;
     for (const session of connectSessions) {
-      if (!session.direct || completedShown.current.has(session.id)) continue;
+      // A manual run too, once the librarian is done or Import was pressed and its chat is put away (2026-10-15).
+      if ((!session.direct && (!session.finished || (connectPopup && connectPopup.sessionId === session.id))) || completedShown.current.has(session.id)) continue;
       const work = (session.jobs || []).filter((job) => job.kind === 'import' || job.kind === 'recall' || job.kind === 'survey');
       // A run whose every app was left out (Later on each sign-in) has no work, and ends too, saying why (ImportStatus).
       const ended = (work.length > 0 || ((session.leftOut || []).length > 0 && session.finished && !session.thinking)) && work.every((job) => job.status === 'done' || job.status === 'failed' || job.status === 'stopped') && !(session.needs || []).length;
@@ -275,7 +278,7 @@ export default function App() {
       completedShown.current.add(session.id);
       setImportStatus(session.id);
     }
-  }, [connectSessions, importModal, phase]);
+  }, [connectSessions, importModal, phase, connectPopup]);
   const openSession = (id) => {
     const session = connectSessions.find((entry) => entry.id === id);
     if (session && session.direct) setImportStatus(id); else setConnectPopup({ sessionId: id });

@@ -35,7 +35,8 @@ export function providerCopy(provider, tool, { why = '', changed = false } = {})
   if (busy && busy.action === 'sign-in') return { state: 'signing-in', line: 'Finish signing in in your browser.', primary: busy.url ? 'Open page' : 'Waiting…', waiting: !busy.url };
   if ((busy && busy.action !== 'sign-out') || (tool && ['installing', 'checking', 'unknown', 'updating'].includes(tool.status))) return { state: 'connecting', line: `Connecting ${name}…`, primary: 'Connecting…', waiting: true };
   const problem = tool && tool.error ? String(tool.error).split(/(?<=[.!?])\s/)[0].slice(0, 160) : '';
-  return { state: 'not-connected', line: problem || `Your imports are waiting for ${name}.`, primary: 'Connect', waiting: false, problem: !!problem };
+  // No line under the title unless something went wrong (From Amitav, 2026-10-15: no subtext on these prompts).
+  return { state: 'not-connected', line: problem || '', primary: 'Connect', waiting: false, problem: !!problem };
 }
 
 /**
@@ -83,10 +84,10 @@ export default function ProviderPopup({ session, tools, onConnect, onSignIn, onO
       <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget) onLater(); }}>
         <section className="modal need-modal" role="dialog" aria-modal="true" aria-label={`Connect ${NAME[provider]}`}>
           <h3>{`Connect ${NAME[provider]}`}</h3>
-          <p className={error || (words.problem && (pressed || words.state === 'refused')) ? 'need-error' : undefined} role="status" data-provider-line="1">{line}</p>
+          {line ? <p className={error || (words.problem && (pressed || words.state === 'refused')) ? 'need-error' : undefined} role="status" data-provider-line="1">{line}</p> : null}
           <div className="mf">
             {otherReady ? <button type="button" className="link" data-provider-other={other} onClick={() => Promise.resolve(onContinue(other)).catch((failure) => setError(String((failure && failure.message) || failure)))}>{`Use ${NAME[other]}`}</button> : null}
-            <button type="button" className="link" data-provider-later="1" onClick={onLater}>Later</button>
+            <button type="button" className="link" data-provider-later="1" onClick={onLater}>Skip</button>
             <button type="button" className="btn small" data-provider-connect={provider} disabled={words.waiting} onClick={primary}>{words.primary}</button>
           </div>
         </section>

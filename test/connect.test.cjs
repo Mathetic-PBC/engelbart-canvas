@@ -1163,7 +1163,7 @@ test('the librarian must ask: no sign-in looked at and no survey before Allow; A
     started = await connect.start({ sources: { chats: { on: true, apps: ['ChatGPT', 'Claude'] } }, provider: 'anthropic' });
     let now = await until(state(started.id), (s) => s.needs.length === 2 && !s.thinking && s.chat.length > 1, 'the two prompts');
     assert.deepEqual(now.needs.map((need) => [need.app, need.kind, need.reason]), [['ChatGPT', 'consent', 'Allow Engelbart to search and read your ChatGPT?'], ['Claude', 'consent', 'Allow Engelbart to search and read your Claude?']]);
-    assert.equal(now.needs[0].note, 'What the agents read there may be sent to Anthropic for processing.');
+    assert.equal(now.needs[0].note, 'Engelbart will also ask ChatGPT once what it remembers about your research, then delete that chat. What the agents read there may be sent to Anthropic for processing.', 'what the recall does, said before it is allowed');
     assert.deepEqual(calls.checked, [], 'no sign-in of theirs is looked at before Allow');
     assert.deepEqual(calls.keychain, [], 'nor copied');
     assert.deepEqual(now.jobs.filter((job) => job.apps.some((app) => app === 'ChatGPT' || app === 'Claude')).map((job) => job.kind), [], 'no survey before Allow');
@@ -1195,6 +1195,25 @@ test('the librarian must ask: no sign-in looked at and no survey before Allow; A
   } finally {
     if (started) connect.stop(started.id);
   }
+});
+
+test('a tool the agents found, ticked in a manual import, is asked about on its own and, allowed, brought in through its site (2026-10-15)', async () => {
+  const { connect, state } = fakeConnect({ ask: true, delayMs: 200 });
+  const started = await connect.start({ librarian: true, direct: { mode: 'manual', projects: [{ title: 'Help-seeking study', description: 'A study.' }], roles: [], work: '', apps: ['Obsidian'], scopes: {}, additional: [{ name: 'Linear', website: 'https://linear.app', note: 'only the study board' }, { name: 'Figma', website: 'https://figma.com' }] } });
+  let now = await until(state(started.id), (s) => s.needs.filter((need) => need.kind === 'consent').length === 2, 'a prompt for each tool');
+  assert.deepEqual(now.needs.map((need) => need.reason), ['Allow Engelbart to search and read your Linear?', 'Allow Engelbart to search and read your Figma?']);
+  assert.equal(now.jobs.some((job) => /Other tools/.test(job.label)), false, 'nothing of them before Allow');
+  now = await connect.need(started.id, now.needs.find((need) => need.app === 'Linear').id, 'open');
+  now = await until(state(started.id), (s) => s.jobs.some((job) => job.label === 'Other tools: Linear'), 'Linear\'s import');
+  now = await connect.need(started.id, now.needs.find((need) => need.app === 'Figma').id, 'skip');
+  assert.ok(now.leftOut.some((entry) => entry.app === 'Figma'));
+  connect.stop(started.id);
+  const saved = JSON.parse(fs.readFileSync(path.join(ctx.dataRoot, '.connect', started.id, 'session.json'), 'utf8'));
+  const job = saved.jobs.find((one) => one.label === 'Other tools: Linear');
+  assert.deepEqual(job.extra, { sites: ['linear.app'] }, 'its site, for the browser to open');
+  assert.match(job.plan, /Linear \(linear\.app\)|Linear/);
+  assert.match(job.plan, /only the study board/, 'what the person said about it');
+  assert.equal(saved.jobs.some((one) => one.label === 'Other tools: Figma'), false, 'Skip brings nothing of it in');
 });
 
 test('the librarian\'s prompts come back after a quit for the apps not yet answered; an app allowed before is not asked again', async () => {

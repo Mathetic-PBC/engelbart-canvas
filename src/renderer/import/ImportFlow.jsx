@@ -959,8 +959,11 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     // What the agents do, said before they start (From Amitav, 2026-10-15). Import manually is the second option's, not a
     // way back to the question.
     if (d === 'agents-consent') {
-      const cli = F.provider === 'openai' ? 'Codex' : F.provider === 'anthropic' ? 'Claude Code' : 'Claude Code or Codex';
-      const company = F.provider === 'openai' ? 'OpenAI' : F.provider === 'anthropic' ? 'Anthropic' : 'Anthropic or OpenAI';
+      // The provider that will run it: the one chosen, else the one Engelbart would pick (opened from a project, nothing
+      // was chosen in this flow: it named neither, 2026-10-15).
+      const runs = F.provider || (decision && decision.pick) || null;
+      const cli = runs === 'openai' ? 'Codex' : runs === 'anthropic' ? 'Claude Code' : 'Claude Code or Codex';
+      const company = runs === 'openai' ? 'OpenAI' : runs === 'anthropic' ? 'Anthropic' : 'Anthropic or OpenAI';
       const browser = browsers && browsers.chosenId && browsers.keychain !== 'declined' ? browserName(browsers.chosenId) : 'browser';
       return (
         <>

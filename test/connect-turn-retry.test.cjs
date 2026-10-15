@@ -113,3 +113,35 @@ test('an agent turn on Claude Code is not saved to the person\'s history; the in
   await agents.turn({ choice: choiceOf('anthropic'), kind: 'interview', system: 'rules', message: 'go', onUpdate: () => {} });
   assert.doesNotMatch(runs[1].command, /--no-session-persistence/);
 });
+
+// 2026-10-15 (Hudson's local run: "Nothing new came into your Engelbart Library"): every import given its job's tools
+// failed at once with "tools.ensure is not a function". The job's tool names were passed to turn() as `tools`, the name of
+// the tools manager it ensures the CLI with, so the manager was never reached. A real turn, with a tools manager and a
+// job's tool list, for each CLI.
+test('a job\'s own tool list reaches the agent, and the CLI is still ensured by the tools manager', async () => {
+  for (const provider of ['anthropic', 'openai']) {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'eb-toolnames-'));
+    const auth = path.join(home, 'auth.json');
+    fs.writeFileSync(auth, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
+    const calls = [];
+    const manager = { ensure: async (cli) => { calls.push(`ensure ${cli}`); }, use: async (cli, fn) => { calls.push(`use ${cli}`); return fn(); }, check: async () => {}, binaryFor: () => null, environment: () => ({}) };
+    const connections = [];
+    const run = (shell, args, options, done) => {
+      const file = options.env.ENGELBART_CONNECT_MCP ? JSON.parse(fs.readFileSync(options.env.ENGELBART_CONNECT_MCP, 'utf8')).mcpServers.engelbart.args[1] : null;
+      if (file) connections.push(JSON.parse(fs.readFileSync(file, 'utf8')));
+      if (provider === 'openai') {
+        const config = fs.readFileSync(path.join(options.env.CODEX_HOME, 'config.toml'), 'utf8');
+        const match = /args = \[".*?", "(.*?)"\]/.exec(config);
+        if (match) connections.push(JSON.parse(fs.readFileSync(match[1], 'utf8')));
+        fs.writeFileSync(options.env.ENGELBART_CONNECT_OUTPUT, 'Brought in 2 chats.');
+      }
+      setImmediate(() => done(null, provider === 'openai' ? '' : `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Brought in 2 chats.' })}\n`));
+      return { stdout: null };
+    };
+    const agents = createConnectAgents({ environment: { HOME: home, PATH: '/usr/bin' }, runDirectory: path.join(home, 'runs'), interviewHome: path.join(home, 'codex-home'), codexAuthFile: auth, run, tools: manager });
+    const out = await agents.turn({ choice: choiceOf(provider), kind: 'import', system: 'rules', message: 'go', bridge: { url: 'http://127.0.0.1:1/x', token: 't' }, toolNames: ['web_chats', 'import_web_chats'] });
+    assert.equal(out.text, 'Brought in 2 chats.', provider);
+    assert.deepEqual(calls, [`ensure ${provider === 'openai' ? 'codex' : 'claude'}`, `use ${provider === 'openai' ? 'codex' : 'claude'}`], `${provider}: the manager ensured and ran the CLI`);
+    assert.deepEqual(connections.map((one) => one.tools), [['web_chats', 'import_web_chats']], `${provider}: the job's tools reached its MCP server`);
+  }
+});

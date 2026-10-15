@@ -66,6 +66,8 @@ case "$1" in
     case "$B" in hang) sleep 120;; garbage) echo "Usage: codex [OPTIONS] [PROMPT]"; exit 0;; esac
     echo "codex-cli $V";;
   login)
+    # -c key=value, as the real one takes (Engelbart signs in with cli_auth_credentials_store="file")
+    while [ "$2" = "-c" ]; do shift 2; done
     case "$2" in
       status) [ "$B" = auth-hang ] && sleep 120
         case "$(cat "$AUTH" 2>/dev/null)" in
@@ -75,7 +77,7 @@ case "$1" in
         esac;;
       "") echo "Starting local login server on http://localhost:1455."; echo "If your browser did not open, navigate to this URL to authenticate:"
         echo ""; echo "https://auth.openai.com/oauth/authorize?response_type=code&client_id=pretend"
-        sleep 1; mkdir -p "$(dirname "$AUTH")"; echo chatgpt > "$AUTH"; echo "Successfully logged in";;
+        sleep 1; mkdir -p "$(dirname "$AUTH")"; echo chatgpt > "$AUTH"; echo '{"auth_mode":"chatgpt","tokens":{"id_token":"pretend","access_token":"pretend"}}' > "$(dirname "$AUTH")/auth.json"; echo "Successfully logged in";;
       *) echo "error: unexpected argument '$2'"; exit 2;;
     esac;;
   update) [ "$B" = update-offline ] && { echo "error sending request for url (https://api.github.com/repos/openai/codex/releases/latest)"; exit 1; }

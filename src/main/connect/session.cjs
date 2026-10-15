@@ -285,7 +285,17 @@ function cleanChoices(input, homeDir, { alsoPicked = [] } = {}) {
     direct: cleanDirect(given.direct, homeDir), // Import your context (2026-10-13): no librarian, one import a tool
     keychain: given.keychain !== false, // whether the person let Engelbart copy their browser's sign-ins (2026-10-13)
     browserAgents: cleanBrowserAgents(given.browserAgents), // the web apps' imports in the person's own browser (2026-10-13)
+    extras: cleanExtras(given.extras), // the librarian's run: tools the agents found that Engelbart has no import for (2026-10-15)
   };
+}
+
+/** Tools Engelbart has no import of its own for, as a manual run keeps them → [{ name, website, note, projects }]. */
+function cleanExtras(value) {
+  const text = (one, max) => (typeof one === 'string' ? one.replace(/\s+/g, ' ').trim().slice(0, max) : '');
+  return (Array.isArray(value) ? value : []).filter((one) => one && typeof one === 'object' && text(one.name, 60)).slice(0, 12).map((one) => ({
+    name: text(one.name, 60), website: hostOfSite(one.website) ? String(one.website).trim().slice(0, 300) : '', note: text(one.note, 600),
+    projects: (Array.isArray(one.projects) ? one.projects : []).map((title) => text(title, 120)).filter(Boolean).slice(0, MAX_DIRECT_PROJECTS),
+  }));
 }
 
 /**
@@ -681,12 +691,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   /* --------------------------------------------------------------------------------------------- the priority queue */
 
   /** A job queued: started when a place is free, the most urgent kind first. The same kind, source and apps go once. */
-  function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null, find = false, route = null, again = false }) {
+  function dispatch(s, { kind = 'import', source, apps: given = [], label, plan = '', extra = null, find = false, route = null, again = false, keyExtra = '' }) {
     if (kind === 'import' && s.skippedSources.has(source)) return null; // the person skipped it: nothing of it comes in
     const apps = (kind === 'import' && given.length ? given.filter((app) => !s.skipped.has(app)) : given).filter((app) => mayReach(s, app));
     if (given.length && !apps.length) return null;
     // `again`: an import run once more because a connector was signed in after its agent had started (rerunJob).
-    const key = `${find ? 'find' : kind}:${source}:${[...apps].sort().join(',')}${again ? ':again' : ''}`;
+    const key = `${find ? 'find' : kind}:${source}:${[...apps].sort().join(',')}${again ? ':again' : ''}${keyExtra ? `:${keyExtra}` : ''}`;
     if (s.jobs.some((job) => job.key === key) || s.jobs.length >= MAX_JOBS) return null;
     if (apps.length && apps.every((app) => s.skipped.has(app))) return null; // the person skipped them for this run
     if (kind === 'import' && apps.length && s.jobs.some((job) => job.kind === 'import' && job.source === source && !job.apps.length)) return null; // the whole source went already
@@ -855,7 +865,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       const dirs = job.kind === 'memory' ? [s.dir, path.join(s.dataRoot, 'assets', 'md'), ...(s.projectDir ? [s.projectDir] : [])].filter((dir) => fs.existsSync(dir)) : job.kind === 'redact' ? [] : s.dirs;
       const message = job.kind === 'memory' ? await memoryMessage(s) : job.kind === 'redact' ? `<memory_md>\n${s.memoryDraft}\n</memory_md>` : jobMessage(s, job);
       const browseOptions = browse ? { steps: path.join(s.dir, 'steps', job.id), enable: browse.enable, browser: browse.browserName } : null;
-      const out = await agents.turn({ choice, kind: turnKind, system: systemOf(s, turnKind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: browse ? [] : connectorsNow, onUpdate, browse: browseOptions, tools: toolNames, meta: { kind: turnKind, session: s, job, callTool } });
+      const out = await agents.turn({ choice, kind: turnKind, system: systemOf(s, turnKind), message, session: null, dirs, signal: controller.signal, bridge: bridge && bridge.connection, connectors: browse ? [] : connectorsNow, onUpdate, browse: browseOptions, toolNames, meta: { kind: turnKind, session: s, job, callTool } });
       if (job.kind === 'survey') await surveyed(s, job, out.text);
       else if (job.kind === 'memory') drafted(s, out.text);
       else if (job.kind === 'redact') await finishMemory(s, out.text);
@@ -1259,12 +1269,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   async function signInsFirst(s, only = null) {
     const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map(), checking: new Map(), elsewhere: new Map() };
     if (!webSignIn || !s.choices.permissions.browser) return out;
-    // Every web app, and a connector app with sites (Notion) when no connector of Engelbart's or the person's reaches it;
-    // in the librarian's run only those the person allowed (consentCard): no sign-in of theirs is looked at before.
-    const reached = s.connected || new Set();
+    // Every web app; in the librarian's run only those the person allowed (consentCard): no sign-in of theirs is looked at
+    // before. Not a connector app (Notion) any more (2026-10-15): it is read only through its own tools, never a browser,
+    // so a copied sign-in sent it to an agent in their browser that could do nothing; its Connect step reaches it.
     const apps = Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps)
       .filter((app) => (!only || only.includes(app)) && mayReach(s, app))
-      .filter((app) => appOf(app) && (appOf(app).reach === 'web' || (appOf(app).reach === 'connector' && !reached.has(app) && webSignIn.supports(app))) && signsInAtAll(app));
+      .filter((app) => appOf(app) && appOf(app).reach === 'web' && signsInAtAll(app));
     if (!apps.length) return out;
     const results = new Map();
     const waiting = [];
@@ -1793,9 +1803,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (asked) {
       choices.custom = [choices.custom, librarianNotes(asked)].filter(Boolean).join('\n\n').slice(0, 4000);
       choices.sources.sites.on = asked.apps.includes(importFlow.SITES);
+      // The tools the agents found, ticked (2026-10-15: told to the librarian, but nothing ever imported them): each asked
+      // about on its own (consentCard), and brought in through its site once allowed (extraImport).
+      choices.extras = cleanExtras(asked.additional);
       choices.direct = null;
     }
-    if (!Object.values(choices.sources).some((choice) => choice.on)) throw new Error('Pick at least one source.');
+    if (!Object.values(choices.sources).some((choice) => choice.on) && !(choices.extras || []).length) throw new Error('Pick at least one source.');
     const usable = readyNow();
     // Import your context with neither CLI able to run (2026-10-14): it starts, waiting for the provider the person chose
     // (the workspace's Connect popup), rather than failing in the flow with nowhere to connect it.
@@ -1865,6 +1878,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // (deps.allowed, the tests: every app allowed before the run, as a session picked up again has them.)
     if (deps.allowed === true) for (const app of askedApps(s)) s.allowed.add(app);
     for (const app of askedApps(s)) if (!s.allowed.has(app)) consentCard(s, app);
+    for (const tool of s.choices.extras || []) if (!s.allowed.has(tool.name)) consentCard(s, tool.name, tool);
     const { lines } = await beginApps(s, askedApps(s).filter((app) => s.allowed.has(app)));
     if (s.stopped || s.suspended) return;
     lookForFolders(s);
@@ -1888,12 +1902,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * librarian is told not to ask about or dispatch it. Allow starts its sign-in check and survey (allowApp); Skip leaves
    * it out for the run.
    */
-  function consentCard(s, app) {
+  function consentCard(s, app, extra = null) {
     if (s.skipped.has(app) || s.allowed.has(app) || s.needs.some((need) => !need.closed && need.app === app && need.kind === 'consent')) return;
-    const source = sourceOfApp(app);
-    const need = { id: randomUUID(), app, kind: 'consent', reason: `Allow Engelbart to search and read your ${shownName(app)}?`, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: `What the agents read there may be sent to ${PROVIDER_COMPANIES[s.choice.provider] || 'the model provider'} for processing.`, closed: false, held: true, at: now() };
+    const source = extra ? null : sourceOfApp(app);
+    const need = { id: randomUUID(), app, kind: 'consent', reason: `Allow Engelbart to search and read your ${extra ? app : shownName(app)}?`, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: `${!extra && APPS[app] && APPS[app].memory && s.choices.permissions.recall ? `Engelbart will also ask ${shownName(app)} once what it remembers about your research, then delete that chat. ` : ''}What the agents read there may be sent to ${PROVIDER_COMPANIES[s.choice.provider] || 'the model provider'} for processing.`, closed: false, held: !extra, at: now(), ...(extra ? { extra } : {}) };
     s.needs.push(need);
-    s.held.set(app, { source, recall: false, consent: true });
+    if (!extra) s.held.set(app, { source, recall: false, consent: true });
     if (source) s.found[source] = { ...(s.found[source] || {}), [app]: { reach: appOf(app).reach, consent: 'asking: Engelbart asks the person to allow it to search and read this app. Nothing of it has been looked at. Do not ask about it, offer it or dispatch it.' } };
     logAction(s, null, `Asking you: ${need.reason}`);
   }
@@ -1903,6 +1917,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     need.closed = true;
     need.outcome = 'done';
     s.allowed.add(need.app);
+    if (need.extra) { logAction(s, null, `Allowed Engelbart to search and read ${need.app}`, 'You'); save(s); emit(s); void extraImport(s, need.extra).catch(() => {}); return; }
     s.held.delete(need.app);
     const source = sourceOfApp(need.app);
     if (source) {
@@ -1917,6 +1932,20 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       // The librarian hears it was allowed only when it waits on nothing else; the survey's report wakes it otherwise.
       emit(s);
     }).catch(() => {});
+  }
+
+  /**
+   * A tool Engelbart has no import of its own for, allowed in the librarian's run: its sign-in copied into Engelbart's
+   * browser from theirs (as Import your context does for these), else read in their own browser when agents may use it;
+   * one import of its pages, documents or items about their project, as notes.
+   */
+  async function extraImport(s, tool) {
+    const host = hostOfSite(tool.website);
+    const copied = host && s.choices.keychain !== false && webSignIn && typeof webSignIn.copyDomains === 'function' ? await webSignIn.copyDomains([host], { denied: signInDenied }).catch(() => false) : false;
+    const ba = copied ? null : s.choices.browserAgents;
+    const how = ba ? `Open it in a tab of your own in their ${ba.browserName}, where they are signed in` : 'Open it through their sign-in in Engelbart\'s browser';
+    const plan = `This is a tool they use that Engelbart has no import of its own for: ${toolSaid(tool)}. ${how}, and bring in its pages, documents or items about the project in <project> as notes (add_note).${host ? '' : ' It has no website given: look for it in their browser history first.'}`;
+    dispatch(s, { kind: 'import', source: 'sites', apps: [], label: `Other tools: ${tool.name}`.slice(0, 120), plan, extra: { sites: host ? [host] : [] }, route: ba ? 'browser' : null, keyExtra: tool.name });
   }
 
   /**
@@ -2772,7 +2801,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       }
     }
     // The librarian's prompts are not kept either: an app it was still asking about is asked about again.
-    if (!s.choices.direct && !s.finished && !s.stopped && (s.chat.length || s.jobs.length)) for (const app of askedApps(s)) if (!s.allowed.has(app)) consentCard(s, app);
+    if (!s.choices.direct && !s.finished && !s.stopped && (s.chat.length || s.jobs.length)) {
+      for (const app of askedApps(s)) if (!s.allowed.has(app)) consentCard(s, app);
+      for (const tool of s.choices.extras || []) if (!s.allowed.has(tool.name)) consentCard(s, tool.name, tool);
+    }
     logAction(s, null, 'Picked up again after Engelbart closed');
     emit(s);
     pump(s);

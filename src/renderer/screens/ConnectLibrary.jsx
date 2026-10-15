@@ -1676,7 +1676,9 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
 
       {view === 'chat' && session && (
         <>
-          {header(`Refine with ${targetName}`, { backButton: true })}
+          {/* A run opened over a workspace by its id (a manual import from Import your context) has no choose screen of
+              its own to go back to: the old one brought back Gmail and Engelbart's own sign-in window (2026-10-15). */}
+          {header(`Refine with ${targetName}`, { backButton: !!onBack || !(popup && sessionId) })}
           <div ref={chatRef} data-connect-chat="1" style={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: `18px ${gutter}`, scrollPaddingBottom: 64 }}>
             {/* The opening line ("Found 2 Obsidian vaults…") is not shown (2026-10-09): until the librarian says something,
                 the dots used everywhere else, in the middle. */}
