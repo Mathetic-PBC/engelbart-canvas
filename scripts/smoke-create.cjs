@@ -3,9 +3,9 @@
 // npm run build && npx electron scripts/smoke-create.cjs
 // Runs the real app, hidden, against disposable project/user data, and drives an @create exchange (2026-10-14): while it
 // runs, its sentence and a row with a spinner, "Creating …", what it is doing, m:ss and Stop; once done, the sentence and a
-// row per file (thumbnail, name, type, Save, ⌄), nothing in the library yet; ⌄ opens a file inline; its name opens it in a
-// Stage tab (the row greys); the Stage's Save puts it in the library under Assets ("✓ Saved" there and on the row, the
-// address "Library / Assets / <name>").
+// row per file (icon, name, ✓ Saved, ⌄), each already in the library under Assets (2026-10-15: saved as the run ends);
+// ⌄ opens a file inline; its name opens it in a Stage tab, which reads "✓ Saved" and the address
+// "Library / Assets / <name>".
 // The fake agents (src/main/bart/ask.cjs fakeCreate) by default; ENGELBART_CREATE_REAL=1 runs the real Create (it needs the
 // model's sign-in on this Mac) on "make an SVG diagram of the agent prompts". ENGELBART_CREATE_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
@@ -57,7 +57,7 @@ async function shot(wc, name) {
   const picture = await wc.capturePage(undefined, { stayHidden: true, stayAwake: true });
   fs.writeFileSync(path.join(SHOTS, `${name}.png`), picture.toPNG());
 }
-// Where a run's files are, before and after Save (ENGELBART_CREATE_SHOTS gets before-save.json and after-save.json): every
+// Where a run's files are once saved (ENGELBART_CREATE_SHOTS gets after-save.json): every
 // file under the disposable home but the database's own, the run's saved list, the workspace's meta.json and the library
 // rows @create made.
 function walk(dir, out = []) {
@@ -116,13 +116,13 @@ app.whenReady().then(async () => {
     const done = await until(async () => { const list = await made(wc); return list.length && list.every((one) => one.save) ? list : null; }, 'the made rows', REAL ? 12000 : 600);
     console.log('done:', JSON.stringify(done));
     assert.ok(done.length >= 1 && done.length <= 5, 'a row per file, up to five');
-    assert.ok(done.every((one) => /Save/.test(one.save)), 'each has Save');
+    await until(async () => (await made(wc)).every((one) => /Saved/.test(one.save)), 'each row reads Saved', 400);
     assert.ok(!(await rows(wc)).some((line) => /@\[[^\]]*\]\(made:/.test(line) && !/^bart> @\[[^\]]*\]\(made:[^)]*\)$/.test(line)), 'no @mention shown as text');
     await until(async () => (await made(wc)).some((one) => one.thumb), 'a thumbnail', 200).catch(() => console.log('(no thumbnail drawn)'));
     await pause(400);
     await shot(wc, '2-done');
     const library = (await js(wc, 'window.engelbartAPI.library()').catch(() => null));
-    if (Array.isArray(library)) assert.equal(library.length, before.length, 'nothing went into the library by itself');
+    if (Array.isArray(library)) assert.equal(library.length, before.length + done.length, 'each file went into the library as the run ended');
 
     /* ------------------------------------------------ expanded */
     const pick = done.find((one) => /\.svg$/i.test(one.name)) || done.find((one) => /\.html$/i.test(one.name)) || done[0];
@@ -137,21 +137,14 @@ app.whenReady().then(async () => {
 
     /* ------------------------------------------------ open in Stage */
     await press(wc, `${ED} [data-made-row="${pick.key}"] .made-name`);
-    await until(async () => (await made(wc)).some((one) => one.key === pick.key && one.bg === 'rgb(243, 243, 243)'), 'the row greyed while its tab is open', 400);
-    await until(() => js(wc, `!!document.querySelector('[data-page-save="made"]')`), 'the Stage\'s Save', 400);
+    await until(() => js(wc, `!!document.querySelector('[data-page-save="made-saved"]')`), '✓ Saved in the Stage', 400);
     await pause(800);
     await shot(wc, '4-stage');
 
     /* ------------------------------------------------ saved */
-    await dump(wc, 'before-save');
-    await press(wc, '[data-page-save="made"]');
-    await until(() => js(wc, `!!document.querySelector('[data-page-save="made-saved"]')`), '✓ Saved in the Stage', 400);
     const crumb = await until(() => js(wc, `(document.querySelector('[data-stage-crumb]')||{}).textContent`), 'the address crumb');
     console.log('crumb:', crumb);
     assert.equal(crumb, `Library / Assets / ${crumb.split(' / ').pop()}`);
-    await until(async () => (await made(wc)).some((one) => one.key === pick.key && /Saved/.test(one.save)), '✓ Saved on the row');
-    await pause(500);
-    await shot(wc, '5-saved');
     await dump(wc, 'after-save');
 
     /* ------------------------------------------------ collapse */

@@ -1,11 +1,11 @@
 'use strict';
 
-// @discover's research box (src/renderer/workspace/DocEditor.jsx, 2026-10-13). An @discover question with a problem on it
-// is answered twice: Chat replies under it at once (main's bart/ask.cjs DISCOVER_INTRO, its closing line naming Discover),
-// and Discover searches in a box of its own under that reply, a turn of the same conversation whose line is
-// `@discover --research <problem>` (src/renderer/model/doc.js isResearch). A Deep search waits five seconds first, with
-// Cancel; a reply Bart sends to Discover again refines the search, stopping one still running. There is no document here:
-// the editor and its elements are stand-ins, as in doc-editor-titles.
+// @discover's research box (src/renderer/workspace/DocEditor.jsx, 2026-10-13; 2026-10-14). An @discover question is
+// Discover's alone: it settles with the person what to research, and once it has, its reply ends with a hidden
+// <research> line (main's bart/ask.cjs takeResearch) and the window puts a research box under it, a turn of the same
+// conversation whose line is `@discover --research <direction>` (src/renderer/model/doc.js isResearch), which the editor
+// asks (askBoxed). A Deep search waits five seconds first, with Cancel; a reply Bart sends to Discover stops a search still
+// running. There is no document here: the editor and its elements are stand-ins, as in doc-editor-titles.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -65,7 +65,7 @@ const settled = () => new Promise((resolve) => setImmediate(resolve));
 
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
-test('an @discover question is Chat\'s reply under it and a research box under that, both asked at once, one conversation', async () => {
+test('an @discover question is Discover\'s alone (2026-10-14): one ask, no box and no Chat reply; the box the window puts under its reply is asked by the editor', async () => {
   const { threads } = await doc();
   const m = mounted(['Notes', '@discover how do tutors notice struggle?', '', 'After']);
   m.editor.askInline(1);
@@ -73,30 +73,35 @@ test('an @discover question is Chat\'s reply under it and a research box under t
   assert.match(ls[1], /^bart# \[discover [\dTZ:-]+\] $/, 'its title line, the conversation Discover\'s');
   assert.equal(ls[2], '@discover how do tutors notice struggle?');
   assert.match(ls[3], /^bart~> /);
-  assert.equal(ls[4], '@discover --research how do tutors notice struggle?');
-  assert.match(ls[5], /^bart~> /);
-  assert.deepEqual(ls.slice(6), ['', 'After']);
+  assert.deepEqual(ls.slice(4), ['', 'After']);
+  assert.ok(!ls.some((l) => l.includes('--research')), 'no box until Discover settles the direction');
+  assert.equal(m.asks.length, 1);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].intro, m.asks[0].research, m.asks[0].name, m.asks[0].text], ['discover', undefined, undefined, true, 'how do tutors notice struggle?']);
+  // The reply came back with a direction: the window places it, the box line and its pending line in one change.
+  assert.equal(m.editor.askBoxed('box-1'), false, 'not in the document yet: the window tries again');
+  m.props.text = [...ls.slice(0, 3), ...answer('I will look for how tutors notice a student is stuck. The reading guide will appear below.'), '@discover --research how tutors notice a student is stuck', 'bart~> box-1', '', 'After'].join('\n');
+  assert.equal(m.editor.askBoxed('box-1'), true);
+  const box = m.lines().indexOf('@discover --research how tutors notice a student is stuck');
   assert.equal(m.asks.length, 2);
-  const [intro, search] = m.asks;
-  assert.deepEqual([intro.agent, intro.intro, intro.name, intro.text, intro.askId], ['bart', 'discover', true, 'how do tutors notice struggle?', ls[3].slice(7)]);
-  assert.deepEqual([search.agent, search.research, search.name, search.text, search.askId, search.place], ['discover', true, undefined, 'how do tutors notice struggle?', ls[5].slice(7), { line: 4, text: ls[4] }]);
-  const [thread] = threads(ls);
-  assert.deepEqual(thread.turns.map((t) => t.q), [2, 4], 'one conversation: the reply, then the box, while both run');
+  const search = m.asks[1];
+  assert.deepEqual([search.agent, search.research, search.askId, search.text, search.place], ['discover', true, 'box-1', '--research how tutors notice a student is stuck', { line: box, text: m.lines()[box] }]);
+  assert.deepEqual(search.turns.map((t) => t.question), ['how do tutors notice struggle?'], 'the conversation that reached it');
+  const [thread] = threads(m.lines());
+  assert.deepEqual(thread.turns.map((t) => t.q), [2, box], 'one conversation: the reply, then the box');
 });
 
-test('no box for an @discover line with nothing but flags, an answer to its card, or a box\'s own line', () => {
+test('askBoxed asks only a research box\'s pending line; a bare or flags-only @discover line asks Discover once', () => {
   const flags = mounted(['@discover --deep', '']);
   flags.editor.askInline(0);
-  assert.deepEqual([flags.asks.length, flags.asks[0].agent, flags.asks[0].intro], [1, 'discover', undefined]);
+  assert.deepEqual([flags.asks.length, flags.asks[0].agent, flags.asks[0].research], [1, 'discover', undefined]);
   assert.ok(!flags.lines().some((l) => l.includes('--research')));
-  const CARD = JSON.stringify({ say: '', card: 'focus', focus: { title: 'Which part?', options: [{ label: 'Tutors' }, { label: 'Tests' }] }, ready: false });
-  const body = replyLines(replyBody('discover', CARD), { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 1000 }, { model: false, agent: 'discover' });
-  // The answer as the card's Submit writes it (sendCard), its pending line with it: a turn of the card, with no box.
-  const carded = mounted(['@discover', ...body, '@discover picked "Tutors"', 'bart~> card-1']);
-  const turns = carded.editor.turnsBefore(carded.lines(), carded.lines().length - 2);
-  assert.equal(turns.length, 1);
-  assert.equal(carded.editor.splitsDiscover({ type: 'bart', agent: 'discover', text: 'picked "Tutors"' }, turns), false, 'an answer to its card is asked as before');
-  assert.equal(carded.editor.splitsDiscover({ type: 'bart', agent: 'discover', text: '--research tutors' }, []), false, 'a box\'s own line is the search');
+  const bare = mounted(['@discover', '']);
+  bare.editor.askInline(0);
+  assert.deepEqual([bare.asks.length, bare.asks[0].agent, bare.asks[0].text], [1, 'discover', '']);
+  const plain = mounted(['@discover tutors', 'bart~> run-1', '']);
+  assert.equal(plain.editor.askBoxed('run-1'), false, 'a pending line under a question is no box');
+  assert.equal(plain.editor.askBoxed('gone'), false);
+  assert.equal(plain.asks.length, 0);
 });
 
 test('drawn: the reply\'s card closes, and the box is a card of its own: "Research · Standard" on top, its own Collapse at the foot', () => {
@@ -113,36 +118,41 @@ test('drawn: the reply\'s card closes, and the box is a card of its own: "Resear
   assert.ok(!head.replace(/ data-raw="[^"]*"/, '').includes('how do tutors'), 'the first box does not repeat the question above it');
   const foot = html.slice(html.indexOf(`data-foot="${box}"`));
   assert.match(foot.slice(0, foot.indexOf('</div>')), /data-act="fold" data-turn="\d+" aria-label="Collapse"/, 'the box collapses alone');
-  assert.match(replyFoot.slice(0, replyFoot.indexOf('</div>')), /data-act="fold" data-turn="1" aria-label="Collapse"/, 'the reply\'s foot collapses the reply alone (2026-10-13)');
+  assert.ok(!replyFoot.slice(0, replyFoot.indexOf('</div>')).includes('data-act="fold"'), 'the reply\'s Collapse is not on its foot (2026-10-15)');
+  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="fold" data-turn="1" aria-label="Collapse"/, 'but in its question\'s corner, collapsing the reply alone');
   // Collapsed, the box keeps its head and foot, on no grey.
   m.click('fold', { turn: String(box) });
   assert.match(rowOf(m.html(), box), /background:none/);
   assert.ok(!m.html().replace(/ data-raw="[^"]*"/g, '').includes('A paper'));
 });
 
-test('a Deep search waits five seconds, "Searching in 5 s" with Cancel; Cancel takes the box out and nothing is searched', () => {
-  const m = mounted(['@discover --deep tutors noticing struggle', '']);
-  m.editor.askInline(0);
-  assert.equal(m.asks.length, 1, 'the reply is asked at once, the search waits');
-  const pending = m.lines()[4].slice(7);
-  assert.match(rowOf(m.html(), 4), /Searching in 5 s[\s\S]*data-act="cancelwait"/);
+test('a Deep box waits five seconds, "Searching in 5 s" with Cancel; Cancel takes the box out and nothing is searched', () => {
+  const doc = ['@discover --deep tutors noticing struggle', ...answer('I will look for how tutors notice struggle.'), '@discover --research tutors noticing struggle', 'bart~> box-1', ''];
+  const m = mounted(doc);
+  assert.equal(m.editor.askBoxed('box-1'), true);
+  assert.equal(m.asks.length, 0, 'the search waits: the conversation is --deep');
+  const at = m.lines().indexOf('bart~> box-1');
+  assert.match(rowOf(m.html(), at), /Searching in 5 s[\s\S]*data-act="cancelwait"/);
   m.tick(); m.tick();
-  assert.match(rowOf(m.html(), 4), /Searching in 3 s/);
-  m.click('cancelwait', { ask: pending });
-  assert.ok(!m.lines().some((l) => l.includes('--research') || l.includes(pending)), 'the box is gone');
-  assert.equal(m.asks.length, 1);
+  assert.match(rowOf(m.html(), at), /Searching in 3 s/);
+  m.click('cancelwait', { ask: 'box-1' });
+  assert.ok(!m.lines().some((l) => l.includes('--research') || l.includes('box-1')), 'the box is gone');
+  assert.equal(m.asks.length, 0);
   // Left alone, it is asked when the count runs out.
-  const w = mounted(['@discover --deep tutors noticing struggle', '']);
-  w.editor.askInline(0);
+  const w = mounted(doc);
+  w.editor.askBoxed('box-1');
   for (let k = 0; k < 5; k++) w.tick();
-  assert.deepEqual([w.asks.length, w.asks[1].agent, w.asks[1].research], [2, 'discover', true]);
+  assert.deepEqual([w.asks.length, w.asks[0].agent, w.asks[0].research], [1, 'discover', true]);
+  // A standard one is asked at once.
+  const now = mounted(['@discover tutors', ...answer('Looking.'), '@discover --research tutors', 'bart~> box-2', '']);
+  now.editor.askBoxed('box-2');
+  assert.deepEqual([now.asks.length, now.asks[0].research], [1, true]);
 });
 
-test('a reply Bart sends to Discover refines the search: one still running stops, its box saying so; the new box says what it was asked', async () => {
+test('a reply Bart sends to Discover while a search runs stops it, its box saying so, and goes to Discover, which settles the new direction', async () => {
   const head = 'bart# [discover 2026-10-13T10:00:00Z] Tutors';
   const lines = [head, '@discover tutors noticing struggle', ...answer('Looking.'), '@discover --research tutors noticing struggle', 'bart~> run-1', ''];
   const m = mounted(lines, { onRoute: async () => ({ id: 'r', agent: 'discover', sure: 0.9, by: 'model' }) });
-  m.editor.followText = new Map([[1, 'only K-12']]);
   // The box is still running, so its conversation has no follow-up field yet: a reply typed under it asks the same way.
   const at = m.lines().length - 1;
   m.props.text = [...m.lines().slice(0, at), '@bart only K-12'].join('\n');
@@ -152,22 +162,261 @@ test('a reply Bart sends to Discover refines the search: one still running stops
   assert.deepEqual(m.stopped, ['run-1']);
   assert.equal(ls[ls.indexOf('@discover --research tutors noticing struggle') + 1], 'bart> Stopped: refined below.');
   assert.equal(ls[at], '@bart only K-12');
-  assert.equal(ls[at + 2], '@discover --research only K-12');
-  assert.deepEqual(m.asks.map((a) => [a.agent, !!a.intro, !!a.research]), [['bart', true, false], ['discover', false, true]]);
+  assert.match(ls[at + 1], /^bart~> /);
+  assert.ok(!ls.slice(at).some((l) => l.includes('--research')), 'no box of its own: Discover settles it');
+  assert.deepEqual(m.asks.map((a) => [a.agent, !!a.intro, !!a.research, a.text]), [['discover', false, false, 'only K-12']]);
   const { threads } = await doc();
   assert.equal(threads(ls).length, 1, 'still one conversation');
-  assert.match(rowOf(m.html(), at + 2), />Research<\/span>[\s\S]*>Standard<\/span>[\s\S]*>only K-12<\/span>/, 'the refining box says what it was asked');
 });
 
-test('main: Chat\'s reply is told Discover searches under it and asked without the flags; --research is never part of a question', () => {
+test('a reply streaming in hides Discover\'s <research> line, whole or half-arrived; Chat\'s is drawn as written', () => {
+  const m = mounted(['@discover tutors', 'bart~> s1', ''], { asks: { s1: { agent: 'discover', lines: ['I will look for how tutors notice struggle.', '', '<research>how tutors notice'] } } });
+  const row = rowOf(m.html(), 1);
+  assert.ok(row.includes('how tutors notice struggle.') && !row.includes('&lt;research') && !row.includes('<research'), 'the tag is not drawn');
+  const half = mounted(['@discover tutors', 'bart~> s2', ''], { asks: { s2: { agent: 'discover', lines: ['Looking.', '<res'] } } });
+  assert.ok(!rowOf(half.html(), 1).includes('&lt;res'));
+  const chat = mounted(['@chat x', 'bart~> s3', ''], { asks: { s3: { agent: 'bart', lines: ['<research>is Chat\'s to say</research>'] } } });
+  assert.ok(rowOf(chat.html(), 1).includes('&lt;research&gt;'), 'only Discover\'s');
+});
+
+test('a question in a paragraph of its own: Discover\'s blank line is drawn as Brainstorm\'s is, a gap between the two rows', () => {
+  const said = 'This workspace is about Bart\'s voice.\n\nWhat would you like to research?';
+  const rows = (agent, token) => {
+    const m = mounted([`@${token}`, ...answer(said, agent), '']);
+    return [rowOf(m.html(), 1), rowOf(m.html(), 2), rowOf(m.html(), 3)].map((row) => row.replace(/ data-[a-z-]+="[^"]*"/g, ''));
+  };
+  const discover = rows('discover', 'discover'), brainstorm = rows('brainstorm', 'brainstorm');
+  assert.ok(discover[0].includes('Bart’s voice') || discover[0].includes('Bart&#39;s voice') || discover[0].includes("Bart's voice"), 'the sentence');
+  assert.ok(!/What would you like/.test(discover[1]), 'the blank line is a row of its own');
+  assert.ok(discover[2].includes('What would you like to research?'), 'the question after it');
+  assert.deepEqual(discover, brainstorm, 'drawn alike');
+});
+
+test('Discover\'s card (2026-10-14, the mock): bordered rows with a radio, a pick waits for Submit, its own field in the card and none under it', () => {
+  const CARD = JSON.stringify({ say: '', card: 'focus', focus: { title: 'What would you like to research?', options: [{ label: 'Concise replies', why: 'front-loaded answers' }, { label: 'Listening', why: 'reacting first' }, { label: 'Judging replies' }] }, ready: false });
+  const body = replyLines(replyBody('discover', CARD), { level: { name: 'Opus', effort: 'high' }, trail: [], ms: 1000 }, { model: true, agent: 'discover' });
+  const m = mounted(['@discover', ...body, '']);
+  let html = m.html();
+  assert.equal((html.match(/class="dv-opt"/g) || []).length, 3);
+  assert.match(html, /<span class="dv-label">Concise replies<\/span><span class="dv-why">front-loaded answers<\/span>/, 'the reason under the label');
+  assert.ok(html.includes('placeholder="Or say it in your own words…"') && html.includes('class="dv-submit"'), 'its own field and Submit');
+  assert.ok(!html.includes('data-followup='), 'no @bart field under the card');
+  // Its reply opened (the answer just came in, 2026-10-15): still none under it; the field to focus is the card's own.
+  m.editor.replyOpen.add(0);
+  assert.ok(!m.html().includes('data-followup='), 'none under it with the reply opened');
+  m.editor.replyOpen.delete(0);
+  m.click('cardopt', { turn: '0', opt: '1' });
+  assert.equal(m.asks.length, 0, 'a pick is not sent');
+  html = m.html();
+  assert.match(html, /class="dv-opt"[^>]*aria-checked="true"><span aria-hidden="true" class="dv-radio"><\/span><span[^>]*><span class="dv-label">Listening/);
+  assert.match(html, /class="dv-submit"[^>]*style="background:#0070f3/, 'Submit blue once something is picked');
+  m.click('sendfollow', { thread: '0' });
+  assert.equal(m.asks.length, 1);
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text], ['discover', 'picked "Listening"']);
+  // Answered, it collapses (2026-10-15, David): no options, no Submit; the pick on the row under it.
+  const done = m.html();
+  assert.ok(!done.includes('class="dv-submit"') && !done.includes('class="dv-opt"'), 'the card is folded away');
+  assert.match(done, /data-folded-row="0"/);
+});
+
+test('a pick sent from Discover\'s card (2026-10-15, David): the card collapses, and the question Discover asks back opens its reply field with the keyboard in it; a reply that starts the search opens none', () => {
+  const CARD = JSON.stringify({ say: '', card: 'focus', focus: { title: 'What would you like to research?', options: [{ label: 'Concise replies' }, { label: 'Listening' }] }, ready: false });
+  const body = replyLines(replyBody('discover', CARD), { level: { name: 'Opus', effort: 'high' }, trail: [], ms: 1000 }, { model: true, agent: 'discover' });
+  const run = (reply, box = false) => {
+    const m = mounted(['@discover', ...body, '']);
+    const input = { focused: 0, focus() { input.focused += 1; } };
+    m.editor.edRef.current.querySelector = (sel) => (/data-follow-input/.test(sel) ? input : null);
+    m.click('cardopt', { turn: '0', opt: '1' });
+    m.click('sendfollow', { thread: '0' });
+    const pending = m.lines().findIndex((l) => l.startsWith('bart~> '));
+    m.editor.replyArrived();
+    assert.ok(m.editor.replyWait, 'waiting while Discover answers');
+    const answered = answer(reply).join('\n') + (box ? '\n@discover --research listening\nbart~> run-box' : '');
+    m.props.text = m.lines().map((l, j) => (j === pending ? answered : l)).join('\n');
+    m.editor.replyArrived();
+    return { m, input };
+  };
+  const asked = run('What do you want the reading to help you decide?');
+  assert.equal(asked.input.focused, 1, 'its question: the reply field takes the keyboard');
+  assert.match(asked.m.html(), /data-follow-input="\d+"/);
+  assert.equal(asked.m.editor.replyWait, null);
+  const searching = run('I will look for work on listening. The reading guide will appear below.', true);
+  assert.equal(searching.input.focused, 0, 'the search has started: no field');
+  // A reply sent from that field waits for the next question the same way.
+  const m = asked.m;
+  m.editor.followText.set(0, 'pick one for me');
+  m.click('sendfollow', { thread: '0' });
+  assert.ok(m.editor.replyWait, 'the next answer opens it again');
+});
+
+test('main: a search is a box\'s turn alone; the <research> line is taken out of a reply and handed back, never on a search; --research is never part of a question', () => {
   const context = { head: '<engelbart>', contextJson: '', mentionedFiles: '', documents: '', now: '' };
-  const intro = ask.firstMessage({ context, prior: [], question: 'tutors', resumed: false, intro: 'discover' })({ toString: () => '' });
-  assert.ok(intro.includes(ask.DISCOVER_INTRO) && intro.indexOf(ask.DISCOVER_INTRO) < intro.indexOf('<question>'));
-  for (const said of ['one or two short sentences', 'Yes.', 'Do not restate']) assert.ok(ask.DISCOVER_INTRO.includes(said), said);
-  for (const gone of ['three short sentences', 'what you take the problem to be']) assert.ok(!ask.DISCOVER_INTRO.includes(gone), gone);
+  assert.equal(ask.DISCOVER_INTRO, undefined);
   assert.ok(!ask.firstMessage({ context, prior: [], question: 'tutors', resumed: false })('').includes('discover_intro'));
+  assert.deepEqual([ask.isSearch('--research tutors'), ask.isSearch('--deep --research'), ask.isSearch('research tutors'), ask.isSearch('--researcher')], [true, true, false, false]);
   assert.equal(ask.withoutResearch('--research --deep tutors'), '--deep tutors');
   const plan = ask.turnPlan({ agent: 'discover', text: '--research --deep tutors', turns: [{ question: '--research tutors', answer: 'A guide.' }] }, MODELS);
-  assert.deepEqual([plan.question, plan.mode, plan.prior[0].question], ['tutors', 'deep', 'tutors']);
+  assert.deepEqual([plan.question, plan.mode, plan.prior[0].question, plan.search], ['tutors', 'deep', 'tutors', true]);
+  assert.ok(plan.extra.startsWith('<mode>deep.') && plan.extra.endsWith('<search>The direction is settled: search on the one in <question> now, and reply with the reading guide.</search>'));
+  const talk = ask.turnPlan({ agent: 'discover', text: 'tutors', turns: [] }, MODELS);
+  assert.deepEqual([talk.search, talk.extra, ask.turnPlan({ agent: 'discover', text: '', turns: [] }, MODELS).asked], [false, '', 'Start from this workspace.']);
+  // The tag: taken out wherever it is, the last one's direction on one line; none, or an empty one, hands back nothing.
+  assert.deepEqual(ask.takeResearch('I will look for X and Y. The reading guide will appear below.\n\n<research>X and\n  Y in classrooms</research>\n'), { text: 'I will look for X and Y. The reading guide will appear below.', research: 'X and Y in classrooms' });
+  assert.deepEqual(ask.takeResearch('What would you like to research?'), { text: 'What would you like to research?', research: null });
+  assert.deepEqual(ask.takeResearch('Ok.\n<research>  </research>'), { text: 'Ok.', research: null });
+  assert.deepEqual(ask.takeResearch('<research>a</research> then <research>b</research>'), { text: ' then', research: 'b' });
+  assert.equal(ask.takeResearch(null).research, null);
 });
 
+test('an @discover run\'s steps, opened, are drawn by part of the trace (2026-10-15): a check on a part done, a ring on the one going, the step waiting darker; its count the lines shown; the row names the step by title', () => {
+  const { askProgressed, traceHtml } = load('DocEditor.jsx');
+  const trace = { groups: [
+    { key: 'start', title: 'Starting papers', lines: [{ text: 'Found “How Do AI Agents Do Human Work?” in your library', now: false }, { text: 'Searched for papers close to your problem', now: false }] },
+    { key: 'cited', title: 'Newer papers that cite them', lines: [{ text: 'Finding newer papers that cite “Creating General User Models”', now: true }] },
+  ], latest: 'cited', now: 'Finding newer papers that cite “Creating General User Models”', last: 'Finding newer papers that cite “Creating General User Models”' };
+  let ask = askProgressed({ agent: 'discover', activity: '', log: [] }, { activity: 'Reading what cites “W4410263957”', log: true });
+  ask = askProgressed(ask, { trace });
+  const m = mounted(['Notes', '@discover is there anyone else that has done this?', 'bart~> run-1'], { asks: { 'run-1': ask } });
+  let row = rowOf(m.html(), 2);
+  assert.match(row, /Finding newer papers that cite “Creating General User Models”/, 'the row: the waiting step by its title, not its id');
+  assert.ok(!row.includes('W4410263957'));
+  assert.match(row, />3 steps</, 'the lines the trace shows');
+  assert.ok(!row.includes('data-trace-group'), 'shut until clicked');
+  m.editor.openLogs.add('run-1');
+  row = rowOf(m.html(), 2);
+  assert.deepEqual([...row.matchAll(/data-trace-group="(\w+)" data-going="(\w+)"/g)].map((g) => [g[1], g[2]]), [['start', 'false'], ['cited', 'true']]);
+  assert.match(row, /color:#171717">Finding newer papers/, 'the step waiting, darker');
+  assert.match(row, /color:#8f8f8f">Searched for papers close to your problem/);
+  // Writing: every part done. Between steps, the newest one named; thinking, "Thinking".
+  assert.ok(!/data-going="true"/.test(traceHtml(trace, { writing: true })));
+  const between = { ...trace, now: null, last: 'Found 9 newer papers that cite “X”' };
+  const m2 = mounted(['Notes', '@discover q', 'bart~> run-2'], { asks: { 'run-2': { ...ask, trace: between } } });
+  assert.match(rowOf(m2.html(), 2), /Found 9 newer papers that cite “X”/);
+  const m3 = mounted(['Notes', '@discover q', 'bart~> run-3'], { asks: { 'run-3': { ...ask, activity: 'Thinking', trace: between } } });
+  assert.match(rowOf(m3.html(), 2), /class="t"[^>]*>Thinking/);
+  // A new step starts over.
+  assert.equal(askProgressed(ask, { step: 2, name: 'Fable', effort: 'xhigh' }).trace, null);
+});
+
+/* ---------------------------------------------------------------------------- Refine (2026-10-15, David) */
+// The reply that said what Discover will look for has Refine where Reply stands. It opens the conversation's field under
+// that reply; what is sent is `@discover --refine <words>`: a running search stops, the runs before stay collapsed, and
+// the direction Discover settles from it waits in a research box until Start research or Restart research.
+const BRIEF = 'when shorter replies help understanding and when they leave too much out';
+const conversation = (box) => [
+  '@discover --deep concise replies',
+  ...answer('What are you hoping to understand about concise replies?'),
+  '@discover when being brief starts hurting understanding',
+  ...answer(`I'll look for research on ${BRIEF}.`),
+  `@discover --research ${BRIEF}`,
+  ...box,
+  '',
+];
+const RUNNING = ['bart~> run1'];
+const DONE = answer('## Start here\n\n**[A paper](https://example.org/a)** · A. Author · 2024\n**Read:** abstract only\n**Why:** a measurement.');
+const footOf = (html, q) => { const at = html.indexOf(`data-foot="${q}"`); return at < 0 ? '' : html.slice(at, html.indexOf('</div>', html.indexOf('data-act="dropturn"', at))); };
+
+test('Refine sits where Reply does, on the reply that said what Discover will look for, alone: running or done', () => {
+  for (const box of [RUNNING, DONE]) {
+    const m = mounted(conversation(box)), html = m.html(), intent = m.lines().indexOf('@discover when being brief starts hurting understanding');
+    assert.equal((html.match(/data-act="refine"/g) || []).length, 1, 'one Refine');
+    assert.match(footOf(html, intent), /<button type="button" class="bart-reply" data-act="refine" data-thread="0"[^>]*>Refine<\/button>/, 'on that reply\'s button row, as Reply is drawn');
+    assert.ok(!footOf(html, 0).includes('data-act="refine"'), 'not on the question before it');
+  }
+});
+
+test('opening Refine stops nothing; its field opens under that reply, the conversation\'s only field', () => {
+  const m = mounted(conversation(RUNNING));
+  m.click('refine', { thread: '0' });
+  const html = m.html();
+  assert.deepEqual(m.stopped, [], 'nothing cancelled');
+  assert.ok(m.lines().includes('bart~> run1'), 'the search still runs');
+  assert.equal((html.match(/data-followup="0"/g) || []).length, 1, 'one field');
+  assert.match(html, /placeholder="Correct or develop the direction…"/);
+  assert.ok(html.indexOf('data-followup="0"') < html.indexOf('data-research='), 'under the reply, above the research box');
+  assert.ok(!html.includes('data-act="refine"'), 'Refine itself gives way to its field');
+  m.editor.closeReply(0);
+  assert.ok(m.html().includes('data-act="refine"'), 'Escape on an empty field puts Refine back');
+});
+
+test('a refinement sent while the search runs stops it, keeps it collapsed, and asks Discover; output the stopped run still sends finds no place', async () => {
+  const { placeAnswer } = await doc();
+  const m = mounted(conversation(RUNNING));
+  m.click('refine', { thread: '0' });
+  m.editor.followText.set(0, 'Focus on what makes replies feel conversational, rather than their length');
+  m.editor.sendFollow(0);
+  assert.deepEqual(m.stopped, ['run1'], 'the running search stops when the refinement is sent');
+  const ls = m.lines(), box = ls.indexOf(`@discover --research ${BRIEF}`);
+  assert.equal(ls[box + 1], 'bart+> Stopped: refined below.', 'the stopped run stays, collapsed');
+  assert.equal(ls[box + 2], '@discover --refine Focus on what makes replies feel conversational, rather than their length', 'the refinement, the next turn');
+  assert.match(ls[box + 3], /^bart~> /);
+  const [asked] = m.asks;
+  assert.deepEqual([asked.agent, asked.refine, asked.text], ['discover', true, '--refine Focus on what makes replies feel conversational, rather than their length']);
+  assert.deepEqual(asked.turns.map((turn) => turn.question), ['--deep concise replies', 'when being brief starts hurting understanding', `--research ${BRIEF}`], 'the whole conversation, not the latest reply alone');
+  assert.equal(placeAnswer(m.props.text, 'run1', ['bart> ## Start here', 'bart> late']), null, 'the stopped run\'s answer finds no pending line');
+  assert.ok(!m.props.text.includes('bart> late'));
+});
+
+test('the refined direction waits in its box with Restart research; Refine moves to the reply that said it; the restart runs at the same depth', async () => {
+  const { placeAnswer, researchLine } = await doc();
+  const m = mounted(conversation(DONE));
+  m.click('refine', { thread: '0' });
+  m.editor.followText.set(0, 'Focus on what makes replies feel conversational');
+  m.editor.sendFollow(0);
+  assert.deepEqual(m.stopped, [], 'a finished search has nothing to stop');
+  assert.ok(m.lines().some((line) => /^bart\+> ## Start here/.test(line)), 'the finished guide stays in the document, collapsed');
+  // What the window places for a Refine turn (Workspace askBart, `refine`): the reply, then the box with no search under it.
+  const id = m.lines().find((line) => line.startsWith('bart~> ')).slice(7);
+  m.props.text = placeAnswer(m.props.text, id, [...answer("I'll now look for research on what makes replies feel conversational."), researchLine('what makes replies feel conversational')]);
+  let html = m.html();
+  const waiting = m.lines().indexOf('@discover --research what makes replies feel conversational');
+  assert.match(rowOf(html, waiting), /data-act="startresearch" data-row="\d+"[^>]*>Restart research<\/button>/, 'a run came before: Restart');
+  assert.match(rowOf(html, waiting), /Research<\/span>.*Deep/, 'at the depth the conversation runs at');
+  assert.equal((html.match(/data-act="refine"/g) || []).length, 1);
+  assert.match(footOf(html, m.lines().indexOf('@discover --refine Focus on what makes replies feel conversational')), /data-act="refine"/, 'Refine on the reply that said the new direction');
+  assert.equal(m.asks.length, 1, 'nothing searched until it is started');
+  // Restart: the box is asked as any research box, Deep's five seconds first.
+  m.click('startresearch', { row: String(waiting) });
+  const pending = m.lines()[waiting + 1];
+  assert.match(pending, /^bart~> /);
+  const held = m.editor.waits.get(pending.slice(7));
+  assert.ok(held && held.ask.research && held.ask.agent === 'discover', 'a Deep search, counting down');
+  assert.equal(held.ask.text, '--research what makes replies feel conversational');
+  html = m.html();
+  assert.ok(!html.includes('data-act="startresearch"'), 'started: no button');
+});
+
+test('a waiting box with no run before it says Start research; reloaded, the direction, its button and the collapsed runs are all still there', async () => {
+  const fresh = mounted(['@discover concise replies', ...answer("I'll look for research on concise replies."), '@discover --research concise replies', '']);
+  assert.match(fresh.html(), /data-act="startresearch"[^>]*>Start research<\/button>/);
+  // The document a Refine left, opened again.
+  const m = mounted(conversation(DONE));
+  m.click('refine', { thread: '0' }); m.editor.followText.set(0, 'only studies with people'); m.editor.sendFollow(0);
+  const { placeAnswer, researchLine } = await doc();
+  const id = m.lines().find((line) => line.startsWith('bart~> ')).slice(7);
+  const saved = placeAnswer(m.props.text, id, [...answer("I'll now look for studies with people."), researchLine(`${BRIEF}, in studies with people`)]);
+  const again = mounted(saved.split('\n'));
+  const html = again.html();
+  assert.match(html, /data-act="startresearch"[^>]*>Restart research<\/button>/);
+  assert.ok(saved.includes(`@discover --research ${BRIEF}, in studies with people`), 'the direction, in the file');
+  assert.ok(saved.split('\n').some((line) => /^bart\+> ## Start here/.test(line)), 'the earlier guide, collapsed, in the file');
+});
+
+test('a second refinement replaces a direction still waiting; an answer to Discover\'s question about a refinement stays a Refine turn', async () => {
+  const { placeAnswer, researchLine } = await doc();
+  const m = mounted(conversation(DONE));
+  m.click('refine', { thread: '0' }); m.editor.followText.set(0, 'something else'); m.editor.sendFollow(0);
+  let id = m.lines().find((line) => line.startsWith('bart~> ')).slice(7);
+  // Unclear: Discover asks; the answer goes to Discover, as part of the Refine, and its direction will wait too.
+  m.props.text = placeAnswer(m.props.text, id, answer('What should the search look at instead?'));
+  m.editor.followText.set(0, 'the turn-taking'); m.editor.sendFollow(0);
+  const answered = m.asks[1];
+  assert.deepEqual([answered.agent, answered.refine, answered.text], ['discover', true, 'the turn-taking']);
+  id = answered.askId;
+  m.props.text = placeAnswer(m.props.text, id, [...answer("I'll now look at turn-taking."), researchLine('turn-taking in conversational replies')]);
+  assert.equal(m.lines().filter((line) => line === '@discover --research turn-taking in conversational replies').length, 1);
+  // Refined again before it was started: that direction goes, the new one will take its place.
+  m.click('refine', { thread: '0' }); m.editor.followText.set(0, 'only in voice assistants'); m.editor.sendFollow(0);
+  assert.ok(!m.lines().includes('@discover --research turn-taking in conversational replies'), 'the waiting direction is replaced');
+  assert.equal(m.asks[2].refine, true);
+});

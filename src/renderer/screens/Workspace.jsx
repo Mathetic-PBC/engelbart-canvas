@@ -21,10 +21,12 @@ import { useZoteroStatus, useZoteroFinding, useZoteroWaiting } from '../workspac
 import { zoteroChipAction } from '../model/zotero.js';
 import { flatWorkspaces, nextPlace } from '../model/nav.js';
 import { onStage, savesPageCopy } from '../model/stage.js';
-import { paperState, savePaper, repoState, tryRepo } from '../model/guide.js';
-import { buildLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey } from '../model/doc.js';
+import { paperState, savePaper } from '../model/guide.js';
+import { buildLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, researchLine } from '../model/doc.js';
 import { cardOfAnswer, questionOf } from '../../main/bart/card.cjs';
 import { fallbackAgent } from '../model/route.js';
+// An ask's id, as the editor makes them (DocEditor newAskId): a research box this window puts in (askBart) takes one.
+const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 import { findAskLine, findBuildLine } from '../model/askLine.js';
 import { openBeside, closePane } from '../model/panes.js';
 import { addDropped } from '../model/drop.js';
@@ -591,9 +593,24 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return task;
   }, [topic, project.id, flush]);
 
-  // `intro`: Chat's reply that comes first, 'discover' over an @discover question's search (`research`, the box under it;
-  // DocEditor splitsDiscover), 2026-10-13. A research box stopped by hand says so, so it stays a turn of its conversation.
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, intro = null, research = false }) => {
+  // A research box Discover settled on (2026-10-14) is asked by the editor showing the document `key` once its lines are
+  // in it (DocEditor askBoxed): tried again until they are, as handOff does, but sooner, since its row waits on it.
+  const boxOff = React.useCallback((key, askId) => {
+    let tries = 0;
+    const attempt = () => {
+      const editor = editorRefs.current.map((ref) => ref && ref.current).find((held) => held && held.props && held.props.docKey === key);
+      if (editor && editor.askBoxed && editor.askBoxed(askId)) return;
+      tries += 1;
+      if (tries < 120) setTimeout(attempt, 16);
+    };
+    setTimeout(attempt, 0);
+  }, []);
+
+  // `research`: a research box's search (2026-10-13), which says so when stopped by hand, so it stays a turn of its
+  // conversation.
+  // `refine`: a turn of Discover's Refine (2026-10-15, the editor's refiningAt): the direction it settles waits in its box
+  // until the person presses Start research or Restart research there (DocEditor startResearch); nothing is searched.
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false }) => {
     if (!key || !ref || !topic) return;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
     let answered = null;
@@ -624,6 +641,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     // want to talk about, and Brainstorm's reply marks it (main's bart/ask.cjs takeTopic, `out.topic`), then or whenever
     // they change to another. A first line with words and no topic marked is named from those words, as any thread is.
     const ownTopic = agent === 'brainstorm' && !build;
+    // A Discover conversation started empty (2026-10-14) is named from what it settles to research, not from its opening.
+    const ownDirection = agent === 'discover' && !build;
     // The answer is in the document a render after it is placed: the title changes once it is there.
     const retitleTo = (title) => {
       let tries = 0;
@@ -649,6 +668,19 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       }).catch(() => {});
     };
     if (name && !later && !ownTopic) nameAs(text);
+    // Its title, while it has none, from the direction (retitle's `unset`).
+    const nameDirection = (said) => {
+      api.nameChat({ text: said, agent: 'discover' }).then((named) => {
+        let tries = 0;
+        const fill = () => {
+          const held = docsRef.current[key];
+          if (typeof held === 'string' && named && named.title && !held.includes(`bart~> ${askId}`)) { const next = retitle(held, answered, named.title, { unset: true }); if (next !== null) changeDoc(key, ref, next); return; }
+          tries += 1;
+          if (tries < 20) setTimeout(fill, 100);
+        };
+        fill();
+      }).catch(() => {});
+    };
     if (build) {
       try {
         if (!build.request) { place(['bart> **No Build.** Write what to build after --build.']); return; }
@@ -664,11 +696,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}), ...(intro ? { intro } : {}) });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}) });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
-      place(out.stopped ? (research ? ['bart> Stopped.'] : []) : out.lines);
-      if (later && !ownTopic) nameAs(out.stopped ? '' : answerText(out.lines));
+      // Discover settled what to research (2026-10-14; main's bart/ask.cjs takeResearch, `out.research`): its research box
+      // goes under the reply in the same change, the line keeping the direction, and the editor asks it (boxOff).
+      const box = !out.stopped && out.research ? { askId: newAskId(), line: researchLine(out.research) } : null;
+      place(out.stopped ? (research ? ['bart> Stopped.'] : []) : box ? [...out.lines, box.line, ...(refine ? [] : [`bart~> ${box.askId}`])] : out.lines);
+      if (box && !refine) boxOff(key, box.askId);
+      if (box && ownDirection) nameDirection(out.research);
+      if (later && !ownTopic && !ownDirection) nameAs(out.stopped ? '' : answerText(out.lines));
       if (ownTopic && !out.stopped && !out.failed) { if (out.topic) retitleTo(out.topic); else if (name && !later) nameAs(text); }
       // The Welcome walkthrough's last card answered (main's ask.cjs, the welcome path): Discover starts on their next steps.
       if (out.welcome === 'result') handOff(key, askId);
@@ -678,7 +715,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     } finally {
       setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
-  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow, tickWalk, handOff, buildFrom]);
+  }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow, tickWalk, handOff, boxOff, buildFrom]);
 
   // Bart, the router (2026-10-12; main/bart/route.cjs): which agent an `@bart` line is for. Its pending line says what
   // the editor's says for any run, "Thinking · <name> <effort>" with the level the line would start on if he could not
@@ -1049,8 +1086,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // The same three states for each paper of an @discover guide (2026-10-02, model/guide.js), read again whenever the
   // library or the rail changes: a paper saved from the Stage reads ✓ in the guide too.
   const guidePaperState = React.useCallback((address) => paperState(library, address, inRail).state, [library, inRail]);
-  // And for the repository a guide's Try line links (2026-10-04): its mark reads "Added" once the repository is here.
-  const guideRepoState = React.useCallback((address) => repoState(library, address, inRail).state, [library, inRail]);
 
   /* --------------------------------------------------------------- opening */
 
@@ -1664,11 +1699,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // has no copy (the address, named with its title, linked here; main keeps its pdf straight away), + Workspace links the
   // library's row. Two clicks never make two rows: the second finds it here, or main refuses it as already in the library.
   const saveGuidePaper = ({ address, title }) => savePaper({ address, title, library, inRail }, { addInput, linkIds });
-  // A guide's Try link (2026-10-04), after its page opened in the Stage: the repository comes into this workspace, which
-  // starts its sandbox in main. A new one is added by its address and named by the library (owner/repo); one the library
-  // has is linked, never added twice. A sandbox that could not start is said by addInput and linkIds.
-  const tryGuideRepo = ({ address }) => tryRepo({ address, library, inRail }, { addInput, linkIds });
-
   // The Browser's Save: the page as a new row, named in the card, into the library alone or also into this workspace.
   const savePage = async (name, here) => {
     if (!openPage) return;
@@ -1910,8 +1940,6 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     onStopAsk: (askId) => api.stopBart(askId).catch((error) => onError(error)),
     paperState: guidePaperState,
     onSavePaper: saveGuidePaper,
-    repoState: guideRepoState,
-    onTryRepo: tryGuideRepo,
     madeFiles,
     madeOpen,
     onMadeNeeded: needMade,

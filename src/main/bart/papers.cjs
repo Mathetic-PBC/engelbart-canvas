@@ -8,6 +8,10 @@
 // day; a record by its id is free, a filtered list $0.0001, a search $0.001), so the tools prefer lookups by id and
 // filters to searches. A trace of a dozen papers costs well under a cent. Semantic Scholar was the other candidate; it
 // refuses callers without a key most of the time (429).
+// 2026-10-15: search finds starting points by meaning (OpenAlex's search.semantic: title and abstract embeddings,
+// closest first), at most one call a second. Its pricing table lists a semantic search at $0.001, but an example on the
+// same page charges $0.01, so plan for $0.01: ten a day without a key ($0.10), a hundred with a free one ($1 a day;
+// OPENALEX_API_KEY, passed on by ./ask.cjs to ./papers-mcp.cjs). by "words" is the search of before.
 //
 // A record is what the agent needs to write a guide entry and to go on tracing: an id to pass to the other tools, the
 // title, authors, year, venue, DOI, abstract, an open-access address and an arXiv page when there are any. Lists carry
@@ -17,6 +21,8 @@ const API = 'https://api.openalex.org';
 const ARXIV_API = 'https://export.arxiv.org/api/query';
 const TIMEOUT_MS = 20_000;
 const MAX_LIST = 100;
+const SEMANTIC_GAP_MS = 1100; // OpenAlex: one semantic request a second
+const SEMANTIC_MAX_CHARS = 2000;
 const LIST_FIELDS = 'id,title,publication_year,authorships,primary_location,doi,cited_by_count,type';
 const FULL_FIELDS = `${LIST_FIELDS},abstract_inverted_index,best_oa_location,open_access,locations,referenced_works_count,referenced_works,related_works`;
 
@@ -80,10 +86,12 @@ function fullRecord(work) {
   };
 }
 
-class PapersError extends Error {}
+class PapersError extends Error {
+  constructor(message, status = null) { super(message); this.status = status; }
+}
 
-/** `fetchImpl` and `wait` are for tests. */
-function createPapers({ fetchImpl = globalThis.fetch, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), apiKey = null } = {}) {
+/** `fetchImpl`, `wait` and `now` are for tests. `apiKey`: an OpenAlex key, for its larger daily allowance. */
+function createPapers({ fetchImpl = globalThis.fetch, wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = Date.now, apiKey = null } = {}) {
   async function get(url, { json = true } = {}) {
     for (let attempt = 0; ; attempt += 1) {
       let response;
@@ -96,7 +104,7 @@ function createPapers({ fetchImpl = globalThis.fetch, wait = (ms) => new Promise
       if (response.status === 404) return null;
       if ((response.status === 429 || response.status >= 500) && attempt === 0) { await wait(1500); continue; }
       if (response.status === 429) throw new PapersError('OpenAlex refused the call: the daily allowance for callers without a key is used up, or too many calls came at once.');
-      if (!response.ok) throw new PapersError(`OpenAlex answered ${response.status}.`);
+      if (!response.ok) throw new PapersError(`OpenAlex answered ${response.status}.`, response.status);
       return json ? response.json() : response.text();
     }
   }
@@ -107,9 +115,21 @@ function createPapers({ fetchImpl = globalThis.fetch, wait = (ms) => new Promise
     return get(url.toString());
   };
   const work = (id) => api(`/works/${id}`, { select: FULL_FIELDS });
-  const list = async (filter, { sort, limit, search } = {}) => {
-    const page = await api('/works', { filter, sort, search, per_page: Math.min(MAX_LIST, limit), select: LIST_FIELDS });
+  const list = async (filter, { sort, limit, search, semantic } = {}) => {
+    const page = await api('/works', { filter, sort, search, 'search.semantic': semantic, per_page: Math.min(MAX_LIST, limit), select: LIST_FIELDS });
     return { total: (page && page.meta && page.meta.count) || 0, results: ((page && page.results) || []).map(listRecord) };
+  };
+  // Semantic calls at least SEMANTIC_GAP_MS apart, in the order they were asked.
+  let semanticAt = -Infinity, semanticQueue = Promise.resolve();
+  const spaced = (call) => {
+    const turn = semanticQueue.then(async () => {
+      const gap = semanticAt + SEMANTIC_GAP_MS - now();
+      if (gap > 0) await wait(gap);
+      semanticAt = now();
+      return call();
+    });
+    semanticQueue = turn.catch(() => {});
+    return turn;
   };
   const byIds = async (ids) => {
     const out = new Map();
@@ -187,11 +207,27 @@ function createPapers({ fetchImpl = globalThis.fetch, wait = (ms) => new Promise
       const out = await list(`author.id:${short(person.id)}`, { sort: sort === 'recent' ? 'publication_date:desc' : 'cited_by_count:desc', limit: count(limit, 25) });
       return { found: true, author: describe(person), others_with_that_name: others.map(describe), total: out.total, order: sort === 'recent' ? 'most recent first' : 'most cited first', results: out.results };
     },
-    async search({ query, limit, from_year: fromYear, until_year: untilYear }) {
-      const text = clean(query);
-      if (!text) throw new PapersError('Give words to search for.');
-      const out = await list(years(fromYear, untilYear).join(',') || undefined, { search: text, limit: count(limit, 10, 25) });
-      return { total: out.total, order: 'relevance (OpenAlex ranks the most cited high: prefer the citation graph)', results: out.results };
+    // By meaning (the default): the problem in plain sentences, against each paper's title and abstract, closest first;
+    // one search parameter only, so never `search` beside it, and no sort (cited_by_count does not work with it). OpenAlex
+    // refusing it (a 4xx but 429) falls back to words, and says so. By words: words matched, the most cited ranked high.
+    async search({ query, limit, from_year: fromYear, until_year: untilYear, by = 'meaning' }) {
+      const filter = years(fromYear, untilYear).join(',') || undefined, max = count(limit, 10, 25);
+      const words = async (note = '') => {
+        const text = clean(query);
+        if (!text) throw new PapersError('Give words to search for.');
+        const out = await list(filter, { search: text, limit: max });
+        return { total: out.total, order: `${note}relevance (OpenAlex ranks the most cited high: prefer the citation graph)`, results: out.results };
+      };
+      if (by === 'words') return words();
+      const text = String(query || '').replace(/\s+/g, ' ').trim().slice(0, SEMANTIC_MAX_CHARS);
+      if (!text) throw new PapersError('Give the problem to search for, in plain sentences.');
+      try {
+        const out = await spaced(() => list(filter, { semantic: text, limit: max }));
+        return { total: out.total, order: 'closest in meaning first (title and abstract)', results: out.results };
+      } catch (error) {
+        if (!(error instanceof PapersError) || !(error.status >= 400 && error.status < 500) || error.status === 429) throw error;
+        return words(`OpenAlex refused the search by meaning (${error.status}), so this matched words instead: `);
+      }
     },
   };
 }
@@ -208,7 +244,7 @@ const PAPER_TOOLS = [
   { name: 'citations', description: `What cites a paper: most recent first (sort "recent", the default) or most cited first ("cited"), from a year on when from_year is given. Without abstracts. ${ID}`, inputSchema: schema({ id: string, limit: integer(MAX_LIST), sort: { type: 'string', enum: ['recent', 'cited'] }, from_year: year }, ['id']) },
   { name: 'author_works', description: 'An author\'s works, most cited first (sort "cited", the default) or most recent first ("recent"). author: a name or an OpenAlex author id (A…). The best match is used; others with that name are listed, so check the institution.', inputSchema: schema({ author: string, limit: integer(MAX_LIST), sort: { type: 'string', enum: ['cited', 'recent'] } }, ['author']) },
   { name: 'related', description: `Papers OpenAlex links to this one by shared concepts and time, up to 25. ${ID}`, inputSchema: schema({ id: string, limit: integer(25) }, ['id']) },
-  { name: 'search', description: 'Search papers by words, optionally within years. Ranking favours what is most cited, so use it to find starting points only when the person\'s library and document give none.', inputSchema: schema({ query: string, limit: integer(25), from_year: year, until_year: year }, ['query']) },
+  { name: 'search', description: 'Find papers by meaning: give one to three plain sentences stating the problem. OpenAlex compares them with each paper\'s title and abstract and returns the closest first, up to 25, without abstracts (resolve gives one). by "words" matches words instead and ranks the most cited high. Use it only to find starting points.', inputSchema: schema({ query: string, limit: integer(25), from_year: year, until_year: year, by: { type: 'string', enum: ['meaning', 'words'] } }, ['query']) },
 ];
 
 // Every tool only looks up: Codex runs a tool marked so without asking (codex exec cannot ask anyone).

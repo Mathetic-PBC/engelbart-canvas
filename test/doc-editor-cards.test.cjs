@@ -113,7 +113,8 @@ test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap
   const m = mounted(['@discover', ...answer({ ...FOCUS, lookFor: LOOK }), '']);
   assert.equal(m.entry(0).live, true);
   const shown = m.editor.editorHtml();
-  assert.ok(shown.includes('data-act="cardskip"') && shown.includes('data-act="cardopt"') && />@bart<\/span><textarea data-follow-input="0" data-agent="discover"/.test(shown));
+  // Its field is in the card since 2026-10-14 (the mock), with Submit; none under the foot.
+  assert.ok(shown.includes('data-act="cardskip"') && shown.includes('data-act="cardopt"') && /<span class="dv-field"><textarea data-follow-input="0" data-agent="discover"/.test(shown) && !shown.includes('data-followup='));
   assert.ok(!shown.includes('data-act="cardwrap"') && !shown.includes('data-act="senddiscover"') && !shown.includes('data-act="opendiscover"') && !shown.includes('data-discover-input') && !shown.includes('Wrap up'));
   m.click('cardwrap', 0);
   m.typeDiscover('c0', TYPED);
@@ -153,9 +154,8 @@ test('on a live @brainstorm versions card the field under it reads "Or rewrite i
   m.editor.followText.set(0, '  Why do retries   loop at all? ');
   m.editor.sendFollow(0);
   assert.equal(m.asks[0].text, 'Why do retries loop at all?');
-  for (const lines of [['@brainstorm', ...answer(FOCUS), ''], ['@discover', ...answer(VERSIONS), '']]) {
-    assert.match(mounted(lines).editor.editorHtml(), /placeholder="Pick one, or say it in your own words…"/, `${lines[0]}: as on any card`);
-  }
+  assert.match(mounted(['@brainstorm', ...answer(FOCUS), '']).editor.editorHtml(), /placeholder="Pick one, or say it in your own words…"/, '@brainstorm: as on any card');
+  assert.match(mounted(['@discover', ...answer(VERSIONS), '']).editor.editorHtml(), /placeholder="Or say it in your own words…"/, '@discover: its field in the card (2026-10-14)');
   assert.match(editorModule.BRAINSTORM_ITEM.summary, /^Think something through out loud/, '2026-10-14: a conversation');
   assert.ok(!/dig into next|card/.test(editorModule.BRAINSTORM_ITEM.summary + editorModule.BRAINSTORM_ITEM.facts), 'no fixed ending, no cards');
 });

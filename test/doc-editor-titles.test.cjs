@@ -68,15 +68,12 @@ test('a new question gets an empty title line above it and is asked to be named;
     assert.match(ls[1], new RegExp(`^bart# \\[${line.slice(1, line.indexOf(' '))} \\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ\\] $`), `${agent}: the title line, empty, keeping its agent and when it was asked`);
     assert.equal(ls[2], line);
     assert.match(ls[3], /^bart~> /);
-    // @discover (2026-10-13): Chat's reply is the one named, and the search is a research box under it.
-    const research = agent === 'discover';
-    assert.equal(ls[research ? 6 : 4], 'After');
-    if (research) assert.deepEqual([ls[4], ls[5].slice(0, 7)], ['@discover --research retries', 'bart~> ']);
-    assert.equal(m.asks.length, research ? 2 : 1);
-    assert.equal(m.asks[0].agent, research ? 'bart' : agent);
+    // @discover (2026-10-14): Discover's alone, as any agent's; a research box comes only once it settles the direction.
+    assert.equal(ls[4], 'After');
+    assert.equal(m.asks.length, 1);
+    assert.equal(m.asks[0].agent, agent);
     assert.equal(m.asks[0].name, true);
     assert.equal(m.asks[0].askId, ls[3].slice('bart~> '.length));
-    if (research) assert.deepEqual([m.asks[1].agent, m.asks[1].name, m.asks[1].askId], ['discover', undefined, ls[5].slice('bart~> '.length)]);
   }
 });
 
@@ -378,7 +375,7 @@ test('the card (2026-10-13): question 14px 16px, answer 12px under it in a 14px 
   assert.ok(!html.includes('data-followup=') && html.includes('data-act="reply" data-thread="0"'), 'Reply, no field');
 });
 
-test('the button row (2026-10-13): Reply, Copy and Regenerate on the left; the model, effort and time on the right (the agent first unless Chat, never "via Bart"), then Collapse and Delete; the closing line is kept', () => {
+test('the button row (2026-10-13): Reply, Copy and Regenerate on the left; the model, effort and time on the right (the agent first unless Chat, never "via Bart"), then Delete, Collapse being in the question\'s corner (2026-10-15); the closing line is kept', () => {
   const footOf = (html) => { const at = html.indexOf('data-foot='); assert.ok(at >= 0, 'a foot is drawn'); const start = html.lastIndexOf('<div', at); return html.slice(start, html.indexOf('</div>', at) + 6); };
   const shown = (html) => html.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
   for (const [line, closing, meta] of [['@bart make the icons bigger', '*Build · Opus · high · 39 s*', 'Build · Opus · high · 39 s'], ['@chat why retry?', '*Chat · Opus · high · 17 s*', 'Opus · high · 17 s'], ['@bart why retry?', '*Chat · 48 s · via Bart*', '48 s'], ['@chat why retry?', '*Opus · high · 9 s · moved up from Sonnet medium*', 'Opus · high · 9 s']]) {
@@ -389,10 +386,11 @@ test('the button row (2026-10-13): Reply, Copy and Regenerate on the left; the m
     assert.match(foot, /<button type="button" class="bart-reply" data-act="reply" data-thread="1"/, 'Reply');
     assert.match(foot, /data-act="copybart" data-turn="1" aria-label="Copy"/, 'Copy');
     assert.match(foot, /data-act="regen" data-turn="1" data-quiet="1" aria-label="Regenerate"/, 'Regenerate, opening no selector');
-    assert.match(foot, /data-act="fold" data-turn="1" aria-label="Collapse"/, 'Collapse');
+    assert.ok(!foot.includes('data-act="fold"'), 'no Collapse here');
+    assert.match(rowOf(m.html(), 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="(?:fold" data-turn="1|foldthread" data-row="0)" aria-label="Collapse" aria-expanded="true"[^>]*><svg[^>]*><path d="m6 9 6 6 6-6">/, 'Collapse, a chevron, in the question\'s top right');
     assert.match(foot, /data-act="dropturn" data-turn="1" aria-label="Delete"/, 'Delete');
-    const order = ['data-act="reply"', 'copybart', 'data-act="regen"', 'data-foot-meta', 'data-act="fold"', 'dropturn'].map((k) => foot.indexOf(k));
-    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'Reply, Copy, Regenerate, the meta, Collapse, Delete');
+    const order = ['data-act="reply"', 'copybart', 'data-act="regen"', 'data-foot-meta', 'dropturn'].map((k) => foot.indexOf(k));
+    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'Reply, Copy, Regenerate, the meta, Delete');
     assert.ok(!foot.includes('editturn') && !foot.includes('footbuild'), 'no Edit, no Build');
     assert.equal(m.lines()[3], `bart> ${closing}`, 'the closing line in the file is as it was');
   }
@@ -506,7 +504,7 @@ test('a follow-up collapses the turns before it but the last (2026-10-14: the tw
   m.click('fold', { turn: '1' });
   assert.ok(m.lines().slice(2, second).every((l) => /^bart>/.test(l)));
   const open = m.html();
-  assert.match(open, /data-foot="1"[^>]*>[\s\S]*?data-act="fold" data-turn="1" aria-label="Collapse"/, 'open again, its foot collapses that exchange');
+  assert.match(rowOf(open, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="fold" data-turn="1" aria-label="Collapse"/, 'open again, its question\'s corner collapses that exchange (2026-10-15)');
   assert.ok(open.includes('because') && open.includes('data-foot="1"'), 'its answer and foot are drawn');
   assert.ok(!rowOf(open, 1).includes('data-folded-row'), 'its question is a question row again');
   assert.ok(rowOf(open, second).includes('data-folded-row'), 'the other stays one row');
@@ -611,9 +609,12 @@ test('Workspace askBart names a Build\'s conversation from its request, as Chat\
 
 test('Workspace askBart names a conversation an empty line started from its first answer, not "New conversation" (2026-10-14); a Brainstorm one names its own topic (test/brainstorm-topic.test.cjs)', () => {
   const src = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
-  const placed = src.indexOf("place(out.stopped ? (research ? ['bart> Stopped.'] : []) : out.lines);");
-  const later = src.indexOf("if (later && !ownTopic) nameAs(out.stopped ? '' : answerText(out.lines));");
+  const placed = src.indexOf("place(out.stopped ? (research ? ['bart> Stopped.'] : []) : box ? [...out.lines, box.line, ...(refine ? [] : [`bart~> ${box.askId}`])] : out.lines);");
+  const later = src.indexOf("if (later && !ownTopic && !ownDirection) nameAs(out.stopped ? '' : answerText(out.lines));");
   assert.ok(placed > 0 && later > placed, 'named once its answer is placed');
+  // A Discover conversation (2026-10-14) is named from the direction it settles, while it has no title (retitle's `unset`).
+  assert.ok(src.includes("const ownDirection = agent === 'discover' && !build;") && src.includes('if (box && ownDirection) nameDirection(out.research);'));
+  assert.ok(src.includes("api.nameChat({ text: said, agent: 'discover' })") && src.includes('retitle(held, answered, named.title, { unset: true })'));
   assert.ok(src.indexOf("if (later && !ownTopic) nameAs('');") > later, 'a failed run still gets its title line filled');
 });
 
@@ -766,4 +767,61 @@ test('three turns: the follow-up that makes the third collapses the first and le
   n.editor.followText.set(1, 'and backoff?');
   n.editor.sendFollow(1);
   assert.ok(n.lines().slice(2, 2 + answer('x').length).every((l) => /^bart>/.test(l)), 'two turns: nothing collapsed');
+});
+
+test('a click that expands a collapsed conversation, or its last exchange, opens its reply field with the keyboard in it (2026-10-15); an earlier exchange opens nothing', () => {
+  const field = (m) => { const at = /data-follow-input="(\d+)"/.exec(m.html()); return at ? Number(at[1]) : null; };
+  const focusing = (m) => {
+    const input = { focused: 0, focus() { input.focused += 1; } };
+    m.editor.edRef.current.querySelector = (sel) => (/data-follow-input/.test(sel) ? input : null);
+    return input;
+  };
+  // A conversation collapsed to its title's row: expanded, its field is drawn, and takes the keyboard once the document has changed.
+  const m = mounted(['bart#+ Retry logic', '@chat why retry?', ...answer('because'), '']);
+  assert.equal(field(m), null, 'collapsed: no field');
+  const input = focusing(m);
+  m.click('foldthread', { row: '0' });
+  assert.equal(m.lines()[0], 'bart# Retry logic', 'expanded');
+  assert.notEqual(field(m), null, 'its reply field is drawn');
+  m.editor.focusReplyAfter();
+  assert.equal(input.focused, 1, 'the keyboard is in it');
+  m.editor.focusReplyAfter();
+  assert.equal(input.focused, 1, 'once');
+  // Its last exchange folded on its own: the same.
+  const turn = mounted(['@chat why retry?', ...answer('because').map((l) => l.replace(/^bart>/, 'bart+>')), '']);
+  const typed = focusing(turn);
+  turn.click('fold', { turn: '0' });
+  assert.notEqual(field(turn), null);
+  turn.editor.focusReplyAfter();
+  assert.equal(typed.focused, 1);
+  // An earlier exchange expanded opens nothing: the field is the conversation's last exchange's.
+  const two = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because').map((l) => l.replace(/^bart>/, 'bart+>')), '@chat and more?', ...answer('more'), '']);
+  two.click('fold', { turn: '1' });
+  assert.equal(field(two), null);
+  assert.equal(two.editor.replyFocus, null);
+});
+
+test('a question asked on a line: once answered, its reply field opens, with the keyboard in it unless the person clicked, typed or scrolled meanwhile (2026-10-15)', () => {
+  const run = (meanwhile) => {
+    const m = mounted(['@chat why retry?', '']);
+    const input = { focused: 0, focus() { input.focused += 1; } };
+    m.editor.edRef.current.querySelector = (sel) => (/data-follow-input/.test(sel) ? input : null);
+    m.editor.askInline(0);
+    const pending = m.lines().findIndex((l) => l.startsWith('bart~> '));
+    m.editor.replyArrived();
+    assert.ok(m.editor.replyWait, 'waiting while it runs');
+    if (meanwhile) meanwhile(m.editor);
+    m.props.text = m.lines().map((l, j) => (j === pending ? answer('because').join('\n') : l)).join('\n');
+    m.editor.replyArrived();
+    return { m, input, field: /data-follow-input="\d+"/.test(m.html()) };
+  };
+  const still = run();
+  assert.ok(still.field, 'its reply field is drawn');
+  assert.equal(still.input.focused, 1, 'nothing touched since: the keyboard is in it');
+  assert.equal(still.m.editor.replyWait, null);
+  for (const [why, meanwhile] of [['clicked', (ed) => { ed.touchedAt = Date.now() + 1; }], ['scrolled', (ed) => { ed.wheelAt = Date.now() + 1; }]]) {
+    const moved = run(meanwhile);
+    assert.ok(moved.field, `${why}: the field still opens`);
+    assert.equal(moved.input.focused, 0, `${why}: the keyboard stays where they put it`);
+  }
 });

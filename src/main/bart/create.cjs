@@ -7,9 +7,11 @@
 // folder is deleted; a run that was stopped or failed deletes it and keeps nothing.
 // 2026-10-14: kept is no longer "in the library". The files go to <project>/.created/<askId>/, with the project's documents
 // so the answer's rows (one `@[name](made:<askId>/<path>)` line per file, the editor's Create row), its expanded view and
-// the Stage still open them after a restart. Only Save (saveCreated) puts one in the library, as a row whose source is
+// the Stage still open them after a restart. Save (saveCreated) puts one in the library, as a row whose source is
 // `create` (the Library's Assets chip), linked to the workspace; which file was saved as which row is kept beside the files
 // (SAVED_FILE). Nothing here changes or deletes a row the library already holds.
+// 2026-10-15 (David's): each file is saved as its run ends (saveAllCreated), once: a row taken out of the library later
+// stays out, and the row's Save is there again for it, or for a file whose save failed.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -236,4 +238,9 @@ async function saveCreated(ctx, projectId, workspaceId, askId, rel, { inspectPdf
   return linkMade(ctx, projectId, workspaceId, row, onAdded);
 }
 
-module.exports = { CREATE_DIR, CREATED_DIR, SAVED_FILE, PREVIEWS_DIR, MAX_CREATED, MAX_CREATED_BYTES, CREATE_TIMEOUT_MS, draftPath, openDraft, dropDraft, draftFiles, createdDir, createdFile, keepCreated, madeMention, createdBody, firstSentence, createdSentence, requestSentence, readCreated, saveCreated };
+/** Every file a run kept, saved into the library as its run ends (saveCreated, each on its own: one that fails stays unsaved). */
+async function saveAllCreated(ctx, projectId, workspaceId, askId, files, options = {}) {
+  for (const file of files) { try { await saveCreated(ctx, projectId, workspaceId, askId, file.rel, options); } catch { /* its row offers Save */ } }
+}
+
+module.exports = { CREATE_DIR, CREATED_DIR, SAVED_FILE, PREVIEWS_DIR, MAX_CREATED, MAX_CREATED_BYTES, CREATE_TIMEOUT_MS, draftPath, openDraft, dropDraft, draftFiles, createdDir, createdFile, keepCreated, madeMention, createdBody, firstSentence, createdSentence, requestSentence, readCreated, saveCreated, saveAllCreated };

@@ -801,8 +801,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       // `routed`: Bart, the router, handed this line over (2026-10-12, bart/route.cjs): its record's id, whether it read the
       // line as a request to build, and the agent the person picked instead of its pick.
       const routed = routedInput(value.routed);
-      // `intro` (2026-10-13): Chat's reply that comes first, 'discover' over Discover's search (bart/ask.cjs INTROS).
-      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}), ...(overleaf ? { overleaf } : {}), ...(routed ? { routed } : {}), ...(value.intro === 'discover' && agent === 'bart' ? { intro: value.intro } : {}), place: placeOf(value.place, projectId, ref) };
+      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}), ...(overleaf ? { overleaf } : {}), ...(routed ? { routed } : {}), place: placeOf(value.place, projectId, ref) };
       if (ref.kind === 'mark') {
         // a web page's mark has no page (MATH-54): its answer goes in the ink's "web" list
         mark = { markId: ref.id, page: ref.source === 'web' ? null : ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url, ...(ref.source === 'web' ? { source: 'web' } : {}) };

@@ -84,6 +84,10 @@ test('routeByRule: empty → brainstorm, --build → Build, a level → discover
   assert.deepEqual(routeByRule('--build add a comment', {}), { agent: 'build', rule: '--build' });
   assert.deepEqual(routeByRule('tutors --deep', {}), { agent: 'discover', rule: 'level' });
   assert.deepEqual(routeByRule('--quick tutors', {}), { agent: 'discover', rule: 'level' });
+  // Answering Discover's question (2026-10-14): Discover's, after the flags that pick otherwise.
+  assert.deepEqual(routeByRule('how they notice', { current: 'discover', asking: true }), { agent: 'discover', rule: 'answering Discover' });
+  assert.deepEqual(routeByRule('--build it', { current: 'discover', asking: true }), { agent: 'build', rule: '--build' });
+  assert.equal(routeByRule('how they notice', { current: 'discover' }), null, 'after a guide, the model decides');
   assert.deepEqual(routeByRule('--haiku why?', { models }), { agent: 'chat', rule: 'model flag' });
   assert.deepEqual(routeByRule('why? --low', { models }), { agent: 'chat', rule: 'model flag' });
   assert.deepEqual(routeByRule('--opus why?', {}), { agent: 'chat', rule: 'model flag' }, 'without the models file, a model\'s word still counts');
@@ -112,6 +116,18 @@ test('routeInputs: the section from the heading, the threads above with their to
   assert.equal(buildTextOf(lines, thread.turns[0]), 'Add Haiku 5.5 to models.cjs.', 'the last fenced block');
   const plain = ['@chat why', 'bart> because', 'bart> *Sonnet · 2s*'];
   assert.equal(buildTextOf(plain, threads(plain, parseLines(plain))[0].turns[0]), 'why\n\nbecause', 'no block: the question and the answer');
+  // `asking` (2026-10-14): Discover's last turn neither a research box nor a guide.
+  const asking = (ls) => routeInputs([...ls, '@bart x'], ls.length).asking;
+  assert.equal(asking(['@discover', 'bart> What would you like to research?']), true);
+  assert.equal(asking(['@discover tutors', 'bart> I will look.', '@discover --research tutors', 'bart> ## Start here']), false, 'a box');
+  assert.equal(asking(['@discover tutors', 'bart> ## Start here']), false, 'a guide');
+  assert.equal(asking(['@discover tutors', 'bart> I will look.', '@discover --research tutors', 'bart> ## Start here', '@discover only after 2022', 'bart> Which years?']), true, 'asking again after a guide');
+  assert.equal(asking(['@chat why', 'bart> because']), false, 'not Discover');
+  // A Refine (2026-10-15): Discover's question about it is answered to Discover; a line under the direction it settled,
+  // waiting in its box to be started, goes on with Discover too.
+  const refined = ['@discover tutors', 'bart> I will look.', '@discover --research tutors', 'bart> ## Start here', '@discover --refine something else'];
+  assert.equal(asking([...refined, 'bart> What should the search look at instead?']), true, 'asked about a Refine');
+  assert.equal(asking([...refined, 'bart> I will now look at turn-taking.', '@discover --research turn-taking']), true, 'a direction waiting');
 });
 
 test('routeInputs: a thread\'s question is its first line, as plain text, cut at a word to 80 characters or fewer', async () => {
@@ -316,16 +332,11 @@ test('handoff: chat, brainstorm and discover keep the @bart line as typed, ask t
     assert.match(m.lines()[1], new RegExp(`^bart# \\[${token} \\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\dZ\\] $`));
     assert.equal(m.lines()[2], '@bart how do tutors notice struggle?', '@bart stays @bart');
     assert.match(m.lines()[3], /^bart~> /);
-    // Discover (2026-10-13): Chat's reply is asked under the line, told it is Discover's (intro), and the search in a
-    // research box under it (doc-editor-research).
-    const discover = agent === 'discover';
-    assert.equal(m.asks.length, discover ? 2 : 1);
-    assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name, m.asks[0].intro], [discover ? 'bart' : internal, 'how do tutors notice struggle?', { id: 'route-a' }, true, discover ? 'discover' : undefined]);
+    // Discover (2026-10-14): asked as any agent is; a research box comes only once it settles the direction.
+    assert.equal(m.asks.length, 1);
+    assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].routed, m.asks[0].name, m.asks[0].intro], [internal, 'how do tutors notice struggle?', { id: 'route-a' }, true, undefined]);
     assert.deepEqual(m.asks[0].place, { line: 2, text: '@bart how do tutors notice struggle?' });
-    if (discover) {
-      assert.deepEqual(m.lines().slice(4, 6).map((l) => l.replace(/ \S+$/, '')), ['@discover --research how do tutors notice', 'bart~>']);
-      assert.deepEqual([m.asks[1].agent, m.asks[1].research, m.asks[1].text, m.asks[1].place], ['discover', true, 'how do tutors notice struggle?', { line: 4, text: '@discover --research how do tutors notice struggle?' }]);
-    }
+    assert.ok(!m.lines().some((l) => l.includes('--research')));
     assert.equal(m.routes[0].text, 'how do tutors notice struggle?');
     const { threads, answeredBy } = await loadDoc();
     assert.equal(answeredBy(threads(m.lines())[0]), internal);
@@ -334,7 +345,7 @@ test('handoff: chat, brainstorm and discover keep the @bart line as typed, ask t
 
 test('a line Bart handed to @discover: its follow-up, Regenerate, the session and the rules are @discover\'s', async () => {
   const head = 'bart# [discover 2026-10-12T21:41:00Z] Tutors';
-  const done = [head, '@bart papers on tutors?', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', ''];
+  const done = [head, '@bart papers on tutors?', 'bart> ## Start here', 'bart> *Discover · Opus · high · 9 s*', ''];
   // The follow-up field asks @discover, and is written as its line.
   const f = mounted(done);
   assert.match(f.editor.followHtml(f.lines(), f.editor.findTurn(f.lines(), 1).thread), />@discover</);
@@ -351,18 +362,23 @@ test('a line Bart handed to @discover: its follow-up, Regenerate, the session an
   // A follow-up from the card's field is routed with @discover as the agent the conversation is with (2026-10-13; no
   // rule), and once handed over it is the thread's next turn, as an `@bart` line. (One typed in the document under the
   // card starts a conversation of its own, doc-editor-titles.)
-  // Sent to Discover again, it is Chat's reply and a research box of the same conversation (2026-10-13).
+  // Sent to Discover again (2026-10-14), it is Discover's turn of the same conversation, which settles the new direction.
   const n = mounted(done.slice(0, 4), { route: async (input) => ({ id: 'route-n', agent: input.current, sure: 0.9, by: 'model' }) });
   n.editor.followText.set(1, 'and more?');
   n.editor.sendFollow(1);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual([n.routes[0].rule, n.routes[0].current], [null, 'discover']);
+  assert.deepEqual([n.routes[0].rule, n.routes[0].current], [null, 'discover'], 'after a guide the model decides');
   assert.equal(n.lines()[4], '@bart and more?');
   assert.equal(n.lines().filter((l) => l.startsWith('bart#')).length, 1, 'no second title');
-  assert.deepEqual([n.asks[0].agent, n.asks[0].intro, n.asks[0].turns.length, n.asks[0].name], ['bart', 'discover', 1, undefined]);
-  assert.deepEqual([n.asks[1].agent, n.asks[1].research, n.asks[1].turns.length], ['discover', true, 1]);
+  assert.equal(n.asks.length, 1);
+  assert.deepEqual([n.asks[0].agent, n.asks[0].intro, n.asks[0].research, n.asks[0].turns.length, n.asks[0].name], ['discover', undefined, undefined, 1, undefined]);
   const { threads } = await loadDoc();
-  assert.equal(threads(n.lines())[0].turns.length, 3);
+  assert.equal(threads(n.lines())[0].turns.length, 2);
+  // While Discover is still asking what to research (its last turn no box and no guide), a reply is its answer, by rule.
+  const asking = mounted([head, '@bart papers on tutors?', 'bart> What are you hoping the research will help you figure out?', 'bart> *Discover · Opus · high · 4 s*'], { route: async (input) => ({ id: 'route-q', agent: 'chat', sure: 0.9, by: input.rule ? 'rule' : 'model' }) });
+  asking.editor.followText.set(1, 'how they notice a student is stuck');
+  asking.editor.sendFollow(1);
+  assert.deepEqual([asking.routes[0].rule, asking.routes[0].current], [{ agent: 'discover', rule: 'answering Discover' }, 'discover']);
 });
 
 test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec starts a Build of the spec; otherwise Chat is asked to write the Build prompt', async () => {
@@ -714,6 +730,68 @@ test('@create: a line Bart sent to Create waits 5 s ("Creating a chart · Starts
   assert.equal(m.editor.cancelCreate(askId), false, 'too late to cancel: Stop stops it now');
 });
 
+test('@create at work (2026-10-14): a thinking line until it says what it is making, then "Creating an HTML page…" and what it is doing under it', () => {
+  const m = mounted(['# Notes', 'bart# [create 2026-10-14T20:00:00Z] ', '@create create a html page descriing everyting weve worked on', 'bart~> c1', '']);
+  const run = { agent: 'create', name: 'Opus', effort: 'high', activity: 'Thinking', at: Date.now(), lines: [], log: [] };
+  const html = (ask) => { m.props.asks = { c1: ask }; m.editor.lastHtml = null; return m.editor.editorHtml(); };
+  const thinking = html(run);
+  assert.ok(!thinking.includes('data-create-pending'), 'no file row before the sentence');
+  assert.match(thinking, /Thinking · Opus high/);
+  const sentence = 'An HTML page covering the work in this workspace.';
+  const arriving = html({ ...run, activity: 'Writing', lines: [sentence] });
+  assert.ok(arriving.includes('data-create-pending'));
+  // Succinct (2026-10-15): "Creating an HTML page…" in place of the model's sentence, then a row saying what it is doing.
+  assert.ok(!arriving.includes(sentence), 'not the model\'s sentence');
+  assert.equal((arriving.match(/Creating an HTML page/g) || []).length, 1, 'said once');
+  assert.match(arriving, />Creating an HTML page…<\/div><div[^>]*>[\s\S]*?align-items:baseline[^>]*><span[^>]*>Thinking<\/span><\/span>/, 'the line, then the row');
+  assert.ok(html({ ...run, making: sentence, log: ['Reading notes.md'] }).includes('data-create-pending'), 'its sentence whole, and reading on');
+  assert.ok(html({ ...run, log: ['Writing summary.html'] }).includes('data-create-pending'), 'no sentence, but writing a file');
+  const { makingLabel } = EDITOR;
+  assert.equal(makingLabel('', 'create a html page descriing everyting weve worked on', null), 'Creating an HTML page');
+  assert.equal(makingLabel('An HTML page covering the work', '', null), 'Creating an HTML page');
+  assert.equal(makingLabel('', 'make an html of the results', null), 'Creating an HTML page');
+  assert.equal(makingLabel('', 'write a markdown document on it', null), 'Creating a Markdown document');
+  assert.equal(makingLabel('', 'make a chart of CHI submissions by year', null), 'Creating a chart');
+  assert.equal(makingLabel('', 'make an svg of the agents', null), 'Creating a diagram');
+  // A file open in a Stage tab has no grey behind its row (2026-10-14).
+  const made = mounted(['bart#+ [create 2026-10-14T20:00:00Z] A page', '@create make a page', 'bart> A page.', 'bart>', 'bart> @[page.html](made:c1/page.html)', 'bart>', 'bart> *Create · Opus · high · 9 s*', '']);
+  made.props.madeOpen = new Set(['c1/page.html']); made.editor.lastHtml = null;
+  const row = made.editor.editorHtml().match(/<div data-made-row="c1\/page\.html"[^>]*>/);
+  assert.ok(row && !/background/.test(row[0]), 'no background on the row');
+  assert.ok(!made.editor.editorHtml().includes('#f3f3f3'));
+});
+
+test('a made file opened by a rest of the pointer (2026-10-15, David): its name and icon open it in its frame, as the chevron does, after a rest; leaving the frame folds it, unless something in it was pressed', (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const made = mounted(['bart#+ [create 2026-10-14T20:00:00Z] A diagram', '@create make an svg of the agents', 'bart> A diagram.', 'bart>', 'bart> @[agents.svg](made:c1/agents.svg)', 'bart>', 'bart> *Create · Opus · high · 9 s*', '']);
+  made.props.madeFiles = { 'c1/agents.svg': { name: 'agents.svg', type: 'svg', url: 'file:///made/agents.svg', saved: { name: 'agents' } } };
+  made.editor.lastHtml = null;
+  const html = made.editor.editorHtml();
+  assert.equal((html.match(/data-made-peek="c1\/agents\.svg"/g) || []).length, 2, 'on the name and the icon');
+  const framed = () => { made.editor.lastHtml = null; return made.editor.editorHtml().includes('data-made-frame="c1/agents.svg"'); };
+  const el = { dataset: { madePeek: 'c1/agents.svg', name: 'agents.svg' }, isConnected: true };
+  made.editor.peekMade(el);
+  assert.ok(!framed(), 'nothing while the pointer only passes');
+  t.mock.timers.tick(400);
+  assert.ok(framed(), 'a rest: its frame, where the chevron opens it');
+  assert.ok(made.editor.editorHtml().includes('<img src="file:///made/agents.svg" alt="agents.svg" draggable="false">'), 'showing the file');
+  assert.equal(made.editor.state.pop, null, 'no peek over the page');
+  made.editor.unpeekFrame('c1/agents.svg');
+  assert.ok(!framed(), 'leaving the frame folds it');
+  made.editor.peekMade(el); made.editor.unpeekMade(); t.mock.timers.tick(400);
+  assert.ok(!framed(), 'left before the rest: it never opens');
+  made.editor.peekMade(el); t.mock.timers.tick(400);
+  made.editor.madeAct('madestage', { dataset: { made: 'c1/agents.svg', name: 'agents.svg' } });
+  made.editor.unpeekFrame('c1/agents.svg');
+  assert.ok(framed(), 'pressed in it: it stays open');
+  made.editor.madeAct('madeexpand', { dataset: { made: 'c1/agents.svg', name: 'agents.svg' } });
+  assert.ok(!framed(), 'and its chevron folds it');
+  // Opened by the chevron, leaving does not fold it.
+  made.editor.madeAct('madeexpand', { dataset: { made: 'c1/agents.svg', name: 'agents.svg' } });
+  made.editor.unpeekFrame('c1/agents.svg');
+  assert.ok(framed());
+});
+
 test('@create: Cancel during the wait asks @chat instead, marks the router corrected, and the title line names Chat', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
   const m = mounted(['# Notes', '@bart make a page on tutors'], { route: async () => ({ id: 'route-k', agent: 'create', sure: 0.95, by: 'model' }) });
@@ -782,13 +860,14 @@ test('Chat → Discover → Chat: a typed follow-up is an @bart line Bart routes
   assert.equal(m.routes.length, 1);
   assert.deepEqual([m.routes[0].text, m.routes[0].current, m.routes[0].rule], ['papers on this?', 'chat', null]);
   await settled();
-  // Discover (2026-10-13): Chat's reply, said to be Discover's, then the search in a research box under it.
-  assert.deepEqual([m.asks[0].agent, m.asks[0].intro, m.asks[0].routed.id, m.asks[0].name], ['bart', 'discover', 'route-chat', undefined]);
+  // Discover (2026-10-14): asked alone; it settles the direction, and the window puts the research box under its reply.
+  assert.deepEqual([m.asks[0].agent, m.asks[0].intro, m.asks[0].routed.id, m.asks[0].name], ['discover', undefined, 'route-chat', undefined]);
   assert.deepEqual(m.asks[0].turns, [{ question: 'how do tutors notice struggle?', answer: 'By watching.', agent: 'bart' }], 'the earlier turn says Chat answered it');
-  assert.deepEqual([m.asks[1].agent, m.asks[1].research], ['discover', true]);
   assert.equal(m.lines()[0], CHAT_DONE[0], 'the title line keeps the first pick');
-  answerAt(m, m.asks[0].askId, ['bart> Looking for tutoring papers.', 'bart> *Discover · Sonnet · high · 3 s*']);
-  answerAt(m, m.asks[1].askId, ['bart> A guide.', 'bart> *Discover · Opus · high · 9 s*']);
+  answerAt(m, m.asks[0].askId, ['bart> I will look for tutoring papers.', 'bart> *Discover · Sonnet · high · 3 s*', '@discover --research tutoring papers', 'bart~> box-1']);
+  assert.equal(m.editor.askBoxed('box-1'), true);
+  assert.deepEqual([m.asks[1].agent, m.asks[1].research], ['discover', true]);
+  answerAt(m, 'box-1', ['bart> ## Start here', 'bart> *Discover · Opus · high · 9 s*']);
 
   // Discover answered: the card's next follow-up is routed with Discover as `current`; Bart sends it back to Chat.
   pick = 'chat';
@@ -926,12 +1005,13 @@ function rowOf(html, i) {
 const clickAct = (m, dataset, disabled = false) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset, disabled, closest: () => null } : null) }, preventDefault() {} });
 const TITLED = ['bart# [chat 2026-10-13T09:00:00Z] Retry logic', '@chat why retry?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*', ''];
 
-test('an answered question has no Collapse in its corner (2026-10-13): it is on the button row and folds that exchange; a titled conversation\'s last open one collapses the conversation', () => {
-  // Titled, its only exchange: the foot's Collapse collapses the conversation to its title's row.
+test('an answered question has its Collapse in its corner (2026-10-15; on the button row from 2026-10-13): it folds that exchange; a titled conversation\'s last open one collapses the conversation', () => {
+  // Titled, its only exchange: the corner's Collapse collapses the conversation to its title's row.
   const titled = mounted(TITLED);
   const html = titled.editor.editorHtml();
-  assert.ok(!rowOf(html, 1).includes('data-corner') && !rowOf(html, 1).includes('data-chip'), 'nothing beside an answered question');
-  assert.match(html, /data-foot="1"[\s\S]*data-act="fold" data-turn="1" aria-label="Collapse" aria-expanded="true">/);
+  assert.ok(!rowOf(html, 1).includes('data-chip'), 'no chip beside an answered question');
+  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="fold" data-turn="1" aria-label="Collapse" aria-expanded="true">/, 'its Collapse, top right');
+  assert.ok(!/data-foot="1"[^>]*>(?:(?!<\/div><div data-line)[\s\S])*data-act="fold"/.test(html), 'not on the button row');
   clickAct(titled, { act: 'fold', turn: '1' });
   assert.equal(titled.lines()[0], 'bart#+ [chat 2026-10-13T09:00:00Z] Retry logic', 'collapsed to its title');
   assert.deepEqual(titled.lines().slice(1), TITLED.slice(1), 'its exchange is not folded as well');
@@ -946,8 +1026,7 @@ test('an answered question has no Collapse in its corner (2026-10-13): it is on 
   // Untitled: it folds that turn.
   const untitled = mounted(TITLED.slice(1));
   const plain = untitled.editor.editorHtml();
-  assert.ok(!plain.includes('data-corner'));
-  assert.match(plain, /data-foot="0"[\s\S]*data-act="fold" data-turn="0" aria-label="Collapse" aria-expanded="true">/);
+  assert.match(rowOf(plain, 0), /data-corner="0"[^>]*><button class="bart-ic" data-act="fold" data-turn="0" aria-label="Collapse" aria-expanded="true">/);
   clickAct(untitled, { act: 'fold', turn: '0' });
   assert.match(untitled.lines()[1], /^bart\+> because$/, 'folded');
   // A turn of it at work: the earlier exchange still collapses, alone.
@@ -1040,9 +1119,13 @@ test('a line being routed names, from the start, the level it would start on; th
   pinned.editor.askInline(0);
   assert.deepEqual(pinned.routes[0].level, { name: 'Opus', effort: 'high' });
   // A follow-up of a conversation with Discover falls back to Chat; one with Brainstorm names nothing (its model is never shown).
-  const discover = mounted(['@discover tutors', 'bart> A guide.', 'bart> *Discover · Opus · high · 9 s*', ''], { route: () => new Promise(() => {}) });
+  const discover = mounted(['@discover tutors', 'bart> ## Start here', 'bart> *Discover · Opus · high · 9 s*', ''], { route: () => new Promise(() => {}) });
   discover.editor.followText.set(0, 'which is cheapest?'); discover.editor.sendFollow(0);
   assert.deepEqual([discover.routes[0].current, discover.routes[0].level], ['discover', { name: chatStep.name, effort: chatStep.effort }]);
+  // One answering Discover's question goes to Discover by rule (2026-10-14): its level.
+  const asked = mounted(['@discover tutors', 'bart> What are you hoping to figure out?', 'bart> *Discover · Opus · high · 9 s*', ''], { route: () => new Promise(() => {}) });
+  asked.editor.followText.set(0, 'how they notice'); asked.editor.sendFollow(0);
+  assert.deepEqual([asked.routes[0].rule.rule, asked.routes[0].level.name], ['answering Discover', readDiscover('tutors', DEFAULTS, []).steps[0].name]);
   const brainstorm = mounted(['@brainstorm a plan', 'bart> Think about it.', 'bart> *Brainstorm · 9 s*', ''], { route: () => new Promise(() => {}) });
   brainstorm.editor.followText.set(0, 'more'); brainstorm.editor.sendFollow(0);
   assert.equal(brainstorm.routes[0].level, undefined);

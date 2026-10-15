@@ -591,21 +591,14 @@ test('the system prompt tells @bart what <stage> and <highlights> are, after <hi
   assert.ok(!/read it again for a follow-up/.test(BART_SYSTEM_PROMPT), 'a follow-up is sent the highlights: no reading them off disk');
 });
 
-test('Chat\'s reply to an @discover question (2026-10-13, `intro`): asked without the flags, it closes as Discover\'s', async () => {
+test('there are no intros (2026-10-14): an @discover line is Discover\'s alone, and a routed Build is asked for its Build prompt as any is', async () => {
+  const askModule = require('../src/main/bart/ask.cjs');
+  assert.equal(askModule.BUILD_INTRO, undefined);
+  assert.equal(askModule.DISCOVER_INTRO, undefined, 'Chat no longer replies before Discover');
+  const sent = askModule.firstMessage({ context: { head: '<engelbart>' }, prior: [], question: 'ok build it', resumed: false, routed: { build: true } })('');
+  assert.ok(sent.includes('<routed>The person wants this built.') && !sent.includes('<build_intro>') && !sent.includes('<discover_intro>'), 'the routed block, no intro');
   const bart = createFakeBart({ readModels: () => MODELS, delayMs: 5 });
   const ref = { kind: 'workspace', workspaceId: workspace.id };
-  const out = await bart.ask(ctx, project.id, { askId: 'i1', ref, workspaceId: workspace.id, text: '--deep tutors', agent: 'bart', intro: 'discover' });
-  assert.equal(out.lines[0], 'bart> FAKE INTRO to "tutors": Discover is looking for what to read on it.');
-  assert.match(out.lines[out.lines.length - 1], /^bart> \*Discover · /);
-  // 'build' is no intro (2026-10-13: a Build Bart starts from a spec has no reply of Chat's): a routed build is asked for
-  // its Build prompt, as any is.
-  const { firstMessage } = require('../src/main/bart/ask.cjs');
-  assert.equal(require('../src/main/bart/ask.cjs').BUILD_INTRO, undefined);
-  const sent = firstMessage({ context: { head: '<engelbart>' }, prior: [], question: 'ok build it', resumed: false, routed: { build: true }, intro: 'build' })('');
-  assert.ok(sent.includes('<routed>The person wants this built.') && !sent.includes('<build_intro>'), 'the routed block, no Build intro');
-  const built = await bart.ask(ctx, project.id, { askId: 'i3', ref, workspaceId: workspace.id, text: 'ok build it', agent: 'bart', intro: 'build', routed: { id: 'r1', build: true } });
-  assert.ok(!built.lines[0].includes('FAKE INTRO'), 'answered as Chat, not as an intro');
-  // Not asked as an intro, it is Chat's as before; `intro` means nothing to another agent.
   const plain = await bart.ask(ctx, project.id, { askId: 'i2', ref, workspaceId: workspace.id, text: 'tutors', agent: 'bart' });
   assert.match(plain.lines[plain.lines.length - 1], /^bart> \*Chat · /);
 });
@@ -1991,18 +1984,20 @@ test('@discover has three levels a provider: Sonnet medium, Opus high, Opus max 
   assert.deepEqual(old.discover.providers.openai, { ...DEFAULT_DISCOVER.providers.openai, standard: { model: 'sol', effort: 'xhigh' } }, 'half a step: the other half as that day\'s default had it');
   assert.deepEqual([step('why', old), step('--quick why', old), step('--deep why', old)], [['Fable xhigh'], ['Sonnet medium'], ['Opus max']]);
   const plan = (text, turns = []) => turnPlan({ agent: 'discover', text, turns }, DEFAULTS);
-  assert.match(plan('why do agents loop').extra, /^<mode>standard\. Up to three starting points;[^<]*eight sources[^<]*<\/mode>$/);
-  assert.equal(plan('--quick why do agents loop').extra, `<mode>${MODE_LIMITS.quick}</mode>`);
-  // Each mode keeps its total and gives essays a share of it (2026-10-03), and says how many more papers may be opened only
-  // to look for code (2026-10-04): none in quick mode.
-  assert.equal(MODE_LIMITS.quick, 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply. No extra papers opened to look for code.');
-  assert.equal(MODE_LIMITS.standard, 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply. Up to two extra papers opened to look for code.');
-  assert.equal(MODE_LIMITS.deep, 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply. Up to four extra papers opened to look for code.');
-  const deep = plan('picked "Retries"', [{ question: 'agents --deep', answer: '```json\n{}\n```' }]);
-  assert.deepEqual([deep.mode, /fifteen sources/.test(deep.extra), deep.steps[0].name, deep.steps[0].effort], ['deep', true, 'Opus', 'max'], 'an answer to a card carries the problem\'s --deep on, and its level');
-  const quick = plan('only after 2022', [{ question: '--quick agents', answer: '## Start here' }]);
+  // Only a research box's turn, the search, is told how far to trace (2026-10-14); a turn settling the direction is not.
+  assert.equal(plan('why do agents loop').extra, '');
+  assert.match(plan('--research why do agents loop').extra, /^<mode>standard\. Up to three starting points;[^<]*eight sources[^<]*<\/mode>\n\n<search>The direction is settled/);
+  assert.ok(plan('--quick --research why do agents loop').extra.startsWith(`<mode>${MODE_LIMITS.quick}</mode>`));
+  assert.deepEqual([plan('--research why').search, plan('why').search, plan('--research why').question], [true, false, 'why']);
+  // Each mode keeps its total and gives essays a share of it (2026-10-03); no extra papers opened to look for code (gone 2026-10-15).
+  assert.equal(MODE_LIMITS.quick, 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply.');
+  assert.equal(MODE_LIMITS.standard, 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply.');
+  assert.equal(MODE_LIMITS.deep, 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply.');
+  const deep = plan('--research retries', [{ question: 'agents --deep', answer: 'Which part?' }, { question: 'retries', answer: 'I will look for…' }]);
+  assert.deepEqual([deep.mode, /fifteen sources/.test(deep.extra), deep.steps[0].name, deep.steps[0].effort], ['deep', true, 'Opus', 'max'], 'the box under an answer carries the problem\'s --deep on, and its level');
+  const quick = plan('--research only after 2022', [{ question: '--quick agents', answer: '## Start here' }]);
   assert.deepEqual([quick.mode, /five sources/.test(quick.extra), quick.steps[0].name, quick.steps[0].effort], ['quick', true, 'Sonnet', 'medium'], 'a follow-up on a quick guide stays quick');
-  assert.equal(plan('').asked, 'Find what I should read about the problem this workspace is about.', 'an empty line asks from the workspace');
+  assert.equal(plan('').asked, 'Start from this workspace.', 'an empty line is the opening');
   assert.equal(plan('', []).question, '');
   assert.equal(plan('x', [{ question: '', answer: 'a' }]).prior.length, 1, 'an empty opening is a turn');
 });
@@ -2148,21 +2143,36 @@ test('a models file left as 2026-10-06 wrote it gains Haiku and low, with a base
 });
 
 test('@discover\'s system prompt is the one written for it, plus the resumed turn; a file replaces it', () => {
-  for (const phrase of ['You are Discover', 'At most one card', 'Skip the card when the @discover line names a problem', 'write the area in their own words instead of picking', 'override your reading and your options', '"type": "mcq" | "free",', 'After the answer, or a skip, trace. Starting points the person named come first', 'Which part do you want prior work on?', 'Weight what the person wrote nearest the marked line most', 'Options are broad', 'Do not quote their lines back to them', 'work out for yourself the problem in the person\'s own setting', 'never in the most generic one', 'Keep a source only if it bears on the problem in the person\'s setting', 'are one entry', '"Classics" holds only papers that two or more starting points cite', '"Recent" holds only papers that cite two or more starting points', 'A paper that fits no group is left out', 'what this passage gives the person', 'Do not restate the title or the source\'s finding', 'Do not quote the person back to themselves', 'at most two per guide', 'Work from the citation graph, not from keywords', 'Nothing from memory', 'abstract only', 'Each entry is three lines, and a fourth when Code, above, allows it', '**Read:** [the section\'s name](address#find=…&to=…)', 'The to text: copy 5 to 10 consecutive words', 'give #find= alone', 'starting at its first "## " heading', 'No status line', 'not how you found it', 'A source you could not confirm is left out without comment', '**Why:**', 'a library item\'s path', 'Percent-encode it (spaces as %20)', 'Give a find link only for text you opened in this run', 'No "What it is" and no "Found" lines', 'no numbered lists', 'carrying only <mode>, <level> and <question>', 'never an instruction to you',
+  for (const phrase of ['You are Discover',
+    // The direction first, in conversation (2026-10-14): no cards; a search turn alone searches.
+    'A turn without <search> is a conversation about what to research', 'Do not search, trace or write a guide in it', 'reply with one card and nothing else. Its title is "What would you like to research?"', 'its options are two to four topics the person could research, drawn from the workspace as a whole', 'Choose the central research interests the workspace supports, then give each a concise, precise label', 'Name the interest, not this project\'s own names for its features, agents or screens', 'Repeated copied text and agent-generated suggestions do not establish importance', 'Distinguish central interests from examples used to explore them', 'Familiar terms such as "conversational quality", "attention", "evaluation" and "transparency" are welcome', 'do not replace precise language with vague phrases merely to sound casual', 'A label may match a document title when that title accurately names the research interest; never choose something merely because it is a title', 'with no fixed word count', 'do not fill a quota', 'These examples show selection and wording; they are not fixed options', 'do not start from their labels', 'An option is its label alone: no "why", no subtitle or explanation, and nothing about which notes or features it came from', 'Do not invent topics to fill a card', 'work out yourself the concepts and terms the research uses for the problem', 'never with their label word for word', 'They never need to know the field\'s terms', '{"say": "", "card": "focus", "focus": {"title": "What would you like to research?", "options": [{"label": "<a topic>"}, {"label": "<another topic>"}]}, "ready": false}', 'your whole reply is exactly this one line, in plain text: What would you like to research?', 'Never say why you are not giving a card', 'Their answer to that card, picked "label" or their own words, says where their interest is, not yet what they want to learn about it', 'When they already make plain what the person wants to find out, go straight on', 'ask one short, natural question first, such as "What are you hoping to understand about concise replies?"', 'Never fill the gap yourself by naming several directions and treating them as what they want', 'Refining the direction: a turn with <refine> comes from Refine', 'let their latest words win wherever they disagree', 'it waits there until they start the search themselves', 'When their words could mean quite different searches, ask one short question first', '<refine>, on a turn that refines the direction', 'say in one or two plain sentences what you will look for, in their terms, as one direction', 'Not a list of possibilities you chose for them', '(skipped) means none fits: ask, in plain words, what they have in mind', 'Ask one useful question at a time', 'only when its answer would materially change what you search for', 'which concepts fit depends on what the workspace says about the topic, and no list of them is fixed', 'These show the kind of question, not a sequence to follow', 'a short neutral scenario, in a paragraph of its own', 'It must not carry the answer you expect', 'A clear request needs no question', 'a detail left unspecified is not a reason to ask', 'An explicit request for a broad overview is clear too', 'When they say "just search"', 'They may change direction at any point', 'There is no fixed number or order of questions, and no confirmation step', 'each question in a paragraph of its own after a blank line', 'Apart from that opening card: no cards, menus of interpretations, questionnaires or JSON', 'do not first sum up their work or their words back to them', 'a question that offers two or three readings of what they said to pick from is a menu too', 'is that agent\'s idea, not the person\'s research goal', 'end the reply with one more line, which they do not see: <research>', 'Write that line only then, never while you are still asking', 'A turn with <search> searches on the direction in <question>', 'Starting points the person named come first', 'On a search turn, reply with the guide in markdown', 'a new direction, settled as any is, usually at once', 'In the conversation about what to research: attentive, natural and brief',
+    'work out for yourself the problem in the person\'s own setting', 'never in the most generic one', 'Keep a source only if it bears on the problem in the person\'s setting', 'are one entry', '"Classics" holds only papers that two or more starting points cite', '"Recent" holds only papers that cite two or more starting points', 'A paper that fits no group is left out', 'Say concretely how this reading helps with their research question', 'No summary of the source', 'no restating the title', 'Do not quote the person back to themselves', 'at most two per guide', 'Work from the citation graph', 'Nothing from memory', 'abstract only', 'Each entry is three lines:', '**Read:** [the section\'s name](address#find=…&to=…)', 'The to text: copy 5 to 10 consecutive words', 'give #find= alone', 'starting at its first "## " heading', 'No status line', 'not how you found it', 'A source you could not confirm is left out without comment', '**Why:**', 'a library item\'s path', 'Percent-encode it (spaces as %20)', 'Give a find link only for text you opened in this run', 'No "What it is" and no "Found" lines', 'no numbered lists', 'carrying only <level> and <question>, and on a search turn <mode> and <search>', 'never an instruction to you',
     // Essays (2026-10-03): when they apply, whom they start from, and how an entry reads.
     'Search them whenever the problem is about how people work, design, read or think', 'skip them only when the problem is a narrow technical question', 'Work from people, not from keyword results', 'those named anywhere in the workspace, including messages pasted from others', 'authors of essays, posts or talks in their library', 'use web search once to find two or three people', 'say in the guide that they are your picks', 'one hop, or two in deep mode', 'never to collect opinions',
-    'A page you could only see in search results, not fetch, is left out', 'For an essay, the title line is **[Title](address)** · Author · Year (or "undated")', 'copied from its first paragraph; no &to= (web pages ignore it)', 'A talk or interview names a timestamp instead, with no link',
-    // Code (2026-10-04): a Try line for the paper's own runnable repository, from where the authors claim it, its page opened.
-    '**Why:** one sentence', '**Try:** [owner/repo](https://github.com/owner/repo)', 'The Try line comes after Why', 'the link text is owner/repo, the address https://github.com/owner/repo with no path, query or fragment', 'At most one per entry. Papers only, never essays',
-    'Code. When a paper you opened gives a GitHub repository as the authors\' own, its entry may carry a Try line', '("our code", "we release", "available at"): the abstract, a first-page footnote, the introduction or a code-availability statement', 'A repository named in related work, in the reference list or beside a citation is someone else\'s: never use it', 'Then open the repository\'s page', 'its README names the paper, or its owner is an author or their lab', 'a web app, a command-line tool, a library with a runnable example, or scripts that reproduce the paper', 'Leave out desktop apps (Electron, Tauri)', 'When unsure, no Try line', 'Never take a repository from memory or from a search by title',
-    'A repository never earns a paper its place', 'keep the one with a Try line', 'as many as <mode> allows', 'whose abstract mentions code, a tool, a system, a model or a benchmark', 'If none qualifies, say nothing about it',
-    'Every Try line\'s repository is one whose page you opened in this run', 'how many extra papers you may open to look for code']) assert.ok(DISCOVER_SYSTEM_PROMPT.toLowerCase().includes(phrase.toLowerCase()), phrase);
+    'A page you could only see in search results, not fetch, is left out', 'For an essay, the title line is **[Title](address)** · Author · Year (or "undated")', 'copied from its first paragraph; no &to= (web pages ignore it)', 'A talk or interview names a timestamp instead, with no link', '**Why:** one sentence']) assert.ok(DISCOVER_SYSTEM_PROMPT.toLowerCase().includes(phrase.toLowerCase()), phrase);
+  // Starting points from two places (2026-10-15): theirs, at most half, and some found by searching by meaning.
+  for (const phrase of ['from two places', 'search by meaning', 'At most half the starting points', 'two in deep mode', 'all the starting points are found', 'Search only to find starting points (step 1), and by meaning, never by words']) assert.ok(DISCOVER_SYSTEM_PROMPT.includes(phrase), phrase);
+  assert.ok(!DISCOVER_SYSTEM_PROMPT.includes('Only when they have none, find some with related or search'), 'no longer from their library alone');
+  const at0 = (phrase) => DISCOVER_SYSTEM_PROMPT.indexOf(phrase);
   assert.ok(!/ESCALATE/.test(DISCOVER_SYSTEM_PROMPT));
-  assert.ok(!/exactly three lines/.test(DISCOVER_SYSTEM_PROMPT), 'an entry may have a fourth line');
-  // The Code paragraphs sit after "Open what you recommend", in the trace; the Try line after Why in the guide's form.
+  // Opening labels (2026-10-15): the principle is taught on a made-up workspace; no real workspace's topics are written in.
+  // The opening labels (2026-10-15, David's): no word count, no keeping the field's terms out, no lab-notebook label
+  // examples; three worked examples of selection and wording in their place, said to be no fixed options.
+  assert.ok(!/three to six plain words|keep them out of the label|Notebook entries that auto-tag samples|Making the sync panel show every saved change|neither jargon nor chatty/.test(DISCOVER_SYSTEM_PROMPT), 'the old label rules are gone');
+  for (const example of ['"What makes an AI feel attentive"', '"Tracking sample histories"', '"Hints that support independent problem-solving"', 'Do not raise the isolated disagreement exercise above it', 'leave out the incidental styling task']) assert.ok(DISCOVER_SYSTEM_PROMPT.includes(example), example);
+  assert.ok(!/Keep the person's setting/.test(DISCOVER_SYSTEM_PROMPT));
+  assert.ok(!/At most one card|"type": "mcq"|Which part do you want prior work on|Skip the card|Options are broad/.test(DISCOVER_SYSTEM_PROMPT), 'one card only, the opening\'s (2026-10-14)');
+  assert.ok(at0('\n# First, the direction') < at0('\n# The search') && at0('\n# The search') < at0('\n# Then, trace'), 'the direction, then the search, then the trace');
+  // A pick is no longer settled at once, and the direction is said as one (2026-10-15): the old instructions are gone.
+  assert.ok(!/which they often do|go straight on: say what you will look for|the two or three things the search will look for|say the reading guide will appear below/.test(DISCOVER_SYSTEM_PROMPT), 'no "pick, then search at once"');
+  // No Try line and no looking for code (2026-10-15): an entry is three lines.
+  assert.ok(!/Try line|\*\*Try:\*\*|look for code|GitHub repository|Code\. When|A repository never earns|a fourth when Code/i.test(DISCOVER_SYSTEM_PROMPT), 'no Try line');
+  // A Why (2026-10-15): one sentence of about 20 to 30 words on how the reading helps with their question, never forced onto
+  // a feature of the workspace; the old "open question in their work" is gone, and the verification rules stay.
+  for (const phrase of ['**Why:** one sentence of about 20 to 30 words, as a guide, not a limit', 'a second only when a distinction that matters would otherwise be lost', 'name the concept, evidence, method or tension it offers', 'Do not force a link to a particular feature, document or step of their workspace', 'no filler such as "provides valuable insights"', 'never make a claim stronger to make it shorter', 'For the form only, never the content', 'ends its Why with "My pick."', 'Every paper in the guide must have come back from a paper tool in this run']) assert.ok(DISCOVER_SYSTEM_PROMPT.includes(phrase), phrase);
+  assert.ok(!/which open question in their work it bears on/.test(DISCOVER_SYSTEM_PROMPT), 'no Why forced onto an open question of the workspace');
   const at = (phrase) => DISCOVER_SYSTEM_PROMPT.indexOf(phrase);
-  assert.ok(at('Open what you recommend') < at('Code. When a paper') && at('Code. When a paper') < at('A repository never earns') && at('A repository never earns') < at('# What is real'));
-  assert.ok(at('**Why:** one sentence') < at('**Try:** [owner/repo]') && at('**Try:** [owner/repo]') < at('For an essay, the title line'));
+  assert.ok(at('Open what you recommend') < at('# What is real') && at('**Why:** one sentence') < at('For an essay, the title line'));
   assert.ok(!/Not verified|say so at the end|already trust on this|which part of the person's problem it touches|Which of these should I start from|Card 2|select_all/.test(DISCOVER_SYSTEM_PROMPT), 'no "Not verified" group, no account of failures, no free card 2, no old Why');
   assert.ok(!/keeps in their library; fetch their own pages|not to find opinions/.test(DISCOVER_SYSTEM_PROMPT), 'essays no longer start only from people the person names or keeps');
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-prompt-discover-'));
@@ -2197,7 +2207,7 @@ test('a discover guide starts at its first "## " heading: a status line before i
   const essays = '## Essays\n\n**[An essay](https://example.org/essay)** · A. Writer · undated\n**Read:** [Margins](https://example.org/essay#find=the%20margin%20is%20where)\n**Why:** a design to compare against.';
   assert.equal(replyBody('discover', `${said}${GUIDE}\n\n${essays}`), `${GUIDE}\n\n${essays}`);
   assert.equal(replyBody('discover', said + essays), essays);
-  // A Try line (2026-10-04) is kept as any line of the guide is.
+  // A Try line in an older guide (2026-10-04 to 2026-10-15) is kept as any line of the guide is.
   const tried = `${GUIDE}\n**Try:** [ada/retries](https://github.com/ada/retries)\n\n${essays}`;
   assert.equal(replyBody('discover', said + tried), tried);
 });
@@ -2240,11 +2250,53 @@ test('the paper tools turn OpenAlex records into what a guide needs, and say wha
   assert.deepEqual([activity.paperTool('resolve', { query: 'Retries' }), activity.claudeUpdate({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'mcp__papers__citations', input: { id: 'W1' } }] } }).activity], ['Looking up “Retries”', 'Reading what cites “W1”']);
 });
 
-test('the real runner for @discover: file, web and paper tools, the paper server for both CLIs, its own Codex home, sessions and timeout, and <mode>', async () => {
+test('search finds papers by meaning (2026-10-15): search.semantic alone, years kept, spaced a second apart, words on a refusal; by "words" as before', async () => {
+  const seen = [], waits = [];
+  let clock = 0, refuse = false;
+  const reply = (status, body) => ({ status, ok: status < 400, json: async () => body, text: async () => body });
+  const W = (n) => ({ id: `https://openalex.org/W${n}`, title: `Paper ${n}`, publication_year: 2023, cited_by_count: n, authorships: [] });
+  const fetchImpl = async (url) => {
+    const u = new URL(url); seen.push(u);
+    if (u.pathname !== '/works') return reply(404, null);
+    if (u.searchParams.has('search.semantic')) return refuse ? reply(400, { error: 'semantic search is not available' }) : reply(200, { meta: { count: 2 }, results: [W(1), W(2)] });
+    if (u.searchParams.has('search')) return reply(200, { meta: { count: 1 }, results: [W(3)] });
+    return reply(404, null);
+  };
+  const papers = papersLib.createPapers({ fetchImpl, wait: async (ms) => { waits.push(ms); clock += ms; }, now: () => clock });
+  const problem = 'Tutors notice when a student is stuck, before the student says so. How do they notice, and what do they do next?';
+  const call = async (args) => JSON.parse((await papersLib.callTool(papers, 'search', args)).content[0].text);
+  const found = await call({ query: problem, from_year: 2021 });
+  const sent = seen[seen.length - 1];
+  assert.equal(sent.searchParams.get('search.semantic'), problem, 'by meaning by default: the sentences as written');
+  assert.ok(!sent.searchParams.has('search') && !sent.searchParams.has('sort'), 'never `search` beside it, and no sort');
+  assert.equal(sent.searchParams.get('filter'), 'from_publication_date:2021-01-01', 'year filters work with it');
+  assert.deepEqual([found.order, found.results.map((r) => r.id)], ['closest in meaning first (title and abstract)', ['W1', 'W2']]);
+  await call({ query: 'x'.repeat(3000), limit: 50 });
+  assert.equal(seen[seen.length - 1].searchParams.get('search.semantic').length, 2000, 'clipped to 2,000 characters');
+  assert.equal(seen[seen.length - 1].searchParams.get('per_page'), '25', 'at most 25');
+  assert.ok(waits.length === 1 && waits[0] >= 1100, 'the second semantic call waits out the 1.1 s');
+  refuse = true;
+  const fell = await call({ query: problem });
+  assert.ok(seen[seen.length - 1].searchParams.has('search') && !seen[seen.length - 1].searchParams.has('search.semantic'), 'a 400: the words search');
+  assert.match(fell.order, /^OpenAlex refused the search by meaning \(400\), so this matched words instead: /);
+  assert.deepEqual(fell.results.map((r) => r.id), ['W3']);
+  refuse = false;
+  const words = await call({ query: 'tutor, noticing: struggle', by: 'words' });
+  const asked = seen[seen.length - 1];
+  assert.deepEqual([asked.searchParams.get('search'), asked.searchParams.has('search.semantic')], ['tutor noticing struggle', false], 'by words: `search`, as before');
+  assert.match(words.order, /^relevance/);
+  assert.deepEqual(papersLib.PAPER_TOOLS.find((tool) => tool.name === 'search').inputSchema.properties.by, { type: 'string', enum: ['meaning', 'words'] });
+  assert.match(papersLib.PAPER_TOOLS.find((tool) => tool.name === 'search').description, /^Find papers by meaning: give one to three plain sentences stating the problem\./);
+  // What the person sees while it searches.
+  assert.equal(activity.paperTool('search', { query: 'Tutors noticing struggle' }), 'Finding papers close to “Tutors noticing struggle”');
+  assert.equal(activity.paperTool('search', { query: 'tutor struggle', by: 'words' }), 'Searching papers for “tutor struggle”');
+});
+
+test('the real runner for @discover: file, web and paper tools, the paper server for both CLIs, its own Codex home, sessions and timeout; the direction handed back, and <mode> on the search turn alone (2026-10-14)', async () => {
   const authFile = path.join(homeDir, 'auth-discover.json');
   fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
   const calls = [];
-  const replies = [JSON.stringify(FOCUS), GUIDE, GUIDE];
+  const replies = ['I will look for how agents loop and how they are stopped. The reading guide will appear below.\n\n<research>why agents loop and how they are stopped</research>', GUIDE, GUIDE];
   const run = (shell, args, options, callback) => {
     const command = args[args.length - 1];
     const mcp = options.env.ENGELBART_BART_MCP ? JSON.parse(fs.readFileSync(options.env.ENGELBART_BART_MCP, 'utf8')) : null;
@@ -2262,22 +2314,30 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   const first = await ask('d1', 'agents --deep');
   const home = `${codexHome}-discover`;
   assert.equal(calls[0].env.CODEX_HOME, home);
-  assert.match(calls[0].command, /-c 'tools\.web_search=true'/);
-  assert.equal(calls[0].timeout, 45 * 60_000, 'three quarters of an hour a deep step');
+  // Settling the direction only talks (2026-10-15): no web and no paper tools until the research box searches.
+  assert.match(calls[0].command, /-c 'tools\.web_search=false'/);
+  assert.notEqual(calls[0].timeout, 45 * 60_000, 'an ordinary step\'s time: it does not search');
   assert.deepEqual([calls[0].env.ENGELBART_BART_MODEL, /model_reasoning_effort="ultra"/.test(calls[0].command)], ['gpt-6-astra', true], 'deep: Astra ultra');
   assert.equal(fs.readFileSync(path.join(home, 'AGENTS.md'), 'utf8'), DISCOVER_SYSTEM_PROMPT);
-  assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n\n[mcp_servers.papers]\ncommand = "/Apps/Engelbart"\nargs = ["/Apps/papers-mcp.cjs"]\nenv = { ELECTRON_RUN_AS_NODE = "1" }\nstartup_timeout_sec = 30\ntool_timeout_sec = 90\n');
-  assert.match(calls[0].input, /<mode>deep\.[^\n]*<\/mode>\n\n<level>You are running as Astra at ultra effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nagents\n<\/question>$/);
-  assert.deepEqual([first.lines[0], discoverThreads.size(), brainstormThreads.size()], ['bart> ```json', 1, 0], 'a card, kept among discover\'s own sessions');
+  assert.ok(!fs.readFileSync(path.join(home, 'config.toml'), 'utf8').includes('mcp_servers.papers'), 'no paper server');
+  assert.ok(!calls[0].input.includes('<mode>') && !calls[0].input.includes('<search>'), 'settling the direction is no search');
+  assert.match(calls[0].input, /\n\n<level>You are running as Astra at ultra effort, step 1 of 1\. No higher step exists\.<\/level>\n\n<question>\nagents\n<\/question>$/);
+  assert.deepEqual([first.lines[0], first.research, discoverThreads.size(), brainstormThreads.size()], ['bart> I will look for how agents loop and how they are stopped. The reading guide will appear below.', 'why agents loop and how they are stopped', 1, 0], 'the tag handed back, not shown; kept among discover\'s own sessions');
+  assert.ok(!first.lines.some((line) => line.includes('<research>')));
 
+  // The research box under it is the search: the same session, told how far to trace and to search.
   const said = [{ question: 'agents --deep', answer: first.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n') }];
-  const second = await ask('d2', '(skipped)', said);
+  const second = await ask('d2', '--research why agents loop and how they are stopped', said);
   assert.match(calls[1].command, / resume /);
-  assert.match(calls[1].input, /^<mode>deep\./, 'the resumed turn still says how far to trace');
+  assert.match(calls[1].command, /-c 'tools\.web_search=true'/);
+  assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n\n[mcp_servers.papers]\ncommand = "/Apps/Engelbart"\nargs = ["/Apps/papers-mcp.cjs"]\nenv = { ELECTRON_RUN_AS_NODE = "1" }\nstartup_timeout_sec = 30\ntool_timeout_sec = 90\n', 'the search has the paper tools');
+  assert.match(calls[1].input, /^<mode>deep\.[^\n]*<\/mode>\n\n<search>The direction is settled[^\n]*<\/search>\n\n/, 'the resumed search still says how far to trace');
+  assert.match(calls[1].input, /<question>\nwhy agents loop and how they are stopped\n<\/question>$/, 'the direction, without the flag');
+  assert.equal(second.research, undefined, 'a search hands back no direction');
   assert.deepEqual([calls[1].timeout, calls[1].env.ENGELBART_BART_MODEL], [45 * 60_000, 'gpt-6-astra'], 'and stays on the deep level');
   assert.deepEqual(second.lines.slice(0, 3), ['bart> ## Start here', 'bart>', 'bart> **[A paper](https://arxiv.org/abs/2401.00001)** · A. Author · 2024 · arXiv']);
 
-  await ask('d3', '--opus only after 2022', []);
+  await ask('d3', '--opus --research only after 2022', []);
   const claude = calls[2];
   assert.match(claude.command, /--strict-mcp-config --mcp-config "\$ENGELBART_BART_MCP" --tools "Read,Grep,Glob,WebSearch,WebFetch" --allowedTools "Read,Grep,Glob,WebSearch,WebFetch,mcp__papers__\*" /);
   assert.deepEqual(claude.mcp, { mcpServers: { papers: { command: '/Apps/Engelbart', args: ['/Apps/papers-mcp.cjs'], env: { ELECTRON_RUN_AS_NODE: '1' } } } });
@@ -2287,14 +2347,32 @@ test('the real runner for @discover: file, web and paper tools, the paper server
   assert.equal(claude.env.ENGELBART_BART_MODEL, 'opus', 'a model flag picks for its line');
 
   replies.push(GUIDE);
-  const quick = await ask('d4', '--quick agents', []);
+  const quick = await ask('d4', '--quick --research agents', []);
   const fast = calls[3];
   assert.deepEqual([fast.timeout, fast.env.ENGELBART_BART_MODEL, /model_reasoning_effort="medium"/.test(fast.command)], [30 * 60_000, 'gpt-6.1-sol', true], 'quick: Sol medium, half an hour');
-  assert.match(fast.input, /<mode>quick\. Up to two starting points;[^<]*at most five sources in the guide, of which up to two are essays when essays apply\. No extra papers opened to look for code\.<\/mode>\n\n<level>You are running as Sol at medium effort/);
+  assert.match(fast.input, /<mode>quick\. Up to two starting points;[^<]*at most five sources in the guide, of which up to two are essays when essays apply\.<\/mode>\n\n<search>[^\n]*<\/search>\n\n<level>You are running as Sol at medium effort/);
   assert.match(quick.lines[quick.lines.length - 1], /^bart> \*Discover · Sol · medium · \d+ s\*$/, 'its foot still names the model');
 
   writeCodexConfig(home, {});
   assert.equal(fs.readFileSync(path.join(home, 'config.toml'), 'utf8'), '# Written by Engelbart (src/main/bart/ask.cjs). Replaced on every run.\n');
+});
+
+test('an empty @discover\'s plain reply is the question alone, whatever the model said before it; a card, or any later turn, as it came (2026-10-14)', async () => {
+  const replies = [];
+  const run = (shell, args, options, callback) => callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: replies.shift() })}\n`);
+  const bart = createBart({ readModels: () => DEFAULTS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs-opened'), run, discoverThreads: createThreads({ idleMs: DISCOVER_IDLE_MS }), node: '/Apps/Engelbart', papersServer: '/Apps/papers-mcp.cjs' });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const ask = (askId, text, reply) => { replies.push(reply); return bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text, turns: [], agent: 'discover' }); };
+  const body = (out) => out.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n');
+  assert.equal(body(await ask('o1', '', 'Workspace is empty, so plain line.\n\nWhat would you like to research?')), 'What would you like to research?');
+  const themed = JSON.stringify({ say: '', card: 'focus', focus: { title: 'What would you like to research?', options: [{ label: 'Voice' }, { label: 'Agents' }, { label: 'Viewer' }] }, ready: false });
+  assert.equal(card.questionOf(card.cardOfAnswer(body(await ask('o2', '', themed)))).title, 'What would you like to research?', 'a card stays a card');
+  // Its topics are labels alone, at most four (2026-10-15): a "why" the model wrote is dropped; a later turn's card is not touched.
+  const whys = JSON.stringify({ say: '', card: 'focus', focus: { title: 'What would you like to research?', options: ['Concise, conversational replies', 'What makes an AI feel attentive', 'Evaluating conversational quality', 'Making agent activity understandable', 'A fifth'].map((label) => ({ label, why: 'From the notes on Bart.' })) }, ready: false });
+  const plain = card.questionOf(card.cardOfAnswer(body(await ask('o4', '', `\`\`\`json\n${whys}\n\`\`\``))));
+  assert.deepEqual(plain.options, [{ label: 'Concise, conversational replies' }, { label: 'What makes an AI feel attentive' }, { label: 'Evaluating conversational quality' }, { label: 'Making agent activity understandable' }]);
+  assert.ok(card.questionOf(card.cardOfAnswer(body(await ask('o5', 'tutors', whys)))).options.every((option) => option.why), 'a later turn\'s card keeps them');
+  assert.equal(body(await ask('o3', 'tutors', 'Tutors, then. What would you like to research?')), 'Tutors, then. What would you like to research?', 'only a bare opening');
 });
 
 test('a --codex @discover line runs Codex at its level when Claude Code is the default; a follow-up stays on Codex and resumes its session; --claude starts Claude Code afresh (P-07)', async () => {
@@ -2316,7 +2394,7 @@ test('a --codex @discover line runs Codex at its level when Claude Code is the d
   assert.equal(DEFAULTS.provider, 'anthropic');
   const first = await ask('dp1', 'agents --codex --deep');
   assert.match(calls[0].command, /^exec \S*codex exec --color never /, 'Codex, a new session');
-  assert.deepEqual([calls[0].env.ENGELBART_BART_MODEL, /model_reasoning_effort="ultra"/.test(calls[0].command), calls[0].timeout], ['gpt-6-astra', true, 45 * 60_000], 'at deep: Astra ultra');
+  assert.deepEqual([calls[0].env.ENGELBART_BART_MODEL, /model_reasoning_effort="ultra"/.test(calls[0].command)], ['gpt-6-astra', true], 'at deep: Astra ultra (a deep search\'s time is its research box\'s)');
   assert.equal(first.meta.provider, 'openai');
   assert.match(first.lines[first.lines.length - 1], /^bart> \*Discover · Astra · ultra · \d+ s\*$/, 'the foot names it (A-02)');
 
@@ -2337,7 +2415,7 @@ test('a --codex @discover line runs Codex at its level when Claude Code is the d
   assert.deepEqual([calls[3].env.ENGELBART_BART_MODEL, / --effort max /.test(calls[3].command), claude.meta.provider], ['opus', true, 'anthropic'], 'deep on Claude Code: Opus max');
 });
 
-test('the fake @discover asks one card (which part, in broad areas) for a line with no problem, then writes a guide; a problem gets the guide at once, and a follow-up additions', async () => {
+test('the fake @discover settles the direction in conversation (2026-10-14): an empty line gets the card "What would you like to research?", a broad topic one question, an answer or a clear request the <research> line, which the window asks as a research box; the box writes the guide, and a follow-up additions', async () => {
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
   const ref = { kind: 'workspace', workspaceId: workspace.id };
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
@@ -2347,28 +2425,44 @@ test('the fake @discover asks one card (which part, in broad areas) for a line w
     const out = await bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text: model.parseLine(doc[doc.length - 1]).text, turns, agent: 'discover' });
     const next = [...doc, ...out.lines];
     const [again] = model.threads(next);
-    return { doc: next, card: card.cardOfAnswer(model.turnText(next, again.turns[again.turns.length - 1]).answer), lines: out.lines };
+    return { doc: next, card: card.cardOfAnswer(model.turnText(next, again.turns[again.turns.length - 1]).answer), lines: out.lines, research: out.research };
   };
+  // What the window does with a direction (Workspace askBart): its research box under the reply, asked in turn.
+  const box = (at, askId) => run([...at.doc, model.researchLine(at.research)], askId);
   const at = await run(['@discover'], 'dv1');
   const which = card.questionOf(at.card);
-  assert.deepEqual([which.type, which.title], ['focus', 'Which part do you want prior work on?']);
-  assert.ok(which.options.length >= 3 && which.options.length <= 4, 'three or four broad areas');
-  assert.equal(at.card.say, '');
-  const picked = await run([...at.doc, `@discover ${card.answerLine(at.card, { picks: [which.options[0].label] })}`], 'dv2');
-  assert.deepEqual([picked.card, picked.lines[0]], [null, 'bart> ## Start here'], 'one card: a pick goes straight to the guide');
-  assert.ok(!picked.lines.some((line) => /Which of these should I start from/.test(line)));
-  const own = await run([...at.doc, `@discover ${card.answerLine(at.card, { note: 'choosing among research threads, from the ReAct paper' })}`], 'dv2b');
-  assert.equal(own.card, null, 'their own words: the guide');
-  assert.equal(own.lines[2], 'bart> **[A fake record for “choosing among research threads, from the ReAct paper”](https://example.org/fake-named)** · Fake Author et al. · 2024', 'their words start the guide');
-  const guide = await run([...at.doc, '@discover (skipped)'], 'dv3');
+  assert.deepEqual([which.type, which.title, at.card.say, at.research], ['focus', 'What would you like to research?', '', undefined], 'the opening card, and no search');
+  assert.deepEqual(which.options, [{ label: 'Fake theme one' }, { label: 'Fake theme two' }, { label: 'Fake theme three' }], 'labels alone');
+  // A pick only says where their interest is (2026-10-15): one short question, no search yet; the answer settles it.
+  const pickedTheme = await run([...at.doc, `@discover ${card.answerLine(at.card, { picks: ['Fake theme two'] })}`], 'dv1b');
+  assert.deepEqual([pickedTheme.lines[0], pickedTheme.research], ['bart> FAKE DISCOVER: What are you hoping to understand about fake theme two?', undefined], 'a pick: one question');
+  const pickAnswered = await run([...pickedTheme.doc, '@discover when being brief starts hurting understanding'], 'dv1c');
+  assert.equal(pickAnswered.research, 'Fake theme two; when being brief starts hurting understanding', 'the pick and the answer, together');
+  const broad = await run([...at.doc, '@discover tutors'], 'dv2');
+  assert.deepEqual([broad.lines[0], broad.research], ['bart> FAKE DISCOVER: What are you hoping the research will help you figure out?', undefined], 'a broad topic: one question');
+  const settled = await run([...broad.doc, '@discover how they help novices debug'], 'dv3');
+  assert.equal(settled.research, 'tutors; how they help novices debug', 'the answer settles it');
+  assert.ok(settled.lines[0].startsWith('bart> FAKE DISCOVER will look for work on') && !settled.lines.some((line) => line.includes('<research>')), 'the tag is not shown');
+  const own = await box(settled, 'dv4');
+  assert.deepEqual([own.lines[0], own.research], ['bart> ## Start here', undefined], 'the box writes the guide, and hands back no direction');
+  assert.equal(own.lines[2], 'bart> **[A fake record for “tutors; how they help novices debug”](https://example.org/fake-named)** · Fake Author et al. · 2024', 'the direction the conversation reached starts the guide');
+  // An older exchange's card, answered now: read as said, and settled.
+  const carded = await run(['@discover', `bart> \`\`\`json`, `bart> ${JSON.stringify(FOCUS)}`, 'bart> ```', '@discover picked "Retries"'], 'dv5');
+  assert.deepEqual([carded.lines[0], carded.research], ['bart> FAKE DISCOVER: What are you hoping to understand about retries?', undefined]);
+  // A clear request: no question, the line at once.
+  const clear = await run(['@discover find papers on why coding agents retry the same failing step'], 'dv6');
+  assert.equal(clear.research, 'find papers on why coding agents retry the same failing step');
+  const guide = await box(clear, 'dv7');
   assert.equal(guide.card, null, 'the guide is not a card');
   assert.equal(guide.lines[0], 'bart> ## Start here');
+  assert.ok(guide.lines.some((line) => /\(standard mode\)/.test(line)));
   assert.ok(!guide.lines.some((line) => /Not verified/.test(line)), 'no "Not verified" group');
   // Three lines an entry (2026-09-30): the title, Read with a link to the passage, Why.
   const entry = guide.lines.slice(2, 5).map((line) => line.replace(/^bart> ?/, ''));
   assert.match(entry[0], /^\*\*\[[^\]]+\]\([^)\s]+\)\*\* · Fake Author et al\. · 2024$/);
   assert.match(entry[1], /^\*\*Read:\*\* \[Introduction\]\([^)\s]+#find=a%20fake%20passage[^)\s&]*&to=the%20fake%20section%20after%20it\)$/);
-  assert.match(entry[2], /^\*\*Why:\*\* a fake method to set against the open question in “Agents” of /, 'what the passage gives and the open question (round 3)');
+  assert.match(entry[2], /^\*\*Why:\*\* Helps you examine a fake method bearing on /, 'how the reading helps, in one short sentence (2026-10-15)');
+  assert.ok(!entry[2].includes('Agents'), 'tied to no part of the workspace');
   assert.ok(!guide.lines.some((line) => /^bart> \*\*Why:\*\*.*agents”/.test(line)), 'never the person\'s words quoted back');
   assert.equal(guide.lines[5], 'bart>', 'one blank line between entries');
   assert.ok(!guide.lines.some((line) => /What it is:|Found:/.test(line)));
@@ -2385,46 +2479,43 @@ test('the fake @discover asks one card (which part, in broad areas) for a line w
   assert.match(essay[0], /^\*\*\[[^\]]+\]\(https:\/\/[^)\s#]+\)\*\* · [^·]+ · (?:\d{4}|undated)$/, 'the E-03 title line');
   assert.equal(essay[1], '**Read:** [A fake heading](https://example.org/fake-essay#find=the%20fake%20first%20paragraph%20of%20the%20essay)');
   assert.ok(!/&to=/.test(essay[1]), 'no &to=: a web page ignores it');
-  assert.match(essay[2], /^\*\*Why:\*\* a fake case that cuts against what is assumed to set against the open question in “Agents” of /);
+  assert.match(essay[2], /^\*\*Why:\*\* Helps you examine a fake case that cuts against what is assumed bearing on /);
   const essayLink = splitTarget(essay[1].match(/\]\(([^)\s]+)\)$/)[1]);
   assert.deepEqual([essayLink.address, essayLink.find, essayLink.to], ['https://example.org/fake-essay', 'the fake first paragraph of the essay', ''], 'the Stage opens the page and finds its words');
   assert.equal(guide.lines.filter((line) => /^bart> \*\*\[/.test(line)).length, 3, 'a starting paper, a classic and an essay: within the mode\'s total');
-  // The classic was read in full and ends in a Try line, its authors' repository (2026-10-04): a fourth line, after Why.
+  // The classic was read in full: three lines, with no Try line after Why (gone 2026-10-15).
   const classicAt = guide.lines.indexOf('bart> ## Classics');
-  const classic = guide.lines.slice(classicAt + 2, classicAt + 7).map((line) => line.replace(/^bart> ?/, ''));
+  const classic = guide.lines.slice(classicAt + 2, classicAt + 6).map((line) => line.replace(/^bart> ?/, ''));
   assert.match(classic[1], /^\*\*Read:\*\* \[Implementation\]\(https:\/\/example\.org\/fake-classic#find=a%20fake%20passage%20on%20how%20it%20was%20built&to=/);
   assert.match(classic[2], /^\*\*Why:\*\* /);
-  assert.equal(classic[3], '**Try:** [fake-lab/fake-classic](https://github.com/fake-lab/fake-classic)', 'the T-01 form');
-  assert.equal(classic[4], '', 'one blank line after it');
-  assert.equal(guide.lines.filter((line) => /^bart> \*\*Try:\*\*/.test(line)).length, 1, 'one Try line, on a paper, none on the essay');
-  const { guideRepo } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/guide.js')).href);
-  assert.deepEqual(guideRepo(classic[3]), { name: 'fake-lab/fake-classic', address: 'https://github.com/fake-lab/fake-classic' });
+  assert.equal(classic[3], '', 'one blank line after Why');
+  assert.equal(guide.lines.filter((line) => /^bart> \*\*Try:\*\*/.test(line)).length, 0, 'no Try line anywhere');
   const fakeGuide = guide.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n');
-  assert.equal(replyBody('discover', fakeGuide), fakeGuide, 'replyBody keeps the Try line');
-  const more = await run([...guide.doc, '@discover only after 2022'], 'dv4');
-  assert.equal(more.lines[0], 'bart> ## Recent', 'a follow-up on a guide gets additions');
-  assert.equal((await run(['@discover agents'], 'dv5a')).lines[0], 'bart> ## Start here', 'a line that names a problem, however short, asks no card');
-  const long = await run(['@discover why do coding agents retry the same failing step'], 'dv5');
-  assert.equal(long.lines[0], 'bart> ## Start here');
-  assert.ok(long.lines.some((line) => /\(standard mode\)/.test(line)));
+  assert.equal(replyBody('discover', fakeGuide), fakeGuide, 'replyBody keeps the guide whole');
+  const more = await run([...guide.doc, '@discover only after 2022'], 'dv8');
+  assert.equal(more.research, 'only after 2022', 'a follow-up on a guide is a new direction, settled at once');
+  assert.equal((await box(more, 'dv9')).lines[0], 'bart> ## Recent', 'its search gets additions');
+  // A redirect while it is still asking: the new direction, with what was said since.
+  const moved = await run([...broad.doc, '@discover actually, find studies on rubber-duck debugging instead'], 'dv10');
+  assert.equal(moved.research, 'tutors; actually, find studies on rubber-duck debugging instead');
   const parsed = model.parseLine('@Discover why');
   assert.deepEqual([parsed.agent, model.agentOf(parsed), model.agentOf(model.parseLine('@chat why')), model.agentOf(model.parseLine('@bart why'))], ['discover', 'discover', 'bart', 'router']);
   projects.agentStarted(ctx, { id: 'dv-agent', kind: 'discover', projectId: project.id, workspaceId: workspace.id });
   projects.agentFinished(ctx, 'dv-agent');
 });
 
-test('@discover on a named paper (2026-10-04): no card, the paper opened whole first, "## This paper" before the trace from it, its sections in pairs of Read and Why', () => {
-  for (const phrase of ['Skip it too when <question> names a paper: a library item mentioned on the line', 'a title, a DOI or an arXiv id', 'Words beside it say which part of the paper the person cares about', 'With no words, the problem is the one nearest the marked line, read in their setting',
+test('@discover on a named paper (2026-10-04): no question first, the paper opened whole first, "## This paper" before the trace from it, its sections in pairs of Read and Why', () => {
+  for (const phrase of ['A paper: when <question> names one (a library item mentioned on the line', 'a title, a DOI or an arXiv id', 'that paper is the direction; words beside it say which part they care about',
     '# A named paper', 'When <question> names a paper, open all of it before anything else: the library file from its path, else an open-access copy', 'up to four, best first, not in the paper\'s order', 'Never the abstract, and the introduction only when nothing else serves', 'This paper is the only starting point', 'backward through what it cites in the sections you chose, forward through what cites it', 'A library paper the paper tools do not know is still the guide\'s first entry, from the file you opened',
     '"This paper" holds only the paper <question> names', 'When there is a "This paper" group, there is no "Start here"', '"Classics" holds papers the named paper cites in the sections you chose', '"Recent" holds papers that cite it and bear on the same part', 'The named paper counts as one of the sources <mode> allows',
-    'The "This paper" entry is the title line, then, for each section you chose, best first, a pair of lines', '**Why:** as for any entry.', 'One Read link per pair. A Try line may follow the last pair', 'If only the abstract could be reached, the entry is the title line, "**Read:** abstract only" and one Why, and the trace goes on',
+    'The "This paper" entry is the title line, then, for each section you chose, best first, a pair of lines', '**Why:** as for any entry.', 'One Read link per pair.', 'If only the abstract could be reached, the entry is the title line, "**Read:** abstract only" and one Why, and the trace goes on',
     'A follow-up that names a paper gets that paper\'s guide']) assert.ok(DISCOVER_SYSTEM_PROMPT.includes(phrase), phrase);
   const at = (phrase) => DISCOVER_SYSTEM_PROMPT.indexOf(phrase);
-  assert.ok(at('# First, refine') < at('Skip it too when <question> names a paper') && at('Skip it too when') < at('Otherwise ask one card'), 'P-01 in "First, refine"');
-  assert.ok(at('# Then, trace') < at('# A named paper') && at('If none qualifies, say nothing about it') < at('# A named paper') && at('# A named paper') < at('# What is real'), 'P-02: its own section, after the trace');
+  assert.ok(at('\n# First, the direction') < at('A paper: when <question> names one') && at('A paper: when') < at('\n# The search'), 'P-01 in "First, the direction"');
+  assert.ok(at('# Then, trace') < at('# A named paper') && at('Open what you recommend') < at('# A named paper') && at('# A named paper') < at('# What is real'), 'P-02: its own section, after the trace');
   assert.ok(at('"## This paper", "## Start here", "## Classics"') > at('# The guide'), 'P-03: "This paper" is the first group');
   assert.ok(at('"Classics" holds only papers that two or more starting points cite') < at('When there is a "This paper" group'), 'the rules for a problem stay, those for a paper follow them');
-  assert.ok(at('The Try line comes after Why') < at('The "This paper" entry') && at('The "This paper" entry') < at('For an essay, the title line'));
+  assert.ok(at('**Why:** one sentence') < at('The "This paper" entry') && at('The "This paper" entry') < at('For an essay, the title line'));
 });
 
 test('replyBody drops a foot the model copied from the conversation (2026-10-13), for every agent: @brainstorm too since its replies are prose (2026-10-14)', () => {
@@ -2445,7 +2536,7 @@ test('replyBody keeps a guide that starts at "## This paper", and drops what was
   assert.equal(replyBody('discover', `Opened the paper; tracing now.\n\n${named}`), named, 'a status line before it goes');
 });
 
-test('the fake @discover on a mentioned library paper: no card, "## This paper" with two sections, each its own Read and Why into the library copy, then Classics, Recent and Essays; words beside it or a follow-up the same (P-05)', async () => {
+test('the fake @discover on a mentioned library paper: settled at once, its box "## This paper" with two sections, each its own Read and Why into the library copy, then Classics, Recent and Essays; words beside it or a follow-up the same (P-05)', async () => {
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
   const lib = await projects.createProject(ctx, 'Named Paper');
   const space = await projects.createWorkspace(ctx, lib.id, { name: 'Reading' });
@@ -2461,9 +2552,15 @@ test('the fake @discover on a mentioned library paper: no card, "## This paper" 
     const out = await bart.ask(ctx, lib.id, { askId, ref, workspaceId: space.id, text: model.parseLine(doc[doc.length - 1]).text, turns, agent: 'discover' });
     const next = [...doc, ...out.lines];
     const [again] = model.threads(next);
-    return { doc: next, card: card.cardOfAnswer(model.turnText(next, again.turns[again.turns.length - 1]).answer), lines: out.lines, text: out.lines.map((line) => line.replace(/^bart> ?/, '')) };
+    return { doc: next, card: card.cardOfAnswer(model.turnText(next, again.turns[again.turns.length - 1]).answer), lines: out.lines, research: out.research, text: out.lines.map((line) => line.replace(/^bart> ?/, '')) };
   };
-  const named = await run(['@discover @[Retries Considered]'], 'np1');
+  // A line that names a paper is settled at once (2026-10-14); the window asks its research box, which writes the guide.
+  const ask = async (doc, askId) => {
+    const said = await run(doc, `${askId}-d`);
+    assert.ok(said.research, `${doc[doc.length - 1]}: settled at once`);
+    return run([...said.doc, model.researchLine(said.research)], askId);
+  };
+  const named = await ask(['@discover @[Retries Considered]'], 'np1');
   assert.equal(named.card, null, 'A-01: no card');
   assert.equal(named.text[0], '## This paper', 'the guide opens with the paper');
   assert.ok(!named.text.includes('## Start here'), 'P-04: no "Start here" beside it');
@@ -2484,23 +2581,23 @@ test('the fake @discover on a mentioned library paper: no card, "## This paper" 
   assert.deepEqual(groups, ['## This paper', '## Classics', '## Recent', '## Essays']);
   assert.ok(named.text.some((line) => /^\*\*\[A fake classic it cites \(standard mode\)\]/.test(line)));
   assert.ok(named.text.filter((line) => /^\*\*\[/.test(line)).length <= 8, 'within standard\'s eight sources, the paper among them');
-  assert.equal(named.text.filter((line) => line.startsWith('**Try:**')).length, 1);
+  assert.equal(named.text.filter((line) => line.startsWith('**Try:**')).length, 0, 'no Try line (2026-10-15)');
   const body = named.text.slice(0, -2).join('\n');
   assert.equal(replyBody('discover', body), body, 'replyBody keeps it whole');
   // With words beside it, the same guide; a workspace's mention names no paper.
-  const worded = await run(['@discover @[Retries Considered] how they measured recovery'], 'np2');
+  const worded = await ask(['@discover @[Retries Considered] how they measured recovery'], 'np2');
   assert.deepEqual([worded.card, worded.text[0]], [null, '## This paper']);
-  assert.equal((await run([`@discover what @[Reading](ws:${space.id}) is about`], 'np3')).text[0], '## Start here', 'A-04: no paper named, as before');
-  assert.equal((await run(['@discover why do retries loop'], 'np4')).text[0], '## Start here', 'A-04: a problem, as before');
+  assert.equal((await ask([`@discover what @[Reading](ws:${space.id}) is about`], 'np3')).text[0], '## Start here', 'A-04: no paper named, as before');
+  assert.equal((await ask(['@discover find papers on why retries loop'], 'np4')).text[0], '## Start here', 'A-04: a problem, as before');
   // A follow-up that names a paper gets its guide; one that does not gets additions.
-  const first = await run(['@discover why do retries loop'], 'np5');
-  const follow = await run([...first.doc, '@discover @[Retries Considered]'], 'np6');
+  const first = await ask(['@discover find papers on why retries loop'], 'np5');
+  const follow = await ask([...first.doc, '@discover @[Retries Considered]'], 'np6');
   assert.equal(follow.text[0], '## This paper');
-  assert.equal((await run([...follow.doc, '@discover only after 2022'], 'np7')).text[0], '## Recent');
+  assert.equal((await ask([...follow.doc, '@discover only after 2022'], 'np7')).text[0], '## Recent');
 });
 
 test('@brainstorm and @discover: a resumed turn is sent no <stage> or <highlights> of the Stage, as before', async () => {
-  for (const [agent, opening, reply, told] of [['brainstorm', '', 'What is on your mind about it?', /^<level>[^\n]*<\/level>\n\n<question>\n\(skipped\)\n<\/question>$/], ['discover', 'agents', JSON.stringify(FOCUS), /^<mode>standard\.[^\n]*<\/mode>\n\n<level>/]]) {
+  for (const [agent, opening, reply, told] of [['brainstorm', '', 'What is on your mind about it?', /^<level>[^\n]*<\/level>\n\n<question>\n\(skipped\)\n<\/question>$/], ['discover', 'agents', 'Which part of agents?', /^<level>[^\n]*<\/level>\n\n<question>\n\(skipped\)\n<\/question>$/]]) {
     const { calls, options } = stageRunner(`stage-${agent}`, reply);
     const bart = createBart({ ...options, brainstormThreads: createThreads(), discoverThreads: createThreads() });
     const ref = { kind: 'workspace', workspaceId: workspace.id };
@@ -2746,4 +2843,75 @@ test('@brainstorm\'s prompt says what <topic> is and when to mark one, never to 
     'end your reply with one more line: <topic>a short label of a few words</topic>', 'not after a bare "@brainstorm" before they have chosen, not for a subquestion or a passing tangent',
     'Never mention the label or the chip in your reply.',
   ]) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
+});
+
+test('@discover\'s steps told as its trace (2026-10-15): by part, each by what came back and by title; the library\'s papers found there; lookups after the trace one check; Codex\'s events too', () => {
+  const { createTrace, libraryMatcher } = require('../src/main/bart/trace.cjs');
+  const H = { id: 'W1', title: 'How Do AI Agents Do Human Work? Comparing AI and Human Workflows', arxiv: 'https://arxiv.org/abs/2510.22780', doi: '10.48550/arxiv.2510.22780' };
+  const G = { id: 'W2', title: 'Creating General User Models from Computer Use', doi: null };
+  const use = (id, name, input) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: name.includes('__') || /^[A-Z]/.test(name) ? name : `mcp__papers__${name}`, input }] } });
+  const back = (id, value, error = false) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, is_error: error, content: [{ type: 'text', text: typeof value === 'string' ? value : JSON.stringify(value) }] }] } });
+  const trace = createTrace({ entries: [{ name: 'Agents at work', type: 'website', tags: ['paper'], url: 'https://arxiv.org/abs/2510.22780' }] });
+  const take = (...events) => { let story = null; for (const event of events) story = trace.take(event) || story; return story; };
+  assert.equal(trace.take({ type: 'assistant', message: { content: [{ type: 'tool_use', id: 'x', name: 'Grep', input: {} }] } }), null, 'other tools are not part of it');
+  let story = take(use('a', 'resolve', { query: '2510.22780' }));
+  assert.deepEqual([story.groups[0].lines, story.now], [[{ text: 'Looking up “2510.22780”', now: true }], 'Looking up “2510.22780”']);
+  story = take(back('a', { found: true, paper: H }), use('b', 'search', { query: 'People want their work across tools.' }), back('b', { total: 25, results: [G, ...Array.from({ length: 24 }, (_, n) => ({ id: `W${100 + n}`, title: `Other ${n}` }))] }), use('c', 'resolve', { query: 'W2' }), back('c', { found: true, paper: G }), use('c2', 'resolve', { query: 'W105' }), back('c2', { found: true, paper: { id: 'W105', title: 'Other 5' } }));
+  assert.deepEqual(story.groups[0], { key: 'start', title: 'Starting papers', lines: [
+    { text: 'Found “How Do AI Agents Do Human Work?” in your library', now: false },
+    { text: 'Searched for papers close to your problem', now: false },
+    { text: 'Picked “Creating General User Models from Computer Use”, the closest of 25', now: false },
+    { text: 'Picked “Other 5”, the 7th closest of 25', now: false },
+  ] });
+  story = take(use('d', 'references', { id: 'W1' }), back('d', { of: H, total: 41, listed: 41, results: [{ id: 'W7', title: 'Verdant: notebooks' }, { id: 'W8', title: 'SensePath: Understanding the Sensemaking Process' }, { id: 'W9', title: 'A third' }, { id: 'W10', title: 'A fourth' }] }), use('e', 'references', { id: 'W2' }), back('e', { of: G, total: 0, results: [] }), use('f', 'resolve', { query: 'W7' }), use('g', 'resolve', { query: 'W8' }));
+  assert.deepEqual(story.groups[1].lines.map((line) => [line.text, line.now]), [['Listed the 41 papers “How Do AI Agents Do Human Work?” cites', false], ['“Creating General User Models from Computer Use” cites no paper OpenAlex knows', false], ['Checking whether “Verdant” and “SensePath” fit', true]], 'the lookups after it: one line, still waiting');
+  story = take(back('f', { found: true, paper: { id: 'W7', title: 'Verdant: notebooks' } }), back('g', { found: true, paper: { id: 'W8', title: 'SensePath: Understanding the Sensemaking Process' } }));
+  assert.equal(story.groups[1].lines[2].text, 'Checked whether “Verdant” and “SensePath” fit');
+  story = take(use('h', 'resolve', { query: 'W9' }), use('i', 'resolve', { query: 'W10' }), use('j', 'resolve', { query: 'W11' }));
+  assert.deepEqual([story.groups[1].lines.length, story.groups[1].lines[2].text], [3, 'Checking whether “Verdant”, “SensePath” and 3 more fit'], 'more lookups with no step between: the same check, five named as two and a count');
+  take(back('h', { found: false, query: 'W9' }), back('i', {}), back('j', 'The lookup failed: timeout', true));
+  story = take(use('k', 'citations', { id: 'W1' }), back('k', { of: H, total: 9, results: [] }), use('l', 'citations', { id: 'W2' }));
+  assert.deepEqual([story.groups.map((group) => group.title), story.latest], [['Starting papers', 'Papers they cite', 'Newer papers that cite them'], 'cited']);
+  assert.deepEqual(story.groups[2].lines.map((line) => line.text), ['Found 9 newer papers that cite “How Do AI Agents Do Human Work?”', 'Finding newer papers that cite “Creating General User Models from Computer Use”']);
+  assert.deepEqual([story.now, story.last], ['Finding newer papers that cite “Creating General User Models from Computer Use”', 'Finding newer papers that cite “Creating General User Models from Computer Use”']);
+  // The papers read, by title when the address is one it knows; the web by its host.
+  story = take(back('l', 'OpenAlex is busy', true), use('m', 'WebFetch', { url: 'https://arxiv.org/html/2510.22780v2' }), back('m', 'text'), use('m2', 'Read', { file_path: '/tmp/webfetch-1792-x.pdf' }), back('m2', 'pdf', true), use('n', 'WebSearch', { query: 'agents at work essay' }), use('o', 'WebFetch', { url: 'https://www.example.com/post' }), back('o', 'text'));
+  assert.equal(story.groups[2].lines[1].text, 'Couldn’t find newer papers that cite “Creating General User Models from Computer Use”');
+  assert.deepEqual(story.groups.slice(3).map((group) => [group.title, group.lines.map((line) => line.text)]), [['Reading the papers', ['Read “How Do AI Agents Do Human Work?”', 'Couldn’t read a pdf it downloaded']], ['Essays and posts', ['Searching the web for “agents at work essay”', 'Read example.com']]]);
+  // Codex: mcp_tool_call items, started then completed, their result as { content }.
+  const codex = createTrace({ entries: [] });
+  codex.take({ type: 'item.started', item: { id: 'i1', type: 'mcp_tool_call', server: 'papers', tool: 'references', arguments: '{"id":"W2"}' } });
+  const told = codex.take({ type: 'item.completed', item: { id: 'i1', type: 'mcp_tool_call', server: 'papers', tool: 'references', result: { content: [{ type: 'text', text: JSON.stringify({ of: G, total: 1, results: [] }) }] } } });
+  assert.deepEqual(told.groups, [{ key: 'cites', title: 'Papers they cite', lines: [{ text: 'Listed the 1 paper “Creating General User Models from Computer Use” cites', now: false }] }]);
+  codex.take({ type: 'item.started', item: { id: 'i3', type: 'mcp_tool_call', server: 'papers', tool: 'citations', arguments: { id: 'W2' } } });
+  assert.equal(codex.take({ type: 'item.completed', item: { id: 'i3', type: 'mcp_tool_call', server: 'papers', tool: 'citations', result: { content: [{ type: 'text', text: JSON.stringify({ of: G, total: 1, results: [] }) }] } } }).groups[1].lines[0].text, 'Found 1 newer paper that cites “Creating General User Models from Computer Use”');
+  assert.equal(codex.take({ type: 'item.started', item: { id: 'i2', type: 'mcp_tool_call', server: 'engelbart', tool: 'save_file', arguments: {} } }), null);
+  // The library: by arXiv id, DOI or the same title.
+  const mine = libraryMatcher([{ name: 'Retries Considered.pdf', type: 'pdf', path: '/x/Retries Considered.pdf' }, { name: 'x', url: 'https://doi.org/10.1145/3290605.3300234' }]);
+  assert.deepEqual([mine({ title: 'Retries considered' }), mine({ title: 'Other', doi: '10.1145/3290605.3300234' }), mine({ title: 'Other', doi: '10.1/2' })], [true, true, false]);
+});
+
+test('a Refine turn (2026-10-15): told the direction last searched and that its words win, until the next search; its line is told as a correction; no paper tools or web while it talks', () => {
+  const turns = [
+    { question: 'concise replies', answer: 'What are you hoping to understand about concise replies?' },
+    { question: 'when being brief starts hurting understanding', answer: 'I will look for research on when shorter replies help understanding.' },
+    { question: '--deep --research when shorter replies help understanding and when they leave too much out', answer: '## Start here\n\nx' },
+  ];
+  const refine = turnPlan({ agent: 'discover', text: '--refine focus on what makes replies feel conversational, rather than their length', turns }, DEFAULTS);
+  assert.deepEqual([refine.refine, refine.refining, refine.search, refine.asked], [true, true, false, 'focus on what makes replies feel conversational, rather than their length']);
+  assert.equal(refine.extra, '<refine>The person is refining the research direction. The direction last searched: when shorter replies help understanding and when they leave too much out. Their latest words take precedence over anything said before.</refine>');
+  assert.equal(refine.mode, 'deep', 'the depth the last search ran at');
+  // Discover asked a question about it: the answer is still part of the refining.
+  const answered = turnPlan({ agent: 'discover', text: 'the turn-taking', turns: [...turns, { question: '--refine something else', answer: 'What should the search look at instead?' }] }, DEFAULTS);
+  assert.deepEqual([answered.refine, answered.refining], [false, true]);
+  assert.match(answered.extra, /^<refine>/);
+  assert.equal(answered.shown[3].question, 'Refine the research direction: something else', 'the line told as a correction, without its flag');
+  // Its research box searches as any does; and a turn after that search is no longer refining.
+  const box = turnPlan({ agent: 'discover', text: '--research what makes replies feel conversational', turns: [...turns, { question: '--refine x', answer: 'I will look.' }] }, DEFAULTS);
+  assert.deepEqual([box.search, box.refining], [true, false]);
+  assert.match(box.extra, /^<mode>deep\./);
+  const after = turnPlan({ agent: 'discover', text: 'more on that', turns: [...turns, { question: '--refine x', answer: 'I will look.' }, { question: '--research y', answer: '## Start here' }] }, DEFAULTS);
+  assert.deepEqual([after.refining, after.extra], [false, '']);
+  // A plain turn with no Refine before it is not refining.
+  assert.deepEqual([turnPlan({ agent: 'discover', text: 'tutors', turns: [] }, DEFAULTS).refining, turnPlan({ agent: 'discover', text: 'tutors', turns: [] }, DEFAULTS).extra], [false, '']);
 });

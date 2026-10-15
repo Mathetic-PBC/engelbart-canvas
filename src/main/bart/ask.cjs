@@ -54,9 +54,13 @@
 // one step (./question.cjs readDiscover: the level of the models file's `discover` block for its mode, on the provider the
 // line or its exchange names with --claude or --codex, else @bart's; a follow-up stays on it and resumes), @bart's file and
 // web tools and the paper tools (./papers.cjs, served by ./papers-mcp.cjs: to Claude Code by --mcp-config, to Codex by its
-// own home's config.toml), its own sessions kept for two idle hours, and half an hour a step (three quarters, deep). It may
-// ask a card or two first, which are written as @brainstorm's are; its guide is markdown, written as an @bart answer is.
-// Each turn carries <mode>: quick or deep when a line of the exchange said --quick or --deep, else standard.
+// own home's config.toml), its own sessions kept for two idle hours, and half an hour a step (three quarters, deep).
+// 2026-10-14 (David's): it settles what to research in conversation first, in prose, in place of its card (an older
+// exchange's cards are sent as text, ./card.cjs cardAsText). Once the direction is clear its reply ends with
+// <research>…</research>, taken out here (takeResearch) and handed back as `research`; the window opens a research box
+// on it (`@discover --research <direction>`, the line keeping the direction in the document), whose turn is the search:
+// it alone carries <mode> (quick or deep when a line of the exchange said --quick or --deep, else standard) and
+// <search>, and gets the guide, markdown written as an @bart answer is.
 //
 // @create (2026-10-13): the same run, for something new the person wants made (a page, a chart, a document, a dataset, a
 // small script). Its own prompt (./create-system-prompt.cjs), @bart's models and steps (./models.cjs readQuestion; no
@@ -80,11 +84,12 @@ const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
 const { BRAINSTORM_SYSTEM_PROMPT } = require('./brainstorm-system-prompt.cjs');
 const { WELCOME_SYSTEM_PROMPT } = require('./brainstorm-welcome-system-prompt.cjs');
 const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
+const { createTrace } = require('./trace.cjs');
 const { CREATE_SYSTEM_PROMPT } = require('./create-system-prompt.cjs');
-const { CREATE_TIMEOUT_MS, openDraft, dropDraft, keepCreated, createdBody, firstSentence, createdSentence } = require('./create.cjs');
+const { CREATE_TIMEOUT_MS, openDraft, dropDraft, keepCreated, saveAllCreated, createdBody, firstSentence, createdSentence } = require('./create.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
-const { readMode, readProvider } = require('./question.cjs');
-const { OPENING, SKIPPED, NEXT_ID, NEXT_PLACEHOLDER, cardBody, cardOfAnswer, cardAsText, questionOf, readCard, readAnswer, resultText } = require('./card.cjs');
+const { readMode, readProvider, readRefine } = require('./question.cjs');
+const { OPENING, NEXT_ID, NEXT_PLACEHOLDER, cardBody, cardOfAnswer, cardAsText, questionOf, readCard, readAnswer, resultText, parseJson } = require('./card.cjs');
 const { plainTitle, capTitle } = require('./name-chat.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
@@ -130,15 +135,21 @@ const STAGE_ID = 'stage';
 const STAGE_TITLE = 'Where are you in the process?';
 const STAGES = ['Just exploring', 'Reading what’s out there', 'I have a question I want to answer', 'Building or running something', 'Writing it up'];
 const WELCOME_NEXT_TITLE = 'What are your next steps?';
-// What an @discover line with nothing after it asks.
-const DISCOVER_OPENING = 'Find what I should read about the problem this workspace is about.';
+// What an @discover line with nothing after it asks (2026-10-14: as @brainstorm's, a start; it asks what to research, a
+// card of the workspace's themes).
+const DISCOVER_OPENING = 'Start from this workspace.';
+// A research box's turn, the search (2026-10-14): what it is told besides its <mode>.
+const SEARCH_BLOCK = '<search>The direction is settled: search on the one in <question> now, and reply with the reading guide.</search>';
+// A Refine turn (2026-10-15, David), and every turn after it until the next search: the person is correcting or developing
+// the direction (the prompt's "Refining the direction"). `current`: the direction last searched, when there was one.
+const refineBlock = (current) => `<refine>The person is refining the research direction${current ? `. The direction last searched: ${current}` : ''}. Their latest words take precedence over anything said before.</refine>`;
 // How far each mode traces (the prompt's <mode>), and how many of its sources are essays when essays apply (2026-10-03):
-// a share of the same total, so papers no longer use it all. And how many more papers may be opened only to look for a
-// repository to run (2026-10-04, the prompt's "Code"): none in quick mode.
+// a share of the same total, so papers no longer use it all. (2026-10-04 to 2026-10-15 it also said how many papers could
+// be opened only to look for code; Discover no longer looks.)
 const MODE_LIMITS = {
-  quick: 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply. No extra papers opened to look for code.',
-  standard: 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply. Up to two extra papers opened to look for code.',
-  deep: 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply. Up to four extra papers opened to look for code.',
+  quick: 'quick. Up to two starting points; one hop backward and one forward from each; at most five sources in the guide, of which up to two are essays when essays apply.',
+  standard: 'standard. Up to three starting points; one hop backward and one forward from each; at most eight sources in the guide, of which two to three are essays when essays apply.',
+  deep: 'deep. Up to five starting points; one hop backward and one forward from each, then one more of each from the best of what you found; at most fifteen sources in the guide, of which three to five are essays when essays apply.',
 };
 
 class BartError extends Error {
@@ -176,7 +187,11 @@ function levelBlock(steps, at, pinned) {
 // the flag says where the editor draws it, and is never part of the question.
 const RESEARCH_RE = /(^|\s)--research(?=\s|$)/gi;
 const withoutResearch = (text) => String(text == null ? '' : text).replace(RESEARCH_RE, '$1').replace(/\s+/g, ' ').trim();
-const cleanTurn = (turn) => ({ question: clipMiddle(withoutResearch(turn.question), 8000), answer: clipMiddle(String(turn.answer || '').trim(), 20000), ...(AGENTS.includes(turn.agent) ? { agent: turn.agent } : {}) });
+/** Whether an @discover line is a research box's, the search (2026-10-14). */
+const isSearch = (text) => /(^|\s)--research(?=\s|$)/i.test(String(text == null ? '' : text));
+// A Refine turn's line (2026-10-15) is told as what it is: the person correcting the direction.
+const refineShown = (text) => { const read = readRefine(text); return read.refine ? `Refine the research direction: ${read.rest}` : String(text == null ? '' : text); };
+const cleanTurn = (turn) => ({ question: clipMiddle(refineShown(withoutResearch(turn.question)), 8000), answer: clipMiddle(String(turn.answer || '').trim(), 20000), ...(AGENTS.includes(turn.agent) ? { agent: turn.agent } : {}) });
 
 /**
  * The earlier turns of an exchange as the renderer read them from the document, made safe: strings, bounded, no empty
@@ -250,8 +265,8 @@ async function withImagePaths(ctx, projectId, question) {
  * turn is also sent the Stage and the highlights as they are now (`context.now`, MATH-54 follow-up): what it was given
  * when the session started may be out of date.
  */
-function firstMessage({ context, prior, question, resumed, extra = '', routed = null, agent = null, intro = null, topic = null }) {
-  const asked = [(intro && INTROS[intro]) || routedBlock(routed), topicBlock(topic), `<question>\n${question}\n</question>`].filter(Boolean).join('\n\n');
+function firstMessage({ context, prior, question, resumed, extra = '', routed = null, agent = null, topic = null }) {
+  const asked = [routedBlock(routed), topicBlock(topic), `<question>\n${question}\n</question>`].filter(Boolean).join('\n\n');
   if (resumed) return (level) => [extra, context.now, level, asked].filter(Boolean).join('\n\n');
   return (level) => [context.head, context.contextJson, context.mentionedFiles, context.documents, conversationBlock(prior, { agent }), extra, level, asked].filter(Boolean).join('\n\n');
 }
@@ -263,16 +278,9 @@ function firstMessage({ context, prior, question, resumed, extra = '', routed = 
 // editor's handOff). Older answers that end "Press [[build]] Build" still draw the hammer and build on a click
 // (model/doc.js BUILD_TOKEN).
 const ROUTED_BUILD = '<routed>The person wants this built. Write the Build prompt as one fenced code block, after at most two sentences. End with one short line asking whether they want you to build it, such as `Want me to build it?` Do not write [[build]] or tell them to press anything.</routed>';
-// An @discover question (2026-10-13) is answered twice: Chat replies at once, with this block before <question>, and
-// Discover searches in a box under that reply (the editor's research turn). The reply says yes when asked, names what
-// the search looks for and says the guide appears below; the box already shows the search started, so it says no more.
-const DISCOVER_INTRO = '<discover_intro>Discover, the research agent, is searching now for what the person should read on this, and its reading guide will appear in a box under your reply. Reply first, in one or two short sentences of plain prose. If they asked whether you can (can you, could you, would you), start with "Yes." Then name the two or three things the search will look for, in their own terms, and say the reading guide will appear below. Do not restate or explain their problem, do not say you will start or are working on it, do not name or recommend papers, authors or findings, and do not say that you cannot search.</discover_intro>';
-/** The block before <question> of Chat's reply that comes first, by what comes under it (`intro`). */
-const INTROS = { discover: DISCOVER_INTRO };
-/** `intro` as asked: 'discover' for Chat's reply that comes first, else null. */
-const introOf = (value, agent) => (agent === 'bart' && Object.prototype.hasOwnProperty.call(INTROS, value) ? value : null);
-/** An @discover question as Chat's reply to it is asked (DISCOVER_INTRO): without its mode and provider flags. */
-const introQuestion = (text) => readProvider(readMode(withoutResearch(text)).rest).rest;
+// From 2026-10-13 to 2026-10-14 an @discover question was answered twice, Chat's reply first (told so by a
+// <discover_intro> block) and Discover's search in a box under it, at once. Discover now says itself what it will look for,
+// once it knows (turnPlan, takeResearch).
 /** The block a routed turn carries before <question>: '' unless Bart routed it with build. */
 const routedBlock = (routed) => (routed && routed.build ? ROUTED_BUILD : '');
 
@@ -308,12 +316,19 @@ function turnPlan({ agent, text, turns, choice, entries = [], welcome = false },
   const prior = cleanTurns(turns, { keepEmpty: brainstorm || discover });
   // @discover's mode, and the level it runs on, is the one the line names, else the one an earlier turn named (readDiscover).
   const read = brainstorm ? readBrainstorm(text, models) : discover ? readDiscover(withoutResearch(text), models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
+  // A turn settles what to research (2026-10-14), unless it is a research box's, which searches: that turn alone is told
+  // how far to trace. An older exchange's card is sent as text.
+  // A Refine turn, or a turn answering Discover's question about one (2026-10-15): told so, with the direction last searched.
   if (discover) {
+    const search = isSearch(text), raw = (Array.isArray(turns) ? turns : []).map((turn) => String((turn && turn.question) || ''));
+    const last = raw.map(isSearch).lastIndexOf(true), refine = readRefine(text).refine;
+    const refining = !search && (refine || raw.slice(last + 1).some((question) => readRefine(question).refine));
+    const current = last >= 0 ? withoutResearch(readProvider(readMode(raw[last]).rest).rest) : '';
     return {
-      agent, brainstorm, ...read, prior,
+      agent, brainstorm, ...read, prior, search, refine, refining,
       asked: read.question || DISCOVER_OPENING,
-      shown: prior.map((turn) => ({ ...turn, question: turn.question || DISCOVER_OPENING })),
-      extra: `<mode>${MODE_LIMITS[read.mode]}</mode>`,
+      shown: prior.map((turn) => { const card = cardOfAnswer(turn.answer); return { ...turn, question: turn.question || DISCOVER_OPENING, ...(card ? { answer: cardAsText(card) } : {}) }; }),
+      extra: search ? `<mode>${MODE_LIMITS[read.mode]}</mode>\n\n${SEARCH_BLOCK}` : refining ? refineBlock(current) : '',
     };
   }
   // @create asks as @bart does, on @bart's models (2026-10-13).
@@ -478,8 +493,55 @@ function takeTopic(text) {
   const rest = said.replace(TOPIC_TAG_RE, (_, inner) => { label = inner; return ''; }).replace(/\s+$/, '');
   return { text: rest, topic: (label && capTitle(plainTitle(label))) || null };
 }
+// What Discover settled to research (2026-10-14): a reply that ends the conversation about it ends with
+// `<research>direction</research>` (its prompt, "# First, the direction"). The tag is taken out of the reply and the
+// direction goes back with the answer (`research`), for the window to open a research box on.
+const RESEARCH_TAG_RE = /<research>([\s\S]*?)<\/research>/g;
+/** → { text, research }: the reply without its research tags, and the last one's direction on one line (or null). */
+function takeResearch(text) {
+  let found = null;
+  const said = String(text == null ? '' : text);
+  if (!said.includes('<research>')) return { text: said, research: null };
+  const rest = said.replace(RESEARCH_TAG_RE, (_, inner) => { found = inner; return ''; }).replace(/\s+$/, '');
+  const research = found ? found.replace(/\s+/g, ' ').trim().slice(0, 1000) : '';
+  return { text: rest, research: research || null };
+}
 /** The block before <question> that says a Brainstorm conversation's topic, when it has one. */
 const topicBlock = (topic) => (topic ? `<topic>${String(topic).replace(/[<>]/g, '')}</topic>` : '');
+
+/**
+ * The reply with what it hands back taken out: a Brainstorm conversation's topic (takeTopic); the direction Discover
+ * settled on (takeResearch), which a search's own turn never hands back (its tag, if it wrote one, is dropped).
+ * → { text, topic, research }
+ */
+function taken(agent, plan, text) {
+  if (agent === 'brainstorm' && !plan.welcome) return { ...takeTopic(text), research: null };
+  if (agent === 'discover') { const out = takeResearch(text); return { text: plan.search ? out.text : opened(plan, out.text), topic: null, research: plan.search ? null : out.research }; }
+  return { text, topic: null, research: null };
+}
+// An empty @discover line with nothing in the workspace to make a card of is asked this alone (2026-10-14): the model
+// sometimes says first why there is no card, which is dropped here.
+const DISCOVER_QUESTION = 'What would you like to research?';
+// The opening card's topics (2026-10-15, David): two to four, each a label alone, with no grey line saying where it came from.
+const OPENING_TOPICS = 4;
+/**
+ * A bare opening's reply: a card keeps its topics' labels only, at most four; a reply that is not a card but asks the
+ * question is the question alone. Anything else, and any later turn, as it came.
+ */
+function opened(plan, text) {
+  const said = String(text || '');
+  if (plan.question) return said;
+  if (/^\s*(\{|```)/.test(said)) return topicsOnly(said);
+  return said.includes(DISCOVER_QUESTION) ? DISCOVER_QUESTION : said;
+}
+function topicsOnly(said) {
+  const card = parseJson(said), focus = card && card.focus;
+  if (!focus || !Array.isArray(focus.options)) return said;
+  const options = focus.options.map((option) => (typeof option === 'string' ? { label: option } : option && typeof option === 'object' ? { label: option.label } : null)).filter((option) => option && option.label).slice(0, OPENING_TOPICS);
+  return JSON.stringify({ ...card, focus: { ...focus, options } });
+}
+/** What an answer hands back beside its lines: { topic } and { research } when there are. */
+const handedBack = (named) => ({ ...(named.topic ? { topic: named.topic } : {}), ...(named.research ? { research: named.research } : {}) });
 
 /** A pick handed on to be kept; keeping it never stands in a question's way. */
 function remember(onPicked, step) {
@@ -575,7 +637,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     if (onEvent && child && child.stdout) child.stdout.on('data', eventReader(onEvent));
   });
   // The paper tools' MCP server, as either CLI is told to start it.
-  const papers = { command: node, args: [papersServer], env: { ELECTRON_RUN_AS_NODE: '1' } };
+  // An OpenAlex key in the environment (2026-10-15) goes with it: a larger daily allowance (./papers.cjs).
+  const papers = { command: node, args: [papersServer], env: { ELECTRON_RUN_AS_NODE: '1', ...(environment.OPENALEX_API_KEY ? { OPENALEX_API_KEY: environment.OPENALEX_API_KEY } : {}) } };
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');
   const stopped = (signal) => signal && signal.aborted;
 
@@ -584,7 +647,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
   // tools too (@discover), from a config written next to the prompt.
   // `rules`: the permission rules in place of `allowed` (@create's, which name a path), sent through the environment, with
   // --permission-mode dontAsk.
-  function claudeTurns({ system, cwd, dirs, stem, signal, short, onUpdate, resume, allowed = CLAUDE_TOOLS, rules = null, mcp = false, timeout, logId = null }) {
+  function claudeTurns({ system, cwd, dirs, stem, signal, short, onUpdate, onRaw = null, resume, allowed = CLAUDE_TOOLS, rules = null, mcp = false, timeout, logId = null }) {
     const promptFile = `${stem}.system.md`, mcpFile = `${stem}.mcp.json`;
     fs.writeFileSync(promptFile, system, { mode: 0o600 });
     if (mcp) fs.writeFileSync(mcpFile, JSON.stringify({ mcpServers: { papers } }), { mode: 0o600 });
@@ -599,7 +662,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const permitted = rules ? '--allowedTools "$ENGELBART_BART_RULES" --permission-mode dontAsk' : `--allowedTools "${granted}"`;
         const command = `exec ${program('claude')} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config${servers} --tools "${allowed}" ${permitted} ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
         const env = childEnvironment({ ...programEnv('claude'), ENGELBART_BART_SESSION: id, ENGELBART_BART_MODEL: level.model, ENGELBART_BART_PROMPT: promptFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...(rules ? { ENGELBART_BART_RULES: rules } : {}), ...(mcp ? { ENGELBART_BART_MCP: mcpFile } : {}), ...Object.fromEntries(dirs.map((dir, n) => [`ENGELBART_BART_DIR${n}`, dir])) });
-        const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { log((runs) => runs.event(logId, event)); onUpdate(claudeUpdate(event, short)); }, timeout);
+        const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { log((runs) => runs.event(logId, event)); if (onRaw) onRaw(event); onUpdate(claudeUpdate(event, short)); }, timeout);
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
         const result = lastResultLine(stdout);
         if (!result) throw new BartError('unavailable', notFound(failure) ? 'Claude Code was not found on the login shell PATH.' : `Claude Code did not return a result${failure ? ` (${failure.message.split('\n')[0]})` : ''}.`);
@@ -611,7 +674,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
 
   // `mcp`: the paper tools too (@discover), from the private home's config.toml, which holds nothing else.
   // `write`: @create's sandbox (CREATE_CODEX) in place of the read-only one, rooted at `cwd`.
-  function codexTurns({ system, cwd, stem, signal, short, onUpdate, home = codexHome, web = true, mcp = false, write = false, timeout, logId = null }) {
+  function codexTurns({ system, cwd, stem, signal, short, onUpdate, onRaw = null, home = codexHome, web = true, mcp = false, write = false, timeout, logId = null }) {
     const source = codexAuthFile || path.join(environment.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
     if (!prepareCodexHome({ codexHome: home, source, instructions: system })) throw new BartError('unavailable', 'Codex is not signed in with a ChatGPT account (run `codex login`). An API key is never used.');
     writeCodexConfig(home, mcp ? { papers } : {});
@@ -626,7 +689,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const shared = `--skip-git-repo-check -m "$ENGELBART_BART_MODEL" -c 'model_reasoning_effort="${level.effort}"' ${sandbox} -c 'tools.web_search=${web}' -c project_doc_max_bytes=0 --json -o "$ENGELBART_BART_OUTPUT" - < "$ENGELBART_BART_INPUT"`;
         const command = session ? `exec ${program('codex')} exec ${at}resume "$ENGELBART_BART_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${at}${shared}`;
         const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: home, ENGELBART_BART_SESSION: session || '', ENGELBART_BART_MODEL: level.model, ENGELBART_BART_OUTPUT: outFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...(write ? { ENGELBART_BART_CWD: cwd } : {}) });
-        const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { log((runs) => runs.event(logId, event)); onUpdate(codexUpdate(event, short)); }, timeout);
+        const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { log((runs) => runs.event(logId, event)); if (onRaw) onRaw(event); onUpdate(codexUpdate(event, short)); }, timeout);
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
         let text = '';
         try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
@@ -656,9 +719,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * web page in front's tab, asked for its selection and picture as they are now. `overleaf` (MATH-65): the window's
    * Overleaf tabs (overleaf/stage.cjs forTurn), for <stage source="overleaf"> and <overleaf_tabs>.
    */
-  // `intro` (2026-10-13): Chat's reply that comes first, 'discover' over Discover's search (DISCOVER_INTRO).
-  async function ask(ctx, projectId, { askId, ref, workspaceId, text: typed, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null, intro: introInput = null }, { onProgress } = {}) {
-    const models = readModels(), intro = introOf(introInput, agent), text = intro ? introQuestion(typed) : typed;
+  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
+    const models = readModels();
     const bart = agent === 'bart', create = agent === 'create', routed = routedOf(routedInput);
     // The context first: @brainstorm's path is read against the library it shows (turnPlan).
     const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
@@ -696,17 +758,22 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       // @create's first sentence, what it is making (./create.cjs firstSentence): shown above its row while it works.
       const making = create ? firstSentence((text) => onProgress && onProgress({ making: text })) : null;
       const updated = making ? (update) => { making.take(update); feed.take(update); } : feed.take;
+      // @discover's steps told as its trace (./trace.cjs, 2026-10-15): by part, each saying what came back.
+      const trace = agent === 'discover' ? createTrace({ entries: context.entries }) : null;
+      const traced = trace ? (event) => { const story = trace.take(event); if (story && onProgress) onProgress({ trace: story }); } : null;
       const once = async (session) => {
         let cli = null;
         try {
           const only = {
             bart: {},
             brainstorm: { allowed: BRAINSTORM_TOOLS, home: brainstormCodexHome, web: false },
-            discover: { home: discoverCodexHome, mcp: true, timeout: mode === 'deep' ? DEEP_DISCOVER_TIMEOUT_MS : DISCOVER_TIMEOUT_MS },
+            // A turn settling what to research only talks (2026-10-15): it reads the person's files, and has no paper tools and
+            // no web until its research box searches.
+            discover: plan.search ? { home: discoverCodexHome, mcp: true, timeout: mode === 'deep' ? DEEP_DISCOVER_TIMEOUT_MS : DISCOVER_TIMEOUT_MS } : { allowed: BRAINSTORM_TOOLS, home: discoverCodexHome, web: false },
             create: { allowed: CREATE_TOOLS, rules: draft && createRules(draft), home: createCodexHome, write: true, timeout: CREATE_TIMEOUT_MS },
           }[agent];
-          cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd: draft || cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: updated, resume: session, logId, ...only });
-          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed, agent, intro, topic: agent === 'brainstorm' ? context.topic : null }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
+          cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd: draft || cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: updated, onRaw: traced, resume: session, logId, ...only });
+          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed, agent, topic: agent === 'brainstorm' ? context.topic : null }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
         } finally { if (cli) cli.done(); }
       };
       const cliName = TOOL_OF[provider];
@@ -734,13 +801,14 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         // (2026-10-14: kept with the project, <project>/.created/<id>/, each answered with a line the editor draws as its row.)
         const made = create ? await keepCreated(ctx, projectId, logId, draft) : null;
         if (made) { meta.created = made.files.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
+        if (made) await saveAllCreated(ctx, projectId, workspaceId, logId, made.files, { inspectPdf, onAdded }); // and saved (2026-10-15)
         // A card is written as its JSON in a fence; a reply that is not one, as it came (the editor draws it as an answer).
         // The Welcome walkthrough's cards always read the same (welcomeReply).
-        const named = agent === 'brainstorm' && !plan.welcome ? takeTopic(out.text) : { text: out.text, topic: null };
+        const named = taken(agent, plan, out.text);
         const body = made ? createdBody(createdSentence(making.text, out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : replyBody(agent, named.text);
         // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
         if (out.session && store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
-        return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent: intro === 'discover' ? 'discover' : agent }), meta, ...(named.topic ? { topic: named.topic } : {}) };
+        return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta, ...handedBack(named) };
       } finally {
         feed.end();
         running.delete(askId);
@@ -798,26 +866,27 @@ function fakeTopic(reply, sent, question) {
 }
 
 /**
- * The fake @discover's reply, as a model would write it. An @discover line with no problem gets one card first (which
- * part, in broad areas; 2026-09-30, one card, no longer a second of starting points); its answer, its skip or a line
- * that names a problem gets a guide in three-line entries, whose first entry is what the person wrote in their own words
- * on the card, if they did, then the first library item, by its path when it has one, with a section to find in it
+ * The fake @discover's reply, as a model would write it (2026-10-14: the direction first, in conversation). A turn that
+ * is not a search: an empty line gets the card "What would you like to research?", three themes to pick; a line that asks
+ * clearly (find, papers, studies, an overview, "just search", a paper by mention), a second answer, a follow-up on a
+ * guide or a pick from a card gets a sentence on what it will look for and the <research> line; anything else one question back. A
+ * search (a research box's turn) gets a guide in three-line entries, whose first entry is the direction it was given
+ * when the conversation took a turn to reach it, then the first library item, by its path when it has one, with a section to find in it
  * (`#find=…&to=…`, round 2), and an "## Essays" group of one essay, its Read a link to its first paragraph's words with
- * no `&to=` (2026-10-03). Each Why says what the passage gives and the open question it bears on (round 3). The classic
- * was read in full and carries a Try line, its authors' repository (2026-10-04). A follow-up on a guide gets additions.
- * A question holding a mention (`@[Name]`, with or without words beside it; 2026-10-04) names a paper: no card, and a
+ * no `&to=` (2026-10-03). Each Why says in one short sentence how the reading helps with the question (2026-10-15). No Try line
+ * since 2026-10-15. A follow-up on a guide gets additions.
+ * A direction holding a mention (`@[Name]`, with or without words beside it; 2026-10-04) names a paper: its search gets a
  * guide that opens with "## This paper", the library item by its path, two sections best first, each its own Read and
  * Why, then a classic it cites, a paper that cites it and an essay; a follow-up that names one gets the same.
  * Nothing is looked up: every entry says it is fake.
  */
 function fakeDiscover(context, plan) {
-  const guided = plan.prior.length > 0 && /^## /.test(plan.prior[plan.prior.length - 1].answer);
-  let from = plan.prior.length;
-  while (from > 0 && cardOfAnswer(plan.prior[from - 1].answer)) from -= 1;
-  const cards = plan.prior.length - from, skipped = plan.question.trim() === SKIPPED;
+  if (!plan.search) return fakeDirection(context, plan);
+  const guided = plan.prior.some((turn) => /^## /.test(turn.answer));
   // Title, Read and Why; Read names a section by a link to its first words, or says the fake only had the abstract.
-  // Why: what the passage gives (a method, a measurement, a design…) and the open question it bears on; never the person's words.
-  const why = (gives) => `**Why:** a fake ${gives} to set against the open question in “${context.workspaceName}” of how to tell the work is going well.`;
+  // Why: in one short sentence, how the reading helps with the question (a method, a measurement, a design…), tied to no
+  // feature of the workspace; never the person's words (2026-10-15).
+  const why = (gives) => `**Why:** Helps you examine a fake ${gives} bearing on how to tell the work is going well.`;
   const entry = (title, address, section, words, to, gives = 'method') => [
     `**[${title}](${address})** · Fake Author et al. · 2024`,
     `**Read:** ${section ? `[${section}](${address}#find=${encodeURIComponent(words)}${to ? `&to=${encodeURIComponent(to)}` : ''})` : 'abstract only'}`,
@@ -831,10 +900,7 @@ function fakeDiscover(context, plan) {
   ];
   // An item's place: a path is written percent-encoded, so a space ends no link.
   const where = (item) => (item.path ? item.path.split('/').map(encodeURIComponent).join('/') : item.url);
-  const classic = (label) => [
-    ...entry(`A fake classic${label} (${plan.mode} mode)`, 'https://example.org/fake-classic', 'Implementation', 'a fake passage on how it was built', 'the fake evaluation after it', 'term for what is being handled'),
-    '**Try:** [fake-lab/fake-classic](https://github.com/fake-lab/fake-classic)',
-  ];
+  const classic = (label) => entry(`A fake classic${label} (${plan.mode} mode)`, 'https://example.org/fake-classic', 'Implementation', 'a fake passage on how it was built', 'the fake evaluation after it', 'term for what is being handled');
   const essays = ['## Essays', '', ...essay('A fake essay', 'https://example.org/fake-essay', 'A fake heading', 'the fake first paragraph of the essay', 'case that cuts against what is assumed')];
   // A paper named by a mention (a workspace's, `(ws:…)`, is not one): its own sections first, best first, not in its order.
   const mention = String(plan.question).match(/@\[([^\]\n]+)\](?!\(ws:)/);
@@ -853,14 +919,8 @@ function fakeDiscover(context, plan) {
     ].join('\n');
   }
   if (guided) return ['## Recent', '', ...entry('A fake later paper', 'https://example.org/fake-recent', null, '', '', 'measurement')].join('\n');
-  const problem = cards > 0 ? plan.prior[from].question : plan.question; // the problem as first asked, not an answer to a card
-  if (!String(problem || '').trim() && cards === 0) {
-    return JSON.stringify({ say: '', card: 'focus', focus: { title: 'Which part do you want prior work on?', options: [{ label: `What “${context.workspaceName}” is trying to do`, why: 'the aim as a whole' }, { label: 'How others have measured it', why: 'ways to tell it worked' }, { label: 'What has been tried before', why: 'earlier attempts' }] }, ready: false });
-  }
-  // Words of their own in place of a pick name the problem (and any paper in them) and start the guide (A-05).
-  const asked = cards >= 1 ? cardOfAnswer(plan.prior[from].answer) : null;
-  const said = asked && !skipped ? readAnswer(plan.question, asked) : null;
-  const own = said && !said.picks.length ? said.text : '';
+  // A direction the conversation took a turn to reach is the first entry, in its own words.
+  const own = plan.prior.length > 1 ? String(plan.question || '').trim() : '';
   // A paper of the library first, else anything it has a place for.
   const first = context.entries.find((item) => item.type === 'pdf' && (item.path || item.url)) || context.entries.find((item) => item.path || item.url);
   return [
@@ -870,6 +930,29 @@ function fakeDiscover(context, plan) {
     '## Classics', '', ...classic(''), '',
     ...essays,
   ].join('\n');
+}
+
+// What makes a fake turn's request clear enough to search on (fakeDirection).
+// What makes a fake Refine unclear enough to ask about first.
+const FAKE_UNCLEAR_RE = /\b(?:not sure|something else|different)\b/i;
+const FAKE_CLEAR_RE = /\b(?:find|papers?|studies|study|overview|survey|literature|just search|explore)\b|@\[/i;
+/** The fake @discover's turn that settles what to research (fakeDiscover). */
+function fakeDirection(context, plan) {
+  const said = String(plan.question || '').trim(), opening = !said || said === DISCOVER_OPENING;
+  if (opening) return JSON.stringify({ say: '', card: 'focus', focus: { title: 'What would you like to research?', options: ['Fake theme one', 'Fake theme two', 'Fake theme three'].map((label) => ({ label })) }, ready: false });
+  // What was said since the last guide: a follow-up on one is a new direction, settled at once.
+  const lastGuide = plan.prior.map((turn) => /^## /.test(turn.answer)).lastIndexOf(true);
+  const asked = plan.prior.slice(lastGuide + 1).filter((turn) => turn.question && turn.question !== DISCOVER_OPENING && !isSearch(turn.question));
+  const unpick = (question) => question.replace(/^picked "([^"]+)"$/, '$1');
+  // A Refine (2026-10-15): its words win; words that could mean several searches get one question first.
+  if (plan.refine && FAKE_UNCLEAR_RE.test(said)) return 'FAKE DISCOVER: What should the search look at instead?';
+  if (plan.refining) return `FAKE DISCOVER will now look for work on “${said}”.\n\n<research>${said}</research>`;
+  // A pick from a card only says where their interest is (2026-10-15): one question first, as for a broad topic, unless
+  // they were asked already. Words of their own are read as any line.
+  const picked = /^picked "/.test(said);
+  if (!asked.length && lastGuide < 0 && (picked || !FAKE_CLEAR_RE.test(said))) return picked ? `FAKE DISCOVER: What are you hoping to understand about ${unpick(said).toLowerCase()}?` : 'FAKE DISCOVER: What are you hoping the research will help you figure out?';
+  const direction = [...asked.map((turn) => unpick(turn.question)), unpick(said)].join('; ');
+  return `FAKE DISCOVER will look for work on “${direction}”.\n\n<research>${direction}</research>`;
 }
 
 /**
@@ -890,14 +973,34 @@ function fakeCreate(draft, question) {
   return { first: 'A fake report, a chart page and its data, from made-up numbers.', files: ['report.md', 'chart.html', 'data.csv'], last: 'Done.' };
 }
 
+/**
+ * The paper tools' calls and answers a fake @discover search tells as its trace (2026-10-15), as Claude Code's events: a
+ * library paper, a search by meaning and its closest result, both papers' references and what cites the first.
+ */
+function fakeTraceEvents(entries) {
+  const theirs = entries.find((item) => item.type === 'pdf' || (item.tags || []).includes('paper'));
+  const own = { id: 'W1', title: theirs ? theirs.name : 'A fake paper of yours', doi: null };
+  const found = { id: 'W2', title: 'A fake paper close to the problem', doi: null };
+  const use = (id, name, input) => ({ type: 'assistant', message: { content: [{ type: 'tool_use', id, name: `mcp__papers__${name}`, input }] } });
+  const back = (id, value) => ({ type: 'user', message: { content: [{ type: 'tool_result', tool_use_id: id, content: [{ type: 'text', text: JSON.stringify(value) }] }] } });
+  return [
+    use('f1', 'resolve', { query: own.title }), back('f1', { found: true, paper: own }),
+    use('f2', 'search', { query: 'The fake problem, in a sentence.' }), back('f2', { total: 12, order: 'closest in meaning first (title and abstract)', results: [found, ...Array.from({ length: 11 }, (_, n) => ({ id: `W${10 + n}`, title: `Fake result ${n + 2}` }))] }),
+    use('f3', 'resolve', { query: 'W2' }), back('f3', { found: true, paper: found }),
+    use('f4', 'references', { id: 'W1' }), back('f4', { of: own, total: 14, listed: 14, results: [] }),
+    use('f5', 'references', { id: 'W2' }), back('f5', { of: found, total: 22, listed: 22, results: [] }),
+    use('f6', 'citations', { id: 'W1' }), back('f6', { of: own, total: 3, results: [] }),
+  ];
+}
+
 /** Scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing "hard" moves up one step; one containing "code" is answered with a JSON code block too. @brainstorm runs fakeThink (the Welcome walkthrough's fakeWelcome), @discover fakeDiscover, @create fakeCreate. */
 function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), onPicked = () => {}, runLog = null, inspectPdf = null, onAdded = () => {} }) {
   const waits = new Map();
   const log = logTo(runLog);
   const router = createFakeRouter({ runLog });
   return {
-    async ask(ctx, projectId, { askId, ref, workspaceId, text: typed, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null, intro: introInput = null }, { onProgress } = {}) {
-      const models = readModels(), routed = routedOf(routedInput), intro = introOf(introInput, agent), text = intro ? introQuestion(typed) : typed;
+    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
+      const models = readModels(), routed = routedOf(routedInput);
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
       const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' || agent === 'create' ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
       const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover', create = agent === 'create';
@@ -910,7 +1013,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const ended = (status, result, error) => log((runs) => runs.finish(logId, { status, written: result ? result.lines : null, error: error && error.message, ms: Date.now() - startedAt }));
       if (plan.written != null) { const result = resultReply(plan); ended('done', result); return result; }
       if (create && !question) { const error = new BartError('failed', 'There is nothing on the line to make.'); ended('failed', null, error); throw error; }
-      const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed, agent, intro, topic: agent === 'brainstorm' ? context.topic : null });
+      const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed, agent, topic: agent === 'brainstorm' ? context.topic : null });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
       const making = create ? firstSentence((said) => onProgress && onProgress({ making: said })) : null;
@@ -919,7 +1022,13 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const opens = [];
       const act = async (text) => {
         feed.reset();
-        for (const activity of discover ? ['Reading notes.md', 'Looking up “fake”', 'Reading what cites “fake”'] : [...opens, 'Reading notes.md', QUIET.has(agent) ? 'Searching for “fake”' : 'Searching the web for “fake”']) { feed.take({ activity, log: true }); await pause(delayMs / 4); }
+        // Discover looks papers up only when it searches (2026-10-14); settling what to research, it reads the notes.
+        for (const activity of discover ? (plan.search ? ['Reading notes.md', 'Looking up “fake”', 'Reading what cites “fake”'] : ['Reading notes.md']) : [...opens, 'Reading notes.md', QUIET.has(agent) ? 'Searching for “fake”' : 'Searching the web for “fake”']) { feed.take({ activity, log: true }); await pause(delayMs / 4); }
+        // And tells them as its trace (./trace.cjs), from the paper tools' calls and answers a real run would get.
+        if (discover && plan.search) {
+          const trace = createTrace({ entries: context.entries });
+          for (const event of fakeTraceEvents(context.entries)) { const story = trace.take(event); if (story && onProgress) onProgress({ trace: story }); await pause(delayMs / 16); }
+        }
         feed.take({ textStart: true });
         const pieces = text.match(/[\s\S]{1,24}/g) || [];
         for (const delta of pieces) { feed.take({ delta }); await pause(delayMs / 2 / pieces.length); }
@@ -941,15 +1050,16 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
           first: message, session: held ? held.session : null,
           // What it was sent is what it reports: a resumed session gets the question alone (an @bart one, the Stage and
           // highlights as well), a new one gets everything.
-          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: create && !intro ? await actCreate(fakeCreate(draft, question)) : await act(intro ? `FAKE INTRO to "${question}": Discover is looking for what to read on it.` : plan.welcome ? fakeWelcome(plan) : brainstorm ? fakeTopic(fakeThink(plan, sent), sent, question) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
+          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: create ? await actCreate(fakeCreate(draft, question)) : await act(plan.welcome ? fakeWelcome(plan) : brainstorm ? fakeTopic(fakeThink(plan, sent), sent, question) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned, ...(routed ? { routed } : {}) };
         const made = create ? await keepCreated(ctx, projectId, logId, draft) : null;
         if (made) { meta.created = made.files.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
-        const named = agent === 'brainstorm' && !plan.welcome ? takeTopic(out.text) : { text: out.text, topic: null };
+        if (made) await saveAllCreated(ctx, projectId, workspaceId, logId, made.files, { inspectPdf, onAdded }); // and saved (2026-10-15)
+        const named = taken(agent, plan, out.text);
         const body = made ? createdBody(createdSentence(making.text, out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : replyBody(agent, named.text);
         if (store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
-        const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent: intro === 'discover' ? 'discover' : agent }), meta, ...(named.topic ? { topic: named.topic } : {}) };
+        const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta, ...handedBack(named) };
         ended('done', result);
         return result;
       } catch (error) {
@@ -965,4 +1075,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { takeTopic, DISCOVER_INTRO, withoutResearch, createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, welcomeReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, WELCOME_CARDS };
+module.exports = { takeTopic, takeResearch, withoutResearch, isSearch, createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, welcomeReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, WELCOME_CARDS };

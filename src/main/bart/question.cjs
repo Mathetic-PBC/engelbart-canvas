@@ -124,6 +124,16 @@ const PROVIDER_WORDS = { claude: 'anthropic', codex: 'openai', chatgpt: 'openai'
 // The flag withMode writes for each.
 const PROVIDER_FLAGS = { anthropic: '--claude', openai: '--codex' };
 
+// A Refine turn (2026-10-15, David): `--refine` on an @discover line says it corrects or develops the research direction
+// already given (Refine on the research-intent reply; ./ask.cjs turnPlan). Never part of the question.
+const REFINE_RE = /(^|\s)(--refine)(?=\s|$)/gi;
+/** Whether an @discover line is a Refine turn, and the line without the flag. → { refine, rest } */
+function readRefine(text) {
+  let refine = false;
+  const rest = String(text || '').replace(REFINE_RE, (all, lead) => { refine = true; return lead; }).replace(/\s+/g, ' ').trim();
+  return { refine, rest };
+}
+
 /** The provider an @discover line names, the last when it names two, else null; and the line without it. → { provider, rest } */
 function readProvider(text) {
   let provider = null;
@@ -150,7 +160,7 @@ function levelOf(models, provider, mode) {
  */
 function readDiscover(text, models, earlier = []) {
   const offered = (provider) => (provider && models.providers[provider] ? provider : null);
-  const { mode: named, rest: unmoded } = readMode(text);
+  const { mode: named, rest: unmoded } = readMode(readRefine(text).rest);
   const { provider: asked, rest } = readProvider(unmoded);
   const before = [...(Array.isArray(earlier) ? earlier : [])].reverse().map((turn) => (turn && turn.question) || '');
   const carried = before.map((question) => readMode(question).mode).find(Boolean);
@@ -185,7 +195,7 @@ function withMode(text, mode, models, plain = 'standard', provider = null) {
 function discoverSpans(text, models) {
   const spans = [];
   const blankOut = (source, re) => source.replace(re, (all, lead, word, at) => { spans.push([at + lead.length, at + all.length]); return lead + ' '.repeat(all.length - lead.length); });
-  const blank = blankOut(blankOut(String(text || ''), MODE_RE), PROVIDER_RE);
+  const blank = blankOut(blankOut(blankOut(String(text || ''), MODE_RE), PROVIDER_RE), REFINE_RE);
   if (models) spans.push(...readFlags(blank, models).spans);
   return spans.sort((a, b) => a[0] - b[0]);
 }
@@ -220,4 +230,4 @@ function withChoice(text, models, { model, effort }) {
   return [`--${model}`, `--${effort}`, rest].filter(Boolean).join(' ');
 }
 
-module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, above, ladderOf, readQuestion, readMode, readProvider, levelOf, readDiscover, withMode, discoverSpans, readBuildFlag, buildRequestOf, withChoice };
+module.exports = { EFFORTS, EFFORT_LABELS, MODES, effortOf, modelOf, readFlags, above, ladderOf, readQuestion, readMode, readProvider, readRefine, levelOf, readDiscover, withMode, discoverSpans, readBuildFlag, buildRequestOf, withChoice };

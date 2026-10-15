@@ -150,13 +150,19 @@ test('doc.js: retitle changes the title of the conversation that holds a questio
   assert.equal(topicOfThread(threads(CONVERSATION(''))[0]), '');
   assert.equal(topicOfThread(threads(CONVERSATION('New conversation'))[0]), '');
   assert.equal(topicOfThread(threads(['bart# [chat 2026-10-14T20:13:23Z] Why', '@chat why?', 'bart> b'])[0]), '');
+  // `unset` (2026-10-14, a Discover conversation named from its direction): only a title not yet given is filled.
+  const D = (title) => [`bart# [discover 2026-10-14T20:13:23Z] ${title}`, '@discover', 'bart> What would you like to research?', 'bart> *Discover · 2 s*', '@discover tutors', 'bart> I will look.', ''].join('\n');
+  const at = { question: '@discover tutors', index: 4 };
+  for (const empty of ['', 'New conversation']) assert.equal(retitle(D(empty), at, 'Tutors noticing struggle', { unset: true }).split('\n')[0], 'bart# [discover 2026-10-14T20:13:23Z] Tutors noticing struggle', JSON.stringify(empty));
+  assert.equal(retitle(D('Mine'), at, 'Tutors noticing struggle', { unset: true }), null, 'a title already there stays');
+  assert.equal(retitle(D('Mine'), at, 'Tutors noticing struggle').split('\n')[0], 'bart# [discover 2026-10-14T20:13:23Z] Tutors noticing struggle', 'without it, as before');
 });
 
 test('Workspace askBart: a Brainstorm conversation names its own topic: not named at once or from a bare line\'s answer; retitled from the reply\'s topic once the answer is in, else named from a first line\'s words', () => {
   const src = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
   assert.ok(src.includes("const ownTopic = agent === 'brainstorm' && !build;"));
   assert.ok(src.includes('if (name && !later && !ownTopic) nameAs(text);'), 'not named at once');
-  assert.ok(src.includes("if (later && !ownTopic) nameAs(out.stopped ? '' : answerText(out.lines));"), 'a bare line\'s answer names nothing');
+  assert.ok(src.includes("if (later && !ownTopic && !ownDirection) nameAs(out.stopped ? '' : answerText(out.lines));"), 'a bare line\'s answer names nothing');
   assert.ok(src.includes('if (ownTopic && !out.stopped && !out.failed) { if (out.topic) retitleTo(out.topic); else if (name && !later) nameAs(text); }'));
   assert.ok(src.includes('if (typeof held === \'string\' && !held.includes(`bart~> ${askId}`)) { const next = retitle(held, answered, title);'), 'once the answer is in the document');
 });

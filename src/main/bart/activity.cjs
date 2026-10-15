@@ -41,7 +41,8 @@ function paperTool(tool, input) {
   if (tool === 'citations') return `Reading what cites${quoted(given.id).replace(/^ for/, '')}`;
   if (tool === 'author_works') return `Listing the works of${quoted(given.author).replace(/^ for/, '')}`;
   if (tool === 'related') return `Finding papers near${quoted(given.id).replace(/^ for/, '')}`;
-  if (tool === 'search') return `Searching papers${quoted(given.query)}`;
+  // A search by meaning (the default, 2026-10-15) reads as what it does; one by words as before.
+  if (tool === 'search') return given.by === 'words' ? `Searching papers${quoted(given.query)}` : `Finding papers close to${quoted(given.query).replace(/^ for/, '')}`;
   return 'Looking papers up';
 }
 

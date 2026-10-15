@@ -1,7 +1,7 @@
 // Bart, the router, in the editor (2026-10-12). An `@bart` line picks its agent here first, by rule; only a line no
 // rule settles is sent to the model (src/main/bart/route.cjs), with what this module reads of the document around it:
 // its section, the threads above and the spec above, if any.
-import { parseLines, threads, turnText, answeredBy, tokenOf, answerFences } from './doc.js';
+import { parseLines, threads, turnText, answeredBy, tokenOf, answerFences, isResearch } from './doc.js';
 import { readFlags, readBuildFlag, effortOf } from '../../main/bart/question.cjs';
 
 const LEVEL_RE = /(^|\s)--(quick|standard|deep)(?=\s|$)/i;
@@ -40,18 +40,21 @@ function hasModelFlag(text, models) {
  * The agent an `@bart` line goes to by rule, or null when no rule settles it and the model is asked. `text`: the line
  * after `@bart`; `lines`, `at`: the document and the line's index (for the thread it is under); `models`: the models
  * file, when loaded; `current`: the agent the thread a follow-up goes on with is with (routeInputs). → { agent: 'chat' |
- * 'brainstorm' | 'discover' | 'build', rule } | null. In order:
+ * 'brainstorm' | 'discover' | 'build', rule } | null. `asking`: the line answers Discover while it settles what to research
+ * (routeInputs). In order:
  *   an empty line → brainstorm; --build → Build; --quick, --standard or --deep → discover; a model or effort flag → chat,
- *   unless the line follows up a thread, where the flag is for whichever agent answers.
+ *   unless the line follows up a thread, where the flag is for whichever agent answers; an answer to Discover's question
+ *   → discover (2026-10-14: its conversation is not over until it searches, so its replies are not routed away to Chat).
  * A line under a thread is no longer settled by its thread's agent (2026-10-13): the model is told which agent the
  * conversation is with (`current`) and stays with it unless the line clearly wants another.
  */
-export function routeByRule(text, { models = null, current = null } = {}) {
+export function routeByRule(text, { models = null, current = null, asking = false } = {}) {
   const said = String(text || '');
   if (!said.trim()) return { agent: 'brainstorm', rule: 'empty' };
   if (readBuildFlag(said).build) return { agent: 'build', rule: '--build' };
   if (LEVEL_RE.test(said)) return { agent: 'discover', rule: 'level' };
   if (!current && hasModelFlag(said, models)) return { agent: 'chat', rule: 'model flag' };
+  if (asking) return { agent: 'discover', rule: 'answering Discover' };
   return null;
 }
 
@@ -71,7 +74,9 @@ export function buildTextOf(lines, turn) {
  *   specTitle: its first line, plain and cut as a thread's question is (questionLine), or '' (2026-10-13: so the router can
  *     tell a line asking for that spec to be built from one asking for something of its own);
  *   current: when the line follows up a thread (a turn of it, or directly under its last answer), the token of the agent
- *     that answered it last ('chat', 'brainstorm' or 'discover'), else null (2026-10-13).
+ *     that answered it last ('chat', 'brainstorm' or 'discover'), else null (2026-10-13);
+ *   asking: that agent is Discover and its last turn neither searched nor gave a guide: it is still settling what to
+ *     research, so the line answers it (routeByRule; 2026-10-14).
  * The router (main) takes the last five threads and the section's last 4,000 characters once agent replies are left out
  * (bart/route.cjs sectionText), so the section is sent whole here: cut first, it would hold less than that.
  */
@@ -104,5 +109,8 @@ export function routeInputs(lines, at) {
   const agent = into ? answeredBy(into) : null;
   const current = agent === 'bart' || agent === 'brainstorm' || agent === 'discover' ? tokenOf(agent) : null;
   const specTitle = spec != null ? questionLine(spec.split('\n').find((line) => line.trim()) || '') : '';
-  return { section: lines.slice(start, at + 1).join('\n'), threads: list, specAbove: spec != null, spec, specTitle, current };
+  // Discover still settling what to research (2026-10-14): its last turn is not a research box and gave no guide.
+  const last = into && agent === 'discover' ? said(into).pop() : null;
+  const asking = !!last && !isResearch(ps[last.q]) && !/^## /m.test(turnText(lines, last).answer);
+  return { section: lines.slice(start, at + 1).join('\n'), threads: list, specAbove: spec != null, spec, specTitle, current, asking };
 }

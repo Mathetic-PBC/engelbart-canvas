@@ -115,9 +115,10 @@ export function placeTitle(text, askId, title, near = null) {
 /**
  * `text` with the title of the conversation that holds the question `near` (askedAt, read before its answer was placed)
  * changed to `title` (2026-10-14: a Brainstorm conversation's topic, the label on its chip); null when there is nothing
- * to change: no such question, a conversation with no title line, or the same title already.
+ * to change: no such question, a conversation with no title line, or the same title already. `unset`: only a title not
+ * written yet is changed (2026-10-14: a Discover conversation named from what it settled to research).
  */
-export function retitle(text, near, title) {
+export function retitle(text, near, title, { unset = false } = {}) {
   const said = String(title || '').trim();
   if (!said || !near || typeof near.question !== 'string') return null;
   const all = String(text).split('\n');
@@ -126,7 +127,7 @@ export function retitle(text, near, title) {
   const thread = best < 0 ? null : threads(all).find((t) => t.turns.some((turn) => turn.q === best));
   if (!thread || thread.titleLine < 0) return null;
   const m = all[thread.titleLine].match(TITLE_RE), meta = titleMeta(m[2]);
-  if (meta.text.trim() === said) return null;
+  if (meta.text.trim() === said || (unset && meta.text.trim() && meta.text.trim() !== UNSET_TOPIC)) return null;
   all[thread.titleLine] = titleLine(said, m[1] === '+', meta);
   return all.join('\n');
 }
@@ -545,7 +546,7 @@ export function replyRawOffset(p, fOff, opts) {
  * own, unless that thread is an @orient one; the @brainstorm lines answering an @orient thread's cards go on with it.
  */
 const followsIn = (p, first, thread) => (
-  agentOf(p) === 'router' || isResearch(p) || (agentOf(p) === thread.agent && (p.agent !== 'orient' || first.agent === 'orient'))
+  agentOf(p) === 'router' || isResearch(p) || isRefine(p) || (agentOf(p) === thread.agent && (p.agent !== 'orient' || first.agent === 'orient'))
 );
 // An @discover research box (2026-10-13): an @discover question is answered by a reply (Chat, asked with main's
 // bart/ask.cjs DISCOVER_INTRO, its closing line naming Discover), then searched in a box of its own under it, a turn of
@@ -560,6 +561,15 @@ export const isResearch = (p) => !!p && p.type === 'bart' && agentOf(p) === 'dis
 export const researchLine = (text) => `@discover ${RESEARCH_FLAG}${String(text || '').trim() ? ` ${String(text).trim()}` : ''}`;
 /** What a research box's line asks, without its flag. */
 export const researchText = (text) => String(text || '').replace(new RegExp(RESEARCH_RE.source, 'gi'), '$1').replace(/\s+/g, ' ').trim();
+// A Refine turn (2026-10-15, David): what the person typed in the field Refine opens under the research-intent reply,
+// `@discover --refine <words>`, a turn of the same conversation (it goes on with it as a research box's line does). Its
+// answer is the direction again, corrected, which waits in a research box until Start research or Restart research.
+export const REFINE_FLAG = '--refine';
+const REFINE_RE = /(^|\s)--refine(?=\s|$)/i;
+/** Whether parsed line `p` is a Refine turn's line. */
+export const isRefine = (p) => !!p && p.type === 'bart' && agentOf(p) === 'discover' && REFINE_RE.test(p.text);
+/** A Refine turn's line for what was typed. */
+export const refineLine = (text) => `@discover ${REFINE_FLAG} ${String(text || '').trim()}`;
 // The agents a closing line names first (main/bart/reply.cjs attribution, 2026-10-12): "Build" is Chat, asked to write
 // the Build prompt for a line Bart read as one to build.
 const FOOT_AGENTS = { Chat: 'bart', Build: 'bart', Brainstorm: 'brainstorm', Discover: 'discover', Create: 'create' };
@@ -623,9 +633,10 @@ export function threads(lines, ps = parseLines(lines)) {
       // (2026-10-13): one still being typed under a card is no turn of it, and asked from the document it starts a
       // conversation of its own (DocEditor askInline). The card's reply field, its cards and its research boxes put the
       // pending line in with the question. A Build's card in place of that pending line (2026-10-13: a "yes" Bart sent to
-      // Build with the spec above, DocEditor handOff) is its answer, and the question a turn of the thread as well.
+      // Build with the spec above, DocEditor handOff) is its answer, and the question a turn of the thread as well. A
+      // research box goes on with it before it is asked (2026-10-15): the direction a Refine settled waits there to be started.
       if (!turn.answered || turn.build || i + 1 >= lines.length || ps[i + 1].type !== 'bart' || !followsIn(ps[i + 1], ps[thread.from], thread)) break;
-      if (!(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply' || ps[i + 2].type === 'build'))) break;
+      if (!isResearch(ps[i + 1]) && !(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply' || ps[i + 2].type === 'build'))) break;
       i += 1;
     }
     out.push(thread);

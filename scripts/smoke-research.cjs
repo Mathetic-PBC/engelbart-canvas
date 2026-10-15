@@ -2,9 +2,10 @@
 
 // npm run build && npx electron scripts/smoke-research.cjs
 // Runs the real app, hidden, against disposable project/user data and the fake agents (src/main/bart/ask.cjs and
-// route.cjs), and drives @discover's research box (2026-10-13; DocEditor splitsDiscover) by typing: an @discover question
-// is answered by Chat's reply, closing as Discover's, with the search in a box of its own under it; a reply asking about
-// it goes to Chat, with no new box; a reply asking for other papers refines the search in a second box.
+// route.cjs), and drives @discover by typing (2026-10-14): an empty @discover line asks "What would you like to
+// research?" on a card of the workspace's themes, with no search, and a theme picked there is searched in a box; a broad topic gets one question back, a reply that answers it stays with Discover (by rule),
+// and once the direction is settled a research box goes under Discover's reply and searches by itself; the conversation is
+// named from that direction. A clear request gets its box at once. A reply asking about a guide goes to Chat, no new box.
 // ENGELBART_RESEARCH_SHOTS=<dir> saves pictures of the window.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -57,9 +58,13 @@ async function shot(wc, name) {
   fs.writeFileSync(path.join(SHOTS, `${name}.png`), picture.toPNG());
 }
 // The reply field is shut until Reply opens it (2026-10-13).
+// The last conversation's Reply: the one being talked to here.
+// Into the last conversation's reply field: open already once its answer came in (2026-10-15), else through its Reply.
 const reply = async (wc, text) => {
-  await press(wc, `${ED} [data-act="reply"]`);
-  await press(wc, `${ED} [data-follow-input]`);
+  const last = (sel) => `(()=>{const all=document.querySelectorAll(${JSON.stringify(sel)});all.forEach((b)=>b.removeAttribute('data-last'));const b=all[all.length-1];if(b)b.setAttribute('data-last','1');return b?b.dataset.act||'field':''})()`;
+  if (await js(wc, last(`${ED} [data-act="reply"], ${ED} [data-follow-input]`)) === 'reply') await press(wc, `${ED} [data-act="reply"][data-last]`);
+  await js(wc, last(`${ED} [data-follow-input]`));
+  await press(wc, `${ED} [data-follow-input][data-last]`);
   await typeKeys(wc, `${text}\n`);
 };
 
@@ -75,72 +80,135 @@ app.whenReady().then(async () => {
     await until(() => js(wc, `!!document.querySelector(${JSON.stringify(ED)})`).catch(() => false), 'the workspace document');
     await pause(400);
 
-    /* ------------------------------------------------ an @discover question: the reply, then the box */
+    /* ------------------------------------------------ an empty @discover: a card of themes, no search; a pick is searched */
     await press(wc, `${ED} [data-line="0"] .t`);
     await key(wc, 'A', { modifiers: ['meta'] });
     await key(wc, 'Backspace');
     await until(async () => (await rows(wc)).join('\n').trim() === '', 'an empty document');
-    await typeKeys(wc, 'Notes\n@discover how do tutors notice struggle\n');
-    const asked = await until(async () => { const ls = await rows(wc); return ls.some((l) => l === '@discover --research how do tutors notice struggle') ? ls : null; }, 'the research line, asked with the reply');
-    await shot(wc, '1-asked');
+    // The first Enter takes the agent from the menu ("@Discover "), the second asks the line.
+    await typeKeys(wc, 'Notes\n@discover\n');
+    await typeKeys(wc, '\n');
+    await until(async () => (await rows(wc)).some((l) => /^bart~> /.test(l)), 'asked');
     await settled(wc);
-    const ls = await rows(wc);
-    const q = ls.indexOf('@discover how do tutors notice struggle'), box = ls.indexOf('@discover --research how do tutors notice struggle');
-    assert.ok(q > 0 && box > q, `the box under the reply: ${JSON.stringify(asked)}`);
-    assert.match(ls[q - 1], /^bart# \[discover /, 'one title, the conversation Discover\'s');
-    assert.equal(ls[q + 1], 'bart> FAKE INTRO to "how do tutors notice struggle": Discover is looking for what to read on it.');
-    assert.match(ls[box - 1], /^bart> \*Discover · /, 'the reply closes as Discover\'s');
-    assert.ok(ls.slice(box + 1).some((l) => /^bart> ## /.test(l)), 'the guide is in the box');
-    const head = await js(wc, `(()=>{const h=document.querySelector('${ED} [data-research]');return h?{text:h.innerText.replace(/\\s+/g,' ').trim(),editable:h.getAttribute('contenteditable'),radius:getComputedStyle(h).borderTopLeftRadius}:null})()`);
-    assert.deepEqual(head, { text: 'Research · Standard', editable: 'false', radius: '10px' });
-    await shot(wc, '2-answered');
-    console.log('PASS an @discover question is the reply, closing as Discover\'s, and the search in a box of its own under it');
+    let ls = await rows(wc);
+    const q = ls.findIndex((l) => /^@discover\s*$/i.test(l));
+    assert.ok(q > 0, JSON.stringify(ls));
+    assert.match(ls[q - 1], /^bart# \[discover [^\]]+\] ?(?:New conversation)?$/, 'its title waits for the direction');
+    assert.ok(!ls.some((l) => l.includes('--research')), 'no box: nothing to search yet');
+    const shown = await js(wc, `document.querySelector('${ED}').innerText`);
+    assert.ok(shown.includes('What would you like to research?'), 'the card asks it');
+    assert.ok(!/Discover is looking|Searching/.test(shown), 'nothing says it is searching');
+    const options = await js(wc, `[...document.querySelectorAll('${ED} [data-act="cardopt"]')].map((b)=>b.querySelector('.dv-label').innerText.trim())`);
+    assert.equal(options.length, 3, JSON.stringify(options));
+    assert.deepEqual(options, ['Fake theme one', 'Fake theme two', 'Fake theme three']);
+    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-followup]').length`), 0, 'no @bart field under it: its own field is in the card');
+    await shot(wc, '1-card');
+    await press(wc, `${ED} [data-act="cardopt"][data-opt="1"]`);
+    assert.equal(await js(wc, `document.querySelector('${ED} [data-act="cardopt"][data-opt="1"]').getAttribute('aria-checked')`), 'true', 'picked, waiting for Submit');
+    assert.ok(!(await rows(wc)).some((l) => /^bart~> /.test(l)), 'nothing asked on a pick');
+    await shot(wc, '1a-picked');
+    await press(wc, `${ED} .dv-submit`);
+    // A pick says where the interest is, not what they want to learn (2026-10-15): one short question first, no box.
+    await until(async () => (await rows(wc)).includes('bart> FAKE DISCOVER: What are you hoping to understand about fake theme two?'), 'the pick\'s question');
+    await settled(wc);
+    assert.ok(!(await rows(wc)).some((l) => l.includes('--research')), 'no box before the question is answered');
+    await shot(wc, '1b-asked');
+    await reply(wc, 'when being brief starts hurting understanding');
+    const picked = '@discover --research Fake theme two; when being brief starts hurting understanding';
+    await until(async () => (await rows(wc)).includes(picked), 'the pick\'s box');
+    await settled(wc);
+    ls = await rows(wc);
+    assert.ok(ls.slice(ls.indexOf(picked)).some((l) => /^bart> ## Start here/.test(l)), 'the guide is in the box');
+    await until(async () => (await rows(wc)).some((l) => /^bart#\+? \[discover [^\]]+\] Fake theme two/i.test(l)), 'named from the pick');
+    await shot(wc, '1c-picked');
+    console.log('PASS an empty @discover asks "What would you like to research?" on a card of themes; a pick gets one question, and the answer is searched in its box');
 
-    /* ------------------------------------------------ a reply about it is Chat's: no new box */
+    /* ------------------------------------------------ a new conversation under it */
+    const below = (await rows(wc)).length - 1;
+    await press(wc, `${ED} [data-line="${below}"]`);
+    await typeKeys(wc, '\n@discover tutors\n');
+    await until(async () => (await rows(wc)).includes('@discover tutors'), 'typed');
+    await settled(wc);
+    ls = await rows(wc);
+    assert.equal(ls[ls.indexOf('@discover tutors') + 1], 'bart> FAKE DISCOVER: What are you hoping the research will help you figure out?', 'a broad topic: a question back');
+
+    /* ------------------------------------------------ a broad topic: one question; the answer settles it, and the box searches */
+    await reply(wc, 'how they notice struggle');
+    await until(async () => (await rows(wc)).some((l) => /^@discover --research tutors/.test(l)), 'the research box');
+    await settled(wc);
+    ls = await rows(wc);
+    const said = ls.indexOf('@bart how they notice struggle'), box = ls.findIndex((l) => /^@discover --research tutors/.test(l));
+    assert.ok(said > 0 && box > said, JSON.stringify(ls));
+    assert.equal(ls[box], '@discover --research tutors; how they notice struggle', 'the direction kept on the box\'s line');
+    assert.match(ls[said + 1], /^bart> FAKE DISCOVER will look for work on/);
+    assert.ok(!ls.some((l) => l.includes('<research>')), 'the tag is never in the document');
+    assert.match(ls[box - 1], /^bart> \*Discover · /, 'the reply closes as Discover\'s');
+    assert.ok(ls.slice(box + 1).some((l) => /^bart> ## Start here/.test(l)), 'the guide is in the box');
+    const head = await js(wc, `(()=>{const h=[...document.querySelectorAll('${ED} [data-research]')].pop();return h?{text:h.innerText.replace(/\\s+/g,' ').trim(),editable:h.getAttribute('contenteditable')}:null})()`);
+    assert.ok(head && /^Research · Standard/.test(head.text) && head.editable === 'false', JSON.stringify(head));
+    const title = await until(async () => (await rows(wc)).find((l) => /^bart#\+? \[discover [^\]]+\] Tutors/i.test(l)), 'the title from the direction');
+    assert.ok(!/New conversation/.test(title), title);
+    assert.equal((await rows(wc)).filter((l) => /^bart#/.test(l)).length, 2, 'two conversations');
+    await shot(wc, '2-searched');
+    console.log(`PASS a broad topic gets one question; the answer settles it and the box searches by itself (title: ${title})`);
+
+    /* ------------------------------------------------ a reply about the guide is Chat's: no new box */
     await reply(wc, 'which one is the most cited');
     await settled(wc);
-    const after = await rows(wc);
-    assert.equal(after.filter((l) => l.includes('--research')).length, 1, 'still one box');
-    assert.ok(after.some((l) => l === '@bart which one is the most cited'));
-    assert.match(after[after.indexOf('@bart which one is the most cited') + 1], /^bart> FAKE ANSWER/);
-    console.log('PASS a reply asking about it goes to Chat, with no new search');
+    ls = await rows(wc);
+    assert.equal(ls.filter((l) => l.includes('--research')).length, 2, 'no new box');
+    assert.match(ls[ls.indexOf('@bart which one is the most cited') + 1], /^bart> FAKE ANSWER/);
+    console.log('PASS a reply asking about the guide goes to Chat, with no new search');
 
-    /* ------------------------------------------------ a reply asking for other papers refines the search */
-    await reply(wc, 'find papers on K-12 only');
-    await settled(wc);
-    const refined = await rows(wc);
-    assert.ok(refined.includes('@discover --research find papers on K-12 only'), JSON.stringify(refined.slice(-12)));
-    const heads = await js(wc, `[...document.querySelectorAll('${ED} [data-research]')].map((h)=>h.innerText.replace(/\\s+/g,' ').trim())`);
-    assert.deepEqual(heads, ['Research · Standard', 'Research · Standard · find papers on K-12 only']);
-    const collapsed = await js(wc, `[...document.querySelectorAll('${ED} [data-line]')].filter((d)=>/^bart\\+> /.test(d.dataset.raw)).length`);
-    assert.ok(collapsed > 0, 'the turns before the reply collapsed');
-    await shot(wc, '3-refined');
-    console.log('PASS a reply asking for other papers refines the search in a second box, the turns before it collapsed');
-
-    /* ------------------------------------------------ a Build Bart picks: Chat's reply, then the Build's card under it */
-    // At the end of the document: an answer with a fenced block (the fake's answer to a question about code), then "ok build it".
-    const before = await rows(wc);
-    await press(wc, `${ED} [data-line="${before.length - 1}"]`);
-    await typeKeys(wc, '\n@chat show the code config\n');
-    await settled(wc);
-    const spec = await rows(wc);
-    assert.ok(spec.some((l) => l === 'bart> ```json'), `a fenced block to build: ${JSON.stringify(spec)}`);
-    const end = spec.length - 1;
+    /* ------------------------------------------------ a clear request: the box at once */
+    const end = (await rows(wc)).length - 1;
     await press(wc, `${ED} [data-line="${end}"]`);
-    await typeKeys(wc, '@bart ok build it\n');
-    await until(async () => (await rows(wc)).some((l) => /^build> /.test(l)), 'the Build\'s card', 600);
+    await typeKeys(wc, '\n@discover find papers on why coding agents retry\n');
+    await until(async () => (await rows(wc)).includes('@discover --research find papers on why coding agents retry'), 'its box');
+    // Its steps, opened, are told as its trace (2026-10-15): by part, each saying what came back.
+    await press(wc, `${ED} [data-act="asklog"]`);
+    const told = await until(() => js(wc, `(()=>{const g=[...document.querySelectorAll('${ED} [data-trace-group]')];return g.length>=3&&/Found 3/.test(g[2].innerText)&&g.map((d)=>d.innerText.trim())})()`), 'the trace, by part');
+    await shot(wc, '3-trace');
+    assert.match(told[0], /^Starting papers\n(?:Found “[^”]+” in your library|Looked up “[^”]+”)\nSearched for papers close to your problem\nPicked “A fake paper close to the problem”, the closest of 12$/);
+    assert.match(told[1], /^Papers they cite\nListed the 14 papers “[^”]+” cites\nListed the 22 papers “A fake paper close to the problem” cites$/);
+    assert.match(told[2], /^Newer papers that cite them\nFound 3 newer papers that cite “[^”]+”$/);
+    console.log('PASS a search\'s steps are told by part of the trace, each saying what came back');
     await settled(wc);
-    const built = await rows(wc), line = built.indexOf('@bart ok build it'), card = built.findIndex((l) => /^build> /.test(l));
-    assert.equal(built[line + 1], 'bart> FAKE INTRO to "ok build it": Build is making the spec above.', JSON.stringify(built.slice(line)));
-    assert.match(built[card - 1], /^bart> \*Build · /, 'the reply closes as Build\'s, right above the card');
-    // Typed under the answer, the line starts a conversation of its own (2026-10-13): that one has no follow-up field over
-    // the card; the @chat conversation above keeps its own.
-    const from = built.indexOf('@chat show the code config');
-    // (Since 2026-10-13 a field is opened by its Reply: what is drawn is the Reply.)
-    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-followup="${line}"], ${ED} [data-act="reply"][data-thread="${line}"]').length`), 0, 'no follow-up field or Reply over the card');
-    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-act="reply"][data-thread="${from}"]').length`), 1, 'the conversation above keeps its own Reply');
-    await shot(wc, '4-build');
-    console.log('PASS a Build Bart picks is Chat\'s reply first, closing as Build\'s, with the Build\'s card under it');
+    ls = await rows(wc);
+    const clear = ls.indexOf('@discover find papers on why coding agents retry');
+    assert.match(ls[clear + 1], /^bart> FAKE DISCOVER will look for work on/);
+    assert.ok(ls.slice(ls.indexOf('@discover --research find papers on why coding agents retry')).some((l) => /^bart> ## Start here/.test(l)));
+    await shot(wc, '3-clear');
+    console.log('PASS a clear request is settled at once and searched in its box');
+
+    /* ------------------------------------------------ Refine: the new direction waits in its box until Restart research */
+    const refines = await js(wc, `document.querySelectorAll('${ED} [data-act="refine"]').length`);
+    assert.equal(refines, 2, 'Refine on the reply that said what it will look for, where it is not collapsed (Tutors\' is, under Chat\'s turn)');
+    await js(wc, `(()=>{const all=document.querySelectorAll('${ED} [data-act="refine"]');all[all.length-1].setAttribute('data-last','1')})()`);
+    await press(wc, `${ED} [data-act="refine"][data-last]`);
+    const field = await until(() => js(wc, `(()=>{const f=[...document.querySelectorAll('${ED} [data-follow-input]')].pop();return f&&f.getAttribute('placeholder')})()`), 'the Refine field');
+    assert.equal(field, 'Correct or develop the direction…');
+    await shot(wc, '4-refine-field');
+    await press(wc, `${ED} [data-follow-input]`);
+    await typeKeys(wc, 'only studies of open source agents\n');
+    const waiting = '@discover --research only studies of open source agents';
+    await until(async () => (await rows(wc)).includes(waiting), 'the refined direction');
+    await settled(wc);
+    ls = await rows(wc);
+    const refined = ls.indexOf('@discover --refine only studies of open source agents');
+    assert.ok(refined > 0 && ls.indexOf(waiting) > refined, JSON.stringify(ls));
+    assert.equal(ls[refined + 1], 'bart> FAKE DISCOVER will now look for work on “only studies of open source agents”.');
+    assert.ok(!ls.slice(ls.indexOf(waiting) + 1).some((l) => /^bart.?> ## Start here/.test(l)), 'nothing searched yet');
+    const before = ls.indexOf('@discover --research find papers on why coding agents retry');
+    assert.ok(ls.slice(before + 1, refined).some((l) => /^bart\+> ## Start here/.test(l)), 'the earlier guide stays, collapsed');
+    const start = await js(wc, `(()=>{const b=document.querySelector('${ED} [data-act="startresearch"]');return b&&b.innerText.trim()})()`);
+    assert.equal(start, 'Restart research');
+    await shot(wc, '4-refined');
+    await press(wc, `${ED} [data-act="startresearch"]`);
+    await until(async () => (await rows(wc)).slice((await rows(wc)).indexOf(waiting) + 1).some((l) => /^bart> ## /.test(l)), 'the restarted search', 600);
+    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-act="startresearch"]').length`), 0, 'started: no button');
+    await shot(wc, '4-restarted');
+    console.log('PASS Refine settles a new direction that waits in its box; Restart research searches it, the earlier guide collapsed');
     app.exit(0);
   } catch (error) {
     console.error(error);
