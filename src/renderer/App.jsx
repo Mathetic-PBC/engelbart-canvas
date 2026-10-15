@@ -616,7 +616,7 @@ export default function App() {
       <WindowEdges />
       {/* test mode, its pill and Settings' Test data section, only in a developer's copy (src/main/developer.cjs): the app
           people download has no test mode */}
-      <WindowControls test={config.testModeAvailable ? {
+      <WindowControls bare={phase === 'create'} test={config.testModeAvailable ? {
         testMode: config.testMode,
         onReset: () => resetTest(false),
         onStartNew: () => resetTest(true),

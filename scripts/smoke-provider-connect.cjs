@@ -100,7 +100,7 @@ async function walkToProjects(wc) {
   await until(async () => { const f = await flow(wc); return f && f.screen === 'roles' && !f.dialog; }, 'What kind of work do you do?');
   await press(wc, '[data-work-role="Researcher"]');
   await pressText(wc, '.work-foot', 'Continue');
-  await until(async () => (await flow(wc)).screen === 'work', 'What are you interested in?');
+  await until(async () => (await flow(wc)).screen === 'work', 'What are you interested in researching right now?');
   await type(wc, '#work-description', 'I study how students ask for help.');
   await pressText(wc, '.work-foot', 'Continue');
   await until(async () => (await flow(wc)).screen === 'projects', 'the projects screen');

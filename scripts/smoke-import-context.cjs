@@ -108,7 +108,23 @@ app.whenReady().then(async () => {
     /* the intro */
     await until(async () => { const f = await flow(wc); return f && f.screen === 'intro' && !f.dialog; }, 'Import your context, a screen of its own');
     await shot(wc, '01-intro');
-    assert.match(await text(wc, '[data-copy=privacy]'), /Remove anything at any time\.$/, 'the period after "time"');
+    // From Amitav (2026-10-15): every supported app's logo with no "+12", fitted to the window; no "Remove anything at any
+    // time. Learn more"; Skip, not Start from scratch; no notifications or settings in the top right while onboarding.
+    assert.equal(await has(wc, '[data-copy=privacy]'), false, 'no "Remove anything at any time."');
+    assert.equal(await js(wc, '[...document.querySelectorAll(".intro-page .ic")].some((ic)=>/^\\+\\d/.test(ic.textContent.trim()))'), false, 'no +12');
+    assert.ok(await js(wc, 'document.querySelectorAll(".intro-page .ic img").length') > 8, 'every supported app, not the first eight');
+    for (const [w, h] of [[1280, 900], [900, 560]]) {
+      win.setSize(w, h);
+      await pause(200);
+      const fits = await js(wc, '(()=>{const r=[...document.querySelectorAll(".intro-page h1, .intro-page .ic, .intro-page .actions>*")].map((e)=>e.getBoundingClientRect());return r.every((b)=>b.left>=0&&b.right<=innerWidth&&b.top>=0&&b.bottom<=innerHeight)&&document.scrollingElement.scrollHeight<=innerHeight})()');
+      assert.equal(fits, true, `the logos and the buttons fit a ${w}×${h} window, nothing to scroll`);
+      assert.equal(await js(wc, 'Math.abs(document.querySelector(".intro-page .scratch-link").getBoundingClientRect().left-document.querySelector(".intro-page .ic").getBoundingClientRect().left)<=1'), true, 'Skip lines up with the logos');
+      await shot(wc, `01-intro-${w}x${h}`);
+    }
+    win.setSize(1280, 900);
+    await pause(150);
+    assert.equal(await text(wc, '.intro-page .scratch-link'), 'Skip');
+    assert.equal(await has(wc, '.notification-bell, .settings-gear'), false, 'no notifications or settings in onboarding');
     await press(wc, '[data-import-start]');
     /* both subscribed: asked which, choosing is continuing */
     await until(async () => { const f = await flow(wc); return f.dialog === 'provider-choice' && f.screen === 'intro'; }, 'Which provider? (over the intro)');
@@ -117,8 +133,12 @@ app.whenReady().then(async () => {
     /* the browser's sign-ins, over the first work question */
     // 2026-10-14: the intro stays behind its popups ("the background should never change when a new popup comes").
     await until(async () => { const f = await flow(wc); return f.dialog === 'keychain' && f.screen === 'intro'; }, 'the browser\'s sign-ins, over the intro');
-    assert.match(await text(wc, '[role=dialog] h3'), /Arc sign-ins/, 'the default browser, Arc');
-    assert.equal(await js(wc, 'document.querySelectorAll("[role=dialog] p").length'), 0, 'no text under the question (Attachment 1)');
+    // From Amitav (2026-10-15): no question mark, no key, no Don't allow (they have to allow, so no "Are you sure?" after
+    // it either), and one line saying where it all stays.
+    assert.equal(await text(wc, '[role=dialog] h3'), 'Allow Engelbart to use your Arc sign-ins', 'the default browser, Arc; no question mark');
+    assert.equal(await text(wc, '[role=dialog] h3 + p'), 'Everything is stored locally on your own device.');
+    assert.equal(await has(wc, '[role=dialog] .key'), false, 'no key icon');
+    assert.deepEqual(await js(wc, '[...document.querySelectorAll("[role=dialog] button")].map((b)=>b.textContent.trim())'), ['Use another browser', 'Allow']);
     await shot(wc, '03-keychain');
     await press(wc, '[data-import-keychain-allow]');
     /* roles */
@@ -127,11 +147,12 @@ app.whenReady().then(async () => {
     assert.equal(await has(wc, '.work-head .work-back'), false, 'Back is at the lower left, not the top');
     assert.equal(await has(wc, '.work-foot .work-back'), true);
     await press(wc, '[data-work-role="Researcher"]');
+    assert.equal(await js(wc, 'getComputedStyle(document.querySelector("[data-work-role=Researcher]")).borderColor'), 'rgb(23, 23, 23)', 'what is chosen is outlined in black (From Amitav)');
     await shot(wc, '04-roles');
     await pressText(wc, '.work-foot', 'Continue');
     /* the work: one line that grows, never resized by hand */
-    await until(async () => (await flow(wc)).screen === 'work', 'What are you interested in?');
-    assert.equal(await text(wc, '.work-head h1'), 'What are you interested in?');
+    await until(async () => (await flow(wc)).screen === 'work', 'What are you interested in researching right now?');
+    assert.equal(await text(wc, '.work-head h1'), 'What are you interested in researching right now?');
     assert.equal(await js(wc, 'document.querySelectorAll("[data-import-screen=work] p, [data-import-screen=work] small").length'), 0, 'no line about the keys');
     assert.equal(await js(wc, 'getComputedStyle(document.querySelector("#work-description")).resize'), 'none', 'not expandable (Attachment 2)');
     assert.equal(await js(wc, 'document.querySelector("#work-description").placeholder'), 'Understanding the Memex...');
@@ -164,6 +185,18 @@ app.whenReady().then(async () => {
     await js(wc, 'document.querySelectorAll("[data-work-project]")[1].click()');
     await pause(100);
     await shot(wc, '06-projects');
+    // From Amitav (2026-10-15): no project icons; Add a project the size of a project, still a popup, its hints the Memex.
+    assert.equal(await has(wc, '[data-import-screen=projects] .project-symbol'), false, 'no project icons');
+    assert.equal(await js(wc, '[...document.querySelectorAll("[data-work-project]")].every((row)=>{const when=row.querySelector(".project-recency");if(!when)return true;const box=row.lastElementChild.getBoundingClientRect(),at=when.getBoundingClientRect();return at.width<=100&&box.left-at.right<=24})'), true, 'when a project was worked on stays beside its circle');
+    const sizes = await js(wc, '(()=>{const rows=[...document.querySelectorAll("[data-work-project]")].map((e)=>e.getBoundingClientRect().height);return {row:Math.min(...rows),add:document.querySelector("[data-import-screen=projects] .add-project").getBoundingClientRect().height}})()');
+    assert.ok(Math.abs(sizes.row - sizes.add) <= 1, `Add a project is a project's size (${sizes.add} vs ${sizes.row})`);
+    await press(wc, '[data-import-screen=projects] .add-project');
+    await until(async () => (await flow(wc)).dialog === 'work-add-project', 'Add a project, a popup');
+    assert.equal(await js(wc, 'document.querySelector("#custom-project-title").placeholder'), 'Memex');
+    assert.equal(await js(wc, 'document.querySelector("#custom-project-description").placeholder'), 'Understanding the history, motivation, and hardware behind the Memex through research articles, papers, interviews, and essays.');
+    await shot(wc, '06b-add-project');
+    await pressText(wc, '[role=dialog]', 'Cancel');
+    await until(async () => !(await flow(wc)).dialog, 'Add a project closed');
     await pressText(wc, '.work-foot', 'Continue');
     /* the method, after the projects, over the next screen */
     await until(async () => { const f = await flow(wc); return f.dialog === 'import-mode' && f.screen === 'picker'; }, 'How would you like to import context? (over the picker)');
@@ -244,6 +277,7 @@ app.whenReady().then(async () => {
     /* two projects picked: which one opens (2026-10-14) */
     await until(async () => (await flow(wc)).dialog === 'first-project', 'Which project do you want to start with?');
     assert.equal(await js(wc, 'document.querySelectorAll("[data-first-project]").length'), 2);
+    assert.equal(await has(wc, '[role=dialog] .project-symbol'), false, 'no project icons here either');
     await shot(wc, '08d-first-project');
     await js(wc, 'document.querySelectorAll("[data-first-project]")[1].click()');
     const startWith = await js(wc, 'document.querySelectorAll("[data-first-project]")[1].textContent');

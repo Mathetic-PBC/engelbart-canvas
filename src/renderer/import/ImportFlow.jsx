@@ -55,22 +55,24 @@ const LINKS_NOTE = 'Also bring in the web links saved in these notes (essays, pa
 /** "A", "A and B", "A, B, and C". */
 const listed = (names) => (names.length <= 1 ? names[0] || '' : names.length === 2 ? `${names[0]} and ${names[1]}` : `${names.slice(0, -1).join(', ')}, and ${names[names.length - 1]}`);
 const DEFAULT_PICKS = [];
-const ANSWERS = [
-  ['Does my context leave my computer?', 'No. All files, both saved locally and located in the cloud through a 3rd-party are all saved locally and are not uploaded to any of our servers. However, your text will be sent to model providers during the retrieval process and is subject to their own data retention guidelines, just like any other AI chat.'],
-  ['Will you sell my data?', 'No. Engelbart does neither retains nor sells any of your data. Importing context simply makes the experience more seamless for you and is not a means to collect your data :)'],
-  ["Can I delete things I've imported?", 'Yes. You can remove anything from a project or your library at any time.'],
-  ['Where does my context go?', "Engelbart keeps track of the locations of your local files in a local table and creates local copies of files you've created through 3rd-party applications. All context is aggregated in the Engelbart Library, which stays local."],
-];
 export const COPY = {
   title: 'Import your context',
   subtitle: "Agents will import your notes, chats, and other project context into Engelbart. Everything remains local and isn't uploaded to the cloud.",
   primary: 'Import context (recommended)',
-  secondary: 'Start from scratch',
-  privacy: 'Remove anything at any time.',
+  secondary: 'Skip',
   pickerTitle: 'What should go in your library?',
   bring: 'Bring these in',
 };
 const FLOW_VERSION = 3; // 3 (2026-10-14): Import your context is a screen of its own, not a dialog over the picker
+// Dialogs taken out (From Amitav, 2026-10-15): a flow saved on one of them opens on what took its place.
+const GONE_DIALOGS = { 'keychain-confirm': 'keychain', privacy: null, apps: null };
+// The intro's logos (From Amitav, 2026-10-15: "get rid of the +12, just show everything"): every supported app with a
+// logo, the mockup's eight first, each logo once (Claude Code has Claude's).
+const SUPPORTED = (() => {
+  const seen = new Set();
+  return [...WORKS.map(([name, src]) => [shownName(name), src]), ...CATALOG.filter((tool) => TOOL_LOGOS[tool.id]).map((tool) => [tool.name, TOOL_LOGOS[tool.id]])]
+    .filter(([name, src]) => (seen.has(name) || seen.has(src) ? false : (seen.add(name).add(src), true)));
+})();
 
 /* ------------------------------------------------------------------------------------------------- small pieces */
 
@@ -78,14 +80,12 @@ const Svg = ({ d }) => <svg viewBox="0 0 24 24" aria-hidden="true" dangerouslySe
 const CHEV = <Svg d={'<path d="m9 5 7 7-7 7"/>'} />;
 const DOWN = <Svg d={'<path d="m6 9 6 6 6-6"/>'} />;
 const CHECK = <Svg d={'<path d="m5 12 4 4 10-10"/>'} />;
-const KEY = <Svg d={'<circle cx="8" cy="15" r="4"/><path d="m11 12 8-8m-3 3 2 2"/>'} />;
 const FOLDER = <Svg d={'<path d="M2 5h7l2 2h11v13H2z"/>'} />;
 const FILE = <Svg d={'<path d="M6 2h8l5 5v15H6z"/><path d="M14 2v5h5"/>'} />;
 const GLOBE = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 17 0 0 0 0 18 17 17 0 0 0 0-18"/>'} />;
 const WEB = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18"/>'} />;
 const PLUS = <Svg d={'<path d="M12 5v14M5 12h14"/>'} />;
 // A project's symbol is the workspace icon (../ui/SidebarIcons.jsx WorkspaceIcon): workspaces become projects (2026-10-13).
-const PROJECT = <Svg d={'<rect x="3.5" y="3" width="6.5" height="18" rx="2.5"/><rect x="14" y="3" width="6.5" height="10.5" rx="2.5"/><rect x="14" y="16.5" width="6.5" height="4.5" rx="2.25"/>'} />;
 const CURSOR = <Svg d={'<path d="M4.04 4.69a.5.5 0 0 1 .65-.65l16 6.5a.5.5 0 0 1-.06.95l-6.13 1.58a2 2 0 0 0-1.43 1.44l-1.58 6.12a.5.5 0 0 1-.95.07z"/>'} />;
 
 const Check = ({ on }) => <span className={`cb ${on ? 'on' : ''}`}>{on ? CHECK : null}</span>;
@@ -214,7 +214,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     api.flow().then((saved) => {
       if (!live) return;
       // In a project, only a run that Full Disk Access's relaunch left pending comes back; otherwise the picker, fresh.
-      if (saved && saved.v === FLOW_VERSION && (mode === 'new' || (saved.into === into && saved.pendingRun))) { restoredPending.current = !!saved.pendingRun; setF({ ...fresh(), ...saved, menu: null }); }
+      if (saved && saved.v === FLOW_VERSION && (mode === 'new' || (saved.into === into && saved.pendingRun))) { restoredPending.current = !!saved.pendingRun; setF({ ...fresh(), ...saved, menu: null, ...(Object.hasOwn(GONE_DIALOGS, saved.dialog) ? { dialog: GONE_DIALOGS[saved.dialog] } : {}) }); }
       setRestored(true);
     }).catch(() => setRestored(true));
     api.providers(false).then((out) => { if (live) setProviders(out); }).catch(() => {});
@@ -663,12 +663,10 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         <T k="title" tag="h1" />
         <T k="subtitle" tag="p" className="lead" />
         <div className="icons">
-          {WORKS.map(([name, src]) => <span key={name} className="ic" title={shownName(name)}><img src={src} alt={shownName(name)} /></span>)}
-          <button type="button" className="ic" aria-label="Show all supported apps" onClick={() => set({ dialog: 'apps' })}>+12</button>
+          {SUPPORTED.map(([name, src]) => <span key={name} className="ic" title={name}><img src={src} alt={name} /></span>)}
         </div>
-        <div className="trust"><T k="privacy" /><button type="button" className="link under" onClick={() => set({ dialog: 'privacy' })}>Learn more</button></div>
         <div className="actions">
-          <a className="link scratch-link" href="#start-from-scratch" onClick={(event) => { event.preventDefault(); set({ dialog: 'scratch-confirm' }); }}><T k="secondary" /></a>
+          <a className="link scratch-link" href="#skip" onClick={(event) => { event.preventDefault(); set({ dialog: 'scratch-confirm' }); }}><T k="secondary" /></a>
           <button type="button" className="btn" data-import-start="1" onClick={importContext}><T k="primary" /></button>
         </div>
       </div>
@@ -697,8 +695,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const workNext = () => { if (latest.current.work.trim()) set({ screen: 'projects' }); };
   const workPage = () => (
     <main className="work-page review-work" data-import-screen="work"><div className="work-column">
-      {flowHeader('What are you interested in?', 'work-description-title', () => set({ screen: 'roles' }))}
-      <textarea id="work-description" className="field" rows={1} ref={growReviewInput} autoFocus aria-label="What are you interested in?" placeholder="Understanding the Memex..." value={F.work}
+      {flowHeader('What are you interested in researching right now?', 'work-description-title', () => set({ screen: 'roles' }))}
+      <textarea id="work-description" className="field" rows={1} ref={growReviewInput} autoFocus aria-label="What are you interested in researching right now?" placeholder="Understanding the Memex..." value={F.work}
         onChange={event => { growReviewInput(event.currentTarget); set({ work: event.target.value.slice(0, 2000) }); }}
         onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); workNext(); } }} />
       <footer className="work-foot">{lowerBack()}<button type="button" className="btn" disabled={!F.work.trim()} onClick={workNext}>Continue{CHEV}</button></footer>
@@ -714,7 +712,6 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           <div className="project-list">
             {projects.map((project) => (
               <button key={project.id} type="button" className="project-choice" role="checkbox" aria-checked={F.picked.includes(project.id)} data-work-project={project.id} onClick={() => set((now) => ({ picked: toggle(now.picked, project.id) }))}>
-                <span className="project-symbol">{PROJECT}</span>
                 <span><b>{project.title}</b><small>{project.description || 'Added by you'}</small></span>
                 {project.recent ? <span className="project-recency">{project.recent}</span> : null}
                 <Check on={F.picked.includes(project.id)} />
@@ -927,13 +924,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   const dialogBody = () => {
     const d = F.dialog;
-    if (d === 'privacy') return (<><div className="modal-head"><h3>About your context</h3><button type="button" className="close" aria-label="Close" onClick={close}>×</button></div>{ANSWERS.map(([q, a]) => <div key={q} className="faq-item"><b>{q}</b><p>{a}</p></div>)}{buttons('', 'Got it', null, close)}</>);
-    if (d === 'apps') {
-      const seen = new Set();
-      const list = [...WORKS.map(([name, src]) => [shownName(name), src]), ...CATALOG.filter((tool) => TOOL_LOGOS[tool.id]).map((tool) => [tool.name, TOOL_LOGOS[tool.id]])].filter(([name]) => (seen.has(name) ? false : seen.add(name)));
-      return (<><div className="modal-head"><h3>Works with your tools</h3><button type="button" className="close" aria-label="Close" onClick={close}>×</button></div><div className="all-apps">{list.map(([name, src]) => <span key={name} className="supported-app"><img src={src} alt="" />{name}</span>)}</div>{buttons('', 'Done', null, close)}</>);
-    }
-    if (d === 'scratch-confirm') return (<><h3>Are you sure?</h3><p>{mode === 'modal' ? 'Nothing will be imported. You can import your context later.' : 'Your project will start with an empty library. You can import your context later.'}</p><div className="mf"><button type="button" className="link" onClick={() => (mode === 'modal' ? startFromScratch() : set({ dialog: 'project' }))}>{mode === 'modal' ? 'Close' : 'Start from scratch'}</button><button type="button" className="btn small" onClick={importContext}>Keep importing</button></div></>);
+    if (d === 'scratch-confirm') return (<><h3>Are you sure?</h3><p>{mode === 'modal' ? 'Nothing will be imported. You can import your context later.' : 'Your project will start with an empty library. You can import your context later.'}</p><div className="mf"><button type="button" className="link" onClick={() => (mode === 'modal' ? startFromScratch() : set({ dialog: 'project' }))}>{mode === 'modal' ? 'Close' : 'Skip'}</button><button type="button" className="btn small" onClick={importContext}>Keep importing</button></div></>);
     if (d === 'project') {
       return (
         <>
@@ -991,8 +982,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         </>
       );
     }
-    if (d === 'keychain') return (<><div className="key">{KEY}</div><h3>{`Allow Engelbart to use your ${browserNow} sign-ins?`}</h3><div className="mf keychain-actions"><button type="button" className="link under" onClick={() => set({ dialog: 'keychain-browser', browserChoice: (browsers && browsers.chosenId) || null })}>Use another browser</button><button type="button" className="link" onClick={() => set({ dialog: 'keychain-confirm' })}>Don’t allow</button><button type="button" className="btn small" data-import-keychain-allow="1" onClick={() => keychainAnswer('allowed')}>Allow</button></div></>);
-    if (d === 'keychain-confirm') return (<><h3>Continue without browser access?</h3><p>You can still import from sources on your Mac.</p><div className="mf"><button type="button" className="link" onClick={() => keychainAnswer('declined')}>Continue without access</button><button type="button" className="btn small" onClick={() => keychainAnswer('allowed')}>Allow access</button></div></>);
+    if (d === 'keychain') return (<><h3>{`Allow Engelbart to use your ${browserNow} sign-ins`}</h3><p>Everything is stored locally on your own device.</p><div className="mf keychain-actions"><button type="button" className="link under" onClick={() => set({ dialog: 'keychain-browser', browserChoice: (browsers && browsers.chosenId) || null })}>Use another browser</button><button type="button" className="btn small" data-import-keychain-allow="1" onClick={() => keychainAnswer('allowed')}>Allow</button></div></>);
     if (d === 'notes-permission') return (<><h3>Allow Engelbart to read Apple Notes?</h3><div className="mf"><button type="button" className="link" onClick={() => { const now = latest.current; const next = { ...now, picks: now.picks.filter(id => id !== 'Apple Notes'), confirmed: now.confirmed.filter(id => id !== 'Apple Notes'), dialog: null }; latest.current = next; set(next); setTimeout(runGate, 0); }}>Don’t allow</button><button type="button" className="btn" onClick={() => { rememberNotesConsent(); latest.current = { ...latest.current, notesConsent: true, dialog: null }; set({ notesConsent: true, dialog: null }); setTimeout(runGate, 0); }}>Allow</button></div></>);
 
     if (d === 'keychain-browser') {
@@ -1036,7 +1026,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           <div className="profiles first-projects" role="radiogroup" aria-label="Project to start with">
             {chosen.map((project) => (
               <button key={project.id} type="button" className="prof first-project" role="radio" aria-checked={pick === project.id} data-first-project={project.id} onClick={() => set({ firstChoice: project.id })}>
-                <span className="project-symbol">{PROJECT}</span><span>{project.title}</span>{pick === project.id ? CHECK : null}
+                <span>{project.title}</span>{pick === project.id ? CHECK : null}
               </button>
             ))}
           </div>
@@ -1058,8 +1048,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       return (
         <>
           <h3>Add a project</h3>
-          <label className="field-label">Project title<input id="custom-project-title" className="field" placeholder="A concise name for your project" value={draft.title} onChange={(event) => setDraft((now) => ({ ...now, title: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') save(); }} /></label>
-          <label className="field-label">Description <span className="muted">(optional)</span><textarea id="custom-project-description" className="field" rows={2} placeholder="What are you trying to do?" value={draft.description} onChange={(event) => setDraft((now) => ({ ...now, description: event.target.value }))} /></label>
+          <label className="field-label">Project title<input id="custom-project-title" className="field" placeholder="Memex" value={draft.title} onChange={(event) => setDraft((now) => ({ ...now, title: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') save(); }} /></label>
+          <label className="field-label">Description <span className="muted">(optional)</span><textarea id="custom-project-description" className="field" rows={2} placeholder="Understanding the history, motivation, and hardware behind the Memex through research articles, papers, interviews, and essays." value={draft.description} onChange={(event) => setDraft((now) => ({ ...now, description: event.target.value }))} /></label>
           <div className="mf"><button type="button" className="link" onClick={close}>Cancel</button><button type="button" className="btn" disabled={!draft.title.trim()} onClick={save}>Add project</button></div>
         </>
       );
@@ -1100,7 +1090,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   const d = F.dialog;
   const body = d ? dialogBody() : null;
-  const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'folder-fallback' ? 'disk-deny-modal' : (d === 'folders' || d === 'disk-wait') ? 'disk-modal' : d === 'privacy' ? 'context-modal' : '';
+  const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'folder-fallback' ? 'disk-deny-modal' : (d === 'folders' || d === 'disk-wait') ? 'disk-modal' : '';
   const screen = F.screen === 'intro' ? introPage() : F.screen === 'roles' ? rolesPage() : F.screen === 'work' ? workPage() : F.screen === 'projects' ? projectsPage() : F.screen === 'tools' ? toolsPage() : F.screen === 'scopes' ? scopesPage() : picker();
 
   return (

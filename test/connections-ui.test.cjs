@@ -155,7 +155,9 @@ test('the connected options are Repository access and Disconnect, and no Refresh
 test('Connections is a page of the Settings window, not an icon in the top-right controls (MATH-64), nor a row of the sidebar (2026-10-13: "it should just be in settings")', () => {
   const controls = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/WindowControls.jsx'), 'utf8');
   assert.doesNotMatch(controls, /<Connections|import Connections/);
-  assert.match(controls, /<SandboxNotifications \/>\s*<Settings test=\{test\} \/>/);
+  assert.match(controls, /\{!bare && <SandboxNotifications \/>\}\s*\{!bare && <Settings test=\{test\} \/>\}/);
+  // Neither on onboarding's screens (From Amitav, 2026-10-15).
+  assert.match(fs.readFileSync(path.join(__dirname, '../src/renderer/App.jsx'), 'utf8'), /<WindowControls bare=\{phase === 'create'\}/);
   const css = fs.readFileSync(path.join(__dirname, '../src/renderer/styles.css'), 'utf8');
   assert.doesNotMatch(css, /connections-trigger/);
   const rail = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Rail.jsx'), 'utf8');

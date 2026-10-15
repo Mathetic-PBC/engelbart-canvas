@@ -156,9 +156,9 @@ function sampleSession(choices, browser = 'Chrome') {
 }
 
 const POPUPS = [
-  ['intro', 'Import intro (screen)'], ['first-project', 'Which project to start with'], ['obsidian-picker', 'Choose from Obsidian'], ['privacy', 'Privacy'], ['apps', 'All apps'], ['scratch-confirm', 'Start confirmation'], ['project', 'New project'],
+  ['intro', 'Import intro (screen)'], ['first-project', 'Which project to start with'], ['obsidian-picker', 'Choose from Obsidian'], ['scratch-confirm', 'Start confirmation'], ['project', 'New project'],
   ['provider-choice', 'Choose provider (both subscribed)'], ['tools-setup', 'Tools setup'], ['import-mode', 'Import method'],
-  ['keychain', 'Browser sign-ins'], ['keychain-browser', 'Browser picker'], ['keychain-confirm', 'Decline browser sign-ins'],
+  ['keychain', 'Browser sign-ins'], ['keychain-browser', 'Browser picker'],
   ['folders', 'Full Disk Access'], ['disk-wait', 'Waiting for Settings'], ['disk-helper', 'Toggle Setting (beside System Settings)'], ['disk-relaunch', 'Restarting'], ['folder-fallback', 'Deny Full Disk Access'], ['folder-results', 'Folder permissions'],
   ['screen:roles', 'Roles'], ['screen:work', 'What are you working on'], ['screen:projects', 'Recent projects'], ['work-add-project', 'Add a project'],
   ['screen:tools', 'Confirm tools'], ['work-add-tool', 'Add a tool'], ['screen:picker', 'Sources & context (manual)'],
