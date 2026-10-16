@@ -201,3 +201,29 @@ your report if the code made a different reading better.
 - M11 Manual library onboarding has no Reply box (the "Reply…" composer with the provider chip).
 - M12 The work line ("Bringing in ChatGPT: …"): the words in the gradient, no blue dot.
 - M13 "Bring these in ›" becomes "Finish in background", with no arrow.
+
+## Status, 2026-10-16
+
+Built on this branch (commits 443c99b CONNECTORS, 17c53e8 DISCOVERY, 229c4b1 COOKIES, 90b5bab MAIN, 0b78fcc SCREENS, then
+fixes from the smokes). `npm test` 2156/2156; `smoke-import-context` passes both ways; `smoke-import-real` (Claude Code)
+passes; three real librarian turns averaged 16.5 words a message (Hudson's examples: 45-55). Test build:
+`/Users/Shared/engelbart-test/build-4`, steps in `/Users/Shared/engelbart-test/onboarding-beta-TESTING.md`.
+
+Readings taken where the note left room:
+- M1's grant lists the apps the per-app popups asked about (web apps, connectors, the tools the agents found or the person
+  added), not local apps (Obsidian, Apple Notes, Claude Code): those were never asked and the scan reads them behind it.
+  The popups' line about the provider processing what is read is gone with them (no subtext).
+- The grant waits for its answer before the librarian's first turn (the scan runs behind it), so the librarian plans
+  with exactly the apps it may reach.
+- Recall (Asking ChatGPT/Claude what it remembers) had no browser and could never ask: fixed in tools.cjs.
+- A connector its server won't serve for the account (Evernote outside its MCP beta) is read through its website as an
+  Other tool; one with no website is skipped with a line.
+- S3: "an update exists" is the tool check's outdated/incompatible; the agent popup's Skip goes on to Import your context,
+  which asks again.
+
+Open:
+- Not run against real signed-in accounts: Safari's cookie file, Evernote/Linear OAuth, GitHub/Overleaf/Zotero check pages
+  with real cookies, the ChatGPT/Claude project question.
+- The auto smoke ends with a native SIGABRT at quit ("Napi::Error") after printing ok: not traced (teardown, not the run).
+- The old Connect your library choose screen still has its own profile and Keychain modals.
+- scripts/smoke-connect-tools.cjs, smoke-provider-connect.cjs, smoke-provider-real.cjs still walk the removed tools screen.
