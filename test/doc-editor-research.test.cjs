@@ -119,7 +119,7 @@ test('drawn: the reply\'s card closes, and the box is a card of its own: "Resear
   const foot = html.slice(html.indexOf(`data-foot="${box}"`));
   assert.match(foot.slice(0, foot.indexOf('</div>')), /data-act="fold" data-turn="\d+" aria-label="Collapse"/, 'the box collapses alone');
   assert.ok(!replyFoot.slice(0, replyFoot.indexOf('</div>')).includes('data-act="fold"'), 'the reply\'s Collapse is not on its foot (2026-10-15)');
-  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="fold" data-turn="1" aria-label="Collapse"/, 'but in its question\'s corner, collapsing the reply alone');
+  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="foldall" data-turn="1" aria-label="Collapse"/, 'but in its question\'s corner, collapsing the conversation (2026-10-15)');
   // Collapsed, the box keeps its head and foot, on no grey.
   m.click('fold', { turn: String(box) });
   assert.match(rowOf(m.html(), box), /background:none/);
@@ -213,13 +213,14 @@ test('Discover\'s card (2026-10-14, the mock): bordered rows with a radio, a pic
   m.click('sendfollow', { thread: '0' });
   assert.equal(m.asks.length, 1);
   assert.deepEqual([m.asks[0].agent, m.asks[0].text], ['discover', 'picked "Listening"']);
-  // Answered, it collapses (2026-10-15, David): no options, no Submit; the pick on the row under it.
+  // Answered, it is drawn still, the pick in blue, no field: a Discover card never collapses by itself (2026-10-15, David).
   const done = m.html();
-  assert.ok(!done.includes('class="dv-submit"') && !done.includes('class="dv-opt"'), 'the card is folded away');
-  assert.match(done, /data-folded-row="0"/);
+  assert.ok(!done.includes('class="dv-submit"'));
+  assert.match(done, /<button type="button" class="dv-opt" disabled role="radio" aria-checked="true">/);
+  assert.ok(!m.lines().some((line) => line.startsWith('bart+>')), 'nothing collapsed');
 });
 
-test('a pick sent from Discover\'s card (2026-10-15, David): the card collapses, and the question Discover asks back opens its reply field with the keyboard in it; a reply that starts the search opens none', () => {
+test('a pick sent from Discover\'s card (2026-10-15, David): the question Discover asks back opens its reply field with the keyboard in it; a reply that starts the search opens none', () => {
   const CARD = JSON.stringify({ say: '', card: 'focus', focus: { title: 'What would you like to research?', options: [{ label: 'Concise replies' }, { label: 'Listening' }] }, ready: false });
   const body = replyLines(replyBody('discover', CARD), { level: { name: 'Opus', effort: 'high' }, trail: [], ms: 1000 }, { model: true, agent: 'discover' });
   const run = (reply, box = false) => {
@@ -247,6 +248,7 @@ test('a pick sent from Discover\'s card (2026-10-15, David): the card collapses,
   m.editor.followText.set(0, 'pick one for me');
   m.click('sendfollow', { thread: '0' });
   assert.ok(m.editor.replyWait, 'the next answer opens it again');
+  assert.ok(!m.lines().some((line) => line.startsWith('bart+>')), 'a reply in a Discover conversation collapses nothing');
 });
 
 test('main: a search is a box\'s turn alone; the <research> line is taken out of a reply and handed back, never on a search; --research is never part of a question', () => {
@@ -339,20 +341,22 @@ test('opening Refine stops nothing; its field opens under that reply, the conver
   assert.ok(m.html().includes('data-act="refine"'), 'Escape on an empty field puts Refine back');
 });
 
-test('a refinement sent while the search runs stops it, keeps it collapsed, and asks Discover; output the stopped run still sends finds no place', async () => {
+test('a refinement sent while the search runs stops it, takes its empty box out (2026-10-15, David), and asks Discover; output the stopped run still sends finds no place', async () => {
   const { placeAnswer } = await doc();
   const m = mounted(conversation(RUNNING));
   m.click('refine', { thread: '0' });
   m.editor.followText.set(0, 'Focus on what makes replies feel conversational, rather than their length');
   m.editor.sendFollow(0);
   assert.deepEqual(m.stopped, ['run1'], 'the running search stops when the refinement is sent');
-  const ls = m.lines(), box = ls.indexOf(`@discover --research ${BRIEF}`);
-  assert.equal(ls[box + 1], 'bart+> Stopped: refined below.', 'the stopped run stays, collapsed');
-  assert.equal(ls[box + 2], '@discover --refine Focus on what makes replies feel conversational, rather than their length', 'the refinement, the next turn');
-  assert.match(ls[box + 3], /^bart~> /);
+  const ls = m.lines(), said = ls.indexOf(`bart> I'll look for research on ${BRIEF}.`);
+  assert.ok(!ls.includes(`@discover --research ${BRIEF}`) && !ls.some((line) => /Stopped: refined below/.test(line)), 'the stopped box is gone');
+  assert.ok(!ls.some((line) => line.startsWith('bart+>')), 'nothing collapsed');
+  const refined = ls.indexOf('@discover --refine Focus on what makes replies feel conversational, rather than their length');
+  assert.ok(refined > said, 'the refinement, the next turn after the reply that said the direction');
+  assert.match(ls[refined + 1], /^bart~> /);
   const [asked] = m.asks;
   assert.deepEqual([asked.agent, asked.refine, asked.text], ['discover', true, '--refine Focus on what makes replies feel conversational, rather than their length']);
-  assert.deepEqual(asked.turns.map((turn) => turn.question), ['--deep concise replies', 'when being brief starts hurting understanding', `--research ${BRIEF}`], 'the whole conversation, not the latest reply alone');
+  assert.deepEqual(asked.turns.map((turn) => turn.question), ['--deep concise replies', 'when being brief starts hurting understanding'], 'the whole conversation, not the latest reply alone (the stopped box is no part of it)');
   assert.equal(placeAnswer(m.props.text, 'run1', ['bart> ## Start here', 'bart> late']), null, 'the stopped run\'s answer finds no pending line');
   assert.ok(!m.props.text.includes('bart> late'));
 });
@@ -364,7 +368,7 @@ test('the refined direction waits in its box with Restart research; Refine moves
   m.editor.followText.set(0, 'Focus on what makes replies feel conversational');
   m.editor.sendFollow(0);
   assert.deepEqual(m.stopped, [], 'a finished search has nothing to stop');
-  assert.ok(m.lines().some((line) => /^bart\+> ## Start here/.test(line)), 'the finished guide stays in the document, collapsed');
+  assert.ok(m.lines().some((line) => /^bart> ## Start here/.test(line)) && !m.lines().some((line) => line.startsWith('bart+>')), 'the finished guide stays in the document, open: nothing collapsed (2026-10-15)');
   // What the window places for a Refine turn (Workspace askBart, `refine`): the reply, then the box with no search under it.
   const id = m.lines().find((line) => line.startsWith('bart~> ')).slice(7);
   m.props.text = placeAnswer(m.props.text, id, [...answer("I'll now look for research on what makes replies feel conversational."), researchLine('what makes replies feel conversational')]);
@@ -386,7 +390,7 @@ test('the refined direction waits in its box with Restart research; Refine moves
   assert.ok(!html.includes('data-act="startresearch"'), 'started: no button');
 });
 
-test('a waiting box with no run before it says Start research; reloaded, the direction, its button and the collapsed runs are all still there', async () => {
+test('a waiting box with no run before it says Start research; reloaded, the direction, its button and the runs before are all still there', async () => {
   const fresh = mounted(['@discover concise replies', ...answer("I'll look for research on concise replies."), '@discover --research concise replies', '']);
   assert.match(fresh.html(), /data-act="startresearch"[^>]*>Start research<\/button>/);
   // The document a Refine left, opened again.
@@ -399,7 +403,7 @@ test('a waiting box with no run before it says Start research; reloaded, the dir
   const html = again.html();
   assert.match(html, /data-act="startresearch"[^>]*>Restart research<\/button>/);
   assert.ok(saved.includes(`@discover --research ${BRIEF}, in studies with people`), 'the direction, in the file');
-  assert.ok(saved.split('\n').some((line) => /^bart\+> ## Start here/.test(line)), 'the earlier guide, collapsed, in the file');
+  assert.ok(saved.split('\n').some((line) => /^bart> ## Start here/.test(line)), 'the earlier guide, open, in the file');
 });
 
 test('a second refinement replaces a direction still waiting; an answer to Discover\'s question about a refinement stays a Refine turn', async () => {

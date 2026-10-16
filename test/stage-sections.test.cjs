@@ -478,11 +478,11 @@ const passage = (where, find) => `${where}#find=${encodeURIComponent(find)}`;
 const finds = (s) => s.calls.filter(([name]) => name === 'browserFind' || name === 'browserStopFind');
 
 /** A Stage with a page's view to show, and the page loaded once `loaded(s)` says so. */
-function pageStage() {
+function pageStage(api = {}) {
   globalThis.ResizeObserver = class { observe() {} disconnect() {} };
   globalThis.MutationObserver = class { observe() {} disconnect() {} };
   const slot = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 }), parentElement: null };
-  return stage({ nodes: { 'data-browser-slot': slot } });
+  return stage({ nodes: { 'data-browser-slot': slot }, api });
 }
 const loaded = (s, id, url = ESSAY) => { s.on.onBrowserState({ id, url, title: 'How might we learn?', loading: false, canGoBack: false, canGoForward: false, error: null }); s.rerender(); };
 const opened = (s) => { const call = s.calls.find(([name]) => name === 'browserOpen'); return call && call[1]; };
@@ -510,7 +510,22 @@ test.describe('the Stage: a passage in a page or a drawn file', () => {
     globalThis.document = { baseURI: 'file:///app/index.html' };
   });
 
-  test('landing on a loaded page: browserFind with the words, no find card; nothing stops it until the card closes', async () => {
+  test('landing on a loaded page: its section shown by the page, tinted and scrolled to, with no find (no orange on its first words, 2026-10-15)', async () => {
+    const shown = [];
+    const s = pageStage({ browserSection: async (...args) => { shown.push(args); return true; } });
+    s.open(passage(ESSAY, WORDS));
+    await s.settle();
+    const id = opened(s);
+    loaded(s, id);
+    await s.settle();
+    assert.deepEqual(shown, [[id, WORDS]], 'its section asked of the page');
+    assert.deepEqual(finds(s), [], 'and nothing found: the page has shown it');
+    assert.equal(s.one('FindCard'), null);
+    loaded(s, id); await s.settle();
+    assert.deepEqual(shown.length, 1, 'once');
+  });
+
+  test('landing on a loaded page whose section is not found: browserFind with the words, no find card; nothing stops it until the card closes', async () => {
     const s = pageStage();
     s.open(passage(ESSAY, WORDS));
     await s.settle();
@@ -518,9 +533,10 @@ test.describe('the Stage: a passage in a page or a drawn file', () => {
     assert.ok(id, 'the page is opened');
     assert.deepEqual(finds(s), [], 'nothing is found before the page has loaded');
     loaded(s, id);
-    assert.deepEqual(finds(s), [['browserFind', id, WORDS, { backward: false }]], 'found as ⌘F would, from the first match');
+    assert.deepEqual(s.calls.filter(([name]) => name === 'browserSection'), [['browserSection', id, WORDS]], 'its section asked of the page first (2026-10-15)');
+    await s.settle();
+    assert.deepEqual(finds(s), [['browserFind', id, WORDS, { backward: false }]], 'not shown: found as ⌘F would, from the first match');
     assert.equal(s.one('FindCard'), null, 'finding stays false');
-    assert.deepEqual(s.calls.filter(([name]) => name === 'browserSection'), [['browserSection', id, WORDS]], 'and its section tinted, to the next heading (2026-10-15)');
 
     s.on.onBrowserFound({ id, matches: 2, active: 1 }); // Chromium counts the matches
     s.rerender();

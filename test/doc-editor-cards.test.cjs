@@ -109,6 +109,44 @@ test('Send to Discover after an older recap: with nothing typed it does nothing;
   assert.deepEqual(done.asks, []);
 });
 
+test('an answered @discover choice can be picked again (2026-10-15, David): asked first, then what came after its answer goes and the new pick is asked, once nothing in it is at work', () => {
+  const after = ['@discover picked "Retries"', ...answer(FREE), '@discover because loops', ...answer(FREE)];
+  const m = mounted(['@discover', ...answer(FOCUS), ...after, '']);
+  const card = m.html(0);
+  assert.match(card, /<button type="button" class="dv-opt" disabled role="radio" aria-checked="true">[\s\S]*?>Retries</, 'the pick stays checked, not a button');
+  assert.match(card, /<button type="button" class="dv-opt" data-act="cardrepick" data-turn="0" data-opt="1" title="[^"]+" role="radio" aria-checked="false">[\s\S]*?>Timeouts</, 'the other can be picked');
+  const press = (act, opt) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset: { act, turn: '0', ...(opt == null ? {} : { opt: String(opt) }) } } : null) }, preventDefault() {} });
+  const repick = (opt) => press('cardrepick', opt);
+  const before = m.lines().join('\n');
+  repick(0);
+  assert.deepEqual(m.asks, [], 'the same pick asks nothing');
+  assert.ok(!m.html(0).includes('data-repick-confirm'), 'and asks nothing of them');
+  // Another row: asked first (2026-10-15, David: "it should ask me if i want to do that since it will restart"), nothing
+  // changed until Restart from here.
+  repick(1);
+  assert.deepEqual(m.asks, [], 'nothing asked yet');
+  assert.equal(m.lines().join('\n'), before, 'nor anything taken out');
+  let asking = m.html(0);
+  assert.match(asking, /data-opt="1" title="[^"]+" data-repicking="1"[^>]*>[\s\S]*?>Timeouts</, 'the row asked for, dashed');
+  assert.match(asking, /<span class="dv-confirm" data-repick-confirm="0"[^>]*><span class="dv-confirm-text">Pick <b>Timeouts<\/b> instead\? Everything after this will be asked again from that pick\.<\/span>/);
+  assert.match(asking, /data-act="cardrepickno" data-turn="0">Cancel<\/button><button type="button" class="dv-restart" data-act="cardrepickgo" data-turn="0" data-opt="1">Restart from here</);
+  press('cardrepickno');
+  assert.ok(!m.html(0).includes('data-repick-confirm') && !m.html(0).includes('data-repicking'), 'Cancel: as it was answered');
+  assert.equal(m.lines().join('\n'), before);
+  repick(1);
+  assert.equal(m.editor.escapeShut({ key: 'Escape', preventDefault() {} }), true, 'Escape cancels it too');
+  assert.ok(!m.html(0).includes('data-repick-confirm'));
+  assert.equal(m.editor.shutMenus(), false, 'and is used up');
+  repick(1);
+  press('cardrepickgo', 1);
+  const ls = m.lines(), q = 1 + answer(FOCUS).length;
+  assert.equal(ls[q], '@discover picked "Timeouts"', 'the answering line says the new pick');
+  assert.match(ls[q + 1], /^bart~> /, 'and is asked again');
+  assert.equal(ls.length, q + 3, 'every turn after it is gone');
+  assert.deepEqual([m.asks[0].agent, m.asks[0].text, m.asks[0].turns.length], ['discover', 'picked "Timeouts"', 1], 'asked as a follow-up of the card');
+  assert.ok(!m.html(0).includes('cardrepick') && !m.html(0).includes('data-repick-confirm'), 'while it is at work, nothing can be picked, and nothing is asked');
+});
+
 test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap up or Send asked of one does nothing; Skip is on the foot, and the field under it answers it as @discover', async () => {
   const m = mounted(['@discover', ...answer({ ...FOCUS, lookFor: LOOK }), '']);
   assert.equal(m.entry(0).live, true);
@@ -192,7 +230,9 @@ test('a live @brainstorm card is drawn as an answer: what it says, then its ques
   const NEXT = { say: 'You kept coming back to “correct”.', card: 'questions', questions: { eyebrow: 'what next', items: [{ id: 'next', type: 'open', title: card.NEXT_TITLE, placeholder: card.NEXT_PLACEHOLDER }] }, ready: false };
   const next = mounted(['@brainstorm', ...answer(NEXT), '']);
   assert.match(next.html(0), /<span data-card-say="1"[^>]*>You kept coming back to “correct”\.<\/span><span [^>]*><\/span><span data-card-question="1"[^>]*>So what do you want to dig into next\?<\/span>/, 'the lead-in, then the question');
-  assert.match(next.editor.editorHtml(), /placeholder="One thing, as specific as you can make it" aria-label="Answer"/);
+  // An open question's field says "Respond…", never the card's own hint (2026-10-15, David).
+  assert.match(next.editor.editorHtml(), /placeholder="Respond…" aria-label="Answer"/);
+  assert.ok(!next.editor.editorHtml().includes('placeholder="One thing, as specific as you can make it"'));
 });
 
 test('a free card is answered by what is typed in the field under it, sent with Enter or Send as a follow-up is, never routed; with one turn before it nothing collapses (2026-10-14: the two newest stay open); nothing typed sends nothing (2026-10-13)', () => {
@@ -368,9 +408,13 @@ test('Send to Discover is not drawn after @bart or @discover answers, under a re
   bart.editor.discoverText.set('t0', 'x');
   bart.editor.sendDiscover('t0');
   assert.deepEqual(bart.asks, [], 'a target that is not drawn sends nothing');
-  assert.ok(!bart.editor.editorHtml().includes('aria-label="Ask a follow-up"'), 'the follow-up field is shut until Reply (2026-10-13)');
-  bart.editor.replyOpen.add(0);
-  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, '@bart\'s follow-up field, once Reply opened it');
+  // The latest @bart answer's reply line is always there (2026-10-15, David's reference); an older one's is shut until Reply.
+  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, 'the latest answer\'s reply line');
+  const two = mounted(['@bart why?', 'bart> because', 'bart> *Sonnet · high · 3 s*', '', '@bart how?', 'bart> so', 'bart> *Sonnet · high · 3 s*', '']);
+  assert.equal((two.editor.editorHtml().match(/aria-label="Ask a follow-up"/g) || []).length, 1, 'the older answer\'s is shut until Reply');
+  assert.match(two.editor.editorHtml(), /data-foot="0"[^>]*>(?:(?!<\/div>)[\s\S])*data-act="reply" data-thread="0" aria-label="Reply"/, 'its Reply is in its icons at the bottom');
+  two.editor.replyOpen.add(0);
+  assert.equal((two.editor.editorHtml().match(/aria-label="Ask a follow-up"/g) || []).length, 2, 'the older answer\'s, once Reply opened it');
 });
 
 test('the @ menu no longer offers Orient: the editor, the rail model and the workspace list Bart, Chat, Brainstorm and Discover; the rail names no Orient (M-01)', async () => {

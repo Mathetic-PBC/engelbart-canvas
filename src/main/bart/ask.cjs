@@ -86,7 +86,8 @@ const { WELCOME_SYSTEM_PROMPT } = require('./brainstorm-welcome-system-prompt.cj
 const { DISCOVER_SYSTEM_PROMPT } = require('./discover-system-prompt.cjs');
 const { createTrace } = require('./trace.cjs');
 const { CREATE_SYSTEM_PROMPT } = require('./create-system-prompt.cjs');
-const { CREATE_TIMEOUT_MS, openDraft, dropDraft, keepCreated, saveAllCreated, createdBody, firstSentence, createdSentence } = require('./create.cjs');
+const { CREATE_TIMEOUT_MS, openDraft, dropDraft, keepCreated, saveAllCreated, createdBody, createdSentence, requestSentence } = require('./create.cjs');
+const { createMaking, createdLine } = require('./making.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
 const { readMode, readProvider, readRefine } = require('./question.cjs');
 const { OPENING, NEXT_ID, NEXT_PLACEHOLDER, cardBody, cardOfAnswer, cardAsText, questionOf, readCard, readAnswer, resultText, parseJson } = require('./card.cjs');
@@ -95,7 +96,7 @@ const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
 const { clipMiddle } = require('./clip.cjs');
-const { pathLabeller, claudeUpdate, codexUpdate, eventReader, createFeed } = require('./activity.cjs');
+const { pathLabeller, claudeReader, codexUpdate, eventReader, createFeed } = require('./activity.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
 const { readGettingStarted } = require('../store/getting-started.cjs');
 const { createRouter, createFakeRouter, markCorrected } = require('./route.cjs');
@@ -618,8 +619,10 @@ const CREATE_CODEX = ['sandbox_mode="workspace-write"', 'sandbox_workspace_write
 // `runLog` (./runlog.cjs, optional): the Agent map's record of each run; none keeps nothing. It is told, and never changes,
 // what each run is sent and does. `inspectPdf` and `onAdded(row)`: for what @create keeps in the library (a pdf read for
 // whether it is a paper; a row made, so the sidebar reads the library again).
-function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), routerCodexHome = `${codexHome}-router`, brainstormCodexHome = `${codexHome}-brainstorm`, discoverCodexHome = `${codexHome}-discover`, createCodexHome = `${codexHome}-create`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER, runLog = null, inspectPdf = null, onAdded = () => {} } = {}) {
+function createBart({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-bart-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-bart'), routerCodexHome = `${codexHome}-router`, brainstormCodexHome = `${codexHome}-brainstorm`, discoverCodexHome = `${codexHome}-discover`, createCodexHome = `${codexHome}-create`, makingCodexHome = `${codexHome}-making`, codexAuthFile, run = execFile, threads = createThreads(), brainstormThreads = createThreads({ idleMs: BRAINSTORM_IDLE_MS }), discoverThreads = createThreads({ idleMs: DISCOVER_IDLE_MS }), tools = null, onPicked = () => {}, node = process.execPath, papersServer = PAPERS_SERVER, runLog = null, inspectPdf = null, onAdded = () => {}, makeLine = null } = {}) {
   const log = logTo(runLog);
+  // @create's line, what it is making (./making.cjs, 2026-10-15): asked of a quick model as the run starts.
+  const making = makeLine || createMaking({ readModels, environment, runDirectory: path.join(runDirectory, 'making'), codexHome: makingCodexHome, codexAuthFile, run, tools });
   // Bart, the router (./route.cjs, 2026-10-12): picks the agent an `@bart` line is for and steps aside.
   const router = createRouter({ readModels, environment, runDirectory, codexHome: routerCodexHome, codexAuthFile, run, tools, runLog });
   const shell = resolveShell(environment);
@@ -662,8 +665,9 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const servers = mcp ? ' --mcp-config "$ENGELBART_BART_MCP"' : '', granted = mcp ? `${allowed},${PAPER_TOOLS}` : allowed;
         const permitted = rules ? '--allowedTools "$ENGELBART_BART_RULES" --permission-mode dontAsk' : `--allowedTools "${granted}"`;
         const command = `exec ${program('claude')} -p --output-format stream-json --verbose --include-partial-messages ${session ? '--resume' : '--session-id'} "$ENGELBART_BART_SESSION" --restricted --setting-sources "" --strict-mcp-config${servers} --tools "${allowed}" ${permitted} ${grants} --model "$ENGELBART_BART_MODEL" --effort ${level.effort} --system-prompt-file "$ENGELBART_BART_PROMPT" < "$ENGELBART_BART_INPUT"`;
+        const read = claudeReader(short); // a Write named and counted as it comes (2026-10-15)
         const env = childEnvironment({ ...programEnv('claude'), ENGELBART_BART_SESSION: id, ENGELBART_BART_MODEL: level.model, ENGELBART_BART_PROMPT: promptFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...(rules ? { ENGELBART_BART_RULES: rules } : {}), ...(mcp ? { ENGELBART_BART_MCP: mcpFile } : {}), ...Object.fromEntries(dirs.map((dir, n) => [`ENGELBART_BART_DIR${n}`, dir])) });
-        const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { log((runs) => runs.event(logId, event)); if (onRaw) onRaw(event); onUpdate(claudeUpdate(event, short)); }, timeout);
+        const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { log((runs) => runs.event(logId, event)); if (onRaw) onRaw(event); onUpdate(read(event)); }, timeout);
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
         const result = lastResultLine(stdout);
         if (!result) throw new BartError('unavailable', notFound(failure) ? 'Claude Code was not found on the login shell PATH.' : `Claude Code did not return a result${failure ? ` (${failure.message.split('\n')[0]})` : ''}.`);
@@ -756,9 +760,13 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       const controller = new AbortController();
       running.set(askId, controller);
       const feed = createFeed({ onProgress });
-      // @create's first sentence, what it is making (./create.cjs firstSentence): shown above its row while it works.
-      const making = create ? firstSentence((text) => onProgress && onProgress({ making: text })) : null;
-      const updated = making ? (update) => { making.take(update); feed.take(update); } : feed.take;
+      // @create's line (./making.cjs, 2026-10-15): what it is making, shown above its row a second or two in, while the run
+      // works; and the answer's text once it is done, so the words do not change. Not Opus's: it thinks before it says anything.
+      const line = create ? making({ request: question, documents: context.documents, provider }).then((said) => {
+        if (said.line && onProgress && running.get(askId) === controller) onProgress({ making: said.line });
+        return said.line;
+      }).catch(() => '') : null;
+      const updated = feed.take;
       // @discover's steps told as its trace (./trace.cjs, 2026-10-15): by part, each saying what came back.
       const trace = agent === 'discover' ? createTrace({ entries: context.entries }) : null;
       const traced = trace ? (event) => { const story = trace.take(event); if (story && onProgress) onProgress({ trace: story }); } : null;
@@ -806,7 +814,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         // A card is written as its JSON in a fence; a reply that is not one, as it came (the editor draws it as an answer).
         // The Welcome walkthrough's cards always read the same (welcomeReply).
         const named = taken(agent, plan, out.text);
-        const body = made ? createdBody(createdSentence(making.text, out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : replyBody(agent, named.text);
+        // With nothing kept (a Build's request, refused), the line on what it was making is not said.
+        const body = made ? createdBody(createdSentence(made.files.length ? createdLine((await line) || requestSentence(question)) : '', out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : replyBody(agent, named.text);
         // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
         if (out.session && store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta, ...handedBack(named) };
@@ -1017,8 +1026,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed, agent, topic: agent === 'brainstorm' ? context.topic : null });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
       const feed = createFeed({ onProgress, intervalMs: 0 });
-      const making = create ? firstSentence((said) => onProgress && onProgress({ making: said })) : null;
-      const take = making ? (update) => { making.take(update); feed.take(update); } : feed.take;
+      const take = feed.take;
       // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces.
       const opens = [];
       const act = async (text) => {
@@ -1035,12 +1043,16 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
         for (const delta of pieces) { feed.take({ delta }); await pause(delayMs / 2 / pieces.length); }
         return text;
       };
-      // @create's (2026-10-14): what it is making first, then what it reads and writes, then its last message.
+      // @create's (2026-10-15): the line on what it is making first, as the quick model would send it (./making.cjs), then
+      // what it reads and writes (a file growing as it is written), then its last message.
+      let line = '';
       const write = async (text) => { take({ textStart: true }); const pieces = text.match(/[\s\S]{1,24}/g) || []; for (const delta of pieces) { take({ delta }); await pause(delayMs / 4 / pieces.length); } };
       const actCreate = async ({ first, files, last }) => {
         feed.reset();
-        if (first) await write(first);
-        for (const activity of ['Reading notes.md', ...files.map((file) => `Writing ${file}`)]) { take({ activity, log: true }); await pause(delayMs / 4); }
+        line = first;
+        if (first && onProgress) onProgress({ making: first });
+        take({ activity: 'Reading notes.md', log: true }); await pause(delayMs / 4);
+        for (const file of files) { take({ activity: `Writing ${file}` }); take({ activity: `Writing ${file} · 2 KB` }); await pause(delayMs / 8); take({ activity: `Writing ${file}`, log: true }); await pause(delayMs / 8); }
         await write(last);
         return last;
       };
@@ -1058,7 +1070,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
         if (made) { meta.created = made.files.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
         if (made) await saveAllCreated(ctx, projectId, workspaceId, logId, made.files, { inspectPdf, onAdded }); // and saved (2026-10-15)
         const named = taken(agent, plan, out.text);
-        const body = made ? createdBody(createdSentence(making.text, out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : replyBody(agent, named.text);
+        const body = made ? createdBody(createdSentence(made.files.length ? createdLine(line || requestSentence(question)) : '', out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : replyBody(agent, named.text);
         if (store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta, ...handedBack(named) };
         ended('done', result);

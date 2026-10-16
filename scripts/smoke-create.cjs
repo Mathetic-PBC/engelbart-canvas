@@ -2,7 +2,7 @@
 
 // npm run build && npx electron scripts/smoke-create.cjs
 // Runs the real app, hidden, against disposable project/user data, and drives an @create exchange (2026-10-14): while it
-// runs, its sentence and a row with a spinner, "Creating …", what it is doing, m:ss and Stop; once done, the sentence and a
+// runs, its line on what it is making (2026-10-15) and a row with a spinner, what it is doing, m:ss and Stop; once done, the sentence and a
 // row per file (icon, name, ✓ Saved, ⌄), each already in the library under Assets (2026-10-15: saved as the run ends);
 // ⌄ opens a file inline; its name opens it in a Stage tab, which reads "✓ Saved" and the address
 // "Library / Assets / <name>".
@@ -107,7 +107,7 @@ app.whenReady().then(async () => {
     await until(async () => (await rows(wc)).join('\n').trim() === '', 'an empty document');
     await typeKeys(wc, '@create make an SVG diagram of the agent prompts\n');
     await until(() => js(wc, `!!document.querySelector('${ED} [data-create-pending]')`), 'the running row');
-    const running = await until(() => js(wc, `(()=>{const r=document.querySelector('${ED} [data-create-pending]');if(!r)return null;const t=r.innerText;return /Creating/.test(t)&&/Stop/.test(t)&&r.querySelector('[data-made-clock]')?t:null})()`), 'Creating…, the clock and Stop', 600);
+    const running = await until(() => js(wc, `(()=>{const r=document.querySelector('${ED} [data-create-pending]');if(!r)return null;const t=r.innerText;return ${REAL ? "/^Creating /" : '/Creating a fake report, a chart page and its data/'}.test(t)&&/Stop/.test(t)&&r.querySelector('[data-made-clock]')?t:null})()`), 'its line, the clock and Stop', 600);
     console.log('running:', JSON.stringify(running));
     await until(() => js(wc, `/\\S/.test((document.querySelector('${ED} [data-create-pending]')||{}).innerText||'') && !!document.querySelector('${ED} [data-create-pending] > div:first-child:not([style*="display:flex"])')`), 'its sentence', REAL ? 2400 : 300).catch(() => console.log('(no sentence before the shot)'));
     await shot(wc, '1-running');
@@ -123,6 +123,21 @@ app.whenReady().then(async () => {
     await shot(wc, '2-done');
     const library = (await js(wc, 'window.engelbartAPI.library()').catch(() => null));
     if (Array.isArray(library)) assert.equal(library.length, before.length + done.length, 'each file went into the library as the run ended');
+
+    /* ------------------------------------------------ peek: a small card over the page; nothing in the document moves */
+    const peekAt = await spot(wc, `${ED} [data-made-row="${done[0].key}"] .made-name`);
+    const layout = () => js(wc, `[...document.querySelectorAll('${ED} [data-line]')].map((d)=>Math.round(d.getBoundingClientRect().top)).join(',')`);
+    const still = await layout();
+    wc.sendInputEvent({ type: 'mouseMove', x: peekAt.x, y: peekAt.y });
+    const card = await until(() => js(wc, `(()=>{const c=document.querySelector('[data-made-peek-card]');if(!c)return null;const r=c.getBoundingClientRect();return{w:Math.round(r.width),h:Math.round(r.height),overlay:c.getAttribute('data-overlay')}})()`), 'the peek', 100);
+    console.log('peek:', JSON.stringify(card));
+    assert.ok(card.w === 280 && card.overlay === '1', JSON.stringify(card));
+    assert.equal(await layout(), still, 'nothing in the document moved');
+    assert.equal(await js(wc, `document.querySelectorAll('${ED} [data-made-frame]').length`), 0, 'no frame opened in the document');
+    await pause(300);
+    await shot(wc, '2b-peek');
+    wc.sendInputEvent({ type: 'mouseMove', x: 5, y: 5 });
+    await until(() => js(wc, `!document.querySelector('[data-made-peek-card]')`), 'the peek gone', 100);
 
     /* ------------------------------------------------ expanded */
     const pick = done.find((one) => /\.svg$/i.test(one.name)) || done.find((one) => /\.html$/i.test(one.name)) || done[0];

@@ -1160,8 +1160,14 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       return;
     }
     // A page that has loaded, at an address: one that turned into a pdf (a download) never commits one, and waits for the viewer.
-    // Its section is tinted too, from the words to the next heading (2026-10-15; main's page-preload.cjs showSection).
-    if (page && web && !web.loading && !failed && web.url && web.url !== 'about:blank') { land(tab.id, text); if (api.browserSection) quiet(api.browserSection(tab.id, text)); }
+    // Its section is tinted, from the words to the next heading, and scrolled to (2026-10-15; main's page-preload.cjs
+    // showSection): find runs only when the page could not show it, so no orange match sits on its first words (David).
+    if (page && web && !web.loading && !failed && web.url && web.url !== 'about:blank') {
+      const id = tab.id;
+      if (!api.browserSection) { land(id, text); return; }
+      clearPending(id, text);
+      Promise.resolve(api.browserSection(id, text)).then((shown) => { if (!shown) land(id, text); }, () => land(id, text));
+    }
   }, [tab.id, tab.pendingFind, !!pdf, visible, view && view.kind, page, web && web.loading, web && web.url, !!failed]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ⌘T while the Stage shows and ⌘W from anywhere but the terminal, bringing the Stage forward; ⌘F while the Stage shows and has the keyboard

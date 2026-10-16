@@ -91,6 +91,43 @@ function claudeUpdate(event, short) {
   return null;
 }
 
+/**
+ * claudeUpdate, with a Write told as it is written (2026-10-15, David): Claude Code streams a tool's input as it is made,
+ * and a large file takes a minute or more to come, all of it "Thinking" while claudeUpdate waits for the whole call. Here
+ * the file is named as soon as its path has come ("Writing diagram.svg"), then its size so far each whole KB ("Writing
+ * diagram.svg · 9 KB"); the whole call is still logged once, as claudeUpdate logs it. Only the path and a length are kept:
+ * what the file holds never leaves this module. One reader per turn. → (event) → as claudeUpdate
+ */
+function claudeReader(short) {
+  const writes = new Map(); // a Write's content block, by index → { json (until its path has come), file, length, kb }
+  return (event) => {
+    const inner = event && event.type === 'stream_event' && event.event;
+    if (inner && inner.type === 'content_block_start' && inner.content_block && inner.content_block.type === 'tool_use') {
+      if (inner.content_block.name === 'Write') writes.set(inner.index, { json: '', file: null, length: 0, kb: 0 });
+      return null;
+    }
+    if (inner && inner.type === 'content_block_delta' && inner.delta && inner.delta.type === 'input_json_delta') {
+      const held = writes.get(inner.index), part = String(inner.delta.partial_json || '');
+      if (!held) return null;
+      if (!held.file) {
+        held.json += part;
+        const named = /"file_path"\s*:\s*"((?:[^"\\]|\\.)*)"/.exec(held.json);
+        if (!named) return null;
+        try { held.file = JSON.parse(`"${named[1]}"`); } catch { held.file = named[1]; }
+        held.length = held.json.length - named.index - named[0].length; held.json = '';
+        return { activity: `Writing ${short(held.file)}` };
+      }
+      held.length += part.length;
+      const kb = Math.floor(held.length / 1024);
+      if (kb <= held.kb) return null;
+      held.kb = kb;
+      return { activity: `Writing ${short(held.file)} · ${kb} KB` };
+    }
+    if (inner && inner.type === 'content_block_stop') writes.delete(inner.index);
+    return claudeUpdate(event, short);
+  };
+}
+
 const READERS = new Set(['cat', 'sed', 'head', 'tail', 'nl', 'bat', 'less', 'wc']);
 const SEARCHERS = new Set(['rg', 'grep', 'ag', 'ack']);
 const LISTERS = new Set(['ls', 'find', 'fd', 'tree']);
@@ -183,4 +220,4 @@ function createFeed({ onProgress = () => {}, intervalMs = 100 } = {}) {
   };
 }
 
-module.exports = { pathLabeller, claudeUpdate, codexUpdate, commandLabel, paperTool, eventReader, createFeed };
+module.exports = { pathLabeller, claudeUpdate, claudeReader, codexUpdate, commandLabel, paperTool, eventReader, createFeed };

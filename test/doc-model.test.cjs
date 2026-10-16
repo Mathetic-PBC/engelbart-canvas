@@ -193,7 +193,8 @@ test('a pasted image is an inline token that reads [Attachment n]; alone on a li
   const { INLINE, tokShown, inlineHtml, parseLine, rawOffset } = await load();
   const token = '![Attachment 1](img:0a1b2c3d-0000-4000-8000-000000000000)';
   assert.deepEqual(`fix ${token} now`.split(INLINE).filter(Boolean), ['fix ', token, ' now']);
-  assert.deepEqual(tokShown(token), { shown: '[Attachment 1]', pre: 1 });
+  assert.deepEqual(tokShown(token), { shown: '[Attachment 1]', pre: 1, unit: true }, 'one unit (2026-10-15): the caret stands before or after it');
+  assert.equal(rawOffset(parseLine(`fix ${token} now`), 'fix [Atta'.length), `fix ${token}`.length, 'a click inside the chip lands after it, never inside its source');
   assert.match(inlineHtml(`fix ${token}`), /data-attachment="0a1b2c3d-0000-4000-8000-000000000000"[^>]*>\[Attachment 1\]</);
   assert.equal(parseLine(token).type, 'img');
   const todo = parseLine(`- [ ] fix ${token} now`);

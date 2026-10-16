@@ -132,35 +132,9 @@ function createdBody(text, { files, skipped }, askId) {
 }
 
 /**
- * The sentence Create says first (2026-10-14): what it is making, the text of its first message, written before it reads or
- * writes anything (./create-system-prompt.cjs). Fed the run's updates (./activity.cjs claudeUpdate, codexUpdate): the text
- * of the first message is taken when a tool is used after it, another message starts, or (Codex) the message arrives
- * whole; `onSentence(text)` is told it once. A message that is the harness's ("ESCALATE: …") is not one.
- * → { take(update), text } (`text` '' until there is one)
- */
-function firstSentence(onSentence = () => {}) {
-  let text = '', done = false;
-  const finish = () => {
-    const clean = text.replace(/\s+/g, ' ').trim();
-    if (done || !clean || /^ESCALATE:/.test(clean)) { text = ''; return; }
-    done = true; text = clean;
-    try { onSentence(clean); } catch { /* nobody listening */ }
-  };
-  return {
-    take(update) {
-      if (!update || done) return;
-      if (update.textStart) { if (text.trim()) finish(); else text = ''; return; }
-      if (typeof update.delta === 'string') { text += update.delta; return; }
-      if (typeof update.text === 'string') { text = update.text; finish(); return; }
-      if (update.activity && update.log) finish();
-    },
-    get text() { return done ? text : ''; },
-  };
-}
-
-/**
- * The sentences above the rows: what it said it was making, then its last message when that says something more (not
- * "Done."), else the request as a sentence ("make a chart of X" → "A chart of X.").
+ * The sentences above the rows: the line on what it was making (./making.cjs, 2026-10-15; until then the first message of
+ * its own), then its last message when that says something more (not "Done."), else the request as a sentence ("make a
+ * chart of X" → "A chart of X.").
  */
 function createdSentence(first, last, request) {
   const said = [first, last].map((text) => String(text || '').trim()).filter((text) => text && !/^done\.?$/i.test(text) && !/^ESCALATE:/.test(text));
@@ -243,4 +217,4 @@ async function saveAllCreated(ctx, projectId, workspaceId, askId, files, options
   for (const file of files) { try { await saveCreated(ctx, projectId, workspaceId, askId, file.rel, options); } catch { /* its row offers Save */ } }
 }
 
-module.exports = { CREATE_DIR, CREATED_DIR, SAVED_FILE, PREVIEWS_DIR, MAX_CREATED, MAX_CREATED_BYTES, CREATE_TIMEOUT_MS, draftPath, openDraft, dropDraft, draftFiles, createdDir, createdFile, keepCreated, madeMention, createdBody, firstSentence, createdSentence, requestSentence, readCreated, saveCreated, saveAllCreated };
+module.exports = { CREATE_DIR, CREATED_DIR, SAVED_FILE, PREVIEWS_DIR, MAX_CREATED, MAX_CREATED_BYTES, CREATE_TIMEOUT_MS, draftPath, openDraft, dropDraft, draftFiles, createdDir, createdFile, keepCreated, madeMention, createdBody, createdSentence, requestSentence, readCreated, saveCreated, saveAllCreated };

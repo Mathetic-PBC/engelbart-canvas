@@ -1963,9 +1963,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const RAIL_MIN = 220, RAIL_MAX = 520, DOC_MIN = 280, RIGHT_MIN = 320;
   const railRoom = Math.max(RAIL_MIN, viewWidth - 2 - DOC_MIN - RIGHT_MIN);
   const rail = clamp(railWidth, RAIL_MIN, Math.min(RAIL_MAX, railRoom));
-  // Folded away (or under the document's full screen), the sidebar and its edge take no room: the document and the right
-  // pane share the window.
-  const railShown = !docFull && !railHidden;
+  // Folded away, the sidebar and its edge take no room: the document and the right pane share the window. The document's
+  // full screen keeps it (2026-10-15, David): only the right pane gives way.
+  const railShown = !railHidden;
   const railSpace = railShown ? rail + 1 : 0;
   const rightRoom = Math.max(RIGHT_MIN, viewWidth - railSpace - 1 - DOC_MIN);
   const right = clamp(rightWidth == null ? Math.round((viewWidth - railSpace - 1) / 2) : rightWidth, RIGHT_MIN, rightRoom);
@@ -1991,11 +1991,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // column too); the sidebar stays. Switching between them keeps it.
   const full = stageFull;
   const paneWidth = full ? Math.max(RIGHT_MIN, viewWidth - railSpace) : right;
-  // The sidebar's toggle and ⌘\ (2026-10-07). Under the document's full screen it brings the sidebar back, leaving that.
-  const toggleRail = () => {
-    if (docFull) { setDocFull(false); setRailHidden(false); return; }
-    setRailHidden((now) => !now);
-  };
+  // The sidebar's toggle and ⌘\ (2026-10-07), the same under the document's full screen.
+  const toggleRail = () => { setRailHidden((now) => !now); };
   const toggleRailRef = React.useRef(toggleRail);
 
   /* ------------------------------------------------------- the sidebar tour */

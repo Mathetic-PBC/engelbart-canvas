@@ -82,11 +82,12 @@ function fallbackTitle(text) {
 }
 
 /**
- * → nameChat({ text, provider }) → { title, provider, model, modelName, effort, ms, named }. `text`: the question as typed
- * after its agent token; `readModels()`: the list in force, as @bart's runs read it (../index.cjs bartModels). `named`
- * is false when the title is the fallback. Never throws.
+ * One short run with no tools and no session (2026-10-15: shared with @create's line, ./making.cjs): `step` (namingStep)
+ * given `system` and `input`, at most `timeoutMs`. → quickRun(step, system, input) → what the model said, '' when it
+ * said nothing usable. Never throws. `codexHome`: Codex is given `system` as its home's instructions, so each kind of
+ * run has its own.
  */
-function createNameChat({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-name-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-name'), codexAuthFile, run = execFile, tools = null, timeoutMs = NAME_TIMEOUT_MS } = {}) {
+function createQuickRun({ environment = process.env, runDirectory, codexHome, codexAuthFile, run = execFile, tools = null, timeoutMs = NAME_TIMEOUT_MS, prefix = 'name' } = {}) {
   const shell = resolveShell(environment);
   const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
   const programEnv = (name) => (tools && tools.binaryFor(name) ? { [`ENGELBART_${name.toUpperCase()}_BIN`]: tools.binaryFor(name) } : {});
@@ -107,35 +108,47 @@ function createNameChat({ readModels, environment = process.env, runDirectory = 
     return result && !result.is_error && typeof result.result === 'string' ? result.result : '';
   }
 
-  async function viaCodex(step, stem) {
+  async function viaCodex(step, stem, system) {
     const source = codexAuthFile || path.join(environment.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
-    if (!prepareCodexHome({ codexHome, source, instructions: NAME_PROMPT })) return '';
+    if (!prepareCodexHome({ codexHome, source, instructions: system })) return '';
     const command = `exec ${program('codex')} exec --skip-git-repo-check --ephemeral -s read-only -m "$ENGELBART_NAME_MODEL" -c 'model_reasoning_effort="${step.effort}"' -c 'tools.web_search=false' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_NAME_OUTPUT" - < "$ENGELBART_NAME_INPUT"`;
     await execute(command, childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_NAME_MODEL: step.model, ENGELBART_NAME_OUTPUT: `${stem}.out.txt`, ENGELBART_NAME_INPUT: `${stem}.input.txt` }));
     try { return fs.readFileSync(`${stem}.out.txt`, 'utf8'); } catch { return ''; }
   }
 
+  return async function quickRun(step, system, input) {
+    let stem = null;
+    try {
+      fs.mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
+      stem = path.join(runDirectory, `${prefix}-${randomUUID()}`);
+      fs.writeFileSync(`${stem}.system.md`, system, { mode: 0o600 });
+      fs.writeFileSync(`${stem}.input.txt`, input, { mode: 0o600 });
+      const runIt = () => (step.provider === 'anthropic' ? viaClaudeCode(step, stem) : viaCodex(step, stem, system));
+      return String((tools ? await tools.use(TOOL_OF[step.provider], runIt) : await runIt()) || '');
+    } catch { return ''; } finally {
+      if (stem) for (const end of ['.system.md', '.input.txt', '.out.txt']) { try { fs.unlinkSync(stem + end); } catch { /* none */ } }
+    }
+  };
+}
+
+/**
+ * → nameChat({ text, provider }) → { title, provider, model, modelName, effort, ms, named }. `text`: the question as typed
+ * after its agent token; `readModels()`: the list in force, as @bart's runs read it (../index.cjs bartModels). `named`
+ * is false when the title is the fallback. Never throws.
+ */
+function createNameChat({ readModels, environment = process.env, runDirectory = path.join(os.tmpdir(), 'engelbart-name-runs'), codexHome = path.join(os.tmpdir(), 'engelbart-codex-home-name'), codexAuthFile, run = execFile, tools = null, timeoutMs = NAME_TIMEOUT_MS } = {}) {
+  const quickRun = createQuickRun({ environment, runDirectory, codexHome, codexAuthFile, run, tools, timeoutMs });
   return async function nameChat({ text, provider }) {
     const started = Date.now();
     const step = namingStep(readModels(), provider);
     const said = { provider: step.provider, model: step.model, modelName: step.name, effort: step.effort };
     const question = plainTitle(String(text || '').replace(/\s+/g, ' ')).slice(0, MAX_QUESTION);
     if (!question) return { title: UNNAMED, ...said, ms: Date.now() - started, named: false };
-    let stem = null;
-    try {
-      fs.mkdirSync(runDirectory, { recursive: true, mode: 0o700 });
-      stem = path.join(runDirectory, `name-${randomUUID()}`);
-      fs.writeFileSync(`${stem}.system.md`, NAME_PROMPT, { mode: 0o600 });
-      // The instruction again after the question, and the title alone: Luna, given it only as instructions, answered the question.
-      fs.writeFileSync(`${stem}.input.txt`, `The conversation opens with this question:\n\n<question>\n${question}\n</question>\n\nDo not answer it. ${NAME_PROMPT} Reply with the title alone.`, { mode: 0o600 });
-      const runIt = () => (step.provider === 'anthropic' ? viaClaudeCode : viaCodex)(step, stem);
-      const raw = tools ? await tools.use(TOOL_OF[step.provider], runIt) : await runIt();
-      const title = cleanTitle(raw);
-      // More words than a title has is an answer, not a name: the fallback.
-      if (title && title.split(' ').length <= MAX_WORDS) return { title, ...said, ms: Date.now() - started, named: true };
-    } catch { /* the fallback below */ } finally {
-      if (stem) for (const end of ['.system.md', '.input.txt', '.out.txt']) { try { fs.unlinkSync(stem + end); } catch { /* none */ } }
-    }
+    // The instruction again after the question, and the title alone: Luna, given it only as instructions, answered the question.
+    const raw = await quickRun(step, NAME_PROMPT, `The conversation opens with this question:\n\n<question>\n${question}\n</question>\n\nDo not answer it. ${NAME_PROMPT} Reply with the title alone.`);
+    const title = cleanTitle(raw);
+    // More words than a title has is an answer, not a name: the fallback.
+    if (title && title.split(' ').length <= MAX_WORDS) return { title, ...said, ms: Date.now() - started, named: true };
     return { title: fallbackTitle(text), ...said, ms: Date.now() - started, named: false };
   };
 }
@@ -148,4 +161,4 @@ function createFakeNameChat({ readModels }) {
   };
 }
 
-module.exports = { NAME_PROMPT, NAME_TIMEOUT_MS, MAX_TITLE, UNNAMED, providerOf, namingStep, plainTitle, capTitle, cleanTitle, fallbackTitle, createNameChat, createFakeNameChat };
+module.exports = { NAME_PROMPT, NAME_TIMEOUT_MS, MAX_TITLE, UNNAMED, providerOf, namingStep, plainTitle, capTitle, cleanTitle, fallbackTitle, createQuickRun, createNameChat, createFakeNameChat };

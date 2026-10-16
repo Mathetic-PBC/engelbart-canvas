@@ -2,7 +2,7 @@
 
 // @create (2026-10-13; src/main/bart/create.cjs, ask.cjs): an agent that makes a new thing as files in a draft folder of
 // its own, <dataRoot>/.create/<askId>/, the only place it may write. The line's syntax, the CLIs' arguments, the files
-// kept (and not), and the answer that stands for them. The router's pick and the editor's five-second wait are in
+// kept (and not), and the answer that stands for them. The router's pick (asked at once since 2026-10-15) is in
 // route.test.cjs. Since 2026-10-14 the files are kept with the project (<project>/.created/<askId>/), not in the library:
 // the answer has one `@[name](made:<askId>/<path>)` line per file, and Save (saveCreated) adds one to the library.
 
@@ -17,10 +17,12 @@ const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
 const { normalizeModels } = require('../src/main/bart/models.cjs');
 const { createBart, createFakeBart, CLAUDE_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, AGENTS } = require('../src/main/bart/ask.cjs');
-const { CREATE_DIR, CREATE_TIMEOUT_MS, MAX_CREATED, SAVED_FILE, draftPath, openDraft, createdDir, createdFile, keepCreated, createdBody, firstSentence, createdSentence, requestSentence, readCreated, saveCreated, saveAllCreated } = require('../src/main/bart/create.cjs');
+const { CREATE_DIR, CREATE_TIMEOUT_MS, MAX_CREATED, SAVED_FILE, draftPath, openDraft, createdDir, createdFile, keepCreated, createdBody, createdSentence, requestSentence, readCreated, saveCreated, saveAllCreated } = require('../src/main/bart/create.cjs');
 const { CREATE_SYSTEM_PROMPT } = require('../src/main/bart/create-system-prompt.cjs');
 const { stripAgentReplies, OMITTED } = require('../src/main/bart/strip.cjs');
 const { createRunLog } = require('../src/main/bart/runlog.cjs');
+const { createMaking, cleanMaking, createdLine, MAKING_PROMPT, MAX_DOCUMENTS } = require('../src/main/bart/making.cjs');
+const { claudeReader } = require('../src/main/bart/activity.cjs');
 
 const DEFAULTS = normalizeModels(null); // Claude Code, Sonnet high first
 const CODEX = { ...DEFAULTS, provider: 'openai' };
@@ -87,7 +89,9 @@ function cli(calls, write = (dir) => { fs.writeFileSync(path.join(dir, 'chi-by-y
 const realBart = (models, run, extra = {}) => {
   const authFile = path.join(homeDir, 'auth.json');
   fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
-  return createBart({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs'), codexHome: path.join(homeDir, 'codex-home'), createCodexHome: path.join(homeDir, 'codex-home-create'), codexAuthFile: authFile, run, ...extra });
+  // The line on what it is making (../src/main/bart/making.cjs) is its own quick run, tested on its own below.
+  const makeLine = async () => ({ line: 'A chart of CHI submissions by year, one bar a year.', named: true, ms: 1 });
+  return createBart({ readModels: () => models, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs'), codexHome: path.join(homeDir, 'codex-home'), createCodexHome: path.join(homeDir, 'codex-home-create'), codexAuthFile: authFile, run, makeLine, ...extra });
 };
 
 test('Claude Code: Write and Edit on the draft folder alone (dontAsk refuses any other write), no Bash, the draft as cwd, 10 minutes', async () => {
@@ -112,6 +116,7 @@ test('Claude Code: Write and Edit on the draft folder alone (dontAsk refuses any
   assert.ok((await readCreated(ctx, project.id, 'cc1', 'chi-by-year.html')).saved, 'its row reads Saved');
   assert.ok(fs.existsSync(path.join(createdDir(ctx, project.id, 'cc1'), 'chi-by-year.html')), 'kept with the project');
   assert.ok(out.lines.includes('bart> @[chi-by-year.html](made:cc1/chi-by-year.html)'), 'its row\'s line');
+  assert.equal(out.lines[0], 'bart> Created a chart of CHI submissions by year, one bar a year.', 'the line it was shown while it worked, said done ("Created"), then its own last message');
   assert.ok(!fs.existsSync(call.cwd), 'the draft folder is gone');
   assert.match(out.lines[out.lines.length - 1], /^bart> \*Create · Sonnet · high · \d+ s\*$/, 'the foot: Create · model · effort · time');
 });
@@ -157,7 +162,7 @@ test('a fake run writing report.md, chart.html and data.csv: kept with the proje
   assert.deepEqual(progress.filter((p) => p.making).map((p) => p.making), ['A fake report, a chart page and its data, from made-up numbers.']);
   assert.ok(said >= 0 && said < wrote, 'said before the first file is written');
   // The answer: that sentence ("Done." is not said), then one line per file, then the foot.
-  assert.deepEqual(out.lines.slice(0, 5), ['bart> A fake report, a chart page and its data, from made-up numbers.', 'bart>', 'bart> @[chart.html](made:fk1/chart.html)', 'bart> @[data.csv](made:fk1/data.csv)', 'bart> @[report.md](made:fk1/report.md)']);
+  assert.deepEqual(out.lines.slice(0, 5), ['bart> Created a fake report, a chart page and its data, from made-up numbers.', 'bart>', 'bart> @[chart.html](made:fk1/chart.html)', 'bart> @[data.csv](made:fk1/data.csv)', 'bart> @[report.md](made:fk1/report.md)']);
   assert.match(out.lines[out.lines.length - 1], /^bart> \*Create · Sonnet · high · \d+ s\*$/);
   assert.ok(!out.lines.some((line) => /Not kept|Done\./.test(line)));
   // A row's file as the editor reads it: its text, saved.
@@ -219,22 +224,7 @@ test('saved as the run ends (2026-10-15): every kept file into the library, each
   for (const id of added) assert.ok(linked().includes(id), 'linked to the workspace');
 });
 
-test('the sentence above the rows: the first message, the last one too unless it is "Done.", else the request as a sentence', () => {
-  const told = [];
-  const first = firstSentence((text) => told.push(text));
-  first.take({ activity: 'Thinking' });
-  first.take({ textStart: true });
-  for (const delta of ['A diagram of the ', 'agent prompts.']) first.take({ delta });
-  assert.equal(first.text, '', 'not taken while it may still be coming');
-  first.take({ activity: 'Reading route.cjs', log: true });
-  assert.equal(first.text, 'A diagram of the agent prompts.');
-  first.take({ textStart: true }); first.take({ delta: 'Done.' });
-  assert.deepEqual(told, ['A diagram of the agent prompts.'], 'told once');
-  const codex = firstSentence();
-  codex.take({ text: 'ESCALATE: too big' });
-  assert.equal(codex.text, '', 'the harness\'s line is not one');
-  codex.take({ text: 'A chart of CHI submissions by year.' });
-  assert.equal(codex.text, 'A chart of CHI submissions by year.');
+test('the sentence above the rows: the line on what it is making, the last message too unless it is "Done.", else the request as a sentence', () => {
   assert.equal(createdSentence('A chart.', 'Done.', 'x'), 'A chart.');
   assert.equal(createdSentence('A chart.', 'A chart.', 'x'), 'A chart.');
   assert.equal(createdSentence('A chart.', 'The 2019 numbers were not on the page, so that bar is missing.', 'x'), 'A chart.\n\nThe 2019 numbers were not on the page, so that bar is missing.');
@@ -295,4 +285,80 @@ test('keepCreated: only the library\'s formats, at most five, each at most 20 MB
   fs.writeFileSync(path.join(big, 'huge.csv'), Buffer.alloc(20 * 1024 * 1024 + 1));
   assert.deepEqual((await keepCreated(ctx, project.id, 'kc2', big)).skipped, ['huge.csv: larger than 20 MB']);
   assert.throws(() => draftPath(ctx.dataRoot, '../x'), /ask id is invalid/);
+});
+
+/* ------------------------------------------------------- what it is making, as it works (2026-10-15) */
+
+test('the line on what it is making: one quick run on the lowest model at low effort, given the request and the end of the documents; the request as a sentence when it fails', async () => {
+  const calls = [];
+  const run = (reply) => (shell, args, options, callback) => {
+    const command = args[args.length - 1];
+    calls.push({ command, env: options.env, input: fs.readFileSync(options.env.ENGELBART_NAME_INPUT, 'utf8'), prompt: fs.readFileSync(options.env.ENGELBART_NAME_PROMPT, 'utf8') });
+    callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: reply })}\n`);
+  };
+  const making = (reply) => createMaking({ readModels: () => DEFAULTS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'making-runs'), run: run(reply) });
+  const documents = `${'x'.repeat(MAX_DOCUMENTS)}<workspace>We talked about the five pillars.</workspace>`;
+  const said = await making('"A diagram of this conversation: the five pillars and what is still open"')({ request: 'make a digram going over everything we talked about', documents, provider: 'anthropic' });
+  assert.deepEqual([said.line, said.named], ['A diagram of this conversation: the five pillars and what is still open.', true]);
+  const [call] = calls;
+  assert.equal(call.env.ENGELBART_NAME_MODEL, Object.values(DEFAULTS.providers.anthropic.models)[0].id, 'the lowest model');
+  assert.match(call.command, /--tools "" .*--effort low /);
+  assert.equal(call.prompt, MAKING_PROMPT);
+  assert.ok(call.input.includes('We talked about the five pillars.') && call.input.length < MAX_DOCUMENTS + 2000, 'the end of the documents');
+  assert.match(call.input, /<request>\nmake a digram going over everything we talked about\n<\/request>/);
+  assert.deepEqual(fs.readdirSync(path.join(homeDir, 'making-runs')), [], 'its files are gone');
+  // Nothing usable: the request as a sentence.
+  for (const reply of ['', 'ESCALATE: no', `${'word '.repeat(60)}`]) {
+    const fallback = await making(reply)({ request: 'make a chart of CHI submissions by year', documents: '', provider: 'anthropic' });
+    assert.deepEqual([fallback.line, fallback.named], ['A chart of CHI submissions by year.', false], JSON.stringify(reply));
+  }
+  assert.equal(cleanMaking('**An HTML page on tutors**'), 'An HTML page on tutors.');
+  assert.equal(cleanMaking('Line: a chart of x!'), 'A chart of x!');
+  assert.equal(createdLine('A diagram of the highlighting, Stage, and browser-window problems.'), 'Created a diagram of the highlighting, Stage, and browser-window problems.');
+  assert.equal(createdLine('An HTML page on tutors.'), 'Created an HTML page on tutors.');
+  assert.equal(createdLine('Creating a page on tutors…'), 'Created a page on tutors.');
+  assert.equal(createdLine(''), '');
+});
+
+test('a Create run: its line told as it starts, before it reads or writes, and the answer\'s text once done; the prompt asks no first sentence of the model', async () => {
+  const progress = [];
+  let release;
+  const held = new Promise((resolve) => { release = resolve; });
+  const run = (shell, args, options, callback) => {
+    fs.writeFileSync(path.join(options.cwd, 'conversation.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>');
+    // The run goes on only once its line has been told.
+    held.then(() => callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'Done.' })}\n`));
+  };
+  const line = 'A diagram of this conversation: other agents, the five pillars and what is still open.';
+  const bart = realBart(DEFAULTS, run, { makeLine: async (asked) => { assert.equal(asked.request, 'make a diagram of this conversation'); assert.equal(typeof asked.documents, 'string'); return { line, named: true }; } });
+  const asking = bart.ask(ctx, project.id, { askId: 'ml1', ref: ref(), workspaceId: workspace.id, text: 'make a diagram of this conversation', agent: 'create' }, { onProgress: (p) => { progress.push(p); if (p.making) release(); } });
+  const out = await asking;
+  assert.deepEqual(progress.filter((p) => p.making).map((p) => p.making), [line], 'told once');
+  assert.deepEqual(out.lines.slice(0, 3), ['bart> Created a diagram of this conversation: other agents, the five pillars and what is still open.', 'bart>', 'bart> @[conversation.svg](made:ml1/conversation.svg)'], 'the same words, done (2026-10-15, David: "Created a diagram …"); "Done." not said');
+  assert.ok(!/first message|first sentence/.test(CREATE_SYSTEM_PROMPT), 'no sentence of its own first');
+  assert.match(CREATE_SYSTEM_PROMPT, /Reply with "Done\." and nothing else: Engelbart says what you made/);
+  // Nothing kept (a Build's request, refused): the line is not said, its last message is.
+  const refused = realBart(DEFAULTS, (shell, args, options, callback) => callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: 'This is a Build: it changes something you already have.' })}\n`), { makeLine: async () => ({ line, named: true }) });
+  const no = await refused.ask(ctx, project.id, { askId: 'ml2', ref: ref(), workspaceId: workspace.id, text: 'make the icons different', agent: 'create' });
+  assert.equal(no.lines[0], 'bart> This is a Build: it changes something you already have.');
+});
+
+test('a Write told as it is written: named once its path has come, then its size each whole KB; logged once, whole; what it holds never shown', () => {
+  const read = claudeReader((file) => path.basename(file));
+  const stream = (event) => read({ type: 'stream_event', event });
+  const part = (partial_json, index = 2) => stream({ type: 'content_block_delta', index, delta: { type: 'input_json_delta', partial_json } });
+  assert.equal(stream({ type: 'content_block_start', index: 2, content_block: { type: 'tool_use', name: 'Write', input: {} } }), null);
+  assert.equal(part('{"file_pa'), null, 'no path yet');
+  assert.deepEqual(part('th": "/d/conversation-diagram.svg", "content": "<svg'), { activity: 'Writing conversation-diagram.svg' });
+  assert.equal(part('<g>'.repeat(100)), null, 'under a KB');
+  assert.deepEqual(part('<g>'.repeat(300)), { activity: 'Writing conversation-diagram.svg · 1 KB' });
+  assert.equal(part('x'), null, 'the same KB');
+  assert.deepEqual(part('x'.repeat(1024)), { activity: 'Writing conversation-diagram.svg · 2 KB' });
+  // Another tool's input is not read as it comes; a Write's block ends and the whole call is logged as before.
+  assert.equal(stream({ type: 'content_block_start', index: 3, content_block: { type: 'tool_use', name: 'Read', input: {} } }), null);
+  assert.equal(part('{"file_path": "/d/x.md"}', 3), null);
+  assert.equal(stream({ type: 'content_block_stop', index: 2 }), null);
+  assert.equal(part('more', 2), null, 'ended: nothing more counted');
+  assert.deepEqual(read({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Write', input: { file_path: '/d/conversation-diagram.svg', content: '<svg/>' } }] } }), { activity: 'Writing conversation-diagram.svg', log: true });
+  assert.deepEqual(stream({ type: 'content_block_start', index: 0, content_block: { type: 'thinking' } }), { activity: 'Thinking' });
 });

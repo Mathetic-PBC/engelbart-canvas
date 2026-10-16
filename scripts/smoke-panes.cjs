@@ -240,12 +240,13 @@ app.whenReady().then(async () => {
     };
     await press(wc, '[data-doc-full]');
     let seen = await layout();
-    assert.deepEqual([seen.full, seen.rail, seen.right], ['1', 'none', 'none'], 'no sidebar, no Stage');
-    assert.equal(seen.main, seen.window, 'the middle column has the whole window');
+    assert.deepEqual([seen.full, seen.right], ['1', 'none'], 'no Stage');
+    assert.notEqual(seen.rail, 'none', 'the sidebar stays (2026-10-15)');
+    assert.ok(seen.main < seen.window, 'the middle column has the window but the sidebar');
     now = await settledStrip(wc);
     assert.ok(sideBySide(now) && half(now), `the document and the note side by side, half the window each (${now.panes.map((p) => `${p.width}px`).join(' + ')})`);
     await shot(wc, '6-full');
-    console.log(`PASS the full screen hides the sidebar and the Stage (the column is ${seen.main}px; panes ${now.panes.map((p) => `${p.width}px`).join(' + ')})`);
+    console.log(`PASS the full screen hides the Stage and keeps the sidebar (the column is ${seen.main}px; panes ${now.panes.map((p) => `${p.width}px`).join(' + ')})`);
     // The caret in a line, the @ menu open: the menu, then the line, then the full screen.
     await press(wc, `${PANE(0)} [data-editor] [data-line="0"] .t`);
     await key(wc, 'End');

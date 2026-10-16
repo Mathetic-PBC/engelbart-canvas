@@ -246,3 +246,81 @@ test('the window\'s Escape with the key elsewhere shuts the editor\'s open menu 
     assert.equal(editor.shutMenus(), false, 'nothing left open');
   }
 });
+
+test('a pasted image never shows its source (2026-10-15, David): alone on a line with the caret on it, the picture; inside a line with the caret beside it, its chip', () => {
+  const token = '![Attachment 1](img:81b164f7-40e0-40ce-9521-6f2e951df8d0)';
+  const shown = (html) => html.replace(/<[^>]*>/g, '');
+  const m = mounted(`${token}\nfix ${token} now`, { images: { '81b164f7-40e0-40ce-9521-6f2e951df8d0': 'file:///a.png' } });
+  const [first, second] = m.editor.parsedOf(m.editor.lines());
+  m.editor.caret = { line: 0, offset: token.length };
+  const alone = m.editor.lineHtml(0, token, first, true, true);
+  assert.match(alone, /<span data-src="[^"]+" data-open="0" data-img-line="1"><span contenteditable="false" data-imgbox="0"[\s\S]*<img data-img="0" src="file:\/\/\/a\.png"/, 'the picture, held as the line\'s one closed token');
+  assert.ok(!shown(alone).includes('img:'), shown(alone));
+  const inline = `fix ${token} now`;
+  for (const offset of ['fix '.length, `fix ${token}`.length, 'fix ![Att'.length]) {
+    m.editor.caret = { line: 1, offset };
+    const html = m.editor.lineHtml(1, inline, second, true, false);
+    assert.ok(!shown(html).includes('img:') && shown(html).includes('[Attachment 1]'), `caret at ${offset}: ${shown(html)}`);
+  }
+});
+
+test('beside a picture alone on its line (2026-10-15, David): what is typed or pasted is a line of its own above or below it, Backspace after it takes it away, Backspace before it takes the empty line above', () => {
+  const token = '![Attachment 1](img:81b164f7-40e0-40ce-9521-6f2e951df8d0)';
+  const at = (text, offset, line = 1) => {
+    const m = mounted(text, { images: { '81b164f7-40e0-40ce-9521-6f2e951df8d0': 'file:///a.png' } });
+    m.editor.caretInfo = () => ({ anchor: { line, offset }, focus: { line, offset } });
+    const key = (k) => { const e = { key: k, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, isComposing: false, prevented: false, preventDefault() { this.prevented = true; } }; m.editor.editorKey(e); return e; };
+    const paste = (t) => m.editor.editorPaste({ clipboardData: { files: [], getData: (type) => (type === 'text/plain' ? t : '') }, preventDefault() {} });
+    return { m, key, paste, last: () => m.changes[m.changes.length - 1] };
+  };
+  let s = at(`Above\n${token}\nBelow`, 0);
+  assert.equal(s.key('g').prevented, true);
+  assert.equal(s.last(), `Above\ng\n${token}\nBelow`, 'typed before it: a line above it');
+  assert.equal(s.m.editor.state.activeLine, 1);
+  s = at(`Above\n${token}\nBelow`, token.length);
+  s.key('h');
+  assert.equal(s.last(), `Above\n${token}\nh\nBelow`, 'typed after it: a line below it');
+  s = at(`Above\n${token}\nBelow`, token.length);
+  s.paste('one\ntwo');
+  assert.equal(s.last(), `Above\n${token}\none\ntwo\nBelow`, 'pasted after it: lines below it');
+  s = at(`Above\n${token}\nBelow`, token.length);
+  s.key('Backspace');
+  assert.equal(s.last(), 'Above\n\nBelow', 'Backspace after it: gone, an empty line left');
+  s = at(`Above\n\n${token}`, 0, 2);
+  s.key('Backspace');
+  assert.equal(s.last(), `Above\n${token}`, 'Backspace before it: the empty line above goes');
+  s = at(`Above\n${token}`, 0);
+  assert.equal(s.key('Backspace').prevented, true);
+  assert.equal(s.m.changes.length, 0, 'Backspace before it, under a line of text: never joined into that line');
+  assert.equal(s.m.editor.state.activeLine, 0);
+});
+
+test('a conversation is taken away whole (2026-10-15, David): Backspace under it or Delete over it marks it, the same key again takes it; any other key unmarks it; one at work is never marked', () => {
+  const CONV = ['bart#+ [chat 2026-10-15T17:01:00Z] Recalling our talk', '@bart what were we talking about', 'bart> Discover.', 'bart> *Chat · Sonnet · medium · 3 s*'];
+  const at = (lines, line, offset) => {
+    const m = mounted(lines.join('\n'));
+    m.editor.caretInfo = () => ({ anchor: { line, offset }, focus: { line, offset } });
+    const key = (k) => { const e = { key: k, shiftKey: false, metaKey: false, ctrlKey: false, altKey: false, isComposing: false, prevented: false, preventDefault() { this.prevented = true; } }; m.editor.editorKey(e); return e; };
+    return { m, key, last: () => m.changes[m.changes.length - 1] };
+  };
+  let s = at(['Before', ...CONV, 'After', ''], 5, 0);
+  assert.equal(s.key('Backspace').prevented, true);
+  assert.equal(s.m.changes.length, 0, 'the first Backspace changes nothing');
+  assert.deepEqual(s.m.editor.armed && [s.m.editor.armed.from, s.m.editor.armed.to], [1, 4], 'it marks the conversation, from its title line');
+  s.key('Backspace');
+  assert.equal(s.last(), 'Before\nAfter\n', 'the second takes it away; the line under it stays');
+  assert.equal(s.m.editor.state.activeLine, 1);
+  s = at(['Before', ...CONV, '', 'End', ''], 5, 0);
+  s.key('Backspace');
+  assert.equal(s.last(), ['Before', ...CONV, 'End', ''].join('\n'), 'an empty line under it goes first');
+  assert.ok(s.m.editor.armed, 'and the conversation is marked');
+  s = at(['Before', ...CONV, 'After', ''], 5, 0);
+  s.key('Backspace'); s.key('x');
+  assert.equal(s.m.editor.armed, null, 'another key unmarks it');
+  s = at(['Before', ...CONV, 'After', ''], 0, 6);
+  s.key('Delete'); assert.equal(s.m.changes.length, 0); s.key('Delete');
+  assert.equal(s.last(), 'Before\nAfter\n', 'Delete at the end of the line over it, twice');
+  s = at(['Before', '@bart still going?', 'bart~> abc', 'After', ''], 3, 0);
+  s.key('Backspace');
+  assert.ok(!s.m.editor.armed, 'a conversation at work is not marked');
+});

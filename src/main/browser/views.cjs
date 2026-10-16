@@ -670,6 +670,11 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       if (!waiting || !fromTab(event, id, entry) || !reply || typeof reply !== 'object' || reply.nonce !== waiting.nonce) return;
       waiting.resolve(quoteInput(reply.quote));
     });
+    contents.ipc.on(PAGE.CHANNELS.section, (event, reply) => {
+      const waiting = reply && typeof reply === 'object' ? entry.sectionWaits.get(reply.nonce) : null;
+      if (!waiting || !fromTab(event, id, entry)) return;
+      waiting(reply.shown === true);
+    });
     contents.ipc.on(PAGE.CHANNELS.selection, (event, reply) => {
       const waiting = reply && typeof reply === 'object' ? entry.selectionWaits.get(reply.nonce) : null;
       if (!waiting || !fromTab(event, id, entry)) return;
@@ -1213,7 +1218,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map(), editing: false, boxWait: null, boxes: null, boxCss: '', boxKey: null, boxDraw: Promise.resolve(), removed: null, boxView: { id: null }, boxHide: null, frameWaits: new Map(), cursor: '', cursorKey: null, cursorDraw: Promise.resolve() };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map(), sectionWaits: new Map(), editing: false, boxWait: null, boxes: null, boxCss: '', boxKey: null, boxDraw: Promise.resolve(), removed: null, boxView: { id: null }, boxHide: null, frameWaits: new Map(), cursor: '', cursorKey: null, cursorDraw: Promise.resolve() };
     entries.set(id, entry);
 
     const contents = view.webContents;
@@ -1307,14 +1312,25 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     return true;
   }
 
-  /** A guide's section on the page (2026-10-15; page-preload.cjs showSection): the words it starts with, or '' for none. */
-  function section(id, text) {
+  /**
+   * A guide's section on the page (2026-10-15; page-preload.cjs showSection): the words it starts with, or '' for none.
+   * → whether the page found it, tinted it and scrolled to it (false: not found, no answer within SELECTION_TIMEOUT_MS,
+   * or the tab gone), so Stage finds the words as ⌘F would only when the page could not.
+   */
+  function section(id, text, { timeoutMs = SELECTION_TIMEOUT_MS } = {}) {
     assertId(id);
     const entry = entries.get(id);
-    if (!entry) return false;
+    if (!entry) return Promise.resolve(false);
     if (typeof text !== 'string' || text.length > FIND_MAX) throw new TypeError('Section text must be a bounded string');
-    entry.view.webContents.send(PAGE.CHANNELS.section, text);
-    return true;
+    const contents = entry.view.webContents;
+    if (contents.isDestroyed()) return Promise.resolve(false);
+    const nonce = nextId('section');
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => { entry.sectionWaits.delete(nonce); resolve(false); }, timeoutMs);
+      if (typeof timer.unref === 'function') timer.unref();
+      entry.sectionWaits.set(nonce, (shown) => { clearTimeout(timer); entry.sectionWaits.delete(nonce); resolve(shown); });
+      try { contents.send(PAGE.CHANNELS.section, { nonce, words: text }); } catch { entry.sectionWaits.get(nonce)(false); }
+    });
   }
 
   function stopFind(id) {
