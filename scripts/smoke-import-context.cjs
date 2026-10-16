@@ -158,12 +158,14 @@ app.whenReady().then(async () => {
     assert.equal(await js(wc, 'getComputedStyle(document.querySelector("#work-description")).resize'), 'none', 'not expandable (Attachment 2)');
     assert.equal(await js(wc, 'document.querySelector("#work-description").placeholder'), 'Understanding the Memex...');
     assert.equal(await js(wc, '[...document.querySelectorAll(".work-foot button")].find((b)=>b.textContent.trim().startsWith("Continue")).disabled'), true, 'Continue waits for a description');
-    const centred = await js(wc, '(()=>{const r=document.querySelector("#work-description").getBoundingClientRect();return Math.abs((r.left+r.right)/2-innerWidth/2)<4&&r.width<=400&&Math.abs((r.top+r.bottom)/2-innerHeight/2)<innerHeight*0.2})()');
-    assert.equal(centred, true, 'a small box, centred in the window');
+    // The onboarding beta's one fluid scale (S2, 2026-10-16): sizes are the design's times --ix-scale.
+    const scale = await js(wc, 'parseFloat(getComputedStyle(document.querySelector(".ix")).getPropertyValue("--ix-scale"))||1');
+    const centred = await js(wc, `(()=>{const r=document.querySelector("#work-description").getBoundingClientRect();return Math.abs((r.left+r.right)/2-innerWidth/2)<4&&r.width<=400*${scale}+2&&Math.abs((r.top+r.bottom)/2-innerHeight/2)<innerHeight*0.25})()`);
+    assert.equal(centred, true, 'a small box (at the window\'s scale), centred in the window');
     const short = await js(wc, 'document.querySelector("#work-description").getBoundingClientRect().height');
     await type(wc, '#work-description', 'I study how students ask for help. '.repeat(20));
     const tall = await js(wc, 'document.querySelector("#work-description").getBoundingClientRect().height');
-    assert.ok(tall > short && tall <= 141, `it grows to a point, then scrolls (${short} → ${tall})`);
+    assert.ok(tall > short && tall <= 141 * scale + 2, `it grows to a point, then scrolls (${short} → ${tall})`);
     await type(wc, '#work-description', 'I study how students ask for help.');
     await shot(wc, '05-work');
     // Shift+Enter is a new paragraph; Enter continues.
@@ -194,7 +196,7 @@ app.whenReady().then(async () => {
     await press(wc, '[data-import-screen=projects] .add-project');
     await until(async () => (await flow(wc)).dialog === 'work-add-project', 'Add a project, a popup');
     assert.equal(await js(wc, 'document.querySelector("#custom-project-title").placeholder'), 'Memex');
-    assert.equal(await js(wc, 'document.querySelector("#custom-project-description").placeholder'), 'Understanding the history, motivation, and hardware behind the Memex through research articles, papers, interviews, and essays.');
+    assert.equal(await js(wc, 'document.querySelector("#custom-project-description").placeholder'), 'Understanding the history of the Memex');
     await shot(wc, '06b-add-project');
     await pressText(wc, '[role=dialog]', 'Cancel');
     await until(async () => !(await flow(wc)).dialog, 'Add a project closed');
@@ -332,6 +334,7 @@ app.whenReady().then(async () => {
       assert.equal(await has(wc, '[data-connect-draft]'), false, 'no Reply box on the onboarding page');
       const webJobs = async () => (await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(firstChat.id)})`)).jobs.filter((job) => job.apps.some((app) => asked.includes(app)));
       assert.deepEqual(await webJobs(), [], 'nothing of them runs before Grant access');
+      await pause(500); // the message's rise
       await shot(wc, '11-librarian-grant');
       const first = asked[0];
       await press(wc, `[data-connect-grant-app="${first}"]`);
@@ -364,6 +367,10 @@ app.whenReady().then(async () => {
       // What was specified, its saved websites' line among it, for the librarian.
       assert.match(choices.custom, /- Obsidian: Only my notes about help-seeking\. Also bring in the web links saved in these notes.*; only these folders and files: .*Research; only for these of the projects: /, choices.custom);
       assert.equal(await js(wc, '/Your answer/.test(document.body.innerText)'), false, 'nothing says Your answer');
+      // The librarian's question stays answerable whatever Engelbart adds under it (a step, a line about an app): M2.
+      await until(() => has(wc, '[data-connect-card="live"]'), 'the librarian\'s question, live', 1200);
+      assert.equal(await has(wc, '[data-connect-dock-open]'), false, 'no chip for a chat that is on screen, nor for the one Back stopped');
+      await pause(500);
       await shot(wc, '11c-librarian-chat');
       // Finish in background (no arrow): Import, then straight on; the projects are made and the first opens.
       assert.equal(await text(wc, '[data-connect-import]'), 'Finish in background');
@@ -402,7 +409,8 @@ app.whenReady().then(async () => {
       assert.equal(await text(wc, '[data-need-popup] [data-need-primary]'), 'Connect');
       await shot(wc, '13a-connect-popup');
       await pressText(wc, '[data-need-popup] .mf', 'Skip');
-      await until(async () => !/^Connect /.test(await text(wc, '[data-need-popup] h3')), 'the next popup');
+      // A signed-out web app's card comes once its quiet copies have failed (recover: about half a minute).
+      await until(async () => /^Sign in to /.test(await text(wc, '[data-need-popup] h3')), 'the next popup: a sign-in brought back', 4000);
     }
     // The overlay is the scrim (the whole window), so native views step aside for it, and a click on Skip lands on Skip.
     assert.equal(await js(wc, '(()=>{const s=document.querySelector("[data-need-popup] .scrim");const r=s.getBoundingClientRect();const l=document.querySelector("[data-need-later]").getBoundingClientRect();return s.dataset.overlay==="1"&&r.width===innerWidth&&r.height===innerHeight&&document.elementFromPoint(l.x+l.width/2,l.y+l.height/2)===document.querySelector("[data-need-later]")})()'), true, 'the scrim is the overlay, Later on top');

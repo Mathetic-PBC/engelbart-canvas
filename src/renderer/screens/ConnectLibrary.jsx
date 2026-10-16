@@ -537,7 +537,8 @@ function NeedsCard({ needs, onOpen, onSkip }) {
       <div style={{ display: 'flex', flexDirection: 'column', border: '1px solid #eaeaea', borderRadius: 10, background: '#fff' }}>
         {needs.map((need) => {
           const view = needView(need);
-          const under = need.busy && need.browser && need.kind !== 'signin-here' ? waitingIn(signInName(need.app), need.browser) : view.hint;
+          // No line under a step's name (no hint subtext), only the wait in their browser while it waits.
+          const under = need.busy && need.browser && need.kind !== 'signin-here' ? waitingIn(signInName(need.app), need.browser) : '';
           return (
             <div key={need.id} data-connect-need={need.kind} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '10px 12px 10px 14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1506,7 +1507,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     try { setSession(await api.connectImport(session.id)); putAway(); } catch (failure) { setError(errorMessage(failure)); }
   };
   const back = () => {
-    if (onBack) { if (session) api.connectStop(session.id).catch(() => {}); onBack(); return; }
+    // Stopped and dismissed: a chat left with Back is over, never a chip or a popup later (2026-10-16).
+    if (onBack) { if (session) api.connectStop(session.id).then(() => api.connectDismiss(session.id)).catch(() => {}); onBack(); return; }
     if (session) api.connectStop(session.id).catch(() => {});
     idRef.current = null;
     setSession(null);
@@ -1784,8 +1786,8 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
               );
             })}
             <NeedsCard needs={needs} onOpen={openNeed} onSkip={needSkip} />
-            {session.chat.some((item) => !item.opener) && chatStatus(session) && (
-              <div data-connect-waiting="1" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 10, font: '13px/1.5 var(--font-sans)', color: '#8f8f8f' }}><Dots />{chatStatus(session)}</div>
+            {spoke && chatStatus(session) && (
+              <div data-connect-waiting="1" aria-live="polite" className="cx-shimmer" style={{ font: '13px/1.5 var(--font-sans)' }}>{chatStatus(session)}</div>
             )}
             {(session.error || error) && (
               <div data-connect-error="1" style={{ display: 'flex', alignItems: 'baseline', gap: 10, font: '12.5px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>

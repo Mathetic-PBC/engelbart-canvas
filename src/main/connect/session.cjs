@@ -482,6 +482,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       // Import your context's manual run (the librarian's, From Amitav 2026-10-15): put away once finished, its status opens
       // rather than the chat (2026-10-16: "i should not be able to see this weird popup in manual mode").
       manual: !!s.manual,
+      // Apps still held on their sign-in or Connect step, or being brought back (recover): the run has not ended while any is.
+      holding: s.held ? s.held.size : 0,
     };
   }
   // What session.json keeps is enough to pick the session up again after Engelbart quits (resume): the chat, the choices,

@@ -273,7 +273,7 @@ export default function App() {
       if ((!session.direct && (!session.finished || (connectPopup && connectPopup.sessionId === session.id))) || completedShown.current.has(session.id)) continue;
       const work = (session.jobs || []).filter((job) => job.kind === 'import' || job.kind === 'recall' || job.kind === 'survey');
       // A run whose every app was left out (Later on each sign-in) has no work, and ends too, saying why (ImportStatus).
-      const ended = (work.length > 0 || ((session.leftOut || []).length > 0 && session.finished && !session.thinking)) && work.every((job) => job.status === 'done' || job.status === 'failed' || job.status === 'stopped') && !(session.needs || []).length;
+      const ended = (work.length > 0 || ((session.leftOut || []).length > 0 && session.finished && !session.thinking)) && work.every((job) => job.status === 'done' || job.status === 'failed' || job.status === 'stopped') && !(session.needs || []).length && !session.holding;
       if (!ended || session.dismissed) continue;
       completedShown.current.add(session.id);
       setImportStatus(session.id);

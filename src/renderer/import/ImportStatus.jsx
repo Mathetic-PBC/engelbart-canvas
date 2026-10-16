@@ -117,7 +117,8 @@ export default function ImportStatus({ session, onClose, onNeed, onNeedDone = nu
   const leftOnly = (Array.isArray(session.leftOut) ? session.leftOut : []).filter((entry) => !jobs.some((job) => (job.apps || []).includes(entry.app)) && !(session.needs || []).some((need) => need.app === entry.app))
     .map((entry) => ({ id: `left-${entry.app}`, kind: 'import', apps: [entry.app], label: entry.app, status: 'stopped', skipped: true }));
   // Ended with nothing to run at all (every app left out) is ended too: it said "Imports in progress" for good.
-  const ended = (jobs.length > 0 || (leftOnly.length > 0 && session.finished && !session.thinking)) && jobs.every((job) => ENDED.has(job.status)) && !(session.needs || []).length;
+  // Nor while an app is still held on its sign-in (2026-10-16: a sign-in being brought back quietly has no step yet).
+  const ended = (jobs.length > 0 || (leftOnly.length > 0 && session.finished && !session.thinking)) && jobs.every((job) => ENDED.has(job.status)) && !(session.needs || []).length && !session.holding;
   const imported = jobs.filter(brought);
   const all = ended && imported.length === jobs.length && !leftOnly.length;
   // A step belongs to the jobs that asked for it (jobIds), else to a job of its app.

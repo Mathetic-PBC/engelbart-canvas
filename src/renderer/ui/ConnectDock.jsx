@@ -60,7 +60,9 @@ const importsEnded = (entry) => {
 };
 
 export function ConnectChip({ sessions, onOpen }) {
-  const shown = (sessions || []).filter((entry) => !isOpen(entry.id) && !importsEnded(entry));
+  // Never a stopped session (2026-10-16: the chat put away with its Back arrow said "Importing" for good, and its chip
+  // opened that dead chat as the "Refine with Claude Code" popup, in the middle of a manual import).
+  const shown = (sessions || []).filter((entry) => !isOpen(entry.id) && !importsEnded(entry) && !entry.stopped);
   const top = shown.find((entry) => entry.needs && entry.needs.length) || shown[0];
   if (!top) return null;
   const line = dockLine(top);
