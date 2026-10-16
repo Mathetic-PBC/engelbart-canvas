@@ -319,3 +319,21 @@ test('parseSources: several at once, split on commas, lines or spaces; a path ke
   assert.equal(parseSources('notes.md')[0].why, '"notes.md" is not a link or a path');
   assert.deepEqual(parseSources('  \n , '), []);
 });
+
+test('the @ menu offers the whole library, what this workspace holds first, then the rest (2026-10-16)', async () => {
+  const { mentionRows } = await load();
+  const lib = [
+    row('a', 'Zebra elsewhere', 'md', ['note'], { project_id: 'other' }),
+    row('b', 'Zebra outside any project', 'md', [], { project_id: null }),
+    row('c', 'Zebra here', 'md', ['note'], { project_id: 'mine' }),
+    row('d', 'Other here', 'pdf', ['paper']),
+  ];
+  const items = (rows) => rows.filter((r) => r.kind === 'item').map((r) => r.key);
+  const here = new Set(['c', 'd']);
+  assert.deepEqual(items(mentionRows({ query: 'zeb', library: lib, here })), ['c', 'a', 'b'], 'typed: here first, then every other match');
+  assert.deepEqual(items(mentionRows({ query: '', library: lib, here })), ['c', 'd', 'a', 'b'], 'nothing typed: the same order');
+  assert.deepEqual(items(mentionRows({ query: 'zeb', library: lib })), ['a', 'b', 'c'], 'without `here`, the library\'s order');
+  const bodies = { items: new Map([['d', 'about zebras']]), workspaces: new Map() };
+  assert.deepEqual(items(mentionRows({ query: 'zeb', library: lib, here, bodies })), ['c', 'a', 'b', 'd'], 'found only by what it says: after every name, even here');
+  assert.deepEqual(items(mentionRows({ query: 'zebra outside', library: lib, here })), ['b'], 'words with a space between them');
+});

@@ -178,13 +178,20 @@ const FIRST_WORKSPACES = 3; // before anything is typed
  * last first, never `hereId`): three before anything is typed, else up to six whose names hold the words, then (with
  * `bodies`) whose documents hold what is typed; then up to ten things from the library, ranked before they are cut
  * (MATH-59, matchRank): names that start with what is typed, names that hold it, where they are or their kind, their
- * summary, and last (with `bodies`) only what they say.
+ * summary, and last (with `bodies`) only what they say. The whole library is offered, whatever project holds a row;
+ * with `here`, what this workspace holds first (2026-10-16).
  */
-export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null, bodies = null, zotero = false }) {
+export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null, bodies = null, zotero = false, here = null }) {
   const needle = String(query || '').trim().toLowerCase();
   const verbs = [BART_VERB, CHAT_VERB, BRAINSTORM_VERB, DISCOVER_VERB, CREATE_VERB, NOTE_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
   const pool = library.filter((row) => row.type !== 'image');
-  let hits = (needle ? ranked(pool, needle, bodies) : pool).map((row) => ({ kind: 'item', key: row.id, row, name: row.name }));
+  // What this workspace holds (`here`, a Set of library ids) comes first (2026-10-16), then the rest of the library: a
+  // note of another project, or a source no project holds, is offered as well. A row found only by what it says stays
+  // after every row found by its name, wherever it is.
+  const tier = (row) => (needle && matchRank(row, needle, bodies) === 4 ? 2 : 0) + (here && here.has(row.id) ? 0 : 1);
+  const found = needle ? ranked(pool, needle, bodies) : pool;
+  const ordered = here ? found.map((row, i) => ({ row, i, t: tier(row) })).sort((a, b) => a.t - b.t || a.i - b.i).map((hit) => hit.row) : found;
+  let hits = ordered.map((row) => ({ kind: 'item', key: row.id, row, name: row.name }));
   const out = [...verbs];
   if (page && page.title && (!needle || `${page.title} ${page.input}`.toLowerCase().includes(needle))) {
     if (pageRow) { out.push({ kind: 'item', key: pageRow.id, row: pageRow, name: pageRow.name, open: true }); hits = hits.filter((hit) => hit.key !== pageRow.id); }

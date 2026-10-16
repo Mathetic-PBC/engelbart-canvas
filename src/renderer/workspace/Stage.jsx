@@ -13,6 +13,7 @@ import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 import { withAsk } from '../pdf/canvas.js';
 import ImportSignins from './ImportSignins.jsx';
+import FindCard from '../ui/FindCard.jsx';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
 
@@ -197,33 +198,7 @@ function SaveCard({ title, onSave, onClose, cardRef }) {
   );
 }
 
-// ⌘F: a card at the top right of what is in front (the design's "Find on stage"): the query, where the match in front is
-// among all of them, previous, next, close. Enter and ⇧Enter step; Escape closes.
-function FindCard({ inputRef, text, found, onText, onStep, onClose }) {
-  const small = { width: 24, height: 24, padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', font: '13px/1 var(--font-sans)', color: '#4d4d4d' };
-  const none = text && found && !found.matches;
-  return (
-    <div data-find-bar="1" data-overlay="1" style={{ position: 'absolute', top: 10, right: 14, left: 14, maxWidth: 360, marginLeft: 'auto', zIndex: 30, display: 'flex', alignItems: 'center', gap: 4, height: 34, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, animation: `rise 160ms ${EASE}` }}>
-      <input
-        ref={inputRef}
-        value={text}
-        onChange={(event) => onText(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.key === 'Enter') { event.preventDefault(); onStep(event.shiftKey ? -1 : 1); }
-          else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); }
-        }}
-        aria-label="Find on this page"
-        spellCheck={false}
-        style={{ flex: 1, width: 'auto', minWidth: 60, padding: 0, border: 0, background: 'transparent', font: '13px/1.4 var(--font-sans)', color: '#171717' }}
-      />
-      <span data-find-count="1" style={{ flex: 'none', textAlign: 'right', font: '11px/1 var(--font-mono)', color: none ? '#e70022' : '#8f8f8f' }}>{text && found ? (found.matches ? `${found.active} of ${found.matches}` : '0 matches') : ''}</span>
-      <span style={{ flex: 'none', width: 1, height: 16, margin: '0 4px', background: '#eaeaea' }} />
-      <button type="button" className="hov-ink-wash" onClick={() => onStep(-1)} aria-label="Previous match" title="⇧⏎" style={small}>↑</button>
-      <button type="button" className="hov-ink-wash" onClick={() => onStep(1)} aria-label="Next match" title="⏎" style={small}>↓</button>
-      <button type="button" className="hov-ink-wash" onClick={onClose} aria-label="Close find" title="esc" style={{ ...small, color: '#8f8f8f' }}>×</button>
-    </div>
-  );
-}
+// ⌘F's card is ui/FindCard.jsx (shared with the middle canvas's find since 2026-10-16).
 
 // The sections an @discover guide suggested for the paper in front (2026-10-03), where the find card sits, and under it
 // while it is open: the one shown, a list of them all to show another, and × to clear the tint and the menu.
@@ -412,7 +387,7 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 // The pdf an answer is for, as the workspace keeps it ({ rowId } or { url }), and whether a tab's pdf is it.
 const pdfWhere = (p) => (p.rowId ? { rowId: p.rowId } : { url: p.url });
 const samePdf = (p, where) => !!p && !!where && (where.rowId ? p.rowId === where.rowId : !p.rowId && !!where.url && p.url === where.url);
-const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText, onTabs }, ref) {
+const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText, onTabs, keysToDoc }, ref) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -1172,6 +1147,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   // ⌘T while the Stage shows and ⌘W from anywhere but the terminal, bringing the Stage forward; ⌘F while the Stage shows and has the keyboard
   // (its fields, a pdf, a page: main forwards those) or nothing else that takes typing does; ⌘G / ⇧⌘G while finding.
+  // While the middle canvas was clicked last (`keysToDoc`, Workspace.jsx; 2026-10-16) the ones pressed in the app's page
+  // and the Edit menu's Find items are its own; the ones a page on the Stage sends (they name its tab) stay the Stage's.
+  const toDoc = React.useRef(keysToDoc);
+  toDoc.current = keysToDoc;
+  const docHas = () => !!(toDoc.current && toDoc.current());
   keys.current = {
     tabId: tab.id,
     finding,
@@ -1182,6 +1162,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       if (name === 'close-tab') { if (onShow) onShow(); closeTab(from || tab.id); return; }
       if (typeof name === 'string' && /^tab-[1-9]$/.test(name)) { const t = tabs[Number(name.slice(4)) - 1]; if (t) select(t); return; } // ⌘1–9 pressed in a page
       if (!visible) return;
+      if (!from && /^find/.test(String(name)) && docHas()) return;
       if (name === 'find') { if (from || !editable(document.activeElement) || (rootRef.current && rootRef.current.contains(document.activeElement))) openFind(); }
       else if ((name === 'find-next' || name === 'find-previous') && finding) runFind(findText, name === 'find-next' ? 1 : -1);
     },
@@ -1194,11 +1175,14 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const take = () => { event.preventDefault(); event.stopPropagation(); };
       if ((key === 't' || key === 'w') && !event.shiftKey) {
         if (inTerminal(event.target)) return; // the terminal's own tabs
+        if (docHas()) return; // the middle canvas's tabs (Workspace.jsx)
         if (key === 't' && !visible) return; // the Terminal shows: ⌘T opens a terminal there (TerminalPane, 2026-09-25)
         take();
         keys.current.shortcut(key === 't' ? 'new-tab' : 'close-tab', null);
       } else if (!visible) {
         /* the rest only while the Stage shows */
+      } else if ((key === 'f' || key === 'g') && docHas()) {
+        /* the middle canvas's find (Workspace.jsx) */
       } else if (key === 'f' && !event.shiftKey && (inside || !editable(event.target))) { take(); keys.current.shortcut('find', null); }
       else if (key === 'g' && keys.current.finding) { take(); keys.current.shortcut(event.shiftKey ? 'find-previous' : 'find-next', null); }
     };

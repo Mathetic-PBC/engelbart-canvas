@@ -416,6 +416,19 @@ test('the @ menu\'s query is the @ and what follows it up to the caret, on a lin
   assert.equal(mentionAt(null, 0), null);
 });
 
+test('the @ menu reads past a space while a name it offers holds the words (2026-10-16)', async () => {
+  const { mentionAt } = await load();
+  const names = ['Meeting with David', 'Meeting with Amir', 'Plan'];
+  const holds = (query) => names.some((name) => name.toLowerCase().includes(query.toLowerCase()));
+  assert.deepEqual(mentionAt('see @Meeting with D', 19, holds), { query: 'Meeting with D', start: 4 });
+  assert.deepEqual(mentionAt('@Meeting ', 9, holds), { query: 'Meeting ', start: 0 }, 'the space that comes before the next word');
+  assert.deepEqual(mentionAt('@pla', 4, holds), { query: 'pla', start: 0 }, 'a word alone is read as before');
+  assert.equal(mentionAt('@Plan is to write', 17, holds), null, 'words no name holds are writing: the menu closes');
+  assert.equal(mentionAt('@ Meeting', 9, holds), null, 'nothing is looked for after a lone @ and a space');
+  assert.equal(mentionAt('@[Meeting with David] and', 25, holds), null, 'a mention already made stays shut');
+  assert.equal(mentionAt('@Meeting with D', 15), null, 'without names to ask, a space ends the query as it did');
+});
+
 test('a follow-up sent with a mention is an @chat line whose mention draws as one, under the same thread (2026-10-02)', async () => {
   const { parseLine, threads, inlineHtml, INLINE, wsMention } = await load();
   const ws = wsMention('Other place', '0a1b2c3d-0000-4000-8000-000000000000');

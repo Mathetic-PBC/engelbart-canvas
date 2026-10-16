@@ -126,8 +126,11 @@ test('what is typed after the last / narrows that level, spaces and all; the pat
   edited.editor.pickMention({ kind: 'item', key: 'f-1', row: FOLDER, name: 'My Papers' });
   await settle();
   edited.type('See @My Pap');
-  assert.equal(edited.editor.state.mention, null, 'the path broken: no folder, and "@My Pap" is no mention');
+  // Since 2026-10-16 the whole menu reads past a space while a name holds the words: "@My Pap" is looked for there.
+  assert.deepEqual([edited.editor.state.mention.query, edited.editor.browsing()], ['My Pap', null], 'the path broken: no folder, and "@My Pap" looked for in the whole menu');
   assert.equal(edited.editor.state.browse, null);
+  edited.type('See @My Pap is broken');
+  assert.equal(edited.editor.state.mention, null, 'words no name holds: no mention');
   edited.type('See @My');
   assert.deepEqual([edited.editor.state.mention.query, edited.editor.browsing()], ['My', null], 'the whole menu again');
 });

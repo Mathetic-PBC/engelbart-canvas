@@ -14,8 +14,8 @@ import { isUntitled } from '../model/names.js';
 import { libraryPanelRows, looksAddable, parseSources, searchRows } from '../model/rail.js';
 import { LIBRARY_CHIPS, libraryCounts } from '../model/kind.js';
 import { findWorkspaces } from '../model/nav.js';
-import { countLabel, sinceWords, sourceIcon, shortcutProjects } from '../model/sidebar.js';
-import { NotificationRows, useBuildNotifications } from '../ui/SandboxNotifications.jsx';
+import { countLabel, sinceWords, sourceIcon, shortcutProjects, versionsOf } from '../model/sidebar.js';
+import { failureReason, sandboxStatus } from '../model/sandbox-notifications.js';
 import { usePlaced } from '../ui/usePlaced.js';
 import { useBodies } from './useBodies.js';
 import { useAddRun } from './useAddRun.js';
@@ -153,7 +153,7 @@ export function PanelRow({ icon, title, meta, active = false, faint = false, onC
 }
 
 /** A small icon button on a row's right (shown on the row's hover unless `shown`). */
-export function RowAction({ label, onClick, shown = false, children, ...rest }) {
+export function RowAction({ label, onClick, shown = false, children, style = null, ...rest }) {
   return (
     <button
       type="button"
@@ -164,7 +164,7 @@ export function RowAction({ label, onClick, shown = false, children, ...rest }) 
       onClick={(event) => { event.stopPropagation(); onClick(event); }}
       onDoubleClick={(event) => event.stopPropagation()}
       {...rest}
-      style={{ flex: 'none', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 5, background: 'transparent', cursor: 'pointer', color: '#8f8f8f' }}
+      style={{ flex: 'none', width: 22, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 0, border: 0, borderRadius: 5, background: 'transparent', cursor: 'pointer', color: '#8f8f8f', ...style }}
     >
       {children}
     </button>
@@ -296,57 +296,69 @@ export function FitCrumb({ parts, style, ...rest }) {
 
 /* ----------------------------------------------------------------- Agents */
 
-const AGENT_GROUPS = [['Failed', 'failed'], ['Needs you', 'needs'], ['Finished', 'unseen'], ['Running', 'running'], ['Earlier', 'done']];
-const EARLIER_SHOWN = 12;
-const agentIcon = (kind) => (kind === 'connect' ? <I.LibraryIcon size={15} /> : kind === 'bart' || kind === 'brainstorm' || kind === 'discover' ? <I.ChatIcon size={15} /> : <I.AgentsIcon size={15} />);
+// 2026-10-16 (Hudson's "User Interface" notes): no "Earlier" (a row goes three days after it last changed, or a day after it
+// was clicked: model/sidebar.js keptAgents), so what is done is among what finished; the repositories' builds are rows here
+// too, not a section of their own.
+const AGENT_GROUPS = [['Failed', ['failed']], ['Needs you', ['needs']], ['Finished', ['unseen', 'done']], ['Running', ['running']]];
+const agentIcon = (kind) => (kind === 'connect' ? <I.LibraryIcon size={15} /> : kind === 'repo' ? <I.SourceIcon kind="git" size={15} /> : kind === 'bart' || kind === 'brainstorm' || kind === 'discover' ? <I.ChatIcon size={15} /> : <I.AgentsIcon size={15} />);
+
+/** Where a row is: a project's path, "A sticky" for a sticky's quick task, a repository build's state, or what a Connect note did. */
+function agentWhere(entry, crumbOf) {
+  if (entry.kind === 'repo') {
+    const run = entry.run;
+    if (run.status === 'starting') return ['Building…'];
+    const status = sandboxStatus(run, entry.sandbox);
+    return [run.status === 'failed' ? ['Build failed', failureReason(run)].filter(Boolean).join(' · ') : ['Build finished', status].filter(Boolean).join(' · ')];
+  }
+  if (entry.node) return crumbOf(entry.node);
+  if (entry.kind === 'quick') return ['A sticky'];
+  return entry.did ? [entry.did] : [];
+}
 
 /**
  * Agents, with what was the Inbox (2026-10-13: "Combine inbox and Agents into just Agents"): what failed, what needs you,
- * what finished and was not looked at, what runs, and the last few done, newest first in each; under them the repositories'
- * builds the notification bell held (Building… → Build finished / Build failed), read once the panel opens. A row says
- * where it is and how long ago, with its own count; a press goes to it. "Next agent needing attention" is ⌘J's.
- * `entries`: model/sidebar.js agentEntries. `crumbOf(node)`: the project's path, names outermost first.
+ * what finished, and what runs, newest first in each, the repositories' builds among them. A row says where it is and how
+ * long ago; a black dot while it waits to be looked at (2026-10-16: "The number should be replaced with a black circle to
+ * indicate I need to view it"), its name in the import's wave while it runs; a press goes to it, its × (on hover, in the
+ * upper right) puts it away. "Next agent needing attention" is ⌘J's. `entries`: model/sidebar.js agentEntries and
+ * repoEntries, as keptAgents leaves them. `crumbOf(node)`: the project's path, names outermost first.
+ * `onGo(entry, rect)`: the row's rect, for what opens beside it.
  */
-export function AgentsPanel({ anchor, entries, crumbOf, onGo, onNext, onSeenAll, onClose, ignore }) {
-  const { sandboxes, rows: repoBuilds } = useBuildNotifications();
-  const unread = repoBuilds.filter((row) => !row.read).map((row) => row.id);
-  React.useEffect(() => { if (sandboxes && unread.length) sandboxes.markNotificationsRead(unread); }, [sandboxes, unread.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+export function AgentsPanel({ anchor, entries, crumbOf, onGo, onDismiss, onNext, onSeenAll, onClose, ignore }) {
   const [, tick] = React.useState(0);
   React.useEffect(() => { const timer = setInterval(() => tick((n) => n + 1), 30000); return () => clearInterval(timer); }, []);
-  const groups = AGENT_GROUPS.map(([title, state]) => [title, state, entries.filter((entry) => entry.state === state)])
-    .map(([title, state, list]) => [title, state, state === 'done' ? list.slice(0, EARLIER_SHOWN) : list])
-    .filter(([, , list]) => list.length);
-  const toLook = entries.filter((entry) => entry.state === 'needs' || entry.state === 'unseen' || entry.state === 'failed').length;
-  const unseen = entries.some((entry) => entry.state === 'unseen');
+  const groups = AGENT_GROUPS.map(([title, states]) => [title, entries.filter((entry) => states.includes(entry.state))]).filter(([, list]) => list.length);
+  const unseen = entries.some((entry) => entry.state === 'unseen' && !entry.viewed);
+  const rectOf = (element) => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }; };
   const row = (entry) => {
-    const crumb = entry.node ? crumbOf(entry.node) : entry.kind === 'quick' ? ['A post-it'] : entry.did ? [entry.did] : [];
+    const crumb = agentWhere(entry, crumbOf);
+    const running = entry.state === 'running';
+    const waiting = !running && entry.state !== 'done' && !entry.viewed;
     return (
-      <div key={entry.id} role="button" tabIndex={-1} className="sb-prow" data-agent-entry={entry.id} data-agent-state={entry.state} onClick={() => onGo(entry)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 10, minHeight: 34, boxSizing: 'border-box', padding: '6px 10px', borderRadius: 6, cursor: 'pointer' }}>
+      <div key={entry.id} role="button" tabIndex={-1} className="sb-prow" data-agent-entry={entry.id} data-agent-state={entry.state} data-agent-viewed={entry.viewed ? '1' : undefined} onClick={(event) => onGo(entry, rectOf(event.currentTarget))} style={{ flex: 'none', position: 'relative', display: 'flex', alignItems: 'center', gap: 10, minHeight: 34, boxSizing: 'border-box', padding: '6px 10px', borderRadius: 6, cursor: 'pointer' }}>
         <span style={{ flex: 'none', width: 18, display: 'flex', justifyContent: 'center', color: '#4d4d4d' }}>{agentIcon(entry.kind)}</span>
         <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column' }}>
-          <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(14, '#171717'), lineHeight: 1.35 }}>{entry.title}</span>
+          <span className={running ? 'eb-wave' : undefined} style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(14, '#171717'), lineHeight: 1.35 }}>{entry.title}</span>
           {crumb.length > 0 && <FitCrumb parts={crumb} style={{ marginTop: 1, lineHeight: 1.35 }} />}
         </span>
-        <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 6, ...text(12, '#8f8f8f') }}>{since(entry.at)}<Pill summary={{ total: entry.state === 'done' ? 0 : 1, running: entry.state === 'running' ? 1 : 0, ready: entry.state === 'running' ? 0 : 1 }} /></span>
+        <span style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, ...text(12, '#8f8f8f') }}>
+          {since(entry.at)}
+          <span aria-hidden="true" style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: waiting ? '#171717' : 'transparent' }} data-agent-dot={waiting ? '1' : undefined} />
+        </span>
+        {onDismiss && <RowAction label={`Remove ${entry.title}`} onClick={() => onDismiss(entry)} data-agent-dismiss={entry.id} style={{ position: 'absolute', top: 1, right: 1, width: 16, height: 16, padding: 0, border: 0, borderRadius: 4, background: 'transparent', cursor: 'pointer', color: '#8f8f8f', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><I.CloseIcon size={11} /></RowAction>}
       </div>
     );
   };
   return (
     <Floating anchor={anchor} width={360} cap={620} label="Agents" onClose={onClose} ignore={ignore} data-sb-panel="agents">
-      <PanelHead title="Agents" note={toLook > 0 ? <span data-agents-to-look="1">{toLook} to look at</span> : null}>
+      <PanelHead title="Agents">
         {unseen && <button type="button" className="hov-bd2" data-agents-seen-all="1" onClick={onSeenAll} style={{ height: 26, padding: '0 10px', border: '1px solid #e4e4e4', borderRadius: 7, background: '#fff', boxShadow: '0 1px 1px #0000000a', cursor: 'pointer', ...text(12, '#171717', 500) }}>Mark all as seen</button>}
       </PanelHead>
-      {!groups.length && !(repoBuilds.length || (sandboxes && sandboxes.error))
+      {!groups.length
         ? <Empty>Nothing yet. When an agent finishes or asks you something, it shows here.</Empty>
         : (
           <Scroll style={{ padding: '4px 6px 8px' }}>
-            {groups.map(([title, state, list]) => <Group key={state} title={title}>{list.map(row)}</Group>)}
-            {sandboxes && (repoBuilds.length > 0 || sandboxes.error) && (
-              <div data-agents-repositories="1">
-                <div style={{ padding: '10px 10px 4px', ...text(12, '#8f8f8f', 500) }}>Repositories</div>
-                <NotificationRows sandboxes={sandboxes} rows={repoBuilds} onClose={onClose} />
-              </div>
-            )}
+            {groups.map(([title, list]) => <Group key={title} title={title}>{list.map(row)}</Group>)}
           </Scroll>
         )}
       <button type="button" className="hov-wash" data-agents-next="1" onClick={() => { onClose(); onNext(); }} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 20, width: '100%', minHeight: 38, boxSizing: 'border-box', padding: '8px 14px', border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13.5) }}>
@@ -556,11 +568,17 @@ const CHEVRON = (size = 13) => <I.ChevronDown size={size} stroke={2.4} />;
  * (`folded`, a Set; `onFold(id)`). `guideLevel`: the level whose children get the guide line; `contextRoot`: the project the
  * card is about, in bold. `q`: what the panel's search holds; a row shows when it or something in it matches.
  */
-export function ProjectTree({ ids, depth = 0, tree, counts, hereId, folded = null, onFold = null, expandAll = false, guideLevel = null, contextRoot = null, q = '', onGo, onMenu = null }) {
-  const matches = (id) => { const n = tree.get(id).node; return !q || n.name.toLowerCase().includes(q) || (n.children || []).some((child) => matches(child.id)); };
+export function ProjectTree({ ids, depth = 0, tree, counts, hereId, folded = null, onFold = null, expandAll = false, guideLevel = null, contextRoot = null, q = '', onGo, onMenu = null, onOpenVersion = null }) {
+  // A project's archived versions (one per Clear) are under it, after its projects (2026-10-16: "The archived projects
+  // should show … as sub projects, not in their separate section"), where onOpenVersion is given.
+  const archivesOf = (n) => (onOpenVersion ? versionsOf(n) : []);
+  const versionMatches = (version) => !q || version.title.toLowerCase().includes(q);
+  const matches = (id) => { const n = tree.get(id).node; return !q || n.name.toLowerCase().includes(q) || archivesOf(n).some(versionMatches) || (n.children || []).some((child) => matches(child.id)); };
   return ids.filter((id) => tree.has(id) && matches(id)).map((id) => {
     const at = tree.get(id), n = at.node;
     const kids = (n.children || []).map((child) => child.id);
+    const versions = archivesOf(n).filter((version) => !q || n.name.toLowerCase().includes(q) || versionMatches(version));
+    const under = kids.length + versions.length;
     const isFolded = !expandAll && !q && !!folded && folded.has(id);
     const here = id === hereId;
     const inHere = hereId && tree.has(hereId) && tree.get(hereId).path.includes(id);
@@ -581,12 +599,18 @@ export function ProjectTree({ ids, depth = 0, tree, counts, hereId, folded = nul
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(depth ? 13.5 : 14, depth ? '#4d4d4d' : '#171717', id === contextRoot || here ? 500 : 400), ...(isUntitled(n.name) ? { color: '#8f8f8f' } : {}) }}>{n.name}</span>
           <span className="sb-tools" style={{ marginLeft: 0 }}>
             <span className="sb-slot-count"><Count summary={counts.get(id)} /></span>
-            {!expandAll && <span className="sb-slot-chev">{kids.length > 0 && <button type="button" className={`sb-chev${at.level > 1 && !inHere ? ' sb-on-hover' : ''}`} data-tree-fold={id} data-open={isFolded ? '0' : '1'} aria-label={`${isFolded ? 'Open' : 'Fold'} ${n.name}`} onClick={(event) => { event.stopPropagation(); if (onFold) onFold(id); }}>{CHEVRON()}</button>}</span>}
+            {!expandAll && <span className="sb-slot-chev">{under > 0 && <button type="button" className={`sb-chev${at.level > 1 && !inHere ? ' sb-on-hover' : ''}`} data-tree-fold={id} data-open={isFolded ? '0' : '1'} aria-label={`${isFolded ? 'Open' : 'Fold'} ${n.name}`} onClick={(event) => { event.stopPropagation(); if (onFold) onFold(id); }}>{CHEVRON()}</button>}</span>}
           </span>
         </div>
-        {kids.length > 0 && !isFolded && (
+        {under > 0 && !isFolded && (
           <div className="sb-fly-kids" data-parent={id} data-guide={at.level === guideLevel ? '1' : '0'} style={{ paddingLeft: depth ? 18 : 22 }}>
-            <ProjectTree ids={kids} depth={depth + 1} tree={tree} counts={counts} hereId={hereId} folded={folded} onFold={onFold} expandAll={expandAll} guideLevel={guideLevel} contextRoot={contextRoot} q={q} onGo={onGo} onMenu={onMenu} />
+            <ProjectTree ids={kids} depth={depth + 1} tree={tree} counts={counts} hereId={hereId} folded={folded} onFold={onFold} expandAll={expandAll} guideLevel={guideLevel} contextRoot={contextRoot} q={q} onGo={onGo} onMenu={onMenu} onOpenVersion={onOpenVersion} />
+            {versions.map((version) => (
+              <div key={version.file} role="button" tabIndex={-1} className="sb-prow" data-sb-version={version.file} title={version.clearedAt ? `Cleared ${sinceWords(version.clearedAt)}` : undefined} onClick={() => onOpenVersion(version)} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, minHeight: 30, boxSizing: 'border-box', padding: '0 8px', borderRadius: 6, cursor: 'pointer' }}>
+                <span style={{ flex: 'none', width: 16, display: 'flex', justifyContent: 'center', color: '#8f8f8f' }}><I.ArchiveIcon size={14} /></span>
+                <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...text(13.5, '#8f8f8f') }}>{version.title}</span>
+              </div>
+            ))}
           </div>
         )}
       </React.Fragment>
@@ -602,12 +626,12 @@ const useFolded = (initial) => {
 
 /**
  * Every project here (Projects' More): a search, the tree with every level-2 project folded but the one you are in, each
- * row's count, a + that makes one at the top; under it every archived version (one per Clear), newest first.
+ * row's count, a + that makes one at the top; each project's archived versions (one per Clear, newest first) under it.
  */
-export function ProjectsPanel({ anchor, roots, tree, counts, hereId, versions = [], onGo, onNew, onMenu, onOpenVersion, onClose, ignore }) {
+export function ProjectsPanel({ anchor, roots, tree, counts, hereId, onGo, onNew, onMenu, onOpenVersion, onClose, ignore }) {
   const [q, setQ] = React.useState('');
   const branch = hereId && tree.has(hereId) ? tree.get(hereId).path[0] : null;
-  const [folded, flip] = useFolded(roots.filter((node) => node.id !== branch && (node.children || []).length).map((node) => node.id));
+  const [folded, flip] = useFolded(roots.filter((node) => node.id !== branch && ((node.children || []).length || (node.archives || []).length)).map((node) => node.id));
   const go = (id) => { onClose(); onGo(id); };
   const needle = q.trim().toLowerCase();
   return (
@@ -617,28 +641,21 @@ export function ProjectsPanel({ anchor, roots, tree, counts, hereId, versions = 
       </PanelHead>
       <SearchField value={q} onChange={setQ} placeholder="Find a project" />
       <Scroll style={{ padding: '4px 6px 8px' }}>
-        <ProjectTree ids={roots.map((node) => node.id)} tree={tree} counts={counts} hereId={hereId} folded={folded} onFold={flip} q={needle} onGo={go} onMenu={onMenu} />
-        {needle && ![...tree.values()].some((entry) => entry.node.name.toLowerCase().includes(needle)) && <Empty>No project by that name.</Empty>}
-        {!needle && versions.length > 0 && (
-          <Group title="Archived">
-            {versions.map((version) => (
-              <PanelRow key={`${version.workspaceId}/${version.file}`} data-sb-version={version.file} icon={<I.ArchiveIcon size={15} />} title={version.title} meta={`${version.name}${version.clearedAt ? ` · cleared ${sinceWords(version.clearedAt)}` : ''}`} onClick={() => { onClose(); onOpenVersion(version); }} />
-            ))}
-          </Group>
-        )}
+        <ProjectTree ids={roots.map((node) => node.id)} tree={tree} counts={counts} hereId={hereId} folded={folded} onFold={flip} q={needle} onGo={go} onMenu={onMenu} onOpenVersion={(version) => { onClose(); onOpenVersion(version); }} />
+        {needle && ![...tree.values()].some((entry) => entry.node.name.toLowerCase().includes(needle) || versionsOf(entry.node).some((version) => version.title.toLowerCase().includes(needle))) && <Empty>No project by that name.</Empty>}
       </Scroll>
     </Floating>
   );
 }
 
 /** A level's More: every sibling there and what is in each, open, each foldable; nothing above them. */
-export function SiblingsPanel({ anchor, parentId, roots, tree, counts, hereId, onGo, onMenu, onClose, ignore }) {
+export function SiblingsPanel({ anchor, parentId, roots, tree, counts, hereId, onGo, onMenu, onOpenVersion = null, onClose, ignore }) {
   const [folded, flip] = useFolded([]);
   const ids = parentId ? (tree.get(parentId).node.children || []).map((child) => child.id) : roots.map((node) => node.id);
   return (
     <Floating anchor={anchor} width={320} cap={560} label="More projects" onClose={onClose} ignore={ignore} data-sb-panel="siblings">
       <Scroll style={{ padding: '6px 6px 8px' }}>
-        <ProjectTree ids={ids} depth={1} tree={tree} counts={counts} hereId={hereId} folded={folded} onFold={flip} onGo={(id) => { onClose(); onGo(id); }} onMenu={onMenu} />
+        <ProjectTree ids={ids} depth={1} tree={tree} counts={counts} hereId={hereId} folded={folded} onFold={flip} onGo={(id) => { onClose(); onGo(id); }} onMenu={onMenu} onOpenVersion={onOpenVersion ? (version) => { onClose(); onOpenVersion(version); } : null} />
       </Scroll>
     </Floating>
   );
@@ -1083,9 +1100,6 @@ export function SearchDialog({ projectId, workspaces, rows, library, inRail, onG
         ))}
         {typed && !flat.length && <Empty>Nothing matches “{typed}”.</Empty>}
         {(problem || (answer && answer.error)) && <div style={{ padding: '4px 14px 8px', ...text(12, '#e70022'), overflowWrap: 'anywhere' }}>{problem || answer.error}</div>}
-      </div>
-      <div style={{ flex: 'none', display: 'flex', gap: 14, padding: '8px 16px', ...text(11.5, '#8f8f8f') }}>
-        <span>↑↓ to move</span><span>↵ to open</span><span>esc to close</span>
       </div>
     </Centered>
   );

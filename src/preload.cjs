@@ -416,6 +416,8 @@ const engelbartAPI = Object.freeze({
   onBrowserFound: (callback) => subscribe('browser:found', callback),
   // ⌘T / ⌘W from a page, and the Edit menu's Find items: { name, tab } (tab: the page that had the keyboard, else null).
   onBrowserShortcut: (callback) => subscribe('browser:shortcut', callback),
+  // A page on the Stage (or its box layer or card) took the keyboard: { id } (2026-10-16, model/key-side.js).
+  onBrowserFocused: (callback) => subscribe('browser:focused', callback),
   // A tab's pdf: { id, url, name, under, loading | bytes | error } (src/main/browser/views.cjs).
   onBrowserPdf: (callback) => subscribe('browser:pdf', callback),
   // Import sign-ins from the person's browsers into the Stage (MATH-18, src/main/browser/import-cookies.cjs). Domains and

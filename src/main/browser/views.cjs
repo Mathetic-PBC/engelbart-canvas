@@ -757,6 +757,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setBackgroundColor('#00000000');
     view.setVisible(false);
     const contents = view.webContents;
+    contents.on('focus', () => send('browser:focused', { id: layer.tab })); // the Stage's, as its page is (attach)
     contents.on('did-finish-load', () => { layer.ready = true; if (layer.queued) { contents.send(LAYER.CHANNELS.start, layer.queued); layer.queued = null; } });
     contents.on('will-navigate', (event) => event.preventDefault());
     contents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -950,6 +951,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setBackgroundColor('#00000000');
     view.setVisible(false);
     const contents = view.webContents;
+    contents.on('focus', () => send('browser:focused', { id: card.tab })); // the Stage's, as its page is (attach)
     contents.on('did-finish-load', () => { card.ready = true; if (card.queued) { contents.send(CARD.CHANNELS.state, card.queued); card.queued = null; } });
     contents.on('will-navigate', (event) => event.preventDefault());
     contents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -1226,6 +1228,9 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     listenToPage(contents, id, entry);
     contents.setWindowOpenHandler(windowOpenHandler(id, contents));
     contents.on('did-create-window', (popup) => watchPopup(popup, id));
+    // The page took the keyboard (a click in it, mostly): the renderer never sees a click in a native view, and ⌘T, ⌘W
+    // and ⌘F go to the place clicked last (2026-10-16, renderer's model/key-side.js).
+    contents.on('focus', () => send('browser:focused', { id }));
     // window.close() from the page (the last step of many sign-ins) closes the tab.
     contents.on('destroyed', () => { if (entries.get(id) === entry) { detach(id); send('browser:closed', { id }); } });
     contents.on('did-fail-load', (_event, code, description, url, isMainFrame) => {

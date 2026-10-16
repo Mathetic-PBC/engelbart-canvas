@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Testing the UI round</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { max-width:700px; margin:0; padding:48px 24px; line-height:1.6; }
+  h2 { margin-top:2em; }
+  ol, ul { padding-left:1.2em; }
+  li { margin:.4em 0; }
+  label { cursor:pointer; }
+  input[type=checkbox] { margin-right:.5em; }
+  code { font-size:.9em; }
+  button { font:inherit; font-weight:500; color:inherit; background:none; border:1px solid currentColor; border-radius:0; padding:12px 20px; cursor:pointer; }
+  button:hover { background:rgba(128,128,128,.15); }
+</style>
+</head>
+<body>
+<h1>Testing the UI round</h1>
+<p>The window marked Electron in the Dock is branch <code>hudson-ui-10-16</code> (worktree <code>draft-1</code>) in test mode. Its data is in <code>~/.engelbart/test/ui-10-16</code>, and it has its own config. Your Engelbart in /Applications and your <code>~/.engelbart</code> are untouched. Onboarding was skipped: the window starts with two seeded projects, Engelbart and Research, plus a few agent rows. Claude Code and Codex are the real ones.</p>
+<p>⌘Q in that window quits only that window. To start over, run this from the worktree:<br><code>npx electron scripts/try-ui-10-16.cjs --fresh</code></p>
+
+<h2>Title bar</h2>
+<ul>
+<li><label><input type="checkbox">The sidebar toggle and the clock are on the right, directly above the gear and the compose icon.</label></li>
+</ul>
+
+<h2>Search</h2>
+<ul>
+<li><label><input type="checkbox">Open Search from the sidebar. There is no "↑↓ to move ↵ to open esc to close" line under it.</label></li>
+</ul>
+
+<h2>Agents</h2>
+<ul>
+<li><label><input type="checkbox">Open Agents in the sidebar. You should see no Earlier section, no Repositories section and no "3 to look at".</label></li>
+<li><label><input type="checkbox">"Four days old (should not show)" is not there, because it expired after 3 days.</label></li>
+<li><label><input type="checkbox">Three rows have a small black dot and no number: the failed sticky, "New sidebar" (needs you) and the answer in Old requirements.</label></li>
+<li><label><input type="checkbox">The sticky's row says "A sticky", and no row says "post-it".</label></li>
+<li><label><input type="checkbox">Hover a row and an × shows in its upper right. Clicking the × on "Copy button in the lower left" removes the row.</label></li>
+<li><label><input type="checkbox">Click "The archived workspace should open". The stickies show, and its quick-task card opens next to the row.</label></li>
+<li><label><input type="checkbox">Click the answer row. You land in User Interface ▸ Sidebar with Old requirements in front. Open Agents again and that row has no dot.</label></li>
+<li><label><input type="checkbox">Click "New sidebar" and its Build card opens.</label></li>
+<li><label><input type="checkbox">Running: start something real, such as @bart in a note or a Build. While it runs, its name should shimmer the way importing does. The seeded rows can't show this.</label></li>
+</ul>
+
+<h2>Archived projects</h2>
+<ul>
+<li><label><input type="checkbox">Open Projects ▸ More. There is no separate Archived section.</label></li>
+<li><label><input type="checkbox">Unfold Onboarding. Its two archived versions sit under it, and clicking one opens it in Onboarding.</label></li>
+</ul>
+
+<h2>Sources by last opened</h2>
+<ul>
+<li><label><input type="checkbox">In User Interface ▸ Sidebar, the project folder lists the last-opened note first.</label></li>
+<li><label><input type="checkbox">Open Iconography, then Sidebar brainstorming. Each one moves to the top when you open it.</label></li>
+</ul>
+
+<h2>⌘T, ⌘W, ⌘F follow your last click</h2>
+<ul>
+<li><label><input type="checkbox">Click in the middle canvas and press ⌘T. The + new note menu opens.</label></li>
+<li><label><input type="checkbox">Still in the middle canvas, press ⌘W. It closes the tab in front, but never Workspace and never the last tab.</label></li>
+<li><label><input type="checkbox">Open a note in the side pane, click inside it and press ⌘W. The side pane closes.</label></li>
+<li><label><input type="checkbox">Open a source on Stage and click inside the page. ⌘T and ⌘W act on Stage tabs, not on notes. Inside the native page this was only simulated, so check this one carefully.</label></li>
+<li><label><input type="checkbox">Click in the terminal. ⌘T and ⌘W act on terminal tabs.</label></li>
+<li><label><input type="checkbox">In User Interface ▸ Middle Canvas, press ⌘F and type <em>canvas</em>. The matches highlight, ⌘G goes to the next one, ⇧⌘G to the previous one, and Esc closes the find bar.</label></li>
+<li><label><input type="checkbox">⌘G moves exactly one match at a time. The Edit menu might also catch it and skip two; this is unverified.</label></li>
+</ul>
+
+<h2>@ any source</h2>
+<ul>
+<li><label><input type="checkbox">At the bottom of Middle Canvas, type <code>@Context</code>. "Context engineering notes", from the Research project, is offered.</label></li>
+<li><label><input type="checkbox">Type <code>@Requirement engineering</code>. It keeps matching after the space.</label></li>
+<li><label><input type="checkbox">Pick it. Hovering the mention says "A note in another project."</label></li>
+<li><label><input type="checkbox">Click the mention, edit the note and switch to Research. The edit is in Research's copy, and no second copy was made in Engelbart.</label></li>
+<li><label><input type="checkbox">Notes of this project come first in the menu. Sources from the sample library show up too.</label></li>
+</ul>
+
+<h2>Quotes</h2>
+<ul>
+<li><label><input type="checkbox">Click into the seeded quote in Middle Canvas and edit its text. It stays a quote.</label></li>
+<li><label><input type="checkbox">Backspace at the very start of the quote turns it into a plain line.</label></li>
+<li><label><input type="checkbox">Type <code>&gt;</code> with no space after it, then paste a sentence. It becomes a formatted quote.</label></li>
+<li><label><input type="checkbox">Type <code>&gt;</code> and paste several lines. Each line is quoted.</label></li>
+<li><label><input type="checkbox">Enter inside a quote ends the quote.</label></li>
+</ul>
+
+<h2>Decisions I made without you</h2>
+<ol>
+<li>The expiry (3 days, or 1 day after you click a row) also applies to Failed and Needs you. Should a failure you never clicked disappear by itself?</li>
+<li>A click counts as viewed: the dot goes away, and the row leaves the counts and ⌘J. The row comes back if that agent changes again. The × works the same way.</li>
+<li>Mentioning a note from another project links it into this project.</li>
+<li>⌘T in a new window, before you have clicked anything, goes to the document.</li>
+</ol>
+
+<h2>Not verified</h2>
+<ul>
+<li>A real click inside a native Stage page (only simulated with focus).</li>
+<li>Editing the same cross-project note in two windows at once.</li>
+<li>The Edit-menu ⌘F/⌘G double step.</li>
+</ul>
+
+<p><button type="button" onclick="document.querySelectorAll('input[type=checkbox]').forEach((b)=>{b.checked=false});save()">Clear checks</button></p>
+<script>
+  const boxes = [...document.querySelectorAll('input[type=checkbox]')];
+  function save() { try { localStorage.setItem('try-ui-10-16', JSON.stringify(boxes.map((b) => b.checked))); } catch {} }
+  try { (JSON.parse(localStorage.getItem('try-ui-10-16')) || []).forEach((on, i) => { if (boxes[i]) boxes[i].checked = on; }); } catch {}
+  boxes.forEach((b) => b.addEventListener('change', save));
+</script>
+</body>
+</html>

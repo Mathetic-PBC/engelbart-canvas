@@ -165,3 +165,54 @@ test('versionsOf: one workspace\'s own archived versions, newest first, none of 
   assert.deepEqual(versionsOf(node).map((v) => [v.workspaceId, v.file, v.title]), [['a', '2.md', 'Untitled'], ['a', '1.md', 'Old']]);
   assert.deepEqual(versionsOf({ id: 'c', name: 'C', children: [] }), []);
 });
+
+// 2026-10-16 (Hudson's "User Interface" notes): no "Earlier" in Agents; a row goes three days after it last changed or a
+// day after it was clicked, its × puts it away until it changes again; repositories' builds are rows; a project's folder
+// lists what was opened last first.
+test('keptAgents drops old, clicked-a-day-ago and dismissed rows; a clicked row is viewed until it changes', async () => {
+  const { keptAgents, markAgent, summarize } = await load();
+  const now = Date.parse('2026-10-16T12:00:00Z');
+  const ago = (hours) => new Date(now - hours * 3600000).toISOString();
+  const entries = [
+    { id: 'fresh', state: 'failed', at: ago(2) },
+    { id: 'old', state: 'needs', at: ago(80) },
+    { id: 'oldrun', state: 'running', at: ago(200) },
+    { id: 'clicked', state: 'unseen', at: ago(30) },
+    { id: 'clickedlong', state: 'done', at: ago(50) },
+    { id: 'gone', state: 'failed', at: ago(1) },
+    { id: 'again', state: 'failed', at: ago(1) },
+    { id: 'ranthen', state: 'unseen', at: ago(1) },
+  ];
+  const marks = { clicked: { clicked: ago(3) }, clickedlong: { clicked: ago(25) }, gone: { dismissed: ago(0.5) }, again: { dismissed: ago(5) }, ranthen: { clicked: ago(4) } };
+  const kept = keptAgents(entries, marks, now);
+  assert.deepEqual(kept.map((entry) => entry.id), ['fresh', 'oldrun', 'clicked', 'again', 'ranthen']);
+  assert.equal(kept.find((entry) => entry.id === 'clicked').viewed, true);
+  assert.equal(kept.find((entry) => entry.id === 'ranthen').viewed, undefined); // clicked while it ran; it finished since
+  assert.deepEqual(summarize(kept), { total: 4, running: 1, ready: 3 });
+  const next = markAgent({ stale: { clicked: ago(24 * 9) }, kept: { dismissed: ago(1) } }, 'new', 'clicked', ago(0));
+  assert.deepEqual(Object.keys(next).sort(), ['kept', 'new']);
+  assert.equal(next.new.clicked, ago(0));
+});
+
+test('repoEntries makes the bell\'s repository builds rows of Agents', async () => {
+  const { repoEntries } = await load();
+  const rows = [
+    { id: 'n1', libraryId: 'r1', runId: 'a', at: '2026-10-16T10:00:00Z', read: false, status: 'starting' },
+    { id: 'n2', libraryId: 'r2', runId: 'b', at: '2026-10-16T09:00:00Z', read: true, status: 'ready' },
+    { id: 'n3', libraryId: 'r3', runId: 'c', at: '2026-10-16T08:00:00Z', read: false, status: 'failed' },
+    { id: 'n4', libraryId: 'gone', runId: 'd', at: '2026-10-16T08:00:00Z', read: false },
+  ];
+  const items = { r1: { run: { status: 'starting' } }, r2: { run: { status: 'ready' }, sandbox: 'asleep' }, r3: { run: { status: 'failed' } } };
+  const out = repoEntries(rows, items, [{ id: 'r1', name: 'mqo00/rope' }]);
+  assert.deepEqual(out.map((entry) => [entry.id, entry.title, entry.state, !!entry.viewed]), [['repo:n1', 'mqo00/rope', 'running', false], ['repo:n2', 'Repository', 'unseen', true], ['repo:n3', 'Repository', 'failed', false]]);
+  assert.equal(out[1].sandbox, 'asleep');
+});
+
+test('byOpened puts what was opened last first, else by when it came in', async () => {
+  const { byOpened, noteOpened } = await load();
+  const list = [{ id: 'a', created: '2026-10-01T00:00:00Z' }, { id: 'b', created: '2026-10-02T00:00:00Z' }, { id: 'c' }, { id: 'd' }];
+  assert.deepEqual(byOpened(list, { a: '2026-10-15T00:00:00Z' }).map((row) => row.id), ['a', 'b', 'c', 'd']);
+  assert.deepEqual(byOpened(list, { d: '2026-10-15T00:00:00Z', c: '2026-10-14T00:00:00Z' }).map((row) => row.id), ['d', 'c', 'b', 'a']);
+  const many = noteOpened({ x: '2026-10-01T00:00:00Z', y: '2026-10-03T00:00:00Z' }, 'z', '2026-10-05T00:00:00Z', 2);
+  assert.deepEqual(Object.keys(many).sort(), ['y', 'z']);
+});
