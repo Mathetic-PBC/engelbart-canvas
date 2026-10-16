@@ -450,6 +450,41 @@ test('a failed session check is not "signed out": asked again a moment later; on
   assert.deepEqual(await run(CLAUDE_ONE('c-111111'), () => [200, []]), { signedIn: false });
 });
 
+test('ChatGPT\'s chats inside its projects are listed too, with the project\'s name (its list leaves them out; 2026-10-16)', async () => {
+  // Checked on a real account: none of a project's 9 chats among the 519 /backend-api/conversations listed. A project's
+  // chats come from the sidebar's projects (g-p-…; a GPT's are in the list), each paged by cursor.
+  const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
+  const asked = [];
+  const answers = (url) => {
+    if (url === '/api/auth/session') return [200, { accessToken: 't', user: { email: 'me@example.org' } }];
+    if (url.startsWith('/backend-api/conversations?')) return [200, { items: [{ id: 'main-1', title: 'Regression help', update_time: 1759000000 }], total: 1 }];
+    if (url.startsWith('/backend-api/gizmos/snorlax/sidebar')) {
+      return /cursor=next/.test(url)
+        ? [200, { items: [{ gizmo: { gizmo: { id: 'g-p-bbb', display: { name: 'Finances' } } } }], cursor: null }]
+        : [200, { items: [{ gizmo: { gizmo: { id: 'g-p-aaa', display: { name: 'introspection' } } } }, { gizmo: { gizmo: { id: 'g-a-gpt', display: { name: 'A GPT' } } } }], cursor: 'next' }];
+    }
+    if (url === '/backend-api/gizmos/g-p-aaa/conversations?cursor=0') return [200, { items: [{ id: 'proj-1', title: 'Journal', update_time: 1759000100 }], cursor: 'c2' }];
+    if (url === '/backend-api/gizmos/g-p-aaa/conversations?cursor=c2') return [200, { items: [{ id: 'proj-2', title: 'Values', update_time: 1759000200 }], cursor: null }];
+    if (url === '/backend-api/gizmos/g-p-bbb/conversations?cursor=0') return [200, { items: [{ id: 'proj-3', title: 'Taxes', update_time: 1759000300 }], cursor: null }];
+    return [404, null];
+  };
+  const fetch = async (url) => { asked.push(url); const [status, body] = answers(url); return { ok: status >= 200 && status < 300, status, json: async () => body }; };
+  const out = await new AsyncFunction('fetch', CHATGPT_LIST(50))(fetch);
+  assert.deepEqual(out.items.map((item) => [item.id, item.project]), [['main-1', null], ['proj-1', 'introspection'], ['proj-2', 'introspection'], ['proj-3', 'Finances']]);
+  assert.equal(out.partial, undefined);
+  assert.equal(asked.some((url) => url.includes('g-a-gpt')), false, 'a GPT is not a project');
+  // Through listWebChats: a project's chats found by its name.
+  const page = { ensure: async () => {}, evaluate: async (script) => new AsyncFunction('fetch', script)(fetch) };
+  assert.deepEqual((await listWebChats(page, 'ChatGPT', { project: 'intro' })).chats.map((chat) => chat.id), ['proj-2', 'proj-1']);
+  // The projects can't be read: the list is still read, and the answer says what was left out.
+  const failing = async (url) => (url.startsWith('/backend-api/gizmos/') ? { ok: false, status: 500, json: async () => null } : fetch(url));
+  const partial = await new AsyncFunction('fetch', CHATGPT_LIST(50))(failing);
+  assert.deepEqual(partial.items.map((item) => item.id), ['main-1']);
+  assert.equal(partial.partial, "ChatGPT's projects answered 500");
+  const listed = await listWebChats({ ensure: async () => {}, evaluate: async (script) => new AsyncFunction('fetch', script)(failing) }, 'ChatGPT');
+  assert.equal(listed.partial, "ChatGPT's projects answered 500", 'the agent is told');
+});
+
 test('Google Drive: a Doc\'s pictures kept out of its Markdown export, a Sheet as a table', () => {
   const dir = path.join(homeDir, 'google-test');
   const md = googleMarkdown(`# Thesis\n\nA figure: ![][image1]\n\n[image1]: <data:image/png;base64,${PNG.toString('base64')}>\n`, dir);

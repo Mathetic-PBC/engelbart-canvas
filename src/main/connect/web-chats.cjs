@@ -40,7 +40,37 @@ for (let offset = 0; items.length < ${limit}; ) {
   offset += list.length;
   if (!list.length || !fresh || (page.total && offset >= page.total)) break;
 }
-return { signedIn: true, account: (session.user && (session.user.email || session.user.name)) || '', items };`;
+// The chats inside the account's projects, which that list leaves out (2026-10-16, a real account: none of a project's 9
+// chats among the 519 it listed): each project (an id starting g-p-; a GPT's chats are in the list) from the sidebar's own
+// list, then its chats, both paged by cursor, each with its project's name. A project that can't be read leaves the rest.
+let partial = null;
+try {
+  const projects = [];
+  for (let cursor = null, rounds = 0; rounds < 20; rounds += 1) {
+    const r = await fetch('/backend-api/gizmos/snorlax/sidebar?conversations_per_gizmo=0' + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''), { headers, credentials: 'include' });
+    if (!r.ok) { partial = "ChatGPT's projects answered " + r.status; break; }
+    const page = await r.json();
+    for (const entry of (page && page.items) || []) {
+      const gizmo = entry && entry.gizmo && (entry.gizmo.gizmo || entry.gizmo);
+      if (gizmo && typeof gizmo.id === 'string' && gizmo.id.startsWith('g-p-')) projects.push({ id: gizmo.id, name: (gizmo.display && gizmo.display.name) || '' });
+    }
+    cursor = page && page.cursor;
+    if (!cursor) break;
+  }
+  let inProjects = 0;
+  for (const project of projects) {
+    for (let cursor = '0', rounds = 0; cursor !== null && cursor !== undefined && rounds < 50 && inProjects < ${limit}; rounds += 1) {
+      const r = await fetch('/backend-api/gizmos/' + encodeURIComponent(project.id) + '/conversations?cursor=' + encodeURIComponent(cursor), { headers, credentials: 'include' });
+      if (!r.ok) { partial = "a ChatGPT project's chats answered " + r.status; break; }
+      const page = await r.json();
+      let fresh = 0;
+      for (const c of (page && page.items) || []) { if (!c || seen.has(c.id)) continue; seen.add(c.id); fresh += 1; inProjects += 1; items.push({ id: c.id, title: c.title || '', created: c.create_time, updated: c.update_time, project: project.name || null }); }
+      if (!fresh) break;
+      cursor = page.cursor;
+    }
+  }
+} catch { partial = "ChatGPT's projects could not be read"; }
+return { signedIn: true, account: (session.user && (session.user.email || session.user.name)) || '', items, ...(partial ? { partial } : {}) };`;
 
 const CHATGPT_ONE = (id) => `
 const asked = await fetch('/api/auth/session', { credentials: 'include' }).then(async (r) => ({ status: r.status, body: r.ok ? await r.json().catch(() => undefined) : null })).catch(() => ({ status: 0, body: null }));
@@ -159,7 +189,7 @@ async function listWebChats(page, app, { days = null, query = '', project = '', 
     rows.push(row);
   }
   rows.sort((a, b) => String(b.date).localeCompare(String(a.date)));
-  return { account: out.account || '', total: (out.items || []).length, chats: rows.slice(0, Math.min(Math.max(1, Math.round(limit) || 200), MAX_LIST)) };
+  return { account: out.account || '', total: (out.items || []).length, chats: rows.slice(0, Math.min(Math.max(1, Math.round(limit) || 200), MAX_LIST)), ...(out.partial ? { partial: out.partial } : {}) };
 }
 
 /** One conversation read into turns → { id, title, date, turns: [{ role, text }] }. */
