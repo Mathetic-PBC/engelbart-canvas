@@ -6,14 +6,18 @@ import Pager from '../ui/Pager.jsx';
 import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { GH, GLOBE, PDF } from '../ui/Icons.jsx';
 import { heldRow } from '../model/github.js';
-import { SUBS, isFresh, forward, pagerOf, endOf, projectInput, importButtons, createButtons, rowWhy, contextRows, toolsWanted, toolsStep, agentReady, TOOL_WHY, PROFILE_PROMPT } from '../model/onboarding.js';
-import { rowOf } from '../model/tools.js';
+import { SUBS, isFresh, forward, shownPager, endOf, projectInput, importButtons, createButtons, rowWhy, contextRows, agentGate, PROFILE_PROMPT } from '../model/onboarding.js';
 import { useGithubStatus } from '../workspace/useGithubStatus.js';
 import ImportSignins from '../workspace/ImportSignins.jsx';
 import GithubRepos from '../workspace/GithubRepos.jsx';
 import ConnectLibrary from './ConnectLibrary.jsx';
-import ImportFlow from '../import/ImportFlow.jsx';
+import ImportFlow, { useFluidScale } from '../import/ImportFlow.jsx';
+import AgentSetupPopup, { providerOfChoice } from '../import/AgentSetup.jsx';
 import { importApi } from '../import/import-api.js';
+
+// What the agent popup and Import your context call (2026-10-16): Import your context's calls, with the tool manager's own
+// update (the popup updates a CLI too old for Engelbart without signing it in, which toolsConnect would).
+const flowApi = { ...importApi, toolsUpdate: (id) => api.toolsUpdate(id) };
 import welcomePng from '../../../design/assets/welcome-field.png';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
@@ -36,6 +40,9 @@ const lead = { margin: 0, maxWidth: 440, font: '15.5px/1.6 var(--font-sans)', co
 const column = { width: '100%', maxWidth: 520, display: 'flex', flexDirection: 'column' };
 const plain = { padding: 0, border: 0, background: 'none', cursor: 'pointer' };
 const skipStyle = { ...plain, padding: '10px 12px', marginLeft: -12, font: '500 13px/1 var(--font-sans)', color: '#8f8f8f' };
+// Welcome (2026-10-16, S1/S2): bigger type, the picture as large as the window lets it be, Continue on the right.
+const welcomeH1 = { margin: 0, font: '600 36px/1.15 var(--font-sans)', letterSpacing: '-0.9px', color: '#171717', textAlign: 'center' };
+const welcomeLead = { margin: 0, font: '18px/1.5 var(--font-sans)', color: '#4d4d4d', textAlign: 'center', textWrap: 'pretty' };
 const faint = { font: 'italic 13px/1.5 var(--font-sans)', color: '#8f8f8f' };
 const LABEL = { github: 'GitHub', url: 'Websites', pdf: 'Papers' };
 
@@ -63,7 +70,7 @@ function Footer({ showSkip, onSkip, continueDisabled, onContinue, label = 'Conti
   return (
     <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
       <div style={{ display: 'flex' }}>
-        {showSkip && <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={onSkip} style={skipStyle}>Skip for now</button>}
+        {showSkip && <button type="button" className="hov-ink" data-onboarding-skip="1" onClick={onSkip} style={skipStyle}>Skip</button>}
       </div>
       <span data-onboarding-continue="1"><Button variant="filled" go disabled={continueDisabled} onClick={onContinue}>{label}</Button></span>
     </div>
@@ -132,11 +139,20 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
   const addedHere = (src) => added.filter((item) => item.src === src && byId.has(item.id)).map((item) => byId.get(item.id));
   const heldRepo = (repo) => heldRow(repo, library);
 
-  // Whether the tools screen is in the flow: decided by the first check that answers, then kept, so the pager does not
-  // change under the person while the installs it started run. While it is undecided the screen is there, checking.
-  const [withTools, setWithTools] = React.useState(() => toolsWanted(tools, { connect: fresh }));
-  React.useEffect(() => { if (withTools === null) { const wanted = toolsWanted(tools, { connect: fresh }); if (wanted !== null) setWithTools(wanted); } }, [tools, withTools]); // eslint-disable-line react-hooks/exhaustive-deps
-  const flowOptions = { tools: withTools !== false, connect: connectMode };
+  // The "Set up your tools" screen is gone (2026-10-16, S3: "There is a super ugly install claude code and codex screen
+  // right after the welcome to engelbart screen"): Welcome's Continue goes on at once when Claude Code or Codex is
+  // installed, signed in and subscribed (updated in the background when too old), and otherwise asks in a popup over
+  // Welcome (../import/AgentSetup.jsx). The step stays out of the flow, so the pager never counts it.
+  const flowOptions = { tools: false, connect: connectMode };
+  const fit = useFluidScale(); // { scale, width, height }: the window's, for S2's one fluid scale
+  const [gate, setGate] = React.useState(null); // null | 'checking' (Continue pressed, the check not answered) | 'ask' (the popup)
+  const [agentProviders, setAgentProviders] = React.useState(null);
+  React.useEffect(() => {
+    if (!connectMode || step !== 'welcome' || !tools || !tools.checked) return undefined;
+    let live = true;
+    importApi.providers(true).then((out) => { if (live) setAgentProviders(out); }).catch(() => { if (live) setAgentProviders((now) => now || { providers: [] }); });
+    return () => { live = false; };
+  }, [connectMode, step, tools]);
 
   const go = (next) => { setPlace((now) => ({ ...now, ...next })); setEntry(''); setEntryErr(''); setError(''); };
   // Forward from here; past a new user's last screen the project is made, past the guided setup's the Welcome workspace.
@@ -149,13 +165,39 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
   };
   const advance = () => goForward();
 
-  // The check answered with nothing to install while the tools screen was showing: on to the next one.
-  React.useEffect(() => { if (step === 'tools' && withTools === false) advance(); }, [step, withTools]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Welcome's Continue (S3). Without Connect (+ Project) nothing needs an agent: on at once.
+  const welcomeNext = () => { if (!connectMode) { advance(); return; } if (!gate) setGate('checking'); };
+  React.useEffect(() => {
+    if (gate !== 'checking') return;
+    const out = agentGate(tools, agentProviders);
+    if (!out) return;
+    if (out.git) api.toolsInstall(['git']).catch(() => {}); // Git is never asked about: it comes with the app
+    if (!out.go) { setGate('ask'); return; }
+    for (const id of out.update) api.toolsUpdate(id).catch(() => {});
+    onTools('skip'); // nothing is asked about the tools after onboarding either: one runs
+    setGate(null);
+    advance();
+  }, [gate, tools, agentProviders]); // eslint-disable-line react-hooks/exhaustive-deps
+  const agentDone = (choice) => {
+    const provider = providerOfChoice(choice);
+    if (provider) importApi.rememberProvider(provider).catch(() => {});
+    onTools('skip');
+    setGate(null);
+    advance();
+  };
+  // Skip: on to Import your context, whose Import context asks again (it can't run without one). The guided setup's
+  // Connect your library can't either: its old screens come back in its place, as Skip on the tools screen did.
+  const agentSkip = () => {
+    onTools('skip');
+    setGate(null);
+    if (flowMode === 'guided') { setConnectDropped(true); goForward({ ...flowOptions, connect: false }); return; }
+    advance();
+  };
 
   // Enter on the welcome screen continues, as the design has it.
   React.useEffect(() => {
-    if (step !== 'welcome') return undefined;
-    const onKey = (event) => { if (event.key === 'Enter' && !/^(INPUT|TEXTAREA|BUTTON)$/.test(event.target.tagName)) advance(); };
+    if (step !== 'welcome' || gate) return undefined;
+    const onKey = (event) => { if (event.key === 'Enter' && !/^(INPUT|TEXTAREA|BUTTON)$/.test(event.target.tagName)) welcomeNext(); };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   });
@@ -288,7 +330,7 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
     }
   };
 
-  const pager = pagerOf(flowMode, step, flowOptions);
+  const pager = shownPager(flowMode, step, flowOptions);
   // Connect's page draws the pager in their own foot, beside their button.
   const pagePager = pager && (
     <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 16 }}>
@@ -301,63 +343,23 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
 
   let body = null;
   if (step === 'welcome') {
+    // S1/S2 (2026-10-16): "Move continue to the right not in the middle"; "generally make everything bigger, there is too
+    // much whitespace. this should be minimum size but should expand with window". The column takes the window's fluid
+    // scale (useFluidScale), the picture as large as the window's height leaves room for, Continue lower right as on
+    // Import your context's screens.
+    const room = Math.min((fit.height - 54) / fit.scale - 300, (fit.width - 48) / fit.scale * (758 / 1199));
+    const wide = Math.round(Math.max(300, Math.min(640, room * (1199 / 758))));
     body = (
-      <div data-screen-label="01 Welcome" style={{ ...column, alignItems: 'center', gap: 28, animation: rise }}>
-        <Head title="Welcome to Engelbart">The best way to brainstorm and create research projects</Head>
-        <img src={welcomePng} alt="" style={{ display: 'block', width: '100%', maxWidth: 420, aspectRatio: '1199/758', objectFit: 'cover', borderRadius: 10 }} />
-        <span data-onboarding-continue="1"><Button variant="filled" go onClick={advance}>Continue</Button></span>
-      </div>
-    );
-  } else if (step === 'tools') {
-    // What the launch check would have asked about in the setup dialog, on a screen of the flow instead. Install all
-    // starts the installs and moves on at once: they run in the background, and the setup dialog asks only what is
-    // left (signing in) once onboarding is over. Skip for now asks nothing more until the next launch.
-    // With Connect your library next: "signing into claude code and/or codex must be done before this step",
-    // so each agent's row has its own Install or Sign in, Install all stays on the screen, and Continue waits for one of
-    // them to be ready. Skipping it then takes Connect out of the flow.
-    const plan = withTools ? toolsStep(tools, { connect: connectMode }) : { ids: [], install: [], label: 'Continue', disabled: false, stay: false };
-    const install = () => {
-      if (plan.install.length) api.toolsInstall(plan.install).catch(() => {});
-      if (plan.stay) return;
-      onTools('install');
-      advance();
-    };
-    const skip = () => {
-      onTools('skip');
-      if (connectMode && !agentReady(tools)) { setConnectDropped(true); goForward({ ...flowOptions, connect: false }); return; }
-      advance();
-    };
-    const act = (id, row) => {
-      setError('');
-      const run = row.action === 'install' ? api.toolsInstall([id]) : row.action === 'sign-in' ? api.toolsSignIn(id) : row.action === 'cancel' ? api.toolsCancelSignIn(id) : row.action === 'update' ? api.toolsUpdate(id) : api.toolsCheck();
-      Promise.resolve(run).catch((failure) => setError(errorMessage(failure)));
-    };
-    body = (
-      <div data-screen-label="02 Tools" style={{ ...column, minHeight: 0, gap: 24, animation: rise }}>
-        <Head title="Set up your tools">{connectMode ? 'Engelbart works through Git and an agent: Claude Code or Codex. Install one and sign in; the next step’s agents run on it.' : 'Engelbart works through Git and an agent: Claude Code or Codex. They install in the background while you carry on.'}</Head>
-        {withTools === null && <div style={{ minHeight: 150, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><ThinkingDots label="checking this Mac" /></div>}
-        {withTools && (
-          <div data-onboarding-tools="1" style={{ display: 'flex', flexDirection: 'column' }}>
-            {plan.ids.map((id) => {
-              const row = rowOf(tools.tools[id]);
-              const apple = id === 'git' && tools.platform === 'darwin' && row.action === 'install';
-              const label = { install: 'Install', update: 'Update', 'sign-in': 'Sign in', retry: 'Try again', cancel: 'Cancel' }[row.action];
-              return (
-                <div key={id} data-tool-row={id} style={{ display: 'flex', alignItems: 'flex-start', gap: 16, padding: '14px 2px' }}>
-                  <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 3 }}>
-                    <span style={{ font: '500 14px/1.4 var(--font-sans)', color: '#171717' }}>{row.name}</span>
-                    <span style={{ font: '12.5px/1.5 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{TOOL_WHY[id]}{apple ? ' Installing it opens Apple’s installer for the command line tools.' : ''}</span>
-                    {connectMode && row.page && <button type="button" className="hov-ink" onClick={() => api.openExternal(row.page).catch(() => {})} style={{ ...plain, alignSelf: 'flex-start', font: '12.5px/1.4 var(--font-sans)', color: '#8f8f8f' }}>Open the sign-in page again</button>}
-                  </span>
-                  <span data-tool-state style={{ flex: 'none', paddingTop: 2, font: '12px/1.4 var(--font-mono)', color: row.tone === 'ok' ? '#171717' : '#8f8f8f' }}>{row.state}</span>
-                  {connectMode && row.action && <span data-tool-action={row.action} style={{ flex: 'none' }}><Button size="sm" onClick={() => act(id, row)}>{label}</Button></span>}
-                </div>
-              );
-            })}
-          </div>
-        )}
-        {errorLine}
-        <Footer showSkip onSkip={skip} label={plan.label} continueDisabled={withTools === null || plan.disabled} onContinue={install} />
+      <div data-screen-label="01 Welcome" data-onboarding-scale={fit.scale} style={{ width: wide, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: 30, animation: rise, zoom: fit.scale }}>
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+          <h1 style={welcomeH1}>Welcome to Engelbart</h1>
+          <p style={welcomeLead}>The best way to brainstorm and create research projects</p>
+        </div>
+        <img src={welcomePng} alt="" style={{ display: 'block', width: '100%', aspectRatio: '1199/758', objectFit: 'cover', borderRadius: 10 }} />
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 16 }}>
+          {pager ? <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}><Pager count={pager.count} index={pager.index} /><div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div></div> : <span />}
+          <span data-onboarding-continue="1"><Button variant="filled" go disabled={gate === 'checking'} onClick={welcomeNext} style={{ padding: '14px 20px', font: '500 15px/1 var(--font-sans)', borderRadius: 10 }}>Continue</Button></span>
+        </div>
       </div>
     );
   } else if (step === 'import') {
@@ -538,7 +540,7 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
         <div className="title-bar title-lead" style={{ position: 'absolute', left: 0, right: 0, top: 0, height: 54, zIndex: 5, display: 'flex', alignItems: 'center', padding: '0 24px' }}>
           {onBack && <button type="button" className="hov-ink" onClick={onBack} title={backTitle} style={{ ...plain, font: '500 17px/1 var(--font-sans)', letterSpacing: '-0.2px', color: '#171717' }}>Engelbart</button>}
         </div>
-        <ImportFlow api={importApi} mode="new" platform={IS_MAC ? 'darwin' : 'other'} onDone={(made, extra = {}) => onDone(made, { stageLinks: [...stageLinks.current], session: extra.session || null })}
+        <ImportFlow api={flowApi} mode="new" platform={IS_MAC ? 'darwin' : 'other'} onDone={(made, extra = {}) => onDone(made, { stageLinks: [...stageLinks.current], session: extra.session || null })}
           // Import manually (From Amitav, 2026-10-15): the librarian's chat, Connect your library's page as it was here, on
           // the session the flow started. Put away (or skipped), the flow makes the projects and opens the first.
           renderLibrarian={({ sessionId, project, onDone: done, onBack: goBack }) => (
@@ -570,10 +572,11 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
         </div>
       )}
       {/* No card (2026-09-28): the same 800 × 600 at most, drawn on nothing, so lists inside still scroll and the page never does. */}
-      {step !== 'intro' && step !== 'connect' && <div data-screen-label="Onboarding window" style={{ flex: 'none', display: 'flex', flexDirection: 'column', width: 'min(800px, 100%)', height: 'min(600px, 100%)', overflow: 'hidden' }}>
-        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'safe center', gap: 24, padding: '40px 32px 28px' }}>
+      {/* Welcome (2026-10-16, S2) takes the whole window, its column growing with it. */}
+      {step !== 'intro' && step !== 'connect' && <div data-screen-label="Onboarding window" style={{ flex: 'none', display: 'flex', flexDirection: 'column', width: step === 'welcome' ? '100%' : 'min(800px, 100%)', height: step === 'welcome' ? '100%' : 'min(600px, 100%)', overflow: 'hidden' }}>
+        <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'safe center', gap: 24, padding: step === 'welcome' ? '8px 24px 24px' : '40px 32px 28px' }}>
           {body}
-          {pager && !place.detour && (
+          {pager && !place.detour && step !== 'welcome' && (
             <div style={{ flex: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 16 }}>
               <Pager count={pager.count} index={pager.index} />
               <div data-onboarding-step-of="1" style={{ font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}>{`${pager.index + 1} of ${pager.count}`}</div>
@@ -581,6 +584,7 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
           )}
         </div>
       </div>}
+      {gate === 'ask' && step === 'welcome' && <AgentSetupPopup scale={fit.scale} api={flowApi} tools={tools} providers={agentProviders} onDone={agentDone} onSkip={agentSkip} />}
       {importing && <ImportSignins opensLater onClose={() => setImporting(false)} onOpenSite={(url) => { if (!stageLinks.current.includes(url)) stageLinks.current.push(url); }} />}
     </div>
   );

@@ -153,7 +153,7 @@ app.whenReady().then(async () => {
     await pressText(wc, '.work-foot', 'Continue');
     /* the work: one line that grows, never resized by hand */
     await until(async () => (await flow(wc)).screen === 'work', 'What are you interested in researching right now?');
-    assert.equal(await text(wc, '.work-head h1'), 'What are you interested in researching right now?');
+    assert.equal(await text(wc, '.work-head h1'), 'What are you interested in researching?');
     assert.equal(await js(wc, 'document.querySelectorAll("[data-import-screen=work] p, [data-import-screen=work] small").length'), 0, 'no line about the keys');
     assert.equal(await js(wc, 'getComputedStyle(document.querySelector("#work-description")).resize'), 'none', 'not expandable (Attachment 2)');
     assert.equal(await js(wc, 'document.querySelector("#work-description").placeholder'), 'Understanding the Memex...');
@@ -221,23 +221,16 @@ app.whenReady().then(async () => {
       assert.ok(ticked.includes(id), `${extra.name}, found in use, ticked`);
       await press(wc, `[data-group="${extra.category || 'other'}"]`);
       await until(() => has(wc, `[data-app="${id}"]`), `${extra.name} under ${extra.category || 'other'}`);
-      assert.deepEqual(await js(wc, `(()=>{const row=document.querySelector('[data-app="${id}"]');return {logo:!!row.querySelector('.no-logo'),drawn:row.querySelectorAll('img, svg').length - row.querySelectorAll('.cb svg').length}})()`), { logo: true, drawn: 0 }, `${extra.name}: no icon, its room kept`);
+      assert.deepEqual(await js(wc, `(()=>{const row=document.querySelector('[data-app="${id}"]');return {logo:!!row.querySelector('.no-logo'),drawn:row.querySelectorAll('img, svg').length - row.querySelectorAll('.cb svg').length}})()`), { logo: false, drawn: 0 }, `${extra.name}: no icon, and no room kept for one (S7)`);
     }
     assert.equal(await has(wc, '[data-add-tool]'), true, '+ Add a tool');
     await press(wc, '[data-group="notes"]');
     await shot(wc, '07-tools');
-    // One group open at a time (Attachment 20).
-    assert.equal(await js(wc, 'document.querySelector("[data-group=notes]").getAttribute("aria-expanded")'), 'true', 'Notes open');
-    await press(wc, '[data-group="transcripts"]');
-    assert.equal(await js(wc, 'document.querySelector("[data-group=notes]").getAttribute("aria-expanded")'), 'false', 'Notes folded when Meeting transcripts opens');
-    await press(wc, '[data-group="notes"]');
-    // The category's Specify context opens by itself once something in it is ticked: "these apps", no projects (From Amitav:
-    // "it should only be for tool level"); a source's own stays closed until its row's Specify context is clicked.
-    await until(() => has(wc, '[data-context-panel="group:notes"]'), 'Notes\' Specify context, open');
+    // 2026-10-16 (S6): every category open, with no chevron, and no "Specify context for all {category}"; a source's own
+    // stays closed until its row's Specify context is clicked.
+    assert.equal(await has(wc, '.group-head .expand, [data-specify-group], [data-context-panel^="group:"]'), false, 'no category-level fold or Specify context');
+    assert.equal(await has(wc, '[data-app="Obsidian"]') && await has(wc, '[data-app="Granola"]'), true, 'every category open');
     assert.equal(await has(wc, '[data-context-panel="Obsidian"]'), false, 'Obsidian\'s own stays closed');
-    assert.equal(await text(wc, '[data-context-panel="group:notes"] .review-context-label'), 'Specific things to import from these apps (optional)');
-    assert.equal(await has(wc, '[data-context-panel="group:notes"] .review-projects, [data-context-panel="group:notes"] .review-projects-note'), false, 'no projects on a category\'s');
-    assert.equal(await js(wc, 'document.querySelector("[data-scope-note=\'group:notes\']").placeholder'), 'Only bring in notes relating to the Memex and my research');
     const level = await js(wc, '(()=>{const b=document.querySelector("[data-specify-context=Obsidian]");const t=b.getBoundingClientRect(),s=b.querySelector("svg").getBoundingClientRect();return Math.abs((t.top+t.bottom)/2-(s.top+s.bottom)/2)})()');
     assert.ok(level <= 2, `the chevron is level with "Specify context" (${level}px off)`);
     // A tool's own: every project picked ticked until it is narrowed, never none.
@@ -279,7 +272,7 @@ app.whenReady().then(async () => {
     await press(wc, '[data-import-run]');
     await until(async () => (await flow(wc)).dialog === 'import-method', 'How should Engelbart import your sources?');
     assert.equal(await text(wc, '[role=dialog] h3'), 'How should Engelbart import your sources?');
-    assert.deepEqual(await js(wc, '[...document.querySelectorAll("[data-import-method] b")].map((b)=>b.textContent)'), ['Import in the background with agents.', 'Import manually with fine-grained permissions.']);
+    assert.deepEqual(await js(wc, '[...document.querySelectorAll("[data-import-method] b")].map((b)=>b.textContent)'), [await js(wc, 'document.querySelector("[data-import-method=agents] b").dataset.recommended === "1"') ? 'Import in the background with agents (recommended)' : 'Import in the background with agents', 'Import manually with fine-grained permissions']);
     assert.equal(await js(wc, '[...document.querySelectorAll("[role=dialog] button")].some((b)=>b.textContent.trim()==="Continue")'), false, 'no Continue: choosing is continuing');
     await shot(wc, '09-method');
     if (MODE === 'auto') {

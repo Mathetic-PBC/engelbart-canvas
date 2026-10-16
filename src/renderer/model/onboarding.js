@@ -210,3 +210,169 @@ Rules:
 - After the profile, list the 3–5 most important things you *don't* know about my research that would substantially improve the profile, so I can fill them in.
 
 Output the final profile inside a single code block so I can copy it cleanly.`;
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+// Onboarding beta (2026-10-16, Hudson's Onboarding note; docs/onboarding-beta-10-16.md S1–S13).
+
+/**
+ * The pager drawn under a screen (S3: "the pager counts only screens that exist"; it read "1 of 3" on Welcome, then "2 of
+ * 4"). Only screens that draw it count: in a new user's flow Create and Connect are Import your context's own page, which
+ * has no pager, so Welcome is the only one and none is drawn. A flow of one such screen draws none. → { count, index } | null
+ */
+export function shownPager(mode, step, options) {
+  const own = flowOf(mode, options).filter((name) => !(mode === 'new' && options && options.connect && (name === 'create' || name === 'connect')));
+  const index = own.indexOf(step);
+  return index < 0 || own.length < 2 ? null : { count: own.length, index };
+}
+
+/**
+ * One fluid scale for the onboarding's screens (S2: "make everything bigger, there is too much whitespace. this should be
+ * minimum size but should expand with window"): the CSS zoom of their column, from the window's size. Never below `min`
+ * (at the smallest window, 1000 × 700, already larger than the mockup), growing with the window's shorter side, at most `max`.
+ */
+export function fluidScale(width, height, { min = 1.1, max = 2, base = [1060, 720] } = {}) {
+  const w = Number(width) || 0, h = Number(height) || 0;
+  if (!w || !h) return min;
+  const grow = Math.min(w / base[0], h / base[1]) * min;
+  return Math.round(Math.min(max, Math.max(min, grow)) * 1000) / 1000;
+}
+
+// Claude Code and Codex, as the agent popup names them (S3).
+export const CLIS = ['claude', 'codex'];
+const PROVIDER_OF_CLI = { claude: 'anthropic', codex: 'openai' };
+export const providerOfCli = (id) => PROVIDER_OF_CLI[id] || null;
+export const cliOfProvider = (provider) => (provider === 'openai' ? 'codex' : provider === 'anthropic' ? 'claude' : null);
+/** "Connect to Claude", "Connect to ChatGPT", "Connect to Claude and ChatGPT": the account each CLI signs in with. */
+export const CONNECT_TO = { claude: 'Claude', codex: 'ChatGPT' };
+export function connectLabel(ids) {
+  const names = CLIS.filter((id) => (ids || []).includes(id)).map((id) => CONNECT_TO[id]);
+  return names.length ? `Connect to ${names.join(' and ')}` : '';
+}
+/** What a choice in the popup covers: 'claude' | 'codex' | 'both'. */
+export const choiceIds = (choice) => (choice === 'both' ? [...CLIS] : CLIS.includes(choice) ? [choice] : []);
+
+const providerEntry = (providers, id) => ((providers && providers.providers) || []).find((one) => one.id === PROVIDER_OF_CLI[id]) || null;
+const toolOf = (snapshot, id) => (snapshot && snapshot.tools && snapshot.tools[id]) || null;
+const OUTDATED = ['outdated', 'incompatible'];
+
+/**
+ * Whether a CLI is installed and signed in with a subscription, by its own word, whatever its version
+ * (src/main/onboarding/providers.cjs `subscribed`; from a main without it: signed in with a plan named).
+ */
+export function subscribedCli(snapshot, providers, id) {
+  const tool = toolOf(snapshot, id);
+  const one = providerEntry(providers, id);
+  if (!tool || !tool.installed || !one || tool.status === 'missing' || tool.status === 'failed') return false;
+  if (typeof one.subscribed === 'boolean') return one.subscribed;
+  return !!(one.signedIn && one.subscription);
+}
+
+/**
+ * Where one CLI stands for the agent popup: 'ready' (it runs: installed, up to date, signed in with a subscription),
+ * 'connecting' (Engelbart installs, updates or checks it), 'signing-in' (its sign-in waits in the browser), 'install' (not
+ * on this Mac), 'update' (too old for Engelbart), 'sign-in' (installed and up to date but not signed in, or signed in
+ * without a subscription; `refused` too: it said it was signed in, yet turned the agents away), 'failed' (an install or a
+ * check that stopped; its `error` says why).
+ */
+export function cliStage(snapshot, providers, id, { refused = false } = {}) {
+  const tool = toolOf(snapshot, id);
+  if (!tool) return 'connecting';
+  const busy = tool.busy || null;
+  if (busy && busy.action === 'sign-in') return 'signing-in';
+  if (busy && busy.action !== 'sign-out') return 'connecting';
+  if (['installing', 'checking', 'unknown', 'updating'].includes(tool.status)) return 'connecting';
+  if (tool.status === 'failed') return 'failed';
+  if (!tool.installed || tool.status === 'missing') return tool.error ? 'failed' : 'install';
+  if (OUTDATED.includes(tool.status)) return tool.autoUpdate ? 'connecting' : 'update';
+  if (!refused && tool.status === 'ready' && subscribedCli(snapshot, providers, id)) return 'ready';
+  return 'sign-in';
+}
+
+/** Git is never a row (S3): it ships with the app, and when it is missing anyway it is installed in the background. */
+export function gitMissing(snapshot) {
+  const git = toolOf(snapshot, 'git');
+  return !!git && git.status === 'missing' && !git.busy && !git.skip;
+}
+
+/**
+ * Welcome's Continue (S3, in place of the "Set up your tools" screen) → null while the tool check or the providers have not
+ * answered; else { go: true, update } when Claude Code or Codex qualifies (installed, signed in, with a subscription):
+ * those that qualify and are too old are updated in the background (`update`; both qualify, both update) and the flow goes
+ * straight on. Neither: { go: false }, and the popup asks which to use. `git`: Git to install in the background.
+ */
+export function agentGate(snapshot, providers) {
+  if (!snapshot || !snapshot.checked || !snapshot.tools || !providers || !Array.isArray(providers.providers)) return null;
+  const git = gitMissing(snapshot);
+  const qualifying = CLIS.filter((id) => subscribedCli(snapshot, providers, id));
+  if (!qualifying.length) return { go: false, update: [], git, qualifying };
+  const update = qualifying.filter((id) => { const tool = toolOf(snapshot, id); return OUTDATED.includes(tool.status) && !tool.busy && !tool.pin && !tool.autoUpdate; });
+  return { go: true, update, git, qualifying };
+}
+
+/**
+ * The agent popup for a choice (S3: "Claude Code, Codex, or both") → { stages: { id: stage }, install, update, signIn,
+ * failed, done, primary: { label, action: null | 'sign-in' | 'open' | 'retry', ids, url?, disabled }, problem }.
+ * Choosing installs what is missing (`install`) and updates what is out of date (`update`) at once; one installed and up
+ * to date but not signed in waits for one press, "Connect to Claude" (or ChatGPT, or both), which opens that CLI's own
+ * sign-in. `done`: one of them runs, and the flow goes on by itself. `problem`: why one stopped, in its own words.
+ */
+export function agentChoice(snapshot, providers, choice, { refused = null } = {}) {
+  const ids = choiceIds(choice);
+  const stages = Object.fromEntries(ids.map((id) => [id, cliStage(snapshot, providers, id, { refused: refused === id })]));
+  const having = (stage) => ids.filter((id) => stages[id] === stage);
+  const install = having('install');
+  const update = having('update');
+  const signIn = having('sign-in');
+  const failed = having('failed');
+  const signing = having('signing-in');
+  const done = having('ready').length > 0;
+  const errorOf = (list) => { for (const id of list) { const tool = toolOf(snapshot, id); if (tool && tool.error) return String(tool.error).split(/(?<=[.!?])\s/)[0].slice(0, 160); } return ''; };
+  let primary;
+  if (!ids.length) primary = { label: 'Continue', action: null, ids: [], disabled: true };
+  else if (done) primary = { label: 'Connected', action: null, ids: [], disabled: true };
+  else if (signIn.length) primary = { label: connectLabel(signIn), action: 'sign-in', ids: signIn, disabled: false };
+  else if (signing.length) {
+    const busy = toolOf(snapshot, signing[0]).busy || {};
+    primary = busy.url ? { label: 'Open sign-in page', action: 'open', ids: signing.slice(0, 1), url: busy.url, disabled: false } : { label: 'Finish signing in…', action: null, ids: [], disabled: true };
+  } else if (failed.length && failed.length === ids.length - having('ready').length) primary = { label: 'Try again', action: 'retry', ids: failed, disabled: false };
+  else primary = { label: 'Connecting…', action: null, ids: [], disabled: true };
+  return { stages, install, update, signIn, failed, done, primary, problem: failed.length ? errorOf(failed) : '' };
+}
+
+/**
+ * The browser's sign-ins, asked once before the work questions (S9–S12) → what comes next, from api.browsers() (`browsers`,
+ * null while the browsers are still being looked for):
+ *   'wait'            not known yet: "Looking for your browsers…" in place, then asked (S11: never skipped for want of it)
+ *   { go: answer }    answered before ('allowed' | 'declined'; macOS's refusal counts as declined), or no browser on this
+ *                     Mac to ask about ('declined': nothing is copied, and macOS is never asked)
+ *   'safari'          Safari chosen without Full Disk Access: "Engelbart requires additional permissions to access Safari"
+ *   'ask'             "Allow Engelbart to use your {browser} sign-ins"
+ */
+export function keychainStep(browsers) {
+  if (!browsers) return 'wait';
+  if (browsers.keychain === 'allowed') return { go: 'allowed' };
+  if (browsers.keychain === 'declined' || browsers.keychain === 'refused') return { go: 'declined' };
+  if (!Array.isArray(browsers.browsers) || !browsers.browsers.length) return { go: 'declined' };
+  if (browsers.chosenId === 'safari' && !(browsers.safari && browsers.safari.diskAccess === true)) return 'safari';
+  return 'ask';
+}
+
+/** The chosen browser's profiles (COOKIES' api.browsers(): [] for one with a single profile, or none readable). */
+export function profilesOf(browsers) {
+  const list = (browsers && Array.isArray(browsers.browsers)) ? browsers.browsers : [];
+  const chosen = list.find((browser) => browser.id === (browsers && browsers.chosenId));
+  return chosen && Array.isArray(chosen.profiles) ? chosen.profiles : [];
+}
+
+/**
+ * After Allow (or Safari's disk access granted): "Select your {Browser} profile" when the chosen browser has more than one
+ * and none of them was chosen (S10), else 'macos': the one prompt macOS shows for the browser's sign-ins, at once (S12).
+ */
+export function afterAllow(browsers) {
+  const profiles = profilesOf(browsers);
+  if (profiles.length > 1 && !profiles.some((profile) => profile.id === (browsers && browsers.chosenProfile))) return 'profile';
+  return 'macos';
+}
+
+/** The run's `keychain` (S11): from the answer alone. Declined, refused or never answered, macOS is never asked. */
+export const runKeychain = (browsers) => !!browsers && browsers.keychain === 'allowed';

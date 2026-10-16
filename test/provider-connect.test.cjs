@@ -97,6 +97,20 @@ test('both CLIs there, one signed in: that one runs; a CLI being installed reads
   assert.equal(stateOf({ installed: true, status: 'ready', busy: { action: 'check' } }, true), 'ready', 'a check of a ready one is not "connecting"');
 });
 
+test('subscribed whatever the version (2026-10-16, S3): an old Claude Code signed in with a plan is updated, not asked about', async () => {
+  const old = await machine({ claude: '2.1.1', codex: 'missing' });
+  assert.equal(old.tools.snapshot().tools.claude.status, 'outdated');
+  const claude = (await providersOn(old).status({ fresh: true })).providers.find((one) => one.id === 'anthropic');
+  assert.deepEqual([claude.subscribed, claude.subscription], [true, 'max'], 'too old, but it qualifies');
+  old.tools.setUpdates('ask'); // not updated on its own: it cannot run until it is
+  const asked = (await providersOn(old).status({ fresh: true })).providers[0];
+  assert.deepEqual([asked.signedIn, asked.subscribed], [false, true]);
+  const free = (await providersOn(await machine({ claude: '2.1.300 no-plan', codex: 'missing' })).status({ fresh: true })).providers[0];
+  assert.deepEqual([free.signedIn, free.subscribed], [true, false], 'signed in without a subscription: it runs, it does not qualify');
+  const out = (await providersOn(await machine({ claude: '2.1.300 signed-out', codex: 'missing' })).status({ fresh: true })).providers[0];
+  assert.equal(out.subscribed, false);
+});
+
 /* --------------------------------------------------------------------------------------------------- the discovery */
 
 function discoveryOn(m, { fail = null } = {}) {

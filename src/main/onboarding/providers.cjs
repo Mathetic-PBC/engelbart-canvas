@@ -108,9 +108,9 @@ function createProviders({ tools, prefs, homeDir = os.homedir(), environment = p
 
   async function read() {
     if (fake) {
-      if (fake === 'none') return ['anthropic', 'openai'].map((id) => ({ id, name: PROVIDER_NAMES[id], installed: true, signedIn: false, subscription: null, since: null, state: 'not-connected' }));
+      if (fake === 'none') return ['anthropic', 'openai'].map((id) => ({ id, name: PROVIDER_NAMES[id], installed: true, signedIn: false, subscription: null, subscribed: false, since: null, state: 'not-connected' }));
       const plans = FAKES[fake] || FAKES.claude;
-      return ['anthropic', 'openai'].map((id, n) => ({ id, name: PROVIDER_NAMES[id], installed: true, signedIn: true, subscription: plans[id], since: n === 0 ? 1_700_000_000_000 : 1_710_000_000_000, state: 'ready' }));
+      return ['anthropic', 'openai'].map((id, n) => ({ id, name: PROVIDER_NAMES[id], installed: true, signedIn: true, subscription: plans[id], subscribed: !!plans[id], since: n === 0 ? 1_700_000_000_000 : 1_710_000_000_000, state: 'ready' }));
     }
     const snap = tools && tools.snapshot ? tools.snapshot() : null;
     const record = (id) => (snap && snap.tools && snap.tools[TOOL_OF[id]]) || {};
@@ -123,18 +123,24 @@ function createProviders({ tools, prefs, homeDir = os.homedir(), environment = p
       // Signed in only when the CLI says so (2026-10-14): a check that could not tell (`signedIn: null`, e.g. `auth status`
       // timing out on a fresh Mac's first run) counted as signed in, and every agent then failed with "Not logged in".
       // Claude Code is asked now (its answer also names the plan); Codex's own sign-in file is read when its check could not tell.
-      let signedIn = installed && works && r.signedIn === true;
+      // A CLI too old for Engelbart is asked too (2026-10-16, the onboarding beta's S3): one signed in with a subscription is
+      // updated in the background and onboarding goes straight on, so `subscribed` says so whatever its version, while
+      // `signedIn` (it can run now) stays false until it works.
+      const asked = installed && (works || r.status === 'outdated' || r.status === 'incompatible');
+      let cliSignedIn = asked && r.signedIn === true;
       let subscription = null;
-      if (installed && works && id === 'anthropic' && r.path) {
+      if (asked && id === 'anthropic' && r.path) {
         const auth = claudeAuth(await claudeStatus(r.path));
-        if (auth) { signedIn = auth.loggedIn; subscription = auth.plan; }
+        if (auth) { cliSignedIn = auth.loggedIn; subscription = auth.plan; }
       }
-      if (installed && works && id === 'openai') {
-        if (r.signedIn !== true && r.signedIn !== false) signedIn = codexSignedIn({ env: environment, home: homeDir });
-        if (signedIn) subscription = codexPlan({ env: environment, home: homeDir });
+      if (asked && id === 'openai') {
+        if (r.signedIn !== true && r.signedIn !== false) cliSignedIn = codexSignedIn({ env: environment, home: homeDir });
+        if (cliSignedIn) subscription = codexPlan({ env: environment, home: homeDir });
       }
+      const signedIn = works && cliSignedIn;
+      const subscribed = !!(cliSignedIn && subscription);
       const since = bornAt(id === 'anthropic' ? path.join(homeDir, '.claude') : (environment.CODEX_HOME || path.join(homeDir, '.codex')));
-      out.push({ id, name: PROVIDER_NAMES[id], installed, signedIn, subscription, since, account: r.account || null, status: r.status || 'missing', state: stateOf(r, signedIn), error: signedIn ? null : (r.error || null) });
+      out.push({ id, name: PROVIDER_NAMES[id], installed, signedIn, subscription, subscribed, since, account: r.account || null, status: r.status || 'missing', state: stateOf(r, signedIn), error: signedIn ? null : (r.error || null) });
     }
     return out;
   }

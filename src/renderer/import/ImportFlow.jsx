@@ -4,6 +4,9 @@ import { ROUND3_CSS } from './round3-css.js';
 import { ROUND4_CSS } from './round4-css.js';
 import { TOOL_LOGOS, WORKS, BROWSER_LOGOS, PROVIDER_LOGOS } from './logos.js';
 import ObsidianPicker from './ObsidianPicker.jsx';
+import { AgentSetupBody } from './AgentSetup.jsx';
+import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
+import { fluidScale, keychainStep, afterAllow, profilesOf, runKeychain, cliOfProvider } from '../model/onboarding.js';
 import {
   CATALOG, CATALOG_IDS, ROLES, GROUPS, GROUP_IDS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp,
   scopeKind, emptyScope, scopeReady,
@@ -14,7 +17,7 @@ import { LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, cleanDays, shownName } from '
 // design/onboarding-mockup/Onboarding.html with its markup and classes (its CSS is import-css.js, scoped under .ix).
 //
 //   Import context → (the provider: asked when both are subscribed; tools set up when neither can run) → (the browser's
-//   sign-ins) → What kind of work do you do? → What are you interested in researching right now? → What project do you
+//   sign-ins) → What kind of work do you do? → What are you interested in researching? → What project do you
 //   want to work on first? → What should go in your library? (the categories, with the tools the agents found added to
 //   them) → Import to Engelbart → How should Engelbart import your sources?
 //     in the background with agents → Import context using background agents (I understand) → (Allow Engelbart to
@@ -53,8 +56,6 @@ const isLinks = (id) => typeof id === 'string' && id.startsWith(LINKS);
 const linkedApp = (id) => id.slice(LINKS.length);
 /** A source as the Specify context lines name it ("websites saved in Obsidian", not "Saved websites from Obsidian"). */
 const spokenName = (id) => (isLinks(id) ? `websites saved in ${toolName(linkedApp(id))}` : toolName(id));
-/** A category in a sentence: "all notes", "all meeting transcripts", "all AI chats". */
-const spokenGroup = (label) => label.replace(/^([A-Z])(?=[a-z])/, (c) => c.toLowerCase());
 const NOTES_APPS = (GROUPS.find((group) => group.id === 'notes') || { apps: [] }).apps;
 const groupOf = (id) => (isLinks(id) || id === SITES ? 'sites' : (GROUPS.find((group) => group.apps.includes(id)) || {}).id || null);
 const LINKS_NOTE = 'Also bring in the web links saved in these notes (essays, papers, articles and other pages): add each one to the library with add_to_library.';
@@ -91,6 +92,28 @@ const FILE = <Svg d={'<path d="M6 2h8l5 5v15H6z"/><path d="M14 2v5h5"/>'} />;
 const GLOBE = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a17 17 0 0 0 0 18 17 17 0 0 0 0-18"/>'} />;
 const WEB = <Svg d={'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c5 5 5 13 0 18-5-5-5-13 0-18"/>'} />;
 const PLUS = <Svg d={'<path d="M12 5v14M5 12h14"/>'} />;
+// How should Engelbart import your sources? (2026-10-16, S8): the agents' pointer (the sidebar's Agents icon) for the first
+// way, a raised hand for the second (Attachment 13 without its rounded square; Lucide's hand, ISC), in the same stroke.
+const AGENT_ICON = <Svg d={`<path d="${AGENTS_PATH}"/>`} />;
+const HAND_ICON = <Svg d={'<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path d="M14 10V4a2 2 0 0 0-2-2a2 2 0 0 0-2 2v2"/><path d="M10 10.5V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2v8"/><path d="M18 8a2 2 0 1 1 4 0v6a8 8 0 0 1-8 8h-2c-2.8 0-4.5-.86-5.99-2.34l-3.6-3.6a2 2 0 0 1 2.83-2.82L7 15"/>'} />;
+// System Settings ▸ Privacy & Security ▸ Full Disk Access, opened directly when main has no api.openDiskAccess yet (S9).
+const FULL_DISK_ACCESS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles';
+
+/**
+ * The window's size and the onboarding's one fluid scale (2026-10-16, S2: "generally make everything bigger, there is too
+ * much whitespace. this should be minimum size but should expand with window. same for all like five screens"): the zoom
+ * of each screen's column (model/onboarding.js fluidScale), from a minimum at the smallest window.
+ */
+export function useFluidScale() {
+  const read = () => ({ width: typeof window === 'undefined' ? 1000 : window.innerWidth, height: typeof window === 'undefined' ? 700 : window.innerHeight });
+  const [size, setSize] = React.useState(read);
+  React.useEffect(() => {
+    const onResize = () => setSize(read());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return { ...size, scale: fluidScale(size.width, size.height) };
+}
 // A project's symbol is the workspace icon (../ui/SidebarIcons.jsx WorkspaceIcon): workspaces become projects (2026-10-13).
 
 const Check = ({ on }) => <span className={`cb ${on ? 'on' : ''}`}>{on ? CHECK : null}</span>;
@@ -102,9 +125,9 @@ function ToolLogo({ id }) {
   if (TOOL_LOGOS[id]) return <img src={TOOL_LOGOS[id]} alt="" />;
   if (id === LOCAL_PDFS || id === LOCAL_FOLDERS) return FOLDER;
   if (id === SITES) return WEB;
-  // A tool the agents found or the person added: no icon (From Amitav, 2026-10-15: "they should just have no icon"), its
-  // room kept so the names line up.
-  return <span className="no-logo" aria-hidden="true" />;
+  // A tool the agents found or the person added: no icon (From Amitav, 2026-10-15: "they should just have no icon"), and
+  // no room kept for one either (2026-10-16, S7: "shift the text to the left to get rid of the whitespace").
+  return null;
 }
 const browserName = (id) => ((BROWSERS.find((browser) => browser.id === id) || {}).name || 'your browser');
 
@@ -141,15 +164,15 @@ const runApps = (F) => F.picks.filter((id) => CATALOG_IDS.includes(id));
 const runAdded = (F) => F.added.filter((tool) => F.picks.includes(tool.id));
 
 const RUN_LABEL = 'Import to Engelbart';
+// Dialogs a click beside them does not close: questions that need an answer (2026-10-16: the browser's sign-ins "wasn't
+// skippable, so you shouldn't even be able to skip this"), and steps that are under way.
+const UNSKIPPABLE = ['starting', 'organize', 'browser-agents', 'browser-agents-confirm', 'keychain', 'keychain-browser', 'safari', 'browser-profile'];
 
 // "Allow Engelbart to read Apple Notes?" answered Allow once is not asked again (2026-10-14: skip permission prompts that
 // were already accepted). macOS keeps its own answer; this is Engelbart's question in front of it.
 const NOTES_KEY = 'engelbart.import.notesConsent';
 function notesConsented() { try { return window.localStorage.getItem(NOTES_KEY) === '1'; } catch { return false; } }
 function rememberNotesConsent() { try { window.localStorage.setItem(NOTES_KEY, '1'); } catch { /* asked again next time */ } }
-
-/** A source that is an app (a category of apps says "these apps"; one with folders, files or links "these sources"). */
-const isApp = (id) => !isLinks(id) && ![SITES, LOCAL_PDFS, LOCAL_FOLDERS].includes(id);
 
 /* ======================================================================================================== the flow */
 
@@ -194,11 +217,12 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     api.flow().then((saved) => {
       if (!live) return;
       // In a project the picker comes fresh every time; a new user's onboarding opens where it was.
-      if (saved && saved.v === FLOW_VERSION && mode === 'new') { setF({ ...fresh(), ...saved, menu: null, ...(Object.hasOwn(GONE_DIALOGS, saved.dialog) ? { dialog: GONE_DIALOGS[saved.dialog] } : {}) }); }
+      if (saved && saved.v === FLOW_VERSION && mode === 'new') { setF({ ...fresh(), ...saved, menu: null, groupScopes: {}, ...(Object.hasOwn(GONE_DIALOGS, saved.dialog) ? { dialog: GONE_DIALOGS[saved.dialog] } : {}) }); }
       setRestored(true);
     }).catch(() => setRestored(true));
     api.providers(false).then((out) => { if (live) setProviders(out); }).catch(() => {});
-    api.browsers().then((out) => { if (live) { setBrowsers(out); set((now) => (now.browserChoice ? {} : { browserChoice: out.chosenId })); } }).catch(() => {});
+    // A detection that failed is a Mac with no browser to ask about, not an answer left missing (S11).
+    api.browsers().then((out) => { if (live) { setBrowsers(out); set((now) => (now.browserChoice ? {} : { browserChoice: out.chosenId })); } }).catch(() => { if (live) setBrowsers((now) => now || { browsers: [], keychain: null, failed: true }); });
     api.discovery().then((out) => { if (live) setDiscovery(out); }).catch(() => {});
     api.diskAccess().then((out) => { if (live) setDisk(out); }).catch(() => {});
     if (api.foldersAsked) api.foldersAsked().then((out) => { if (live) setAsked(out || {}); }).catch(() => {});
@@ -311,7 +335,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       // The work questions come next; the tool agent starts once the browser question is answered, so the tools screen
       // has what it found by the time the person gets there. 2026-10-14: the popups the intro's buttons bring up stay over
       // the intro ("the background should never change when a new popup comes").
-      keychainGate(() => set({ dialog: null, screen: 'roles' }));
+      keychainGate('roles');
     } else if (purpose === 'run') void run(provider);
     else if (purpose === 'librarian') void startLibrarian(provider);
     else set({ dialog: null });
@@ -327,31 +351,105 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   /* -------- the start */
   const importContext = () => { setError(''); void needProvider('start'); };
 
-  /** The browser's sign-ins asked about once (Keychain), then `then`; the tool agent starts once it is answered. */
-  const afterKeychain = React.useRef(null);
-  const keychainGate = (then) => {
-    const answered = (browsers && browsers.keychain) || null;
-    const go = (answer) => { then(); startTools(answer); };
-    if (answered || !browsers || !browsers.browsers.length) { go(answered || 'declined'); return; }
-    afterKeychain.current = go;
-    set({ dialog: 'keychain' });
+  /**
+   * The browser's sign-ins, asked once before the work questions (2026-10-16, S9–S12; model/onboarding.js keychainStep).
+   * It can't be skipped, and is never skipped for want of an answer: while the browsers are still being looked for the
+   * dialog says so and asks once they are known (S11; it used to go on as 'declined', and the run then sent keychain: true).
+   * What comes after (`keychainNext`: the work questions) is kept in the saved flow, so a relaunch macOS asks for after Full
+   * Disk Access comes back to the question and goes on from it.
+   */
+  const keychainGate = (next) => {
+    latest.current = { ...latest.current, keychainNext: next };
+    set({ keychainNext: next });
+    routeKeychain(browsers);
   };
-  const keychainAnswer = async (answer) => {
-    try { await api.keychain(answer); } catch (failure) { say(failure); }
+  const routeKeychain = (now, { fresh = false } = {}) => {
+    const step = keychainStep(fresh && now ? { ...now, keychain: null } : now);
+    if (step === 'wait') { set({ dialog: 'keychain' }); return; }
+    if (step.go) { keychainDone(step.go); return; }
+    set({ dialog: step === 'safari' ? 'safari' : 'keychain' });
+  };
+  // The browsers found while the dialog waited for them: asked now (or on at once, with none to ask about).
+  const haveBrowsers = !!browsers;
+  React.useEffect(() => {
+    const now = latest.current;
+    if (haveBrowsers && now.dialog === 'keychain' && now.keychainNext) routeKeychain(browsers);
+  }, [haveBrowsers]); // eslint-disable-line react-hooks/exhaustive-deps
+  const keychainDone = (answer) => {
+    const now = latest.current;
+    // A flow saved on the question before `keychainNext` was kept: it was asked from the intro, on the way to the questions.
+    const next = now.keychainNext || (now.screen === 'intro' ? 'roles' : null);
+    latest.current = { ...now, dialog: null, keychainNext: null, diskWaiting: false };
+    set({ dialog: null, keychainNext: null, diskWaiting: false, ...(next ? { screen: next } : {}) });
+    startTools(answer === 'allowed' ? 'allowed' : 'declined');
+  };
+  /** Allow (or Safari's disk access granted): the profile first when the browser has several (S10), then macOS (S12). */
+  const keychainAllow = () => {
+    if (afterAllow(browsers) === 'profile') { set({ dialog: 'browser-profile', profileChoice: null }); return; }
+    void askMacos();
+  };
+  // macOS's one prompt for the chosen browser's sign-ins, at once, with either way of importing (S12: it waited until
+  // Import to Engelbart with "Choose sources myself"). It resolves once macOS answered (COOKIES' api.keychain: { keychain:
+  // 'allowed' | 'refused' }); a refusal is kept as such, so nothing asks macOS again this run.
+  const askMacos = async () => {
+    setBusy('keychain');
+    let out = null;
+    try { out = await api.keychain('allowed'); } catch (failure) { say(failure); }
+    setBusy('');
+    const answer = out && typeof out === 'object' && (out.keychain === 'allowed' || out.keychain === 'refused') ? out.keychain : 'allowed';
     setBrowsers((now) => ({ ...(now || { browsers: [] }), keychain: answer }));
-    const go = afterKeychain.current;
-    afterKeychain.current = null;
-    set({ dialog: null });
-    if (go) go(answer);
+    keychainDone(answer);
   };
+  const keychainDecline = async () => {
+    try { await api.keychain('declined'); } catch (failure) { say(failure); }
+    setBrowsers((now) => ({ ...(now || { browsers: [] }), keychain: 'declined' }));
+    keychainDone('declined');
+  };
+  const chooseProfile = async () => {
+    const id = latest.current.profileChoice;
+    if (!id || !browsers) return;
+    if (typeof api.chooseBrowserProfile === 'function') {
+      try { setBrowsers(await api.chooseBrowserProfile(browsers.chosenId, id)); } catch (failure) { say(failure); return; }
+    } else setBrowsers((now) => ({ ...now, chosenProfile: id }));
+    void askMacos();
+  };
+  // Safari (S9): Grant disk access opens System Settings ▸ Privacy & Security ▸ Full Disk Access (no guide window) and waits
+  // for the switch; granted, Safari's sign-ins are used like any other browser's.
+  const grantDisk = async () => {
+    set({ diskWaiting: true });
+    try {
+      if (typeof api.openDiskAccess === 'function') await api.openDiskAccess();
+      else await api.openExternal(FULL_DISK_ACCESS_URL);
+    } catch (failure) { say(failure); }
+  };
+  const safariOpen = F.dialog === 'safari';
+  React.useEffect(() => {
+    if (!safariOpen) return undefined;
+    let live = true;
+    let timer = null;
+    const tick = async () => {
+      let granted = false;
+      try { const out = await api.diskAccess(); granted = !!(out && out.granted); } catch { granted = false; }
+      if (!live) return;
+      if (!granted) { timer = setTimeout(tick, 1500); return; }
+      setDisk({ granted: true });
+      let now = browsers;
+      try { now = await api.browsers(); setBrowsers(now); } catch { /* the last answer */ }
+      if (!live || latest.current.dialog !== 'safari') return;
+      const ready = { ...(now || {}), safari: { ...((now && now.safari) || {}), diskAccess: true } };
+      if (afterAllow(ready) === 'profile') { set({ dialog: 'browser-profile', profileChoice: null }); return; }
+      void askMacos();
+    };
+    timer = setTimeout(tick, 0);
+    return () => { live = false; clearTimeout(timer); };
+  }, [safariOpen]); // eslint-disable-line react-hooks/exhaustive-deps
   const useBrowser = async () => {
     const id = F.browserChoice;
-    try { setBrowsers(await api.chooseBrowser(id)); } catch (failure) { say(failure); return; }
-    // Firefox keeps no Keychain key to ask for: its sign-ins are read as they are. Safari's can't be read at all: the
-    // sign-ins are made inside Engelbart (src/main/connect/web-signin.cjs).
-    if (id === 'safari') { set({ dialog: 'keychain' }); return; }
-    if (!(BROWSERS.find((browser) => browser.id === id) || {}).keychain) { set({ dialog: 'keychain' }); return; }
-    set({ dialog: 'keychain' });
+    let out = null;
+    try { out = await api.chooseBrowser(id); setBrowsers(out); } catch (failure) { say(failure); return; }
+    // Another browser is asked about afresh: Safari's popup, or Allow for any other (Firefox keeps no Keychain key, so
+    // macOS asks nothing for it).
+    routeKeychain(out, { fresh: true });
   };
   const startTools = (answer) => {
     const now = latest.current;
@@ -452,7 +550,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const startInput = (now, provider, { projects, apps, scopes, additional }, extra = {}) => ({
     provider,
     permissions: { files: true, browser: true, recall: true, notes: apps.includes('Apple Notes') },
-    keychain: !browsers || browsers.keychain !== 'declined',
+    keychain: runKeychain(browsers), // S11: from the answer alone; declined or never answered, macOS is never asked
     browser: (browsers && browsers.chosenId) || null,
     days: cleanDays(now.period),
     ...(mode === 'modal' && into ? { projectId: into, ...(workspaceId ? { workspaceId } : {}) } : {}),
@@ -561,6 +659,24 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     latest.current = { ...latest.current, folderAnswers: answers };
     set({ folderAnswers: answers });
   };
+  // Skip (2026-10-16, S13: "they should be able to deny"): on without asking macOS for the folders; what needs them is left
+  // out quietly (the folder guard reads only folders allowed, ../../main/connect/folder-access.cjs).
+  const organizeSkip = () => { latest.current = { ...latest.current, organized: true, dialog: null }; set({ organized: true, dialog: null }); setTimeout(runGate, 0); };
+
+  // S8: "(recommended)" in the first way's title only while the whole title fits on one line at the dialog's width.
+  const [recommendedFits, setRecommendedFits] = React.useState(true);
+  const recommendedWatch = React.useRef(null);
+  const recommendedRef = React.useCallback((title) => {
+    if (recommendedWatch.current) { recommendedWatch.current.disconnect(); recommendedWatch.current = null; }
+    if (!title) return;
+    const measure = () => {
+      const probe = title.parentElement && title.parentElement.querySelector('.recommended-measure');
+      if (probe) setRecommendedFits(probe.getBoundingClientRect().width <= title.getBoundingClientRect().width + 0.5);
+    };
+    measure();
+    if (typeof ResizeObserver === 'function') { recommendedWatch.current = new ResizeObserver(measure); recommendedWatch.current.observe(title); }
+  }, []);
+  const fit = useFluidScale();
 
   /* -------- picks */
   /** A tool from "+ Add a tool": ticked, as the person's own choice. */
@@ -568,29 +684,23 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   /** The category a source is shown in: the catalog's, else (a tool the agents found or the person added) its own. */
   const groupOfId = (id, now = F) => groupOf(id) || ((now.added.find((tool) => tool.id === id) || {}).group) || 'other';
   /** A category's rows: its apps (Websites: the browser's saved URLs, then each notes app's saved websites), then the tools
-   *  the agents found in it. Other has only those, and is shown only when it has one. */
+   *  the agents found in it. Other: its own apps (Linear, 2026-10-16) and those, shown when it has either. */
   const keysOf = (group, now = F) => {
-    const own = group.id === 'other' ? [] : (group.apps.length ? group.apps : [`__${group.id}`]).map((key) => (key === '__sites' ? SITES : key));
+    const own = (group.apps.length ? group.apps : group.id === 'other' ? [] : [`__${group.id}`]).map((key) => (key === '__sites' ? SITES : key));
     const links = group.id === 'sites' ? NOTES_APPS.filter((app) => now.picks.includes(app)).map(linksOf) : [];
     const found = now.added.filter((tool) => groupOfId(tool.id, now) === group.id).map((tool) => tool.id);
     return [...own, ...links, ...found];
   };
   const toggle = (list, id) => (list.includes(id) ? list.filter((one) => one !== id) : [...list, id]);
   const scopeOf = (id) => F.scopes[id] || emptyScope(isLinks(id) ? SITES : id);
-  const groupScopeOf = (gid) => ({ note: '', people: [], ...(F.groupScopes[gid] || {}) });
-  const setGroupScope = (gid, patch) => set((now) => ({ groupScopes: { ...now.groupScopes, [gid]: { note: '', people: [], ...(now.groupScopes[gid] || {}), ...patch } } }));
-  /** A source ticked or unticked (the person's own, so the tool agent's answer leaves it). Ticking opens its category's
-   *  Specify context (unless the person closed it there) and closes any one source's; unticking opens nothing. A notes app
-   *  unticked takes its saved websites with it. */
+  /** A source ticked or unticked (the person's own, so the tool agent's answer leaves it). Ticking closes any one source's
+   *  Specify context; unticking opens nothing. A notes app unticked takes its saved websites with it. */
   const pickSource = (id) => set((now) => {
     const adding = !now.picks.includes(id);
     let picks = toggle(now.picks, id);
     if (!adding && NOTES_APPS.includes(id)) picks = picks.filter((one) => one !== linksOf(id));
-    const gid = groupOfId(id, now);
     const touched = [...new Set([...now.touched, id])];
-    return adding
-      ? { picks, touched, scopeOpen: null, groupScopeClosed: now.groupScopeClosed.filter((one) => one !== gid) }
-      : { picks, touched, scopeOpen: now.scopeOpen === id ? null : now.scopeOpen };
+    return adding ? { picks, touched, scopeOpen: null } : { picks, touched, scopeOpen: now.scopeOpen === id ? null : now.scopeOpen };
   });
   const setScope = (id, patch) => set((now) => ({ scopes: { ...now.scopes, [id]: { ...(now.scopes[id] || emptyScope(id)), ...patch } } }));
   // Choose files (2026-10-14: "choose folder and choose files should just be the same thing"): files and folders in one
@@ -643,6 +753,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     // Nothing on this Mac to name projects from (2026-10-15: a new account): said plainly, not as a failure to try again.
     const text = projectStatus === 'done' && found.empty ? 'No recent projects found. Add your own below.'
       : projectStatus === 'done' ? 'Recent projects found'
+      // DISCOVERY's route (2026-10-16): the person's Claude or ChatGPT on the web is asked when the CLIs knew nothing.
+      : projectStatus === 'running' && Array.isArray(found.asking) && found.asking.length ? `Asking ${found.asking.join(' and ')} about your projects…`
       : projectStatus === 'running' ? 'Finding recent projects in the background…'
         : projectStatus === 'failed' ? (connect ? `Couldn’t reach ${named}.` : 'Couldn’t find recent projects. Add your own below.')
           : projectStatus === 'waiting-provider' ? `Waiting for ${named || 'your AI provider'}…`
@@ -699,8 +811,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const workNext = () => { if (latest.current.work.trim()) set({ screen: 'projects' }); };
   const workPage = () => (
     <main className="work-page review-work" data-import-screen="work"><div className="work-column">
-      {flowHeader('What are you interested in researching right now?', 'work-description-title', () => set({ screen: 'roles' }))}
-      <textarea id="work-description" className="field" rows={1} ref={growReviewInput} autoFocus aria-label="What are you interested in researching right now?" placeholder="Understanding the Memex..." value={F.work}
+      {flowHeader('What are you interested in researching?', 'work-description-title', () => set({ screen: 'roles' }))}
+      <textarea id="work-description" className="field" rows={1} ref={growReviewInput} autoFocus aria-label="What are you interested in researching?" placeholder="Understanding the Memex..." value={F.work}
         onChange={event => { growReviewInput(event.currentTarget); set({ work: event.target.value.slice(0, 2000) }); }}
         onKeyDown={event => { if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) { event.preventDefault(); workNext(); } }} />
       <footer className="work-foot">{lowerBack()}<button type="button" className="btn" disabled={!F.work.trim()} onClick={workNext}>Continue{CHEV}</button></footer>
@@ -723,6 +835,9 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
             ))}
             {!ready && <div className="project-loading">{discoveryLine()}<div className="project-skeleton" /><div className="project-skeleton" /></div>}
             {ready && projectStatus === 'failed' && discoveryLine()}
+            {/* Nothing anywhere knew of a project (DISCOVERY's reason 'no-context', 2026-10-16): the person adds one, and
+                nothing says it failed ("it is more an issue of not enough context"). */}
+            {projectStatus === 'done' && discovery.projects.empty && !projects.length && <p className="projects-empty" data-projects-empty={discovery.projects.reason || 'empty'}>Add the project you want to start with.</p>}
           </div>
           <button type="button" className="add-project" onClick={() => { setDraft({ title: '', description: '', tool: '', website: '' }); set({ dialog: 'work-add-project' }); }}>{PLUS} Add a project</button>
           <footer className="work-foot">{lowerBack()}
@@ -794,14 +909,6 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     });
   };
 
-  /** A category's Specify context: for every source ticked in it. A category of one source is that source's own. */
-  const groupPanel = (group, keys) => {
-    const on = keys.filter((id) => F.picks.includes(id));
-    if (keys.length === 1) return sourcePanel(keys[0]);
-    const scope = groupScopeOf(group.id);
-    const name = on.every(isApp) ? 'these apps' : 'these sources';
-    return contextPanel({ id: `group:${group.id}`, name, label: `Specific things to import from ${name} (optional)`, hint: GROUP_HINTS[group.id] || '', note: scope.note, onNote: (note) => setGroupScope(group.id, { note }) });
-  };
 
   const picker = () => (
     <>
@@ -809,38 +916,31 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         <div className="col">
           <T k="pickerTitle" tag="h2" />
           {mode === 'new' && toolStatus === 'checking' && <div className="discovery-line picker-discovery" role="status" data-tools-status="checking"><span className="activity-dot" /><span>Finding the tools you use…</span></div>}
+          {/* 2026-10-16 (S6, "get rid of this dropdown, it should not be collapsable on a topic level"): every category is
+              open, with no chevron, and has no "Specify context for all {category}" of its own; each source keeps its own
+              Specify context, a category of one source too. */}
           {GROUPS.filter((group) => keysOf(group).length > 0).map((group) => {
-            const keys = keysOf(group), open = F.open.includes(group.id);
+            const keys = keysOf(group);
             const nOn = keys.filter((id) => F.picks.includes(id)).length;
-            // The category's Specify context opens by itself (2026-10-14: "do not auto-expand on an app level, only a
-            // category level"): shown open once something in it is ticked, until the person closes it.
-            const groupOpen = nOn > 0 && !F.groupScopeClosed.includes(group.id);
-            return <section key={group.id}>
+            return <section key={group.id} data-group-section={group.id}>
               <div className="group-head">
-                <button type="button" className="expand" data-group={group.id} aria-expanded={open} onClick={() => set({ open: open ? [] : [group.id], scopeOpen: null })}>{CHEV}<span>{group.label}</span></button>
+                <span className="group-title" data-group={group.id}>{group.label}</span>
                 <span className="muted review-count">{nOn ? `${nOn} selected` : ''}</span>
               </div>
-              {open && <div className="apps">
+              <div className="apps">
                 {keys.map((id) => {
                   const selected = F.picks.includes(id);
-                  const own = keys.length > 1; // a category of one source has only the category's panel
                   return <section key={id} className={`review-source ${selected ? 'selected' : ''}`}>
                     <div className="review-source-row">
                       <button type="button" className="app-row" data-app={id} role="checkbox" aria-checked={selected} onClick={() => pickSource(id)}>
                         <ToolLogo id={id} /><span className="app-text">{nameOf(id)}</span><Check on={selected} />
                       </button>
-                      {selected && own && <button type="button" className={`review-specify ${F.scopeOpen === id ? 'is-open' : ''}`} data-specify-context={id} aria-expanded={F.scopeOpen === id} onClick={() => set({ scopeOpen: F.scopeOpen === id ? null : id })}>Specify context{DOWN}</button>}
+                      {selected && <button type="button" className={`review-specify ${F.scopeOpen === id ? 'is-open' : ''}`} data-specify-context={id} aria-expanded={F.scopeOpen === id} onClick={() => set({ scopeOpen: F.scopeOpen === id ? null : id })}>Specify context{DOWN}</button>}
                     </div>
-                    {selected && own && F.scopeOpen === id && sourcePanel(id)}
+                    {selected && F.scopeOpen === id && sourcePanel(id)}
                   </section>;
                 })}
-                {nOn > 0 && <section className="group-context" data-group-context={group.id}>
-                  <div className="group-context-row">
-                    <button type="button" className={`review-specify ${groupOpen ? 'is-open' : ''}`} data-specify-group={group.id} aria-expanded={groupOpen} onClick={() => set((now) => ({ groupScopeClosed: groupOpen ? [...now.groupScopeClosed, group.id] : now.groupScopeClosed.filter((one) => one !== group.id) }))}>{`Specify context for ${keys.length === 1 ? nameOf(keys[0]) : `all ${spokenGroup(group.label)}`}`}{DOWN}</button>
-                  </div>
-                  {groupOpen && groupPanel(group, keys)}
-                </section>}
-              </div>}
+              </div>
             </section>;
           })}
           <div className="picker-add"><button type="button" className="link under" data-add-tool="1" onClick={() => { setCatalogQuery(''); setDraft({ title: '', description: '', tool: '', website: '' }); set({ dialog: 'work-add-tool' }); }}>+ Add a tool</button></div>
@@ -861,37 +961,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const close = () => set({ dialog: null });
   const browserNow = browsers ? browserName(browsers.chosenId) : 'your browser';
 
-  // Claude Code's and Codex's rows (2026-10-14): one Connect each, which installs, checks and signs in, whichever the CLI
-  // still needs (src/main/tools/manager.cjs connect); "Connecting…" while Engelbart works on it, never "Installing" for
-  // one the person has ("it should say connecting instead"); Connected only once the CLI itself says it is signed in.
-  // What stopped it (an install that failed, a CLI that does not run) is its line.
-  const toolRow = (id, name) => {
-    const tool = toolsSnap && toolsSnap.tools && toolsSnap.tools[id];
-    const provider = id === 'claude' ? 'anthropic' : 'openai';
-    const status = providers && (providers.providers || []).find((one) => one.id === provider);
-    const busy = (tool && tool.busy) || null;
-    // Signed in by its own word, yet it turned the agent away (refusedNow): its line says why, and Connect signs in again.
-    const refused = refusedNow() === provider && !busy;
-    const ready = !refused && !!(status && status.installed && status.signedIn);
-    const signing = !ready && !!busy && busy.action === 'sign-in';
-    const connecting = !ready && !signing && !refused && (!!(busy && busy.action !== 'sign-out') || (status && status.state === 'connecting') || (!!tool && ['installing', 'checking', 'unknown', 'updating'].includes(tool.status)));
-    const why = refused ? String((discovery && discovery.projects && discovery.projects.error) || '') : !ready && !busy && tool && tool.error ? String(tool.error) : '';
-    const problem = why ? why.split(/(?<=[.!?])\s/)[0] : '';
-    const label = ready ? 'Connected' : signing ? 'Finish in your browser' : connecting ? 'Connecting…' : problem || 'Not connected';
-    const state = ready ? 'ready' : refused ? 'refused' : signing ? 'signing-in' : connecting ? 'connecting' : 'not-connected';
-    const connect = () => (refused ? api.toolsSignIn(id) : api.toolsConnect ? api.toolsConnect(id) : api.toolsInstall([id])).catch(say);
-    return (
-      <div key={id} data-provider-row={provider} data-provider-state={state} style={{ borderTop: 0 }}>
-        <Logo src={PROVIDER_LOGOS[provider]} />
-        <span>{name}</span>
-        <small title={problem || undefined} style={{ maxWidth: 200, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{label}</small>
-        {ready ? CHECK
-          : signing ? (busy.url && api.openExternal ? <button type="button" className="btn secondary small" onClick={() => api.openExternal(busy.url).catch(say)}>Open page</button> : null)
-            : connecting ? null
-              : <button type="button" className="btn secondary small" data-provider-connect={provider} onClick={connect}>Connect</button>}
-      </div>
-    );
-  };
+  // The browser named as the profile popup says it: "Select your Chrome profile" (not "Google Chrome").
+  const shortBrowser = (id) => browserName(id).replace(/^(Google|Microsoft)\s+/, '');
 
   const dialogBody = () => {
     const d = F.dialog;
@@ -923,33 +994,30 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         </>
       );
     }
+    // The agent popup (2026-10-16, S3): the same one Welcome shows (./AgentSetup.jsx), in place of "Connect Claude Code or
+    // Codex". The CLI the flow asked for (a provider that could not run, or one that turned the agents away) is chosen
+    // already; once one can run, the effect above goes on with what it was opened for.
     if (d === 'tools-setup') {
-      const ready = readyProviders().length > 0;
-      return (
-        <>
-          <div className="modal-head"><h3>Connect Claude Code or Codex</h3><button type="button" className="close" aria-label="Close tool setup" onClick={() => set({ dialog: null })}>×</button></div>
-          <p>Engelbart’s agents run on the subscription you already have. One is enough.</p>
-          <div className="tool-list">
-            {toolsSnap && toolsSnap.tools && toolsSnap.tools.git && toolsSnap.tools.git.status !== 'ready' ? <div style={{ borderTop: 0 }}><span>Git</span><small>{toolsSnap.tools.git.status === 'ready' ? 'Installed' : 'Not installed'}</small>{toolsSnap.tools.git.status === 'ready' ? CHECK : <button type="button" className="btn secondary small" onClick={() => api.toolsInstall(['git']).catch(say)}>Install</button>}</div> : null}
-            {toolRow('claude', 'Claude Code')}
-            {toolRow('codex', 'Codex')}
-          </div>
-          <div className="mf"><button type="button" className="link" onClick={() => set({ dialog: null })}>Back</button><button type="button" className="btn" disabled={!ready} onClick={() => needProvider(F.purpose || 'start')}>Continue</button></div>
-        </>
-      );
+      const asked = F.connectFor ? cliOfProvider(F.connectFor) : null;
+      const turnedAway = refusedNow() ? cliOfProvider(refusedNow()) : null;
+      return <AgentSetupBody key={asked || 'any'} api={api} tools={toolsSnap} providers={providers} initial={asked} refused={turnedAway} watchDone={false} onSkip={() => set({ dialog: null })} />;
     }
     // How should Engelbart import your sources? (From Amitav, 2026-10-15): choosing is continuing, as the legacy question's
-    // was. In the background: what that means first (agents-consent). Manually: the librarian.
+    // was. In the background: what that means first (agents-consent). Manually: the librarian. 2026-10-16 (S8): the agents'
+    // icon and a hand, "(recommended)" in the first title when it still fits on one line (dropped when it does not), no
+    // trailing periods.
     if (d === 'import-method') {
       return (
         <>
           <h3>How should Engelbart import your sources?</h3>
           <div className="profiles import-modes" role="group" aria-label="How to import">
             <button type="button" className="prof import-mode" data-import-method="agents" onClick={inBackground}>
-              <span className="import-mode-copy"><b>Import in the background with agents.</b><small>Engelbart will dispatch local background agents to bring in your approved sources with minimal intervention (recommended).</small></span>
+              <span className="import-mode-icon">{AGENT_ICON}</span>
+              <span className="import-mode-copy"><b ref={recommendedRef} data-recommended={recommendedFits ? '1' : '0'}>Import in the background with agents{recommendedFits ? <span className="recommended"> (recommended)</span> : null}</b><span className="recommended-measure" aria-hidden="true">Import in the background with agents (recommended)</span><small>Engelbart will dispatch local background agents to bring in your approved sources with minimal intervention.</small></span>
             </button>
             <button type="button" className="prof import-mode" data-import-method="manual" onClick={manually}>
-              <span className="import-mode-copy"><b>Import manually with fine-grained permissions.</b><small>Engelbart will ask for your input before importing anything and will use permission prompts to ask for explicit permission before accessing anything.</small></span>
+              <span className="import-mode-icon">{HAND_ICON}</span>
+              <span className="import-mode-copy"><b>Import manually with fine-grained permissions</b><small>Engelbart will ask for your input before importing anything and will use permission prompts to ask for explicit permission before accessing anything.</small></span>
             </button>
           </div>
           <div className="mf mf-start"><button type="button" className="link" onClick={close}>Back</button></div>
@@ -964,7 +1032,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       const runs = F.provider || (decision && decision.pick) || null;
       const cli = runs === 'openai' ? 'Codex' : runs === 'anthropic' ? 'Claude Code' : 'Claude Code or Codex';
       const company = runs === 'openai' ? 'OpenAI' : runs === 'anthropic' ? 'Anthropic' : 'Anthropic or OpenAI';
-      const browser = browsers && browsers.chosenId && browsers.keychain !== 'declined' ? browserName(browsers.chosenId) : 'browser';
+      const browser = browsers && browsers.chosenId && runKeychain(browsers) ? browserName(browsers.chosenId) : 'browser';
       return (
         <>
           <h3>Import context using background agents</h3>
@@ -977,7 +1045,47 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         </>
       );
     }
-    if (d === 'keychain') return (<><h3>{`Allow Engelbart to use your ${browserNow} sign-ins`}</h3><p>Everything is stored locally on your own device.</p><div className="mf keychain-actions"><button type="button" className="link under" onClick={() => set({ dialog: 'keychain-browser', browserChoice: (browsers && browsers.chosenId) || null })}>Use another browser</button><button type="button" className="btn small" data-import-keychain-allow="1" onClick={() => keychainAnswer('allowed')}>Allow</button></div></>);
+    // The browser's sign-ins (S9–S12, keychainGate): no way past it but an answer. While the browsers are being looked for
+    // it says so in its place (S11); Allow goes to the profile (S10) or straight to macOS's own prompt (S12).
+    if (d === 'keychain') {
+      if (!browsers) return (<><h3>Allow Engelbart to use your browser sign-ins</h3><div className="discovery-line keychain-looking" role="status" data-keychain-looking="1"><span>Looking for your browsers…</span></div></>);
+      const asking = busy === 'keychain';
+      return (<><h3>{`Allow Engelbart to use your ${browserNow} sign-ins`}</h3><p>Everything is stored locally on your own device.</p><div className="mf keychain-actions"><button type="button" className="link under" disabled={asking} onClick={() => set({ dialog: 'keychain-browser', browserFrom: 'keychain', browserChoice: (browsers && browsers.chosenId) || null })}>Use another browser</button><button type="button" className="btn small" data-import-keychain-allow="1" disabled={asking} onClick={keychainAllow}>{asking ? 'Waiting for macOS…' : 'Allow'}</button></div></>);
+    }
+    // Safari (S9, Hudson's words): Full Disk Access, for Safari's own cookie file. Grant disk access opens System Settings at
+    // Full Disk Access and waits for the switch (the effect above); Skip uses no Safari sign-ins (as declined).
+    if (d === 'safari') {
+      const waiting = !!F.diskWaiting || busy === 'keychain';
+      return (
+        <>
+          <h3>Engelbart requires additional permissions to access Safari</h3>
+          <p>Click on the toggle next to ‘Engelbart’ to grant access</p>
+          <div className="mf safari-actions">
+            <button type="button" className="link mf-left" data-safari-skip="1" onClick={keychainDecline}>Skip</button>
+            <button type="button" className="btn secondary small" data-safari-other="1" onClick={() => set({ dialog: 'keychain-browser', browserFrom: 'safari', browserChoice: (browsers && browsers.chosenId) || null })}>Select different browser</button>
+            <button type="button" className="btn small" data-safari-grant="1" disabled={busy === 'keychain'} onClick={grantDisk}>{waiting ? 'Waiting for access…' : 'Grant disk access'}</button>
+          </div>
+        </>
+      );
+    }
+    // Several profiles in the chosen browser (S10): one is chosen, and only it is ever read from.
+    if (d === 'browser-profile') {
+      const list = profilesOf(browsers);
+      const asking = busy === 'keychain';
+      return (
+        <>
+          <h3>{`Select your ${shortBrowser(browsers && browsers.chosenId)} profile`}</h3>
+          <div className="profiles browser-profiles" role="radiogroup" aria-label="Profile">
+            {list.map((profile) => (
+              <button key={profile.id} type="button" className="prof browser-choice profile-choice" role="radio" aria-checked={F.profileChoice === profile.id} data-browser-profile={profile.id} onClick={() => set({ profileChoice: profile.id })}>
+                <span className="profile-name">{profile.name || profile.id}</span>{profile.email ? <span className="profile-email">{profile.email}</span> : null}
+              </button>
+            ))}
+          </div>
+          <div className="mf"><button type="button" className="btn small" data-browser-profile-continue="1" disabled={!F.profileChoice || asking} onClick={chooseProfile}>{asking ? 'Waiting for macOS…' : 'Continue'}</button></div>
+        </>
+      );
+    }
     if (d === 'notes-permission') return (<><h3>Allow Engelbart to read Apple Notes?</h3><div className="mf"><button type="button" className="link" onClick={() => { const now = latest.current; const next = { ...now, picks: now.picks.filter(id => id !== 'Apple Notes'), dialog: null }; latest.current = next; set(next); setTimeout(runGate, 0); }}>Don’t allow</button><button type="button" className="btn" onClick={() => { rememberNotesConsent(); latest.current = { ...latest.current, notesConsent: true, dialog: null }; set({ notesConsent: true, dialog: null }); setTimeout(runGate, 0); }}>Allow</button></div></>);
 
     if (d === 'keychain-browser') {
@@ -992,7 +1100,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
               </button>
             ))}
           </div>
-          <div className="mf"><button type="button" className="link" onClick={() => set({ dialog: 'keychain' })}>Back</button><button type="button" className="btn" disabled={!F.browserChoice} onClick={useBrowser}>{`Use ${browserName(F.browserChoice)}`}</button></div>
+          <div className="mf"><button type="button" className="link" onClick={() => set({ dialog: F.browserFrom === 'safari' ? 'safari' : 'keychain' })}>Back</button><button type="button" className="btn" disabled={!F.browserChoice} onClick={useBrowser}>{`Use ${browserName(F.browserChoice)}`}</button></div>
         </>
       );
     }
@@ -1015,7 +1123,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
               <span className="organize-enabled" data-organize-enabled="agents">{CHECK}Enabled</span>
             </div>
           </div>
-          <div className="mf"><button type="button" className="btn small" data-organize-continue="1" disabled={!done} onClick={() => { latest.current = { ...latest.current, organized: true, dialog: null }; set({ organized: true, dialog: null }); setTimeout(runGate, 0); }}>Continue</button></div>
+          <div className="mf"><button type="button" className="link mf-left" data-organize-skip="1" onClick={organizeSkip}>Skip</button><button type="button" className="btn small" data-organize-continue="1" disabled={!done} onClick={() => { latest.current = { ...latest.current, organized: true, dialog: null }; set({ organized: true, dialog: null }); setTimeout(runGate, 0); }}>Continue</button></div>
         </>
       );
     }
@@ -1054,7 +1162,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
         <>
           <h3>Add a project</h3>
           <label className="field-label">Project title<input id="custom-project-title" className="field" placeholder="Memex" value={draft.title} onChange={(event) => setDraft((now) => ({ ...now, title: event.target.value }))} onKeyDown={(event) => { if (event.key === 'Enter') save(); }} /></label>
-          <label className="field-label">Description <span className="muted">(optional)</span><textarea id="custom-project-description" className="field" rows={2} placeholder="Understanding the history, motivation, and hardware behind the Memex through research articles, papers, interviews, and essays." value={draft.description} onChange={(event) => setDraft((now) => ({ ...now, description: event.target.value }))} /></label>
+          <label className="field-label">Description <span className="muted">(optional)</span><textarea id="custom-project-description" className="field" rows={2} placeholder="Understanding the history of the Memex" value={draft.description} onChange={(event) => setDraft((now) => ({ ...now, description: event.target.value }))} /></label>
           <div className="mf"><button type="button" className="link" onClick={close}>Cancel</button><button type="button" className="btn" disabled={!draft.title.trim()} onClick={save}>Add project</button></div>
         </>
       );
@@ -1095,7 +1203,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   const d = F.dialog;
   const body = d ? dialogBody() : null;
-  const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'organize' ? 'organize-modal' : '';
+  const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'organize' ? 'organize-modal' : d === 'tools-setup' ? 'agent-modal' : d === 'safari' ? 'safari-modal' : '';
   const screen = F.screen === 'intro' ? introPage() : F.screen === 'roles' ? rolesPage() : F.screen === 'work' ? workPage() : F.screen === 'projects' ? projectsPage() : picker();
 
   // Import manually: the librarian's chat, Connect your library's own page, outside this flow's styles; put away, the
@@ -1112,12 +1220,13 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   return (
     <CopyContext.Provider value={{ edit, copy, setCopy }}>
-      <div className={`ix ${edit ? 'editing' : ''} ${mode === 'modal' ? 'ix-in-modal' : ''}`} data-import-flow={mode} data-screen={F.screen} data-dialog={d || ''}>
+      {/* S2's one fluid scale (a new user's onboarding; over a workspace the flow keeps its size) */}
+      <div className={`ix ${edit ? 'editing' : ''} ${mode === 'modal' ? 'ix-in-modal' : 'ix-fluid'}`} data-import-flow={mode} data-screen={F.screen} data-dialog={d || ''} style={mode === 'modal' ? undefined : { '--ix-scale': fit.scale }}>
         <style>{IMPORT_CSS}{EXTRA_CSS}{ROUND3_CSS}{ROUND4_CSS}</style>
         <div className="ix-app" inert={d ? true : undefined}>{screen}</div>
         {error && <div className="ix-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss">×</button></div>}
         {body && (
-          <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget && !['starting', 'organize', 'browser-agents', 'browser-agents-confirm'].includes(d)) set({ dialog: null }); }}>
+          <div className="scrim" onMouseDown={(event) => { if (event.target === event.currentTarget && !UNSKIPPABLE.includes(d)) set({ dialog: null }); }}>
             <section className={`modal ${modalClass}`} role="dialog" aria-modal="true" aria-label={d}>{body}</section>
           </div>
         )}

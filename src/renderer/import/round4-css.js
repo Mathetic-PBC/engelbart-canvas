@@ -81,7 +81,6 @@ export const ROUND4_CSS = `
 .ix .ob .mf{margin-top:14px}
 .ix .ob-count{margin-right:auto;font-size:12px}
 
-.ix .no-logo{width:17px;height:17px;flex:none}
 .ix .picker-discovery{margin:-4px 0 16px}
 .ix .picker-add{display:flex;justify-content:flex-end;margin:16px 0 0}
 .ix .picker-add .link{font-size:13px}
@@ -100,4 +99,44 @@ export const ROUND4_CSS = `
 .ix .organize-connect svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.7}
 .ix .organize-enabled{display:inline-flex;align-items:center;gap:6px;min-height:34px;padding:0 14px;border-radius:999px;background:#f2f2f2;font-size:13.5px;font-weight:500;color:var(--ink)}
 .ix .organize-enabled svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2}
+
+/* Onboarding beta (2026-10-16, docs/onboarding-beta-10-16.md S1–S13) */
+/* S2 "generally make everything bigger, there is too much whitespace. this should be minimum size but should expand with
+   window": one fluid scale, the columns' zoom (--ix-scale, ImportFlow's useFluidScale), the pages keeping the window's
+   size; less room above the columns. Dialogs grow too, a little less. */
+.ix.ix-fluid .work-column,.ix.ix-fluid .col,.ix.ix-fluid .intro-page .welcome,.ix.ix-fluid .foot-inner{zoom:var(--ix-scale,1)}
+.ix.ix-fluid .modal{zoom:calc(1 + (var(--ix-scale,1) - 1) * .6)}
+.ix.ix-fluid .work-page{padding-top:72px;padding-bottom:40px}
+.ix.ix-fluid .picker-page{padding-top:72px}
+.ix.ix-fluid .work-head h1{margin-top:0}
+/* S1: Continue lower right on every screen, Back (when there is one) far left */
+.ix.ix [data-import-screen=roles] .work-foot{justify-content:space-between}
+.ix.ix [data-import-screen=roles] .work-foot>.btn{margin-left:auto}
+/* S6: categories always open, no chevron; their rows under the name, not indented past it */
+.ix .group-title{flex:1;min-width:0;font-size:16px;font-weight:500;text-align:left}
+.ix.ix .review-picker .apps{margin-left:0;padding-left:0;border:0}
+/* S8: the two ways of importing, each with its icon; "(recommended)" in the first title when it fits on one line */
+.ix .import-mode-icon{flex:none;width:24px;height:24px;display:grid;place-items:center;color:var(--ink)}
+.ix .import-mode-icon svg{width:21px;height:21px;stroke-width:1.6}
+.ix .import-mode-copy{position:relative}
+.ix .import-mode-copy .recommended{font-weight:inherit}
+.ix .recommended-measure{position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;pointer-events:none;font-size:15px;font-weight:500;line-height:1.4}
+/* S3: the agent popup (./AgentSetup.jsx), its rows as the browser picker's */
+.ix .modal.agent-modal{width:min(440px,100%)}
+.ix .agent-choices .browser-choice{min-height:54px}
+.ix .agent-choices .browser-choice>.agent-logos{flex:none;display:inline-flex;align-items:center;min-width:41px}
+.ix .agent-choices .browser-choice>span{text-align:left}
+.ix .agent-logos img{width:24px;height:24px;border-radius:6px;background:#fff}
+.ix .agent-logos.two img+img{margin-left:-7px;box-shadow:0 0 0 2px #fff}
+.ix .agent-choices .browser-choice>svg{width:15px;height:15px;flex:none;color:var(--ink)}
+.ix .agent-setup .mf{gap:14px}
+/* S9 Safari's permission, S10 the profile, S11 the browsers still being looked for */
+.ix .modal.safari-modal{width:min(540px,100%)}
+.ix .safari-actions{gap:12px}
+.ix .safari-actions .btn.secondary{background:transparent}
+.ix .profile-choice .profile-name{flex:1;min-width:0;overflow-wrap:anywhere}
+.ix .profile-choice .profile-email{flex:none;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;color:var(--mute)}
+.ix .keychain-looking{margin-top:16px;font-size:14px}
+/* the projects nobody knew of (DISCOVERY's 'no-context'): a plain ask, no failure */
+.ix .projects-empty{margin:4px 0 0;font-size:14px;line-height:1.5;color:var(--body)}
 `;

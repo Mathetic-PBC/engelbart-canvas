@@ -32,6 +32,7 @@ const SCENARIOS = {
   claude: [{ id: 'anthropic', installed: true, signedIn: true, subscription: 'max' }, { id: 'openai', installed: true, signedIn: true, subscription: null }],
   codex: [{ id: 'anthropic', installed: true, signedIn: true, subscription: null }, { id: 'openai', installed: true, signedIn: true, subscription: 'plus' }],
   none: [{ id: 'anthropic', installed: false, signedIn: false, subscription: null }, { id: 'openai', installed: false, signedIn: false, subscription: null }],
+  'signed-out': [{ id: 'anthropic', installed: true, signedIn: false, subscription: null }, { id: 'openai', installed: true, signedIn: false, subscription: null }],
 };
 // `agents`: whether the person's Claude Code or Codex already lets its agents use their browser ('allowed'), Engelbart asks
 // first ('ask'), or no browser has the extension ('none') (src/main/onboarding/browser-agents.cjs).
@@ -57,13 +58,29 @@ function createMockApi(getConfig) {
   let disc = { projects: { status: 'idle' }, tools: { status: 'idle' } };
   let keychain = null;
   let browserChosen = null;
-  let installed = { claude: SCENARIOS[getConfig().scenario][0].installed, codex: SCENARIOS[getConfig().scenario][1].installed };
-  // Set up and signed in from the tools dialog: each with its subscription, so both done asks which (the workspace: "if
-  // not authenticated, show the login then choose").
-  const providerList = () => SCENARIOS[getConfig().scenario].map((one) => {
-    const done = one.id === 'anthropic' ? installed.claude : installed.codex;
-    return { ...one, installed: done || one.installed, signedIn: done || one.signedIn, subscription: one.subscription || (done && getConfig().scenario === 'none' ? (one.id === 'anthropic' ? 'max' : 'plus') : null) };
+  let profileChosen = null;
+  let diskGranted = false;
+  // Each CLI on this pretend Mac (2026-10-16, the agent popup): 'missing' | 'signed-out' | 'ready', and what runs for it.
+  const start = SCENARIOS[getConfig().scenario];
+  const cli = {
+    claude: { state: !start[0].installed ? 'missing' : start[0].signedIn ? 'ready' : 'signed-out', busy: null, plan: start[0].subscription },
+    codex: { state: !start[1].installed ? 'missing' : start[1].signedIn ? 'ready' : 'signed-out', busy: null, plan: start[1].subscription },
+  };
+  const providerList = () => ['claude', 'codex'].map((id) => {
+    const one = cli[id];
+    const signedIn = one.state === 'ready';
+    return { id: id === 'claude' ? 'anthropic' : 'openai', installed: one.state !== 'missing', signedIn, subscription: signedIn ? one.plan : null, subscribed: signedIn && !!one.plan };
   });
+  const snapTools = () => ({ checked: true, platform: 'darwin', tools: {
+    git: { id: 'git', status: 'ready', installed: true, busy: null },
+    ...Object.fromEntries(['claude', 'codex'].map((id) => [id, { id, installed: cli[id].state !== 'missing', status: cli[id].busy && cli[id].busy.action === 'install' ? 'installing' : cli[id].state, signedIn: cli[id].state === 'ready', busy: cli[id].busy, error: null }])),
+  } });
+  const after = (ms, fn) => setTimeout(() => { fn(); emit('tools', snapTools()); }, ms);
+  const install = (id) => { if (cli[id].state !== 'missing' || cli[id].busy) return; cli[id].busy = { action: 'install' }; emit('tools', snapTools()); after(1400, () => { cli[id] = { ...cli[id], busy: null, state: 'signed-out' }; }); };
+  // A sign-in in the browser: its page first, then signed in, with a subscription (the scenarios' plans, else one).
+  const signIn = (id) => { cli[id].busy = { action: 'sign-in', url: `https://example.invalid/${id}/sign-in` }; emit('tools', snapTools()); after(1800, () => { cli[id] = { ...cli[id], busy: null, state: 'ready', plan: cli[id].plan || (id === 'claude' ? 'max' : 'plus') }; }); };
+  // Chrome has two profiles here, so its profile popup shows (S10); Safari asks for Full Disk Access (S9).
+  const PROFILES = { chrome: [{ id: 'Default', name: 'Hudson', email: 'hudson@example.com' }, { id: 'Profile 1', name: 'Research', email: 'lab@example.edu' }] };
   let agentsAnswer = null;
   const agentsStatus = () => {
     const kind = getConfig().agents || 'ask';
@@ -71,11 +88,10 @@ function createMockApi(getConfig) {
     const byCli = kind === 'allowed';
     return { available, browser: available ? { id: 'chrome', name: 'Chrome' } : null, others: [], allowedByCli: byCli, consent: agentsAnswer, ask: available && !byCli && !agentsAnswer, use: available && agentsAnswer !== 'declined' && (byCli || agentsAnswer === 'allowed'), why: available ? '' : 'The extension is not in a browser on this Mac' };
   };
-  const snapTools = () => ({ checked: true, tools: { git: { status: 'ready', installed: true }, claude: { status: providerList()[0].signedIn ? 'ready' : 'missing', installed: providerList()[0].installed }, codex: { status: providerList()[1].signedIn ? 'ready' : 'missing', installed: providerList()[1].installed } } });
   const browsersOut = () => {
     const ids = getConfig().browsers.filter((id) => BROWSERS.some((browser) => browser.id === id));
     const chosen = browserChosen && ids.includes(browserChosen) ? browserChosen : ids[0] || null;
-    return { browsers: ids.map((id) => ({ ...BROWSERS.find((browser) => browser.id === id), isDefault: id === ids[0] })), defaultId: ids[0] || null, chosenId: chosen, keychain };
+    return { browsers: ids.map((id) => ({ ...BROWSERS.find((browser) => browser.id === id), isDefault: id === ids[0], profiles: PROFILES[id] || [] })), defaultId: ids[0] || null, chosenId: chosen, chosenProfile: profileChosen, keychain, safari: { diskAccess: diskGranted } };
   };
   return {
     flow: async () => flow,
@@ -83,8 +99,10 @@ function createMockApi(getConfig) {
     providers: async () => ({ providers: providerList(), decision: decide(providerList(), remembered), remembered }),
     rememberProvider: async (id) => { remembered = id; return { providers: providerList(), decision: decide(providerList(), remembered), remembered }; },
     browsers: async () => browsersOut(),
-    chooseBrowser: async (id) => { browserChosen = id; return browsersOut(); },
-    keychain: async (answer) => { keychain = answer; return answer; },
+    chooseBrowser: async (id) => { browserChosen = id; profileChosen = null; keychain = null; return browsersOut(); },
+    chooseBrowserProfile: async (_browser, id) => { profileChosen = id; return browsersOut(); },
+    keychain: async (answer) => { keychain = answer; await new Promise((resolve) => { setTimeout(resolve, answer === 'allowed' ? 700 : 0); }); return { keychain: answer }; },
+    openDiskAccess: async () => { setTimeout(() => { diskGranted = true; }, 2500); toast('System Settings would open at Full Disk Access; granted here in 2.5 s.'); return true; },
     browserAgents: async () => agentsStatus(),
     browserAgentsAnswer: async (answer) => { agentsAnswer = answer; return answer; },
     discovery: async () => disc,
@@ -102,16 +120,17 @@ function createMockApi(getConfig) {
       return disc;
     },
     onDiscovery: (fn) => { listeners.discovery.add(fn); return () => listeners.discovery.delete(fn); },
-    diskAccess: async () => ({ platform: 'darwin', granted: false }),
+    diskAccess: async () => ({ platform: 'darwin', granted: diskGranted }),
     // The folders asked about before (the panel's "Folders asked before"): Allow Engelbart to organize your research is skipped.
     foldersAsked: async () => (getConfig().disk ? { Desktop: 'allowed', Documents: 'allowed', Downloads: 'allowed' } : {}),
     foldersAsk: async (ids) => Object.fromEntries(ids.map((id) => [id, id === 'Downloads' ? 'denied' : 'allowed'])),
     notesPermission: async () => ({ allowed: true }),
     tools: async () => snapTools(),
     onTools: (fn) => { listeners.tools.add(fn); return () => listeners.tools.delete(fn); },
-    toolsInstall: async (ids) => { setTimeout(() => { for (const id of ids) installed[id] = true; emit('tools', snapTools()); }, 900); return true; },
-    toolsSignIn: async (id) => { setTimeout(() => { installed[id] = true; emit('tools', snapTools()); }, 900); return true; },
-    toolsConnect: async (id) => { setTimeout(() => { installed[id] = true; emit('tools', snapTools()); }, 900); return true; },
+    toolsInstall: async (ids) => { for (const id of ids) if (cli[id]) install(id); return snapTools(); },
+    toolsUpdate: async () => snapTools(),
+    toolsSignIn: async (id) => { if (cli[id] && cli[id].state !== 'missing') signIn(id); return snapTools(); },
+    toolsConnect: async (id) => { if (!cli[id]) return snapTools(); if (cli[id].state === 'missing') install(id); else if (cli[id].state !== 'ready') signIn(id); return snapTools(); },
     toolsCancelSignIn: async () => true,
     openExternal: async () => true,
     detect: async () => ({ apps: { Obsidian: { found: true }, 'Claude Code': { found: true }, Codex: { found: true }, Cursor: { found: true }, [CATALOG.find((tool) => tool.id === 'PDFs on this Mac').id]: { found: true } }, sites: { found: true }, github: { found: false }, localRepos: [] }),
@@ -149,8 +168,8 @@ function sampleSession(choices, browser = 'Chrome') {
 
 const POPUPS = [
   ['intro', 'Import intro (screen)'], ['first-project', 'Which project to start with'], ['obsidian-picker', 'Choose from Obsidian'], ['scratch-confirm', 'Start confirmation'], ['project', 'New project'],
-  ['provider-choice', 'Choose provider (both subscribed)'], ['tools-setup', 'Tools setup'], ['import-method', 'How to import'], ['agents-consent', 'Background agents'],
-  ['keychain', 'Browser sign-ins'], ['keychain-browser', 'Browser picker'],
+  ['provider-choice', 'Choose provider (both subscribed)'], ['tools-setup', 'Claude Code, Codex, or both (the agent popup)'], ['import-method', 'How to import'], ['agents-consent', 'Background agents'],
+  ['keychain', 'Browser sign-ins'], ['keychain-browser', 'Browser picker'], ['safari', 'Safari: Full Disk Access'], ['browser-profile', 'Select your Chrome profile'],
   ['organize', 'Allow Engelbart to organize your research'],
   ['screen:roles', 'Roles'], ['screen:work', 'What are you working on'], ['screen:projects', 'Recent projects'], ['work-add-project', 'Add a project'],
   ['work-add-tool', 'Add a tool'], ['screen:picker', 'Tools (categories)'],
@@ -306,7 +325,8 @@ body{margin:0}
             <option value="both">Both subscribed: asked which</option>
             <option value="claude">Only Claude subscribed</option>
             <option value="codex">Only Codex subscribed</option>
-            <option value="none">Neither set up</option>
+            <option value="none">Neither installed: the agent popup installs</option>
+            <option value="signed-out">Both installed, signed out: Connect to …</option>
           </select>
           <label htmlFor="browsers">Installed browsers (ids, the default first)</label>
           <input id="browsers" value={config.browsers.join(', ')} onChange={(event) => keep({ ...config, browsers: event.target.value.split(',').map((id) => id.trim()).filter(Boolean) })} />
