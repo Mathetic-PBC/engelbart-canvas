@@ -6,7 +6,7 @@ import { TOOL_LOGOS, WORKS, BROWSER_LOGOS, PROVIDER_LOGOS } from './logos.js';
 import ObsidianPicker from './ObsidianPicker.jsx';
 import { AgentSetupBody } from './AgentSetup.jsx';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
-import { fluidScale, keychainStep, afterAllow, profilesOf, runKeychain, cliOfProvider } from '../model/onboarding.js';
+import { fluidScale, keychainStep, afterAllow, profilesOf, runKeychain, cliOfProvider, providerOfCli } from '../model/onboarding.js';
 import {
   CATALOG, CATALOG_IDS, ROLES, GROUPS, GROUP_IDS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp,
   scopeKind, emptyScope, scopeReady,
@@ -316,6 +316,17 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     if (want && !readyNow.split(',').includes(want)) return;
     void needProvider(latest.current.purpose || 'start', want || null);
   }, [connectOpen, readyNow, wantedAt]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Another CLI chosen in the popup than the one it was opened for (Claude Code turned the agents away, and Codex was
+  // picked), running: the flow goes on with that one, not waiting for the first (2026-10-16: it showed Connected and
+  // waited, with Skip the only way on). 'Both': whichever of them runs. Only then: the effect above goes on for the one
+  // asked for, or for any when none was, and returns early in exactly this case, so the flow goes on once.
+  const choseInPopup = (choice) => {
+    const want = latest.current.connectFor || null;
+    if (!want || latest.current.dialog !== 'tools-setup') return;
+    const provider = choice === 'both' ? null : providerOfCli(choice);
+    if (provider === want || readyProviders().includes(want)) return;
+    void needProvider(latest.current.purpose || 'start', provider);
+  };
   const providerReady = (provider, purpose) => {
     set({ provider, connectFor: null, refused: null });
     if (purpose === 'projects') {
@@ -366,6 +377,9 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   const routeKeychain = (now, { fresh = false } = {}) => {
     const step = keychainStep(fresh && now ? { ...now, keychain: null } : now);
     if (step === 'wait') { set({ dialog: 'keychain' }); return; }
+    // No browser whose sign-ins can be read: declined without a question, and saved as declined, so nothing waits for an
+    // answer (2026-10-16: the recent projects waited ten minutes for one, discover.cjs keychainAnswer).
+    if (step.go === 'declined' && !now.keychain) Promise.resolve(api.keychain('declined')).catch(() => {});
     if (step.go) { keychainDone(step.go); return; }
     set({ dialog: step === 'safari' ? 'safari' : 'keychain' });
   };
@@ -1000,7 +1014,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     if (d === 'tools-setup') {
       const asked = F.connectFor ? cliOfProvider(F.connectFor) : null;
       const turnedAway = refusedNow() ? cliOfProvider(refusedNow()) : null;
-      return <AgentSetupBody key={asked || 'any'} api={api} tools={toolsSnap} providers={providers} initial={asked} refused={turnedAway} watchDone={false} onSkip={() => set({ dialog: null })} />;
+      return <AgentSetupBody key={asked || 'any'} api={api} tools={toolsSnap} providers={providers} initial={asked} refused={turnedAway} onDone={choseInPopup} onSkip={() => set({ dialog: null })} />;
     }
     // How should Engelbart import your sources? (From Amitav, 2026-10-15): choosing is continuing, as the legacy question's
     // was. In the background: what that means first (agents-consent). Manually: the librarian. 2026-10-16 (S8): the agents'
