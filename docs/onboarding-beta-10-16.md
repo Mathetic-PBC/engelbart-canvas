@@ -207,7 +207,7 @@ your report if the code made a different reading better.
 Built on this branch (commits 443c99b CONNECTORS, 17c53e8 DISCOVERY, 229c4b1 COOKIES, 90b5bab MAIN, 0b78fcc SCREENS, then
 fixes from the smokes). `npm test` 2156/2156; `smoke-import-context` passes both ways; `smoke-import-real` (Claude Code)
 passes; three real librarian turns averaged 16.5 words a message (Hudson's examples: 45-55). Test build:
-`/Users/Shared/engelbart-test/build-4`, steps in `/Users/Shared/engelbart-test/onboarding-beta-TESTING.md`.
+`/Users/Shared/engelbart-test/build-5` (from 2ee8e20; build-4 from 7974b5e), steps in `/Users/Shared/engelbart-test/onboarding-beta-TESTING.md`.
 
 Readings taken where the note left room:
 - M1's grant lists the apps the per-app popups asked about (web apps, connectors, the tools the agents found or the person
