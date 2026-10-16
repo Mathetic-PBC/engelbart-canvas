@@ -25,7 +25,7 @@ export function needCopy(need) {
     return { title: `Sign in to ${app}`, text: '', primary: 'Sign in', secondary: 'Skip' };
   }
   // A sign-in brought back (connect/session.cjs recover, 2026-10-16): after the quiet copies, one step, Sign in inside
-  // Engelbart (Google's in the person's browser, which it refuses Engelbart's window for) or Skip. Nothing under the title.
+  // Engelbart (every app's, Google's too since 2026-10-16) or Skip. Nothing under the title.
   if (need.kind === 'signin-here') {
     if (need.busy) return { title: `Sign in to ${app}`, text: '', primary: 'Waiting…', secondary: 'Skip', waiting: true };
     return { title: `Sign in to ${app}`, text: '', primary: need.where === 'browser' ? `Sign in in ${browser}` : 'Sign in inside Engelbart', secondary: 'Skip' };

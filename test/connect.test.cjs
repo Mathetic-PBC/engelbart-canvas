@@ -771,41 +771,52 @@ test('Import your context: one import a tool told the projects picked, a manual 
   connect.dismiss(started.id);
 });
 
-test('Google\'s card signs in through the person\'s browser (its sign-in refuses Engelbart\'s window); Skip calls the wait off and leaves out every Google app picked (2026-10-16)', async () => {
-  const fresh = fs.mkdtempSync(path.join(homeDir, 'wait-'));
-  let aborted = false;
-  const signIn = (app, { signal }) => new Promise((resolve) => { signal.addEventListener('abort', () => { aborted = true; resolve({ status: 'cancelled' }); }); });
-  const webSignIn = { supports: () => true, canSignIn: () => true, signIn, signInQuiet: async () => ({ signedIn: false, browser: '' }), signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome' };
-  const signInWindow = { open: async () => { throw new Error('Google never opens in Engelbart\'s window'); }, close: () => {} };
+test('Google\'s card is Sign in inside Engelbart, as every app\'s (2026-10-16: every copy from Chrome answered 302 → ServiceLogin); signed in there, its import starts; Skip closes the window and leaves out every Google app picked', async () => {
+  // Hudson: "the same fallback logic we have for everything else for Google Drive, including signing in in Engelbart's
+  // chromium if it fails".
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'google-here-'));
+  const opened = [];
+  let closeWindow = null;
+  let windowSays = null; // null: the window stays open until closed
+  let here = false;
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: false, browser: '' }), signedIn: async () => here, stillSignedIn: async () => here, signedInHere: () => { here = true; }, keychainNote: () => '', browserName: () => 'Chrome' };
+  const signInWindow = { open: (app) => { opened.push(app); return windowSays ? Promise.resolve({ status: windowSays }) : new Promise((resolve) => { closeWindow = () => resolve({ status: 'closed' }); }); }, close: () => { if (closeWindow) closeWindow(); closeWindow = null; } };
   const { connect, state } = fakeConnect({ home: fresh, webSignIn, signInWindow });
   const started = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: [{ id: 'p', title: 'Memex' }], apps: ['Google Docs', 'Google Meet'], scopes: {} } });
-  const now = await until(state(started.id), (s) => s.needs.some((need) => need.kind === 'signin-here'), 'Google\'s card');
-  const cards = now.needs.filter((need) => need.kind === 'signin-here');
+  const cards = (await until(state(started.id), (s) => s.needs.some((need) => need.kind === 'signin-here'), 'Google\'s card')).needs.filter((need) => need.kind === 'signin-here');
   assert.equal(cards.length, 1, 'one card for the one sign-in Drive and Meet share');
-  assert.equal(cards[0].where, 'browser');
+  assert.equal(cards[0].where, 'here', 'inside Engelbart, not their browser');
   await connect.need(started.id, cards[0].id, 'open');
-  const waiting = connect.state(started.id).needs.find((need) => need.id === cards[0].id);
-  assert.equal(waiting.busy, true, 'waits for the sign-in in their browser');
+  assert.equal(opened.length, 1, 'Engelbart\'s window opened');
+  assert.equal(connect.state(started.id).needs.find((need) => need.id === cards[0].id).busy, true);
   await connect.need(started.id, cards[0].id, 'skip');
-  assert.equal(aborted, true, 'the wait was called off');
+  assert.equal(closeWindow, null, 'Skip closed the window');
   const after = await until(state(started.id), (s) => s.leftOut.length === 2, 'both Google apps left out');
   assert.deepEqual(after.leftOut.map((entry) => entry.app).sort(), ['Google Docs', 'Google Meet']);
   assert.equal(after.jobs.some((job) => job.kind === 'import'), false, 'nothing of Google comes in');
   connect.stop(started.id);
   connect.dismiss(started.id);
+
+  // Signed in in that window: checked, and Google's import starts.
+  windowSays = 'signed-in';
+  const again = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: [{ id: 'p', title: 'Memex' }], apps: ['Google Docs'], scopes: {} } });
+  const card = (await until(state(again.id), (s) => s.needs.some((need) => need.kind === 'signin-here'), 'Google\'s card again')).needs.find((need) => need.kind === 'signin-here');
+  await connect.need(again.id, card.id, 'open');
+  await until(state(again.id), (s) => !s.needs.some((need) => need.id === card.id), 'signed in and checked: the step closed');
+  await until(state(again.id), (s) => s.jobs.some((job) => job.kind === 'import' && job.apps.includes('Google Docs')), 'Google Drive queued once signed in');
+  connect.stop(again.id);
+  connect.dismiss(again.id);
 });
 
-test('Google\'s card: their browser signed in and the copy turned away, it gives up at once with one line, never waiting on "Waiting…" (2026-10-16)', async () => {
-  // The beta: "Google Drive sign in kept saying Waiting…": Chrome held the sign-in, Google turned Engelbart's copy away, and
-  // the card waited ten minutes for a new sign-in nobody had to make.
-  const fresh = fs.mkdtempSync(path.join(homeDir, 'turned-'));
-  // Nothing copied at the start (the card; a sign-in held there and refused is left out at once, without one), then the
-  // card's Sign in in Chrome finds the sign-in there and Google turning its copy away.
-  const webSignIn = { supports: () => true, canSignIn: () => true, recapture: async () => ({ signedIn: false, reason: 'turned-away' }), signInQuiet: async () => ({ signedIn: false, browser: '' }), signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome' };
-  const signInWindow = { open: async () => { throw new Error('Google never opens in Engelbart\'s window'); }, close: () => {} };
+test('Google signed in in Chrome and its copy refused: a card to sign in inside Engelbart (it was left out at once, with no way to sign in); Google turning that window away too skips it with one line (2026-10-16)', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'google-held-'));
+  const webSignIn = { supports: () => true, canSignIn: () => true, signInQuiet: async () => ({ signedIn: false, browser: '', held: true }), signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome' };
+  const signInWindow = { open: async () => ({ status: 'rejected' }), close: () => {} };
   const { connect, state } = fakeConnect({ home: fresh, webSignIn, signInWindow });
   const started = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: [{ id: 'p', title: 'Memex' }], apps: ['Google Docs', 'Google Meet'], scopes: {} } });
   const card = (await until(state(started.id), (s) => s.needs.some((need) => need.kind === 'signin-here'), 'Google\'s card')).needs.find((need) => need.kind === 'signin-here');
+  assert.equal(card.where, 'here');
+  assert.equal(connect.state(started.id).leftOut.length, 0, 'not left out before the person is asked');
   await connect.need(started.id, card.id, 'open');
   const after = await until(state(started.id), (s) => !s.needs.some((need) => need.id === card.id) && s.leftOut.length === 2, 'given up on, both Google apps left out');
   assert.deepEqual(after.leftOut.map((entry) => entry.app).sort(), ['Google Docs', 'Google Meet']);

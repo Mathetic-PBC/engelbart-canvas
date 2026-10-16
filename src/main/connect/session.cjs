@@ -42,7 +42,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName, sharesSignIn, signInGroup, signsInThroughBrowser, fallbackOf } = require('../../shared/connect-sources.cjs');
+const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName, sharesSignIn, signInGroup, fallbackOf } = require('../../shared/connect-sources.cjs');
 const prompts = require('./prompts.cjs');
 const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
@@ -1694,8 +1694,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * A sign-in that doesn't work in Engelbart's browser, brought back (the onboarding beta, 2026-10-16). Hudson: "The retries
    * should happen in the background with different retries and methods, but if it doesn't work it should auto-skip. Get rid
    * of the option to choose another profile", and Bart's flow, which he took: copy from the chosen profile and check; retry
-   * quietly for a while; a check that can't tell keeps the sign-in; then one card, "Sign in inside Engelbart" or Skip (for
-   * Google's, whose sign-in refuses Engelbart's window, the person's own browser, copied over after); signed in, checked,
+   * quietly for a while; a check that can't tell keeps the sign-in; then one card, "Sign in inside Engelbart" or Skip
+   * (Google's too, since 2026-10-16: it went to the person's browser, whose copy Google refused); signed in, checked,
    * and the agent goes on; failing even then, skipped with one quiet line that stays ("Couldn't connect to Linear.
    * Skipped."), the other imports going on. Nothing opens by itself while it retries. `target`: { app } a registered web
    * app, or { tool } one of the Other tools. One recovery per sign-in (Gmail and Drive share Google's), whoever asks: an
@@ -1739,19 +1739,21 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return rec.phase === 'quiet' && rec.quiet ? rec.quiet.then(answer) : Promise.resolve().then(answer);
   }
 
-  /** The card a recovery ends in, once (Sign in inside Engelbart, or in their browser for Google's · Skip). */
+  /**
+   * The card a recovery ends in, once: Sign in inside Engelbart · Skip, for every app, Google's too (2026-10-16: its card
+   * sent the person to Chrome and waited for a copy Google refused every time, "Waiting…" for ten minutes).
+   */
   function askCard(s, rec, job) {
     rec.phase = 'card';
     rec.carded = true;
-    const where = rec.app && signsInThroughBrowser(rec.app) ? 'browser' : 'here';
-    const need = { id: randomUUID(), app: rec.app || rec.name, kind: SIGNIN_HERE, where, recovery: rec.key, reason: `Sign in to ${rec.name}`, jobs: job ? [job.id] : [], waiters: new Map(), opened: false, busy: false, error: '', note: '', closed: false, keep: !job, tries: 0, at: now(), doneNote: backNote(rec).note };
+    const need = { id: randomUUID(), app: rec.app || rec.name, kind: SIGNIN_HERE, where: 'here', recovery: rec.key, reason: `Sign in to ${rec.name}`, jobs: job ? [job.id] : [], waiters: new Map(), opened: false, busy: false, error: '', note: '', closed: false, keep: !job, tries: 0, at: now(), doneNote: backNote(rec).note };
     need.settled = new Promise((resolve) => { need.settle = resolve; });
     // Put away because no agent waits on it any more (releaseNeeds): the next loss starts afresh.
     need.settled.then((how) => { rec.phase = 'ended'; if (how === 'gone' && s.recoveries.get(rec.key) === rec) s.recoveries.delete(rec.key); });
     rec.need = need;
     s.needs.push(need);
     logAction(s, job, `Needs you: ${need.reason}`);
-    traced({ kind: 'need', sessionId: s.id, ...(job ? { jobId: job.id } : {}), text: `Needs the person (sign in ${where === 'browser' ? 'in their browser' : 'inside Engelbart'}, ${rec.name})` });
+    traced({ kind: 'need', sessionId: s.id, ...(job ? { jobId: job.id } : {}), text: `Needs the person (sign in inside Engelbart, ${rec.name})` });
     emit(s);
     return need;
   }
@@ -1781,20 +1783,22 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /**
    * A held app signed in in the person's browser whose sign-in Engelbart's browser refuses (`held-elsewhere`): read there by
-   * an agent when they let agents use it; else signed in inside Engelbart (recover's card); Google's, which refuses
-   * Engelbart's window too, left out with a line.
+   * an agent when they let agents use it; else signed in inside Engelbart (recover's card), Google's too (2026-10-16, the
+   * beta's trace: every copy of Chrome's Google sign-in answered 302 → ServiceLogin; Hudson: "the same fallback logic we
+   * have for everything else for Google Drive, including signing in in Engelbart's chromium if it fails"). Google turning
+   * that window away too ends in "Couldn't connect to …. Skipped." (signInHereNow's 'rejected').
    */
   function heldElsewhere(s, app, browserName = '') {
     if (s.choices.browserAgents) { if (readElsewhere(s, app, browserName)) releaseHeld(s, app, 'done'); return; }
-    if (!signsInThroughBrowser(app) && signInWindow) { recoverHeld(s, app); return; }
+    if (signInWindow) { recoverHeld(s, app); return; }
     readElsewhere(s, app, browserName);
     releaseHeld(s, app, 'skip');
   }
 
   /**
-   * "Sign in inside Engelbart" (or, for Google's, in their browser) on a recovery's card: the sign-in made, checked inside
-   * Engelbart, and the step closed as done; turned away, or signed in and still not working, given up on (giveUp); closed
-   * without signing in, said on the card, which can be tried once more.
+   * "Sign in inside Engelbart" on a recovery's card: the sign-in made in Engelbart's window, checked, and the step closed as
+   * done; turned away (Google's "Couldn't sign you in", 'rejected'), or signed in and still not working, given up on
+   * (giveUp); the window closed without signing in, said on the card, which can be tried once more. Skip closes the window.
    */
   function signInHere(s, found) {
     if (found.busy) return snapshot(s);
@@ -1802,8 +1806,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     found.error = '';
     found.opened = true;
     emit(s);
-    // It can take minutes (a sign-in in their browser is waited for until it comes over): the card shows it waiting, and
-    // its answer comes as the session's next snapshot.
+    // It lasts as long as the window is open: the card shows it waiting, and its answer comes as the session's next snapshot.
     void signInHereNow(s, found).catch(() => { found.busy = false; emit(s); });
     return snapshot(s);
   }
@@ -1811,17 +1814,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   async function signInHereNow(s, found) {
     const rec = (s.recoveries && s.recoveries.get(found.recovery)) || { name: shownName(found.app), app: APPS[found.app] ? found.app : null, tool: null };
     let out = { status: 'closed' };
+    if (signInWindow && typeof signInWindow.close === 'function') found.cancel = () => signInWindow.close();
     try {
-      if (found.where === 'browser') {
-        const controller = new AbortController();
-        found.cancel = () => { controller.abort(); signInBrowserCancel(rec.app); };
-        if (typeof webSignIn.recapture === 'function') {
-          const back = await webSignIn.recapture(rec.app, { signal: controller.signal, timeoutMs: deps.recaptureMs || 10 * 60_000 });
-          // Their browser signed in and its copy turned away ('turned-away', 2026-10-16: Google Drive's card said Waiting… for
-          // ten minutes): nothing the person can do there, so it is given up on now ("Couldn't connect to …. Skipped.").
-          out = back && back.signedIn ? { status: 'signed-in' } : back && back.refused ? { status: 'refused' } : back && back.reason === 'turned-away' ? { status: 'rejected' } : { status: 'closed' };
-        } else out = await signInBrowser(rec.app);
-      } else if (rec.app) out = await signInWindowOpen(rec.app);
+      if (rec.app) out = await signInWindowOpen(rec.app);
       else if (signInWindow && typeof signInWindow.openSite === 'function') {
         const sites = toolSites(rec.tool);
         out = await signInWindow.openSite({ name: rec.name, url: rec.tool.website || (sites[0] ? `https://${sites[0]}` : ''), domains: sites });
@@ -1833,7 +1828,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const works = out.status === 'signed-in' && (!rec.app || await Promise.resolve().then(() => (typeof webSignIn.stillSignedIn === 'function' ? webSignIn.stillSignedIn(rec.app) : webSignIn.signedIn(rec.app))).catch(() => false));
     if (works) {
       if (rec.app) for (const other of sharesSignIn(rec.app)) signInChecked.set(other, { status: 'signed-in', browser: '', browserId: '' });
-      logAction(s, null, `Signed in to ${rec.name}${found.where === 'browser' ? '' : ' inside Engelbart'}`, 'You');
+      logAction(s, null, `Signed in to ${rec.name} inside Engelbart`, 'You');
       closeNeed(s, found, 'done');
       return snapshot(s);
     }
@@ -2344,9 +2339,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // in their own browser when they let agents use it; else signed in inside Engelbart (recover's card, 2026-10-16: "I
     // suppose we can ask them to sign in using Engelbart's chromium … and then have agents run there").
     if (s.choices.keychain === false && s.choices.browserAgents) { for (const app of checked.signedOut) checked.elsewhere.set(app, s.choices.browserAgents.browserName); checked.signedOut.clear(); }
-    // Signed in in their browser, refused by Engelbart's, and no browser agents: signed in inside Engelbart (not Google's,
-    // which refuses Engelbart's window as well: left out, said).
-    if (!s.choices.browserAgents && signInWindow) for (const [app] of [...checked.elsewhere]) if (!signsInThroughBrowser(app)) { checked.elsewhere.delete(app); checked.signedOut.add(app); }
+    // Signed in in their browser, refused by Engelbart's, and no browser agents: signed in inside Engelbart, Google's as
+    // well (2026-10-16: it was left out here, said, with no way to sign in; heldElsewhere).
+    if (!s.choices.browserAgents && signInWindow) for (const [app] of [...checked.elsewhere]) { checked.elsewhere.delete(app); checked.signedOut.add(app); }
     const held = new Set([...checked.signedOut, ...checked.checking.keys()]);
     for (const [app, name] of checked.refused) {
       leaveOut(s, app, `macOS didn't allow ${name || 'your browser'}'s sign-ins`);
