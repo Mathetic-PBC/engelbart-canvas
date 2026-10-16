@@ -11,7 +11,7 @@ import { useGithubStatus } from '../workspace/useGithubStatus.js';
 import ImportSignins from '../workspace/ImportSignins.jsx';
 import GithubRepos from '../workspace/GithubRepos.jsx';
 import ConnectLibrary from './ConnectLibrary.jsx';
-import ImportFlow, { useFluidScale } from '../import/ImportFlow.jsx';
+import ImportFlow, { useWindowSize } from '../import/ImportFlow.jsx';
 import AgentSetupPopup, { providerOfChoice } from '../import/AgentSetup.jsx';
 import { importApi } from '../import/import-api.js';
 
@@ -144,7 +144,7 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
   // installed, signed in and subscribed (updated in the background when too old), and otherwise asks in a popup over
   // Welcome (../import/AgentSetup.jsx). The step stays out of the flow, so the pager never counts it.
   const flowOptions = { tools: false, connect: connectMode };
-  const fit = useFluidScale(); // { scale, width, height }: the window's, for S2's one fluid scale
+  const fit = useWindowSize(); // { width, height }: the window's, for Welcome's picture
   const [gate, setGate] = React.useState(null); // null | 'checking' (Continue pressed, the check not answered) | 'ask' (the popup)
   const [agentProviders, setAgentProviders] = React.useState(null);
   React.useEffect(() => {
@@ -344,13 +344,13 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
   let body = null;
   if (step === 'welcome') {
     // S1/S2 (2026-10-16): "Move continue to the right not in the middle"; "generally make everything bigger, there is too
-    // much whitespace. this should be minimum size but should expand with window". The column takes the window's fluid
-    // scale (useFluidScale), the picture as large as the window's height leaves room for, Continue lower right as on
-    // Import your context's screens.
-    const room = Math.min((fit.height - 54) / fit.scale - 300, (fit.width - 48) / fit.scale * (758 / 1199));
+    // much whitespace. this should be minimum size but should expand with window"): the picture as large as the window's
+    // height leaves room for, Continue lower right as on Import your context's screens. Not zoomed ("Zoom back out the
+    // onboarding, it looks ugly zoomed in", the same day).
+    const room = Math.min(fit.height - 54 - 300, (fit.width - 48) * (758 / 1199));
     const wide = Math.round(Math.max(300, Math.min(640, room * (1199 / 758))));
     body = (
-      <div data-screen-label="01 Welcome" data-onboarding-scale={fit.scale} style={{ width: wide, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: 30, animation: rise, zoom: fit.scale }}>
+      <div data-screen-label="01 Welcome" style={{ width: wide, maxWidth: '100%', display: 'flex', flexDirection: 'column', gap: 30, animation: rise }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
           <h1 style={welcomeH1}>Welcome to Engelbart</h1>
           <p style={welcomeLead}>The best way to brainstorm and create research projects</p>
@@ -572,7 +572,7 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
         </div>
       )}
       {/* No card (2026-09-28): the same 800 × 600 at most, drawn on nothing, so lists inside still scroll and the page never does. */}
-      {/* Welcome (2026-10-16, S2) takes the whole window, its column growing with it. */}
+      {/* Welcome (2026-10-16, S2) takes the whole window, its picture growing with it. */}
       {step !== 'intro' && step !== 'connect' && <div data-screen-label="Onboarding window" style={{ flex: 'none', display: 'flex', flexDirection: 'column', width: step === 'welcome' ? '100%' : 'min(800px, 100%)', height: step === 'welcome' ? '100%' : 'min(600px, 100%)', overflow: 'hidden' }}>
         <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'safe center', gap: 24, padding: step === 'welcome' ? '8px 24px 24px' : '40px 32px 28px' }}>
           {body}
@@ -584,7 +584,7 @@ export default function Onboarding({ mode = 'new', into = null, tools = null, on
           )}
         </div>
       </div>}
-      {gate === 'ask' && step === 'welcome' && <AgentSetupPopup scale={fit.scale} api={flowApi} tools={tools} providers={agentProviders} onDone={agentDone} onSkip={agentSkip} />}
+      {gate === 'ask' && step === 'welcome' && <AgentSetupPopup api={flowApi} tools={tools} providers={agentProviders} onDone={agentDone} onSkip={agentSkip} />}
       {importing && <ImportSignins opensLater onClose={() => setImporting(false)} onOpenSite={(url) => { if (!stageLinks.current.includes(url)) stageLinks.current.push(url); }} />}
     </div>
   );

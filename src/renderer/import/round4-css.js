@@ -101,11 +101,8 @@ export const ROUND4_CSS = `
 .ix .organize-enabled svg{width:14px;height:14px;fill:none;stroke:currentColor;stroke-width:2.2}
 
 /* Onboarding beta (2026-10-16, docs/onboarding-beta-10-16.md S1–S13) */
-/* S2 "generally make everything bigger, there is too much whitespace. this should be minimum size but should expand with
-   window": one fluid scale, the columns' zoom (--ix-scale, ImportFlow's useFluidScale), the pages keeping the window's
-   size; less room above the columns. Dialogs grow too, a little less. */
-.ix.ix-fluid .work-column,.ix.ix-fluid .col,.ix.ix-fluid .intro-page .welcome,.ix.ix-fluid .foot-inner{zoom:var(--ix-scale,1)}
-.ix.ix-fluid .modal{zoom:calc(1 + (var(--ix-scale,1) - 1) * .6)}
+/* S2 "there is too much whitespace": less room above the columns. Their zoom, which grew with the window, is gone
+   ("Zoom back out the onboarding, it looks ugly zoomed in", the same day). */
 .ix.ix-fluid .work-page{padding-top:72px;padding-bottom:40px}
 .ix.ix-fluid .picker-page{padding-top:72px}
 .ix.ix-fluid .work-head h1{margin-top:0}

@@ -1,11 +1,12 @@
 'use strict';
 
 // The onboarding beta's screens (2026-10-16, docs/onboarding-beta-10-16.md S1–S13): the decisions behind the agent popup
-// that replaced "Set up your tools", the pager, the fluid scale, and the browser's sign-ins gate
+// that replaced "Set up your tools", the pager, the zoom taken back out, and the browser's sign-ins gate
 // (src/renderer/model/onboarding.js).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { normalizeTools } = require('../src/main/tools/record.cjs');
@@ -101,14 +102,19 @@ test('S3 pager: only the screens that draw it count', async () => {
   assert.deepEqual(m.shownPager('existing', 'context', { tools: false }), { count: 2, index: 1 });
 });
 
-test('S2: one fluid scale, from a minimum, growing with the window', async () => {
+test('S2\'s zoom undone ("Zoom back out the onboarding, it looks ugly zoomed in"), and a project row\'s circle keeps its size', async () => {
   const m = await load();
-  const small = m.fluidScale(1000, 700), mid = m.fluidScale(1440, 900), big = m.fluidScale(2560, 1440);
-  assert.equal(small, 1.1);
-  assert.ok(mid > small && big > mid, `${small} < ${mid} < ${big}`);
-  assert.ok(big <= 2);
-  assert.equal(m.fluidScale(800, 500), 1.1, 'never below the minimum');
-  assert.equal(m.fluidScale(0, 0), 1.1);
+  assert.equal(m.fluidScale, undefined);
+  const css = async (file, name) => (await import(pathToFileURL(path.join(__dirname, '../src/renderer/import', file)).href))[name];
+  const all = [await css('import-css.js', 'IMPORT_CSS'), await css('round3-css.js', 'ROUND3_CSS'), await css('round4-css.js', 'ROUND4_CSS')].join('\n');
+  assert.doesNotMatch(all, /zoom\s*:/, 'no screen or dialog zoomed');
+  for (const file of ['../src/renderer/screens/Onboarding.jsx', '../src/renderer/import/ImportFlow.jsx', '../src/renderer/import/AgentSetup.jsx']) {
+    assert.doesNotMatch(fs.readFileSync(path.join(__dirname, file), 'utf8'), /zoom:|--ix-scale/, file);
+  }
+  // The beta's projects list: the row's second child was its icon's text once, then its circle, stretched across the row.
+  assert.doesNotMatch(all, /project-choice>span:nth-child/);
+  assert.match(all, /\.project-choice>\.project-text\{flex:1;min-width:0\}/);
+  assert.match(fs.readFileSync(path.join(__dirname, '../src/renderer/import/ImportFlow.jsx'), 'utf8'), /<span className="project-text"><b>\{project\.title\}<\/b>/);
 });
 
 test('S9–S12: the browser’s sign-ins are asked, never skipped for want of an answer', async () => {

@@ -225,18 +225,6 @@ export function shownPager(mode, step, options) {
   return index < 0 || own.length < 2 ? null : { count: own.length, index };
 }
 
-/**
- * One fluid scale for the onboarding's screens (S2: "make everything bigger, there is too much whitespace. this should be
- * minimum size but should expand with window"): the CSS zoom of their column, from the window's size. Never below `min`
- * (at the smallest window, 1000 × 700, already larger than the mockup), growing with the window's shorter side, at most `max`.
- */
-export function fluidScale(width, height, { min = 1.1, max = 2, base = [1060, 720] } = {}) {
-  const w = Number(width) || 0, h = Number(height) || 0;
-  if (!w || !h) return min;
-  const grow = Math.min(w / base[0], h / base[1]) * min;
-  return Math.round(Math.min(max, Math.max(min, grow)) * 1000) / 1000;
-}
-
 // Claude Code and Codex, as the agent popup names them (S3).
 export const CLIS = ['claude', 'codex'];
 const PROVIDER_OF_CLI = { claude: 'anthropic', codex: 'openai' };

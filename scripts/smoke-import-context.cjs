@@ -158,14 +158,14 @@ app.whenReady().then(async () => {
     assert.equal(await js(wc, 'getComputedStyle(document.querySelector("#work-description")).resize'), 'none', 'not expandable (Attachment 2)');
     assert.equal(await js(wc, 'document.querySelector("#work-description").placeholder'), 'Understanding the Memex...');
     assert.equal(await js(wc, '[...document.querySelectorAll(".work-foot button")].find((b)=>b.textContent.trim().startsWith("Continue")).disabled'), true, 'Continue waits for a description');
-    // The onboarding beta's one fluid scale (S2, 2026-10-16): sizes are the design's times --ix-scale.
-    const scale = await js(wc, 'parseFloat(getComputedStyle(document.querySelector(".ix")).getPropertyValue("--ix-scale"))||1');
-    const centred = await js(wc, `(()=>{const r=document.querySelector("#work-description").getBoundingClientRect();return Math.abs((r.left+r.right)/2-innerWidth/2)<4&&r.width<=400*${scale}+2&&Math.abs((r.top+r.bottom)/2-innerHeight/2)<innerHeight*0.25})()`);
-    assert.equal(centred, true, 'a small box (at the window\'s scale), centred in the window');
+    // No zoom (2026-10-16, after the beta's fluid scale: "Zoom back out the onboarding, it looks ugly zoomed in"): the design's sizes.
+    assert.equal(await js(wc, 'getComputedStyle(document.querySelector(".work-column")).zoom'), '1', 'the column is not zoomed');
+    const centred = await js(wc, '(()=>{const r=document.querySelector("#work-description").getBoundingClientRect();return Math.abs((r.left+r.right)/2-innerWidth/2)<4&&r.width<=402&&Math.abs((r.top+r.bottom)/2-innerHeight/2)<innerHeight*0.25})()');
+    assert.equal(centred, true, 'a small box, centred in the window');
     const short = await js(wc, 'document.querySelector("#work-description").getBoundingClientRect().height');
     await type(wc, '#work-description', 'I study how students ask for help. '.repeat(20));
     const tall = await js(wc, 'document.querySelector("#work-description").getBoundingClientRect().height');
-    assert.ok(tall > short && tall <= 141 * scale + 2, `it grows to a point, then scrolls (${short} → ${tall})`);
+    assert.ok(tall > short && tall <= 143, `it grows to a point, then scrolls (${short} → ${tall})`);
     await type(wc, '#work-description', 'I study how students ask for help.');
     await shot(wc, '05-work');
     // Shift+Enter is a new paragraph; Enter continues.

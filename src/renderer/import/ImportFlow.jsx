@@ -6,7 +6,7 @@ import { TOOL_LOGOS, WORKS, BROWSER_LOGOS, PROVIDER_LOGOS } from './logos.js';
 import ObsidianPicker from './ObsidianPicker.jsx';
 import { AgentSetupBody } from './AgentSetup.jsx';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
-import { fluidScale, keychainStep, afterAllow, profilesOf, runKeychain, cliOfProvider, providerOfCli } from '../model/onboarding.js';
+import { keychainStep, afterAllow, profilesOf, runKeychain, cliOfProvider, providerOfCli } from '../model/onboarding.js';
 import {
   CATALOG, CATALOG_IDS, ROLES, GROUPS, GROUP_IDS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp,
   scopeKind, emptyScope, scopeReady,
@@ -100,11 +100,10 @@ const HAND_ICON = <Svg d={'<path d="M18 11V6a2 2 0 0 0-2-2a2 2 0 0 0-2 2"/><path
 const FULL_DISK_ACCESS_URL = 'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles';
 
 /**
- * The window's size and the onboarding's one fluid scale (2026-10-16, S2: "generally make everything bigger, there is too
- * much whitespace. this should be minimum size but should expand with window. same for all like five screens"): the zoom
- * of each screen's column (model/onboarding.js fluidScale), from a minimum at the smallest window.
+ * The window's size, for Welcome's picture (2026-10-16). The screens' zoom that grew with it (S2's fluid scale) is gone:
+ * "Zoom back out the onboarding, it looks ugly zoomed in" (the same day, after trying the beta).
  */
-export function useFluidScale() {
+export function useWindowSize() {
   const read = () => ({ width: typeof window === 'undefined' ? 1000 : window.innerWidth, height: typeof window === 'undefined' ? 700 : window.innerHeight });
   const [size, setSize] = React.useState(read);
   React.useEffect(() => {
@@ -112,7 +111,7 @@ export function useFluidScale() {
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
   }, []);
-  return { ...size, scale: fluidScale(size.width, size.height) };
+  return size;
 }
 // A project's symbol is the workspace icon (../ui/SidebarIcons.jsx WorkspaceIcon): workspaces become projects (2026-10-13).
 
@@ -690,7 +689,6 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     measure();
     if (typeof ResizeObserver === 'function') { recommendedWatch.current = new ResizeObserver(measure); recommendedWatch.current.observe(title); }
   }, []);
-  const fit = useFluidScale();
 
   /* -------- picks */
   /** A tool from "+ Add a tool": ticked, as the person's own choice. */
@@ -842,7 +840,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
           <div className="project-list">
             {projects.map((project) => (
               <button key={project.id} type="button" className="project-choice" role="checkbox" aria-checked={F.picked.includes(project.id)} data-work-project={project.id} onClick={() => set((now) => ({ picked: toggle(now.picked, project.id) }))}>
-                <span><b>{project.title}</b><small>{project.description || 'Added by you'}</small></span>
+                <span className="project-text"><b>{project.title}</b><small>{project.description || 'Added by you'}</small></span>
                 {project.recent ? <span className="project-recency">{project.recent}</span> : null}
                 <Check on={F.picked.includes(project.id)} />
               </button>
@@ -1234,8 +1232,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   return (
     <CopyContext.Provider value={{ edit, copy, setCopy }}>
-      {/* S2's one fluid scale (a new user's onboarding; over a workspace the flow keeps its size) */}
-      <div className={`ix ${edit ? 'editing' : ''} ${mode === 'modal' ? 'ix-in-modal' : 'ix-fluid'}`} data-import-flow={mode} data-screen={F.screen} data-dialog={d || ''} style={mode === 'modal' ? undefined : { '--ix-scale': fit.scale }}>
+      {/* ix-fluid: a new user's onboarding, the whole window (over a workspace the flow is a modal) */}
+      <div className={`ix ${edit ? 'editing' : ''} ${mode === 'modal' ? 'ix-in-modal' : 'ix-fluid'}`} data-import-flow={mode} data-screen={F.screen} data-dialog={d || ''}>
         <style>{IMPORT_CSS}{EXTRA_CSS}{ROUND3_CSS}{ROUND4_CSS}</style>
         <div className="ix-app" inert={d ? true : undefined}>{screen}</div>
         {error && <div className="ix-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError('')} aria-label="Dismiss">×</button></div>}

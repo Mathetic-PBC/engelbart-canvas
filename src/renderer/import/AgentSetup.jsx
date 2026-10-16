@@ -91,14 +91,14 @@ export function AgentSetupBody({ api, tools, providers, initial = null, refused 
 }
 
 /** The popup over a screen that is not inside an `.ix` (Welcome): its own scrim and styles, as ./ProviderPopup.jsx. */
-export default function AgentSetupPopup({ scale = 1, ...props }) {
+export default function AgentSetupPopup(props) {
   React.useEffect(() => {
     const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); props.onSkip(); } };
     window.addEventListener('keydown', onKey, true);
     return () => window.removeEventListener('keydown', onKey, true);
   }, [props.onSkip]); // eslint-disable-line react-hooks/exhaustive-deps
   return (
-    <div className="ix ix-overlay ix-fluid" data-overlay="1" data-cover="1" data-agent-popup="1" style={{ '--ix-scale': scale }}>
+    <div className="ix ix-overlay ix-fluid" data-overlay="1" data-cover="1" data-agent-popup="1">
       <style>{IMPORT_CSS}{'.ix.ix-overlay{min-height:0;background:transparent}.ix.ix-overlay .scrim{z-index:160}.ix .mf .mf-left{margin-right:auto}'}{ROUND3_CSS}{ROUND4_CSS}</style>
       <div className="scrim">
         <section className="modal agent-modal" role="dialog" aria-modal="true" aria-label="Use Claude Code, Codex, or both?">
