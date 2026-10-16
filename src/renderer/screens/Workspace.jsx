@@ -32,6 +32,8 @@ import { fallbackAgent } from '../model/route.js';
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 import { findAskLine, findBuildLine } from '../model/askLine.js';
 import { openBeside, closePane } from '../model/panes.js';
+import { createSideTracker, docClose, docHasKeys } from '../model/key-side.js';
+import DocFind from '../workspace/DocFind.jsx';
 import { addDropped } from '../model/drop.js';
 import { addOrFind } from '../model/add-or-find.js';
 import { createDocSync } from '../model/doc-sync.js';
@@ -130,6 +132,7 @@ const VIEW_SAVE_DELAY = 400;
 const PANE_MIN = 240; // px: a column too narrow for two of these side by side scrolls sideways instead (MATH-23)
 const NO_PANES = [];
 const noView = () => null; // a document beside the one in front keeps no scroll position: it opens at its top
+const BESIDE_FIND = { right: 52 }; // ⌘F's card over the pane beside stops short of its × (DocPane)
 const POST_ITS_HIDDEN = 'engelbart.postIts.hidden';
 const TITLE_LINE = 27; // px from the window's top to the middle of its lights (src/main/index.cjs trafficLightPosition)
 const TITLE_BAR = TITLE_LINE + 17; // a tab is 34px, its title in its middle
@@ -199,6 +202,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const allWorkspaces = React.useMemo(() => flatWorkspaces(tree.workspaces), [tree.workspaces]);
   const [railWidth, setRailWidth] = React.useState(300);
   const [notePlus, setNotePlus] = React.useState(null); // the +'s note menu beside the tabs: the +'s rect while it is open
+  const notePlusRef = React.useRef(null); // the + itself, for ⌘T in the middle canvas
   const [rightWidth, setRightWidth] = React.useState(null); // px, or null: half of what the sidebar leaves
   const [viewWidth, setViewWidth] = React.useState(() => window.innerWidth || 1440);
   React.useEffect(() => {
@@ -1966,18 +1970,86 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   /* --------------------------------------------------------------- keyboard */
 
   // ⌘1–9 switch the tabs of whichever side was clicked last (MATH-12, 2026-10-06): the documents in the middle, or the Stage.
-  // A press anywhere else (the library, the header) leaves it as it was.
-  const lastSide = React.useRef('doc');
+  // A press anywhere else (the library, the header) leaves it as it was. Since 2026-10-16 ⌘T, ⌘W and ⌘F go the same way
+  // ("cmd + w and cmd + t should work in middle canvas or stage or terminal, depending on where i clicked";
+  // model/key-side.js), and the keyboard moving into one of the three counts as a click there. A page on the Stage is a
+  // native view this page never sees a click in: main says when one takes the keyboard (browser:focused).
+  const sides = React.useRef(null);
+  if (!sides.current) sides.current = createSideTracker();
   React.useEffect(() => {
-    const onDown = (event) => {
-      const at = event.target && event.target.closest ? event.target : null; if (!at) return;
-      if (at.closest('[data-stage]')) lastSide.current = 'stage';
-      else if (at.closest('[data-terminal]')) lastSide.current = 'terminal';
-      else if (at.closest('[data-doc-pane], [data-doc-strip]')) lastSide.current = 'doc';
-    };
+    const t = sides.current;
+    const onDown = (event) => t.pressed(event.target);
+    const onFocus = (event) => t.focused(event.target);
+    const onLeave = (event) => { if (event.target === window) t.left(document.activeElement); };
     window.addEventListener('pointerdown', onDown, true);
-    return () => window.removeEventListener('pointerdown', onDown, true);
+    window.addEventListener('focusin', onFocus, true);
+    window.addEventListener('blur', onLeave);
+    const offPage = api.onBrowserFocused ? api.onBrowserFocused(() => t.page()) : null;
+    return () => {
+      window.removeEventListener('pointerdown', onDown, true);
+      window.removeEventListener('focusin', onFocus, true);
+      window.removeEventListener('blur', onLeave);
+      if (offPage) offPage();
+    };
   }, []);
+  // Whether the middle canvas has ⌘T, ⌘W and ⌘F now: the Stage and the terminal ask it too (RightPane keysToDoc) and step
+  // aside while it does.
+  const docShown = React.useRef(null);
+  docShown.current = { docShown: !!active && !stageFull, docFull };
+  const keysToDoc = React.useCallback(() => docHasKeys(sides.current.side(), docShown.current), []);
+
+  // The middle canvas's ⌘T opens the +'s note menu, as the + does; ⌘W closes the pane beside when it was clicked last, else
+  // the tab in front, never Workspace or the last tab (docClose); ⌘F opens find over the pane clicked last (DocFind.jsx),
+  // and ⌘G / ⇧⌘G step through it while it is open.
+  const [docFind, setDocFind] = React.useState(null); // { pane, focus, back } while ⌘F's card is open
+  const [docFindText, setDocFindText] = React.useState('');
+  const docFindStep = React.useRef(null);
+  const closeDocFind = React.useCallback(() => setDocFind(null), []);
+  React.useEffect(() => { if (docFind && docFind.pane >= paneDocs.length) setDocFind(null); }, [docFind, paneDocs.length]);
+  const docKeys = React.useRef(null);
+  docKeys.current = {
+    finding: !!docFind,
+    newTab: () => {
+      const plus = notePlusRef.current;
+      if (!plus || notePlus) return;
+      const r = plus.getBoundingClientRect();
+      setNotePlus({ left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width });
+    },
+    closeTab: () => {
+      const what = docClose({ tabs, active: activeTab, pane: sides.current.pane(), beside: beside.length });
+      if (what && what.pane) closeBeside(what.pane);
+      else if (what) closeTab(what.tab);
+    },
+    find: () => {
+      const at = Math.max(0, Math.min(sides.current.pane(), paneDocs.length - 1));
+      const editor = (editorRefs.current[at] || {}).current;
+      const back = editor && editor.caretNow ? editor.caretNow() : null; // where the caret goes back to if no match can take it
+      setDocFind((now) => ({ pane: at, focus: (now ? now.focus : 0) + 1, back: back || (now && now.pane === at ? now.back : null) }));
+    },
+    step: (by) => { if (docFindStep.current) docFindStep.current(by); },
+  };
+  React.useEffect(() => {
+    if (!active) return undefined;
+    const onKey = (event) => {
+      if (!event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented || !keysToDoc()) return;
+      const key = String(event.key).toLowerCase(), k = docKeys.current;
+      const take = () => { event.preventDefault(); event.stopPropagation(); };
+      if (key === 'g') { if (k.finding) { take(); k.step(event.shiftKey ? -1 : 1); } return; }
+      if (event.shiftKey) return; // ⇧⌘W is the window's
+      if (key === 't') { take(); k.newTab(); }
+      else if (key === 'w') { take(); k.closeTab(); }
+      else if (key === 'f') { take(); k.find(); }
+    };
+    window.addEventListener('keydown', onKey, true);
+    // The Edit menu's Find items, when no key in this page took them (main's views.cjs shortcut; a tab named: a page's).
+    const offMenu = api.onBrowserShortcut ? api.onBrowserShortcut(({ name, tab }) => {
+      if (tab || !keysToDoc()) return;
+      const k = docKeys.current;
+      if (name === 'find') k.find();
+      else if ((name === 'find-next' || name === 'find-previous') && k.finding) k.step(name === 'find-next' ? 1 : -1);
+    }) : null;
+    return () => { window.removeEventListener('keydown', onKey, true); if (offMenu) offMenu(); };
+  }, [active, keysToDoc]);
 
   React.useEffect(() => {
     if (!active) return undefined;
@@ -1986,8 +2058,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const inTerminal = target && target.closest && target.closest('[data-terminal]');
       const mod = event.metaKey && !event.ctrlKey; // Ctrl+1–9 goes to the level-2 projects (2026-10-13)
       if (mod && !inTerminal && /^[1-9]$/.test(event.key)) {
-        if (lastSide.current === 'terminal' && rightMode === 'terminal') return; // the Terminal's own tabs (TerminalPane)
-        if (lastSide.current === 'stage' && rightMode === 'stage' && stageRef.current) {
+        const side = sides.current.side();
+        if (side === 'terminal' && rightMode === 'terminal') return; // the Terminal's own tabs (TerminalPane)
+        if (side === 'stage' && rightMode === 'stage' && stageRef.current) {
           event.preventDefault();
           stageRef.current.tabAt(Number(event.key) - 1);
           return;
@@ -2292,7 +2365,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onError={onError}
             />
           )}
-          {topic && <button type="button" className="hov-tab-plus" data-note-plus="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setNotePlus(notePlus ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }); }} aria-label="Open or make a note" aria-expanded={!!notePlus} title="Open a note or make one" style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>}
+          {topic && <button ref={notePlusRef} type="button" className="hov-tab-plus" data-note-plus="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setNotePlus(notePlus ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }); }} aria-label="Open or make a note" aria-expanded={!!notePlus} title="Open a note or make one" style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>}
           {/* The document's full screen (MATH-23), at the strip's end as the Stage's is at its own. */}
           {topic && <button type="button" className="hov-wash2" onClick={toggleDocFull} aria-label={docFull ? 'Exit full screen' : 'Full screen'} title={docFull ? 'Exit full screen (Esc)' : 'Full screen'} data-doc-full={docFull ? '1' : '0'} style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{docFull ? <Collapse /> : <Expand />}</button>}
         </div>
@@ -2395,6 +2468,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                 onKeepMine={() => keepMine(doc.key)}
                 onTakeTheirs={() => takeTheirs(doc.key)}
                 onClose={pane ? () => closeBeside(i) : null}
+                find={docFind && docFind.pane === i ? <DocFind editorRef={editorRefAt(i)} text={docFindText} onText={setDocFindText} onClose={closeDocFind} focusKey={docFind.focus} back={docFind.back} stepRef={docFindStep} place={pane ? BESIDE_FIND : null} /> : null}
                 empty={pane ? null : noWorkspace}
                 style={paneStyle(i)}
                 editor={{
@@ -2450,6 +2524,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onContinueAsk={topic ? continueAsk : undefined}
           onCopyText={(value) => api.copyText(value).catch((error) => onError(error))}
           onTabs={setStagePlaces}
+          keysToDoc={keysToDoc}
           save={madeSave || (topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null)}
           style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: docFull ? 'none' : 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />

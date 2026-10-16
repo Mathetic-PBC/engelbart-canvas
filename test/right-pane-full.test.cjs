@@ -20,7 +20,7 @@ test('the full screen is the right pane\'s, not only the Stage\'s', () => {
 test('the Terminal is handed the full screen and draws its button at the end of its tabs, as the Stage does', () => {
   assert.match(read('workspace/RightPane.jsx'), /<TerminalPane [^>]*full=\{full\} onFull=\{onFull\}/);
   const terminal = read('terminal/TerminalPane.jsx');
-  assert.match(terminal, /export default function TerminalPane\(\{[^}]*full = false, onFull = null \}\)/);
+  assert.match(terminal, /export default function TerminalPane\(\{[^}]*full = false, onFull = null(, [^}]*)? \}\)/); // keysToDoc after it since 2026-10-16
   assert.match(terminal, /\{onFull && \(\s*<button type="button" className="hov-wash2" onClick=\{\(\) => \{ card\.hide\(\); onFull\(\); \}\} aria-label=\{full \? 'Exit full screen' : 'Full screen'\} title=\{full \? 'Exit full screen' : 'Full screen'\} data-term-full=/);
   assert.match(terminal, /\{full \? <Collapse \/> : <Expand \/>\}/);
 });

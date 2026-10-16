@@ -470,6 +470,11 @@ test('views: find in the page, and the keys a page cannot keep (⌘T, ⌘W; ⇧�
   a.focused = true;
   views.shortcut('find-next');
   assert.deepEqual(sent.at(-1), ['browser:shortcut', { name: 'find-next', tab: 'a' }]);
+
+  // A page taking the keyboard is told (2026-10-16): the renderer sees no click in a native view, and ⌘T, ⌘W and ⌘F go
+  // to the place clicked last (model/key-side.js).
+  a.emit('focus');
+  assert.deepEqual(sent.at(-1), ['browser:focused', { id: 'a' }]);
 });
 
 test('GitHub pages open on the Stage; only its sign-in pages go to the default browser', () => {
