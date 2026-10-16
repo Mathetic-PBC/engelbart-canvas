@@ -70,8 +70,10 @@ test('tool discovery: every catalog tool answered; local finds stay; extras dedu
   assert.equal(out.tools.length, flow.CATALOG_IDS.length);
   assert.equal(out.tools.find((tool) => tool.id === 'Obsidian').used, true);
   assert.equal(out.tools.find((tool) => tool.id === 'Notion').used, false);
-  assert.deepEqual(out.additional.map((tool) => tool.name), ['Linear', 'Figma']);
-  assert.equal(out.additional[1].website, '');
+  // Linear is a catalog tool since 2026-10-16: named among the others, it answers for itself there.
+  assert.deepEqual(out.additional.map((tool) => tool.name), ['Figma']);
+  assert.equal(out.tools.find((tool) => tool.id === 'Linear').used, true);
+  assert.equal(out.additional[0].website, '');
   const fallback = flow.readTools('garbage', known);
   assert.equal(fallback.tools.find((tool) => tool.id === 'Notion').used, true);
 });
@@ -93,10 +95,12 @@ test('manual scopes: what each kind needs before it is ready', () => {
 
 test('the plan keeps the agent to the projects picked, and a manual import to its exact scope', () => {
   const projects = [{ id: 'a', title: 'Requirements study', description: 'How novices describe requirements' }];
-  const auto = flow.importPlan({ app: 'Notion', mode: 'auto', projects, roles: ['Researcher'], work: 'CS education' });
+  const auto = flow.importPlan({ app: 'Google Docs', mode: 'auto', projects, roles: ['Researcher'], work: 'CS education' });
   assert.match(auto, /only what pertains to these projects/);
   assert.match(auto, /Requirements study: How novices/);
   assert.match(auto, /Never install a plugin/);
+  // A connector app (2026-10-16) is read through its own tools, not a browser.
+  assert.match(flow.importPlan({ app: 'Notion', mode: 'auto', projects }), /through Notion's own tools \(its connector\)/);
   const manual = flow.importPlan({ app: 'Gmail', mode: 'manual', projects, scope: { kind: 'email', folders: [], items: [], people: ['lee@example.edu'], note: '', labels: [] } });
   assert.match(manual, /read only email with these people: lee@example.edu/);
   assert.doesNotMatch(manual, /Never install/);
@@ -121,13 +125,14 @@ test('Gmail is paused ("Get rid of Gmail and Calendar imports for now"): no Emai
 
 test('an Other category, last, holds what fits no other', () => {
   const other = flow.GROUPS[flow.GROUPS.length - 1];
-  assert.deepEqual({ id: other.id, label: other.label, apps: [...other.apps] }, { id: 'other', label: 'Other', apps: [] });
+  // Linear is Other's own app since 2026-10-16 ("just Linear should by default be in the 'Other' category").
+  assert.deepEqual({ id: other.id, label: other.label, apps: [...other.apps] }, { id: 'other', label: 'Other', apps: ['Linear'] });
   assert.ok(flow.GROUP_IDS.includes('other'));
 });
 
 test('tool discovery: every extra tool gets a category the picker has (else Other); calendars and mail are left out', () => {
   const reply = JSON.stringify({ tools: [], additional: [
-    { name: 'Linear', website: 'https://linear.app', used: true, category: 'code' },
+    { name: 'Asana', website: 'https://asana.com', used: true, category: 'code' },
     { name: 'Figma', used: true, category: 'design' },
     { name: 'Readwise', used: true, category: 'Notes' },
     { name: 'Google Calendar', used: true, category: 'other' },
@@ -138,7 +143,7 @@ test('tool discovery: every extra tool gets a category the picker has (else Othe
     { name: 'Fantastical', used: true },
   ] });
   const out = flow.readTools(reply, {});
-  assert.deepEqual(out.additional.map((tool) => [tool.name, tool.category]), [['Linear', 'code'], ['Figma', 'other'], ['Readwise', 'notes']]);
+  assert.deepEqual(out.additional.map((tool) => [tool.name, tool.category]), [['Asana', 'code'], ['Figma', 'other'], ['Readwise', 'notes']]);
 });
 
 test('the plan keeps a background run to what the person specified too, not only a manual one', () => {

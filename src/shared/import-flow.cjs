@@ -25,13 +25,11 @@ const PAUSED_APPS = Object.freeze(['Gmail']);
 /**
  * The picker's groups: Connect's sources (a paused app taken out, and a category it leaves empty with it), Code holding
  * GitHub and the folders on this Mac, then Other, for the tools the agents find that fit no category (From Amitav,
- * 2026-10-15). Websites and Other have no apps of their own.
+ * 2026-10-15). Websites has no apps of its own; Other is one of Connect's sources since 2026-10-16, holding Linear
+ * ("just Linear should by default be in the 'Other' category"), so a direct session has a source to run it under.
  */
-const GROUPS = Object.freeze([
-  ...SOURCES.map((source) => ({ id: source.id, label: source.label, apps: source.id === 'code' ? ['GitHub', LOCAL_FOLDERS] : source.apps.filter((app) => !PAUSED_APPS.includes(app)), emptied: source.apps.length > 0 && source.apps.every((app) => PAUSED_APPS.includes(app)) }))
-    .filter((group) => !group.emptied).map(({ id, label, apps }) => Object.freeze({ id, label, apps: Object.freeze(apps) })),
-  Object.freeze({ id: 'other', label: 'Other', apps: Object.freeze([]) }),
-]);
+const GROUPS = Object.freeze(SOURCES.map((source) => ({ id: source.id, label: source.label, apps: source.id === 'code' ? ['GitHub', LOCAL_FOLDERS] : source.apps.filter((app) => !PAUSED_APPS.includes(app)), emptied: source.apps.length > 0 && source.apps.every((app) => PAUSED_APPS.includes(app)) }))
+  .filter((group) => !group.emptied).map(({ id, label, apps }) => Object.freeze({ id, label, apps: Object.freeze(apps) })));
 const GROUP_IDS = Object.freeze(GROUPS.map((group) => group.id));
 
 const groupOfApp = (app) => (app === SITES ? 'sites' : (GROUPS.find((group) => group.apps.includes(app)) || {}).id || null);
@@ -185,6 +183,13 @@ function readProjects(text) {
 function readTools(text, known = {}) {
   const value = jsonOf(text) || {};
   const said = new Map((Array.isArray(value.tools) ? value.tools : []).filter((entry) => entry && typeof entry === 'object' && CATALOG_IDS.includes(entry.id)).map((entry) => [entry.id, entry]));
+  // A catalog tool the agent listed among the others instead (2026-10-16: Linear joined the catalog, and agents told
+  // "Linear, Figma…" are other tools still name it there) counts as its answer for that tool, when it gave none in `tools`.
+  const byName = new Map(CATALOG.map((tool) => [tool.name.toLowerCase(), tool.id]));
+  for (const entry of Array.isArray(value.additional) ? value.additional : []) {
+    const id = entry && typeof entry === 'object' ? byName.get(clip(entry.name, 60).toLowerCase()) : null;
+    if (id && !said.has(id)) said.set(id, { id, used: entry.used !== false, evidence: entry.evidence });
+  }
   const tools = CATALOG_IDS.map((id) => {
     const fact = known[id] || null;
     const reply = said.get(id);
@@ -249,7 +254,7 @@ function scopeOptions(id, projects) {
  * projects picked, leave out everything else; a manual import keeps to the exact folders, people, drafts, collections
  * or items the person chose. `scope` (manual) as emptyScope's, with `labels` for the ticked items' names.
  */
-function importPlan({ app, mode, projects, roles = [], work = '', scope = null, period = '', browser = '' }) {
+function importPlan({ app, mode, projects, roles = [], work = '', scope = null, period = '', browser = '', connector = reachOf(app) === 'connector' && !browser }) {
   const titles = (projects || []).map((project) => project.title).filter(Boolean);
   const described = (projects || []).map((project) => `- ${project.title}${project.description ? `: ${project.description}` : ''}`).join('\n');
   const lines = [
@@ -272,6 +277,10 @@ function importPlan({ app, mode, projects, roles = [], work = '', scope = null, 
   if (scope && String(scope.note || '').trim()) lines.push(`In their words, what to bring in from it: ${clip(scope.note, 600)}`);
   if (said.length) {
     lines.push(`They narrowed it down: read ${said.join(', and ')}. Nothing outside it comes in, even when it looks related.`);
+  } else if (connector) {
+    // A connector app (Notion, Granola, Linear, Evernote: 2026-10-16) is read through its own MCP server's reading
+    // tools, not a browser. `connector: false` when its fallback route (Evernote's browser) runs instead.
+    lines.push(`Find what belongs with these projects yourself, through ${shownName(app)}'s own tools (its connector), only reading. If they are missing or say the sign-in ended, bring nothing in and say ${shownName(app)} needs to be connected again.`);
   } else if (browser) {
     lines.push(`Find what belongs with these projects yourself, in the person's own ${browser} (their sign-ins are there) and the files on this Mac. Never install a plugin or an extension.`);
   } else {

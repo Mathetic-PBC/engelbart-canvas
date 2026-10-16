@@ -159,7 +159,8 @@ test('no Gmail line, and the consent card directly under the Code row, in the so
   const m = await model();
   assert.equal(m.gmailConsent, undefined);
   assert.doesNotMatch(screen, /gmailConsent|data-connect-gmail-consent|Engelbart searches your Gmail/);
-  assert.equal(m.SOURCES[m.SOURCES.length - 1].id, 'code', 'Code is the last source');
+  // Other follows Code since 2026-10-16 (Linear's category): the card still comes right after the list.
+  assert.deepEqual(m.SOURCES.slice(-2).map((source) => source.id), ['code', 'other'], 'Code, then Other, are the last sources');
   const box = screen.slice(screen.indexOf('<div data-connect-sources-box="1"'));
   assert.match(box, /^<div data-connect-sources-box="1"[^\n]*>\n\s*\{sourcesList\}\n\s*<div data-connect-consent-at="after-code"[^\n]*>\{consentCard\}<\/div>/, 'right after the sources, inside their scrolling box');
   assert.equal(screen.match(/\{consentCard\}/g).length, 1, 'not pinned above the foot as well');

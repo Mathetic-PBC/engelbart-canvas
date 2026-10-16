@@ -22,6 +22,8 @@ import cursor from '../../../design/assets/logos/cursor_light.svg';
 import zotero from '../../../design/assets/logos/zotero.svg';
 import overleaf from '../../../design/assets/logos/overleaf.svg';
 import github from '../../../design/assets/logos/github.svg';
+// Linear's mark (2026-10-16): Simple Icons' linear.svg (simple-icons 13.21.0, CC0), in Linear's indigo #5E6AD2.
+import linear from '../../../design/assets/logos/linear.svg';
 import safari from '../../../design/assets/logos/browsers/safari.png';
 import chrome from '../../../design/assets/logos/browsers/chrome.png';
 import brave from '../../../design/assets/logos/browsers/brave.png';
@@ -38,7 +40,7 @@ export const TOOL_LOGOS = {
   Obsidian: obsidian, Notion: notion, 'Apple Notes': apple, OneNote: onenote, 'Google Docs': googledrive, Evernote: evernote,
   Granola: granola, 'Google Meet': meet, Zoom: zoom, Gmail: gmail,
   ChatGPT: openai, Codex: codex, Claude: claude, 'Claude Code': claude, Grok: grok, Gemini: gemini, Perplexity: perplexity, Cursor: cursor,
-  Zotero: zotero, Overleaf: overleaf, GitHub: github,
+  Zotero: zotero, Overleaf: overleaf, GitHub: github, Linear: linear,
 };
 
 /** The intro's row of logos (the mockup's WORKS), then "+12". */

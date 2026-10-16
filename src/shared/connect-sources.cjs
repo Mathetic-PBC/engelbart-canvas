@@ -12,7 +12,11 @@
 //   web         the agents' own browser, hidden, on the sign-ins of Engelbart's Stage (src/main/connect/browser.cjs).
 //               `sites` are the only hosts it opens for the app (sign-in pages: SIGN_IN_SITES), `start` where it begins
 //   connector   the app's official MCP server, which Engelbart signs in to with OAuth (src/main/connect/connectors.cjs);
-//               `mcp` is its address
+//               `mcp` is its address, `scope` the OAuth scope asked for (else whatever the server lists, which can be
+//               write and delete too), `also` the server's other addresses (a person's own Claude Code or Codex may
+//               name one: src/main/connect/own-connectors.cjs), `reads` the server's tools that only read ({ list,
+//               read }: a survey gets `list`, an import both), `fallback` ('web') the route used while the server
+//               can't be: its `sites` and `start` are then the browser's, as a web app's
 //   signin      Engelbart's own sign-in (Zotero, GitHub)
 //   automation  macOS Automation: Engelbart asks the app itself, which macOS asks the person to allow once (Apple Notes)
 // `memory`: an AI assistant that keeps memories of the person. With their leave, an agent asks it for a research profile
@@ -31,6 +35,9 @@ const SOURCES = Object.freeze([
   { id: 'sites', label: 'Websites', apps: [] },
   { id: 'papers', label: 'Papers', apps: ['Zotero', 'Overleaf', LOCAL_PDFS] },
   { id: 'code', label: 'Code', apps: [] },
+  // Other (2026-10-16, Hudson's Onboarding note: "Don't add that new projects category, just Linear should by default be in
+  // the 'Other' category"): the tools that fit no category. Linear is its one app; the tools the agents find join it.
+  { id: 'other', label: 'Other', apps: ['Linear'] },
 ]);
 
 const GOOGLE = ['drive.google.com', 'docs.google.com', 'accounts.google.com', 'myaccount.google.com', 'www.google.com', 'google.com'];
@@ -41,7 +48,15 @@ const APPS = Object.freeze({
   'Apple Notes': { reach: 'automation' },
   OneNote: { reach: 'web', sites: ['onenote.com', 'onenote.cloud.microsoft', 'office.com', 'live.com', 'microsoft.com', 'microsoftonline.com', 'sharepoint.com'], start: 'https://www.onenote.com/notebooks' },
   'Google Docs': { reach: 'web', sites: GOOGLE, start: 'https://drive.google.com/drive/recent' },
-  Evernote: { reach: 'web', sites: ['evernote.com'], start: 'https://www.evernote.com/client/web' },
+  // Evernote (2026-10-16, Hudson: "we should add MCP support for Evernote and Linear"): its official MCP server,
+  // https://mcp.evernote.com/mcp (dev.evernote.com/mcp: "Authentication happens automatically over OAuth"; "In beta",
+  // "rolling out gradually"). Probed 2026-10-16: its 401 names https://mcp.evernote.com/.well-known/oauth-protected-resource
+  // (resource https://mcp.evernote.com, scopes read create write delete), whose authorization server
+  // https://accounts.evernote.com registers clients dynamically (/auth/register), with PKCE S256, public clients
+  // (token_endpoint_auth_methods none) and refresh tokens. Only `read` is asked for. The tools that read are from
+  // dev.evernote.com/mcp/tools. While it is in beta the browser stays its fallback (an account the server refuses, or no
+  // reading tools): `sites` and `start` are that route's.
+  Evernote: { reach: 'connector', mcp: 'https://mcp.evernote.com/mcp', scope: 'read', fallback: 'web', sites: ['evernote.com'], start: 'https://www.evernote.com/client/web', reads: { list: ['search_notebooks', 'search_notes', 'semantic_search', 'search_tags', 'search_spaces'], read: ['get_note', 'get_attachment', 'get_space'] } },
   Granola: { reach: 'connector', mcp: 'https://mcp.granola.ai/mcp' },
   'Google Meet': { reach: 'web', sites: [...GOOGLE, 'meet.google.com'], start: 'https://drive.google.com/drive/search?q=type:document%20Meet%20Recordings' },
   Zoom: { reach: 'local', pick: 'folder', sites: ['zoom.us'] },
@@ -60,6 +75,13 @@ const APPS = Object.freeze({
   Overleaf: { reach: 'web', sites: ['overleaf.com'], start: 'https://www.overleaf.com/project' },
   [LOCAL_PDFS]: { reach: 'local', pick: 'folder' },
   GitHub: { reach: 'signin' },
+  // Linear (2026-10-16): its official MCP server's read-only endpoint (linear.app/docs/mcp: "Connect to
+  // https://mcp.linear.app/mcp/readonly, which only ever exposes read tools"; "The interactive setup flow uses OAuth 2.1
+  // with dynamic client registration"). Probed 2026-10-16: its 401 names /.well-known/oauth-protected-resource/mcp/readonly
+  // (scopes read), whose authorization server https://mcp.linear.app registers clients at /register, with PKCE S256,
+  // public clients allowed and refresh tokens. `also`: the read-write endpoint and the old SSE one, which a person's own
+  // Claude Code may name (only `reads` are ever given to an agent). The tools that read, by the server's own names.
+  Linear: { reach: 'connector', mcp: 'https://mcp.linear.app/mcp/readonly', also: ['https://mcp.linear.app/mcp', 'https://mcp.linear.app/sse'], scope: 'read', sites: ['linear.app'], start: 'https://linear.app/', reads: { list: ['list_teams', 'list_projects', 'list_issues', 'list_documents', 'list_cycles', 'get_user'], read: ['get_project', 'get_issue', 'get_document', 'list_comments', 'list_milestones', 'get_milestone', 'get_status_updates', 'get_team', 'list_issue_statuses', 'list_issue_labels', 'list_project_labels'] } },
 });
 
 // Where a sign-in may take a page on its way back to an app (an agent's browser only goes where its apps' `sites` are).
@@ -120,6 +142,8 @@ const categoryOfApp = (app) => GROUP_CATEGORIES[sourceOfApp(app)] || null;
 const CHAT_APPS = Object.freeze(sourceOf('chats').apps.slice());
 /** The AI assistants an agent can ask for what they remember, of `apps`. */
 const recallApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => appOf(app) && appOf(app).memory);
+/** The route a connector app takes while its server can't be used ('web' for Evernote), else null. */
+const fallbackOf = (app) => (appOf(app) && appOf(app).fallback) || null;
 /** The apps reached on the web, of `apps`. */
 const webApps = (apps) => (Array.isArray(apps) ? apps : []).filter((app) => appOf(app) && appOf(app).reach === 'web');
 
@@ -134,4 +158,4 @@ const cleanDays = (value) => (value === 182 || value === 365 ? value : null);
 /** "the past year" for 365, "the past 6 months" for 182, "all time" otherwise. */
 const periodName = (days) => (PERIODS.find((period) => period.days === cleanDays(days)) || PERIODS[2]).label;
 
-module.exports = { SOURCES, APPS, LOCAL_PDFS, ITEM_SOURCES, ITEM_CATEGORIES, GROUP_CATEGORIES, CHAT_APPS, categoryOfApp, READABLE_NAMES, SIGN_IN_SITES, SIGN_IN_COOKIES, signInGroup, sharesSignIn, signsInThroughBrowser, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, cleanDays, periodName };
+module.exports = { SOURCES, APPS, LOCAL_PDFS, ITEM_SOURCES, ITEM_CATEGORIES, GROUP_CATEGORIES, CHAT_APPS, categoryOfApp, READABLE_NAMES, SIGN_IN_SITES, SIGN_IN_COOKIES, signInGroup, sharesSignIn, signsInThroughBrowser, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, fallbackOf, cleanDays, periodName };

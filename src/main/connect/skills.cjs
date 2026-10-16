@@ -50,9 +50,19 @@ const SKILLS = {
 - An import: the plan gives the account's n and ik and the thread ids the person approved. Call import_gmail_threads with exactly those (threads [{ id, subject }], up to 50 a call), nothing else; a thread brought in before is skipped. If the plan has no n and ik and gmail_accounts finds more than one account, do not guess: bring nothing in and say so.
 - Never open threads one by one to copy them, never search for more to bring in than the plan names, and never download attachments: their names are listed in each note.`,
 
+  // Evernote (2026-10-16): its official MCP server first (dev.evernote.com/mcp/tools), the browser while that server is in
+  // beta and can't be used (connect-sources `fallback`).
   Evernote: `# Evernote
-- ${BROWSER}
+- When Evernote's own tools are there (the MCP server "evernote": search_notebooks, search_notes, semantic_search, get_note), use them and no browser: search_notebooks for the notebooks, search_notes (Evernote's search syntax, with notebook, tag and date filters) or semantic_search for the notes the plan wants, get_note for each one's content, and add_note it (title = the note's title, markdown = its content, source = "evernote:<note id>"). Use only its tools that read; never create, edit, move, tag or delete anything. If they say the sign-in ended, call needs_you with kind "connector" and reason "Connect Evernote".
+- Without those tools, Engelbart's browser: ${BROWSER}
 - Start at https://www.evernote.com/client/web. The Notes list shows titles; open each note the plan wants, browser_read its text and add_note it (title, markdown, source = the note's address). Notebooks are in the sidebar under Notebooks. ${SIGN_IN}`,
+
+  // Linear (2026-10-16): only through its official read-only MCP server (connect-sources), under Other.
+  Linear: `# Linear
+- Linear is reached only through its own reading tools, never a browser: the Linear MCP server (usually named "linear"): list_teams, list_projects, list_issues, list_documents, list_cycles, then get_project, get_issue, get_document, list_comments, get_status_updates for what the plan wants. Use only tools that read.
+- Find the projects (and their issues and documents) that belong with the plan's projects: list_projects, and list_issues filtered by project, team or words from the plan. Bring in a project as one note (title = the project's name, markdown = its description, status, milestones and latest status update, then its issues as a list with their identifiers and states), and a document or a long issue the plan wants as its own note (source = its Linear link).
+- Without those tools, or if they say the sign-in ended, bring nothing in and call needs_you with kind "connector" and reason "Connect Linear".
+- Leave out by default: closed or cancelled issues older than the plan's time range, and teams that have nothing to do with the plan.`,
 
   Granola: `# Granola
 - Granola keeps its notes encrypted on this Mac and has no web app, so it is reached only through its own tools: the Granola MCP server (usually named "granola"), signed in either through Engelbart or through the person's own Claude Code or Codex, where they are signed in already. Its tools list or search meetings, get a meeting's notes and get its transcript. Use them; never ask the person to export or download anything.

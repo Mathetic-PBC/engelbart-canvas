@@ -2,7 +2,7 @@
 
 // The connectors the person has already signed in to in their own Claude Code or Codex (round 3, 2026-10-13: "for
 // Granola I am already signed in … so an agent should just be able to use that headlessly"). An app with an official MCP
-// server (connect-sources `mcp`: Granola, Notion) that the person added to their CLI — matched by that server's address —
+// server (connect-sources `mcp`: Granola, Notion, Linear, Evernote) that the person added to their CLI — matched by that server's address —
 // is handed to the import agent under the person's own name for it, with no token of Engelbart's: each CLI finds its
 // own sign-in for a server by its name and address. Verified on Hudson's Mac (Claude Code 2.1.x, codex-cli 0.162): a
 // `claude -p --strict-mcp-config --mcp-config '{"granola": {"type": "http", "url": …}}'` turn used his Granola sign-in,
@@ -23,8 +23,13 @@ const SIGNED_IN = new Set(['o_auth', 'oauth', 'bearer_token', 'unsupported']);
 
 const plain = (url) => String(url || '').trim().replace(/\/+$/, '').toLowerCase();
 
-/** The apps with an official server → { [address]: app }. */
-const officialServers = () => Object.fromEntries(Object.entries(APPS).filter(([, app]) => app.mcp).map(([name, app]) => [plain(app.mcp), name]));
+/**
+ * The apps with an official server → { [address]: app }: its address and its others (`also`, 2026-10-16: Engelbart signs
+ * in to Linear's read-only endpoint, a person's own Claude Code names https://mcp.linear.app/mcp; the agent is given only
+ * the tools that read either way, agents.cjs).
+ */
+const officialServers = () => Object.fromEntries(Object.entries(APPS).filter(([, app]) => app.mcp)
+  .flatMap(([name, app]) => [app.mcp, ...(Array.isArray(app.also) ? app.also : [])].map((url) => [plain(url), name])));
 
 /** Claude Code's user-scope servers → [{ name, url, type }]. */
 function claudeServersOf({ homeDir, env = process.env, readFile = (file) => fs.readFileSync(file, 'utf8') }) {
