@@ -430,7 +430,7 @@ export function agentEntries({ agents = [], builds = [], connect = [], projectId
   for (const agent of agents) {
     if (!agent || agent.projectId !== projectId || agent.kind === 'build') continue;
     if (agent.status !== 'running' && agent.status !== 'waiting') continue;
-    out.push({ id: `agent:${agent.id}`, kind: agent.kind, title: AGENT_NAME[agent.kind] || 'Agent', node: agent.workspaceId || null, state: agent.status === 'running' ? 'running' : 'unseen', at: agent.status === 'running' ? agent.started : (agent.finished || agent.started) });
+    out.push({ id: `agent:${agent.id}`, kind: agent.kind, title: AGENT_NAME[agent.kind] || 'Agent', node: agent.workspaceId || null, doc: agent.doc || null, state: agent.status === 'running' ? 'running' : 'unseen', at: agent.status === 'running' ? agent.started : (agent.finished || agent.started) });
   }
   for (const task of builds) {
     if (!task || task.projectId !== projectId) continue;
@@ -443,16 +443,73 @@ export function agentEntries({ agents = [], builds = [], connect = [], projectId
   return out.sort((a, b) => time(b.at) - time(a.at));
 }
 
+/**
+ * The repositories' builds the bell held (ui/SandboxNotifications.jsx), as rows of Agents among the rest (2026-10-16:
+ * "Repositories should not have its own section"): Building… runs, a failed build failed, a finished one is to look at
+ * until it is read. `rows`: the notifications still shown; `items`: library id → { run, sandbox }.
+ * → [{ id, kind: 'repo', title, node: null, state, at, viewed?, notification, run, sandbox, repo }]
+ */
+export function repoEntries(rows = [], items = {}, library = []) {
+  const out = [];
+  for (const notification of rows) {
+    const item = (items || {})[notification.libraryId];
+    const run = item && item.run;
+    if (!run) continue;
+    const repo = library.find((row) => row.id === notification.libraryId) || null;
+    const state = run.status === 'starting' ? 'running' : run.status === 'failed' ? 'failed' : 'unseen';
+    out.push({ id: `repo:${notification.id}`, kind: 'repo', title: (repo && repo.name) || 'Repository', node: null, state, at: notification.at, ...(notification.read && state !== 'running' ? { viewed: true } : {}), notification, run, sandbox: item.sandbox ?? null, repo });
+  }
+  return out;
+}
+
 export const READY_STATES = new Set(['needs', 'unseen', 'failed']);
 
-/** One count for a list of agents: the running ones and the ones to look at (needs you, finished unseen, failed). */
+/** One count for a list of agents: the running ones and the ones to look at (needs you, finished unseen, failed), less the ones already clicked (`viewed`). */
 export function summarize(list = []) {
   let running = 0, ready = 0;
   for (const entry of list) {
     if (entry.state === 'running') running += 1;
-    else if (READY_STATES.has(entry.state)) ready += 1;
+    else if (READY_STATES.has(entry.state) && !entry.viewed) ready += 1;
   }
   return { total: running + ready, running, ready };
+}
+
+// How long an agent stays in Agents (2026-10-16, Hudson: no "Earlier" section; "it should just like go away after 3d or
+// after 1d of me clicking on it"). One still running stays.
+export const AGENT_KEPT_MS = 3 * 24 * 60 * 60 * 1000;
+export const AGENT_CLICKED_MS = 24 * 60 * 60 * 1000;
+const MARKS_KEPT_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** A row of Agents clicked or put away with its ×: `marks` { [entry id]: { clicked?, dismissed? } } with that one's time set; marks older than a week are dropped. */
+export function markAgent(marks = {}, id, what, at = new Date().toISOString()) {
+  const now = time(at);
+  const out = {};
+  for (const [key, mark] of Object.entries(marks || {})) {
+    if (!mark || typeof mark !== 'object') continue;
+    if (Math.max(time(mark.clicked), time(mark.dismissed)) >= now - MARKS_KEPT_MS) out[key] = mark;
+  }
+  out[id] = { ...(out[id] || {}), [what]: at };
+  return out;
+}
+
+/**
+ * What Agents shows: no row put away with its × since it last changed, and no row that is not running once it is three days old or a day past
+ * the click. A row clicked since it last changed (its `at`) is `viewed`: it has been looked at, so it no longer asks to be
+ * (no dot, out of the counts and of ⌘J); one clicked while it ran and finished since is new again.
+ */
+export function keptAgents(entries = [], marks = {}, now = Date.now()) {
+  const out = [];
+  for (const entry of entries) {
+    const mark = (marks && marks[entry.id]) || {};
+    if (mark.dismissed && time(mark.dismissed) >= time(entry.at)) continue; // put away; back if it changes again
+    const clicked = time(mark.clicked) >= time(entry.at) ? time(mark.clicked) : 0;
+    if (entry.state !== 'running') {
+      if (entry.at && now - time(entry.at) > AGENT_KEPT_MS) continue;
+      if (clicked && now - clicked > AGENT_CLICKED_MS) continue;
+    }
+    out.push(clicked ? { ...entry, viewed: true } : entry);
+  }
+  return out;
 }
 
 /**
@@ -528,6 +585,24 @@ export function sourceIcon(row) {
   if (row.type === 'pdf') return 'pdf';
   if (row.type === 'folder') return 'folder';
   return 'file';
+}
+
+/**
+ * A project's own folder, the source opened or looked at last first (2026-10-16, Hudson: "the most recently opened/viewed
+ * notes/images/sources should be shown at the top … right now i think it is in order added"): by when each was last
+ * opened (`opened`: id → ISO time), or when it came into the library if it never was; ties keep their order.
+ */
+export function byOpened(rows = [], opened = {}) {
+  const when = (row) => Math.max(time((opened || {})[row.id]), time(row.created));
+  return rows.map((row, i) => ({ row, i, at: when(row) })).sort((a, b) => b.at - a.at || a.i - b.i).map((entry) => entry.row);
+}
+
+/** An opening remembered: `opened` with `id` at `at`, keeping the `max` newest. */
+export function noteOpened(opened = {}, id, at = new Date().toISOString(), max = 400) {
+  const next = { ...(opened || {}), [id]: at };
+  const ids = Object.keys(next);
+  if (ids.length <= max) return next;
+  return Object.fromEntries(ids.sort((a, b) => time(next[b]) - time(next[a])).slice(0, max).map((key) => [key, next[key]]));
 }
 
 /** A folder's rows as the sidebar draws them: five, or four and More. → { shown, more } */

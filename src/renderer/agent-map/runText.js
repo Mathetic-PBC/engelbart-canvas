@@ -12,7 +12,7 @@ export const AGENTS = [
   { agent: 'brainstorm', routed: 'brainstorm', name: 'Brainstorm', token: '@brainstorm' },
   { agent: 'discover', routed: 'discover', name: 'Discover', token: '@discover' },
   { agent: 'create', routed: 'create', name: 'Create', token: '@create' },
-  { agent: 'build', routed: 'build', name: 'Build', token: '@bart / Build button / panel / post-it' },
+  { agent: 'build', routed: 'build', name: 'Build', token: '@bart / Build button / panel / sticky' },
   { agent: 'run step', routed: null, name: 'Run step', token: '', inside: 'build' },
 ];
 
@@ -333,7 +333,7 @@ export function viaLabel(via, routedTo) {
   if (via === '--build') return 'Typed directly (--build)';
   if (via === 'button') return 'Typed directly (Build button)';
   if (via === 'panel') return 'Typed directly (Build panel)';
-  if (via === 'post-it') return 'Typed directly (post-it)';
+  if (via === 'post-it') return 'Typed directly (sticky)';
   const info = agentInfo(routedTo);
   return `Typed directly (${info.unknown ? info.name : info.token})`;
 }

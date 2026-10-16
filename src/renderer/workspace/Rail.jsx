@@ -6,7 +6,7 @@ import { isUntitled } from '../model/names.js';
 import { looksAddable, searchRows } from '../model/rail.js';
 import { flatWorkspaces } from '../model/nav.js';
 import {
-  LEVEL_ROWS, MAX_DEPTH, archivedVersions, folderRows, indexTree, libraryLabel, openPath, projectPlan, projectSlots, rollUp,
+  LEVEL_ROWS, MAX_DEPTH, folderRows, indexTree, libraryLabel, openPath, projectPlan, projectSlots, rollUp,
   shortcutOf, summarize, summaryOf, toggleOpen, workspaceActivity,
 } from '../model/sidebar.js';
 import { libraryCounts } from '../model/kind.js';
@@ -17,7 +17,6 @@ import { useBodies } from './useBodies.js';
 import { carriesDrop, readDrop } from '../model/drop.js';
 import TrashPanel from '../post-its/TrashPanel.jsx';
 import { openSettings } from '../ui/Settings.jsx';
-import { useBuildNotifications } from '../ui/SandboxNotifications.jsx';
 import * as I from '../ui/SidebarIcons.jsx';
 import {
   AddPicker, AgentsPanel, ContextMenu, Count, CreateProjectDialog, FolderDialog, LibraryPanel, Pill, PeekCard, ProjectFlyout,
@@ -427,7 +426,7 @@ export default function Rail({
   project, onOpenProject, onNewProject, onAllProjects, onRenameProject, onOpenProjectPage = () => {}, projectCounts = new Map(),
   roots = [], hereId = null, recent = [], visits = [], entries = [],
   onSelectWorkspace, onCreateWorkspace, onRenameWorkspace, onDeleteWorkspace, onOpenVersion,
-  onGoAgent = () => {}, onNextAgent = () => {}, onSeenAll = () => {}, onToggleRail = () => {}, railHidden = false,
+  onGoAgent = () => {}, onDismissAgent = null, onNextAgent = () => {}, onSeenAll = () => {}, onToggleRail = () => {}, railHidden = false,
   rows = [], activeRowId = null, flashId = null,
   library = [], inRail = () => false, onOpenRow, onRenameRow, onRemoveRow, onLinkRow, onOpenHeld, onDropItems,
   onAddInput, onPickDisk, onNewNote, onPickRepo,
@@ -515,7 +514,6 @@ export default function Rail({
   }, [order.join(','), project.id]); // eslint-disable-line react-hooks/exhaustive-deps
   const plan = React.useMemo(() => projectPlan({ index: tree, order, expanded }), [tree, order, expanded]);
   const projectsOpen = isOpen('section:projects', true);
-  const versions = React.useMemo(() => archivedVersions(roots), [roots]);
 
   // Resting on a folded project shows what is in it (2026-10-13), after the sidebar's beat; it goes a beat after the pointer
   // leaves the row and the card ("the hover stays unless I click somewhere else (this is a bug)").
@@ -739,12 +737,7 @@ export default function Rail({
   };
 
   /* ---------------------------------------------------------------- agents */
-  const { rows: repoBuilds } = useBuildNotifications(); // the bell's, now in Agents
-  const agentsSummary = React.useMemo(() => {
-    const own = summarize(entries);
-    const unread = repoBuilds.filter((row) => !row.read).length;
-    return { total: own.total + unread, running: own.running, ready: own.ready + unread };
-  }, [entries, repoBuilds]);
+  const agentsSummary = React.useMemo(() => summarize(entries), [entries]); // the repositories' builds are among them (2026-10-16)
   const libraryTotal = React.useMemo(() => libraryCounts(library).all, [library]);
 
   const stickiesDrag = !!(postItDrag && postItDrag.active);
@@ -861,7 +854,7 @@ export default function Rail({
         : <Tip at={tip.at} data-sb-tip="label">{tip.label}</Tip>)}
 
       {panel && panel.kind === 'project' && <ProjectMenu anchor={panel.anchor} project={project} counts={projectCounts} onSwitch={onOpenProject} onNewProject={onNewProject} onAllProjects={onAllProjects} onRename={() => setRenaming('project')} onProjectPage={onOpenProjectPage} onShortcuts={() => setShortcuts(true)} onClose={close} ignore={ignore('project')} />}
-      {panel && panel.kind === 'agents' && <AgentsPanel anchor={panel.anchor} entries={entries} crumbOf={crumbOf} onGo={(entry) => { close(); onGoAgent(entry); }} onNext={onNextAgent} onSeenAll={onSeenAll} onClose={close} ignore={ignore('agents')} />}
+      {panel && panel.kind === 'agents' && <AgentsPanel anchor={panel.anchor} entries={entries} crumbOf={crumbOf} onGo={(entry, rect) => { close(); onGoAgent(entry, rect); }} onDismiss={onDismissAgent} onNext={onNextAgent} onSeenAll={onSeenAll} onClose={close} ignore={ignore('agents')} />}
       {panel && panel.kind === 'library' && <LibraryPanel key={panel.chip || 'all'} anchor={panel.anchor} chip={panel.chip} projectId={project.id} library={library} inRail={inRail} onOpen={(row) => onOpenRow(row)} onLink={onLinkRow} onAddInput={(input) => onAddInput(input, null)} onOpenFull={onAllProjects} onOpenWorkspace={onOpenHeld} onClose={close} ignore={ignore('library')} />}
       {addPanel && (
         <AddPicker
@@ -880,8 +873,8 @@ export default function Rail({
           ignore={ignore('add', addPanel.key)}
         />
       )}
-      {panel && panel.kind === 'projects' && <ProjectsPanel anchor={panel.anchor} roots={roots} tree={tree} counts={counts} hereId={hereId} versions={versions} onGo={go} onNew={() => create(null)} onMenu={projectMenu} onOpenVersion={onOpenVersion} onClose={close} ignore={ignore('projects')} />}
-      {panel && panel.kind === 'siblings' && tree.has(panel.parentId) && <SiblingsPanel anchor={panel.anchor} parentId={panel.parentId} roots={roots} tree={tree} counts={counts} hereId={hereId} onGo={go} onMenu={projectMenu} onClose={close} ignore={ignore('siblings', panel.key)} />}
+      {panel && panel.kind === 'projects' && <ProjectsPanel anchor={panel.anchor} roots={roots} tree={tree} counts={counts} hereId={hereId} onGo={go} onNew={() => create(null)} onMenu={projectMenu} onOpenVersion={onOpenVersion} onClose={close} ignore={ignore('projects')} />}
+      {panel && panel.kind === 'siblings' && tree.has(panel.parentId) && <SiblingsPanel anchor={panel.anchor} parentId={panel.parentId} roots={roots} tree={tree} counts={counts} hereId={hereId} onGo={go} onMenu={projectMenu} onOpenVersion={onOpenVersion} onClose={close} ignore={ignore('siblings', panel.key)} />}
       {panel && panel.kind === 'sources' && (() => {
         const folder = panel.folderId ? folders.find((one) => one.id === panel.folderId) : null;
         const list = folder ? folderRowsOf(folder) : rows;

@@ -20,7 +20,7 @@ import { useFolderFiles } from '../workspace/useFolderFiles.js';
 import { useZoteroStatus, useZoteroFinding, useZoteroWaiting } from '../workspace/useZoteroStatus.js';
 import { zoteroChipAction } from '../model/zotero.js';
 import { flatWorkspaces, nextPlace } from '../model/nav.js';
-import { READY_STATES, agentEntries, indexTree, rollUp, shortcutProjects, summarize, visited } from '../model/sidebar.js';
+import { READY_STATES, agentEntries, byOpened, indexTree, keptAgents, markAgent, noteOpened, repoEntries, rollUp, shortcutProjects, summarize, visited } from '../model/sidebar.js';
 import { connectInbox, dockLine } from '../model/connect.js';
 import RecentPages from '../workspace/RecentPages.jsx';
 import { onStage, savesPageCopy } from '../model/stage.js';
@@ -44,7 +44,7 @@ import BuildReview from '../workspace/BuildReview.jsx';
 import PostItBuild from '../post-its/PostItBuild.jsx';
 import PostItTask from '../post-its/PostItTask.jsx';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
-import { repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
+import { availableBuildNotifications, canOpenPreview, canOpenTerminal, repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
 import SidebarTour, { TOUR_STEPS, tourSeen, markTourSeen } from '../workspace/SidebarTour.jsx';
 
 // The import's "Open library" requests (App.jsx tourRequest) already taken, by their n: a project opened again later
@@ -117,6 +117,12 @@ const ARCHIVE_TAB = 'archive:'; // an archived version's tab (2026-09-27: it ope
 // The top-level project's page (2026-10-13): its own tab, opened from the project menu's Project page or the clock.
 const PROJECT_TAB = 'project';
 const VISITS_KEY = 'engelbart.recentPages'; // top-level project id → the pages opened there, for the clock (RecentPages.jsx)
+// This machine's marks on the rows of Agents ({ [entry id]: { clicked, dismissed } }, model/sidebar.js keptAgents) and
+// when each source was last opened ({ [library id]: ISO }, byOpened: a project's folder lists the newest first).
+const AGENT_MARKS_KEY = 'engelbart.agentMarks';
+const OPENED_KEY = 'engelbart.openedAt';
+const readStored = (key) => { try { const held = JSON.parse(window.localStorage.getItem(key) || '{}'); return held && typeof held === 'object' && !Array.isArray(held) ? held : {}; } catch { return {}; } };
+const writeStored = (key, value) => { try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* not remembered */ } };
 const readVisits = (projectId) => { try { const all = JSON.parse(window.localStorage.getItem(VISITS_KEY) || '{}'); return Array.isArray(all[projectId]) ? all[projectId] : []; } catch { return []; } };
 const AGENT_RANK = { failed: 4, needs: 3, unseen: 2 };
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
@@ -1049,6 +1055,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
 
+  // When each source was opened last (2026-10-16): a note put in front in the middle, a row the Stage shows in front, a
+  // sidebar row clicked. The project's folder lists the newest first (railRows).
+  const [opened, setOpened] = React.useState(() => readStored(OPENED_KEY));
+  const noteOpen = React.useCallback((id) => { if (id) setOpened((now) => noteOpened(now, id)); }, []);
+  React.useEffect(() => { writeStored(OPENED_KEY, opened); }, [opened]);
+  React.useEffect(() => { if (activeTab && activeTab !== 'ws' && !activeTab.startsWith(ARCHIVE_TAB) && activeTab !== PROJECT_TAB) noteOpen(activeTab); }, [activeTab, noteOpen]);
+  React.useEffect(() => { if (stageFront) noteOpen(stageFront); }, [stageFront, noteOpen]);
+
   // This workspace's sources (the sidebar's Your sources): its context, the notes made in it and what its document
   // mentions. Its sub-workspaces are under it in Workspaces, and its archived versions are indented under it with them (2026-10-08; all of them in Workspaces' More).
   const rows = React.useMemo(() => {
@@ -1075,6 +1089,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     }
     return out;
   }, [topic, byId, tree.notes, mentioned]);
+  const railRows = React.useMemo(() => byOpened(rows, opened), [rows, opened]);
 
   // What the @ menu and the sidebar's search offer (MATH-58): the library less the notes trashed from their last
   // workspace. `mentionable`, which an @mention already written is opened by, keeps the whole library, those notes marked
@@ -1306,6 +1321,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const sandboxes = useSandboxes();
   const onRowClick = (row, event) => {
     if (row.type === 'child') { selectTopic(row.id); return; }
+    if (row.type !== 'archive') noteOpen(row.id);
     if (row.type === 'archive') { openTab(`${ARCHIVE_TAB}${row.file}`, row.name); return; }
     // A GitHub repository opens its live preview in the Stage, its sandbox's shell in the terminal pane, or both (the
     // preview in front, the terminal a tab behind it); one still building (or failed, or stopped) shows its build, and
@@ -1424,7 +1440,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const lines = editor.lines();
       let at = place.text ? findAskLine(lines, { text: place.text, line: place.line, routedTo }) : -1;
       if (at < 0 && buildId) at = findBuildLine(lines, buildId);
-      if (at < 0) { if (place.text) onError(new Error('This line is no longer here')); return; }
+      if (at < 0) { if (target.onMissing) target.onMissing(); else if (place.text) onError(new Error('This line is no longer here')); return; }
       let drawn = 0;
       const show = () => { if (!editor.showLine(at, { flash: target.flash !== false }) && (drawn += 1) < 20) setTimeout(show, 100); };
       setTimeout(show, 50);
@@ -1599,26 +1615,76 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const line = dockLine(connectSessions.find((session) => session.id === entry.sessionId));
     return { ...entry, tone: line ? line.tone : 'done' };
   }), [connectSessions, project.id]);
-  const entries = React.useMemo(() => agentEntries({ agents: navHere.agents, builds: buildList, connect: connectHere, projectId: project.id }), [navHere.agents, buildList, connectHere, project.id]);
+  // The repositories' builds the bell held are rows among them (2026-10-16), and every row goes three days after it last
+  // changed, a day after it was clicked, or when its × puts it away (model/sidebar.js keptAgents; checked each minute).
+  const repoRows = React.useMemo(() => (sandboxes ? repoEntries(availableBuildNotifications(sandboxes.notifications, sandboxes.items), sandboxes.items, sandboxes.library || []) : []), [sandboxes]);
+  const [agentMarks, setAgentMarks] = React.useState(() => readStored(AGENT_MARKS_KEY));
+  React.useEffect(() => { writeStored(AGENT_MARKS_KEY, agentMarks); }, [agentMarks]);
+  const [minute, setMinute] = React.useState(() => Date.now());
+  React.useEffect(() => { const timer = setInterval(() => setMinute(Date.now()), 60000); return () => clearInterval(timer); }, []);
+  const entries = React.useMemo(
+    () => keptAgents([...agentEntries({ agents: navHere.agents, builds: buildList, connect: connectHere, projectId: project.id }), ...repoRows], agentMarks, minute),
+    [navHere.agents, buildList, connectHere, project.id, repoRows, agentMarks, minute],
+  );
   const treeIndex = React.useMemo(() => indexTree(tree.workspaces), [tree.workspaces]);
   const projectCounts = React.useMemo(() => {
     const by = new Map();
     for (const agent of nav.agents) {
       if (!agent || agent.projectId === project.id || (agent.status !== 'running' && agent.status !== 'waiting')) continue;
       if (!by.has(agent.projectId)) by.set(agent.projectId, []);
-      by.get(agent.projectId).push({ state: agent.status === 'running' ? 'running' : 'unseen' });
+      by.get(agent.projectId).push({ id: `agent:${agent.id}`, state: agent.status === 'running' ? 'running' : 'unseen', at: agent.status === 'running' ? agent.started : (agent.finished || agent.started) });
     }
-    const out = new Map([...by].map(([id, list]) => [id, summarize(list)]));
+    const out = new Map([...by].map(([id, list]) => [id, summarize(keptAgents(list, agentMarks, minute))]));
     out.set(project.id, summarize(entries));
     return out;
-  }, [nav.agents, entries, project.id]);
+  }, [nav.agents, entries, project.id, agentMarks, minute]);
   const nodeCounts = React.useMemo(() => rollUp(treeIndex, entries), [treeIndex, entries]);
-  // Going to an agent: a Connect note opens its popup, a Build's version opens read-only, anything else its project.
-  const goAgent = (entry) => {
+  // Going to an agent (2026-10-16: "Clicking on an agent should take me to the note or project where the agent ran/is
+  // running"): an ask, the note or project it was asked in (revealAsk); a Build, its project's document at its card, or the
+  // archived version it was put in as when its card is not in the document now; a sticky's quick task, its card, the
+  // stickies brought into sight; a repository's build, its preview, its terminal or its build details, as its row in the
+  // sidebar opens; a Connect note, its popup. The row is marked clicked (keptAgents: viewed, gone a day later). `rect`:
+  // the row's, for the quick task's card.
+  const markAgentRow = (id, what) => setAgentMarks((now) => markAgent(now, id, what));
+  const goAgent = (entry, rect = null) => {
     if (!entry) return;
+    markAgentRow(entry.id, 'clicked');
     if (entry.kind === 'connect') { onOpenConnect(entry.sessionId); return; }
-    if (entry.task && entry.task.version && entry.task.workspaceId) { goToVersion(entry.task.workspaceId, { file: entry.task.version.file, title: entry.task.version.title }).catch(onError); return; }
+    if (entry.kind === 'repo') {
+      if (!sandboxes) return;
+      sandboxes.markNotificationsRead([entry.notification.id]);
+      if (canOpenPreview(entry.run)) sandboxes.open(entry.run);
+      else if (canOpenTerminal(entry.run)) sandboxes.openTerminal(entry.run);
+      else if (entry.repo) sandboxes.openBuild(entry.repo, null);
+      return;
+    }
+    const task = entry.task;
+    if (task && task.kind === 'quick') {
+      setPostItsHidden(false);
+      setPostItBuild(null);
+      setQuickTask({ id: task.id, postItId: task.postItId || null, anchor: rect });
+      return;
+    }
+    if (task && task.workspaceId && index.has(task.workspaceId)) {
+      const version = task.version ? { file: task.version.file, title: task.version.title } : null;
+      revealAsk({ place: { projectId: project.id, ref: { kind: 'workspace', workspaceId: task.workspaceId } }, buildId: task.id, flash: false, onMissing: version ? () => { goToVersion(task.workspaceId, version).catch(onError); } : null });
+      return;
+    }
+    if (entry.doc) {
+      // a note asked in from a project: that project, with the note in front
+      if (entry.doc.kind === 'note' && entry.node && index.has(entry.node) && entry.node !== topicId) selectTopic(entry.node);
+      revealAsk({ place: { projectId: project.id, ref: entry.doc }, flash: false });
+      return;
+    }
     if (entry.node && index.has(entry.node)) selectTopic(entry.node);
+  };
+  // A row's × (2026-10-16): put away until it changes again; a Connect note that is done is dismissed for good, a
+  // repository's notification cleared.
+  const dismissAgent = (entry) => {
+    if (!entry) return;
+    markAgentRow(entry.id, 'dismissed');
+    if (entry.kind === 'connect' && entry.state !== 'running') api.connectDismiss(entry.sessionId).catch(() => {});
+    if (entry.kind === 'repo' && sandboxes) sandboxes.clearNotifications([entry.notification.id]);
   };
   // ⌘J (2026-10-13: "Next agent needing attention"): what failed, then what needs you, then what finished, oldest first,
   // never the one just gone to; with nothing waiting, the project written in before (model/nav.js nextPlace).
@@ -1627,7 +1693,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   goNextAgentRef.current = () => {
     const time = (iso) => Date.parse(iso || '') || 0;
     const queue = entries
-      .filter((entry) => READY_STATES.has(entry.state) && entry.id !== lastAgent.current && (entry.kind === 'connect' || (entry.node && index.has(entry.node))))
+      .filter((entry) => READY_STATES.has(entry.state) && !entry.viewed && entry.id !== lastAgent.current && (entry.kind === 'connect' || (entry.node && index.has(entry.node))))
       .sort((a, b) => AGENT_RANK[b.state] - AGENT_RANK[a.state] || time(a.at) - time(b.at));
     if (queue.length) { lastAgent.current = queue[0].id; goAgent(queue[0]); return; }
     lastAgent.current = null;
@@ -1636,6 +1702,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const seenAll = () => {
     for (const id of new Set(entries.filter((entry) => entry.state === 'unseen' && entry.node).map((entry) => entry.node))) api.seenAgents(project.id, id).catch(() => {});
     for (const entry of connectHere) if (entry.tone === 'done') api.connectDismiss(entry.sessionId).catch(() => {});
+    const unseenIds = entries.filter((entry) => entry.state === 'unseen' && !entry.viewed).map((entry) => entry.id);
+    if (unseenIds.length) setAgentMarks((now) => unseenIds.reduce((marks, id) => markAgent(marks, id, 'clicked'), now));
+    const unreadRepos = entries.filter((entry) => entry.kind === 'repo' && !entry.viewed).map((entry) => entry.notification.id);
+    if (unreadRepos.length && sandboxes) sandboxes.markNotificationsRead(unreadRepos);
   };
   // Ctrl+1–9 (2026-10-13): this top-level project's level-2 projects, in its order, wherever the keyboard is.
   React.useEffect(() => {
@@ -2194,8 +2264,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           and clock, the tab's title, and Stage · Terminal (2026-10-13: "align all the text at the top and reduce some of the
           vertical spacing"); the bar is no taller than a tab under that line. */}
       <header className="title-bar" style={{ display: 'flex', alignItems: 'stretch', height: TITLE_BAR, background: '#fafafa', flex: 'none' }}>
-        {/* Over the sidebar: the window's lights, then the sidebar's toggle (Iconography "Toggle sidebar"); folded, only they stay. */}
-        <div className="title-lead" data-title-lead="1" style={{ flex: 'none', width: railShown ? rail : 'auto', boxSizing: 'border-box', display: 'flex', alignItems: 'flex-start', gap: 2, padding: `${TITLE_LINE - 14}px 12px 0 14px`, minWidth: 0, overflow: 'hidden' }}>
+        {/* Over the sidebar: the window's lights, then the sidebar's toggle (Iconography "Toggle sidebar") and the clock at its
+            right edge, over Settings and New note (2026-10-16: "move these to the right"); folded, they follow the lights. */}
+        <div className="title-lead" data-title-lead="1" style={{ flex: 'none', width: railShown ? rail : 'auto', boxSizing: 'border-box', display: 'flex', alignItems: 'flex-start', justifyContent: railShown ? 'flex-end' : 'flex-start', gap: 2, padding: `${TITLE_LINE - 14}px ${railShown ? 8 : 12}px 0 14px`, minWidth: 0, overflow: 'hidden' }}>
           <button type="button" className="sb-icon" data-sidebar-toggle={railShown ? 'shown' : 'hidden'} aria-label={railShown ? 'Hide the sidebar' : 'Show the sidebar'} title={`${railShown ? 'Hide' : 'Show'} the sidebar (⌘\\)`} onClick={toggleRail}>
             {railShown ? <PanelCloseIcon /> : <PanelOpenIcon />}
           </button>
@@ -2260,11 +2331,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onDeleteWorkspace={deleteTopic}
           onOpenVersion={(version) => { goToVersion(version.workspaceId, { file: version.file, title: version.title }).catch(onError); }}
           onGoAgent={goAgent}
+          onDismissAgent={dismissAgent}
           onNextAgent={() => goNextAgentRef.current()}
           onSeenAll={seenAll}
           onToggleRail={toggleRail}
           railHidden={railHidden}
-          rows={rows}
+          rows={railRows}
           activeRowId={activeRowId}
           flashId={flashId}
           library={findable}
