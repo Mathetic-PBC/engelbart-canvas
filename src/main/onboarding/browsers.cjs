@@ -7,6 +7,13 @@
 // asked in the background (../browser/installed-apps.cjs: /Applications first, then Spotlight, never blocking), once when
 // Engelbart starts and again whenever the import flow opens. The person's pick is remembered (./prefs.cjs `browser`) and
 // is what ../connect/web-signin.cjs reads first and opens sign-in pages in, in place of the default.
+//
+// Its profile (2026-10-16, C4, the Onboarding note: "When importing from a browser that has multiple profiles, a popup should
+// appear asking the user to select which profile (one selection only)"): each browser's profiles come with the list
+// (`profilesOf`, ../connect/web-signin.cjs: Chromium's Local State names and accounts, Firefox's profiles.ini, Safari's
+// profiles once Full Disk Access is granted), and the one picked is remembered with the browser (./prefs.cjs `profile`):
+// the only profile any copy reads. Allow (C5, S12) asks macOS for that browser's sign-ins at once (`unlock`), so the prompt
+// comes while the person is looking at what it is for; Safari has no Keychain prompt, and its Allow means Full Disk Access.
 
 const { BROWSERS, browserById, browserIdOfName, orderBrowsers } = require('../../shared/import-flow.cjs');
 
@@ -15,9 +22,11 @@ const SETTLE_MS = 2500;
 /**
  * `installedApps` (../browser/installed-apps.cjs); `defaultName()` macOS's name for the default browser; `prefs` { get, set }.
  * `override` ids standing in for this Mac's browsers (ENGELBART_ONBOARDING_BROWSERS in scripted runs) with the first the
- * default.
+ * default. `profilesOf(id)` → [{ id, name, email }] a browser's profiles ([] for one or none readable); `unlock(id)` →
+ * { keychain: 'allowed' } | { keychain: 'refused', browser } once macOS answered (webSignIn.unlockBrowser);
+ * `diskAccess()` → { granted } (./disk-access.cjs status).
  */
-function createBrowsers({ installedApps, defaultName = () => '', prefs, override = null }) {
+function createBrowsers({ installedApps, defaultName = () => '', prefs, override = null, profilesOf = () => [], unlock = null, diskAccess = null }) {
   let last = null;
 
   const defaultId = () => (override ? override[0] || null : browserIdOfName(defaultName()));
@@ -35,38 +44,76 @@ function createBrowsers({ installedApps, defaultName = () => '', prefs, override
     return out;
   }
 
+  const profiles = (id) => { try { return (profilesOf(id) || []).map(({ id: pid, name, email }) => ({ id: String(pid), name: String(name || pid), email: String(email || '') })); } catch { return []; } };
+  const granted = async () => { if (!diskAccess) return false; try { return !!(await diskAccess()).granted; } catch { return false; } };
+
   /**
-   * → { browsers: [{ id, name, keychain, isDefault }], defaultId, chosenId, keychain } in the order to show them, the
-   * default first. `chosenId`: the remembered pick when it is still installed, else the default (when installed), else
-   * the first.
+   * → { browsers: [{ id, name, keychain, isDefault, profiles: [{ id, name, email }] }], defaultId, chosenId, chosenProfile,
+   * keychain, safari: { diskAccess } } in the order to show them, the default first. `chosenId`: the remembered pick when it
+   * is still installed, else the default (when installed), else the first. `chosenProfile`: the remembered profile when it
+   * is one of the chosen browser's, else null (the popup asks when there are several). `profiles` is [] for a browser with
+   * one profile or none readable.
    */
   async function list() {
     const ids = orderBrowsers(await installed(), defaultId());
-    const remembered = (prefs.get() || {}).browser || null;
-    const chosenId = remembered && ids.includes(remembered) ? remembered : ids[0] || null;
+    const remembered = prefs.get() || {};
+    const chosenId = remembered.browser && ids.includes(remembered.browser) ? remembered.browser : ids[0] || null;
     last = { ids, chosenId, defaultId: defaultId() };
+    const browsers = ids.map((id) => ({ ...browserById(id), isDefault: id === defaultId(), profiles: profiles(id) }));
+    const chosen = browsers.find((browser) => browser.id === chosenId);
+    const chosenProfile = chosen && remembered.profile && (!remembered.browser || remembered.browser === chosenId) && chosen.profiles.some((profile) => profile.id === remembered.profile) ? remembered.profile : null;
     return {
-      browsers: ids.map((id) => ({ ...browserById(id), isDefault: id === defaultId() })),
+      browsers,
       defaultId: defaultId(),
       chosenId,
-      keychain: (prefs.get() || {}).keychain || null,
+      chosenProfile,
+      keychain: remembered.keychain || null,
+      safari: { diskAccess: await granted() },
     };
   }
 
-  /** The person picked `id` ("Use another browser"): remembered when it is installed. */
+  /** The person picked `id` ("Use another browser"): remembered when it is installed; another browser's profile forgotten. */
   async function choose(id) {
     if (!browserById(id)) throw new TypeError('browser is invalid');
     const ids = last ? last.ids : (await list()).browsers.map((browser) => browser.id);
     if (!ids.includes(id)) throw new Error(`${browserById(id).name} is not installed`);
-    prefs.set({ browser: id });
+    const was = prefs.get() || {};
+    prefs.set({ browser: id, ...(was.browser !== id ? { profile: null } : {}) });
     return list();
   }
 
-  /** The answer to "Allow Engelbart to use your <browser> sign-ins?" */
-  function setKeychain(answer) {
+  /**
+   * "Select your {browser} profile" (S10): `profileId` of `browserId`, remembered with the browser → the same as list().
+   * A profile the browser doesn't have is refused.
+   */
+  async function chooseProfile(browserId, profileId) {
+    if (!browserById(browserId)) throw new TypeError('browser is invalid');
+    const ids = last ? last.ids : (await list()).browsers.map((browser) => browser.id);
+    if (!ids.includes(browserId)) throw new Error(`${browserById(browserId).name} is not installed`);
+    if (!profiles(browserId).some((profile) => profile.id === profileId)) throw new Error(`${browserById(browserId).name} has no such profile`);
+    prefs.set({ browser: browserId, profile: profileId });
+    return list();
+  }
+
+  /**
+   * The answer to "Allow Engelbart to use your <browser> sign-ins?" (C5, S11, S12), remembered → { keychain: 'declined' }
+   * at once (macOS never asked), or, allowed, once macOS answered for the chosen browser: { keychain: 'allowed' } |
+   * { keychain: 'refused', browser } (one prompt, its key kept for the run). Safari: allowed when Full Disk Access is
+   * granted and its file reads.
+   */
+  async function setKeychain(answer) {
     if (answer !== 'allowed' && answer !== 'declined') throw new TypeError('answer is invalid');
     prefs.set({ keychain: answer });
-    return answer;
+    if (answer === 'declined' || typeof unlock !== 'function') return { keychain: answer };
+    const remembered = (prefs.get() || {}).browser || null;
+    const id = remembered || (last && last.chosenId) || defaultId();
+    if (!id) return { keychain: 'allowed' };
+    try {
+      const out = await unlock(id);
+      return out && out.keychain === 'refused' ? { keychain: 'refused', browser: out.browser || browserById(id)?.name || '', ...(out.needs ? { needs: out.needs } : {}) } : { keychain: 'allowed' };
+    } catch {
+      return { keychain: 'allowed' }; // nothing macOS could be asked: the copy says what it finds
+    }
   }
 
   /**
@@ -81,7 +128,7 @@ function createBrowsers({ installedApps, defaultName = () => '', prefs, override
     return defaultName();
   }
 
-  return { list, choose, setKeychain, preferredName, defaultId };
+  return { list, choose, chooseProfile, setKeychain, preferredName, defaultId };
 }
 
 module.exports = { createBrowsers };

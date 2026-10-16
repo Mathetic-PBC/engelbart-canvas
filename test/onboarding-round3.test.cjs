@@ -148,6 +148,7 @@ test('whether the folders macOS guards may already be read, and nothing that ask
   const disk = createDiskAccess({ platform: 'darwin', fake: 'denied' });
   assert.deepEqual(await disk.status(), { platform: 'darwin', granted: false });
   assert.deepEqual(await createDiskAccess({ platform: 'darwin', fake: 'granted' }).status(), { platform: 'darwin', granted: true });
-  assert.deepEqual(Object.keys(disk), ['status'], 'no System Settings, no helper beside it, no relaunch');
+  // Safari's "Grant disk access" (2026-10-16, S9) opens System Settings at Full Disk Access again, and only that: no helper.
+  assert.deepEqual(Object.keys(disk), ['status', 'open'], 'System Settings for Safari only, no helper beside it, no relaunch');
   assert.equal(fs.existsSync(path.join(__dirname, '../src/main/onboarding/disk-helper.html')), false);
 });

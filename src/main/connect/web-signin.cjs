@@ -11,12 +11,25 @@
 //      writes its cookies to disk within about half a minute of a sign-in;
 //   3. done only once Engelbart's browser holds the sign-in (2026-10-08: "even when i signed into chatgpt in the engelbart
 //      window it made me do it again"), never because a window was closed.
-// A default browser whose cookies Engelbart cannot read (Safari) is passed over (2026-10-09): another installed browser that
-// can be read is used instead — one already holding the app's sign-in, else Chrome, else the first one found — with the page
-// opened there (`openIn`, `open -b <bundle id>`). With none installed, 'no-browser': the caller says which browsers it needs.
-// A Keychain refusal on one browser goes on to the next that holds the sign-in (Firefox needs no Keychain); only when none is
-// left is it 'denied'. `signInQuiet` is the same without ever opening a page: the check made when a web app is ticked on the
-// choose screen (2026-10-10, after `keychainTarget` says which browser macOS will be asked about) or before the survey starts.
+// One browser and one profile, chosen once (2026-10-16, C4: the Onboarding note's "Select your {browser} profile", and Bart:
+// "Treat the selected profile as a boundary … rather than silently trying other accounts"): the browser the person picked
+// (`chosen().browser`, else the default) and its profile (`chosen().profile`, else the one picked for this sign-in before,
+// else "Default", else its first) are the only ones any copy reads and the only place a page opens. Nothing falls through
+// to another profile or browser any more (it used to pass over Safari and a refusing Keychain for the next browser). Safari
+// is read like the others now (../browser/safari-cookies.cjs) once Full Disk Access is granted; before, a copy says
+// `needs: 'disk-access'`. `signInQuiet` is the same without ever opening a page: the check made when a web app is ticked on
+// the choose screen (2026-10-10, after `keychainTarget` says which browser macOS will be asked about) or before the survey.
+//
+// The Keychain answer (`chosen().keychain`, onboarding's "Allow Engelbart to use your <browser> sign-ins?", C5/C6): declined,
+// nothing is copied from the browser at all; allowed, macOS may be asked (`unlockBrowser` asks at once, on Allow); unanswered,
+// a quiet look that may only use what macOS was asked already (`askedOnly`) asks nothing.
+//
+// Every tool, not only the registered apps (2026-10-16, C7/C8: "Modify the code such that it uses the cookies for all tools,
+// including ones in the 'other' category or that are added by the agents"): `copyFor({ name, domains })` copies a tool's
+// sites from the chosen profile, and `recapture` is the native-browser fallback ("have the user sign in to the application
+// in their native browser, capture these new/updated cookies"): copied at once when they are there, else the page opens in
+// the chosen browser and profile and the cookies are copied once they appear or change. A copy that fails its check is
+// undone completely (C3: every cookie it wrote, not only the session cookie; 16 Google cookies of other accounts were left).
 
 // A copy is held only once it works (2026-10-12, "make Chrome sign-ins dependable"): a cookie can be there for a sign-in
 // Google has since ended, which read "✓ Signed in" and then failed in the run. An app whose site has a check page
@@ -51,11 +64,8 @@ const SIGN_IN_PAGES = Object.freeze({
   Overleaf: 'https://www.overleaf.com/login',
 });
 
-// macOS's name for the default browser (app.getApplicationNameForProtocol) → the importer's id. Safari has none.
-const BROWSER_NAMES = [[/chromium/i, 'chromium'], [/canary/i, null], [/chrome/i, 'chrome'], [/brave/i, 'brave'], [/edge/i, 'edge'], [/vivaldi/i, 'vivaldi'], [/opera/i, 'opera'], [/^arc\b/i, 'arc'], [/comet/i, 'comet'], [/^dia\b/i, 'dia'], [/firefox/i, 'firefox']];
-
-// The browsers a sign-in page opens in when the default can't be read (Safari), in this order.
-const OPEN_ORDER = ['chrome', 'brave', 'firefox'];
+// macOS's name for the default browser (app.getApplicationNameForProtocol) → the importer's id (Safari's too, 2026-10-16).
+const BROWSER_NAMES = [[/chromium/i, 'chromium'], [/canary/i, null], [/chrome/i, 'chrome'], [/brave/i, 'brave'], [/edge/i, 'edge'], [/vivaldi/i, 'vivaldi'], [/opera/i, 'opera'], [/^arc\b/i, 'arc'], [/comet/i, 'comet'], [/^dia\b/i, 'dia'], [/firefox/i, 'firefox'], [/technology preview/i, null], [/^safari\b/i, 'safari']];
 
 // "Use another account" on a Google row waiting on the browser (2026-10-12): Google's add-an-account page, in that browser,
 // straight to signing another account in.
@@ -92,19 +102,38 @@ function browserIdOf(name) {
 /** The key a sign-in's remembered profile is kept under: its cookie's site ('google.com' for every Google app). */
 const pickKey = (app) => (SIGN_IN_COOKIES[app] || [])[0] || '';
 
+/** A tool's sites as registrable domains ('www.linear.app' → 'linear.app'), each once, nonsense left out. */
+const registrable = (domains) => [...new Set((domains || []).map((domain) => String(domain).toLowerCase().trim().replace(/^https?:\/\//, '').split('/')[0].split('.').filter(Boolean).slice(-2).join('.')).filter((domain) => domain.includes('.')))];
+
+/**
+ * The `open` arguments that show `url` in one profile of a Chromium browser (C8): a second launch with
+ * --profile-directory hands the page to the running browser, in that profile ("Profile 1", "Default").
+ */
+const profileOpenArgs = (bundle, profileId, url) => ['-n', '-b', bundle, '--args', `--profile-directory=${profileId}`, url];
+
 /**
  * `cookieImport` the importer (createCookieImport, or null off macOS; its `check(domain)` asks a site's check page);
  * `defaultBrowser()` macOS's name for the default browser; `openExternal(url)` opens a page there; `openIn(browserId,
- * url)` opens one in another installed browser; `getSession()` the Stage's session (where the agents' sign-ins are);
- * `picks` { get(key) → { browser, profile } | null, set(key, pick) } the profiles the person picked; `log(line)` what is
- * worth noting (a check with no answer).
+ * url)` opens one in another installed browser; `openInProfile(browserId, profileId, url)` one in a given profile of a
+ * Chromium browser (profileOpenArgs; without it, the browser's own last profile); `getSession()` the Stage's session (where
+ * the agents' sign-ins are); `picks` { get(key) → { browser, profile } | null, set(key, pick) } the profiles the person
+ * picked per sign-in; `chosen()` → { browser, profile, keychain } the browser, profile and Keychain answer onboarding
+ * remembered (../onboarding/prefs.cjs); `log(line, detail?)` what is worth noting (every check's answer, C2).
  * `pollMs` / `slowPollMs` / `fastForMs` how often a wait looks again (POLL_MS…).
  * → { supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount,
- *     keychainTarget, keychainNote, holdersOf, picked, choose, opensIn }
+ *     keychainTarget, keychainNote, holdersOf, picked, choose, opensIn, copyFor, recapture, unlockBrowser, profilesOf }
  */
-function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal, openIn = null, getSession, picks = null, log = () => {}, pollMs = POLL_MS, slowPollMs = SLOW_POLL_MS, fastForMs = FAST_FOR_MS, timeoutMs = TIMEOUT_MS, checkCacheMs = CHECK_CACHE_MS, now = () => Date.now(), sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }) }) {
+function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal, openIn = null, openInProfile = null, getSession, picks = null, chosen = () => ({}), log = () => {}, pollMs = POLL_MS, slowPollMs = SLOW_POLL_MS, fastForMs = FAST_FOR_MS, timeoutMs = TIMEOUT_MS, checkCacheMs = CHECK_CACHE_MS, now = () => Date.now(), sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }) }) {
   // The Chromium browsers whose Keychain key has been asked for while Engelbart runs (keychainNote).
   const asked = new Set();
+  // The browsers macOS refused when Allow asked for them at once (unlockBrowser): not asked again until Allow asks again.
+  const refusedHere = new Set();
+  /** What onboarding remembered → { browser, profile, keychain } (any of them null). */
+  const choice = () => { try { const value = chosen() || {}; return { browser: value.browser || null, profile: value.profile || null, keychain: value.keychain || null }; } catch { return { browser: null, profile: null, keychain: null }; } };
+  /** The browser every copy reads: the one picked, else the default (by its name). */
+  const chosenId = () => choice().browser || browserIdOf(defaultBrowser());
+  /** Whether the importer can read `id` now (Safari: Full Disk Access granted). */
+  const canRead = (id) => { try { return !cookieImport || typeof cookieImport.canRead !== 'function' || cookieImport.canRead(id) !== false; } catch { return false; } };
   // One import per browser at a time: two apps looked at together wait for the one answer macOS gives (a refusal is then
   // known before the second asks, so macOS is asked once).
   const queues = new Map();
@@ -148,15 +177,64 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
    */
   function works(app) {
     const domain = pickKey(app);
-    if (!CHECKED_SITES.has(domain) || !cookieImport || typeof cookieImport.check !== 'function') return Promise.resolve(true);
+    if (!CHECKED_SITES.has(domain)) return Promise.resolve(true);
+    return checkSite(domain);
+  }
+
+  /**
+   * A checked site's answer (../browser/import-cookies.cjs: 2xx signed in, its login page or a 401 signed out, anything else
+   * null) → true | false | null, the same for every app on it for a few minutes. Every answer is logged with the status and
+   * where a redirect went (C2), so the trace says why a sign-in was kept or dropped. No check page, or no importer: null.
+   */
+  function checkSite(domain) {
+    if (!CHECKED_SITES.has(domain) || !cookieImport || (typeof cookieImport.check !== 'function' && typeof cookieImport.checkDetail !== 'function')) return Promise.resolve(null);
     const cached = verdicts.get(domain);
     if (cached && now() - cached.at < checkCacheMs) return cached.answer;
-    const answer = Promise.resolve().then(() => cookieImport.check(domain)).catch(() => null).then((value) => {
-      if (value == null) log(`No answer checking the ${CHECKED_SITES.get(domain)} sign-in (offline or too slow): counted as signed in.`);
-      return value == null ? null : !!value;
+    const site = CHECKED_SITES.get(domain);
+    const asking = typeof cookieImport.checkDetail === 'function'
+      ? Promise.resolve().then(() => cookieImport.checkDetail(domain))
+      : Promise.resolve().then(() => cookieImport.check(domain)).then((signedIn) => ({ signedIn }));
+    const answer = asking.catch(() => null).then((detail) => {
+      const value = detail && detail.signedIn != null ? !!detail.signedIn : null;
+      const said = detail && (detail.status || detail.location) ? ` (${detail.status || 'no status'}${detail.location ? ` → ${detail.location}` : ''})` : detail && detail.reason ? ` (${detail.reason})` : '';
+      if (value == null) log(`No answer checking the ${site} sign-in${said || ' (offline or too slow)'}: counted as signed in.`, { kind: 'signin-check', site, domain, verdict: 'unknown', ...(detail || {}) });
+      else log(`Checked the ${site} sign-in${said}: ${value ? 'signed in' : 'signed out'}.`, { kind: 'signin-check', site, domain, verdict: value ? 'signed-in' : 'signed-out', ...(detail || {}) });
+      return value;
     });
     verdicts.set(domain, { at: now(), answer });
     return answer;
+  }
+
+  /** What Engelbart's browser holds for `domains` → Map(domain|path|name → cookie), values kept in main only (C3). */
+  async function snapshot(domains) {
+    const store = getSession().cookies;
+    const out = new Map();
+    for (const domain of domains) {
+      const held = await store.get({ domain }).catch(() => []);
+      for (const cookie of held || []) out.set(`${String(cookie.domain || domain).replace(/^\./, '')}|${cookie.path || '/'}|${cookie.name}`, cookie);
+    }
+    return out;
+  }
+
+  /**
+   * A copy that failed its check undone completely (C3): every cookie of `domains` it wrote or changed taken out, and any
+   * it overwrote put back as it was (`before`, snapshot()). Cookies it left alone stay.
+   */
+  async function undo(before, domains) {
+    const store = getSession().cookies;
+    if (typeof store.remove !== 'function') return;
+    const after = await snapshot(domains);
+    for (const [key, cookie] of after) {
+      const was = before.get(key);
+      if (was && was.value === cookie.value) continue;
+      const host = String(cookie.domain || '').replace(/^\./, '');
+      await store.remove(`http${cookie.secure ? 's' : ''}://${host}${cookie.path || '/'}`, cookie.name).catch(() => {});
+      if (was && typeof store.set === 'function') {
+        const back = { url: `http${was.secure ? 's' : ''}://${host}${was.path || '/'}`, name: was.name, value: was.value, path: was.path || '/', secure: !!was.secure, httpOnly: !!was.httpOnly, ...(was.sameSite ? { sameSite: was.sameSite } : {}), ...(was.hostOnly ? {} : { domain: was.domain }), ...(was.session || !was.expirationDate ? {} : { expirationDate: was.expirationDate }) };
+        await store.set(back).catch(() => {});
+      }
+    }
+    for (const domain of domains) verdicts.delete(domain);
   }
 
   /**
@@ -194,35 +272,65 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
 
   const browserName = () => String(defaultBrowser() || '').replace(/^Google /, '') || 'your browser';
 
-  /** The installed browsers whose cookies can be read, the default first, each one's "Default" profile first. */
-  function readable() {
-    let found = [];
-    try { found = (cookieImport && cookieImport.sources()) || []; } catch { found = []; }
-    const defaultId = browserIdOf(defaultBrowser());
-    return found
-      .filter((source) => source.profiles && source.profiles.length)
-      .map((source) => ({ ...source, profiles: [...source.profiles].sort((a, b) => (b.id === 'Default') - (a.id === 'Default')) }))
-      .sort((a, b) => (b.id === defaultId) - (a.id === defaultId));
+  /** Every browser the importer lists (installed, with a profile). */
+  function listed() {
+    try { return ((cookieImport && cookieImport.sources()) || []).filter((source) => source.profiles && source.profiles.length); } catch { return []; }
   }
 
   /**
-   * Where a sign-in page can open when no browser can be read yet (2026-10-15: Safari chosen, Chrome installed but never
-   * opened on a new account): the installed Chromium browsers, profiles or none; signed in there, `readable` lists it.
+   * The one profile of `source` a copy reads (C4): the one onboarding remembered, else the one picked for `app`'s sign-in
+   * (the choose screen's question, 2026-10-12), else "Default", else its first.
    */
-  function openable() {
-    const now = readable();
+  function profileOf(source, app = null) {
+    const want = choice().profile;
+    const pick = app ? picked(app) : null;
+    return (want && source.profiles.find((profile) => profile.id === want))
+      || (pick && pick.browser === source.id && source.profiles.find((profile) => profile.id === pick.profile))
+      || source.profiles.find((profile) => profile.id === 'Default')
+      || source.profiles[0];
+  }
+
+  /**
+   * The chosen browser, with only the profile a copy reads (C4) → [source] | [] (not installed, or no profile yet). `count`
+   * says how many profiles it has, so a row names the profile only when there was a choice.
+   */
+  function readable(app = null) {
+    const id = chosenId();
+    const source = id ? listed().find((one) => one.id === id) : null;
+    if (!source) return [];
+    return [{ ...source, count: source.profiles.length, profiles: [profileOf(source, app)] }];
+  }
+
+  /**
+   * Where a sign-in page can open when the chosen browser can't be read yet (2026-10-15: Chrome installed but never opened
+   * on a new account): that browser, with no profile; signed in there, `readable` lists it.
+   */
+  function openable(app = null) {
+    const now = readable(app);
     if (now.length) return now;
     let found = [];
     try { found = (cookieImport && typeof cookieImport.installedChromium === 'function' && cookieImport.installedChromium()) || []; } catch { found = []; }
-    return found;
+    return found.filter((source) => source.id === chosenId()).map((source) => ({ ...source, count: (source.profiles || []).length, profiles: source.profiles && source.profiles.length ? [profileOf(source, app)] : [] }));
   }
 
-  /** The sign-in cookie a profile holds for the app → { stamp } | null (names only: no Keychain). */
+  /**
+   * Every cookie name a profile holds for `domains` as one string (C8, 2026-10-16): it changes when any of them is set
+   * anew, not only the session cookie (Bart: "after a rejected copy, its polling can ignore that profile until the
+   * session-cookie timestamp changes"). '' when none, or unreadable.
+   */
+  function printOf(source, profile, domains) {
+    try {
+      return cookieImport.cookieNames(source.id, profile.id, domains).map((entry) => `${entry.domain}/${entry.name}@${entry.stamp || 0}`).sort().join('\n');
+    } catch { return ''; }
+  }
+
+  /** The sign-in cookie a profile holds for the app → { stamp, print } | null (names only: no Keychain). */
   function holding(app, source, profile) {
     const [domain, pattern] = SIGN_IN_COOKIES[app];
     try {
-      const hit = cookieImport.cookieNames(source.id, profile.id, domainsOf(app)).find((entry) => entry.domain === domain && pattern.test(entry.name));
-      return hit ? { stamp: hit.stamp || 0 } : null;
+      const names = cookieImport.cookieNames(source.id, profile.id, domainsOf(app));
+      const hit = names.find((entry) => entry.domain === domain && pattern.test(entry.name));
+      return hit ? { stamp: hit.stamp || 0, print: names.map((entry) => `${entry.domain}/${entry.name}@${entry.stamp || 0}`).sort().join('\n') } : null;
     } catch { return null; } // locked or gone
   }
 
@@ -246,13 +354,13 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   }
 
   /**
-   * Every profile, in every browser that can be read, holding the app's sign-in → [{ browserId, browser, profileId, name,
-   * email, keychain }] (`keychain`: macOS will be asked before it can be copied). Where the person is asked which one.
+   * The chosen profile, when it holds the app's sign-in → [{ browserId, browser, profileId, name, email, keychain }]
+   * (`keychain`: macOS will be asked before it can be copied). One profile at most (C4): the choose screen asks nothing.
    */
   function holdersOf(app) {
     if (!copies(app)) return [];
     const out = [];
-    for (const source of readable()) {
+    for (const source of readable(app)) {
       for (const profile of holders(app, source)) {
         out.push({ browserId: source.id, browser: source.name, profileId: profile.id, name: profile.name || profile.id, email: profile.email || '', keychain: source.family === 'chromium' && !asked.has(source.id) });
       }
@@ -260,23 +368,15 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     return out;
   }
 
-  /**
-   * Where the sign-in page opens: the default browser when it can be read, else (Safari, 2026-10-12) Chrome, else Brave,
-   * else Firefox, whichever is installed (the importer lists only installed ones), else the first that can be opened.
-   */
+  /** Where the sign-in page opens: the chosen browser (C4), or null when it can't be opened. */
   function opener(sources) {
     return openers(sources)[0] || null;
   }
 
-  /** Every browser a sign-in page can open in, in opener's order: the next is tried when one fails to open. */
+  /** The browsers a sign-in page can open in: the chosen one only, when it can be opened (C4: no next browser). */
   function openers(sources) {
     const defaultId = browserIdOf(defaultBrowser());
-    const out = [];
-    const add = (source) => { if (source && !out.includes(source)) out.push(source); };
-    add(sources.find((source) => source.id === defaultId));
-    for (const id of OPEN_ORDER) add(sources.find((source) => source.id === id && source.bundle));
-    for (const source of sources) if (source.bundle) add(source);
-    return out;
+    return sources.filter((source) => source.id === chosenId() && (source.bundle || source.id === defaultId)).slice(0, 1);
   }
 
   /** Whether a browser counts as installed once macOS has answered (at most ~2 s), so one that is not is never opened. */
@@ -288,9 +388,17 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   /**
    * Open `url` in `source`: the default browser through openExternal, any other with `open -b` (openIn). The "default"
    * is the browser the person chose (index.cjs defaultBrowser), and index.cjs's openExternal opens that one, not macOS's
-   * default (round 3: a sign-in opened somewhere other than the browser they selected).
+   * default (round 3: a sign-in opened somewhere other than the browser they selected). A Chromium browser with more than
+   * one profile opens it in the chosen profile (`openInProfile`, C8), so the cookies it sets are the ones copied; Firefox and
+   * Safari open it where they are.
    */
   async function openPage(source, url) {
+    const profile = source.profiles && source.profiles[0];
+    if (openInProfile && source.family === 'chromium' && profile && (source.count || 0) > 1) {
+      try { await openInProfile(source.id, profile.id, url); return; } catch (error) {
+        log(`Couldn't open a page in ${source.name}'s ${profile.name || profile.id} profile (${(error && error.message) || error}): opened where ${source.name} is.`);
+      }
+    }
     if (source.id === browserIdOf(defaultBrowser()) || !openIn) await openExternal(url);
     else await openIn(source.id, url);
   }
@@ -302,7 +410,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   async function openApp(app) {
     const url = SIGN_IN_PAGES[app] || (appOf(app) && appOf(app).start) || '';
     if (!url) return '';
-    const sources = readable();
+    const sources = openable(app);
     if (!sources.length) { try { await openExternal(url); return browserName(); } catch { return ''; } }
     const target = await openFirst(sources, url);
     return target ? target.name : '';
@@ -318,23 +426,62 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
 
   /**
    * Every cookie of `domains` copied from the browser the person chose (round 3: the other tools they named, Linear or
-   * Figma, read in Engelbart's browser with their sign-ins rather than in their own browser) → true when copied.
+   * Figma, read in Engelbart's browser with their sign-ins rather than in their own browser) → true when copied. copyFor's,
+   * as a yes or no.
    */
   async function copyDomains(domains, { denied = new Set() } = {}) {
-    const wanted = [...new Set((domains || []).map((domain) => String(domain).toLowerCase().split('.').filter(Boolean).slice(-2).join('.')).filter((domain) => domain.includes('.')))];
-    if (!cookieImport || !wanted.length) return false;
-    const target = opener(readable());
-    if (!target || denied.has(target.id) || !target.profiles.length) return false;
+    const out = await copyFor({ domains }, { denied }).catch(() => ({ copied: 0 }));
+    return out.copied > 0;
+  }
+
+  /**
+   * A tool's sign-in (C7, 2026-10-16), for one with no registered app: an "Other" tool, one the agents found or the person
+   * added. Every cookie of its `domains` copied from the chosen browser and profile into Engelbart's browser, and checked
+   * where its site has a check page (../browser/import-cookies.cjs SIGN_IN_CHECKS) →
+   *   { copied: number, signedIn: true | false | null, browser?, profile? } and, when nothing could be copied, why:
+   *   `declined` (the person turned their browser's sign-ins down), `needs: 'disk-access'` (Safari, no Full Disk Access),
+   *   `needs: 'keychain'` (not allowed yet: macOS is never asked then), `refused`/`refusedId` (macOS said no), `noBrowser`.
+   * `signedIn`: the check's answer; with no check, null, or false when nothing was copied and Engelbart's browser holds
+   * nothing for those sites either (no session cookie at all). A copy the check says is signed out is undone (C3).
+   */
+  async function copyFor({ name = '', domains = [] } = {}, { denied = new Set() } = {}) {
+    const wanted = registrable(domains);
+    if (!cookieImport || !wanted.length) return { copied: 0, signedIn: null };
+    if (choice().keychain === 'declined') return { copied: 0, signedIn: null, declined: true };
+    const [source] = readable();
+    if (!source) return { copied: 0, signedIn: null, noBrowser: true };
+    if (!canRead(source.id)) return { copied: 0, signedIn: null, needs: 'disk-access', browser: source.name };
+    if (denied.has(source.id) || refusedHere.has(source.id)) return { copied: 0, signedIn: null, refused: source.name, refusedId: source.id };
+    if (source.family === 'chromium' && !asked.has(source.id) && choice().keychain !== 'allowed') return { copied: 0, signedIn: null, needs: 'keychain', browser: source.name };
+    const profile = source.profiles[0];
+    const named = { browser: source.name, ...(source.count > 1 ? { profile: profile.name || profile.id } : {}) };
+    const before = await snapshot(wanted);
+    let result;
     try {
-      await oneAtATime(target.id, () => {
-        if (target.family === 'chromium') asked.add(target.id);
-        return cookieImport.import({ browser: target.id, profile: target.profiles[0].id, domains: wanted, quiet: true });
+      result = await oneAtATime(source.id, () => {
+        if (denied.has(source.id)) throw Object.assign(new Error('Keychain access was denied'), { denied: true });
+        if (source.family === 'chromium') asked.add(source.id);
+        return cookieImport.import({ browser: source.id, profile: profile.id, domains: wanted, quiet: true });
       });
-      return true;
     } catch (error) {
-      if (error && error.denied) denied.add(target.id);
-      return false;
+      if (error && error.denied) { denied.add(source.id); return { copied: 0, signedIn: null, refused: source.name, refusedId: source.id }; }
+      if (error && error.needs) return { copied: 0, signedIn: null, needs: error.needs, browser: source.name };
+      log(`Couldn't copy ${name || wanted.join(', ')} from ${source.name}: ${(error && error.message) || error}`);
+      return { copied: 0, signedIn: null, ...named };
     }
+    if (result && result.needs) return { copied: 0, signedIn: null, needs: result.needs, browser: source.name };
+    // An importer that doesn't count (a fake) counts as one copied.
+    const copied = result && Number.isFinite(Number(result.imported)) ? Number(result.imported) : 1;
+    let signedIn = null;
+    for (const domain of wanted.filter((one) => CHECKED_SITES.has(one))) {
+      verdicts.delete(domain); // a new copy: asked about afresh
+      const answer = await checkSite(domain);
+      if (answer === false) signedIn = false;
+      else if (answer === true && signedIn !== false) signedIn = true;
+    }
+    if (signedIn === false) { await undo(before, wanted); return { copied: 0, signedIn: false, ...named }; }
+    if (!copied && signedIn === null && !before.size) signedIn = false;
+    return { copied, signedIn, ...named };
   }
 
   /**
@@ -344,13 +491,10 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
    */
   function heldThere(app) {
     if (!supports(app) || !signsInThroughBrowser(app)) return false;
-    try { return readable().some((source) => holders(app, source).length > 0); } catch { return false; }
+    try { return readable(app).some((source) => holders(app, source).length > 0); } catch { return false; }
   }
 
-  /**
-   * Open `url` in the first of `sources` (openers' order) that is installed and opens → the source, or null. One that fails
-   * to open (`open -b` erring) is passed over for the next (2026-10-12), not the end of the sign-in.
-   */
+  /** Open `url` in the chosen browser (openers) once it is known to be installed → that source, or null when it won't open. */
   async function openFirst(sources, url) {
     for (const source of openers(sources)) {
       if (!(await installedNow(source))) continue;
@@ -358,7 +502,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
         await openPage(source, url);
         return source;
       } catch (error) {
-        log(`Couldn't open a page in ${source.name} (${(error && error.message) || error}): trying the next browser.`);
+        log(`Couldn't open a page in ${source.name} (${(error && error.message) || error}).`);
       }
     }
     return null;
@@ -367,57 +511,59 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   /** The browser `app`'s sign-in page would open in (signIn), by name, or '' when none can be read. */
   function opensIn(app) {
     if (!copies(app)) return '';
-    const target = opener(openable());
+    const target = opener(openable(app));
     return target ? target.name : '';
   }
 
   /**
-   * The app's sign-in from the first browser holding a copy that works, brought into Engelbart's browser → { browser,
-   * browserId, profile, unchecked } | { refused, refusedId } | { dead } | {}. The profile the person picked goes first. A
-   * browser in `denied` is not asked again; one that refuses is added to it and the next is tried. A copy found signed out
-   * is dropped and the next tried; `seen` (shared across a wait's looks) keeps such a profile from being copied again until
-   * its browser has set the sign-in anew. `profile` is named only when the browser has more than one.
+   * The app's sign-in from the chosen profile (C4), brought into Engelbart's browser → { browser, browserId, profile,
+   * unchecked } | { refused, refusedId } | { dead } | { needs: 'disk-access', browser } | { declined } | {}. A browser in
+   * `denied` is not asked again; one that refuses is added to it. A copy found signed out is undone (C3: every cookie it
+   * wrote, and what it overwrote put back); `seen` (shared across a wait's looks) keeps the profile from being copied again
+   * until any of its cookies for the app's sites is set anew (C8). `profile` is named only when the browser has more than
+   * one. `askedOnly`: a Chromium browser macOS hasn't been asked about this run is passed over unless the person allowed
+   * their browser's sign-ins (C6: an allowed browser may be asked).
    */
   async function bringOver(app, sources, denied, seen = new Map(), { askedOnly = false } = {}) {
     if (isHere(app)) return {};
+    if (choice().keychain === 'declined') return { declined: true };
     const domains = domainsOf(app);
-    const pick = picked(app);
-    const candidates = [];
-    for (const source of sources) {
-      for (const profile of source.profiles) {
-        const first = !!(pick && pick.browser === source.id && pick.profile === profile.id);
-        candidates.push({ source, profile, first });
-      }
-    }
-    candidates.sort((a, b) => b.first - a.first);
     let refused = null;
     let failure = null;
     let dead = false;
-    for (const { source, profile } of candidates) {
+    for (const source of sources) {
+      if (!canRead(source.id)) return { needs: 'disk-access', from: source.name };
+      const profile = source.profiles[0];
+      if (!profile) continue;
       const cookie = holding(app, source, profile);
       if (!cookie) continue;
-      if (denied.has(source.id)) { refused = refused || source; continue; }
-      // `askedOnly`: a Chromium browser macOS has not been asked about this run is passed over, so no prompt comes up.
-      if (askedOnly && source.family === 'chromium' && !asked.has(source.id)) continue;
+      if (denied.has(source.id) || refusedHere.has(source.id)) { refused = refused || source; continue; }
+      if (askedOnly && source.family === 'chromium' && !asked.has(source.id) && choice().keychain !== 'allowed') continue;
       const key = `${source.id}/${profile.id}`;
-      if (seen.has(key) && seen.get(key) === cookie.stamp) { dead = true; continue; }
+      if (seen.has(key) && seen.get(key) === cookie.print) { dead = true; continue; }
+      const before = await snapshot(domains);
+      let result;
       try {
-        await oneAtATime(source.id, () => {
+        result = await oneAtATime(source.id, () => {
           if (denied.has(source.id)) throw Object.assign(new Error('Keychain access was denied'), { denied: true });
           if (source.family === 'chromium') asked.add(source.id);
           return cookieImport.import({ browser: source.id, profile: profile.id, domains, quiet: true });
         });
       } catch (error) {
         if (error && error.denied) { refused = refused || source; denied.add(source.id); continue; }
+        if (error && error.needs) return { needs: error.needs, from: source.name };
         failure = failure || error;
         continue;
       }
+      if (result && result.needs) return { needs: result.needs, from: source.name };
       verdicts.delete(pickKey(app)); // a new copy: asked about afresh
-      const now_ = await live(app);
-      if (now_.live) {
-        return { browser: source.name, browserId: source.id, profile: source.profiles.length > 1 ? (profile.name || profile.id) : '', ...(now_.unchecked ? { unchecked: true } : {}) };
+      const ok = (await signedIn(app)) ? await works(app) : false;
+      if (ok !== false) {
+        return { browser: source.name, browserId: source.id, profile: (source.count || source.profiles.length) > 1 ? (profile.name || profile.id) : '', ...(ok === null ? { unchecked: true } : {}) };
       }
-      if (now_.dead) { dead = true; seen.set(key, cookie.stamp); }
+      await undo(before, domains);
+      dead = true;
+      seen.set(key, cookie.print);
     }
     if (refused) return { refused: refused.name, refusedId: refused.id };
     if (dead) return { dead: true };
@@ -430,9 +576,10 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
 
   /**
    * Sign in to `app` → { status: 'signed-in', browser, profile?, opened, unchecked? } | { status: 'timeout', browser } |
-   * { status: 'cancelled' } | { status: 'denied', browser, browserId } (macOS refused every browser holding it) |
-   * { status: 'no-browser' } (none can be read) | { status: 'unsupported', browser } (no known sign-in cookie, or signed in
-   * through Engelbart's window this run, so never copied: Engelbart's window is where it signs in again).
+   * { status: 'cancelled' } | { status: 'denied', browser, browserId } (macOS refused the chosen browser) |
+   * { status: 'no-browser' } (it can't be read) | { status: 'unsupported', browser } (no known sign-in cookie, or signed in
+   * through Engelbart's window this run, so never copied: Engelbart's window is where it signs in again) |
+   * { status: 'needs-disk-access', browser } (Safari without Full Disk Access) | { status: 'declined' }.
    * `onOpened(browser)` once the sign-in page is open there. Held already and working: signed in, and macOS is not asked.
    * `timeoutMs` Infinity waits until signed in or `signal` aborts (Google's Sign in on the choose screen, 2026-10-12).
    * `denied` the browsers macOS refused this run (not asked again; one refusing now is added).
@@ -441,14 +588,16 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     const held = supports(app) ? await live(app) : { live: await signedIn(app) };
     if (held.live) return { status: 'signed-in', browser: '', opened: false, ...(held.unchecked ? { unchecked: true } : {}) };
     if (!copies(app) || !cookieImport) return { status: 'unsupported', browser: browserName() };
-    const sources = readable();
-    const targets = sources.length ? sources : openable(); // none read yet: one to sign in in, read once it is signed in
+    const sources = readable(app);
+    const targets = sources.length ? sources : openable(app); // none read yet: one to sign in in, read once it is signed in
     if (!targets.length) return { status: 'no-browser' };
     const denied = deniedBefore || new Set();
     const seen = new Map();
     const first = sources.length ? await bringOver(app, sources, denied, seen) : {};
     if (first.browser) return { status: 'signed-in', ...from(first), opened: false };
     if (first.refused) return { status: 'denied', browser: first.refused, browserId: first.refusedId };
+    if (first.needs) return { status: 'needs-disk-access', browser: first.from };
+    if (first.declined) return { status: 'declined' };
     if (signal && signal.aborted) return { status: 'cancelled' };
     // Signed in there already, but the copy doesn't work in Engelbart (Google ties a session to the browser that made it):
     // opening its sign-in page would only show them they are signed in (round 3: "it always just brings me to this
@@ -461,20 +610,15 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     const key = pickKey(app);
     waitingIn.set(key, target);
     try {
-      const until = Date.now() + limit;
-      let waited = 0;
-      while (Date.now() < until) {
-        const wait = waited < fastForMs ? pollMs : slowPollMs;
-        await sleep(wait);
-        waited += wait;
-        if (signal && signal.aborted) return { status: 'cancelled' };
-        // Signed in through Engelbart's window meanwhile ("Sign in here instead"): that sign-in stands.
-        if (isHere(app)) return (await signedIn(app)) ? { status: 'signed-in', browser: '', opened: true } : { status: 'cancelled' };
-        const now_ = sources.length ? sources : readable(); // a browser opened for the first time has a profile now
-        const found = now_.length ? await bringOver(app, now_, denied, seen) : {};
-        if (found.browser) return { status: 'signed-in', ...from(found), opened: true };
-        if (found.refused) return { status: 'denied', browser: found.refused, browserId: found.refusedId };
-      }
+      const found = await waitFor(() => {
+        const now_ = sources.length ? sources : readable(app); // a browser opened for the first time has a profile now
+        return now_.length ? bringOver(app, now_, denied, seen) : {};
+      }, { signal, limit, stop: () => isHere(app) });
+      if (found === 'cancelled') return { status: 'cancelled' };
+      // Signed in through Engelbart's window meanwhile ("Sign in here instead"): that sign-in stands.
+      if (found === 'here') return (await signedIn(app)) ? { status: 'signed-in', browser: '', opened: true } : { status: 'cancelled' };
+      if (found && found.browser) return { status: 'signed-in', ...from(found), opened: true };
+      if (found && found.refused) return { status: 'denied', browser: found.refused, browserId: found.refusedId };
     } finally {
       if (waitingIn.get(key) === target) waitingIn.delete(key);
     }
@@ -482,13 +626,36 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   }
 
   /**
+   * A wait's looks: `look()` every POLL_MS for FAST_FOR_MS, then every SLOW_POLL_MS, until it answers with a browser or a
+   * refusal, `signal` aborts ('cancelled'), `stop()` says to ('here'), or `limit` ms pass (null).
+   */
+  async function waitFor(look, { signal = null, limit = timeoutMs, stop = () => false } = {}) {
+    const until = Date.now() + limit;
+    let waited = 0;
+    while (Date.now() < until) {
+      const wait = waited < fastForMs ? pollMs : slowPollMs;
+      await sleep(wait);
+      waited += wait;
+      if (signal && signal.aborted) return 'cancelled';
+      if (stop()) return 'here';
+      const found = await look();
+      if (found && (found.browser || found.refused || found.done)) return found;
+    }
+    return null;
+  }
+
+  /**
    * Whether the app's sign-in is in Engelbart's browser and works, or can be brought over without opening anything →
-   * { signedIn, browser, profile?, unchecked?, refused, refusedId, noBrowser }. A copy held that is signed out is copied
-   * again from the browser and checked again. `denied` is shared across checks (the choose screen's lasts while Engelbart
-   * runs), so macOS is never asked twice about one browser; `noBrowser` when no browser's cookies can be read. `askedOnly`
-   * (a sign-in lost partway through a run, 2026-10-12): only browsers macOS was asked about already, so it asks nothing new;
-   * `fresh` the copy held dropped first, as an agent found it signed out. A sign-in Engelbart's window made this run is only
-   * looked at, never copied (`here`: true), as is every sign-in off the Mac; `fresh`, it is dropped and not signed in.
+   * { signedIn, browser, profile?, unchecked?, refused, refusedId, noBrowser, needs?, declined? }. A copy held that is
+   * signed out is copied again from the browser and checked again. `denied` is shared across checks (the choose screen's
+   * lasts while Engelbart runs), so macOS is never asked twice about one browser; `noBrowser` when the chosen browser's
+   * cookies can't be read; `needs: 'disk-access'` Safari without Full Disk Access; `declined` the person turned their
+   * browser's sign-ins down. `askedOnly` (a sign-in lost partway through a run, 2026-10-12): unless their browser's
+   * sign-ins were allowed (C6), only a browser macOS was asked about already, so it asks nothing new; `fresh` the copy held
+   * dropped first, as an agent found it signed out (the quiet retries' call: allowed, it may ask). A sign-in Engelbart's
+   * window made this run is only looked at, never copied (`here`: true), as is every sign-in off the Mac; `fresh`, it is
+   * dropped and not signed in. `signedIn: false` only when the site said so or no session cookie is there (C2); a check
+   * that couldn't answer keeps the copy (`unchecked`).
    */
   async function signInQuiet(app, { denied = new Set(), askedOnly = false, fresh = false } = {}) {
     // Signed in through Engelbart's window this run, or off the Mac (nothing to copy from): Engelbart's own session alone.
@@ -503,12 +670,103 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     if (fresh) await drop(app);
     const held = fresh ? { live: false } : await live(app);
     if (held.live) return { signedIn: true, browser: '', ...(held.unchecked ? { unchecked: true } : {}) };
-    const sources = readable();
+    const sources = readable(app);
     if (!sources.length) return { signedIn: false, browser: '', noBrowser: true };
     const found = await bringOver(app, sources, denied, new Map(), { askedOnly }).catch(() => ({}));
     if (found.browser) return { signedIn: true, ...from(found) };
+    if (found.needs) return { signedIn: false, browser: found.from || '', needs: found.needs };
+    if (found.declined) return { signedIn: false, browser: '', declined: true };
     // `held`: their browser is signed in (the copy was refused by the site, or not tried for a browser not asked yet).
     return { signedIn: false, browser: '', refused: found.refused || '', refusedId: found.refusedId || '', ...(!found.refused && !askedOnly && found.dead && heldThere(app) ? { held: true } : {}) };
+  }
+
+  /**
+   * The native-browser fallback (C8, 2026-10-16, the Onboarding note's "Cookies fallback": "have the user sign in to the
+   * application in their native browser, capture these new/updated cookies, and then import them to Engelbart's chromium").
+   * `target` a registered app ('Google Docs') or a tool { name, url, domains } (an Other tool). Its cookies are copied from
+   * the chosen browser and profile at once when they are there (an already signed-in person never signs in again); else its
+   * page opens there, in that profile, and the cookies are copied once any of them appears or changes; then checked.
+   * Bounded by `timeoutMs`; `signal` ends it. →
+   *   { signedIn: true, unchecked?, browser?, profile? } | { signedIn: false, reason? } | { refused, refusedId, signedIn: false }
+   *   (`reason`: 'timeout', 'cancelled', 'declined', 'disk-access', 'keychain', 'no-browser', 'signed-out', 'unsupported').
+   */
+  async function recapture(target, { signal = null, timeoutMs: limit = timeoutMs, denied: deniedBefore = null } = {}) {
+    const denied = deniedBefore || new Set();
+    const app = typeof target === 'string' ? target : null;
+    if (!cookieImport) return { signedIn: false, reason: 'unsupported' };
+    if (choice().keychain === 'declined') return { signedIn: false, reason: 'declined' };
+    if (app && supports(app)) return recaptureApp(app, { signal, limit, denied });
+    const tool = app ? { name: app, domains: domainsOf(app), url: SIGN_IN_PAGES[app] || (appOf(app) && appOf(app).start) || '' } : (target || {});
+    const domains = registrable(tool.domains && tool.domains.length ? tool.domains : (tool.url ? [String(tool.url)] : []));
+    if (!domains.length) return { signedIn: false, reason: 'unsupported' };
+    const url = tool.url || `https://${domains[0]}/`;
+    return recaptureSites({ name: tool.name || domains[0], domains, url }, { signal, limit, denied });
+  }
+
+  const failedCopy = (found) => (found.refused ? { signedIn: false, refused: found.refused, refusedId: found.refusedId }
+    : found.needs === 'disk-access' ? { signedIn: false, reason: 'disk-access' }
+      : found.needs === 'keychain' ? { signedIn: false, reason: 'keychain' }
+        : found.declined ? { signedIn: false, reason: 'declined' }
+          : found.noBrowser ? { signedIn: false, reason: 'no-browser' } : null);
+
+  /** recapture for a registered app with a known sign-in cookie (bringOver's copy and check). */
+  async function recaptureApp(app, { signal, limit, denied }) {
+    if (isHere(app)) {
+      const held = await live(app);
+      return held.live ? { signedIn: true, ...(held.unchecked ? { unchecked: true } : {}) } : { signedIn: false, reason: 'signed-out' };
+    }
+    const sources = readable(app);
+    const targets = sources.length ? sources : openable(app);
+    if (!targets.length) return { signedIn: false, reason: 'no-browser' };
+    const seen = new Map();
+    const done = (found) => ({ signedIn: true, ...from(found) });
+    const first = sources.length ? await bringOver(app, sources, denied, seen).catch(() => ({})) : {};
+    if (first.browser) return done(first);
+    const failed = failedCopy(first);
+    if (failed) return failed;
+    if (signal && signal.aborted) return { signedIn: false, reason: 'cancelled' };
+    const url = SIGN_IN_PAGES[app] || (appOf(app) && appOf(app).start);
+    const opened = url ? await openFirst(targets, url) : null;
+    if (!opened) return { signedIn: false, reason: 'no-browser' };
+    const found = await waitFor(() => {
+      const now_ = sources.length ? sources : readable(app);
+      return now_.length ? bringOver(app, now_, denied, seen).catch(() => ({})) : {};
+    }, { signal, limit, stop: () => isHere(app) });
+    if (found === 'cancelled') return { signedIn: false, reason: 'cancelled' };
+    if (found === 'here') return (await signedIn(app)) ? { signedIn: true } : { signedIn: false, reason: 'signed-out' };
+    if (found && found.browser) return done(found);
+    if (found && found.refused) return failedCopy(found);
+    return { signedIn: false, reason: 'timeout' };
+  }
+
+  /** recapture for a tool's sites (copyFor's copy and check), the page opened at `url`. */
+  async function recaptureSites({ name, domains, url }, { signal, limit, denied }) {
+    const good = (out) => out.copied > 0 && out.signedIn !== false;
+    const done = (out) => ({ signedIn: true, ...(out.signedIn === null ? { unchecked: true } : {}), ...(out.browser ? { browser: out.browser } : {}), ...(out.profile ? { profile: out.profile } : {}) });
+    const first = await copyFor({ name, domains }, { denied });
+    if (good(first)) return done(first);
+    const failed = failedCopy(first);
+    if (failed) return failed;
+    if (signal && signal.aborted) return { signedIn: false, reason: 'cancelled' };
+    const targets = openable();
+    if (!targets.length) return { signedIn: false, reason: 'no-browser' };
+    const opened = await openFirst(targets, url);
+    if (!opened) return { signedIn: false, reason: 'no-browser' };
+    const printNow = () => { const [source] = readable(); return source ? printOf(source, source.profiles[0], domains) : ''; };
+    let last = printNow();
+    const found = await waitFor(async () => {
+      const print = printNow();
+      if (!print || print === last) return {};
+      last = print;
+      const out = await copyFor({ name, domains }, { denied });
+      if (good(out)) return { done: true, out };
+      if (out.refused) return { refused: out.refused, refusedId: out.refusedId };
+      return {};
+    }, { signal, limit });
+    if (found === 'cancelled') return { signedIn: false, reason: 'cancelled' };
+    if (found && found.done) return done(found.out);
+    if (found && found.refused) return failedCopy(found);
+    return { signedIn: false, reason: 'timeout' };
   }
 
   /**
@@ -560,17 +818,49 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   }
 
   /**
+   * Allow on "Allow Engelbart to use your <browser> sign-ins?" (C5, S12, 2026-10-16): macOS asked for the chosen browser's
+   * key at once, one prompt, kept for the run (index.cjs's key cache), resolving once macOS answered →
+   *   { keychain: 'allowed' } | { keychain: 'refused', browser } (macOS said no, or Safari without Full Disk Access:
+   *   `needs: 'disk-access'`). Firefox and a browser with no key: nothing to ask, allowed. Safari has no Keychain prompt:
+   *   allowed means Full Disk Access is granted and its cookie file reads.
+   */
+  async function unlockBrowser(browserId = chosenId()) {
+    const id = browserId || chosenId();
+    if (!cookieImport || !id) return { keychain: 'allowed' };
+    const source = listed().find((one) => one.id === id);
+    const name = (source && source.name) || (id === 'safari' ? 'Safari' : id);
+    const family = source ? source.family : id === 'safari' ? 'safari' : id === 'firefox' ? 'firefox' : 'chromium';
+    if (family === 'safari') return canRead(id) ? { keychain: 'allowed' } : { keychain: 'refused', browser: name, needs: 'disk-access' };
+    if (family !== 'chromium' || typeof cookieImport.unlock !== 'function') return { keychain: 'allowed' };
+    try {
+      await oneAtATime(id, () => { asked.add(id); return cookieImport.unlock(id); });
+      refusedHere.delete(id);
+      return { keychain: 'allowed' };
+    } catch (error) {
+      if (error && error.denied) { asked.delete(id); refusedHere.add(id); return { keychain: 'refused', browser: name }; }
+      return { keychain: 'allowed' }; // not installed after all, or no key yet: nothing to ask
+    }
+  }
+
+  /**
+   * A browser's profiles for "Select your {browser} profile" (C4, S10) → [{ id, name, email }], or [] when it has one or
+   * none that can be read (Safari without Full Disk Access).
+   */
+  function profilesOf(browserId) {
+    const source = listed().find((one) => one.id === browserId);
+    const profiles = source ? source.profiles.filter((profile) => !profile.locked) : [];
+    return profiles.length > 1 ? profiles.map((profile) => ({ id: profile.id, name: profile.name || profile.id, email: profile.email || '' })) : [];
+  }
+
+  /**
    * The browser macOS will be asked about to bring the app's sign-in over, when it has not been yet while Engelbart runs →
-   * { id, name } | null: the one picked, else the first holding it, else where its sign-in page would open; Firefox needs no
-   * Keychain. `holdersOnly` (the choose screen's check when an app is ticked, 2026-10-11): only a browser holding the
-   * sign-in, since the check opens nothing, so with none macOS is not asked and there is no browser to name.
+   * { id, name } | null: the chosen one (C4); Firefox and Safari need no Keychain. `holdersOnly` (the choose screen's check
+   * when an app is ticked, 2026-10-11): only when it holds the sign-in, since the check opens nothing.
    */
   function keychainTarget(app, { holdersOnly = false } = {}) {
     if (!copies(app) || !cookieImport) return null;
-    const sources = readable();
-    const pick = picked(app);
-    const target = (pick && sources.find((source) => source.id === pick.browser && holders(app, source).some((profile) => profile.id === pick.profile)))
-      || sources.find((source) => holders(app, source).length) || (holdersOnly ? null : opener(sources));
+    const sources = readable(app);
+    const target = sources.find((source) => holders(app, source).length) || (holdersOnly ? null : opener(sources.length ? sources : openable(app)));
     if (!target || target.family !== 'chromium' || asked.has(target.id)) return null;
     return { id: target.id, name: target.name };
   }
@@ -582,9 +872,9 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
   }
 
   /** Every answer kept in memory dropped (test mode's reset, 2026-10-15): the next check asks again. */
-  const forget = () => { verdicts.clear(); waitingIn.clear(); here.clear(); };
+  const forget = () => { verdicts.clear(); waitingIn.clear(); here.clear(); refusedHere.clear(); };
 
-  return { forget, supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount, keychainTarget, keychainNote, holdersOf, heldThere, openApp, copyBlind, copyDomains, picked, choose, opensIn, readableCount: () => readable().length };
+  return { forget, supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, unlockBrowser, profilesOf, anotherAccount, keychainTarget, keychainNote, holdersOf, heldThere, openApp, copyBlind, copyDomains, copyFor, recapture, picked, choose, opensIn, readableCount: () => readable().length };
 }
 
-module.exports = { createWebSignIn, SIGN_IN_COOKIES, SIGN_IN_PAGES, ANOTHER_ACCOUNT_PAGE, READABLE_NAMES, domainsOf, browserIdOf };
+module.exports = { createWebSignIn, SIGN_IN_COOKIES, SIGN_IN_PAGES, ANOTHER_ACCOUNT_PAGE, READABLE_NAMES, domainsOf, browserIdOf, registrable, profileOpenArgs };

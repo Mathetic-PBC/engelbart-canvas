@@ -39,4 +39,8 @@ export const importApi = {
   connectStart: (choices) => api.connectStart(choices),
   startProject: (input) => api.startProject(input),
   openTrace: () => api.importTraceOpen(),
+  // One profile of the chosen browser, for every copy (2026-10-16, C4) → the same as browsers().
+  chooseBrowserProfile: (browserId, profileId) => api.importBrowserProfile(browserId, profileId),
+  // Safari's "Grant disk access" (S9): System Settings ▸ Privacy & Security ▸ Full Disk Access → { opened }.
+  openDiskAccess: () => api.importOpenDiskAccess(),
 };

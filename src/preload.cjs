@@ -137,6 +137,7 @@ const engelbartAPI = Object.freeze({
   connectProviders: invoke('connect-providers'),
   connectStart: invoke('connect-start'),
   connectAnswer: invoke('connect-answer'),
+  connectGrant: invoke('connect-grant'), // (id, { apps: [ids] }) → snapshot: "Grant access" on the librarian's first message (2026-10-16)
   connectAuthorize: invoke('connect-authorize'),
   connectChose: invoke('connect-chose'),
   connectCancelSignIn: invoke('connect-cancel-sign-in'),
@@ -179,9 +180,9 @@ const engelbartAPI = Object.freeze({
   // the folders macOS guards may already be read, where the flow was, and View ▸ Agent Trace.
   importProviders: invoke('import-providers'), // (fresh?) → { providers, decision: { pick, ask, choices, setup }, remembered }
   importProviderRemember: invoke('import-provider-remember'), // (provider) → the same, that one remembered
-  importBrowsers: invoke('import-browsers'), // → { browsers: [{ id, name, keychain, isDefault }], defaultId, chosenId, keychain }
+  importBrowsers: invoke('import-browsers'), // → { browsers: [{ id, name, keychain, isDefault, profiles: [{ id, name, email }] }], defaultId, chosenId, chosenProfile, keychain, safari: { diskAccess } }
   importBrowserChoose: invoke('import-browser-choose'), // (id) → the same
-  importKeychain: invoke('import-keychain'), // ('allowed' | 'declined')
+  importKeychain: invoke('import-keychain'), // ('allowed' | 'declined') → { keychain: 'allowed' | 'refused' | 'declined', browser? } once macOS answered
   importBrowserAgents: invoke('import-browser-agents'), // ({ provider, browserId }) → whether agents can use the person's own browser
   importBrowserAgentsAnswer: invoke('import-browser-agents-answer'), // ('allowed' | 'declined' | null)
   importDiscovery: invoke('import-discovery'), // → { projects, tools }
@@ -194,6 +195,8 @@ const engelbartAPI = Object.freeze({
   importFlowSave: invoke('import-flow-save'), // (flow | null)
   importTraceOpen: invoke('import-trace-open'),
   importObsidianTree: invoke('import-obsidian-tree'), // → { vaults: [{ name, path, tree }], truncated }
+  importBrowserProfile: invoke('import-browser-profile'), // (browserId, profileId) → the same as importBrowsers
+  importOpenDiskAccess: invoke('import-open-disk-access'), // System Settings ▸ Full Disk Access, nothing else → { opened }
   onDiscovery: (callback) => subscribe('engelbart:discovery', callback),
   onConnectors: (callback) => subscribe('engelbart:connectors', callback),
   renameProject: invoke('rename-project'),

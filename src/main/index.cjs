@@ -71,7 +71,7 @@ const { createFakeConnectAgents, createCliGatedAgents } = require('./connect/fak
 const { createAgentBrowser } = require('./connect/browser.cjs');
 const { createConnectors } = require('./connect/connectors.cjs');
 const { createOwnConnectors } = require('./connect/own-connectors.cjs');
-const { createWebSignIn, SIGN_IN_COOKIES } = require('./connect/web-signin.cjs');
+const { createWebSignIn, SIGN_IN_COOKIES, profileOpenArgs } = require('./connect/web-signin.cjs');
 const { createAppleNotes } = require('./connect/apple-notes.cjs');
 const { createSignInWindow } = require('./connect/signin-window.cjs');
 const { createSigninProfiles } = require('./connect/signin-profiles.cjs');
@@ -1049,6 +1049,11 @@ if (!hasSingleInstanceLock) {
       defaultName: macDefaultBrowser,
       prefs,
       override: process.env.ENGELBART_ONBOARDING_BROWSERS != null ? process.env.ENGELBART_ONBOARDING_BROWSERS.split(',').map((id) => id.trim()).filter(Boolean) : null,
+      // Each browser's profiles, Allow's one macOS prompt, and Safari's Full Disk Access (2026-10-16, C4/C5): webSignIn and
+      // diskAccess are made below, and only asked once the window calls.
+      profilesOf: (id) => webSignIn.profilesOf(id),
+      unlock: (id) => webSignIn.unlockBrowser(id),
+      diskAccess: () => diskAccess.status(),
     });
     openChosen = (url) => new Promise((resolve, reject) => {
       const remembered = (prefs.get() || {}).browser || null;
@@ -1082,10 +1087,22 @@ if (!hasSingleInstanceLock) {
         if (!bundle) { reject(new Error(`No way to open ${browserId}`)); return; }
         execFile('open', ['-b', bundle, parseExternalUrl(url).href], (error) => (error ? reject(error) : resolve()));
       }),
+      // A page in one profile of a Chromium browser (C8): `open -n -b <bundle> --args --profile-directory=<id> <url>`.
+      openInProfile: (browserId, profileId, url) => new Promise((resolve, reject) => {
+        const bundle = bundleOf(browserId);
+        if (!bundle) { reject(new Error(`No way to open ${browserId}`)); return; }
+        execFile('open', profileOpenArgs(bundle, profileId, parseExternalUrl(url).href), (error) => (error ? reject(error) : resolve()));
+      }),
       getSession: () => electronSession.fromPartition(BROWSER_PARTITION),
       // The profile picked when several hold a sign-in, in <dataRoot>/.connect/signin-profiles.json (ids only).
       picks: createSigninProfiles({ dataRoot: () => store.config().dataRoot }),
-      log: (text) => { console.warn(`[connect] ${text}`); },
+      // The browser, profile and Keychain answer onboarding remembered (2026-10-16, C4-C6): the only ones a copy uses.
+      chosen: () => { const kept = prefs.get() || {}; return { browser: kept.browser || null, profile: kept.profile || null, keychain: kept.keychain || null }; },
+      // Every sign-in check's answer in the Agent trace too (C2: its status and where a redirect went).
+      log: (text, detail) => {
+        console.warn(`[connect] ${text}`);
+        if (detail && detail.kind === 'signin-check') { try { trace.event({ kind: 'signin-check', text, detail }); } catch { /* the trace is made below */ } }
+      },
     });
     // A sign-in made in Engelbart's own browser (the choose screen's "Sign in", ./connect/signin-window.cjs): on the Mac when
     // no browser of the person's holds one to bring over or they turned its sign-ins down, and every sign-in elsewhere.

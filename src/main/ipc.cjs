@@ -590,6 +590,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('connect-providers', () => { const out = cx().providers(); warm(); return out; });
   handle('connect-start', (input) => cx().start(plainObject(input, 'choices')));
   handle('connect-answer', (id, input) => cx().answer(importId(id), plainObject(input, 'answer')));
+  handle('connect-grant', (id, input) => cx().grant(importId(id), plainObject(input, 'grant')));
   const authorizeInput = (input) => { const value = plainObject(input, 'choice'); return { app: appName(value.app), kind: str(value.kind, 'kind', 16), path: optStr(value.path, 'path', 4096) }; };
   handle('connect-authorize', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
   handle('connect-chose', (id, input) => cx().authorize(importId(id), authorizeInput(input)));
@@ -676,6 +677,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('import-provider-remember', (provider) => { ix().providers.remember(providerId(provider)); return ix().providers.status(); });
   handle('import-browsers', () => ix().browsers.list());
   handle('import-browser-choose', (id) => ix().browsers.choose(str(id, 'browser', 32)));
+  // Allow asks macOS for the chosen browser's sign-ins at once and answers once macOS did (2026-10-16, C5): { keychain:
+  // 'allowed' | 'refused' | 'declined', browser? }.
   handle('import-keychain', (answer) => ix().browsers.setKeychain(str(answer, 'answer', 16)));
   // Browser agents (./onboarding/browser-agents.cjs): whether the web apps' imports can run in the person's own browser,
   // and their answer to "Let agents use your browser?" ('allowed' | 'declined'; null forgets it).
@@ -702,6 +705,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('import-discovery-reset', () => ix().discovery.reset());
   // Whether the folders macOS guards may already be read (granted on the person's own; nothing asks for it, 2026-10-15).
   handle('import-disk-access', () => ix().diskAccess.status());
+  // The browser's profile every copy reads (2026-10-16, C4: "Select your {browser} profile") → the same as import-browsers.
+  handle('import-browser-profile', (browserId, profileId) => ix().browsers.chooseProfile(str(browserId, 'browser', 32), str(profileId, 'profile', 120)));
+  // Safari's "Grant disk access" (S9): System Settings ▸ Privacy & Security ▸ Full Disk Access, nothing else → { opened }.
+  handle('import-open-disk-access', () => (typeof ix().diskAccess.open === 'function' ? ix().diskAccess.open() : { opened: false }));
   handle('import-flow', () => (ix().prefs.get().flow || null));
   handle('import-flow-save', (flow) => { if (flow === null) { ix().prefs.set({ flow: null }); return true; } ix().prefs.set({ flow: plainObject(flow, 'flow') }); return true; });
   handle('import-trace-open', () => ix().openTrace());

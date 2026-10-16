@@ -4,6 +4,8 @@
 //   provider   'anthropic' | 'openai': the provider picked when both had a subscription, so it is not asked again
 //   browser    the browser whose sign-ins Engelbart uses (an id of shared/import-flow.cjs BROWSERS), when the person chose
 //              one other than their default ("Use another browser")
+//   profile    the profile of that browser every copy reads (2026-10-16, C4: "Select your {browser} profile"): its id
+//              ("Profile 1", a Firefox folder, a Safari profile's UUID), kept with `browser`
 //   keychain   'allowed' | 'declined': the answer to "Allow Engelbart to use your <browser> sign-ins?"
 //   browserAgents  'allowed' | 'declined': the answer to "Let agents use your browser?" (./browser-agents.cjs), asked
 //              only when the person's Claude Code or Codex does not already let its agents drive their browser
@@ -16,6 +18,8 @@ const { PROVIDER_IDS, browserById } = require('../../shared/import-flow.cjs');
 
 const FILE = 'onboarding.json';
 const MAX_FLOW_BYTES = 200_000;
+// A browser profile's id: as ../connect/signin-profiles.cjs keeps them.
+const PROFILE_ID = /^[\w .@()-]{1,120}$/;
 
 const fileOf = (dataRoot) => path.join(dataRoot, '.connect', FILE);
 
@@ -32,13 +36,14 @@ function clean(value) {
   const out = {};
   if (PROVIDER_IDS.includes(value.provider)) out.provider = value.provider;
   if (browserById(value.browser)) out.browser = value.browser;
+  if (typeof value.profile === 'string' && PROFILE_ID.test(value.profile)) out.profile = value.profile;
   if (value.keychain === 'allowed' || value.keychain === 'declined') out.keychain = value.keychain;
   if (value.browserAgents === 'allowed' || value.browserAgents === 'declined') out.browserAgents = value.browserAgents;
   if (value.flow && typeof value.flow === 'object' && JSON.stringify(value.flow).length <= MAX_FLOW_BYTES) out.flow = value.flow;
   return out;
 }
 
-/** What is remembered → { provider?, browser?, keychain?, browserAgents?, flow? } */
+/** What is remembered → { provider?, browser?, profile?, keychain?, browserAgents?, flow? } */
 function get(dataRoot) {
   return clean(read(dataRoot));
 }

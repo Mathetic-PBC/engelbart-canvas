@@ -17,6 +17,9 @@
 // not be secure", accounts.google.com/…/signin/rejected). It then leaves cookies that turn every later try away too, so
 // the window clears Google's __Host-*, __Secure-*, OTZ and NID cookies (on google.com, accounts.google.com and
 // mail.google.com), closes, and open() resolves { status: 'rejected' }: the row offers Try again.
+// Any site (2026-10-16, C9: "I suppose we can ask them to sign in using Engelbart's chromium … and then have agents run
+// there"): `openSite({ name, url, domains })` does the same for a tool with no registered app, in the same session. With no
+// sign-in cookie to look for, it is signed in when the window closes with its sites' cookies changed.
 
 const { appOf, SIGN_IN_COOKIES, signInGroup } = require('../../shared/connect-sources.cjs');
 const { SIGN_IN_PAGES } = require('./web-signin.cjs');
@@ -48,15 +51,48 @@ async function clearGoogleRefusal(session) {
 /**
  * `getParent()` the window it opens over; `getSession()` the agents' browser session; `userAgent(ua)` the user agent sites
  * see (as connect/browser.cjs sets it); `signedIn(app)` whether that session holds the app's sign-in (webSignIn.signedIn).
- * → { open(app) → Promise<{ status: 'signed-in' | 'closed' | 'rejected' }>, close(), isOpen() }
+ * → { open(app) → Promise<{ status: 'signed-in' | 'closed' | 'rejected' }>, openSite({ name, url, domains }) → the same,
+ *     close(), isOpen() }
  */
 function createSignInWindow({ BrowserWindow, getParent = () => null, getSession, userAgent = (ua) => ua, signedIn, headless = false, pollMs = POLL_MS, timers = { setInterval, clearInterval } }) {
   let current = null; // { group, app, win, promise, finish }
 
+  /**
+   * A registered app's sign-in page. One with no known sign-in cookie (Evernote, OneNote…) opens as any site does
+   * (openSite, C9): its own sites, signed in when their cookies changed while the window was open.
+   */
   function open(app) {
     const start = SIGN_IN_PAGES[app] || (appOf(app) && appOf(app).start);
-    if (!start || !SIGN_IN_COOKIES[app]) return Promise.resolve({ status: 'closed' });
-    const group = signInGroup(app);
+    if (!start) return Promise.resolve({ status: 'closed' });
+    if (!SIGN_IN_COOKIES[app]) return openSite({ name: app, url: start, domains: siteDomains(app, start) });
+    return present({ group: signInGroup(app), app, start, signedInNow: () => signedIn(app) });
+  }
+
+  /**
+   * Sign in to any https site inside Engelbart (C9, 2026-10-16: an "Other" tool, one the agents found or the person added),
+   * in the agents' session. A site has no sign-in cookie Engelbart knows, so the window stays until the person closes it;
+   * then 'signed-in' when the cookies of `domains` (registrable, the url's own by default) appeared or changed while it was
+   * open, else 'closed'. Not https: 'closed' at once.
+   */
+  function openSite({ name = '', url = '', domains = [] } = {}) {
+    if (!httpsOnly(url)) return Promise.resolve({ status: 'closed' });
+    const sites = registrableOf(domains.length ? domains : [new URL(url).hostname]);
+    if (!sites.length) return Promise.resolve({ status: 'closed' });
+    const before = printOf(getSession(), sites);
+    return present({
+      group: `site ${sites.join(' ')}`,
+      app: name,
+      start: url,
+      title: name ? `Sign in to ${name}` : 'Sign in',
+      closed: async () => ((await printOf(getSession(), sites)) !== (await before) ? 'signed-in' : 'closed'),
+    });
+  }
+
+  /**
+   * The window itself: `start` loaded on the agents' session; every `pollMs`, `signedInNow()` (when given) says whether it
+   * is signed in, which closes it ('signed-in'); closed by the person, `closed()` says how it ended ('closed' when not given).
+   */
+  function present({ group, app = '', start, title = 'Sign in', signedInNow = null, closed = null }) {
     if (current && current.group === group && current.win && !current.win.isDestroyed()) {
       current.win.show();
       current.win.focus();
@@ -71,7 +107,7 @@ function createSignInWindow({ BrowserWindow, getParent = () => null, getSession,
       height: 720,
       minWidth: 360,
       minHeight: 480,
-      title: 'Sign in',
+      title,
       backgroundColor: '#ffffff',
       show: !headless,
       autoHideMenuBar: true,
@@ -136,14 +172,21 @@ function createSignInWindow({ BrowserWindow, getParent = () => null, getSession,
     entry.finish = finish;
     current = entry;
 
-    timer = timers.setInterval(async () => {
-      if (done || looking) return;
-      looking = true;
-      try {
-        if (await signedIn(app)) finish('signed-in');
-      } catch { /* looked at again next time */ } finally { looking = false; }
-    }, pollMs);
-    win.on('closed', () => { closeChildren(); if (!refused) finish('closed'); });
+    if (signedInNow) {
+      timer = timers.setInterval(async () => {
+        if (done || looking) return;
+        looking = true;
+        try {
+          if (await signedInNow()) finish('signed-in');
+        } catch { /* looked at again next time */ } finally { looking = false; }
+      }, pollMs);
+    }
+    win.on('closed', () => {
+      closeChildren();
+      if (refused || done) return;
+      if (!closed) { finish('closed'); return; }
+      void Promise.resolve().then(closed).then((status) => finish(status === 'signed-in' ? 'signed-in' : 'closed'), () => finish('closed'));
+    });
     void win.loadURL(start).catch(() => {});
     return entry.promise;
   }
@@ -156,7 +199,27 @@ function createSignInWindow({ BrowserWindow, getParent = () => null, getSession,
     if (entry.win && !entry.win.isDestroyed()) entry.win.close();
   }
 
-  return { open, close, isOpen: () => !!current };
+  return { open, openSite, close, isOpen: () => !!current };
+}
+
+/** Sites as registrable domains ('www.linear.app' → 'linear.app'), each once. */
+const registrableOf = (domains) => [...new Set((domains || []).map((domain) => String(domain).toLowerCase().replace(/^https?:\/\//, '').split('/')[0].split('.').filter(Boolean).slice(-2).join('.')).filter((domain) => domain.includes('.')))];
+
+/** A registered app's sites (its start page's own, then its listed sites). */
+const siteDomains = (app, start) => registrableOf([(() => { try { return new URL(start).hostname; } catch { return ''; } })(), ...((appOf(app) && appOf(app).sites) || [])]);
+
+/**
+ * Every cookie `session` holds for `sites` as one string (name, domain, path and value; kept in main, compared only), so
+ * a sign-in made in the window shows as a change. '' when it can't be read.
+ */
+async function printOf(session, sites) {
+  const cookies = session && session.cookies;
+  if (!cookies || typeof cookies.get !== 'function') return '';
+  const lines = [];
+  for (const domain of sites) {
+    for (const cookie of await cookies.get({ domain }).catch(() => [])) lines.push(`${cookie.domain}|${cookie.path || '/'}|${cookie.name}|${cookie.value}`);
+  }
+  return lines.sort().join('\n');
 }
 
 module.exports = { createSignInWindow, clearGoogleRefusal, rejectedByGoogle, POLL_MS };

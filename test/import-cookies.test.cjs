@@ -288,8 +288,12 @@ test('the private copy is deleted whether reading succeeds or throws', () => {
 test('sign-in check verdicts from a manual-redirect fetch status', () => {
   const github = mod.SIGN_IN_CHECKS.find((c) => c.domain === 'github.com');
   assert.equal(mod.checkResult(github, { status: 200 }), true, 'the protected page loaded: signed in');
-  assert.equal(mod.checkResult(github, { status: 302 }), false, 'a 3xx to login: signed out');
-  assert.equal(mod.checkResult(github, { status: 0, type: 'opaqueredirect' }), false, 'a hidden redirect: signed out');
+  assert.equal(mod.checkResult(github, { status: 302, location: 'https://github.com/login' }), false, 'a 3xx to its login page: signed out');
+  // One rule (2026-10-16, C2): a redirect whose target isn't the site's own login page is not confirmed either way.
+  assert.equal(mod.checkResult(github, { status: 302 }), null, 'a 3xx to nowhere known: not confirmed');
+  assert.equal(mod.checkResult(github, { status: 0, type: 'opaqueredirect' }), null, 'a hidden redirect: not confirmed');
+  assert.equal(mod.checkResult(github, { status: 401 }), false, 'a 401: signed out');
+  for (const status of [403, 404, 429, 500, 503]) assert.equal(mod.checkResult(github, { status }), null, `a ${status}: not confirmed`);
   assert.equal(mod.checkResult(github, null), null, 'a check that could not run is null');
 });
 
@@ -301,7 +305,7 @@ test('GitHub\'s check uses GITHUB_SESSION_COOKIES and endedGithubSession from sr
   const toLogin = 'https://github.com/login?return_to=https%3A%2F%2Fgithub.com%2Fsettings%2Fprofile';
   assert.equal(mod.checkResult(github, { status: 302, location: toLogin }), false, 'sent to /login: GitHub ended the sign-in');
   assert.equal(mod.checkResult(github, { status: 302, location: 'https://github.com/sessions/verified-device' }), null, 'sent elsewhere: not confirmed');
-  assert.equal(mod.checkResult(github, { status: 302, location: '' }), false, 'a redirect to somewhere unknown: signed out');
+  assert.equal(mod.checkResult(github, { status: 302, location: '' }), null, 'a redirect to somewhere unknown: not confirmed (2026-10-16, C2)');
   assert.equal(mod.checkResult(github, { status: 200 }, new Set(['logged_in', '_gh_sess'])), false, 'no session cookie held: signed out, whatever the page said');
   assert.equal(mod.checkResult(github, { status: 200 }, new Set(['user_session'])), true);
   assert.equal(mod.checkResult(github, null, new Set(['_gh_sess'])), false, 'no session cookie: signed out even unchecked');
@@ -458,7 +462,7 @@ test('domains lists domain and count only, with the pre-ticked defaults, and no 
 test('import writes the ticked domains into the session, calls flushStore, and returns counts only', async () => {
   const { support, userData } = makeMachine();
   const session = fakeSession();
-  const request = fakeRequest({ 'https://github.com/settings/profile': 200, 'https://drive.google.com/drive/u/0/': { status: 302 } });
+  const request = fakeRequest({ 'https://github.com/settings/profile': 200, 'https://drive.google.com/drive/u/0/': { status: 302, location: 'https://accounts.google.com/ServiceLogin?service=wise' } });
   const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => session, request, keychain: async () => PASSWORD, now: () => new Date('2026-10-06T00:00:00Z') });
   const result = await importer.import({ browser: 'brave', profile: 'Default', domains: ['github.com', 'google.com'] });
 
@@ -535,7 +539,7 @@ test('the GitHub check: no session cookie skips the request; a redirect to /logi
   const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), request, keychain: async () => PASSWORD, checkTimeoutMs: 50 });
   const result = await importer.import({ browser: 'brave', profile: 'Default', domains: ['github.com', 'google.com'] });
   assert.equal(result.checks.find((c) => c.site === 'GitHub').signedIn, false);
-  assert.equal(result.checks.find((c) => c.site === 'Google').signedIn, false, '"Redirect was cancelled" is signed out, not null');
+  assert.equal(result.checks.find((c) => c.site === 'Google').signedIn, null, '"Redirect was cancelled" goes somewhere unknown: not confirmed (2026-10-16, C2)');
 
   // A profile with no GitHub sign-in: nothing GITHUB_SESSION_COOKIES names, so GitHub is not even asked.
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'home-'));
@@ -665,7 +669,7 @@ test('an uninstalled browser is never asked about: its install answer is waited 
     installed: () => true, // not answered yet: counts as installed
     settled: async (bundle) => { settledAsked.push(bundle); return bundle !== 'com.brave.Browser'; },
   });
-  assert.deepEqual(importer.sources().map((s) => s.id).sort(), ['brave', 'firefox'], 'listed until Spotlight answers');
+  assert.deepEqual(importer.sources().map((s) => s.id).sort(), ['brave', 'firefox', 'safari'], 'listed until Spotlight answers (Safari locked: no Full Disk Access here)');
   assert.equal(await importer.ready('brave'), false);
   await assert.rejects(importer.unlock('brave'), /not installed/);
   await assert.rejects(importer.import({ browser: 'brave', profile: 'Default', domains: ['github.com'] }), /not installed/);

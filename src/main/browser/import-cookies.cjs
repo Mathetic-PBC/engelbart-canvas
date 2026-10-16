@@ -21,6 +21,8 @@ const path = require('node:path');
 const crypto = require('node:crypto');
 const { execFile } = require('node:child_process');
 const { endedGithubSession, GITHUB_SESSION_COOKIES } = require('../../shared/github.cjs');
+const safari = require('./safari-cookies.cjs');
+const { canReadHere } = require('../onboarding/disk-access.cjs');
 
 // The Chromium-family browsers (CK-01). `dir` is under ~/Library/Application Support; `keychain` is the Keychain generic
 // password whose value derives the decryption key; `bundle` the macOS bundle id `open -b` opens a page in (Connect your
@@ -40,7 +42,10 @@ const CHROMIUM = [
   { id: 'dia', name: 'Dia', dir: 'Dia/User Data', keychain: 'Dia Safe Storage' }, // verify
 ];
 const FIREFOX = { id: 'firefox', name: 'Firefox', dir: 'Firefox', bundle: 'org.mozilla.firefox' };
-const BY_ID = new Map([...CHROMIUM.map((b) => [b.id, { ...b, family: 'chromium' }]), [FIREFOX.id, { ...FIREFOX, family: 'firefox' }]]);
+// Safari (2026-10-16, C1): its own file format and no Keychain key (./safari-cookies.cjs), behind Full Disk Access instead.
+// It has no folder under Application Support; its files are found from the home folder.
+const SAFARI = { id: 'safari', name: 'Safari', bundle: 'com.apple.Safari' };
+const BY_ID = new Map([...CHROMIUM.map((b) => [b.id, { ...b, family: 'chromium' }]), [FIREFOX.id, { ...FIREFOX, family: 'firefox' }], [SAFARI.id, { ...SAFARI, family: 'safari' }]]);
 
 /** The macOS bundle id of a browser the importer knows, or null (none confirmed, or not one it knows). */
 const bundleOf = (id) => (BY_ID.get(id) && BY_ID.get(id).bundle) || null;
@@ -364,6 +369,26 @@ function normalizeFirefox({ rows }, { want = null, now = nowSeconds() } = {}) {
   return { cookies, skipped: 0 };
 }
 
+/**
+ * Safari's parsed cookies (./safari-cookies.cjs parseBinaryCookies) -> cookies for cookies.set. Values are in the clear; a
+ * record that didn't parse was counted there. Safari writes only persistent cookies to disk, so each keeps its expiry; no
+ * SameSite is kept, so 'unspecified'. `want`, `now` as above.
+ */
+function normalizeSafari({ cookies: rows, skipped = 0 }, { want = null, now = nowSeconds() } = {}) {
+  const cookies = rows.filter((row) => (!want || want.has(registrableDomain(row.host))) && safari.safariKept(row, now)).map((row) => ({
+    host: row.host,
+    name: row.name,
+    value: row.value,
+    path: row.path,
+    secure: row.secure,
+    httpOnly: row.httpOnly,
+    sameSite: 'unspecified',
+    persistent: row.expires > 0,
+    expires: row.expires,
+  }));
+  return { cookies, skipped };
+}
+
 /* ------------------------------------------------------------------------------------------- sign-in checks (CK-14) */
 
 // Each site a person is likely to import, with a page that needs a sign-in: asked for over the Stage's session without
@@ -372,17 +397,31 @@ function normalizeFirefox({ rows }, { want = null, now = nowSeconds() } = {}) {
 // The request is Electron's net.request, not net.fetch (2026-10-06, tried against Electron 44.4.1): net.fetch with
 // redirect:'manual' throws "Redirect was cancelled" instead of returning the 3xx, and with redirects followed its Response
 // has no url, so neither says where the page was sent. net.request's 'redirect' event gives the status and the target. A
-// "Redirect was cancelled" error that comes back anyway is a redirect to somewhere unknown, and counts as signed out.
+// "Redirect was cancelled" error that comes back anyway is a redirect to somewhere unknown: not confirmed either way
+// (2026-10-16; it counted as signed out before the one rule below).
 //
 // GitHub has the signed-out tests the Stage itself uses (src/shared/github.cjs, src/main/browser/views.cjs): the Stage
 // holds none of GITHUB_SESSION_COOKIES (nothing to be signed in with, so the page is not even asked for), or the page was
 // sent to GitHub's /login (endedGithubSession). A GitHub redirect anywhere else (a device check, say) is not one GitHub
-// means as signed out, so it comes back null: not confirmed either way.
+// means as signed out, so it comes back null: not confirmed either way. Every other check is read the same way (below).
 //
 // Google's is Drive's own page (2026-10-16, tried against Electron 44.4.1): myaccount.google.com answered every net.request,
 // signed in or out, with a 429 "unusual traffic" page, so a live sign-in read as signed out and was dropped (curl got a 302
 // to /intro, so it was the client, not the network). Drive's page answers both ways in one request: 200 signed in, a 302
 // to accounts.google.com/ServiceLogin signed out. A redirect anywhere else (a bot check, say) is not confirmed either way.
+//
+// One verdict rule for every check (2026-10-16, C2: "Please ensure the changes propogate to Zotero, Overleaf, and all of
+// the other API sign in methods we use"): a 2xx is signed in; a redirect to that site's own login page, or a 401, is signed
+// out; anything else (403, 429, 5xx, a redirect elsewhere or to nowhere known, a timeout, a network error) is null, not
+// confirmed either way, and the caller keeps the cookies. Each check names its login page (`signedOut`): what the site
+// itself answered signed out, asked from net.request over an empty session on 2026-10-16 (with Electron's user agent and
+// the Stage's alike): Drive 302 → accounts.google.com/ServiceLogin; GitHub 302 → github.com/login; Overleaf 302 →
+// www.overleaf.com/login; Zotero /settings/ 303 → www.zotero.org/user/login (its /settings/keys answers a bare 403, so it
+// is not the page); Evernote /client/web 302 → www.evernote.com/Login.action. Signed in, Drive answered 200 (real cookies,
+// the same day); the others' signed-in answers were not tried here (a Chromium profile's cookies need macOS's Keychain),
+// and whatever they are, an answer other than a 2xx reads as null, never as signed out. ChatGPT (backend-api/me: 401, it
+// wants a bearer token, not cookies), Claude (api/organizations: a bare 403), Notion, Perplexity, Grok and Linear (200
+// signed out) have no page that tells, so their sign-ins are held on their cookies alone.
 const GOOGLE_LOGIN_PATH = /^\/(?:ServiceLogin|signin|v\d+\/signin|AccountChooser)(?:[/?]|$)/i;
 
 /** A Google page redirected to Google's own sign-in page: Google no longer takes the sign-in the browser holds. */
@@ -393,14 +432,25 @@ function endedGoogleSession(_from, to) {
   } catch { return false; }
 }
 
+/** A login page on `hosts` whose path matches `pattern`, as a check's `signedOut(from, to)` (a relative `to` read from `from`). */
+const loginAt = (hosts, pattern) => (from, to) => {
+  try {
+    const login = new URL(to, from);
+    return login.protocol === 'https:' && hosts.includes(login.hostname) && pattern.test(login.pathname);
+  } catch { return false; }
+};
+
 const SIGN_IN_CHECKS = [
   { site: 'GitHub', domain: 'github.com', url: 'https://github.com/settings/profile', sessionCookies: GITHUB_SESSION_COOKIES, signedOut: endedGithubSession },
   { site: 'Google', domain: 'google.com', url: 'https://drive.google.com/drive/u/0/', signedOut: endedGoogleSession },
-  { site: 'Overleaf', domain: 'overleaf.com', url: 'https://www.overleaf.com/project' },
-  { site: 'Zotero', domain: 'zotero.org', url: 'https://www.zotero.org/settings/' },
+  { site: 'Overleaf', domain: 'overleaf.com', url: 'https://www.overleaf.com/project', signedOut: loginAt(['www.overleaf.com', 'overleaf.com'], /^\/login\/?$/) },
+  { site: 'Zotero', domain: 'zotero.org', url: 'https://www.zotero.org/settings/', signedOut: loginAt(['www.zotero.org', 'zotero.org'], /^\/user\/login\/?$/) },
+  // An "Other" tool's check (copyFor, 2026-10-16): Evernote is reached through the browser while its MCP is in beta.
+  { site: 'Evernote', domain: 'evernote.com', url: 'https://www.evernote.com/client/web', signedOut: loginAt(['www.evernote.com', 'evernote.com'], /^\/Login\.action$/i) },
 ];
 const CHECK_BY_DOMAIN = new Map(SIGN_IN_CHECKS.map((check) => [check.domain, check]));
-const DEFAULT_DOMAINS = SIGN_IN_CHECKS.map((check) => check.domain);
+// The Stage's import picker pre-ticks the sites a person is likely to import (Evernote's check is Connect's only).
+const DEFAULT_DOMAINS = SIGN_IN_CHECKS.filter((check) => check.domain !== 'evernote.com').map((check) => check.domain);
 // A check that has not answered by then is null ("not confirmed"): the picker never waits on "Importing…" for longer.
 const CHECK_TIMEOUT_MS = 10_000;
 const REDIRECT_CANCELLED = /Redirect was cancelled/i;
@@ -416,21 +466,24 @@ function wasRedirect(response) {
 const lacksSession = (check, held) => !!(check.sessionCookies && held && !check.sessionCookies.some((name) => held.has(name)));
 
 /**
- * The signed-in verdict for one site: true signed in (a 2xx), false signed out, null when the check could not run or is
- * not confirmed. `response` is probe()'s { status, location }; `held` the names of the cookies the Stage holds for the
- * check page (a Set), or null when unknown.
+ * The signed-in verdict for one site, by the rule above: true signed in (a 2xx), false signed out (sent to its own login
+ * page, a 401, or none of its session cookies held), null not confirmed either way (a site declining to answer, rate-limited,
+ * bot-checked or down, says nothing about the sign-in). `response` is probe()'s { status, location }; `held` the names of
+ * the cookies the Stage holds for the check page (a Set), or null when unknown.
  */
 function checkResult(check, response, held = null) {
   if (lacksSession(check, held)) return false;
   if (!response) return null;
-  if (wasRedirect(response)) {
-    if (check.signedOut && response.location) return check.signedOut(check.url, response.location) ? false : null;
-    return false;
-  }
+  if (wasRedirect(response)) return !!response.location && typeof check.signedOut === 'function' && check.signedOut(check.url, response.location) ? false : null;
   const status = Number(response.status) || 0;
-  // A site declining to answer (rate-limited, bot-checked, down) says nothing about the sign-in: not confirmed, never "signed out".
-  if (status === 429 || status >= 500) return null;
-  return status >= 200 && status < 300;
+  if (status === 401) return false;
+  return status >= 200 && status < 300 ? true : null;
+}
+
+/** A redirect target as the trace keeps it: its origin and path, the query (a continue URL, an account hint) left off. */
+function shownLocation(location, from) {
+  if (!location) return '';
+  try { const to = new URL(location, from); return `${to.origin}${to.pathname}`; } catch { return ''; }
 }
 
 /**
@@ -551,6 +604,7 @@ function firefoxNames(root) {
 }
 
 function profilesFor(browser, supportDir) {
+  if (!browser.dir) return []; // Safari: found from the home folder, behind Full Disk Access (createCookieImport)
   const root = path.join(supportDir, browser.dir);
   if (!existsDir(root)) return [];
   return browser.family === 'firefox' ? firefoxProfiles(root) : chromiumProfiles(root);
@@ -574,18 +628,51 @@ function profilesFor(browser, supportDir) {
  *    folder is there is listed.
  *  - `settled(bundleId)`: the same, once macOS has answered (at most ~2 s; ./installed-apps.cjs `settled`) → Promise<boolean>.
  *    Waited for before macOS is asked for a browser's key (`unlock`, `import`) or a page is opened in it (`ready`).
+ *  - `homeDir`: the home folder Safari's files are under (C1); by default the one `supportDir` is in.
+ *  - `fullDiskAccess()`: whether this process may read what macOS guards (../onboarding/disk-access.cjs canReadHere, by
+ *    default). Safari's files are never touched without it, so a read can't bring up macOS's "access data from other apps"
+ *    prompt: Safari is listed with one locked profile, and reading it answers `needs: 'disk-access'`.
  */
-function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), getSession, request = null, keychain, now = () => new Date(), checkTimeoutMs = CHECK_TIMEOUT_MS, installed = null, settled = null }) {
+function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), getSession, request = null, keychain, now = () => new Date(), checkTimeoutMs = CHECK_TIMEOUT_MS, installed = null, settled = null, homeDir = path.resolve(supportDir || '.', '..', '..'), fullDiskAccess = () => canReadHere(homeDir) === true }) {
   const importsFile = path.join(userDataDir || '.', 'browser-imports.json');
   const unixNow = () => Math.floor(now().getTime() / 1000);
+
+  const granted = () => { try { return !!fullDiskAccess(); } catch { return false; } };
+  const LOCKED_SAFARI = Object.freeze([Object.freeze({ id: 'Default', name: 'Safari', cookieFile: '', locked: true })]);
+  /** Safari's profiles: read only with Full Disk Access; without it (or refused anyway), one locked profile. */
+  function safariHere() {
+    if (!granted()) return LOCKED_SAFARI;
+    try {
+      const sqlite = loadSqlite();
+      return safari.safariProfiles(homeDir, { openDb: sqlite ? (file) => new sqlite.DatabaseSync(file, { readOnly: true }) : null });
+    } catch (error) {
+      if (error && error.needsDiskAccess) return LOCKED_SAFARI;
+      return [];
+    }
+  }
+  const profilesOf = (browser) => (browser.family === 'safari' ? safariHere() : profilesFor(browser, supportDir));
+  const needsDiskAccess = () => Object.assign(new Error('Engelbart needs Full Disk Access to read Safari\'s sign-ins.'), { needsDiskAccess: true, needs: 'disk-access', browser: 'Safari' });
+
+  /**
+   * Whether a browser's cookies can be read now → true, or false for Safari without Full Disk Access (C1). Any other
+   * browser: true (its Keychain, if any, is asked when it is read).
+   */
+  function canRead(browserId) {
+    const browser = BY_ID.get(browserId);
+    if (!browser) return false;
+    if (browser.family !== 'safari') return true;
+    return !safariHere().some((profile) => profile.locked);
+  }
 
   /** The installed browsers and their profiles, domains and values untouched (CK-03). */
   function sources() {
     const out = [];
     for (const browser of BY_ID.values()) {
       if (!has(browser)) continue;
-      const profiles = profilesFor(browser, supportDir);
-      if (profiles.length) out.push({ id: browser.id, name: browser.name, family: browser.family, bundle: browser.bundle || null, profiles: profiles.map((p) => ({ id: p.id, name: p.name, ...(p.email ? { email: p.email } : {}) })) });
+      const profiles = profilesOf(browser);
+      // Locked Safari is listed only when macOS says Safari is there (`installed`): with no install check, only its files say so.
+      if (browser.family === 'safari' && typeof installed !== 'function' && profiles.some((p) => p.locked)) continue;
+      if (profiles.length) out.push({ id: browser.id, name: browser.name, family: browser.family, bundle: browser.bundle || null, profiles: profiles.map((p) => ({ id: p.id, name: p.name, ...(p.email ? { email: p.email } : {}), ...(p.locked ? { locked: true } : {}) })) });
     }
     return out;
   }
@@ -656,26 +743,47 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     const browser = BY_ID.get(browserId);
     if (!browser) throw new Error('That browser is not one Engelbart can import from.');
     if (!has(browser)) throw new Error(`${browser.name} is not installed.`);
-    const profile = profilesFor(browser, supportDir).find((p) => p.id === profileId);
+    const profile = profilesOf(browser).find((p) => p.id === profileId);
     if (!profile) throw new Error('That browser profile is no longer there.');
     return { browser, profile };
+  }
+
+  /** A Safari profile's file parsed; locked (no Full Disk Access) or refused by macOS: `needs: 'disk-access'` thrown. */
+  function readSafari(profile) {
+    if (profile.locked || !profile.cookieFile || !granted()) throw needsDiskAccess();
+    try { return safari.readSafariFile(profile.cookieFile); } catch (error) { if (error && error.needsDiskAccess) throw needsDiskAccess(); throw error; }
   }
 
   /** The ticked domains' cookies for a profile, read from a private copy and (Chromium) decrypted. Values stay in main. */
   function readProfile(browser, profile, key, want) {
     const options = { want, now: unixNow() };
+    if (browser.family === 'safari') return normalizeSafari(readSafari(profile), options);
     if (browser.family === 'firefox') return normalizeFirefox(withCopy(profile.cookieFile, tmpBase, readFirefoxDb), options);
     return normalizeChromium(withCopy(profile.cookieFile, tmpBase, readChromiumDb), key, options);
   }
 
+  /** A profile's rows for listing, with no value decrypted → { rows: [{ host, name, stamp, … }], kept(row, now) }. */
+  function listed(browser, profile) {
+    if (browser.family === 'safari') {
+      return { rows: readSafari(profile).cookies.map((cookie) => ({ ...cookie, value: undefined, stamp: cookie.created })), kept: safari.safariKept };
+    }
+    const firefox = browser.family === 'firefox';
+    const read = firefox ? withCopy(profile.cookieFile, tmpBase, readFirefoxDb) : withCopy(profile.cookieFile, tmpBase, readChromiumDb);
+    return { rows: read.rows, kept: firefox ? firefoxKept : chromiumKept };
+  }
+
   /** The domains a profile has cookies for, with counts (CK-07). No Keychain: listing never decrypts. Expired and
-   *  partitioned rows are not counted, as they will not be imported (chromiumKept, firefoxKept). */
+   *  partitioned rows are not counted, as they will not be imported (chromiumKept, firefoxKept). Safari without Full Disk
+   *  Access: no domains, and `needs: 'disk-access'`. */
   function domains(browserId, profileId) {
     const { browser, profile } = resolveProfile(browserId, profileId);
     const counts = new Map();
-    const firefox = browser.family === 'firefox';
-    const read = firefox ? withCopy(profile.cookieFile, tmpBase, readFirefoxDb) : withCopy(profile.cookieFile, tmpBase, readChromiumDb);
-    const kept = firefox ? firefoxKept : chromiumKept;
+    let read;
+    try { read = listed(browser, profile); } catch (error) {
+      if (error && error.needsDiskAccess) return { browser: browser.id, profile: profile.id, defaults: DEFAULT_DOMAINS, domains: [], needs: 'disk-access' };
+      throw error;
+    }
+    const { kept } = read;
     const at = unixNow();
     for (const row of read.rows) {
       if (!kept(row, at)) continue;
@@ -691,14 +799,14 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
    * The names of the live cookies a profile holds for `wanted` registrable domains → [{ domain, name, stamp }]. No Keychain
    * and no values, as domains(): enough to tell whether a site's sign-in cookie is there before anything is decrypted or
    * written (Connect your library's sign-in in the default browser, ../connect/web-signin.cjs). `stamp` is when the cookie
-   * was last set, so a copy found signed out is not copied again until the browser signs in anew (2026-10-12).
+   * was last set, so a copy found signed out is not copied again until the browser signs in anew (2026-10-12; Safari keeps
+   * no such time, so its creation time). Safari without Full Disk Access: thrown, with `needs: 'disk-access'`.
    */
   function cookieNames(browserId, profileId, wanted) {
     const { browser, profile } = resolveProfile(browserId, profileId);
     const want = new Set((Array.isArray(wanted) ? wanted : []).map((d) => String(d).toLowerCase()));
-    const firefox = browser.family === 'firefox';
-    const read = firefox ? withCopy(profile.cookieFile, tmpBase, readFirefoxDb) : withCopy(profile.cookieFile, tmpBase, readChromiumDb);
-    const kept = firefox ? firefoxKept : chromiumKept;
+    const read = listed(browser, profile);
+    const { kept } = read;
     const at = unixNow();
     const out = [];
     for (const row of read.rows) {
@@ -714,8 +822,11 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     const checks = importedDomains.map((domain) => CHECK_BY_DOMAIN.get(domain)).filter(Boolean);
     return Promise.all(checks.map(async (check) => {
       const held = check.sessionCookies ? await heldNames(session.cookies, check.url) : null;
-      const response = lacksSession(check, held) || !request ? null : await probe(request, session, check.url, checkTimeoutMs);
-      return { site: check.site, domain: check.domain, url: check.url, signedIn: checkResult(check, response, held) };
+      const skippedForNoSession = lacksSession(check, held);
+      const response = skippedForNoSession || !request ? null : await probe(request, session, check.url, checkTimeoutMs);
+      // What the site answered, for the trace (C2): the status (0 when nothing came back) and where a redirect went.
+      const answered = skippedForNoSession ? { status: 0, location: '', reason: 'no-session-cookie' } : response ? { status: Number(response.status) || 0, location: shownLocation(response.location, check.url) } : { status: 0, location: '', reason: request ? 'no-answer' : 'no-request' };
+      return { site: check.site, domain: check.domain, url: check.url, signedIn: checkResult(check, response, held), ...answered };
     }));
   }
 
@@ -725,16 +836,26 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
    * sign-in over (2026-10-12): a cookie that is there can still belong to a sign-in Google has ended.
    */
   async function check(domain) {
+    const result = await checkDetail(domain);
+    return result ? result.signedIn : null;
+  }
+
+  /**
+   * check(domain) with what the site answered (C2, every check in the trace) → { site, domain, url, signedIn, status,
+   * location, reason? } | null (no check page for it).
+   */
+  async function checkDetail(domain) {
     const known = CHECK_BY_DOMAIN.get(String(domain || '').toLowerCase());
     if (!known) return null;
     const [result] = await runChecks(getSession(), [known.domain]);
-    return result ? result.signedIn : null;
+    return result || null;
   }
 
   /**
    * Import the ticked domains' cookies into the Stage (CK-08–CK-13). Returns counts only — { imported, skipped, sessionOnly,
    * checks } — with no cookie value anywhere in it. A Keychain denial or miss (Chromium) throws before anything is written
-   * (CK-05). No domains is nothing to import (2026-10-06): no Keychain prompt, no read, no write and no record.
+   * (CK-05). No domains is nothing to import (2026-10-06): no Keychain prompt, no read, no write and no record. Safari
+   * without Full Disk Access (C1): nothing written, nothing recorded, and `needs: 'disk-access'` (never an empty copy).
    */
   async function run({ browser: browserId, profile: profileId, domains: wanted, quiet = false }) {
     const { browser, profile } = resolveProfile(browserId, profileId);
@@ -743,7 +864,11 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
 
     const key = browser.family === 'chromium' ? await keyOf(browser) : null;
 
-    const read = readProfile(browser, profile, key, want);
+    let read;
+    try { read = readProfile(browser, profile, key, want); } catch (error) {
+      if (error && error.needsDiskAccess) return { browser: browser.id, profile: profile.name, imported: 0, skipped: 0, sessionOnly: 0, checks: [], needs: 'disk-access' };
+      throw error;
+    }
     const cookies = read.cookies.filter((cookie) => !boundToBrowser(cookie));
     const skipped = read.skipped + (read.cookies.length - cookies.length);
     const session = getSession();
@@ -780,7 +905,7 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     return { browser: browser.id, profile: profile.name, imported, skipped, sessionOnly, checks };
   }
 
-  return { sources, installedChromium, domains, cookieNames, check, import: run, unlock, ready };
+  return { sources, installedChromium, domains, cookieNames, check, checkDetail, canRead, import: run, unlock, ready };
 }
 
 // `security` exits with the low byte of the Keychain's OSStatus (2026-10-06): 44 is errSecItemNotFound (-25300), no key of
@@ -830,6 +955,7 @@ module.exports = {
   boundToBrowser,
   CHROMIUM,
   FIREFOX,
+  SAFARI,
   bundleOf,
   DEFAULT_DOMAINS,
   SIGN_IN_CHECKS,
@@ -845,6 +971,8 @@ module.exports = {
   readFirefoxDb,
   normalizeChromium,
   normalizeFirefox,
+  normalizeSafari,
+  shownLocation,
   withCopy,
   checkResult,
   probe,
