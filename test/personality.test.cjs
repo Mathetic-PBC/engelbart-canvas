@@ -54,7 +54,7 @@ test('Chat, Brainstorm, Discover, Create and Build open with it, then their own 
   assert.match(CREATE_SYSTEM_PROMPT, /# Your role: Create\n\nYou make a new standalone artifact the person asked for\./);
   assert.match(BUILD_SYSTEM_PROMPT, /# Your role: Build\n\nYou implement the change the person handed you and verify it\./);
   // How the shared voice shows in each role: one line, no more.
-  assert.match(BRAINSTORM_SYSTEM_PROMPT, /Respond in ordinary conversational prose, with the shared personality and the amount of detail the moment needs\./);
+  assert.match(BRAINSTORM_SYSTEM_PROMPT, /Apart from that opening card, respond in ordinary conversational prose, with the shared personality and the amount of detail the moment needs\./);
   assert.match(DISCOVER_SYSTEM_PROMPT, /the voice shows as selective taste in what you put in front of them, not as chatter in the guide\./);
   assert.match(CREATE_SYSTEM_PROMPT, /The voice belongs only in what you say to the person\. The artifact itself follows the style they asked for\./);
   assert.match(BUILD_SYSTEM_PROMPT, /the voice shows as direct, discerning reporting[^\n]*with no extra conversational text\./);

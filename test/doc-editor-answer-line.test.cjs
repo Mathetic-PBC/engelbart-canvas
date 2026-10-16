@@ -54,8 +54,6 @@ async function drawn(editor, i, active) {
 // The mark's column (MATH-69): the drawn mark's and the edited one's.
 const MARK_DRAWN = 'flex:none;min-width:1.75em;padding-right:0.25em;box-sizing:border-box';
 const MARK_EDITED = 'display:inline-block;min-width:1.75em;margin-left:-1.75em;box-sizing:border-box;white-space:pre';
-// An @bart answer's bullet (2026-10-15, David's reference): its text 14px in, the dot in that column; edited, its `- ` there.
-const DOT_EDITED = 'display:inline-block;min-width:14px;margin-left:-14px;box-sizing:border-box;white-space:pre;';
 
 const at = (editor, start) => editor.lines().findIndex((line) => line.includes(start));
 
@@ -71,9 +69,9 @@ test('a heading in an answer keeps its size while the caret is on it, its `## ` 
 test('a bullet in an answer keeps its place while the caret is on it, its `- ` faint where the dot stood', async () => {
   const editor = mounted(LINES), i = at(editor, '- The highlight');
   const { html, p, spans } = await drawn(editor, i, true);
-  assert.deepEqual(spans[0], { src: '- ', style: `color:#b5b5b5;${DOT_EDITED}` });
+  assert.deepEqual(spans[0], { src: '- ', style: `color:#b5b5b5;${MARK_EDITED};` });
   assert.equal(spans.map((s) => s.src).join(''), p.text);
-  assert.match(html, /padding-left:calc\(0px \+ 14px\);/, 'its depth\'s indent, and the bullet\'s column');
+  assert.match(html, /padding-left:calc\(0px \+ 1\.75em\);/, 'its depth\'s indent, and the mark\'s column');
   assert.match(html, /background:#f5f5f5/, 'the light focus tint');
 });
 
@@ -91,20 +89,18 @@ const LIST = ['@bart lists?', ...replyLines('- A bullet that is long enough to w
 
 /** Where a line's text starts, read from its style: the indent before the mark's column, and the column. */
 function startsAt(html, active) {
-  if (active) { const m = html.match(/padding-left:calc\((\d+)px \+ ([\d.]+(?:em|px))\);/); return m && { depth: Number(m[1]), col: m[2] }; }
-  const m = html.match(/<span style="display:flex;padding-left:(\d+)px"><span contenteditable="false" (?:aria-hidden="true" )?style="flex:none;min-width:([\d.]+(?:em|px));/); return m && { depth: Number(m[1]), col: m[2] };
+  if (active) { const m = html.match(/padding-left:calc\((\d+)px \+ ([\d.]+em)\);/); return m && { depth: Number(m[1]), col: m[2] }; }
+  const m = html.match(/<span style="display:flex;padding-left:(\d+)px"><span contenteditable="false" style="flex:none;min-width:([\d.]+em);/); return m && { depth: Number(m[1]), col: m[2] };
 }
 
 test('an answer\'s bullet, number or todo puts its text at the same place drawn and edited', async () => {
   const editor = mounted(LIST);
-  // A bullet's column is 14px, its dot drawn in it (2026-10-15); a number's or a todo's the 1.75em one.
-  for (const [start, depth, col] of [['- A bullet', 0, '14px'], ['  - A nested', 18, '14px'], ['10. The tenth', 0, '1.75em'], ['- [ ] A todo', 0, '1.75em']]) {
+  for (const [start, depth] of [['- A bullet', 0], ['  - A nested', 18], ['10. The tenth', 0], ['- [ ] A todo', 0]]) {
     const i = at(editor, start), shown = await drawn(editor, i, false), edited = await drawn(editor, i, true);
-    assert.deepEqual(startsAt(shown.html, false), { depth, col }, `${start}: drawn`);
-    assert.deepEqual(startsAt(edited.html, true), { depth, col }, `${start}: edited`);
-    if (col === '14px') assert.match(shown.html, /data-chat-dot="1" style="position:absolute;left:0;top:calc\(0\.775em - 2px\);width:4px;height:4px;border-radius:50%;background:#b3b3b3"/, `${start}: the dot, 12px left of the text`);
-    else assert.ok(shown.html.includes(`style="${MARK_DRAWN};color:#8f8f8f;user-select:none"`), `${start}: the drawn mark in its column`);
-    assert.deepEqual(edited.spans[0].style, col === '14px' ? `color:#b5b5b5;${DOT_EDITED}` : `color:#b5b5b5;${MARK_EDITED};`, `${start}: the edited mark in the same column`);
+    assert.deepEqual(startsAt(shown.html, false), { depth, col: '1.75em' }, `${start}: drawn`);
+    assert.deepEqual(startsAt(edited.html, true), { depth, col: '1.75em' }, `${start}: edited`);
+    assert.ok(shown.html.includes(`style="${MARK_DRAWN};color:#8f8f8f;user-select:none"`), `${start}: the drawn mark in its column`);
+    assert.deepEqual(edited.spans[0].style, `color:#b5b5b5;${MARK_EDITED};`, `${start}: the edited mark in the same column`);
     assert.doesNotMatch(shown.html, /gap:10px/, 'no gap beside the column: the column is the gap');
   }
   assert.equal((await drawn(editor, at(editor, '10. The tenth'), false)).html.match(/user-select:none">([^<]*)</)[1], '10.', 'the number drawn as before');
@@ -113,7 +109,7 @@ test('an answer\'s bullet, number or todo puts its text at the same place drawn 
 test('a wrapped bullet being edited hangs under its text: the line indented by the column, its mark pulled back into it', async () => {
   const editor = mounted(LIST), i = at(editor, '  - A nested');
   const { html, spans } = await drawn(editor, i, true);
-  const pad = html.match(/padding-left:calc\(18px \+ (14px)\);/), pull = spans[0].style.match(/margin-left:-(14px)/), wide = spans[0].style.match(/min-width:(14px)/);
+  const pad = html.match(/padding-left:calc\(18px \+ (1\.75em)\);/), pull = spans[0].style.match(/margin-left:-(1\.75em)/), wide = spans[0].style.match(/min-width:(1\.75em)/);
   assert.ok(pad && pull && wide, 'the line\'s padding, the mark\'s pull and its width');
   assert.equal(pull[1], pad[1], 'the mark is pulled back by the column the line is indented by');
   assert.equal(wide[1], pad[1], 'and fills it, so the first line\'s text starts where the wrapped lines do');

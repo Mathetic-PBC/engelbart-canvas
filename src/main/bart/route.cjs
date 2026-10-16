@@ -14,7 +14,8 @@
 //
 // What it is sent: the line, the agent the conversation is with now (`current`, for a follow-up), its section (from the nearest heading above to the line, the last 4,000 characters, agent
 // replies left out as for @brainstorm, ./strip.cjs), the last five threads above (agent, the first 80 characters of the
-// question, how many lines up), and whether the nearest answer above holds a fenced block. Never the library,
+// question, how many lines up), and whether the nearest answer above holds a fenced block. The line goes without its
+// model and effort flags (2026-10-16): they pick how the agent runs, not which agent. Never the library,
 // context_json or a mentioned file.
 //
 // Every pick is a run in the Agent map's log (./runlog.cjs) under agent 'router', a rule's pick too (by: 'rule'); the run
@@ -31,6 +32,7 @@ const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../c
 const { TOOL_OF } = require('../tools/requirements.cjs');
 const { stripAgentReplies } = require('./strip.cjs');
 const { ROUTE_SYSTEM_PROMPT } = require('./route-system-prompt.cjs');
+const { readFlags } = require('./question.cjs');
 
 const ROUTE_TIMEOUT_MS = 20_000;
 const SECTION_CHARS = 4000;
@@ -196,7 +198,9 @@ function createRouter({ readModels, environment = process.env, runDirectory = pa
     finally { try { fs.unlinkSync(`${stem}.input.txt`); } catch { /* already gone */ } }
   }
 
-  return routerOf({ log, now, pick: async (input) => {
+  // The line as the model reads it: its model and effort flags (`--sonnet --medium`) left out, once the models file is read.
+  const plain = (text) => { const models = readModels ? readModels() : null; return models && models.providers ? readFlags(text, models).rest : text; };
+  return routerOf({ log, now, plain, pick: async (input) => {
     const step = routeModel(readModels ? readModels() : null);
     if (!step) return { parsed: null, step: null, raw: '', error: 'no model to route on' };
     try {
@@ -230,7 +234,7 @@ function createFakeRouter({ runLog = null, now = Date.now } = {}) {
 }
 
 /** What both routers share: the rule's or the model's pick, logged. `pick(input, text, current)` → { parsed, step, raw, error? }. */
-function routerOf({ log, now, pick }) {
+function routerOf({ log, now, pick, plain = (text) => text }) {
   async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, specTitle = '', current = null, rule = null, place = null } = {}) {
     const id = `route-${randomUUID()}`, started = now();
     if (rule && RULE_PICKS.has(rule.agent)) {
@@ -239,7 +243,7 @@ function routerOf({ log, now, pick }) {
       log((runs) => { runs.amend(id, { pick: out.agent, sure: 1 }); runs.finish(id, { status: 'done', written: [`@${out.agent}`], ms: out.ms }); });
       return out;
     }
-    const input = routeInput({ text, section, workspaceName, threads, specAbove, specTitle, current });
+    const input = routeInput({ text: plain(text), section, workspaceName, threads, specAbove, specTitle, current });
     log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, current, input, by: 'model', place })));
     const { parsed, step, raw, error } = await pick(input, text, current);
     if (step) log((runs) => { runs.step(id, { model: step.id, name: step.name, effort: step.effort, input }); runs.output(id, { raw }); });

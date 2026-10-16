@@ -113,8 +113,8 @@ test('an answered @discover choice can be picked again (2026-10-15, David): aske
   const after = ['@discover picked "Retries"', ...answer(FREE), '@discover because loops', ...answer(FREE)];
   const m = mounted(['@discover', ...answer(FOCUS), ...after, '']);
   const card = m.html(0);
-  assert.match(card, /<button type="button" class="dv-opt" disabled role="radio" aria-checked="true">[\s\S]*?>Retries</, 'the pick stays checked, not a button');
-  assert.match(card, /<button type="button" class="dv-opt" data-act="cardrepick" data-turn="0" data-opt="1" title="[^"]+" role="radio" aria-checked="false">[\s\S]*?>Timeouts</, 'the other can be picked');
+  assert.match(card, /<button type="button" class="dv-opt" disabled role="checkbox" aria-checked="true">[\s\S]*?>Retries</, 'the pick stays checked, not a button');
+  assert.match(card, /<button type="button" class="dv-opt" data-act="cardrepick" data-turn="0" data-opt="1" title="[^"]+" role="checkbox" aria-checked="false">[\s\S]*?>Timeouts</, 'the other can be picked');
   const press = (act, opt) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset: { act, turn: '0', ...(opt == null ? {} : { opt: String(opt) }) } } : null) }, preventDefault() {} });
   const repick = (opt) => press('cardrepick', opt);
   const before = m.lines().join('\n');
@@ -180,7 +180,7 @@ test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap
   assert.deepEqual(model.threads(recap.lines()).map((t) => model.agentOf(model.parseLine(recap.lines()[t.from]))), ['brainstorm', 'discover']);
 });
 
-test('on a live @brainstorm versions card the field under it reads "Or rewrite it yourself…", and the rest is as on any card; elsewhere it reads as before (round 7)', () => {
+test('on a live @brainstorm versions card the field in it reads "Or rewrite it yourself…", and the rest is as on any card; elsewhere it reads as before (round 7; in the card, 2026-10-16)', () => {
   const VERSIONS = { say: '', card: 'questions', questions: { items: [{ id: 'versions', type: 'mcq', title: 'Which one is your question?', options: [{ label: 'Why do retries loop?', why: 'as you wrote it' }, { label: 'Why specifically do retries loop?', why: 'narrower' }] }] }, lookFor: LOOK, ready: false };
   const m = mounted(['@brainstorm', ...answer(VERSIONS), '']);
   const shown = m.editor.editorHtml();
@@ -192,7 +192,7 @@ test('on a live @brainstorm versions card the field under it reads "Or rewrite i
   m.editor.followText.set(0, '  Why do retries   loop at all? ');
   m.editor.sendFollow(0);
   assert.equal(m.asks[0].text, 'Why do retries loop at all?');
-  assert.match(mounted(['@brainstorm', ...answer(FOCUS), '']).editor.editorHtml(), /placeholder="Pick one, or say it in your own words…"/, '@brainstorm: as on any card');
+  assert.match(mounted(['@brainstorm', ...answer(FOCUS), '']).editor.editorHtml(), /placeholder="Or say it in your own words…"/, '@brainstorm: its field in the card, as @discover\'s (2026-10-16)');
   assert.match(mounted(['@discover', ...answer(VERSIONS), '']).editor.editorHtml(), /placeholder="Or say it in your own words…"/, '@discover: its field in the card (2026-10-14)');
   assert.match(editorModule.BRAINSTORM_ITEM.summary, /^Think something through out loud/, '2026-10-14: a conversation');
   assert.ok(!/dig into next|card/.test(editorModule.BRAINSTORM_ITEM.summary + editorModule.BRAINSTORM_ITEM.facts), 'no fixed ending, no cards');
@@ -249,14 +249,25 @@ test('a free card is answered by what is typed in the field under it, sent with 
   assert.equal(m.editor.followText.get(0), undefined, 'the field emptied');
 });
 
-test('a single choice answers with the row clicked, with what is typed as a note; a select-all ticks rows and Enter sends them; the answer line reads as said (2026-10-13)', async () => {
+test('a single choice is a row picked, then Submit, with what is typed as a note (2026-10-16: as @discover\'s); a select-all ticks rows and Enter sends them; the answer line reads as said (2026-10-13)', async () => {
   const opt = (m, q, n) => m.editor.editorClick({ target: { closest: () => ({ dataset: { act: 'cardopt', turn: String(q), opt: String(n) } }) }, preventDefault() {} });
   const one = mounted(['@brainstorm', ...answer(FOCUS), '']);
-  assert.match(one.html(0), /<button type="button" class="bs-row" data-act="cardopt" data-turn="0" data-opt="1" role="radio" aria-checked="false"><span aria-hidden="true" class="bs-mark">•<\/span><span class="bs-label">Timeouts<\/span><\/button>/, 'a list row to click');
-  assert.match(one.editor.editorHtml(), /placeholder="Pick one, or say it in your own words…"/);
+  one.editor.forceUpdate = () => {};
+  assert.match(one.html(0), /<button type="button" class="dv-opt" data-act="cardopt" data-turn="0" data-opt="1" role="checkbox" aria-checked="false"><span aria-hidden="true" class="dv-radio"><\/span><span style="flex:1;min-width:0"><span class="dv-label">Timeouts<\/span><\/span><\/button>/, 'a bordered row to pick');
+  assert.match(one.editor.editorHtml(), /data-agent="brainstorm" rows="1" spellcheck="false" autocomplete="off" placeholder="Or say it in your own words…"/, 'its own field, in the card');
   one.editor.followText.set(0, 'soon');
   opt(one, 0, 1);
-  assert.deepEqual([one.asks[0].agent, one.asks[0].text], ['brainstorm', 'picked "Timeouts"; note: soon']);
+  assert.deepEqual(one.asks, [], 'a pick waits for Submit');
+  assert.match(one.html(0), /data-opt="1" role="checkbox" aria-checked="true"/);
+  // Any number of rows (2026-10-16, David): another ticked too, one unticked, sent in the card's order.
+  opt(one, 0, 0);
+  assert.match(one.html(0), /data-opt="0" role="checkbox" aria-checked="true"/);
+  assert.match(one.html(0), /data-opt="1" role="checkbox" aria-checked="true"/, 'the first pick stays');
+  opt(one, 0, 0);
+  assert.match(one.html(0), /data-opt="0" role="checkbox" aria-checked="false"/, 'a second click unticks it');
+  opt(one, 0, 0);
+  one.editor.sendFollow(0);
+  assert.deepEqual([one.asks[0].agent, one.asks[0].text], ['brainstorm', 'picked "Retries", "Timeouts"; note: soon'], 'in the card\'s order');
 
   const MANY = { say: '', card: 'questions', questions: { items: [{ id: 'which', type: 'select_all', title: 'Which of these happen?', options: [{ label: 'Retries', why: 'you said so' }, { label: 'Timeouts' }, { label: 'Deadlocks' }] }] }, ready: false };
   const many = mounted(['@brainstorm', ...answer(MANY), '']);
@@ -276,7 +287,7 @@ test('a single choice answers with the row clicked, with what is typed as a note
   const done = mounted(['@brainstorm', ...answer(MANY), '@brainstorm picked "Retries", "Deadlocks"; note: mostly at night', 'bart> FAKE', 'bart> *3 s*', '']);
   const row = done.lines().indexOf('@brainstorm picked "Retries", "Deadlocks"; note: mostly at night');
   const line = await lineOf(done, row);
-  assert.ok(line.includes('<span class="t" style="flex:1;min-width:0"><span style="color:#0070f3;font-weight:500">@brainstorm</span> Retries, Deadlocks · mostly at night</span>'), 'their picks and note, after the agent the line names (2026-10-14)');
+  assert.ok(line.includes('<span class="t" style="flex:1;min-width:0"><span style="color:#0070f3;font-weight:500">@bart</span> Retries, Deadlocks · mostly at night</span>'), 'their picks and note, after @bart, whichever agent the line names (2026-10-16)');
   assert.match(line, /data-raw="@brainstorm picked &quot;Retries&quot;, &quot;Deadlocks&quot;; note: mostly at night"/, 'the line as main reads it');
   assert.match(done.html(0), /class="bs-row" disabled role="checkbox" aria-checked="true">/, 'still, ticked');
   const skipped = await lineOf(mounted(['@brainstorm', ...answer(FREE), '@brainstorm (skipped)', 'bart> x', '']), answer(FREE).length + 1);
@@ -408,13 +419,9 @@ test('Send to Discover is not drawn after @bart or @discover answers, under a re
   bart.editor.discoverText.set('t0', 'x');
   bart.editor.sendDiscover('t0');
   assert.deepEqual(bart.asks, [], 'a target that is not drawn sends nothing');
-  // The latest @bart answer's reply line is always there (2026-10-15, David's reference); an older one's is shut until Reply.
-  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, 'the latest answer\'s reply line');
-  const two = mounted(['@bart why?', 'bart> because', 'bart> *Sonnet · high · 3 s*', '', '@bart how?', 'bart> so', 'bart> *Sonnet · high · 3 s*', '']);
-  assert.equal((two.editor.editorHtml().match(/aria-label="Ask a follow-up"/g) || []).length, 1, 'the older answer\'s is shut until Reply');
-  assert.match(two.editor.editorHtml(), /data-foot="0"[^>]*>(?:(?!<\/div>)[\s\S])*data-act="reply" data-thread="0" aria-label="Reply"/, 'its Reply is in its icons at the bottom');
-  two.editor.replyOpen.add(0);
-  assert.equal((two.editor.editorHtml().match(/aria-label="Ask a follow-up"/g) || []).length, 2, 'the older answer\'s, once Reply opened it');
+  assert.ok(!bart.editor.editorHtml().includes('aria-label="Ask a follow-up"'), 'the follow-up field is shut until Reply (2026-10-13)');
+  bart.editor.replyOpen.add(0);
+  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, '@bart\'s follow-up field, once Reply opened it');
 });
 
 test('the @ menu no longer offers Orient: the editor, the rail model and the workspace list Bart, Chat, Brainstorm and Discover; the rail names no Orient (M-01)', async () => {

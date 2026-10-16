@@ -114,6 +114,20 @@ test('a line typed under a --deep exchange starts its own conversation, so it sh
   assert.equal(await mounted(['@discover agents --quick', 'bart> ## Start here', '@discover more --deep']).chip(2), 'Deep', 'the line\'s own wins');
 });
 
+test('a question sent draws no model or effort flag; the line keeps them, and one not yet sent still shows them (2026-10-16)', async () => {
+  const m = mounted(['@bart --sonnet --medium i don\'t know what i want', 'bart> Start with what you keep coming back to.', 'bart> *Chat · Sonnet · medium · 3 s*', '', '@bart --opus why']);
+  const sent = await m.lineOf(0);
+  assert.doesNotMatch(sent.replace(/data-raw="[^"]*"/, ''), /--sonnet|--medium/, 'the flags are not drawn');
+  assert.match(sent, /@bart<\/span> i don't know what i want/, 'one space where they were');
+  assert.equal(m.lines()[0], '@bart --sonnet --medium i don\'t know what i want', 'the line keeps them');
+  assert.match(await m.lineOf(4), /<span style="font-weight:500">--opus<\/span>/, 'a line not yet sent shows its flag');
+  // Sent, a line says @bart whichever agent it names (2026-10-16); the line keeps the name, and one not sent shows it.
+  const named = mounted(['@discover --deep how tutors notice struggle', 'bart> ## Start here', 'bart> *Discover · 3 s*', '', '@discover more']);
+  assert.match(await named.lineOf(0), /class="t"[^>]*><span style="color:#0070f3;font-weight:500">@bart<\/span> how tutors notice struggle</);
+  assert.equal(named.lines()[0], '@discover --deep how tutors notice struggle');
+  assert.match(await named.lineOf(4), /@discover/);
+});
+
 test('picking writes the level into the line: Deep adds --deep, Standard takes it off; a pin goes; the lead stays as written (L-05)', async () => {
   const m = mounted(['@discover how people read']);
   m.pick(0, 'deep');

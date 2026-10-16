@@ -625,9 +625,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // `research`: a research box's search (2026-10-13), which says so when stopped by hand, so it stays a turn of its
   // conversation.
+  // `steer`: a reply sent under a running search (2026-10-16, DocEditor steerResearch), { after, words }: main stops that
+  // search and goes on from it in its session, told what was added (bart/ask.cjs pausedFor), under this ask's pending line.
   // `refine`: a turn of Discover's Refine (2026-10-15, the editor's refiningAt): the direction it settles waits in its box
   // until the person presses Start research or Restart research there (DocEditor startResearch); nothing is searched.
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false }) => {
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false, steer = null }) => {
     if (!key || !ref || !topic) return;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
     let answered = null;
@@ -713,7 +715,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}) });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}), ...(steer ? { steer } : {}) });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       // Discover settled what to research (2026-10-14; main's bart/ask.cjs takeResearch, `out.research`): its research box

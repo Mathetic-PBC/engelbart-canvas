@@ -89,7 +89,7 @@ const { CREATE_SYSTEM_PROMPT } = require('./create-system-prompt.cjs');
 const { CREATE_TIMEOUT_MS, openDraft, dropDraft, keepCreated, saveAllCreated, createdBody, createdSentence, requestSentence } = require('./create.cjs');
 const { createMaking, createdLine } = require('./making.cjs');
 const { readQuestion, readBrainstorm, readDiscover, withChoice } = require('./models.cjs');
-const { readMode, readProvider, readRefine } = require('./question.cjs');
+const { readMode, readProvider, readRefine, modelOf, effortOf } = require('./question.cjs');
 const { OPENING, NEXT_ID, NEXT_PLACEHOLDER, cardBody, cardOfAnswer, cardAsText, questionOf, readCard, readAnswer, resultText, parseJson } = require('./card.cjs');
 const { plainTitle, capTitle } = require('./name-chat.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
@@ -110,6 +110,7 @@ const BRAINSTORM_IDLE_MS = 2 * 60 * 60_000;
 const DISCOVER_IDLE_MS = 2 * 60 * 60_000;
 const MAX_TURNS = 40;
 const ESCALATE_RE = /^ESCALATE:\s*(.{0,400})$/s;
+const STEER_KEEP_MS = 10 * 60 * 1000; // how long a search stopped by a reply keeps its session for the run that goes on
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const CLAUDE_TOOLS = 'Read,Grep,Glob,WebSearch,WebFetch';
 const BRAINSTORM_TOOLS = 'Read,Grep,Glob';
@@ -188,11 +189,29 @@ function levelBlock(steps, at, pinned) {
 // the flag says where the editor draws it, and is never part of the question.
 const RESEARCH_RE = /(^|\s)--research(?=\s|$)/gi;
 const withoutResearch = (text) => String(text == null ? '' : text).replace(RESEARCH_RE, '$1').replace(/\s+/g, ' ').trim();
+/**
+ * A research box's line with what the person said while it searched (2026-10-16, David: a reply under a running search
+ * adjusts it, as one to Claude does, rather than starting it over): `--steer <words>` after its direction, once a reply.
+ * Read anywhere but the run it steers, they are part of the direction.
+ */
+const steersShown = (text) => {
+  const [head, ...more] = String(text == null ? '' : text).split(/\s+--steer\s+/i);
+  return more.length ? `${head.trim()} (also: ${more.map((words) => words.trim()).filter(Boolean).join('; ')})` : head;
+};
+/**
+ * What a search is told when it goes on, in its own session, with a reply sent while it ran; or with the level picked on
+ * its box while it ran (`mode`, 2026-10-16, David), how far it now traces.
+ */
+const steerMessage = (words, mode = null) => [
+  mode && MODE_LIMITS[mode] ? `While you were searching, the person changed how far to search:\n\n<mode>${MODE_LIMITS[mode]}</mode>` : '',
+  words ? `While you were searching, the person added this:\n\n${words}` : '',
+  `Take it into account and carry on from where you are. Keep what you found that still fits, ${words ? 'look further where it points' : 'search as far as the new level goes'}, and do not start the search over. Then write the guide as before.`,
+].filter(Boolean).join('\n\n');
 /** Whether an @discover line is a research box's, the search (2026-10-14). */
 const isSearch = (text) => /(^|\s)--research(?=\s|$)/i.test(String(text == null ? '' : text));
 // A Refine turn's line (2026-10-15) is told as what it is: the person correcting the direction.
 const refineShown = (text) => { const read = readRefine(text); return read.refine ? `Refine the research direction: ${read.rest}` : String(text == null ? '' : text); };
-const cleanTurn = (turn) => ({ question: clipMiddle(refineShown(withoutResearch(turn.question)), 8000), answer: clipMiddle(String(turn.answer || '').trim(), 20000), ...(AGENTS.includes(turn.agent) ? { agent: turn.agent } : {}) });
+const cleanTurn = (turn) => ({ question: clipMiddle(refineShown(withoutResearch(steersShown(turn.question))), 8000), answer: clipMiddle(String(turn.answer || '').trim(), 20000), ...(AGENTS.includes(turn.agent) ? { agent: turn.agent } : {}) });
 
 /**
  * The earlier turns of an exchange as the renderer read them from the document, made safe: strings, bounded, no empty
@@ -316,7 +335,14 @@ function turnPlan({ agent, text, turns, choice, entries = [], welcome = false },
   const brainstorm = agent === 'brainstorm', discover = agent === 'discover';
   const prior = cleanTurns(turns, { keepEmpty: brainstorm || discover });
   // @discover's mode, and the level it runs on, is the one the line names, else the one an earlier turn named (readDiscover).
-  const read = brainstorm ? readBrainstorm(text, models) : discover ? readDiscover(withoutResearch(text), models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
+  const named = brainstorm ? readBrainstorm(text, models) : discover ? readDiscover(withoutResearch(steersShown(text)), models, prior) : readQuestion(choice ? withChoice(text, models, choice) : text, models);
+  // Regenerate's selector (2026-10-16, David) asks @brainstorm and @discover again on the model and effort picked there,
+  // for that run alone: the line keeps its words, and Discover its mode.
+  const picked = (brainstorm || discover) && choice ? modelOf(choice.model, models) : null, effort = picked ? effortOf(choice.effort) : null;
+  const entry = picked ? models.providers[picked.provider] : null;
+  const read = entry && effort && entry.efforts.includes(effort)
+    ? { ...named, provider: picked.provider, pinned: false, steps: [{ provider: picked.provider, key: picked.model, model: entry.models[picked.model].id, name: entry.models[picked.model].name, effort }] }
+    : named;
   // A turn settles what to research (2026-10-14), unless it is a research box's, which searches: that turn alone is told
   // how far to trace. An older exchange's card is sent as text.
   // A Refine turn, or a turn answering Discover's question about one (2026-10-15): told so, with the direction last searched.
@@ -466,11 +492,16 @@ function withoutCopiedFoot(text) {
 }
 
 /**
- * The reply as the document keeps it, by agent: @discover's card when it asked one, else its guide as it came; @bart's,
- * @brainstorm's (2026-10-14: prose, as Chat's) and @create's answer as it came. Each loses a copied foot at its end. (The
- * Welcome walkthrough's cards are kept by welcomeReply and ./card.cjs cardBody.)
+ * The reply as the document keeps it, by agent: @discover's card when it asked one, else its guide as it came;
+ * @brainstorm's opening card (2026-10-16), its labels only and at most four, else its prose (2026-10-14, as Chat's); @bart's
+ * and @create's answer as it came. Each loses a copied foot at its end. (The Welcome walkthrough's cards are kept by
+ * welcomeReply and ./card.cjs cardBody.)
  */
 function replyBody(agent, text) {
+  if (agent === 'brainstorm' && /^\s*(\{|```)/.test(String(text))) {
+    const card = readCard(text);
+    if (card && card.card !== 'none') return cardBody(topicsOnly(String(text))).body;
+  }
   if (agent === 'discover') {
     const card = /^\s*(\{|```)/.test(String(text)) ? readCard(text) : null;
     if (card && card.card !== 'none') return cardBody(text).body;
@@ -629,6 +660,19 @@ function createBart({ readModels, environment = process.env, runDirectory = path
   const program = (name) => (tools && tools.binaryFor(name) ? `"$ENGELBART_${name.toUpperCase()}_BIN"` : name);
   const programEnv = (name) => (tools && tools.binaryFor(name) ? { [`ENGELBART_${name.toUpperCase()}_BIN`]: tools.binaryFor(name) } : {});
   const running = new Map(); // askId → AbortController
+  // A search stopped by a reply sent under it (2026-10-16): its session, for the run that goes on with the reply.
+  const settling = new Map(), paused = new Map(); // askId → its run's end; a stopped search's askId → { provider, session }
+  const pause = (askId, entry) => {
+    paused.set(askId, entry);
+    const timer = setTimeout(() => paused.delete(askId), STEER_KEEP_MS); if (timer && timer.unref) timer.unref();
+  };
+  // The session of search `after`, which is stopped first if it still runs, once its run has ended.
+  const pausedFor = async (after, provider) => {
+    const controller = running.get(after); if (controller) controller.abort();
+    await settling.get(after);
+    const entry = paused.get(after); paused.delete(after);
+    return entry && entry.provider === provider ? entry : null;
+  };
   const childEnvironment = (extra) => {
     const base = sanitizeEnvironment(scrubAgentSession(environment));
     for (const key of NOT_THE_SUBSCRIPTION) delete base[key];
@@ -723,18 +767,23 @@ function createBart({ readModels, environment = process.env, runDirectory = path
    * web page in front's tab, asked for its selection and picture as they are now. `overleaf` (MATH-65): the window's
    * Overleaf tabs (overleaf/stage.cjs forTurn), for <stage source="overleaf"> and <overleaf_tabs>.
    */
-  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
+  async function ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null, steer = null }, { onProgress } = {}) {
     const models = readModels();
     const bart = agent === 'bart', create = agent === 'create', routed = routedOf(routedInput);
     // The context first: @brainstorm's path is read against the library it shows (turnPlan).
     const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
-    const plan = turnPlan({ agent, text, turns, choice: bart || create ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
+    const plan = turnPlan({ agent, text, turns, choice: bart || create || agent === 'brainstorm' || agent === 'discover' ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
     const { question, provider, steps, pinned, prior, asked, shown, extra, mode } = plan;
     if (!question && (bart || create)) throw new BartError('failed', create ? 'There is nothing on the line to make.' : 'There is no question on the line.');
     if (pinned && bart) remember(onPicked, steps[0]);
     // @create keeps no sessions: each turn starts from the document.
     const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent] || null;
-    const held = prior.length && store && !switched(prior, agent) ? store.take(threadKey(projectId, ref, prior), provider) : null;
+    // A reply sent while its search ran (`steer` { after, words }, 2026-10-16, David), or a level picked on its box (`level`,
+    // the line's mode flag already changed): that run stops, and this one goes on in its session, told what was added or
+    // how far it now traces (steerMessage), on the level's model; a session that cannot be had (or one on the other
+    // provider) is a search of the direction as it now reads, the words part of it (steersShown).
+    const steered = agent === 'discover' && plan.search && steer ? await pausedFor(steer.after, provider) : null;
+    const held = steered || (prior.length && store && !switched(prior, agent) ? store.take(threadKey(projectId, ref, prior), provider) : null);
     const system = loadSystemPrompt(ctx.dataRoot, plan.welcome ? 'welcome' : agent);
     // The Agent map's record (runLog): from here every way out of the run is logged.
     const logId = askId || randomUUID(), startedAt = Date.now();
@@ -758,6 +807,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       const stem = path.join(cwd, `ask-${randomUUID()}`);
       const controller = new AbortController();
       running.set(askId, controller);
+      let settle = () => {}; settling.set(askId, new Promise((resolve) => { settle = resolve; }));
       const feed = createFeed({ onProgress });
       // @create's line (./making.cjs, 2026-10-15): what it is making, shown above its row a second or two in, while the run
       // works; and the answer's text once it is done, so the words do not change. Not Opus's: it thinks before it says anything.
@@ -768,7 +818,13 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       const updated = feed.take;
       // @discover's steps told as its trace (./trace.cjs, 2026-10-15): by part, each saying what came back.
       const trace = agent === 'discover' ? createTrace({ entries: context.entries }) : null;
-      const traced = trace ? (event) => { const story = trace.take(event); if (story && onProgress) onProgress({ trace: story }); } : null;
+      // The session a search runs in, as its events name it, kept if it is stopped (pausedFor).
+      const live = { session: held ? held.session : null };
+      const traced = (event) => {
+        const named = event && (event.session_id || (event.type === 'thread.started' ? event.thread_id : null));
+        if (typeof named === 'string' && UUID_RE.test(named)) live.session = named;
+        if (!trace) return; const story = trace.take(event); if (story && onProgress) onProgress({ trace: story });
+      };
       const once = async (session) => {
         let cli = null;
         try {
@@ -781,7 +837,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
             create: { allowed: CREATE_TOOLS, rules: draft && createRules(draft), home: createCodexHome, write: true, timeout: CREATE_TIMEOUT_MS },
           }[agent];
           cli = (provider === 'anthropic' ? claudeTurns : codexTurns)({ system, cwd: draft || cwd, dirs: context.dirs, stem, signal: controller.signal, short: pathLabeller(context.dirs), onUpdate: updated, onRaw: traced, resume: session, logId, ...only });
-          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: sent, resumed: !!session, extra, routed, agent, topic: agent === 'brainstorm' ? context.topic : null }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
+          const going = !!steered && session === steered.session; // on in the stopped search's session, told what was added
+          return await climb({ steps, pinned, first: firstMessage({ context, prior: shown, question: going ? steerMessage(steer.words, steer.level ? mode : null) : sent, resumed: !!session, extra: going ? '' : extra, routed, agent, topic: agent === 'brainstorm' ? context.topic : null }), session, turn: (input) => { feed.reset(); return loggedTurn(log, logId, input, cli.turn); }, onProgress: stepShown(agent, onProgress) });
         } finally { if (cli) cli.done(); }
       };
       const cliName = TOOL_OF[provider];
@@ -802,7 +859,10 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       try {
         let out;
         // A session that will not resume (its file is gone, the CLI changed) is not the person's problem: start again from the document.
-        try { out = await guarded(held ? held.session : null); } catch (error) { if (!held || error.kind === 'stopped') throw error; out = await guarded(null); }
+        try { out = await guarded(held ? held.session : null); } catch (error) {
+          if (error.kind === 'stopped' && plan.search && live.session) pause(askId, { provider, session: live.session });
+          if (!held || error.kind === 'stopped') throw error; out = await guarded(null);
+        }
         const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned, ...(routed ? { routed } : {}) };
         // @create's files kept in the library, each answered with a mention of its row (./create.cjs); stopped, it keeps none.
         if (create && stopped(controller.signal)) throw new BartError('stopped', 'Stopped.');
@@ -821,6 +881,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       } finally {
         feed.end();
         running.delete(askId);
+        settling.delete(askId); settle();
         dropDraft(draft);
         try { fs.unlinkSync(`${stem}.input.txt`); } catch { /* already gone */ }
       }
@@ -1008,10 +1069,10 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   const log = logTo(runLog);
   const router = createFakeRouter({ runLog });
   return {
-    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null }, { onProgress } = {}) {
+    async ask(ctx, projectId, { askId, ref, workspaceId, text, turns, choice, agent = 'bart', highlight = null, stage = null, live = null, overleaf = null, routed: routedInput = null, place = null, steer = null }, { onProgress } = {}) {
       const models = readModels(), routed = routedOf(routedInput);
       const context = await buildContext(ctx, projectId, { ref, workspaceId, askId, agent, highlight, stage, live, overleaf });
-      const plan = turnPlan({ agent, text, turns, choice: agent === 'bart' || agent === 'create' ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
+      const plan = turnPlan({ agent, text, turns, choice: ['bart', 'create', 'brainstorm', 'discover'].includes(agent) ? choice : null, entries: context.entries, welcome: welcomeHere(ctx, projectId, agent, ref, workspaceId) }, models);
       const { brainstorm, question, provider, steps, pinned, prior } = plan, discover = agent === 'discover', create = agent === 'create';
       if (pinned && question && agent === 'bart') remember(onPicked, steps[0]);
       const store = { bart: threads, brainstorm: brainstormThreads, discover: discoverThreads }[agent] || null;
@@ -1024,6 +1085,7 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
       if (create && !question) { const error = new BartError('failed', 'There is nothing on the line to make.'); ended('failed', null, error); throw error; }
       const message = firstMessage({ context, prior: plan.shown, question: await withImagePaths(ctx, projectId, plan.asked), resumed: !!held, extra: plan.extra, routed, agent, topic: agent === 'brainstorm' ? context.topic : null });
       const pause = (ms) => new Promise((resolve, reject) => { const timer = setTimeout(resolve, ms); waits.set(askId, () => { clearTimeout(timer); reject(new BartError('stopped', 'Stopped.')); }); });
+      if (steer && waits.has(steer.after)) waits.get(steer.after)(); // a reply under a running search stops it first (the real ask's pausedFor)
       const feed = createFeed({ onProgress, intervalMs: 0 });
       const take = feed.take;
       // The same kinds of update a real run sends, spread over the delay: two things done, then the answer in pieces.
@@ -1087,4 +1149,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { takeTopic, takeResearch, withoutResearch, isSearch, createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, welcomeReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, WELCOME_CARDS };
+module.exports = { takeTopic, takeResearch, withoutResearch, steersShown, steerMessage, isSearch, createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, welcomeReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, WELCOME_CARDS };

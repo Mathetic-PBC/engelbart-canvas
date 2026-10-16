@@ -151,9 +151,9 @@ test('a pending row with 40 lines so far keeps them in a capped box, the log and
   assert.match(box.after, /data-act="asklog"/); assert.match(box.after, /data-act="stopask"/);
   assert.ok(r.height <= PAD + 240 + ACTIVITY, `no taller than the cap and its activity row (${r.height}px)`);
   assert.equal(box.scrollTop, box.scrollHeight - box.clientHeight, 'on its newest line');
-  // Its look is the answer so far's as before: the same grey lines and the cursor at the end, inside the box.
+  // Its look is the answer so far's as before: the same grey lines, inside the box, with no mark pulsing at the end (2026-10-16, David).
   assert.match(r.html, /<div data-stream="a1" style="[^"]*"><span style="display:block;min-height:22px;padding:1px 0 1px 14px;[^"]*color:#8f8f8f;font-size:14px/);
-  assert.match(r.html.slice(0, r.html.indexOf(box.after)), /animation:thinking 1\.2s ease-in-out infinite/);
+  const stream = r.html.slice(r.html.indexOf('<div data-stream="a1"')); assert.ok(!stream.slice(0, stream.indexOf('</div>')).includes('animation:thinking'));
 });
 
 test('scrolled up more than 40px, the box keeps where it was on the next update; back at the bottom it follows again', () => {
