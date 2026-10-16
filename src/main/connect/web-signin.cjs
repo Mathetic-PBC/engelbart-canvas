@@ -581,7 +581,10 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     return target ? `macOS will ask to use ${target.name}'s sign-ins. Choose Allow.` : '';
   }
 
-  return { supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount, keychainTarget, keychainNote, holdersOf, heldThere, openApp, copyBlind, copyDomains, picked, choose, opensIn, readableCount: () => readable().length };
+  /** Every answer kept in memory dropped (test mode's reset, 2026-10-15): the next check asks again. */
+  const forget = () => { verdicts.clear(); waitingIn.clear(); here.clear(); };
+
+  return { forget, supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount, keychainTarget, keychainNote, holdersOf, heldThere, openApp, copyBlind, copyDomains, picked, choose, opensIn, readableCount: () => readable().length };
 }
 
 module.exports = { createWebSignIn, SIGN_IN_COOKIES, SIGN_IN_PAGES, ANOTHER_ACCOUNT_PAGE, READABLE_NAMES, domainsOf, browserIdOf };

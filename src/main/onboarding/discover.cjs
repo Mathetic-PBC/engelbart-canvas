@@ -373,7 +373,17 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
     return publicOf(stateOf(ctx.dataRoot));
   }
 
-  return { state, startProjects, startTools, stop, reset };
+  /**
+   * A data root wiped (test mode's reset, 2026-10-15: what was found stayed in memory, so the projects and tools screens
+   * came back answered): its searches stopped and its state forgotten, read from disk again (nothing there now) next time.
+   */
+  function forget(dataRoot) {
+    const st = roots.get(dataRoot);
+    if (st) for (const key of ['projects', 'tools']) if (st.controllers[key]) st.controllers[key].abort();
+    roots.delete(dataRoot);
+  }
+
+  return { state, startProjects, startTools, stop, reset, forget };
 }
 
 module.exports = { createDiscovery, projectDigest, toolEvidence, historySites };

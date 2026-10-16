@@ -423,9 +423,15 @@ export default function App() {
     try {
       const result = await api.resetTestData({ fresh });
       if (result.reset) {
-        if (fresh) {
-          try { Object.keys(localStorage).filter((key) => key.startsWith('engelbart.')).forEach((key) => localStorage.removeItem(key)); } catch { /* storage unavailable */ }
-        }
+        // Either reset forgets what this window remembers (2026-10-15, Hudson: "resetting test data also resets states so
+        // i see popups again"): tours seen, popups put away, folds, and the steps and completions it already showed.
+        try { Object.keys(localStorage).filter((key) => key.startsWith('engelbart.')).forEach((key) => localStorage.removeItem(key)); } catch { /* storage unavailable */ }
+        try { Object.keys(sessionStorage).filter((key) => key.startsWith('engelbart.')).forEach((key) => sessionStorage.removeItem(key)); } catch { /* storage unavailable */ }
+        laterNeeds.current.clear();
+        completedShown.current.clear();
+        laterProvider.current.clear();
+        setNeedShown(null);
+        setImportStatus(null);
         setConfig(result);
         leaveProject();
         setRun((n) => n + 1);

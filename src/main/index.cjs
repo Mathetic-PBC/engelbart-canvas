@@ -1216,6 +1216,15 @@ if (!hasSingleInstanceLock) {
     ipcMain.handle('trace:reveal', fromTrace(() => traceWindow.revealFolder()));
     app.on('will-quit', () => connect.suspendAll());
     registerEngelbartIpc({
+      // Test mode's reset (2026-10-15): what the app keeps outside the data root forgotten too, so onboarding's popups and
+      // sign-ins come back: the sign-in answers in memory, a pretend machine's installs, and (a copy run from a checkout,
+      // whose browser is its own) the sign-ins copied into Engelbart's browser. A packaged copy's browser is left alone: it
+      // may be the one the person works in.
+      afterTestReset: async () => {
+        try { if (webSignIn && webSignIn.forget) webSignIn.forget(); } catch { /* nothing kept */ }
+        if (toolsFake && toolsFake.reset) { toolsFake.reset(); try { await tools.check(); } catch { /* checked again later */ } }
+        if (!app.isPackaged) await electronSession.fromPartition(BROWSER_PARTITION).clearStorageData().catch(() => {});
+      },
       agentMap,
       // A page @create made, as a picture for its row (2026-10-14, bart/created-preview.cjs).
       snapshotHtml: createSnapshotter({ BrowserWindow }),

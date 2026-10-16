@@ -275,7 +275,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
 // `snapshotHtml(file, out)`: a picture of a page @create made (bart/created-preview.cjs); null in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null, scanner = null, agentMap = null, snapshotHtml = null }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null, scanner = null, agentMap = null, snapshotHtml = null, afterTestReset = async () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -377,6 +377,12 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     const fresh = !!(options && typeof options === 'object' && options.fresh === true);
     if (!(await confirmReset({ fresh }))) return { reset: false, ...store.config() };
     const config = await changing(() => store.resetTestData({ fresh }));
+    // Everything kept about that data root outside it forgotten too (2026-10-15, Hudson: "resetting test data also
+    // resets states so i see popups again"): its import runs, what discovery found, the provider and sign-in answers.
+    try { if (connect && connect.forget) connect.forget(config.dataRoot); } catch { /* nothing kept */ }
+    try { if (importFlow && importFlow.discovery && importFlow.discovery.forget) importFlow.discovery.forget(config.dataRoot); } catch { /* nothing kept */ }
+    try { if (importFlow && importFlow.providers && importFlow.providers.forget) importFlow.providers.forget(); } catch { /* nothing kept */ }
+    await Promise.resolve().then(() => afterTestReset({ dataRoot: config.dataRoot, fresh })).catch(() => {});
     announce('engelbart:data-root-changed', { config, fresh }, { except: win });
     return { reset: true, ...config };
   });

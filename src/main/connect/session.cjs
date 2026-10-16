@@ -2865,7 +2865,28 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     return true;
   }
 
+  /**
+   * A data root wiped (test mode's reset, 2026-10-15: its runs stayed listed, popups and all, and sign-ins checked before
+   * were taken as answered): its sessions stopped and dropped, and every sign-in answer kept in memory forgotten.
+   */
+  function forget(dataRoot) {
+    for (const [id, s] of [...sessions]) {
+      if (s.dataRoot !== dataRoot) continue;
+      s.stopped = true;
+      for (const controller of s.controllers) { try { controller.abort(); } catch { /* ended */ } }
+      if (s.interviewController) { try { s.interviewController.abort(); } catch { /* ended */ } }
+      for (const need of s.needs) { if (need.watch) clearInterval(need.watch); if (need.cancel) { try { need.cancel(); } catch { /* none */ } } }
+      if (browser) for (const job of s.jobs) browser.close(job.id);
+      sessions.delete(id);
+    }
+    resumed.delete(dataRoot);
+    signInChecked.clear();
+    signInChecking.clear();
+    signInDenied.clear();
+  }
+
   return {
+    forget,
     start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, unblock, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose, signInBrowser, signInBrowserCancel, signInUnlock, signInAnotherAccount, signInPick,
     setProvider: (id, provider) => { const s = get(id); setProvider(s, provider); emit(s); return snapshot(s); },
     // the first build's name for authorize

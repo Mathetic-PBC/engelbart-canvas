@@ -33,6 +33,8 @@ function parseSpec(value) {
 
 function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => new Date() } = {}) {
   const { state, failInstall, signInNever } = parseSpec(spec);
+  /** The pretend machine as it started (test mode's reset, 2026-10-15: its installs stayed, so setup never showed again). */
+  const reset = () => { const fresh = parseSpec(spec).state; for (const name of Object.keys(state)) state[name] = fresh[name]; };
   const fakePath = (name) => (name === 'git' ? (state.git.bundled ? '/Users/fake/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin/git' : '/usr/bin/git') : `/Users/fake/.local/bin/${name}`);
 
   async function detect(only = TOOL_NAMES) {
@@ -99,7 +101,7 @@ function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((re
     return null;
   }
 
-  return { detect, actions, signInProcess, signOutProcess, execFile, state };
+  return { detect, actions, signInProcess, signOutProcess, execFile, state, reset };
 }
 
 module.exports = { createFakeTools, parseSpec, FAKE_ACCOUNT };

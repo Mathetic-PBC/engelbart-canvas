@@ -114,7 +114,7 @@ function discoveryOn(m, { fail = null } = {}) {
   const agents = { turn: async (input) => { runs += 1; if (fail) throw fail; return gated.turn(input); } };
   const discovery = createDiscovery({ agents, context: async () => ({ dataRoot: path.join(home, 'root') }), homeDir: home, providers, notify: (state) => { last = state; } });
   const settled = () => until(() => last, (state) => state && state.projects.status !== 'running', 'the project agent');
-  return { discovery, runs: () => runs, rechecked, settled, last: () => last };
+  return { discovery, home, runs: () => runs, rechecked, settled, last: () => last };
 }
 
 test('Try again on a provider that cannot run never runs it: it waits, naming the provider to connect; connected, it runs', async () => {
@@ -314,4 +314,19 @@ test('the tool agent is told the categories, every extra tool comes back in one 
   assert.match(told.system, /"category"/);
   assert.match(told.system, /calendar/i);
   assert.deepEqual(done.tools.results.additional.map((tool) => [tool.name, tool.category]), [['Figma', 'other'], ['Readwise', 'notes']]);
+});
+
+test('discovery forgets a data root: what it found is read again from that root (test mode\'s reset, 2026-10-15)', async () => {
+  const m = await machine({ claude: '2.1.300', codex: 'missing' });
+  const d = discoveryOn(m);
+  await d.discovery.startProjects({ provider: 'anthropic' });
+  const done = await d.settled();
+  assert.equal(done.projects.status, 'done');
+  const root = (await d.discovery.state()).projects;
+  assert.equal(root.status, 'done');
+  // the root wiped on disk, then forgotten: idle again, so the next start runs
+  const { dataRoot } = { dataRoot: path.join(d.home, 'root') };
+  fs.rmSync(path.join(dataRoot, '.connect'), { recursive: true, force: true });
+  d.discovery.forget(dataRoot);
+  assert.equal((await d.discovery.state()).projects.status, 'idle');
 });

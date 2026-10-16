@@ -2638,3 +2638,13 @@ test('off the Mac (no importer): Sign in opens Engelbart\'s window, and its chec
   assert.deepEqual(await connect.signInWindowOpen('Google Docs'), { status: 'signed-in' });
   assert.deepEqual(win.opened, ['Google Docs'], 'Google too');
 });
+
+test('test mode\'s reset forgets a data root\'s runs and the sign-in answers kept in memory (2026-10-15)', async () => {
+  const { connect, state } = fakeConnect({ delayMs: 200 });
+  const started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } } });
+  await until(state(started.id), (s) => s.chat.length > 0, 'the run');
+  assert.ok(connect.list(ctx.dataRoot).some((one) => one.id === started.id));
+  connect.forget(ctx.dataRoot);
+  assert.equal(connect.list(ctx.dataRoot).some((one) => one.id === started.id), false, 'its runs are gone from the list');
+  assert.equal(connect.has(started.id), false);
+});
