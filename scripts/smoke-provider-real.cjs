@@ -1,17 +1,19 @@
 'use strict';
 
 // npm run build && npx electron scripts/smoke-provider-real.cjs
-// Connecting Claude Code and Codex against this Mac's REAL CLIs (2026-10-14): the app hidden, on a disposable home, its
-// agents the real `claude -p` / `codex exec` (run with --no-session-persistence / --ephemeral, so nothing lands in the
-// person's history). "Signed out" is the real CLI pointed at an empty scratch config dir (CLAUDE_CONFIG_DIR, CODEX_HOME);
-// "signing in" is simulated by unsetting it again, so the person's own sign-in answers: no account is changed, and a real
-// sign-in (which would open their browser) is refused outright by this script.
-//   A  both CLIs signed out at launch: the tools screen asks to sign in; signed in (simulated), the real Claude Code finds
-//      the projects. Codex stays signed out: one of the two is enough.
-//   B  Claude Code signed out while the project agent starts (a real "Not logged in · Please run /login"): the line says
-//      "Couldn’t reach Claude Code" with Connect Claude Code, not a dead Try again; Connect (after signing in) runs it again.
-//   C  signed out again before the import: the real import agent fails "Not logged in", the run waits, "Connect Claude
-//      Code" comes over the workspace; signed in, Connect, and the import goes on by itself and brings the note in.
+// The agent popup (2026-10-16, the onboarding beta's S3) against this Mac's REAL Claude Code and Codex, for detection
+// only: the app hidden, on a disposable home, the real CLIs pointed at empty scratch config dirs for the whole run
+// (CLAUDE_CONFIG_DIR, CODEX_HOME), so both are really signed out and the person's own sign-ins are never read or changed.
+// Nothing is installed, updated, signed in or out: the tool manager's install/update actions, its sign-in and its
+// sign-out are stand-ins that only count (patched before the app loads), Engelbart's updates are 'ask', the CLIs' own
+// updaters are off (DISABLE_AUTOUPDATER, Codex's check_for_update_on_startup), and a real login through node-pty is
+// refused outright. No agent runs: nothing can.
+//   the launch check: both real CLIs installed and signed out, neither subscribed: nothing to run on.
+//   Welcome ▸ Continue: the popup over Welcome, not straight on; no version anywhere (the real ones least of all), no
+//   subtext, Skip plain text far left; "Connect to Claude", "Connect to ChatGPT", "Connect to Claude and ChatGPT" per
+//   choice; Connect to Claude asks for Claude Code's own sign-in, with the real CLI's path (the stand-in ends it unsigned:
+//   the popup stays, asking again). Skip goes on to Import your context, whose Import context asks again in the same
+//   popup, nothing run.
 // ENGELBART_IMPORT_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -23,11 +25,13 @@ const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-pr
 const emptyClaude = path.join(root, 'scratch-claude-config');
 const emptyCodex = path.join(root, 'scratch-codex-home');
 fs.mkdirSync(emptyClaude); fs.mkdirSync(emptyCodex);
-const signOut = () => { process.env.CLAUDE_CONFIG_DIR = emptyClaude; };
-const signIn = () => { delete process.env.CLAUDE_CONFIG_DIR; };
-signOut();
+fs.writeFileSync(path.join(emptyCodex, 'config.toml'), 'check_for_update_on_startup = false\n');
+// Signed out for the whole run, never unset: the person's ~/.claude and ~/.codex are not where the CLIs look.
+process.env.CLAUDE_CONFIG_DIR = emptyClaude;
 process.env.CODEX_HOME = emptyCodex;
+process.env.DISABLE_AUTOUPDATER = '1';
 delete process.env.ANTHROPIC_API_KEY;
+delete process.env.OPENAI_API_KEY;
 app.setPath('userData', path.join(root, 'electron'));
 process.env.ENGELBART_HOME_DIR = root;
 process.env.ENGELBART_SUMMARIES = 'off';
@@ -39,28 +43,35 @@ process.env.ENGELBART_HEADLESS = '1';
 process.env.ENGELBART_INSTALLED_BROWSERS = '';
 process.env.ENGELBART_DISK_ACCESS = 'granted';
 process.env.ENGELBART_BROWSER_AGENTS = 'none';
-for (const key of ['ENGELBART_TOOLS_FAKE', 'ENGELBART_PROVIDERS_FAKE', 'ENGELBART_CONNECT_FAKE', 'ENGELBART_BART_FAKE']) delete process.env[key];
+for (const key of ['ENGELBART_TOOLS_FAKE', 'ENGELBART_PROVIDERS_FAKE', 'ENGELBART_CONNECT_FAKE', 'ENGELBART_CONNECT_FAKE_CLI', 'ENGELBART_BART_FAKE']) delete process.env[key];
 
-// Never a real sign-in from here: it would open the person's browser on their account.
+// Stand-ins for everything that would change the person's installs or sign-ins (src/main/index.cjs reads these when it
+// loads, so they are replaced first): each only counts.
+const asked = { install: [], update: [], signIn: [], signOut: [], realLogin: 0 };
+const install = require('../src/main/tools/install.cjs');
+install.createActions = () => ({
+  installGit: async () => { asked.install.push('git'); return { ok: false, kind: 'other', error: 'Installs are refused in this smoke.' }; },
+  installAgent: async (name) => { asked.install.push(name); return { ok: false, kind: 'other', error: 'Installs are refused in this smoke.' }; },
+  updateAgent: async (name) => { asked.update.push(name); return { ok: false, kind: 'other', error: 'Updates are refused in this smoke.' }; },
+  updateGit: async () => { asked.update.push('git'); return { ok: false, kind: 'other', error: 'Updates are refused in this smoke.' }; },
+});
+// An update's rollback mark and rollback (tools/install.cjs) write beside the real install: never.
+install.markRollback = () => null;
+install.rollback = () => false;
+const signing = require('../src/main/tools/sign-in.cjs');
+signing.createSignInProcess = () => (name, file) => { asked.signIn.push({ name, file }); return { done: Promise.resolve({ code: 1, output: 'A real sign-in is refused in this smoke.' }), kill: () => {} }; };
+signing.createSignOutProcess = () => async (name) => { asked.signOut.push(name); return { code: 1, output: 'A real sign-out is refused in this smoke.' }; };
+// And never a real sign-in through a terminal either: it would open the person's browser on their account.
 const pty = require('node-pty');
 const spawn = pty.spawn;
-let refusedSignIns = 0;
 pty.spawn = (file, args, options) => {
-  if (/"\$ENGELBART_TOOL" (?:auth )?login/.test((args || []).join(' '))) { refusedSignIns += 1; throw new Error('A real sign-in is refused in this smoke'); }
+  if (/"\$ENGELBART_TOOL" (?:auth )?log(?:in|out)\b/.test((args || []).join(' '))) { asked.realLogin += 1; throw new Error('A real sign-in is refused in this smoke'); }
   return spawn(file, args, options);
 };
 
 const home = require('../src/main/store/home.cjs');
-// Updates asked for, never run: nothing here touches the person's installs.
+// Updates asked for, never run.
 home.writeConfig(home.ensureHome(root).root, { testMode: false, tools: { updates: 'ask' } });
-const write = (rel, text) => { const file = path.join(root, rel); fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, text); };
-write('Notes/.obsidian/daily-notes.json', JSON.stringify({ folder: 'Daily' }));
-write('Notes/Research/Help-seeking.md', '# Help-seeking\n\nNovices in CS1 rarely ask for help; an AI tutor that asks them first might change that.\n');
-write('Library/Application Support/obsidian/obsidian.json', JSON.stringify({ vaults: { v: { path: path.join(root, 'Notes'), ts: Date.now(), open: true } } }));
-const session = (dir, id, prompt) => write(`.claude/projects/-${dir.replace(/\//g, '-')}/${id}.jsonl`, `${JSON.stringify({ type: 'user', entrypoint: 'cli', cwd: path.join(root, dir), timestamp: new Date().toISOString(), message: { role: 'user', content: prompt } })}\n`);
-session('help-seeking-study', '11111111-1111-4111-8111-111111111111', 'Plan the help-seeking analysis for the CS1 tutoring RCT');
-session('help-seeking-study', '22222222-2222-4222-8222-222222222222', 'Write the methods section of the help-seeking paper');
-fs.mkdirSync(path.join(root, 'help-seeking-study'), { recursive: true });
 
 require('../src/main/index.cjs');
 
@@ -80,16 +91,14 @@ const click = async (wc, { x, y }) => {
 };
 const spot = (wc, selector) => js(wc, `(()=>{const el=document.querySelector(${JSON.stringify(selector)});if(!el||el.disabled)return null;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`);
 const press = async (wc, selector, tries) => { const at = await until(() => spot(wc, selector), selector, tries); await click(wc, at); };
-const pressText = async (wc, scope, words) => {
-  const at = await until(() => js(wc, `(()=>{const el=[...document.querySelectorAll(${JSON.stringify(`${scope} button`)})].find((b)=>!b.disabled&&b.textContent.trim().startsWith(${JSON.stringify(words)}));if(!el)return null;el.scrollIntoView({block:'center'});const r=el.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2)}})()`), `"${words}"`);
-  await click(wc, at);
-};
 const has = (wc, selector) => js(wc, `!!document.querySelector(${JSON.stringify(selector)})`);
 const text = (wc, selector) => js(wc, `(document.querySelector(${JSON.stringify(selector)})||{}).textContent||''`);
 const flow = (wc) => js(wc, '(()=>{const el=document.querySelector("[data-import-flow]");return el?{screen:el.dataset.screen,dialog:el.dataset.dialog}:null})()');
-const type = (wc, selector, value) => js(wc, `(()=>{const el=document.querySelector(${JSON.stringify(selector)});const proto=el.tagName==='TEXTAREA'?HTMLTextAreaElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(proto,"value").set.call(el,${JSON.stringify(value)});el.dispatchEvent(new Event("input",{bubbles:true}))})()`);
 const tools = (wc) => js(wc, 'window.engelbartAPI.tools()');
 const discovery = (wc) => js(wc, 'window.engelbartAPI.importDiscovery()');
+const AGENT = '.agent-setup';
+const primary = (wc) => js(wc, `(()=>{const b=document.querySelector(${JSON.stringify(`${AGENT} [data-agent-primary]`)});return b?{label:b.textContent.trim(),action:b.dataset.agentPrimary,disabled:b.disabled}:null})()`);
+const labelIs = (wc, label, tries) => until(async () => { const b = await primary(wc); return b && b.label === label && !b.disabled ? b : null; }, `"${label}"`, tries);
 const SHOTS = process.env.ENGELBART_IMPORT_SHOTS;
 async function shot(wc, name) {
   if (!SHOTS) return;
@@ -98,6 +107,7 @@ async function shot(wc, name) {
   fs.writeFileSync(path.join(SHOTS, `real-${name}.png`), picture.toPNG());
 }
 const log = (line) => console.log(`  · ${line}`);
+const untouched = (when) => assert.deepEqual({ install: asked.install, update: asked.update, signOut: asked.signOut, realLogin: asked.realLogin }, { install: [], update: [], signOut: [], realLogin: 0 }, `nothing installed, updated, signed out or really signed in (${when})`);
 
 app.whenReady().then(async () => {
   try {
@@ -109,105 +119,69 @@ app.whenReady().then(async () => {
     await until(() => js(wc, '!!document.querySelector("[data-onboarding=new]")').catch(() => false), 'a new user\'s onboarding');
     const launch = await until(() => tools(wc).then((snap) => (snap && snap.checked ? snap : null)), 'the launch check', 1200);
 
-    /* A: both real CLIs signed out */
+    /* the launch check: both real CLIs signed out */
     assert.deepEqual([launch.tools.claude.installed, launch.tools.claude.status, launch.tools.claude.signedIn], [true, 'signed-out', false], `the real Claude Code, signed out: ${JSON.stringify(launch.tools.claude)}`);
     assert.deepEqual([launch.tools.codex.installed, launch.tools.codex.status, launch.tools.codex.signedIn], [true, 'signed-out', false], `the real Codex, signed out: ${JSON.stringify(launch.tools.codex)}`);
-    assert.equal((await js(wc, 'window.engelbartAPI.importProviders(true)')).decision.setup, true, 'nothing to run on');
-    log(`A launch: Claude Code ${launch.tools.claude.version} and Codex ${launch.tools.codex.version}, both signed out`);
+    const providers = await js(wc, 'window.engelbartAPI.importProviders(true)');
+    assert.equal(providers.decision.setup, true, 'nothing to run on');
+    assert.deepEqual(providers.providers.map((one) => [one.id, one.signedIn, one.subscribed]), [['anthropic', false, false], ['openai', false, false]], 'neither signed in nor subscribed');
+    const versions = [launch.tools.claude.version, launch.tools.codex.version].filter(Boolean);
+    log(`launch: the real Claude Code and Codex, both signed out (${versions.join(', ')})`);
+
+    /* Welcome ▸ Continue: neither qualifies, so the popup */
     await press(wc, '[data-onboarding-continue] button');
-    await until(() => has(wc, '[data-tool-row="claude"] [data-tool-action="sign-in"]'), 'the tools screen asks to sign in');
-    assert.equal(await text(wc, '[data-tool-row="claude"] [data-tool-state]'), 'Not signed in');
-    await shot(wc, 'A1-tools');
-    signIn(); // the person signs in to Claude Code (simulated: their own sign-in answers again)
-    await js(wc, 'window.engelbartAPI.toolsCheck()'); // what the end of a sign-in runs
-    await until(() => tools(wc).then((snap) => snap.tools.claude.signedIn === true), 'Claude Code signed in');
-    await pressText(wc, '[data-screen-label="02 Tools"]', 'Continue');
+    await until(() => has(wc, '[data-agent-popup] [data-agent-choice]'), 'Use Claude Code, Codex, or both? over Welcome', 1200);
+    assert.equal(await js(wc, 'document.querySelector("[data-onboarding]").dataset.step'), 'welcome', 'over Welcome, not straight on');
+    assert.equal(await has(wc, '[data-tool-row], [data-onboarding-tools]'), false, 'no tools screen');
+    const plain = async (when) => {
+      const words = await text(wc, AGENT);
+      for (const version of versions) assert.equal(words.includes(version), false, `the real version ${version} is not shown (${when})`);
+      assert.doesNotMatch(words, /\d+\.\d+/, `no version (${when}): ${words}`);
+      assert.equal(await js(wc, `document.querySelectorAll(${JSON.stringify(`${AGENT} small, ${AGENT} h3 + p`)}).length`), 0, `no subtext (${when})`);
+      const skip = await js(wc, `(()=>{const s=document.querySelector(${JSON.stringify(`${AGENT} [data-agent-skip]`)});const c=getComputedStyle(s);const r=s.getBoundingClientRect();const rows=Math.min(...[...document.querySelectorAll(${JSON.stringify(`${AGENT} [data-agent-choice]`)})].map((b)=>b.getBoundingClientRect().left));return{text:s.textContent.trim(),plain:c.backgroundColor==="rgba(0, 0, 0, 0)"&&parseFloat(c.borderTopWidth)===0,left:Math.abs(r.left-rows)<=2}})()`);
+      assert.deepEqual(skip, { text: 'Skip', plain: true, left: true }, `Skip, plain text far left (${when})`);
+    };
+    await plain('nothing chosen');
+    await shot(wc, '01-welcome-popup');
+    for (const [choice, label] of [['codex', 'Connect to ChatGPT'], ['both', 'Connect to Claude and ChatGPT'], ['claude', 'Connect to Claude']]) {
+      await press(wc, `[data-agent-choice="${choice}"]`);
+      const shown = await labelIs(wc, label, 1200);
+      assert.equal(shown.action, 'sign-in', `${choice}: installed and up to date, so its sign-in`);
+      await plain(choice);
+    }
+    untouched('choosing');
+    log('the popup: Connect to ChatGPT / Claude and ChatGPT / Claude, no version shown');
+    await shot(wc, '02-claude-chosen');
+
+    /* Connect to Claude: Claude Code's own sign-in, with the real CLI (the stand-in refuses it) */
+    await press(wc, `${AGENT} [data-agent-primary="sign-in"]`);
+    await until(() => asked.signIn.length > 0, 'Claude Code\'s sign-in asked for');
+    await until(() => tools(wc).then((snap) => !snap.tools.claude.busy), 'the sign-in over, checked again', 1200);
+    assert.deepEqual(asked.signIn.map((one) => one.name), ['claude'], 'only the one chosen');
+    assert.equal(asked.signIn[0].file, launch.tools.claude.path, 'the real Claude Code\'s own sign-in');
+    assert.equal((await tools(wc)).tools.claude.signedIn, false, 'still signed out (really)');
+    assert.equal(await has(wc, '[data-agent-popup]'), true, 'the popup stays while neither runs');
+    await labelIs(wc, 'Connect to Claude', 1200);
+    await plain('after the sign-in');
+    log(`Connect to Claude asked for ${asked.signIn[0].file}'s sign-in (refused here)`);
+
+    /* Skip: on to Import your context, which asks again */
+    await press(wc, '[data-agent-popup] [data-agent-skip]');
     await until(async () => { const f = await flow(wc); return f && f.screen === 'intro' && !f.dialog; }, 'Import your context');
     await press(wc, '[data-import-start]');
-    await until(async () => { const f = await flow(wc); return f && f.screen === 'roles' && !f.dialog; }, 'on with Claude Code (Codex, signed out, not needed)');
-    await press(wc, '[data-work-role="Researcher"]');
-    await pressText(wc, '.work-foot', 'Continue');
-    await until(async () => (await flow(wc)).screen === 'work', 'the work');
-    await type(wc, '#work-description', 'I study how students ask for help in CS1.');
-    await pressText(wc, '.work-foot', 'Continue');
-    await until(async () => (await flow(wc)).screen === 'projects', 'the projects screen');
-    const firstRun = await until(() => discovery(wc).then((d) => (d.projects.status === 'done' || d.projects.status === 'failed' ? d.projects : null)), 'the real project agent', 3600);
-    assert.equal(firstRun.status, 'done', `the real Claude Code found the projects: ${JSON.stringify(firstRun)}`);
-    assert.equal(firstRun.provider, 'anthropic');
-    log(`A projects by the real Claude Code: ${firstRun.projects.map((project) => project.title).join(', ')}`);
-    await until(() => has(wc, '[data-work-project]'), 'the projects shown');
-    await shot(wc, 'A2-projects');
-
-    /* B: signed out while the agent starts: the real "Not logged in" */
-    const started = await js(wc, 'window.engelbartAPI.importDiscoverProjects({ provider: "anthropic", again: true })');
-    assert.equal(started.projects.status, 'running', 'signed in when it started');
-    signOut(); // signed out in a terminal while it runs
-    const failed = await until(() => discovery(wc).then((d) => (d.projects.status !== 'running' ? d.projects : null)), 'the agent\'s answer', 1200);
-    assert.deepEqual([failed.status, failed.connect, failed.error], ['failed', 'anthropic', 'Not logged in · Please run /login'], JSON.stringify(failed));
-    await until(() => has(wc, '[data-discovery-connect="anthropic"]'), 'Connect Claude Code on the line');
-    assert.match(await text(wc, '[data-discovery-status]'), /^Couldn’t reach Claude Code\./);
-    assert.equal(await has(wc, '[data-discovery-again]'), false, 'no Try again that runs it as it is');
-    await shot(wc, 'B1-line');
-    log('B the real CLI said "Not logged in · Please run /login": the line asks to connect Claude Code');
-    await press(wc, '[data-discovery-connect="anthropic"]');
-    await until(async () => (await flow(wc)).dialog === 'tools-setup', 'Connect Claude Code or Codex');
-    await until(() => js(wc, '(document.querySelector("[data-provider-row=anthropic]")||{dataset:{}}).dataset.providerState==="not-connected"'), 'Claude Code: Not connected');
-    await shot(wc, 'B2-dialog');
-    signIn();
-    await press(wc, '[data-provider-connect="anthropic"]'); // checked first: signed in, so no browser sign-in
-    await until(async () => !(await flow(wc)).dialog, 'on by itself once connected', 1200);
-    const again = await until(() => discovery(wc).then((d) => (d.projects.status === 'done' && d.projects.ended !== failed.ended ? d.projects : null)), 'the projects found again', 3600);
-    log(`B connected: found again (${again.projects.length})`);
-    assert.equal(refusedSignIns, 0, 'no real sign-in was started');
-
-    /* C: signed out before the import: "Connect Claude Code" over the workspace */
-    await until(() => has(wc, '[data-work-project]'), 'the projects shown');
-    await js(wc, 'document.querySelectorAll("[data-work-project]")[0].click()');
-    await pressText(wc, '.work-foot', 'Continue');
-    await until(async () => { const f = await flow(wc); return f.screen === 'picker' && !f.dialog; }, 'the picker');
-    // Obsidian alone: the tools screen ticks what the tool agent found (From Amitav, 2026-10-15), and a connector's step
-    // (Granola's) would come before the provider's popup.
-    for (const group of await js(wc, '[...document.querySelectorAll("[data-group]")].map((b)=>b.dataset.group)')) {
-      if (await js(wc, `document.querySelector('[data-group="${group}"]').getAttribute('aria-expanded')`) !== 'true') await press(wc, `[data-group="${group}"]`);
-      await js(wc, '[...document.querySelectorAll("[data-app][aria-checked=true]")].filter((b)=>b.dataset.app!=="Obsidian").forEach((b)=>b.click())');
-    }
-    if (await js(wc, 'document.querySelector("[data-group=notes]").getAttribute("aria-expanded")') !== 'true') await press(wc, '[data-group="notes"]');
-    if (await js(wc, 'document.querySelector("[data-app=Obsidian]").getAttribute("aria-checked")') !== 'true') await press(wc, '[data-app="Obsidian"]');
-    signOut(); // no check: Engelbart still thinks it can run, as when a sign-in lapses
-    await press(wc, '[data-import-run]');
-    // How should Engelbart import your sources? In the background, understood (From Amitav, 2026-10-15).
-    await until(async () => (await flow(wc)).dialog === 'import-method', 'How should Engelbart import your sources?');
-    await press(wc, '[data-import-method="agents"]');
-    await until(async () => (await flow(wc)).dialog === 'agents-consent', 'Import context using background agents');
-    await press(wc, '[data-import-understood]');
-    // Allow Engelbart to organize your research (2026-10-15): Connect desktop, then Continue.
-    for (let i = 0; i < 80 && !(await has(wc, '[data-provider-popup]')); i++) {
-      const f = await flow(wc);
-      if (f && f.dialog === 'organize') { if (await has(wc, '[data-organize-connect]')) await press(wc, '[data-organize-connect]'); else if (await has(wc, '[data-organize-continue]:not([disabled])')) await press(wc, '[data-organize-continue]'); }
-      await pause(150);
-    }
-    await until(() => has(wc, '[data-provider-popup="anthropic"]'), '"Connect Claude Code" over the workspace', 3600);
-    const run = (await js(wc, 'window.engelbartAPI.connectList()')).find((entry) => entry.direct);
-    assert.equal(run.blocked.provider, 'anthropic');
-    assert.equal(run.blocked.error, 'Not logged in · Please run /login', 'the real CLI\'s words');
-    assert.equal(run.jobs.some((job) => job.status === 'failed'), false, 'nothing failed: the run waits');
-    await until(() => js(wc, 'document.querySelector("[data-provider-popup]").dataset.providerState==="not-connected"'), 'its line once the check has run', 1200);
-    assert.equal(await text(wc, '[data-provider-line]'), 'Your imports are waiting for Claude Code.');
-    await shot(wc, 'C1-workspace');
-    log('C the real import agent said "Not logged in": the run waits, "Connect Claude Code" over the workspace');
-    signIn();
-    await press(wc, '[data-provider-connect="anthropic"]');
-    await until(async () => !(await has(wc, '[data-provider-popup]')), 'the popup gone once connected', 1200);
-    const done = await until(async () => { const s = (await js(wc, 'window.engelbartAPI.connectList()')).find((entry) => entry.id === run.id); const imports = s ? s.jobs.filter((job) => job.kind === 'import') : []; return imports.length && imports.every((job) => ['done', 'failed', 'stopped'].includes(job.status)) ? s : null; }, 'the real import ended', 12000);
-    const obsidian = done.jobs.find((job) => job.kind === 'import' && job.apps.includes('Obsidian'));
-    assert.equal(obsidian.status, 'done', `the import ran on the real Claude Code: ${JSON.stringify(obsidian)}`);
-    log(`C connected: the import went on (${obsidian.notes} notes: ${obsidian.summary.slice(0, 120)})`);
-    await shot(wc, 'C2-after');
-    assert.equal(refusedSignIns, 0, 'no real sign-in was started');
+    await until(async () => (await flow(wc)).dialog === 'tools-setup', 'the agent popup again', 1200);
+    await until(() => has(wc, `[role=dialog] ${AGENT} [data-agent-choice]`), 'the same popup in Import your context');
+    await plain('Import context');
+    await shot(wc, '03-import-popup');
+    const found = (await discovery(wc)).projects;
+    assert.ok(!['running', 'failed'].includes(found.status), `no agent ran: ${JSON.stringify(found)}`);
+    untouched('the end');
+    assert.equal(asked.signIn.length, 1, 'one sign-in asked for, by the one press');
     console.log('smoke-provider-real: ok');
     app.exit(0);
   } catch (error) {
     console.error('smoke-provider-real failed:', error);
+    console.error('asked:', JSON.stringify(asked));
     try { const wc = BrowserWindow.getAllWindows()[0].webContents; await shot(wc, 'zz-failure'); console.error(await js(wc, 'document.body.innerText.slice(0,1500)')); } catch { /* none */ }
     app.exit(1);
   }

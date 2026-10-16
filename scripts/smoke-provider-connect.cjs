@@ -6,15 +6,22 @@
 // installed. it should say connecting instead"; "maybe if they dont hit connect it doesnt work but fails silently"). The real
 // app, hidden, on a disposable home, with a pretend Mac's Claude Code and Codex (ENGELBART_TOOLS_FAKE) whose fake agents
 // fail as the real CLIs do when they can't run (ENGELBART_CONNECT_FAKE_CLI: "Not logged in · Please run /login"). The
-// provider is the tool check's answer (no ENGELBART_PROVIDERS_FAKE). Scenarios:
-//   unknown   Claude Code whose sign-in check never answers (signedIn null), no Codex: Import context asks to connect it
-//             (it used to count as signed in, and every agent failed); Connect signs in, and the flow goes on by itself.
-//   fresh     neither CLI (a fresh Mac): Engelbart installs Claude Code at launch; its row says "Connecting…", never
-//             "Installing"; then it is signed in and the projects are found.
-//   refused   both signed in, Claude Code's account turned away ("Credit balance is too low"): the projects line says it
-//             couldn't reach Claude Code and offers to connect it; Try again never re-runs it as it is; Codex finds them.
-//   blocked   onboarded with Claude Code, which is signed out before the run: the project opens, "Connect Claude Code"
-//             over the workspace; Connect signs in and the imports go on by themselves.
+// provider is the tool check's answer (no ENGELBART_PROVIDERS_FAKE). Since 2026-10-16 (the onboarding beta's S3) the
+// agent popup, "Use Claude Code, Codex, or both?" (src/renderer/import/AgentSetup.jsx), asks over Welcome in place of the
+// tools screen and inside Import your context in place of "Connect Claude Code or Codex". Scenarios:
+//   unknown   Claude Code whose sign-in check never answers (signedIn null), no Codex: the popup over Welcome (it never
+//             counts as signed in); Skip goes on to Import your context, whose Import context asks again in the same
+//             popup, nothing run on it; Claude Code, "Connect to Claude" signs in, and the flow goes on by itself.
+//   fresh     neither CLI (a fresh Mac): Engelbart installs Claude Code at launch; the popup's Claude Code reads
+//             "Connecting…", never "Installing"; then "Connect to Claude" signs it in, the popup closes by itself and the
+//             projects are found.
+//   refused   both signed in and subscribed: Welcome goes straight on, no popup; Claude Code picked. Its account turned
+//             away ("Credit balance is too low"): the projects line says it couldn't reach Claude Code and offers to
+//             connect it; Try again never re-runs it as it is; the popup comes with Claude Code chosen and "Connect to
+//             Claude", waits for the person, and Codex chosen there finds the projects.
+//   blocked   onboarded with Claude Code (straight past Welcome), which is signed out before the run: the project opens,
+//             "Connect Claude Code" over the workspace; Connect signs in and the imports go on by themselves.
+// No version and no subtext in the popup, Skip plain text far left, whatever it shows.
 // ENGELBART_IMPORT_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -56,6 +63,9 @@ write('Notes/Research/Help-seeking.md', 'Novices rarely ask.\n');
 write('Library/Application Support/obsidian/obsidian.json', JSON.stringify({ vaults: { v: { path: path.join(root, 'Notes'), ts: Date.now(), open: true } } }));
 const session = (dir, id, prompt) => write(`.claude/projects/-${dir.replace(/\//g, '-')}/${id}.jsonl`, `${JSON.stringify({ type: 'user', entrypoint: 'cli', cwd: path.join(root, dir), message: { role: 'user', content: prompt } })}\n`);
 session('tutoring-study', '11111111-1111-4111-8111-111111111111', 'Plan the help-seeking analysis');
+fs.mkdirSync(path.join(root, 'tutoring-study'), { recursive: true });
+// refused: Codex signed in with a ChatGPT Plus plan (its sign-in file's ID token), so the popup counts it as one that runs (S3).
+if (SCENARIO === 'refused') { const part = (o) => Buffer.from(JSON.stringify(o)).toString('base64url'); write('.codex/auth.json', JSON.stringify({ tokens: { id_token: `${part({ alg: 'none' })}.${part({ 'https://api.openai.com/auth': { chatgpt_plan_type: 'plus' } })}.x` } })); }
 
 require('../src/main/index.cjs');
 
@@ -91,10 +101,22 @@ async function shot(wc, name) {
   const picture = await wc.capturePage(undefined, { stayHidden: true, stayAwake: true });
   fs.writeFileSync(path.join(SHOTS, `connect-${SCENARIO}-${name}.png`), picture.toPNG());
 }
-// The connect dialog's Claude Code / Codex rows: { anthropic: { state, label, buttons } }.
-const rows = (wc) => js(wc, '(()=>{const out={};for(const row of document.querySelectorAll("[data-provider-row]"))out[row.dataset.providerRow]={state:row.dataset.providerState,label:(row.querySelector("small")||{}).textContent||"",buttons:[...row.querySelectorAll("button")].map((b)=>b.textContent.trim())};return out})()');
 // No horizontal dividing line in what is shown (Hudson: "I never want horizontal dividing lines").
 const dividers = (wc, scope) => js(wc, `[...document.querySelectorAll(${JSON.stringify(`${scope} *`)})].filter((el)=>{const s=getComputedStyle(el);return (parseFloat(s.borderTopWidth)>0&&s.borderTopStyle!=='none')||(parseFloat(s.borderBottomWidth)>0&&s.borderBottomStyle!=='none')}).filter((el)=>!el.matches('button,input,textarea,.btn')).length`);
+// The agent popup, over Welcome ([data-agent-popup]) or in Import your context's modal: its button { label, action, disabled }.
+const AGENT = '.agent-setup';
+const primary = (wc) => js(wc, `(()=>{const b=document.querySelector(${JSON.stringify(`${AGENT} [data-agent-primary]`)});return b?{label:b.textContent.trim(),action:b.dataset.agentPrimary,disabled:b.disabled}:null})()`);
+const labelIs = (wc, label, tries) => until(async () => { const b = await primary(wc); return b && b.label === label && !b.disabled ? b : null; }, `"${label}"`, tries);
+async function plain(wc, when) {
+  const words = await text(wc, AGENT);
+  assert.equal(await text(wc, `${AGENT} h3`), 'Use Claude Code, Codex, or both?');
+  assert.doesNotMatch(words, /\d+\.\d+/, `no version in the popup (${when}): ${words}`);
+  assert.doesNotMatch(words, /Installing|Skip for now/, `never "Installing", nor "Skip for now" (${when})`);
+  assert.equal(await js(wc, `document.querySelectorAll(${JSON.stringify(`${AGENT} small, ${AGENT} h3 + p`)}).length`), 0, `no subtext (${when})`);
+  assert.equal(await dividers(wc, AGENT), 0, `no dividing lines (${when})`);
+  const skip = await js(wc, `(()=>{const s=document.querySelector(${JSON.stringify(`${AGENT} [data-agent-skip]`)});const c=getComputedStyle(s);const r=s.getBoundingClientRect();const rows=Math.min(...[...document.querySelectorAll(${JSON.stringify(`${AGENT} [data-agent-choice]`)})].map((b)=>b.getBoundingClientRect().left));return{text:s.textContent.trim(),plain:c.backgroundColor==="rgba(0, 0, 0, 0)"&&parseFloat(c.borderTopWidth)===0,left:Math.abs(r.left-rows)<=2}})()`);
+  assert.deepEqual(skip, { text: 'Skip', plain: true, left: true }, `Skip, plain text far left (${when})`);
+}
 
 async function walkToProjects(wc) {
   await until(async () => { const f = await flow(wc); return f && f.screen === 'roles' && !f.dialog; }, 'What kind of work do you do?');
@@ -117,19 +139,46 @@ app.whenReady().then(async () => {
     await until(() => tools(wc).then((snap) => snap && snap.checked), 'the launch check');
     await press(wc, '[data-onboarding-continue] button');
 
+    if (SCENARIO === 'unknown' || SCENARIO === 'fresh') {
+      /* neither can run: the popup over Welcome, never a tools screen */
+      await until(() => has(wc, '[data-agent-popup] [data-agent-choice]'), 'Use Claude Code, Codex, or both? over Welcome');
+      assert.equal(await js(wc, 'document.querySelector("[data-onboarding]").dataset.step'), 'welcome', 'over Welcome');
+      assert.equal(await has(wc, '[data-tool-row], [data-onboarding-tools]'), false, 'no tools screen');
+      await plain(wc, 'over Welcome');
+      await shot(wc, '01-welcome-popup');
+    }
+
+    if (SCENARIO === 'unknown') {
+      // Skip goes on: Import your context asks again.
+      await press(wc, '[data-agent-popup] [data-agent-skip]');
+      await until(async () => !(await has(wc, '[data-agent-popup]')), 'Skip closes the popup');
+    }
+
     if (SCENARIO === 'fresh') {
-      /* the tools screen while Claude Code installs at launch: "Connecting…" */
-      await until(() => has(wc, '[data-tool-row="claude"]'), 'the tools screen');
-      const state = await until(async () => { const t = await text(wc, '[data-tool-row="claude"] [data-tool-state]'); return t || null; }, 'Claude Code\'s state');
-      await shot(wc, '01-tools-installing');
-      assert.equal(state, 'Connecting…', `Claude Code being installed reads "Connecting…" (${state})`);
-      assert.doesNotMatch(await text(wc, '[data-onboarding-tools]'), /Installing/, 'never "Installing"');
-      // Installed: its sign-in is the step (Continue waits for it).
-      await until(() => has(wc, '[data-tool-row="claude"] [data-tool-action="sign-in"] button'), 'Claude Code installed, waiting for its sign-in', 600);
+      /* Claude Code chosen while Engelbart installs it at launch: "Connecting…" */
+      await press(wc, '[data-agent-choice="claude"]');
+      assert.equal((await tools(wc)).tools.claude.busy && (await tools(wc)).tools.claude.busy.action, 'install', 'installing since launch');
+      const installing = await primary(wc);
+      await shot(wc, '02-popup-installing');
+      assert.deepEqual([installing.label, installing.disabled], ['Connecting…', true], `Claude Code being installed reads "Connecting…": ${JSON.stringify(installing)}`);
+      await plain(wc, 'installing');
+      // Installed: its sign-in is the one press left.
+      await labelIs(wc, 'Connect to Claude', 600);
       assert.equal((await tools(wc)).tools.claude.status, 'signed-out');
-      await press(wc, '[data-tool-row="claude"] [data-tool-action="sign-in"] button');
+      await plain(wc, 'installed');
+      await press(wc, '[data-agent-popup] [data-agent-primary="sign-in"]');
       await until(() => tools(wc).then((snap) => snap.tools.claude.signedIn === true), 'signed in', 600);
-      await pressText(wc, '[data-screen-label="02 Tools"]', 'Continue');
+      await until(async () => !(await has(wc, '[data-agent-popup]')), 'the popup gone by itself once it runs', 600);
+    }
+
+    if (SCENARIO === 'refused' || SCENARIO === 'blocked') {
+      // Claude Code signed in with a subscription: straight on, no popup (S3).
+      for (let i = 0; i < 400; i++) {
+        assert.equal(await has(wc, '[data-agent-popup]'), false, 'no popup for a subscribed Claude Code');
+        const f = await flow(wc);
+        if (f && f.screen === 'intro') break;
+        await pause();
+      }
     }
 
     /* the intro → Import context */
@@ -138,19 +187,19 @@ app.whenReady().then(async () => {
 
     if (SCENARIO === 'unknown') {
       // Before: Claude Code counted as signed in, the project agent ran and failed "Not logged in", and Try again re-ran it.
-      await until(async () => (await flow(wc)).dialog === 'tools-setup', 'Connect Claude Code or Codex (asked, not run)');
-      const before = await rows(wc);
-      await shot(wc, '01-connect-dialog');
-      assert.equal(before.anthropic.state, 'not-connected', JSON.stringify(before));
-      assert.deepEqual(before.anthropic.buttons, ['Connect']);
-      assert.equal(await text(wc, '[role=dialog] h3'), 'Connect Claude Code or Codex');
-      assert.doesNotMatch(await text(wc, '[role=dialog]'), /Install/, 'no "Install" for one the person has');
-      assert.equal(await dividers(wc, '[role=dialog] .tool-list'), 0, 'no dividing lines');
+      await until(async () => (await flow(wc)).dialog === 'tools-setup', 'the agent popup again (asked, not run)');
+      await until(() => has(wc, `[role=dialog] ${AGENT} [data-agent-choice]`), 'the same popup in Import your context');
+      await shot(wc, '03-import-popup');
+      await plain(wc, 'Import context');
+      assert.equal(await has(wc, '[data-provider-row], .tool-list'), false, 'not the old Connect Claude Code or Codex');
       const discovery = await js(wc, 'window.engelbartAPI.importDiscovery()');
       assert.notEqual(discovery.projects.status, 'failed', 'nothing ran on a CLI that could not');
-      await press(wc, '[data-provider-connect="anthropic"]');
-      await until(async () => { const r = await rows(wc); return r.anthropic && ['connecting', 'signing-in'].includes(r.anthropic.state); }, 'Connecting… / Finish in your browser');
-      await shot(wc, '02-connecting');
+      await press(wc, `${AGENT} [data-agent-choice="claude"]`);
+      await labelIs(wc, 'Connect to Claude');
+      assert.doesNotMatch(await text(wc, AGENT), /Install/, 'no "Install" for one the person has');
+      await press(wc, `${AGENT} [data-agent-primary="sign-in"]`);
+      await until(() => tools(wc).then((snap) => snap.tools.claude.busy && snap.tools.claude.busy.action === 'sign-in'), 'Claude Code\'s own sign-in');
+      await shot(wc, '04-signing-in');
       // Signed in: on with the flow by itself, no Continue pressed.
       await walkToProjects(wc);
     }
@@ -158,10 +207,15 @@ app.whenReady().then(async () => {
     if (SCENARIO === 'fresh' || SCENARIO === 'blocked') await walkToProjects(wc);
 
     if (SCENARIO === 'refused') {
-      // Claude Code has the subscription (Codex's sign-in file names no plan on this pretend Mac): picked without asking.
+      // Both subscribed: asked which, Claude Code chosen.
       const f = await until(async () => { const now = await flow(wc); return now && (now.dialog === 'provider-choice' || now.screen === 'roles') ? now : null; }, 'the provider picked');
       if (f.dialog === 'provider-choice') await press(wc, '[data-onboarding-provider="anthropic"]');
       await walkToProjects(wc);
+      // Claude Code found nothing, so ChatGPT and Claude on the web are next, which wait for the browser question's answer.
+      // No browser on this Mac: that question is declined without being asked, and saved as declined, so the projects have
+      // their answer in seconds (before 2026-10-16 it was never saved and they waited ten minutes, discover.cjs
+      // KEYCHAIN_WAIT_MS).
+      await until(() => js(wc, 'window.engelbartAPI.importDiscovery()').then((d) => d.projects.status !== 'running'), 'the projects, not left waiting on a browser question nobody was asked');
       // Claude Code turned the agent away: the line says so and offers to connect it (no dead Try again).
       await until(() => has(wc, '[data-discovery-connect="anthropic"]'), 'Couldn’t reach Claude Code · Connect Claude Code');
       assert.match(await text(wc, '[data-discovery-status]'), /^Couldn’t reach Claude Code\.Connect Claude Code$/);
@@ -170,17 +224,20 @@ app.whenReady().then(async () => {
       const runsBefore = (await js(wc, 'window.engelbartAPI.importDiscovery()')).projects;
       assert.equal(runsBefore.connect, 'anthropic');
       await press(wc, '[data-discovery-connect="anthropic"]');
-      await until(async () => (await flow(wc)).dialog === 'tools-setup', 'Connect Claude Code or Codex');
-      const shown = await rows(wc);
-      await shot(wc, '02-refused-dialog');
-      assert.equal(shown.anthropic.state, 'refused', JSON.stringify(shown));
-      assert.match(shown.anthropic.label, /Credit balance is too low/, 'its line says why');
-      assert.equal(shown.openai.state, 'ready');
+      await until(async () => (await flow(wc)).dialog === 'tools-setup', 'the agent popup');
+      await until(() => has(wc, `[role=dialog] ${AGENT}`), 'the agent popup in Import your context');
+      // Claude Code chosen already; signed in but turned away, so its one press is its sign-in.
+      assert.equal(await js(wc, `document.querySelector(${JSON.stringify(`${AGENT} [data-agent-choice="claude"]`)}).getAttribute("aria-checked")`), 'true', 'Claude Code chosen');
+      await labelIs(wc, 'Connect to Claude');
+      await plain(wc, 'refused');
+      await shot(wc, '02-refused-popup');
       // Not re-run on its own while it would be turned away again.
       await pause(600);
       assert.equal((await flow(wc)).dialog, 'tools-setup', 'it waits for the person');
-      await pressText(wc, '[role=dialog] .mf', 'Continue');
-      await until(async () => !(await flow(wc)).dialog, 'the dialog closed');
+      assert.equal((await js(wc, 'window.engelbartAPI.importDiscovery()')).projects.ended, runsBefore.ended, 'not re-run');
+      // Codex runs: chosen, the flow goes on with it.
+      await press(wc, `${AGENT} [data-agent-choice="codex"]`);
+      await until(async () => !(await flow(wc)).dialog, 'the popup closed once Codex is chosen', 400);
     }
 
     /* the projects found */
@@ -240,7 +297,7 @@ app.whenReady().then(async () => {
     app.exit(0);
   } catch (error) {
     console.error(`smoke-provider-connect (${SCENARIO}) failed:`, error);
-    try { const wc = BrowserWindow.getAllWindows()[0].webContents; await shot(wc, 'zz-failure'); console.error(await js(wc, 'document.body.innerText.slice(0,1500)')); } catch { /* none */ }
+    try { const wc = BrowserWindow.getAllWindows()[0].webContents; await shot(wc, 'zz-failure'); console.error(await js(wc, 'document.body.innerText.slice(0,1500)')); console.error(JSON.stringify({ flow: await flow(wc), projects: (await js(wc, 'window.engelbartAPI.importDiscovery()')).projects }).slice(0, 1500)); } catch { /* none */ }
     app.exit(1);
   }
 });
