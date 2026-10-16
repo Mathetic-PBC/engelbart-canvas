@@ -120,6 +120,7 @@ export const ROUND4_CSS = `
 .ix .import-mode-icon svg{width:21px;height:21px;stroke-width:1.6}
 .ix .import-mode-copy{position:relative}
 .ix .import-mode-copy .recommended{font-weight:inherit}
+.ix .modal.method-modal{width:min(560px,100%)} /* wide enough that "(recommended)" stays on the first title's line (2026-10-16) */
 .ix .recommended-measure{position:absolute;left:0;top:0;visibility:hidden;white-space:nowrap;pointer-events:none;font-size:15px;font-weight:500;line-height:1.4}
 /* S3: the agent popup (./AgentSetup.jsx), its rows as the browser picker's */
 .ix .modal.agent-modal{width:min(440px,100%)}

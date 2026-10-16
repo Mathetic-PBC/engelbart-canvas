@@ -1203,7 +1203,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
 
   const d = F.dialog;
   const body = d ? dialogBody() : null;
-  const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'organize' ? 'organize-modal' : d === 'tools-setup' ? 'agent-modal' : d === 'safari' ? 'safari-modal' : '';
+  const modalClass = d === 'obsidian-picker' ? 'obsidian-modal' : d === 'organize' ? 'organize-modal' : d === 'tools-setup' ? 'agent-modal' : d === 'safari' ? 'safari-modal' : d === 'import-method' ? 'method-modal' : '';
   const screen = F.screen === 'intro' ? introPage() : F.screen === 'roles' ? rolesPage() : F.screen === 'work' ? workPage() : F.screen === 'projects' ? projectsPage() : picker();
 
   // Import manually: the librarian's chat, Connect your library's own page, outside this flow's styles; put away, the

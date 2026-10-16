@@ -319,30 +319,28 @@ app.whenReady().then(async () => {
     if (MODE === 'manual') {
       /* Import manually: the librarian's chat (Connect your library's page) on the same choices; no Full Disk Access */
       await until(async () => (await flow(wc)).screen === 'librarian', 'the librarian\'s chat', 1200);
-      await until(() => has(wc, '[data-connect-agent]'), 'the librarian\'s first words', 1200);
-      // The librarian must ask (From Amitav, 2026-10-15): a popup for each web app or connector before anything of it is
-      // looked at; no survey of it runs before Allow; Allow starts its survey, Skip leaves it out.
+      // The librarian asks once, first (2026-10-16, in place of a popup per app): one message, every app unticked, Select
+      // all beside a Grant access that waits for a tick; nothing of them runs, and the librarian waits, until it is answered.
+      await until(() => has(wc, '[data-connect-grant="live"]'), 'Allow Engelbart to access the following apps:', 1200);
       const firstChat = (await js(wc, 'window.engelbartAPI.connectList()')).find((entry) => !entry.direct && !entry.stopped);
-      await until(() => has(wc, '[data-need-popup][data-need-kind="consent"]'), 'Allow Engelbart to search and read your …?');
-      await shot(wc, '11-librarian');
-      const asked = (await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(firstChat.id)})`)).needs.filter((need) => need.kind === 'consent').map((need) => need.app);
-      assert.ok(asked.length >= 2, `a prompt for each web app or connector: ${asked.join(', ')}`);
+      assert.equal(await has(wc, '[data-need-popup]'), false, 'no popup per app');
+      const asked = await js(wc, '[...document.querySelectorAll("[data-connect-grant-app]")].map((el)=>el.dataset.connectGrantApp)');
+      assert.ok(asked.length >= 2, `a row for each web app, connector and tool: ${asked.join(', ')}`);
+      assert.equal(await js(wc, 'document.querySelectorAll("[data-connect-grant-app][aria-checked=true]").length'), 0, 'every one unticked');
+      assert.equal(await js(wc, 'document.querySelector("[data-connect-grant-go]").disabled'), true, 'Grant access waits for a tick');
+      assert.equal(await text(wc, '[data-connect-grant-all]'), 'Select all');
+      assert.equal(await has(wc, '[data-connect-draft]'), false, 'no Reply box on the onboarding page');
       const webJobs = async () => (await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(firstChat.id)})`)).jobs.filter((job) => job.apps.some((app) => asked.includes(app)));
-      assert.deepEqual(await webJobs(), [], 'nothing of them runs before Allow');
-      const title = await js(wc, 'document.querySelector("[data-need-popup] h3").textContent');
-      const first = asked.find((app) => title.includes(app === 'Google Docs' ? 'Google Drive' : app)) || asked[0];
-      assert.match(title, /^Allow Engelbart to search and read your .+\?$/);
-      assert.match(await js(wc, 'document.querySelector("[data-need-popup] p").textContent'), /may be sent to (Anthropic|OpenAI) for processing\./);
-      await press(wc, '[data-need-popup] [data-need-primary]');
-      // Allowed: its sign-in is looked at and its survey starts (here, signed out of the test browser, it is left out; a
-      // connector not connected yet is offered by the librarian as a button).
-      await until(async () => (await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(firstChat.id)})`)).log.some((entry) => entry.text === `Allowed Engelbart to search and read ${first}`), `${first} allowed`);
-      for (let n = 0; n < 12 && await has(wc, '[data-need-popup][data-need-kind="consent"]'); n += 1) {
-        await press(wc, '[data-need-popup] [data-need-later]');
-        await new Promise((resolve) => { setTimeout(resolve, 300); });
-      }
-      assert.equal(await has(wc, '[data-need-popup]'), false, 'every prompt answered');
-      assert.deepEqual((await webJobs()).filter((job) => !job.apps.includes(first)), [], 'what was skipped never ran');
+      assert.deepEqual(await webJobs(), [], 'nothing of them runs before Grant access');
+      await shot(wc, '11-librarian-grant');
+      const first = asked[0];
+      await press(wc, `[data-connect-grant-app="${first}"]`);
+      assert.equal(await js(wc, 'document.querySelector("[data-connect-grant-go]").disabled'), false);
+      await press(wc, '[data-connect-grant-go]');
+      await until(async () => (await js(wc, `window.engelbartAPI.connectState(${JSON.stringify(firstChat.id)})`)).log.some((entry) => /^Allowed Engelbart to access /.test(entry.text)), `${first} allowed`);
+      await until(() => has(wc, '[data-connect-grant="answered"]'), 'the grant folded to one line');
+      await until(() => has(wc, '[data-connect-agent]'), 'the librarian\'s first words, after the grant', 1200);
+      assert.deepEqual((await webJobs()).filter((job) => !job.apps.includes(first)), [], 'what was left out never ran');
       await shot(wc, '11b-librarian-asked');
       // Its back arrow stops that chat and brings back the tools screen, not Connect your library's own choose screen.
       await press(wc, 'button.bart-ic[aria-label="Back"]');
@@ -352,6 +350,11 @@ app.whenReady().then(async () => {
       await until(async () => (await flow(wc)).dialog === 'import-method', 'How should Engelbart import your sources?, again');
       await press(wc, '[data-import-method="manual"]');
       await until(async () => (await flow(wc)).screen === 'librarian', 'the librarian\'s chat, again', 1200);
+      await until(() => has(wc, '[data-connect-grant="live"]'), 'the grant, again', 1200);
+      // Select all reads Deselect all once every one is ticked.
+      await press(wc, '[data-connect-grant-all]');
+      assert.equal(await text(wc, '[data-connect-grant-all]'), 'Deselect all');
+      await press(wc, '[data-connect-grant-go]');
       await until(() => has(wc, '[data-connect-agent]'), 'the librarian\'s first words, again', 1200);
       assert.equal(await js(wc, '[...document.querySelectorAll("[data-connect-library] *")].filter((el)=>{const c=getComputedStyle(el);return (parseFloat(c.borderTopWidth)>0&&c.borderTopStyle!=="none"&&el.getBoundingClientRect().width>200&&parseFloat(c.borderLeftWidth)===0)||(parseFloat(c.borderBottomWidth)>0&&c.borderBottomStyle!=="none"&&el.getBoundingClientRect().width>200&&parseFloat(c.borderLeftWidth)===0)}).length'), 0, 'no dividing lines in the chat');
       const chat = (await js(wc, 'window.engelbartAPI.connectList()')).find((entry) => !entry.direct && !entry.stopped);
@@ -360,15 +363,11 @@ app.whenReady().then(async () => {
       assert.ok(choices.sources.notes.apps.includes('Obsidian'));
       // What was specified, its saved websites' line among it, for the librarian.
       assert.match(choices.custom, /- Obsidian: Only my notes about help-seeking\. Also bring in the web links saved in these notes.*; only these folders and files: .*Research; only for these of the projects: /, choices.custom);
-      // Put away, the chat goes on in the background; the projects are made and the first opens.
-      await until(() => has(wc, '[data-need-popup][data-need-kind="consent"]'), 'the prompts, again');
-      for (let n = 0; n < 12 && await has(wc, '[data-need-popup][data-need-kind="consent"]'); n += 1) {
-        await press(wc, '[data-need-popup] [data-need-later]');
-        await new Promise((resolve) => { setTimeout(resolve, 300); });
-      }
+      assert.equal(await js(wc, '/Your answer/.test(document.body.innerText)'), false, 'nothing says Your answer');
+      await shot(wc, '11c-librarian-chat');
+      // Finish in background (no arrow): Import, then straight on; the projects are made and the first opens.
+      assert.equal(await text(wc, '[data-connect-import]'), 'Finish in background');
       await press(wc, '[data-connect-import]');
-      await until(() => has(wc, '[data-connect-done]'), 'Continue', 1200);
-      await press(wc, '[data-connect-done]');
       await until(() => js(wc, '!document.querySelector("[data-import-flow]")'), 'the project open', 1200);
       const made = await js(wc, 'window.engelbartAPI.listProjects()');
       for (const title of titles.slice(0, 2)) assert.ok(made.some((project) => project.name === title), `a project named for ${title}`);
@@ -409,7 +408,9 @@ app.whenReady().then(async () => {
     assert.equal(await js(wc, '(()=>{const s=document.querySelector("[data-need-popup] .scrim");const r=s.getBoundingClientRect();const l=document.querySelector("[data-need-later]").getBoundingClientRect();return s.dataset.overlay==="1"&&r.width===innerWidth&&r.height===innerHeight&&document.elementFromPoint(l.x+l.width/2,l.y+l.height/2)===document.querySelector("[data-need-later]")})()'), true, 'the scrim is the overlay, Later on top');
     assert.match(await text(wc, '[data-need-popup] h3'), /^Sign in to /);
     assert.equal(await has(wc, '[data-need-popup] .need-modal > p'), false, 'no "Continue in Arc." (From Amitav, 2026-10-15)');
-    assert.equal(await text(wc, '[data-need-popup] [data-need-primary]'), 'Open Arc');
+    // Signed out of every browser here: the sign-in brought back is one card (2026-10-16), signed in inside Engelbart, or
+    // for Google's in Arc.
+    assert.match(await text(wc, '[data-need-popup] [data-need-primary]'), /^Sign in (inside Engelbart|in Arc)$/);
     await shot(wc, '13-signin-popup');
     // Skip (Later until From Amitav, 2026-10-15) puts the step away for good: skipped, no "Needs you" left anywhere.
     const first = await text(wc, '[data-need-popup] h3');
