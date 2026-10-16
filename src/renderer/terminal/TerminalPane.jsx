@@ -74,7 +74,7 @@ function errorText(error) {
 }
 
 // `full` / `onFull`: the right pane's full screen (Workspace.jsx), its button at the end of the tabs as the Stage's is.
-export default function TerminalPane({ cwd, projectId, visible = true, full = false, onFull = null }) {
+export default function TerminalPane({ cwd, projectId, visible = true, full = false, onFull = null, keysToDoc = null }) {
   useSyncExternalStore(subscribeVersion, getVersion);
   const state = getState();
   const stageRef = useRef(null);
@@ -355,6 +355,9 @@ export default function TerminalPane({ cwd, projectId, visible = true, full = fa
   };
 
   // While focus is in the pane: ⌘T opens a new terminal, ⌘W closes the current tab and ⌘1–9 switch tabs.
+  // `keysToDoc` (Workspace.jsx, 2026-10-16): the middle canvas was clicked last, and ⌘T opens a note there instead.
+  const toDoc = useRef(keysToDoc);
+  toDoc.current = keysToDoc;
   useEffect(() => {
     if (!visible) return undefined;
     const onKey = (event) => {
@@ -363,6 +366,7 @@ export default function TerminalPane({ cwd, projectId, visible = true, full = fa
       const inside = rootRef.current && event.target && rootRef.current.contains(event.target);
       // ⌘T opens a terminal whenever the Terminal shows, wherever the keyboard is (2026-09-25: "cmd t in terminal new
       // terminal not browser"); while the Stage shows it is the Stage's.
+      if (event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey && !inside && toDoc.current && toDoc.current()) return;
       if (event.metaKey && event.key.toLowerCase() === 't' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void launch('shell', projectCwd); return; }
       if (inside && currentId && event.metaKey && event.key.toLowerCase() === 'w' && !event.shiftKey && !event.altKey) { event.preventDefault(); event.stopPropagation(); void close(currentId); return; }
       if (inside && event.metaKey && /^[1-9]$/.test(event.key)) {

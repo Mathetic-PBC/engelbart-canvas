@@ -11,7 +11,7 @@ const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background
 
 export default function DocPane({
   index, kind = 'note', editorRef, docKey, text, readOnly = false, title, onRename, titleFocus,
-  conflict, onKeepMine, onTakeTheirs, onClose, empty, editor, style,
+  conflict, onKeepMine, onTakeTheirs, onClose, empty, editor, style, find = null,
 }) {
   // The title is a field of its own: a draft while it is typed, named on Enter or when the caret leaves it. An untitled
   // name is its hint, not its value.
@@ -54,6 +54,7 @@ export default function DocPane({
 
   return (
     <section data-doc-pane={index} aria-label={index === 0 ? 'Document' : `${kind === 'workspace' ? 'Workspace' : 'Note'}: ${title || 'Untitled'}`} style={{ position: 'relative', minWidth: 0, minHeight: 0, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', background: '#fff', ...style }}>
+      {find /* ⌘F's card while this pane is searched (DocFind.jsx), at its top right */}
       {conflict && (
         <div role="alert" data-doc-conflict="1" data-overlay="1" style={{ position: 'absolute', top: 10, right: 16, zIndex: 30, display: 'flex', alignItems: 'center', gap: 4, maxWidth: 'calc(100% - 32px)', padding: '5px 6px 5px 12px', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', boxShadow: '0 4px 14px #0000000f', font: '12.5px/1.4 var(--font-sans)', color: '#4d4d4d' }}>
           <span style={{ marginRight: 6 }}>Saved in another window while you were editing.</span>

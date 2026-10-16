@@ -669,6 +669,30 @@ export default class DocEditor extends React.Component {
     const s = this.state; if (!s.mention && !s.picker && !s.pop) return false;
     this.closePicker(); this.hidePop(); if (s.mention) this.setState({ mention: null }); return true;
   }
+  // ⌘F in the middle canvas (2026-10-16, DocFind.jsx) searches the lines as drawn and paints its matches with CSS Custom
+  // Highlights: nothing is written into the editor's DOM. Closing it gives the keyboard back here, on the match in front.
+  /** What find searches: the lines, and the page that scrolls them. null before the editor is drawn. */
+  findRoot() { const ed = this.editorEl(); return ed ? { root: ed, scroller: this.scrollRef.current } : null; }
+  /** The caret where it is now ({ line, sel: [a, b] } in the line's source), for placeCaret; null when the document does
+   * not have it or the selection runs over lines. */
+  caretNow() { const c = this.caretInfo(); if (!c || c.anchor.line !== c.focus.line) return null; return { line: c.anchor.line, sel: [Math.min(c.anchor.offset, c.focus.offset), Math.max(c.anchor.offset, c.focus.offset)] }; }
+  /** A range on the page (find's match in front) as a caret placeCaret takes: null when it is not in one line's text or
+   * the line takes no caret (an answer, a Build). */
+  caretOfRange(range) {
+    if (!range) return null;
+    const a = this.caretAt(range.startContainer, range.startOffset), b = this.caretAt(range.endContainer, range.endOffset);
+    if (!a || !b || a.line !== b.line || this.lockedAt(this.lines(), a.line)) return null;
+    return { line: a.line, sel: [Math.min(a.offset, b.offset), Math.max(a.offset, b.offset)] };
+  }
+  /** The keyboard back in the document with `c` selected (caretNow, caretOfRange), as a click would put it. → whether it went */
+  placeCaret(c) {
+    const ls = this.lines();
+    if (this.props.readOnly || !c || ls[c.line] == null || this.lockedAt(ls, c.line)) return false;
+    const end = lineText(this.parsedOf(ls)[c.line] || parseLine(ls[c.line]), ls[c.line]).length; // the line may have changed since
+    this.caret = { line: c.line, sel: [Math.min(c.sel[0], end), Math.min(c.sel[1], end)] }; this.wantFocus = true;
+    if (this.state.activeLine === c.line) this.forceUpdate(); else this.setState({ activeLine: c.line, mention: null });
+    return true;
+  }
 
   /* ---------------------------------------------------------------- the pane beside (MATH-23) */
   // The mentions whose document is open in the pane beside this one are marked, as the link clicked stays marked on Andy
