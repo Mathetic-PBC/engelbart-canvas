@@ -95,10 +95,11 @@ function copiedLabel(copied) {
   return parts.join(' · ');
 }
 
-function describe(row) {
+// `projectId`: the project open here. A note of another one is mentioned too (2026-10-16), and its card says so.
+function describe(row, projectId) {
   const kind = kindOf(row);
   let summary;
-  if (isNote(row)) summary = 'A note in this project.';
+  if (isNote(row)) summary = row.project_id === projectId ? 'A note in this project.' : 'A note in another project.';
   else if (hasTag(row, 'git')) summary = row.folder_path ? `Cloned at ${row.folder_path}` : (row.url || 'A repository.');
   else if (row.type === 'website') summary = row.url || 'A linked page.';
   else summary = row.folder_path || (row.path ? basename(row.path) : '');
@@ -1101,7 +1102,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const letGo = React.useMemo(() => letGoNotes({ workspaces: tree.workspaces, notes: tree.notes }), [tree.workspaces, tree.notes]);
   const findable = React.useMemo(() => (letGo.size ? library.filter((row) => !letGo.has(row.id)) : library), [library, letGo]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, ...library.filter((row) => row.type !== 'image').map((row) => (letGo.has(row.id) ? { ...describe(row), trashed: true } : describe(row)))], [library, letGo]);
+  const mentionable = React.useMemo(() => [BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, ...library.filter((row) => row.type !== 'image').map((row) => (letGo.has(row.id) ? { ...describe(row, project.id), trashed: true } : describe(row, project.id)))], [library, letGo, project.id]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.map((row) => row.id)), [rows]);
@@ -1488,8 +1489,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const held = place && index.get(place.workspaceId);
     return held ? { ...place, name: held.node.name } : null; // the names are the tree's, current after a rename
   }, [navHere, topic, project.id, index]);
-  // The @ menu: Bart, Task, Note, the open page, the project's other workspaces (written in last first), then the library
-  // (model/rail.js).
+  // The @ menu: Bart, Task, Note, the open page, the project's other workspaces (written in last first), then the library,
+  // all of it, what this workspace holds first (model/rail.js).
   const mentionSpaces = React.useMemo(() => {
     const order = new Map();
     nav.recent.forEach((entry, i) => { if (entry.projectId === project.id && !order.has(entry.workspaceId)) order.set(entry.workspaceId, i); });
@@ -1501,8 +1502,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [mentionOpen, setMentionOpen] = React.useState(false);
   const mentionBodies = useBodies(project.id, mentionOpen);
   const mentionItems = React.useCallback(
-    (query) => mentionRows({ query, library: findable, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies, zotero: zoteroOn }),
-    [findable, openPage, pageKnown, mentionSpaces, topic, mentionBodies, zoteroOn],
+    (query) => mentionRows({ query, library: findable, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies, zotero: zoteroOn, here: railIds }),
+    [findable, openPage, pageKnown, mentionSpaces, topic, mentionBodies, zoteroOn, railIds],
   );
   // A mentioned workspace's peek (workspace/WorkspacePeek.jsx): the tree, state.json's agents and recent edits, and its
   // document as open here (unsaved words included) or as saved.

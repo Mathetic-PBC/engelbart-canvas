@@ -628,6 +628,21 @@ test('read-text-file: project-relative, ~/ and absolute paths inside the home di
   assert.equal(big.truncated, true);
 });
 
+test('a note of another project, mentioned here, opens, saves and renames in its own project (2026-10-16)', async () => {
+  const mine = await projects.createProject(ctx, 'Mentions here');
+  const theirs = await projects.createProject(ctx, 'Notes there');
+  const note = await projects.createNote(ctx, theirs.id, { name: 'Over there', text: 'first\n' });
+  assert.equal(await projects.readDoc(ctx, mine.id, { kind: 'note', id: note.id }), 'first\n', 'read from this project, it is the other one\'s file');
+  await projects.writeDoc(ctx, mine.id, { kind: 'note', id: note.id }, 'edited here\n');
+  assert.equal(fs.readFileSync(path.join(theirs.dir, 'Over there.md'), 'utf8'), 'edited here\n');
+  assert.equal(fs.existsSync(path.join(mine.dir, 'Over there.md')), false, 'nothing is written into this project');
+  const renamed = await projects.renameNote(ctx, mine.id, note.id, 'Renamed there');
+  assert.equal(renamed.name, 'Renamed there');
+  assert.ok(fs.existsSync(path.join(theirs.dir, 'Renamed there.md')));
+  assert.equal(await projects.readDoc(ctx, theirs.id, { kind: 'note', id: note.id }), 'edited here\n');
+  await assert.rejects(projects.readDoc(ctx, mine.id, { kind: 'note', id: '00000000-0000-4000-8000-000000000000' }), /Unknown note/);
+});
+
 test('stage-file: a missing path is "Nothing is at that path", one macOS refuses says so (2026-10-02)', async (t) => {
   const { BLOCKED } = require('../src/main/stage/files.cjs');
   const project = await projects.createProject(ctx, 'Stage Paths');
@@ -704,3 +719,4 @@ test('ipc: trash-project stops the project\'s running @bart asks and its Builds 
   const preload = fs.readFileSync(path.join(__dirname, '../src/preload.cjs'), 'utf8');
   for (const [name, channel] of [['trashProject', 'trash-project'], ['restoreProject', 'restore-project'], ['trashedProjects', 'trashed-projects']]) assert.ok(preload.includes(`${name}: invoke('${channel}')`), name);
 });
+

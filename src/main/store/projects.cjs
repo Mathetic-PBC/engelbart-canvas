@@ -904,11 +904,29 @@ async function createNote(ctx, projectId, { name, workspaceId, text } = {}) {
   return publicNote(row);
 }
 
-async function renameNote(ctx, projectId, noteId, name) {
-  const project = findProject(ctx, projectId);
-  const notesDb = await db.openNotesDb(project.dir);
-  const row = await notesDb.get(assertId(noteId, 'note'));
+// Where a note is kept (2026-10-16): in the project asked for, or, for a note of another project mentioned there (the @
+// menu offers the whole library), in the project its library row says made it. A note mentioned from another project then
+// opens, saves and renames in its own project's folder, as it does there. → { project, notesDb, row }
+async function noteHome(ctx, projectId, noteId) {
+  const id = assertId(noteId, 'note');
+  let project = findProject(ctx, projectId);
+  let notesDb = await db.openNotesDb(project.dir);
+  let row = await notesDb.get(id);
+  if (!row && ctx.libraryDb) {
+    const item = await ctx.libraryDb.get(id);
+    const owner = item && item.project_id && item.project_id !== projectId ? projectRecords(ctx).find((candidate) => candidate.id === item.project_id) : null;
+    if (owner) {
+      project = owner;
+      notesDb = await db.openNotesDb(owner.dir);
+      row = await notesDb.get(id);
+    }
+  }
   if (!row) throw new Error('Unknown note');
+  return { project, notesDb, row };
+}
+
+async function renameNote(ctx, projectId, noteId, name) {
+  const { project, notesDb, row } = await noteHome(ctx, projectId, noteId);
   const base = sanitizeName(name);
   if (base === row.name) return publicNote(row);
   const stem = uniqueName(project.dir, base, '.md');
@@ -954,10 +972,7 @@ async function readImage(ctx, id) {
 async function resolveDoc(ctx, projectId, ref) {
   if (!ref || typeof ref !== 'object') throw new TypeError('doc ref must be an object');
   if (ref.kind === 'note') {
-    const project = findProject(ctx, projectId);
-    const notesDb = await db.openNotesDb(project.dir);
-    const row = await notesDb.get(assertId(ref.id, 'note'));
-    if (!row) throw new Error('Unknown note');
+    const { project, notesDb, row } = await noteHome(ctx, projectId, ref.id);
     return { file: path.join(project.dir, row.path), note: row, notesDb };
   }
   if (ref.kind === 'workspace') {

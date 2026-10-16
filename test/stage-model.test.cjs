@@ -486,3 +486,10 @@ test('placeTab: a tab given back and not opened yet comes forward rather than a 
   assert.deepEqual(placeTab(tabs, 0, 'l:example.org/a'), { focus: 1 });
   assert.deepEqual(placeTab(tabs, 0, 'l:other.org'), { append: true });
 });
+
+test('a quote reads the same with or without the space after its `>`, on the Stage as in the editor (2026-10-16)', async () => {
+  const { markdownBlocks } = await load('markdown');
+  const { parseLine } = await load('doc');
+  assert.deepEqual(markdownBlocks('>tight\n> spaced'), [{ type: 'quote', text: 'tight spaced' }]);
+  for (const line of ['>tight', '> tight']) assert.deepEqual(parseLine(line), { type: 'quote', text: 'tight' }, line);
+});
