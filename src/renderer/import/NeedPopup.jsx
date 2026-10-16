@@ -24,8 +24,12 @@ export function needCopy(need) {
     if (need.opened) return { title: `Sign in to ${app}`, text: need.code ? `Enter ${need.code} on GitHub, then come back.` : 'Finish signing in in your browser.', primary: 'Open again', secondary: 'Skip' };
     return { title: `Sign in to ${app}`, text: '', primary: 'Sign in', secondary: 'Skip' };
   }
-  // The librarian's prompt before an app is searched or read (2026-10-15, From Amitav): whose model reads it, Allow / Skip.
-  if (need.kind === 'consent') return { title: need.reason || `Allow Engelbart to search and read your ${app}?`, text: need.note || '', primary: 'Allow', secondary: 'Skip' };
+  // A sign-in brought back (connect/session.cjs recover, 2026-10-16): after the quiet copies, one step, Sign in inside
+  // Engelbart (Google's in the person's browser, which it refuses Engelbart's window for) or Skip. Nothing under the title.
+  if (need.kind === 'signin-here') {
+    if (need.busy) return { title: `Sign in to ${app}`, text: '', primary: 'Waiting…', secondary: 'Skip', waiting: true };
+    return { title: `Sign in to ${app}`, text: '', primary: need.where === 'browser' ? `Sign in in ${browser}` : 'Sign in inside Engelbart', secondary: 'Skip' };
+  }
   if (need.kind === 'permission') return { title: `Allow Engelbart to read ${app}?`, text: '', primary: 'Allow', secondary: 'Don’t allow' };
   if (need.kind === 'folder') return { title: `Choose your ${app} folder`, text: '', primary: 'Choose folder', secondary: 'Skip' };
   // A connector's sign-in opens in the default browser (connectors.cjs), whichever browser was chosen for the copies.

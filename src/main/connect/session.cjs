@@ -42,7 +42,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
-const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName, sharesSignIn, signInGroup } = require('../../shared/connect-sources.cjs');
+const { SOURCES, APPS, LOCAL_PDFS, sourceOf, appOf, sourceOfApp, recallApps, cleanDays, periodName, shownName, sharesSignIn, signInGroup, signsInThroughBrowser, fallbackOf } = require('../../shared/connect-sources.cjs');
 const prompts = require('./prompts.cjs');
 const { scanFor } = require('./scan.cjs');
 const readers = require('./readers.cjs');
@@ -64,6 +64,11 @@ const NEED_WAIT_MS = 170_000;
 // A web app's sign-in copied again mid-run (signInAgain): another agent asking within this long of it shares its answer.
 const SIGN_IN_AGAIN_SHARED_MS = 30_000;
 const SIGN_IN_CHECK_MS = 10_000; // the sign-ins looked at before the surveys start, all together, at most this long
+// A sign-in that doesn't work in Engelbart's browser is copied again quietly this many times, these far apart, before the
+// person is asked (recover, 2026-10-16): a browser writes a fresh sign-in to disk within about half a minute.
+const RECOVER_WAITS_MS = Object.freeze([0, 8000, 20000]);
+// The steps the person settles by signing in inside Engelbart (or, for Google's, in their own browser): recover's card.
+const SIGNIN_HERE = 'signin-here';
 const ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ASK_KINDS = new Set(['single', 'multi', 'open', 'repos']);
 // Which of GitHub's repositories, asked as any choice is: the window shows the GitHub list instead (2026-10-08: "when
@@ -72,9 +77,7 @@ const REPOS_ASK = /\bwhich\b.*\brepo(?:s|sitory|sitories)?\b/i;
 const AUTHORIZE_KINDS = new Set(['signin', 'connector', 'permission', 'folder']);
 // The steps that are a sign-in, a code or a check on a site (round 3): made in the person's browser, then copied over.
 const SIGNIN_KINDS = new Set(['signin', 'password', 'code', '2fa', 'captcha']);
-// Who processes what an agent reads, by provider: said on the librarian's prompt to search and read an app (consentCard).
-const PROVIDER_COMPANIES = Object.freeze({ anthropic: 'Anthropic', openai: 'OpenAI' });
-/** Whether the librarian's run must ask before `app` is touched (consentCard): an app on the web or behind a connector. */
+/** Whether the librarian's run must ask before `app` is touched (askGrant): an app on the web or behind a connector. */
 const asksFirst = (app) => !!(APPS[app] && (APPS[app].reach === 'web' || APPS[app].reach === 'connector'));
 const SIGNIN_APPS = new Set(['Zotero', 'GitHub']);
 // A step whose sign-in Engelbart can see for itself (Zotero's and GitHub's own, a connector's) is looked at this often
@@ -459,7 +462,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   const chosenBrowser = () => { try { return webSignIn && webSignIn.browserName ? webSignIn.browserName() : ''; } catch { return ''; } };
   // The browser its sign-in opens in (2026-10-15: "Open Safari" on a card whose sign-in Safari can never give Engelbart).
   const opensIn = (app) => { try { return (webSignIn && typeof webSignIn.opensIn === 'function' && webSignIn.opensIn(app)) || ''; } catch { return ''; } };
-  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, jobIds: [...need.jobs], opened: need.opened, busy: need.busy, browser: need.browser || need.own || (SIGNIN_KINDS.has(need.kind) && opensIn(need.app)) || chosenBrowser(), error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}), ...(need.code ? { code: need.code } : {}) });
+  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, jobIds: [...need.jobs], opened: need.opened, busy: need.busy, browser: need.browser || need.own || (SIGNIN_KINDS.has(need.kind) && opensIn(need.app)) || chosenBrowser(), error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}), ...(need.code ? { code: need.code } : {}), ...(need.kind === SIGNIN_HERE ? { where: need.where || 'here' } : {}) });
   // What was left out of the run and why, in the person's words (2026-10-14: "when she finally hit later, nothing was
   // imported, so she was super confused"): the status's completion names each, with its reason.
   const publicLeftOut = (s) => [...(s.leftOut || new Map())].map(([app, why]) => ({ app, why }));
@@ -476,6 +479,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       blocked: s.blocked ? { provider: s.blocked.provider, name: PROVIDER_NAMES[s.blocked.provider], error: s.blocked.error, at: s.blocked.at || null } : null,
       // Import your context's run (2026-10-13): how it was chosen and the projects every agent keeps to, for its status modal
       direct: s.choices.direct ? { mode: s.choices.direct.mode, projects: s.choices.direct.projects.map((project) => project.title) } : null,
+      // Import your context's manual run (the librarian's, From Amitav 2026-10-15): put away once finished, its status opens
+      // rather than the chat (2026-10-16: "i should not be able to see this weird popup in manual mode").
+      manual: !!s.manual,
     };
   }
   // What session.json keeps is enough to pick the session up again after Engelbart quits (resume): the chat, the choices,
@@ -487,7 +493,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       fs.mkdirSync(s.dir, { recursive: true, mode: 0o700 });
       fs.writeFileSync(path.join(s.dir, 'session.json'), JSON.stringify({
         ...snapshot(s), log: s.log, choices: s.choices, picked: s.picked, found: s.found, interviewSession: s.interviewSession, skipped: [...s.skipped], skippedSources: [...s.skippedSources],
-        suspended: !!s.suspended, allowed: [...(s.allowed || [])], approved: Object.fromEntries([...(s.approved || new Map())].map(([app, ids]) => [app, [...ids]])), gmailThreads: s.gmailThreads || 0, fallback: [...(s.fallback || [])], connected: [...(s.connected || [])], rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles, ...(job.find ? { find: true } : {}), ...(job.extra && job.extra.sites ? { extra: { sites: job.extra.sites } } : {}) })),
+        suspended: !!s.suspended, allowed: [...(s.allowed || [])], approved: Object.fromEntries([...(s.approved || new Map())].map(([app, ids]) => [app, [...ids]])), gmailThreads: s.gmailThreads || 0, fallback: [...(s.fallback || [])], connected: [...(s.connected || [])], rows: [...s.rows], inProject: [...s.inProject], inWorkspace: [...s.inWorkspace], workspaceId: s.workspaceId, jobs: s.jobs.map((job) => ({ ...publicJob(job), key: job.key, plan: job.plan, titles: job.titles, ...(job.find ? { find: true } : {}), ...(job.extra && job.extra.sites ? { extra: { sites: job.extra.sites, ...(job.extra.tool ? { tool: job.extra.tool } : {}) } } : {}) })),
       }, null, 2), { mode: 0o600 });
     } catch { /* the chat goes on */ }
   }
@@ -571,8 +577,27 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     try { return fs.readFileSync(path.join(dataRoot, 'instructions.md'), 'utf8').trim(); } catch { return ''; }
   }
 
+  /**
+   * A line Engelbart says in the chat about the run (an app left out, skipped, not connected), not the librarian's: drawn
+   * quietly, and never the chat's last word, so a question still open stays open (2026-10-16, Hudson: "When these start to
+   * fail … the original message got greyed out, meaning I couldn't respond to it").
+   */
+  function notice(s, text) {
+    s.chat.push({ role: 'agent', notice: true, text, ask: null, authorize: null, at: now() });
+  }
+
+  /** The librarian's own last word (not a notice, not the apps' grant), or null. */
+  function lastSaid(s) {
+    return [...s.chat].reverse().find((entry) => entry.role === 'agent' && !entry.notice && !entry.grant && !entry.opener) || null;
+  }
+
   function conversationText(s) {
-    return s.chat.filter((entry) => !entry.opener).map((entry) => `${entry.role === 'agent' ? 'librarian' : 'person'}: ${entry.text}${entry.ask ? `\n  (asked, ${entry.ask.kind}: ${entry.ask.title}${entry.ask.options.length ? ` — ${entry.ask.options.map((option) => option.label).join(' | ')}` : ''})` : ''}${entry.authorize ? `\n  (offered the button: ${entry.authorize.label})` : ''}`).join('\n');
+    const spoken = (entry) => {
+      if (entry.grant) return `engelbart: asked the person to allow ${listed(entry.grant.rows.map((row) => row.name))}${entry.grant.answered ? `; they allowed ${entry.grant.answered.allowed.length ? listed(entry.grant.answered.allowed) : 'none'}${entry.grant.answered.skipped.length ? ` and left out ${listed(entry.grant.answered.skipped)}` : ''}` : '; not answered yet'}`;
+      if (entry.notice) return `engelbart: ${entry.text}`;
+      return null;
+    };
+    return s.chat.filter((entry) => !entry.opener).map((entry) => spoken(entry) || `${entry.role === 'agent' ? 'librarian' : 'person'}: ${entry.text}${entry.ask ? `\n  (asked, ${entry.ask.kind}: ${entry.ask.title}${entry.ask.options.length ? ` — ${entry.ask.options.map((option) => option.label).join(' | ')}` : ''})` : ''}${entry.authorize ? `\n  (offered the button: ${entry.authorize.label})` : ''}`).join('\n');
   }
 
   function importsText(s) {
@@ -722,7 +747,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   const sitesOf = (apps) => [...new Set(apps.flatMap((app) => (appOf(app) && appOf(app).sites) || []))];
   /** The apps a job covers: those it names, else every app picked for its source (a whole source handed over). */
-  // A whole source handed over reaches its apps, but in the librarian's run never one the person hasn't allowed (consentCard).
+  // A whole source handed over reaches its apps, but in the librarian's run never one the person hasn't allowed (askGrant).
   const appsOfJob = (s, job) => (job.apps.length ? job.apps : ((s.choices.sources[job.source] || {}).apps || [])).filter((app) => job.apps.includes(app) || mayReach(s, app));
 
   function jobMessage(s, job) {
@@ -1026,7 +1051,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (!choice.on) continue;
       for (const app of choice.apps) {
         if (only && !only.includes(app)) continue;
-        if (!mayReach(s, app)) continue; // not allowed yet (consentCard)
+        if (!mayReach(s, app)) continue; // not allowed yet (askGrant)
         const reach = appOf(app) ? appOf(app).reach : null;
         if (reach === 'web') {
           if (!s.choices.permissions.browser) { s.found[source] = { ...(s.found[source] || {}), [app]: { reach, left: 'They did not let the agents use their accounts, so this app is left out.' } }; continue; }
@@ -1038,9 +1063,22 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
           s.found[source] = { ...(s.found[source] || {}), [app]: { reach, survey: 'running' } };
           dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${shownName(app)}` });
         } else if (reach === 'connector') {
-          const connected = connectors ? connectors.status(app).connected : false;
-          s.found[source] = { ...(s.found[source] || {}), [app]: connected ? { reach, survey: 'running' } : { reach, needs: 'connector' } };
-          if (connected) dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${shownName(app)}` });
+          const connected = connectorConnected(app);
+          if (!connected && connectorFallback(s, app)) {
+            s.found[source] = { ...(s.found[source] || {}), [app]: { reach, fallback: 'Its connector does not serve this account: it is read through its website instead, by its own import. Do not offer or dispatch it.' } };
+          } else if (connected) {
+            s.found[source] = { ...(s.found[source] || {}), [app]: { reach, survey: 'running' } };
+            dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${shownName(app)}` });
+          } else if (connectors) {
+            // Allowed but not connected (2026-10-16: Notion and Granola were allowed at 09:58 and nothing started: this
+            // set needs 'connector' and did nothing else, so no card came and the librarian never heard): its Connect step
+            // now, held; connected, its survey starts (releaseHeld), and the librarian is told it waits on the person.
+            const entry = { reach, connector: 'Engelbart asked the person to connect it, on a card of its own. Do not offer it or ask about it: its survey reports once they have connected it.' };
+            s.found[source] = { ...(s.found[source] || {}), [app]: entry };
+            s.newFound = { ...(s.newFound || {}), [source]: { ...((s.newFound || {})[source] || {}), [app]: entry } };
+            s.held.set(app, { source, recall: false });
+            signInCard(s, app, 'connector');
+          } else s.found[source] = { ...(s.found[source] || {}), [app]: { reach, needs: 'connector' } };
         }
       }
     }
@@ -1269,7 +1307,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   async function signInsFirst(s, only = null) {
     const out = { signedOut: new Set(), refused: new Map(), signedIn: new Map(), checking: new Map(), elsewhere: new Map() };
     if (!webSignIn || !s.choices.permissions.browser) return out;
-    // Every web app; in the librarian's run only those the person allowed (consentCard): no sign-in of theirs is looked at
+    // Every web app; in the librarian's run only those the person allowed (askGrant): no sign-in of theirs is looked at
     // before. Not a connector app (Notion) any more (2026-10-15): it is read only through its own tools, never a browser,
     // so a copied sign-in sent it to an agent in their browser that could do nothing; its Connect step reaches it.
     const apps = Object.values(s.choices.sources).filter((choice) => choice.on).flatMap((choice) => choice.apps)
@@ -1339,18 +1377,13 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         leaveOut(s, app, `macOS didn't allow ${result.browser || 'your browser'}'s sign-ins`);
         skipApp(s, app);
         releaseHeld(s, app, 'skip');
-        s.chat.push({ role: 'agent', text: skippedLine(result.browser, [app]), ask: null, authorize: null, at: now() });
+        notice(s, skippedLine(result.browser, [app]));
         emit(s);
         return;
       }
-      if (s.choices.direct && result && result.status === 'held-elsewhere') { if (readElsewhere(s, app, result.browser)) releaseHeld(s, app, 'done'); else releaseHeld(s, app, 'skip'); emit(s); return; }
-      if (s.choices.direct) { signInCard(s, app); emit(s); return; }
-      // Signed out (2026-10-12): left out quietly, as signInsFirst leaves out an app signed out at the start. Everything
-      // about a web app's sign-in is settled on the choose screen; no Log in card comes up later.
-      leaveOut(s, app, 'not signed in');
-      skipApp(s, app);
-      releaseHeld(s, app, 'skip');
-      s.chat.push({ role: 'agent', text: leftOutLine([app]), ask: null, authorize: null, at: now() });
+      if (result && result.status === 'held-elsewhere') { heldElsewhere(s, app, result.browser); emit(s); return; }
+      // Signed out: brought back (recover), quietly first; its survey or import starts once it is signed in.
+      recoverHeld(s, app);
       emit(s);
     });
   }
@@ -1367,9 +1400,6 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /** "Skipped ChatGPT and Claude: macOS didn't allow Chrome's sign-ins. You can add them later from Add sources." */
   const skippedLine = (name, apps) => `Skipped ${listed(apps.map(shownName))}: macOS didn't allow ${name || 'your browser'}'s sign-ins. You can add ${apps.length === 1 ? 'it' : 'them'} later from Add sources.`;
-
-  /** "Left out Gmail: its sign-in ended partway through. You can add it later from Add sources." */
-  const endedLine = (app) => `Left out ${shownName(app)}: its sign-in ended partway through. You can add it later from Add sources.`;
 
   /** "Left out Google Drive: not signed in. You can add it from Add sources." */
   const leftOutLine = (apps) => `Left out ${listed(apps.map(shownName))}: not signed in. You can add ${apps.length === 1 ? 'it' : 'them'} from Add sources.`;
@@ -1397,6 +1427,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * taken as Codex's and so never reached signInAgain).
    */
   function needApp(job, reason) {
+    // One of the Other tools (2026-10-16: every one asked "Couldn't open Other tools: Linear"): its own name, never the
+    // job's label.
+    if (!job.apps.length && job.extra && job.extra.tool && job.extra.tool.name) return job.extra.tool.name;
     const first = job.apps[0] || job.label;
     const web = (app) => !!(appOf(app) && appOf(app).reach === 'web');
     if (web(first)) return first;
@@ -1430,6 +1463,34 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   function connectorConnected(app) {
     try { return !!(connectors && isConnectorApp(app) && connectors.status(app).connected); } catch { return false; }
   }
+  /** Each connector app of `apps` asked for its state (connectors.check: its server, at most every few minutes), quietly. */
+  async function checkConnectors(apps) {
+    if (!connectors || typeof connectors.check !== 'function') return;
+    await Promise.all(apps.filter(isConnectorApp).map((app) => Promise.resolve().then(() => connectors.check(app)).catch(() => null)));
+  }
+
+  /**
+   * A connector whose server can't serve this account (2026-10-16: Evernote's MCP is in beta, rolling out): its website
+   * instead, as one of the Other tools are read (toolJob: the sign-in copied from the chosen browser, recover when it
+   * fails); one with no website to fall back on is skipped with a quiet line. → whether it was handled so.
+   */
+  function connectorFallback(s, app) {
+    let status = null;
+    try { status = connectors ? connectors.status(app) : null; } catch { status = null; }
+    if (!status || status.state !== 'unavailable') return false;
+    if (fallbackOf(app) !== 'web' || !appOf(app).sites) {
+      leaveOut(s, app, 'its connector doesn’t serve your account');
+      skipApp(s, app);
+      notice(s, `Couldn't connect to ${shownName(app)}. Skipped.`);
+      return true;
+    }
+    const site = { name: shownName(app), website: appOf(app).start || '', sites: appOf(app).sites };
+    const projects = s.choices.direct ? s.choices.direct.projects : [];
+    logAction(s, null, `${shownName(app)} through its website: its connector doesn't serve your account`);
+    void toolJob(s, site, { plan: (how) => `${s.choices.direct ? `${importFlow.importPlan({ app: importFlow.SITES, mode: s.choices.direct.mode, projects, roles: s.choices.direct.roles, work: s.choices.direct.work, period: periodName(s.choices.days) })}\n\n` : ''}This is ${shownName(app)}, read through its website because its connector doesn't serve their account. ${how}, and bring in its notes about ${s.choices.direct ? 'these projects' : 'the project in <project>'} as notes (add_note).` }).then((job) => dispatch(s, job)).catch(() => {});
+    return true;
+  }
+
   /** Whether a step's sign-in is made: Zotero's or GitHub's account connected, or a connector signed in. */
   function stepSignedIn(need) {
     if (SIGNIN_APPS.has(need.app)) return !!ownStatus(need.app).connected;
@@ -1500,9 +1561,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       return Promise.resolve({ status: 'done', note: `${shownName(app)} is connected now, but this import started without it. Finish now with what you have; Engelbart starts the ${shownName(app)} import again with the connection.` });
     }
     if (job.route === 'browser' && s.choices.browserAgents) return askInBrowser(s, job, app, { kind, reason });
-    // A web app's sign-in lost partway through (2026-10-12): settled here, with no card (Zotero's and GitHub's sign-ins,
-    // connectors and folder choices keep theirs).
+    // A web app's sign-in lost partway through (2026-10-12): checked, then brought back (recover), quietly first (Zotero's
+    // and GitHub's sign-ins, connectors and folder choices keep their steps). An Other tool's the same way (2026-10-16).
     if ((kind === 'signin' || kind === 'password') && webSignIn && signsInAtAll(app) && appOf(app) && appOf(app).reach === 'web') return signInAgain(s, job, app);
+    if ((kind === 'signin' || kind === 'password') && !job.apps.length && job.extra && job.extra.tool && job.extra.tool.name === app) return recover(s, job, { tool: job.extra.tool });
     let need = s.needs.find((entry) => !entry.closed && entry.app === app && entry.kind === kind);
     if (!need) {
       need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, kind), closed: false, at: now() };
@@ -1550,16 +1612,17 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (!s.signInsAgain) s.signInsAgain = new Map();
     let again = s.signInsAgain.get(group);
     if (!again) {
-      again = { checking: null, checkedAt: 0, stood: new Set(), copying: null, settledAt: 0, told: new Set() };
+      again = { checking: null, checkedAt: 0, stood: new Set() };
       s.signInsAgain.set(group, again);
     }
+    // Already being brought back for another agent (Gmail and Drive share Google's): this one waits for the same answer.
+    if (recovering(s, { app })) return recover(s, job, { app });
     const skippedNote = () => ({ status: 'skipped', note: `${shownName(app)} was left out for this run. Do not ask again: finish without it.` });
     if (again.stood.has(job.id)) {
       logAction(s, job, `Carried on without ${shownName(app)}: it still looked signed in`);
       emit(s);
       return Promise.resolve({ status: 'skipped', note: `${shownName(app)} still looks signed in to Engelbart, so the trouble is on its side. Do not ask again: finish without it with what you have, and say so in your answer.` });
     }
-    if (again.copying) return copyAgain(s, job, app, again);
     // One look at the sign-in, shared by the agents asking within a while of it.
     if (!again.checking || (again.checkedAt && Date.now() - again.checkedAt > SIGN_IN_AGAIN_SHARED_MS)) {
       again.checkedAt = 0;
@@ -1569,7 +1632,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
     return again.checking.then((stands) => {
       if (s.skipped.has(app)) return skippedNote();
-      if (again.copying || !stands) return copyAgain(s, job, app, again);
+      if (!stands) return recover(s, job, { app });
       again.stood.add(job.id);
       logAction(s, job, `Still signed in to ${shownName(app)}: its page or API failed for a moment`);
       emit(s);
@@ -1577,35 +1640,204 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     });
   }
 
+  /* ----------------------------------------------------------------------------------- a sign-in brought back (M5) */
+
+  /** Who a recovery is for: a registered web app (its sign-in shared by the apps of its group), or one of the Other tools. */
+  function recoveryOf(target) {
+    if (target.app) return { key: `app:${signInGroup(target.app)}`, name: shownName(target.app), app: target.app, tool: null };
+    return { key: `tool:${String(target.tool.name).toLowerCase()}`, name: target.tool.name, app: null, tool: target.tool };
+  }
+  const recovering = (s, target) => { const rec = s.recoveries && s.recoveries.get(recoveryOf(target).key); return !!(rec && rec.phase !== 'ended'); };
+  const leftAlready = (s, who) => s.skipped.has(who.name) || (!!who.app && s.skipped.has(who.app));
+  const skippedNote = (who) => ({ status: 'skipped', note: `${who.name} was left out for this run. Do not ask again: finish without it.` });
+  const backNote = (who) => ({ status: 'done', note: `The ${who.name} sign-in works in Engelbart's browser again. Reload the page and carry on.` });
+  /** An Other tool's sites: those given, else its website's. */
+  const toolSites = (tool) => [...new Set([...(Array.isArray(tool.sites) ? tool.sites : []), hostOfSite(tool.website)].filter(Boolean))];
+  const pause = (ms) => new Promise((resolve) => { const timer = setTimeout(resolve, ms); if (timer.unref) timer.unref(); });
+
+  /** An Other tool's sign-in copied from the person's chosen browser profile (webSignIn.copyFor) → { copied, signedIn }. */
+  function copyTool(tool) {
+    const domains = toolSites(tool);
+    if (!webSignIn || !domains.length) return Promise.resolve({ copied: 0, signedIn: false });
+    if (typeof webSignIn.copyFor === 'function') return Promise.resolve().then(() => webSignIn.copyFor({ name: tool.name, domains }));
+    if (typeof webSignIn.copyDomains === 'function') return webSignIn.copyDomains(domains, { denied: signInDenied }).then((ok) => ({ copied: ok ? 1 : 0, signedIn: ok ? null : false }));
+    return Promise.resolve({ copied: 0, signedIn: false });
+  }
+
   /**
-   * The sign-in found gone: copied again once per sign-in per run. Agents asking while that copy is made, or just after,
-   * share its answer; one asking again after it was told to carry on, or later on, found the copy did not hold: left out,
-   * so the run never loops on copies the site refuses.
+   * The quiet part of a recovery: the sign-in copied again from the person's chosen browser profile, a few times over half
+   * a minute (a fresh sign-in reaches the browser's disk within about that), with no window and no card. → what brought it
+   * back (signInQuiet's answer, or copyTool's), or null. A check that couldn't tell counts as signed in (`unchecked`): it
+   * never sends the person to sign in again. Their browser's sign-ins turned down, macOS refusing that browser, or a
+   * sign-in their browser holds that Engelbart's refuses (`held`): nothing a copy could change.
    */
-  function copyAgain(s, job, app, again) {
-    if (!again.copying) {
-      again.copying = webSignIn.signInQuiet(app, { denied: signInDenied, askedOnly: true, fresh: true }).catch(() => ({ signedIn: false }));
-      again.copying.then(() => { again.settledAt = Date.now(); });
+  async function quietly(s, rec) {
+    if (s.choices.keychain === false || !webSignIn) return null;
+    for (const wait of deps.recoverWaitsMs || RECOVER_WAITS_MS) {
+      if (wait) await pause(wait);
+      if (s.stopped || leftAlready(s, rec)) return null;
+      let out = null;
+      try { out = rec.app ? await webSignIn.signInQuiet(rec.app, { denied: signInDenied, fresh: true }) : await copyTool(rec.tool); } catch { out = null; }
+      if (out && out.signedIn) return out;
+      if (out && rec.tool && out.signedIn === null && out.copied > 0) return out; // copied, with nothing to check it by: the agent's reload is the check
+      if (out && out.refused) { if (out.refusedId) signInDenied.add(out.refusedId); return null; }
+      // Signed in there but refused here, or nothing that can be copied at all (Safari without Full Disk Access, the
+      // Keychain not allowed, their sign-ins turned down): no copy will change it.
+      if (out && (out.held || out.needs || out.declined)) return null;
     }
-    const lost = again.told.has(job.id) || (again.settledAt && Date.now() - again.settledAt > SIGN_IN_AGAIN_SHARED_MS);
-    const answer = lost ? Promise.resolve({ signedIn: false }) : again.copying;
-    return answer.then((result) => {
-      if (s.skipped.has(app)) return { status: 'skipped', note: `${shownName(app)} was left out for this run. Do not ask again: finish without it.` };
-      if (result && result.signedIn) {
-        again.told.add(job.id);
-        const kept = checkedAs(app, result);
-        for (const other of sharesSignIn(app)) signInChecked.set(other, kept);
-        logAction(s, job, result.browser ? `Copied the ${shownName(app)} sign-in again from ${result.browser}` : `Signed in to ${shownName(app)} again`);
-        emit(s);
-        return { status: 'done', note: `The ${shownName(app)} sign-in was copied again from the person's browser. Reload the page and carry on.` };
-      }
-      leaveOut(s, app, 'its sign-in ended partway through');
-      skipApp(s, app, [job.id]);
-      logAction(s, job, `Left out ${shownName(app)}: its sign-in ended partway through`);
-      s.chat.push({ role: 'agent', text: endedLine(app), ask: null, authorize: null, at: now() });
+    return null;
+  }
+
+  /**
+   * A sign-in that doesn't work in Engelbart's browser, brought back (the onboarding beta, 2026-10-16). Hudson: "The retries
+   * should happen in the background with different retries and methods, but if it doesn't work it should auto-skip. Get rid
+   * of the option to choose another profile", and Bart's flow, which he took: copy from the chosen profile and check; retry
+   * quietly for a while; a check that can't tell keeps the sign-in; then one card, "Sign in inside Engelbart" or Skip (for
+   * Google's, whose sign-in refuses Engelbart's window, the person's own browser, copied over after); signed in, checked,
+   * and the agent goes on; failing even then, skipped with one quiet line that stays ("Couldn't connect to Linear.
+   * Skipped."), the other imports going on. Nothing opens by itself while it retries. `target`: { app } a registered web
+   * app, or { tool } one of the Other tools. One recovery per sign-in (Gmail and Drive share Google's), whoever asks: an
+   * agent (`job`), or an app held at the start (`job` null). An agent told it was signed in again that asks again found it
+   * did not hold: the card, or, after the card, left out. → a promise of what the agent is told { status, note }.
+   */
+  function recover(s, job, target) {
+    const who = recoveryOf(target);
+    if (leftAlready(s, who)) return Promise.resolve(skippedNote(who));
+    if (!s.recoveries) s.recoveries = new Map();
+    let rec = s.recoveries.get(who.key);
+    if (rec && rec.phase === 'ended') {
+      if (!job || !rec.told.has(job.id)) rec = null; // lost again later on: brought back again
+      else if (rec.carded) { giveUp(s, null, rec); return Promise.resolve({ status: 'skipped', note: `${who.name}'s sign-in did not hold, so it is left out for this run. Do not ask again: finish without it and say so.` }); }
+      else rec.phase = 'card';
+    }
+    if (!rec) {
+      rec = { ...who, phase: 'quiet', told: new Set(), carded: false, need: null, quiet: null };
+      s.recoveries.set(who.key, rec);
+      logAction(s, job, `Bringing back the ${who.name} sign-in`);
+      rec.quiet = quietly(s, rec).then((out) => {
+        if (out) {
+          rec.phase = 'ended';
+          if (rec.app) { const kept = checkedAs(rec.app, out); for (const other of sharesSignIn(rec.app)) signInChecked.set(other, kept); }
+          logAction(s, job, out.browser ? `Copied the ${who.name} sign-in again from ${out.browser}` : `The ${who.name} sign-in works again`);
+          emit(s);
+        } else if (rec.phase === 'quiet') rec.phase = 'card';
+      });
+    }
+    const answer = () => {
+      if (leftAlready(s, who)) return skippedNote(who);
+      if (rec.phase === 'ended') { if (job) rec.told.add(job.id); return backNote(who); }
+      const need = rec.need && !rec.need.closed ? rec.need : askCard(s, rec, job);
+      if (!job) { need.keep = true; return need.settled.then((how) => (how === 'done' ? backNote(who) : skippedNote(who))); }
+      if (!need.jobs.includes(job.id)) need.jobs.push(job.id);
+      return waitOn(s, job, need).then((result) => {
+        if (result.status === 'done') { rec.told.add(job.id); return backNote(who); }
+        return result.status === 'skipped' ? skippedNote(who) : result;
+      });
+    };
+    return rec.phase === 'quiet' && rec.quiet ? rec.quiet.then(answer) : Promise.resolve().then(answer);
+  }
+
+  /** The card a recovery ends in, once (Sign in inside Engelbart, or in their browser for Google's · Skip). */
+  function askCard(s, rec, job) {
+    rec.phase = 'card';
+    rec.carded = true;
+    const where = rec.app && signsInThroughBrowser(rec.app) ? 'browser' : 'here';
+    const need = { id: randomUUID(), app: rec.app || rec.name, kind: SIGNIN_HERE, where, recovery: rec.key, reason: `Sign in to ${rec.name}`, jobs: job ? [job.id] : [], waiters: new Map(), opened: false, busy: false, error: '', note: '', closed: false, keep: !job, tries: 0, at: now(), doneNote: backNote(rec).note };
+    need.settled = new Promise((resolve) => { need.settle = resolve; });
+    // Put away because no agent waits on it any more (releaseNeeds): the next loss starts afresh.
+    need.settled.then((how) => { rec.phase = 'ended'; if (how === 'gone' && s.recoveries.get(rec.key) === rec) s.recoveries.delete(rec.key); });
+    rec.need = need;
+    s.needs.push(need);
+    logAction(s, job, `Needs you: ${need.reason}`);
+    traced({ kind: 'need', sessionId: s.id, ...(job ? { jobId: job.id } : {}), text: `Needs the person (sign in ${where === 'browser' ? 'in their browser' : 'inside Engelbart'}, ${rec.name})` });
+    emit(s);
+    return need;
+  }
+
+  /** A recovery given up on: left out for the run, with one quiet line that stays, the others going on. */
+  function giveUp(s, need, rec) {
+    const name = rec ? rec.name : shownName(need.app);
+    notice(s, `Couldn't connect to ${name}. Skipped.`);
+    logAction(s, null, `Couldn't connect to ${name}: skipped`);
+    if (need && !need.closed) { closeNeed(s, need, 'skip', 'Engelbart couldn’t connect to it'); return; }
+    const app = rec ? rec.app || rec.name : need.app;
+    leaveOut(s, app, 'Engelbart couldn’t connect to it');
+    skipApp(s, app);
+    emit(s);
+  }
+
+  /** An app held at the start whose sign-in didn't come over (signed out, or still checking then signed out): brought back. */
+  function recoverHeld(s, app) {
+    if (!s.held.has(app)) s.held.set(app, { source: (s.choices.direct ? importFlow.groupOfApp(app) : sourceOfApp(app)) || 'notes', recall: false });
+    recover(s, null, { app }).then((answer) => {
+      if (s.stopped || !s.held.has(app)) return;
+      if (answer.status === 'done') releaseHeld(s, app, 'done');
+      else { leaveOut(s, app, 'not signed in'); skipApp(s, app); releaseHeld(s, app, 'skip'); }
       emit(s);
-      return { status: 'skipped', note: `${shownName(app)}'s sign-in ended and could not be brought back, so it is left out for this run. Do not ask again: finish without it and say so.` };
-    });
+    }).catch(() => {});
+  }
+
+  /**
+   * A held app signed in in the person's browser whose sign-in Engelbart's browser refuses (`held-elsewhere`): read there by
+   * an agent when they let agents use it; else signed in inside Engelbart (recover's card); Google's, which refuses
+   * Engelbart's window too, left out with a line.
+   */
+  function heldElsewhere(s, app, browserName = '') {
+    if (s.choices.browserAgents) { if (readElsewhere(s, app, browserName)) releaseHeld(s, app, 'done'); return; }
+    if (!signsInThroughBrowser(app) && signInWindow) { recoverHeld(s, app); return; }
+    readElsewhere(s, app, browserName);
+    releaseHeld(s, app, 'skip');
+  }
+
+  /**
+   * "Sign in inside Engelbart" (or, for Google's, in their browser) on a recovery's card: the sign-in made, checked inside
+   * Engelbart, and the step closed as done; turned away, or signed in and still not working, given up on (giveUp); closed
+   * without signing in, said on the card, which can be tried once more.
+   */
+  function signInHere(s, found) {
+    if (found.busy) return snapshot(s);
+    found.busy = true;
+    found.error = '';
+    found.opened = true;
+    emit(s);
+    // It can take minutes (a sign-in in their browser is waited for until it comes over): the card shows it waiting, and
+    // its answer comes as the session's next snapshot.
+    void signInHereNow(s, found).catch(() => { found.busy = false; emit(s); });
+    return snapshot(s);
+  }
+
+  async function signInHereNow(s, found) {
+    const rec = (s.recoveries && s.recoveries.get(found.recovery)) || { name: shownName(found.app), app: APPS[found.app] ? found.app : null, tool: null };
+    let out = { status: 'closed' };
+    try {
+      if (found.where === 'browser') {
+        const controller = new AbortController();
+        found.cancel = () => { controller.abort(); signInBrowserCancel(rec.app); };
+        if (typeof webSignIn.recapture === 'function') {
+          const back = await webSignIn.recapture(rec.app, { signal: controller.signal, timeoutMs: deps.recaptureMs || 10 * 60_000 });
+          out = back && back.signedIn ? { status: 'signed-in' } : back && back.refused ? { status: 'refused' } : { status: 'closed' };
+        } else out = await signInBrowser(rec.app);
+      } else if (rec.app) out = await signInWindowOpen(rec.app);
+      else if (signInWindow && typeof signInWindow.openSite === 'function') {
+        const sites = toolSites(rec.tool);
+        out = await signInWindow.openSite({ name: rec.name, url: rec.tool.website || (sites[0] ? `https://${sites[0]}` : ''), domains: sites });
+      } else out = { status: 'failed', error: `Couldn't open ${rec.name} inside Engelbart.` };
+    } catch (error) { out = { status: 'failed', error: error && error.message ? error.message : '' }; }
+    found.busy = false;
+    found.cancel = null;
+    if (found.closed) return snapshot(s);
+    const works = out.status === 'signed-in' && (!rec.app || await Promise.resolve().then(() => (typeof webSignIn.stillSignedIn === 'function' ? webSignIn.stillSignedIn(rec.app) : webSignIn.signedIn(rec.app))).catch(() => false));
+    if (works) {
+      if (rec.app) for (const other of sharesSignIn(rec.app)) signInChecked.set(other, { status: 'signed-in', browser: '', browserId: '' });
+      logAction(s, null, `Signed in to ${rec.name}${found.where === 'browser' ? '' : ' inside Engelbart'}`, 'You');
+      closeNeed(s, found, 'done');
+      return snapshot(s);
+    }
+    found.tries += 1;
+    if (out.status === 'signed-in' || out.status === 'rejected' || out.status === 'refused' || found.tries >= 2) { giveUp(s, found, rec); return snapshot(s); }
+    found.error = out.status === 'failed' && out.error ? line(out.error, 200) : `Not signed in to ${rec.name} yet.`;
+    emit(s);
+    return snapshot(s);
   }
 
   function waitAgain(s, job) {
@@ -1634,14 +1866,21 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     need.outcome = how;
     if (need.watch) { clearInterval(need.watch); need.watch = null; }
     if (need.cancel) need.cancel(); // a sign-in still waited for in the default browser
-    if (how === 'skip' && !s.stopped) { leaveOut(s, need.app, why || laterWhy(need)); skipApp(s, need.app, need.jobs); }
+    if (how === 'skip' && !s.stopped) {
+      leaveOut(s, need.app, why || laterWhy(need));
+      skipApp(s, need.app, need.jobs);
+      // A recovery's card skipped leaves out every app picked that shares the sign-in (Drive's skips Gmail's too): it
+      // would only be asked again for them.
+      if (need.kind === SIGNIN_HERE && APPS[need.app]) for (const other of sharesSignIn(need.app)) if (other !== need.app && pickedHere(s, other)) { leaveOut(s, other, why || laterWhy(need)); skipApp(s, other); }
+    }
+    if (need.settle) need.settle(how);
     // A sign-in that came back signed out after the run started (lateSignIn): Log in done lets it join, Skip leaves it out.
     if (need.held) releaseHeld(s, need.app, how === 'skip' ? 'skip' : 'done');
     // A connector signed in while its agents waited: their tools were fixed when they started, so each finishes now and
     // its import runs again with the connection (rerunJob).
     const restart = how === 'done' && need.kind === 'connector' && isConnectorApp(need.app);
     if (restart) for (const job of s.jobs) if (need.jobs.includes(job.id) && job.kind === 'import' && !(job.connectors || []).includes(need.app)) job.rerun = true;
-    const done = restart ? { status: 'done', note: `${shownName(need.app)} is connected now, but this import started without it. Finish now with what you have; Engelbart starts the ${shownName(need.app)} import again with the connection.` } : { status: 'done' };
+    const done = restart ? { status: 'done', note: `${shownName(need.app)} is connected now, but this import started without it. Finish now with what you have; Engelbart starts the ${shownName(need.app)} import again with the connection.` } : { status: 'done', ...(need.doneNote ? { note: need.doneNote } : {}) };
     for (const [jobId, resolve] of need.waiters) { resolve(how === 'skip' ? { status: 'skipped' } : done); if (browser) browser.hide(jobId); }
     need.waiters.clear();
     for (const jobId of need.jobs) if (browser) browser.hide(jobId);
@@ -1676,7 +1915,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * whole source; a button leaves out its app. → what was left out, in words, or '' when the last turn asked nothing.
    */
   function skipAsked(s) {
-    const last = [...s.chat].reverse().find((entry) => entry.role === 'agent');
+    const last = lastSaid(s);
     if (!last) return '';
     if (last.authorize && last.authorize.app) { skipApp(s, last.authorize.app); return last.authorize.app; }
     const ask = last.ask;
@@ -1705,7 +1944,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (need.closed || !need.jobs.includes(job.id)) continue;
       need.waiters.delete(job.id);
       need.jobs = need.jobs.filter((id) => id !== job.id);
-      if (!need.jobs.length) { need.closed = true; if (need.watch) { clearInterval(need.watch); need.watch = null; } if (need.cancel) need.cancel(); }
+      // A recovery's card an app held at the start still waits on (`keep`) stays.
+      if (!need.jobs.length && !need.keep) { need.closed = true; if (need.watch) { clearInterval(need.watch); need.watch = null; } if (need.cancel) need.cancel(); if (need.settle) need.settle('gone'); }
     }
   }
 
@@ -1804,7 +2044,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       choices.custom = [choices.custom, librarianNotes(asked)].filter(Boolean).join('\n\n').slice(0, 4000);
       choices.sources.sites.on = asked.apps.includes(importFlow.SITES);
       // The tools the agents found, ticked (2026-10-15: told to the librarian, but nothing ever imported them): each asked
-      // about on its own (consentCard), and brought in through its site once allowed (extraImport).
+      // about in the grant (askGrant), and brought in through its site once allowed (extraImport).
       choices.extras = cleanExtras(asked.additional);
       choices.direct = null;
     }
@@ -1840,6 +2080,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       waitingForSurvey: false, surveyNews: [], recalls: {}, memory: { status: 'waiting', path: memory.memoryPath(ctx.dataRoot), error: '' }, memoryQueued: false, memoryDraft: null,
       skipped: new Set(), skippedSources: new Set(), suspended: false, held: new Map(), fallback: new Set(), connected: new Set(), rows: new Set(), inProject: new Set(), inWorkspace: new Set(), workspaceId, placing: Promise.resolve(),
       allowed: new Set(), approved: new Map(), // the librarian's run (2026-10-15): the apps the person let be read, the items they ticked
+      manual: !!asked,
     };
     // A folder the person chose for an app on this Mac (Import your context's manual scopes): the app's, as if found.
     const scoped = choices.direct || asked;
@@ -1867,24 +2108,41 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.chat.push(opener);
       emit(s);
     }
+    // The librarian must ask (From Amitav, 2026-10-15: "Fix/change this so the librarian must ask!"): nothing of a web app
+    // or a connector is touched, no sign-in copied from their browser or reused and no survey run, until the person has
+    // allowed it, all of them in one message, at once (askGrant). Those allowed before (a session picked up again) go on.
+    // (deps.allowed, the tests: every app allowed before the run, as a session picked up again has them.)
+    if (deps.allowed === true) for (const app of askedApps(s)) s.allowed.add(app);
+    if (askGrant(s)) emit(s);
     try { s.found = await scanFor({ ...s.choices, project: projectFor(s.choices) }, { homeDir, env, picked: s.picked, zotero, github, appleNotes: s.choices.permissions.notes ? appleNotes : null, access: accessOf(s) }); } catch (error) { s.found = { error: error.message }; }
     if (s.stopped || s.suspended) return;
     opener.text = foundSentence(s);
     s.dirs = dirsOf(s);
+    markAsking(s);
     emit(s);
-    // The librarian must ask (From Amitav, 2026-10-15: "Fix/change this so the librarian must ask!"): nothing of a web app
-    // or a connector is touched, no sign-in copied from their browser or reused and no survey run, until the person has
-    // said Allow on Engelbart's own prompt for it (consentCard). Those allowed before (a session picked up again) go on.
-    // (deps.allowed, the tests: every app allowed before the run, as a session picked up again has them.)
-    if (deps.allowed === true) for (const app of askedApps(s)) s.allowed.add(app);
-    for (const app of askedApps(s)) if (!s.allowed.has(app)) consentCard(s, app);
-    for (const tool of s.choices.extras || []) if (!s.allowed.has(tool.name)) consentCard(s, tool.name, tool);
+    // The librarian starts once the person said which apps it may reach: it plans with what it may reach.
+    await granted(s);
+    if (s.stopped || s.suspended) return;
     const { lines } = await beginApps(s, askedApps(s).filter((app) => s.allowed.has(app)));
     if (s.stopped || s.suspended) return;
     lookForFolders(s);
     if (lines) opener.text = `${opener.text}\n\n${lines}`;
     emit(s);
     await interviewTurn(s, 'Start.');
+  }
+
+  /**
+   * A session picked up again whose grant was still open (revive): once it is answered, the apps allowed start, and the
+   * librarian, if it had not said anything yet, starts too.
+   */
+  async function afterGrant(s) {
+    await granted(s);
+    if (s.stopped || s.suspended) return;
+    await beginApps(s, askedApps(s).filter((app) => s.allowed.has(app)));
+    if (s.stopped || s.suspended || s.finished) return;
+    lookForFolders(s);
+    emit(s);
+    if (!lastSaid(s) && !s.thinking) await interviewTurn(s, 'Start.');
   }
 
   /** The apps of the librarian's run on the web or behind a connector, ticked and not skipped. */
@@ -1894,44 +2152,99 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   /** Whether an agent may reach `app` now: in the librarian's run, an app it must ask about only once allowed. */
   const mayReach = (s, app) => !!s.choices.direct || !asksFirst(app) || (s.allowed || new Set()).has(app);
+  /** Whether the person picked `app` for this run. */
+  const pickedHere = (s, app) => Object.values(s.choices.sources).some((choice) => choice.on && choice.apps.includes(app)) || !!(s.choices.direct && s.choices.direct.apps.includes(app));
 
   /**
-   * The librarian's prompt for an app (2026-10-15, From Amitav: before copying cookies or reusing a session, "Allow
-   * Engelbart to search and read your Google Drive?", saying that what is read may reach the model provider, Allow /
-   * Skip): a popup over the chat. Until it is answered the app is held: no sign-in is looked at, no survey runs, and the
-   * librarian is told not to ask about or dispatch it. Allow starts its sign-in check and survey (allowApp); Skip leaves
-   * it out for the run.
+   * The librarian's run asks once, in one message, the first one in the chat (the onboarding beta, 2026-10-16, Hudson:
+   * "Before I get to the actual library onboarding chat I got 12 different popups … Instead, the first message in the chat
+   * window that should appear (this will circumvent the somewhat long loading time too!) is one message … 'Allow Engelbart
+   * to access the following apps:' … every one should be unchecked by default … For things like saved URLs from notes apps,
+   * don't include those; only include the primitive apps"). It replaced From Amitav's prompt per app (2026-10-15), and asks
+   * about the same apps: every one on the web or behind a connector, and every tool the agents found or the person added.
+   * Until it is answered those apps are held (no sign-in of theirs looked at, no survey) and the librarian waits; the scan
+   * runs behind it. → its chat entry, or null when there is nothing to ask.
    */
-  function consentCard(s, app, extra = null) {
-    if (s.skipped.has(app) || s.allowed.has(app) || s.needs.some((need) => !need.closed && need.app === app && need.kind === 'consent')) return;
-    const source = extra ? null : sourceOfApp(app);
-    const need = { id: randomUUID(), app, kind: 'consent', reason: `Allow Engelbart to search and read your ${extra ? app : shownName(app)}?`, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: `${!extra && APPS[app] && APPS[app].memory && s.choices.permissions.recall ? `Engelbart will also ask ${shownName(app)} once what it remembers about your research, then delete that chat. ` : ''}What the agents read there may be sent to ${PROVIDER_COMPANIES[s.choice.provider] || 'the model provider'} for processing.`, closed: false, held: !extra, at: now(), ...(extra ? { extra } : {}) };
-    s.needs.push(need);
-    if (!extra) s.held.set(app, { source, recall: false, consent: true });
-    if (source) s.found[source] = { ...(s.found[source] || {}), [app]: { reach: appOf(app).reach, consent: 'asking: Engelbart asks the person to allow it to search and read this app. Nothing of it has been looked at. Do not ask about it, offer it or dispatch it.' } };
-    logAction(s, null, `Asking you: ${need.reason}`);
+  function askGrant(s) {
+    if (openGrant(s)) return openGrant(s);
+    const rows = [
+      ...askedApps(s).filter((app) => !s.allowed.has(app)).map((app) => ({ id: app, name: shownName(app) })),
+      ...(s.choices.extras || []).filter((tool) => !s.allowed.has(tool.name) && !s.skipped.has(tool.name)).map((tool) => ({ id: tool.name, name: tool.name, tool: true, ...(tool.website ? { website: tool.website } : {}) })),
+    ];
+    if (!rows.length) return null;
+    const entry = { role: 'agent', text: '', grant: { rows, answered: null }, ask: null, authorize: null, at: now() };
+    s.chat.push(entry);
+    for (const row of rows) if (!row.tool) s.held.set(row.id, { source: sourceOfApp(row.id), recall: false, consent: true });
+    logAction(s, null, `Asking you: Allow Engelbart to access ${listed(rows.map((row) => row.name))}?`);
+    return entry;
+  }
+  const openGrant = (s) => s.chat.find((entry) => entry.grant && !entry.grant.answered) || null;
+
+  /** What the librarian is told of the apps still asked about, once the scan has replaced what was found. */
+  function markAsking(s) {
+    const entry = openGrant(s);
+    if (!entry) return;
+    for (const row of entry.grant.rows) {
+      const source = row.tool ? null : sourceOfApp(row.id);
+      if (source) s.found[source] = { ...(s.found[source] || {}), [row.id]: { reach: appOf(row.id).reach, consent: 'asking: Engelbart asks the person to allow it. Nothing of it has been looked at. Do not ask about it, offer it or dispatch it.' } };
+    }
   }
 
-  /** Allow on an app's consentCard: kept for the run, then its sign-in is looked at and its survey starts. */
-  function allowApp(s, need) {
-    need.closed = true;
-    need.outcome = 'done';
-    s.allowed.add(need.app);
-    if (need.extra) { logAction(s, null, `Allowed Engelbart to search and read ${need.app}`, 'You'); save(s); emit(s); void extraImport(s, need.extra).catch(() => {}); return; }
-    s.held.delete(need.app);
-    const source = sourceOfApp(need.app);
-    if (source) {
-      const { consent: _consent, ...entry } = (s.found[source] || {})[need.app] || {};
-      s.found[source] = { ...(s.found[source] || {}), [need.app]: entry };
+  /** Resolves once the open grant is answered (at once when there is none), or the session stops or is put away. */
+  function granted(s) {
+    if (!openGrant(s) || s.stopped || s.suspended) return Promise.resolve();
+    return new Promise((resolve) => { (s.grantWaiters = s.grantWaiters || []).push(resolve); });
+  }
+  function releaseGrant(s) {
+    const waiters = s.grantWaiters || [];
+    s.grantWaiters = [];
+    for (const resolve of waiters) resolve();
+  }
+
+  /**
+   * "Grant access" on the grant: { apps: [the ids ticked] }, at least one. Those ticked are allowed for the run (an Other
+   * tool's import starts at once); the rest are left out. → snapshot
+   */
+  function grant(id, input = {}) {
+    const s = get(id);
+    const entry = openGrant(s);
+    if (!entry) return snapshot(s);
+    const ids = new Set((Array.isArray(input && input.apps) ? input.apps : []).filter((one) => typeof one === 'string'));
+    const allowed = entry.grant.rows.filter((row) => ids.has(row.id)).map((row) => row.id);
+    if (!allowed.length) throw new Error('Pick at least one app');
+    answerGrant(s, entry, allowed, 'you didn’t allow Engelbart to access it');
+    return snapshot(s);
+  }
+
+  function answerGrant(s, entry, ids, why) {
+    const { rows } = entry.grant;
+    entry.grant.answered = { allowed: rows.filter((row) => ids.includes(row.id)).map((row) => row.name), skipped: rows.filter((row) => !ids.includes(row.id)).map((row) => row.name), at: now() };
+    for (const row of rows) {
+      if (ids.includes(row.id)) { allowOne(s, row); continue; }
+      leaveOut(s, row.id, why);
+      if (row.tool) s.skipped.add(row.id);
+      else { skipApp(s, row.id); releaseHeld(s, row.id, 'skip'); }
     }
-    logAction(s, null, `Allowed Engelbart to search and read ${shownName(need.app)}`, 'You');
+    logAction(s, null, entry.grant.answered.allowed.length ? `Allowed Engelbart to access ${listed(entry.grant.answered.allowed)}` : `Left out ${listed(entry.grant.answered.skipped)}`, 'You');
     save(s);
     emit(s);
-    void beginApps(s, [need.app]).then(({ leftOut }) => {
-      if (leftOut.length) s.chat.push({ role: 'agent', text: leftOutLine(leftOut), ask: null, authorize: null, at: now() });
-      // The librarian hears it was allowed only when it waits on nothing else; the survey's report wakes it otherwise.
-      emit(s);
-    }).catch(() => {});
+    releaseGrant(s);
+  }
+
+  /** An app or tool the person allowed: kept for the run; an app's sign-in and survey start with beginApps, a tool's import now. */
+  function allowOne(s, row) {
+    s.allowed.add(row.id);
+    if (row.tool) {
+      const tool = (s.choices.extras || []).find((one) => one.name === row.id);
+      if (tool) void extraImport(s, tool).catch(() => {});
+      return;
+    }
+    s.held.delete(row.id);
+    const source = sourceOfApp(row.id);
+    if (source) {
+      const { consent: _consent, ...entry } = (s.found[source] || {})[row.id] || {};
+      s.found[source] = { ...(s.found[source] || {}), [row.id]: entry };
+    }
   }
 
   /**
@@ -1940,33 +2253,42 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * one import of its pages, documents or items about their project, as notes.
    */
   async function extraImport(s, tool) {
-    const host = hostOfSite(tool.website);
-    const copied = host && s.choices.keychain !== false && webSignIn && typeof webSignIn.copyDomains === 'function' ? await webSignIn.copyDomains([host], { denied: signInDenied }).catch(() => false) : false;
+    dispatch(s, await toolJob(s, tool, { plan: (how, host) => `This is a tool they use that Engelbart has no import of its own for: ${toolSaid(tool)}. ${how}, and bring in its pages, documents or items about the project in <project> as notes (add_note).${host ? '' : ' It has no website given: look for it in their browser history first.'}` }));
+  }
+
+  /**
+   * One of the Other tools' imports (2026-10-16, Hudson: "Modify the code such that it uses the cookies for all tools,
+   * including ones in the 'other' category or that are added by the agents"): its sign-in copied from the person's chosen
+   * browser profile into Engelbart's (copyTool); the person's own browser only when nothing could be copied and they let
+   * agents use it. One job a tool, carrying the tool (name, website, sites), so a sign-in it asks for is the tool's
+   * (needApp, recover). → the job to dispatch
+   */
+  async function toolJob(s, tool, { plan }) {
+    const sites = toolSites(tool);
+    const out = sites.length && s.choices.keychain !== false ? await copyTool(tool).catch(() => null) : null;
+    const copied = !!(out && (out.copied > 0 || out.signedIn));
+    if (copied) logAction(s, null, `Copied your ${tool.name} sign-in`);
     const ba = copied ? null : s.choices.browserAgents;
     const how = ba ? `Open it in a tab of your own in their ${ba.browserName}, where they are signed in` : 'Open it through their sign-in in Engelbart\'s browser';
-    const plan = `This is a tool they use that Engelbart has no import of its own for: ${toolSaid(tool)}. ${how}, and bring in its pages, documents or items about the project in <project> as notes (add_note).${host ? '' : ' It has no website given: look for it in their browser history first.'}`;
-    dispatch(s, { kind: 'import', source: 'sites', apps: [], label: `Other tools: ${tool.name}`.slice(0, 120), plan, extra: { sites: host ? [host] : [] }, route: ba ? 'browser' : null, keyExtra: tool.name });
+    return { kind: 'import', source: 'sites', apps: [], label: `Other tools: ${tool.name}`.slice(0, 120), plan: plan(how, sites[0] || ''), extra: { sites, tool: { name: tool.name, website: tool.website || '', sites } }, route: ba ? 'browser' : null, keyExtra: tool.name };
   }
 
   /**
    * The apps a run may reach now, started: their sign-ins looked at (copied from the person's browser when Engelbart's
-   * has none), their surveys started (a signed-out one left out, one whose browser macOS refused skipped). → { lines: the
-   * opener's sign-in lines, leftOut: the apps left out signed out }
+   * has none), their surveys started (a signed-out one brought back by recover, its survey waiting on it; one whose browser
+   * macOS refused skipped). → { lines: the opener's sign-in lines, leftOut: [] (kept for its callers) }
    */
   async function beginApps(s, apps) {
     if (!apps.length) return { lines: '', leftOut: [] };
+    await checkConnectors(apps);
     const checked = await signInsFirst(s, apps);
     if (s.stopped || s.suspended) return { lines: '', leftOut: [] };
     startWork(s, new Set([...checked.signedOut, ...checked.refused.keys(), ...checked.checking.keys()]), apps);
     for (const [app, answer] of checked.checking) if (s.held.has(app)) lateSignIn(s, app, answer);
-    // A ticked web app still signed out (the choose screen signs each in before it starts, so a race, or a session resumed
-    // after a quit) gets no card on this screen (2026-10-11): it is left out, and the opener says where to add it.
-    const leftOut = [...checked.signedOut].filter((app) => s.held.has(app));
-    for (const app of leftOut) {
-      skipApp(s, app);
-      releaseHeld(s, app, 'skip');
-      logAction(s, null, `Left out ${shownName(app)}: not signed in`);
-    }
+    // A ticked web app still signed out (2026-10-16, in place of leaving it out): brought back, quietly first, then its
+    // card (Sign in inside Engelbart · Skip); its survey starts once it is signed in.
+    for (const app of [...checked.signedOut].filter((one) => s.held.has(one))) recoverHeld(s, app);
+    const leftOut = [];
     // An app whose browser macOS refused gets no card that can't succeed (2026-10-10): it is skipped for this run.
     for (const [app, name] of checked.refused) {
       skipApp(s, app);
@@ -2005,6 +2327,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // The apps a connector reaches (Engelbart's sign-in, or the one the person made in their own Claude Code or Codex):
     // their tools are used, no sign-in is copied for them.
     s.connected = new Set();
+    await checkConnectors(d.apps);
     for (const app of d.apps) {
       if (!connectors || !appOf(app) || appOf(app).reach !== 'connector') continue;
       const reached = await Promise.resolve().then(() => (typeof connectors.reaches === 'function' ? connectors.reaches(app, s.choice.provider) : connectors.status(app).connected)).catch(() => false);
@@ -2014,8 +2337,12 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const checked = await signInsFirst(s);
     if (s.stopped || s.suspended) return;
     // Their browser's sign-ins declined (the keychain question): a web app Engelbart's browser isn't signed in to is read
-    // in their own browser when they let agents use it, else left out. No sign-in is made in Engelbart's window.
-    if (s.choices.keychain === false) { for (const app of checked.signedOut) checked.elsewhere.set(app, s.choices.browserAgents ? s.choices.browserAgents.browserName : ''); checked.signedOut.clear(); }
+    // in their own browser when they let agents use it; else signed in inside Engelbart (recover's card, 2026-10-16: "I
+    // suppose we can ask them to sign in using Engelbart's chromium … and then have agents run there").
+    if (s.choices.keychain === false && s.choices.browserAgents) { for (const app of checked.signedOut) checked.elsewhere.set(app, s.choices.browserAgents.browserName); checked.signedOut.clear(); }
+    // Signed in in their browser, refused by Engelbart's, and no browser agents: signed in inside Engelbart (not Google's,
+    // which refuses Engelbart's window as well: left out, said).
+    if (!s.choices.browserAgents && signInWindow) for (const [app] of [...checked.elsewhere]) if (!signsInThroughBrowser(app)) { checked.elsewhere.delete(app); checked.signedOut.add(app); }
     const held = new Set([...checked.signedOut, ...checked.checking.keys()]);
     for (const [app, name] of checked.refused) {
       leaveOut(s, app, `macOS didn't allow ${name || 'your browser'}'s sign-ins`);
@@ -2028,8 +2355,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // reaches and whose sign-in isn't copied from a browser (Granola): held on its step, its import started once signed in.
     const webChecked = (app) => checked.signedIn.has(app) || checked.refused.has(app) || checked.elsewhere.has(app) || checked.signedOut.has(app) || checked.checking.has(app);
     const ownHeld = new Map();
+    const viaSite = new Set(); // connectors read through their website instead (connectorFallback)
     for (const app of d.apps) {
       if (s.skipped.has(app) || held.has(app)) continue;
+      if (isConnectorApp(app) && !s.connected.has(app) && connectorFallback(s, app)) { viaSite.add(app); continue; } // read through its site instead
       if (SIGNIN_APPS.has(app) && ownDep(app) && typeof ownDep(app).status === 'function' && !ownStatus(app).connected) ownHeld.set(app, 'signin');
       else if (isConnectorApp(app) && connectors && !s.connected.has(app) && !webChecked(app)) ownHeld.set(app, 'connector');
     }
@@ -2037,24 +2366,20 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       if (s.skipped.has(app)) continue;
       if (held.has(app)) {
         s.held.set(app, { source: importFlow.groupOfApp(app), recall: false });
-        if (checked.signedOut.has(app)) signInCard(s, app);
+        if (checked.signedOut.has(app)) recoverHeld(s, app);
         continue;
       }
       if (ownHeld.has(app)) { signInCard(s, app, ownHeld.get(app)); continue; }
+      if (viaSite.has(app)) continue;
       directImport(s, app);
     }
     for (const [app, answer] of checked.checking) lateSignIn(s, app, answer);
-    if (d.additional.length) {
-      const sites = [...new Set(d.additional.map((tool) => hostOfSite(tool.website)).filter(Boolean))];
-      // Their sign-ins for those sites copied into Engelbart's browser (round 3: the hidden browser first); the person's own
-      // browser only when that can't be done and they let agents use it.
-      const copied = s.choices.keychain !== false && sites.length && webSignIn && typeof webSignIn.copyDomains === 'function'
-        ? await webSignIn.copyDomains(sites, { denied: signInDenied }).catch(() => false) : false;
-      const ba = copied ? null : s.choices.browserAgents;
-      const named = d.additional.map(toolSaid);
-      const how = ba ? `Open each in a tab of your own in their ${ba.browserName}, where they are signed in, and bring in their pages, documents or items about these projects as notes (add_note).` : 'Open each through their sign-in in Engelbart\'s browser, and bring in their pages, documents or items about these projects as notes (add_note) or saved pages.';
-      const plan = [importFlow.importPlan({ app: importFlow.SITES, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, period: periodName(s.choices.days) }), `These are tools they use that Engelbart has no import of its own for: ${named.join('; ')}. ${how} One with no website given: look for it in their browser history first.`].join('\n\n');
-      dispatch(s, { kind: 'import', source: 'sites', apps: [], label: `Other tools: ${d.additional.map((tool) => tool.name).join(', ')}`.slice(0, 120), plan, extra: { sites }, route: ba ? 'browser' : null });
+    // The tools not in the catalog (2026-10-16: one job a tool, each with its own sign-in, where they were one job whose
+    // every sign-in was "Other tools: …"): their sign-ins copied into Engelbart's browser (round 3: the hidden browser
+    // first); the person's own browser only when that can't be done and they let agents use it.
+    for (const tool of d.additional) {
+      const base = importFlow.importPlan({ app: importFlow.SITES, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, period: periodName(s.choices.days) });
+      dispatch(s, await toolJob(s, tool, { plan: (how, host) => `${base}\n\nThis is a tool they use that Engelbart has no import of its own for: ${toolSaid(tool)}. ${how}, and bring in its pages, documents or items about these projects as notes (add_note) or saved pages.${host ? '' : ' It has no website given: look for it in their browser history first.'}` }));
     }
     if (s.choices.permissions.recall && s.choices.permissions.browser) {
       for (const app of recallApps((s.choices.sources.chats || {}).on ? s.choices.sources.chats.apps : [])) {
@@ -2104,7 +2429,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     }
     leaveOut(s, app, `you're signed in to it in ${browserName || 'your browser'}, but it doesn't let Engelbart use that sign-in`);
     skipApp(s, app);
-    s.chat.push({ role: 'agent', text: `Left out ${shownName(app)}: you're signed in to it in ${browserName || 'your browser'}, but it doesn't let Engelbart use that sign-in. Let agents use ${browserName || 'your browser'} to bring it in.`, ask: null, authorize: null, at: now() });
+    notice(s, `Left out ${shownName(app)}: you're signed in to it in ${browserName || 'your browser'}, but it doesn't let Engelbart use that sign-in.`);
     logAction(s, null, `Left out ${shownName(app)}: its sign-in in ${browserName || 'your browser'} doesn't work in Engelbart`);
     return false;
   }
@@ -2181,7 +2506,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    * no survey reported is not kept.
    */
   function approvePicked(s, labels) {
-    const last = [...s.chat].reverse().find((entry) => entry.role === 'agent');
+    const last = lastSaid(s);
     const ask = last && last.ask;
     if (!ask || !Array.isArray(ask.options) || !sourceOf(ask.source)) return;
     const apps = (Array.isArray(ask.apps) && ask.apps.length ? ask.apps : sourceOf(ask.source).apps).filter((app) => APPROVAL_APPS.has(app));
@@ -2283,8 +2608,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const s = get(id);
     s.finished = true;
     if (s.interviewController) s.interviewController.abort();
-    // An app still asked about (consentCard) was never allowed: it is left out, its prompt put away.
-    for (const need of s.needs) if (!need.closed && need.kind === 'consent') closeNeed(s, need, 'skip', 'you pressed Import before allowing it');
+    // The apps still asked about (askGrant) were never allowed: they are left out, the grant answered so.
+    const open = openGrant(s);
+    if (open) answerGrant(s, open, [], 'you pressed Import before allowing it');
     for (const [source, choice] of Object.entries(s.choices.sources)) {
       const sent = s.jobs.filter((job) => job.kind === 'import' && job.source === source);
       if (!choice.on || s.skippedSources.has(source) || sent.some((job) => !job.apps.length)) continue;
@@ -2320,11 +2646,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const found = s.needs.find((entry) => entry.id === needId && !entry.closed);
     if (!found) return snapshot(s);
     if (!['open', 'done', 'skip'].includes(action)) throw new Error('Unknown action');
-    // The librarian's prompt to search and read an app (consentCard): Allow (open, done) starts it, Skip leaves it out.
-    if (found.kind === 'consent') {
-      if (action === 'skip') closeNeed(s, found, 'skip');
-      else allowApp(s, found);
-      return snapshot(s);
+    // A recovery's card (recover): its sign-in made inside Engelbart (or in their browser, for Google's), or Skip.
+    if (found.kind === SIGNIN_HERE) {
+      if (action === 'skip') { closeNeed(s, found, 'skip'); return snapshot(s); }
+      return signInHere(s, found);
     }
     // Zotero's and GitHub's own sign-ins (2026-10-14): run here, not in the window, and closed once the account is connected.
     if (SIGNIN_APPS.has(found.app) && !found.own && action !== 'skip') {
@@ -2424,7 +2749,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         if (out.status === 'denied') {
           if (out.browserId) signInDenied.add(out.browserId);
           closeNeed(s, found, 'skip', `macOS didn't allow ${out.browser || 'your browser'}'s sign-ins`);
-          s.chat.push({ role: 'agent', text: skippedLine(out.browser, [found.app]), ask: null, authorize: null, at: now() });
+          notice(s, skippedLine(out.browser, [found.app]));
           emit(s);
           return;
         }
@@ -2465,7 +2790,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       return snapshot(s);
     }
     if (out.held) { closeNeed(s, found, readElsewhere(s, found.app, found.browser) ? 'done' : 'skip', 'its sign-in doesn’t work in Engelbart'); return snapshot(s); }
-    if (out.refused) { if (out.refusedId) signInDenied.add(out.refusedId); closeNeed(s, found, 'skip', `macOS didn't allow ${out.refused}'s sign-ins`); s.chat.push({ role: 'agent', text: skippedLine(out.refused, [found.app]), ask: null, authorize: null, at: now() }); emit(s); return snapshot(s); }
+    if (out.refused) { if (out.refusedId) signInDenied.add(out.refusedId); closeNeed(s, found, 'skip', `macOS didn't allow ${out.refused}'s sign-ins`); notice(s, skippedLine(out.refused, [found.app])); emit(s); return snapshot(s); }
     // They say they are signed in there and agents may use that browser: read it there (the copy can't be told apart).
     if (found.opened && s.choices.browserAgents && readElsewhere(s, found.app, found.browser)) { closeNeed(s, found, 'done'); return snapshot(s); }
     found.error = `Still not signed in to ${shownName(found.app)}${found.browser ? ` in ${found.browser}` : ''}.`;
@@ -2570,6 +2895,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     for (const controller of s.controllers) controller.abort();
     for (const job of s.jobs) if (job.status === 'queued') { job.status = 'stopped'; job.ended = now(); }
     for (const found of s.needs) if (!found.closed) closeNeed(s, found, 'skip');
+    releaseGrant(s);
     if (s.memory.status === 'waiting' || s.memory.status === 'writing' || s.memory.status === 'cleaning') s.memory = { ...s.memory, status: 'stopped' };
     logAction(s, null, 'Stopped everything', 'You');
     emit(s);
@@ -2661,6 +2987,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         save(s, { force: true });
         if (s.interviewController) s.interviewController.abort();
         for (const controller of s.controllers) controller.abort();
+        releaseGrant(s);
       }
       sessions.delete(s.id);
       resumed.delete(s.dataRoot);
@@ -2697,6 +3024,13 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   }
 
   /** Paths a saved session kept for an app (a folder chosen, an export), still inside the home folder and still there. */
+  /** An Other tool a saved job was for ({ name, website, sites }), or null. */
+  function keptTool(tool) {
+    if (!tool || typeof tool.name !== 'string' || !tool.name.trim()) return null;
+    const sites = (Array.isArray(tool.sites) ? tool.sites : []).filter((host) => typeof host === 'string' && /^[a-z0-9.-]{1,200}$/i.test(host)).slice(0, 12);
+    return { name: line(tool.name, 60), website: typeof tool.website === 'string' && /^https?:\/\//i.test(tool.website) ? tool.website.slice(0, 300) : '', sites };
+  }
+
   function keptPaths(value) {
     const out = {};
     for (const [app, file] of Object.entries(value && typeof value === 'object' ? value : {})) {
@@ -2745,7 +3079,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       inProject: new Set((Array.isArray(saved.inProject) ? saved.inProject : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
       inWorkspace: new Set((Array.isArray(saved.inWorkspace) ? saved.inWorkspace : []).filter((row) => typeof row === 'string' && ID_RE.test(row))),
       workspaceId: projectId && typeof saved.workspaceId === 'string' && ID_RE.test(saved.workspaceId) ? saved.workspaceId : null, placing: Promise.resolve(),
-      gmailThreads: Number.isInteger(saved.gmailThreads) && saved.gmailThreads > 0 ? saved.gmailThreads : 0,
+      gmailThreads: Number.isInteger(saved.gmailThreads) && saved.gmailThreads > 0 ? saved.gmailThreads : 0, manual: saved.manual === true,
       allowed: new Set((Array.isArray(saved.allowed) ? saved.allowed : []).filter((app) => typeof app === 'string' && APPS[app])),
       approved: new Map(Object.entries(saved.approved && typeof saved.approved === 'object' ? saved.approved : {}).filter(([app, ids]) => APPROVAL_APPS.has(app) && Array.isArray(ids)).map(([app, ids]) => [app, new Set(ids.filter((id) => typeof id === 'string').slice(0, 2000))])),
       leftOut: new Map((Array.isArray(saved.leftOut) ? saved.leftOut : []).filter((entry) => entry && typeof entry.app === 'string' && (APPS[entry.app] || entry.app === 'GitHub') && typeof entry.why === 'string').map((entry) => [entry.app, line(entry.why, 200)])),
@@ -2763,7 +3097,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       s.jobs.push({
         ...(find ? { find: true } : {}),
         id: typeof job.id === 'string' && ID_RE.test(job.id) ? job.id : randomUUID(), key: typeof job.key === 'string' ? job.key : `${find ? 'find' : job.kind}:${job.source}:${[...apps].sort().join(',')}`,
-        kind: job.kind, priority: PRIORITY[job.kind], seq: s.seq, source: String(job.source || ''), apps, label: line(job.label, 120), plan: typeof job.plan === 'string' ? clip(job.plan, 8000) : '', extra: job.extra && Array.isArray(job.extra.sites) ? { sites: job.extra.sites.filter((host) => typeof host === 'string' && /^[a-z0-9.-]{1,200}$/i.test(host)).slice(0, 12) } : null,
+        kind: job.kind, priority: PRIORITY[job.kind], seq: s.seq, source: String(job.source || ''), apps, label: line(job.label, 120), plan: typeof job.plan === 'string' ? clip(job.plan, 8000) : '', extra: job.extra && Array.isArray(job.extra.sites) ? { sites: job.extra.sites.filter((host) => typeof host === 'string' && /^[a-z0-9.-]{1,200}$/i.test(host)).slice(0, 12), ...(keptTool(job.extra.tool) ? { tool: keptTool(job.extra.tool) } : {}) } : null,
         status: again ? 'queued' : job.status, skipped: !!job.skipped, notes: Number(job.notes) || 0, items: Number(job.items) || 0, titles: (Array.isArray(job.titles) ? job.titles : []).slice(0, 80).map((title) => line(title, 120)),
         activity: '', summary: again ? '' : line(job.summary, 500), error: again ? '' : line(job.error, 300), started: again ? null : job.started || null, ended: again ? null : job.ended || null,
         ...(job.route === 'browser' && job.kind === 'import' && s.choices.browserAgents ? { route: 'browser' } : {}),
@@ -2793,17 +3127,29 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (s.choices.direct) {
       for (const need of Array.isArray(saved.needs) ? saved.needs : []) {
         const app = need && typeof need.app === 'string' ? need.app : '';
-        if (!app || need.closed || !(SIGNIN_KINDS.has(need.kind) || need.kind === 'connector') || !APPS[app] || !s.choices.direct.apps.includes(app)) continue;
+        if (!app || need.closed || !(SIGNIN_KINDS.has(need.kind) || need.kind === 'connector' || need.kind === SIGNIN_HERE) || !APPS[app] || !s.choices.direct.apps.includes(app)) continue;
         if (s.skipped.has(app) || s.jobs.some((job) => job.kind === 'import' && job.apps.includes(app))) continue;
         // Signed in while Engelbart was closed (Zotero, GitHub, a connector): its import starts now, with no step.
         if ((SIGNIN_APPS.has(app) && ownStatus(app).connected) || (need.kind === 'connector' && connectorConnected(app))) { directImport(s, app); continue; }
+        // A web app's sign-in: brought back again (recover), quietly first.
+        if (APPS[app].reach === 'web') { s.held.set(app, { source: importFlow.groupOfApp(app), recall: false }); recoverHeld(s, app); continue; }
         signInCard(s, app, need.kind === 'connector' ? 'connector' : 'signin');
       }
     }
-    // The librarian's prompts are not kept either: an app it was still asking about is asked about again.
+    // The librarian's grant (askGrant): one still open is asked again as it was, and its apps held; apps neither allowed nor
+    // left out (a session from before the grant) are asked about in a new one. A connector allowed and still waiting to be
+    // connected gets its step again, or, connected meanwhile, its survey.
+    let grantOpen = false;
     if (!s.choices.direct && !s.finished && !s.stopped && (s.chat.length || s.jobs.length)) {
-      for (const app of askedApps(s)) if (!s.allowed.has(app)) consentCard(s, app);
-      for (const tool of s.choices.extras || []) if (!s.allowed.has(tool.name)) consentCard(s, tool.name, tool);
+      const open = openGrant(s);
+      if (open) { for (const row of open.grant.rows) if (!row.tool) s.held.set(row.id, { source: sourceOfApp(row.id), recall: false, consent: true }); } else askGrant(s);
+      grantOpen = !!openGrant(s);
+      for (const [source, apps] of Object.entries(s.found)) {
+        for (const [app, value] of Object.entries(apps && typeof apps === 'object' ? apps : {})) {
+          if (!value || !value.connector || !isConnectorApp(app) || !s.allowed.has(app) || s.skipped.has(app)) continue;
+          if (connectorConnected(app)) { s.found[source] = { ...s.found[source], [app]: { reach: 'connector', survey: 'running' } }; dispatch(s, { kind: 'survey', source, apps: [app], label: `Looking through ${shownName(app)}` }); } else { s.held.set(app, { source, recall: false }); signInCard(s, app, 'connector'); }
+        }
+      }
     }
     logAction(s, null, 'Picked up again after Engelbart closed');
     emit(s);
@@ -2815,6 +3161,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
       void opening(s);
     } else if (s.choices.direct) {
       if (!s.finished) void directOpening(s); // Import your context has no librarian: the imports not queued yet are
+    } else if (grantOpen) {
+      void afterGrant(s); // the librarian goes on (or starts) once the person has said which apps it may reach
     } else if (!s.done && !s.finished) {
       const last = s.chat[s.chat.length - 1];
       if (!last) void interviewTurn(s, 'Start.');
@@ -2887,7 +3235,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
 
   return {
     forget,
-    start, answer, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, unblock, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose, signInBrowser, signInBrowserCancel, signInUnlock, signInAnotherAccount, signInPick,
+    start, answer, grant, authorize, importNow, need, stop, stopJob, suspendAll, resume, retryMemory, unblock, setMinimized, dismiss, attachProject, windowClosed, logJob, list, providers, cancelSignIn, signInNote, signInCheck, signInWindowOpen, signInWindowClose, signInBrowser, signInBrowserCancel, signInUnlock, signInAnotherAccount, signInPick,
     setProvider: (id, provider) => { const s = get(id); setProvider(s, provider); emit(s); return snapshot(s); },
     // the first build's name for authorize
     connected: (id, input) => authorize(id, input),

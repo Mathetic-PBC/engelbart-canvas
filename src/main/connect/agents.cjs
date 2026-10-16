@@ -44,6 +44,7 @@ const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
 const { pathLabeller, claudeUpdate, codexUpdate, eventReader } = require('../bart/activity.cjs');
 const { writeCodexConfig } = require('../bart/ask.cjs');
+const { APPS } = require('../../shared/connect-sources.cjs');
 
 const READ_TOOLS = 'Read,Grep,Glob';
 const WEB_TOOLS = 'WebSearch,WebFetch';
@@ -120,9 +121,10 @@ const CONNECTOR_READS = Object.freeze({
   Notion: Object.freeze({ list: ['notion-search', 'notion-list-recent-pages', 'notion-list-shared-pages', 'notion-list-private-pages', 'notion-list-favorite-pages', 'notion-get-self'], read: ['notion-fetch', 'notion-query-data-sources', 'notion-query-meeting-notes'] }),
 });
 
-/** The tools of `connector` ({ app }) an agent of `kind` may call: a survey's list, an import's list and read. */
+/** The tools of `connector` ({ app }) an agent of `kind` may call: a survey's list, an import's list and read. Linear's
+ *  and Evernote's (2026-10-16) are their catalog entries' `reads` (shared/connect-sources.cjs). */
 function connectorTools(connector, kind) {
-  const reads = connector && CONNECTOR_READS[connector.app];
+  const reads = connector && (CONNECTOR_READS[connector.app] || (APPS[connector.app] && APPS[connector.app].reach === 'connector' && APPS[connector.app].reads) || null);
   if (!reads) return [];
   return kind === 'survey' || kind === 'discover' ? [...reads.list] : [...reads.list, ...reads.read];
 }

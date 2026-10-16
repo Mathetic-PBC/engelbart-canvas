@@ -794,6 +794,9 @@ export function chatStatus(session) {
 export function needView(need) {
   const kind = need && need.kind;
   const app = need ? shownName(need.app) : '';
+  // A sign-in brought back (connect/session.cjs recover, 2026-10-16): signed in inside Engelbart, or for Google's (which
+  // refuses Engelbart's window) in the person's browser, then copied over. Nothing under it.
+  if (kind === 'signin-here') return { title: `Sign in to ${app}`, action: need.where === 'browser' ? `Sign in in ${need.browser || 'your browser'}` : 'Sign in inside Engelbart', hint: '' };
   if (kind === 'connector') return { title: `${app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
   if (kind === 'permission') return { title: `${app} needs your permission`, action: 'Allow', hint: 'macOS will ask' };
   if (need && (need.app === 'Zotero' || need.app === 'GitHub')) return { title: `${app} needs you to sign in`, action: 'Log in', hint: 'Opens in your browser · read-only' };
@@ -826,8 +829,9 @@ export function dockLine(session) {
   const needs = session.needs || [];
   if (needs.length) return { tone: 'warn', short: 'Needs you', text: needs.length === 1 ? needView(needs[0]).title : `${needs.length} steps need you` };
   if (session.thinking || (!session.done && !session.finished)) {
-    const asked = session.chat && session.chat.length && session.chat[session.chat.length - 1].role === 'agent' && !session.thinking;
-    return { tone: asked ? 'warn' : 'busy', short: asked ? 'Your answer' : 'Connecting', text: asked ? 'The librarian asked you something' : 'Connecting your library…' };
+    // Never "Your answer" (2026-10-16, Hudson: "nothing should ever say 'your answer'!!!! it should say importing …
+    // because they will know if they are needed since they are the ones doing it").
+    return { tone: 'busy', short: 'Importing', text: 'Importing your library…' };
   }
   const jobs = workJobs(session.jobs);
   const ended = jobs.filter((job) => statusOf(job).done).length;

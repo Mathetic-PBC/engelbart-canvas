@@ -2,11 +2,9 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import GithubRepos from '../workspace/GithubRepos.jsx';
-import ThinkingDots from '../ui/ThinkingDots.jsx';
 import { heldRow } from '../model/github.js';
 import { rowOf } from '../model/tools.js';
 import { markOpen } from '../ui/connect-open.js';
-import NeedPopup from '../import/NeedPopup.jsx';
 import { SOURCES, APPS, LOCAL_PDFS, LOCAL_REPOS, BROWSER_ROW, initialPicks, choicesOf, PERIODS, DEFAULT_PERIOD_DAYS, periodName, resumable, statusOf, workJobs, afterSignInWindowClosed, signInWindowClosed, runningFirst, workLine, needView, memoryLine, footLine, chatStatus, workRow, ticked, tickRow, tickRepo, tickGroup, tickAll, allPicked, groupState, localPicked, rowLabel, rowSub, rowTip, shownName, NEEDS_SIGN_IN, consentFor, permissionsOf, newlyTickedWeb, waitForYes, signInPanel, keychainOutcome, signInsToCheck, waitingWhile, placedLine, unsignedWeb, signInGate, shownSignIn, signInChain, signInWindows, opensSignIn, sharesSignIn, signsInViaBrowser, signInName, waitingIn, folderPanel, folderAccessLabel } from '../model/connect.js';
 import obsidian from '../../../design/assets/logos/obsidian.svg';
 import notion from '../../../design/assets/logos/notion.svg';
@@ -76,6 +74,20 @@ const CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:cen
   + '.cx-opt-line{display:flex;flex-wrap:wrap;align-items:baseline;column-gap:8px;row-gap:1px}'
   + '.cx-opt-label{min-width:0;overflow-wrap:anywhere}'
   + '.cx-opt-why{min-width:0;overflow-wrap:anywhere;font-size:12.5px;color:#8f8f8f}'
+  // A ticked option is outlined black (2026-10-16, Hudson: "this should be black outline, not blue … the button should stay
+  // blue tho"), at the 1.5px every selected row has; @brainstorm's cards keep theirs.
+  + '.bs-opt.cx-opt[aria-checked="true"]{border-color:#171717;box-shadow:inset 0 0 0 .5px #171717}'
+  // Words that move while work goes on, in place of dots (2026-10-16: "Get rid of these weird dots … and just have the text
+  // gradient"; "make this gradient and get rid of the blue dot"). Still for anyone who asked for less motion.
+  + '.cx-shimmer{background:linear-gradient(90deg,#a3a3a3 0%,#171717 35%,#a3a3a3 70%);background-size:220% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;animation:cx-shimmer 1.8s linear infinite}'
+  + '@keyframes cx-shimmer{from{background-position:110% 0}to{background-position:-110% 0}}'
+  + '@media (prefers-reduced-motion: reduce){.cx-shimmer{animation:none;color:#4d4d4d;background:none}}'
+  // The grant (2026-10-16): the add to library page's rows in a message, a circle at the right that fills blue once ticked.
+  + '.cx-grant-row{display:flex;align-items:center;gap:12px;width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid transparent;border-radius:8px;background:#fff;cursor:pointer;text-align:left;font:14.5px/1.4 var(--font-sans);color:#171717}'
+  + '.cx-grant-row:hover{background:#fafafa}.cx-grant-row[aria-checked="true"]{border-color:#171717;box-shadow:inset 0 0 0 .5px #171717;background:#fafafa}.cx-grant-row:disabled{cursor:default}'
+  + '.cx-grant-row:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
+  + '.cx-circle{flex:none;box-sizing:border-box;width:20px;height:20px;display:flex;align-items:center;justify-content:center;border:1.5px solid #c9c9c9;border-radius:50%;background:#fff;color:#fff}'
+  + '[aria-checked="true"]>.cx-circle{border-color:#0070f3;background:#0070f3}'
   + '.bs-field{display:block;width:100%;box-sizing:border-box;margin:0;padding:8px 10px;border:1px solid #eaeaea;border-radius:8px;background:#fff;outline:none;resize:none;font:14px/1.5 var(--font-sans);color:#171717}.bs-field:focus{border-color:#c9c9c9}.bs-field::placeholder{color:#8f8f8f}'
   + '.bs-submit{padding:8px 14px;border:0;border-radius:8px;background:#0070f3;color:#fff;font:500 13px/1 var(--font-sans);cursor:pointer;transition:opacity 120ms}.bs-submit:hover{opacity:.86}.bs-submit:disabled{background:#eaeaea;color:#8f8f8f;cursor:default;opacity:1}'
   + '.cx-btn{display:inline-flex;align-items:center;gap:7px;height:30px;padding:0 12px;border:1px solid #171717;border-radius:8px;background:#171717;color:#fff;cursor:pointer;font:500 12.5px/1 var(--font-sans);white-space:nowrap}.cx-btn:hover{opacity:.88}.cx-btn:disabled{opacity:.5;cursor:default}'
@@ -99,6 +111,11 @@ const CLOUD_FILLED = <svg width="15" height="11" viewBox="0 0 15 11" aria-hidden
 const GLOBE = <Svg size={14} width={1.5}><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" /></Svg>;
 /** "a, b and c". */
 const listOf = (names) => (names.length < 2 ? names.join('') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`);
+/** The index of the chat's last turn (the librarian's or the person's): not the opening line, a notice or the apps' grant; -1. */
+export function lastTurn(chat) {
+  for (let i = (chat || []).length - 1; i >= 0; i -= 1) { const item = chat[i]; if (!item.opener && !item.notice && !item.grant) return i; }
+  return -1;
+}
 const LOCK = <Svg size={13} width={1.8}><rect x="4" y="11" width="16" height="10" rx="2" /><path d="M8 11V7a4 4 0 0 1 8 0v4" /></Svg>;
 const ALERT = <Svg size={14} width={1.8}><path d="M12 9v4" /><path d="M12 17h.01" /><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z" /></Svg>;
 
@@ -510,22 +527,24 @@ export function AnsweredAsk({ ask, children }) {
 
 /**
  * The steps the agents handed the person, in the chat as one card (2026-10-09, David's mockup in place of the strip above
- * Reply): a row an app, "Opens in your browser · read-only" under it, Skip and its one button; then what Skip means.
+ * Reply): a row an app, Skip and its one button. What Skip means is no longer said under it (2026-10-16, "get rid of this
+ * slop"), nor anything under a sign-in brought back (recover's card: Sign in inside Engelbart).
  */
 function NeedsCard({ needs, onOpen, onSkip }) {
   if (!needs.length) return null;
   return (
     <div data-connect-needs="1" style={{ display: 'flex', flexDirection: 'column', gap: 8, maxWidth: '94%', animation: `rise 200ms ${EASE}` }}>
       <div style={{ display: 'flex', flexDirection: 'column', border: '1px solid #eaeaea', borderRadius: 10, background: '#fff' }}>
-        {needs.map((need, i) => {
+        {needs.map((need) => {
           const view = needView(need);
+          const under = need.busy && need.browser && need.kind !== 'signin-here' ? waitingIn(signInName(need.app), need.browser) : view.hint;
           return (
             <div key={need.id} data-connect-need={need.kind} style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '10px 12px 10px 14px' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ flex: 'none', display: 'flex', color: '#8f8f8f' }}>{logoOf(need.app) || ALERT}</span>
                 <span style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 1 }}>
-                  <span title={view.title} style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{shownName(need.app)}</span>
-                  <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{need.busy && need.browser ? waitingIn(signInName(need.app), need.browser) : view.hint}</span>
+                  <span title={view.title} style={{ font: '500 13.5px/1.4 var(--font-sans)', color: '#171717' }}>{need.kind === 'signin-here' ? view.title : shownName(need.app)}</span>
+                  {under && <span style={{ font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{under}</span>}
                   {need.note && !need.error && <span data-connect-need-note="1" style={{ font: '12px/1.45 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{need.note}</span>}
                 </span>
                 <button type="button" className="bart-text" data-connect-need-skip="1" onClick={() => onSkip(need)}>Skip</button>
@@ -536,9 +555,60 @@ function NeedsCard({ needs, onOpen, onSkip }) {
           );
         })}
       </div>
-      <span style={{ font: '12px/1.45 var(--font-sans)', color: '#8f8f8f' }}>Skipping one leaves it out. You can add it later from Add sources.</span>
     </div>
   );
+}
+
+/**
+ * The librarian's first message (2026-10-16, Hudson: "one message that has the icon, name, and a circular checkbox …
+ * 'Allow Engelbart to access the following apps:' … every one should be unchecked by default, but there should be a
+ * 'Select all' button that is next to the 'Grant access' button. 'Select all' should change to 'Deselect all' if all are
+ * selected. I should not be able to press 'Grant access' unless I have selected at least one."). Answered, it folds to
+ * one line of what was allowed. `live`: it may still be answered (open, the run neither stopped nor finished).
+ */
+export function GrantCard({ grant, live, onGrant }) {
+  const [picks, setPicks] = React.useState([]);
+  const [busy, setBusy] = React.useState(false);
+  const ids = grant.rows.map((row) => row.id);
+  const all = ids.length > 0 && ids.every((id) => picks.includes(id));
+  if (grant.answered) {
+    const said = grant.answered.allowed.length ? `Allowed ${listOf(grant.answered.allowed)}` : 'Allowed none of them';
+    return <div data-connect-grant="answered" style={{ display: 'flex', alignItems: 'center', gap: 8, font: '13px/1.5 var(--font-sans)', color: '#8f8f8f' }}><span style={{ display: 'flex', color: '#8f8f8f' }}>{CHECK}</span>{said}</div>;
+  }
+  const toggle = (id) => setPicks((now) => (now.includes(id) ? now.filter((one) => one !== id) : [...now, id]));
+  const send = async () => {
+    if (!picks.length || busy) return;
+    setBusy(true);
+    try { await onGrant(picks); } finally { setBusy(false); }
+  };
+  return (
+    <div data-connect-grant={live ? 'live' : 'closed'} style={{ padding: '14px 16px 14px', border: '1px solid #eaeaea', borderRadius: 10, background: '#fff', animation: `rise 260ms ${EASE}` }}>
+      <div style={{ font: '600 15px/1.45 var(--font-sans)', color: '#171717' }}>Allow Engelbart to access the following apps:</div>
+      <div role="group" aria-label="Apps Engelbart may access" style={{ display: 'flex', flexDirection: 'column', gap: 4, marginTop: 10 }}>
+        {grant.rows.map((row) => {
+          const on = picks.includes(row.id);
+          return (
+            <button key={row.id} type="button" className="cx-grant-row" role="checkbox" aria-checked={on ? 'true' : 'false'} data-connect-grant-app={row.id} disabled={!live || busy} onClick={() => toggle(row.id)}>
+              <span style={{ flex: 'none', width: 18, display: 'flex', justifyContent: 'center', color: '#8f8f8f' }}>{logoOf(row.id) || GLOBE}</span>
+              <span style={{ flex: 1, minWidth: 0 }}>{row.name}</span>
+              <span className="cx-circle" aria-hidden="true">{on ? CHECK : null}</span>
+            </button>
+          );
+        })}
+      </div>
+      {live && (
+        <div data-connect-card-actions="1" style={{ ...CARD_ACTIONS, justifyContent: 'flex-end' }}>
+          <button type="button" className="bart-text" data-connect-grant-all="1" disabled={busy} onClick={() => setPicks(all ? [] : ids)}>{all ? 'Deselect all' : 'Select all'}</button>
+          <button type="button" className="bs-submit" data-connect-grant-go="1" disabled={!picks.length || busy} onClick={send}>Grant access</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** A line Engelbart says about the run (an app left out or skipped): quiet, and never in the way of a question. */
+function Notice({ text }) {
+  return <div data-connect-notice="1" style={{ font: '13px/1.5 var(--font-sans)', color: '#8f8f8f', textWrap: 'pretty' }}>{text}</div>;
 }
 
 /**
@@ -731,8 +801,7 @@ function WorkLine({ session }) {
   const { agent } = view;
   return (
     <div data-connect-workline="1" aria-live="polite" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, height: 24, padding: '0 4px', font: '12.5px/1 var(--font-sans)', color: '#8f8f8f', overflow: 'hidden', whiteSpace: 'nowrap' }}>
-      <span aria-hidden="true" style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: agent && agent.waiting && !view.lead ? '#e8a317' : '#0070f3', animation: 'github-wait 1.4s ease-in-out infinite' }} />
-      {view.lead && <span data-connect-thinking="1" style={{ flex: 'none', maxWidth: agent ? '45%' : '100%', overflow: 'hidden', textOverflow: 'ellipsis', color: '#4d4d4d' }}>{view.lead}</span>}
+      {view.lead && <span data-connect-thinking="1" className="cx-shimmer" style={{ flex: 'none', maxWidth: agent ? '45%' : '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}>{view.lead}</span>}
       {view.lead && agent && <span style={{ flex: 'none', color: '#c9c9c9' }}>·</span>}
       {agent && (
         <span key={agent.id} data-connect-subagent={agent.id} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 6, animation: `rise 220ms ${EASE}` }}>
@@ -768,31 +837,26 @@ export function Foot({ left, pager, button }) {
   );
 }
 
-/** "• Bringing in Zotero papers and AI chats · Google Drive needs you" (model/connect.js footLine), the dot blue while work goes on. */
+/** "Bringing in Zotero papers and AI chats · Google Drive needs you" (model/connect.js footLine), moving while work goes on (no dot, 2026-10-16). */
 function FootStatus({ session }) {
   const text = footLine(session);
   if (!text) return null;
   const going = workJobs(session.jobs).some((job) => !statusOf(job).done);
   return (
-    <span data-connect-foot-status="1" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, font: '12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-      <span aria-hidden="true" style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: going ? '#0070f3' : '#c9c9c9', animation: going ? 'github-wait 1.4s ease-in-out infinite' : 'none' }} />
-      <span style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{text}</span>
+    <span data-connect-foot-status="1" aria-live="polite" style={{ display: 'flex', alignItems: 'center', minWidth: 0, font: '12.5px/1.3 var(--font-sans)', color: '#8f8f8f', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+      <span className={going ? 'cx-shimmer' : undefined} style={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>{text}</span>
     </span>
   );
 }
 
 /**
- * Until the librarian says something (2026-10-09: "make the loading icon better and have some status to it"): the dots,
- * bigger. (2026-10-12, second test run: the line that moved through the jobs' labels under the title is gone; 2026-10-13,
- * the "Onboarding" workspace: so is the "N of M looked at" counter, "unhelpful and wrong".)
+ * Until the librarian says something (2026-10-09: "make the loading icon better and have some status to it"): its words,
+ * moving (2026-10-16: no dots). `compact`: under the apps' grant, a line rather than the middle of the chat.
  */
-function Starting() {
+function Starting({ compact = false }) {
   return (
-    <div data-connect-starting="1" role="status" aria-live="polite" style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 18, paddingBottom: 40, animation: `rise 260ms ${EASE}` }}>
-      <ThinkingDots label="" size={7} />
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
-        <div style={{ font: '500 16px/1.3 var(--font-sans)', letterSpacing: '-0.1px', color: '#171717' }}>Getting to know your library</div>
-      </div>
+    <div data-connect-starting="1" role="status" aria-live="polite" style={compact ? { display: 'flex', animation: `rise 260ms ${EASE}` } : { flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', paddingBottom: 40, animation: `rise 260ms ${EASE}` }}>
+      <div className="cx-shimmer" style={{ font: compact ? '14px/1.5 var(--font-sans)' : '500 16px/1.3 var(--font-sans)', letterSpacing: '-0.1px' }}>Getting to know your library</div>
     </div>
   );
 }
@@ -1427,12 +1491,19 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
     } catch (failure) { setError(errorMessage(failure)); }
   };
   const needSkip = (need) => api.connectNeed(session.id, need.id, 'skip').then(setSession).catch((failure) => setError(errorMessage(failure)));
+  // "Grant access" on the librarian's first message (2026-10-16): the apps ticked are allowed, the rest left out.
+  const grantApps = (apps) => api.connectGrant(session.id, { apps }).then(setSession).catch((failure) => setError(errorMessage(failure)));
   const pickProvider = (next) => {
     setProvider(next);
     if (session) api.connectProvider(session.id, next).then(setSession).catch((failure) => setError(errorMessage(failure)));
   };
   const importNow = async () => {
     try { setSession(await api.connectImport(session.id)); setView('working'); } catch (failure) { setError(errorMessage(failure)); }
+  };
+  // "Finish in background" on the onboarding page (2026-10-16): Import, then straight on to the project, the work going on
+  // behind it (no "Bringing everything in" page in between).
+  const finishInBackground = async () => {
+    try { setSession(await api.connectImport(session.id)); putAway(); } catch (failure) { setError(errorMessage(failure)); }
   };
   const back = () => {
     if (onBack) { if (session) api.connectStop(session.id).catch(() => {}); onBack(); return; }
@@ -1458,11 +1529,10 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
   const allOn = picks ? allPicked(picks, found) : false;
   const ready = providers === null || providers.some((entry) => entry.ready); // unknown until the list comes: no flash of "sign in first"
   const jobs = session ? workJobs(session.jobs) : [];
-  // The librarian's prompt to search and read an app (2026-10-15, From Amitav: it must ask before anything of it is
-  // touched) is a popup over the chat, one at a time; the agents' other steps stay in the chat.
-  const asking = session ? session.needs.find((need) => need.kind === 'consent') || null : null;
   const needs = session ? session.needs.filter((need) => need.kind !== 'consent') : [];
-  const last = session ? session.chat.length - 1 : -1;
+  // The chat's last turn: the librarian's or the person's, never Engelbart's own lines (notices) or the apps' grant.
+  const last = session ? lastTurn(session.chat) : -1;
+  const spoke = !!(session && session.chat.some((item) => !item.opener && !item.grant && !item.notice));
   const running = jobs.filter((job) => !statusOf(job).done).length;
   const done = !!(session && session.done);
   const wide = view !== 'choose';
@@ -1682,12 +1752,23 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
           <div ref={chatRef} data-connect-chat="1" style={{ position: 'relative', flex: 1, minHeight: 0, overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: 16, padding: `18px ${gutter}`, scrollPaddingBottom: 64 }}>
             {/* The opening line ("Found 2 Obsidian vaults…") is not shown (2026-10-09): until the librarian says something,
                 the dots used everywhere else, in the middle. */}
-            {!session.chat.some((item) => !item.opener) && !session.error && !error && (
-              <Starting session={session} />
+            {!spoke && !session.error && !error && !session.chat.some((item) => item.grant) && (
+              <Starting />
             )}
             {session.chat.map((item, i) => {
               if (item.opener) return null;
+              if (item.grant) {
+                return (
+                  <React.Fragment key={`grant-${item.at}`}>
+                    <GrantCard grant={item.grant} live={!item.grant.answered && !session.finished && !session.stopped} onGrant={grantApps} />
+                    {!spoke && !session.error && !error && <Starting compact />}
+                  </React.Fragment>
+                );
+              }
+              if (item.notice) return <Notice key={i} text={item.text} />;
               if (item.role !== 'agent') return <div key={i} data-connect-user="1" style={{ alignSelf: 'flex-end', maxWidth: '80%', padding: '8px 12px', borderRadius: 12, background: '#f2f2f2', font: '14.5px/1.6 var(--font-sans)', color: '#171717', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', animation: `rise 160ms ${EASE}` }}>{item.text}</div>;
+              // Live while it is the librarian's last word and nobody has answered it: a line Engelbart adds after it (an
+              // app left out, a sign-in skipped) never closes it (2026-10-16).
               const live = i === last && !session.thinking && !session.finished && !session.stopped;
               return (
                 <div key={i} data-connect-agent="1" style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: '94%', animation: `rise 260ms ${EASE}` }}>
@@ -1706,26 +1787,33 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             {session.chat.some((item) => !item.opener) && chatStatus(session) && (
               <div data-connect-waiting="1" aria-live="polite" style={{ display: 'flex', alignItems: 'center', gap: 10, font: '13px/1.5 var(--font-sans)', color: '#8f8f8f' }}><Dots />{chatStatus(session)}</div>
             )}
-            {(session.error || error) && <div data-connect-error="1" style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{session.error || error}{session.error ? ' Reply to try again.' : ''}</div>}
+            {(session.error || error) && (
+              <div data-connect-error="1" style={{ display: 'flex', alignItems: 'baseline', gap: 10, font: '12.5px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>
+                <span>{session.error || error}{session.error && !page ? ' Reply to try again.' : ''}</span>
+                {session.error && page && <button type="button" className="bart-text" data-connect-retry="1" onClick={() => reply({ text: 'Try again.' })}>Try again</button>}
+              </div>
+            )}
           </div>
-          <div style={{ flex: 'none', padding: `0 ${page ? gutter : '16px'} 12px` }}>
+          {/* No Reply box on the onboarding page (2026-10-16, Hudson: "delete this in the manual library onboarding"): its
+              questions are answered on their cards. The popup keeps it. */}
+          {!page && <div style={{ flex: 'none', padding: '0 16px 12px' }}>
             <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px 12px 16px', background: '#fafafa', borderRadius: 10, marginTop: 8 }}>
               <textarea ref={draftRef} value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); sendDraft(); } }} rows={1} data-connect-draft="1" placeholder="Reply…" spellCheck={false} style={{ flex: 1, minWidth: 0, display: 'block', minHeight: 24, margin: 0, padding: 0, border: 0, background: 'none', outline: 'none', resize: 'none', font: '15px/1.6 var(--font-sans)', color: '#171717' }} />
               <ProviderChip providers={providers} provider={session.provider} fallback={session.choice} onPick={pickProvider} onSend={sendDraft} sendOn={!!draft.trim() && !session.thinking} sendLabel="Send" style={{ marginTop: -3 }} />
             </div>
-            {!page && <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, paddingTop: 10 }}>
               <div style={{ flex: 1, minWidth: 0 }}>{session.chat.some((item) => !item.opener) && <WorkLine session={session} />}</div>
               {/* "the import button should be in bottom right and should not be highlighted until the agent returns all questions have been asked" */}
               <button type="button" data-connect-import="1" data-ready={done ? '1' : '0'} onClick={importNow} title={done ? 'Bring in everything picked' : 'The librarian still has questions; Import now uses sensible defaults for the rest'} style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 7, height: 34, padding: '0 16px 0 14px', border: `1px solid ${done ? '#0070f3' : '#eaeaea'}`, borderRadius: 8, background: done ? '#0070f3' : '#fff', color: done ? '#fff' : '#8f8f8f', cursor: 'pointer', font: '500 13px/1 var(--font-sans)', whiteSpace: 'nowrap', transition: 'background 160ms, color 160ms, border-color 160ms' }}>{DOWNLOAD}Import</button>
-            </div>}
-          </div>
+            </div>
+          </div>}
           {/* On the page (2026-10-09, David's mockup): how far the work is at the left, the pager and one button at the
-              right. "Skip the rest" brings in what is left with sensible defaults (Import) while questions remain; once the
-              librarian has asked everything it reads "Bring these in". */}
+              right, "Finish in background" (2026-10-16, Hudson: "should not have an arrow and should just say 'Finish in
+              background'"): what is left comes in with sensible defaults (Import), and the work goes on behind the project. */}
           {page && (
             <div style={{ flex: 'none', padding: `0 ${gutter} 4px` }}>
               <Foot pager={pager} left={<FootStatus session={session} />}
-                button={<button type="button" data-connect-import="1" data-ready={done ? '1' : '0'} onClick={importNow} style={importFootStyle(done)}>{done ? 'Bring these in' : 'Skip the rest'}<span style={{ display: 'inline-flex' }}>{CARET_RIGHT}</span></button>} />
+                button={<button type="button" data-connect-import="1" data-ready={done ? '1' : '0'} onClick={finishInBackground} style={{ ...importFootStyle(done), padding: '0 16px' }}>Finish in background</button>} />
             </div>
           )}
         </>
@@ -1810,7 +1898,6 @@ export default function ConnectLibrary({ mode = 'onboarding', sessionId = null, 
             </div>
         </>
       )}
-      {asking && <NeedPopup key={asking.id} need={asking} onOpen={() => openNeed(asking)} onDone={() => openNeed(asking)} onSkip={() => needSkip(asking)} onLater={() => needSkip(asking)} />}
     </div>
   );
 }

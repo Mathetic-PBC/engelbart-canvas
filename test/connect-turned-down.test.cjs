@@ -166,13 +166,14 @@ test('no Gmail line, and the consent card directly under the Code row, in the so
   assert.equal(screen.match(/\{consentCard\}/g).length, 1, 'not pinned above the foot as well');
 });
 
-test('the starting screen: the dots and the title, no count and no line moving through the jobs', async () => {
+test('the starting screen: its title in a moving gradient (no dots, 2026-10-16), no count and no line moving through the jobs', async () => {
   const m = await model();
   assert.equal(m.startingLines, undefined);
   assert.equal(m.STARTING_LINE_MS, undefined);
   assert.doesNotMatch(screen, /CyclingLine|startingLines|STARTING_LINE_MS|data-connect-starting-line/);
   const starting = screen.slice(screen.indexOf('function Starting('), screen.indexOf('\n}\n', screen.indexOf('function Starting(')));
-  assert.match(starting, /<ThinkingDots/);
+  assert.doesNotMatch(starting, /ThinkingDots|<Dots/, 'no dots');
+  assert.match(starting, /className="cx-shimmer"/);
   assert.match(starting, /Getting to know your library/);
   // The count is gone (2026-10-13, the Onboarding workspace: "Remove the 'looked at' counter").
   assert.doesNotMatch(starting, /looked at/);

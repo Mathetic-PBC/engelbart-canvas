@@ -281,7 +281,8 @@ export default function App() {
   }, [connectSessions, importModal, phase, connectPopup]);
   const openSession = (id) => {
     const session = connectSessions.find((entry) => entry.id === id);
-    if (session && session.direct) setImportStatus(id); else setConnectPopup({ sessionId: id });
+    // A manual run put away and finished opens its status too, never the chat (2026-10-16).
+    if (session && (session.direct || (session.manual && session.finished))) setImportStatus(id); else setConnectPopup({ sessionId: id });
   };
   const statusSession = importStatus ? connectSessions.find((entry) => entry.id === importStatus) : null;
   // One popup at a time (2026-10-14, Hudson: "There were two popups, there should only be one … Simplify this."). A step

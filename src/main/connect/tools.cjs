@@ -156,10 +156,17 @@ const browsedApps = (apps, { approvals = false } = {}) => (apps || []).filter((a
 const BROWSE_SITES = Object.freeze({ 'Google Docs': ['drive.google.com', 'docs.google.com'], 'Google Meet': ['drive.google.com', 'docs.google.com'], Gemini: ['gemini.google.com'] });
 const SURVEY_SITES = Object.freeze({ 'Google Docs': ['drive.google.com'], 'Google Meet': ['drive.google.com'] });
 
+/**
+ * The assistants a recall asks what it remembers (2026-10-16): it opens them, fixed reader or not, since asking is the
+ * whole job, and its window takes Engelbart's question, word for word, and nothing else (./browser.cjs sendOnly). Without
+ * this a recall of ChatGPT or Claude had no browser at all and could never ask.
+ */
+const recalledApps = (kind, apps) => (kind === 'recall' ? (apps || []).filter((app) => APPS[app] && APPS[app].memory) : []);
+
 /** The sites an agent of `kind` may browse for `apps` (and `extraSites`), the sign-in pages aside. */
 function browseSitesFor(kind, apps, extraSites = [], { approvals = false } = {}) {
   const sites = browsedApps(apps, { approvals: approvals && kind !== 'survey' }).flatMap((app) => (kind === 'survey' && SURVEY_SITES[app]) || BROWSE_SITES[app] || APPS[app].sites || []);
-  return [...new Set([...sites, ...extraSites])];
+  return [...new Set([...sites, ...recalledApps(kind, apps).flatMap((app) => BROWSE_SITES[app] || APPS[app].sites || []), ...extraSites])];
 }
 
 /**
@@ -168,7 +175,7 @@ function browseSitesFor(kind, apps, extraSites = [], { approvals = false } = {})
  */
 function toolNamesFor(kind, { apps = [], extraSites = [], page = true, approvals = false } = {}) {
   const names = TOOLS_FOR[kind] || TOOLS_FOR.import;
-  const browses = page && (browsedApps(apps, { approvals: approvals && kind !== 'survey' }).length > 0 || extraSites.length > 0);
+  const browses = page && (browsedApps(apps, { approvals: approvals && kind !== 'survey' }).length > 0 || recalledApps(kind, apps).length > 0 || extraSites.length > 0);
   return names.filter((name) => browses || !BROWSING.includes(name));
 }
 
