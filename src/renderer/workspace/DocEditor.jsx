@@ -53,7 +53,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { HAMMER_PATHS } from '../model/hammer.js';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchText, isRefine, refineLine, wsMention, fileMention, zoteroMention, madeMentionOf, madeKey, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf, topicOfThread, whenShown } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, ATTACH_RE, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchText, isRefine, refineLine, wsMention, fileMention, zoteroMention, madeMentionOf, madeKey, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf, topicOfThread, whenShown } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, isResultOffer, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -70,6 +70,7 @@ import { fieldCaret } from './caret.js';
 import Popover from './Popover.jsx';
 import MadePeek from './MadePeek.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
+import ImageViewer from './ImageViewer.jsx';
 import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
 import { guideTitle } from '../model/guide.js';
 import { guideSections, splitTarget, parseTable } from '../model/stage.js';
@@ -212,10 +213,15 @@ const RISE_CSS = '@keyframes rise{from{opacity:0;transform:translateY(6px)}to{op
 const cssString = (text) => `"${String(text).replace(/["\\]/g, '\\$&').replace(/[\n\r]+/g, ' ')}"`;
 const emptyHintCss = (text) => `[data-editor][data-empty-hint]{position:relative}[data-editor][data-empty-hint] > div[data-line]:last-child > span.t:has(> br:only-child)::before{content:${cssString(text)};position:absolute;left:0;right:0;color:#b5b5b5;pointer-events:none;user-select:none}`;
 
+// The hairline between an exchange's turns (2026-10-15, David): drawn in the follow-up's row, 16px under the answer above,
+// from the question's left edge to the card's right padding.
+const TURN_RULE = '<span contenteditable="false" aria-hidden="true" data-turn-rule="1" style="position:absolute;left:18px;right:18px;top:16px;height:1px;background:#e9e9e9;pointer-events:none"></span>';
 // The answer card's controls. They are drawn as strings inside the editor, so what hover does lives here: an icon washes
 // grey and turns ink (Delete turns red) and shows its name under it; the chip's border goes one grey darker, never ink.
 // A conversation's Collapse, in its first open question's corner, is always shown (2026-10-15, David), not only on hover.
-const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;cursor:pointer;color:#4d4d4d}'
+// An earlier answer's icons (2026-10-15, David): hidden until its turn is pointed at (turnHover adds the rule that shows them).
+const CARD_CSS = '[data-turn-tools]>div{visibility:hidden}'
+  + '.bart-ic{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;cursor:pointer;color:#4d4d4d}'
   + '.bart-ic:hover{background:#f2f2f2;color:#171717}.bart-ic[data-danger]:hover{color:#e70022}.bart-ic:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
   + '.bart-tip{position:absolute;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#171717;font:12px/1.2 var(--font-sans);white-space:nowrap;pointer-events:none;opacity:0;visibility:hidden;transition:opacity 120ms}'
   + '.bart-ic:hover+.bart-tip,.bart-ic:focus-visible+.bart-tip{opacity:1;visibility:visible}'
@@ -289,7 +295,18 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.made-frame img{display:block;width:100%;height:auto}.made-frame table{border-collapse:collapse;font:13px/1.5 var(--font-sans)}.made-frame td,.made-frame th{padding:4px 10px;border-bottom:1px solid #eee;text-align:left;white-space:nowrap}'
   + '.made-peek-body img{height:100%;object-fit:contain}.made-peek-body>:not(img){zoom:.82}' // the smaller peek's text, smaller too
   // A page's picture (2026-10-15, David: a sliver): the top of the page across the peek's width, not all of it squeezed in.
-  + '.made-peek-body img.made-page{height:auto;object-fit:initial}';
+  + '.made-peek-body img.made-page{height:auto;object-fit:initial}'
+  // An @bart answer (2026-10-15, David's reference): its icons (15px in 26px, grey until hovered); the fold's toggle; the
+  // reply line, plain until it is focused or holds text.
+  + '.chat-ic{display:inline-flex;align-items:center;justify-content:center;width:26px;height:26px;padding:0;border:0;border-radius:6px;background:none;cursor:pointer;color:#a3a3a3}.chat-ic svg{width:15px;height:15px}.chat-ic:hover{color:#4d4d4d}.chat-ic:disabled{cursor:default;opacity:.4}.chat-ic:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
+  + '.chat-ic:hover+.bart-tip,.chat-ic:focus-visible+.bart-tip{opacity:1;visibility:visible}'
+  + '[data-armed]{box-shadow:inset 0 0 0 9999px rgba(0,112,243,.09)!important}' // a conversation marked to be taken away
+  + '[data-chat-more][data-cut]::before{left:20px;right:18px;height:46px}'
+  + '.chat-more{display:inline-flex;align-items:center;gap:4px;padding:0;border:0;background:none;color:#6b6b6b;font:500 13.5px/1.4 var(--font-sans);cursor:pointer}.chat-more:hover{color:#171717}'
+  + '.chat-field{display:flex;align-items:flex-end;gap:8px;margin:-9px -9px -9px -11px;padding:8px 8px 8px 10px;border:1px solid transparent;border-radius:9px;transition:background 120ms,border-color 120ms}'
+  + '.chat-field:focus-within,.chat-field[data-typed]{background:#fff;border-color:#e3e3e3}.chat-field:not(:focus-within):not([data-typed]) [data-chip]{visibility:hidden}'
+  + '.chat-field textarea::placeholder{color:#a3a3a3;font-style:normal;font-size:14.5px}.chat-field .bart-chip{height:24px!important;font-size:12.5px!important;color:#6b6b6b!important}'
+  + '.chat-line:has(.chat-field:focus-within),.chat-line:has(.chat-field[data-typed]){border-top-color:transparent!important}';
 // A Zotero chip's hover text while its paper's download is waited for (MATH-65 build 4).
 const WAITING_TIP = "Opened in your browser. Download the PDF and it'll open here.";
 // Lucide's drawings at the design's weight: 16px, 1.5px stroke, round caps.
@@ -312,6 +329,8 @@ const ICON = {
   open: icon('<path d="m6 9 6 6 6-6"></path>', 16, 1.75),
   pointer: icon(`<path d="${AGENTS_PATH}"></path>`, 15, 1.75),
   expand: icon('<path d="m7 15 5 5 5-5"></path><path d="m7 9 5-5 5 5"></path>'),
+  // An older @bart answer's Reply (2026-10-15): Lucide's reply.
+  reply: icon('<path d="m9 17-5-5 5-5"></path><path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>'),
   trash: icon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
   chevron: `<span style="display:inline-flex;color:#8f8f8f">${icon('<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`,
   send: icon('<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>', 13, 2.2),
@@ -494,6 +513,20 @@ export function moveLineTo(ls, i, j) {
   return out;
 }
 const CLIP_OLD = 6;
+// An @bart answer's line height (2026-10-15: 15px/1.55), and how many lines its fold must hide to be drawn.
+const CHAT_LINE_PX = 15 * 1.55;
+const CHAT_FOLD_LINES = 4;
+// The clipboard's copy of a selection with whole conversations in it, as the document's lines (acrossSource).
+const OWN_LINES = 'application/x-engelbart-lines';
+const CHAT_SHOW_LINES = 6; // what a folded @bart answer shows, at least its first paragraph (2026-10-15, David)
+// What a line of an @bart answer is, as its spacing and its fold read it: 'blank', 'item', 'h' or 'p'; null if it is not an answer's line.
+const chatKind = (raw) => {
+  const r = parseLine(raw ?? ''); if (r.type !== 'reply') return null;
+  if (!r.text.trim()) return 'blank';
+  const q = parseLine(r.text); return isMarked(q.type) ? 'item' : q.type === 'h' ? 'h' : 'p';
+};
+// A code line of an @bart answer: the card's 18px and the answer's rule.
+const chatCode = (html, at) => html.replace(/padding:(\d+)px 16px/, 'padding:$1px 18px').replace(/padding:([^;]*?) 14px;border-left:2px solid #d6d6d6/, 'padding:$1 12px;border-left:1.5px solid #e6e6e6').replace('<div ', at.older ? `<div data-chat-older="${at.turn.q}" ` : '<div ');
 // The round send of a message box (2026-10-13): blue with a white arrow once there is something to send, grey until then.
 const boxSend = (ready) => `background:${ready ? '#0070f3' : '#ececec'};color:${ready ? '#fff' : '#a3a3a3'}`;
 // A message box (2026-10-13): one line on the cards' grey, no outline (David: the plain look, as before), growing as its
@@ -542,7 +575,7 @@ export default class DocEditor extends React.Component {
   buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildPrompt = new Set(); buildScroll = new Map(); buildDrawn = new Map();
   // A follow-up just sent (2026-10-13): its question's row to be put where its reply field was (holdFollow),
   // { key, line, text, top, until }. `wheelAt`: when the person last scrolled the pane with the wheel (caretLineBelow).
-  followHold = null; wheelAt = 0;
+  followHold = null; wheelAt = 0; focusInto = null; armed = null; armedDrawn = false;
   // An @discover guide's papers being saved, by address: the button's state when it was clicked (it stays disabled on it).
   saving = new Map();
   // The question being edited in place (2026-10-03): { q, original, under, mark } — its line, what it held, the lines of
@@ -592,6 +625,7 @@ export default class DocEditor extends React.Component {
       // A press in the space under a card (gapAt) is kept for its click too. One on a heading's space above its text must not
       // put the caret in the heading: the click makes a line above it instead.
       mousedown: (e) => {
+        this.disarm();
         // While a button is down the pane is not scrolled for the person (keepCaretLine), and an answer-so-far box being
         // dragged by its scrollbar is not replaced under the pointer (patchPending): it is, once the button comes up.
         this.pressed = true;
@@ -630,7 +664,7 @@ export default class DocEditor extends React.Component {
       drop: (e) => { this.markDropChip(null); if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
       // Leaving it otherwise puts back a question being edited (2026-10-03).
-      focusout: (e) => { if (inEd(e) && inTitle(e) && document.hasFocus()) { if (!this.syncing) this.commitTitle(e.target); return; } if (inEd(e) && inAsk(e) && document.hasFocus()) this.leftReply(Number(e.target.dataset.followInput)); if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
+      focusout: (e) => { if (inEd(e) && !(e.relatedTarget && this.editorEl() && this.editorEl().contains(e.relatedTarget))) this.disarm(); if (inEd(e) && inTitle(e) && document.hasFocus()) { if (!this.syncing) this.commitTitle(e.target); return; } if (inEd(e) && inAsk(e) && document.hasFocus()) this.leftReply(Number(e.target.dataset.followInput)); if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.focusInto = e.relatedTarget && e.relatedTarget.matches && e.relatedTarget.matches('[data-follow-input]') ? { key: e.relatedTarget.dataset.followInput, a: 1e6, b: 1e6 } : null; if (this.focusInto) this.timer(() => { this.focusInto = null; }, 0); this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
       compositionstart: () => { this.composing = true; },
       compositionend: (e) => { this.composing = false; if (inEd(e) && !inFollow(e)) this.editorInput(); },
     };
@@ -723,6 +757,7 @@ export default class DocEditor extends React.Component {
     if (this.resizeObs) this.resizeObs.disconnect();
     window.removeEventListener('resize', this.fitFollows);
     Object.entries(this.docListeners || {}).forEach(([k, f]) => document.removeEventListener(k, f));
+    if (this.turnCss) { this.turnCss.remove(); this.turnCss = null; }
     document.removeEventListener('scroll', this.buildScrolled, true);
     document.removeEventListener('pointerdown', this.touched, true); document.removeEventListener('keydown', this.touched, true);
     document.removeEventListener('scroll', this.streamScrolled, true);
@@ -759,7 +794,7 @@ export default class DocEditor extends React.Component {
       const on = m.dataset.ws ? !!ws && m.dataset.ws === ws : m.dataset.file == null && m.dataset.zotero == null && !!want && String(m.dataset.mention).toLowerCase() === want;
       if (on !== m.hasAttribute('data-beside')) m.toggleAttribute('data-beside', on);
     }
-    this.markFinding();
+    this.markFinding(); this.markArmed();
   }
   // A Zotero item's chips while main looks for a free copy of its paper (MATH-65 build 3; `zoteroFinding`, a Set of item
   // keys) say "Finding a free copy…"; while main waits for it in the Downloads folder (build 4, `zoteroWaiting`), a label
@@ -1101,7 +1136,8 @@ export default class DocEditor extends React.Component {
   // (2026-10-12) stays drawn there as a link does: a click on it builds.
   openIdx(tokens, a, b, shut = false) {
     const out = []; let acc = 0;
-    tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre, touched = tok.startsWith('@[') ? a < end && b > acc : a <= end && b >= acc; if (pre && touched && !(shut && (holdsLink(tok) || tok === BUILD_TOKEN))) out.push(k); acc = end; });
+    // A pasted image's token never opens (2026-10-15, David): `![Attachment 1](img:<id>)` is no text to edit.
+    tokens.forEach((tok, k) => { const end = acc + tok.length, pre = tokShown(tok).pre && !ATTACH_RE.test(tok), touched = tok.startsWith('@[') ? a < end && b > acc : a <= end && b >= acc; if (pre && touched && !(shut && (holdsLink(tok) || tok === BUILD_TOKEN))) out.push(k); acc = end; });
     return out;
   }
   // Whether line `p`'s links stay drawn with the caret on it: an answer's line, the caret put there by the mouse.
@@ -1228,6 +1264,9 @@ export default class DocEditor extends React.Component {
       // open question collapses the conversation (collapseAll), and the Collapse is on its first open question alone.
       // A question still being answered in a titled conversation has it too (2026-10-15, David): the conversation collapses.
       const foldable = !!at && (cornered(at.turn, at.box) || (!!at.turn.pending && !at.box && at.thread.titleLine >= 0)) && (!buildTurn || whole) && !editing;
+      // An answered @bart exchange keeps its corner too (2026-10-15, David: it was taken off to match his reference, and he
+      // wanted it back).
+      const chatQ = !!at && at.chat && asked && !at.turn.pending && !editing;
       const corner = foldable && (at.thread.turns.find((turn) => !turn.folded) || {}).q === at.turn.q ? this.cornerHtml(at, whole) : '';
       // Not asked yet (or being edited), the line is the message box (2026-10-13): one line, white, bordered, growing as it
       // wraps with the chip and send kept bottom-right.
@@ -1237,12 +1276,19 @@ export default class DocEditor extends React.Component {
       }
       // Asked, it is the card's question: flush with the card's 16px, 14px under its top, or under an earlier exchange
       // folded to a line (whose own space is under it).
-      const pad = top ? 14 : at.afterBare ? 0 : 14;
+      // A follow-up under an open @bart answer: 16px under that answer's last line, the hairline, 14px, the question.
+      const pad = top ? 14 : at.afterBare ? 0 : at.ruled ? 16 + 1 + 14 : 14;
+      const rule = at.ruled ? TURN_RULE : '', turnOf = at.earlier ? ` data-turn-of="${at.turn.q}"` : '';
       const topic = this.topicChipHtml(i, at);
       // A click anywhere on an open question does what the conversation's Collapse does (2026-10-15, David).
       const fold = foldable ? ` data-fold-turn="${at.turn.q}"${whole ? ` data-fold-whole="${at.thread.titleLine}"` : ''}` : '';
-      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''}${fold} style="display:flex;align-items:flex-start;gap:10px;padding:${pad}px 16px ${closes ? 10 : 0}px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '8px' : '0'};font-size:16px;line-height:1.6;color:#171717;${locked ? `user-select:text;cursor:${foldable ? 'pointer' : 'default'}` : ''}"><span class="t" style="${topic ? 'flex:0 1 auto' : 'flex:1'};min-width:0">${content || '<br>'}</span>`
-        + topic + (chipped ? chip : '') + corner
+      if (chatQ) {
+        return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''} class="chat-q"${at.older ? ` data-chat-older="${at.turn.q}"` : ''}${turnOf}${fold} style="position:relative;display:flex;align-items:flex-start;gap:10px;padding:${pad}px 18px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '8px' : '0'};font-size:16px;line-height:1.5;color:#171717;${locked ? `user-select:text;cursor:${foldable ? 'pointer' : 'default'}` : ''}"><span class="t" style="${topic ? 'flex:0 1 auto' : 'flex:1'};min-width:0">${content || '<br>'}</span>`
+          + topic + (chipped ? chip : '') + corner + rule
+          + '</div>';
+      }
+      return `<div ${raw} ${locked ? 'contenteditable="false" data-readonly="1"' : ''}${fold} style="${rule ? 'position:relative;' : ''}display:flex;align-items:flex-start;gap:10px;padding:${pad}px 16px ${closes ? 10 : 0}px;background:#fafafa;border-radius:${radius(top, closes)};margin-bottom:${closes ? '8px' : '0'};font-size:16px;line-height:1.6;color:#171717;${locked ? `user-select:text;cursor:${foldable ? 'pointer' : 'default'}` : ''}"><span class="t" style="${topic ? 'flex:0 1 auto' : 'flex:1'};min-width:0">${content || '<br>'}</span>`
+        + topic + (chipped ? chip : '') + corner + rule
         + '</div>';
     }
     if (p.type === 'pending') {
@@ -1302,6 +1348,7 @@ export default class DocEditor extends React.Component {
     if (p.type === 'reply') {
       // A folded turn's foot is not drawn: the turn is its question's one row (foldedHtml). A research box keeps its own.
       if (at && at.role === 'foot' && at.turn.answered && !at.turn.pending && at.turn.folded && !at.box) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
+      if (at && at.role === 'foot' && at.chat) return this.chatFootHtml({ raw, at, closes: at.closes });
       if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), busy: isRunning(at.thread, this.props.builds), box: at.box, reply: at.reply, refine: at.refine, corner: cornered(at.turn, at.box) && !at.turn.build });
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
@@ -1314,7 +1361,8 @@ export default class DocEditor extends React.Component {
       // (An answer with no question above it, left by an edit outside the app, is a card of its own.)
       const near = at ? null : this.lines(), first = at ? at.first : parseLine(near[i - 1] ?? '').type !== 'reply', closes = at ? at.closes : parseLine(near[i + 1] ?? '').type !== 'reply', last = at ? at.lastBody : closes;
       const rawA = at && at.role === 'answer' && !at.box ? `${raw} data-answer-of="${at.turn.q}"` : raw;
-      if (p.code) return this.answerCodeHtml(i, rawA, p, active, first, closes, last, !at);
+      if (p.code) { const code = this.answerCodeHtml(i, rawA, p, active, first, closes, last, !at); return at && at.chat ? chatCode(code, at) : code; }
+      if (at && at.chat && at.role === 'answer') return this.chatLineHtml(i, rawA, p, active, at);
       // A brainstorm recap's lines ("What you know: …", "Your question: …") as sections: the label in bold on a line
       // of its own, the words under it. An older recap's "Look for:" line too (MATH-31), no longer a button.
       const recap = at && fixedStep(at.agent) && !active && at.turn && this.isRecap(this.lines(), at.turn) ? recapLine(p.text) : null;
@@ -1342,7 +1390,11 @@ export default class DocEditor extends React.Component {
       const src = p.src.startsWith('img:') ? ((this.props.images || {})[p.src.slice(4)] || '') : p.src;
       const { name, width } = imgParts(p.text);
       const picture = `<span contenteditable="false" data-imgbox="${i}" style="position:relative;display:inline-block;max-width:100%;margin:6px 0;line-height:0;user-select:none;${width ? `width:${width}px;` : ''}"><img data-img="${i}" src="${esc(src)}" alt="${esc(name)}" draggable="false" style="display:block;width:100%;max-width:100%;${width ? '' : 'max-height:520px;width:auto;'}border:1px solid #eaeaea;border-radius:8px;cursor:${this.props.readOnly ? 'zoom-in' : 'grab'}">${IMG_CORNERS.map(([side, at, cursor]) => `<span data-imgsize="${i}" data-imgcorner="${side}" aria-label="Resize image" style="position:absolute;${at};width:16px;height:16px;cursor:${cursor};background:transparent"></span>`).join('')}</span>`;
-      const content = active ? this.activeHtml([line]) : !src ? `<span contenteditable="false" style="display:inline-block;margin:6px 0;padding:10px 14px;border:1px dashed #c9c9c9;border-radius:8px;font:12.5px/1.5 var(--font-sans);color:#8f8f8f;user-select:none">${esc(name || 'image')}…</span>` : picture;
+      const drawn = !src ? `<span contenteditable="false" style="display:inline-block;margin:6px 0;padding:10px 14px;border:1px dashed #c9c9c9;border-radius:8px;font:12.5px/1.5 var(--font-sans);color:#8f8f8f;user-select:none">${esc(name || 'image')}…</span>` : picture;
+      // With the caret on it the picture stays (2026-10-15, David: never its `![Attachment 1](img:<id>)`), held as the line's
+      // one closed token. The caret stands before it or after it, each in a zero-width space of its own (one caret, drawn
+      // at one side); what is typed or pasted there goes on a line of its own (besidePicture).
+      const content = active ? `\u200b<span data-src="${esc(line)}" data-open="0" data-img-line="1">${drawn}</span>\u200b` : drawn;
       return `<div ${raw} style="padding:4px 0;min-height:35px"><span class="t" style="display:block">${content}</span></div>`;
     }
     const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(line, this.mentionOpts);
@@ -1832,7 +1884,8 @@ export default class DocEditor extends React.Component {
   layout(ls) {
     const at = new Map(), ps = this.parsedOf(ls), cards = this.cardsOf(ls);
     let shut = -2; // the last line of the collapsed conversation drawn last, whose row a row right under it is ruled off from
-    for (const thread of threads(ls, ps)) {
+    const all = threads(ls, ps), latest = this.latestTurn(ls, all);
+    for (const thread of all) {
       // A titled conversation (2026-10-12): open, its title is not drawn and the card starts at its question; collapsed, the
       // title's row is the one row drawn for it all. (`ruled` is no longer drawn: collapsed rows are cards of their own.)
       const titled = thread.titleLine >= 0, collapsed = isCollapsed(thread, this.props.builds);
@@ -1858,12 +1911,14 @@ export default class DocEditor extends React.Component {
       const intent = said && said.answered && !said.pending && !said.folded && this.props.onAsk && !this.props.readOnly ? said : null;
       const refineHere = !!intent && this.refineOpen.has(thread.from);
       // A Discover card's field is inside it (2026-10-15), opened or not: a reply opened under it focuses that one.
-      const field = follow && !inCard && !refineHere && (live || this.replyOpen.has(thread.from)), after = field || (follow && this.endsInRecap(ls, thread));
+      // The latest @bart answer's reply line is always there (2026-10-15, David's reference); an older one's once its Reply opens it.
+      const lastChat = end.q === latest && this.isChat(this.turnAgent(thread, end), end, endCard, isResearch(ps[end.q]));
+      const field = follow && !inCard && !refineHere && (live || this.replyOpen.has(thread.from) || lastChat), after = field || (follow && this.endsInRecap(ls, thread));
       // A collapsed turn (2026-10-13) is drawn bare, as one row (foldedHtml) with no foot, at the top of the card: the
       // question under it starts 18px below the last of them.
       // An @discover research box (2026-10-13, doc.js isResearch) is a card of its own: the turn above it closes its card,
       // and its line is the box's head (researchHtml). `cut`: the turn's last row closes the card, a box coming next.
-      let afterBare = false;
+      let afterBare = false, prevChat = false;
       thread.turns.forEach((turn, n) => {
         const agent = this.turnAgent(thread, turn), card = cards.byQ.get(turn.q), editable = this.canEdit(ps[turn.q], turn, card);
         // A line not asked yet is a message box of its own (2026-10-13): the card above it closes, as above a research box.
@@ -1871,9 +1926,15 @@ export default class DocEditor extends React.Component {
         const nextBare = !!next && next.answered && !next.pending && next.folded && !isResearch(ps[next.q]);
         const answers = n > 0 ? cards.byQ.get(thread.turns[n - 1].q) || null : null;
         const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end, shuts = (tail && !after) || (cut && !(refineHere && turn === intent));
+        // An @bart answer (2026-10-15, David's reference), and whether it is older than the latest one asked.
+        const chat = this.isChat(agent, turn, card, box), older = chat && turn.q !== latest, replies = tail && follow && !inCard && !field;
+        // Turns as units (2026-10-15, David): a follow-up asked under an open @bart answer has a hairline over it (`ruled`,
+        // drawn in its question's row, never in the document), and an answer a follow-up came under (`earlier`) keeps its
+        // icons out of the way, shown while its turn is pointed at (chatFootHtml).
+        const ruled = n > 0 && prevChat && !afterBare && !box && turn.answered, earlier = chat && !!next && !cut && !bare && !turn.pending;
         // A folded turn's row (lineHtml foldedHtml) closes the card when its foot would have: its foot is not drawn.
-        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || box || !turn.answered, afterBare, lastBare: !nextBare, closes: !turn.answered || !!turn.build || (bare && !box && shuts), editable: editable && !box, bare, box, answers });
-        afterBare = bare;
+        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || box || !turn.answered, afterBare, lastBare: !nextBare, closes: !turn.answered || !!turn.build || (bare && !box && shuts), editable: editable && !box, bare, box, answers, chat, older, replies, ruled, earlier });
+        afterBare = bare; prevChat = chat && turn.answered && !turn.pending && !bare;
         if (turn.build) return; // its answer is the Build's card, drawn as a card is (buildHtml), not as an answer's rows
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
         const lastBody = (turn.foot >= 0 ? turn.foot : turn.to + 1) - (gap >= 0 ? 2 : 1);
@@ -1881,11 +1942,29 @@ export default class DocEditor extends React.Component {
           const role = i === turn.foot ? 'foot' : parseLine(ls[i]).type === 'pending' ? 'pending' : 'answer', ends = i === turn.to;
           const drawn = card && i <= card.last ? { card: i === turn.from ? card : null, underCard: i !== turn.from } : {};
           // `reply`: the thread whose Reply the turn's button row has, the last turn's while its field is shut.
-          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && after, reply: tail && follow && !field && !inCard ? thread.from : null, refine: turn === intent && !refineHere ? thread.from : null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, editable: editable && !box, ...drawn });
+          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && after, reply: tail && follow && !field && !inCard ? thread.from : null, refine: turn === intent && !refineHere ? thread.from : null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, editable: editable && !box, chat, older, earlier, ...drawn });
         }
       });
     }
     return at;
+  }
+  // An @bart answer (2026-10-15): Chat's, or an `@bart` line's not handed on yet; not a research box, a Build or a card.
+  isChat(agent, turn, card, box) { return (agent === 'bart' || agent === 'router') && !box && !turn.build && !card; }
+  // The exchange asked last in this document (2026-10-15, David): the newest run's (an ask id starts with the time it was
+  // asked), kept by its question's line once it has answered; else the last one in the document asked (a line not sent
+  // yet is not one). → its question's line.
+  latestTurn(ls, all) {
+    const nth = (q) => { let n = 0; for (let j = 0; j < q; j++) if (ls[j] === ls[q]) n++; return n; };
+    let best = null;
+    for (const thread of all) for (const turn of thread.turns) {
+      if (!turn.pending) continue;
+      const t = parseInt(String(turn.pending).split('-')[0], 36) || 0;
+      if (!best || t >= best.t) best = { t, q: turn.q };
+    }
+    if (best) this.lastAsked = { doc: this.props.docKey, line: ls[best.q], nth: nth(best.q) };
+    const turns = all.flatMap((thread) => thread.turns).filter((turn) => turn.answered || turn.pending), was = this.lastAsked && this.lastAsked.doc === this.props.docKey ? this.lastAsked : null;
+    const kept = was ? turns.find((turn) => ls[turn.q] === was.line && nth(turn.q) === was.nth) : null;
+    return kept ? kept.q : turns.length ? turns[turns.length - 1].q : -1;
   }
   // Whether a turn's question can be edited in place (2026-10-03): answered and not at work, in an editor that can ask and
   // be written in; not a Build (`@bart --build`), and not a turn whose answer is a card (cardsOf).
@@ -2195,6 +2274,77 @@ export default class DocEditor extends React.Component {
       + wrap(`<button class="bart-ic" data-danger="1" data-act="dropturn" data-turn="${q}" aria-label="Delete">${ICON.trash}</button>${tip('Delete', 'right')}`)
       + '</div>';
   }
+  // An @bart answer's foot (2026-10-15, David's reference): its icons, 8px under it (Copy and Regenerate on the left,
+  // Delete on the right), 15px in 26px boxes. No Collapse here: it is in the question's corner. An older answer's has them
+  // too (2026-10-15, David: not a toolbar over its top right shown on hover), and Reply after Regenerate when it is the
+  // last exchange of its conversation and its reply line is shut.
+  // `raw` is set when the answer's closing line is this foot.
+  chatFootHtml({ raw = '', at, closes }) {
+    const { turn, thread } = at, q = turn.q;
+    const busy = isRunning(thread, this.props.builds), copied = this.copied === `bart${q}`;
+    const one = (attrs, label, glyph, side, extra = '') => `<span style="flex:none;position:relative;display:inline-flex;${extra}"><button class="chat-ic" ${attrs} aria-label="${label}">${glyph}</button><span class="bart-tip" style="${side}:0">${label}</span></span>`;
+    // An answer a follow-up came under (2026-10-15, David): its row takes no room, and its icons are a small white pill
+    // on the right end of the hairline under it, hidden until its turn is pointed at (editorOver, turnHover), so pointing
+    // at it moves nothing.
+    const earlier = !!at.earlier && !closes;
+    const open = earlier
+      ? `<div ${raw} contenteditable="false" data-readonly="1" data-foot="${q}" data-turn-of="${q}" data-turn-tools="${q}" style="user-select:none;cursor:default;position:relative;height:0;padding:0 12.5px;background:#fafafa"><div style="position:absolute;right:18px;top:2px;z-index:1;display:flex;align-items:center;gap:2px;height:28px;padding:0 2px;box-sizing:border-box;background:#fff;border:1px solid #e9e9e9;border-radius:8px;box-shadow:0 1px 3px rgba(0,0,0,.08)">`
+      : `<div ${raw} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;padding:8px 12.5px ${closes ? 12 : 0}px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? 8 : 0}px">`;
+    return open
+      + one(`data-act="copybart" data-turn="${q}"${copied ? ' style="color:#4d4d4d"' : ''}`, copied ? 'Copied' : 'Copy', ICON.copy, 'left')
+      + one(`data-act="regen" data-turn="${q}" data-quiet="1"${busy ? ' disabled' : ''}`, busy ? 'Regenerate once it answers' : 'Regenerate', ICON.regenerate, 'left')
+      + (at.reply != null ? one(`data-act="reply" data-thread="${at.reply}"`, 'Reply', ICON.reply, 'left') : '')
+      + one(`data-act="dropturn" data-turn="${q}"`, 'Delete', ICON.trash, 'right', earlier ? '' : 'margin-left:auto')
+      + (earlier ? '</div></div>' : '</div>');
+  }
+  // One line of an @bart answer (2026-10-15, David's reference): 15px/1.55 on the card's grey, 18px in, a 1.5px rule 12px
+  // from the text. A bullet is a 4px dot centred 12px left of its text, which starts 14px in (its `•` stays, unseen, so
+  // the caret counts it as before). The space over a line is the rule's padding, so the rule runs on: 8px between a
+  // paragraph and a list, and for a blank line; 6px between items. The rule starts 11px under the question (2026-10-15,
+  // David: 8px was too tight, 14px a bit loose).
+  chatLineHtml(i, raw, p, active, at) {
+    const ls = this.lines(), kind = chatKind(ls[i]), before = at.first ? null : chatKind(ls[i - 1] ?? '');
+    const space = !before || before === 'blank' || kind === 'blank' ? 0 : kind === 'item' && before === 'item' ? 6 : kind !== before && (kind === 'item' || before === 'item') ? 8 : 0;
+    const own = !isRunning(at.thread, this.props.builds) ? at.turn.q : null, opts = this.answerOpts(own);
+    const q = parseLine(p.text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
+    // A bullet's column is 14px; a number's or a todo's keeps the 1.75em one (MATH-69), drawn and edited alike.
+    const a = this.answerLook(p.text, own), dot = q.type === 'list' && q.num == null, col = dot ? '14px' : MARK_COL;
+    let content, look = q.type === 'h' ? a.look : 'text-wrap:pretty;', hang = '';
+    if (active) {
+      const cut = q.type === 'h' || isMarked(q.type) ? p.text.length - q.text.length : 0, shut = this.linksShut(p);
+      const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
+      if (cut && q.type !== 'h') hang = `padding-left:calc(${q.depth * 18}px + ${col});`;
+      content = tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `display:inline-block;min-width:${col};margin-left:-${col};box-sizing:border-box;white-space:pre;`}`, shut, opts) : this.activeHtml(tokensOf(p, ls[i]), null, null, shut, opts);
+    } else if (dot) {
+      const mark = `<span contenteditable="false" aria-hidden="true" style="flex:none;min-width:14px;position:relative;color:transparent;user-select:none">${esc(listMark(q))}<span data-chat-dot="1" style="position:absolute;left:0;top:calc(0.775em - 2px);width:4px;height:4px;border-radius:50%;background:#b3b3b3"></span></span>`;
+      content = `<span style="display:flex;padding-left:${q.depth * 18}px">${mark}<span style="flex:1;min-width:0">${ink(inlineHtml(q.text, opts))}</span></span>`;
+    } else content = a.content;
+    const blank = kind === 'blank' && !active;
+    const ends = at.closes ? 'padding-bottom:12px;border-radius:0 0 10px 10px;margin-bottom:8px;' : '';
+    return `<div ${raw}${at.older ? ` data-chat-older="${at.turn.q}"` : ''}${at.earlier ? ` data-turn-of="${at.turn.q}"` : ''} data-chat-line="${kind}" style="padding:${at.first ? 11 : 0}px 18px 0;${ends}background:#fafafa;color:#262626;font-size:15px;line-height:1.55;cursor:text">`
+      + `<span style="display:block;padding:${space}px 0 0 12px;border-left:1.5px solid #e6e6e6"><span class="t" style="display:block;${blank ? 'height:8px;overflow:hidden;' : `min-height:23px;`}border-radius:4px;${look}${hang}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
+  }
+  // An @bart answer's fold (2026-10-15, David's reference): folded, its first paragraph and what follows it up to
+  // CHAT_SHOW_LINES lines (applyClips), then "N more points" (what is hidden is a list of N items) or "Show more"; opened,
+  // "Show less" at its end. 8px over it, inside the rule. Drawn
+  // hidden: applyClips shows it when what it hides is over CHAT_FOLD_LINES lines. An answer there when the document opened
+  // starts folded; one that landed since starts open.
+  chatMoreHtml(ls, at) {
+    const turn = at.turn, key = this.answerKey(ls, turn);
+    if (this.props.compact) return '';
+    const body = [];
+    for (let j = turn.from; j <= turn.to && j !== turn.foot; j++) { const kind = chatKind(ls[j]); if (kind) body.push({ j, kind }); }
+    let k = 0; while (k < body.length && body[k].kind === 'blank') k++;
+    const head = k; while (k < body.length && body[k].kind === 'p') k++;
+    if (k === head) k = head + 1; // an answer that starts with a list or a heading: its first line
+    const hidden = body.slice(k).filter((row) => row.kind !== 'blank'); if (!hidden.length) return '';
+    const items = hidden.every((row) => row.kind === 'item') ? hidden.filter((row) => parseLine(parseLine(ls[row.j]).text).depth === 0).length : 0;
+    const label = items ? `${items} more point${items === 1 ? '' : 's'}` : 'Show more';
+    const open = this.moreOpen.has(key) || (!this.seenAnswers.has(key) && !this.moreShut.has(key));
+    const chevron = `<span style="display:inline-flex;color:#8f8f8f">${icon(open ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`;
+    return `<div contenteditable="false" data-readonly="1" data-more="${turn.q}" data-chat-more="1" data-key="${key}" data-split="${body[k].j}" data-open="${open ? 1 : 0}"${at.older ? ` data-chat-older="${turn.q}"` : ''}${at.earlier ? ` data-turn-of="${turn.q}"` : ''} style="display:none;position:relative;user-select:none;cursor:default;padding:0 18px;background:#fafafa">`
+      + `<span style="display:flex;padding:8px 0 0 12px;border-left:1.5px solid #e6e6e6"><button type="button" class="chat-more" data-act="more" data-key="${key}" data-open="${open ? 1 : 0}" aria-expanded="${open}">${open ? 'Show less' : label}${chevron}</button></span></div>`;
+  }
   // What a follow-up starts on: the pick made on this card's chip, or else the flags of the question before it, so an
   // exchange pinned to a model stays on it. → { flags, step }
   followStep(ls, thread) {
@@ -2211,7 +2361,7 @@ export default class DocEditor extends React.Component {
   // recap and could be sent empty, to brainstorm again; now it is the conversation's next turn and needs words). After an
   // @discover guide it asks @discover for more, which needs words.
   // `closes: false`: a row follows it inside the card (Send to Discover after a recap), so it leaves the card's end to that.
-  followHtml(ls, thread, { closes = true } = {}) {
+  followHtml(ls, thread, { closes = true, older = null } = {}) {
     const live = this.cardsOf(ls).byQ.get(thread.turns[thread.turns.length - 1].q);
     if (live && live.live) return this.answerFieldHtml(thread, live, closes);
     const { step } = this.followStep(ls, thread), from = thread.from;
@@ -2225,12 +2375,23 @@ export default class DocEditor extends React.Component {
     }
     const open = !!(this.state.picker && this.state.picker.kind === 'follow' && this.state.picker.i === from);
     const chip = step ? `<span class="bart-chip" data-act="pickfollow" data-thread="${from}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:4px;height:28px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(step.name)} ${esc(EFFORT_LABELS[step.effort] || step.effort)}<span style="display:inline-flex;color:#8f8f8f">${icon(open ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span></span>` : '';
-    return this.fieldBox(from, { lead, closes, chip, input: this.fieldInput(from, 'placeholder="Respond…" aria-label="Ask a follow-up"') });
+    // An @bart answer's reply line (2026-10-15, David's reference).
+    return this.chatFieldHtml(from, { lead, closes, chip, older });
+  }
+  // The reply line under an @bart answer (2026-10-15, David's reference): a rule over it, then `@bart` and "Reply…" in grey
+  // on the card; focused or holding text, a white box with the model and a 24px send (the CSS's .chat-field). The latest
+  // answer's is under its icons, 6px down; an older one's too, once its Reply opens it.
+  chatFieldHtml(from, { lead, closes, chip, older }) {
+    return `<div contenteditable="false" data-followup="${from}"${older != null ? ` data-chat-older="${older}"` : ''} style="user-select:none;padding:6px 18px ${closes ? 12 : 6}px;background:#fafafa;border-radius:${closes ? '0 0 10px 10px' : '0'};margin-bottom:${closes ? 8 : 0}px"><div class="chat-line" style="display:flow-root;border-top:1px solid #ececec;padding-top:10px"><div class="chat-field">`
+      + `<span style="flex:none;align-self:flex-start;color:#8f8f8f;font:500 14.5px/24px var(--font-sans)">${lead}</span>`
+      + this.fieldInput(from, 'placeholder="Reply…" aria-label="Ask a follow-up"', 'font:14.5px/24px var(--font-sans);margin:0')
+      + `<span data-chip="f${from}" style="flex:none;display:inline-flex;align-items:center;gap:8px">${chip}<button class="bart-send" data-act="sendfollow" data-thread="${from}" data-box="1" aria-label="Send" style="flex:none;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;padding:0;border:0;border-radius:50%;${boxSend(false)};cursor:pointer">${ICON.sendBox}</button></span>`
+      + '</div></div></div>';
   }
   // A reply's textarea: one line tall, growing as it wraps (fitFollow); the question is still one line of the document,
   // so Enter sends and a pasted line break becomes a space.
-  fieldInput(from, attrs) {
-    return `<textarea data-follow-input="${from}" ${attrs} rows="1" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:2px 0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text"></textarea>`;
+  fieldInput(from, attrs, look = '') {
+    return `<textarea data-follow-input="${from}" ${attrs} rows="1" spellcheck="false" autocomplete="off" style="flex:1;min-width:0;display:block;height:24px;margin:2px 0;padding:0;border:0;background:none;outline:none;resize:none;overflow:hidden;font:16px/1.5 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text;${look}"></textarea>`;
   }
   // The field a reply is typed in (2026-10-13), plain on the card's grey under its button row, flush with the question:
   // the blue lead on the first line, the field, then (bottom-right) the chip and the round send.
@@ -2257,11 +2418,23 @@ export default class DocEditor extends React.Component {
   }
   // Reply (2026-10-13) opens its thread's field, the caret in it; it shuts again when it is left empty (focusout, Escape)
   // or sent.
-  openReply(from) {
+  openReply(from, { show = false } = {}) {
     this.replyOpen.add(from); this.lastHtml = null; this.syncEditor();
     const input = this.followField(from); if (!input) return;
     input.focus({ preventScroll: true });
-    if (input.scrollIntoView) input.scrollIntoView({ block: 'nearest' });
+    if (show) this.showExchange(from, input); else if (input.scrollIntoView) input.scrollIntoView({ block: 'nearest' });
+  }
+  // A reply field that took the keyboard on its own (its exchange expanded, or its answer landed) is shown with the answer
+  // over it (2026-10-15, David: the pane went to the field, and the answer's top was out of sight): the exchange whole,
+  // from its question to the field, when it fits in the pane; when it does not, its question near the pane's top.
+  showExchange(from, input) {
+    const ls = this.lines(), thread = threads(ls, this.parsedOf(ls)).find((t) => t.from === from), box = this.scrollRef.current, ed = this.editorEl();
+    const last = thread && thread.turns[thread.turns.length - 1], row = last && ed && ed.querySelector(`[data-line="${last.q}"]`);
+    const card = (input.closest && input.closest('[data-followup]')) || input;
+    if (!box || !row || !row.getBoundingClientRect) { if (input.scrollIntoView) input.scrollIntoView({ block: 'nearest' }); return; }
+    const pane = box.getBoundingClientRect(), top = row.getBoundingClientRect().top - pane.top - 24, below = card.getBoundingClientRect().bottom - pane.bottom + 16;
+    const by = top < 0 ? top : Math.min(Math.max(below, 0), top);
+    if (by) box.scrollTop += by;
   }
   closeReply(from) { const reply = this.replyOpen.delete(from), refine = this.refineOpen.delete(from); if (reply || refine) { this.lastHtml = null; this.syncEditor(); } }
   /* Refine (2026-10-15, David). The reply that said what Discover will look for has Refine where a conversation's last
@@ -2349,7 +2522,7 @@ export default class DocEditor extends React.Component {
     if (!found || !found.turn.answered || found.turn.pending || found.thread.turns[found.thread.turns.length - 1] !== found.turn) return;
     const from = found.thread.from, act = document.activeElement;
     const free = this.touchedAt <= wait.at && this.wheelAt <= wait.at && (!act || act === document.body);
-    if (free) this.openReply(from); else { this.replyOpen.add(from); this.lastHtml = null; this.syncEditor(); }
+    if (free) this.openReply(from, { show: true }); else { this.replyOpen.add(from); this.lastHtml = null; this.syncEditor(); }
     if (!this.followField(from)) this.replyOpen.delete(from);
   }
   focusReplyAfter() {
@@ -2358,7 +2531,7 @@ export default class DocEditor extends React.Component {
     const input = this.followField(want.from);
     if (!input) { this.replyOpen.delete(want.from); return; }
     input.focus({ preventScroll: true });
-    if (input.scrollIntoView) input.scrollIntoView({ block: 'nearest' });
+    this.showExchange(want.from, input);
   }
   // A reply field left: shut when it holds nothing, once the keyboard has not come back to it (a redraw puts it back) and
   // no selector or @ menu of its own is open.
@@ -2404,6 +2577,7 @@ export default class DocEditor extends React.Component {
     const around = (input.closest && input.closest('.dv-own')) || input.parentElement; // a Discover card's field sits in a box of its own
     const send = around && around.querySelector('[data-act="sendfollow"], [data-act="senddiscover"]'); if (!send) return;
     const ready = input.dataset.empty === '1' || !!input.value.trim();
+    if (input.parentElement && input.parentElement.classList && input.parentElement.classList.contains('chat-field')) input.parentElement.toggleAttribute('data-typed', !!input.value.trim());
     const box = !!(send.dataset && send.dataset.box);
     send.style.background = ready ? '#0070f3' : box ? '#ececec' : '#f2f2f2'; send.style.color = ready ? '#fff' : box ? '#a3a3a3' : '#8f8f8f';
   }
@@ -2417,12 +2591,13 @@ export default class DocEditor extends React.Component {
       const dim = !!editing && !!where && !!where.turn && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
       out += dimmed(this.lineHtml(i, line, p, active === i, false, where, this.lockedAt(ls, i)));
       // Under an answer's last line, its Show more (2026-10-13), shown by applyClips once it is long enough to cut.
-      if (where && where.lastBody && where.role === 'answer' && !where.box && !where.turn.pending && !where.turn.folded && !where.turn.build && !cards.byQ.has(where.turn.q)) out += this.moreHtml(ls, where.turn);
-      if (where && where.footAfter && !(where.turn.folded && !where.box)) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), box: where.box, reply: where.reply }));
+      if (where && where.lastBody && where.role === 'answer' && !where.box && !where.turn.pending && !where.turn.folded && !where.turn.build && !cards.byQ.has(where.turn.q)) out += where.chat ? this.chatMoreHtml(ls, where) : this.moreHtml(ls, where.turn);
+      if (where && where.footAfter && where.chat && !where.turn.folded) out += dimmed(this.chatFootHtml({ at: where, closes: (where.tail && !where.drawnAfter) || where.cut }));
+      else if (where && where.footAfter && !(where.turn.folded && !where.box)) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), box: where.box, reply: where.reply }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
       // card (MATH-31; under it, not above, since 2026-10-05: the agent's own field comes first).
       const recap = !!where && where.followAfter && this.endsInRecap(ls, where.thread);
-      if (where && where.fieldAfter) out += this.followHtml(ls, where.thread, { closes: !recap });
+      if (where && where.fieldAfter) out += this.followHtml(ls, where.thread, { closes: !recap, older: where.older ? where.turn.q : null });
       if (where && where.refineAfter) out += this.refineHtml(where.thread);
       if (recap) out += `<div contenteditable="false" data-recap-discover="${where.thread.from}" style="user-select:none;padding:0 12px 10px;margin-bottom:8px;background:#fafafa;border-radius:0 0 10px 10px">${this.sendDiscoverHtml(`t${where.thread.from}`)}</div>`;
     });
@@ -2542,10 +2717,14 @@ export default class DocEditor extends React.Component {
   /* Long answers (2026-10-13). An answer is known by its question and closing lines (answerKey); those in the document
      when it opened (seenAnswers, noted once per docKey) start cut at CLIP_OLD lines; one that lands while it is open is
      shown whole, with no toggle. Show more (moreOpen) shows a cut one whole, Show less cuts it again. */
-  answerKey(ls, turn) { return `${hashLine(ls[turn.q])}.${hashLine(ls[turn.foot >= 0 ? turn.foot : turn.to])}`; }
+  // The same question asked again and answered alike is told apart by how many came before it (2026-10-15).
+  answerKey(ls, turn) {
+    let nth = 0; for (let j = 0; j < turn.q; j++) if (ls[j] === ls[turn.q]) nth++;
+    return `${hashLine(ls[turn.q])}.${hashLine(ls[turn.foot >= 0 ? turn.foot : turn.to])}${nth ? `.${nth}` : ''}`;
+  }
   noteAnswers(ls) {
     if (this.seenDoc === this.props.docKey) return;
-    this.seenDoc = this.props.docKey; this.seenAnswers = new Set(); this.moreOpen = new Set();
+    this.seenDoc = this.props.docKey; this.seenAnswers = new Set(); this.moreOpen = new Set(); this.moreShut = new Set();
     for (const thread of threads(ls, this.parsedOf(ls))) for (const turn of thread.turns) if (turn.answered && !turn.pending) this.seenAnswers.add(this.answerKey(ls, turn));
   }
   // The toggle under an answer that was there when the document opened, inside its rule, hidden until applyClips finds
@@ -2560,8 +2739,48 @@ export default class DocEditor extends React.Component {
   // row across it held to what is left of it, a 56px fade over the end) and its toggle says Show more; opened, it is whole
   // and says Show less. Not the answer the caret is in. All rows are measured before any is changed.
   applyClips(ed) {
-    const toggles = ed && ed.querySelectorAll ? [...ed.querySelectorAll('[data-more]')] : []; if (!toggles.length) return;
+    const all = ed && ed.querySelectorAll ? [...ed.querySelectorAll('[data-more]')] : []; if (!all.length) return;
     const active = this.state.activeLine;
+    const chevron = (up) => `<span style="display:inline-flex;color:#8f8f8f">${icon(up ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`;
+    // An @bart answer's fold (chatMoreHtml), measured: it shows its first paragraph (up to data-split), then whole rows
+    // while CHAT_SHOW_LINES lines are not passed (2026-10-15, David: the paragraph alone showed too little); a row that
+    // would pass them, with two lines or more left, is held to those lines under a fade. Folded only when more than
+    // CHAT_FOLD_LINES lines are left hidden; its label counts the points hidden when they are all a list's.
+    // The caret on a line it shows leaves it folded (2026-10-15, David: a click in the answer opened it whole, and leaving
+    // it for the reply field folded it again under the press); on a line it hides (a search put it there), it opens for
+    // good, so leaving it moves nothing.
+    const chats = all.filter((more) => more.dataset.chatMore).map((more) => {
+      const rows = [...ed.querySelectorAll(`[data-answer-of="${more.dataset.more}"]`)];
+      if (!rows.length) return null;
+      const split = Number(more.dataset.split);
+      const counts = rows.map((row) => { const t = row.dataset.chatLine === 'blank' ? null : row.querySelector('.t'); return t ? Math.round(t.getBoundingClientRect().height / CHAT_LINE_PX) : 0; });
+      let shown = 0, k = 0;
+      for (; k < rows.length && Number(rows[k].dataset.line) < split; k++) shown += counts[k];
+      while (k < rows.length && shown + counts[k] <= CHAT_SHOW_LINES) shown += counts[k++];
+      let clip = null;
+      if (k < rows.length && CHAT_SHOW_LINES - shown >= 2 && rows[k].dataset.chatLine !== 'h') {
+        const n = CHAT_SHOW_LINES - shown, t = rows[k].querySelector('.t');
+        clip = { row: rows[k], n, px: Math.round(t.getBoundingClientRect().top - rows[k].getBoundingClientRect().top + n * CHAT_LINE_PX) };
+      } else while (k > 0 && Number(rows[k - 1].dataset.line) >= split && rows[k - 1].dataset.chatLine === 'blank') k--;
+      const hide = rows.slice(clip ? k + 1 : k), left = counts.slice(clip ? k + 1 : k).reduce((a, b) => a + b, 0) + (clip ? counts[k] - clip.n : 0);
+      if (left <= CHAT_FOLD_LINES) return null;
+      const said = hide.filter((row) => row.dataset.chatLine !== 'blank');
+      const points = said.length && said.every((row) => row.dataset.chatLine === 'item') ? said.filter((row) => parseLine(parseLine(row.dataset.raw || '').text).depth === 0).length : 0;
+      const label = points ? `${points} more point${points === 1 ? '' : 's'}` : 'Show more';
+      return { more, hide, clip, label, caret: hide.some((row) => Number(row.dataset.line) === active) };
+    });
+    for (const plan of chats) {
+      if (!plan) continue;
+      const { more, hide, clip, label } = plan, key = more.dataset.key, button = more.querySelector('[data-act="more"]');
+      let open = more.dataset.open === '1';
+      if (!open && plan.caret) { this.moreOpen.add(key); this.moreShut.delete(key); open = true; }
+      more.style.display = 'block'; more.dataset.open = open ? '1' : '0';
+      if (button) { button.innerHTML = `${open ? 'Show less' : esc(label)}${chevron(open)}`; button.dataset.open = open ? '1' : '0'; button.setAttribute('aria-expanded', String(open)); }
+      if (open) continue;
+      for (const row of hide) row.style.display = 'none';
+      if (clip) { Object.assign(clip.row.style, { boxSizing: 'border-box', maxHeight: `${clip.px}px`, overflow: 'hidden' }); more.dataset.cut = '1'; }
+    }
+    const toggles = all.filter((more) => !more.dataset.chatMore); if (!toggles.length) return;
     const plans = toggles.map((more) => {
       const rows = [...ed.querySelectorAll(`[data-answer-of="${more.dataset.more}"]`)];
       if (!rows.length || rows.some((row) => Number(row.dataset.line) === active)) return null;
@@ -2569,7 +2788,6 @@ export default class DocEditor extends React.Component {
       if (rects[rects.length - 1].bottom - top <= Number(more.dataset.cutOver) * ANSWER_LINE_PX + 16) return null;
       return { more, rows, rects, top };
     });
-    const chevron = (up) => `<span style="display:inline-flex;color:#8f8f8f">${icon(up ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`;
     for (const plan of plans) {
       if (!plan) continue;
       const { more, rows, rects, top } = plan, open = this.moreOpen.has(more.dataset.key), button = more.querySelector('[data-act="more"]');
@@ -2667,8 +2885,13 @@ export default class DocEditor extends React.Component {
     }
     const html = this.editorHtml();
     const hadFocus = document.activeElement === ed || ed.contains(document.activeElement);
-    const field = document.activeElement, had = field && field.matches && field.matches('[data-follow-input]') && ed.contains(field) ? { key: field.dataset.followInput, a: field.selectionStart, b: field.selectionEnd }
-        : field && field.matches && field.matches('[data-discover-input]') && ed.contains(field) ? { discover: true, key: field.dataset.discoverInput, a: field.selectionStart, b: field.selectionEnd } : null;
+    const field = document.activeElement;
+    let had = field && field.matches && field.matches('[data-follow-input]') && ed.contains(field) ? { key: field.dataset.followInput, a: field.selectionStart, b: field.selectionEnd }
+      : field && field.matches && field.matches('[data-discover-input]') && ed.contains(field) ? { discover: true, key: field.dataset.discoverInput, a: field.selectionStart, b: field.selectionEnd } : null;
+    // A reply field pressed while a line had the caret (2026-10-15, David: it took a second click): leaving the line redraws
+    // the editor before the field has the keyboard, so the field pressed is gone; the one drawn in its place takes it.
+    if (!had && this.focusInto && !ed.contains(field)) had = this.focusInto;
+    this.focusInto = null;
     const buildField = field && field.matches && field.matches('[data-build-input]') && ed.contains(field) ? { key: field.dataset.buildInput, a: field.selectionStart, b: field.selectionEnd } : null;
     // A title being renamed (2026-10-12) keeps the keyboard through a redraw (an answer landing, its title filled in by
     // name-chat meanwhile): the field is drawn again with what was typed, and focused again where it was.
@@ -2734,9 +2957,23 @@ export default class DocEditor extends React.Component {
     if (t.firstChild && t.firstChild.nodeName === 'BR') return { node: t, offset: 0 };
     const last = t.lastChild; return last && last.nodeType === 3 ? { node: last, offset: last.length } : { node: t, offset: t.childNodes.length };
   }
+  // An image line's picture (2026-10-15) holds no text to stand in: the caret is in the zero-width space before it (0) or
+  // after it (the token's length).
+  edgeOfPicture(t, raw) {
+    const box = t.querySelector('[data-img-line]'); if (!box || box.parentNode !== t) return null;
+    const len = (box.dataset.src || '').length, before = box.previousSibling, after = box.nextSibling, at = [...t.childNodes].indexOf(box);
+    if (raw <= 0) return before && before.nodeType === 3 ? { node: before, offset: before.length } : { node: t, offset: at };
+    return after && after.nodeType === 3 ? { node: after, offset: 0 } : { node: t, offset: at + 1 };
+  }
+  // Where a point stands on an image line: before its picture (0) or anywhere else, the picture itself included, after it.
+  imgSide(d, t, n, o) {
+    const len = (d.dataset.raw || '').length, box = t && (t.querySelector('[data-img-line]') || t.firstElementChild); if (!box) return len;
+    const r = document.createRange(); r.selectNode(box);
+    try { return r.comparePoint(n, o) < 0 ? 0 : len; } catch { return len; }
+  }
   setSelection(line, a, b) {
     const ed = this.editorEl(); if (!ed) return; const d = ed.querySelector(`[data-line="${line}"]`); const t = d && d.querySelector('.t'); if (!t) return;
-    const s = this.posIn(t, this.rawToDisplay(t, a)), e = this.posIn(t, this.rawToDisplay(t, b));
+    const s = this.edgeOfPicture(t, a) || this.posIn(t, this.rawToDisplay(t, a)), e = this.edgeOfPicture(t, b) || this.posIn(t, this.rawToDisplay(t, b));
     getSelection().setBaseAndExtent(s.node, s.offset, e.node, e.offset);
   }
   caretInfo() {
@@ -2749,6 +2986,7 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl();
     if (!n || !ed) return null; const el = n.nodeType === 1 ? n : n.parentElement; const d = el && el.closest('[data-line]'); if (!d || !ed.contains(d)) return null;
     const t = d.querySelector('.t'); let off = 0;
+    if (parseLine(d.dataset.raw || '').type === 'img') return { line: Number(d.dataset.line), offset: this.imgSide(d, t, n, o) };
     if (t && t.contains(n)) {
       const r = document.createRange(); r.selectNodeContents(t); r.setEnd(n, o); off = r.toString().replace(/\u200b/g, '').length;
     } else off = t ? t.textContent.length : 0;
@@ -2808,7 +3046,12 @@ export default class DocEditor extends React.Component {
       if (!this.caret) this.caret = { line: c.anchor.line, sel: [a, b], back };
       this.setState({ activeLine: c.anchor.line, mention: null }); return;
     }
-    const line = ls[c.anchor.line] ?? '', p = this.parsedOf(ls)[c.anchor.line] || parseLine(line), key = p.type === 'img' || isCode(p) || isFence(p) ? '' : this.openIdx(tokensOf(p, line), a, b, this.linksShut(p)).join(',');
+    const line = ls[c.anchor.line] ?? '', p = this.parsedOf(ls)[c.anchor.line] || parseLine(line);
+    if (p.type === 'img' && a === b) {
+      const sel = getSelection(), box = sel && sel.anchorNode && sel.anchorNode.nodeType === 3 ? sel.anchorNode.parentNode.querySelector('[data-img-line]') : null;
+      if (!box || (sel.anchorNode !== box.previousSibling && sel.anchorNode !== box.nextSibling)) { this.setSelection(c.anchor.line, a, a); return; }
+    }
+    const key = p.type === 'img' || isCode(p) || isFence(p) ? '' : this.openIdx(tokensOf(p, line), a, b, this.linksShut(p)).join(',');
     if (key !== this.openKey) { this.caret = { line: c.anchor.line, sel: [a, b], back }; this.forceUpdate(); }
   }
   editorInput = () => {
@@ -2844,13 +3087,22 @@ export default class DocEditor extends React.Component {
       return sameLine(p, txt);
     };
     // The lines that survived the edit, in order. A deletion across lines (select all, cut) takes no answer and no answered
-    // question with it: those the browser removed are put back where they stood. The one deletion that may take answer
+    // question with it, unless their whole conversation is in it (whole): those the browser removed are put back where they stood. The one deletion that may take answer
     // lines is one made inside a single answer, where its text is the person's to edit.
     const kept = new Map(divs.map((d) => [Number(d.dataset.line), d]));
     const span = this.selRaw && this.selRaw.multi ? this.selRaw.lines : null, inside = !!span && psOld.slice(span[0], span[1] + 1).every((q) => q.type === 'reply');
+    // A conversation wholly inside the selection goes with it (2026-10-15, David), as a picture does; not one at work.
+    const whole = new Set();
+    if (bulk && span) {
+      for (const t of threads(old, psOld)) {
+        const from = t.titleLine >= 0 ? t.titleLine : t.from;
+        if (from >= span[0] && t.to <= span[1] && !isRunning(t, this.props.builds)) for (let j = from; j <= t.to; j++) whole.add(j);
+      }
+    }
     let ls = [], pos = -1, restored = false;
     old.forEach((rawLine, j) => {
       const d = kept.get(j);
+      if (whole.has(j)) { if (d) restored = true; return; }
       if (!d) { if (this.lockedAt(old, j) || (psOld[j].type === 'reply' && !inside)) { ls.push(rawLine); restored = true; } return; }
       if (j === activeId) pos = ls.length;
       ls.push(textOf(d));
@@ -2858,6 +3110,13 @@ export default class DocEditor extends React.Component {
     if (!ls.length || (strayText && this.endsOnCard(ls))) ls.push('');
     if (restored) this.lastHtml = null;
     let caret = c && pos >= 0 ? { line: pos, offset: c.anchor.offset } : null;
+    // Typed beside a picture past editorKey (a composition, say): a line of its own, as besidePicture makes it.
+    if (pos >= 0 && psOld[activeId] && psOld[activeId].type === 'img' && ls[pos] !== old[activeId] && ls[pos].includes(old[activeId])) {
+      const tok = old[activeId], k = ls[pos].indexOf(tok), head = ls[pos].slice(0, k), tail = ls[pos].slice(k + tok.length);
+      ls.splice(pos, 1, ...(head ? [head] : []), tok, ...(tail ? [tail] : []));
+      if (tail) pos += head ? 2 : 1;
+      caret = { line: pos, offset: tail ? tail.length : head.length }; this.lastHtml = null;
+    }
     if (caret && (strip || cleared)) { caret = { line: pos, offset: cleared ? 0 : Math.max(0, caret.offset - strip) }; this.lastHtml = null; }
     if (strayText) {
       const last = ls.length - 1, q = parseLine(ls[last]), base = lineText(q, ls[last]).length;
@@ -2913,6 +3172,7 @@ export default class DocEditor extends React.Component {
   }
   editorKey = (e) => {
     this.keyReached(e);
+    if (this.armed && e.key !== 'Backspace' && e.key !== 'Delete' && !['Shift', 'Meta', 'Control', 'Alt'].includes(e.key)) this.disarm();
     if (this.state.picker) this.closePicker();
     const s = this.state, c = this.caretInfo(); if (!c) return; const ls = this.lines();
     const ps = this.parsedOf(ls), i = c.anchor.line, line = ls[i] ?? '', p = ps[i] || parseLine(line), cur = lineText(p, line), mod = e.metaKey || e.ctrlKey;
@@ -2963,12 +3223,27 @@ export default class DocEditor extends React.Component {
       this.setLines((x) => { const out = [...x]; out[i] = l1; out.splice(i + 1, 0, l2); return out; }, { line: i + 1, offset: 0 });
       this.setState({ activeLine: i + 1, mention: null }); return;
     }
+    // Beside a picture alone on its line (2026-10-15, David): Backspace after it or Delete before it takes it away (an
+    // empty line stays); Backspace before it or Delete after it takes an empty line next to it away, or steps onto the
+    // line there; a character typed is a line of its own, above or below it. Enter is Enter's own: a line above or below.
+    if (p.type === 'img' && collapsed && !mod && !e.altKey && !e.isComposing) {
+      const after = a > 0, k = after ? i + 1 : i - 1, near = ls[k];
+      if ((e.key === 'Backspace' && after) || (e.key === 'Delete' && !after)) { e.preventDefault(); this.writeText(i, '', { line: i, offset: 0 }); this.setState({ activeLine: i, mention: null }); return; }
+      if (e.key === 'Backspace' || e.key === 'Delete') {
+        e.preventDefault(); if (near == null) return;
+        if (near === '' && !this.lockedAt(ls, k)) { this.setLines((x) => x.filter((_, j) => j !== k), { line: after ? i : i - 1, offset: after ? line.length : 0 }); this.setState({ activeLine: after ? i : i - 1, mention: null }); return; }
+        if (this.lockedAt(ls, k)) return;
+        this.caret = { line: k, offset: after ? 0 : lineText(ps[k] || parseLine(near), near).length }; this.wantFocus = true; this.setState({ activeLine: k, mention: null }); return;
+      }
+      if (e.key.length === 1 && !e.ctrlKey) { e.preventDefault(); this.besidePicture(i, a, e.key); return; }
+    }
     // Backspace right after a mention, or Delete right before one, takes the whole token, its (ws:…) or (lib:…) with it
     // (MATH-57): one key, one mention, and one ⌘Z brings it back. ⌥ and ⌘ delete as the browser does.
     if ((e.key === 'Backspace' || e.key === 'Delete') && collapsed && !mod && !e.altKey && !isCode(p) && !isFence(p)) {
       const span = mentionBeside(cur, a, e.key === 'Backspace');
       if (span) { e.preventDefault(); this.writeText(i, cur.slice(0, span[0]) + cur.slice(span[1]), { line: i, offset: span[0] }); this.setState({ mention: null, activeLine: i }); return; }
     }
+    if ((e.key === 'Backspace' || e.key === 'Delete') && !same && !this.props.readOnly && this.deleteAcross()) { e.preventDefault(); return; }
     if (e.key === 'Backspace' && collapsed && a === 0) {
       if (isMarked(p.type)) {
         e.preventDefault();
@@ -2980,6 +3255,14 @@ export default class DocEditor extends React.Component {
         // A fence is not merged into the line next to it (that would undo the block): the caret steps over it instead.
         if ((isFence(p) || isFence(q)) && cur !== '' && lineText(q, ls[i - 1]) !== '') {
           this.caret = { line: i - 1, offset: lineText(q, ls[i - 1]).length }; this.wantFocus = true; this.setState({ activeLine: i - 1, mention: null }); return;
+        }
+        // A conversation over the line: marked, then taken away (blockAt). An empty line goes first, when a line follows it.
+        const block = !mod && this.blockAt(ls, { end: i - 1 });
+        if (block) {
+          if (this.armedIs(block)) { this.dropBlock(block, { line: block.from, offset: 0 }); return; }
+          this.arm(block);
+          if (cur === '' && i + 1 < ls.length) { this.setLines((x) => x.filter((_, j) => j !== i), { line: i, offset: 0 }); this.setState({ activeLine: i, mention: null }); }
+          return;
         }
         if (this.lockedAt(ls, i - 1)) {
           // Answers are read-only: an empty line right after one goes away; a line with text stays.
@@ -2997,7 +3280,10 @@ export default class DocEditor extends React.Component {
       return;
     }
     if (e.key === 'Delete' && collapsed && a === cur.length && i < ls.length - 1) {
-      e.preventDefault(); const q = ps[i + 1]; if (this.lockedAt(ls, i + 1)) return; const nt = lineText(q, ls[i + 1]);
+      e.preventDefault(); const q = ps[i + 1];
+      const block = !mod && this.blockAt(ls, { start: i + 1 });
+      if (block) { if (this.armedIs(block)) this.dropBlock(block, { line: i, offset: a }); else this.arm(block); return; }
+      if (this.lockedAt(ls, i + 1)) return; const nt = lineText(q, ls[i + 1]);
       if ((isFence(p) || isFence(q)) && cur !== '' && nt !== '') return;
       this.setLines((x) => { const out = [...x]; out[i] = sameLine(p, cur + nt); out.splice(i + 1, 1); return out; }, { line: i, offset: cur.length });
       return;
@@ -3071,19 +3357,28 @@ export default class DocEditor extends React.Component {
     if (!at) { const ls = this.lines(), last = Math.max(0, ls.length - 1), line = ls[last] ?? ''; at = { line: last, offset: lineText(parseLine(line), line).length }; }
     return at;
   }
+  // Text typed or pasted beside a picture alone on its line (2026-10-15, David): its own line or lines, above the picture
+  // when the caret was before it, below when after, so the picture stays a picture and never a chip in a line of text.
+  besidePicture(i, at, text) {
+    const parts = String(text).replace(/\r/g, '').split('\n'), k = at > 0 ? i + 1 : i, end = k + parts.length - 1;
+    this.setLines((x) => { const out = [...x]; out.splice(k, 0, ...parts); return out; }, { line: end, offset: parts[parts.length - 1].length });
+    this.setState({ activeLine: end, mention: null });
+  }
   editorPaste = (e) => {
     const c = this.caretInfo(); if (!c) return;
     const pasted = [...(((e.clipboardData || {}).files) || [])].filter((file) => /^image\/(png|jpeg|gif|webp)$/.test(file.type));
     if (pasted.length && this.props.onPasteImage) { e.preventDefault(); void this.pasteImages(pasted, { line: c.anchor.line, offset: Math.min(c.anchor.offset, c.focus.offset) }); return; }
     e.preventDefault();
     const data = e.clipboardData || window.clipboardData;
-    let text = (data.getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
+    const own = (data.getData(OWN_LINES) || '').replace(/\r/g, '');
+    let text = own || (data.getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
     const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = this.parsedOf(ls)[i] || parseLine(line), cur = lineText(p, line);
+    if (p.type === 'img' && c.anchor.line === c.focus.line && c.anchor.offset === c.focus.offset) { this.besidePicture(i, c.anchor.offset, text); return; }
     // Copied from a PDF (MATH-24): the page's line breaks, split words and ligatures come out (model/paste.js). Not in code.
-    if (!isCode(p) && !isFence(p)) text = pdfText(text);
+    if (!own && !isCode(p) && !isFence(p)) text = pdfText(text);
     // Copied from a web page (2026-10-02), the plain text has each link's title only: the page's HTML gives the addresses
     // back. A copy from this editor already holds its links as markdown, and code takes what was copied as it is.
-    const html = text.includes('](') || isCode(p) || isFence(p) ? '' : data.getData('text/html');
+    const html = own || text.includes('](') || isCode(p) || isFence(p) ? '' : data.getData('text/html');
     if (html) text = withLinks(text, [...new DOMParser().parseFromString(html, 'text/html').querySelectorAll('a[href]')].map((a) => ({ text: a.textContent, href: a.getAttribute('href') })));
     // A quote's lines are all it holds (2026-10-07), so blank lines at the ends of a paste would only leave quote lines of
     // nothing, which cannot be edited away.
@@ -3122,7 +3417,8 @@ export default class DocEditor extends React.Component {
     e.preventDefault();
     e.clipboardData.setData('text/plain', text);
     e.clipboardData.setData('text/html', selectionHtml(text));
-    if (cut && !this.props.readOnly) { this.bulkDelete = true; document.execCommand('delete'); this.bulkDelete = false; }
+    const over = this.across(); if (over) e.clipboardData.setData(OWN_LINES, this.acrossSource(over));
+    if (cut && !this.props.readOnly && !this.deleteAcross()) { this.bulkDelete = true; document.execCommand('delete'); this.bulkDelete = false; }
   }
   // Dragging an image's corner (2026-10-12; any of its four since 2026-10-15) sizes it live; letting go writes the width
   // into its line. A left corner widens it as it is dragged left.
@@ -3140,14 +3436,17 @@ export default class DocEditor extends React.Component {
     };
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up);
   }
-  // Dragging an image (2026-10-15, David): once the pointer has moved a few pixels with the button down, the picture
-  // follows it, faint, and a blue line shows where it would land (imgDropGaps, the nearest place to the pointer); letting
+  // Dragging an image (2026-10-15, David): once the pointer has moved a few pixels with the button down, a small solid
+  // copy of the picture (at most 220×160) rides under the pointer, the picture itself stays faint where it was, and a blue
+  // line with a dot at its start glides to where it would land (imgDropGaps, the nearest place to the pointer); letting
   // go moves its line there (moveLineTo). A press that does not move is a click: it opens the picture large, as before.
   // Escape, or letting go where nothing is allowed, leaves it where it was.
   startImgDrag(e, pic) {
     const i = Number(pic.dataset.img), ed = this.editorEl(); if (!ed || !Number.isInteger(i)) return;
     const x0 = e.clientX, y0 = e.clientY, r0 = pic.getBoundingClientRect();
+    const k = Math.min(1, 220 / (r0.width || 1), 160 / (r0.height || 1)); // the dragged copy's scale
     let ghost = null, bar = null, target = null;
+    const still = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     this.imgDragged = false;
     const gaps = imgDropGaps(this.lines());
     const place = (x, y) => {
@@ -3158,7 +3457,7 @@ export default class DocEditor extends React.Component {
       target = best && best.j !== i && best.j !== i + 1 ? best.j : null;
       const box = ed.getBoundingClientRect();
       if (bar) Object.assign(bar.style, { display: target == null ? 'none' : 'block', left: `${box.left}px`, width: `${box.width}px`, top: `${(best ? best.y : 0) - 1}px` });
-      if (ghost) Object.assign(ghost.style, { left: `${x - (x0 - r0.left)}px`, top: `${y - (y0 - r0.top)}px` });
+      if (ghost) Object.assign(ghost.style, { left: `${x - (x0 - r0.left) * k}px`, top: `${y - (y0 - r0.top) * k}px` });
       // Near the pane's top or bottom edge, the pane scrolls.
       const pane = this.scrollRef.current, pr = pane && pane.getBoundingClientRect ? pane.getBoundingClientRect() : null;
       if (pr && y < pr.top + 40) pane.scrollTop -= 14; else if (pr && y > pr.bottom - 40) pane.scrollTop += 14;
@@ -3167,6 +3466,7 @@ export default class DocEditor extends React.Component {
       window.removeEventListener('mousemove', move); window.removeEventListener('mouseup', up); window.removeEventListener('keydown', key, true);
       if (ghost) ghost.remove(); if (bar) bar.remove();
       pic.style.opacity = '';
+      if (document.body && document.body.style) document.body.style.cursor = '';
       if (this.imgDragged) this.timer(() => { this.imgDragged = false; }, 0);
       if (drop && target != null) { const j = target; this.setLines((ls) => moveLineTo(ls, i, j)); this.setState({ activeLine: null }); }
     };
@@ -3174,13 +3474,18 @@ export default class DocEditor extends React.Component {
       if (!this.imgDragged) {
         if (Math.abs(ev.clientX - x0) + Math.abs(ev.clientY - y0) < 5) return;
         this.imgDragged = true;
+        bar = document.createElement('div');
+        Object.assign(bar.style, { position: 'fixed', zIndex: 59, height: '2px', background: '#0070f3', borderRadius: '1px', pointerEvents: 'none', display: 'none', transition: still ? '' : 'top 90ms ease-out' });
+        const dot = document.createElement('div'); // the line's start, as a ring
+        Object.assign(dot.style, { position: 'absolute', left: '-7px', top: '-3px', width: '8px', height: '8px', boxSizing: 'border-box', border: '2px solid #0070f3', borderRadius: '50%', background: '#fff' });
+        if (bar.appendChild) bar.appendChild(dot);
         ghost = pic.cloneNode(false);
         ghost.removeAttribute('data-img');
-        Object.assign(ghost.style, { position: 'fixed', zIndex: 60, width: `${r0.width}px`, height: `${r0.height}px`, maxHeight: 'none', opacity: '0.6', pointerEvents: 'none', cursor: 'grabbing', boxShadow: '0 12px 32px rgba(0,0,0,.12)' });
-        bar = document.createElement('div');
-        Object.assign(bar.style, { position: 'fixed', zIndex: 59, height: '2px', background: '#0070f3', borderRadius: '1px', pointerEvents: 'none', display: 'none' });
+        Object.assign(ghost.style, { position: 'fixed', zIndex: 60, margin: '0', width: `${Math.round(r0.width * k)}px`, height: `${Math.round(r0.height * k)}px`, maxWidth: 'none', maxHeight: 'none', objectFit: 'cover', opacity: '1', pointerEvents: 'none', border: '0', borderRadius: '8px', background: '#fff', boxShadow: '0 0 0 1px rgba(0,0,0,.06), 0 10px 28px rgba(0,0,0,.18)' });
         document.body.appendChild(bar); document.body.appendChild(ghost);
-        pic.style.opacity = '0.35';
+        if (!still && typeof ghost.animate === 'function') ghost.animate([{ opacity: 0, transform: 'scale(.92)' }, { opacity: 1, transform: 'scale(1)' }], { duration: 120, easing: 'ease-out' });
+        if (document.body.style) document.body.style.cursor = 'grabbing';
+        pic.style.opacity = '0.3';
       }
       place(ev.clientX, ev.clientY);
     };
@@ -3188,39 +3493,52 @@ export default class DocEditor extends React.Component {
     const key = (ev) => { if (ev.key === 'Escape') { ev.preventDefault(); ev.stopPropagation(); finish(false); } };
     window.addEventListener('mousemove', move); window.addEventListener('mouseup', up); window.addEventListener('keydown', key, true);
   }
-  copyPicture = async () => {
-    const lb = this.state.lightbox; if (!lb) return;
+  // The picture viewer (./ImageViewer.jsx): copying the one it shows to the clipboard as an image. → whether it did.
+  // Its pixels are read through a canvas: the page's connect-src refuses fetch() a blob: or data: picture (2026-10-15).
+  copyPicture = async (src) => {
     try {
-      const blob = await (await fetch(lb.src)).blob();
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      await window.engelbartAPI.copyImage(bytes);
-      this.setState({ lightbox: { ...lb, copied: true } });
-      if (this.copiedT) clearTimeout(this.copiedT);
-      this.copiedT = this.timer(() => { if (this.state.lightbox) this.setState({ lightbox: { ...this.state.lightbox, copied: false } }); }, 1400);
-    } catch { /* the picture stays where it was */ }
+      const img = new Image(); img.src = src; await img.decode();
+      const canvas = document.createElement('canvas'); canvas.width = img.naturalWidth; canvas.height = img.naturalHeight;
+      canvas.getContext('2d').drawImage(img, 0, 0);
+      const blob = await new Promise((done) => canvas.toBlob(done, 'image/png')); if (!blob) return false;
+      return !!(await window.engelbartAPI.copyImage(new Uint8Array(await blob.arrayBuffer())));
+    } catch { return false; }
+  };
+  // The note's pictures in document order, each with its line, for the viewer's ← and →.
+  pictures() {
+    const images = this.props.images || {};
+    return this.lines().flatMap((line, j) => {
+      const p = parseLine(line); if (p.type !== 'img') return [];
+      const src = p.src.startsWith('img:') ? (images[p.src.slice(4)] || '') : p.src;
+      return src ? [{ src, alt: imgParts(p.text).name, line: j }] : [];
+    });
+  }
+  openPicture(pic) {
+    const line = Number(pic.dataset && pic.dataset.img), src = pic.getAttribute('src'), pics = this.pictures();
+    let at = pics.findIndex((one) => one.line === line);
+    if (at < 0) at = pics.findIndex((one) => one.src === src);
+    const list = at < 0 ? [{ src, alt: pic.getAttribute('alt') || '', line }] : pics;
+    at = Math.max(0, at);
+    this.setState({ lightbox: { pics: list, at, src: list[at].src } });
+  }
+  // On close, focus goes back to the picture in the note that was shown last.
+  closePicture = () => {
+    const lb = this.state.lightbox; if (!lb) return;
+    const line = lb.pics[lb.at] && lb.pics[lb.at].line;
+    this.setState({ lightbox: null });
+    this.timer(() => {
+      const ed = this.editorEl(), pic = ed && Number.isFinite(line) ? ed.querySelector(`img[data-img="${line}"]`) : null;
+      if (pic) { pic.tabIndex = -1; pic.focus({ preventScroll: true }); }
+    }, 0);
   };
   lightboxEl() {
     const lb = this.state.lightbox; if (!lb) return null;
-    const close = () => this.setState({ lightbox: null });
-    const btn = { position: 'absolute', width: 36, height: 36, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #eaeaea', borderRadius: 8, background: '#fff', color: '#171717', cursor: 'pointer' };
-    return (
-      <div data-lightbox="1" role="dialog" aria-modal="true" aria-label="Image" onClick={close} onKeyDown={(e) => { if (e.key === 'Escape') close(); }} tabIndex={-1} ref={(el) => { if (el && !el.contains(document.activeElement)) el.focus(); }} style={{ position: 'fixed', inset: 0, zIndex: 1000, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 56, background: 'rgba(0,0,0,.55)', outline: 'none' }}>
-        <img src={lb.src} alt={lb.alt} onClick={(e) => e.stopPropagation()} style={{ maxWidth: '100%', maxHeight: '100%', objectFit: 'contain', borderRadius: 8, background: '#fff', boxShadow: '0 12px 40px rgba(0,0,0,.35)' }} />
-        <button type="button" aria-label="Close" onClick={(e) => { e.stopPropagation(); close(); }} style={{ ...btn, top: 16, right: 16 }}>
-          <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3.5 3.5l9 9M12.5 3.5l-9 9" /></svg>
-        </button>
-        <button type="button" aria-label="Copy image" title={lb.copied ? 'Copied' : 'Copy image'} onClick={(e) => { e.stopPropagation(); void this.copyPicture(); }} style={{ ...btn, bottom: 16, left: 16, color: lb.copied ? '#0070f3' : '#171717' }}>
-          {lb.copied
-            ? <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M3 8.4 6.4 12 13 4.5" /></svg>
-            : <svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinejoin="round"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5" /><path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H3A1.5 1.5 0 0 0 1.5 3v6A1.5 1.5 0 0 0 3 10.5h.5" /></svg>}
-        </button>
-      </div>
-    );
+    return <ImageViewer pics={lb.pics} at={lb.at} onStep={(at) => this.setState({ lightbox: { ...lb, at, src: lb.pics[at].src } })} onClose={this.closePicture} onCopy={this.copyPicture} />;
   }
   editorClick = (e) => {
     const pic = e.target.closest && e.target.closest('[data-img]');
     if (pic && (this.resizing || this.imgDragged)) { e.preventDefault(); return; }
-    if (pic && typeof pic.getAttribute === 'function') { e.preventDefault(); this.setState({ lightbox: { src: pic.getAttribute('src'), alt: pic.getAttribute('alt') || '', copied: false } }); return; }
+    if (pic && typeof pic.getAttribute === 'function') { e.preventDefault(); this.openPicture(pic); return; }
     // The editor's own empty space below the last line. A drag from one line to another also ends here (2026-10-02: Chromium
     // clicks what holds both ends), and putting the caret at the end lost its highlight.
     // The space under a card, with a row under it (2026-10-13), puts the caret on a line there (gapAt); the space between
@@ -3228,6 +3546,14 @@ export default class DocEditor extends React.Component {
     if (e.target === this.editorEl()) {
       if (!this.downOnRoot || !getSelection().isCollapsed) return;
       this.cancelEdit();
+      // Level with a picture alone on its line (2026-10-15): the caret goes before it or after it, the side nearer the press.
+      const pictured = [...(e.target.querySelectorAll ? e.target.querySelectorAll('[data-line]') : [])].find((row) => { const r = row.getBoundingClientRect(); return r.height && r.top <= e.clientY && e.clientY < r.bottom; });
+      if (pictured && parseLine(pictured.dataset.raw || '').type === 'img') {
+        const r = (pictured.querySelector('[data-imgbox]') || pictured).getBoundingClientRect(), j = Number(pictured.dataset.line);
+        this.caret = { line: j, offset: e.clientX < r.left + r.width / 2 ? 0 : pictured.dataset.raw.length };
+        if (this.state.activeLine === j) this.applyCaret(); else { this.wantFocus = true; this.setState({ activeLine: j, mention: null }); }
+        return;
+      }
       const gap = this.downGap && this.gapAt(e.target, e.clientY);
       if (gap && gap.at === this.downGap.at) this.openGap(gap);
       else { const rows = this.rowsAround(e.clientY); if (rows.below < 0 && !rows.level) this.focusEnd(); }
@@ -3268,7 +3594,13 @@ export default class DocEditor extends React.Component {
       if (k === 'reply') { this.closePicker(); this.openReply(Number(act.dataset.thread)); return; }
       if (k === 'refine') { this.closePicker(); this.openRefine(Number(act.dataset.thread)); return; }
       if (k === 'startresearch') { this.startResearch(Number(act.dataset.row)); return; }
-      if (k === 'more') { const key = act.dataset.key; if (!this.moreOpen.delete(key)) this.moreOpen.add(key); this.lastHtml = null; this.syncEditor(); return; }
+      if (k === 'more') {
+        const key = act.dataset.key;
+        // An @bart answer's toggle says whether it is open (data-open: one that landed since the document opened starts open).
+        const open = act.dataset.open != null ? act.dataset.open === '1' : this.moreOpen.has(key);
+        if (open) { this.moreOpen.delete(key); this.moreShut.add(key); } else { this.moreOpen.add(key); this.moreShut.delete(key); }
+        this.lastHtml = null; this.syncEditor(); return;
+      }
       if (k === 'senddiscover') { this.closePicker(); this.sendDiscover(act.dataset.target); return; }
       if (k === 'opendiscover') { this.closePicker(); this.openDiscover(act.dataset.target); return; }
       if (k === 'resultask') { this.closePicker(); this.askResult(i, act.dataset.agent); return; }
@@ -3364,7 +3696,16 @@ export default class DocEditor extends React.Component {
       this.collapseAll(Number(asked.dataset.foldTurn));
     }
   };
+  // The pointed-at turn's icons (2026-10-15): one rule in a style of the editor's own, so nothing is redrawn.
+  turnHover(q) {
+    if (q === (this.hoveredTurn ?? null)) return;
+    this.hoveredTurn = q;
+    if (typeof document === 'undefined' || !document.head || typeof document.createElement !== 'function') return;
+    if (!this.turnCss) { this.turnCss = document.createElement('style'); document.head.appendChild(this.turnCss); }
+    this.turnCss.textContent = q == null ? '' : `[data-turn-tools][data-turn-tools="${q}"]>div{visibility:visible}`;
+  }
   editorOver = (e) => {
+    const turn = e.target.closest('[data-turn-of]'); this.turnHover(turn ? turn.dataset.turnOf : null);
     const m = e.target.closest('[data-mention]'), res = m && m.dataset.file == null && m.dataset.zotero == null && m.dataset.made == null && (m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention, m.dataset.lib));
     if (res) this.showPop(res, { currentTarget: m });
     const peek = e.target.closest('[data-made-peek]'); if (peek) this.peekMade(peek);
@@ -3376,6 +3717,7 @@ export default class DocEditor extends React.Component {
   // Leaving what opened the selector starts its closing clock, unless the pointer went straight onto the selector: React has
   // by then already handled that same event (the selector's onMouseEnter stops the clock), and this would start it again.
   editorOut = (e) => {
+    if (!(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-turn-of]'))) this.turnHover(null);
     if (e.target.closest('[data-mention]')) this.hidePop();
     const peek = e.target.closest('[data-made-peek]');
     if (peek && !(e.relatedTarget && peek.contains(e.relatedTarget))) this.unpeekMade();
@@ -4031,6 +4373,66 @@ export default class DocEditor extends React.Component {
     const text = flattenPaste(input ? input.value : held.value), ls = this.lines(), p = this.parsedOf(ls)[held.line];
     if (!text || !p || p.type !== 'title' || text === p.text.trim()) { this.lastHtml = null; this.syncEditor(); return; }
     this.setLines((x) => x.map((l, j) => (j === held.line ? titleLine(text, p.folded, p) : l)));
+  }
+  /* A conversation is taken away whole (2026-10-15, David), as a picture is: Backspace at the start of the line under it
+     (an empty one goes first) or Delete at the end of the line over it marks it (armed: tinted), and the same key again
+     takes it away, from its title line to its last line; ⌘Z brings it back. Any other key, a click, leaving the document
+     or an edit that moves it unmarks it. One still at work (a run, a Build) is not marked. */
+  // The conversation whose last line is `end`, or whose first line (its title line, if it has one) is `start`.
+  blockAt(ls, { end = null, start = null }) {
+    const thread = threads(ls, this.parsedOf(ls)).find((t) => (end != null ? t.to === end : (t.titleLine >= 0 ? t.titleLine : t.from) === start));
+    if (!thread || isRunning(thread, this.props.builds)) return null;
+    return { thread, from: thread.titleLine >= 0 ? thread.titleLine : thread.from, to: thread.to };
+  }
+  armedIs(block) { const armed = this.armed; return !!armed && armed.from === block.from && armed.to === block.to; }
+  arm(block) { this.armed = { from: block.from, to: block.to, head: block.thread.from }; this.markArmed(); }
+  disarm() { if (!this.armed) return; this.armed = null; this.markArmed(); }
+  markArmed() {
+    const ed = this.editorEl(); if (!ed || !ed.querySelectorAll || (!this.armed && !this.armedDrawn)) return;
+    // Still that conversation, where it was: an edit that moved it or changed it unmarks it.
+    if (this.armed) { const block = this.blockAt(this.lines(), { start: this.armed.from }); if (!block || block.to !== this.armed.to) this.armed = null; }
+    const armed = this.armed;
+    for (const el of ed.querySelectorAll('[data-armed]')) el.removeAttribute('data-armed');
+    this.armedDrawn = !!armed; if (!armed) return;
+    for (const el of ed.querySelectorAll('[data-line]')) { const j = Number(el.dataset.line); if (j >= armed.from && j <= armed.to) el.setAttribute('data-armed', ''); }
+    for (const el of ed.querySelectorAll(`[data-followup="${armed.head}"]`)) el.setAttribute('data-armed', '');
+    for (const el of ed.querySelectorAll('[data-more]')) { const j = Number(el.dataset.more); if (j >= armed.from && j <= armed.to) el.setAttribute('data-armed', ''); }
+  }
+  // A selection from a line of text to another with a whole conversation between them, deleted or cut (2026-10-15, David):
+  // done on the document, not left to the browser, which lost the end line's rest across the conversation's blocks. The
+  // two ends join as Backspace joins lines; a conversation at work between them stays. → whether it was done here.
+  // The selection when it runs from a line of text to another over a whole conversation: its ends, and the conversations
+  // between them; null otherwise.
+  across() {
+    const ends = this.selEnds(); if (!ends || ends.start.line === ends.end.line) return null;
+    const ls = this.lines(), ps = this.parsedOf(ls), { start, end } = ends;
+    const all = threads(ls, ps).map((t) => ({ t, from: t.titleLine >= 0 ? t.titleLine : t.from, to: t.to }));
+    const inOne = (j) => all.some((b) => j >= b.from && j <= b.to) || this.lockedAt(ls, j);
+    const blocks = all.filter((b) => b.from > start.line && b.to < end.line);
+    return inOne(start.line) || inOne(end.line) || !blocks.length ? null : { ls, ps, start, end, blocks };
+  }
+  // What such a selection holds as the document's own lines (cut or copied with it, 2026-10-15): pasted back into this
+  // editor, its conversations are conversations again. One at work is left out.
+  acrossSource(sel) {
+    const { ls, ps, start, end, blocks } = sel, busy = new Set();
+    for (const b of blocks) if (isRunning(b.t, this.props.builds)) for (let j = b.from; j <= b.to; j++) busy.add(j);
+    const mid = ls.slice(start.line + 1, end.line).filter((_, k) => !busy.has(start.line + 1 + k));
+    return [lineText(ps[start.line], ls[start.line]).slice(start.offset), ...mid, lineText(ps[end.line], ls[end.line]).slice(0, end.offset)].join('\n');
+  }
+  deleteAcross() {
+    const sel = this.across(); if (!sel) return false;
+    const { ls, ps, start, end, blocks } = sel, keep = [];
+    for (const b of blocks) if (isRunning(b.t, this.props.builds)) for (let j = b.from; j <= b.to; j++) keep.push(ls[j]);
+    const head = lineText(ps[start.line], ls[start.line]).slice(0, start.offset), tail = lineText(ps[end.line], ls[end.line]).slice(end.offset);
+    const out = [...ls.slice(0, start.line), sameLine(ps[start.line], head + tail), ...keep, ...ls.slice(end.line + 1)];
+    this.armed = null;
+    this.setLines(() => out, { line: start.line, offset: head.length }); this.wantFocus = true; this.setState({ activeLine: start.line, mention: null });
+    return true;
+  }
+  dropBlock(block, caret) {
+    this.armed = null;
+    this.setLines((x) => { const out = x.filter((_, j) => j < block.from || j > block.to); return out.length ? out : ['']; }, caret);
+    this.setState({ activeLine: caret.line, mention: null });
   }
   // Delete: this turn leaves the document, its question and its answer; the turns around it stay. A run still at work is stopped.
   deleteTurn(q) {

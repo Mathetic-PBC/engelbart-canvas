@@ -982,10 +982,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // Copy all under an answer: a question and its answer, as they read in the document.
   handle('copy-text', (text) => { writeClipboard(str(text, 'text', 400000)); return true; });
   // The image of a pasted picture, copied as a picture (2026-10-12): the renderer sends its bytes, main writes the clipboard.
-  handle('copy-image', (bytes) => {
+  handle('copy-image', async (bytes) => {
     const buf = Buffer.from(bytes instanceof ArrayBuffer || ArrayBuffer.isView(bytes) ? (ArrayBuffer.isView(bytes) ? new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength) : new Uint8Array(bytes)) : []);
     if (!buf.length || buf.length > 40e6) throw new Error('image is empty or too large');
-    return !!writeImage(buf);
+    return !!(await writeImage(buf));
   });
 
   // Build (src/main/build; docs/superpowers/specs/2026-09-25-build-workflow-design.md): a workspace handed to Claude Code

@@ -127,8 +127,8 @@ app.whenReady().then(async () => {
       const more=document.querySelector('${ED} [data-more]'), foot=q&&document.querySelector('${ED} [data-foot="'+q.dataset.line+'"]');
       const answer=document.querySelector('${ED} [data-answer-of="'+(q&&q.dataset.line)+'"] .t');
       const box=document.querySelector('${ED} [data-message-box]'), send=box&&box.querySelector('[data-act="ask"]');
-      return {folded, q:q&&q.innerText, qColor:q&&getComputedStyle(q).color, more:more&&getComputedStyle(more).display, cut:more&&more.dataset.cut, label:more&&more.innerText.trim(),
-        answerColor:answer&&getComputedStyle(answer).color, foot:foot&&foot.innerText.replace(/\\s+/g,' ').trim(), reply:!!(foot&&foot.querySelector('[data-act="reply"]')),
+      return {folded, q:q&&q.innerText, qColor:q&&getComputedStyle(q).color, more:more&&getComputedStyle(more).display, cut:more&&more.dataset.open, label:more&&more.innerText.trim(),
+        answerColor:answer&&getComputedStyle(answer).color, foot:foot&&[...foot.querySelectorAll('button')].map((b)=>b.getAttribute('aria-label')).join(' '), reply:!!(foot&&foot.querySelector('[data-act="reply"]')),
         field:!!document.querySelector('${ED} [data-followup]'), box:box&&{border:getComputedStyle(box).borderTopStyle,bg:getComputedStyle(box).backgroundColor,text:box.querySelector('.t').innerText.trim(),send:send&&getComputedStyle(send).backgroundColor,chip:(box.querySelector('[data-act="pick"]')||{}).textContent||null},
         top:document.querySelector('[data-fold-all]').textContent, footer:[...document.querySelectorAll('[data-doc-footer] button')].map((b)=>b.textContent)};
     })()`);
@@ -137,32 +137,35 @@ app.whenReady().then(async () => {
     assert.equal(card.q, '@bart do any of our agents use few-shot examples?', 'the question says @bart');
     assert.equal(card.qColor, 'rgb(23, 23, 23)');
     assert.equal(card.answerColor, 'rgb(38, 38, 38)', 'the answer is dark');
-    assert.deepEqual([card.more, card.cut, card.label], ['block', '1', 'Show more'], 'an answer there when the document opened starts cut off');
-    assert.ok(card.reply && card.foot.startsWith('Reply') && card.foot.endsWith('Opus · high · 23 s'), `the button row: ${card.foot}`);
-    assert.equal(card.field, false, 'no reply field until Reply');
+    // The @bart answer restyle (2026-10-15, David's reference): folded after its first paragraph, "Show more" (a paragraph
+    // follows its list, so what is hidden is not a list alone); the latest
+    // answer's icons (Copy, Regenerate, Delete) and its reply line under them.
+    assert.deepEqual([card.more, card.cut, card.label], ['block', '0', 'Show more'], 'an answer there when the document opened starts folded');
+    assert.ok(!card.reply && card.foot === 'Copy Regenerate Delete', `the icons: ${card.foot}`);
+    assert.equal(card.field, true, 'the latest answer\'s reply line');
     assert.deepEqual(card.box, { border: 'none', bg: 'rgb(250, 250, 250)', text: '@bart', send: 'rgb(236, 236, 236)', chip: 'Sonnet High' }, 'the @bart box');
     assert.deepEqual([card.top, card.footer], ['Collapse all', ['Copy', 'Build', 'Clear']], 'Collapse all at the top; Copy, Build and Clear under the page');
     await shot(wc, '2-open');
-    console.log(`PASS the open card: 3 folded lines, @bart, a dark answer cut off with Show more, "${card.foot}", the @bart box, Collapse all, and Copy, Build and Clear under the page`);
+    console.log(`PASS the open card: 3 folded lines, @bart, a dark answer folded with Show more, "${card.foot}" and the reply line, the @bart box, Collapse all, and Copy, Build and Clear under the page`);
 
     /* ------------------------------------------------ Show more, Show less */
     await press(wc, `${ED} [data-act="more"]`);
-    const opened = await js(wc, `(()=>{const m=document.querySelector('${ED} [data-more]');return{cut:m.dataset.cut||null,label:m.innerText.trim(),hidden:[...document.querySelectorAll('${ED} [data-answer-of]')].filter((r)=>getComputedStyle(r).display==='none').length}})()`);
-    assert.deepEqual(opened, { cut: null, label: 'Show less', hidden: 0 });
+    const opened = await js(wc, `(()=>{const m=document.querySelector('${ED} [data-more]');return{open:m.dataset.open,label:m.innerText.trim(),hidden:[...document.querySelectorAll('${ED} [data-answer-of]')].filter((r)=>getComputedStyle(r).display==='none').length}})()`);
+    assert.deepEqual(opened, { open: '1', label: 'Show less', hidden: 0 });
     await shot(wc, '3-show-more');
     await press(wc, `${ED} [data-act="more"]`);
-    assert.equal(await js(wc, `document.querySelector('${ED} [data-more]').dataset.cut`), '1', 'Show less cuts it again');
-    console.log('PASS Show more shows it whole, Show less cuts it again');
+    assert.equal(await js(wc, `document.querySelector('${ED} [data-more]').innerText.trim()`), 'Show more', 'Show less folds it again');
+    console.log('PASS Show more shows it whole, Show less folds it again');
 
     /* ------------------------------------------------ Reply opens the field; Escape with nothing typed shuts it */
-    await press(wc, `${ED} [data-act="reply"]`);
-    const field = await js(wc, `(()=>{const f=document.querySelector('${ED} [data-follow-input]');return f?{focused:document.activeElement===f,reply:!!document.querySelector('${ED} [data-act="reply"]')}:null})()`);
-    assert.deepEqual(field, { focused: true, reply: false }, 'the field, focused; Reply gone while it is open');
+    await press(wc, `${ED} [data-follow-input]`);
+    const field = await js(wc, `(()=>{const f=document.querySelector('${ED} [data-follow-input]');return f?{focused:document.activeElement===f,white:getComputedStyle(f.parentElement).backgroundColor}:null})()`);
+    assert.deepEqual(field, { focused: true, white: 'rgb(255, 255, 255)' }, 'the reply line, focused, a white box');
     await shot(wc, '4-reply');
     await key(wc, 'Escape');
-    await until(() => js(wc, `!document.querySelector('${ED} [data-follow-input]')`), 'the field shut');
-    assert.equal(await js(wc, `!!document.querySelector('${ED} [data-act="reply"]')`), true);
-    console.log('PASS Reply opens the field with the caret in it; Escape with nothing typed shuts it');
+    await pause(300);
+    assert.equal(await js(wc, `!!document.querySelector('${ED} [data-follow-input]')`), true, 'the latest answer\'s reply line stays');
+    console.log('PASS the latest answer\'s reply line takes the caret; Escape with nothing typed leaves it there');
 
     /* ------------------------------------------------ the strip under the page */
     await press(wc, '[data-copy-doc]', true);
@@ -179,8 +182,8 @@ app.whenReady().then(async () => {
     await key(wc, 'Enter', { ch: '\r' });
     await until(async () => !(await rows(wc)).some((l) => /^bart~> /.test(l)), 'the answer', 600);
     await pause(300);
-    const landed = await js(wc, `(()=>{const q=[...document.querySelectorAll('${ED} [data-line]')].find((d)=>d.dataset.raw==='@bart what does Discover do?');return{toggle:!!document.querySelector('${ED} [data-more="'+q.dataset.line+'"]'),hidden:[...document.querySelectorAll('${ED} [data-answer-of="'+q.dataset.line+'"]')].filter((r)=>getComputedStyle(r).display==='none'||r.style.maxHeight).length}})()`);
-    assert.deepEqual(landed, { toggle: false, hidden: 0 }, 'an answer that lands while the document is open is whole, with no Show more');
+    const landed = await js(wc, `(()=>{const q=[...document.querySelectorAll('${ED} [data-line]')].find((d)=>d.dataset.raw==='@bart what does Discover do?');const m=document.querySelector('${ED} [data-more="'+q.dataset.line+'"]');return{folded:!!m&&!!m.offsetHeight&&m.dataset.open==='0',hidden:[...document.querySelectorAll('${ED} [data-answer-of="'+q.dataset.line+'"]')].filter((r)=>getComputedStyle(r).display==='none'||r.style.maxHeight).length}})()`);
+    assert.deepEqual(landed, { folded: false, hidden: 0 }, 'an answer that lands while the document is open is whole (2026-10-15: open, its toggle Show less if it is long)');
     await shot(wc, '7-landed');
     console.log('PASS the @bart box sends; its answer lands in full');
 

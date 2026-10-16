@@ -180,7 +180,10 @@ test('an open titled conversation draws no title row; its question opens the car
   assert.ok(!/data-title-row|data-thread-row/.test(html));
   assert.ok(!html.replace(/ data-raw="[^"]*"/g, '').includes('Retry logic'), 'the title is not shown');
   assert.match(rowOf(html, 1), /border-radius:10px 10px 0 0/, 'the first question has the card\'s rounded top');
-  assert.ok(html.includes('data-act="foldall" data-turn="1" aria-label="Collapse" aria-expanded="true">'), 'the corner\'s Collapse is the conversation\'s (2026-10-15)');
+  // An @bart answer's corner (2026-10-15, David: back after the restyle took it off) and a click on its question both
+  // collapse the conversation.
+  assert.match(rowOf(html, 1), /data-fold-turn="1" style=/, 'a click on the question is the conversation\'s Collapse');
+  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="foldall" data-turn="1" aria-label="Collapse"/, 'its corner too');
   assert.ok(!html.includes('data-act="foldthread"'), 'not the conversation\'s');
   assert.deepEqual(m.lines(), lines, 'the `bart#` line is as it was');
   // Its only exchange: Collapse from the foot folds the conversation to one row, a link; an ⌥-click is a click, not a rename.
@@ -261,7 +264,7 @@ test('a conversation at work collapses all the same (2026-10-15, David): the que
   const lines = ['bart# Retry logic', '@chat why retry?', ...answer('because'), '@chat and more?', 'bart~> run1', ''];
   const m = mounted(lines);
   const html = m.html();
-  assert.match(html, /data-act="foldall" data-turn="1" aria-label="Collapse" aria-expanded="true">/, 'the conversation\'s Collapse, not disabled');
+  assert.match(rowOf(html, 1), /data-fold-turn="1" style=/, 'a click on its answered question collapses the conversation (no corner on an @bart answer, 2026-10-15)');
   assert.ok(!html.includes('Collapse once it answers'));
   const at = lines.indexOf('@chat and more?');
   const alone = mounted(['bart# Retry logic', '@chat why retry?', 'bart~> run1', '']).html();
@@ -391,34 +394,37 @@ test('a title with no question under it is the text it is; deleting a titled con
   assert.deepEqual(m.lines(), ['Notes', '', 'After']);
 });
 
-test('the card (2026-10-13): question 14px 16px, answer 12px under it in a 14px rule, button row 12px 10px 10px 16px closing it, 8px under a card; no reply field until Reply', () => {
+test('the card (2026-10-15, David\'s reference): question 14px 18px at 16px/1.5, answer 11px under it at 15px/1.55 in a 1.5px rule 12px from its text; the latest answer\'s icons 8px under it and its reply line closing the card; an older one keeps its icons in a row that takes no room, and no toolbar over it', () => {
   const html = mounted(['@chat first?', ...answer('one'), '@chat second?', ...answer('two'), '']).html();
-  assert.match(rowOf(html, 0), /padding:14px 16px 0px;background:#fafafa;border-radius:10px 10px 0 0/);
-  assert.match(rowOf(html, 0), /color:#171717/);
-  assert.match(rowOf(html, 1), /padding:12px 16px 0px;[^"]*color:#262626;font-size:16px;line-height:1\.65[^"]*"><span style="display:block;padding:2px 0 2px 14px;border-left:2px solid #d6d6d6"/);
-  assert.match(rowOf(html, 4), /padding:14px 16px 0px/, 'a question under an open answer');
-  assert.match(html, /padding:12px 10px 6px 16px/);
-  assert.match(html, /padding:12px 10px 10px 16px;background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:8px/);
-  assert.ok(!html.includes('data-followup=') && html.includes('data-act="reply" data-thread="0"'), 'Reply, no field');
+  assert.match(rowOf(html, 0), /padding:14px 18px 0px;background:#fafafa;border-radius:10px 10px 0 0;margin-bottom:0;font-size:16px;line-height:1\.5;color:#171717/);
+  assert.match(rowOf(html, 1), /padding:11px 18px 0;background:#fafafa;color:#262626;font-size:15px;line-height:1\.55[^"]*"><span style="display:block;padding:0px 0 0 12px;border-left:1\.5px solid #e6e6e6"/);
+  assert.match(rowOf(html, 4), /padding:31px 18px 0px/, 'a question under an open answer: under the hairline between turns (2026-10-15, test/doc-editor-turns)');
+  assert.match(html, /data-foot="0" data-turn-of="0" data-turn-tools="0" style="user-select:none;cursor:default;position:relative;height:0/, 'the older answer: its icons at its foot too, shown while it is pointed at');
+  assert.match(html, /data-foot="4" style="user-select:none;cursor:default;display:flex;align-items:center;padding:8px 12\.5px 0px;background:#fafafa/, 'the latest: its icons, 8px under it');
+  assert.match(html, /data-followup="0" style="user-select:none;padding:6px 18px 12px;background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:8px"><div class="chat-line" style="display:flow-root;border-top:1px solid #ececec;padding-top:10px">/, 'its reply line, 6px under them, closing the card');
+  assert.ok(!html.includes('data-act="reply"'), 'no Reply: the latest\'s reply line is there, and the older one is not its conversation\'s last');
+  assert.ok(!html.includes('chat-bar'), 'no toolbar over the older answer (2026-10-15, David)');
 });
 
-test('the button row (2026-10-13): Reply, Copy and Regenerate on the left; then Delete on the right, the closing line\'s words not drawn (2026-10-15), Collapse being in the question\'s corner (2026-10-15); the closing line is kept', () => {
+test('the button row (2026-10-15, David\'s reference): Copy and Regenerate on the left, Delete on the right, the closing line\'s words not drawn; Collapse in the question\'s corner, not here; the closing line is kept', () => {
   const footOf = (html) => { const at = html.indexOf('data-foot='); assert.ok(at >= 0, 'a foot is drawn'); const start = html.lastIndexOf('<div', at); return html.slice(start, html.indexOf('</div>', at) + 6); };
   const shown = (html) => html.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
   for (const [line, closing, meta] of [['@bart make the icons bigger', '*Build · Opus · high · 39 s*', 'Opus · high · 39 s'], ['@chat why retry?', '*Chat · Opus · high · 17 s*', 'Opus · high · 17 s'], ['@bart why retry?', '*Chat · 48 s · via Bart*', '48 s'], ['@chat why retry?', '*Opus · high · 9 s · moved up from Sonnet medium*', 'Opus · high · 9 s']]) {
     const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', line, 'bart> because', `bart> ${closing}`, ''];
     const m = mounted(lines), foot = footOf(m.html());
-    assert.equal(shown(foot), 'Reply', `${closing}: Reply, and not ${meta}`);
+    assert.equal(shown(foot), '', `${closing}: icons alone, and not ${meta}`);
     assert.ok(!foot.includes('data-foot-meta'), 'no meta');
-    assert.match(foot, /<button type="button" class="bart-reply" data-act="reply" data-thread="1"/, 'Reply');
-    assert.match(foot, /data-act="copybart" data-turn="1" aria-label="Copy"/, 'Copy');
-    assert.match(foot, /data-act="regen" data-turn="1" data-quiet="1" aria-label="Regenerate"/, 'Regenerate, opening no selector');
-    assert.ok(!foot.includes('data-act="fold"'), 'no Collapse here');
-    assert.match(rowOf(m.html(), 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="(?:foldall" data-turn="1|foldthread" data-row="0)" aria-label="Collapse" aria-expanded="true"[^>]*><svg[^>]*><path d="m7 20 5-5 5 5">/, 'Collapse, the fold icon, in the question\'s top right');
+    assert.ok(!foot.includes('data-act="reply"'), 'no Reply: the latest answer\'s reply line is under it');
+    assert.match(m.html(), /data-followup="1"/, 'its reply line');
+    assert.match(foot, /<button class="chat-ic" data-act="copybart" data-turn="1" aria-label="Copy"/, 'Copy');
+    assert.match(foot, /<button class="chat-ic" data-act="regen" data-turn="1" data-quiet="1" aria-label="Regenerate"/, 'Regenerate, opening no selector');
+    assert.ok(!foot.includes('data-act="fold'), 'no Collapse here');
+    assert.match(rowOf(m.html(), 1), /data-act="foldall" data-turn="1" aria-label="Collapse"/, 'it is in the question\'s corner');
+    assert.match(rowOf(m.html(), 1), /data-fold-turn="1"/, 'a click on the question collapses it');
     assert.match(foot, /data-act="dropturn" data-turn="1" aria-label="Delete"/, 'Delete');
-    const order = ['data-act="reply"', 'copybart', 'data-act="regen"', 'dropturn'].map((k) => foot.indexOf(k));
-    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'Reply, Copy, Regenerate, Delete');
-    assert.match(foot, /<span style="margin-left:auto"><\/span><span style="flex:none;position:relative;display:inline-flex;"><button class="bart-ic" data-danger="1" data-act="dropturn"/, 'Delete pushed right');
+    const order = ['copybart', 'data-act="regen"', 'dropturn'].map((k) => foot.indexOf(k));
+    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'Copy, Regenerate, Delete');
+    assert.match(foot, /<span style="flex:none;position:relative;display:inline-flex;margin-left:auto"><button class="chat-ic" data-act="dropturn"/, 'Delete pushed right');
     assert.ok(!foot.includes('editturn') && !foot.includes('footbuild'), 'no Edit, no Build');
     assert.equal(m.lines()[3], `bart> ${closing}`, 'the closing line in the file is as it was');
   }
@@ -433,15 +439,17 @@ test('the follow-up field says @bart whichever agent answered, since what is typ
   for (const line of ['@chat why retry?', '@discover retries', '@brainstorm a plan']) {
     const m = mounted([line, ...answer('x'), '']);
     m.props.onRoute = () => {};
-    assert.ok(!m.html().includes('data-followup='), `${line}: shut until Reply`);
-    m.click('reply', { thread: '0' });
+    // The latest @bart answer's reply line is always there (2026-10-15, David's reference); another agent's opens on Reply.
+    const chat = line.startsWith('@chat');
+    if (chat) assert.ok(m.html().includes('data-followup='), `${line}: there already`);
+    else { assert.ok(!m.html().includes('data-followup='), `${line}: shut until Reply`); m.click('reply', { thread: '0' }); }
     const routed = field(m.html());
-    assert.match(routed, /font-size:16px;line-height:24px">@bart<\/span>/, `${line}: @bart`);
+    assert.match(routed, chat ? /color:#8f8f8f;font:500 14\.5px\/24px var\(--font-sans\)">@bart<\/span>/ : /font-size:16px;line-height:24px">@bart<\/span>/, `${line}: @bart`);
     assert.ok(!/>@(chat|discover|brainstorm)</.test(routed), `${line}: not the agent that answered`);
-    assert.match(routed, /placeholder="Respond…"/);
+    assert.match(routed, chat ? /placeholder="Reply…"/ : /placeholder="Respond…"/);
     delete m.props.onRoute;
     const token = line.split(' ')[0];
-    assert.match(field(m.html()), new RegExp(`line-height:24px">${token}</span>`), `${line}: no router, it asks ${token}`);
+    assert.match(field(m.html()), new RegExp(`(?:line-height:24px|/24px var\\(--font-sans\\))">${token}</span>`), `${line}: no router, it asks ${token}`);
   }
 });
 
@@ -516,7 +524,7 @@ test('a follow-up collapses the turns before it but the last (2026-10-14: the tw
     }
     assert.ok(rowOf(html, 1).includes('why retry?') && rowOf(html, second).includes('and timeouts, and what happens'), `${tag}: the questions, as said`);
     const asked = third + 1 + answer('x').length;
-    assert.match(rowOf(html, asked), /padding:\d+px 16px 0px;background:#fafafa;border-radius:0 0 0 0/, `${tag}: the new question goes on in the same card, under the open turn`);
+    assert.match(rowOf(html, asked), /padding:\d+px 1[68]px 0px;background:#fafafa;border-radius:0 0 0 0/, `${tag}: the new question goes on in the same card, under the open turn`);
     // Folded lines at the top of the card, 6px apart, then 18px to the question.
     assert.match(rowOf(html, 1).slice(0, 600), /padding:14px 16px 6px;background:#fafafa;border-radius:10px 10px 0 0/, `${tag}: the first at the card's top, 6px under it`);
     assert.match(rowOf(html, second).slice(0, 600), /padding:0px 16px 18px/, `${tag}: 18px under the last`);
@@ -532,7 +540,7 @@ test('a follow-up collapses the turns before it but the last (2026-10-14: the tw
   m.click('fold', { turn: '1' });
   assert.ok(m.lines().slice(2, second).every((l) => /^bart>/.test(l)));
   const open = m.html();
-  assert.match(rowOf(open, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="foldall" data-turn="1" aria-label="Collapse"/, 'open again, its question\'s corner collapses the conversation (2026-10-15)');
+  assert.match(rowOf(open, 1), /data-fold-turn="1" style=/, 'open again, a click on its question collapses the conversation (an @bart answer has no corner since 2026-10-15)');
   assert.ok(open.includes('because') && open.includes('data-foot="1"'), 'its answer and foot are drawn');
   assert.ok(!rowOf(open, 1).includes('data-folded-row'), 'its question is a question row again');
   assert.ok(rowOf(open, second).includes('data-folded-row'), 'the other stays one row');
@@ -825,8 +833,7 @@ test('a click that expands a collapsed conversation, or its last exchange, opens
   // An earlier exchange expanded opens nothing: the field is the conversation's last exchange's.
   const two = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because').map((l) => l.replace(/^bart>/, 'bart+>')), '@chat and more?', ...answer('more'), '']);
   two.click('fold', { turn: '1' });
-  assert.equal(field(two), null);
-  assert.equal(two.editor.replyFocus, null);
+  assert.equal(two.editor.replyFocus, null, 'nothing takes the keyboard (the latest @bart answer\'s reply line is there already, 2026-10-15)');
 });
 
 test('a question asked on a line: once answered, its reply field opens, with the keyboard in it unless the person clicked, typed or scrolled meanwhile (2026-10-15)', () => {
@@ -852,4 +859,35 @@ test('a question asked on a line: once answered, its reply field opens, with the
     assert.ok(moved.field, `${why}: the field still opens`);
     assert.equal(moved.input.focused, 0, `${why}: the keyboard stays where they put it`);
   }
+});
+
+test('an @bart answer\'s fold (2026-10-15, David\'s reference): its first paragraph, then "N more points" when a list is hidden, else "Show more"; open, "Show less"; none when nothing follows the paragraph', () => {
+  const list = replyLines('Mostly this.\n\n- **One:** a\n- **Two:** b\n  - nested\n- **Three:** c', { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: true });
+  const m = mounted(['@chat what have we been working on', ...list, '']);
+  const more = (html) => { const at = html.indexOf('data-chat-more='); return at < 0 ? '' : html.slice(html.lastIndexOf('<div', at), html.indexOf('</div>', at) + 6); };
+  let toggle = more(m.html());
+  assert.match(toggle, /data-split="2" data-open="0"/, 'there when the document opened: folded, from the blank line after the paragraph');
+  assert.match(toggle, />3 more points<span style="display:inline-flex;color:#8f8f8f"><svg width="12"/, 'three top-level items, the chevron 12px');
+  m.click('more', { key: /data-key="([^"]+)"/.exec(toggle)[1], open: '0' });
+  toggle = more(m.html());
+  assert.ok(/data-open="1"/.test(toggle) && />Show less</.test(toggle), 'opened: Show less');
+  const prose = replyLines('First.\n\nThen a second paragraph.\n\n- a list after it', { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: true });
+  assert.match(more(mounted(['@chat x?', ...prose, '']).html()), />Show more</, 'not only a list hidden: Show more');
+  assert.equal(more(mounted(['@chat x?', ...answer('just one paragraph'), '']).html()), '', 'nothing after the paragraph: no toggle');
+});
+
+test('the latest @bart exchange (2026-10-15): the one asked last, kept once it answers; else the last in the document', async () => {
+  const { threads } = await doc();
+  const m = mounted(['@chat one?', ...answer('a'), '', '@chat two?', ...answer('b'), '']);
+  assert.equal(m.editor.latestTurn(m.lines(), threads(m.lines())), 5, 'none seen asked: the last');
+  const n = mounted(['@chat one?', `bart~> ${(Date.now() - 5000).toString(36)}-old`, '', '@chat two?', ...answer('b'), '']);
+  assert.equal(n.editor.latestTurn(n.lines(), threads(n.lines())), 0, 'the run at work is the latest, wherever it stands');
+  n.props.text = ['@chat one?', ...answer('a'), '', '@chat two?', ...answer('b'), ''].join('\n');
+  assert.equal(n.editor.latestTurn(n.lines(), threads(n.lines())), 0, 'answered, it stays the latest: kept by its question');
+});
+
+test('a line not sent yet is not the latest exchange (2026-10-15): the answer above it keeps its icons and reply line', () => {
+  const html = mounted(['@chat one?', ...answer('a'), '', '@bart', '']).html();
+  assert.match(html, /data-foot="0" style="user-select:none;cursor:default;display:flex/, 'its icons');
+  assert.match(html, /data-followup="0"/, 'its reply line');
 });

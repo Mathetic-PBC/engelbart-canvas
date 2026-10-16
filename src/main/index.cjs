@@ -1285,7 +1285,8 @@ if (!hasSingleInstanceLock) {
         return true;
       },
       writeClipboard: (text) => clipboard.writeText(text),
-      writeImage: (buf) => { const img = require('electron').nativeImage.createFromBuffer(buf); if (img.isEmpty()) return false; clipboard.writeImage(img); return true; },
+      // Electron 44's clipboard is the W3C one (write([ClipboardItem]), async): writeImage is gone, so the picture goes as a PNG.
+      writeImage: async (buf) => { const img = require('electron').nativeImage.createFromBuffer(buf); if (img.isEmpty()) return false; await clipboard.write([new (require('electron').ClipboardItem)({ 'image/png': new Blob([img.toPNG()], { type: 'image/png' }) })]); return true; },
       bart,
       builds,
       sandbox,

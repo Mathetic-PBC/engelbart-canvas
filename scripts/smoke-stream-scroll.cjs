@@ -179,7 +179,7 @@ app.whenReady().then(async () => {
     ];
     for (const c of cases) {
       await mount(c.lines, { route: c.route });
-      await js(`(()=>{document.querySelector('[data-act="reply"]').click();return true})()`); // the field is shut until Reply (2026-10-13)
+      await js(`(()=>{const r=document.querySelector('[data-act="reply"]');if(r)r.click();return true})()`); // shut until Reply (2026-10-13), but the latest @bart answer's is always there (2026-10-15)
       await pause(100);
       // The field brought to the lower part of the pane, as after reading the long answer down to it.
       const field = await js(`(()=>{const f=document.querySelector('[data-follow-input]');const p=f.closest('[style*="overflow: auto"]');p.scrollTop+=f.getBoundingClientRect().top-p.getBoundingClientRect().top-p.clientHeight*0.7;return{top:f.getBoundingClientRect().top,from:f.dataset.followInput}})()`);
@@ -201,7 +201,7 @@ app.whenReady().then(async () => {
     }
     // Sent with the field off screen, the pane is left as it is.
     await mount(convo(), { route: false });
-    await js(`(()=>{document.querySelector('[data-act="reply"]').click();return true})()`); // the field is shut until Reply (2026-10-13)
+    await js(`(()=>{const r=document.querySelector('[data-act="reply"]');if(r)r.click();return true})()`); // shut until Reply (2026-10-13), but the latest @bart answer's is always there (2026-10-15)
     await pause(100);
     await scrollPane(0); await pause(80);
     const off = await js(`(()=>{const f=document.querySelector('[data-follow-input]');const p=f.closest('[style*="overflow: auto"]');return f.getBoundingClientRect().top>p.getBoundingClientRect().bottom})()`);

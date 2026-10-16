@@ -999,27 +999,27 @@ function rowOf(html, i) {
 const clickAct = (m, dataset, disabled = false) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset, disabled, closest: () => null } : null) }, preventDefault() {} });
 const TITLED = ['bart# [chat 2026-10-13T09:00:00Z] Retry logic', '@chat why retry?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*', ''];
 
-test('a conversation\'s Collapse is in its first open question\'s corner, the fold icon (2026-10-15, David), and collapses all of it; a click on any open question does the same', () => {
-  // Titled, its only exchange: the corner's Collapse collapses the conversation to its title's row.
+test('a click on an open @bart question collapses all of its conversation (2026-10-15, David), as its corner\'s Collapse (foldall) does', () => {
+  // Titled, its only exchange: a click on its question (foldall) collapses the conversation to its title's row.
   const titled = mounted(TITLED);
   const html = titled.editor.editorHtml();
   assert.ok(!rowOf(html, 1).includes('data-chip'), 'no chip beside an answered question');
-  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="foldall" data-turn="1" aria-label="Collapse" aria-expanded="true"><svg[^>]*><path d="m7 20 5-5 5 5">/, 'its Collapse, top right, the fold icon');
+  assert.ok(rowOf(html, 1).includes('data-corner="1"') && rowOf(html, 1).includes('data-fold-turn="1"'), 'its corner, and a click on the question, collapse it');
   assert.ok(!/data-foot="1"[^>]*>(?:(?!<\/div><div data-line)[\s\S])*data-act="fold"/.test(html), 'not on the button row');
   clickAct(titled, { act: 'foldall', turn: '1' });
   assert.equal(titled.lines()[0], 'bart#+ [chat 2026-10-13T09:00:00Z] Retry logic', 'collapsed to its title');
   assert.deepEqual(titled.lines().slice(1), TITLED.slice(1), 'its exchange is not folded as well');
-  // Titled, two answered: the corner is on the first alone, and either collapses the whole conversation.
+  // Titled, two answered: either question collapses the whole conversation.
   const twoLines = [...TITLED.slice(0, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', ''];
   const two = mounted(twoLines), drawn = two.editor.editorHtml();
-  assert.ok(rowOf(drawn, 1).includes('data-corner="1"') && !rowOf(drawn, 4).includes('data-corner'), 'one Collapse, on the first question');
+  assert.ok(rowOf(drawn, 1).includes('data-fold-turn="1"') && rowOf(drawn, 1).includes('data-corner="1"') && !rowOf(drawn, 4).includes('data-corner'), 'the first can be clicked, and has the corner; the second has none');
   assert.match(rowOf(drawn, 4), /data-fold-turn="4"/, 'the second can still be clicked');
   clickAct(two, { act: 'foldall', turn: '4' });
   assert.match(two.lines()[0], /^bart#\+ /, 'the conversation collapses');
   assert.deepEqual(two.lines().slice(1), twoLines.slice(1), 'its exchanges as they were');
   // Untitled: every answered exchange of it folds.
   const untitled = mounted([...TITLED.slice(1, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', '']);
-  assert.match(rowOf(untitled.editor.editorHtml(), 0), /data-corner="0"[^>]*><button class="bart-ic" data-act="foldall" data-turn="0"/);
+  assert.match(rowOf(untitled.editor.editorHtml(), 0), /data-fold-turn="0"/);
   clickAct(untitled, { act: 'foldall', turn: '0' });
   assert.match(untitled.lines()[1], /^bart\+> because$/, 'the first folded');
   assert.match(untitled.lines()[4], /^bart\+> those too$/, 'and the second');
@@ -1050,7 +1050,7 @@ test('three turns, the first two folded: two one-line rows (no foot, no answer),
   }
   assert.ok(!drawn.includes('because') && !drawn.includes('it depends'), 'no answer text');
   assert.ok(rowOf(html, 3).includes(long.slice(0, 60)), 'the long question, in its one line');
-  assert.match(rowOf(html, 6), /padding:0px 16px 0px;background:#fafafa;border-radius:0 0 0 0/, 'the open turn goes on in the same card, under the folded lines (2026-10-13)');
+  assert.match(rowOf(html, 6), /padding:0px 18px 0px;background:#fafafa;border-radius:0 0 0 0/, 'the open turn goes on in the same card, under the folded lines (2026-10-13; 18px in since 2026-10-15)');
   assert.match(rowOf(html, 0), /padding:14px 16px 6px;background:#fafafa;border-radius:10px 10px 0 0/, 'the folded lines open the card');
   assert.ok(drawn.includes('exponential') && html.includes('data-foot="6"'));
   clickAct(m, { act: 'fold', turn: '3' });

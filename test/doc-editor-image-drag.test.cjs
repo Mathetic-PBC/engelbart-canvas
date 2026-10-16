@@ -77,9 +77,10 @@ test('an image shows the grab cursor, not the zoom one; a read-only document kee
   assert.match(mounted(['Notes', IMG, 'End'], { readOnly: true }).html(), /<img data-img="1"[^>]*cursor:zoom-in"/);
 });
 
-test('click, hold and drag: the image follows the pointer, a blue line shows where it lands, letting go moves its line there; a click without a move still opens it large', () => {
+test('click, hold and drag: a small copy of the image follows the pointer, a blue line shows where it lands, letting go moves its line there; a click without a move still opens it large', () => {
   const m = mounted(['Notes', IMG, 'one', 'two', 'three', '']);
-  const pic = { dataset: { img: '1' }, style: {}, getBoundingClientRect: () => ({ left: 100, top: 40 }), cloneNode: () => ({ style: {}, removeAttribute() {}, remove() {} }) };
+  const clones = [];
+  const pic = { dataset: { img: '1' }, style: {}, getBoundingClientRect: () => ({ left: 100, top: 40, width: 600, height: 400 }), cloneNode: () => { const c = { style: {}, removeAttribute() {}, remove() {} }; clones.push(c); return c; } };
   m.editor.startImgDrag({ clientX: 120, clientY: 50 }, pic);
   m.listeners.mousemove({ clientX: 121, clientY: 51 });
   assert.equal(m.made.length, 0, 'a twitch is not a drag');
@@ -87,7 +88,9 @@ test('click, hold and drag: the image follows the pointer, a blue line shows whe
   const bar = m.made[0];
   assert.ok(bar && bar.style.background === '#0070f3' && bar.style.display === 'block', 'the blue line');
   assert.equal(bar.style.top, '159px', 'at the top of line 4, the nearest place');
-  assert.equal(pic.style.opacity, '0.35', 'the image left behind, faint');
+  assert.equal(pic.style.opacity, '0.3', 'the image left behind, faint');
+  assert.equal(clones[0].style.width, '220px', 'what follows the pointer is a small copy, at most 220px wide');
+  assert.equal(clones[0].style.opacity, '1', 'and solid');
   m.listeners.mouseup();
   assert.deepEqual(m.lines(), ['Notes', 'one', 'two', IMG, 'three', '']);
   assert.ok(bar.removed && pic.style.opacity === '', 'the line goes, the image is whole again');

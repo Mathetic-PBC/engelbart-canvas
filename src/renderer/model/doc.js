@@ -477,7 +477,9 @@ export function tokShown(tok, opts) {
   if (tok === BUILD_TOKEN) return { shown: '', pre: 1, unit: true }; // the hammer: a drawing, no text
   const math = mathOf(tok);
   if (math) { const r = renderMath(math.tex, math.display); return r ? { shown: r.shown, pre: 1, unit: true } : { shown: tok, pre: 0 }; }
-  const attachment = tok.match(ATTACH_RE); if (attachment) return { shown: `[${attachment[1] || 'Attachment'}]`, pre: 1 };
+  // A pasted image is one unit too (2026-10-15, David): its source (`![Attachment 1](img:<id>)`) is never shown, not even
+  // with the caret beside it, and the caret stands before or after it, never inside.
+  const attachment = tok.match(ATTACH_RE); if (attachment) return { shown: `[${attachment[1] || 'Attachment'}]`, pre: 1, unit: true };
   // Bold may hold a link or a mention (an @discover guide's titles, 2026-09-30): what shows is what they show.
   if (tok.startsWith('**') && tok.endsWith('**') && tok.length > 4) return { shown: tok.slice(2, -2).split(INLINE).filter(Boolean).map((inner) => tokShown(inner, opts).shown).join(''), pre: 2 };
   if (tok.startsWith('`') && tok.endsWith('`') && tok.length > 2) return { shown: tok.slice(1, -1), pre: 1 };

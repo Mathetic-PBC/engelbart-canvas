@@ -322,7 +322,7 @@ test('Chat writes a Build prompt only when asked, or when Bart routed a build to
   assert.match(BART_SYSTEM_PROMPT, /- if they explicitly asked you to implement something you cannot execute, say so briefly and give the minimum useful next step/);
 });
 
-test('Chat has nine examples of response shape, and three for the highlight box (2026-10-13)', () => {
+test('Chat has ten examples of response shape (the tenth a recap, 2026-10-15), and three for the highlight box (2026-10-13)', () => {
   const at = (s) => BART_SYSTEM_PROMPT.indexOf(s);
   const examples = at('# Examples of response shape');
   const highlight = at('# Asked from a highlight');
@@ -337,6 +337,7 @@ test('Chat has nine examples of response shape, and three for the highlight box 
     'which agent task should I start with?',
     'do we support Arc?',
     'should Chat and Build be separate?',
+    'where did we land on this?',
   ]) assert.ok(at(`Person:\n${person}\n\nChat:\n`) > examples && at(person) < at('# What you are given'), person);
   assert.ok(at('never reuse them as facts in another conversation') > examples, 'the examples say their facts are not facts');
   assert.ok(highlight < at('Q: what does .726 mean here?') && at('Q: what does .726 mean here?') < moveUp, 'the box examples sit under "# Asked from a highlight"');

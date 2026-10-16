@@ -408,9 +408,13 @@ test('Send to Discover is not drawn after @bart or @discover answers, under a re
   bart.editor.discoverText.set('t0', 'x');
   bart.editor.sendDiscover('t0');
   assert.deepEqual(bart.asks, [], 'a target that is not drawn sends nothing');
-  assert.ok(!bart.editor.editorHtml().includes('aria-label="Ask a follow-up"'), 'the follow-up field is shut until Reply (2026-10-13)');
-  bart.editor.replyOpen.add(0);
-  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, '@bart\'s follow-up field, once Reply opened it');
+  // The latest @bart answer's reply line is always there (2026-10-15, David's reference); an older one's is shut until Reply.
+  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, 'the latest answer\'s reply line');
+  const two = mounted(['@bart why?', 'bart> because', 'bart> *Sonnet · high · 3 s*', '', '@bart how?', 'bart> so', 'bart> *Sonnet · high · 3 s*', '']);
+  assert.equal((two.editor.editorHtml().match(/aria-label="Ask a follow-up"/g) || []).length, 1, 'the older answer\'s is shut until Reply');
+  assert.match(two.editor.editorHtml(), /data-foot="0"[^>]*>(?:(?!<\/div>)[\s\S])*data-act="reply" data-thread="0" aria-label="Reply"/, 'its Reply is in its icons at the bottom');
+  two.editor.replyOpen.add(0);
+  assert.equal((two.editor.editorHtml().match(/aria-label="Ask a follow-up"/g) || []).length, 2, 'the older answer\'s, once Reply opened it');
 });
 
 test('the @ menu no longer offers Orient: the editor, the rail model and the workspace list Bart, Chat, Brainstorm and Discover; the rail names no Orient (M-01)', async () => {
