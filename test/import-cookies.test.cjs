@@ -416,11 +416,30 @@ test('a Chromium profile\'s Chrome account (info_cache user_name) comes with its
 test('check(domain): the check page alone, over the Stage\'s session: signed in, signed out, no answer, none known (2026-10-12)', async () => {
   const { support, userData } = makeMachine();
   const make = (script) => mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), request: fakeRequest(script), keychain: async () => { throw new Error('no Keychain for a check'); }, checkTimeoutMs: 50 });
-  assert.equal(await make({ 'https://myaccount.google.com/': 200 }).check('google.com'), true);
-  assert.equal(await make({ 'https://myaccount.google.com/': { status: 302, location: 'https://accounts.google.com/ServiceLogin' } }).check('google.com'), false);
-  assert.equal(await make({ 'https://myaccount.google.com/': 'hang' }).check('google.com'), null, 'timed out');
+  assert.equal(await make({ 'https://drive.google.com/drive/u/0/': 200 }).check('google.com'), true);
+  assert.equal(await make({ 'https://drive.google.com/drive/u/0/': { status: 302, location: 'https://accounts.google.com/ServiceLogin' } }).check('google.com'), false);
+  assert.equal(await make({ 'https://drive.google.com/drive/u/0/': 'hang' }).check('google.com'), null, 'timed out');
   assert.equal(await make({}).check('google.com'), null, 'offline');
   assert.equal(await make({}).check('chatgpt.com'), null, 'no check page');
+});
+
+test('check(domain): a site declining to answer is not "signed out" (2026-10-16: Google answered every Electron request to myaccount.google.com with a 429 "unusual traffic" page, so a live Drive sign-in was dropped)', async () => {
+  const { support, userData } = makeMachine();
+  const make = (script) => mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), request: fakeRequest(script), keychain: async () => { throw new Error('no Keychain for a check'); }, checkTimeoutMs: 50 });
+  const google = 'https://drive.google.com/drive/u/0/';
+  assert.equal(await make({ [google]: 429 }).check('google.com'), null, '429: not confirmed');
+  assert.equal(await make({ [google]: 503 }).check('google.com'), null, '5xx: not confirmed');
+  assert.equal(await make({ 'https://www.overleaf.com/project': 429 }).check('overleaf.com'), null, 'the rule is every site\'s, not Google\'s');
+  assert.equal(await make({ 'https://www.overleaf.com/project': 200 }).check('overleaf.com'), true);
+  // Google's login pages are the signed-out answer; a redirect anywhere else says nothing either way.
+  for (const login of ['https://accounts.google.com/ServiceLogin?service=wise&continue=https://drive.google.com/', 'https://accounts.google.com/v3/signin/identifier?flowName=GlifWebSignIn', 'https://accounts.google.com/signin/v2/identifier']) {
+    assert.equal(await make({ [google]: { status: 302, location: login } }).check('google.com'), false, login);
+  }
+  assert.equal(await make({ [google]: { status: 302, location: 'https://drive.google.com/drive/u/1/' } }).check('google.com'), null, 'a redirect that is not to a login page');
+  assert.equal(await make({ [google]: { status: 302, location: 'https://www.google.com/sorry/index' } }).check('google.com'), null, 'a bot check is not a sign-out');
+  const asked = fakeRequest({ [google]: 200 });
+  await mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), request: asked, keychain: async () => { throw new Error('none'); } }).check('google.com');
+  assert.deepEqual(asked.requests.map((r) => r.options.url), [google], 'Google\'s check page is Drive\'s own, not myaccount.google.com');
 });
 
 test('domains lists domain and count only, with the pre-ticked defaults, and no Keychain', () => {
@@ -439,7 +458,7 @@ test('domains lists domain and count only, with the pre-ticked defaults, and no 
 test('import writes the ticked domains into the session, calls flushStore, and returns counts only', async () => {
   const { support, userData } = makeMachine();
   const session = fakeSession();
-  const request = fakeRequest({ 'https://github.com/settings/profile': 200, 'https://myaccount.google.com/': { status: 302 } });
+  const request = fakeRequest({ 'https://github.com/settings/profile': 200, 'https://drive.google.com/drive/u/0/': { status: 302 } });
   const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => session, request, keychain: async () => PASSWORD, now: () => new Date('2026-10-06T00:00:00Z') });
   const result = await importer.import({ browser: 'brave', profile: 'Default', domains: ['github.com', 'google.com'] });
 
@@ -512,7 +531,7 @@ test('the GitHub check: no session cookie skips the request; a redirect to /logi
   const { support, userData } = makeMachine();
 
   // Signed out in GitHub's own terms: the page went to /login (endedGithubSession). Overleaf's check hangs.
-  const request = fakeRequest({ 'https://github.com/settings/profile': { status: 302, location: 'https://github.com/login?return_to=%2Fsettings%2Fprofile' }, 'https://myaccount.google.com/': 'cancel' });
+  const request = fakeRequest({ 'https://github.com/settings/profile': { status: 302, location: 'https://github.com/login?return_to=%2Fsettings%2Fprofile' }, 'https://drive.google.com/drive/u/0/': 'cancel' });
   const importer = mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), request, keychain: async () => PASSWORD, checkTimeoutMs: 50 });
   const result = await importer.import({ browser: 'brave', profile: 'Default', domains: ['github.com', 'google.com'] });
   assert.equal(result.checks.find((c) => c.site === 'GitHub').signedIn, false);
@@ -529,7 +548,7 @@ test('the GitHub check: no session cookie skips the request; a redirect to /logi
   assert.equal(quiet.requests.length, 0, 'no request for a sign-in that is not there');
 
   // Every check hangs: the import still finishes, about one timeout later, not one per site.
-  const hanging = fakeRequest({ 'https://github.com/settings/profile': 'hang', 'https://myaccount.google.com/': 'hang' });
+  const hanging = fakeRequest({ 'https://github.com/settings/profile': 'hang', 'https://drive.google.com/drive/u/0/': 'hang' });
   const started = Date.now();
   const slow = await mod.createCookieImport({ supportDir: support, userDataDir: userData, getSession: () => fakeSession(), request: hanging, keychain: async () => PASSWORD, checkTimeoutMs: 80 })
     .import({ browser: 'brave', profile: 'Default', domains: ['github.com', 'google.com'] });

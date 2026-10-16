@@ -20,7 +20,7 @@
 
 // A copy is held only once it works (2026-10-12, "make Chrome sign-ins dependable"): a cookie can be there for a sign-in
 // Google has since ended, which read "✓ Signed in" and then failed in the run. An app whose site has a check page
-// (../browser/import-cookies.cjs SIGN_IN_CHECKS: Google's is myaccount.google.com) has that page asked for over Engelbart's
+// (../browser/import-cookies.cjs SIGN_IN_CHECKS: Google's is Drive's own page) has that page asked for over Engelbart's
 // browser after a copy, and whenever a copy already there is about to be counted. Signed in: held. Signed out: dropped,
 // copied again from the browser (which may have signed in anew since), and checked again; still signed out, not signed in.
 // No answer (offline, too slow): held, and said (`unchecked`), never waited on longer than the check's own limit. One

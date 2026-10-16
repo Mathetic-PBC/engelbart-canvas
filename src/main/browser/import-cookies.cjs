@@ -378,9 +378,24 @@ function normalizeFirefox({ rows }, { want = null, now = nowSeconds() } = {}) {
 // holds none of GITHUB_SESSION_COOKIES (nothing to be signed in with, so the page is not even asked for), or the page was
 // sent to GitHub's /login (endedGithubSession). A GitHub redirect anywhere else (a device check, say) is not one GitHub
 // means as signed out, so it comes back null: not confirmed either way.
+//
+// Google's is Drive's own page (2026-10-16, tried against Electron 44.4.1): myaccount.google.com answered every net.request,
+// signed in or out, with a 429 "unusual traffic" page, so a live sign-in read as signed out and was dropped (curl got a 302
+// to /intro, so it was the client, not the network). Drive's page answers both ways in one request: 200 signed in, a 302
+// to accounts.google.com/ServiceLogin signed out. A redirect anywhere else (a bot check, say) is not confirmed either way.
+const GOOGLE_LOGIN_PATH = /^\/(?:ServiceLogin|signin|v\d+\/signin|AccountChooser)(?:[/?]|$)/i;
+
+/** A Google page redirected to Google's own sign-in page: Google no longer takes the sign-in the browser holds. */
+function endedGoogleSession(_from, to) {
+  try {
+    const login = new URL(to);
+    return login.protocol === 'https:' && login.hostname === 'accounts.google.com' && GOOGLE_LOGIN_PATH.test(login.pathname);
+  } catch { return false; }
+}
+
 const SIGN_IN_CHECKS = [
   { site: 'GitHub', domain: 'github.com', url: 'https://github.com/settings/profile', sessionCookies: GITHUB_SESSION_COOKIES, signedOut: endedGithubSession },
-  { site: 'Google', domain: 'google.com', url: 'https://myaccount.google.com/' },
+  { site: 'Google', domain: 'google.com', url: 'https://drive.google.com/drive/u/0/', signedOut: endedGoogleSession },
   { site: 'Overleaf', domain: 'overleaf.com', url: 'https://www.overleaf.com/project' },
   { site: 'Zotero', domain: 'zotero.org', url: 'https://www.zotero.org/settings/' },
 ];
@@ -413,6 +428,8 @@ function checkResult(check, response, held = null) {
     return false;
   }
   const status = Number(response.status) || 0;
+  // A site declining to answer (rate-limited, bot-checked, down) says nothing about the sign-in: not confirmed, never "signed out".
+  if (status === 429 || status >= 500) return null;
   return status >= 200 && status < 300;
 }
 
