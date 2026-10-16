@@ -263,6 +263,21 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
   }
 
   /**
+   * Every sign-in still waiting in the browser ended, for a quit (../index.cjs requestQuit): its terminal is outside the
+   * session manager, and a PTY whose exit lands while Node is shutting down aborts the app (node-pty's exit callback,
+   * a Napi::Error at FreeEnvironment; seen 2026-10-16). Resolves once each has exited, or after `timeoutMs`.
+   */
+  async function stopSignIns({ timeoutMs = 3000 } = {}) {
+    const runs = [...signIns.values()];
+    for (const run of runs) run.kill();
+    if (!runs.length) return 0;
+    let timer = null;
+    await Promise.race([Promise.allSettled(runs.map((run) => run.done)), new Promise((resolve) => { timer = setTimer(resolve, timeoutMs); })]);
+    clearTimer(timer);
+    return runs.length;
+  }
+
+  /**
    * The CLI's own logout, then a check of that tool: the record (and every row) says Not signed in once the CLI does.
    * → { ok, error }. Not while it signs in or anything else runs for it.
    */
@@ -357,7 +372,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     ];
   }
 
-  return { start, check, update, install, connect, signIn, cancelSignIn, signOut, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
+  return { start, check, update, install, connect, signIn, cancelSignIn, stopSignIns, signOut, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
 }
 
 module.exports = { createTools, STALE_MS, RETRY_UPDATE_MS };

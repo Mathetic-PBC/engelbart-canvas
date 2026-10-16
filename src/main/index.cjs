@@ -271,6 +271,7 @@ async function requestQuit({ update = false, relaunch = false } = {}) {
       await ctx.browserViews.flush().catch(() => {});
       await ctx.postItViews.activate(null);
     }
+    if (tools) await tools.stopSignIns(); // a Claude Code or Codex sign-in still in the browser (Connect): its own terminal
     if (manager) await manager.shutdown();
     if (store) await store.close();
   } catch (error) {

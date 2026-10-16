@@ -57,3 +57,30 @@ test('a CLI found where PATH does not reach signs in with its folder on PATH (Cl
   const exit = await Promise.race([signIn('claude', cli).done, new Promise((_, reject) => setTimeout(() => reject(new Error('sign-in did not end')), 8000))]);
   assert.deepEqual(exit, { code: 0, output: '' });
 });
+
+test('a quit ends a sign-in still waiting in the browser and waits for its terminal to exit (2026-10-16)', async (t) => {
+  // node-pty's exit callback landing while Node shuts down aborts the app (a Napi::Error at FreeEnvironment), and the
+  // sign-in's terminal is outside the session manager the quit closes: ../src/main/index.cjs requestQuit asks the tools
+  // manager to end it first.
+  const { createTools } = require('../src/main/tools/manager.cjs');
+  const { createFakeTools } = require('../src/main/tools/fake.cjs');
+  const { bin, environment } = fixture(t);
+  const waiting = path.join(bin, 'claude');
+  fs.writeFileSync(waiting, '#!/bin/sh\necho "Opening the browser to sign in…"\nsleep 60\n', { mode: 0o755 });
+  const fake = createFakeTools({ claude: '2.1.300 signed-out', codex: 'missing' }, { delayMs: 0, sleep: async () => {} });
+  const real = createSignInProcess({ pty, shell: '/bin/zsh', environment });
+  let pretend = {};
+  // the real sign-in terminal, running the stand-in where the pretend Mac says Claude Code is
+  const tools = createTools({ readTools: () => pretend, writeTools: (value) => { pretend = value; return null; }, detect: fake.detect, actions: fake.actions, signInProcess: (name, _file, options) => real(name, waiting, options), signOutProcess: fake.signOutProcess, setTimer: setTimeout, clearTimer: clearTimeout });
+  await tools.check();
+  const pressed = tools.signIn('claude');
+  await new Promise((resolve) => { setTimeout(resolve, 400); });
+  const busy = tools.snapshot().tools.claude.busy;
+  assert.equal(busy && busy.action, 'sign-in', 'waiting in the browser');
+  const started = Date.now();
+  assert.equal(await tools.stopSignIns({ timeoutMs: 4000 }), 1, 'one sign-in ended');
+  assert.ok(Date.now() - started < 3000, `ended by the kill, not the bound (${Date.now() - started} ms)`);
+  await pressed;
+  assert.equal(tools.snapshot().tools.claude.busy, null);
+  assert.equal(await tools.stopSignIns(), 0, 'nothing left to end');
+});
