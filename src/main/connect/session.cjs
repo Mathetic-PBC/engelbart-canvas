@@ -1817,7 +1817,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
         found.cancel = () => { controller.abort(); signInBrowserCancel(rec.app); };
         if (typeof webSignIn.recapture === 'function') {
           const back = await webSignIn.recapture(rec.app, { signal: controller.signal, timeoutMs: deps.recaptureMs || 10 * 60_000 });
-          out = back && back.signedIn ? { status: 'signed-in' } : back && back.refused ? { status: 'refused' } : { status: 'closed' };
+          // Their browser signed in and its copy turned away ('turned-away', 2026-10-16: Google Drive's card said Waiting… for
+          // ten minutes): nothing the person can do there, so it is given up on now ("Couldn't connect to …. Skipped.").
+          out = back && back.signedIn ? { status: 'signed-in' } : back && back.refused ? { status: 'refused' } : back && back.reason === 'turned-away' ? { status: 'rejected' } : { status: 'closed' };
         } else out = await signInBrowser(rec.app);
       } else if (rec.app) out = await signInWindowOpen(rec.app);
       else if (signInWindow && typeof signInWindow.openSite === 'function') {

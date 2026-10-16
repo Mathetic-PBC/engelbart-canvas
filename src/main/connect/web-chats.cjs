@@ -18,7 +18,7 @@ const ID_RE = /^[\w-]{6,80}$/;
 const MAX_LIST = 2000;
 
 // Whether the account is signed in is told only by an answer that says so: an ok answer with no session (or no
-// organization), or a 401. A 403, a 429, a 5xx, a network error or a body that isn't JSON says nothing either way (a
+// organization), a 401, or Claude's 403 that names the session invalid (below). Any other 403, a 429, a 5xx, a network error or a body that isn't JSON says nothing either way (a
 // test-mode run, 2026-10-12: one failed /api/auth/session read as "signed out" dropped ChatGPT's working sign-in), so the
 // script answers { signedIn: null } and the tool asks once more a few seconds later before it gives up, without "signed out".
 // ChatGPT: the page's own session token, then its conversation list (newest first, 100 a page) or one conversation.
@@ -83,9 +83,15 @@ if (!r.ok) return { signedIn: true, error: 'ChatGPT answered ' + r.status };
 return { signedIn: true, conversation: await r.json() };`;
 
 // Claude: the organization that chats, its projects (names for the list), then its conversations or one conversation.
+// Signed out, claude.ai answers /api/organizations with a 403 that says so, not a 401 (2026-10-16, asked from Electron's
+// page and from net.request over an empty session alike: {"type":"error","error":{"type":"permission_error","message":
+// "Invalid authorization","details":{"error_code":"account_session_invalid"}}}); a 403 without it (Cloudflare's HTML
+// check) says nothing. Read as "couldn't tell", the agent gave up with "Claude's chats could not be read" and no sign-in.
 const CLAUDE_ORG = `
-const asked = await fetch('/api/organizations', { credentials: 'include' }).then(async (r) => ({ status: r.status, body: r.ok ? await r.json().catch(() => undefined) : null })).catch(() => ({ status: 0, body: null }));
+const asked = await fetch('/api/organizations', { credentials: 'include' }).then(async (r) => ({ status: r.status, body: r.ok || r.status === 403 ? await r.json().catch(() => undefined) : null })).catch(() => ({ status: 0, body: null }));
 if (asked.status === 401) return { signedIn: false };
+const refused = asked.status === 403 && asked.body && asked.body.error;
+if (refused && ((refused.details && refused.details.error_code === 'account_session_invalid') || /invalid authorization/i.test(String(refused.message || '')))) return { signedIn: false };
 if (asked.status < 200 || asked.status > 299 || asked.body === undefined) return { signedIn: null, status: asked.status };
 const orgs = asked.body;
 if (!Array.isArray(orgs) || !orgs.length) return { signedIn: false };

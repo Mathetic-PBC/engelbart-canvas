@@ -38,7 +38,7 @@
 // copied again from the browser (which may have signed in anew since), and checked again; still signed out, not signed in.
 // No answer (offline, too slow): held, and said (`unchecked`), never waited on longer than the check's own limit. One
 // answer stands for a few minutes per site, so ticking Google Drive, Gmail and Gemini asks Google once. An app with no
-// check page (ChatGPT, Claude…) is held on its cookie alone, as before.
+// check page (ChatGPT, Notion…) is held on its cookie alone, as before (Claude has one since 2026-10-16).
 //
 // Several profiles holding a sign-in (two Chrome profiles, or Chrome and Brave): the person picks one on the choose screen
 // (`holdersOf`, `choose`), and the pick is remembered per sign-in (`picks`, Connect's .connect/signin-profiles.json: ids
@@ -77,6 +77,10 @@ const POLL_MS = 4000;
 const SLOW_POLL_MS = 15_000;
 const FAST_FOR_MS = 2 * 60_000;
 const TIMEOUT_MS = 5 * 60_000;
+// recapture's wait when the chosen browser already holds the sign-in and Engelbart's copy of it was turned away (2026-10-16:
+// "Google Drive sign in kept saying Waiting…" for its ten minutes): the page opens there in case that browser's own
+// sign-in ended too, and is waited on this long for a new one; a new one turned away as well ends it at once.
+const HELD_WAIT_MS = 2 * 60_000;
 // How long one check's answer stands for every app on that site.
 const CHECK_CACHE_MS = 3 * 60_000;
 // The sites with a check page: their copies are checked, not taken on the cookie alone.
@@ -123,7 +127,7 @@ const profileOpenArgs = (bundle, profileId, url) => ['-n', '-b', bundle, '--args
  * → { supports, canSignIn, signedIn, stillSignedIn, signedInHere, isHere, browserName, signIn, signInQuiet, unlock, anotherAccount,
  *     keychainTarget, keychainNote, holdersOf, picked, choose, opensIn, copyFor, recapture, unlockBrowser, profilesOf }
  */
-function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal, openIn = null, openInProfile = null, getSession, picks = null, chosen = () => ({}), log = () => {}, pollMs = POLL_MS, slowPollMs = SLOW_POLL_MS, fastForMs = FAST_FOR_MS, timeoutMs = TIMEOUT_MS, checkCacheMs = CHECK_CACHE_MS, now = () => Date.now(), sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }) }) {
+function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal, openIn = null, openInProfile = null, getSession, picks = null, chosen = () => ({}), log = () => {}, pollMs = POLL_MS, slowPollMs = SLOW_POLL_MS, fastForMs = FAST_FOR_MS, timeoutMs = TIMEOUT_MS, heldWaitMs = HELD_WAIT_MS, checkCacheMs = CHECK_CACHE_MS, now = () => Date.now(), sleep = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); }) }) {
   // The Chromium browsers whose Keychain key has been asked for while Engelbart runs (keychainNote).
   const asked = new Set();
   // The browsers macOS refused when Allow asked for them at once (unlockBrowser): not asked again until Allow asks again.
@@ -531,6 +535,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     let refused = null;
     let failure = null;
     let dead = false;
+    let copiedDead = false; // a copy made by this call turned away (not one passed over as unchanged since)
     for (const source of sources) {
       if (!canRead(source.id)) return { needs: 'disk-access', from: source.name };
       const profile = source.profiles[0];
@@ -563,10 +568,11 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
       }
       await undo(before, domains);
       dead = true;
+      copiedDead = true;
       seen.set(key, cookie.print);
     }
     if (refused) return { refused: refused.name, refusedId: refused.id };
-    if (dead) return { dead: true };
+    if (dead) return { dead: true, ...(copiedDead ? { copied: true } : {}) };
     if (failure) throw failure;
     return {};
   }
@@ -639,7 +645,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
       if (signal && signal.aborted) return 'cancelled';
       if (stop()) return 'here';
       const found = await look();
-      if (found && (found.browser || found.refused || found.done)) return found;
+      if (found && (found.browser || found.refused || found.done || found.turnedAway)) return found;
     }
     return null;
   }
@@ -688,7 +694,7 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
    * page opens there, in that profile, and the cookies are copied once any of them appears or changes; then checked.
    * Bounded by `timeoutMs`; `signal` ends it. →
    *   { signedIn: true, unchecked?, browser?, profile? } | { signedIn: false, reason? } | { refused, refusedId, signedIn: false }
-   *   (`reason`: 'timeout', 'cancelled', 'declined', 'disk-access', 'keychain', 'no-browser', 'signed-out', 'unsupported').
+   *   (`reason`: 'timeout', 'cancelled', 'declined', 'disk-access', 'keychain', 'no-browser', 'signed-out', 'unsupported', 'turned-away': their browser is signed in and the site turns Engelbart's copy away).
    */
   async function recapture(target, { signal = null, timeoutMs: limit = timeoutMs, denied: deniedBefore = null } = {}) {
     const denied = deniedBefore || new Set();
@@ -728,14 +734,19 @@ function createWebSignIn({ cookieImport, defaultBrowser = () => '', openExternal
     const url = SIGN_IN_PAGES[app] || (appOf(app) && appOf(app).start);
     const opened = url ? await openFirst(targets, url) : null;
     if (!opened) return { signedIn: false, reason: 'no-browser' };
-    const found = await waitFor(() => {
+    // Their browser holds the sign-in and Engelbart's copy was turned away (`first.dead`): a short wait for a new one, and
+    // a new one turned away too (a copy made and refused, `copied`) ends it: the site won't take a copy from that browser.
+    const held = !!first.dead;
+    const found = await waitFor(async () => {
       const now_ = sources.length ? sources : readable(app);
-      return now_.length ? bringOver(app, now_, denied, seen).catch(() => ({})) : {};
-    }, { signal, limit, stop: () => isHere(app) });
+      const out = now_.length ? await bringOver(app, now_, denied, seen).catch(() => ({})) : {};
+      return out.dead && out.copied ? { turnedAway: true } : out;
+    }, { signal, limit: held ? Math.min(limit, heldWaitMs) : limit, stop: () => isHere(app) });
     if (found === 'cancelled') return { signedIn: false, reason: 'cancelled' };
     if (found === 'here') return (await signedIn(app)) ? { signedIn: true } : { signedIn: false, reason: 'signed-out' };
     if (found && found.browser) return done(found);
     if (found && found.refused) return failedCopy(found);
+    if ((found && found.turnedAway) || held) return { signedIn: false, reason: 'turned-away' };
     return { signedIn: false, reason: 'timeout' };
   }
 

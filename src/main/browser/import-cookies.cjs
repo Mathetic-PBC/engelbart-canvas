@@ -420,8 +420,10 @@ function normalizeSafari({ cookies: rows, skipped = 0 }, { want = null, now = no
 // is not the page); Evernote /client/web 302 → www.evernote.com/Login.action. Signed in, Drive answered 200 (real cookies,
 // the same day); the others' signed-in answers were not tried here (a Chromium profile's cookies need macOS's Keychain),
 // and whatever they are, an answer other than a 2xx reads as null, never as signed out. ChatGPT (backend-api/me: 401, it
-// wants a bearer token, not cookies), Claude (api/organizations: a bare 403), Notion, Perplexity, Grok and Linear (200
-// signed out) have no page that tells, so their sign-ins are held on their cookies alone.
+// wants a bearer token, not cookies), Notion, Perplexity, Grok and Linear (200 signed out) have no page that tells, so
+// their sign-ins are held on their cookies alone. Claude's API answers signed out with a 403 whose body says so (the one
+// check that reads the answer, `signedOutAnswer`); signed in, a request with only its sessionKey cookie gets its list
+// (2026-10-16: the claude-chats tool's urllib call, outside any browser), so a 2xx is signed in there too.
 const GOOGLE_LOGIN_PATH = /^\/(?:ServiceLogin|signin|v\d+\/signin|AccountChooser)(?:[/?]|$)/i;
 
 /** A Google page redirected to Google's own sign-in page: Google no longer takes the sign-in the browser holds. */
@@ -429,6 +431,19 @@ function endedGoogleSession(_from, to) {
   try {
     const login = new URL(to);
     return login.protocol === 'https:' && login.hostname === 'accounts.google.com' && GOOGLE_LOGIN_PATH.test(login.pathname);
+  } catch { return false; }
+}
+
+/**
+ * Claude's API turning the session away (asked over an empty session from net.request and from a page, 2026-10-16):
+ * 403 {"type":"error","error":{"type":"permission_error","message":"Invalid authorization","details":{"error_code":
+ * "account_session_invalid"}}}. Cloudflare's 403 (an HTML check page) is not it.
+ */
+function endedClaudeSession(status, body) {
+  if (status !== 403 || !body) return false;
+  try {
+    const error = (JSON.parse(body) || {}).error || {};
+    return (error.details && error.details.error_code === 'account_session_invalid') || /invalid authorization/i.test(String(error.message || ''));
   } catch { return false; }
 }
 
@@ -447,10 +462,13 @@ const SIGN_IN_CHECKS = [
   { site: 'Zotero', domain: 'zotero.org', url: 'https://www.zotero.org/settings/', signedOut: loginAt(['www.zotero.org', 'zotero.org'], /^\/user\/login\/?$/) },
   // An "Other" tool's check (copyFor, 2026-10-16): Evernote is reached through the browser while its MCP is in beta.
   { site: 'Evernote', domain: 'evernote.com', url: 'https://www.evernote.com/client/web', signedOut: loginAt(['www.evernote.com', 'evernote.com'], /^\/Login\.action$/i) },
+  // Claude's is its API's own list of the account's organizations (2026-10-16, the onboarding beta's "Claude's chats
+  // couldn't be read"): its 403 that names the session invalid is signed out (endedClaudeSession; read from the answer).
+  { site: 'Claude', domain: 'claude.ai', url: 'https://claude.ai/api/organizations', signedOutAnswer: endedClaudeSession },
 ];
 const CHECK_BY_DOMAIN = new Map(SIGN_IN_CHECKS.map((check) => [check.domain, check]));
-// The Stage's import picker pre-ticks the sites a person is likely to import (Evernote's check is Connect's only).
-const DEFAULT_DOMAINS = SIGN_IN_CHECKS.filter((check) => check.domain !== 'evernote.com').map((check) => check.domain);
+// The Stage's import picker pre-ticks the sites a person is likely to import (Evernote's and Claude's checks are Connect's only).
+const DEFAULT_DOMAINS = SIGN_IN_CHECKS.filter((check) => check.domain !== 'evernote.com' && check.domain !== 'claude.ai').map((check) => check.domain);
 // A check that has not answered by then is null ("not confirmed"): the picker never waits on "Importing…" for longer.
 const CHECK_TIMEOUT_MS = 10_000;
 const REDIRECT_CANCELLED = /Redirect was cancelled/i;
@@ -477,6 +495,7 @@ function checkResult(check, response, held = null) {
   if (wasRedirect(response)) return !!response.location && typeof check.signedOut === 'function' && check.signedOut(check.url, response.location) ? false : null;
   const status = Number(response.status) || 0;
   if (status === 401) return false;
+  if (typeof check.signedOutAnswer === 'function' && check.signedOutAnswer(status, response.body)) return false;
   return status >= 200 && status < 300 ? true : null;
 }
 
@@ -489,9 +508,11 @@ function shownLocation(location, from) {
 /**
  * Ask for one check page over `session` with Electron's net.request (`request`): redirects not followed, the session's
  * cookies sent. Resolves { status, location } (`location` when the page redirected), or null when it failed or had not
- * answered in `timeoutMs`. The body is never read: the request is aborted as soon as the status or the redirect is known.
+ * answered in `timeoutMs`. The body is never read (the request is aborted as soon as the status or the redirect is known),
+ * except for a check that reads its answer (`body`, Claude's): a non-2xx answer's first BODY_MAX bytes, as `body`.
  */
-function probe(request, session, url, timeoutMs = CHECK_TIMEOUT_MS) {
+const BODY_MAX = 4096;
+function probe(request, session, url, timeoutMs = CHECK_TIMEOUT_MS, { body: readBody = false } = {}) {
   return new Promise((resolve) => {
     let req = null;
     let settled = false;
@@ -508,7 +529,11 @@ function probe(request, session, url, timeoutMs = CHECK_TIMEOUT_MS) {
       req.on('redirect', (status, _method, location) => finish({ status: Number(status) || 302, location: String(location || '') }));
       req.on('response', (response) => {
         if (response && typeof response.on === 'function') response.on('error', () => {}); // aborted under it: not ours to report
-        finish({ status: response ? Number(response.statusCode) || 0 : 0 });
+        const status = response ? Number(response.statusCode) || 0 : 0;
+        if (!readBody || (status >= 200 && status < 300) || !response || typeof response.on !== 'function') { finish({ status }); return; }
+        let text = '';
+        response.on('data', (chunk) => { text += String(chunk); if (text.length >= BODY_MAX) finish({ status, body: text.slice(0, BODY_MAX) }); });
+        response.on('end', () => finish({ status, body: text }));
       });
       req.on('error', (error) => finish(REDIRECT_CANCELLED.test(String(error && error.message)) ? { status: 302, location: '' } : null));
       req.end();
@@ -823,7 +848,7 @@ function createCookieImport({ supportDir, userDataDir, tmpBase = os.tmpdir(), ge
     return Promise.all(checks.map(async (check) => {
       const held = check.sessionCookies ? await heldNames(session.cookies, check.url) : null;
       const skippedForNoSession = lacksSession(check, held);
-      const response = skippedForNoSession || !request ? null : await probe(request, session, check.url, checkTimeoutMs);
+      const response = skippedForNoSession || !request ? null : await probe(request, session, check.url, checkTimeoutMs, { body: typeof check.signedOutAnswer === 'function' });
       // What the site answered, for the trace (C2): the status (0 when nothing came back) and where a redirect went.
       const answered = skippedForNoSession ? { status: 0, location: '', reason: 'no-session-cookie' } : response ? { status: Number(response.status) || 0, location: shownLocation(response.location, check.url) } : { status: 0, location: '', reason: request ? 'no-answer' : 'no-request' };
       return { site: check.site, domain: check.domain, url: check.url, signedIn: checkResult(check, response, held), ...answered };

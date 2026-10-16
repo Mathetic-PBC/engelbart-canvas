@@ -447,6 +447,14 @@ test('a failed session check is not "signed out": asked again a moment later; on
   assert.deepEqual(await run(CHATGPT_ONE('g-111111'), () => [0, null]), { signedIn: null, status: 0 });
   assert.deepEqual(await run(CHATGPT_LIST(5), () => [200, {}]), { signedIn: false });
   assert.deepEqual(await run(CLAUDE_LIST(5), () => [500, null]), { signedIn: null, status: 500 });
+  // Claude signed out answers a 403 that says so (2026-10-16, claude.ai from Electron with no session); Cloudflare's 403
+  // (an HTML page, no JSON) says nothing.
+  const invalid = { type: 'error', error: { type: 'permission_error', message: 'Invalid authorization', details: { error_visibility: 'user_facing', error_code: 'account_session_invalid' } } };
+  assert.deepEqual(await run(CLAUDE_LIST(5), () => [403, invalid]), { signedIn: false });
+  assert.deepEqual(await run(CLAUDE_ONE('c-111111'), () => [403, invalid]), { signedIn: false });
+  assert.deepEqual(await run(CLAUDE_LIST(5), () => [403, { type: 'error', error: { type: 'rate_limit_error', message: 'Slow down' } }]), { signedIn: null, status: 403 });
+  const cloudflare = async () => ({ ok: false, status: 403, json: async () => { throw new SyntaxError('Unexpected token <'); } });
+  assert.deepEqual(await new AsyncFunction('fetch', CLAUDE_LIST(5))(cloudflare), { signedIn: null, status: 403 });
   assert.deepEqual(await run(CLAUDE_ONE('c-111111'), () => [200, []]), { signedIn: false });
 });
 
@@ -783,6 +791,25 @@ test('Google\'s card signs in through the person\'s browser (its sign-in refuses
   const after = await until(state(started.id), (s) => s.leftOut.length === 2, 'both Google apps left out');
   assert.deepEqual(after.leftOut.map((entry) => entry.app).sort(), ['Google Docs', 'Google Meet']);
   assert.equal(after.jobs.some((job) => job.kind === 'import'), false, 'nothing of Google comes in');
+  connect.stop(started.id);
+  connect.dismiss(started.id);
+});
+
+test('Google\'s card: their browser signed in and the copy turned away, it gives up at once with one line, never waiting on "Waiting…" (2026-10-16)', async () => {
+  // The beta: "Google Drive sign in kept saying Waiting…": Chrome held the sign-in, Google turned Engelbart's copy away, and
+  // the card waited ten minutes for a new sign-in nobody had to make.
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'turned-'));
+  // Nothing copied at the start (the card; a sign-in held there and refused is left out at once, without one), then the
+  // card's Sign in in Chrome finds the sign-in there and Google turning its copy away.
+  const webSignIn = { supports: () => true, canSignIn: () => true, recapture: async () => ({ signedIn: false, reason: 'turned-away' }), signInQuiet: async () => ({ signedIn: false, browser: '' }), signedIn: async () => false, keychainNote: () => '', browserName: () => 'Chrome' };
+  const signInWindow = { open: async () => { throw new Error('Google never opens in Engelbart\'s window'); }, close: () => {} };
+  const { connect, state } = fakeConnect({ home: fresh, webSignIn, signInWindow });
+  const started = await connect.start({ provider: 'openai', direct: { mode: 'manual', projects: [{ id: 'p', title: 'Memex' }], apps: ['Google Docs', 'Google Meet'], scopes: {} } });
+  const card = (await until(state(started.id), (s) => s.needs.some((need) => need.kind === 'signin-here'), 'Google\'s card')).needs.find((need) => need.kind === 'signin-here');
+  await connect.need(started.id, card.id, 'open');
+  const after = await until(state(started.id), (s) => !s.needs.some((need) => need.id === card.id) && s.leftOut.length === 2, 'given up on, both Google apps left out');
+  assert.deepEqual(after.leftOut.map((entry) => entry.app).sort(), ['Google Docs', 'Google Meet']);
+  assert.equal(after.chat.filter((entry) => entry.notice && /^Couldn't connect to .+\. Skipped\.$/.test(entry.text)).length, 1, 'one quiet line');
   connect.stop(started.id);
   connect.dismiss(started.id);
 });

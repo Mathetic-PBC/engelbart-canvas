@@ -193,9 +193,39 @@ test('C2: every check page by the one rule, with what each site answered signed 
     assert.equal(verdict(domain, { status: 302, location: 'https://example.com/elsewhere' }), null, `${domain}: a redirect elsewhere is not confirmed`);
     assert.equal(verdict(domain, null), null, `${domain}: no answer (a timeout, a network error) is not confirmed`);
   }
+  // Claude's check reads its answer: the 403 that names the session invalid is signed out; Cloudflare's 403 is not
+  // (2026-10-16: net.request over an empty session, and a page, both got the first).
+  const invalid = JSON.stringify({ type: 'error', error: { type: 'permission_error', message: 'Invalid authorization', details: { error_visibility: 'user_facing', error_code: 'account_session_invalid' } }, request_id: 'req_1' });
+  assert.equal(verdict('claude.ai', { status: 403, body: invalid }), false);
+  assert.equal(verdict('claude.ai', { status: 403, body: '<!DOCTYPE html><html><head><title>Just a moment...</title>' }), null);
+  assert.equal(verdict('claude.ai', { status: 403 }), null, 'no body read: not confirmed');
+  assert.equal(verdict('claude.ai', { status: 200 }), true);
+  assert.equal(verdict('claude.ai', { status: 401 }), false);
+  assert.equal(verdict('google.com', { status: 403, body: invalid }), null, 'only Claude\'s check reads an answer');
+  assert.ok(!cookies.DEFAULT_DOMAINS.includes('claude.ai'), 'the Stage\'s picker pre-ticks nothing new');
   assert.equal(verdict('overleaf.com', { status: 302, location: 'https://evil.example/login' }), null, 'another site\'s login page is not this site\'s');
   assert.equal(verdict('zotero.org', { status: 302, location: 'https://www.zotero.org/settings/storage' }), null);
   assert.equal(cookies.shownLocation('https://accounts.google.com/ServiceLogin?continue=https://drive.google.com&hint=me', 'https://drive.google.com/'), 'https://accounts.google.com/ServiceLogin', 'the trace keeps no query');
+});
+
+test('Claude\'s check reads the answer\'s body (its only one that does); the others are aborted at the status', async () => {
+  const invalid = JSON.stringify({ type: 'error', error: { type: 'permission_error', message: 'Invalid authorization', details: { error_code: 'account_session_invalid' } } });
+  const read = [];
+  const request = ({ url }) => {
+    const req = new EventEmitter();
+    req.end = () => setImmediate(() => {
+      const response = Object.assign(new EventEmitter(), { statusCode: 403 });
+      response.on('newListener', (name) => { if (name === 'data') read.push(url); });
+      req.emit('response', response);
+      setImmediate(() => { response.emit('data', Buffer.from(invalid.slice(0, 40))); response.emit('data', Buffer.from(invalid.slice(40))); response.emit('end'); });
+    });
+    req.abort = () => {};
+    return req;
+  };
+  const importer = cookies.createCookieImport({ supportDir: os.tmpdir(), userDataDir: os.tmpdir(), getSession: () => ({ cookies: { get: async () => [] } }), request, keychain: async () => 'x' });
+  assert.deepEqual(await importer.checkDetail('claude.ai'), { site: 'Claude', domain: 'claude.ai', url: 'https://claude.ai/api/organizations', signedIn: false, status: 403, location: '' });
+  assert.equal(await importer.check('overleaf.com'), null, 'a bare 403 elsewhere: not confirmed');
+  assert.deepEqual(read, ['https://claude.ai/api/organizations'], 'only Claude\'s body was read');
 });
 
 test('C2: check(domain) says what the site answered (status, redirect) for the trace, and webSignIn logs every check', async () => {
@@ -229,7 +259,7 @@ test('C2: check(domain) says what the site answered (status, redirect) for the t
  * `stamps`). `writes` { 'id/profile': [cookies] } what an import of that profile writes into the jar (domain, name, value).
  * `checks` the answers check pages give in turn. `chosen` onboarding's answers.
  */
-function mac({ browsers = {}, writes = {}, checks = [], chosen = {}, defaultName = 'Google Chrome', jar: start = [], stamps = {} } = {}) {
+function mac({ browsers = {}, writes = {}, checks = [], chosen = {}, defaultName = 'Google Chrome', jar: start = [], stamps = {}, options = {} } = {}) {
   const NAMES = { chrome: ['Chrome', 'chromium', 'com.google.Chrome'], brave: ['Brave', 'chromium', 'com.brave.Browser'], firefox: ['Firefox', 'firefox', 'org.mozilla.firefox'], safari: ['Safari', 'safari', 'com.apple.Safari'] };
   let jar = start.map((cookie) => ({ path: '/', secure: true, ...cookie }));
   const calls = { imports: [], unlocked: [], opened: [], openedIn: [], openedProfile: [], removed: [], set: [], checks: [] };
@@ -263,6 +293,7 @@ function mac({ browsers = {}, writes = {}, checks = [], chosen = {}, defaultName
     openIn: async (id, url) => { calls.openedIn.push([id, url]); },
     openInProfile: async (id, pid, url) => { calls.openedProfile.push([id, pid, url]); },
     chosen: () => state.chosen,
+    ...options,
   });
   return { web, calls, jar: () => jar, browsers, state };
 }
@@ -430,8 +461,25 @@ test('C8: after a rejected copy, any of the site\'s cookies set anew (not only t
   assert.ok(looks >= 3, 'not before the change');
 
   const still = mac({ stamps: { 'chrome/Default/SID': 7 }, browsers: { chrome: { profiles: { Default: ['SID'] } } }, writes: { 'chrome/Default': [{ domain: '.google.com', name: 'SID', value: 'x' }] }, checks: [false, true], chosen: { keychain: 'allowed' } });
-  assert.deepEqual(await still.web.recapture('Gmail', { timeoutMs: 30 }), { signedIn: false, reason: 'timeout' }, 'nothing changed there: not copied again');
+  assert.deepEqual(await still.web.recapture('Gmail', { timeoutMs: 30 }), { signedIn: false, reason: 'turned-away' }, 'nothing changed there: not copied again, and their browser holds a sign-in the site turns away');
   assert.equal(still.calls.imports.length, 1);
+});
+
+test('C8: their browser signed in and the copy turned away: a new copy turned away too ends the wait at once; none new, it ends after the short wait (2026-10-16, "kept saying Waiting…")', async () => {
+  const stamps = { 'chrome/Default/SID': 7 };
+  const again = mac({ stamps, browsers: { chrome: { profiles: { Default: ['SID'] } } }, writes: { 'chrome/Default': [{ domain: '.google.com', name: 'SID', value: 'x' }] }, checks: [false, false], chosen: { keychain: 'allowed' }, options: { timeoutMs: 60_000 } });
+  let looks = 0;
+  const signal = { get aborted() { looks += 1; if (looks === 3) stamps['chrome/Default/SID'] = 8; return false; } };
+  const started = Date.now();
+  assert.deepEqual(await again.web.recapture('Gmail', { signal, timeoutMs: 60_000 }), { signedIn: false, reason: 'turned-away' });
+  assert.equal(again.calls.imports.length, 2, 'copied again once the browser\'s cookies changed, and turned away again');
+  assert.ok(Date.now() - started < 5000, 'not the minute it was given');
+  const quiet = mac({ browsers: { chrome: { profiles: { Default: ['SID'] } } }, writes: { 'chrome/Default': [{ domain: '.google.com', name: 'SID', value: 'x' }] }, checks: [false], chosen: { keychain: 'allowed' }, options: { timeoutMs: 60_000, heldWaitMs: 40 } });
+  const at = Date.now();
+  assert.deepEqual(await quiet.web.recapture('Gmail', { timeoutMs: 60_000 }), { signedIn: false, reason: 'turned-away' });
+  assert.ok(Date.now() - at < 5000, 'the short wait, not the minute');
+  const fresh = mac({ browsers: { chrome: { profiles: { Default: [] } } }, writes: { 'chrome/Default': [{ domain: '.google.com', name: 'SID', value: 'x' }] }, chosen: { keychain: 'allowed' }, options: { heldWaitMs: 1 } });
+  assert.deepEqual(await fresh.web.recapture('Gmail', { timeoutMs: 30 }), { signedIn: false, reason: 'timeout' }, 'nothing held there: waited for a sign-in to the end, as before');
 });
 
 test('C8: recapture for an Other tool: copied at once when there; else its page opens and the cookies are taken once they change; bounded', async () => {
