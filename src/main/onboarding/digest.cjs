@@ -53,15 +53,16 @@ function recentRepos(homeDir, { days = DIGEST_DAYS, access = null, max = 15, dep
 }
 
 /**
- * What the person worked on lately, read from this Mac without a model → { folders, repos, vaults, zotero, projects }:
+ * What the person worked on lately, read from this Mac without a model → { folders, repos, projects }:
  *   folders  the folders their Claude Code and Codex sessions ran in, the busiest and most recent first, each with how
  *            many sessions, the last day, the repository it is in, and the newest sessions' titles
  *   repos    the git repositories in their home folder committed to or changed lately (recentRepos)
- *   vaults   each Obsidian vault's notes changed lately (title and folder)
- *   zotero   the collections of their Zotero library (Engelbart's copy), when signed in
  *   projects the Engelbart projects they have already (so a project is not offered twice)
+ * Their Obsidian notes and Zotero collections are no longer read here (2026-10-16, Hudson: "instead of searching their
+ * Obsidian or Zotero (remove this fallback), it should go to their ChatGPT or Claude"): with nothing here, ./discover.cjs
+ * asks the assistants they are signed in to (./assistant-projects.cjs).
  */
-function projectDigest({ homeDir, env = process.env, access = null, zoteroRoot = null, existing = [], days = DIGEST_DAYS }) {
+function projectDigest({ homeDir, env = process.env, access = null, existing = [], days = DIGEST_DAYS }) {
   const byFolder = new Map();
   for (const app of ['Claude Code', 'Codex']) {
     let chats = [];
@@ -87,24 +88,12 @@ function projectDigest({ homeDir, env = process.env, access = null, zoteroRoot =
     })
     .sort((a, b) => b.last.localeCompare(a.last) || b.sessions - a.sessions)
     .slice(0, 25);
-  const vaults = [];
-  let found = [];
-  try { found = readers.obsidianVaults(homeDir); } catch { found = []; }
-  for (const vault of found.slice(0, 3)) {
-    if (access && !access.readable(vault.path)) continue;
-    let files = [];
-    try { files = readers.noteFiles(vault.path, { days: 60, max: 60, readable: access ? access.readable : null }); } catch { files = []; }
-    const notes = files.slice(0, 40).map((file) => ({ title: path.basename(file).replace(/\.(md|markdown|txt)$/i, ''), folder: path.relative(vault.path, path.dirname(file)) || '.' }));
-    vaults.push({ vault: vault.shown, notes });
-  }
-  let zotero = [];
-  if (zoteroRoot) { try { zotero = readers.zoteroCollections(zoteroRoot).collections.slice(0, 40).map((one) => ({ name: one.path, items: one.items })); } catch { zotero = []; } }
   let recent = [];
   try { recent = recentRepos(homeDir, { days, access }).filter((repo) => !folders.some((folder) => folder.repository === repo.shown || folder.shown === repo.shown)); } catch { recent = []; }
-  return { folders, repos: recent, vaults, zotero, projects: existing.slice(0, 30) };
+  return { folders, repos: recent, projects: existing.slice(0, 30) };
 }
 
 /** Whether a digest holds anything to name projects from (the Engelbart projects they have already aside). */
-const digestEmpty = (digest) => !digest || !((digest.folders || []).length || (digest.repos || []).length || (digest.vaults || []).some((vault) => vault.notes && vault.notes.length) || (digest.zotero || []).length);
+const digestEmpty = (digest) => !digest || !((digest.folders || []).length || (digest.repos || []).length);
 
 module.exports = { projectDigest, recentRepos, digestEmpty, DIGEST_DAYS };

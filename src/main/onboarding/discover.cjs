@@ -5,9 +5,16 @@
 // Recent projects ("What project do you want to work on first?"): starts the moment Import context is pressed, before
 // the import method is chosen ("it should not even wait for them to select manual or agent driven"). What the person
 // worked on lately is gathered here without a model (a digest: the folders their Claude Code and Codex sessions ran in
-// and those sessions' titles, the repositories they were in, the notes their Obsidian vaults changed lately, their Zotero
-// collections), then one agent on the provider chosen for onboarding names 1-5 projects as JSON with "a concise and
-// easy-to-parse title". It has no tools: the digest is all it reads, so it answers in well under a minute.
+// and those sessions' titles, the repositories they were in), then one agent on the provider chosen for onboarding names
+// 1-5 projects as JSON with "a concise and easy-to-parse title". It has no tools: the digest is all it reads, so it
+// answers in well under a minute. When it names none (or there is nothing to read), the same question goes to the
+// person's ChatGPT and Claude, which answer from their memory of them (./assistant-projects.cjs, 2026-10-16: in place of
+// the Obsidian and Zotero fallback), with their leave to use their browser's sign-ins only. Nobody knowing of a project
+// is not a failure: "If Claude Code/Codex fail, as well as the GUI counterparts, just require the user to add a project
+// manually. It should not say import failed though, since it is more an issue of not enough context. You can keep that
+// error if the actual process fails" (Hudson). So: projects from any route → done; none, every route having run → done,
+// `empty: true, reason: 'no-context'`; none and a route that broke (an agent's error, a timeout, an answer not the JSON)
+// → failed, with Try again.
 //
 // Tools ("Confirm your tools"): starts when the person chooses to let agents import. "For anything that can be found
 // deterministically (i.e. Obsidian or local things, just do that)": the apps on this Mac (../connect/scan.cjs detect),
@@ -30,15 +37,22 @@ const scan = require('../connect/scan.cjs');
 const { createImportTools } = require('../connect/tools.cjs');
 const { connectChoice } = require('../connect/session.cjs');
 const { APPS, SIGN_IN_COOKIES, shownName } = require('../../shared/connect-sources.cjs');
-const { CATALOG, GROUPS, LOCAL_FOLDERS, SITES, PROVIDER_IDS, browserById, readProjects, readTools } = require('../../shared/import-flow.cjs');
+const { CATALOG, GROUPS, LOCAL_FOLDERS, SITES, PROVIDER_IDS, browserById, readTools } = require('../../shared/import-flow.cjs');
 const prompts = require('./prompts.cjs');
 const { projectDigest, digestEmpty, DIGEST_DAYS } = require('./digest.cjs');
+const { createAssistantProjects, readAnswer, mergeProjects } = require('./assistant-projects.cjs');
+const { createDiskAccess } = require('./disk-access.cjs');
+const onboardingPrefs = require('./prefs.cjs');
 const { accessSpec } = require('../connect/offthread.cjs');
 const { needsProvider } = require('../connect/provider-failure.cjs');
 
 const FILE = 'discovery.json';
 const HISTORY_DAYS = 90;
 const SIGN_IN_TIMEOUT_MS = 20_000;
+// Recent projects start the moment Import context is pressed, before the browser question is answered: the assistants
+// are asked once it is, waited for at most this long (the flow asks it next, and it can't be skipped).
+const KEYCHAIN_WAIT_MS = 10 * 60_000;
+const CLI_NAMES = Object.freeze({ anthropic: 'Claude Code', openai: 'Codex' });
 
 const exists = (file) => { try { fs.accessSync(file); return true; } catch { return false; } };
 const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };
@@ -52,8 +66,12 @@ const hostOf = (url) => { try { return new URL(url).hostname.replace(/^www\./, '
 // The desktop apps that say a tool is used (../connect/scan.cjs keeps the same list for the picker).
 const DESKTOP = { ChatGPT: ['ChatGPT.app'], Claude: ['Claude.app'], Granola: ['Granola.app'], Notion: ['Notion.app'], Evernote: ['Evernote.app'], OneNote: ['Microsoft OneNote.app'], Perplexity: ['Perplexity.app'], Cursor: ['Cursor.app'], Zoom: ['zoom.us.app'], Obsidian: ['Obsidian.app'], 'Google Docs': ['Google Drive.app'], Zotero: ['Zotero.app'], Overleaf: [], Grok: [] };
 
+// Safari's history is read only when Full Disk Access is granted (2026-10-16, D4): without it the copy failed and the
+// tools screen said "No history found", as if there were none. `diskAccess()` → whether it is granted (./disk-access.cjs).
+const diskGranted = (homeDir) => async () => { try { return !!(await createDiskAccess({ homeDir }).status()).granted; } catch { return false; } };
+
 /** A browser's most visited sites, from its history file (Chromium, Firefox, or Safari with Full Disk Access) → [{ host, visits }]. */
-async function historySites({ homeDir, browserId, days = HISTORY_DAYS, run = execFile }) {
+async function historySites({ homeDir, browserId, days = HISTORY_DAYS, run = execFile, diskAccess = diskGranted(homeDir) }) {
   const sqlite = async (file, query) => {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-history-'));
     try {
@@ -83,6 +101,7 @@ async function historySites({ homeDir, browserId, days = HISTORY_DAYS, run = exe
     return tally(rows);
   }
   if (browserId === 'safari') {
+    if (!(await Promise.resolve().then(() => diskAccess()).catch(() => false))) return [];
     const file = path.join(homeDir, 'Library', 'Safari', 'History.db');
     const since = (Date.now() / 1000) - 978307200 - days * 86400;
     try { return tally(await sqlite(file, `SELECT i.url AS url, COUNT(v.id) AS visits FROM history_items i JOIN history_visits v ON v.history_item = i.id WHERE v.visit_time > ${since} GROUP BY i.id ORDER BY visits DESC LIMIT 5000;`)); } catch { return []; } // Full Disk Access not given
@@ -115,21 +134,23 @@ const visitsTo = (sites, app) => sites.filter((site) => usageSitesOf(app).some((
 const sharedSignIn = (app) => Object.keys(SIGN_IN_COOKIES).some((other) => other !== app && SIGN_IN_COOKIES[other][0] === (SIGN_IN_COOKIES[app] || [])[0]);
 
 /**
- * What can be told without a model → { evidence: { [toolId]: { used, method, evidence } }, sites: [{ host, visits }] }.
- * `cookies(app)` → whether the chosen browser holds the app's sign-in cookie (names only).
+ * What can be told without a model → { evidence: { [toolId]: { used, method, evidence } }, sites: [{ host, visits }],
+ * history? } (`history: 'needs-disk-access'` when the browser is Safari and Full Disk Access is not granted, so its
+ * history was not read). `cookies(app)` → whether the chosen browser holds the app's sign-in cookie (names only).
  */
-async function toolEvidence({ homeDir, env = process.env, browserId, access = null, github = null, zotero = null, connectors = null, cookies = () => false, applications = ['/Applications', path.join(homeDir, 'Applications')], run = execFile, detected: given = null }) {
+async function toolEvidence({ homeDir, env = process.env, browserId, access = null, github = null, zotero = null, connectors = null, cookies = () => false, applications = ['/Applications', path.join(homeDir, 'Applications')], run = execFile, detected: given = null, diskAccess = diskGranted(homeDir) }) {
   const evidence = {};
   const set = (id, used, method, text) => { evidence[id] = { used: !!used, method, evidence: text }; };
   // `detected`: scan.detect's answer, read in the scanner process (../connect/scan-child.cjs) so the window never waits.
   let detected = given || { apps: {}, localRepos: [] };
   if (!given) { try { detected = scan.detect({ homeDir, env, access, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), connectors: (app) => !!(connectors && connectors.status(app).connected), applications }); } catch { /* nothing found */ } }
   const appInstalled = (app) => (DESKTOP[app] || []).some((bundle) => applications.some((dir) => exists(path.join(dir, bundle))));
-  const sites = await historySites({ homeDir, browserId, run }).catch(() => []);
+  const blocked = browserId === 'safari' && !(await Promise.resolve().then(() => diskAccess()).catch(() => false));
+  const sites = blocked ? [] : await historySites({ homeDir, browserId, run, diskAccess: async () => true }).catch(() => []);
   const browserName = (browserById(browserId) || {}).name || 'your browser';
   for (const tool of CATALOG) {
     const id = tool.id;
-    if (id === SITES) { set(id, sites.length > 0, 'local', sites.length ? `${browserName} history on this Mac` : 'No history found'); continue; }
+    if (id === SITES) { set(id, sites.length > 0, 'local', sites.length ? `${browserName} history on this Mac` : blocked ? 'Safari history needs Full Disk Access' : 'No history found'); continue; }
     if (id === LOCAL_FOLDERS) { const repos = Array.isArray(detected.localRepos) ? detected.localRepos : []; set(id, repos.length > 0, 'local', repos.length ? `${repos.length} repositories on this Mac` : ''); continue; }
     if (id === 'GitHub') {
       const signed = github && github.status().connected;
@@ -147,7 +168,7 @@ async function toolEvidence({ homeDir, env = process.env, browserId, access = nu
     if (found && found.found) { set(id, true, 'app', found.where || 'Found on this Mac'); continue; }
     set(id, false, 'none', visits ? `${visits} visits lately` : '');
   }
-  return { evidence, sites: sites.slice(0, 80) };
+  return { evidence, sites: sites.slice(0, 80), ...(blocked ? { history: 'needs-disk-access' } : {}) };
 }
 
 /* ------------------------------------------------------------------------------------------------------ the module */
@@ -156,10 +177,14 @@ async function toolEvidence({ homeDir, env = process.env, browserId, access = nu
  * `agents` ({ turn }, traced); `models()` Build's model list; `context()` the store's; `prefs` (./prefs.cjs, by data root);
  * `providers` (./providers.cjs); `browsers` (./browsers.cjs); `webSignIn` (../connect/web-signin.cjs); `cookieImport`
  * (../browser/import-cookies.cjs: cookie names only, here); `agentBrowser` (../connect/browser.cjs); `openBridge`;
- * `zotero`, `github`, `connectors`, `deps` as Connect's; `notify(state)`; `trace` (./trace.cjs).
+ * `zotero`, `github`, `connectors`, `deps` as Connect's; `notify(state)`; `trace` (./trace.cjs). `prefs` (./prefs.cjs: the
+ * Keychain answer, by data root); `assistants` (./assistant-projects.cjs, made from webSignIn and agentBrowser when not
+ * given); `diskAccess()` whether Full Disk Access is granted (Safari's history).
  */
-function createDiscovery({ agents, models = () => null, context, homeDir, env = process.env, providers, webSignIn = null, cookieImport = null, agentBrowser = null, openBridge = null, zotero = null, zoteroRoot = () => null, github = null, connectors = null, deps = {}, notify = () => {}, trace = null, access = () => null, existingProjects = () => [], scanner = null, now = () => new Date().toISOString() }) {
+function createDiscovery({ agents, models = () => null, context, homeDir, env = process.env, providers, webSignIn = null, cookieImport = null, agentBrowser = null, openBridge = null, zotero = null, zoteroRoot = () => null, github = null, connectors = null, deps = {}, notify = () => {}, trace = null, access = () => null, existingProjects = () => [], scanner = null, now = () => new Date().toISOString(), prefs = onboardingPrefs, assistants = null, keychainWaitMs = KEYCHAIN_WAIT_MS, keychainPollMs = 1000, diskAccess = diskGranted(homeDir) }) {
   const roots = new Map(); // dataRoot → { projects, tools, controllers }
+  const say = (kind, text, detail) => { if (trace) trace.event({ kind, text, detail }); };
+  const askers = assistants || (webSignIn && agentBrowser ? createAssistantProjects({ webSignIn, agentBrowser, log: (text, detail) => say('discovery', text, detail) }) : null);
 
   const fileOf = (dataRoot) => path.join(dataRoot, '.connect', FILE);
   function stateOf(dataRoot) {
@@ -180,7 +205,6 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
     } catch { /* shown, if not kept */ }
     notify(publicOf(st));
   }
-  const say = (kind, text, detail) => { if (trace) trace.event({ kind, text, detail }); };
 
   // The provider to run on, or null when none can run now. One the window names is used only while its CLI can run
   // (2026-10-14: Try again re-ran a signed-out Claude Code forever, each time "Not logged in"); then it is the one the
@@ -220,47 +244,97 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
     if (st.controllers.projects) st.controllers.projects.abort();
     const controller = new AbortController();
     st.controllers.projects = controller;
-    st.projects = { status: 'running', provider: chosen, projects: st.projects.projects || [], started: now() };
+    st.projects = { status: 'running', provider: chosen, projects: st.projects.projects || [], route: 'local', started: now() };
     changed(ctx.dataRoot);
+    const aborted = () => controller.signal.aborted;
+    const finish = (next) => {
+      if (aborted()) return;
+      st.projects = { provider: chosen, started: st.projects.started, ...next, ended: now() };
+      if (st.controllers.projects === controller) st.controllers.projects = null;
+      changed(ctx.dataRoot);
+    };
+    // What an earlier run found stays on screen when this one fails (2026-10-14: a run again that failed emptied the list).
+    const failed = (fields) => finish({ status: 'failed', projects: st.projects.projects || [], ...fields });
     void (async () => {
-      const existing = await Promise.resolve().then(() => existingProjects(ctx)).catch(() => []);
-      const args = { homeDir, zoteroRoot: zoteroRoot(), existing: Array.isArray(existing) ? existing : [] };
+      const listed = await Promise.resolve().then(() => existingProjects(ctx)).catch(() => []);
+      const existing = Array.isArray(listed) ? listed : [];
+      const args = { homeDir, existing };
       // Off the main process (5 s of session files on a busy Mac froze the window between screens).
       const digest = scanner
         ? await scanner.run('projectDigest', { ...args, access: accessSpec(access(ctx), ctx.dataRoot) }).catch(() => projectDigest({ ...args, env, access: access(ctx) }))
         : projectDigest({ ...args, env, access: access(ctx) });
-      if (controller.signal.aborted) return;
-      say('discovery', `Looking for recent projects with ${chosen === 'openai' ? 'Codex' : 'Claude Code'}`, { folders: digest.folders.length, repos: (digest.repos || []).length, vaults: digest.vaults.length, zotero: digest.zotero.length });
-      // Nothing on this Mac to name projects from (a new account, 2026-10-15): no model asked, and not a failure: the
-      // person adds their own. Try again would only find nothing again.
-      if (digestEmpty(digest)) {
-        st.projects = { status: 'done', provider: chosen, projects: [], empty: true, started: st.projects.started, ended: now() };
-        if (st.controllers.projects === controller) st.controllers.projects = null;
-        changed(ctx.dataRoot);
-        return;
+      if (aborted()) return;
+      say('discovery', `Looking for recent projects with ${CLI_NAMES[chosen]}`, { folders: digest.folders.length, repos: (digest.repos || []).length });
+      // 1. Claude Code or Codex, on the digest. Nothing on this Mac to name projects from (a new account, 2026-10-15): no
+      // model asked; the assistants are next.
+      let local = { outcome: 'none' };
+      if (!digestEmpty(digest)) {
+        const choice = connectChoice(chosen, (() => { try { return models(); } catch { return null; } })());
+        const message = [
+          `<recent_work note="Read on this Mac without a model, the last ${DIGEST_DAYS} days.">\n${JSON.stringify(digest, null, 1)}\n</recent_work>`,
+          `Today is ${now().slice(0, 10)}.`,
+          'Name their recent projects now, as the JSON object only.',
+        ].join('\n\n');
+        try {
+          const out = await agents.turn({ choice, kind: 'projects', system: prompts.PROJECTS_SYSTEM_PROMPT, message, session: null, dirs: [], signal: controller.signal, meta: { kind: 'projects', label: 'Recent projects', digest } });
+          if (aborted()) return;
+          // null or no projects: it saw none (not a failure); anything but the JSON: it broke.
+          const answer = readAnswer(out && out.text);
+          local = answer.kind === 'projects' ? { outcome: 'found', projects: answer.projects } : answer.kind === 'none' ? { outcome: 'none' } : { outcome: 'broke', failure: { error: 'The agent did not answer as asked.' } };
+        } catch (error) {
+          if (aborted()) return;
+          local = { outcome: 'broke', failure: failure(error, chosen, 'The agent did not answer.') };
+        }
       }
-      const choice = connectChoice(chosen, (() => { try { return models(); } catch { return null; } })());
-      const message = [
-        `<recent_work note="Read on this Mac without a model, the last ${DIGEST_DAYS} days.">\n${JSON.stringify(digest, null, 1)}\n</recent_work>`,
-        `Today is ${now().slice(0, 10)}.`,
-        'Name their recent projects now, as the JSON object only.',
-      ].join('\n\n');
-      try {
-        const out = await agents.turn({ choice, kind: 'projects', system: prompts.PROJECTS_SYSTEM_PROMPT, message, session: null, dirs: [], signal: controller.signal, meta: { kind: 'projects', label: 'Recent projects', digest } });
-        const read = readProjects(out.text);
-        if (controller.signal.aborted) return;
-        // Named none (nothing it saw was a project): done with none, as an empty Mac is, not a failure to try again.
-        st.projects = read ? { status: 'done', provider: chosen, projects: read.projects, ...(read.projects.length ? {} : { empty: true }), started: st.projects.started, ended: now() } : { status: 'failed', provider: chosen, projects: [], error: 'The agent did not answer as asked.', ended: now() };
-      } catch (error) {
-        if (controller.signal.aborted) return;
-        // What an earlier run found stays on screen (2026-10-14: a run again that failed emptied the list).
-        st.projects = { status: 'failed', provider: chosen, projects: st.projects.projects || [], ...failure(error, chosen, 'The agent did not answer.'), ended: now() };
-      } finally {
-        if (st.controllers.projects === controller) st.controllers.projects = null;
-      }
-      changed(ctx.dataRoot);
-    })();
+      if (local.outcome === 'found') { finish({ status: 'done', projects: local.projects, from: [CLI_NAMES[chosen]] }); return; }
+      // 2. Their ChatGPT and Claude, from their memory of the person.
+      let asked = [];
+      try { asked = await askAssistants(ctx, st, controller, chosen); } catch (error) { asked = [{ app: 'assistants', outcome: 'broke', error: String((error && error.message) || error).slice(0, 300) }]; }
+      if (aborted()) return;
+      const found = asked.filter((one) => one.outcome === 'found');
+      if (found.length) { finish({ status: 'done', projects: mergeProjects(found.map((one) => one.projects), { existing }), from: found.map((one) => one.app) }); return; }
+      // 3. None found. A route that broke says so (Try again); else nobody knew of one: the person adds their own.
+      const broke = asked.find((one) => one.outcome === 'broke');
+      if (local.outcome === 'broke') { failed(local.failure); return; }
+      if (broke) { failed({ error: broke.error || `${broke.app} did not answer` }); return; }
+      say('discovery', 'No recent projects: nothing on this Mac or in their assistants names one', { asked: asked.map((one) => [one.app, one.outcome]) });
+      finish({ status: 'done', projects: [], empty: true, reason: 'no-context', asked: asked.map((one) => ({ app: one.app, outcome: one.outcome })) });
+    })().catch((error) => failed({ error: String((error && error.message) || error).slice(0, 300) }));
     return publicOf(st);
+  }
+
+  /** The Keychain answer for `dataRoot` (./prefs.cjs), waited for while it is missing → 'allowed' | 'declined' | null. */
+  async function keychainAnswer(dataRoot, signal) {
+    const read = () => { try { return (prefs.get(dataRoot) || {}).keychain || null; } catch { return null; } };
+    const until = Date.now() + keychainWaitMs;
+    let answer = read();
+    while (!answer && Date.now() < until && !signal.aborted) {
+      await new Promise((resolve) => { setTimeout(resolve, keychainPollMs); });
+      answer = read();
+    }
+    return answer;
+  }
+
+  /**
+   * ChatGPT and Claude asked for the person's projects (./assistant-projects.cjs), only with their leave to use their
+   * browser's sign-ins (S11: the answer alone, never asked for want of one). The provider's own assistant first, so its
+   * projects lead when both answer. → [{ app, outcome, projects?, error? }], [] when they may not be asked.
+   */
+  async function askAssistants(ctx, st, controller, chosen) {
+    if (!askers) return [];
+    if (!(prefs.get(ctx.dataRoot) || {}).keychain) { st.projects = { ...st.projects, route: 'assistants', waiting: 'keychain' }; changed(ctx.dataRoot); }
+    const answer = await keychainAnswer(ctx.dataRoot, controller.signal);
+    if (controller.signal.aborted) return [];
+    if (answer !== 'allowed') {
+      say('discovery', `Not asking ChatGPT or Claude about projects: ${answer === 'declined' ? 'the person kept their browser\'s sign-ins to their browser' : 'the browser question was not answered'}`);
+      return [];
+    }
+    const apps = chosen === 'openai' ? ['ChatGPT', 'Claude'] : ['Claude', 'ChatGPT'];
+    st.projects = { ...st.projects, route: 'assistants', asking: apps };
+    delete st.projects.waiting;
+    changed(ctx.dataRoot);
+    say('discovery', `Asking ${apps.join(' and ')} about recent projects`);
+    return askers.ask({ apps, question: prompts.assistantProjectsPrompt(now()), signal: controller.signal });
   }
 
   /**
@@ -302,9 +376,10 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
         detected = await scanner.run('detect', { homeDir, access: accessSpec(access(ctx), ctx.dataRoot), zotero: zotero ? zotero.status() : null, github: github ? github.status() : null, connectors: connected }).catch(() => null);
         if (controller.signal.aborted) return;
       }
-      const { evidence, sites } = await toolEvidence({ homeDir, env, browserId, access: access(ctx), github, zotero, connectors, cookies: holds, detected });
+      const { evidence, sites, history } = await toolEvidence({ homeDir, env, browserId, access: access(ctx), github, zotero, connectors, cookies: holds, detected, diskAccess });
       if (controller.signal.aborted) return;
-      st.tools = { ...st.tools, results: readTools('', evidence), evidence };
+      // `history: 'needs-disk-access'`: Safari's history was not read (no Full Disk Access), so it was not "none found".
+      st.tools = { ...st.tools, results: readTools('', evidence), evidence, ...(history ? { history } : {}) };
       changed(ctx.dataRoot);
       say('discovery', `Tools found without a model: ${Object.entries(evidence).filter(([, fact]) => fact.used).map(([id]) => shownName(id)).join(', ') || 'none'}`, evidence);
       // Their leave given: the sign-ins the chosen browser holds come into Engelbart's browser now (one macOS prompt for
