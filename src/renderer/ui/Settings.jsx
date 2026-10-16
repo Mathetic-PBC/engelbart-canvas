@@ -115,7 +115,8 @@ function TestData({ test, close }) {
 
 // Import your context (2026-10-13; "Guided setup" from 2026-10-10 until the "Onboarding" workspace: "the redo of onboarding
 // shouldn't be called guided setup. It should be a popup modal in front of the workspace"). Start closes the window and
-// opens it over the workspace (App.jsx), its imports going to the project you're in; from All projects, onboarding's.
+// opens it over the workspace (App.jsx), its imports going to the project you're in; from All projects, over the last
+// project open. Its first question is how to import (2026-10-16), never the roles or projects.
 function GuidedSetupPage({ close }) {
   return (
     <Group title="Your context" data-guided-setup="1">

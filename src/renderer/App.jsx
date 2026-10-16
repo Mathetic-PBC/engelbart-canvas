@@ -332,10 +332,10 @@ export default function App() {
     }, 1200); // after the workspace has drawn itself
     return () => { alive = false; clearTimeout(timer); };
   }, [openProjectId]);
-  // Start (the offer's, or Settings ▸ Guided setup's): onboarding from its first screen, as a new user has it. Inside a
-  // project (2026-10-10, "guided setup shouldn't create a new project") it remembers the workspace it left: its screens
-  // have no Create, and it ends in a Welcome workspace added there. Started again during the setup, it keeps where it was from.
-  const startGuided = React.useCallback(() => {
+  // Start (the offer's, or Settings ▸ Import context's): Import your context over a project, at its first question (how
+  // to import). With no project at all, onboarding from its first screen, as a new user has it; started again during it,
+  // it keeps where it was from.
+  const startGuided = React.useCallback(async () => {
     const now = latest.current;
     const here = now.phase === 'workspace' && now.tree ? now.tree.project.id : null;
     const from = here
@@ -345,12 +345,25 @@ export default function App() {
     setConnectPopup(null);
     // In a workspace: Import your context opens over it, the imports going to its project; nothing is left.
     if (here) { setImportModal({ projectId: here, workspaceId: from.workspaceId || null }); return; }
+    // Anywhere else but the onboarding itself (the projects screen): over the project Engelbart would open at launch, the
+    // last one open, else the first (2026-10-16: "clicking import context should bypass the role and project selection
+    // screens"). No project at all: the onboarding from its first screen, which makes one.
+    if (now.phase !== 'create') {
+      const list = await loadHome().catch(() => []);
+      if (list.length) {
+        const last = await api.lastOpen().catch(() => null);
+        const id = last && list.some((project) => project.id === last.projectId) ? last.projectId : list[0].id;
+        await openProject(id, last && last.projectId === id ? last : null);
+        setImportModal({ projectId: id, workspaceId: last && last.projectId === id ? last.workspaceId || null : null });
+        return;
+      }
+    }
     setTree(null);
     setEntry(null);
     setGuided(from || true);
     setRun((n) => n + 1);
     setPhase('create');
-  }, []);
+  }, [loadHome, openProject]);
   React.useEffect(() => {
     window.addEventListener(START_GUIDED_SETUP, startGuided);
     return () => window.removeEventListener(START_GUIDED_SETUP, startGuided);

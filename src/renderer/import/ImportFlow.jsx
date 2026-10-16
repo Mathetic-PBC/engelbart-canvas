@@ -184,11 +184,12 @@ function rememberNotesConsent() { try { window.localStorage.setItem(NOTES_KEY, '
  */
 export default function ImportFlow({ api, mode = 'new', into = null, workspaceId = null, intoProject = null, onDone = () => {}, onClose = () => {}, edit = false, copy = {}, setCopy = () => {}, preview = null, platform = 'darwin', renderLibrarian = null }) {
   // Import context from inside a project (2026-10-14: "it should just basically start from if they picked manual import"):
-  // the source picker at once, for this project; no intro, work questions or project list again. The permissions already
-  // answered are not asked again (the browser's sign-ins, the folders, agents in the browser are kept by main; Apple
-  // Notes' consent below).
+  // for this project, no intro, work questions or project list again; its first question is how to import (2026-10-16:
+  // "clicking import context should bypass the role and project selection screens and should start from the popup asking
+  // if they want manual or agent importing"), then the sources (`methodFirst`). The permissions already answered are not
+  // asked again (the browser's sign-ins, the folders, agents in the browser are kept by main; Apple Notes' consent below).
   const [F, setF] = React.useState(() => (mode === 'modal' && into ? {
-    ...fresh(), screen: 'picker', dialog: null,
+    ...fresh(), screen: 'picker', dialog: 'import-method', methodFirst: true,
     customProjects: [{ id: `project:${into}`, title: (intoProject && intoProject.name) || 'This project', description: (intoProject && intoProject.description) || '', recent: '' }],
     picked: [`project:${into}`], notesConsent: notesConsented(),
   } : fresh()));
@@ -499,10 +500,22 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   /* -------- the run */
   // How should Engelbart import your sources? (From Amitav, 2026-10-15), asked at Import to Engelbart: in the background
   // with agents (after what that means is said and understood), or manually, the librarian asking before anything comes in.
-  const chooseMethod = () => { const now = latest.current; if ((runApps(now).length || runAdded(now).length) && now.picked.length) set({ dialog: 'import-method' }); };
-  const inBackground = () => set({ mode: 'auto', dialog: 'agents-consent' });
+  // Opened from a project (`methodFirst`), the question comes first: answered there, the sources follow, and Import to
+  // Engelbart goes on with that answer (what agents do is still said after the sources are chosen).
+  const atFirstQuestion = () => { const now = latest.current; return !!now.methodFirst && !now.mode && now.dialog === 'import-method'; };
+  const chooseMethod = () => {
+    const now = latest.current;
+    if (!((runApps(now).length || runAdded(now).length) && now.picked.length)) return;
+    if (now.methodFirst && now.mode === 'auto') { set({ dialog: 'agents-consent' }); return; }
+    if (now.methodFirst && now.mode === 'manual') { manually(); return; }
+    set({ dialog: 'import-method' });
+  };
+  const inBackground = () => { if (atFirstQuestion()) { set({ mode: 'auto', dialog: null }); return; } set({ mode: 'auto', dialog: 'agents-consent' }); };
   const understood = () => { latest.current = { ...latest.current, mode: 'auto', agentsConsent: true, dialog: null }; set({ mode: 'auto', agentsConsent: true, dialog: null }); runGate(); };
-  const manually = () => { latest.current = { ...latest.current, mode: 'manual', dialog: null }; set({ mode: 'manual', dialog: null }); runGate(); };
+  const manually = () => {
+    if (atFirstQuestion()) { set({ mode: 'manual', dialog: null }); return; }
+    latest.current = { ...latest.current, mode: 'manual', dialog: null }; set({ mode: 'manual', dialog: null }); runGate();
+  };
 
   /** What comes before an import starts, either way: which project opens first, Apple Notes' permission, Allow Engelbart
    *  to organize your research (the folders macOS guards, asked once); then the run, or the librarian. */
@@ -1032,7 +1045,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
               <span className="import-mode-copy"><b>Import manually with fine-grained permissions</b><small>Engelbart will ask for your input before importing anything and will use permission prompts to ask for explicit permission before accessing anything.</small></span>
             </button>
           </div>
-          <div className="mf mf-start"><button type="button" className="link" onClick={close}>Back</button></div>
+          {/* the first question from a project: nothing behind it, so Back closes Import context */}
+          <div className="mf mf-start"><button type="button" className="link" data-import-method-back="1" onClick={atFirstQuestion() ? () => { api.saveFlow(null).catch(() => {}); onClose({}); } : close}>Back</button></div>
         </>
       );
     }

@@ -19,7 +19,8 @@
 //             line under them (Skip; "Needs you" brings one back) → Your imports are complete, with the logos
 //     manual: the librarian's chat (its Back to the tools screen, no dividing lines), what was specified told to it; put
 //             away, the projects are made and the first opens
-//   → Import context from Settings: the tools screen at once, nothing ticked.
+//   → Import context from Settings: how to import first (in the project, and from All projects over the last one), then
+//     the sources, nothing ticked.
 // ENGELBART_IMPORT_SHOTS=<dir> saves pictures.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -462,12 +463,36 @@ app.whenReady().then(async () => {
     await press(wc, '[data-import-status-close]');
     await until(() => js(wc, '!document.querySelector("[data-import-status]")'), 'Open library closes it');
     }
-    /* Import context from Settings, inside the project (2026-10-14): straight to the source picker, nothing ticked */
-    await js(wc, 'window.dispatchEvent(new CustomEvent("engelbart:guided-setup"))'); // Settings ▸ Import context ▸ Start
-    await until(() => js(wc, '!!document.querySelector("[data-import-flow=modal]")'), 'Import context over the project');
-    const modal = await js(wc, '(()=>{const el=document.querySelector("[data-import-flow=modal]");return {screen:el.dataset.screen,dialog:el.dataset.dialog,ticked:document.querySelectorAll("[data-import-flow=modal] [data-app][aria-checked=true]").length}})()');
-    assert.deepEqual(modal, { screen: 'picker', dialog: '', ticked: 0 }, `the picker at once, nothing ticked: ${JSON.stringify(modal)}`);
+    /* Import context from Settings (2026-10-16: "should bypass the role and project selection screens and should start from
+       the popup asking if they want manual or agent importing"): how to import first, then the sources, nothing ticked */
+    const modalState = () => js(wc, '(()=>{const el=document.querySelector("[data-import-flow=modal]");return el?{screen:el.dataset.screen,dialog:el.dataset.dialog,ticked:document.querySelectorAll("[data-import-flow=modal] [data-app][aria-checked=true]").length}:null})()');
+    const fromSettings = async (where) => {
+      await js(wc, 'window.dispatchEvent(new CustomEvent("engelbart:guided-setup"))'); // Settings ▸ Import context ▸ Start
+      await until(async () => { const m = await modalState(); return m && m.dialog === 'import-method'; }, `How to import, first (${where})`);
+      assert.equal(await js(wc, '!!document.querySelector("[data-import-screen=roles],[data-import-screen=work],[data-import-screen=projects]")'), false, 'no roles, work or projects screen');
+    };
+    await fromSettings('in the project');
     await shot(wc, '16-settings-import');
+    await press(wc, MODE === 'auto' ? '[data-import-method=agents]' : '[data-import-method=manual]');
+    await until(async () => { const m = await modalState(); return m && m.dialog === ''; }, 'the sources next');
+    assert.deepEqual(await modalState(), { screen: 'picker', dialog: '', ticked: 0 }, 'the picker, nothing ticked');
+    await shot(wc, '16b-settings-sources');
+    // Back on the first question closes Import context; from All projects it opens over the last project, at the question.
+    await press(wc, '[data-import-flow=modal] .foot .back-skip .link');
+    await until(async () => !(await modalState()), 'Cancel closes it');
+    await fromSettings('in the project, again');
+    await press(wc, '[data-import-method-back]');
+    await until(async () => !(await modalState()), 'Back on the first question closes it');
+    if (await has(wc, '[data-tour-close]')) { await press(wc, '[data-tour-close]'); await until(() => js(wc, '!document.querySelector("[data-sidebar-tour]")'), 'the sidebar tour put away'); }
+    // The project's menu (a press can land as it closes from the last one: pressed again until it is open)
+    await until(async () => { if (await has(wc, '[data-sb-switch-project]')) return true; await press(wc, '[data-sb-trigger=project]'); await new Promise((resolve) => setTimeout(resolve, 400)); return has(wc, '[data-sb-switch-project]'); }, 'the project\'s menu');
+    await press(wc, '[data-sb-switch-project]');
+    await press(wc, '[data-sb-all-projects]');
+    await until(() => js(wc, '!!document.querySelector("[data-new-project]") && !document.querySelector("[data-sb-trigger=project]")'), 'All projects');
+    await fromSettings('from All projects');
+    assert.equal(await has(wc, '[data-sb-trigger=project]'), true, 'over a project, not the projects screen');
+    await press(wc, '[data-import-method-back]');
+    await until(async () => !(await modalState()), 'closed');
     console.log(`smoke-import-context (${MODE}): ok (${titles.length} projects found, ${ticked.length} sources ticked, ${MODE === 'auto' ? `${logos.length} imported tiles` : 'the librarian\'s chat put away'})`);
     app.exit(0);
   } catch (error) {
