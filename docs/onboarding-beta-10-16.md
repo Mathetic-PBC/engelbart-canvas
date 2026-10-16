@@ -221,9 +221,38 @@ Readings taken where the note left room:
 - S3: "an update exists" is the tool check's outdated/incompatible; the agent popup's Skip goes on to Import your context,
   which asks again.
 
+Checked against real accounts afterwards (Hudson's Chrome, read-only, nothing sent or changed):
+- C2 signed out (no cookies): every check page redirects to its own login (GitHub /login, Drive accounts.google.com
+  ServiceLogin, Overleaf /login, Zotero /user/login, Evernote /Login.action) and checkResult reads each as false. Signed in
+  (the page's own fetch, redirects not followed): GitHub, Drive, Overleaf and Zotero answer 200, read as true. Evernote: not
+  signed in on that account.
+- D2: ChatGPT's /api/auth/session and Claude's /api/organizations say signed in; the message box is found on both (ChatGPT's
+  is no longer #prompt-textarea: the `div[contenteditable][role=textbox]` pick finds its "Ask ChatGPT" editor; Claude's
+  "Write your prompt to Claude"). Not checked: the Send button's name once text is in (it only shows then; Enter is the
+  fallback). The list and read endpoints answer in the shapes the readers expect.
+- C1: the parser read four real `binarycookies` files this Mac's WebKit wrote (ChatGPT, Atlas, Zoom, Opal: 139 cookies, 0
+  malformed, creation dates before each file's last write, expiry right). Safari's own file is unreadable without Full Disk
+  Access (EPERM) and `readSafariFile` throws `needsDiskAccess`, as C1 wants. Safari's own file with access: not yet.
+- K2: Linear's read tool names (agents.cjs `reads`) are all tools of Linear's MCP server.
+- Found on the way: ChatGPT's conversation list leaves out every chat inside a ChatGPT project (none of a project's 9 among
+  519): fixed in web-chats.cjs (8834c2d). Claude's list includes its projects' chats.
+
 Open:
-- Not run against real signed-in accounts: Safari's cookie file, Evernote/Linear OAuth, GitHub/Overleaf/Zotero check pages
-  with real cookies, the ChatGPT/Claude project question.
-- The auto smoke ends with a native SIGABRT at quit ("Napi::Error") after printing ok: not traced (teardown, not the run).
+- Not run against real signed-in accounts: Evernote/Linear OAuth end to end, Safari's own cookie file with Full Disk
+  Access, the ChatGPT/Claude project question sent for real.
+- The auto smoke once ended with a native SIGABRT at quit: node-pty's exit callback (ThreadSafeFunction::CallJS → a
+  Napi::Error) during node::FreeEnvironment (crash report Electron-2026-10-16-050733.ips). The smokes end with app.exit, which
+  skips the quit that closes terminal sessions. Not reproduced since (5 smoke runs, 58 isolated runs). A Claude Code or Codex
+  sign-in waiting in the browser was the one PTY a real quit left running: requestQuit now ends it first (508c2fe).
 - The old Connect your library choose screen still has its own profile and Keychain modals.
-- scripts/smoke-connect-tools.cjs, smoke-provider-connect.cjs, smoke-provider-real.cjs still walk the removed tools screen.
+- scripts/smoke-provider-real.cjs (the real Claude Code and Codex, detection only; every install, update, sign-in and
+  sign-out stubbed and counted) is rewritten for the agent popup but not run: this Mac's `claude` is a wrapper whose
+  handling of CLAUDE_CONFIG_DIR wasn't checked, so it might read the real ~/.claude.
+
+The three smokes that walked the removed tools screen walk the agent popup now: smoke-connect-tools passes, and so do all
+four scenarios of smoke-provider-connect. Rewriting them found two bugs, both fixed in ImportFlow.jsx:
+- The popup opened for one CLI (Claude Code turned the agents away) dead-ended when the person picked the other: Codex
+  showed Connected and nothing went on (the effect waited for Claude Code; the popup's onDone was off). The choice made in
+  the popup now goes on once it runs.
+- With no browser whose sign-ins can be read, the browser question was declined without being asked but never saved, so
+  the recent projects' ChatGPT/Claude route waited ten minutes for an answer (discover.cjs keychainAnswer). It is saved now.
