@@ -2,7 +2,9 @@
 
 // Pasting into a quote (src/renderer/workspace/DocEditor.jsx editorPaste, 2026-10-07). A line that starts with `> ` is a
 // quote; text of several lines pasted into it used to put only its first line there, and the rest came out below as
-// plain lines. Now every pasted line is a quote line of its own. There is no document here: the editor and the
+// plain lines. Now every pasted line is a quote line of its own. A `>` typed with no space before the paste makes the
+// same quote (2026-10-16), and a quote is a line the person edits like any other: it is not locked, its `> ` shows with
+// the caret on it, and Backspace at the start of its text makes it plain. There is no document here: the editor and the
 // selection are stand-ins, as in doc-editor-edit.
 
 const test = require('node:test');
@@ -40,7 +42,8 @@ function mounted(lines, at, a, b = a) {
   editor.componentDidMount();
   editor.caretInfo = () => ({ anchor: { line: at, offset: a }, focus: { line: at, offset: b } });
   const paste = (text) => editor.editorPaste({ clipboardData: { files: [], getData: (type) => (type === 'text/plain' ? text : '') }, preventDefault() {} });
-  return { editor, paste, lines: () => editor.lines() };
+  const key = (name) => editor.editorKey({ key: name, metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, preventDefault() {} });
+  return { editor, paste, key, lines: () => editor.lines() };
 }
 
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
@@ -86,4 +89,43 @@ test('a single line pasted into a quote is just text in it, and pasting outside 
   const bullet = mounted(['- item'], 0, 6);
   bullet.paste('a\nb');
   assert.deepEqual(bullet.lines(), ['- itema', 'b'], 'a bullet is untouched too: the lines after the first are lines');
+});
+
+test('`>` with no space, then a paste: the quote is `> ` and what was pasted, one line or several', () => {
+  const one = mounted(['Notes', '>'], 1, 1);
+  one.paste('pasted words');
+  assert.deepEqual(one.lines(), ['Notes', '> pasted words']);
+  assert.deepEqual(one.editor.caret, { line: 1, offset: '> pasted words'.length });
+  const several = mounted(['>'], 0, 1);
+  several.paste('first\nsecond');
+  assert.deepEqual(several.lines(), ['> first', '> second'], 'every line quoted, each with its space');
+  const inside = mounted(['>kept'], 0, 1);
+  inside.paste('x');
+  assert.deepEqual(inside.lines(), ['> xkept'], 'a quote typed tight gets its space when something is pasted into it');
+});
+
+test('a quote is a line the person edits: not locked, drawn editable, its `> ` shown faint with the caret on it', () => {
+  const m = mounted(['Notes', '> a quote', 'After'], 1, 4);
+  const ls = m.lines(), p = { type: 'quote', text: 'a quote' };
+  assert.equal(m.editor.lockedAt(ls, 1), false);
+  assert.equal(m.editor.lockedAt(['>'], 0), false, 'a `>` just typed is not locked either');
+  assert.equal(m.editor.endsOnCard(['Notes', '> a quote']), false, 'a document may end on a quote: no line is added under it');
+  const drawn = m.editor.lineHtml(1, ls[1], p, false, false, undefined, false);
+  assert.doesNotMatch(drawn, /contenteditable="false"|data-readonly/);
+  assert.match(drawn, />a quote</);
+  const active = m.editor.lineHtml(1, ls[1], p, true, false, undefined, false);
+  assert.match(active, /data-src="&gt; " data-open="1" style="color:#b5b5b5">&gt; <\/span>/, 'the `> ` is the line\'s own first characters');
+});
+
+test('Backspace at the start of a quote\'s text makes it a plain line; elsewhere in it, it deletes as usual', () => {
+  const m = mounted(['Notes', '> a quote'], 1, 2);
+  m.key('Backspace');
+  assert.deepEqual(m.lines(), ['Notes', 'a quote']);
+  assert.deepEqual(m.editor.caret, { line: 1, offset: 0 });
+  const tight = mounted(['>tight'], 0, 1);
+  tight.key('Backspace');
+  assert.deepEqual(tight.lines(), ['tight'], 'a quote typed without its space, the same');
+  const mid = mounted(['> a quote'], 0, 5);
+  mid.key('Backspace');
+  assert.deepEqual(mid.lines(), ['> a quote'], 'inside the text the key is the browser\'s (nothing changed by the handler)');
 });

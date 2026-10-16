@@ -872,16 +872,18 @@ export default class DocEditor extends React.Component {
   parsedOf(ls) { let ps = this.parsedCache.get(ls); if (!ps) { ps = parseLines(ls); this.parsedCache.set(ls, ps); } return ps; }
   editorEl() { return this.edRef.current; }
   // Lines the person cannot type in: an @bart line once something stands under it, a run at work, the closing line of an
-  // answer (it is the card's foot), an answer folded away, the lines of an @brainstorm card, and the prototype's `> `
-  // replies. The text of an answer can be edited (2026-09-21): it is a drawn-prefix line, as a bullet is. So is a question
-  // in edit mode (2026-10-03), until Enter, Escape or the caret leaving it ends that.
+  // answer (it is the card's foot), an answer folded away, the lines of an @brainstorm card. The text of an answer can be
+  // edited (2026-09-21): it is a drawn-prefix line, as a bullet is. So is a question in edit mode (2026-10-03), until
+  // Enter, Escape or the caret leaving it ends that. A `> ` quote was locked too, as the prototype's replies were; since
+  // 2026-10-16 it is the person's own block quote, edited like any line (typing `>` used to lock the line at once and send
+  // the caret to a new line under it).
   lockedAt(ls, i) {
     if (this.editing && this.editing.q === i) return false;
     const ps = this.parsedOf(ls), p = ps[i] || parseLine('');
     if (p.type === 'build' || p.type === 'title' || this.collapsedOf(ls).has(i)) return true;
     if (p.type === 'reply') return p.folded || this.cardsOf(ls).lines.has(i) || (ATTRIBUTION_RE.test(p.text) && (ps[i + 1] || parseLine('')).type !== 'reply');
     if (p.type === 'bart') return ls[i + 1] != null && UNDER_BART.includes(ps[i + 1].type);
-    return isAnswer(p.type);
+    return isAnswer(p.type) && p.type !== 'quote';
   }
   // A card is closed by its foot, never by a line the caret can sit on: the document needs a line of its own after it.
   // So does a code block, or the caret below it would land on its closing fence and type into it.
@@ -1250,9 +1252,11 @@ export default class DocEditor extends React.Component {
       return `<div ${rawA}${mark ? ' data-paper-line="1"' : ''} style="padding:${first ? 12 : 0}px 16px ${closes ? 10 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 8 : 0}px;color:#262626;font-size:16px;line-height:1.65;cursor:text"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 14px;border-left:2px solid #d6d6d6"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
-      // The prototype's replies: read-only, as they were.
+      // A block quote, its lines one grey block (2026-10-16: editable, as any line is). With the caret on it its `> ` shows,
+      // faint, at the start of the text, the characters it is in the source, so the caret and offsets are as typed.
       const ls = this.lines(), up = i > 0 && parseLine(ls[i - 1]).type === 'quote', down = parseLine(ls[i + 1] ?? '').type === 'quote';
-      return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;padding:${up ? 0 : 8}px 16px ${down ? '0' : '12px'};background:#fafafa;border-radius:${radius(!up, !down)};margin-bottom:${down ? '0' : '14px'};color:#4d4d4d;font-size:16px"><span class="t" style="display:block;min-height:${p.text ? 31 : 12}px;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">${inlineHtml(p.text, this.mentionOpts) || '<br>'}</span></div>`;
+      const content = active ? this.activeHtml(tokensOf(p, line), null, 'color:#b5b5b5') : inlineHtml(p.text, this.mentionOpts);
+      return `<div ${raw} style="cursor:text;padding:${up ? 0 : 8}px 16px ${down ? '0' : '12px'};background:#fafafa;border-radius:${radius(!up, !down)};margin-bottom:${down ? '0' : '14px'};color:#4d4d4d;font-size:16px"><span class="t" style="display:block;min-height:${p.text ? 31 : 12}px;padding:2px 0 2px 12px;border-left:2px solid #dcdcdc">${content || '<br>'}</span></div>`;
     }
     if (p.type === 'img') {
       const src = p.src.startsWith('img:') ? ((this.props.images || {})[p.src.slice(4)] || '') : p.src;
@@ -2695,6 +2699,8 @@ export default class DocEditor extends React.Component {
       const p = psOld[Number(d.dataset.line)] || parseLine(raw); if (this.lockedAt(old, Number(d.dataset.line))) return raw;
       const t = d.querySelector('.t'); let txt = t ? this.activeRaw(t) : '';
       if (p.type === 'h' && Number(d.dataset.line) !== this.state.activeLine && !/^#{1,3} /.test(txt)) txt = raw.slice(0, p.level + 1) + txt;
+      // So is a quote's `> ` (2026-10-16), typed into before the line was redrawn with it.
+      if (p.type === 'quote' && Number(d.dataset.line) !== this.state.activeLine) { const lead = raw.slice(0, raw.length - p.text.length); if (!txt.startsWith(lead)) txt = lead + txt; }
       // Typed into a fence still drawn as its language: the backticks are put back in front of what was typed.
       if (isFence(p) && Number(d.dataset.line) !== this.state.activeLine) txt = p.text.slice(0, p.text.length - fenceShown(p).length) + txt;
       if (p.type === 'reply') return sameLine(p, txt);
@@ -2837,6 +2843,14 @@ export default class DocEditor extends React.Component {
       const span = mentionBeside(cur, a, e.key === 'Backspace');
       if (span) { e.preventDefault(); this.writeText(i, cur.slice(0, span[0]) + cur.slice(span[1]), { line: i, offset: span[0] }); this.setState({ mention: null, activeLine: i }); return; }
     }
+    // Backspace at the start of a quote's text (2026-10-16) takes its whole `> ` off, as it takes a bullet's mark: the line is
+    // plain again. A heading's `# ` goes the same way, one Backspace after it, since `#x` is no heading; `>x` is still a quote.
+    if (e.key === 'Backspace' && collapsed && !mod && p.type === 'quote' && a > 0 && a === line.length - p.text.length) {
+      e.preventDefault();
+      this.setLines((x) => x.map((l, j) => (j === i ? p.text : l)), { line: i, offset: 0 });
+      this.setState({ activeLine: i, mention: null });
+      return;
+    }
     if (e.key === 'Backspace' && collapsed && a === 0) {
       if (isMarked(p.type)) {
         e.preventDefault();
@@ -2946,7 +2960,8 @@ export default class DocEditor extends React.Component {
     e.preventDefault();
     const data = e.clipboardData || window.clipboardData;
     let text = (data.getData('text/plain') || '').replace(/\r/g, ''); if (!text) return;
-    const ls = this.lines(), i = c.anchor.line, line = ls[i] ?? '', p = this.parsedOf(ls)[i] || parseLine(line), cur = lineText(p, line);
+    const ls = this.lines(), i = c.anchor.line, p = this.parsedOf(ls)[i] || parseLine(ls[i] ?? '');
+    let line = ls[i] ?? '', cur = lineText(p, line);
     // Copied from a PDF (MATH-24): the page's line breaks, split words and ligatures come out (model/paste.js). Not in code.
     if (!isCode(p) && !isFence(p)) text = pdfText(text);
     // Copied from a web page (2026-10-02), the plain text has each link's title only: the page's HTML gives the addresses
@@ -2956,7 +2971,12 @@ export default class DocEditor extends React.Component {
     // A quote's lines are all it holds (2026-10-07), so blank lines at the ends of a paste would only leave quote lines of
     // nothing, which cannot be edited away.
     if (p.type === 'quote') text = text.replace(/^\n+|\n+$/g, '');
-    const same = c.anchor.line === c.focus.line, a = same ? Math.min(c.anchor.offset, c.focus.offset) : c.anchor.offset, b = same ? Math.max(c.anchor.offset, c.focus.offset) : a;
+    const same = c.anchor.line === c.focus.line;
+    let a = same ? Math.min(c.anchor.offset, c.focus.offset) : c.anchor.offset, b = same ? Math.max(c.anchor.offset, c.focus.offset) : a;
+    // `>` typed with no space, then a paste after it (2026-10-16): the quote is written `> ` and what was pasted, as when
+    // the space was typed. `>x` reads as a quote here and on the Stage (CommonMark's space is optional); the editor writes
+    // its quotes with the space.
+    if (p.type === 'quote' && /^>(?! )/.test(line) && a >= 1) { line = `> ${line.slice(1)}`; cur = line; a += 1; b += 1; }
     const parts = text.split('\n');
     if (parts.length === 1) { this.writeText(i, cur.slice(0, a) + text + cur.slice(b), { line: i, offset: a + text.length }); return; }
     // A question is one line (2026-10-02): several lines pasted into an @bart, @brainstorm or @discover line that can still
@@ -4002,7 +4022,14 @@ export default class DocEditor extends React.Component {
         return { found: f, browse: b };
       }
     }
-    return { found: mentionAt(text, caret), browse: null };
+    return { found: mentionAt(text, caret, (query) => this.namesHold(query)), browse: null };
+  }
+  // Whether a name the @ menu offers holds `query`, spaces and all (doc.js mentionAt): a library row's or a workspace's,
+  // never an agent's, so `@Bart why` is still a question.
+  namesHold(query) {
+    const q = String(query || '').toLowerCase();
+    const rows = this.props.mentionItems ? this.props.mentionItems(q) : this.props.mentionable || [];
+    return rows.some((r) => r && r.kind !== 'verb' && r.type !== 'chat' && String(r.name || '').toLowerCase().includes(q));
   }
   // The keyboard's row for a menu just read: in a folder its first entry, else the top.
   mentionStart(m, browse) { return browse ? firstPick(folderRows({ browse, listing: browse.listing, query: (m.query || '').toLowerCase() })) : 0; }

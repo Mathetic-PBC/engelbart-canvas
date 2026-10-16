@@ -275,10 +275,20 @@ export function chatMention(name) {
 // What the @ menu is looking for: an `@` and up to 30 characters after it, no space, @ or bracket among them, ending at the
 // caret. A document line and a follow-up field (2026-10-02) read it the same way.
 const MENTION_QUERY_RE = /@([^\s@[\]]{0,30})$/;
-/** The @ menu's query in `text` before `caret` → { query, start } (`start` where its @ stands), or null when there is none. */
-export function mentionAt(text, caret) {
-  const m = String(text ?? '').slice(0, caret).match(MENTION_QUERY_RE);
-  return m ? { query: m[1], start: caret - m[0].length } : null;
+// A name of several words (2026-10-16): past a space the menu keeps reading, up to 60 characters, while a name it offers
+// holds what was typed (`holds`), so `@Meeting with D` still narrows to "Meeting with David". Words no name holds are
+// writing, not a search: the menu closes.
+const NAMED_QUERY_RE = /@([^\s@[\]][^@[\]\n]{0,59})$/;
+/**
+ * The @ menu's query in `text` before `caret` → { query, start } (`start` where its @ stands), or null when there is none.
+ * `holds(query)`, when given, says whether a name the menu offers holds a query with a space in it.
+ */
+export function mentionAt(text, caret, holds) {
+  const before = String(text ?? '').slice(0, caret);
+  const m = before.match(MENTION_QUERY_RE);
+  if (m) return { query: m[1], start: caret - m[0].length };
+  const named = typeof holds === 'function' ? before.match(NAMED_QUERY_RE) : null;
+  return named && holds(named[1]) ? { query: named[1], start: caret - named[0].length } : null;
 }
 /** What a library folder opened from the @ menu writes into the line (MATH-22): `@Folder/`, `@Folder/sub/`, … */
 export const folderPath = (name, rel) => `@${[name, ...(rel ? rel.split('/') : [])].join('/')}/`;
