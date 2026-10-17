@@ -518,6 +518,8 @@ const TOPIC_CHIP_SHOWN = false;
 // An @bart answer's line height (2026-10-15: 15px/1.55), and how many lines its fold must hide to be drawn.
 const CHAT_LINE_PX = 15 * 1.55;
 const CHAT_FOLD_LINES = 4;
+// How long a question just asked is kept where it was on screen (keepAsked): its title and its routing land in that time.
+const ASK_HOLD_MS = 3000;
 // The clipboard's copy of a selection with whole conversations in it, as the document's lines (acrossSource).
 const OWN_LINES = 'application/x-engelbart-lines';
 const STEER_SPLIT = /\s+--steer\s+/i;
@@ -577,9 +579,10 @@ export default class DocEditor extends React.Component {
   // earlier messages, their steps and their prompt, where each card's diff is scrolled to, and the HTML each part of each card was last
   // drawn with (patchBuilds compares these).
   buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildPrompt = new Set(); buildScroll = new Map(); buildDrawn = new Map();
-  // A follow-up just sent (2026-10-13): its question's row to be put where its reply field was (holdFollow),
-  // { key, line, text, top, until }. `wheelAt`: when the person last scrolled the pane with the wheel (caretLineBelow).
-  followHold = null; wheelAt = 0; focusInto = null; armed = null; armedDrawn = false;
+  // A question just asked (2026-10-16, from 2026-10-13's follow-up hold): its row kept where it was on screen, or where its
+  // reply field was, through the redraws that follow (keepAsked), { key, askId, top, until }. `wheelAt`: when the person
+  // last scrolled the pane with the wheel (caretLineBelow, submitTop).
+  askHold = null; wheelAt = 0; focusInto = null; armed = null; armedDrawn = false;
   // An @discover guide's papers being saved, by address: the button's state when it was clicked (it stays disabled on it).
   saving = new Map();
   // The question being edited in place (2026-10-03): { q, original, under, mark } — its line, what it held, the lines of
@@ -682,7 +685,7 @@ export default class DocEditor extends React.Component {
     Promise.resolve().then(() => this.runClock());
     this.wantView = true; this.maybeRestoreView();
     if (typeof ResizeObserver === 'function' && this.editorEl()) {
-      this.resizeObs = new ResizeObserver(() => { const s = this.settle; if (s && s.key === this.key() && Date.now() < s.until) this.applyView(s.pos); });
+      this.resizeObs = new ResizeObserver(() => { const s = this.settle; if (s && s.key === this.key() && Date.now() < s.until) this.applyView(s.pos); else if (this.askHold) this.keepAsked(this.editorEl()); });
       this.resizeObs.observe(this.editorEl());
     }
   }
@@ -713,7 +716,7 @@ export default class DocEditor extends React.Component {
     if (!this.state.mention && this.state.browse) this.setState({ browse: null }); // a folder opened in the menu closes with it (MATH-22)
     if (prevProps.docKey !== this.props.docKey) {
       this.dropEdit(prevProps);
-      this.wantView = true; this.settle = null;
+      this.wantView = true; this.settle = null; this.askHold = null;
       this.history = []; this.future = []; this.caret = null; this.lastHtml = ''; this.lastKey = null; this.selRaw = null; this.openKey = '';
       const s = this.state;
       if (s.activeLine != null || s.mention || s.pop || s.picker) { this.setState({ activeLine: null, mention: null, pop: null, picker: null }); return; }
@@ -852,7 +855,7 @@ export default class DocEditor extends React.Component {
     this.wantView = false;
     if (!this.props.viewOf) return;
     const pos = this.props.viewOf(this.props.viewScope, this.key());
-    this.settle = pos ? { key: this.key(), pos, until: Date.now() + 4000 } : null;
+    this.settle = pos ? { key: this.key(), pos, until: Date.now() + 4000 } : null; this.askHold = null;
     this.applyView(pos);
   }
   applyView(pos) {
@@ -884,9 +887,9 @@ export default class DocEditor extends React.Component {
     clearTimeout(this.viewT); this.viewT = setTimeout(() => { if (this.mounted && this.lastKey === this.key()) this.reportView(this.props, false); }, 300);
   };
   // The person scrolled, clicked or typed: what they do from now on wins over putting the old place back.
-  stopSettling = () => { this.settle = null; };
+  stopSettling = () => { this.settle = null; this.askHold = null; };
   // While the person scrolls the pane, the line being typed on is not kept in place against them (caretLineBelow).
-  paneWheel = () => { this.settle = null; this.wheelAt = Date.now(); };
+  paneWheel = () => { this.settle = null; this.askHold = null; this.wheelAt = Date.now(); };
   // ⌘ (or ⌃) + scroll, and a trackpad pinch, which reaches the page as a ⌃ wheel (2026-10-14, David): the page zooms in and
   // out, between DOC_ZOOM_MIN and DOC_ZOOM_MAX, and the next document opens at it (DOC_ZOOM_KEY). It magnifies: no text
   // rewraps and no box moves against another (docColumnStyle), and what is under the pointer stays under it, up and
@@ -902,7 +905,7 @@ export default class DocEditor extends React.Component {
     this.magnify(next);
     const after = at();
     pane.scrollTop += after.y - before.y; pane.scrollLeft = (pane.scrollLeft || 0) + after.x - before.x;
-    this.settle = null; this.wheelAt = Date.now();
+    this.settle = null; this.askHold = null; this.wheelAt = Date.now();
     clearTimeout(this.zoomT); this.zoomT = setTimeout(() => { try { localStorage.setItem(DOC_ZOOM_KEY, String(this.zoom)); } catch { /* not kept */ } }, 300);
   };
   // The column drawn at `zoom`: its size at 1 is measured on the way out of 1 (it is drawn at 1 then) and let go back at 1.
@@ -958,7 +961,7 @@ export default class DocEditor extends React.Component {
     const d = ed.querySelector(`[data-line="${i}"]`); if (!d) return false;
     const r = d.getBoundingClientRect(), b = box.getBoundingClientRect();
     const pos = { line: i, hash: hashLine(this.lines()[i] || ''), offset: -Math.max(0, Math.round((b.height - r.height) / 2)) };
-    this.settle = { key: this.key(), pos, until: Date.now() + 1500 };
+    this.settle = { key: this.key(), pos, until: Date.now() + 1500 }; this.askHold = null;
     this.applyView(pos);
     if (flash) {
       d.removeAttribute('data-ask-flash'); void d.offsetWidth; d.setAttribute('data-ask-flash', '');
@@ -2569,8 +2572,7 @@ export default class DocEditor extends React.Component {
     if (!thread || !typed || !this.props.onAsk) return;
     const text = withAttachments(typed, this.followImages.get(from) || []), question = refineLine(text), askId = newAskId();
     this.followText.delete(from); this.followImages.delete(from); this.refineOpen.delete(from);
-    const ed = this.editorEl();
-    this.holdField(ed, from, thread.to + 1, question);
+    const ed = this.editorEl(), top = this.fieldTop(ed, from);
     if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     // A search at work stops and its box goes (2026-10-15, David: an empty box stood there, collapsed), so what it would
     // still write finds no place; a direction still waiting to be started goes too, this one replacing it. The runs that
@@ -2587,7 +2589,7 @@ export default class DocEditor extends React.Component {
     const at = (threads(next).find((t) => t.from === from) || thread).to + 1; // the boxes that went were after its first line
     next.splice(at, 0, question, `bart~> ${askId}`); if (at + 2 >= next.length) next.push('');
     const turns = this.turnsBefore(next, at);
-    this.setLines(() => next);
+    this.holdAsked(askId, top); this.setLines(() => next);
     this.setState({ activeLine: null, mention: null });
     this.expectReply(askId); // a question Discover asks about it is answered from the reply field
     this.props.onAsk({ askId, text: `--refine ${text}`, turns, agent: 'discover', refine: true, place: { line: at, text: question } });
@@ -2961,6 +2963,7 @@ export default class DocEditor extends React.Component {
       this.placeStreams(changed.map(([, next]) => next), tops);
       if (keep) this.keepCaretLine(keep);
     }
+    if (changed.length) this.keepAsked(ed);
     this.pruneStreams();
     this.lastHtml = this.editorHtml(); return true;
   }
@@ -3065,17 +3068,37 @@ export default class DocEditor extends React.Component {
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }
     if (land && land.top != null) this.keepCaretLine({ el: ed.querySelector(`[data-line="${land.line}"]`), top: land.top });
-    this.holdFollow(ed, key);
+    this.keepAsked(ed, key);
     this.wantFocus = false; this.syncing = false; this.menuToCaret();
   }
-  // A follow-up just sent (sendFollow): once its question is drawn, its row is put where the reply field's top was, so the
-  // turns folding above it in the same edit do not move what was being looked at.
-  holdFollow(ed, key) {
-    const hold = this.followHold; if (!hold) return;
-    if (hold.key !== key || Date.now() > hold.until) { this.followHold = null; return; }
-    if (this.lines()[hold.line] !== hold.text) return;
-    this.followHold = null;
-    this.keepCaretLine({ el: ed.querySelector(`[data-line="${hold.line}"]`), top: hold.top });
+  /* A question asked (2026-10-16, David: "submitting a question must not move the person's place in the document"): its
+     row stays where it was on screen, or where the reply field it was typed in was, through the redraws that follow it.
+     The turns a follow-up folds above it (foldOlder), the empty line put above a line asked under a card, an answer above
+     it still streaming once the editor no longer has the keyboard (caretLineBelow keeps only a caret's line), a picture
+     above laying itself out again after the redraw: each would move it. Until 2026-10-16 only the follow-up's fold was
+     made up for, on the first draw alone. The pane follows the row by however far it moved, until the question's pending
+     line is answered, ASK_HOLD_MS pass, or the person scrolls, clicks or types in the pane (stopSettling, paneWheel). */
+  // `el`'s top now, if the pane is the person's to keep as it is: no mouse button down, no wheel scroll in the last 400ms,
+  // and `el` in view. Else null: nothing is held.
+  submitTop(el) {
+    const pane = this.scrollRef.current;
+    if (!el || !pane || !pane.getBoundingClientRect || this.pressed || Date.now() - this.wheelAt < 400) return null;
+    const r = el.getBoundingClientRect(), b = pane.getBoundingClientRect();
+    return r.top + r.height <= b.top || r.top >= b.top + b.height ? null : r.top;
+  }
+  // The reply field `from`'s top (submitTop): where the question typed in it goes.
+  fieldTop(ed, from) { return this.submitTop(ed && ed.querySelector(`[data-follow-input="${from}"]`)); }
+  rowTop(ed, i) { return this.submitTop(ed && ed.querySelector(`[data-line="${i}"]`)); }
+  holdAsked(askId, top) { this.askHold = top == null ? null : { key: this.key(), askId, top, until: Date.now() + ASK_HOLD_MS }; }
+  // After a redraw: the question over pending line `askId` back where it was held. Not while a button is down. A redraw
+  // before that line is in the text waits; once it has been and is gone (answered, or its card's), the hold ends.
+  keepAsked(ed, key = this.key()) {
+    const hold = this.askHold; if (!hold || !ed) return;
+    const at = this.lines().indexOf(`bart~> ${hold.askId}`);
+    if (hold.key !== key || Date.now() > hold.until || (at < 1 && hold.seen)) { this.askHold = null; return; }
+    if (at < 1 || this.pressed) return;
+    hold.seen = true;
+    this.keepCaretLine({ el: ed.querySelector(`[data-line="${at - 1}"]`), top: hold.top });
   }
   // The @ menu's line was rewritten under it (a folder's path written in, MATH-22): it hangs from the caret again.
   menuToCaret() {
@@ -3921,11 +3944,12 @@ export default class DocEditor extends React.Component {
     // to take one). A Build's line (`@chat --build`, 2026-10-13) takes one too, marked a Build's (` build`): its card is
     // its answer (doc.js turn.build), and its collapsed row says Build.
     const name = this.startsTitled(gapped, at, turns), build = !!buildRequestOf({ agent, text: p.text });
+    const ed = this.editorEl(); this.holdAsked(askId, this.rowTop(ed, i)); // the line stays where it is on screen (keepAsked)
     this.setLines((x) => {
       const out = this.refining(gap ? [...x.slice(0, i), '', ...x.slice(i)] : x, at);
       out.splice(at + 1, 0, ...add); if (name) out.splice(at, 0, titleLine('', false, { agent, at: askedNow(), ...(build ? { build } : {}) })); return out;
     });
-    const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
+    if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
     this.expectReply(askId);
     const q = name ? at + 1 : at;
     this.props.onAsk({ askId, text: p.text.trim(), turns, agent, place: { line: q, text: ls[i] }, ...(name ? { name: true } : {}) });
@@ -3989,16 +4013,18 @@ export default class DocEditor extends React.Component {
   // stays with unless the line clearly wants another. `line`: an `@bart` line to put in at `i` first (sendFollow), in the
   // same change as its pending line.
   // `before`: a change to the lines made in the same edit (one undo), which keeps their number (sendFollow's fold).
+  // `top`: where the question is kept on screen (keepAsked), the reply field's top for a follow-up; a typed line's own row's.
   // A typed line (`line` null) right under a card's last answer (2026-10-13) gets an empty line above it in the same change,
   // as askInline's does: it starts a conversation of its own, routed with no `current`, and handOff gives it its title line.
-  routeLine(i, line = null, before = null) {
+  routeLine(i, line = null, before = null, top) {
     const now = this.lines(), gap = line == null && this.underCard(now, i), put = line != null ? line : gap ? '' : null;
     const ls = put == null ? now : [...now.slice(0, i), put, ...now.slice(i)], q = gap ? i + 1 : i, p = parseLine(ls[q] || '');
     const askId = newAskId(), add = [`bart~> ${askId}`]; if (q + 1 >= ls.length) add.push('');
     const from = { key: this.props.docKey, props: this.props }; // handed off in this document, wherever the editor is by then
     const inputs = routeInputs(ls, q), current = inputs.current, rule = routeByRule(p.text, { models: this.props.models, current, asking: inputs.asking });
+    const ed = this.editorEl(); this.holdAsked(askId, top !== undefined ? top : this.rowTop(ed, i));
     this.setLines((x) => { const out = before ? before(x) : [...x]; if (put != null) out.splice(i, 0, put); out.splice(q + 1, 0, ...add); return out; });
-    const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
+    if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
     this.expectReply(askId);
     const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: fallbackAgent(current), sure: 0, by: 'none' };
     const level = this.routingLevel(ls, q, p.text, fallback.agent);
@@ -4204,25 +4230,18 @@ export default class DocEditor extends React.Component {
     const ed = this.editorEl();
     const routed = typed && !own && this.props.onRoute, question = routed ? `@bart ${asked}` : own ? `@${token} ${asked}`.trimEnd() : `@${tokenOf(agent)} ${asked}`.trimEnd();
     if (own) agent = agentOf(parseLine(question));
-    this.holdField(ed, from, thread.to + 1, question);
+    // The question goes where the field's top is (keepAsked): the turns folding above it in the same edit move nothing on screen.
+    const top = this.fieldTop(ed, from);
     if (ed && ed.contains(document.activeElement)) document.activeElement.blur();
     const fold = (x) => (discovering ? [...x] : foldOlder(x, thread.turns));
-    if (routed) { this.routeLine(thread.to + 1, question, fold); return; }
+    if (routed) { this.routeLine(thread.to + 1, question, fold, top); return; }
     const askId = newAskId(), add = [question, `bart~> ${askId}`]; if (thread.to + 1 >= ls.length) add.push('');
     const turns = thread.turns.filter((turn) => turn.answered && !turn.pending).map((turn) => withAgent(turnText(ls, turn), turn));
-    this.setLines((x) => { const out = fold(x); out.splice(thread.to + 1, 0, ...add); return out; });
+    this.holdAsked(askId, top); this.setLines((x) => { const out = fold(x); out.splice(thread.to + 1, 0, ...add); return out; });
     this.setState({ activeLine: null, mention: null });
     this.expectReply(askId); // the answer's reply field takes the keyboard (2026-10-16, David; Discover's alone before)
     const refine = agent === 'discover' && this.refiningIn(ls, thread);
     this.props.onAsk({ askId, text: asked, turns, agent, place: { line: thread.to + 1, text: add[0] }, ...(refine ? { refine: true } : {}) });
-  }
-  // Where the reply field `from` is on screen, kept for the question that replaces it (holdFollow): only when it is in view.
-  holdField(ed, from, line, text) {
-    this.followHold = null;
-    const pane = this.scrollRef.current, field = ed && ed.querySelector(`[data-follow-input="${from}"]`);
-    if (!field || !pane || !pane.getBoundingClientRect) return;
-    const r = field.getBoundingClientRect(), b = pane.getBoundingClientRect(); if (r.top + r.height <= b.top || r.top >= b.top + b.height) return;
-    this.followHold = { key: this.key(), line, text, top: r.top, until: Date.now() + 2000 };
   }
   // While the field's @ menu shows, the arrows move in it, Enter or Tab puts the row in and Escape closes it alone; Enter
   // sends, and Escape leaves the field, once it is closed.
