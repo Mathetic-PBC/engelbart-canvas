@@ -2444,9 +2444,9 @@ export default class DocEditor extends React.Component {
     // Collapse is at the top right: the question's corner, or a research box's head (2026-10-16, David). Never here.
     const fold = '<span style="margin-left:auto"></span>';
     // An @discover guide's Save all (2026-10-16, David): words, not a pill, while any of its papers is not in this project,
-    // with how many are left, as each bookmark says Save. A research box's too, once it has finished (every Discover guide is one now).
+    // with how many are left, as each bookmark says Save, right after Copy's box. A research box's too, once it has finished (every Discover guide is one now).
     const left = guide && !folded && this.props.onSavePaper ? this.unsavedPapers(ls, guide) : [], adding = guide && this.savingAll.has(guide.q);
-    if (left.length || adding) lefts.push(`<button type="button" class="bart-text" data-act="papersaveall" data-turn="${guide.q}"${adding ? ' disabled' : ''} style="user-select:none;flex:none;margin-left:6px">${adding ? 'Saving…' : `Save all (${left.length})`}</button>`);
+    if (left.length || adding) lefts.push(`<button type="button" class="bart-text" data-act="papersaveall" data-turn="${guide.q}"${adding ? ' disabled' : ''} style="user-select:none;flex:none">${adding ? 'Saving…' : `Save all (${left.length})`}</button>`);
     // The row starts with Copy's 28px box (2026-10-16: Reply went), 10px in as Delete is from the right, so its glyph stands
     // 16px in, under the question's text and over the reply field's lead.
     return `<div ${raw || ''} contenteditable="false" data-readonly="1" data-foot="${q}" style="user-select:none;cursor:default;display:flex;align-items:center;gap:2px;padding:12px 10px ${closes ? 10 : 6}px 10px;background:${folded ? 'none' : '#fafafa'};border-radius:${radius(false, closes)};margin-bottom:${closes ? '8px' : '0'}">`
