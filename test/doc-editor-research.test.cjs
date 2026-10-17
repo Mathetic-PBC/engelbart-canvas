@@ -146,6 +146,13 @@ test('a Deep box waits five seconds, "Searching in 5 s" with Cancel; Cancel take
   w.editor.askBoxed('box-1');
   for (let k = 0; k < 5; k++) w.tick();
   assert.deepEqual([w.asks.length, w.asks[0].agent, w.asks[0].research], [1, 'discover', true]);
+  // The person goes to another workspace while it counts (2026-10-16): it is still asked, of the document it is in.
+  const gone = [], away = [];
+  const o = mounted(doc, { docTextOf: (key) => (key === 'k' ? o.props.text : 'another workspace'), onRouteGone: (id) => gone.push(id) });
+  o.editor.askBoxed('box-1');
+  o.editor.props = { ...o.props, docKey: 'other', text: 'another workspace', onAsk: (a) => away.push(a) };
+  for (let k = 0; k < 5; k++) o.tick();
+  assert.deepEqual([o.asks.length, o.asks[0] && o.asks[0].askId, away.length, gone.length], [1, 'box-1', 0, 0]);
   // A standard one is asked at once.
   const now = mounted(['@discover tutors', ...answer('Looking.'), '@discover --research tutors', 'bart~> box-2', '']);
   now.editor.askBoxed('box-2');

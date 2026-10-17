@@ -2109,6 +2109,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     onBuildAction,
     onCopyText: (value) => api.copyText(value),
     onStopAsk: (askId) => api.stopBart(askId).catch((error) => onError(error)),
+    // Any open document's text, for a run the editor hands on after it has gone to another (DocEditor linesOf).
+    docTextOf: (key) => docsRef.current[key],
     paperState: guidePaperState,
     onSavePaper: saveGuidePaper,
     madeFiles,

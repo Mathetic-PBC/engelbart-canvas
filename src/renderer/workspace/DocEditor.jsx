@@ -982,6 +982,19 @@ export default class DocEditor extends React.Component {
     this.textNow = null; return text;
   }
   lines() { return this.docText().split('\n'); }
+  // Document `key`'s lines as they are now (2026-10-16): this editor's when it shows it, else the workspace's copy
+  // (props.docTextOf), so a run started here is handed on after the person went to another document. null: not known.
+  // `props` are the ones the editor had when the run started, whose callbacks are that document's.
+  linesOf(key, props = this.props) {
+    if (this.mounted && key === this.props.docKey) return this.lines();
+    const read = this.props.docTextOf || props.docTextOf, text = read ? read(key) : null;
+    return typeof text === 'string' ? text.split('\n') : null;
+  }
+  // Its lines changed: as an edit here when it is shown (one undo step), else through that document's onChange.
+  setLinesOf(key, props, fn) {
+    if (this.mounted && key === this.props.docKey) { this.setLines(fn); return; }
+    const ls = this.linesOf(key, props); if (ls) props.onChange(fn(ls).join('\n'));
+  }
   // Each line read in place (a line inside a code block is code). Kept per array, so a loop over one array reads it once.
   parsedOf(ls) { let ps = this.parsedCache.get(ls); if (!ps) { ps = parseLines(ls); this.parsedCache.set(ls, ps); } return ps; }
   editorEl() { return this.edRef.current; }
@@ -3973,6 +3986,7 @@ export default class DocEditor extends React.Component {
     const now = this.lines(), gap = line == null && this.underCard(now, i), put = line != null ? line : gap ? '' : null;
     const ls = put == null ? now : [...now.slice(0, i), put, ...now.slice(i)], q = gap ? i + 1 : i, p = parseLine(ls[q] || '');
     const askId = newAskId(), add = [`bart~> ${askId}`]; if (q + 1 >= ls.length) add.push('');
+    const from = { key: this.props.docKey, props: this.props }; // handed off in this document, wherever the editor is by then
     const inputs = routeInputs(ls, q), current = inputs.current, rule = routeByRule(p.text, { models: this.props.models, current, asking: inputs.asking });
     this.setLines((x) => { const out = before ? before(x) : [...x]; if (put != null) out.splice(i, 0, put); out.splice(q + 1, 0, ...add); return out; });
     const ed = this.editorEl(); if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
@@ -3982,7 +3996,7 @@ export default class DocEditor extends React.Component {
     const asked = this.props.onRoute
       ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, specTitle: inputs.specTitle, rule, current, place: { line: q, text: ls[q] }, ...(level ? { level } : {}) }))
       : Promise.resolve(fallback);
-    return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: fallbackAgent(current), sure: 0 }));
+    return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: fallbackAgent(current), sure: 0 }, from));
   }
   // What a line's pending row names while Bart routes it (2026-10-13): the first step of the agent it goes to if he cannot
   // pick (`agent`: its rule's, else fallbackAgent's, Chat for a new line), read as main reads it (bart/ask.cjs turnPlan)
@@ -3997,7 +4011,8 @@ export default class DocEditor extends React.Component {
     } catch { return null; }
   }
   // Where Bart's pick goes. The `@bart` line is the one over pending line `askId`, as the document holds it now (gone: the
-  // line was deleted while it was being routed, and nothing is asked).
+  // line was deleted while it was being routed, and nothing is asked). That is the document it was typed in (`from`,
+  // routeLine's), shown or not (2026-10-16: going to another workspace while Bart routed left the line "interrupted").
   //   chat, brainstorm, discover: asked of that agent. The line stays as typed; a line starting a conversation has the pick
   //     kept on its title line, `bart# [discover <when>] …` (doc.js titleLine), which it gets as an asked line does
   //     (askInline). A line going on with a conversation (2026-10-13) is its next turn whatever agent answers it: the
@@ -4013,24 +4028,25 @@ export default class DocEditor extends React.Component {
   //   `--build` on the line (a rule): a Build of the line, as `@chat --build` makes (Workspace askBart); one starting a
   //     conversation gets a title line marked a Build's (2026-10-13), and its card collapses with it.
   // A pick made because routing failed (`by: 'error'`, Workspace routeLine) says so in `routed`, for the run's record.
-  handOff(askId, pick) {
-    const ls = this.lines(), at = ls.indexOf(`bart~> ${askId}`), q = at - 1, p = q >= 0 ? parseLine(ls[q]) : null;
-    if (!p || p.type !== 'bart' || agentOf(p) !== 'router') { if (this.props.onRouteGone) this.props.onRouteGone(askId); return null; }
+  handOff(askId, pick, from = { key: this.props.docKey, props: this.props }) {
+    const { key, props } = from, write = (fn) => this.setLinesOf(key, props, fn);
+    const ls = this.linesOf(key, props) || [], at = ls.indexOf(`bart~> ${askId}`), q = at - 1, p = q >= 0 ? parseLine(ls[q]) : null;
+    if (!p || p.type !== 'bart' || agentOf(p) !== 'router') { if (props.onRouteGone) props.onRouteGone(askId); return null; }
     const id = pick.id || null, text = p.text.trim(), typed = { line: q, text: ls[q] }; // where it was (the Agent Viewer)
     const failed = pick.by === 'error' ? { by: 'error', ...(pick.error ? { error: String(pick.error).slice(0, 400) } : {}) } : {};
     // A `--build` line that starts a conversation gets its title line (2026-10-13), marked a Build's, named from what it asks to build.
     if (pick.agent === 'build' && pick.rule === '--build') {
       const name = this.startsTitled(ls, q, this.turnsBefore(ls, q));
-      if (name) this.setLines((x) => { const out = [...x], at = out.indexOf(`bart~> ${askId}`); if (at > 0) out.splice(at - 1, 0, titleLine('', false, { agent: 'bart', at: askedNow(), build: true })); return out; });
-      this.props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id, ...failed }, place: name ? { line: q + 1, text: typed.text } : typed, ...(name ? { name: true } : {}) });
+      if (name) write((x) => { const out = [...x], at = out.indexOf(`bart~> ${askId}`); if (at > 0) out.splice(at - 1, 0, titleLine('', false, { agent: 'bart', at: askedNow(), build: true })); return out; });
+      props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id, ...failed }, place: name ? { line: q + 1, text: typed.text } : typed, ...(name ? { name: true } : {}) });
       return 'build';
     }
     if (pick.agent === 'build') {
       const spec = routeInputs(ls, q).spec;
-      if (spec != null && pick.spec === true && pick.sure >= 0.8 && this.props.onBuild) {
+      if (spec != null && pick.spec === true && pick.sure >= 0.8 && props.onBuild) {
         // No reply of Chat's (2026-10-13): the Build's card takes the line's own pending line, so it is that turn's answer
         // (doc.js turn.build) and collapses as other Builds do; the card's Prompt row shows what it was given.
-        this.props.onBuild({ text: spec, askId, routedFrom: id, place: typed });
+        props.onBuild({ text: spec, askId, routedFrom: id, place: typed });
         return 'build';
       }
     }
@@ -4046,10 +4062,10 @@ export default class DocEditor extends React.Component {
     // Sent to Discover: a search still running in its conversation stops, since this line says more about what to look for.
     const at2 = name ? q + 1 : q;
     if (agent === 'discover') next = this.refining(next, at2);
-    if (next !== ls) this.setLines(() => next);
+    if (next !== ls) write(() => next);
     const refine = agent === 'discover' && this.refiningAt(next, at2);
     const ask = { askId, text, turns, agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: at2, text: typed.text }, ...(name ? { name: true } : {}), ...(refine ? { refine: true } : {}) };
-    this.props.onAsk(ask);
+    props.onAsk(ask);
     return agent;
   }
   // A reply sent under a running search (2026-10-16, David: "it should not restart the research process, rather just adjust,
@@ -4076,13 +4092,15 @@ export default class DocEditor extends React.Component {
     this.props.onAsk({ askId, text, turns: this.turnsBefore(ls, i), agent: 'discover', research: true, place: { line: i, text: line }, steer: { after, ...steer } });
   }
   // A Deep research box's search (askResearch) is asked after RESEARCH_WAIT_S seconds, its pending line counting them down
-  // ("Searching in 5 s") with Cancel beside it. The line deleted meanwhile, nothing is asked.
+  // ("Searching in 5 s") with Cancel beside it. The line deleted meanwhile, nothing is asked. It is looked for in the
+  // document the box is in, shown or not (handOff's `from`).
   waitResearch(ask) {
+    const { docKey: key } = this.props, props = this.props;
     const redraw = () => { if (!this.patchPending()) this.syncEditor(); };
     const tick = () => {
       const held = this.waits.get(ask.askId); if (!held) return;
-      if (!this.lines().includes(`bart~> ${ask.askId}`)) { this.waits.delete(ask.askId); if (this.props.onRouteGone) this.props.onRouteGone(ask.askId); return; }
-      if (held.left <= 1) { this.waits.delete(ask.askId); this.props.onAsk(ask); redraw(); return; }
+      if (!(this.linesOf(key, props) || []).includes(`bart~> ${ask.askId}`)) { this.waits.delete(ask.askId); if (props.onRouteGone) props.onRouteGone(ask.askId); return; }
+      if (held.left <= 1) { this.waits.delete(ask.askId); props.onAsk(ask); redraw(); return; }
       held.left -= 1; held.timer = this.timer(tick, 1000); redraw();
     };
     this.waits.set(ask.askId, { ask, left: RESEARCH_WAIT_S, timer: this.timer(tick, 1000) });

@@ -556,6 +556,24 @@ test('a line typed and asked right under an answer starts a conversation of its 
   }
 });
 
+test('an @bart line is handed on in the document it was typed in, after the editor has gone to another one while Bart routed (2026-10-16: it was left "interrupted")', async () => {
+  let pick = null;
+  const gone = [], awayAsks = [], awayChanges = [];
+  const m = mounted(['@bart what is a tutor'], { onRoute: () => new Promise((resolve) => { pick = resolve; }), docTextOf: (key) => (key === 'k' ? m.props.text : 'another workspace'), onRouteGone: (id) => gone.push(id) });
+  m.editor.askInline(0);
+  const typed = m.props;
+  // Another workspace's document in the same editor, as React gives it: new props, with that document's callbacks.
+  m.editor.props = { ...typed, docKey: 'other', text: 'another workspace', onChange: (t) => awayChanges.push(t), onAsk: (a) => awayAsks.push(a) };
+  pick({ id: 'r', agent: 'chat', sure: 0.9, by: 'model' });
+  await new Promise((resolve) => setImmediate(resolve));
+  const ls = typed.text.split('\n');
+  assert.deepEqual(gone, [], 'not taken for a deleted line');
+  assert.deepEqual([m.asks.length, m.asks[0].agent, m.asks[0].text], [1, 'bart', 'what is a tutor'], 'asked of Chat, by the document it was typed in');
+  assert.match(ls[0], /^bart# \[chat \d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ\] $/, 'its title line, in that document');
+  assert.deepEqual(ls.slice(1, 3), ['@bart what is a tutor', `bart~> ${m.asks[0].askId}`]);
+  assert.deepEqual([awayAsks.length, awayChanges.length], [0, 0], 'the document shown now is left alone');
+});
+
 test('the reply field still adds a follow-up to the card: one conversation of two turns; a typed line with an empty line or text above it is asked as before', async () => {
   const { threads } = await doc();
   const card = ['bart# [chat 2026-10-13T09:00:00Z] Retries', '@chat why retry?', ...answer('because'), ''];
