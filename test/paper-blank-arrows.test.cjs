@@ -1,11 +1,13 @@
 'use strict';
 
-// MATH-27 follow-up (src/renderer/pdf/PaperView.jsx, canvas.js and src/renderer/model/doc.js, 2026-10-06): a drag from
-// blank space pans and one from text selects; a click on blank space writes no note, a double-click does; a free note left
-// empty goes when it loses the keyboard and is never saved; a highlight's card has no arrow (taken out again the same
-// day); @bart at the start of a note is the document's blue
-// label, shown and in its field's backdrop. PaperView lays out one page of a small fake DOM here (no pdf.js, no rough.js):
-// the page's text is a few spans placed by hand.
+// Typing anywhere (src/renderer/pdf/PaperView.jsx, the annotations round, 2026-10-16; as before MATH-27): a click on the
+// page or the desk beside it, anywhere but its printed words, writes a note there with the caret in it, and a click that
+// puts something away (a pending selection, the highlight in focus, a note being typed in) writes nothing; a press on a
+// note's words moved a few px drags its card, one let go puts the caret there. From MATH-27's follow-up (2026-10-06): a
+// free note left empty goes when it loses the keyboard and is never saved; @bart at the start of a note is the document's
+// blue label, shown and in its field's backdrop. (A drag from blank space panned and a double-click wrote, 2026-10-06 to
+// 2026-10-16.) PaperView lays out one page of a small fake DOM here (no pdf.js, no rough.js): the page's text is a few
+// spans placed by hand.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -65,11 +67,11 @@ function matchOne(el, sel) {
 const matches = (el, sel) => String(sel).split(',').some((one) => matchOne(el, one));
 const ZERO = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
 class El {
-  constructor(tag) { this.tagName = tag.toUpperCase(); this.nodeName = this.tagName; this.nodeType = 1; this.children = []; this.parentNode = null; this.dataset = {}; this.attrs = {}; this.style = styleOf(); this.html = ''; this.scrollHeight = 21; this.scrollTop = 0; this.rect = null; }
+  constructor(tag) { this.tagName = tag.toUpperCase(); this.nodeName = this.tagName; this.nodeType = 1; this.children = []; this.parentNode = null; this.dataset = {}; this.attrs = {}; this.style = styleOf(); this.html = ''; this.scrollHeight = 21; this.scrollTop = 0; this.rect = null; const classes = new Set(); this.classList = { add: (c) => classes.add(c), remove: (c) => classes.delete(c), contains: (c) => classes.has(c) }; }
   get isConnected() { let n = this; while (n.parentNode) n = n.parentNode; return !!n.root; }
   get firstElementChild() { return this.children[0] || null; }
   get lastElementChild() { return this.children[this.children.length - 1] || null; }
-  get offsetWidth() { return parseFloat(this.style.width) || 0; }
+  get offsetWidth() { return parseFloat(this.style.width) || parseFloat(this.style.maxWidth) || 0; }
   get offsetHeight() { return this.dataset.box === 'card' ? cardHeight(this) : 0; }
   get offsetLeft() { return 0; }
   get offsetTop() { return 0; }
@@ -100,13 +102,13 @@ function fakeDocument() {
   return { baseURI: 'file:///app/index.html', body, activeElement: body, createElement: (tag) => new El(tag), createElementNS: (_, tag) => new El(tag) };
 }
 
-// One page 612 × 792 pt in a pane 612px wide at 100%: the page is 612px wide, with 400px of desk each side (G = 400). The
-// view is scrolled 300px across, so the sheet starts at client x −300 and the page at client x 100.
-const W = 612, H = 700, SCROLL = 300, G = 400;
+// One page 612 × 792 pt in a pane 612px wide: at 100% the page is the pane (G = 0); at 50% it is 306px wide in the
+// middle of it (G = 153). The view is not scrolled, so a point's client px are its sheet px.
+const W = 612, H = 700;
 const pdfPage = { getViewport: ({ scale }) => ({ width: 612 * scale, height: 792 * scale }), render: () => ({ promise: Promise.resolve(), cancel() {} }), getTextContent: () => Promise.resolve({ items: [] }) };
-const at = (x, y) => ({ x: x - SCROLL, y }); // client px of a point at (x, y) in the sheet's px (sheet px 300–912 are in view)
+const tick = () => new Promise((r) => setTimeout(r, 1));
 
-async function viewer(marks = {}, props = {}) {
+async function viewer(marks = {}, props = {}, zoom = 1) {
   globalThis.document = fakeDocument();
   const frames = [];
   globalThis.requestAnimationFrame = (fn) => { frames.push(fn); return frames.length; };
@@ -114,7 +116,7 @@ async function viewer(marks = {}, props = {}) {
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   globalThis.getSelection = () => ({ isCollapsed: true, rangeCount: 0 });
   const host = new El('div');
-  host.root = true; host.clientWidth = W; host.clientHeight = H; host.clientLeft = 0; host.clientTop = 0; host.scrollLeft = SCROLL; host.scrollTop = 0;
+  host.root = true; host.clientWidth = W; host.clientHeight = H; host.clientLeft = 0; host.clientTop = 0; host.scrollLeft = 0; host.scrollTop = 0;
   host.rect = { left: 0, top: 0, right: W, bottom: H, width: W, height: H };
   const all = { marks, ...props };
   const view = new PaperView(all);
@@ -122,18 +124,18 @@ async function viewer(marks = {}, props = {}) {
   view.setState = (patch) => Object.assign(view.state, typeof patch === 'function' ? patch(view.state) : patch);
   view.host = { current: host };
   view.doc = { numPages: 1, getPage: async () => pdfPage };
-  view.zoom = 1;
-  await view.layout(null);
-  host.scrollLeft = SCROLL; host.scrollTop = 0; // layout centered page 1; the tests read the view from here
+  view.zoom = zoom;
+  await view.layout();
+  view.drawSoon();
+  for (let i = 0; i < 200 && view.pumping; i += 1) await tick();
   const s = view.sheets[1], g = view.geo[1];
-  assert.equal(g.G, G);
-  s.wrap.rect = { left: -SCROLL, top: 0, right: g.G + g.pageW + g.R - SCROLL, bottom: g.pageH, width: g.G + g.pageW + g.R, height: g.pageH };
-  view.inner.rect = s.wrap.rect;
-  // The page's text: two lines near its top, 12px tall, 4px apart (sheet px 450–850, 100–112 and 116–128).
+  s.wrap.rect = { left: 0, top: 0, right: W, bottom: g.pageH, width: W, height: g.pageH };
+  // The page's text: two lines near its top, 12px tall, 4px apart (page px 50–450 across, 100–112 and 116–128 down at
+  // 100%), as spans and as the text runs pdf.js gives (textBoxes).
+  view.textRects.set(1, [100, 116].map((t) => ({ l: 50 / 612, t: t / 612, r: 450 / 612, b: (t + 12) / 612 })));
   for (const top of [100, 116]) {
     const span = new El('span');
-    const c = at(450, top);
-    span.rect = { left: c.x, top: c.y, right: c.x + 400, bottom: c.y + 12, width: 400, height: 12 };
+    span.rect = { left: g.G + 50 * g.k, top: top * g.k, right: g.G + 450 * g.k, bottom: (top + 12) * g.k, width: 400 * g.k, height: 12 * g.k };
     s.tl.appendChild(span);
   }
   const flush = () => { while (frames.length) frames.shift()(); };
@@ -141,147 +143,146 @@ async function viewer(marks = {}, props = {}) {
 }
 test.afterEach(() => { for (const name of ['document', 'requestAnimationFrame', 'cancelAnimationFrame', 'window', 'getSelection']) delete globalThis[name]; });
 
-const press = (target, x, y, more = {}) => {
-  const c = at(x, y);
-  return { button: 0, target, clientX: c.x, clientY: c.y, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...more };
-};
-const moveTo = (x, y) => { const c = at(x, y); return { clientX: c.x, clientY: c.y }; };
+const event = (target, x, y, more = {}) => ({ button: 0, target, clientX: x, clientY: y, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...more });
+// A click at sheet px (x, y) on `target`, as the paper hears it: its press, then its release.
+function click(view, target, x, y) { const e = event(target, x, y); view.onDown(e); view.pdfMouseUp(e); return e; }
+const free = (view) => (view.marks[1] || []).filter((m) => !(m.rects || []).length);
 
-/* ------------------------------------------------------------------------------------------------ blank space */
+/* ------------------------------------------------------------------------------------------------ typing anywhere */
 
-test('blankAt: off the page, or on it further than a line from every span, is blank; on or near text is not', async () => {
-  const { blankAt, rectDistance, LINE } = await loadCanvas();
-  const page = { left: 400, top: 0, right: 1012, bottom: 792 };
-  const spans = [{ left: 450, top: 100, right: 850, bottom: 112 }, { left: 450, top: 116, right: 850, bottom: 128 }];
-  assert.equal(LINE, 14);
-  assert.equal(rectDistance(spans[0], 500, 106), 0);
-  assert.equal(blankAt(page, spans, 200, 106, LINE), true, 'the desk beside the page');
-  assert.equal(blankAt(page, spans, 500, 700, LINE), true, 'the empty end of the page');
-  assert.equal(blankAt(page, spans, 425, 106, LINE * 2), false, 'within a line at 200%');
-  assert.equal(blankAt(page, spans, 420, 106, LINE), true, 'the margin, 30px from the text at 100%');
-  assert.equal(blankAt(page, spans, 500, 114, LINE), false, 'between two lines');
-  assert.equal(blankAt(page, spans, 860, 106, LINE), false, 'just past a line\'s end');
-  assert.equal(blankAt(page, [], 500, 106, LINE), true, 'a page with no text drawn yet is blank');
-  assert.equal(blankAt(page, [{ left: 500, top: 500, right: 500, bottom: 500 }], 500, 500, LINE), true, 'an empty rect counts for nothing');
-});
-
-test('pointAt: the desk and the page away from its text are blank, the text and the gaps in it are text, a highlight is a mark', async () => {
-  const marks = { 1: [{ id: 'h', rects: [{ x: 50 / 612, y: 100 / 612, w: 100 / 612, h: 12 / 612 }], side: 'left', y: 100 / 612, note: null, text: 'x' }] };
-  const { view, s } = await viewer(marks);
-  const span = s.tl.children[0];
-  const kind = (target, x, y) => { const c = at(x, y); return view.pointAt(target, c.x, c.y).kind; };
-  assert.equal(kind(s.wrap, 350, 300), 'blank', 'the desk');
-  assert.equal(kind(s.tl, 700, 600), 'blank', 'the page\'s empty lower half');
-  assert.equal(kind(s.tl, 420, 300), 'blank', 'its margin');
-  assert.equal(kind(span, 600, 105), 'text');
-  assert.equal(kind(s.tl, 600, 114), 'text', 'between the lines');
-  assert.equal(kind(s.tl, 600, 138), 'text', 'within a line under the last one');
-  assert.equal(kind(s.tl, 470, 106), 'mark', 'a highlight: a click focuses it');
-  assert.equal(view.pointAt(s.tl, W + 2, 300).kind, 'card', 'the scrollbar is no blank space');
-});
-
-test('a drag from blank space pans the view; one from text is left to select', async () => {
-  const { view, host, s } = await viewer();
-  const down = press(s.tl, 700, 600);
-  view.onPanDown(down);
-  assert.ok(down.prevented && down.stopped, 'taken: no selection starts');
-  assert.equal(host.dataset.panning, undefined, 'not a pan until it moves');
-  view.onPanMove(moveTo(702, 601));
-  assert.equal(host.scrollLeft, SCROLL, 'under PRESS_MOVE px: still a click');
-  view.onPanMove(moveTo(660, 550));
-  assert.equal(host.dataset.panning, '1');
-  assert.deepEqual([host.scrollLeft, host.scrollTop], [SCROLL + 40, 50], 'the view follows the pointer, both ways');
-  view.onPanUp();
-  assert.equal(host.dataset.panning, undefined);
-  assert.equal(view.pan, null);
-  // From the desk too.
-  const desk = press(s.wrap, 350, 300);
-  view.onPanDown(desk);
-  view.onPanMove(moveTo(450, 300));
-  assert.equal(host.scrollLeft, SCROLL + 40 - 100);
-  view.onPanUp();
-  // From text, or near it: not taken, so the browser selects as before.
-  for (const [target, x, y] of [[s.tl.children[0], 600, 105], [s.tl, 600, 114]]) {
-    const ev = press(target, x, y);
-    view.onPanDown(ev);
-    assert.equal(ev.prevented, false, `(${x}, ${y}): a selection may start`);
-    assert.equal(view.pan, null);
-  }
-});
-
-test('a click on blank space writes no note: it puts the focus away (a pending selection with no parts keeps nothing); a double-click writes one, with the caret in it', async () => {
-  const marks = { 1: [{ id: 'h', rects: [{ x: 50 / 612, y: 100 / 612, w: 100 / 612, h: 12 / 612 }], side: 'left', y: 100 / 612, note: 'n', text: 'x' }] };
-  const { view, s, flush } = await viewer(marks);
-  view.focusMark('h');
-  view.pendingSel = { parts: [], text: 'x' };
-  view.onPanDown(press(s.tl, 700, 600));
-  view.onPanUp();
-  assert.deepEqual(view.marks[1].map((m) => m.id), ['h'], 'no note');
-  assert.equal(view.focusId, null, 'the focus put away');
-  assert.equal(view.pendingSel, null, 'and the pending selection');
-  // A pending selection clicked away from is kept as a highlight with no note (2026-10-07).
-  view.pendingSel = { parts: [{ page: 1, rects: [{ x: 300, y: 300, w: 80, h: 12 }], width: 612, text: 'kept words', u: 612 }], text: 'kept words' };
-  view.onPanDown(press(s.tl, 700, 600));
-  view.onPanUp();
-  assert.equal(view.pendingSel, null);
-  const kept = view.marks[1].find((m) => m.text === 'kept words');
-  assert.ok(kept && kept.note == null && kept.rects.length === 1, 'kept, with no note');
-  view.marks[1] = view.marks[1].filter((m) => m !== kept);
-  // Old behaviour gone: a click on the page away from a span, through the page's own mouseup, writes nothing either.
-  view.pdfDown = at(700, 600);
-  view.pdfMouseUp(press(s.tl, 700, 600));
-  assert.equal(view.marks[1].length, 1);
-  // A double-click on the page's blank space.
-  const dbl = press(s.tl, 700, 600);
-  view.onDbl(dbl);
-  assert.ok(dbl.prevented);
-  const free = view.marks[1].find((m) => m.id !== 'h');
-  assert.ok(free, 'a free note');
-  assert.deepEqual(free.rects, []);
-  assert.ok(Math.abs(free.pos.x - 300 / 612) < 1e-9 && Math.abs(free.pos.y - 600 / 612) < 1e-9, 'where it was double-clicked');
-  flush();
-  const ta = s.notes.querySelector(`textarea[data-mark="${free.id}"]`);
+test('a click on the page away from its printed words writes a note there, as wide as the room to its right, with the caret in it', async () => {
+  const { freeNoteWidth } = await loadCanvas();
+  const { view, s } = await viewer();
+  click(view, s.tl, 300, 600);
+  const [m] = free(view);
+  assert.ok(m, 'a note');
+  assert.ok(Math.abs(m.pos.x - 300 / 612) < 1e-9 && Math.abs(m.pos.y - 600 / 612) < 1e-9, 'where it was clicked');
+  assert.equal(m.w, freeNoteWidth(300, Infinity, 612), 'as wide as the room to the pane\'s edge, at most NOTE_W');
+  const ta = s.notes.querySelector(`textarea[data-mark="${m.id}"]`);
   assert.ok(ta, 'drawn as its field');
-  assert.equal(document.activeElement, ta, 'with the keyboard');
-  // On the desk too; never on text.
-  view.onDbl(press(s.wrap, 350, 300));
-  assert.equal(view.marks[1].filter((m) => !m.rects.length).length, 2);
-  view.onDbl(press(s.tl.children[0], 600, 105));
-  assert.equal(view.marks[1].length, 3, 'a double-click on text selects a word, as it did');
+  assert.equal(document.activeElement, ta, 'with the keyboard at once, not a frame later');
+  // Beside a line of text, it runs up to the text and wraps there.
+  ta.value = 'x'; ta.oninput(); ta.blur();
+  click(view, s.tl, 10, 100);
+  const [, beside] = free(view);
+  assert.equal(beside.w, freeNoteWidth(10, 50, 612), 'up to the printed words after it (FREE_MIN at the least)');
+});
+
+test('a click on the printed words, or one that puts something away, writes no note; the next click does', async () => {
+  const marks = { 1: [{ id: 'h', rects: [{ x: 50 / 612, y: 300 / 612, w: 100 / 612, h: 12 / 612 }], side: 'left', y: 300 / 612, note: null, text: 'x' }] };
+  const { view, s } = await viewer(marks);
+  click(view, s.tl.children[0], 200, 105);
+  assert.equal(free(view).length, 0, 'on a word: the browser\'s, to select');
+  // The highlight in focus: the click puts it away.
+  view.focusMark('h');
+  click(view, s.tl, 300, 600);
+  assert.equal(view.focusId, null);
+  assert.equal(free(view).length, 0);
+  // A pending selection: put away unkept (2026-10-16, later; Hudson: "I should have to hit enter for it to save"), and
+  // no note written.
+  view.pendingSel = { parts: [{ page: 1, rects: [{ x: 300, y: 400, w: 80, h: 12 }], width: 612, text: 'gone words', u: 612 }], text: 'gone words' };
+  click(view, s.tl, 300, 600);
+  assert.equal(view.pendingSel, null);
+  assert.equal(view.marks[1].find((m) => m.text === 'gone words'), undefined, 'not kept: Enter or a note keeps it');
+  assert.equal(free(view).length, 0);
+  // Nothing to put away: this one writes.
+  click(view, s.tl, 300, 600);
+  assert.equal(free(view).length, 1);
+  // A note being typed in: the click leaves it, and writes nothing.
+  const ta = s.notes.querySelector('textarea');
+  ta.value = 'kept'; ta.oninput();
+  const e = event(s.tl, 300, 650);
+  view.onDown(e); ta.blur(); view.pdfMouseUp(e);
+  assert.equal(free(view).length, 1, 'only the note that was being typed in');
+  assert.equal(free(view)[0].note, 'kept');
+});
+
+test('a click on a highlight puts it in focus, in the gap between two of its words too (one band, 2026-10-16)', async () => {
+  // Two words on one line with a gap of 12px, a line 12px tall: one band (BAND_GAP 1.6 lines), though no merge joined them.
+  const marks = { 1: [{ id: 'h', rects: [{ x: 50 / 612, y: 300 / 612, w: 60 / 612, h: 12 / 612 }, { x: 122 / 612, y: 300 / 612, w: 60 / 612, h: 12 / 612 }], side: 'left', y: 300 / 612, note: null, text: 'two words' }] };
+  const { view, s } = await viewer(marks);
+  click(view, s.tl, 116, 306);
+  assert.equal(view.focusId, 'h', 'the gap is the highlight');
+  assert.equal(free(view).length, 0);
+  click(view, s.tl, 300, 600);
+  assert.equal(view.focusId, null);
+});
+
+test('zoomed out, the desk beside the page takes a note too, as wide as the room that shows', async () => {
+  const { NOTE_W } = await loadCanvas();
+  const { view, s, g } = await viewer({}, {}, 0.5);
+  assert.deepEqual([g.G, g.pageW], [153, 306]);
+  click(view, s.wrap, 40, 200);
+  const [m] = free(view);
+  assert.ok(m.pos.x < 0, 'left of the page');
+  assert.ok(Math.abs(m.pos.x - (40 - 153) / 306) < 1e-9);
+  assert.equal(m.w, NOTE_W, 'the whole desk to its right showed: as wide as a note gets');
+  // Near the pane's right edge, it starts far enough left to show whole.
+  const ta = s.notes.querySelector('textarea');
+  ta.value = 'on the desk'; ta.oninput(); ta.blur();
+  click(view, s.wrap, 605, 300);
+  const [, edge] = free(view);
+  // Its handwriting at NOTE_FLOOR there (a 306 px page): w note px are w × 10/24 on screen.
+  assert.ok(153 + edge.pos.x * 306 + edge.w * 10 / 24 <= 612 - 8 + 1, 'its right edge within the pane (EDGE_PAD in)');
+  assert.ok(edge.pos.x * 306 + 153 < 605, 'begun left of where it was clicked');
 });
 
 test('a free note left empty is gone after a click away or Escape, and never saved', async (t) => {
-  t.mock.timers.enable({ apis: ['setTimeout'] });
   const saved = [];
-  const { view, s, flush } = await viewer({}, { onMarksChange: (marks) => saved.push(marks) });
-  view.onDbl(press(s.tl, 700, 600));
-  flush();
+  const { view, s } = await viewer({}, { onMarksChange: (marks) => saved.push(marks) });
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  click(view, s.tl, 300, 600);
   assert.equal(view.dirty, false, 'nothing saved for a note with nothing in it');
   let out = null;
   view.emit((marks) => { out = marks; });
   assert.deepEqual(out, {}, 'and should anything else be saved meanwhile, not it');
-  // A click away on blank space takes the keyboard from it: it goes.
-  view.onPanDown(press(s.wrap, 350, 300));
-  view.onPanUp();
+  // A click away takes the keyboard from it: it goes.
+  s.notes.querySelector('textarea').blur();
   assert.deepEqual(view.marks[1], [], 'gone');
   assert.equal(s.notes.querySelectorAll('textarea').length, 0);
   t.mock.timers.tick(400);
   assert.ok(saved.every((marks) => !(marks[1] || []).length), 'never saved');
   // Escape leaves it the same way; one written in is kept and saved.
-  view.onDbl(press(s.tl, 700, 600));
-  flush();
+  click(view, s.tl, 300, 600);
   let ta = s.notes.querySelector('textarea');
   view.noteKey({ key: 'Escape', stopPropagation() {}, preventDefault() {} }, ta, view.marks[1][0], 1);
   assert.deepEqual(view.marks[1], []);
-  view.onDbl(press(s.tl, 700, 600));
-  flush();
+  click(view, s.tl, 300, 600);
   ta = s.notes.querySelector('textarea');
   ta.value = 'kept'; ta.oninput();
-  view.onPanDown(press(s.wrap, 350, 300));
-  view.onPanUp();
+  ta.blur();
   assert.deepEqual(view.marks[1].map((m) => m.note), ['kept']);
   t.mock.timers.tick(400);
   assert.deepEqual(saved.at(-1)[1].map((m) => m.note), ['kept']);
+});
+
+test('a press on a note\'s words moved a few px drags its card (no grip); let go before that, the caret goes in', async () => {
+  const marks = { 1: [{ id: 'f', rects: [], side: null, y: 0.5, note: 'move me', text: '', pos: { x: 0.2, y: 0.5 }, w: 150 }] };
+  const { view, s, flush } = await viewer(marks, { onOpenMention() {} });
+  const shown = s.notes.querySelector('[data-note-view="f"]');
+  assert.ok(shown, 'shown as text');
+  assert.equal(s.notes.querySelectorAll('[data-grip]').length, 0, 'no grip');
+  const card = s.notes.querySelector('[data-box]');
+  card.rect = { left: 0.2 * 612, top: 0.5 * 612 - 11, width: 150, height: 44 };
+  // Pressed and let go where it was: the field, with the keyboard.
+  shown.onmousedown(event(shown, 140, 300));
+  view.pressUp(event(shown, 140, 300));
+  flush();
+  const ta = s.notes.querySelector('textarea[data-mark="f"]');
+  assert.ok(ta && document.activeElement === ta, 'a click edits it');
+  ta.blur(); flush();
+  // Pressed and moved 60px right and 30 down: moved, and saved where it was let go.
+  const again = s.notes.querySelector('[data-note-view="f"]');
+  s.notes.querySelector('[data-box]').rect = card.rect;
+  again.onmousedown(event(again, 140, 300));
+  view.pressMove({ clientX: 142, clientY: 301 });
+  assert.equal(view.drag, null, 'under PRESS_MOVE: still a click');
+  view.pressMove({ clientX: 200, clientY: 330 });
+  assert.ok(view.drag && view.drag.moved, 'dragging');
+  assert.equal(view.focusId, 'f', 'its mark in focus: Delete would remove it');
+  view.endDrag();
+  const m = view.marks[1][0];
+  assert.ok(Math.abs(m.pos.x - (0.2 + 60 / 612)) < 1e-9 && Math.abs(m.pos.y - (0.5 + 30 / 612)) < 1e-9, 'moved by the pointer\'s way');
 });
 
 test('keptMarks drops a free note with nothing in it, never a highlight or a note with words', async () => {

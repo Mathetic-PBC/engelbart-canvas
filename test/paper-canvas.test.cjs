@@ -1,78 +1,60 @@
 'use strict';
 
-// The page as a canvas (src/renderer/pdf/canvas.js, MATH-27 phase 1, 2026-10-06): the desk beside every page, the spacing
-// pass that keeps boxes 12px apart and flowing around the ones that were moved, Fit page + notes, which boxes are out of
-// view, and the answers a highlight keeps. Follow-ups (2026-10-06): answers hanging under a moved note widen the desk,
-// a deleted answer stays a turn while its session lasts. Fit page + notes reads the page in view alone (a fit of every
-// page's boxes was tried and undone, 2026-10-06: it zoomed a long paper with notes far apart down to 15%).
+// The page as a canvas (src/renderer/pdf/canvas.js, MATH-27 phase 1, 2026-10-06): the spacing pass that keeps boxes 12px
+// apart and flowing around the ones that were moved, and the answers a highlight keeps; a deleted answer stays a turn
+// while its session lasts. Since the annotations round (2026-10-16) there is no desk to scroll onto, no Fit page + notes
+// and nothing out of view to point at; a note's width is narrow and it grows down (fitWidth, freeNoteWidth), and the
+// column stays in the middle of the pane through every zoom (../src/renderer/model/paper-draw.js columnGeometry,
+// settleView).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
-const Module = require('node:module');
 const { pathToFileURL } = require('node:url');
-const { buildSync } = require('esbuild');
 
 const load = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/pdf/canvas.js')).href);
 
-// PaperView itself, bundled as paper-note-ask.test.cjs does (pdf.js and rough.js are not loaded).
-function loadView() {
-  globalThis.document = { baseURI: 'file:///app/index.html' };
-  const filename = path.join(__dirname, '__PaperView-canvas-unit.cjs');
-  const bundled = buildSync({ entryPoints: [path.join(__dirname, '../src/renderer/pdf/PaperView.jsx')], bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom', 'pdfjs-dist', 'roughjs'], loader: { '.css': 'empty' } });
-  const compiled = new Module(filename, module);
-  compiled.paths = module.paths;
-  const stubs = { 'pdfjs-dist': { GlobalWorkerOptions: {} }, roughjs: { __esModule: true, default: null } };
-  compiled.require = (id) => (id in stubs ? stubs[id] : Module.prototype.require.call(compiled, id));
-  compiled._compile(bundled.outputFiles[0].text, filename);
-  delete globalThis.document;
-  return compiled.exports;
-}
+/* ------------------------------------------------------------------------------------------------ widths, the column */
 
-/* ------------------------------------------------------------------------------------------------ the desk */
-
-test('deskOf: DESK desk px each side, scaled with the page, more when the pane centers a narrow page, more when a moved box needs it', async () => {
-  const { deskOf, deskGeom, DESK } = await load();
-  assert.equal(DESK, 400);
-  assert.deepEqual(deskOf(800, 800), { G: 400, R: 400 }, '100%: the page as wide as the pane, a desk beside it all the same');
-  assert.deepEqual(deskOf(800, 1600, {}, 2), { G: 800, R: 800 }, '200%: the desk twice as wide, as the page is (true canvas, 2026-10-06)');
-  assert.deepEqual(deskOf(800, 400, {}, 0.5), { G: 200, R: 200 }, '50%');
-  assert.deepEqual(deskOf(2000, 120, {}, 0.15), { G: 940, R: 940 }, '15% in a wide pane: centered');
-  assert.deepEqual(deskOf(800, 800, { left: 520.2, right: 0 }), { G: 521, R: 400 }, 'one side widened alone');
-  assert.deepEqual(deskOf(800, 1600, { left: 520.2, right: 0 }, 2), { G: 1041, R: 800 }, 'by desk px, k times as many in the layout');
-  assert.deepEqual(deskGeom({ G: 1041, R: 800, pageW: 1600, k: 2 }), { G: 520.5, R: 400, pageW: 800, k: 2 }, 'a page\'s layout in desk px');
+test('fitWidth: a card as wide as it would be, narrowed to the room the pane shows, never under its least, never wider than the pane', async () => {
+  const { fitWidth, NOTE_MIN, NOTE_W } = await load();
+  assert.equal(fitWidth(NOTE_W, 500, NOTE_MIN, 600), NOTE_W, 'room enough: as wide as it would be');
+  assert.equal(fitWidth(NOTE_W, 150, NOTE_MIN, 600), 150, 'less room: narrowed to it, and taller');
+  assert.equal(fitWidth(NOTE_W, 40, NOTE_MIN, 600), NOTE_MIN, 'too little: its least (it is moved in over the text)');
+  assert.equal(fitWidth(NOTE_W, -300, NOTE_MIN, 600), NOTE_MIN, 'its place out of view: its least, moved in');
+  assert.equal(fitWidth(NOTE_W, 500, NOTE_MIN, 80), 80, 'never wider than the pane shows');
+  assert.equal(fitWidth(70, 500, NOTE_MIN, 600), 70, 'a narrower one is never widened to its least');
 });
 
-test('deskNeed: how far past its page each moved card reaches, plus the desk\'s edge; cards not moved need nothing', async () => {
-  const { deskNeed, DESK_EDGE, NOTE_W, ASK_W } = await load();
-  const P = 500;
-  assert.deepEqual(deskNeed({ 1: [{ id: 'a', note: 'beside', pos: null, rects: [{}] }] }, () => P), { left: 0, right: 0 });
-  const marks = {
-    1: [{ id: 'a', note: 'far left', rects: [{}], pos: { x: -1.2, y: 0.1 } }],
-    2: [{ id: 'b', note: null, rects: [{}], pos: { x: 1.5, y: 0 }, asks: [{ id: 'q' }] }],
-  };
-  const need = deskNeed(marks, () => P);
-  assert.equal(need.left, DESK_EDGE + 1.2 * P);
-  assert.equal(need.right, 1.5 * P + ASK_W + DESK_EDGE - P, 'a mark without a note is a card of its answers');
-  assert.equal(deskNeed({ 3: [{ note: 'x', pos: { x: 0.9, y: 0 } }] }, () => P).right, 0.9 * P + NOTE_W + DESK_EDGE - P, 'a free note');
-  assert.deepEqual(deskNeed({ 9: [{ note: 'x', pos: { x: -3, y: 0 } }] }, () => 0), { left: 0, right: 0 }, 'a page not laid out counts for nothing');
+test('freeNoteWidth: a note typed anywhere runs to the printed text after it or the edge of what showed, within 80..240', async () => {
+  const { freeNoteWidth, FREE_MIN, NOTE_W } = await load();
+  assert.equal(FREE_MIN, 80);
+  assert.equal(freeNoteWidth(100, 300, Infinity), 300 - 6 - 100, 'up to the text on its line');
+  assert.equal(freeNoteWidth(100, Infinity, 260), 260 - 8 - 100, 'up to the pane\'s edge');
+  assert.equal(freeNoteWidth(100, Infinity, Infinity), NOTE_W);
+  assert.equal(freeNoteWidth(500, 520, Infinity), FREE_MIN, 'right against the text: a few words a line all the same');
 });
 
-test('deskNeed: one card a highlight (2026-10-06): a card ASK_W wide at the mark\'s place; an answer\'s own `pos` is not read', async () => {
-  const { deskNeed, DESK, DESK_EDGE } = await load();
-  const P = 500;
-  const answer = (id, more = {}) => ({ id, question: 'q', answer: 'a', pos: null, collapsed: false, ...more });
-  const x = -0.9 * P;
-  const left = { 1: [{ id: 'm', note: '@bart q', rects: [{}], pos: { x: -0.9, y: 0.1 }, asks: [answer('a1'), answer('a2', { pos: { x: -3, y: 0.5 } })] }] };
-  assert.deepEqual(deskNeed(left, () => P), { left: DESK_EDGE - x, right: 0 }, 'the card where the mark was moved; a2 moved on its own before is in it');
-  assert.ok(deskNeed(left, () => P).left > DESK, 'past the 400px desk: it widens');
-  // A mark with nothing left to show is no card: a deleted answer and no note.
-  const gone = { 1: [{ id: 'm', note: null, rects: [{}], pos: { x: -0.9, y: 0.1 }, asks: [answer('a1', { deleted: true })] }] };
-  assert.deepEqual(deskNeed(gone, () => P), { left: 0, right: 0 });
-  assert.equal(deskNeed(gone, () => P, (id) => (id === 'm' ? 1 : 0)).left, DESK_EDGE - x, 'an answer being written makes it one again');
-  // Cards beside the page fit the desk as it is.
-  const beside = { 1: [{ id: 'm', note: 'n', rects: [{}], side: 'left', pos: null, asks: [answer('a1', { pos: { x: -2, y: 0 } })] }] };
-  assert.deepEqual(deskNeed(beside, () => P, () => 2), { left: 0, right: 0 });
+test('columnGeometry: every page as wide as the zoom says, in the middle of a sheet as wide as the pane, or the page past 100%', async () => {
+  const { columnGeometry } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/paper-draw.js')).href);
+  assert.deepEqual(columnGeometry(800, 1), { pageW: 800, S: 800, G: 0 }, '100%: the page is the pane');
+  assert.deepEqual(columnGeometry(800, 0.5), { pageW: 400, S: 800, G: 200 }, '50%: the desk shows each side, the page in the middle');
+  assert.deepEqual(columnGeometry(800, 2), { pageW: 1600, S: 1600, G: 0 }, '200%: the sheet is the page, nothing beyond it to scroll to');
+  assert.deepEqual(columnGeometry(801, 0.15), { pageW: 120, S: 801, G: 340.5 });
+});
+
+test('settleView: a zoom keeps the point it was centered on where it was; across, the view stays on the column\'s middle line', async () => {
+  const { settleView } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/paper-draw.js')).href);
+  // Three pages 800 × 1000 at 100% in an 800px pane, then 400 × 500 at 50%.
+  const from = { tops: [0, 1000, 2000], pageW: 800, S: 800 }, half = { tops: [0, 500, 1000], pageW: 400, S: 800 }, twice = { tops: [0, 2000, 4000], pageW: 1600, S: 1600 };
+  // The point 300px down the pane, page 2's 200th px, at scroll 900: zoomed out it is page 2's 100th px, still 300px down.
+  assert.deepEqual(settleView({ W: 800, ox: 400, oy: 1200, top: 900, left: 0, from, to: half }), { top: 600 - 300, left: 0 });
+  // Zoomed in about the middle line: the page's middle stays in the pane's middle.
+  assert.deepEqual(settleView({ W: 800, ox: 400, oy: 1200, top: 900, left: 0, from, to: twice }), { top: 2400 - 300, left: 400 });
+  // Past 100% a view scrolled across keeps its point across, and never past the page's edges.
+  assert.deepEqual(settleView({ W: 800, ox: 1200, oy: 0, top: 0, left: 800, from: twice, to: { tops: [0, 1500], pageW: 1200, S: 1200 } }), { top: 0, left: 400 });
+  assert.equal(settleView({ W: 800, ox: 400, oy: 0, top: 0, left: 0, from: twice, to: from }).left, 0, 'back to 100%: nothing to scroll across');
+  assert.equal(settleView({ W: 800, ox: 400, oy: 10, top: 0, left: 0, from, to: half }).top, 0, 'never above the paper\'s top');
 });
 
 test('askedByNote: an answer\'s question is shown only when it is not what its note asks now', async () => {
@@ -154,26 +136,6 @@ test('spaceBoxes: no two boxes of a page overlap after the pass, whatever they w
   }
 });
 
-/* ------------------------------------------------------------------------------------------------ fit, out of view */
-
-test('fitZoom: Fit page fits the page; Fit page + notes zooms out until every box fits too', async () => {
-  const { fitZoom, extentAt } = await load();
-  const page = { pageW1: 800, pageH1: 1035, availW: 752, availH: 600, zMin: 0.15, zMax: 2 };
-  const fit = fitZoom(page);
-  assert.ok(Math.abs(fit - 600 / 1035) < 1e-6, 'the height decides for a tall page');
-  const boxes = [{ x: { a: 1, b: 28 }, y: { a: 0.1, b: 0 }, w: 320, h: 260 }, { x: { a: -0.4, b: 0 }, y: { a: 1.2, b: -11 }, w: 240, h: 60 }];
-  const z = fitZoom({ ...page, boxes });
-  assert.ok(z < fit);
-  const e = extentAt({ ...page, boxes }, z);
-  assert.ok(e.right - e.left <= page.availW + 1e-6 && e.bottom - e.top <= page.availH + 1e-6, 'everything fits');
-  assert.ok(extentAt({ ...page, boxes }, z * 1.01).right - extentAt({ ...page, boxes }, z * 1.01).left > page.availW || extentAt({ ...page, boxes }, z * 1.01).bottom - extentAt({ ...page, boxes }, z * 1.01).top > page.availH, 'and no less zoomed out than it must');
-  assert.equal(fitZoom({ ...page, boxes: [{ x: { a: 0, b: -5000 }, y: { a: 0, b: 0 }, w: 10, h: 10 }] }), 0.15, 'what never fits stops at the least zoom');
-  assert.equal(fitZoom({ ...page, availW: 5000, availH: 5000 }), 2, 'and at the most');
-  // The boxes scale with the page (true canvas, 2026-10-06): their extent at 2 is twice theirs at 1.
-  const one = extentAt({ ...page, boxes }, 1), two = extentAt({ ...page, boxes }, 2);
-  for (const key of ['left', 'top', 'right', 'bottom']) assert.ok(Math.abs(two[key] - 2 * one[key]) < 1e-9, key);
-});
-
 test('fieldCaret: a field in a scaled box (a PDF note at another zoom) has its caret scaled from its corner', async () => {
   const { fieldCaret } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/workspace/caret.js')).href);
   // The copy is laid out at the field's own size: its caret 30px right of the field's left and 10px under its top.
@@ -189,54 +151,6 @@ test('fieldCaret: a field in a scaled box (a PDF note at another zoom) has its c
     assert.deepEqual(fieldCaret(field, 7, 2), { left: 160, right: 160, top: 70, bottom: 112 }, 'at 200%');
     assert.deepEqual(fieldCaret(field, 7, 0.5), { left: 115, right: 115, top: 55, bottom: 65.5 }, 'at 50%');
   } finally { delete globalThis.getComputedStyle; delete globalThis.document; }
-});
-
-test('Fit page + notes fits the page in view and the boxes beside it alone: a note pages away does not zoom it out', async () => {
-  const { fitZoom, extentAt } = await load();
-  const { default: PaperView, ZOOM_MIN, ZOOM_MAX } = loadView();
-  const beside = { x: { a: 1, b: 28 }, y: { a: 0.1, b: 0 }, w: 320, h: 120 };
-  const far = { x: { a: -0.4, b: 0 }, y: { a: 0.9, b: 0 }, w: 320, h: 120 };
-  // A twelve-page paper, page 1 in view with a note beside it, and a note on every other page.
-  const W = 800, H = 700, v = { width: 612, height: 792 };
-  const view = new PaperView({});
-  const read = [];
-  let centered = null;
-  Object.assign(view, {
-    host: { current: { clientWidth: W, clientHeight: H } }, doc: {}, inner: {},
-    v0: [null, ...Array.from({ length: 12 }, () => v)],
-    currentPage: () => 1,
-    boxShapes: (n) => { read.push(n); return n === 1 ? [beside] : [far]; },
-    layout(_, done) { this.geo = { 1: { pageW: v.width * this.unit(W) * this.zoom } }; done(); },
-    centerOn: (n, x, y) => { centered = { n, x, y }; },
-  });
-  const page = { pageW1: W, pageH1: v.height * (W / v.width), availW: W - 48, availH: H - 48 - 50, zMin: ZOOM_MIN, zMax: ZOOM_MAX };
-  view.fitPage(true);
-  assert.deepEqual(read, [1], 'only the page in view\'s boxes are read');
-  assert.equal(view.zoom, fitZoom({ ...page, boxes: [beside] }), 'the page and the note beside it');
-  assert.ok(view.zoom > 0.4, 'nowhere near the least zoom');
-  const e = extentAt({ ...page, boxes: [beside] }, view.zoom);
-  assert.equal(centered.n, 1);
-  assert.ok(Math.abs(centered.x - (e.left + e.right) / 2) < 1e-6 && Math.abs(centered.y - (e.top + e.bottom) / 2) < 1e-6, 'centered on them');
-  read.length = 0;
-  view.fitPage(false);
-  assert.deepEqual(read, [], 'Fit page reads no boxes');
-  assert.equal(view.zoom, fitZoom(page));
-});
-
-test('offscreen: boxes beyond each edge of the view by their centers; revealScroll brings them in', async () => {
-  const { offscreen, offscreenSide, revealScroll, chipLabel } = await load();
-  const view = { left: 0, top: 0, right: 800, bottom: 600 };
-  const r = (left, top, width = 240, height = 80) => ({ left, top, width, height });
-  const boxes = [r(900, 100), r(1200, 300), r(-300, 50), r(100, 700), r(100, 100), r(600, 100)];
-  assert.deepEqual(offscreen(boxes, view), { left: 1, right: 2, up: 0, down: 1 }, 'one half in view counts as in view');
-  assert.equal(offscreenSide(r(100, -200), view), 'up');
-  assert.equal(offscreenSide(r(-300, 900), view), 'down', 'off to the left but below: down, where scrolling goes first');
-  assert.deepEqual(revealScroll([r(-300, 900)], view, 'down'), { dx: -324, dy: 980 + 24 - 600 }, 'and brought across as well');
-  assert.deepEqual(revealScroll([r(900, 100), r(1200, 300)], view, 'right'), { dx: 1440 + 24 - 800, dy: 0 }, 'both, when they fit');
-  assert.deepEqual(revealScroll([r(900, 100), r(2000, 300)], view, 'right'), { dx: 1140 + 24 - 800, dy: 0 }, 'else the nearest');
-  assert.deepEqual(revealScroll([r(-300, 50)], view, 'left'), { dx: -324, dy: 0 });
-  assert.deepEqual(revealScroll([r(100, 700)], view, 'down'), { dx: 0, dy: 780 + 24 - 600 });
-  assert.deepEqual([chipLabel(2, 'right'), chipLabel(1, 'left'), chipLabel(3, 'down')], ['2 notes →', '← 1 note', '3 notes ↓']);
 });
 
 /* ------------------------------------------------------------------------------------------------ answers on a highlight */

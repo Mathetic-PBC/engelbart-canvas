@@ -51,6 +51,25 @@ export function mergeLineRects(rects) {
   return out;
 }
 
+// One highlight's own boxes on a line are one band (2026-10-16, Hudson: "Highlights should be continuous … they should
+// stretch across spaces"): a selection is one run of text, so the gaps between its words are part of it. Boxes of one
+// mark on the same line are joined across a gap of up to BAND_GAP × the line's height, wide enough for a justified or
+// scanned line's word gaps (pdf.js gives a span a word there) and narrower than a column gutter, so a selection that
+// runs down one column and up the next is not bridged across the gutter.
+const BAND_GAP = 1.6;
+
+/** A mark's rects as continuous bands: mergeLineRects, with gaps under BAND_GAP × the line's height joined. */
+export function bandRects(rects) {
+  const boxes = mergeLineRects(rects);
+  const out = [];
+  for (const b of boxes) {
+    const prev = out[out.length - 1];
+    if (prev && sameLine(prev, b) && b.x >= prev.x && b.x - (prev.x + prev.w) < BAND_GAP * Math.min(prev.h, b.h)) out[out.length - 1] = union([prev, b]);
+    else out.push({ ...b });
+  }
+  return out;
+}
+
 /** Each of `inner` lies inside one of `outer`: on its line, and within it give or take SLACK of the line's height. */
 export function boxesInside(inner, outer) {
   return inner.length > 0 && inner.every((a) => outer.some((b) => {
@@ -161,7 +180,7 @@ export function dropSlivers(rects) {
 export function selectionParts(pieces) {
   const out = [];
   for (const { page, rects, width, text, u } of pieces || []) {
-    const boxes = mergeLineRects(dropSlivers(rects));
+    const boxes = bandRects(dropSlivers(rects));
     if (boxes.length) out.push({ page, rects: boxes, side: sideOf(boxes, width), y: Math.min(...boxes.map(top)), text, u });
   }
   return out.sort((a, b) => a.page - b.page);

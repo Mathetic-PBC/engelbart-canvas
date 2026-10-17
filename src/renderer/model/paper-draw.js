@@ -34,3 +34,40 @@ export function allOrder(first, last, current, N) {
 
 /** Whether page n, with `first`..`last` in view, is too far off to keep its drawing. */
 export const tooFar = (n, first, last, keep = KEEP_DRAWN) => n < first - keep || n > last + keep;
+
+/* ------------------------------------------------------------------------- the column and its zoom (2026-10-16) */
+// Hudson: "I should not be able to pan left and right … All zooming should be uniform straight down the center." The
+// pages are one column in the middle of the pane, every page as wide as the others; the desk beside them shows only as
+// the page gets narrower than the pane.
+
+/** The column at zoom `z` (1 = the page as wide as the pane) in a pane `W` wide: every page `pageW` wide, on a sheet `S`
+ *  wide (the pane, or the page once it is wider), the page starting `G` from the sheet's left. → { pageW, S, G } */
+export function columnGeometry(W, z) {
+  const pageW = Math.max(1, Math.round(W * z)), S = Math.max(W, pageW);
+  return { pageW, S, G: (S - pageW) / 2 };
+}
+
+/** The index of the sheet whose top is the last at or above y, given the sheets' ascending tops. */
+function sheetIndex(tops, y) {
+  let lo = 0, hi = tops.length - 1;
+  if (hi < 0) return 0;
+  while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (tops[mid] <= y) lo = mid; else hi = mid - 1; }
+  return lo;
+}
+
+/**
+ * Where the view goes once a zoom is laid out: the document point at (`ox`, `oy`) of the old layout (px inside the
+ * paper, where a pinch's transform was centered) stays under the same point of the pane. Vertically by its page and its
+ * share of that page's width, horizontally by its distance from the column's middle, scaled. `from` / `to`: { tops,
+ * pageW, S } of the two layouts; `top` / `left` the scroll now; `W` the pane's width. → { top, left }, left kept to the
+ * page (0 while the page is no wider than the pane).
+ */
+export function settleView({ W, ox, oy, top, left, from, to }) {
+  const n = sheetIndex(from.tops, oy), fy = (oy - (from.tops[n] || 0)) / (from.pageW || 1);
+  const y = (to.tops[n] || 0) + fy * to.pageW, s = to.pageW / (from.pageW || 1);
+  const x = to.S / 2 + (ox - from.S / 2) * s;
+  return { top: Math.max(0, y - (oy - top)), left: Math.max(0, Math.min(Math.max(0, to.S - W), x - (ox - left))) };
+}
+
+/** A turn of the event loop (a task, not a microtask), so input and painting go between two pages' work. */
+export const nextTick = () => new Promise((resolve) => setTimeout(resolve, 0));

@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Annotations test</title>
+<style>
+  body { max-width:700px; margin:0; padding:48px 24px; line-height:1.6; }
+  ul.check { list-style:none; padding-left:0; }
+  ul.check li { margin:6px 0; }
+  ul.check label { display:flex; gap:10px; align-items:baseline; cursor:pointer; }
+  ul.check input { flex:none; }
+  ul.check input:checked + span { opacity:.45; text-decoration:line-through; }
+  pre { background:rgba(128,128,128,.15); padding:12px 16px; overflow-x:auto; white-space:pre; }
+  button { font:inherit; font-weight:500; color:inherit; background:none; border:1px solid currentColor; border-radius:0; padding:12px 20px; cursor:pointer; }
+  button:hover { background:rgba(128,128,128,.15); }
+</style>
+</head>
+<body>
+<h1>Annotations test</h1>
+<p>Branch <code>annotations</code>, 16 October 2026, round 3: your "Post- Bugs post-edit" note on hover, note size and margins. Nothing is committed.</p>
+
+<h2>The window</h2>
+<p>The test window is the second Engelbart, called <b>Electron</b> in the Dock. I restarted it on the new build, and your test notes from round 1 are still in it. It has test mode on (<b>Test · On</b>), keeps its data under <code>~/.engelbart/test/annotations-1016</code>, and leaves your real Engelbart alone. Three PDFs are under Sources: <b>chi92-scan-11pp</b> (your scan), <b>csur-36pp</b>, and <b>etherphone-75pp</b> (the heaviest).</p>
+<p>Test with the Stage at half width and again expanded (the ↗ at the Stage's top right). Its width changes how much room a note has.</p>
+
+<h2>Round 3: hover, note size, margins</h2>
+<ul class="check">
+  <li><label><input type="checkbox"><span>Point at a note. Only its highlight darkens; no other note fades to grey.</span></label></li>
+  <li><label><input type="checkbox"><span>At 100%, a note's handwriting is about the size of the paper's body text, not twice it.</span></label></li>
+  <li><label><input type="checkbox"><span>Pinch out to 15%. Notes shrink with the page until they reach 10px handwriting, then stop. Pinch in to 200%: they grow with the page.</span></label></li>
+  <li><label><input type="checkbox"><span>On etherphone-75pp page 4, your two old notes sit in the left and right margins, wrapping down, neither over the text.</span></label></li>
+  <li><label><input type="checkbox"><span>Type a long note in the left margin. It wraps before the text's left edge instead of running over it.</span></label></li>
+  <li><label><input type="checkbox"><span>Click just right of the text's right edge and type. The note goes into the right margin and wraps there.</span></label></li>
+  <li><label><input type="checkbox"><span>Highlight a line and type a note, with one margin narrow. The note goes to the wider margin.</span></label></li>
+  <li><label><input type="checkbox"><span>Zoom in until no margin shows, only text. Notes are hidden, none over the text. Scroll sideways to a margin: its notes come back.</span></label></li>
+</ul>
+<p><em>Changed from round 2:</em> notes are no longer the same size on screen at every zoom. They scale with the page, which is what "shrinking may actually be more natural" asked for, but stop shrinking at 10px so they stay readable at 15%.</p>
+
+<h2>Round 2: the bugs you found</h2>
+
+<h3>White strip when zoomed out</h3>
+<p>There were three causes:</p>
+<ul>
+  <li>Pages that hadn't been drawn yet showed as white during and just after a pinch. Every page within 12 of the view now gets a small low-resolution drawing in the background. Pages that have been drawn keep a small copy after their full drawing is freed, and that copy shows until the full drawing comes back.</li>
+  <li>Zooming out near the top of a paper left an empty band above page 1 until the pinch ended, then the paper jumped up. The paper's top now stays at the pane's top during the pinch.</li>
+  <li>Some white is real. Pages 3 and 5 of etherphone-75pp are blank in the PDF itself, and with no page edges a blank page reads as a gap.</li>
+</ul>
+<ul class="check">
+  <li><label><input type="checkbox"><span>On etherphone-75pp, read page 1 for a few seconds, then pinch out to 15%. The pages show while you pinch: blurred for a moment, sharp once you stop. There is no white band above page 1.</span></label></li>
+  <li><label><input type="checkbox"><span>Scroll to page 40, then pinch out. Same result.</span></label></li>
+</ul>
+<p><em>Known limit:</em> a page more than 12 pages from where you've been has no small drawing yet. If you pinch out far from anywhere you've read, a few pages can be white for about a second.</p>
+
+
+<p><em>Replaced:</em> round 2 moved notes in over the text when zoomed in. Since round 4 they hide instead (see the top).</p>
+
+<h3>Move handle on hover</h3>
+<ul class="check">
+  <li><label><input type="checkbox"><span>Point at a note. A small four-arrow icon appears just under its lower-right corner. Drag the icon and the note moves.</span></label></li>
+  <li><label><input type="checkbox"><span>Pressing on the note's words and dragging still moves it too. A plain click on the words still puts the caret in.</span></label></li>
+</ul>
+
+<h3>Enter to save a highlight</h3>
+<ul class="check">
+  <li><label><input type="checkbox"><span>Select a passage, then click somewhere else. The selection disappears and nothing is saved.</span></label></li>
+  <li><label><input type="checkbox"><span>Select a passage and press Enter: it is kept as a highlight. Select one and start typing: it is kept with your note on it. Escape drops it.</span></label></li>
+</ul>
+
+<h3>Vertical line on the left when selecting</h3>
+<ul class="check">
+  <li><label><input type="checkbox"><span>Drag to select several lines, on every PDF. No dashed line runs down the page's left.</span></label></li>
+  <li><label><input type="checkbox"><span>While you drag, the selection is drawn as the continuous bands it will be saved as, not as word boxes that overlap darker.</span></label></li>
+</ul>
+
+<h2>Round 1, still to check</h2>
+
+<h3>Lag</h3>
+<p>My numbers come from an offscreen window driven by synthetic events, so your trackpad on a real display is the real test. Round 2 didn't change the lag: the 36- and 75-page papers stay under about 50 ms after a pinch. The CHI scan still stalls for about 100 ms when pinched out, because all 11 pages are on screen at once.</p>
+<ul class="check">
+  <li><label><input type="checkbox"><span>On etherphone-75pp, pinch in and out several times with scrolling in between. Nothing freezes after you lift your fingers.</span></label></li>
+  <li><label><input type="checkbox"><span>Pinch, then straight away type in Getting started or click a row in the sidebar. It responds at once.</span></label></li>
+</ul>
+
+<h3>Page and sideways movement</h3>
+<ul class="check">
+  <li><label><input type="checkbox"><span>No line around pages and no gap between them. The CHI scan's pages 1 and 2 line up.</span></label></li>
+  <li><label><input type="checkbox"><span>At 100% and below, a two-finger swipe sideways moves nothing.</span></label></li>
+  <li><label><input type="checkbox"><span>A pinch near the pane's left or right edge still zooms around the pane's vertical middle.</span></label></li>
+</ul>
+
+<h3>Highlights and typing</h3>
+<ul class="check">
+  <li><label><input type="checkbox"><span>A saved highlight is one band per line with no outline. Clicking it, even in a gap between words, puts it in focus. Delete removes it and ⌘Z brings it back.</span></label></li>
+  <li><label><input type="checkbox"><span>Click any blank spot, whether margin, between paragraphs or beside the page when zoomed out. A caret appears and you can type.</span></label></li>
+  <li><label><input type="checkbox"><span>Select a passage and type at once. Every character lands: "this", not "tis".</span></label></li>
+  <li><label><input type="checkbox"><span>Close the PDF's tab and reopen it from Sources. Highlights and notes come back where they were.</span></label></li>
+  <li><label><input type="checkbox"><span>In a highlight's note, type @bart, a question and Enter. The answer appears under the note. This uses your real Claude account.</span></label></li>
+</ul>
+
+<h2>Decisions for you</h2>
+<ol>
+  <li>Above 100%, the page can still scroll sideways within its own width, so both columns stay readable. Should I lock it completely instead?</li>
+  <li>When a margin is narrower than 96 px, a highlight's note sits over the edge of the text, about 10 characters wide. Should the narrowest width be different, or should the note go somewhere else, such as below its highlight?</li>
+  <li>A note you click to start near the pane's right edge stays in the margin, 80 px wide and tall. I tried starting it further left so it could be 160 px wide, but then it covered the printed column, so I reverted that. Is narrow and tall right there?</li>
+</ol>
+
+<h2>When something fails</h2>
+<p>Note which PDF, the zoom %, whether the Stage was half width or expanded, and what you did just before.</p>
+
+<h2>Closing and reopening the window</h2>
+<p>⌘Q in the Electron window quits only that copy. To open it again:</p>
+<pre>cd ~/engelbart-canvas/.superpowers/worktrees/annotations
+ENGELBART_ROOT_DIR=~/.engelbart/test/annotations-1016/root npx electron . \
+  --user-data-dir=$HOME/.engelbart/test/annotations-1016/electron</pre>
+<p><button type="button" id="clear">Clear checkmarks</button></p>
+
+<script>
+  (function () {
+    var KEY = 'annotations-test-2026-10-16-round-3';
+    var boxes = [].slice.call(document.querySelectorAll('ul.check input'));
+    var saved = {};
+    try { saved = JSON.parse(localStorage.getItem(KEY) || '{}'); } catch (e) { saved = {}; }
+    boxes.forEach(function (box, i) {
+      box.checked = !!saved[i];
+      box.addEventListener('change', function () {
+        saved[i] = box.checked;
+        try { localStorage.setItem(KEY, JSON.stringify(saved)); } catch (e) { /* checkmarks last only this visit */ }
+      });
+    });
+    document.getElementById('clear').addEventListener('click', function () {
+      saved = {};
+      boxes.forEach(function (box) { box.checked = false; });
+      try { localStorage.removeItem(KEY); } catch (e) { /* nothing kept */ }
+    });
+  })();
+</script>
+</body>
+</html>

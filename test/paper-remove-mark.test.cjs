@@ -150,24 +150,33 @@ test('Delete while typing in a note only edits the text; with nothing in focus, 
   assert.deepEqual(drawn, []);
 });
 
-test('no trash button: a card\'s grip pressed puts its mark in focus, and Delete then removes a free note or a highlight', () => {
+test('no trash button and no grip: a card moved by its note\'s words puts its mark in focus, and Delete then removes a free note or a highlight', () => {
   const note = freeNote('n1'), hl = highlight('m1', { note: 'why so high?' });
   const { view, saves } = viewer({ 2: [note, hl] });
   const { body } = keyboard(view);
-  const card = view.cardBox(note, [], [], 2), grip = card.querySelector('[data-grip]');
-  assert.equal(card.querySelector('[data-act="remove"]'), null, 'no trash button (gone 2026-10-07)');
-  view.drawn[2] = { boxes: [], units: [] }; // no drag to start here: only the press's focus is looked at
-  view.startDrag(click(grip), card, 2);
-  assert.equal(view.focusId, 'n1', 'the grip pressed: the note in focus');
-  view.onKeyCapture(keyEv(body, { key: 'Delete' }));
-  assert.deepEqual(view.marks[2].map((x) => x.id), ['m1']);
-  assert.equal(view.state.removed.label, 'Note removed');
-  const hlCard = view.cardBox(hl, [], [], 2);
-  view.startDrag(click(hlCard.querySelector('[data-grip]')), hlCard, 2);
-  view.onKeyCapture(keyEv(body, { key: 'Backspace' }));
-  assert.deepEqual(view.marks[2], []);
-  assert.equal(view.state.removed.label, 'Highlight removed');
-  assert.equal(saves(), 2);
+  globalThis.window = { addEventListener() {}, removeEventListener() {} };
+  try {
+    const card = view.cardBox(note, [], [], 2);
+    assert.equal(card.querySelector('[data-act="remove"]'), null, 'no trash button (gone 2026-10-07)');
+    assert.equal(card.querySelector('[data-grip]'), null, 'no grip (gone 2026-10-16): a card moves by its note\'s words');
+    card.getBoundingClientRect = () => ({ left: 0, top: 0 });
+    view.drawn[2] = { boxes: [{ el: card, m: note }], units: [] };
+    assert.equal(view.startDrag({ clientX: 5, clientY: 5 }, card, 2), true);
+    view.endDrag(true);
+    assert.equal(view.focusId, 'n1', 'the card taken up: the note in focus');
+    view.onKeyCapture(keyEv(body, { key: 'Delete' }));
+    assert.deepEqual(view.marks[2].map((x) => x.id), ['m1']);
+    assert.equal(view.state.removed.label, 'Note removed');
+    const hlCard = view.cardBox(hl, [], [], 2);
+    hlCard.getBoundingClientRect = () => ({ left: 0, top: 0 });
+    view.drawn[2] = { boxes: [{ el: hlCard, m: hl }], units: [] };
+    view.startDrag({ clientX: 5, clientY: 5 }, hlCard, 2);
+    view.endDrag(true);
+    view.onKeyCapture(keyEv(body, { key: 'Backspace' }));
+    assert.deepEqual(view.marks[2], []);
+    assert.equal(view.state.removed.label, 'Highlight removed');
+    assert.equal(saves(), 2);
+  } finally { delete globalThis.window; }
 });
 
 test('a highlight across pages goes whole and ⌘Z brings it back whole, each part where it stood', () => {
