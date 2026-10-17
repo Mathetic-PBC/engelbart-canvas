@@ -314,7 +314,7 @@ test('an @discover run\'s steps, opened, are drawn by part of the trace (2026-10
   const m2 = mounted(['Notes', '@discover q', 'bart~> run-2'], { asks: { 'run-2': { ...ask, trace: between } } });
   assert.match(rowOf(m2.html(), 2), /Found 9 newer papers that cite “X”/);
   const m3 = mounted(['Notes', '@discover q', 'bart~> run-3'], { asks: { 'run-3': { ...ask, activity: 'Thinking', trace: between } } });
-  assert.match(rowOf(m3.html(), 2), /class="t[^"]*"[^>]*>Thinking/);
+  assert.match(rowOf(m3.html(), 2), /class="t"[^>]*><span class="eb-wave"[^>]*>Thinking/); // at work: the wave, no dot (2026-10-16)
   // A new step starts over.
   assert.equal(askProgressed(ask, { step: 2, name: 'Fable', effort: 'xhigh' }).trace, null);
 });

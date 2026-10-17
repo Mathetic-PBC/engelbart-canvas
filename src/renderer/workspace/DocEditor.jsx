@@ -207,7 +207,7 @@ const mentionBeside = (text, at, before) => {
 // A link ⌘-clicked (Ctrl-clicked off macOS, where Ctrl-click is the context menu) opens in a new Stage tab (2026-10-02).
 const newTabClick = (e) => e.metaKey || (e.ctrlKey && !/^(darwin|mac)/i.test(document.documentElement.dataset.platform || navigator.platform || ''));
 
-const RISE_CSS = '@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes thinking{0%,100%{opacity:.25}50%{opacity:1}}@keyframes made-spin{to{transform:rotate(360deg)}}';
+const RISE_CSS = '@keyframes rise{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}@keyframes made-spin{to{transform:rotate(360deg)}}';
 // The hint on a document's last line while it is empty (2026-10-09, the Welcome walkthrough's "Write your thoughts…"):
 // drawn by CSS where the line's <br> is, so it is never in the text and the caret stays put.
 const cssString = (text) => `"${String(text).replace(/["\\]/g, '\\$&').replace(/[\n\r]+/g, ' ')}"`;
@@ -464,6 +464,18 @@ const madeGlyph = (noun) => (noun === 'Script' ? MADE_ICON.code : noun === 'Data
 // (2026-10-15, David: it was on a #f2f2f2 square, the name far from it); a Create run's spinner sits where it will.
 const MADE_SQUARE = (bg = 'transparent') => `flex:none;display:inline-flex;align-items:center;justify-content:center;width:20px;height:32px;border-radius:8px;background:${bg};color:#525252`;
 const SHAPES_ICON = SHAPES_SVG.replace('<svg ', '<svg width="20" height="20" aria-hidden="true" style="display:block" ');
+// Text at work (2026-10-16, David: no blinking blue dot beside it): the wave of styles.css's .eb-wave, on a span as wide as
+// the words, so the band crosses them rather than the empty end of a wide row; a line too long ends in its ellipsis, which
+// waves with it. `html` is escaped already.
+const waveText = (html) => `<span class="eb-wave" style="display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:top">${html}</span>`;
+// The rows at work are drawn again as they change (a Create run's clock each second, an answer as it streams), which would
+// start each wave over before it crosses its words: every wave is put on the page's clock instead, so a row drawn again
+// goes on where the last one was. Its HTML is left as it was (the Web Animations API, not a style), so patchPending's
+// comparisons still hold.
+export function keepWaves(root) {
+  if (!root || typeof root.querySelectorAll !== 'function') return;
+  for (const el of root.querySelectorAll('.eb-wave')) for (const anim of (typeof el.getAnimations === 'function' ? el.getAnimations() : [])) if (anim.startTime !== 0) anim.startTime = 0;
+}
 const SPINNER = '<span aria-hidden="true" style="display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:made-spin .8s linear infinite"></span>';
 // @discover's steps by the part of the trace they are in (2026-10-15, David's mockup): a part done has a check, the one
 // still going a grey ring; under each, what its steps found, the step still waiting darker. `writing`: the trace is over.
@@ -1379,8 +1391,8 @@ export default class DocEditor extends React.Component {
         + (open && story ? `<div data-trace style="margin:0 0 10px 16px;font:12.5px/1.7 var(--font-sans);color:#8f8f8f">${story}</div>` : '')
         + (open && log.length && !story ? `<div style="margin:0 0 8px 16px;font:12px/1.7 var(--font-sans);color:#8f8f8f">${log.map((entry) => `<div style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(entry)}</div>`).join('')}</div>` : '')
         + '<div style="display:flex;align-items:center;gap:10px">'
-        // What it is doing, as a wave of darker grey through the words (2026-10-16, David: no blue dot; styles.css eb-wave).
-        + `<span class="t${ask || wait ? ' eb-wave' : ''}" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${label}</span>`
+        // At work, what it is doing is said by the text alone, a wave through it (2026-10-16, David: no blinking blue dot).
+        + `<span class="t" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${ask || wait ? waveText(label) : label}</span>`
         + (log.length ? `<button class="bart-text" data-act="asklog" data-ask="${esc(p.id)}" aria-expanded="${open}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:6px;font-weight:400">${log.length} ${log.length === 1 ? 'step' : 'steps'}${open ? ICON.stepsOpen : ICON.stepsShut}</button>` : '')
         + (wait ? `<button class="bart-text" data-act="cancelwait" data-ask="${esc(p.id)}" style="user-select:none;flex:none">Cancel</button>` : ask ? `<button class="bart-text" data-act="stopask" data-ask="${esc(p.id)}" style="user-select:none;flex:none">Stop</button>` : `<button class="bart-text" data-act="dropline" data-row="${i}" style="user-select:none;flex:none">Hide</button>`)
         + '</div>' + (boxed ? '</div>' : '') + '</div>';
@@ -1788,7 +1800,7 @@ export default class DocEditor extends React.Component {
       const doing = status === 'running' ? (progress.activity || 'Thinking') : BUILD_STATUS[status];
       const log = progress.log || [], steps = this.buildSteps.has(id);
       live = '<div style="display:flex;align-items:center;gap:10px;margin-top:10px;font:13px/1.5 var(--font-sans);color:#8f8f8f">'
-        + `<span class="eb-wave" style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(doing)}</span>`
+        + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${waveText(esc(doing))}</span>`
         + (log.length ? `<button class="bart-text" data-act="buildsteps" data-build-id="${esc(id)}" aria-expanded="${steps}" style="user-select:none;display:inline-flex;align-items:center;gap:6px;font-weight:400">${log.length} ${log.length === 1 ? 'step' : 'steps'}${steps ? ICON.stepsOpen : ICON.stepsShut}</button>` : '')
         + (status === 'running' || status === 'queued' ? this.buildButton('buildstop', id, 'Stop') : '')
         + '</div>'
@@ -1861,7 +1873,7 @@ export default class DocEditor extends React.Component {
         const key = `${p.id}:${name}`; if (this.buildDrawn.get(key) === html) continue;
         const part = d.querySelector(`[data-build-part="${name}"]`); if (!part) return false;
         const field = document.activeElement, had = field && part.contains(field) && field.matches('[data-build-input]') ? { a: field.selectionStart, b: field.selectionEnd } : null;
-        part.innerHTML = html; this.buildDrawn.set(key, html);
+        part.innerHTML = html; this.buildDrawn.set(key, html); keepWaves(part);
         this.restoreBuilds(part, had ? { key: p.id, ...had } : null);
       }
     }
@@ -2865,7 +2877,7 @@ export default class DocEditor extends React.Component {
       // The label is the line above once it has come (2026-10-15); before that, an interrupted run's row names it.
       + '<span style="flex:1;min-width:0;display:flex;align-items:baseline;gap:12px">'
       + (sentence ? '' : `<span style="flex:none;font:15.5px/1.4 var(--font-sans);color:#262626;white-space:nowrap">${esc(label)}</span>`)
-      + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:${sentence ? '15.5px/1.4' : '13px/1.4'} var(--font-sans);color:${sentence ? '#525252' : '#8f8f8f'}">${esc(doing)}</span>`
+      + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font:${sentence ? '15.5px/1.4' : '13px/1.4'} var(--font-sans);color:${sentence ? '#525252' : '#8f8f8f'}">${ask ? waveText(esc(doing)) : esc(doing)}</span>`
       + '</span>'
       + (ask ? `<span data-made-clock="1" style="flex:none;font:13px/1 var(--font-sans);color:#8f8f8f;font-variant-numeric:tabular-nums">${clockOf(ask.at)}</span>` : '')
       + button + '</div></div>';
@@ -2996,7 +3008,7 @@ export default class DocEditor extends React.Component {
     }
     if (changed.length) {
       const keep = this.caretLineBelow(ed, changed.map(([d]) => d)), tops = this.streamTops(ed);
-      for (const [d, next] of changed) d.replaceWith(next);
+      for (const [d, next] of changed) { d.replaceWith(next); keepWaves(next); }
       this.placeStreams(changed.map(([, next]) => next), tops);
       if (keep) this.keepCaretLine(keep);
     }
@@ -3100,7 +3112,7 @@ export default class DocEditor extends React.Component {
     const menu = this.state.mention && this.state.mention.field != null ? this.state.mention : null;
     const tops = this.streamTops(ed);
     this.syncing = true; ed.innerHTML = html; this.lastHtml = html; this.lastKey = key; this.drawnLines = this.lines(); this.markBeside();
-    this.placeStreams([ed], tops); this.applyClips(ed); this.pruneStreams(); this.restoreFollow(ed, had && !had.discover ? had : null); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
+    this.placeStreams([ed], tops); keepWaves(ed); this.applyClips(ed); this.pruneStreams(); this.restoreFollow(ed, had && !had.discover ? had : null); this.restoreDiscover(ed, had && had.discover ? had : null); this.restoreBuilds(ed, buildField);
     if (titleField) { const input = ed.querySelector(`[data-title-input="${titleField.line}"]`); if (input) { input.focus({ preventScroll: true }); try { input.setSelectionRange(titleField.a, titleField.b); } catch { /* not a text field */ } } }
     if (menu) this.followMenuRedrawn(menu);
     if (c && !had && !buildField && (hadFocus || this.wantFocus)) { ed.focus({ preventScroll: true }); this.caret = c; this.applyCaret(); }

@@ -809,7 +809,7 @@ test('@create at work (2026-10-15, David): a thinking line until its line on wha
   assert.equal((told.match(/an HTML page on the work in this workspace/g) || []).length, 1, 'said once');
   assert.ok(!told.includes('>Creating an HTML page…<'), 'the line itself, not a few words for it');
   // Starting "Creating" (2026-10-15, David), the acronym's capital kept.
-  assert.match(told, new RegExp(`>Creating an HTML page on the work in this workspace: the agents, the five pillars and what is still open…</div><div[^>]*>[\\s\\S]*?align-items:baseline[^>]*><span[^>]*>Building the page</span></span>`), 'the line, then the row saying what it is doing, in words: no file name (2026-10-15, David)');
+  assert.match(told, new RegExp(`>Creating an HTML page on the work in this workspace: the agents, the five pillars and what is still open…</div><div[^>]*>[\\s\\S]*?align-items:baseline[^>]*><span[^>]*><span class="eb-wave"[^>]*>Building the page</span></span></span>`), 'the line, then the row saying what it is doing, in words: no file name (2026-10-15, David)');
   // No line, but a file being written: the few words its kind gives.
   const writing = html({ ...run, log: ['Writing summary.html'] });
   assert.ok(writing.includes('data-create-pending') && writing.includes('>Creating an HTML page…</div>'));
@@ -1242,7 +1242,7 @@ test('"yes" under an answer that asks "Want me to build it?": from the reply fie
 test('a line being routed names, from the start, the level it would start on; the run keeps it until its first step', async () => {
   const { readQuestion, readDiscover } = require('../src/main/bart/question.cjs');
   const { askStarted, askProgressed } = EDITOR;
-  const label = (m, asks) => { m.props.asks = asks; const html = m.editor.editorHtml(); const at = html.indexOf('data-pending='); const row = html.slice(at, html.indexOf('</div></div>', at)); return (row.match(/<span class="t[^"]*"[^>]*>([^<]*)<\/span>/) || [])[1]; };
+  const label = (m, asks) => { m.props.asks = asks; const html = m.editor.editorHtml(); const at = html.indexOf('data-pending='); const row = html.slice(at, html.indexOf('</div></div>', at)); return (row.match(/<span class="t"[^>]*>(?:<span class="eb-wave"[^>]*>)?([^<]*)<\/span>/) || [])[1]; }; // at work, its words in their wave (2026-10-16)
   // A new line: Chat's first step, from the models file (not a fixed "Opus high").
   const chatStep = readQuestion('why?', DEFAULTS).steps[0];
   const fresh = mounted(['@bart why?', ''], { route: () => new Promise(() => {}) });
