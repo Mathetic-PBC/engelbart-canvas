@@ -120,13 +120,22 @@ test('drawn: the box stands in the card of the reply that asked for it (2026-10-
   const foot = html.slice(html.indexOf(`data-foot="${box}"`));
   assert.ok(!foot.slice(0, foot.indexOf('</div>')).includes('data-act="fold"'), 'nothing to collapse on the box\'s foot');
   assert.ok(!replyFoot.slice(0, replyFoot.indexOf('</div>')).includes('data-act="fold"'), 'the reply\'s Collapse is not on its foot (2026-10-15)');
-  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="foldall" data-turn="1" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg/, 'but in its question\'s corner, collapsing the conversation (2026-10-15)');
+  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg/, 'but in its question\'s corner, collapsing the conversation (2026-10-15)');
   // Collapsed, the box keeps its head and foot, on no grey.
   m.click('fold', { turn: String(box) });
   assert.match(rowOf(m.html(), box), /background:none/);
   assert.ok(!rowOf(m.html(), box).includes('data-box-status'), 'folded: no status row');
   assert.match(rowOf(m.html(), box), /data-act="fold"[^>]*aria-expanded="false" aria-label="Expand" title="Expand"><svg[^>]*><path d="m9 18 6-6-6-6"><\/path><\/svg><\/button>/, 'Expand where Collapse was: the chevron points right');
   assert.ok(!m.html().replace(/ data-raw="[^"]*"/g, '').includes('A paper'));
+});
+
+test('a research box that is its titled conversation\'s first exchange: its Collapse collapses the conversation, a double chevron named Collapse conversation (2026-10-16, David)', () => {
+  const lines = ['bart# [discover 2026-10-13T10:00:00Z] Tutors', '@discover --research how do tutors notice struggle?', 'bart> ## Start here', 'bart> **A paper**', 'bart>', 'bart> *Discover · Opus · high · 2 s*', ''];
+  const m = mounted(lines);
+  assert.match(rowOf(m.html(), 1), /data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg[^>]*><path d="m17 11-5-5-5 5"><\/path><path d="m17 18-5-5-5 5"><\/path><\/svg>/);
+  m.click('fold', { turn: '1' });
+  assert.match(m.lines()[0], /^bart#\+ /, 'the conversation collapses');
+  assert.deepEqual(m.lines().slice(1), lines.slice(1), 'the box\'s lines as they were');
 });
 
 test('a Deep box waits five seconds, "Searching in 5 s" with Cancel; Cancel takes the box out and nothing is searched', () => {

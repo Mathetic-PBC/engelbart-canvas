@@ -1087,42 +1087,77 @@ test('a click on Regenerate opens the model selector (2026-10-16, David: as hove
   assert.equal(m.editor.state.picker.kind, 'regen');
 });
 
-test('a conversation\'s Collapse is in its first open question\'s corner, the word (2026-10-16, David), and collapses all of it; each later open exchange has its own, which folds it alone', () => {
+test('a conversation\'s Collapse is its first exchange\'s, a double chevron named Collapse conversation (2026-10-16, David); every later exchange\'s folds it alone', () => {
+  const DOUBLE = '<path d="m17 11-5-5-5 5"></path><path d="m17 18-5-5-5 5"></path>', SINGLE = '<path d="m6 9 6 6 6-6"></path>';
   // Titled, its only exchange: the corner's Collapse collapses the conversation to its title's row.
   const titled = mounted(TITLED);
   const html = titled.editor.editorHtml();
   assert.ok(!rowOf(html, 1).includes('data-chip'), 'no chip beside an answered question');
-  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="foldall" data-turn="1" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg/, 'its Collapse, top right, a chevron');
+  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg/, 'its Collapse, top right');
+  assert.ok(rowOf(html, 1).includes(DOUBLE), 'a double chevron');
   assert.ok(!/data-foot="1"[^>]*>(?:(?!<\/div><div data-line)[\s\S])*data-act="fold"/.test(html), 'not on the button row');
-  clickAct(titled, { act: 'foldall', turn: '1' });
+  clickAct(titled, { act: 'fold', turn: '1' });
   assert.equal(titled.lines()[0], 'bart#+ [chat 2026-10-13T09:00:00Z] Retry logic', 'collapsed to its title');
   assert.deepEqual(titled.lines().slice(1), TITLED.slice(1), 'its exchange is not folded as well');
-  // Titled, two answered (2026-10-16, David): the first's Collapse is the conversation's, the second's folds it alone.
-  const twoLines = [...TITLED.slice(0, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', ''];
-  const two = mounted(twoLines), drawn = two.editor.editorHtml();
-  assert.match(rowOf(drawn, 1), /data-corner="1"[^>]*><button[^>]*data-act="foldall" data-turn="1"/, 'the first: the conversation\'s');
-  assert.match(rowOf(drawn, 4), /data-corner="4"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="4" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg/, 'the second: its own');
+
+  // Titled, three answered: the second's and the third's fold their exchange alone, whatever else is folded.
+  const threeLines = [...TITLED.slice(0, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', '@chat and jitter?', 'bart> jitter too', 'bart> *Chat · Sonnet · high · 2 s*', ''];
+  const replies = (m, q) => m.lines().slice(q + 1, q + 3);
+  const three = mounted(threeLines), drawn = three.editor.editorHtml();
+  assert.match(rowOf(drawn, 1), /data-corner="1"[^>]*><button[^>]*data-act="fold" data-turn="1"[^>]*aria-label="Collapse conversation"/, 'the first: the conversation\'s');
+  assert.ok(rowOf(drawn, 1).includes(DOUBLE));
+  for (const q of [4, 7]) {
+    assert.match(rowOf(drawn, q), new RegExp(`data-corner="${q}"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="${q}" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg`), `turn at ${q}: its own`);
+    assert.ok(rowOf(drawn, q).includes(SINGLE) && !rowOf(drawn, q).includes(DOUBLE), `turn at ${q}: the single chevron`);
+  }
   assert.ok(!rowOf(drawn, 4).includes('data-fold-turn'), 'a click on the question is no Collapse');
-  clickAct(two, { act: 'fold', turn: '4' });
-  assert.equal(two.lines()[0], twoLines[0], 'the conversation stays open');
-  assert.equal(two.lines()[5], 'bart+> those too', 'the second exchange folds');
-  assert.equal(two.lines()[2], 'bart> because', 'the first stays open');
-  clickAct(two, { act: 'foldall', turn: '1' });
-  assert.match(two.lines()[0], /^bart#\+ /, 'the first\'s collapses the conversation');
-  // Untitled: every answered exchange of it folds.
-  const untitled = mounted([...TITLED.slice(1, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', '']);
-  assert.match(rowOf(untitled.editor.editorHtml(), 0), /data-corner="0"[^>]*><button type="button" class="bart-fold" data-act="foldall" data-turn="0"/);
-  clickAct(untitled, { act: 'foldall', turn: '0' });
+  clickAct(three, { act: 'fold', turn: '4' });
+  assert.equal(three.lines()[0], threeLines[0], 'turn 2: the conversation stays open');
+  assert.deepEqual(replies(three, 4), ['bart+> those too', 'bart+> *Chat · Sonnet · high · 2 s*'], 'turn 2 folds');
+  assert.deepEqual(replies(three, 1), threeLines.slice(2, 4), 'turn 1 stays open');
+  assert.deepEqual(replies(three, 7), threeLines.slice(8, 10), 'turn 3 stays open');
+  // Turns 1 and 2 folded, turn 3's Collapse folds turn 3 alone: the last one open no longer collapses the conversation.
+  three.editor.toggleFold(1);
+  assert.deepEqual(replies(three, 1), ['bart+> because', 'bart+> *Chat · Sonnet · high · 3 s*']);
+  clickAct(three, { act: 'fold', turn: '7' });
+  assert.equal(three.lines()[0], threeLines[0], 'turn 3: the conversation stays open');
+  assert.deepEqual(replies(three, 7), ['bart+> jitter too', 'bart+> *Chat · Sonnet · high · 2 s*'], 'turn 3 folds');
+  // Turn 1's Collapse: the title line folds, the turns' own reply lines are as they were.
+  const first = mounted(threeLines);
+  first.editor.collapseTurn(1);
+  assert.match(first.lines()[0], /^bart#\+ /, 'the conversation collapses');
+  assert.deepEqual(first.lines().slice(1), threeLines.slice(1), 'no turn\'s reply lines change');
+  assert.equal(first.editor.findTurn(first.lines(), 1).thread.folded, true, 'thread.folded');
+  // A folded turn 1's line expands that turn alone.
+  const back = mounted(threeLines);
+  back.editor.toggleFold(1);
+  clickAct(back, { act: 'fold', turn: '1' });
+  assert.deepEqual(back.lines(), threeLines, 'expanded, the conversation not collapsed');
+
+  // Untitled: its first exchange's Collapse folds it alone, the single chevron.
+  const untitledLines = [...TITLED.slice(1, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', ''];
+  const untitled = mounted(untitledLines), uh = untitled.editor.editorHtml();
+  assert.match(rowOf(uh, 0), /data-corner="0"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="0" aria-expanded="true" aria-label="Collapse" title="Collapse">/);
+  assert.ok(!rowOf(uh, 0).includes(DOUBLE));
+  clickAct(untitled, { act: 'fold', turn: '0' });
   assert.match(untitled.lines()[1], /^bart\+> because$/, 'the first folded');
-  assert.match(untitled.lines()[4], /^bart\+> those too$/, 'and the second');
-  // A turn of it at work: it collapses all the same (2026-10-15, David), its lines as they were; the answer lands hidden.
+  assert.equal(untitled.lines()[4], 'bart> those too', 'the second stays open');
+
+  // A turn of it at work: turn 1's Collapse folds turn 1 alone, the single chevron; the conversation stays open.
   const runLines = [...TITLED.slice(0, 4), '@chat and timeouts?', 'bart~> r1', ''];
-  const running = mounted(runLines);
-  assert.ok(!running.editor.editorHtml().includes('Collapse once it answers'));
-  clickAct(running, { act: 'foldall', turn: '1' });
-  assert.match(running.lines()[0], /^bart#\+ /, 'the conversation collapses');
-  assert.deepEqual(running.lines().slice(1), runLines.slice(1), 'the one at work as it was');
-  // Untitled, a turn at work: there is no title to collapse to, so its answered exchanges fold and the one at work is left.
+  const running = mounted(runLines), rh = running.editor.editorHtml();
+  assert.ok(!rh.includes('Collapse once it answers'));
+  assert.match(rowOf(rh, 1), /data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse" title="Collapse">/);
+  assert.ok(rowOf(rh, 1).includes(SINGLE) && !rowOf(rh, 1).includes(DOUBLE), 'running: the single chevron');
+  clickAct(running, { act: 'fold', turn: '1' });
+  assert.equal(running.lines()[0], runLines[0], 'the conversation stays open');
+  assert.match(running.lines()[2], /^bart\+> because$/, 'turn 1 folds');
+  assert.equal(running.lines()[5], 'bart~> r1', 'the one at work as it was');
+  // collapseAll is as it was: a titled conversation at work collapses whole; an untitled one's answered exchanges fold.
+  const all = mounted(runLines);
+  clickAct(all, { act: 'foldall', turn: '1' });
+  assert.match(all.lines()[0], /^bart#\+ /, 'collapseAll collapses the conversation');
+  assert.deepEqual(all.lines().slice(1), runLines.slice(1));
   const bare = mounted([...runLines.slice(1)]);
   clickAct(bare, { act: 'foldall', turn: '0' });
   assert.match(bare.lines()[1], /^bart\+> because$/);

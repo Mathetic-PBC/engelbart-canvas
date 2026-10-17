@@ -325,6 +325,9 @@ const ICON = {
   folded: icon('<path d="m9 18 6-6-6-6"></path>', 14, 1.75),
   // An open exchange's Collapse, at the top right of its question (2026-10-15): Lucide's chevron-down, its folded row's turned.
   open: icon('<path d="m6 9 6 6 6-6"></path>', 16, 1.75),
+  // The first exchange's Collapse, which collapses the whole conversation (2026-10-16, David): Lucide's chevrons-up, as
+  // the single chevron is drawn, so it reads as doing more.
+  openAll: icon('<path d="m17 11-5-5-5 5"></path><path d="m17 18-5-5-5 5"></path>', 16, 1.75),
   pointer: icon(`<path d="${AGENTS_PATH}"></path>`, 15, 1.75),
   // An older @bart answer's Reply (2026-10-15): Lucide's reply.
   reply: icon('<path d="m9 17-5-5 5-5"></path><path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>'),
@@ -1287,16 +1290,16 @@ export default class DocEditor extends React.Component {
       // answer, far from the row the exchange folds to). A titled conversation's `--build` line (2026-10-13) keeps its chip,
       // and its corner collapses the conversation.
       const buildTurn = !!at && !!at.turn.build, whole = buildTurn && top && at.thread.titleLine >= 0;
-      // An untitled Build's card is its answer, and folds no other way (no corner). The first open question's Collapse
-      // collapses the conversation (collapseAll); every later open exchange has one of its own (2026-10-16, David), which
-      // folds that exchange (collapseTurn). A click on the question itself collapses nothing (2026-10-16, David; since
+      // An untitled Build's card is its answer, and folds no other way (no corner). Every answered exchange's Collapse is
+      // collapseTurn's (2026-10-16, David): the first exchange of a titled conversation collapses the conversation, every
+      // other folds its exchange alone. A click on the question itself collapses nothing (2026-10-16, David; since
       // 2026-10-15 it had). A question still being answered in a titled conversation has the conversation's (2026-10-15).
       const firstOpen = !!at && (at.thread.turns.find((turn) => !turn.folded) || {}).q === at.turn.q;
       const foldable = !!at && (cornered(at.turn, at.box) || (firstOpen && !!at.turn.pending && !at.box && at.thread.titleLine >= 0)) && (!buildTurn || whole) && !editing;
       // An answered @bart exchange keeps its corner too (2026-10-15, David: it was taken off to match his reference, and he
       // wanted it back).
       const chatQ = !!at && at.chat && asked && !at.turn.pending && !editing;
-      const corner = foldable ? this.cornerHtml(at, whole, firstOpen) : '';
+      const corner = foldable ? this.cornerHtml(at, whole, !!at.turn.pending) : '';
       // Not asked yet (or being edited), the line is the message box (2026-10-13): one line, white, bordered, growing as it
       // wraps with the chip and send kept bottom-right.
       if (!asked || editing) {
@@ -2244,15 +2247,17 @@ export default class DocEditor extends React.Component {
   // conversation it folds all of it to its title's row (foldthread), not while a turn of it runs; otherwise it folds the
   // turn (fold). Out of the text (contenteditable=false, as the chip is), so it is never in the caret's way or a copy, and
   // pulled into the padding so the row is no taller for it.
-  // `whole`: a titled Build's conversation (foldthread); `first`: the first open question's, which collapses the whole
-  // conversation (collapseAll); else the exchange's own (fold, collapseTurn: the last one open in a titled conversation
-  // collapses the conversation). A chevron (2026-10-16, David; the word Collapse before it, that morning): down while open,
-  // as the folded row's points right, named Collapse for a hover and a screen reader.
-  cornerHtml(at, whole = false, first = true) {
+  // `whole`: a titled Build's conversation (foldthread); `asking`: a question still being answered, which collapses the
+  // whole conversation (collapseAll); else the exchange's (fold, collapseTurn). A chevron (2026-10-16, David; the word
+  // Collapse before it, that morning): down while open, as the folded row's points right, named Collapse for a hover and
+  // a screen reader. The first exchange of a titled conversation at rest collapses all of it, and says so: a double
+  // chevron, named Collapse conversation (2026-10-16, David).
+  cornerHtml(at, whole = false, asking = false) {
     const { thread, turn } = at, running = whole && isBuilding(thread, this.props.builds);
+    const all = !whole && !asking && this.collapsesThread(thread, turn), label = all ? 'Collapse conversation' : 'Collapse';
     const button = whole
       ? `<button type="button" class="bart-fold" data-act="foldthread" data-row="${thread.titleLine}" aria-expanded="true" aria-label="Collapse"${running ? ' disabled title="Collapse once it answers"' : ' title="Collapse"'}>${ICON.open}</button>`
-      : `<button type="button" class="bart-fold" data-act="${first ? 'foldall' : 'fold'}" data-turn="${turn.q}" aria-expanded="true" aria-label="Collapse" title="Collapse">${ICON.open}</button>`;
+      : `<button type="button" class="bart-fold" data-act="${asking ? 'foldall' : 'fold'}" data-turn="${turn.q}" aria-expanded="true" aria-label="${label}" title="${label}">${all ? ICON.openAll : ICON.open}</button>`;
     return `<span contenteditable="false" data-corner="${turn.q}" style="user-select:none;flex:none;position:relative;display:inline-flex;margin:-2px -6px -2px auto;height:28px">${button}</span>`;
   }
   // A turn folded by a follow-up (2026-10-13): one row, its question on one line cut off with an ellipsis, grey and small,
@@ -2304,7 +2309,11 @@ export default class DocEditor extends React.Component {
       + `<span style="flex:none;display:inline-flex;margin-right:8px;color:#8f8f8f">${ICON.search}</span><span style="flex:none">Research</span>${levelHtml}${askedHtml}`
       // Done, its Collapse (or Expand, folded) is at its top right (2026-10-16, David: it was an icon on its foot), a chevron
       // as the conversation's is: down while open, right while folded.
-      + (done ? `<span style="flex:none;display:inline-flex;margin:-4px -6px -4px auto;padding-left:10px"><button type="button" class="bart-fold" data-act="fold" data-turn="${turn.q}" aria-expanded="${!turn.folded}" aria-label="${turn.folded ? 'Expand' : 'Collapse'}" title="${turn.folded ? 'Expand' : 'Collapse'}">${turn.folded ? ICON.folded : ICON.open}</button></span>` : '')
+      // The first exchange of a titled conversation's collapses the conversation (collapseTurn), drawn as its corner's is.
+      + (done ? (() => {
+        const all = this.collapsesThread(thread, turn), label = turn.folded ? 'Expand' : all ? 'Collapse conversation' : 'Collapse';
+        return `<span style="flex:none;display:inline-flex;margin:-4px -6px -4px auto;padding-left:10px"><button type="button" class="bart-fold" data-act="fold" data-turn="${turn.q}" aria-expanded="${!turn.folded}" aria-label="${label}" title="${label}">${turn.folded ? ICON.folded : all ? ICON.openAll : ICON.open}</button></span>`;
+      })() : '')
       + '</div>';
     const running = state === 'running', status = running || (done && turn.folded) ? '' : this.boxStatusHtml(ls, i, turn, state, can);
     // A card of its own (2026-10-16, David), white and ruled, inside the reply's card where it stood: running, it goes on
@@ -4432,14 +4441,19 @@ export default class DocEditor extends React.Component {
     this.setState({ activeLine: null, mention: null });
   }
   // A turn's Collapse (2026-10-13, David): it folds that exchange alone, to a line at the top of its card, whatever else in
-  // its conversation is at work. The last exchange left open in a titled conversation collapses the conversation to its
-  // title's row instead (toggleThread), once nothing in it runs. A folded turn's line expands it (toggleFold).
+  // its conversation is at work. The first exchange of a titled conversation collapses the conversation to its title's row
+  // instead (toggleThread), once nothing in it runs (2026-10-16, David: it was the last exchange left open, so a later
+  // turn's Collapse could close everything). A folded turn's line expands it (toggleFold).
   collapseTurn(q) {
     const ls = this.lines(), found = this.findTurn(ls, q); if (!found) return;
     const { thread, turn } = found;
-    const last = !turn.folded && thread.titleLine >= 0 && !isRunning(thread, this.props.builds)
-      && thread.turns.every((t) => t === turn || !t.answered || t.pending || t.folded);
-    if (last) this.toggleThread(thread.titleLine); else this.toggleFold(q);
+    if (this.collapsesThread(thread, turn)) this.toggleThread(thread.titleLine); else this.toggleFold(q);
+  }
+  // Whether `turn`'s Collapse collapses its whole conversation (collapseTurn): it is the first exchange of a titled one,
+  // open, and nothing in the conversation is at work.
+  collapsesThread(thread, turn) {
+    const first = thread.turns[0];
+    return !!turn && !!first && first.q === turn.q && !turn.folded && thread.titleLine >= 0 && !isRunning(thread, this.props.builds);
   }
   // A conversation's Collapse, or a click on one of its open questions (2026-10-15, David): a titled one collapses whole, to
   // its title's row, at work or not (its answer lands hidden); one with no title, or a Build's not yet finished, has each

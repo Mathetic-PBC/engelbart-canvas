@@ -172,7 +172,7 @@ test('the answer replaces its pending line with the title line above it, and the
   assert.deepEqual(r.props.text.split('\n').slice(0, 3).map((l) => l.replace(/\[[^\]]+\] /, '')), ['bart# Retry logic', '@chat why retry?', 'bart> because']);
 });
 
-test('an open titled conversation draws no title row; its question opens the card, rounded; Collapse is in its corner, and on its last open exchange it collapses the conversation', () => {
+test('an open titled conversation draws no title row; its question opens the card, rounded; Collapse is in its corner, and on its first exchange it collapses the conversation', () => {
   const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', '@chat why retry?', ...answer('because'), ''];
   const m = mounted(lines);
   const html = m.html(), head = rowOf(html, 0);
@@ -180,11 +180,11 @@ test('an open titled conversation draws no title row; its question opens the car
   assert.ok(!/data-title-row|data-thread-row/.test(html));
   assert.ok(!html.replace(/ data-raw="[^"]*"/g, '').includes('Retry logic'), 'the title is not shown');
   assert.match(rowOf(html, 1), /border-radius:10px 10px 0 0/, 'the first question has the card\'s rounded top');
-  assert.ok(html.includes('class="bart-fold" data-act="foldall" data-turn="1" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg'), 'the corner\'s Collapse is the conversation\'s (2026-10-15), a chevron (2026-10-16)');
+  assert.ok(html.includes('class="bart-fold" data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m17 11-5-5-5 5"></path><path d="m17 18-5-5-5 5"></path></svg>'), 'the corner\'s Collapse is the conversation\'s (2026-10-15), a double chevron (2026-10-16)');
   assert.ok(!html.includes('data-act="foldthread"'), 'not the conversation\'s');
   assert.deepEqual(m.lines(), lines, 'the `bart#` line is as it was');
   // Its only exchange: Collapse from the foot folds the conversation to one row, a link; an ⌥-click is a click, not a rename.
-  m.click('foldall', { turn: '1' }, false, { alt: true });
+  m.click('fold', { turn: '1' }, false, { alt: true });
   assert.equal(m.lines()[0], 'bart#+ [chat 2026-10-12T21:41:00Z] Retry logic');
   assert.deepEqual(m.lines().slice(1), lines.slice(1));
   assert.equal(m.editor.titleEdit, null);
@@ -242,7 +242,8 @@ test('a click on an open exchange\'s question collapses nothing (2026-10-16, Dav
   assert.match(row.slice(0, row.indexOf('>')), /cursor:default/);
   plain.editor.editorClick({ target: { closest: () => null }, preventDefault() {} });
   assert.ok(plain.lines().slice(1).every((l) => !/^bart\+>/.test(l)), 'nothing folds');
-  plain.click('foldall', { turn: '0' });
+  assert.match(row, /data-act="fold" data-turn="0" aria-expanded="true" aria-label="Collapse" title="Collapse">/, 'untitled: its own Collapse, the single chevron');
+  plain.click('fold', { turn: '0' });
   assert.ok(plain.lines().slice(1, -1).every((l) => /^bart\+>/.test(l)), 'its Collapse folds it');
 });
 
@@ -250,7 +251,7 @@ test('a conversation at work collapses all the same (2026-10-15, David): the que
   const lines = ['bart# Retry logic', '@chat why retry?', ...answer('because'), '@chat and more?', 'bart~> run1', ''];
   const m = mounted(lines);
   const html = m.html();
-  assert.match(html, /class="bart-fold" data-act="foldall" data-turn="1" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg/, 'the conversation\'s Collapse, not disabled');
+  assert.match(html, /class="bart-fold" data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg[^>]*><path d="m6 9 6 6 6-6"><\/path><\/svg>/, 'while it is at work, the first exchange\'s Collapse is its own (2026-10-16), the single chevron, not disabled');
   assert.ok(!html.includes('Collapse once it answers'));
   const at = lines.indexOf('@chat and more?');
   const alone = mounted(['bart# Retry logic', '@chat why retry?', 'bart~> run1', '']).html();
@@ -403,7 +404,7 @@ test('the button row (2026-10-13): Reply, Copy and Regenerate on the left; then 
     assert.match(foot, /data-act="copybart" data-turn="1" aria-label="Copy"/, 'Copy');
     assert.match(foot, /data-act="regen" data-turn="1" data-quiet="1" aria-label="Regenerate"/, 'Regenerate, opening no selector on hover (a click opens it, 2026-10-16)');
     assert.ok(!foot.includes('data-act="fold"'), 'no Collapse here');
-    assert.match(rowOf(m.html(), 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="(?:foldall" data-turn="1|foldthread" data-row="0)" aria-expanded="true" aria-label="Collapse"[^>]*><svg/, 'Collapse, a chevron (2026-10-16), in the question\'s top right');
+    assert.match(rowOf(m.html(), 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="(?:fold" data-turn="1|foldthread" data-row="0)" aria-expanded="true" aria-label="Collapse(?: conversation)?"[^>]*><svg/, 'Collapse, a chevron (2026-10-16), in the question\'s top right');
     assert.match(foot, /data-act="dropturn" data-turn="1" aria-label="Delete"/, 'Delete');
     const order = ['data-act="reply"', 'copybart', 'data-act="regen"', 'dropturn'].map((k) => foot.indexOf(k));
     assert.deepEqual(order, [...order].sort((a, b) => a - b), 'Reply, Copy, Regenerate, Delete');
@@ -521,7 +522,7 @@ test('a follow-up collapses the turns before it but the last (2026-10-14: the tw
   m.click('fold', { turn: '1' });
   assert.ok(m.lines().slice(2, second).every((l) => /^bart>/.test(l)));
   const open = m.html();
-  assert.match(rowOf(open, 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="foldall" data-turn="1" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg/, 'open again, its question\'s corner collapses the conversation (2026-10-15)');
+  assert.match(rowOf(open, 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg/, 'open again, its question\'s corner folds it alone while the follow-up is at work (2026-10-16)');
   assert.ok(open.includes('because') && open.includes('data-foot="1"'), 'its answer and foot are drawn');
   assert.ok(!rowOf(open, 1).includes('data-folded-row'), 'its question is a question row again');
   assert.ok(rowOf(open, second).includes('data-folded-row'), 'the other stays one row');
