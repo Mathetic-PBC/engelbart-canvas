@@ -1,10 +1,13 @@
 'use strict';
 
 // Drawing a pdf's pages (src/renderer/pdf/PaperView.jsx and src/renderer/model/paper-draw.js, MATH-71, 2026-10-07):
-// a page drawn for the first time goes over its white sheet, not under it (it was blank until a zoom); the pages in view
-// are drawn first and a scroll while drawing moves what comes next; a page far from the view gives its drawing back and
-// is drawn again when it comes near; a drawing that fails keeps what was there and does not stop the rest. PaperView
-// lays out a twenty-page stand-in here, in a small fake DOM (no pdf.js, no rough.js).
+// a page drawn for the first time goes under its highlights; the pages in view are drawn first and a scroll while drawing
+// moves what comes next; a page far from the view gives its drawing back and is drawn again when it comes near; a drawing
+// that fails keeps what was there and does not stop the rest. Since 2026-10-16 the sheets are made once a document and a
+// zoom only sizes them again: the drawings near the view are drawn for the new size, every page's text layer is made
+// once, and a turn of the event loop goes between two pages. Since 2026-10-16 (later) a page also has a small drawing under
+// its own, made from it or drawn small by pdf.js within THUMB_AHEAD of the view, kept when its drawing is given back. PaperView lays out a twenty-page stand-in here, in a small
+// fake DOM (no pdf.js, no rough.js; a stand-in TextLayer counts the layers made).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -15,13 +18,14 @@ const { buildSync } = require('esbuild');
 
 const loadDraw = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/paper-draw.js')).href);
 
+const textLayers = []; // every text layer made, by its container
 function loadView() {
   globalThis.document = { baseURI: 'file:///app/index.html' };
   const filename = path.join(__dirname, '__PaperView-draw-unit.cjs');
   const bundled = buildSync({ entryPoints: [path.join(__dirname, '../src/renderer/pdf/PaperView.jsx')], bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom', 'pdfjs-dist', 'roughjs'], loader: { '.css': 'empty' } });
   const compiled = new Module(filename, module);
   compiled.paths = module.paths;
-  const stubs = { 'pdfjs-dist': { GlobalWorkerOptions: {} }, roughjs: { __esModule: true, default: null } };
+  const stubs = { 'pdfjs-dist': { GlobalWorkerOptions: {}, TextLayer: class { constructor({ container }) { textLayers.push(container); } render() { return Promise.resolve(); } cancel() {} } }, roughjs: { __esModule: true, default: null } };
   compiled.require = (id) => (id in stubs ? stubs[id] : Module.prototype.require.call(compiled, id));
   compiled._compile(bundled.outputFiles[0].text, filename);
   delete globalThis.document;
@@ -70,7 +74,7 @@ class El {
   setAttribute(k, v) { this.attrs[k] = String(v); }
   getAttribute(k) { return k in this.attrs ? this.attrs[k] : null; }
   getBoundingClientRect() { return { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 }; }
-  getContext() { return { canvas: this }; }
+  getContext() { return { canvas: this, drawImage() {} }; }
   querySelectorAll(sel) { const out = []; const walk = (el) => { for (const c of el.children) { if (matches(c, sel)) out.push(c); walk(c); } }; walk(this); return out; }
   querySelector(sel) { return this.querySelectorAll(sel)[0] || null; }
 }
@@ -81,12 +85,13 @@ const W = 612, H = 700, N = 20;
 
 // Pages whose drawings are recorded: `hold` makes each drawing wait until released, `fail` the pages that cannot be drawn.
 function pdf({ hold = false, fail = [] } = {}) {
-  const calls = [], waiting = [];
+  const calls = [], thumbs = [], waiting = [];
   const page = (n) => ({
     getViewport: ({ scale }) => ({ width: 612 * scale, height: 792 * scale }),
+    cleanup() { this.cleaned = (this.cleaned || 0) + 1; },
     getTextContent: () => Promise.resolve({ items: [] }),
-    render: ({ canvasContext }) => {
-      calls.push(n);
+    render: ({ canvasContext, viewport }) => {
+      (viewport && Math.round(viewport.width) === 180 ? thumbs : calls).push(n); // THUMB_W: a small drawing
       let done, failed;
       const promise = new Promise((res, rej) => { done = res; failed = rej; });
       const go = () => (fail.includes(n) ? failed(new Error('bad page')) : done());
@@ -95,7 +100,7 @@ function pdf({ hold = false, fail = [] } = {}) {
       return { promise, cancel: () => failed(Object.assign(new Error('cancelled'), { name: 'RenderingCancelledException' })) };
     },
   });
-  return { calls, waiting, doc: { numPages: N, getPage: async (n) => page(n) } };
+  return { calls, thumbs, waiting, doc: { numPages: N, getPage: async (n) => page(n) } };
 }
 
 function viewer(fake) {
@@ -114,8 +119,10 @@ function viewer(fake) {
 test.afterEach(() => { for (const name of ['document', 'requestAnimationFrame', 'cancelAnimationFrame', 'window']) delete globalThis[name]; });
 
 const drawnPages = (view) => view.sheets.map((s, n) => (s && s.canvas ? n : 0)).filter(Boolean);
-const tick = () => new Promise((r) => setImmediate(r));
-async function settle(view) { for (let i = 0; i < 50 && view.pumping; i += 1) await tick(); }
+const tick = () => new Promise((r) => setTimeout(r, 1));
+async function settle(view) { for (let i = 0; i < 400 && view.pumping; i += 1) await tick(); }
+// The sheets made, then drawn from the view outward until there is nothing left to draw.
+async function open(view) { await view.layout(); view.drawSoon(); await settle(view); }
 const scrollTo = (view, host, n) => { host.scrollTop = view.tops[n - 1] + 10; view.drawSoon(); };
 
 /* ------------------------------------------------------------------------------------------------ the order */
@@ -135,29 +142,49 @@ test('nearOrder: the pages in view from the middle outward, then the ones beside
 
 /* ------------------------------------------------------------------------------------------------ PaperView */
 
-test('a page drawn for the first time goes over its white sheet and under its highlights', async () => {
+test('a page drawn for the first time goes under its highlights, its text and its notes', async () => {
   const fake = pdf();
   const { view } = viewer(fake);
-  await view.layout(null);
+  await open(view);
   const s = view.sheets[1], kids = s.wrap.children;
   assert.ok(s.canvas, 'page 1 is drawn');
-  assert.ok(kids.indexOf(s.canvas) > kids.indexOf(s.bg), 'the drawing is after (over) the white page');
+  assert.equal(kids.indexOf(s.thumb), 0, 'first: its small drawing, under everything (no white sheet under it, 2026-10-16)');
+  assert.equal(kids.indexOf(s.canvas), 1, 'then its drawing');
   assert.ok(kids.indexOf(s.canvas) < kids.indexOf(s.hl), 'and before (under) the highlights');
+  assert.equal(s.thumb.width, 180, 'the small drawing is made from it, THUMB_W wide');
 });
 
 test('only the pages near the view are drawn; every page gets its text', async () => {
   const fake = pdf();
   const { view } = viewer(fake);
-  await view.layout(null);
+  await open(view);
   assert.deepEqual(drawnPages(view), [1, 2, 3]);
   assert.deepEqual(fake.calls, [1, 2, 3]);
   for (let n = 1; n <= N; n += 1) assert.equal(view.sheets[n].texted, true, `page ${n} has its text`);
+  // The pages within THUMB_AHEAD (12) of the view get a small drawing of their own, nearest first; none further.
+  assert.deepEqual(fake.thumbs, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
+  for (let n = 1; n <= N; n += 1) assert.equal(!!view.sheets[n].thumb, n <= 13, `page ${n}`);
+});
+
+test('a page whose drawing is given back keeps its small one, which a zoom out shows until it is drawn again', async () => {
+  const fake = pdf();
+  const { view, host } = viewer(fake);
+  await open(view);
+  const thumb = view.sheets[1].thumb;
+  scrollTo(view, host, 15);
+  await settle(view);
+  assert.equal(view.sheets[1].canvas, null, 'its drawing given back');
+  assert.equal(view.sheets[1].thumb, thumb, 'its small drawing kept');
+  assert.equal(thumb.parentNode, view.sheets[1].wrap);
+  view.zoomTo(30);
+  assert.equal(thumb.style.width, `${view.geo[1].pageW}px`, 'sized with the page');
+  assert.ok(view.geo[1].pageW < 200);
 });
 
 test('a scroll draws the pages it brings near and gives back the drawings it leaves far behind', async () => {
   const fake = pdf();
   const { view, host } = viewer(fake);
-  await view.layout(null);
+  await open(view);
   const first = view.sheets[1].canvas;
   scrollTo(view, host, 15);
   await settle(view);
@@ -168,13 +195,15 @@ test('a scroll draws the pages it brings near and gives back the drawings it lea
   scrollTo(view, host, 1);
   await settle(view);
   assert.deepEqual(drawnPages(view), [1, 2, 3], 'back at the top: drawn again, the far ones given back');
-  for (const n of [1, 2, 3]) assert.ok(view.sheets[n].wrap.children.indexOf(view.sheets[n].canvas) > view.sheets[n].wrap.children.indexOf(view.sheets[n].bg));
+  for (const n of [1, 2, 3]) assert.ok(view.sheets[n].wrap.children.indexOf(view.sheets[n].canvas) < view.sheets[n].wrap.children.indexOf(view.sheets[n].hl));
+  for (const n of [1, 2, 3]) assert.ok(view.sheets[n].wrap.children.indexOf(view.sheets[n].thumb) < view.sheets[n].wrap.children.indexOf(view.sheets[n].canvas), 'its small drawing under it');
 });
 
 test('a scroll while a page is being drawn: the page now in view is next, and the one left behind is stopped', async () => {
   const fake = pdf({ hold: true });
   const { view, host } = viewer(fake);
-  const laid = view.layout(null);
+  await view.layout();
+  view.drawSoon();
   for (let i = 0; i < 20 && !fake.waiting.length; i += 1) await tick();
   assert.deepEqual(fake.calls, [1]);
   scrollTo(view, host, 12);
@@ -182,30 +211,36 @@ test('a scroll while a page is being drawn: the page now in view is next, and th
   assert.equal(view.sheets[1].canvas, null, 'page 1 was stopped, not drawn');
   for (let i = 0; i < 40 && fake.calls.length < 2; i += 1) await tick();
   assert.equal(fake.calls[1], 12, 'the page in view comes next');
-  for (let i = 0; i < 200; i += 1) { const w = fake.waiting.shift(); if (w) w.go(); await tick(); if (!view.pumping) break; }
-  await laid;
+  for (let i = 0; i < 400; i += 1) { const w = fake.waiting.shift(); if (w) w.go(); await tick(); if (!view.pumping) break; }
   assert.deepEqual(drawnPages(view), [10, 11, 12, 13, 14]);
 });
 
 test('a page that cannot be drawn keeps what was there and the rest are drawn', async () => {
   const fake = pdf({ fail: [2] });
   const { view } = viewer(fake);
-  await view.layout(null);
+  await open(view);
   assert.deepEqual(drawnPages(view), [1, 3]);
   assert.equal(view.sheets[2].failed, true);
   assert.equal(view.sheets[2].texted, true, 'its text is there all the same');
   assert.equal(view.pumping, 0, 'drawing ended');
 });
 
-test('a zoom carries the drawings over, stretched, and draws the pages in view again', async () => {
+test('a zoom sizes the same sheets again, carries the drawings over stretched, draws the pages in view again and no text layer', async () => {
   const fake = pdf();
   const { view } = viewer(fake);
-  await view.layout(null);
-  const old = view.sheets[1].canvas;
-  view.zoom = 1.5;
-  await view.layout(undefined);
+  textLayers.length = 0;
+  await open(view);
+  assert.equal(textLayers.length, N, 'a text layer a page');
+  const sheets = view.sheets.slice(), old = view.sheets[1].canvas;
+  view.zoomTo(150);
+  assert.deepEqual(view.sheets, sheets, 'the very same sheets');
+  assert.equal(view.sheets[1].canvas, old, 'the old drawing stays meanwhile');
+  assert.equal(old.style.width, `${612 * 1.5}px`, 'stretched to the new size');
+  assert.equal(view.sheets[1].tl.style['--total-scale-factor'], String(1.5), 'the text layer sized by its CSS variable');
+  await settle(view);
   const s = view.sheets[1];
   assert.notEqual(s.canvas, old, 'drawn again at the new zoom');
-  assert.ok(s.wrap.children.indexOf(s.canvas) > s.wrap.children.indexOf(s.bg));
   assert.equal(old.width, 0, 'the stretched drawing let go once replaced');
+  assert.equal(s.wrap.children.indexOf(s.canvas), 1, 'over its small drawing');
+  assert.equal(textLayers.length, N, 'no text layer made again');
 });

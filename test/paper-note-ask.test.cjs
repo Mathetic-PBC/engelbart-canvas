@@ -196,28 +196,15 @@ function keyboard(view, ta) {
 }
 const keyEv = (target, more = {}) => ({ target, key: '', code: '', metaKey: false, ctrlKey: false, altKey: false, shiftKey: false, prevented: false, stopped: false, preventDefault() { this.prevented = true; }, stopPropagation() { this.stopped = true; }, ...more });
 
-test('Space over the paper pans only while nothing has the keyboard: a note\'s field, a button or the document keeps it', () => {
+test('Space is never the paper\'s (no Space-drag to pan since 2026-10-16): it scrolls the pane; a pending selection\'s keys give way to whatever has the keyboard', () => {
   const { view, ta } = viewer('a note');
   const { body, inside, button, outside, editor } = keyboard(view, ta);
-  view.hovered = true;
-  for (const [target, why] of [[ta, 'a note\'s field'], [button, 'a button on the paper'], [outside, 'a button elsewhere'], [editor, 'the document']]) {
+  for (const target of [ta, button, outside, editor, body, inside]) {
     const ev = keyEv(target, { key: ' ', code: 'Space' });
     view.onKeyCapture(ev);
-    assert.ok(!ev.prevented && !ev.stopped, `${why} gets its Space`);
-    assert.equal(view.space, false);
+    assert.ok(!ev.prevented && !ev.stopped, 'Space goes where it would go');
   }
-  for (const target of [body, inside]) {
-    const ev = keyEv(target, { key: ' ', code: 'Space' });
-    view.onKeyCapture(ev);
-    assert.ok(ev.prevented && ev.stopped, 'nothing has the keyboard: the paper pans');
-    assert.equal(view.space, true);
-    view.holdSpace(false);
-  }
-  view.hovered = false;
-  const away = keyEv(body, { key: ' ', code: 'Space' });
-  view.onKeyCapture(away);
-  assert.ok(!away.prevented, 'the pointer elsewhere: Space is the app\'s');
-  // A pending selection's keys too: a focused button keeps Space and Enter.
+  // A pending selection's keys: a focused button keeps Space and Enter.
   view.pendingSel = { parts: [] };
   view.addMark = () => { throw new Error('no note'); };
   for (const k of [' ', 'Enter']) {

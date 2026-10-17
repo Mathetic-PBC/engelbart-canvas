@@ -12,51 +12,61 @@
 // Follow-ups (2026-10-06): the boxes hanging under a moved one widen the desk too (deskNeed, hangLeft); a deleted answer
 // stays one of its exchange's turns while that session can be resumed (exchangeOf), so ⌘Z can bring it back and the
 // next question goes on in the same session.
-// One card a highlight (2026-10-06): a highlight's note and its answers are one card, like a comment thread, ASK_W wide
-// throughout, with one grip and one place (the mark's `pos`); an answer moved on its own before (an ask's `pos`) is
-// shown in its card, its `pos` no longer read. Nothing joins boxes any more, and nothing hangs under a moved one.
+// One card a highlight (2026-10-06): a highlight's note and its answers are one card, like a comment thread, with one
+// place (the mark's `pos`); an answer moved on its own before (an ask's `pos`) is shown in its card, its `pos` no longer
+// read. Nothing joins boxes any more, and nothing hangs under a moved one.
+// Annotations round (2026-10-16): no desk to scroll onto. The column stays in the middle of the pane and what lies beside
+// the page is reached by zooming out (../model/paper-draw.js columnGeometry), so the desk's widths (DESK, deskOf,
+// deskNeed), the fades and chips for boxes out of view, Fit page + notes, and the blank-space pan (blankAt) are gone. A
+// note is narrow and grows down (noteWidth, freeNoteWidth).
+// Notes the same size at every zoom (2026-10-16, later; Hudson: "the font size should be adaptive so it is the same size
+// at all zooms", "i should be able to see all annotations if i can see any vertical position y at all times, irrespective
+// of zoom and position it was left x"): a card is laid out in screen px, not desk px, so the widths below are px on
+// screen at any zoom. Only where a card sits follows the page (its highlight's height and the text's edge, or its `pos`);
+// the pane's edges then move it in, narrowed and taller if it has to be (fitWidth).
+// Notes the size of the paper's text (2026-10-16, third round; Hudson: "the font size is way too large for the annotation,
+// it should be roughly constant to what the font size of the pdf is at 100%, so like 10pt", "shrinking may actually be
+// more natural"): a card is laid out in note px and drawn scaled by noteScale, which follows the page's width, so its
+// handwriting stays beside the printed text at the size of it at every zoom, down to NOTE_FLOOR, where it stops shrinking
+// so it can still be read. The widths below are note px.
 
 /** Side space that centers a page of width pageW in a pane of width W (0 once the page is wider). */
 export const sideSpace = (W, pageW) => Math.max(0, Math.floor((W - pageW) / 2));
 
-export const DESK = 400; // desk px of desk beside a page, each side
 export const BOX_GAP = 12; // desk px kept between two boxes by the spacing pass
-export const DESK_EDGE = 24; // desk px a moved box keeps from the desk's edge (the desk grows to keep it)
-export const NOTE_W = 240; // a note's box, on the desk
-export const ASK_W = 320; // a highlight's card: its note and its answers
-export const SIDE_GAP = 12; // a box beside its page: desk px from the text's edge (28 until 2026-10-07: closer, David)
+export const NOTE_W = 240; // desk px: the widest a note gets (2026-10-16: a highlight's card too, 320 until then)
+export const SIDE_GAP = 12; // a note beside its page: desk px from the text's edge (28 until 2026-10-07: closer, David)
 export const POS_DY = 11; // `pos` is where a box's first line sits: 11px under its top, as free notes were always kept
+export const NOTE_MIN = 96; // px: the narrowest a highlight's note in a margin gets (2026-10-16)
+export const FREE_MIN = 80; // px: the narrowest a note typed anywhere is written
+export const FREE_FIT = 160; // px: a note typed anywhere is narrowed to this, no further, before it is moved in
+export const EDGE_PAD = 8; // px kept between a card and the pane's side
+export const HIDE_ROOM = 40; // note px: a card whose margin shows less than this is hidden, not drawn over the text (round 4,
+// 2026-10-16: "if i zoom in such that there are no margins and it is just text the annotations shouldn't still show")
+export const NOTE_REF = 1050; // a page this many px wide draws a note at its laid-out size: Caveat 24px is then 14 of
+// the page's 612 pt, whose x-height (0.36 em) is that of 10 pt body text (Helvetica, 0.52 em)
+export const NOTE_FLOOR = 10 / 24; // the least a note is drawn at: 10px handwriting, the smallest that reads
+/** Screen px per note px for a page drawn pageW px wide. */
+export const noteScale = (pageW) => Math.max(NOTE_FLOOR, (pageW || NOTE_REF) / NOTE_REF);
 
 /**
- * The desk on each side of a page `pageW` wide in a pane `W` wide, at zoom `k` → { G, R } layout px: G is also where the
- * page starts. DESK and `need` ({ left, right }, deskNeed's) are desk px, so k times as wide in a layout.
+ * A card's width where it is now (2026-10-16): what it would be (`want`), narrowed to the `room` the pane shows beside
+ * its anchor (a highlight's note: from the text's edge to the pane's; a moved or typed one: from where it starts to the
+ * pane's right), but not under `min` (it is moved in over the text instead), and never wider than the pane shows (`span`).
+ * A highlight's note is as wide as its margin, within NOTE_MIN..NOTE_W, and grows down (Hudson: "slightly less horizontal
+ * text … take up the vertical space").
  */
-export function deskOf(W, pageW, need = {}, k = 1) {
-  const side = sideSpace(W, pageW), desk = Math.ceil(DESK * k);
-  return { G: Math.max(side, desk, Math.ceil((need.left || 0) * k)), R: Math.max(side, desk, Math.ceil((need.right || 0) * k)) };
-}
+export const fitWidth = (want, room, min, span) => {
+  const most = Math.max(1, Math.min(want, span)), least = Math.min(min, most);
+  return Math.round(Math.max(least, Math.min(most, room)));
+};
 
 /**
- * How wide the desk must be on each side so every card that was moved keeps DESK_EDGE from its edge, at the page widths
- * `pageWOf(page)` in desk px → { left, right } desk px (0 when nothing reaches past the page). A mark is a card while it
- * has a note, an answer shown (deleted ones are not) or `running(markId)` answers being written: ASK_W wide on a
- * highlight, NOTE_W for a free note. Cards beside the page always fit the DESK.
+ * A note typed anywhere (2026-10-16): from where it starts (`x`) to the printed text after it on its line (`textAt`, its
+ * left edge; Infinity with none) or the edge of what showed (`edge`), whichever is nearer, within FREE_MIN..NOTE_W.
+ * x, textAt and edge are the sheet's px; `ns` its notes' scale (noteScale), the result note px.
  */
-export function deskNeed(marks, pageWOf, running = () => 0) {
-  let left = 0, right = 0;
-  for (const [page, list] of Object.entries(marks || {})) {
-    const P = pageWOf(Number(page));
-    if (!P) continue;
-    for (const m of list || []) {
-      if (!m || !m.pos || (m.note == null && !shownAsks(m).length && !(Number(running(m.id)) > 0))) continue;
-      const x = Number(m.pos.x) * P, w = (m.rects || []).length ? ASK_W : NOTE_W;
-      if (!Number.isFinite(x)) continue;
-      left = Math.max(left, DESK_EDGE - x);
-      right = Math.max(right, x + w + DESK_EDGE - P);
-    }
-  }
-  return { left, right };
-}
+export const freeNoteWidth = (x, textAt, edge, ns = 1) => Math.round(Math.max(FREE_MIN, Math.min(NOTE_W, (Math.min(textAt - 6, edge - 8) - x) / ns)));
 
 /**
  * The printed text's column on a page (2026-10-06, David: a card beside its highlight sits next to the text at any zoom,
@@ -116,103 +126,7 @@ export function spaceBoxes(units, fixed = [], gap = BOX_GAP) {
   return out;
 }
 
-/**
- * Where a page and its boxes reach at zoom z, from the page's top-left → { left, top, right, bottom }. The page is
- * pageW1 × pageH1 at zoom 1. A box's left and top are `x.a·P + x.b·z` and `y.a·P + y.b·z` with P the page's width at z (a
- * moved box keeps its page units, a box beside the page its desk px from the edge); its width and height are desk px,
- * z times as many at z.
- */
-export function extentAt({ pageW1, pageH1, boxes = [] }, z) {
-  const P = pageW1 * z;
-  let left = 0, top = 0, right = P, bottom = pageH1 * z;
-  for (const b of boxes) {
-    const x = b.x.a * P + b.x.b * z, y = b.y.a * P + b.y.b * z;
-    left = Math.min(left, x); top = Math.min(top, y);
-    right = Math.max(right, x + b.w * z); bottom = Math.max(bottom, y + b.h * z);
-  }
-  return { left, top, right, bottom };
-}
-
-/**
- * "Fit page" (no boxes) and "Fit page + notes": the largest zoom from `zMax` down to `zMin` at which the page and its
- * boxes fit `availW` × `availH` (extentAt); `zMin` when nothing does. Only the page in view and its own boxes count: a
- * fit that took in every page's boxes zoomed a long paper down to the least zoom (undone 2026-10-06).
- */
-export function fitZoom({ pageW1, pageH1, boxes = [], availW, availH, zMin, zMax }) {
-  const fits = (z) => { const e = extentAt({ pageW1, pageH1, boxes }, z); return e.right - e.left <= availW && e.bottom - e.top <= availH; };
-  if (fits(zMax)) return zMax;
-  if (!fits(zMin)) return zMin;
-  let lo = zMin, hi = zMax;
-  for (let i = 0; i < 30; i += 1) { const mid = (lo + hi) / 2; if (fits(mid)) lo = mid; else hi = mid; }
-  return lo;
-}
-
-/**
- * Which way each box lies outside the view (client rects), by its center: left or right when it is level with the view,
- * else up or down; boxes whose center is in view are not counted. → { left, right, up, down } counts.
- */
-export function offscreen(boxes, view) {
-  const out = { left: 0, right: 0, up: 0, down: 0 };
-  for (const r of boxes || []) { const side = offscreenSide(r, view); if (side) out[side] += 1; }
-  return out;
-}
-
-/** The edge a box (client rect) lies beyond, by its center: 'left', 'right', 'up', 'down', or null in view. */
-export function offscreenSide(r, view) {
-  const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
-  if (cy < view.top) return 'up';
-  if (cy > view.bottom) return 'down';
-  if (cx < view.left) return 'left';
-  if (cx > view.right) return 'right';
-  return null;
-}
-
-/** "2 notes →": a chip's words for `n` boxes off one edge. */
-export function chipLabel(n, side) {
-  const words = `${n} ${n === 1 ? 'note' : 'notes'}`;
-  return side === 'left' ? `← ${words}` : side === 'right' ? `${words} →` : side === 'up' ? `${words} ↑` : `${words} ↓`;
-}
-
-/**
- * How far to scroll (dx, dy) so the boxes off one edge come into view, `pad` px inside it: all of them when they fit,
- * else the nearest. Boxes above or below that are also off to one side are brought across too. Rects are client rects,
- * `view` the pane's.
- */
-export function revealScroll(boxes, view, side, pad = 24) {
-  if (!boxes.length) return { dx: 0, dy: 0 };
-  const across = side === 'left' || side === 'right';
-  const near = [...boxes].sort((a, b) => (side === 'left' ? b.left - a.left : side === 'right' ? a.left - b.left : side === 'up' ? b.top - a.top : a.top - b.top));
-  const span = (list) => ({ left: Math.min(...list.map((r) => r.left)), top: Math.min(...list.map((r) => r.top)), right: Math.max(...list.map((r) => r.left + r.width)), bottom: Math.max(...list.map((r) => r.top + r.height)) });
-  const room = across ? view.right - view.left - 2 * pad : view.bottom - view.top - 2 * pad;
-  let all = span(boxes);
-  if ((across ? all.right - all.left : all.bottom - all.top) > room) all = span([near[0]]);
-  if (side === 'left') return { dx: all.left - pad - view.left, dy: 0 };
-  if (side === 'right') return { dx: all.right + pad - view.right, dy: 0 };
-  const dx = all.left < view.left ? all.left - pad - view.left : all.right > view.right ? Math.min(all.right + pad - view.right, all.left - pad - view.left) : 0;
-  if (side === 'up') return { dx, dy: all.top - pad - view.top };
-  return { dx, dy: all.bottom + pad - view.bottom };
-}
-
-/* ---------------------------------------------------------------------------------------- blank space (2026-10-06) */
-// A drag on blank space pans (MATH-27 follow-up, 2026-10-06), one on or near text selects. Blank is the desk beside a page,
-// and the page where no text span is within LINE desk px: margins, the gaps round a figure, the empty end of a page. The
-// small gaps between lines and words are near text.
-
-export const LINE = 14; // desk px: about a line of a paper's body text at 100%
 export const PRESS_MOVE = 4; // px: a press that moves less is a click, not a drag
-
-/** The distance from (x, y) to a rect { left, top, right, bottom } (0 inside it). */
-export const rectDistance = (r, x, y) => Math.hypot(Math.max(r.left - x, 0, x - r.right), Math.max(r.top - y, 0, y - r.bottom));
-
-/**
- * Whether a point is blank: off the page `page` ({ left, top, right, bottom }, the same px as everything else), or on it
- * further than `reach` from every rect in `spans` (the text layer's spans). → boolean.
- */
-export function blankAt(page, spans, x, y, reach) {
-  if (!page || x < page.left || x > page.right || y < page.top || y > page.bottom) return true;
-  for (const r of spans || []) if (r && r.right > r.left && r.bottom > r.top && rectDistance(r, x, y) <= reach) return false;
-  return true;
-}
 
 /* ------------------------------------------------------------------------------------------- answers on a highlight */
 

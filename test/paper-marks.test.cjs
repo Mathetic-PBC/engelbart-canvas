@@ -2,7 +2,8 @@
 
 // Paper highlights' pure parts (src/renderer/pdf/marks.js, 2026-10-02): one box per stretch of a line, and where a new
 // highlight goes among a page's marks. A selection across pages (MATH-14, 2026-10-05): one part a page, one mark a part,
-// the parts' marks sharing a group id that placing them among a page's marks keeps.
+// the parts' marks sharing a group id that placing them among a page's marks keeps. One highlight's boxes on a line are one
+// band across its word gaps, never across a column's gutter (bandRects, 2026-10-16).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -38,6 +39,21 @@ test('mergeLineRects: adjacent and overlapping spans on a line join; a word spac
   // Two columns (TutorTrace, page 2 at 100%): the left column ends at 476, the right starts at 511.
   assert.deepEqual(mergeLineRects([r(87, 496, 389, 14.6), r(511, 496, 389, 14.6)]), [r(87, 496, 389, 14.6), r(511, 496, 389, 14.6)]);
   assert.equal(mergeLineRects([r(0, 0, 50, 10), r(56.1, 0, 50, 10)]).length, 2); // 6.1 ≥ 0.6 × 10
+});
+
+test('bandRects: one highlight\'s words on a line are one band across the gaps between them; a column\'s gutter is not crossed', async () => {
+  const { bandRects, mergeLineRects } = await load();
+  // A scan's line, a span a word, gaps of 10–18px on a 22px line (Hudson's screenshot, 2026-10-16: boxes with gaps).
+  const words = [r(135, 80, 120, 22), r(275, 80, 165, 22), r(457, 80, 270, 22)];
+  assert.equal(mergeLineRects(words).length, 3, 'merging alone left them apart (gaps over 0.6 of a line)');
+  assert.deepEqual(bandRects(words), [r(135, 80, 592, 22)], 'one band');
+  // Two lines: a band each.
+  assert.deepEqual(bandRects([...words, r(135, 104, 80, 22), r(230, 104, 60, 22)]), [r(135, 80, 592, 22), r(135, 104, 155, 22)]);
+  // A selection down the left column and up the right: the lines level with each other across a 40px gutter (more than
+  // 1.6 lines of 12px) stay apart.
+  const across = [r(50, 300, 250, 12), r(340, 300, 250, 12)];
+  assert.deepEqual(bandRects(across), across);
+  assert.deepEqual(bandRects([]), []);
 });
 
 test('mergeLineRects: lines that touch or overlap a little stay apart; boxes come top to bottom, then left to right', async () => {
