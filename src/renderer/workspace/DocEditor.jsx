@@ -94,22 +94,9 @@ export const DISCOVER_ITEM = { id: 'discover', type: 'chat', name: 'discover', t
 export const CREATE_ITEM = { id: 'create', type: 'chat', name: 'create', title: 'Create', summary: 'Makes a new file (a page, a chart, a document) under your line; Save puts the ones you want in your library.', facts: 'adds, never edits' };
 export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainstorm', title: 'Brainstorm', summary: 'Think something through out loud: a topic, a paper or what is on your mind. It follows where you take it, and you decide where that is.', facts: 'helps you think, never decides' };
 
-// The page's zoom (⌘ + scroll, 2026-10-14): 1 is as drawn; kept for the next document in this window's storage.
-export const DOC_ZOOM_MIN = 0.5, DOC_ZOOM_MAX = 2.5, DOC_ZOOM_KEY = 'engelbart.docZoom';
-/** The zoom after one wheel event of `deltaY` (a notch of a mouse wheel is about 100, a pinch's steps a few): up is in. */
-export function docZoomAfter(zoom, deltaY) {
-  const step = Math.max(-10, Math.min(10, Number(deltaY) || 0));
-  const next = Math.round(zoom * Math.exp(-step * 0.01) * 100) / 100;
-  return Math.max(DOC_ZOOM_MIN, Math.min(DOC_ZOOM_MAX, next));
-}
-// The page's column as drawn at a zoom. At 1 it fits the pane (65ch at most); zoomed, it is the column as it was at 1
-// (`box`: its width and side padding then, measured) magnified, so no line rewraps and nothing moves against anything
-// else, and a page wider than the pane scrolls sideways (2026-10-14, David).
-export function docColumnStyle(zoom, box) {
-  if (zoom === 1 || !box) return { zoom: '', width: '', maxWidth: '65ch', paddingInline: 'clamp(0px, 3%, 24px)' };
-  return { zoom: String(zoom), width: `${box.width}px`, maxWidth: 'none', paddingInline: `${box.pad}px` };
-}
-const savedZoom = () => { try { const z = Number(localStorage.getItem(DOC_ZOOM_KEY)); return z >= DOC_ZOOM_MIN && z <= DOC_ZOOM_MAX ? z : 1; } catch { return 1; } };
+// The page's column: it fits the pane, 65ch at most. The page has no zoom (Hudson, 2026-10-16, taking back the ⌘ + scroll
+// and pinch zoom of 2026-10-14).
+const DOC_COLUMN = { maxWidth: '65ch', paddingInline: 'clamp(0px, 3%, 24px)' };
 const UNDER_BART = ['pending', 'reply'];
 // The agents that run on one model of their own (no model chip, no selector on Regenerate) and may be asked with nothing
 // after them: every one but @bart and @create (which runs on @bart's models, 2026-10-13). An @discover line's chip picks
@@ -568,7 +555,7 @@ export default class DocEditor extends React.Component {
   // The threads whose reply field is open (2026-10-13: Reply opens it), by first line. The answers that were in the document
   // when it opened (answerKey), for the document they were read in (seenDoc), and the answers opened past their cut.
   replyOpen = new Set(); refineOpen = new Set(); replyFocus = null; replyWait = null; touchedAt = 0; seenDoc = {}; seenAnswers = new Set(); moreOpen = new Set();
-  colRef = React.createRef(); zoom = savedZoom(); zoomBox = null; // the page's column, its zoom and its size at 1 (zoomWheel)
+  colRef = React.createRef(); // the page's column
   // A Build card's reply being typed (by Build id) and the images pasted into it ([{ n, id }]), which cards show their
   // earlier messages, their steps and their prompt, where each card's diff is scrolled to, and the HTML each part of each card was last
   // drawn with (patchBuilds compares these).
@@ -592,8 +579,7 @@ export default class DocEditor extends React.Component {
   /* ---------------------------------------------------------------- lifecycle */
   componentDidMount() {
     this.mounted = true;
-    if (this.scrollRef.current && this.scrollRef.current.addEventListener) this.scrollRef.current.addEventListener('wheel', this.zoomWheel, { passive: false });
-    if (this.zoom !== 1 && !this.props.compact) this.magnify(this.zoom); // opened at a kept zoom: drawn at 1 first, measured, then magnified
+    if (this.scrollRef.current && this.scrollRef.current.addEventListener) this.scrollRef.current.addEventListener('wheel', this.noZoom, { passive: false });
     this.autoCollapse();
     const inEd = (e) => e.target && e.target.closest && e.target.closest('[data-editor]') === this.editorEl();
     // The follow-up field is an <input> inside the editor: its keys and text are its own, not the document's. So is a
@@ -752,8 +738,8 @@ export default class DocEditor extends React.Component {
     if (this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(false);
     if (this.lastKey === this.key()) this.reportView(this.props, true);
     this.dropEdit(this.props);
-    this.mounted = false; clearTimeout(this.pickerT); clearTimeout(this.peekT); clearTimeout(this.viewT); clearInterval(this.clock); clearTimeout(this.zoomT);
-    if (this.scrollRef.current && this.scrollRef.current.removeEventListener) this.scrollRef.current.removeEventListener('wheel', this.zoomWheel);
+    this.mounted = false; clearTimeout(this.pickerT); clearTimeout(this.peekT); clearTimeout(this.viewT); clearInterval(this.clock);
+    if (this.scrollRef.current && this.scrollRef.current.removeEventListener) this.scrollRef.current.removeEventListener('wheel', this.noZoom);
     if (this.resizeObs) this.resizeObs.disconnect();
     window.removeEventListener('resize', this.fitFollows);
     Object.entries(this.docListeners || {}).forEach(([k, f]) => document.removeEventListener(k, f));
@@ -908,56 +894,9 @@ export default class DocEditor extends React.Component {
   stopSettling = () => { this.settle = null; };
   // While the person scrolls the pane, the line being typed on is not kept in place against them (caretLineBelow).
   paneWheel = () => { this.settle = null; this.wheelAt = Date.now(); };
-  // ⌘ (or ⌃) + scroll, and a trackpad pinch, which reaches the page as a ⌃ wheel (2026-10-14, David): the page zooms in and
-  // out, between DOC_ZOOM_MIN and DOC_ZOOM_MAX, and the next document opens at it (DOC_ZOOM_KEY). It magnifies: no text
-  // rewraps and no box moves against another (docColumnStyle), and what is under the pointer stays under it, up and
-  // down and, once the page is wider than the pane, sideways too (David: zoom into something "without my position in the
-  // screen changing"). The column is zoomed with CSS zoom, so what the editor measures is measured as drawn. A native
-  // listener, since React's wheel listener is passive and could not stop the pane scrolling instead.
-  zoomWheel = (e) => {
-    if (!(e.metaKey || e.ctrlKey) || this.props.compact) return;
-    e.preventDefault();
-    const pane = this.scrollRef.current, col = this.colRef.current; if (!pane || !col) return;
-    const was = this.zoom, next = docZoomAfter(was, e.deltaY); if (next === was) return;
-    const at = this.zoomAnchor(e.clientX, e.clientY), before = at();
-    this.magnify(next);
-    const after = at();
-    pane.scrollTop += after.y - before.y; pane.scrollLeft = (pane.scrollLeft || 0) + after.x - before.x;
-    this.settle = null; this.wheelAt = Date.now();
-    clearTimeout(this.zoomT); this.zoomT = setTimeout(() => { try { localStorage.setItem(DOC_ZOOM_KEY, String(this.zoom)); } catch { /* not kept */ } }, 300);
-  };
-  // The column drawn at `zoom`: its size at 1 is measured on the way out of 1 (it is drawn at 1 then) and let go back at 1.
-  magnify(zoom) {
-    const col = this.colRef.current; if (!col) return;
-    if (zoom === 1) this.zoomBox = null;
-    else if (!this.zoomBox) {
-      const view = (col.ownerDocument && col.ownerDocument.defaultView) || globalThis;
-      Object.assign(col.style, docColumnStyle(1, null));
-      const pad = view.getComputedStyle ? parseFloat(view.getComputedStyle(col).paddingLeft) || 0 : 0;
-      this.zoomBox = { width: col.getBoundingClientRect().width, pad };
-    }
-    this.zoom = zoom; Object.assign(col.style, docColumnStyle(zoom, this.zoomBox));
-  }
-  // The point at client (x, y) in the column, as a function giving where it is now ({ x, y }, client px): the character
-  // there when there is one, else the element there (a picture, a card), else the column itself. Beside the column (the
-  // pane's margins) the point is taken level with it.
-  zoomAnchor(x, y) {
-    const col = this.colRef.current, doc = col.ownerDocument || document, r = col.getBoundingClientRect();
-    const px = r.width > 2 ? Math.min(Math.max(x, r.left + 1), r.right - 1) : x;
-    const keep = (rect) => {
-      const b = rect(); if (!b || !b.height) return null;
-      const fy = (y - b.top) / b.height, fx = b.width ? (x - b.left) / b.width : 0;
-      return () => { const c = rect(); return { x: c.left + fx * (c.width || 0), y: c.top + fy * c.height }; };
-    };
-    const caret = doc.caretRangeFromPoint ? doc.caretRangeFromPoint(px, y) : null, text = caret && caret.startContainer;
-    if (text && text.nodeType === 3 && text.length && col.contains(text)) {
-      const i = Math.min(caret.startOffset, text.length - 1);
-      const found = keep(() => { const one = doc.createRange(); one.setStart(text, i); one.setEnd(text, i + 1); return one.getBoundingClientRect(); });
-      if (found) return found;
-    }
-    const el = doc.elementFromPoint ? doc.elementFromPoint(px, y) : null;
-    return (el && el !== col && col.contains(el) && keep(() => el.getBoundingClientRect())) || keep(() => col.getBoundingClientRect()) || (() => ({ x: 0, y: 0 }));
-  }
+  // A trackpad pinch reaches the page as a ⌃ wheel: it does nothing, rather than zoom the window or scroll the pane (the
+  // page has no zoom since 2026-10-16). A native listener, since React's wheel listener is passive and could not stop it.
+  noZoom = (e) => { if (e.ctrlKey) e.preventDefault(); };
   // The Agent Viewer's click (2026-10-12; Workspace revealAsk): line `i` brought to the middle of the pane and lit up for a
   // moment. Held there as a restored view is (`settle`), so a picture or card still laying itself out does not move it.
   // `flash: false` (a Build jumped to from the Agents dropdown or the Inbox, 2026-10-13) brings it there without the light.
@@ -4769,7 +4708,7 @@ export default class DocEditor extends React.Component {
         {this.props.emptyHint && <style>{emptyHintCss(this.props.emptyHint)}</style>}
         {/* Past the last line the page keeps going for about half a window (2026-09-22), so the end of a document can be read and written mid-screen. */}
         <div ref={this.scrollRef} onClick={this.docClick} onScroll={this.onScroll} onWheel={this.paneWheel} onPointerDown={this.stopSettling} onKeyDown={this.stopSettling} style={compact ? { flex: 'none', overflow: 'visible', padding: '0 0 2px', cursor: 'grab' } : { flex: 1, minHeight: 0, overflow: 'auto', padding: '28px clamp(12px, 4%, 40px) max(120px, calc(50vh - 40px))', cursor: 'text' }}>
-          <div ref={this.colRef} style={{ marginInline: 'auto', cursor: 'auto', fontSize: 17, ...(compact ? { maxWidth: 'none', paddingInline: 0 } : docColumnStyle(this.zoom, this.zoomBox)) }}>
+          <div ref={this.colRef} style={{ marginInline: 'auto', cursor: 'auto', fontSize: 17, ...(compact ? { maxWidth: 'none', paddingInline: 0 } : DOC_COLUMN) }}>
             {this.props.header}
             {this.props.above}
             <div
