@@ -17,6 +17,9 @@
 // reach it through an exchange. The phrase rules ("help me learn" is Brainstorm, "learn" alone is not) became one test
 // with the shortcuts it must not take, and no wording examples of its own (David: "it's about intent"): Chat is after
 // something a reply hands over, Brainstorm a change in the person's own understanding or thinking. Follow-ups are one block.
+// Evening 2026-10-16 (David, the Classifier 2 note): the test is the endpoint. Chat when one reply reaches it, however hard
+// the question; Brainstorm when it is far, undefined or reached only through the person's own steps. A bare topic to learn,
+// with no question in it, leans Brainstorm ("i wanna learn about <topic>" went to Chat); a bounded question leans Chat.
 // The eval (scripts/route-eval.mjs, fixtures/route-eval.jsonl) holds the hard cases; fixtures/route-eval-intent.jsonl
 // holds paraphrases kept out of this prompt.
 
@@ -48,7 +51,7 @@ Decision procedure:
 
 3. Do they want external source material found to read or quote: research, a text, or a passage in one? → discover
 
-4. Is what they are after their own understanding, ideas, judgment or direction, rather than a particular answer? → brainstorm
+4. Is the endpoint far, undefined, or reachable only through their own steps, because what they are after is their own understanding, ideas or direction? → brainstorm
 
 5. Otherwise, do they want Engelbart's answer, judgment, explanation, overview, interpretation, retrieval of their own material, or inline writing?
 → chat
@@ -57,17 +60,21 @@ Chat or Brainstorm:
 
 Decide by what the person is after, inferred from the whole line and the conversation it is in, as a person would read it. Casual wording, typos, indirect requests and half-finished thoughts still carry an intent; no particular words are needed or decisive.
 
-- Chat: they are after something Engelbart can hand over in a reply: an answer, explanation, overview, opinion, recommendation, verdict, ideas or wording. Once the reply is given, they have what they came for.
-- Brainstorm: they are after a change in their own understanding or thinking: coming to understand a subject, working out what they think, want, mean or should do, or developing an idea of their own. No single reply delivers that; it is reached over an exchange in which Engelbart draws it out of them. A person setting out to learn or understand something, rather than to get a particular answer, is after this.
+- Chat: there is a known endpoint Engelbart can reach alone, in a reply. The person may not know the answer, but they know what they are asking for: a fact, explanation, overview, verdict, recommendation, critique or draft. A hard question is still Chat if the endpoint is one reply away.
+- Brainstorm: the endpoint is far, undefined, or reachable only through the person's own steps, because what they are after is their own understanding, ideas or direction: working out what they think or want, developing an idea of their own, or learning a topic they have named without asking anything specific about it.
+
+A bare topic they want to understand, with no question in it, leans Brainstorm; a line with a bounded question about it leans Chat. The measure is how far away the endpoint is, not how hard the question is.
+
+A vague start with a clear direction, where the person is working something out and has to do the working-out themselves, is Brainstorm. Vagueness alone is not a signal.
 
 None of these decides it by itself:
 - Being unsure or confused: an unsure person may want a straight answer (Chat) or to think it through (Brainstorm).
 - A question mark: a question can open an exchange as well as ask for an answer.
 - A specific topic, named or not: either agent can take any subject.
-- Words such as "learn", "understand", "help me", "think" or "brainstorm": the same words can ask for an answer or for an exchange.
+- Words such as "learn", "understand", "help me", "think" or "brainstorm": these words alone don't decide it; whether the line holds a bounded question does.
 - Needing a clarification first: either agent can ask one.
 
-When nothing in the line or its conversation points to the person's own understanding or thinking being what they are after, a request is answered: Chat.
+When nothing in the line or its conversation points to the person's own understanding or thinking being what they are after, a request is answered: Chat. A wrong Brainstorm is the more irritating mistake, since it makes someone answer questions they didn't want.
 
 Follow-ups:
 

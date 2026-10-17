@@ -80,3 +80,13 @@
 {"line": "i want to learn about the history of the printing press", "section": "# Notes", "specAbove": false, "expected": "brainstorm", "tag": "bs-learn"}
 {"line": "what is a bris?", "section": "# Notes", "specAbove": false, "expected": "chat", "tag": "chat-explain"}
 {"line": "what year was the printing press invented?", "section": "# Notes", "specAbove": false, "expected": "chat", "tag": "chat-explain"}
+{"line": "what is niddah?", "section": "# Notes", "specAbove": false, "expected": "chat", "tag": "chat-topic"}
+{"line": "I want to learn about niddah", "section": "# Notes", "specAbove": false, "expected": "brainstorm", "tag": "bs-topic"}
+{"line": "should I rewrite the backend?", "section": "# Backend\nThe API server is an Express app from 2019; most handlers are untyped and the tests cover about a third of it.", "specAbove": false, "expected": "chat", "tag": "chat-topic"}
+{"line": "I keep going back and forth on rewriting the backend", "section": "# Backend\nThe API server is an Express app from 2019; most handlers are untyped and the tests cover about a third of it.", "specAbove": false, "expected": "brainstorm", "tag": "bs-topic"}
+{"line": "how does attention work?", "section": "# Notes", "specAbove": false, "expected": "chat", "tag": "chat-topic"}
+{"line": "I'm trying to get my head around attention", "section": "# Notes", "specAbove": false, "expected": "brainstorm", "tag": "bs-topic"}
+{"line": "why does this proof fail?", "section": "# Problem set 3\nClaim: every bounded sequence converges. Proof: a bounded sequence has a convergent subsequence (Bolzano-Weierstrass), so the sequence converges to the same limit.", "specAbove": false, "expected": "chat", "tag": "chat-topic"}
+{"line": "I'm trying to figure out why users skim our replies", "section": "# User study notes\nIn 6 of 8 sessions people scrolled past Bart's reply within a few seconds and went back to typing.", "specAbove": false, "expected": "brainstorm", "tag": "bs-topic"}
+{"line": "i wanna learn about orthodox jewish circumcision", "section": "# Notes", "specAbove": false, "expected": "brainstorm", "tag": "bs-topic"}
+{"line": "i want to learn what a mohel is", "section": "# Notes", "specAbove": false, "expected": "chat", "tag": "chat-topic"}

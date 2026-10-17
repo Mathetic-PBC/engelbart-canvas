@@ -679,7 +679,7 @@ test('Bart\'s prompt (2026-10-14): classify by what the person wants back; their
   assert.match(prompt, /- discover: the person wants external source material found, to go read or quote: published research and other people's prior work[^\n]*Their own notes, decisions, Builds and chats are not Discover\./);
   assert.match(prompt, /"what did we decide about the router\?" → chat/);
   assert.match(prompt, /"what papers should I read on agent debugging\?" → discover/);
-  const order = ['1. Do they want an existing thing changed now? → build', '2. Do they want a new standalone artifact/file made? → create', '3. Do they want external source material found to read or quote: research, a text, or a passage in one? → discover', '4. Is what they are after their own understanding, ideas, judgment or direction, rather than a particular answer? → brainstorm', '5. Otherwise'].map((k) => prompt.indexOf(k));
+  const order = ['1. Do they want an existing thing changed now? → build', '2. Do they want a new standalone artifact/file made? → create', '3. Do they want external source material found to read or quote: research, a text, or a passage in one? → discover', '4. Is the endpoint far, undefined, or reachable only through their own steps, because what they are after is their own understanding, ideas or direction? → brainstorm', '5. Otherwise'].map((k) => prompt.indexOf(k));
   assert.ok(order.every((at) => at >= 0) && order.every((at, n) => !n || at > order[n - 1]), 'the decision procedure, in order');
   // What the model is given stays described, tag by tag.
   for (const tag of ['<line>', '<section>', '<threads>', '<spec_above>', '<current>']) assert.ok(prompt.includes(tag), tag);
@@ -690,12 +690,16 @@ test('Bart\'s prompt (2026-10-16): Chat and Brainstorm are told apart by the int
   assert.match(prompt, /- chat: the person is after a particular result Engelbart supplies[^\n]*list of ideas[^\n]*Chat cannot make files\./);
   assert.match(prompt, /- brainstorm: the person is after a change in THEIR OWN understanding, ideas, judgment or direction: coming to understand a subject they set out to learn/);
   assert.match(prompt, /Chat or Brainstorm:\n\nDecide by what the person is after, inferred from the whole line and the conversation[^\n]*no particular words are needed or decisive\./);
-  assert.match(prompt, /- Chat: they are after something Engelbart can hand over in a reply[^\n]*\n- Brainstorm: they are after a change in their own understanding or thinking/);
+  // The endpoint test (2026-10-16 evening, the Classifier 2 note): how far away the endpoint is, not how hard the question.
+  assert.match(prompt, /- Chat: there is a known endpoint Engelbart can reach alone, in a reply\.[^\n]*A hard question is still Chat if the endpoint is one reply away\.\n- Brainstorm: the endpoint is far, undefined, or reachable only through the person's own steps[^\n]*learning a topic they have named without asking anything specific about it\./);
+  assert.match(prompt, /A bare topic they want to understand, with no question in it, leans Brainstorm; a line with a bounded question about it leans Chat\. The measure is how far away the endpoint is, not how hard the question is\./);
+  assert.match(prompt, /A vague start with a clear direction[^\n]*is Brainstorm\. Vagueness alone is not a signal\./);
   // The shortcuts it must not take, one list; and an unmarked request is answered.
   const shortcuts = prompt.match(/None of these decides it by itself:\n((?:- [^\n]*\n)+)/);
   assert.ok(shortcuts, 'the shortcuts list');
   for (const word of ['unsure or confused', 'A question mark', 'A specific topic', '"learn"', 'Needing a clarification']) assert.ok(shortcuts[1].includes(word), word);
-  assert.match(prompt, /When nothing in the line or its conversation points to the person's own understanding or thinking being what they are after, a request is answered: Chat\./);
+  assert.match(shortcuts[1], /"brainstorm": these words alone don't decide it; whether the line holds a bounded question does\./);
+  assert.match(prompt, /When nothing in the line or its conversation points to the person's own understanding or thinking being what they are after, a request is answered: Chat\. A wrong Brainstorm is the more irritating mistake, since it makes someone answer questions they didn't want\./);
   // No phrase rules or wording examples of their own (David: "it's about intent").
   assert.ok(!prompt.includes('is Brainstorm even when no topic is named'));
   assert.ok(!/^BRAINSTORM$/m.test(prompt), 'no list of Brainstorm phrases');
@@ -708,7 +712,7 @@ test('Bart\'s prompt (2026-10-16): Chat and Brainstorm are told apart by the int
   assert.ok(prompt.indexOf('Follow-ups:') < prompt.indexOf('Important distinctions:'), 'follow-ups near the Chat/Brainstorm test');
   const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
   const cases = read('fixtures/route-eval.jsonl');
-  for (const [line, expected, current] of [['help me learn', 'brainstorm'], ['wait, what does policy mean here?', 'brainstorm', 'brainstorm'], ['help me work through it myself instead', 'brainstorm', 'chat'], ['and what about the learning rate?', 'chat', 'chat']]) {
+  for (const [line, expected, current] of [['help me learn', 'brainstorm'], ['i wanna learn about how honeybees navigate', 'brainstorm'], ['wait, what does policy mean here?', 'brainstorm', 'brainstorm'], ['help me work through it myself instead', 'brainstorm', 'chat'], ['and what about the learning rate?', 'chat', 'chat']]) {
     assert.ok(cases.some((c) => c.line === line && c.expected === expected && (c.current || undefined) === current), `eval: ${line}${current ? ` in ${current}` : ''} → ${expected}`);
   }
   // The held-out paraphrases stay out of the prompt, and their follow-ups are read as the editor sends them: with the
@@ -717,7 +721,7 @@ test('Bart\'s prompt (2026-10-16): Chat and Brainstorm are told apart by the int
   assert.ok(held.length >= 70);
   for (const c of held) assert.ok(!prompt.toLowerCase().includes(c.line.replace(/^(--\S+\s+)+/, '').toLowerCase()), `held out: ${c.line}`);
   for (const c of held.filter((c) => c.current && !c.specAbove)) assert.ok(route.sectionText(c.section).includes('[agent reply omitted]') && !/^bart> /m.test(route.sectionText(c.section)), `replies left out: ${c.line}`);
-  for (const tag of ['bs-indirect', 'chat-rec', 'chat-uncertain', 'chat-flags', 'bs-flags', 'fu-bs', 'fu-chat', 'fu-bs-switch', 'fu-chat-switch', 'reg-discover', 'reg-create', 'reg-build']) assert.ok(held.some((c) => c.tag === tag), tag);
+  for (const tag of ['bs-topic', 'chat-topic', 'bs-indirect', 'chat-rec', 'chat-uncertain', 'chat-flags', 'bs-flags', 'fu-bs', 'fu-chat', 'fu-bs-switch', 'fu-chat-switch', 'reg-discover', 'reg-create', 'reg-build']) assert.ok(held.some((c) => c.tag === tag), tag);
 });
 
 test('Bart\'s prompt (2026-10-16): Discover finds outside texts and passages, not only research; Chat interprets them and finds their own material (prompt text only: scripts/route-eval.mjs asks the model)', () => {
