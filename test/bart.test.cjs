@@ -1266,14 +1266,22 @@ test('@brainstorm\'s system prompt (2026-10-14): the shared personality, then a 
     'usually one to three short sentences, with one question at a time.', 'Leave out long recaps, lists of interpretations, analytical reports and preambles.',
     'without reciting document titles, timestamps, character counts, long excerpts or implementation details they do not need.',
     'is a new start, not a continuation of an earlier exchange',
-    // The opening (2026-10-16, David's; a sentence and the question in prose from 2026-10-14): one card, as Discover's,
-    // when the line does not yet say what to think about: the question that fits, two to four of the workspace's themes.
-    'How a conversation opens. On its first turn, when the person has not yet said what to think about (nothing after "@brainstorm", or an open request with no subject of its own, such as "help me learn"',
-    'reply with one card and nothing else.', '"What would you like to talk about?" for nothing at all, "What would you like to learn about?" for help learning.',
-    'Its options are two to four topics they could take up, drawn from the workspace as a whole', 'not a list of its tasks, documents or recent changes.',
+    // The opening (2026-10-16, David's; a sentence and the question in prose from 2026-10-14): one card, as Discover's.
+    // Later 2026-10-16 (David's): always, whatever the line says, its options following the line.
+    'How a conversation opens. The first turn of a Brainstorm conversation always opens with one card and nothing else, whatever the person wrote',
+    '- Nothing named: nothing after "@brainstorm", or an open request with no subject of its own, such as "help me learn"',
+    '- A topic named, with no question about it: the options are two to four angles within that topic a newcomer could start from, in plain words, not the workspace\'s topics.',
+    'Draw them from what you know of the subject, and from the workspace only when it holds something on it.', '"Where would you like to start with <the topic>?"',
+    '- A direction or a problem named: the options are two to four likely angles on that problem.', '"Where do you want to start?"',
+    'when one does, a card of angles on it is still the opening.', 'Do not answer, explain or diagnose in the card.',
+    'Only the first turn has a card: a turn that continues a conversation', 'including one that follows another agent\'s replies in the thread, is prose, and when the conversation already shows an opening card, do not ask another.',
+    'On a conversation\'s first turn, whatever <question> holds, the reply is the opening card',
+    'An opening for a topic they named (the workspace holds nothing on it):\nPerson: I wanna learn about sourdough\nYou: {"say": "", "card": "focus", "focus": {"title": "Where would you like to start with sourdough?", "options": [{"label": "The starter"}, {"label": "The bake"}, {"label": "Troubleshooting"}]}, "ready": false}',
+    '"What would you like to talk about?" for nothing at all, "What would you like to learn about?" for help learning.',
+    'The options are two to four topics they could take up, drawn from the workspace as a whole', 'not a list of its tasks, documents or recent changes.',
     'Describe the workspace, not what they are doing now: do not single out the latest task, diagnose a problem, or assume what they want to discuss.',
     'Each option is a label of a few plain words and nothing else', '{"say": "", "card": "focus", "focus": {"title": "What would you like to talk about?", "options": [{"label": "<a topic>"}, {"label": "<another topic>"}]}, "ready": false}',
-    'A workspace with little in it still gets the card: draw its topics from whatever is there, the workspace\'s name included', 'The options are guesses they can pass over, since they can write their own under them.', 'When they wrote a topic or a question with a subject of its own, there is no card: respond to what they wrote.',
+    'A workspace with little in it still gets the card: draw its topics from whatever is there, the workspace\'s name included', 'The options are guesses they can pass over, since they can write their own under them.',
     '(skipped), which means none fits: ask, in plain words, what they have in mind.', 'From then on the conversation is prose: no more cards.', 'No card or JSON but the opening card',
     'Once they have chosen a topic, listen before directing.', 'As their thinking becomes clearer, make your questions more precise.',
     'offer a short, neutral scenario that makes it tangible', 'A scenario must not carry your preferred answer.', 'When they could reasonably answer an open question, ask it open, without supplying possible answers',
@@ -1291,6 +1299,7 @@ test('@brainstorm\'s system prompt (2026-10-14): the shared personality, then a 
     'You: You\'ve also said you want the important thing first.\n\nWhen there\'s a problem with your plan, how would you want Bart to balance those?',
     'Person: You\'re right.\nYou: How would you want it to phrase the pushback?', 'What would make that feel polite rather than blunt?',
   ]) assert.ok(BRAINSTORM_SYSTEM_PROMPT.includes(phrase), phrase);
+  assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes('there is no card: respond to what they wrote'), 'a line with a subject opens with the card too');
   // Nothing of the card exchange is left but the opening card: no path, stage or card count, no fixed last question.
   assert.equal(BRAINSTORM_SYSTEM_PROMPT.split('ONE JSON object').length, 2, 'the opening card, and no other');
   for (const gone of ['<path>', '<stage>', '<card>', 'of 5', 'five', 'dig into next', 'A research question is one possible outcome', '# The welcome path', 'id "draws"', 'A good mentor here has been told not to give answers', 'You ask and they write', 'Stuck how: is it that', 'Biased in which way', 'Is that the effect you care about', 'traceability, not cost', 'Ask for their own account before supplying possible answers', 'A question is not required on every turn', 'What\'s one sentence you\'d change?', 'Is there a reply of Bart\'s that already sounds right to you?', 'Was skimming it fine, then', 'sounds too much like it\'s writing a report', 'not the way an interviewer does', 'Ending on a question is not the default', 'Lead with the useful observation itself', 'I think Bart starts well, then overexplains.', 'Contributing a view', 'Resuming a topic', 'Then I\'d put the changes first', 'A brief answer is something to build on', 'Do not default to multiple-choice options', 'What makes a reply feel natural to you?', 'a short list for things that really are separate', 'naming at most two topics', 'What did you want to talk through?', 'simply invite them to say what is on their mind', 'the opening names two topics']) assert.ok(!BRAINSTORM_SYSTEM_PROMPT.includes(gone), `gone: ${gone}`);
@@ -1432,11 +1441,15 @@ test('the fake @brainstorm is a conversation (2026-10-14): prose every turn, in 
   }
   assert.equal(model.threads(doc).length, 1, 'one conversation');
   assert.equal(answers.length, 9, 'nine turns: no card count ends it');
-  assert.ok(answers.every((answer) => card.cardOfAnswer(answer) === null), 'prose every turn, never a card');
-  assert.match(answers[0], /^FAKE BRAINSTORM on "what my study should measure" \(no earlier turns\)\./);
+  // The first turn opens with the card, though the line names what to think about (2026-10-16); prose after it.
+  const opening = card.cardOfAnswer(answers[0]);
+  assert.ok(opening && opening.card === 'focus', 'the opening card');
+  assert.deepEqual([card.questionOf(opening).title, card.questionOf(opening).options.map((o) => o.label)], ['Where would you like to start with “what my study should measure”?', ['A fake first angle', 'A fake second angle', 'A fake third angle']]);
+  assert.ok(answers.slice(1).every((answer) => card.cardOfAnswer(answer) === null), 'prose every turn after it, no other card');
+  assert.match(answers[1], /^FAKE BRAINSTORM on "Not test scores\." \(the same session, given the question alone\)\./, 'their own words under the card');
   assert.match(answers[3], /^FAKE BRAINSTORM on "No, I mean persistence, not confidence\." \(the same session, given the question alone\)\./, 'a correction is passed on as it was said');
   assert.match(answers[4], /^FAKE BRAINSTORM on "Actually, forget measurement: I worry the sample is biased\."/, 'and a change of direction');
-  assert.ok(answers.slice(0, 8).every((answer) => /\?$/.test(answer.trim())));
+  assert.ok(answers.slice(1, 8).every((answer) => /\?$/.test(answer.trim())));
   assert.match(answers[8], /^FAKE BRAINSTORM wrap-up after 8 turns \(the same session, given the question alone\)\.\n\nWhat became clearer:/);
   assert.ok(!answers[8].includes('?'), 'a wrap-up asks nothing');
   const feet = doc.filter((line) => /^bart> \*[^*]+\*$/.test(line));
@@ -1523,14 +1536,15 @@ test('the Welcome walkthrough\'s @brainstorm, run in its workspace: three cards,
   assert.deepEqual(welcome.shown.map((c) => c && [card.questionOf(c).id, card.questionOf(c).title]), [['working', 'What are you working on?'], ['stage', 'Where are you in the process?'], ['next', 'What are your next steps?'], null]);
   assert.deepEqual(welcome.outs.map((out) => out.welcome), [undefined, undefined, undefined, 'result'], 'only the result says so');
   assert.deepEqual(welcome.outs[3].lines.slice(0, 2), ['bart> Find studies of novice debugging.', `bart> ${card.RESULT_OFFER}`]);
-  // Words typed on the walkthrough's line, another workspace, or the walkthrough hidden: an ordinary Brainstorm, in prose.
+  // Words typed on the walkthrough's line, another workspace, or the walkthrough hidden: an ordinary Brainstorm, opening
+  // with its own card (2026-10-16), not the walkthrough's.
   const typed = await exchange(space.id, [], '@brainstorm corrigibility');
   const elsewhere = await exchange(other.id, []);
   setGettingStarted(ctx, proj.id, { hidden: true });
   const hidden = await exchange(space.id, []);
   for (const [name, run] of [['typed', typed], ['elsewhere', elsewhere], ['hidden', hidden]]) {
-    assert.deepEqual([run.shown[0], run.outs[0].welcome], [null, undefined], name);
-    assert.match(run.said[0], /^FAKE BRAINSTORM on /, name);
+    assert.deepEqual([run.shown[0] && run.shown[0].card, run.outs[0].welcome], ['focus', undefined], name);
+    assert.ok(!['working', 'stage', 'next'].includes(card.questionOf(run.shown[0]).id), name);
   }
 });
 
@@ -1632,14 +1646,31 @@ test('recapLine reads a recap line as a section: its label and its words, older 
   assert.equal(card.recapLine('Where I am: elsewhere'), null);
 });
 
-test('the fake @brainstorm with nothing to go on answers in prose, from the workspace, and asks one thing back (2026-10-14)', async () => {
+test('the fake @brainstorm with nothing to go on opens with the card, its workspace themes (2026-10-16; prose from 2026-10-14)', async () => {
   const bare = await projects.createProject(ctx, 'Bare');
   const space = await projects.createWorkspace(ctx, bare.id, { name: 'Empty' });
   const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
   const out = await bart.ask(ctx, bare.id, { askId: 'e1', ref: { kind: 'workspace', workspaceId: space.id }, workspaceId: space.id, text: '', turns: [], agent: 'brainstorm' });
   const said = answerText(out.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n'));
-  assert.equal(card.cardOfAnswer(said), null, 'not a card');
-  assert.equal(said, 'FAKE BRAINSTORM on "Start from this workspace." (no earlier turns).\n\nWhat part of that matters most to you?');
+  const opening = card.cardOfAnswer(said);
+  assert.deepEqual(opening && [opening.card, card.questionOf(opening).title, card.questionOf(opening).options.map((o) => o.label)], ['focus', 'What would you like to talk about?', ['Fake theme one', 'Fake theme two', 'Fake theme three']]);
+});
+
+test('the fake @brainstorm opens with the card when the line names a topic too, and answers in prose once the conversation has its card (later 2026-10-16)', async () => {
+  const proj = await projects.createProject(ctx, 'Sourdough');
+  const space = await projects.createWorkspace(ctx, proj.id, { name: 'Baking' });
+  const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
+  const ref = { kind: 'workspace', workspaceId: space.id };
+  const said = (out) => answerText(out.lines.slice(0, -2).map((line) => line.replace(/^bart> ?/, '')).join('\n'));
+  const first = await bart.ask(ctx, proj.id, { askId: 's1', ref, workspaceId: space.id, text: 'I wanna learn about sourdough', turns: [], agent: 'brainstorm' });
+  const opening = card.cardOfAnswer(said(first));
+  assert.deepEqual(opening && [opening.card, card.questionOf(opening).title], ['focus', 'Where would you like to start with “I wanna learn about sourdough”?'], 'a card, though the line named its topic');
+  assert.equal(first.topic, undefined, 'no topic on the card');
+  // The pick, in a conversation that already holds the opening card: prose, no second card, and the topic set.
+  const next = await bart.ask(ctx, proj.id, { askId: 's2', ref, workspaceId: space.id, text: card.answerLine(opening, { picks: ['A fake second angle'] }), turns: [{ question: 'I wanna learn about sourdough', answer: said(first) }], agent: 'brainstorm' });
+  assert.equal(card.cardOfAnswer(said(next)), null, 'prose after the card');
+  assert.match(said(next), /^FAKE BRAINSTORM on "picked "A fake second angle"" \(the same session, given the question alone\)\./);
+  assert.equal(next.topic, 'A fake second angle', 'the pick sets the topic');
 });
 
 test('@bart and @discover may open the folders the project library\'s files are in, @brainstorm those of this workspace\'s (MB-06, round 3)', async () => {
@@ -2205,6 +2236,9 @@ test('a discover reply is kept as a card when it is one, else as the guide it ca
   const OPEN = { say: '', card: 'focus', focus: { title: 'What would you like to learn about?', options: ['A', 'B', 'C', 'D', 'E'].map((label) => ({ label, why: 'from your notes' })) }, ready: false };
   const kept = card.cardOfAnswer(replyBody('brainstorm', JSON.stringify(OPEN)));
   assert.deepEqual([kept.card, kept.focus.title, kept.focus.options.map((o) => [o.label, o.why || ''])], ['focus', 'What would you like to learn about?', [['A', ''], ['B', ''], ['C', ''], ['D', '']]]);
+  // A card of angles on a topic the line named (later 2026-10-16) is kept the same way.
+  const ANGLES = { say: '', card: 'focus', focus: { title: 'Where would you like to start with sourdough?', options: ['The starter', 'The bake', 'Troubleshooting'].map((label) => ({ label })) }, ready: false };
+  assert.deepEqual(card.questionOf(card.cardOfAnswer(replyBody('brainstorm', JSON.stringify(ANGLES)))).options.map((o) => o.label), ['The starter', 'The bake', 'Troubleshooting']);
   assert.equal(replyBody('brainstorm', 'What would you like to talk about?'), 'What would you like to talk about?');
   assert.equal(replyBody('brainstorm', braces), braces, 'prose with braces in it stays prose');
   assert.equal(replyBody('discover', '{"say": "Enough.", "card": "none", "ready": true}'), '{"say": "Enough.", "card": "none", "ready": true}', 'Discover has no recap card: kept as it came');
@@ -2837,22 +2871,29 @@ test('takeTopic: Brainstorm\'s <topic> tag leaves its reply, its label read as a
 test('a Brainstorm conversation\'s topic: unset after a bare line, marked once the person names it, sent as <topic> after that, and changed by "New topic: …"', async () => {
   const bart = createFakeBart({ readModels: () => MODELS, delayMs: 5 });
   const ref = { kind: 'workspace', workspaceId: workspace.id };
-  const ask = async (lines, askId, text) => {
+  // A follow-up is asked with the turns before it, as the editor sends them.
+  const ask = async (lines, askId, text, turns = []) => {
     await projects.writeDoc(ctx, project.id, ref, lines.join('\n'));
-    return bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text, agent: 'brainstorm' });
+    return bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text, turns, agent: 'brainstorm' });
   };
   const title = (said) => `bart# [brainstorm 2026-10-14T20:13:23Z] ${said}`.trimEnd();
+  const opening = { question: '', answer: 'What did you want to talk through?' };
   const bare = await ask([title(''), '@brainstorm', 'bart~> t1', ''], 't1', '');
   assert.equal(bare.topic, undefined, 'a bare line chooses no topic');
   assert.ok(!bare.lines.some((line) => line.includes('<topic>')));
-  const named = await ask([title(''), '@brainstorm', 'bart> What did you want to talk through?', '@brainstorm Bart\'s voice', 'bart~> t2', ''], 't2', 'Bart\'s voice');
+  // A line that names one opens with the card too (2026-10-16), and sets no topic on it: the answer to the card does.
+  const first = await ask([title(''), '@brainstorm Bart\'s voice', 'bart~> t0', ''], 't0', 'Bart\'s voice');
+  assert.equal(first.topic, undefined, 'not on the opening card');
+  const named = await ask([title(''), '@brainstorm', 'bart> What did you want to talk through?', '@brainstorm Bart\'s voice', 'bart~> t2', ''], 't2', 'Bart\'s voice', [opening]);
   assert.equal(named.topic, 'Bart\'s voice', 'the topic the person named, from the reply\'s tag');
   assert.ok(!named.lines.some((line) => line.includes('<topic>')), 'the tag is not in the document');
-  const kept = await ask([title('Bart\'s voice'), '@brainstorm', 'bart> What did you want to talk through?', '@brainstorm Bart\'s voice', 'bart> What about it?', '@brainstorm its personality', 'bart~> t3', ''], 't3', 'its personality');
+  const pickedOne = await ask([title(''), '@brainstorm', 'bart~> t6', ''], 't6', 'picked "Bart\'s voice"', [opening]);
+  assert.equal(pickedOne.topic, 'Bart\'s voice', 'a pick sets the topic by its label');
+  const kept = await ask([title('Bart\'s voice'), '@brainstorm', 'bart> What did you want to talk through?', '@brainstorm Bart\'s voice', 'bart> What about it?', '@brainstorm its personality', 'bart~> t3', ''], 't3', 'its personality', [opening, { question: 'Bart\'s voice', answer: 'What about it?' }]);
   assert.equal(kept.topic, undefined, 'given <topic>, a subquestion leaves it');
-  const changed = await ask([title('Onboarding'), '@brainstorm', 'bart> What did you want to talk through?', '@brainstorm Bart\'s voice', 'bart> What about it?', '@brainstorm New topic: Onboarding', 'bart~> t4', ''], 't4', 'New topic: Onboarding');
+  const changed = await ask([title('Onboarding'), '@brainstorm', 'bart> What did you want to talk through?', '@brainstorm Bart\'s voice', 'bart> What about it?', '@brainstorm New topic: Onboarding', 'bart~> t4', ''], 't4', 'New topic: Onboarding', [opening, { question: 'Bart\'s voice', answer: 'What about it?' }]);
   assert.equal(changed.topic, undefined, 'the chip already says the new topic: nothing to mark');
-  const typedChange = await ask([title('Bart\'s voice'), '@brainstorm', 'bart> Hi.', '@brainstorm New topic: Onboarding', 'bart~> t5', ''], 't5', 'New topic: Onboarding');
+  const typedChange = await ask([title('Bart\'s voice'), '@brainstorm', 'bart> Hi.', '@brainstorm New topic: Onboarding', 'bart~> t5', ''], 't5', 'New topic: Onboarding', [{ question: '', answer: 'Hi.' }]);
   assert.equal(typedChange.topic, 'Onboarding', 'a change the conversation names is marked');
 });
 

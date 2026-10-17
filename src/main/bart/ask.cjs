@@ -914,11 +914,18 @@ function fakeWelcome(plan) {
  * The fake @brainstorm's reply (2026-10-14: a conversation, in prose), as a model would write it: what it was asked and
  * what of the conversation it was given (a new session given the earlier turns, or the same session given the question
  * alone), so a scripted run shows which. A line asking to wrap up gets a summary with no question after it; any other a
- * question back. An older exchange's cards are named by the text they were sent as (cardAsText).
+ * question back. An older exchange's cards are named by the text they were sent as (cardAsText). A conversation's first
+ * turn opens with the card (2026-10-16, as its prompt says): the workspace's fake themes for an empty line, fake angles on
+ * what a line names.
  */
 function fakeThink(plan, sent) {
   const n = plan.prior.length, asked = plan.question || OPENING;
   const given = !n ? 'no earlier turns' : /<conversation>/.test(sent) ? `a new session, given ${n} earlier ${n === 1 ? 'turn' : 'turns'}` : 'the same session, given the question alone';
+  if (!n && !/\bwrap(?:ping)? (?:it |this )?up\b/i.test(asked)) {
+    const title = asked === OPENING ? 'What would you like to talk about?' : `Where would you like to start with “${asked.slice(0, 80)}”?`;
+    const labels = asked === OPENING ? ['Fake theme one', 'Fake theme two', 'Fake theme three'] : ['A fake first angle', 'A fake second angle', 'A fake third angle'];
+    return JSON.stringify({ say: '', card: 'focus', focus: { title, options: labels.map((label) => ({ label })) }, ready: false });
+  }
   if (/\bwrap(?:ping)? (?:it |this )?up\b/i.test(asked)) return `FAKE BRAINSTORM wrap-up after ${n} ${n === 1 ? 'turn' : 'turns'} (${given}).\n\nWhat became clearer: what you said. Still open: the rest.`;
   return `FAKE BRAINSTORM on "${asked}" (${given}).\n\nWhat part of that matters most to you?`;
 }
@@ -926,12 +933,13 @@ function fakeThink(plan, sent) {
 /**
  * The fake @brainstorm's topic (2026-10-14), as Brainstorm would mark it: a conversation with none yet takes what the
  * person said, unless it was empty or a wrap-up; "New topic: X" (the chip's Change topic) takes X when it is not already
- * the topic. Any other turn leaves it.
+ * the topic. Any other turn leaves it. The opening card sets none (2026-10-16): the answer to it does, a pick by its label.
  */
 function fakeTopic(reply, sent, question) {
+  if (/^\s*\{/.test(reply)) return reply;
   const asked = String(question || '').trim(), now = (String(sent).match(/<topic>([^<]*)<\/topic>/) || [])[1] || '';
-  const changed = asked.match(/^New topic:\s*(.+)$/i);
-  const label = changed ? changed[1] : !now && asked && !/\bwrap(?:ping)? (?:it |this )?up\b/i.test(asked) ? asked : '';
+  const changed = asked.match(/^New topic:\s*(.+)$/i), picked = asked.match(/^picked "([^"]+)"/);
+  const label = changed ? changed[1] : !now && asked && asked !== '(skipped)' && !/\bwrap(?:ping)? (?:it |this )?up\b/i.test(asked) ? (picked ? picked[1] : asked) : '';
   return label && label !== now ? `${reply}\n\n<topic>${label}</topic>` : reply;
 }
 
