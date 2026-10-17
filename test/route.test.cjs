@@ -76,7 +76,7 @@ test('migration: an answered or pending @bart question becomes @chat; a Build re
 
 /* ------------------------------------------------------------------- rules */
 
-test('routeByRule: empty → brainstorm, --build → Build, a level → discover, a model flag → chat (not in a follow-up); a thread above settles nothing: the model', async () => {
+test('routeByRule: empty → brainstorm, --build → Build, a level → discover; a model flag settles nothing (2026-10-16); a thread above settles nothing: the model', async () => {
   const { routeByRule } = await loadRoute();
   const models = DEFAULTS;
   assert.deepEqual(routeByRule('', {}), { agent: 'brainstorm', rule: 'empty' });
@@ -88,9 +88,13 @@ test('routeByRule: empty → brainstorm, --build → Build, a level → discover
   assert.deepEqual(routeByRule('how they notice', { current: 'discover', asking: true }), { agent: 'discover', rule: 'answering Discover' });
   assert.deepEqual(routeByRule('--build it', { current: 'discover', asking: true }), { agent: 'build', rule: '--build' });
   assert.equal(routeByRule('how they notice', { current: 'discover' }), null, 'after a guide, the model decides');
-  assert.deepEqual(routeByRule('--haiku why?', { models }), { agent: 'chat', rule: 'model flag' });
-  assert.deepEqual(routeByRule('why? --low', { models }), { agent: 'chat', rule: 'model flag' });
-  assert.deepEqual(routeByRule('--opus why?', {}), { agent: 'chat', rule: 'model flag' }, 'without the models file, a model\'s word still counts');
+  // A model or effort flag picks how the agent runs, not which agent (2026-10-16): the rest of the line is classified.
+  assert.equal(routeByRule('--haiku why?', { models }), null);
+  assert.equal(routeByRule('why? --low', { models }), null);
+  assert.equal(routeByRule('--sonnet --medium I want to find an excerpt from a religious text', { models }), null);
+  assert.equal(routeByRule('--opus why?', {}), null, 'without the models file too');
+  assert.deepEqual(routeByRule('--sonnet --medium tutors --deep', { models }), { agent: 'discover', rule: 'level' }, 'a level beside them still picks Discover');
+  assert.deepEqual(routeByRule('--opus --build add a comment', { models }), { agent: 'build', rule: '--build' }, 'and --build, Build');
   assert.equal(routeByRule('what does this one entail', { models }), null);
   // 2026-10-13: under a thread, the model decides, told which agent the conversation is with (routeInputs current).
   assert.equal(routeByRule('and what about cost?', { models, current: 'brainstorm' }), null);
@@ -188,6 +192,19 @@ const router = (reply, { seen = {}, models = { ...DEFAULTS, provider: 'anthropic
   return route.createRouter({ readModels: () => models, environment: { SHELL: '/bin/zsh', PATH: '/usr/bin', HOME: os.homedir() }, runDirectory: dir, codexHome: path.join(dir, 'codex'), codexAuthFile: auth, run: cli(reply, seen), runLog });
 };
 const LINE = { projectId: 'p', text: 'what does this one entail', section: '# Haiku\nnotes\n@chat why\nbart> secret answer text\n@bart what does this one entail', workspaceName: 'W', threads: [{ agent: 'chat', question: 'why', up: 2 }], specAbove: false };
+
+test('route.cjs (2026-10-16): the model reads the line without its model and effort flags; the record keeps the line as typed', async () => {
+  const seen = {}, runs = [];
+  const runLog = { start: (r) => runs.push({ ...r }), amend() {}, step() {}, output() {}, finish() {} };
+  const TYPED = '--sonnet --medium I want to find an excerpt from a religious text';
+  const got = await router('{"agent":"discover","sure":0.9}', { seen, runLog }).route({ ...LINE, text: TYPED, section: `# Reading\n@bart ${TYPED}` });
+  assert.deepEqual([got.agent, got.by], ['discover', 'model']);
+  assert.match(seen.input, /<line>\nI want to find an excerpt from a religious text\n<\/line>/);
+  assert.equal(runs[0].question, TYPED);
+  // A `--word` the models file does not know is the person's own text, and stays.
+  await router('{"agent":"chat","sure":0.9}', { seen }).route({ ...LINE, text: 'what does --verbose do?' });
+  assert.match(seen.input, /<line>\nwhat does --verbose do\?\n<\/line>/);
+});
 
 test('route.cjs: valid JSON is the pick; Haiku at low effort on Claude Code, Luna at low on Codex; no tools, no session, 20 s', async () => {
   const seen = {};
@@ -507,7 +524,7 @@ test('handoff: when routing fails the line is asked of Chat saying so (by: error
   assert.equal(picked.nodes[1].error, 'thread question must be a string of at most 400 characters');
 });
 
-test('the button row (2026-10-13): Copy and Regenerate as icons with their names; then Collapse and Delete on the right, the closing line\'s words not drawn (2026-10-15); no Edit or Build', () => {
+test('the button row (2026-10-13): Copy and Regenerate as icons with their names; then Delete on the right (Collapse is at the top right, 2026-10-16), the closing line\'s words not drawn (2026-10-15); no Edit or Build', () => {
   const m = mounted([...SPEC, '']);
   const html = m.editor.footHtml({ q: 0, text: 'Chat · Sonnet · high · 3 s', closes: true });
   assert.match(html, /<button class="bart-ic" data-act="copybart" data-turn="0"[^>]*aria-label="Copy"[^>]*>[\s\S]*?<\/button><span class="bart-tip"[^>]*>Copy<\/span>/, 'Copy: an icon with its tip');
@@ -515,10 +532,11 @@ test('the button row (2026-10-13): Copy and Regenerate as icons with their names
   for (const act of ['editturn', 'footbuild', 'viabart']) assert.ok(!html.includes(`data-act="${act}"`), `no ${act}`);
   const text = (h) => h.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
   assert.equal(text(html), '', 'no model, effort, time or agent');
-  const order = ['copybart', 'data-act="regen"', 'data-act="fold"', 'dropturn'].map((k) => html.indexOf(k));
-  assert.deepEqual(order, [...order].sort((x, y) => x - y), 'Copy, Regenerate, Collapse, Delete');
+  const order = ['copybart', 'data-act="regen"', 'dropturn'].map((k) => html.indexOf(k));
+  assert.deepEqual(order, [...order].sort((x, y) => x - y), 'Copy, Regenerate, Delete');
   assert.ok(!html.includes('data-foot-meta'));
-  assert.match(html, /<span style="flex:none;position:relative;display:inline-flex;margin-left:auto"><button class="bart-ic" data-act="fold"/, 'Collapse pushed right');
+  assert.ok(!html.includes('data-act="fold"'), 'no Collapse on it');
+  assert.match(html, /<span style="margin-left:auto"><\/span><span style="flex:none;position:relative;display:inline-flex;"><button class="bart-ic" data-danger="1" data-act="dropturn"/, 'Delete pushed right');
   // Routed by Bart: neither Build nor an older closing line's "via Bart" is drawn.
   const routed = mounted(['bart# [chat build 2026-10-12T21:41:00Z] Haiku', '@bart build the haiku entry', ...SPEC.slice(1), '']);
   const foot = routed.editor.footHtml({ q: 1, text: 'Build · Sonnet · high · 3 s' });
@@ -596,14 +614,17 @@ test('in an answer line, the hammer builds that turn as the footer\'s Build does
   assert.ok(!mounted([...SPEC, '']).editor.editorHtml().includes('data-build-icon'));
 });
 
-test('the [[build]] line clicked into: the hammer stays drawn and builds; the keyboard at it shows its source', () => {
+test('the [[build]] line is read only like the rest of its answer (2026-10-16): with the caret put there, the hammer stays drawn and builds; its source never shows', () => {
   const at = ROUTED_SPEC.indexOf(`bart> ${BUILD_LINE}`), after = 'Press [[build]]'.length;
   const m = mounted(ROUTED_SPEC);
-  m.editor.state.activeLine = at; m.editor.caret = { line: at, offset: after }; m.editor.byMouse = true;
-  const clicked = m.editor.editorHtml();
-  assert.match(clicked, /<span data-src="\[\[build\]\]" data-open="0"><span data-build-icon="1" contenteditable="false" data-act="footbuild" data-turn="1"/, 'the mouse put the caret beside it: still the hammer, still the turn\'s Build');
-  m.editor.byMouse = false;
-  assert.match(m.editor.editorHtml(), /<span data-src="\[\[build\]\]" data-open="1">\[\[build\]\]<\/span>/, 'the keyboard reached it: its source');
+  assert.equal(m.editor.lockedAt(m.lines(), at), true, 'an answer line');
+  for (const byMouse of [true, false]) {
+    m.editor.state.activeLine = at; m.editor.caret = { line: at, offset: after }; m.editor.byMouse = byMouse;
+    const html = m.editor.editorHtml();
+    assert.match(html, new RegExp(`<div data-line="${at}" data-raw="[^"]*"[^>]* contenteditable="false" data-readonly="1"`), 'not a place to type');
+    assert.match(html, /<span data-build-icon="1" contenteditable="false" data-act="footbuild" data-turn="1"/, 'still the hammer, still the turn\'s Build');
+    assert.ok(!html.includes('data-open="1">[[build]]') && !html.includes('data-src="[[build]]"'), 'never its source');
+  }
 });
 
 test('another agent for a routed line: only the title line changes, and it is asked again with the correction carried', () => {
@@ -657,14 +678,67 @@ test('Bart\'s prompt (2026-10-14): classify by what the person wants back; their
   const prompt = require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT;
   assert.match(prompt, /Classify by WHAT THE PERSON WANTS BACK FROM THIS TURN, not by what subject the request happens to mention\./);
   assert.match(prompt, /- Topic does not determine the agent\. Desired result does\./);
-  assert.match(prompt, /- chat: [^\n]*retrieval of their own prior work/);
-  assert.match(prompt, /- discover: the person wants published research or other people's prior work[^\n]*Their own notes, decisions, Builds and chats are not Discover\./);
+  assert.match(prompt, /- chat: [^\n]*retrieval of their own notes, decisions, conversations or prior work/);
+  assert.match(prompt, /- discover: the person wants external source material found, to go read or quote: published research and other people's prior work[^\n]*Their own notes, decisions, Builds and chats are not Discover\./);
   assert.match(prompt, /"what did we decide about the router\?" → chat/);
   assert.match(prompt, /"what papers should I read on agent debugging\?" → discover/);
-  const order = ['1. Do they want an existing thing changed now? → build', '2. Do they want a new standalone artifact/file made? → create', '3. Do they want prior work from other people to go read? → discover', '4. Do they want help forming their own judgment, direction or question? → brainstorm', '5. Otherwise'].map((k) => prompt.indexOf(k));
+  const order = ['1. Do they want an existing thing changed now? → build', '2. Do they want a new standalone artifact/file made? → create', '3. Do they want external source material found to read or quote: research, a text, or a passage in one? → discover', '4. Is the endpoint far, undefined, or reachable only through their own steps, because what they are after is their own understanding, ideas or direction? → brainstorm', '5. Otherwise'].map((k) => prompt.indexOf(k));
   assert.ok(order.every((at) => at >= 0) && order.every((at, n) => !n || at > order[n - 1]), 'the decision procedure, in order');
   // What the model is given stays described, tag by tag.
   for (const tag of ['<line>', '<section>', '<threads>', '<spec_above>', '<current>']) assert.ok(prompt.includes(tag), tag);
+});
+
+test('Bart\'s prompt (2026-10-16): Chat and Brainstorm are told apart by the interaction wanted, not by phrases; the evals hold the cases (prompt text only: scripts/route-eval.mjs asks the model)', () => {
+  const prompt = require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT;
+  assert.match(prompt, /- chat: the person is after a particular result Engelbart supplies[^\n]*list of ideas[^\n]*Chat cannot make files\./);
+  assert.match(prompt, /- brainstorm: the person is after a change in THEIR OWN understanding, ideas, judgment or direction: coming to understand a subject they set out to learn/);
+  assert.match(prompt, /Chat or Brainstorm:\n\nDecide by what the person is after, inferred from the whole line and the conversation[^\n]*no particular words are needed or decisive\./);
+  // The endpoint test (2026-10-16 evening, the Classifier 2 note): how far away the endpoint is, not how hard the question.
+  assert.match(prompt, /- Chat: there is a known endpoint Engelbart can reach alone, in a reply\.[^\n]*A hard question is still Chat if the endpoint is one reply away\.\n- Brainstorm: the endpoint is far, undefined, or reachable only through the person's own steps[^\n]*learning a topic they have named without asking anything specific about it\./);
+  assert.match(prompt, /A bare topic they want to understand, with no question in it, leans Brainstorm; a line with a bounded question about it leans Chat\. The measure is how far away the endpoint is, not how hard the question is\./);
+  assert.match(prompt, /A vague start with a clear direction[^\n]*is Brainstorm\. Vagueness alone is not a signal\./);
+  // The shortcuts it must not take, one list; and an unmarked request is answered.
+  const shortcuts = prompt.match(/None of these decides it by itself:\n((?:- [^\n]*\n)+)/);
+  assert.ok(shortcuts, 'the shortcuts list');
+  for (const word of ['unsure or confused', 'A question mark', 'A specific topic', '"learn"', 'Needing a clarification']) assert.ok(shortcuts[1].includes(word), word);
+  assert.match(shortcuts[1], /"brainstorm": these words alone don't decide it; whether the line holds a bounded question does\./);
+  assert.match(prompt, /When nothing in the line or its conversation points to the person's own understanding or thinking being what they are after, a request is answered: Chat\. A wrong Brainstorm is the more irritating mistake, since it makes someone answer questions they didn't want\./);
+  // No phrase rules or wording examples of their own (David: "it's about intent").
+  assert.ok(!prompt.includes('is Brainstorm even when no topic is named'));
+  assert.ok(!/^BRAINSTORM$/m.test(prompt), 'no list of Brainstorm phrases');
+  assert.ok(!prompt.includes('Pairs on one subject') && !/" → brainstorm$/m.test(prompt), 'no Brainstorm wording examples');
+  // Follow-ups: read in their conversation, which the model is told it sees without the agent's replies.
+  assert.match(prompt, /Agent replies are left out of what you are given, so you cannot see what the agent last said/);
+  assert.match(prompt, /classify the kind of interaction the conversation is having, not the single turn/);
+  assert.match(prompt, /after Chat: "help me work through it myself instead" → Brainstorm/);
+  assert.match(prompt, /- In Chat, a further question, pushback or confusion about the answer stays Chat\./);
+  assert.ok(prompt.indexOf('Follow-ups:') < prompt.indexOf('Important distinctions:'), 'follow-ups near the Chat/Brainstorm test');
+  const read = (file) => fs.readFileSync(path.join(__dirname, '..', file), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  const cases = read('fixtures/route-eval.jsonl');
+  for (const [line, expected, current] of [['help me learn', 'brainstorm'], ['i wanna learn about how honeybees navigate', 'brainstorm'], ['wait, what does policy mean here?', 'brainstorm', 'brainstorm'], ['help me work through it myself instead', 'brainstorm', 'chat'], ['and what about the learning rate?', 'chat', 'chat']]) {
+    assert.ok(cases.some((c) => c.line === line && c.expected === expected && (c.current || undefined) === current), `eval: ${line}${current ? ` in ${current}` : ''} → ${expected}`);
+  }
+  // The held-out paraphrases stay out of the prompt, and their follow-ups are read as the editor sends them: with the
+  // thread's title line, so the agent's replies are left out.
+  const held = read('fixtures/route-eval-intent.jsonl');
+  assert.ok(held.length >= 70);
+  for (const c of held) assert.ok(!prompt.toLowerCase().includes(c.line.replace(/^(--\S+\s+)+/, '').toLowerCase()), `held out: ${c.line}`);
+  for (const c of held.filter((c) => c.current && !c.specAbove)) assert.ok(route.sectionText(c.section).includes('[agent reply omitted]') && !/^bart> /m.test(route.sectionText(c.section)), `replies left out: ${c.line}`);
+  for (const tag of ['bs-topic', 'chat-topic', 'bs-indirect', 'chat-rec', 'chat-uncertain', 'chat-flags', 'bs-flags', 'fu-bs', 'fu-chat', 'fu-bs-switch', 'fu-chat-switch', 'reg-discover', 'reg-create', 'reg-build']) assert.ok(held.some((c) => c.tag === tag), tag);
+});
+
+test('Bart\'s prompt (2026-10-16): Discover finds outside texts and passages, not only research; Chat interprets them and finds their own material (prompt text only: scripts/route-eval.mjs asks the model)', () => {
+  const prompt = require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT;
+  assert.match(prompt, /- discover: [^\n]*religious texts\), or a specific passage, excerpt or quote in them\. It need not be academic[^\n]*a search with details missing is still Discover\./);
+  assert.match(prompt, /- chat: [^\n]*interpretation of a text or passage/);
+  assert.ok(!/religious/.test(prompt.match(/Important distinctions:[^]*?Examples:/)[0]), 'no rule for religious texts of its own');
+  for (const [line, agent] of [['I want to find an excerpt from a religious text', 'discover'], ['find a passage about forgiveness in a religious text', 'discover'], ['find a historical speech about reconciliation', 'discover'], ['what does this passage mean?', 'chat'], ['explain forgiveness in Christianity', 'chat'], ['find the excerpt I saved in my notes yesterday', 'chat'], ['make a markdown document collecting religious passages about forgiveness', 'create']]) {
+    assert.ok(prompt.includes(`- "${line}" → ${agent}`), `${line} → ${agent}`);
+  }
+  const cases = fs.readFileSync(path.join(__dirname, '../fixtures/route-eval.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  for (const [line, expected] of [['I want to find an excerpt from a religious text', 'discover'], ['--sonnet --medium I want to find an excerpt from a religious text', 'discover'], ['Find the excerpt I saved in my notes yesterday', 'chat']]) {
+    assert.ok(cases.some((c) => c.line === line && c.expected === expected), `eval: ${line} → ${expected}`);
+  }
 });
 
 test('@create: the classifier\'s create pick stands at SURE_ENOUGH, as the others do (2026-10-14: no longer 0.8)', async () => {
@@ -736,10 +810,14 @@ test('@create at work (2026-10-15, David): a thinking line until its line on wha
   assert.equal((told.match(/an HTML page on the work in this workspace/g) || []).length, 1, 'said once');
   assert.ok(!told.includes('>Creating an HTML page…<'), 'the line itself, not a few words for it');
   // Starting "Creating" (2026-10-15, David), the acronym's capital kept.
-  assert.match(told, new RegExp(`>Creating an HTML page on the work in this workspace: the agents, the five pillars and what is still open…</div><div[^>]*>[\\s\\S]*?align-items:baseline[^>]*><span[^>]*>Building the page · 9 KB so far</span></span>`), 'the line, then the row saying what it is doing, in words: no file name (2026-10-15, David)');
+  assert.match(told, new RegExp(`>Creating an HTML page on the work in this workspace: the agents, the five pillars and what is still open…</div><div[^>]*>[\\s\\S]*?align-items:baseline[^>]*><span[^>]*><span class="eb-wave"[^>]*>Building the page</span></span></span>`), 'the line, then the row saying what it is doing, in words: no file name (2026-10-15, David), nor its size (2026-10-16)');
+  assert.ok(!/KB/.test(told), 'no size anywhere on the row');
   // No line, but a file being written: the few words its kind gives.
   const writing = html({ ...run, log: ['Writing summary.html'] });
   assert.ok(writing.includes('data-create-pending') && writing.includes('>Creating an HTML page…</div>'));
+  // Writing before any line or logged file: a run thinking like any other, the file without its size (2026-10-16).
+  const early = html({ ...run, activity: 'Writing summary.html · 9 KB' });
+  assert.ok(!early.includes('data-create-pending') && early.includes('Writing summary.html') && !/KB/.test(early));
   const { makingLabel, creatingLine } = EDITOR;
   assert.equal(creatingLine('A diagram of the highlighting, Stage, and browser-window problems we discussed.'), 'Creating a diagram of the highlighting, Stage, and browser-window problems we discussed…');
   assert.equal(creatingLine('Two charts of CHI submissions.'), 'Creating two charts of CHI submissions…');
@@ -748,7 +826,8 @@ test('@create at work (2026-10-15, David): a thinking line until its line on wha
   const { createDoing } = EDITOR;
   for (const [activity, kind, wrote, said] of [
     ['Thinking', 'diagram', false, 'Planning the diagram'], ['Thinking', 'diagram', true, 'Finishing up'], ['Writing', 'HTML page', false, 'Planning the HTML page'], ['Thinking', null, false, 'Thinking it through'],
-    ['Writing ui-workspace-conversation-diagram.svg', 'diagram', false, 'Drawing the diagram'], ['Writing summary.html · 12 KB', 'page', false, 'Building the page · 12 KB so far'],
+    ['Writing ui-workspace-conversation-diagram.svg', 'diagram', false, 'Drawing the diagram'], ['Writing summary.html · 12 KB', 'page', false, 'Building the page'], ['Writing chart.html · 14 KB', 'page', false, 'Building the page'],
+    ['Editing chart.html · 3 KB', 'page', true, 'Revising the page'], ['Writing diagram.svg · 9 KB', 'diagram', false, 'Drawing the diagram'],
     ['Writing data.csv', 'dataset', false, 'Filling in the dataset'], ['Editing summary.html', 'page', true, 'Revising the page'],
     ['Reading …/Concision in Agent Responses/workspace.md', 'diagram', false, 'Reading your notes'], ['Reading src/main/bart/ask.cjs', 'diagram', false, 'Reading the code'], ['Reading tutors.pdf', 'diagram', false, 'Reading a paper'],
     ['Reading arxiv.org', 'diagram', false, 'Reading a page on arxiv.org'], ['Searching code for “stage”', 'diagram', false, 'Searching the code'], ['Listing **/*.md', 'diagram', false, 'Looking through your files'],
@@ -766,6 +845,36 @@ test('@create at work (2026-10-15, David): a thinking line until its line on wha
   const row = made.editor.editorHtml().match(/<div data-made-row="c1\/page\.html"[^>]*>/);
   assert.ok(row && !/background/.test(row[0]), 'no background on the row');
   assert.ok(!made.editor.editorHtml().includes('#f3f3f3'));
+});
+
+test('a finished Create run opens its file in the Stage by itself (2026-10-16, David): the first file, once per run, only in the workspace it was asked in; never when stopped, failed or nothing kept', () => {
+  const { madeToOpen } = EDITOR;
+  const done = { lines: ['bart> A page.', 'bart>', 'bart> @[page.html](made:c1/page.html)', 'bart>', 'bart> *Create · Opus · high · 9 s*'], meta: {} };
+  const opened = new Set();
+  const here = { askId: 'a1', askedIn: 'w1', here: 'w1', active: true, opened };
+  assert.deepEqual(madeToOpen(done, here), { name: 'page.html', askId: 'c1', rel: 'page.html' });
+  assert.equal(madeToOpen(done, here), null, 'the same answer drawn again opens nothing');
+  assert.ok(opened.has('a1'));
+  const two = { lines: ['bart> Two files.', 'bart>', 'bart> @[chart.svg](made:c2/chart.svg)', 'bart> @[data.csv](made:c2/data.csv)', 'bart>', 'bart> *Create · Opus · high · 9 s*'] };
+  assert.deepEqual(madeToOpen(two, { ...here, askId: 'a2' }), { name: 'chart.svg', askId: 'c2', rel: 'chart.svg' }, 'two files: the first only');
+  assert.equal(madeToOpen(two, { ...here, askId: 'a2' }), null);
+  assert.equal(madeToOpen({ stopped: true }, { ...here, askId: 'a3' }), null, 'stopped');
+  assert.equal(madeToOpen({ failed: true, lines: ['bart> **No answer.** It broke.'] }, { ...here, askId: 'a4' }), null, 'failed');
+  assert.equal(madeToOpen({ failed: true, lines: done.lines }, { ...here, askId: 'a4' }), null, 'failed, whatever its lines');
+  assert.equal(madeToOpen({ lines: ['bart> This is a Build: it changes something you already have.', 'bart>', 'bart> *Create · Opus · high · 9 s*'] }, { ...here, askId: 'a5' }), null, 'nothing kept');
+  assert.equal(madeToOpen(done, { ...here, askId: 'a6', here: 'w2' }), null, 'they have gone to another workspace');
+  assert.equal(madeToOpen(done, { ...here, askId: 'a7', here: null, active: false }), null, 'the project is closed');
+  assert.equal(madeToOpen({ lines: ['bart> By watching.'] }, { ...here, askId: 'a8' }), null, 'an answer with no file');
+  assert.ok(!opened.has('a3') && !opened.has('a6'), 'a run that opened nothing is not marked');
+  // Workspace: asked once its answer is placed, where it was asked (`askedIn`, the workspace at the time), with openMade.
+  const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  const asking = workspace.slice(workspace.indexOf('const askBart = React.useCallback'), workspace.indexOf('const routeLine = React.useCallback'));
+  assert.match(asking, /const askedIn = topic\.id;/);
+  assert.match(asking, /place\(out\.stopped[^\n]*\n[\s\S]*?madeToOpen\(out, \{ askId, askedIn, here: hereRef\.current, active: hereRef\.current !== null, opened: madeOpened\.current \}\)[\s\S]*?madeLanded\.current\(madeIn\(out\.lines, askId\), made\)/);
+  assert.ok(!/madeToOpen/.test(asking.slice(asking.lastIndexOf('} catch (error) {'))), 'nothing opened when the ask failed');
+  assert.equal((workspace.match(/madeToOpen\(/g) || []).length, 1, 'only a run that just finished: no document load or redraw asks it');
+  assert.match(workspace, /madeLanded\.current = \(list, open\) => \{[\s\S]*?for \(const made of list\) await saveMade\(made\);\s*if \(open\) await openMade\(open\);/, 'each file saved, then the one madeToOpen gave opened: not list[0] whatever happened');
+  assert.match(workspace, /stageRef\.current\.openFile\(file\.path, \{\}\);/, 'openMade opens the .created path, as clicking the name does');
 });
 
 test('a made file\'s peek (2026-10-15, David): a rest of the pointer on its name or icon shows the file in a small card over the page, nothing in the document moves; leaving or a press hides it', (t) => {
@@ -999,38 +1108,99 @@ function rowOf(html, i) {
 const clickAct = (m, dataset, disabled = false) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset, disabled, closest: () => null } : null) }, preventDefault() {} });
 const TITLED = ['bart# [chat 2026-10-13T09:00:00Z] Retry logic', '@chat why retry?', 'bart> because', 'bart> *Chat · Sonnet · high · 3 s*', ''];
 
-test('a click on an open @bart question collapses all of its conversation (2026-10-15, David), as its corner\'s Collapse (foldall) does', () => {
-  // Titled, its only exchange: a click on its question (foldall) collapses the conversation to its title's row.
+test('a click on Regenerate opens the model selector (2026-10-16, David: as hovering it did until 2026-10-13); its button asks again on what is picked; @brainstorm\'s and @discover\'s too', () => {
+  const m = mounted(TITLED);
+  let asked = null; m.editor.regenerate = (q, choice) => { asked = { q, choice }; };
+  const el = { dataset: { act: 'regen', turn: '1', quiet: '1' }, disabled: false, closest: () => null, parentElement: { setAttribute() {}, removeAttribute() {} }, getBoundingClientRect: () => ({ left: 10, right: 38, top: 100, bottom: 128 }) };
+  m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? el : null) }, preventDefault() {} });
+  assert.equal(asked, null, 'nothing asked yet');
+  assert.deepEqual([m.editor.state.picker.kind, m.editor.state.picker.i], ['regen', 1], 'the selector, for that answer');
+  m.editor.sendPicked();
+  assert.equal(asked.q, 1, 'its button asks again');
+  assert.equal(m.editor.state.picker, null);
+  // Clicked again while open, it closes.
+  m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? el : null) }, preventDefault() {} });
+  m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? el : null) }, preventDefault() {} });
+  assert.equal(m.editor.state.picker, null);
+  // @brainstorm's and @discover's too (2026-10-16, David): main asks them on what is picked, for that run (ask.cjs turnPlan).
+  asked = null; el.dataset.plain = '1';
+  m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? el : null) }, preventDefault() {} });
+  assert.equal(asked, null);
+  assert.equal(m.editor.state.picker.kind, 'regen');
+});
+
+test('a conversation\'s Collapse is its first exchange\'s, named Collapse conversation and drawn as every other exchange\'s (2026-10-16, David); every later exchange\'s folds it alone', () => {
+  const DOUBLE = '<path d="m17 11-5-5-5 5"></path><path d="m17 18-5-5-5 5"></path>', SINGLE = '<path d="m6 9 6 6 6-6"></path>';
+  const iconOf = (html, q) => rowOf(html, q).match(new RegExp(`data-turn="${q}"[^>]*>(<svg[\\s\\S]*?</svg>)</button>`))[1];
+  // Titled, its only exchange: the corner's Collapse collapses the conversation to its title's row.
   const titled = mounted(TITLED);
   const html = titled.editor.editorHtml();
   assert.ok(!rowOf(html, 1).includes('data-chip'), 'no chip beside an answered question');
-  assert.ok(rowOf(html, 1).includes('data-corner="1"') && rowOf(html, 1).includes('data-fold-turn="1"'), 'its corner, and a click on the question, collapse it');
+  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg/, 'its Collapse, top right');
+  assert.ok(rowOf(html, 1).includes(SINGLE) && !rowOf(html, 1).includes(DOUBLE), 'the single chevron');
   assert.ok(!/data-foot="1"[^>]*>(?:(?!<\/div><div data-line)[\s\S])*data-act="fold"/.test(html), 'not on the button row');
-  clickAct(titled, { act: 'foldall', turn: '1' });
+  clickAct(titled, { act: 'fold', turn: '1' });
   assert.equal(titled.lines()[0], 'bart#+ [chat 2026-10-13T09:00:00Z] Retry logic', 'collapsed to its title');
   assert.deepEqual(titled.lines().slice(1), TITLED.slice(1), 'its exchange is not folded as well');
-  // Titled, two answered: either question collapses the whole conversation.
-  const twoLines = [...TITLED.slice(0, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', ''];
-  const two = mounted(twoLines), drawn = two.editor.editorHtml();
-  assert.ok(rowOf(drawn, 1).includes('data-fold-turn="1"') && rowOf(drawn, 1).includes('data-corner="1"') && !rowOf(drawn, 4).includes('data-corner'), 'the first can be clicked, and has the corner; the second has none');
-  assert.match(rowOf(drawn, 4), /data-fold-turn="4"/, 'the second can still be clicked');
-  clickAct(two, { act: 'foldall', turn: '4' });
-  assert.match(two.lines()[0], /^bart#\+ /, 'the conversation collapses');
-  assert.deepEqual(two.lines().slice(1), twoLines.slice(1), 'its exchanges as they were');
-  // Untitled: every answered exchange of it folds.
-  const untitled = mounted([...TITLED.slice(1, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', '']);
-  assert.match(rowOf(untitled.editor.editorHtml(), 0), /data-fold-turn="0"/);
-  clickAct(untitled, { act: 'foldall', turn: '0' });
+
+  // Titled, three answered: the second's and the third's fold their exchange alone, whatever else is folded.
+  const threeLines = [...TITLED.slice(0, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', '@chat and jitter?', 'bart> jitter too', 'bart> *Chat · Sonnet · high · 2 s*', ''];
+  const replies = (m, q) => m.lines().slice(q + 1, q + 3);
+  const three = mounted(threeLines), drawn = three.editor.editorHtml();
+  assert.match(rowOf(drawn, 1), /data-corner="1"[^>]*><button[^>]*data-act="fold" data-turn="1"[^>]*aria-label="Collapse conversation"/, 'the first: the conversation\'s');
+  for (const q of [4, 7]) assert.equal(iconOf(drawn, 1), iconOf(drawn, q), `the first's icon is turn ${q}'s, markup and all`);
+  for (const q of [4, 7]) {
+    assert.match(rowOf(drawn, q), new RegExp(`data-corner="${q}"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="${q}" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg`), `turn at ${q}: its own`);
+    assert.ok(rowOf(drawn, q).includes(SINGLE) && !rowOf(drawn, q).includes(DOUBLE), `turn at ${q}: the single chevron`);
+  }
+  assert.ok(!rowOf(drawn, 4).includes('data-fold-turn'), 'a click on the question is no Collapse');
+  clickAct(three, { act: 'fold', turn: '4' });
+  assert.equal(three.lines()[0], threeLines[0], 'turn 2: the conversation stays open');
+  assert.deepEqual(replies(three, 4), ['bart+> those too', 'bart+> *Chat · Sonnet · high · 2 s*'], 'turn 2 folds');
+  assert.deepEqual(replies(three, 1), threeLines.slice(2, 4), 'turn 1 stays open');
+  assert.deepEqual(replies(three, 7), threeLines.slice(8, 10), 'turn 3 stays open');
+  // Turns 1 and 2 folded, turn 3's Collapse folds turn 3 alone: the last one open no longer collapses the conversation.
+  three.editor.toggleFold(1);
+  assert.deepEqual(replies(three, 1), ['bart+> because', 'bart+> *Chat · Sonnet · high · 3 s*']);
+  clickAct(three, { act: 'fold', turn: '7' });
+  assert.equal(three.lines()[0], threeLines[0], 'turn 3: the conversation stays open');
+  assert.deepEqual(replies(three, 7), ['bart+> jitter too', 'bart+> *Chat · Sonnet · high · 2 s*'], 'turn 3 folds');
+  // Turn 1's Collapse: the title line folds, the turns' own reply lines are as they were.
+  const first = mounted(threeLines);
+  first.editor.collapseTurn(1);
+  assert.match(first.lines()[0], /^bart#\+ /, 'the conversation collapses');
+  assert.deepEqual(first.lines().slice(1), threeLines.slice(1), 'no turn\'s reply lines change');
+  assert.equal(first.editor.findTurn(first.lines(), 1).thread.folded, true, 'thread.folded');
+  // A folded turn 1's line expands that turn alone.
+  const back = mounted(threeLines);
+  back.editor.toggleFold(1);
+  clickAct(back, { act: 'fold', turn: '1' });
+  assert.deepEqual(back.lines(), threeLines, 'expanded, the conversation not collapsed');
+
+  // Untitled: its first exchange's Collapse folds it alone, the single chevron.
+  const untitledLines = [...TITLED.slice(1, 4), '@chat and timeouts?', 'bart> those too', 'bart> *Chat · Sonnet · high · 2 s*', ''];
+  const untitled = mounted(untitledLines), uh = untitled.editor.editorHtml();
+  assert.match(rowOf(uh, 0), /data-corner="0"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="0" aria-expanded="true" aria-label="Collapse" title="Collapse">/);
+  assert.ok(!rowOf(uh, 0).includes(DOUBLE));
+  clickAct(untitled, { act: 'fold', turn: '0' });
   assert.match(untitled.lines()[1], /^bart\+> because$/, 'the first folded');
-  assert.match(untitled.lines()[4], /^bart\+> those too$/, 'and the second');
-  // A turn of it at work: it collapses all the same (2026-10-15, David), its lines as they were; the answer lands hidden.
+  assert.equal(untitled.lines()[4], 'bart> those too', 'the second stays open');
+
+  // A turn of it at work: turn 1's Collapse folds turn 1 alone, the single chevron; the conversation stays open.
   const runLines = [...TITLED.slice(0, 4), '@chat and timeouts?', 'bart~> r1', ''];
-  const running = mounted(runLines);
-  assert.ok(!running.editor.editorHtml().includes('Collapse once it answers'));
-  clickAct(running, { act: 'foldall', turn: '1' });
-  assert.match(running.lines()[0], /^bart#\+ /, 'the conversation collapses');
-  assert.deepEqual(running.lines().slice(1), runLines.slice(1), 'the one at work as it was');
-  // Untitled, a turn at work: there is no title to collapse to, so its answered exchanges fold and the one at work is left.
+  const running = mounted(runLines), rh = running.editor.editorHtml();
+  assert.ok(!rh.includes('Collapse once it answers'));
+  assert.match(rowOf(rh, 1), /data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse" title="Collapse">/);
+  assert.ok(rowOf(rh, 1).includes(SINGLE) && !rowOf(rh, 1).includes(DOUBLE), 'running: the single chevron');
+  clickAct(running, { act: 'fold', turn: '1' });
+  assert.equal(running.lines()[0], runLines[0], 'the conversation stays open');
+  assert.match(running.lines()[2], /^bart\+> because$/, 'turn 1 folds');
+  assert.equal(running.lines()[5], 'bart~> r1', 'the one at work as it was');
+  // collapseAll is as it was: a titled conversation at work collapses whole; an untitled one's answered exchanges fold.
+  const all = mounted(runLines);
+  clickAct(all, { act: 'foldall', turn: '1' });
+  assert.match(all.lines()[0], /^bart#\+ /, 'collapseAll collapses the conversation');
+  assert.deepEqual(all.lines().slice(1), runLines.slice(1));
   const bare = mounted([...runLines.slice(1)]);
   clickAct(bare, { act: 'foldall', turn: '0' });
   assert.match(bare.lines()[1], /^bart\+> because$/);
@@ -1050,7 +1220,7 @@ test('three turns, the first two folded: two one-line rows (no foot, no answer),
   }
   assert.ok(!drawn.includes('because') && !drawn.includes('it depends'), 'no answer text');
   assert.ok(rowOf(html, 3).includes(long.slice(0, 60)), 'the long question, in its one line');
-  assert.match(rowOf(html, 6), /padding:0px 18px 0px;background:#fafafa;border-radius:0 0 0 0/, 'the open turn goes on in the same card, under the folded lines (2026-10-13; 18px in since 2026-10-15)');
+  assert.match(rowOf(html, 6), /padding:0px 16px 0px;background:#fafafa;border-radius:0 0 0 0/, 'the open turn goes on in the same card, under the folded lines (2026-10-13)');
   assert.match(rowOf(html, 0), /padding:14px 16px 6px;background:#fafafa;border-radius:10px 10px 0 0/, 'the folded lines open the card');
   assert.ok(drawn.includes('exponential') && html.includes('data-foot="6"'));
   clickAct(m, { act: 'fold', turn: '3' });
@@ -1108,7 +1278,7 @@ test('"yes" under an answer that asks "Want me to build it?": from the reply fie
 test('a line being routed names, from the start, the level it would start on; the run keeps it until its first step', async () => {
   const { readQuestion, readDiscover } = require('../src/main/bart/question.cjs');
   const { askStarted, askProgressed } = EDITOR;
-  const label = (m, asks) => { m.props.asks = asks; const html = m.editor.editorHtml(); const at = html.indexOf('data-pending='); const row = html.slice(at, html.indexOf('</div></div>', at)); return (row.match(/<span class="t"[^>]*>([^<]*)<\/span>/) || [])[1]; };
+  const label = (m, asks) => { m.props.asks = asks; const html = m.editor.editorHtml(); const at = html.indexOf('data-pending='); const row = html.slice(at, html.indexOf('</div></div>', at)); return (row.match(/<span class="t"[^>]*>(?:<span class="eb-wave"[^>]*>)?([^<]*)<\/span>/) || [])[1]; }; // at work, its words in their wave (2026-10-16)
   // A new line: Chat's first step, from the models file (not a fixed "Opus high").
   const chatStep = readQuestion('why?', DEFAULTS).steps[0];
   const fresh = mounted(['@bart why?', ''], { route: () => new Promise(() => {}) });

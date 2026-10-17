@@ -61,6 +61,7 @@ const CHANNELS = Object.freeze({
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
 const SECTION = 'engelbart-web-section'; // a guide's section, styled by main's insertCSS as a pdf's (PaperView pdf-section)
 const SECTION_MAX = 30000; // characters a section runs to at most before it is taken to be its paragraph alone
+const SECTION_WAIT = 3000; // ms a section's words not in the page yet are watched for (text a script draws after load)
 const BLOCKS = 'p,li,blockquote,dd,dt,td,th,figcaption,pre,h1,h2,h3,h4,h5,h6';
 const ARTICLE = 'article,main,[role="main"]';
 const CONTEXT = 32; // characters of prefix and of suffix a new quote keeps
@@ -115,10 +116,33 @@ function textMap(nodes) {
   return { text, segs };
 }
 
-/** Where `words` start in the text, as find matches them (any case, any run of whitespace one space); -1 when nowhere. */
+// Typography a guide's words and a page differ in (2026-10-16, Hudson: a Read link into an HTML file that did not
+// scroll): curly quotes and primes, and dashes and hyphens, each one character for one, so offsets are the text's own.
+const FOLD = { '\u2018': "'", '\u2019': "'", '\u201a': "'", '\u201b': "'", '\u2032': "'", '\u201c': '"', '\u201d': '"', '\u201e': '"', '\u201f': '"', '\u2033': '"', '\u2010': '-', '\u2011': '-', '\u2012': '-', '\u2013': '-', '\u2014': '-', '\u2015': '-', '\u2212': '-' };
+const fold = (text) => String(text || '').toLowerCase().replace(/[\u2018-\u201f\u2032\u2033\u2010-\u2015\u2212]/g, (c) => FOLD[c] || c);
+
+/**
+ * Every place `words` are in the text, from the first: [{ start, end }]. As find matches them (any case, any run of
+ * whitespace one space, curly or straight quotes, any dash); where that matches nowhere, with no regard to whitespace at
+ * all, for text whose nodes run together with none between them (a table's cells, a list's items).
+ */
+function matchWords(text, words) {
+  const want = fold(String(words || '').replace(/\s+/g, ' ').trim());
+  if (!want) return [];
+  const hay = fold(text), out = [];
+  for (let at = hay.indexOf(want); at >= 0; at = hay.indexOf(want, at + 1)) out.push({ start: at, end: at + want.length });
+  if (out.length) return out;
+  const bare = want.replace(/ /g, ''), index = [];
+  let flat = '';
+  for (let i = 0; i < hay.length; i += 1) if (!SPACE.test(hay[i])) { flat += hay[i]; index.push(i); }
+  for (let at = flat.indexOf(bare); at >= 0; at = flat.indexOf(bare, at + 1)) out.push({ start: index[at], end: index[at + bare.length - 1] + 1 });
+  return out;
+}
+
+/** Where `words` start in the text (matchWords' first), -1 when nowhere. */
 function findWords(text, words) {
-  const want = String(words || '').replace(/\s+/g, ' ').trim().toLowerCase();
-  return want ? String(text || '').toLowerCase().indexOf(want) : -1;
+  const all = matchWords(text, words);
+  return all.length ? all[0].start : -1;
 }
 
 /**
@@ -453,13 +477,24 @@ function runInPage() {
   // A guide's section: found in the text, run to its next heading (sectionEnd) or its paragraph's end, tinted, and scrolled
   // to its start, a little below the window's top (2026-10-15, David: the tint alone, not find's orange on its first
   // words, which Stage no longer runs once this has shown it). → whether it was found and shown
+  // 2026-10-16 (Hudson: a Read link into an HTML file sometimes did not scroll): the first place the words are that is
+  // drawn; one in a hidden menu or a display:none copy is passed over.
+  const drawn = (range) => {
+    const el = range.startContainer.parentElement;
+    if (el && typeof el.checkVisibility === 'function' && !el.checkVisibility({ visibilityProperty: true, checkVisibilityCSS: true })) return false;
+    return [...range.getClientRects()].some((r) => r.width > 0 || r.height > 0);
+  };
   function showSection(words) {
     const h = registry();
     if (!h) return false;
     h.delete(SECTION);
-    const map = textMap(textNodes()), start = findWords(map.text, words);
-    if (!words || start < 0) return false;
-    const range = domRange(rangeOf(map, start, start + String(words).replace(/\s+/g, ' ').trim().length));
+    if (!words) return false;
+    const map = textMap(textNodes());
+    let range = null, start = -1;
+    for (const one of matchWords(map.text, words)) {
+      const r = domRange(rangeOf(map, one.start, one.end));
+      if (r && drawn(r)) { range = r; start = one.start; break; }
+    }
     if (!range) return false;
     // The section stays inside what holds both its words and the heading above them (an article's body), else inside the
     // page's article or main: a sidebar, the tags or the footer are no part of it, even inside the same <article>.
@@ -485,19 +520,61 @@ function runInPage() {
     const shown = new Highlight(tint);
     shown.priority = -1; // under find's matches (⌘F's), as a pdf's section is
     h.set(SECTION, shown);
-    const at = from && from.closest(BLOCKS) || from;
-    if (at && typeof at.scrollIntoView === 'function') {
-      at.scrollIntoView({ block: 'start', inline: 'nearest' });
-      window.scrollBy(0, -Math.round(Math.min(120, window.innerHeight / 6))); // the date or heading above it in view too
-    }
+    scrollToWords(range, from);
     return true;
   }
-  // { nonce, words } → { nonce, shown } (a bare string, as before 2026-10-15: no reply).
+  // The section's start words a little below the top of each box that scrolls around them, the innermost first, then the
+  // page: the date or heading above them in view too. The words' own place, not their block's (2026-10-16, David: an old
+  // page, cs.brown.edu's, holds its whole text loose in one table cell, its "block", whose top is the page's), and at once
+  // (a page's `scroll-behavior: smooth` let the second scroll cancel the first, which left the page at its top).
+  function scrollToWords(range, from) {
+    const pad = Math.round(Math.min(120, window.innerHeight / 6));
+    const page = document.scrollingElement || document.documentElement;
+    const boxes = [];
+    for (let el = from; el && el !== page && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+      const y = getComputedStyle(el).overflowY;
+      if ((y === 'auto' || y === 'scroll' || y === 'overlay') && el.scrollHeight > el.clientHeight) boxes.push(el);
+    }
+    boxes.push(page);
+    for (const box of boxes) {
+      const rect = (range.getClientRects && range.getClientRects()[0]) || range.getBoundingClientRect();
+      if (!rect || (!rect.height && !rect.width)) { const at = from && from.closest(BLOCKS) || from; if (at && at.scrollIntoView) at.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' }); return; }
+      const top = box === page ? 0 : box.getBoundingClientRect().top;
+      const by = Math.round(rect.top - top - pad);
+      if (box === page) window.scrollBy({ top: by, behavior: 'instant' }); else box.scrollBy({ top: by, behavior: 'instant' });
+    }
+  }
+  // Words not in the page yet (2026-10-16: text a page's script draws after it has loaded): the page is watched for
+  // SECTION_WAIT ms, and the section shown as soon as they are there. Another passage, the person scrolling, typing or
+  // clicking, or a new document ends the wait; the page is left where it is.
+  let watching = null;
+  function stopWatching() {
+    if (!watching) return;
+    watching.stop();
+    watching = null;
+  }
+  function watchFor(words) {
+    if (typeof MutationObserver !== 'function' || !document.documentElement) return;
+    let queued = 0;
+    const check = () => { queued = 0; let shown = false; try { shown = showSection(words); } catch { shown = false; } if (shown) stopWatching(); };
+    const observer = new MutationObserver(() => { if (!queued) queued = setTimeout(check, 50); });
+    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    const timer = setTimeout(stopWatching, SECTION_WAIT);
+    const quit = () => stopWatching();
+    const events = ['wheel', 'keydown', 'pointerdown', 'touchstart', 'pagehide'];
+    for (const name of events) window.addEventListener(name, quit, { capture: true, passive: true });
+    watching = { stop() { observer.disconnect(); clearTimeout(timer); clearTimeout(queued); for (const name of events) window.removeEventListener(name, quit, { capture: true }); } };
+  }
+  // { nonce, words } → { nonce, shown } (a bare string, as before 2026-10-15: no reply). Not found: answered at once, so
+  // Stage's find runs as before, and watched for (watchFor).
   ipcRenderer.on(CHANNELS.section, (_event, asked) => {
     const nonce = asked && typeof asked === 'object' ? asked.nonce : null, words = nonce ? asked.words : asked;
+    const text = typeof words === 'string' ? words.slice(0, MAX_EXACT) : '';
+    stopWatching();
     let shown = false;
-    try { shown = showSection(typeof words === 'string' ? words.slice(0, MAX_EXACT) : ''); } catch { /* the page's own tints stay */ }
+    try { shown = showSection(text); } catch { /* the page's own tints stay */ }
     if (nonce) ipcRenderer.send(CHANNELS.section, { nonce, shown: !!shown });
+    if (!shown && text.trim()) watchFor(text);
   });
   ipcRenderer.on(CHANNELS.add, (_event, value) => {
     const { nonce, mark } = value || {};
@@ -797,4 +874,4 @@ function runInPage() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SECTION_MAX, findWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };

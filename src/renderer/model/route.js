@@ -2,11 +2,9 @@
 // rule settles is sent to the model (src/main/bart/route.cjs), with what this module reads of the document around it:
 // its section, the threads above and the spec above, if any.
 import { parseLines, threads, turnText, answeredBy, tokenOf, answerFences, isResearch } from './doc.js';
-import { readFlags, readBuildFlag, effortOf } from '../../main/bart/question.cjs';
+import { readBuildFlag } from '../../main/bart/question.cjs';
 
 const LEVEL_RE = /(^|\s)--(quick|standard|deep)(?=\s|$)/i;
-// The models' words when the models file is not loaded yet: a flag naming one still means a question for Chat.
-const MODEL_WORDS = new Set(['haiku', 'sonnet', 'opus', 'fable', 'luna', 'sol', 'astra']);
 // A thread's question as the router is sent it, at most (main's bart/route.cjs reads 80 too).
 export const QUESTION_CHARS = 80;
 
@@ -28,23 +26,17 @@ export function questionLine(text, max = QUESTION_CHARS) {
   return (space > 0 ? cut.slice(0, space) : s.slice(0, max)).replace(/[\s,;:–—-]+$/, '');
 }
 
-/** Whether the text after `@bart` carries a model or effort flag. */
-function hasModelFlag(text, models) {
-  if (models && models.providers) { const { chosen, effort } = readFlags(text, models); return !!(chosen || effort); }
-  const words = String(text || '').trim().split(/\s+/).filter(Boolean);
-  const flag = (word) => /^--\S/.test(word || '') && (effortOf(word.slice(2)) || MODEL_WORDS.has(word.slice(2).toLowerCase()));
-  return !!(flag(words[0]) || flag(words[words.length - 1]));
-}
-
 /**
  * The agent an `@bart` line goes to by rule, or null when no rule settles it and the model is asked. `text`: the line
  * after `@bart`; `lines`, `at`: the document and the line's index (for the thread it is under); `models`: the models
  * file, when loaded; `current`: the agent the thread a follow-up goes on with is with (routeInputs). → { agent: 'chat' |
- * 'brainstorm' | 'discover' | 'build', rule } | null. `asking`: the line answers Discover while it settles what to research
- * (routeInputs). In order:
- *   an empty line → brainstorm; --build → Build; --quick, --standard or --deep → discover; a model or effort flag → chat,
- *   unless the line follows up a thread, where the flag is for whichever agent answers; an answer to Discover's question
- *   → discover (2026-10-14: its conversation is not over until it searches, so its replies are not routed away to Chat).
+ * 'brainstorm' | 'discover' | 'build', rule } | null. `asking`: the line answers Discover while it settles what to
+ * research (routeInputs). `models` and `current` are no longer read (2026-10-16), kept for the callers. In order:
+ *   an empty line → brainstorm; --build → Build; --quick, --standard or --deep → discover; an answer to Discover's
+ *   question → discover (2026-10-14: its conversation is not over until it searches, so its replies are not routed away
+ *   to Chat). A model or effort flag settles nothing (2026-10-16, David: "@bart --sonnet --medium I want to find an
+ *   excerpt from a religious text" went to Chat by rule): it picks the model and effort of whichever agent answers, and
+ *   the rest of the line is classified (main's bart/route.cjs reads it without the flags).
  * A line under a thread is no longer settled by its thread's agent (2026-10-13): the model is told which agent the
  * conversation is with (`current`) and stays with it unless the line clearly wants another.
  */
@@ -53,7 +45,6 @@ export function routeByRule(text, { models = null, current = null, asking = fals
   if (!said.trim()) return { agent: 'brainstorm', rule: 'empty' };
   if (readBuildFlag(said).build) return { agent: 'build', rule: '--build' };
   if (LEVEL_RE.test(said)) return { agent: 'discover', rule: 'level' };
-  if (!current && hasModelFlag(said, models)) return { agent: 'chat', rule: 'model flag' };
   if (asking) return { agent: 'discover', rule: 'answering Discover' };
   return null;
 }

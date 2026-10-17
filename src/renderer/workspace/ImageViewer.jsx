@@ -12,7 +12,8 @@ const CSS = '@keyframes lb-fade{from{opacity:0}to{opacity:1}}@keyframes lb-rise{
   + '[data-lightbox]{animation:lb-fade 150ms ease-out}[data-lightbox] img{animation:lb-rise 150ms ease-out}'
   + '@media (prefers-reduced-motion: reduce){[data-lightbox],[data-lightbox] img{animation:none}}'
   + '[data-lightbox-area=scroll]::-webkit-scrollbar{display:none}'
-  + '.lb-x{background:#fff}.lb-x:hover{background:#f5f5f5}.lb-x:focus-visible{outline:none;box-shadow:0 1px 3px rgba(0,0,0,.10),0 0 0 3px rgba(0,112,243,.35)}'
+  // Close is a bare ×, with no box around it (2026-10-16, David).
+  + '.lb-x{background:none;color:#262626}.lb-x:hover{color:#000}.lb-x:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.35)}'
   + '.lb-item:hover{background:#f2f2f2}';
 
 const viewport = () => ({ w: window.innerWidth, h: window.innerHeight });
@@ -102,7 +103,7 @@ export default function ImageViewer({ pics, at, onStep, onClose, onCopy }) {
 
   // Close sits 10px in from the top-right corner of what shows of the picture.
   const visRight = Math.min(left + w - scroll.x, view.w), visTop = Math.max(top - scroll.y, 0);
-  const xStyle = { position: 'absolute', left: visRight - 10 - 30, top: visTop + 10, zIndex: 2, width: 30, height: 30, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: '1px solid #e3e3e3', borderRadius: 7, boxShadow: '0 1px 3px rgba(0,0,0,.10)', color: '#262626', cursor: 'pointer', visibility: nat ? 'visible' : 'hidden' };
+  const xStyle = { position: 'absolute', left: visRight - 10 - 30, top: visTop + 10, zIndex: 2, width: 30, height: 30, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', border: 0, borderRadius: 7, cursor: 'pointer', visibility: nat ? 'visible' : 'hidden' };
 
   return (
     <div

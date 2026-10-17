@@ -77,7 +77,7 @@ test('an image shows the grab cursor, not the zoom one; a read-only document kee
   assert.match(mounted(['Notes', IMG, 'End'], { readOnly: true }).html(), /<img data-img="1"[^>]*cursor:zoom-in"/);
 });
 
-test('click, hold and drag: a small copy of the image follows the pointer, a blue line shows where it lands, letting go moves its line there; a click without a move still opens it large', () => {
+test('click, hold and drag: a small copy of the image follows the pointer, a dark grey line shows where it lands, letting go moves its line there; a click without a move still opens it large', () => {
   const m = mounted(['Notes', IMG, 'one', 'two', 'three', '']);
   const clones = [];
   const pic = { dataset: { img: '1' }, style: {}, getBoundingClientRect: () => ({ left: 100, top: 40, width: 600, height: 400 }), cloneNode: () => { const c = { style: {}, removeAttribute() {}, remove() {} }; clones.push(c); return c; } };
@@ -86,14 +86,14 @@ test('click, hold and drag: a small copy of the image follows the pointer, a blu
   assert.equal(m.made.length, 0, 'a twitch is not a drag');
   m.listeners.mousemove({ clientX: 120, clientY: 158 });
   const bar = m.made[0];
-  assert.ok(bar && bar.style.background === '#0070f3' && bar.style.display === 'block', 'the blue line');
+  assert.ok(bar && bar.style.background === '#c9c9c9' && bar.style.display === 'block', 'the light grey line (2026-10-16)');
   assert.equal(bar.style.top, '159px', 'at the top of line 4, the nearest place');
-  assert.equal(pic.style.opacity, '0.3', 'the image left behind, faint');
+  assert.equal(pic.style.filter, 'brightness(0) invert(.93)', 'the image left behind, light grey');
   assert.equal(clones[0].style.width, '220px', 'what follows the pointer is a small copy, at most 220px wide');
   assert.equal(clones[0].style.opacity, '1', 'and solid');
   m.listeners.mouseup();
   assert.deepEqual(m.lines(), ['Notes', 'one', 'two', IMG, 'three', '']);
-  assert.ok(bar.removed && pic.style.opacity === '', 'the line goes, the image is whole again');
+  assert.ok(bar.removed && pic.style.filter === '', 'the line goes, the image is whole again');
   assert.ok(!m.listeners.mousemove, 'the drag is over');
   // The click that follows a drag opens nothing.
   m.editor.imgDragged = true;

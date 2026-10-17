@@ -60,19 +60,15 @@ const BS = (title) => `bart# [brainstorm 2026-10-14T20:13:23Z] ${title}`.trimEnd
 const said = (text) => replyLines([text], { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: false, agent: 'brainstorm' });
 const CONVERSATION = (title) => [BS(title), '@brainstorm', ...said('Looks like you\'ve been working on Bart\'s voice.\n\nWhat did you want to talk through?'), '@brainstorm I want to talk about Bart\'s voice', ...said('What about its voice are you still figuring out?'), ''];
 
-test('topic chip: beside a Brainstorm conversation\'s first question once it has a topic, once; none while unset, for "New conversation", or for another agent\'s', () => {
+test('topic chip: not drawn since 2026-10-16 (David: "just remove this"), with a topic or without; the topic stays the conversation\'s title', () => {
   const ed = mounted(CONVERSATION('Bart\'s voice'));
   const html = ed.html();
-  assert.equal(html.split('data-topic-chip=').length - 1, 1, 'one chip for the conversation');
+  assert.equal(html.includes('data-topic-chip='), false, 'no chip');
+  assert.ok(!/>Topic:</.test(html), 'no "Topic: …" line');
   const first = rowOf(html, 1);
-  assert.match(first, /data-topic-chip="0"/, 'on the first question\'s row, naming the title line');
-  assert.match(first, /data-act="topic" data-row="0"[^>]*aria-haspopup="dialog" aria-expanded="false" aria-label="Topic: Bart&#39;s voice"|data-act="topic" data-row="0"[^>]*aria-label="Topic: Bart(&#39;|')s voice"/);
-  assert.match(first, />Bart(&#39;|')s voice<\/span>/);
-  assert.match(first, /class="t" style="flex:0 1 auto;min-width:0"/, 'the question\'s text no wider than it is, so the chip sits beside it');
-  assert.equal(mounted(CONVERSATION('')).html().includes('data-topic-chip='), false, 'unset: no chip');
-  assert.equal(mounted(CONVERSATION('New conversation')).html().includes('data-topic-chip='), false);
-  const chat = mounted(['bart# [chat 2026-10-14T20:13:23Z] Why', '@chat why?', ...answer('Because.'), '']);
-  assert.equal(chat.html().includes('data-topic-chip='), false, 'Chat\'s conversation has a title, not a topic');
+  assert.match(first, /class="t"[^>]*><span style="color:#0070f3;font-weight:500">@bart<\/span>/, 'a sent @brainstorm line says @bart (2026-10-16)');
+  assert.equal(ed.lines()[0], BS('Bart\'s voice'), 'the title line as it was');
+  assert.equal(mounted(CONVERSATION('')).html().includes('data-topic-chip='), false);
 });
 
 test('topic chip: a click opens the menu (Rename topic, Change topic) and a second click closes it; Escape closes it', () => {
@@ -96,7 +92,6 @@ test('Rename topic writes the title line alone: no question is asked', () => {
   ed.editor.renameTopic(0, 'Bart\'s personality');
   assert.equal(ed.lines()[0], BS('Bart\'s personality'), 'the title, its agent and time kept');
   assert.equal(ed.asks.length, 0);
-  assert.match(rowOf(ed.html(), 1), />Bart(&#39;|')s personality<\/span>/);
 });
 
 test('Change topic renames, then asks Brainstorm to go on from the new topic as a follow-up of the same conversation, its turns kept', () => {
@@ -112,8 +107,7 @@ test('Change topic renames, then asks Brainstorm to go on from the new topic as 
   const q = ls.indexOf('@brainstorm New topic: Onboarding flow');
   assert.ok(q > 1 && ls[q + 1] === `bart~> ${ask.askId}`, 'the document says where the topic changed');
   const after = mounted(ls).html();
-  assert.equal(after.split('data-topic-chip=').length - 1, 1, 'still one chip, on the first question, folded now');
-  assert.match(rowOf(after, 1), /data-folded-row="1"[\s\S]*data-topic-chip="0"[\s\S]*>Onboarding flow<\/span>/);
+  assert.equal(after.includes('data-topic-chip='), false, 'no chip, folded or not (2026-10-16)');
 });
 
 test('Change topic waits for an answer: the menu offers it only once Brainstorm has answered', () => {

@@ -222,6 +222,24 @@ test('saved as the run ends (2026-10-15): every kept file into the library, each
   assert.equal(added.length, 2);
   for (const rel of ['chart.svg', 'notes.md']) assert.ok((await readCreated(ctx, project.id, 'as1', rel)).saved, `${rel} reads Saved`);
   for (const id of added) assert.ok(linked().includes(id), 'linked to the workspace');
+  // Once: the same run's files saved again add nothing; a row taken out later is not brought back by anything but its Save.
+  await saveAllCreated(ctx, project.id, workspace.id, 'as1', made.files, { onAdded: (one) => added.push(one.id) });
+  assert.equal((await rowsNow()).length, before + 2, 'saved once');
+  assert.equal(added.length, 2);
+});
+
+test('a run asked from a note (2026-10-16): its files saved and linked to the workspace the note was open in, without a click', async () => {
+  const note = await projects.createNote(ctx, project.id, { name: 'Asked here', workspaceId: workspace.id, text: '' });
+  const bart = createFakeBart({ readModels: () => DEFAULTS, delayMs: 2 });
+  const before = (await rowsNow()).length;
+  const out = await bart.ask(ctx, project.id, { askId: 'fkn1', ref: { kind: 'note', id: note.id }, workspaceId: workspace.id, text: 'make an html page summarizing the papers', agent: 'create' });
+  assert.equal(out.meta.created.length, 3);
+  assert.equal((await rowsNow()).length, before + 3);
+  for (const file of out.meta.created) {
+    const read = await readCreated(ctx, project.id, 'fkn1', file.path);
+    assert.ok(read.saved, `${file.name} reads Saved`);
+    assert.ok(linked().includes(read.saved.id), `${file.name} linked to the workspace`);
+  }
 });
 
 test('the sentence above the rows: the line on what it is making, the last message too unless it is "Done.", else the request as a sentence', () => {

@@ -882,7 +882,11 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       // `routed`: Bart, the router, handed this line over (2026-10-12, bart/route.cjs): its record's id, whether it read the
       // line as a request to build, and the agent the person picked instead of its pick.
       const routed = routedInput(value.routed);
-      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}), ...(overleaf ? { overleaf } : {}), ...(routed ? { routed } : {}), place: placeOf(value.place, projectId, ref) };
+      // `steer`: a reply sent under a running search (2026-10-16, bart/ask.cjs pausedFor): the search it goes on from, and what
+      // was said; or `level`, its level picked while it ran (the line says which).
+      const steer = agent === 'discover' && value.steer && typeof value.steer === 'object' ? { after: str(value.steer.after, 'search id', 64), words: str(value.steer.words || '', 'reply', 4000).trim(), level: value.steer.level === true } : null;
+      if (steer && (!/^[\w-]+$/.test(steer.after) || !(steer.words || steer.level))) throw new TypeError('steer is invalid');
+      const question = { askId, ref, workspaceId: str(value.workspaceId, 'workspace id', 64), text: str(value.text, 'question', 8000), turns, choice, agent, ...(steer ? { steer } : {}), ...(ref.kind === 'mark' ? { highlight: highlightInput(value.highlight) } : {}), ...(stage ? { stage } : {}), ...(live ? { live } : {}), ...(overleaf ? { overleaf } : {}), ...(routed ? { routed } : {}), place: placeOf(value.place, projectId, ref) };
       if (ref.kind === 'mark') {
         // a web page's mark has no page (MATH-54): its answer goes in the ink's "web" list
         mark = { markId: ref.id, page: ref.source === 'web' ? null : ref.page, rowId: ref.rowId || null, url: ref.rowId ? null : ref.url, ...(ref.source === 'web' ? { source: 'web' } : {}) };

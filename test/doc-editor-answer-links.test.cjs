@@ -145,11 +145,11 @@ test('after a click beside a link in an answer, the link is still drawn as a lin
     const html = await drawnRead(editor, offset);
     assert.ok(html.includes(`<a href="${HREF.replace(/&/g, '&amp;')}" data-link="1"`), 'drawn as a link');
     assert.doesNotMatch(html, /data-open="1">\[Implementation/, 'its source is not shown');
-    assert.match(html, /data-open="0"><a href=/);
+    assert.doesNotMatch(html, /data-src=/, 'no source spans: an answer is read only (2026-10-16)');
   }
 });
 
-test('an answer line reached by the keyboard shows the link\'s source when the caret is in it', async () => {
+test('an answer line reached by the keyboard still draws the link, not its source: an answer is read only (2026-10-16)', async () => {
   const { editor, text, clickAt } = mounted();
   clickAt(text, 182 + 10, 140);
   editor.state.activeLine = READ;
@@ -159,8 +159,8 @@ test('an answer line reached by the keyboard shows the link\'s source when the c
   editor.keyReached({ key: 'ArrowLeft' });
   assert.equal(editor.byMouse, false);
   const html = await drawnRead(editor, linkEnd);
-  assert.match(html, /data-open="1">\[Implementation section, read up to the evaluation\]\(https:\/\/example\.org/, 'the link\'s source, open');
-  assert.doesNotMatch(html, /<a href="https:\/\/example\.org\/paper\.pdf#find/);
+  assert.doesNotMatch(html.replace(/ data-raw="[^"]*"/g, ''), /\[Implementation section, read up to the evaluation\]\(/, 'no source');
+  assert.match(html, /<a href="https:\/\/example\.org\/paper\.pdf#find/, 'the link');
   const typing = mounted(); typing.editor.byMouse = true; typing.editor.keyReached({ key: 'x' });
   assert.equal(typing.editor.byMouse, false, 'a letter typed reaches it too');
 });

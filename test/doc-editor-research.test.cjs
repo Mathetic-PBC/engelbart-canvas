@@ -104,26 +104,38 @@ test('askBoxed asks only a research box\'s pending line; a bare or flags-only @d
   assert.equal(plain.asks.length, 0);
 });
 
-test('drawn: the reply\'s card closes, and the box is a card of its own: "Research · Standard" on top, its own Collapse at the foot', () => {
+test('drawn: the box stands in the card of the reply that asked for it (2026-10-16, David): "Research · Standard" on top, its own Collapse at its top right (2026-10-16, David: the word, not an icon on its foot)', () => {
   const lines = ['bart# [discover 2026-10-13T10:00:00Z] Tutors', '@discover how do tutors notice struggle?', ...answer('Looking for work on noticing struggle.'),
     '@discover --research how do tutors notice struggle?', 'bart> ## Start here', ...answer('A guide.').slice(0, 1).map(() => 'bart> **A paper**'), 'bart>', 'bart> *Discover · Opus · high · 2 s*', ''];
   const m = mounted(lines);
   const html = m.html(), box = lines.indexOf('@discover --research how do tutors notice struggle?');
   const replyFoot = html.slice(html.indexOf('data-foot="1"'));
-  assert.match(replyFoot.slice(0, replyFoot.indexOf('>')), /border-radius:0 0 10px 10px;margin-bottom:8px/, 'the reply\'s card ends above the box');
+  assert.match(replyFoot.slice(0, replyFoot.indexOf('>')), /border-radius:0 0 0 0;margin-bottom:0/, 'the reply\'s card goes on into the box');
   const head = rowOf(html, box);
-  assert.match(head, /^<div[^>]*data-research="\d+"[^>]*border-radius:10px 10px 0 0/, 'the box starts rounded');
+  assert.match(head, /^<div[^>]*data-research="\d+"[^>]*border-radius:0 0 0 0/, 'the box starts no card of its own');
   assert.match(head, /contenteditable="false"/, 'its line is never edited in place');
-  assert.match(head, />Research<\/span><span[^>]*> · <\/span><span[^>]*>Standard<\/span><\/div>$/);
+  assert.match(head, />Research<\/span><span[^>]*> · <\/span><span data-chip="\d+"[^>]*><span class="bart-level" data-act="pick"[^>]*>Standard<span[^>]*><svg[^]*?<\/svg><\/span><\/span><\/span><span[^>]*margin:-4px -6px -4px auto[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="\d+" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg[^]*?<\/svg><\/button><\/span><\/div>/, 'the box collapses alone, from its top right, a chevron');
   assert.ok(!head.replace(/ data-raw="[^"]*"/, '').includes('how do tutors'), 'the first box does not repeat the question above it');
+  assert.match(head, /data-box-status="finished"[^>]*>.*Finished in 2 s · Opus high<\/span><button type="button" class="bart-reply" data-act="restartresearch" data-row="\d+"[^>]*>Run again<\/button>/, 'under it its status row (2026-10-16, David\'s mockup): how long, the model, Run again');
   const foot = html.slice(html.indexOf(`data-foot="${box}"`));
-  assert.match(foot.slice(0, foot.indexOf('</div>')), /data-act="fold" data-turn="\d+" aria-label="Collapse"/, 'the box collapses alone');
+  assert.ok(!foot.slice(0, foot.indexOf('</div>')).includes('data-act="fold"'), 'nothing to collapse on the box\'s foot');
   assert.ok(!replyFoot.slice(0, replyFoot.indexOf('</div>')).includes('data-act="fold"'), 'the reply\'s Collapse is not on its foot (2026-10-15)');
-  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button class="bart-ic" data-act="foldall" data-turn="1" aria-label="Collapse"/, 'but in its question\'s corner, collapsing the conversation (2026-10-15)');
+  assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg/, 'but in its question\'s corner, collapsing the conversation (2026-10-15)');
   // Collapsed, the box keeps its head and foot, on no grey.
   m.click('fold', { turn: String(box) });
   assert.match(rowOf(m.html(), box), /background:none/);
+  assert.ok(!rowOf(m.html(), box).includes('data-box-status'), 'folded: no status row');
+  assert.match(rowOf(m.html(), box), /data-act="fold"[^>]*aria-expanded="false" aria-label="Expand" title="Expand"><svg[^>]*><path d="m9 18 6-6-6-6"><\/path><\/svg><\/button>/, 'Expand where Collapse was: the chevron points right');
   assert.ok(!m.html().replace(/ data-raw="[^"]*"/g, '').includes('A paper'));
+});
+
+test('a research box that is its titled conversation\'s first exchange: its Collapse collapses the conversation, named Collapse conversation, the single chevron (2026-10-16, David)', () => {
+  const lines = ['bart# [discover 2026-10-13T10:00:00Z] Tutors', '@discover --research how do tutors notice struggle?', 'bart> ## Start here', 'bart> **A paper**', 'bart>', 'bart> *Discover · Opus · high · 2 s*', ''];
+  const m = mounted(lines);
+  assert.match(rowOf(m.html(), 1), /data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg width="16"[^>]*stroke-width="1.75"[^>]*><path d="m6 9 6 6 6-6"><\/path><\/svg>/);
+  m.click('fold', { turn: '1' });
+  assert.match(m.lines()[0], /^bart#\+ /, 'the conversation collapses');
+  assert.deepEqual(m.lines().slice(1), lines.slice(1), 'the box\'s lines as they were');
 });
 
 test('a Deep box waits five seconds, "Searching in 5 s" with Cancel; Cancel takes the box out and nothing is searched', () => {
@@ -143,6 +155,13 @@ test('a Deep box waits five seconds, "Searching in 5 s" with Cancel; Cancel take
   w.editor.askBoxed('box-1');
   for (let k = 0; k < 5; k++) w.tick();
   assert.deepEqual([w.asks.length, w.asks[0].agent, w.asks[0].research], [1, 'discover', true]);
+  // The person goes to another workspace while it counts (2026-10-16): it is still asked, of the document it is in.
+  const gone = [], away = [];
+  const o = mounted(doc, { docTextOf: (key) => (key === 'k' ? o.props.text : 'another workspace'), onRouteGone: (id) => gone.push(id) });
+  o.editor.askBoxed('box-1');
+  o.editor.props = { ...o.props, docKey: 'other', text: 'another workspace', onAsk: (a) => away.push(a) };
+  for (let k = 0; k < 5; k++) o.tick();
+  assert.deepEqual([o.asks.length, o.asks[0] && o.asks[0].askId, away.length, gone.length], [1, 'box-1', 0, 0]);
   // A standard one is asked at once.
   const now = mounted(['@discover tutors', ...answer('Looking.'), '@discover --research tutors', 'bart~> box-2', '']);
   now.editor.askBoxed('box-2');
@@ -201,14 +220,10 @@ test('Discover\'s card (2026-10-14, the mock): bordered rows with a radio, a pic
   assert.match(html, /<span class="dv-label">Concise replies<\/span><span class="dv-why">front-loaded answers<\/span>/, 'the reason under the label');
   assert.ok(html.includes('placeholder="Or say it in your own words…"') && html.includes('class="dv-submit"'), 'its own field and Submit');
   assert.ok(!html.includes('data-followup='), 'no @bart field under the card');
-  // Its reply opened (the answer just came in, 2026-10-15): still none under it; the field to focus is the card's own.
-  m.editor.replyOpen.add(0);
-  assert.ok(!m.html().includes('data-followup='), 'none under it with the reply opened');
-  m.editor.replyOpen.delete(0);
   m.click('cardopt', { turn: '0', opt: '1' });
   assert.equal(m.asks.length, 0, 'a pick is not sent');
   html = m.html();
-  assert.match(html, /class="dv-opt"[^>]*aria-checked="true"><span aria-hidden="true" class="dv-radio"><\/span><span[^>]*><span class="dv-label">Listening/);
+  assert.match(html, /class="dv-opt"[^>]*aria-checked="true"><span aria-hidden="true" class="dv-check"><svg[^>]*><path[^>]*><\/path><\/svg><\/span><span[^>]*><span class="dv-label">Listening/);
   assert.match(html, /class="dv-submit"[^>]*style="background:#0070f3/, 'Submit blue once something is picked');
   m.click('sendfollow', { thread: '0' });
   assert.equal(m.asks.length, 1);
@@ -216,7 +231,7 @@ test('Discover\'s card (2026-10-14, the mock): bordered rows with a radio, a pic
   // Answered, it is drawn still, the pick in blue, no field: a Discover card never collapses by itself (2026-10-15, David).
   const done = m.html();
   assert.ok(!done.includes('class="dv-submit"'));
-  assert.match(done, /<button type="button" class="dv-opt" disabled role="radio" aria-checked="true">/);
+  assert.match(done, /<button type="button" class="dv-opt" disabled role="checkbox" aria-checked="true">/);
   assert.ok(!m.lines().some((line) => line.startsWith('bart+>')), 'nothing collapsed');
 });
 
@@ -295,13 +310,13 @@ test('an @discover run\'s steps, opened, are drawn by part of the trace (2026-10
   const m2 = mounted(['Notes', '@discover q', 'bart~> run-2'], { asks: { 'run-2': { ...ask, trace: between } } });
   assert.match(rowOf(m2.html(), 2), /Found 9 newer papers that cite “X”/);
   const m3 = mounted(['Notes', '@discover q', 'bart~> run-3'], { asks: { 'run-3': { ...ask, activity: 'Thinking', trace: between } } });
-  assert.match(rowOf(m3.html(), 2), /class="t"[^>]*>Thinking/);
+  assert.match(rowOf(m3.html(), 2), /class="t"[^>]*><span class="eb-wave"[^>]*>Thinking/); // at work: the wave, no dot (2026-10-16)
   // A new step starts over.
   assert.equal(askProgressed(ask, { step: 2, name: 'Fable', effort: 'xhigh' }).trace, null);
 });
 
 /* ---------------------------------------------------------------------------- Refine (2026-10-15, David) */
-// The reply that said what Discover will look for has Refine where Reply stands. It opens the conversation's field under
+// The reply that said what Discover will look for had Refine where Reply stood (neither is drawn now). It opens the conversation's field under
 // that reply; what is sent is `@discover --refine <words>`: a running search stops, the runs before stay collapsed, and
 // the direction Discover settles from it waits in a research box until Start research or Restart research.
 const BRIEF = 'when shorter replies help understanding and when they leave too much out';
@@ -318,32 +333,49 @@ const RUNNING = ['bart~> run1'];
 const DONE = answer('## Start here\n\n**[A paper](https://example.org/a)** · A. Author · 2024\n**Read:** abstract only\n**Why:** a measurement.');
 const footOf = (html, q) => { const at = html.indexOf(`data-foot="${q}"`); return at < 0 ? '' : html.slice(at, html.indexOf('</div>', html.indexOf('data-act="dropturn"', at))); };
 
-test('Refine sits where Reply does, on the reply that said what Discover will look for, alone: running or done', () => {
-  for (const box of [RUNNING, DONE]) {
-    const m = mounted(conversation(box)), html = m.html(), intent = m.lines().indexOf('@discover when being brief starts hurting understanding');
-    assert.equal((html.match(/data-act="refine"/g) || []).length, 1, 'one Refine');
-    assert.match(footOf(html, intent), /<button type="button" class="bart-reply" data-act="refine" data-thread="0"[^>]*>Refine<\/button>/, 'on that reply\'s button row, as Reply is drawn');
-    assert.ok(!footOf(html, 0).includes('data-act="refine"'), 'not on the question before it');
+test('no Refine button (2026-10-16, David\'s mockup: the plan is adjusted by replying): running or done, the reply line under the box (running too since 2026-10-16, David)', () => {
+  for (const [box, extra] of [[RUNNING, { asks: { run1: { agent: 'discover' } } }], [DONE, {}]]) {
+    const m = mounted(conversation(box), extra), html = m.html();
+    assert.ok(!html.includes('data-act="refine"'), 'no Refine');
+    assert.ok(html.includes('data-followup="0"'), 'its reply line');
+    assert.ok(html.indexOf('data-research=') < html.indexOf('data-followup="0"'), 'under the box');
   }
 });
 
-test('opening Refine stops nothing; its field opens under that reply, the conversation\'s only field', () => {
-  const m = mounted(conversation(RUNNING));
-  m.click('refine', { thread: '0' });
-  const html = m.html();
-  assert.deepEqual(m.stopped, [], 'nothing cancelled');
-  assert.ok(m.lines().includes('bart~> run1'), 'the search still runs');
-  assert.equal((html.match(/data-followup="0"/g) || []).length, 1, 'one field');
-  assert.match(html, /placeholder="Correct or develop the direction…"/);
-  assert.ok(html.indexOf('data-followup="0"') < html.indexOf('data-research='), 'under the reply, above the research box');
-  assert.ok(!html.includes('data-act="refine"'), 'Refine itself gives way to its field');
-  m.editor.closeReply(0);
-  assert.ok(m.html().includes('data-act="refine"'), 'Escape on an empty field puts Refine back');
+test('a reply under a running search adjusts it rather than starting it over (2026-10-16, David): its words go on the box\'s line, drawn under its head, and the run goes on from the stopped one', () => {
+  const m = mounted(conversation(RUNNING), { asks: { run1: { agent: 'discover' } } });
+  m.editor.followText.set(0, 'only studies with  people');
+  m.editor.sendFollow(0);
+  const ls = m.lines(), box = ls.indexOf(`@discover --research ${BRIEF} --steer only studies with people`);
+  assert.ok(box > 0, 'the words on the box\'s line, on one line');
+  assert.match(ls[box + 1], /^bart~> /, 'a pending line goes on under it');
+  assert.notEqual(ls[box + 1], 'bart~> run1', 'the run that goes on, not the stopped one');
+  assert.equal(m.asks.length, 1, 'asked at once, with no Deep countdown');
+  assert.deepEqual([m.asks[0].agent, m.asks[0].research, m.asks[0].steer], ['discover', true, { after: 'run1', words: 'only studies with people' }]);
+  assert.equal(m.asks[0].askId, ls[box + 1].slice(7));
+  assert.ok(!ls.some((l) => /^@discover --refine/.test(l)), 'no Refine turn: the search is not started over');
+  m.props.asks = { [m.asks[0].askId]: { agent: 'discover' } };
+  assert.match(rowOf(m.html(), box), /data-steer[^>]*><span[^>]*>Added:<\/span><span[^>]*>only studies with people<\/span>/, 'what was added, under the head');
+  assert.ok(!/· [^<]*--steer/.test(rowOf(m.html(), box)), 'not as flags');
+});
+
+test('under a box not started, or one the app closed on, the reply line adjusts the plan: it is sent as a Refine (2026-10-16, David\'s mockup)', () => {
+  for (const box of [[], ['bart~> gone-1']]) {
+    const m = mounted(conversation(box)), html = m.html();
+    assert.match(html, /data-followup="0"/, 'the reply line, under the box');
+    m.editor.followText.set(0, 'only studies with people');
+    m.editor.sendFollow(0);
+    const ls = m.lines();
+    assert.ok(!ls.includes(`@discover --research ${BRIEF}`) && !ls.includes('bart~> gone-1'), 'the box it adjusts goes');
+    assert.ok(ls.includes('@discover --refine only studies with people'));
+    assert.deepEqual([m.asks[0].agent, m.asks[0].refine], ['discover', true]);
+    assert.deepEqual(m.stopped, [], 'a run the app closed on is not stopped: there is none');
+  }
 });
 
 test('a refinement sent while the search runs stops it, takes its empty box out (2026-10-15, David), and asks Discover; output the stopped run still sends finds no place', async () => {
   const { placeAnswer } = await doc();
-  const m = mounted(conversation(RUNNING));
+  const m = mounted(conversation(RUNNING), { asks: { run1: { agent: 'discover' } } });
   m.click('refine', { thread: '0' });
   m.editor.followText.set(0, 'Focus on what makes replies feel conversational, rather than their length');
   m.editor.sendFollow(0);
@@ -361,7 +393,7 @@ test('a refinement sent while the search runs stops it, takes its empty box out 
   assert.ok(!m.props.text.includes('bart> late'));
 });
 
-test('the refined direction waits in its box with Restart research; Refine moves to the reply that said it; the restart runs at the same depth', async () => {
+test('the refined direction waits in its box, Not started with Start research on its status row and no Refine (2026-10-16, David\'s mockup); it runs at the same depth', async () => {
   const { placeAnswer, researchLine } = await doc();
   const m = mounted(conversation(DONE));
   m.click('refine', { thread: '0' });
@@ -374,10 +406,11 @@ test('the refined direction waits in its box with Restart research; Refine moves
   m.props.text = placeAnswer(m.props.text, id, [...answer("I'll now look for research on what makes replies feel conversational."), researchLine('what makes replies feel conversational')]);
   let html = m.html();
   const waiting = m.lines().indexOf('@discover --research what makes replies feel conversational');
-  assert.match(rowOf(html, waiting), /data-act="startresearch" data-row="\d+"[^>]*>Restart research<\/button>/, 'a run came before: Restart');
+  assert.match(rowOf(html, waiting), /data-box-status="ready"[^>]*>.*>Not started · [^<]+<\/span><button type="button" class="bart-go" data-act="startresearch" data-row="\d+"[^>]*><svg[^]*?<\/svg>Start research<\/button>/, 'Not started, then Start research');
   assert.match(rowOf(html, waiting), /Research<\/span>.*Deep/, 'at the depth the conversation runs at');
-  assert.equal((html.match(/data-act="refine"/g) || []).length, 1);
-  assert.match(footOf(html, m.lines().indexOf('@discover --refine Focus on what makes replies feel conversational')), /data-act="refine"/, 'Refine on the reply that said the new direction');
+  assert.ok(!html.includes('data-act="refine"'), 'no Refine: replying adjusts the plan');
+  assert.doesNotMatch(footOf(html, m.lines().indexOf('@discover --refine Focus on what makes replies feel conversational')), /data-act="refine"/, 'none on the reply above the box');
+  assert.match(rowOf(html, waiting), /class="bart-level" data-act="pick" data-row="\d+"[^>]*>Deep/, 'the depth, a picker while the box waits');
   assert.equal(m.asks.length, 1, 'nothing searched until it is started');
   // Restart: the box is asked as any research box, Deep's five seconds first.
   m.click('startresearch', { row: String(waiting) });
@@ -392,7 +425,7 @@ test('the refined direction waits in its box with Restart research; Refine moves
 
 test('a waiting box with no run before it says Start research; reloaded, the direction, its button and the runs before are all still there', async () => {
   const fresh = mounted(['@discover concise replies', ...answer("I'll look for research on concise replies."), '@discover --research concise replies', '']);
-  assert.match(fresh.html(), /data-act="startresearch"[^>]*>Start research<\/button>/);
+  assert.match(fresh.html(), /data-act="startresearch"[^>]*><svg[^]*?<\/svg>Start research<\/button>/);
   // The document a Refine left, opened again.
   const m = mounted(conversation(DONE));
   m.click('refine', { thread: '0' }); m.editor.followText.set(0, 'only studies with people'); m.editor.sendFollow(0);
@@ -401,7 +434,7 @@ test('a waiting box with no run before it says Start research; reloaded, the dir
   const saved = placeAnswer(m.props.text, id, [...answer("I'll now look for studies with people."), researchLine(`${BRIEF}, in studies with people`)]);
   const again = mounted(saved.split('\n'));
   const html = again.html();
-  assert.match(html, /data-act="startresearch"[^>]*>Restart research<\/button>/);
+  assert.match(html, /data-act="startresearch"[^>]*><svg[^]*?<\/svg>Start research<\/button>/);
   assert.ok(saved.includes(`@discover --research ${BRIEF}, in studies with people`), 'the direction, in the file');
   assert.ok(saved.split('\n').some((line) => /^bart> ## Start here/.test(line)), 'the earlier guide, open, in the file');
 });
@@ -423,4 +456,119 @@ test('a second refinement replaces a direction still waiting; an answer to Disco
   m.click('refine', { thread: '0' }); m.editor.followText.set(0, 'only in voice assistants'); m.editor.sendFollow(0);
   assert.ok(!m.lines().includes('@discover --research turn-taking in conversational replies'), 'the waiting direction is replaced');
   assert.equal(m.asks[2].refine, true);
+});
+
+/* ------------------------------------------------- The research card, every state (2026-10-16, David's mockup) */
+// The box's two rows: "Research · Standard" on top, then its status row, the state and its one action on the right.
+const STATE_DOCS = {
+  ready: [],
+  running: ['bart~> run1'],
+  interrupted: ['bart~> gone-1'],
+  stopped: ['bart> Stopped.'],
+  failed: ['bart> **No answer.** The connection to the model dropped.'],
+  finished: DONE,
+};
+const stateOf = (name) => mounted(conversation(STATE_DOCS[name]), name === 'running' ? { asks: { run1: { agent: 'discover', activity: 'Searching' } } } : {});
+const boxAt = (m) => m.lines().indexOf(`@discover --research ${BRIEF}`);
+
+test('each state\'s status row: what it says and its action; running, the pending row is the status row', () => {
+  const want = {
+    ready: [/>Not started · [^<]+</, /class="bart-go" data-act="startresearch"[^>]*><svg[^]*?<\/svg>Start research</],
+    stopped: [/>Stopped · [^<]+</, /class="bart-go" data-act="restartresearch"[^>]*><svg[^]*?<\/svg>Restart</],
+    interrupted: [/>Interrupted: the app closed before it finished</, /data-act="restartresearch"[^>]*><svg[^]*?<\/svg>Restart</],
+    failed: [/>Interrupted: The connection to the model dropped\.</, /data-act="restartresearch"[^>]*><svg[^]*?<\/svg>Restart</],
+    finished: [/>Finished in 3 s · Sonnet high</, /class="bart-reply" data-act="restartresearch"[^>]*>Run again</],
+  };
+  for (const [name, [said, action]] of Object.entries(want)) {
+    const m = stateOf(name), row = rowOf(m.html(), boxAt(m));
+    assert.match(row, new RegExp(`data-box-state="${name}"`), name);
+    assert.match(row, said, `${name}: what it says`);
+    assert.match(row, action, `${name}: its action`);
+    assert.match(row, /class="bart-level" data-act="pick"/, `${name}: the level can be picked`);
+  }
+  const running = stateOf('running'), html = running.html(), row = rowOf(html, boxAt(running));
+  assert.ok(!row.includes('data-box-status'), 'running: no status row of its own');
+  assert.match(row, /class="bart-level" data-act="pick"/, 'running: the level can be picked too (2026-10-16, David): the search goes on at it');
+  assert.match(rowOf(html, boxAt(running) + 1), /data-pending="run1"[\s\S]*data-act="stopask"[^>]*>Stop</, 'its pending row, with Stop');
+  assert.ok(html.includes('data-followup="0"'), 'a reply line while it runs too (2026-10-16, David): it adjusts the search (steerResearch)');
+});
+
+test('cut short, what the run left is not drawn: the status row says it; the reply line is under the box', () => {
+  for (const name of ['interrupted', 'stopped', 'failed']) {
+    const m = stateOf(name), html = m.html(), shown = html.replace(/ data-raw="[^"]*"/g, '');
+    assert.ok(!/>Stopped\.<|No answer came back|>Hide</.test(shown), `${name}: not the line it left`);
+    assert.ok(!html.includes(`data-foot="${boxAt(m)}"`), `${name}: no button row of its own`);
+    assert.match(html, /data-followup="0"[^>]*border-radius:0 0 10px 10px/, `${name}: the reply line closes the card`);
+  }
+});
+
+test('Restart and Run again run the plan again from the beginning: what the run wrote goes, a pending line takes its place, and it is searched at the level its line names', () => {
+  for (const name of ['interrupted', 'stopped', 'failed', 'finished']) {
+    const m = stateOf(name), box = boxAt(m);
+    m.click('restartresearch', { row: String(box) });
+    const ls = m.lines();
+    assert.equal(ls[box], `@discover --research ${BRIEF}`, `${name}: the box's line stays`);
+    assert.match(ls[box + 1], /^bart~> /, `${name}: its pending line`);
+    assert.ok(!ls.some((line) => /Stopped\.|No answer|Start here|gone-1/.test(line)), `${name}: what it wrote is gone`);
+    assert.deepEqual(ls.slice(box + 2), [''], `${name}: nothing else moved`);
+    const held = m.editor.waits.get(ls[box + 1].slice(7));
+    assert.ok(held && held.ask.research && held.ask.text === `--research ${BRIEF}`, `${name}: searched as the box is (Deep, counting down)`);
+  }
+  const running = stateOf('running');
+  running.click('restartresearch', { row: String(boxAt(running)) });
+  assert.ok(running.lines().includes('bart~> run1') && !running.editor.waits.size, 'running: nothing happens');
+});
+
+test('a box not running takes a level from its menu, written into its line, for its next Start, Restart or Run again', () => {
+  for (const name of ['ready', 'stopped', 'finished']) {
+    const m = stateOf(name), box = boxAt(m);
+    m.editor.state.picker = { kind: 'line', i: box };
+    m.editor.pickLevel({ mode: 'standard', provider: MODELS.provider });
+    assert.match(m.lines()[box], /--standard/, `${name}: the level in its line`);
+    assert.equal(m.asks.length, 0, `${name}: nothing asked`);
+  }
+});
+
+test('a level picked on a running box (2026-10-16, David): the search goes on at it, as a reply under it does, its level in its line', () => {
+  const m = mounted(conversation(RUNNING), { asks: { run1: { agent: 'discover' } } }), box = boxAt(m);
+  assert.match(rowOf(m.html(), box), /class="bart-level" data-act="pick"/, 'its level opens the menu while it runs');
+  m.editor.state.picker = { kind: 'line', i: box };
+  m.editor.pickLevel({ mode: 'deep', provider: MODELS.provider });
+  assert.deepEqual([m.lines()[box + 1], m.asks.length], ['bart~> run1', 0], 'the level it runs at (its conversation\'s Deep): nothing changes');
+  m.editor.state.picker = { kind: 'line', i: box };
+  m.editor.pickLevel({ mode: 'quick', provider: MODELS.provider });
+  const ls = m.lines();
+  assert.equal(ls[box], `@discover --research ${BRIEF} --quick`);
+  assert.match(ls[box + 1], /^bart~> /); assert.notEqual(ls[box + 1], 'bart~> run1', 'the run that goes on');
+  assert.equal(m.asks.length, 1);
+  assert.deepEqual([m.asks[0].askId, m.asks[0].research, m.asks[0].steer], [ls[box + 1].slice(7), true, { after: 'run1', level: true }]);
+  assert.equal(m.editor.state.picker, null, 'the menu closes');
+});
+
+test('a research box is a card of its own inside the reply\'s card (2026-10-16, David): running, its running row closes it', () => {
+  const ready = mounted(conversation([]));
+  assert.match(rowOf(ready.html(), boxAt(ready)), /data-box-card style="[^"]*background:#fff;border:1px solid #ebebeb;border-radius:10px"/);
+  const m = mounted(conversation(RUNNING), { asks: { run1: { agent: 'discover' } } }), html = m.html();
+  assert.match(rowOf(html, boxAt(m)), /data-box-card style="[^"]*border-bottom:0;border-radius:10px 10px 0 0"/, 'open at its foot');
+  assert.match(html, /data-pending="run1"[^>]*>\s*<div data-box-card-end style="[^"]*border-top:0;border-radius:0 0 10px 10px"/, 'the running row its foot');
+});
+
+test('a box drawn before its run is known is drawn again whole when it is (patchPending declines): not left saying it was interrupted', () => {
+  const m = mounted(conversation(['bart~> run1'])), box = boxAt(m);
+  assert.match(rowOf(m.html(), box), /data-box-state="interrupted"/, 'no run known yet');
+  const drawn = { dataset: { research: String(box), boxState: 'interrupted' } };
+  m.editor.editorEl = () => ({ querySelectorAll: (sel) => (sel === '[data-box-state]' ? [drawn] : []) });
+  m.editor.lastKey = m.editor.key();
+  m.props.asks = { run1: { agent: 'discover', activity: 'Searching' } };
+  assert.equal(DocEditor.prototype.patchPending.call(m.editor), false, 'its state changed: the editor is drawn again');
+  drawn.dataset.boxState = 'running';
+  assert.equal(DocEditor.prototype.patchPending.call(m.editor), true, 'as drawn: only its pending rows are patched');
+  assert.match(rowOf(m.html(), box), /data-box-state="running"/);
+});
+
+test('interrupted and failed boxes have no dot before what they say', () => {
+  for (const name of ['interrupted', 'failed']) {
+    const m = stateOf(name), row = rowOf(m.html(), boxAt(m));
+    assert.ok(!/border-radius:50%;background:/.test(row.split('data-box-status')[1] || ''), name);
+  }
 });

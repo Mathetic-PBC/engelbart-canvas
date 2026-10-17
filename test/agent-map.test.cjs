@@ -403,6 +403,36 @@ function fakeElectron() {
   return { BrowserWindow, made };
 }
 
+test('a reply under a running search (2026-10-16, David): that search stops and the run that goes on resumes its session, told only what was added', async () => {
+  const SESSION = '5b0c2f1e-3a4d-4e6f-8a9b-0c1d2e3f4a5b';
+  const calls = [];
+  const run = (shell, args, options, callback) => {
+    const command = args[args.length - 1], stdout = new EventEmitter();
+    calls.push({ command, env: options.env, input: fs.readFileSync(options.env.ENGELBART_BART_INPUT, 'utf8') });
+    if (calls.length === 1) {
+      // The search: it says its session, then works until it is stopped.
+      setImmediate(() => stdout.emit('data', Buffer.from(JSON.stringify({ type: 'system', subtype: 'init', session_id: SESSION }) + '\n')));
+      options.signal.addEventListener('abort', () => callback(Object.assign(new Error('aborted'), { code: 'ABORT_ERR' }), ''));
+    } else {
+      setImmediate(() => { const out = JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: '## Start here\n\nA guide.' }) + '\n'; stdout.emit('data', Buffer.from(out)); callback(null, out); });
+    }
+    return { stdout };
+  };
+  const bart = createBart({ readModels: () => CLAUDE, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs-steer'), run });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const turns = [{ question: 'tutors', answer: 'I will look for how tutors notice struggle.' }];
+  const first = bart.ask(ctx, project.id, { askId: 's1', ref, workspaceId: workspace.id, text: '--research how tutors notice struggle', turns, agent: 'discover' }).then(() => null, (error) => error);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  const out = await bart.ask(ctx, project.id, { askId: 's2', ref, workspaceId: workspace.id, text: '--research how tutors notice struggle --steer only studies with people', turns, agent: 'discover', steer: { after: 's1', words: 'only studies with people' } });
+  assert.equal((await first).kind, 'stopped', 'the search it went on from was stopped');
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].command, /--resume "\$ENGELBART_BART_SESSION"/);
+  assert.equal(calls[1].env.ENGELBART_BART_SESSION, SESSION, 'in the stopped search\'s session');
+  assert.match(calls[1].input, /While you were searching, the person added this:\n\nonly studies with people\n\n[\s\S]*do not start the search over/);
+  assert.ok(!/<engelbart>|<mode>/.test(calls[1].input), 'told only what was added, not the search over again');
+  assert.equal(out.lines[0], 'bart> ## Start here');
+});
+
 test('agentMap:open opens the Viewer with test mode off or on, titled Agent Viewer, and focuses it after; a copy without test mode opens none', async (t) => {
   const store = createStore({ homeDir: tmp('open'), testMode: true });
   t.after(() => store.close());
@@ -540,3 +570,4 @@ test('the Design tab draws one agent at a time, picked from a row of tabs, each 
   assert.match(pages['Run step'], /Turns<\/div><div[^>]*>at most \d+/);
   for (const name of NAMES) assert.ok(!/Planned, not built yet/.test(pages[name]), `${name} is built`);
 });
+

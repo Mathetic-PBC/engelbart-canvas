@@ -330,3 +330,24 @@ test('a guide\'s section on a web page (2026-10-15): its words found as find wou
   assert.equal(sectionEnd([{ at: 0, level: 2 }], 10), -1, 'none after it: its paragraph');
   assert.equal(sectionEnd([{ at: 0, level: 2 }, { at: SECTION_MAX + 20, level: 2 }], 10), -1, 'too far: its paragraph');
 });
+
+test('a guide\'s section on a web page (2026-10-16, Hudson: a Read link into an HTML file that did not scroll): every place its words are, curly quotes and dashes as straight ones, and across nodes with no space between them', () => {
+  const { matchWords, findWords, SECTION_WAIT } = require('../src/main/browser/page-preload.cjs');
+  assert.ok(SECTION_WAIT >= 2000 && SECTION_WAIT <= 4000, 'about three seconds for words drawn after load');
+  // a hidden copy first, the one shown later: both found, in the page's order, for the preload to take the drawn one
+  const twice = 'Menu The target passage. Intro. The target passage lives far below.';
+  assert.deepEqual(matchWords(twice, 'the TARGET passage').map((m) => m.start), [5, twice.lastIndexOf('The target')]);
+  // typography: one character for one, so the offsets are the text's own
+  const curly = 'Intro. It’s the target passage — far below “the fold”.';
+  const got = matchWords(curly, 'It\'s the target passage - far below "the fold"');
+  assert.equal(got.length, 1);
+  assert.equal(curly.slice(got[0].start, got[0].end), 'It’s the target passage — far below “the fold”');
+  // a table's cells run together in the text map: matched with no regard to whitespace, only when nothing else matches
+  const cells = 'Intro. The target passagelives far below. Next.';
+  const run = matchWords(cells, 'The target passage lives far below');
+  assert.equal(cells.slice(run[0].start, run[0].end), 'The target passagelives far below');
+  assert.deepEqual(matchWords('a b and ab', 'a b').map((m) => m.start), [0], 'an exact match keeps whitespace');
+  assert.deepEqual(matchWords(cells, 'not on the page'), []);
+  assert.deepEqual(matchWords(cells, ' \n '), []);
+  assert.equal(findWords(curly, 'the target passage - far'), curly.indexOf('the target'));
+});

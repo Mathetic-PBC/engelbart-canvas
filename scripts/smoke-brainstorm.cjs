@@ -2,8 +2,9 @@
 
 // npm run build && npx electron scripts/smoke-brainstorm.cjs
 // Runs the real app, hidden, against disposable project/user data and the fake agents (src/main/bart/ask.cjs fakeThink),
-// and holds an @brainstorm conversation by typing (2026-10-14: prose, as Chat's): its answer is drawn as an answer, with
-// no card, Skip or Wrap up; Reply opens the follow-up field, and what is typed there goes through Bart and stays with
+// and holds an @brainstorm conversation by typing (2026-10-14: prose, as Chat's). It opens with the card (later
+// 2026-10-16: always, its options following the line), and a pick is answered in prose, drawn as an answer, with no card,
+// Skip or Wrap up; Reply opens the follow-up field, and what is typed there goes through Bart and stays with
 // Brainstorm, in the same thread and session, turn after turn with no count that ends it; a wrap-up gets a summary that
 // asks nothing, and the conversation goes on after it.
 // ENGELBART_BRAINSTORM_SHOTS=<dir> saves pictures of the window.
@@ -71,24 +72,31 @@ app.whenReady().then(async () => {
     await until(() => js(wc, `!!document.querySelector(${JSON.stringify(ED)})`).catch(() => false), 'the workspace document');
     await pause(400);
 
-    /* ------------------------------------------------ the first turn: prose, drawn as an answer */
+    /* ------------------------------------------------ the first turn: the opening card; a pick, then prose drawn as an answer */
     await press(wc, `${ED} [data-line="0"] .t`);
     await key(wc, 'A', { modifiers: ['meta'] });
     await key(wc, 'Backspace');
     await until(async () => (await rows(wc)).join('\n').trim() === '', 'an empty document');
     await typeKeys(wc, 'Retries loop when the lock frees.\n@brainstorm retries\n');
     await settled(wc);
-    const first = await lastAnswer(wc);
-    assert.match(first.words, /^FAKE BRAINSTORM on "retries" \(no earlier turns\)\./, first.words);
+    const opening = await until(async () => { const a = await lastAnswer(wc); return a.live ? a : null; }, 'the opening card');
+    assert.ok(opening.live, 'a card, though the line named its topic');
+    await shot(wc, '0-card');
+    await press(wc, `${ED} [data-act="cardopt"][data-opt="0"]`);
+    await press(wc, `${ED} .dv-submit`);
+    await settled(wc);
+    const first = await until(async () => { const a = await lastAnswer(wc); return /^FAKE BRAINSTORM /.test(a.words) ? a : null; }, 'the answer to the pick');
+    assert.match(first.words, /^FAKE BRAINSTORM on "picked "A fake first angle""/, first.words);
     assert.deepEqual([first.live, first.skip, first.wrap, first.reply], [false, false, false, true], 'no card, Skip or Wrap up; Reply on its foot');
     assert.match(first.foot, /Brainstorm/);
     await shot(wc, '1-first');
-    console.log('PASS the first turn is prose, drawn as an answer, with Reply and no card controls');
+    console.log('PASS the first turn is the card; the pick is answered in prose, drawn as an answer, with Reply and no card controls');
 
     /* ------------------------------------------------ follow-ups: Reply, type, Enter; Bart keeps them with Brainstorm */
     const SAID = ['Not the backoff.', 'No, I mean the lock, not the timer.', 'Actually, forget retries: the logging worries me.', 'Who writes the logs.', 'Mostly one worker.', 'So that is the real problem.', 'Let us wrap up.', 'One more thing: it only happens at night.'];
     for (const [n, said] of SAID.entries()) {
-      await press(wc, `${ED} [data-act="reply"]`);
+      // A conversation opened by the card keeps its follow-up field open after an answer (as Discover's): Reply only when shut.
+      if (!(await js(wc, `!!document.querySelector('${ED} [data-follow-input]')`))) await press(wc, `${ED} [data-act="reply"]`);
       await press(wc, `${ED} [data-follow-input]`);
       await typeKeys(wc, `${said}\n`);
       await settled(wc);
@@ -104,7 +112,7 @@ app.whenReady().then(async () => {
       console.log(`PASS turn ${n + 2}: ${JSON.stringify(got.words.split('\n')[0])}`);
     }
     const ls = await rows(wc);
-    assert.equal(ls.filter((l) => /^@brainstorm /.test(l)).length, 1, 'one @brainstorm line opened it');
+    assert.deepEqual(ls.filter((l) => /^@brainstorm /.test(l)), ['@brainstorm retries', '@brainstorm picked "A fake first angle"'], 'one @brainstorm line opened it, and the card\'s answer');
     assert.equal(ls.filter((l) => /^@bart /.test(l)).length, SAID.length, 'each follow-up a line of its own, routed through Bart');
     await shot(wc, '3-after');
     console.log(`PASS ${SAID.length + 1} turns in one conversation, the wrap-up and a turn after it`);

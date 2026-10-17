@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
-import { BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, askStarted, askProgressed } from '../workspace/DocEditor.jsx';
+import { BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, askStarted, askProgressed, madeToOpen } from '../workspace/DocEditor.jsx';
 import DocPane from '../workspace/DocPane.jsx';
 import GettingStarted from '../workspace/GettingStarted.jsx';
 import { EMPTY_HINT, discoverPapers, stepsHere } from '../model/getting-started.js';
@@ -25,7 +25,7 @@ import { connectInbox, dockLine } from '../model/connect.js';
 import RecentPages from '../workspace/RecentPages.jsx';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper } from '../model/guide.js';
-import { buildLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, researchLine } from '../model/doc.js';
+import { buildLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, madeMentionOf, researchLine, REPLY_RE } from '../model/doc.js';
 import { cardOfAnswer, questionOf } from '../../main/bart/card.cjs';
 import { fallbackAgent } from '../model/route.js';
 // An ask's id, as the editor makes them (DocEditor newAskId): a research box this window puts in (askBart) takes one.
@@ -80,6 +80,8 @@ const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
 // library folder (MATH-22), which is no row of its own, and `@[Title](zotero:<key>)` a Zotero item (MATH-65), no row either.
 const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:|\(lib:[\w-]+:|\(zotero:)/g;
 const SAVE_DELAY = 400;
+// The files a run's answer stands for: its `bart> @[name](made:<askId>/<path>)` rows (main/bart/create.cjs), this run's only.
+const madeIn = (lines, askId) => (lines || []).map((line) => { const m = REPLY_RE.exec(String(line)); return m ? madeMentionOf(m[2]) : null; }).filter((made) => made && made.askId === askId);
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
 const basename = (value) => String(value || '').split('/').pop();
@@ -636,10 +638,21 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // `research`: a research box's search (2026-10-13), which says so when stopped by hand, so it stays a turn of its
   // conversation.
+  // `steer`: a reply sent under a running search (2026-10-16, DocEditor steerResearch), { after, words }: main stops that
+  // search and goes on from it in its session, told what was added (bart/ask.cjs pausedFor), under this ask's pending line.
   // `refine`: a turn of Discover's Refine (2026-10-15, the editor's refiningAt): the direction it settles waits in its box
   // until the person presses Start research or Restart research there (DocEditor startResearch); nothing is searched.
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false }) => {
+  // Set once saveMade and openMade are (the @create section below): what Create made, kept and opened as it lands.
+  const madeLanded = React.useRef(() => {});
+  // Which file it opens (2026-10-16, David; DocEditor madeToOpen): where the person is now (null once this project is
+  // closed), and the asks that opened theirs.
+  const hereRef = React.useRef(null);
+  hereRef.current = topic ? topic.id : null;
+  React.useEffect(() => () => { hereRef.current = null; }, []);
+  const madeOpened = React.useRef(new Set());
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false, steer = null }) => {
     if (!key || !ref || !topic) return;
+    const askedIn = topic.id;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
     let answered = null;
     const place = (lines) => {
@@ -724,19 +737,24 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     try {
       await new Promise((resolve) => { setTimeout(resolve, 0); }); // let the pending line reach `pending` before flushing it
       await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}) });
+      const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}), ...(steer ? { steer } : {}) });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
       // Discover settled what to research (2026-10-14; main's bart/ask.cjs takeResearch, `out.research`): its research box
       // goes under the reply in the same change, the line keeping the direction, and the editor asks it (boxOff).
       const box = !out.stopped && out.research ? { askId: newAskId(), line: researchLine(out.research) } : null;
       place(out.stopped ? (research ? ['bart> Stopped.'] : []) : box ? [...out.lines, box.line, ...(refine ? [] : [`bart~> ${box.askId}`])] : out.lines);
+      // Its first file, for a Stage tab as clicking its name does; only here, while they are still in this workspace.
+      const made = madeToOpen(out, { askId, askedIn, here: hereRef.current, active: hereRef.current !== null, opened: madeOpened.current });
       if (box && !refine) boxOff(key, box.askId);
       if (box && ownDirection) nameDirection(out.research);
       if (later && !ownTopic && !ownDirection) nameAs(out.stopped ? '' : answerText(out.lines));
       if (ownTopic && !out.stopped && !out.failed) { if (out.topic) retitleTo(out.topic); else if (name && !later) nameAs(text); }
       // The Welcome walkthrough's last card answered (main's ask.cjs, the welcome path): Discover starts on their next steps.
       if (out.welcome === 'result') handOff(key, askId);
+      // What Create made (2026-10-16, David): saved to the library and this workspace, and opened in the Stage, without
+      // its row's Save or name being clicked (madeLanded); the file opened is `made`, none if they have left.
+      if (!out.stopped && answered != null) madeLanded.current(madeIn(out.lines, askId), made);
     } catch (error) {
       place([`bart> **No answer.** ${errorMessage(error)}`]);
       if (later && !ownTopic) nameAs('');
@@ -1278,6 +1296,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       onError(error);
     }
   }, [madeFiles, project.id, showRight, onError]);
+  // A Create run's answer placed (askBart, 2026-10-16, David): each file it made saved (into the library, linked here, as
+  // its row's Save does), then `open`, its first (madeToOpen), in the Stage (as its name's click does). A save that fails
+  // is told and the file is still opened.
+  madeLanded.current = (list, open) => {
+    if (!list.length) return;
+    (async () => {
+      for (const made of list) await saveMade(made);
+      if (open) await openMade(open);
+    })();
+  };
   // Which made files a Stage tab shows (the editor greys their rows), and the one in front, whose Save is the row's.
   const [stagePlaces, setStagePlaces] = React.useState([]);
   const madeOpen = React.useMemo(() => new Set(stagePlaces.map(madeAt).filter(Boolean).map(madeKey)), [stagePlaces]);
@@ -1920,6 +1948,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // has no copy (the address, named with its title, linked here; main keeps its pdf straight away), + Workspace links the
   // library's row. Two clicks never make two rows: the second finds it here, or main refuses it as already in the library.
   const saveGuidePaper = ({ address, title }) => savePaper({ address, title, library, inRail }, { addInput, linkIds });
+  // Its filled bookmark clicked (2026-10-16, David: unbookmark): the paper leaves this workspace and stays in the library,
+  // as the rail's trash does; the bookmark then reads + (in the library, not here).
+  const unsaveGuidePaper = async ({ address }) => {
+    const { state, row } = paperState(library, address, inRail);
+    if (state !== 'here' || !topic) return;
+    await api.unlinkFromWorkspace(project.id, topic.id, row.id);
+    if (tabs.some((tab) => tab.id === row.id)) closeTab(row.id);
+    await reload();
+  };
   // The Browser's Save: the page as a new row, named in the card, into the library alone or also into this workspace.
   const savePage = async (name, here) => {
     if (!openPage) return;
@@ -2251,8 +2288,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     onBuildAction,
     onCopyText: (value) => api.copyText(value),
     onStopAsk: (askId) => api.stopBart(askId).catch((error) => onError(error)),
+    // Any open document's text, for a run the editor hands on after it has gone to another (DocEditor linesOf).
+    docTextOf: (key) => docsRef.current[key],
     paperState: guidePaperState,
     onSavePaper: saveGuidePaper,
+    onUnsavePaper: unsaveGuidePaper,
     madeFiles,
     madeOpen,
     onMadeNeeded: needMade,

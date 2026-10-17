@@ -181,6 +181,42 @@ test('a failed click goes to onError and the bookmark is what it was before', as
   assert.deepEqual([button.save, button.label, button.busy, button.disabled], ['lib', WORDS.lib, false, false]);
 });
 
+test('a filled bookmark takes the paper off this project through onUnsavePaper (2026-10-16); without it the bookmark stays disabled', async () => {
+  const off = [], saved = [];
+  const { editor, buttons } = draw({ paperState: () => 'here', onSavePaper: (paper) => { saved.push(paper); }, onUnsavePaper: (paper) => { off.push(paper); } });
+  assert.deepEqual(buttons.map((b) => [b.save, b.label, b.disabled]), [['here', 'Remove from this project (it stays in the library)', false], ['here', 'Remove from this project (it stays in the library)', false]]);
+  editor.savePaper(8);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([off, saved], [[{ title: 'CiteSee: Augmenting Citations in Scientific Papers', address: CITESEE }], []]);
+});
+
+test('Save all (n): one text button on the @discover answer\'s foot saves each paper not yet here, one after another', async () => {
+  const states = { [SCIM]: 'lib', [CITESEE]: 'none' }, saved = [];
+  let finish;
+  const { editor, html } = draw({ paperState: (address) => states[address] || 'none', onSavePaper: (paper) => { saved.push(paper.address); return new Promise((resolve) => { finish = () => { states[paper.address] = 'here'; resolve(); }; }); } });
+  const all = [...html.matchAll(/<button[^>]*data-act="papersaveall"[^>]*>([^<]*)<\/button>/g)];
+  assert.equal(all.length, 1, 'one, on the @discover answer only');
+  assert.match(all[0][0], /class="bart-text"/, 'words, not a pill');
+  assert.equal(all[0][1], 'Save all (2)', 'how many are not here yet');
+  const turn = Number(/data-turn="(\d+)"/.exec(all[0][0])[1]);
+  editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset: { act: 'papersaveall', turn: String(turn) }, disabled: false } : null) }, preventDefault() {} });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(saved, [SCIM], 'the first');
+  assert.match(editor.editorHtml(), /data-act="papersaveall"[^>]* disabled[^>]*>Saving…</, 'disabled while it works');
+  finish(); await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual(saved, [SCIM, CITESEE], 'then the next');
+  finish(); await new Promise((resolve) => setImmediate(resolve)); await new Promise((resolve) => setImmediate(resolve));
+  assert.ok(!editor.editorHtml().includes('data-act="papersaveall"'), 'all here: no button');
+});
+
+test('Save all is on a finished research box\'s foot too (2026-10-16), not on one stopped', () => {
+  const boxed = (text) => new DocEditor({ text, paperState: () => 'none', onSavePaper() {}, onAsk() {}, onChange() {} }).editorHtml();
+  const research = GUIDE.replace('@discover tools that help people read papers', '@discover --research tools that help people read papers');
+  assert.equal([...boxed(research).matchAll(/data-act="papersaveall"[^>]*>Save all \(\d+\)</g)].length, 1, 'a finished box');
+  const stopped = research.replace("bart> ## Start here", "bart> Stopped.\nbart> ## Start here");
+  assert.ok(!boxed(stopped).includes('data-act="papersaveall"'), 'a stopped box has no foot');
+});
+
 // The Workspace's side, against the real library and workspace (ipc.cjs): + Save is addInput (add, then link), + Workspace
 // is linkIds, as Workspace.jsx wires them. `sandbox` stands in for main's (src/main/sandbox), none by default.
 async function workspaceHarness(t, { doc = GUIDE, sandbox = null } = {}) {

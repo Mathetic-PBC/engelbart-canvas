@@ -389,8 +389,9 @@ test('views: a tab\'s pdf is saved aside and sent to the viewer; other downloads
   const [channel, payload] = sent.at(-1);
   assert.equal(channel, 'browser:pdf');
   assert.equal(Buffer.from(payload.bytes).toString(), '%PDF-1.4 x');
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  assert.equal(fs.existsSync(item.saved), false); // the temporary copy goes once read
+  // The temporary copy goes once read (an fs.rm in the background: waited for, not timed, as the whole suite loads the Mac).
+  for (let waited = 0; fs.existsSync(item.saved) && waited < 2000; waited += 20) await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.equal(fs.existsSync(item.saved), false);
 
   // Served as octet-stream, a .pdf address is still a pdf; a failed one says so.
   const octet = download('https://example.com/b.pdf', 'application/octet-stream', 'b.pdf');
