@@ -425,8 +425,8 @@ export function createDoing(activity, kind, wrote) {
   const made = /^(Writing|Editing) (.+?)(?: · (\d+) KB)?$/.exec(a);
   if (made) {
     const noun = MADE_NOUN[extOf(made[2])];
-    const verb = made[1] === 'Editing' ? `Revising the ${(noun || 'file').toLowerCase()}` : MAKE_VERB[noun] || 'Writing the file';
-    return verb; // its size is not shown (2026-10-16, David: no "· 9 KB so far")
+    // The verb alone (2026-10-16, David): main's label may still end " · 9 KB", but how much is written is not shown.
+    return made[1] === 'Editing' ? `Revising the ${(noun || 'file').toLowerCase()}` : MAKE_VERB[noun] || 'Writing the file';
   }
   const read = /^Reading (.+)$/.exec(a);
   if (read) {
@@ -443,6 +443,20 @@ export function createDoing(activity, kind, wrote) {
   if (/^Using\b|^Running\b/.test(a)) return 'Working';
   if (!a || /^(?:Thinking|Thinking harder|Writing)$/.test(a)) return wrote ? 'Finishing up' : kind ? `Planning the ${kind}` : 'Thinking it through';
   return a; // the web and papers searched for, saving to Engelbart: already in words
+}
+// The file a finished Create run opens in the Stage (2026-10-16, David: "it should open by itself"): the first made row of
+// its answer (`out`, main's askBart result), the others left to their rows. Only for a run that answered (not stopped,
+// not failed, a file kept), only while the person is still in the workspace it was asked in (`askedIn`, `here`; `active`
+// false once the project is left), and once per run: `opened` holds the asks that opened theirs, and this adds `askId`.
+// An answer already in the document, or one drawn again, never comes here. → { name, askId, rel } | null
+export function madeToOpen(out, { askId, askedIn, here, active = true, opened = null } = {}) {
+  if (!out || out.stopped || out.failed || !askId || (opened && opened.has(askId))) return null;
+  if (!active || !askedIn || askedIn !== here) return null;
+  for (const line of out.lines || []) {
+    const made = madeMentionOf(String(line).replace(/^bart>\s?/, ''));
+    if (made) { if (opened) opened.add(askId); return made; }
+  }
+  return null;
 }
 // m:ss since `at`.
 const clockOf = (at, now = Date.now()) => { const s = Math.max(0, Math.floor((now - (at || now)) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
@@ -1354,7 +1368,9 @@ export default class DocEditor extends React.Component {
       // @discover's trace names a step by its paper's title (traceHtml), the activity by its id: the step still waiting,
       // else, until it thinks or writes, the newest step.
       const traced = ask && ask.trace ? ask.trace.now || (/^(?:Thinking|Writing)?$/.test(ask.activity || '') ? null : ask.trace.last) : null;
-      const doing = wait ? `Searching in ${wait.left} s` : ask ? (traced || String(ask.activity || '').replace(/ · \d+ KB$/, '') || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
+      // A Create run writing before it has said what it makes: the file without how much is written (2026-10-16, David).
+      const now = ask && ask.agent === 'create' ? String(ask.activity || '').replace(/ · \d+ KB$/, '') : ask && ask.activity;
+      const doing = wait ? `Searching in ${wait.left} s` : ask ? (traced || now || (ask.movedUp ? 'Thinking harder' : 'Thinking')) : '';
       const label = wait ? esc(doing) : ask ? `${esc(doing)}${ask.name ? ` · ${esc(ask.name)} ${esc(ask.effort)}` : ''}` : 'No answer came back: the run was interrupted.';
       const story = ask && ask.trace ? traceHtml(ask.trace, { writing: ask.activity === 'Writing' }) : '';
       // Told as a trace, the steps are its lines (a run of lookups is one); else each thing done.
@@ -2858,7 +2874,7 @@ export default class DocEditor extends React.Component {
     const doing = ask ? createDoing(ask.activity, kind, !!writing || /^Writing \S/.test(ask.activity || '')) : 'No answer came back: the run was interrupted.';
     const closes = !at || at.closes;
     // While it works (2026-10-15, David): the line says what it is making, starting "Creating" ("Creating a diagram of this
-    // conversation: …", creatingLine); the row under it says what it is doing ("Writing x.svg · 9 KB"). With no line but a
+    // conversation: …", creatingLine); the row under it says what it is doing ("Building the page", createDoing). With no line but a
     // file being written, the few words the file's kind gives ("Creating a diagram…").
     const sentence = said || writing ? `<div style="padding:0 0 6px;color:#262626;font-size:16px;line-height:1.65">${said ? esc(creatingLine(said)) : `${esc(label === 'Create' ? 'Creating' : label)}…`}</div>` : '';
     // Stop and Hide are plain text, as on every other running row (2026-10-16, Hudson); Save and Open in Stage stay buttons.

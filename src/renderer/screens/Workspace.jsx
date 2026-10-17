@@ -3,7 +3,7 @@ import { api, errorMessage } from '../api.js';
 import Rail from '../workspace/Rail.jsx';
 import DocTabs from '../workspace/DocTabs.jsx';
 import NotePicker from '../workspace/NotePicker.jsx';
-import { BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, askStarted, askProgressed } from '../workspace/DocEditor.jsx';
+import { BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, askStarted, askProgressed, madeToOpen } from '../workspace/DocEditor.jsx';
 import DocPane from '../workspace/DocPane.jsx';
 import GettingStarted from '../workspace/GettingStarted.jsx';
 import { EMPTY_HINT, discoverPapers, stepsHere } from '../model/getting-started.js';
@@ -633,8 +633,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // until the person presses Start research or Restart research there (DocEditor startResearch); nothing is searched.
   // Set once saveMade and openMade are (the @create section below): what Create made, kept and opened as it lands.
   const madeLanded = React.useRef(() => {});
+  // Which file it opens (2026-10-16, David; DocEditor madeToOpen): where the person is now (null once this project is
+  // closed), and the asks that opened theirs.
+  const hereRef = React.useRef(null);
+  hereRef.current = topic ? topic.id : null;
+  React.useEffect(() => () => { hereRef.current = null; }, []);
+  const madeOpened = React.useRef(new Set());
   const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false, steer = null }) => {
     if (!key || !ref || !topic) return;
+    const askedIn = topic.id;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
     let answered = null;
     const place = (lines) => {
@@ -726,6 +733,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       // goes under the reply in the same change, the line keeping the direction, and the editor asks it (boxOff).
       const box = !out.stopped && out.research ? { askId: newAskId(), line: researchLine(out.research) } : null;
       place(out.stopped ? (research ? ['bart> Stopped.'] : []) : box ? [...out.lines, box.line, ...(refine ? [] : [`bart~> ${box.askId}`])] : out.lines);
+      // Its first file, for a Stage tab as clicking its name does; only here, while they are still in this workspace.
+      const made = madeToOpen(out, { askId, askedIn, here: hereRef.current, active: hereRef.current !== null, opened: madeOpened.current });
       if (box && !refine) boxOff(key, box.askId);
       if (box && ownDirection) nameDirection(out.research);
       if (later && !ownTopic && !ownDirection) nameAs(out.stopped ? '' : answerText(out.lines));
@@ -733,8 +742,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       // The Welcome walkthrough's last card answered (main's ask.cjs, the welcome path): Discover starts on their next steps.
       if (out.welcome === 'result') handOff(key, askId);
       // What Create made (2026-10-16, David): saved to the library and this workspace, and opened in the Stage, without
-      // its row's Save or name being clicked (madeLanded).
-      if (!out.stopped && answered != null) madeLanded.current(madeIn(out.lines, askId));
+      // its row's Save or name being clicked (madeLanded); the file opened is `made`, none if they have left.
+      if (!out.stopped && answered != null) madeLanded.current(madeIn(out.lines, askId), made);
     } catch (error) {
       place([`bart> **No answer.** ${errorMessage(error)}`]);
       if (later && !ownTopic) nameAs('');
@@ -1268,13 +1277,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     }
   }, [madeFiles, project.id, showRight, onError]);
   // A Create run's answer placed (askBart, 2026-10-16, David): each file it made saved (into the library, linked here, as
-  // its row's Save does), then the first opened in the Stage (as its name's click does). A save that fails is told and
-  // the file is still opened.
-  madeLanded.current = (list) => {
+  // its row's Save does), then `open`, its first (madeToOpen), in the Stage (as its name's click does). A save that fails
+  // is told and the file is still opened.
+  madeLanded.current = (list, open) => {
     if (!list.length) return;
     (async () => {
       for (const made of list) await saveMade(made);
-      await openMade(list[0]);
+      if (open) await openMade(open);
     })();
   };
   // Which made files a Stage tab shows (the editor greys their rows), and the one in front, whose Save is the row's.

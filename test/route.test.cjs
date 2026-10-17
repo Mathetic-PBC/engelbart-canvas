@@ -810,10 +810,14 @@ test('@create at work (2026-10-15, David): a thinking line until its line on wha
   assert.equal((told.match(/an HTML page on the work in this workspace/g) || []).length, 1, 'said once');
   assert.ok(!told.includes('>Creating an HTML page…<'), 'the line itself, not a few words for it');
   // Starting "Creating" (2026-10-15, David), the acronym's capital kept.
-  assert.match(told, new RegExp(`>Creating an HTML page on the work in this workspace: the agents, the five pillars and what is still open…</div><div[^>]*>[\\s\\S]*?align-items:baseline[^>]*><span[^>]*><span class="eb-wave"[^>]*>Building the page</span></span></span>`), 'the line, then the row saying what it is doing, in words: no file name (2026-10-15, David)');
+  assert.match(told, new RegExp(`>Creating an HTML page on the work in this workspace: the agents, the five pillars and what is still open…</div><div[^>]*>[\\s\\S]*?align-items:baseline[^>]*><span[^>]*><span class="eb-wave"[^>]*>Building the page</span></span></span>`), 'the line, then the row saying what it is doing, in words: no file name (2026-10-15, David), nor its size (2026-10-16)');
+  assert.ok(!/KB/.test(told), 'no size anywhere on the row');
   // No line, but a file being written: the few words its kind gives.
   const writing = html({ ...run, log: ['Writing summary.html'] });
   assert.ok(writing.includes('data-create-pending') && writing.includes('>Creating an HTML page…</div>'));
+  // Writing before any line or logged file: a run thinking like any other, the file without its size (2026-10-16).
+  const early = html({ ...run, activity: 'Writing summary.html · 9 KB' });
+  assert.ok(!early.includes('data-create-pending') && early.includes('Writing summary.html') && !/KB/.test(early));
   const { makingLabel, creatingLine } = EDITOR;
   assert.equal(creatingLine('A diagram of the highlighting, Stage, and browser-window problems we discussed.'), 'Creating a diagram of the highlighting, Stage, and browser-window problems we discussed…');
   assert.equal(creatingLine('Two charts of CHI submissions.'), 'Creating two charts of CHI submissions…');
@@ -822,7 +826,8 @@ test('@create at work (2026-10-15, David): a thinking line until its line on wha
   const { createDoing } = EDITOR;
   for (const [activity, kind, wrote, said] of [
     ['Thinking', 'diagram', false, 'Planning the diagram'], ['Thinking', 'diagram', true, 'Finishing up'], ['Writing', 'HTML page', false, 'Planning the HTML page'], ['Thinking', null, false, 'Thinking it through'],
-    ['Writing ui-workspace-conversation-diagram.svg', 'diagram', false, 'Drawing the diagram'], ['Writing summary.html · 12 KB', 'page', false, 'Building the page'],
+    ['Writing ui-workspace-conversation-diagram.svg', 'diagram', false, 'Drawing the diagram'], ['Writing summary.html · 12 KB', 'page', false, 'Building the page'], ['Writing chart.html · 14 KB', 'page', false, 'Building the page'],
+    ['Editing chart.html · 3 KB', 'page', true, 'Revising the page'], ['Writing diagram.svg · 9 KB', 'diagram', false, 'Drawing the diagram'],
     ['Writing data.csv', 'dataset', false, 'Filling in the dataset'], ['Editing summary.html', 'page', true, 'Revising the page'],
     ['Reading …/Concision in Agent Responses/workspace.md', 'diagram', false, 'Reading your notes'], ['Reading src/main/bart/ask.cjs', 'diagram', false, 'Reading the code'], ['Reading tutors.pdf', 'diagram', false, 'Reading a paper'],
     ['Reading arxiv.org', 'diagram', false, 'Reading a page on arxiv.org'], ['Searching code for “stage”', 'diagram', false, 'Searching the code'], ['Listing **/*.md', 'diagram', false, 'Looking through your files'],
@@ -840,6 +845,36 @@ test('@create at work (2026-10-15, David): a thinking line until its line on wha
   const row = made.editor.editorHtml().match(/<div data-made-row="c1\/page\.html"[^>]*>/);
   assert.ok(row && !/background/.test(row[0]), 'no background on the row');
   assert.ok(!made.editor.editorHtml().includes('#f3f3f3'));
+});
+
+test('a finished Create run opens its file in the Stage by itself (2026-10-16, David): the first file, once per run, only in the workspace it was asked in; never when stopped, failed or nothing kept', () => {
+  const { madeToOpen } = EDITOR;
+  const done = { lines: ['bart> A page.', 'bart>', 'bart> @[page.html](made:c1/page.html)', 'bart>', 'bart> *Create · Opus · high · 9 s*'], meta: {} };
+  const opened = new Set();
+  const here = { askId: 'a1', askedIn: 'w1', here: 'w1', active: true, opened };
+  assert.deepEqual(madeToOpen(done, here), { name: 'page.html', askId: 'c1', rel: 'page.html' });
+  assert.equal(madeToOpen(done, here), null, 'the same answer drawn again opens nothing');
+  assert.ok(opened.has('a1'));
+  const two = { lines: ['bart> Two files.', 'bart>', 'bart> @[chart.svg](made:c2/chart.svg)', 'bart> @[data.csv](made:c2/data.csv)', 'bart>', 'bart> *Create · Opus · high · 9 s*'] };
+  assert.deepEqual(madeToOpen(two, { ...here, askId: 'a2' }), { name: 'chart.svg', askId: 'c2', rel: 'chart.svg' }, 'two files: the first only');
+  assert.equal(madeToOpen(two, { ...here, askId: 'a2' }), null);
+  assert.equal(madeToOpen({ stopped: true }, { ...here, askId: 'a3' }), null, 'stopped');
+  assert.equal(madeToOpen({ failed: true, lines: ['bart> **No answer.** It broke.'] }, { ...here, askId: 'a4' }), null, 'failed');
+  assert.equal(madeToOpen({ failed: true, lines: done.lines }, { ...here, askId: 'a4' }), null, 'failed, whatever its lines');
+  assert.equal(madeToOpen({ lines: ['bart> This is a Build: it changes something you already have.', 'bart>', 'bart> *Create · Opus · high · 9 s*'] }, { ...here, askId: 'a5' }), null, 'nothing kept');
+  assert.equal(madeToOpen(done, { ...here, askId: 'a6', here: 'w2' }), null, 'they have gone to another workspace');
+  assert.equal(madeToOpen(done, { ...here, askId: 'a7', here: null, active: false }), null, 'the project is closed');
+  assert.equal(madeToOpen({ lines: ['bart> By watching.'] }, { ...here, askId: 'a8' }), null, 'an answer with no file');
+  assert.ok(!opened.has('a3') && !opened.has('a6'), 'a run that opened nothing is not marked');
+  // Workspace: asked once its answer is placed, where it was asked (`askedIn`, the workspace at the time), with openMade.
+  const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  const asking = workspace.slice(workspace.indexOf('const askBart = React.useCallback'), workspace.indexOf('const routeLine = React.useCallback'));
+  assert.match(asking, /const askedIn = topic\.id;/);
+  assert.match(asking, /place\(out\.stopped[^\n]*\n[\s\S]*?madeToOpen\(out, \{ askId, askedIn, here: hereRef\.current, active: hereRef\.current !== null, opened: madeOpened\.current \}\)[\s\S]*?madeLanded\.current\(madeIn\(out\.lines, askId\), made\)/);
+  assert.ok(!/madeToOpen/.test(asking.slice(asking.lastIndexOf('} catch (error) {'))), 'nothing opened when the ask failed');
+  assert.equal((workspace.match(/madeToOpen\(/g) || []).length, 1, 'only a run that just finished: no document load or redraw asks it');
+  assert.match(workspace, /madeLanded\.current = \(list, open\) => \{[\s\S]*?for \(const made of list\) await saveMade\(made\);\s*if \(open\) await openMade\(open\);/, 'each file saved, then the one madeToOpen gave opened: not list[0] whatever happened');
+  assert.match(workspace, /stageRef\.current\.openFile\(file\.path, \{\}\);/, 'openMade opens the .created path, as clicking the name does');
 });
 
 test('a made file\'s peek (2026-10-15, David): a rest of the pointer on its name or icon shows the file in a small card over the page, nothing in the document moves; leaving or a press hides it', (t) => {
