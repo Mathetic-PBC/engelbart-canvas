@@ -655,12 +655,15 @@ export default function App() {
       )}
       {importModal && phase === 'workspace' && (
         <div data-overlay="1" data-cover="1" data-import-modal="1" style={{ position: 'fixed', inset: 0, zIndex: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(23,23,23,.18)' }}>
-          {/* transform: the flow's fixed parts (its foot, its dialogs) are held inside this panel, not the window */}
-          <div role="dialog" aria-modal="true" aria-label="Import your context" style={{ position: 'relative', width: 'min(1000px, 100%)', height: 'min(800px, 100%)', overflow: 'auto', background: '#fff', borderRadius: 14, boxShadow: '0 20px 60px #00000026', transform: 'translateZ(0)' }}>
+          {/* transform: the flow's fixed parts (its foot, its dialogs) are held inside this panel, not the window. The panel
+              itself never scrolls (2026-10-17: the foot scrolled up into the list with it); the box inside it does. */}
+          <div role="dialog" aria-modal="true" aria-label="Import your context" style={{ position: 'relative', width: 'min(1000px, 100%)', height: 'min(800px, 100%)', overflow: 'hidden', background: '#fff', borderRadius: 14, boxShadow: '0 20px 60px #00000026', transform: 'translateZ(0)' }}>
+            <div data-import-scroll="1" style={{ position: 'absolute', inset: 0, overflow: 'auto' }}>
             <ImportFlow api={importApi} mode="modal" into={importModal.projectId} workspaceId={importModal.workspaceId} intoProject={tree && tree.project && tree.project.id === importModal.projectId ? { name: tree.project.name || '', description: tree.project.description || '' } : null} platform={/Mac/i.test(navigator.platform || '') ? 'darwin' : 'other'}
               // the flow over the workspace ended: as on landing, the status is not opened by itself (the title bar's words open it);
               // a librarian session (Import manually, From Amitav 2026-10-15) opens its chat over the workspace at once
               onClose={(out = {}) => { setImportModal(null); if (out.session && !out.session.direct) setConnectPopup({ sessionId: out.session.id }); }} />
+            </div>
           </div>
         </div>
       )}
