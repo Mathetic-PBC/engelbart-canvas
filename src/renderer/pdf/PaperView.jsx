@@ -109,6 +109,7 @@ import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { nearOrder, allOrder, tooFar, DRAW_AHEAD, columnGeometry, settleView, nextTick } from '../model/paper-draw.js';
 import { mentionAt, libMention, fileMention, fileMentionOf, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
 import { isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
+import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, LABEL_INK, ERROR_INK, ANSWER_GAP, SPINNER, CARD_GROUND, cardCss } from './card-look.js';
 import { sideSpace, deskGeom, placeOf, posOf, spaceBoxes, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, runningLabel, textColumn, fitWidth, freeNoteWidth, noteScale, NOTE_FLOOR, HIDE_ROOM, FREE_MIN, FREE_FIT, EDGE_PAD, NOTE_W, NOTE_MIN, BOX_GAP, SIDE_GAP, POS_DY, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
@@ -186,12 +187,7 @@ const LAYER_CSS = `
 [data-pdf] [data-hl]{mix-blend-mode:multiply}
 [data-pdf][data-dragging],[data-pdf][data-dragging] *{cursor:grabbing!important;user-select:none!important}
 [data-pdf] [data-box] [data-note-view]{cursor:text}
-[data-pdf] [data-box] button{border:0;background:transparent;padding:2px 6px;border-radius:5px;font:13px/1.4 var(--font-sans);color:#8f8f8f;cursor:pointer;white-space:nowrap}
-[data-pdf] [data-box] button:hover{background:#f2f2f2;color:#171717}
-[data-pdf] [data-box] [data-ask-body],[data-pdf] [data-box] [data-run-body]{user-select:text;cursor:text}
-[data-pdf] [data-box] [data-ask-body] p,[data-pdf] [data-box] [data-run-body] p{margin:0 0 6px}
-[data-pdf] [data-box] a{color:#0070f3;text-decoration:underline;text-underline-offset:2px}
-@keyframes pdf-spin{to{transform:rotate(360deg)}}
+${cardCss('[data-pdf] [data-box]')}
 ::highlight(pdf-section){background-color:rgba(255,196,0,.13)}
 ::highlight(pdf-find){background-color:rgba(255,196,0,.35)}
 ::highlight(pdf-find-active){background-color:rgba(255,140,0,.6)}
@@ -214,8 +210,6 @@ const REVEAL_PAD = 16; // px a card is kept from the pane's edges: its widest (p
 const REMOVED_MS = 5000; // how long "Highlight removed · Undo" stays
 const TOAST = { position: 'absolute', left: '50%', bottom: 60, transform: 'translateX(-50%)', zIndex: 6, display: 'flex', alignItems: 'center', gap: 4, height: 30, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#171717', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.12)' };
 const TOAST_UNDO = { flex: 'none', height: 22, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', color: '#fff', cursor: 'pointer' };
-const ANSWER_GAP = 'margin-top:10px'; // space, not a rule, between the note and an answer in a card, and between two answers
-const SPINNER = 'flex:none;width:10px;height:10px;box-sizing:border-box;border:1.5px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:pdf-spin .8s linear infinite';
 
 // Find (the Browser pane's ⌘F, 2026-09-22): matches are Ranges over the text layer, painted with
 // the CSS Custom Highlight API, so the page's DOM is never touched. Space in the query matches any
@@ -265,13 +259,8 @@ function textRects(range) {
   return out.length ? out : [...range.getClientRects()];
 }
 const SVG = 'http://www.w3.org/2000/svg';
-// A note's handwriting, the same in its field and shown as text. Still Caveat (MATH-15, 2026-10-06), set larger: its
-// x-height is small (0.36 em), so at 17px it read smaller than the paper's own text; 20px brings it near the body's,
-// a little tracking keeps its letters apart, and the ink is a touch softer than black. Line height 1.2 (notes are short).
-// Larger again on 2026-10-08 (Hudson: "the font of annotations should be larger"): 24px, and an answer's 15px (ANSWER_FONT).
-const NOTE_INK = '#1f2633';
-const ANSWER_FONT = 'font:15px/1.55 var(--font-sans)'; // an answer, and one being written, in its card (13px until 2026-10-08)
-const NOTE_LOOK = `pointer-events:auto;padding:0 6px;font:500 24px/1.2 'Caveat',cursive;letter-spacing:.2px;color:${NOTE_INK};-webkit-font-smoothing:antialiased;transition:opacity 120ms,background 120ms`;
+// A note's handwriting, the same in its field and shown as text (./card-look.js NOTE_TYPE, a web box's card's too).
+const NOTE_LOOK = `pointer-events:auto;${NOTE_TYPE};transition:opacity 120ms,background 120ms`;
 
 // An answer as its box draws it (MATH-27): a paragraph a line, with what Bart was told a box may hold (bold, italic,
 // code, links), and a list's or a heading's mark taken off should one come anyway. answerParas: each paragraph's inside.
@@ -1867,8 +1856,8 @@ export default class PaperView extends React.Component {
     }
     // the model that wrote it (a.meta) is kept but not shown (MATH-70 build 3)
     const lib = { libName: (id) => this.libName(id) }, asked = askedByNote(a.question, m.note) ? '' : String(a.question || '');
-    sec.style.cssText = `${line}flex:none;display:flex;flex-direction:column;${ANSWER_FONT};color:#171717`;
-    sec.innerHTML = (asked ? `<div title="${esc(asked)}" style="flex:none;padding:0 6px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8f8f">${esc(asked)}</div>` : '')
+    sec.style.cssText = `${line}flex:none;display:flex;flex-direction:column;${ANSWER_FONT};color:${ANSWER_INK}`;
+    sec.innerHTML = (asked ? `<div title="${esc(asked)}" style="flex:none;padding:0 6px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${QUESTION_INK}">${esc(asked)}</div>` : '')
       + `<div data-ask-body="1" style="flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 6px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
       + '<div style="flex:none;display:flex;flex-wrap:wrap;gap:2px;padding:2px 0 4px">'
       + (this.props.onContinueAsk ? '<button type="button" data-act="continue">Continue in project</button>' : '')
@@ -1931,18 +1920,18 @@ export default class PaperView extends React.Component {
   // Bart is doing, with a spinner, and Stop; ▸ shows its steps; the answer comes in once it is writing. A failure says
   // why, with × to close it. Made once; each change of what Bart is doing fills it in place (fillRun).
   runBox(p, page, divided = false) {
-    const box = makeEl('div', `${divided ? `${ANSWER_GAP};` : ''}flex:none;display:flex;flex-direction:column;${ANSWER_FONT};color:#171717`, { askRun: p.askId });
+    const box = makeEl('div', `${divided ? `${ANSWER_GAP};` : ''}flex:none;display:flex;flex-direction:column;${ANSWER_FONT};color:${ANSWER_INK}`, { askRun: p.askId });
     box.onmousedown = (ev) => ev.stopPropagation();
     box.onclick = (ev) => this.runClick(ev, p.askId, page);
     const steps = makeEl('div', 'display:none;flex:none;padding:0 0 4px', { runSteps: '1' });
     steps.appendChild(makeEl('button', '', { act: 'log' }));
     box.append(
       makeEl('div', 'flex:none;display:flex;align-items:center;gap:8px;padding:0 0 4px 6px', { runHead: '1' }),
-      makeEl('div', 'flex:none;padding:0 6px 6px;color:#8f8f8f;overflow:hidden;text-overflow:ellipsis;white-space:nowrap', { runQuestion: '1' }),
-      makeEl('div', 'display:none;flex:none;padding:0 6px 8px;color:#c4372d;overflow-wrap:anywhere', { runError: '1' }),
+      makeEl('div', `flex:none;padding:0 6px 6px;color:${QUESTION_INK};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`, { runQuestion: '1' }),
+      makeEl('div', `display:none;flex:none;padding:0 6px 8px;color:${ERROR_INK};overflow-wrap:anywhere`, { runError: '1' }),
       steps,
       makeEl('div', 'display:none;flex:none;padding:0 6px 6px;font-size:13px;line-height:1.7;color:#8f8f8f', { runLog: '1' }),
-      makeEl('div', `display:none;flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 6px 8px;color:#8f8f8f;overflow-wrap:anywhere`, { runBody: '1' }),
+      makeEl('div', `display:none;flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 6px 8px;color:${QUESTION_INK};overflow-wrap:anywhere`, { runBody: '1' }),
     );
     this.fillRun(box, p);
     return box;
@@ -1958,9 +1947,9 @@ export default class PaperView extends React.Component {
       if (failed) {
         const close = makeEl('button', '', { act: 'dismiss' }, '×');
         close.setAttribute('aria-label', 'Close');
-        head.replaceChildren(makeEl('span', 'flex:1;min-width:0;font-weight:500;color:#171717', {}, 'Bart · No answer'), close);
+        head.replaceChildren(makeEl('span', `flex:1;min-width:0;font-weight:500;color:${ANSWER_INK}`, {}, 'Bart · No answer'), close);
       } else {
-        head.replaceChildren(makeEl('span', SPINNER), makeEl('span', 'flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#4d4d4d', { runLabel: '1' }), makeEl('button', '', { act: 'stop' }, 'Stop'));
+        head.replaceChildren(makeEl('span', SPINNER), makeEl('span', `flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${LABEL_INK}`, { runLabel: '1' }), makeEl('button', '', { act: 'stop' }, 'Stop'));
       }
     }
     const label = head.querySelector('[data-run-label]');
@@ -2470,7 +2459,7 @@ export default class PaperView extends React.Component {
           </>
         ) : null}
         <div style={{ position: 'relative', flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column' }}>
-          <div ref={this.host} data-pdf="1" style={{ flex: 1, minHeight: 0, overflow: 'auto', border: 0, borderTop: title ? '1px solid #eaeaea' : 0, borderRadius: 0, background: '#fff', padding: 0 }} />
+          <div ref={this.host} data-pdf="1" style={{ flex: 1, minHeight: 0, overflow: 'auto', border: 0, borderTop: title ? '1px solid #eaeaea' : 0, borderRadius: 0, background: CARD_GROUND, padding: 0 }} />
           {note
             ? <span style={{ position: 'absolute', left: 0, right: 0, top: 14, textAlign: 'center', font: '12px/1.5 var(--font-sans)', color: '#8f8f8f', pointerEvents: 'none' }}>{note}</span>
             : null}

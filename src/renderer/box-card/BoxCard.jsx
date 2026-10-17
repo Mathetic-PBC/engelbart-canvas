@@ -5,43 +5,40 @@ import '@fontsource/caveat/500.css';
 import 'katex/dist/katex.min.css';
 import { inlineHtml, noteInkHtml } from '../model/doc.js';
 import { noteQuestion, askedByNote, runningLabel } from '../pdf/canvas.js';
+import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, LABEL_INK, ERROR_INK, ANSWER_GAP, SPINNER as SPINNER_CSS, CARD_GROUND, cardCss, styleOf } from '../pdf/card-look.js';
 
 // The card beside a selected box on a web page (MATH-70 build 2, 2026-10-07): its own small view, one per window, which
 // main places beside the box and moves with it (src/main/browser/views.cjs `card`). The one component Hudson will replace:
-// everything it needs comes through window.boxCardAPI (src/main/browser/box-card-preload.cjs), and its look is a copy of
-// the pdf's card (src/renderer/pdf/PaperView.jsx, its values copied here, not imported): the Caveat note, ASK_W wide,
-// the grip, the trash, the divider between the note and each answer, the answer's paragraphs and the spinner. Over a web
-// page it needs a ground of its own, so it is white with a thin edge and a soft shadow (the pdf's sits on its desk).
+// everything it needs comes through window.boxCardAPI (src/main/browser/box-card-preload.cjs). It looks as the pdf's card
+// does (2026-10-17, David: "exactly like the annotation card on PDFs"), from the same values (src/renderer/pdf/card-look.js,
+// imported, never copied): the Caveat note, the answers' type and inks, room rather than a rule between the note and each
+// answer, the buttons, the answer's paragraphs and the spinner. The pdf's card has no box of its own, only handwriting on
+// the paper's white; over a web page this one is given that white (CARD_GROUND) and no edge, corners or shadow. ASK_W wide,
+// with the trash.
 // The note is saved on the box's mark as it is typed; Enter in a note that starts with @bart asks (Shift+Enter is a new
 // line), and the answer comes in under it. Keys typed here are the card's: Backspace never removes the box.
 
 const api = window.boxCardAPI;
 
-// PaperView's values (2026-10-07), copied.
-const NOTE_INK = '#1f2633';
-const NOTE_LOOK = { padding: '0 6px', font: "500 20px/1.2 'Caveat',cursive", letterSpacing: '.2px', color: NOTE_INK, WebkitFontSmoothing: 'antialiased' };
+const NOTE_LOOK = styleOf(NOTE_TYPE);
+const ANSWER_LOOK = { ...styleOf(ANSWER_FONT), color: ANSWER_INK };
 const ASK_W = 320;
 // A card with no answers is only as wide as its note (David, 2026-10-07: "make the text box smaller"), from MIN_W to ASK_W:
 // its longest line, measured in the note's ink, and the field's padding and edge.
 const MIN_W = 140;
 const NOTE_ROOM = 12 + 2 + 6;
 const PLACEHOLDER = 'Note, or @bart and a question';
-const GRIP = { height: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', position: 'relative' };
-const GRIP_BAR = { width: 22, height: 3, borderRadius: 2, background: '#d9d9d9' };
+const GRIP = { height: 12, position: 'relative' }; // the trash's row (the pdf's card has no grip bar since 2026-10-16)
 const TRASH = { position: 'absolute', top: 1, right: 3, width: 18, height: 18, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 5, border: 0, background: 'rgba(255,255,255,.97)', color: '#8f8f8f', cursor: 'pointer' };
-const DIVIDER = '1px solid #ececec'; // between the note and an answer, and between two answers
-const SPINNER = { flex: 'none', width: 10, height: 10, boxSizing: 'border-box', border: '1.5px solid #c9d9f2', borderTopColor: '#0070f3', borderRadius: '50%', animation: 'card-spin .8s linear infinite' };
-const BUTTON = { border: 0, background: 'transparent', padding: '2px 6px', borderRadius: 5, font: '12px/1.4 var(--font-sans)', color: '#4d4d4d', cursor: 'pointer', whiteSpace: 'nowrap' };
+const GAP = styleOf(ANSWER_GAP); // between the note and an answer, and between two answers
+const SPINNER = styleOf(SPINNER_CSS);
 const ANSWER_MAX = 320; // an answer scrolls inside past this many pixels
 
 const CSS = `
 *{box-sizing:border-box}
-html,body,#root{margin:0;background:transparent;color:#171717;font:13px/1.55 var(--font-sans);overflow:hidden}
-@keyframes card-spin{to{transform:rotate(360deg)}}
-[data-card] button:hover{background:#f2f2f2}
+html,body,#root{margin:0;background:transparent;color:${ANSWER_INK};${ANSWER_FONT};overflow:hidden}
+${cardCss('[data-card]')}
 [data-card] [data-trash]:hover{background:#f2f2f2;color:#171717}
-[data-card] [data-answer] p{margin:0 0 6px}
-[data-card] a{color:#0070f3;text-decoration:underline;text-underline-offset:2px}
 [data-card] textarea::placeholder{color:#b5b5b5}
 `;
 
@@ -80,9 +77,9 @@ function Note({ value, onChange, onKeyDown, fieldRef }) {
 function Answer({ ask, note, divided }) {
   const asked = askedByNote(ask.question, note) ? '' : String(ask.question || '');
   return (
-    <div data-ask={ask.id} style={{ flex: 'none', display: 'flex', flexDirection: 'column', borderTop: divided ? DIVIDER : 0, paddingTop: divided ? 8 : 0 }}>
-      {asked && <div title={asked} style={{ flex: 'none', padding: '0 12px 6px', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asked}</div>}
-      <div data-answer="1" onClick={noFollow} style={{ flex: 'none', maxHeight: ANSWER_MAX, overflow: 'auto', padding: '0 12px 6px', overflowWrap: 'anywhere', userSelect: 'text' }} dangerouslySetInnerHTML={{ __html: answerHtml(ask.answer) }} />
+    <div data-ask={ask.id} style={{ ...(divided ? GAP : {}), flex: 'none', display: 'flex', flexDirection: 'column', ...ANSWER_LOOK }}>
+      {asked && <div title={asked} style={{ flex: 'none', padding: '0 6px 6px', color: QUESTION_INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asked}</div>}
+      <div data-ask-body="1" onClick={noFollow} style={{ flex: 'none', maxHeight: ANSWER_MAX, overflow: 'auto', padding: '0 6px 2px', overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: answerHtml(ask.answer) }} />
     </div>
   );
 }
@@ -93,15 +90,15 @@ function Running({ run, note, divided }) {
   const lines = !failed && run.activity === 'Writing' && Array.isArray(run.lines) ? run.lines : [];
   const asked = askedByNote(run.question, note) ? '' : String(run.question || '');
   return (
-    <div data-ask-run={run.askId} style={{ flex: 'none', display: 'flex', flexDirection: 'column', borderTop: divided ? DIVIDER : 0, paddingTop: divided ? 8 : 0 }}>
-      <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: '0 6px 4px 12px' }}>
-        {failed ? <span style={{ flex: 1, minWidth: 0, fontWeight: 500, color: '#171717' }}>Bart · No answer</span>
-          : <><span style={SPINNER} /><span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: '#4d4d4d' }}>{runningLabel(run)}</span></>}
-        <button type="button" aria-label={failed ? 'Close' : 'Stop'} onClick={() => api.stop(run.askId)} style={BUTTON}>{failed ? '×' : 'Stop'}</button>
+    <div data-ask-run={run.askId} style={{ ...(divided ? GAP : {}), flex: 'none', display: 'flex', flexDirection: 'column', ...ANSWER_LOOK }}>
+      <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 4px 6px' }}>
+        {failed ? <span style={{ flex: 1, minWidth: 0, fontWeight: 500, color: ANSWER_INK }}>Bart · No answer</span>
+          : <><span style={SPINNER} /><span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: LABEL_INK }}>{runningLabel(run)}</span></>}
+        <button type="button" aria-label={failed ? 'Close' : 'Stop'} onClick={() => api.stop(run.askId)}>{failed ? '×' : 'Stop'}</button>
       </div>
-      {asked && <div title={asked} style={{ flex: 'none', padding: '0 12px 6px', color: '#8f8f8f', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asked}</div>}
-      {failed && <div style={{ flex: 'none', padding: '0 12px 8px', color: '#c4372d', overflowWrap: 'anywhere' }}>{run.error || 'The run failed.'}</div>}
-      {lines.length > 0 && <div data-answer="1" onClick={noFollow} style={{ flex: 'none', maxHeight: ANSWER_MAX, overflow: 'auto', padding: '0 12px 8px', color: '#8f8f8f', overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: answerHtml(lines.join('\n')) }} />}
+      {asked && <div title={asked} style={{ flex: 'none', padding: '0 6px 6px', color: QUESTION_INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asked}</div>}
+      {failed && <div style={{ flex: 'none', padding: '0 6px 8px', color: ERROR_INK, overflowWrap: 'anywhere' }}>{run.error || 'The run failed.'}</div>}
+      {lines.length > 0 && <div data-run-body="1" onClick={noFollow} style={{ flex: 'none', maxHeight: ANSWER_MAX, overflow: 'auto', padding: '0 6px 8px', color: QUESTION_INK, overflowWrap: 'anywhere' }} dangerouslySetInnerHTML={{ __html: answerHtml(lines.join('\n')) }} />}
     </div>
   );
 }
@@ -170,13 +167,12 @@ function BoxCard() {
     <div ref={root} style={{ padding: 8, width: width + 16 }}>
       <style>{CSS}</style>
       <span ref={mirror} aria-hidden="true" style={{ ...NOTE_LOOK, padding: 0, position: 'absolute', left: -9999, top: 0, visibility: 'hidden', whiteSpace: 'pre' }} />
-      <div data-card="1" style={{ width, display: 'flex', flexDirection: 'column', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,.08)', paddingBottom: 4 }}>
+      <div data-card="1" style={{ width, display: 'flex', flexDirection: 'column', background: CARD_GROUND, paddingBottom: 4 }}>
         <div style={GRIP}>
-          <span style={GRIP_BAR} />
           <button type="button" data-trash="1" title="Remove box" aria-label="Remove box" onMouseDown={(event) => event.preventDefault()} onClick={() => api.remove()} style={TRASH}>{TRASH_SVG}</button>
         </div>
         <Note value={note} onChange={change} onKeyDown={key} fieldRef={field} />
-        {/* the note is first: every answer comes under a divider */}
+        {/* the note is first: every answer comes with room above it */}
         {asks.map((ask, i) => <Answer key={ask.id || `ask-${i}`} ask={ask} note={note} divided />)}
         {running.map((run) => <Running key={run.askId} run={run} note={note} divided />)}
       </div>
