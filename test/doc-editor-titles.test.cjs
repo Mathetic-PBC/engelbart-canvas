@@ -382,18 +382,23 @@ test('a title with no question under it is the text it is; deleting a titled con
   assert.deepEqual(m.lines(), ['Notes', '', 'After']);
 });
 
-test('the card (2026-10-13): question 14px 16px, answer 12px under it in a 14px rule, button row 12px 10px 6px 16px, the reply field 4px 10px 10px 16px closing it, 8px under a card; no Reply button (2026-10-16)', () => {
-  const html = mounted(['@chat first?', ...answer('one'), '@chat second?', ...answer('two'), '']).html();
+test('the card (2026-10-13): question 14px 16px, answer 12px under it in a 14px rule, button row 12px 10px 6px 10px (Copy\'s glyph 16px in), the reply field closing it (2026-10-16), 8px under a card; read only, the button row closes it', () => {
+  const m = mounted(['@chat first?', ...answer('one'), '@chat second?', ...answer('two'), '']), html = m.html();
   assert.match(rowOf(html, 0), /padding:14px 16px 0px;background:#fafafa;border-radius:10px 10px 0 0/);
   assert.match(rowOf(html, 0), /color:#171717/);
   assert.match(rowOf(html, 1), /padding:12px 16px 0px;[^"]*color:#262626;font-size:16px;line-height:1\.65[^"]*"><span style="display:block;padding:2px 0 2px 14px;border-left:2px solid #d6d6d6"/);
   assert.match(rowOf(html, 4), /padding:14px 16px 0px/, 'a question under an open answer');
-  assert.match(html, /padding:12px 10px 6px 16px/);
-  assert.match(html, /data-followup="0" style="user-select:none;padding:4px 10px 10px 16px;background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:8px"/, 'the field closes the card');
+  assert.match(html, /padding:12px 10px 6px 10px/);
   assert.ok(!html.includes('data-act="reply"'), 'no Reply');
+  assert.match(html, /<div contenteditable="false" data-followup="0" style="user-select:none;padding:4px 10px 10px 16px;background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:8px">/, 'the reply field closes the card');
+  assert.ok(html.indexOf('data-followup="0"') > html.indexOf('data-foot="4"'), 'under the last turn\'s button row');
+  m.props.readOnly = true;
+  const read = m.html();
+  assert.ok(!read.includes('data-followup='), 'read only: no field');
+  assert.match(read, /padding:12px 10px 10px 10px;background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:8px/, 'the button row closes it');
 });
 
-test('the button row (2026-10-13): Copy and Regenerate on the left (no Reply, 2026-10-16); then Delete on the right, the closing line\'s words not drawn (2026-10-15), Collapse being in the question\'s corner (2026-10-15); the closing line is kept', () => {
+test('the button row (2026-10-13): Copy and Regenerate on the left (no Reply since 2026-10-16); then Delete on the right, the closing line\'s words not drawn (2026-10-15), Collapse being in the question\'s corner (2026-10-15); the closing line is kept', () => {
   const footOf = (html) => { const at = html.indexOf('data-foot='); assert.ok(at >= 0, 'a foot is drawn'); const start = html.lastIndexOf('<div', at); return html.slice(start, html.indexOf('</div>', at) + 6); };
   const shown = (html) => html.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
   for (const [line, closing, meta] of [['@bart make the icons bigger', '*Build · Opus · high · 39 s*', 'Opus · high · 39 s'], ['@chat why retry?', '*Chat · Opus · high · 17 s*', 'Opus · high · 17 s'], ['@bart why retry?', '*Chat · 48 s · via Bart*', '48 s'], ['@chat why retry?', '*Opus · high · 9 s · moved up from Sonnet medium*', 'Opus · high · 9 s']]) {
@@ -804,7 +809,7 @@ test('three turns: the follow-up that makes the third collapses the first and le
   assert.ok(n.lines().slice(2, 2 + answer('x').length).every((l) => /^bart>/.test(l)), 'two turns: nothing collapsed');
 });
 
-test('a click that expands a collapsed conversation, or its last exchange, opens its reply field, with the keyboard in it when it is in sight (2026-10-15; the pane stays put, 2026-10-16); an earlier exchange sends no keyboard', () => {
+test('a click that expands a collapsed conversation, or its last exchange, shows its reply field, with the keyboard in it when it is in sight (2026-10-15; the pane stays put, 2026-10-16); an earlier exchange focuses nothing', () => {
   const field = (m) => { const at = /data-follow-input="(\d+)"/.exec(m.html()); return at ? Number(at[1]) : null; };
   const focusing = (m) => {
     const input = { focused: 0, focus() { input.focused += 1; } };
@@ -838,14 +843,15 @@ test('a click that expands a collapsed conversation, or its last exchange, opens
   assert.notEqual(field(turn), null);
   turn.editor.focusReplyAfter();
   assert.equal(typed.focused, 1);
-  // An earlier exchange expanded opens nothing: the field is the conversation's last exchange's.
+  // An earlier exchange expanded focuses nothing: the field, there all along, is the conversation's last exchange's.
   const two = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because').map((l) => l.replace(/^bart>/, 'bart+>')), '@chat and more?', ...answer('more'), '']);
   two.click('fold', { turn: '1' });
+  assert.equal(two.html().indexOf('data-follow-input') > two.html().indexOf('data-foot="' + (2 + answer('x').length) + '"'), true, 'under the last exchange');
   assert.equal(field(two), 1, 'the field, always open at the bottom (2026-10-16), is the conversation\'s, not opened by the click');
   assert.equal(two.editor.replyFocus, null);
 });
 
-test('a question asked on a line: once answered, its reply field opens, with the keyboard in it while the person is still on it: not when they typed or went to another field meanwhile (2026-10-15; 2026-10-16)', () => {
+test('a question asked on a line: once answered, its reply field is under it, with the keyboard in it while the person is still on it: not when they typed or went to another field meanwhile (2026-10-15; 2026-10-16)', () => {
   const run = (meanwhile) => {
     const m = mounted(['@chat why retry?', '']);
     const input = { focused: 0, focus() { input.focused += 1; } };
@@ -868,7 +874,7 @@ test('a question asked on a line: once answered, its reply field opens, with the
   for (const [why, meanwhile] of [['typed', (ed) => { ed.keyedAt = Date.now() + 1; }], ['in another field', () => { globalThis.document.activeElement = elsewhere; }]]) {
     const moved = run(meanwhile);
     globalThis.document.activeElement = null;
-    assert.ok(moved.field, `${why}: the field still opens`);
+    assert.ok(moved.field, `${why}: the field is still drawn`);
     assert.equal(moved.input.focused, 0, `${why}: the keyboard stays where they put it`);
   }
   // Scrolled while reading it: still on it, the field takes the keyboard where the pane is (it is in sight here).
@@ -876,6 +882,6 @@ test('a question asked on a line: once answered, its reply field opens, with the
   assert.equal(read.input.focused, 1, 'scrolled: the keyboard is in it all the same');
   // A follow-up sent from the reply field waits for its answer as a line asked does (2026-10-16, David; Discover's alone before).
   const m = mounted(['@chat why retry?', ...answer('because'), '']);
-  m.editor.replyOpen.add(0); m.editor.followText.set(0, 'and timeouts?'); m.editor.sendFollow(0);
+  m.editor.followText.set(0, 'and timeouts?'); m.editor.sendFollow(0);
   assert.ok(m.editor.replyWait, 'waiting for its answer');
 });

@@ -220,10 +220,6 @@ test('Discover\'s card (2026-10-14, the mock): bordered rows with a radio, a pic
   assert.match(html, /<span class="dv-label">Concise replies<\/span><span class="dv-why">front-loaded answers<\/span>/, 'the reason under the label');
   assert.ok(html.includes('placeholder="Or say it in your own words…"') && html.includes('class="dv-submit"'), 'its own field and Submit');
   assert.ok(!html.includes('data-followup='), 'no @bart field under the card');
-  // Its reply opened (the answer just came in, 2026-10-15): still none under it; the field to focus is the card's own.
-  m.editor.replyOpen.add(0);
-  assert.ok(!m.html().includes('data-followup='), 'none under it with the reply opened');
-  m.editor.replyOpen.delete(0);
   m.click('cardopt', { turn: '0', opt: '1' });
   assert.equal(m.asks.length, 0, 'a pick is not sent');
   html = m.html();
@@ -320,7 +316,7 @@ test('an @discover run\'s steps, opened, are drawn by part of the trace (2026-10
 });
 
 /* ---------------------------------------------------------------------------- Refine (2026-10-15, David) */
-// The reply that said what Discover will look for has Refine where Reply stands. It opens the conversation's field under
+// The reply that said what Discover will look for had Refine where Reply stood (neither is drawn now). It opens the conversation's field under
 // that reply; what is sent is `@discover --refine <words>`: a running search stops, the runs before stay collapsed, and
 // the direction Discover settles from it waits in a research box until Start research or Restart research.
 const BRIEF = 'when shorter replies help understanding and when they leave too much out';

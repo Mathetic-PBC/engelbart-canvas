@@ -167,9 +167,9 @@ test('@discover\'s cards have no Wrap up and no Send to Discover field, and Wrap
   const ls = recap.lines(), drawn = recap.editor.lineHtml(2, ls[2], model.parseLine(ls[2]), false, false, recap.editor.layout(ls).get(2), false);
   assert.match(drawn, />Look for<\/span><span style="display:block;">retry loops<\/span>/, 'drawn as a section');
   assert.ok(!drawn.includes('<button'), 'no button');
-  // Brainstorm again is always open (2026-10-16, David: no Reply button); Send to Discover's row is under it.
-  assert.ok(!recap.editor.editorHtml().includes('data-act="reply"'), 'no Reply on the foot');
+  // Brainstorm again is always under the foot (2026-10-16: no Reply to open it); Send to Discover's row under that.
   const page = recap.editor.editorHtml();
+  assert.ok(!page.includes('data-act="reply"'), 'no Reply on the foot');
   assert.ok(page.indexOf('data-recap-discover="0"') > page.indexOf('data-followup="0"') && page.indexOf('data-followup="0"') > page.indexOf('data-foot="0"'), 'a row of its own, under Brainstorm again');
   recap.typeDiscover('t0', TYPED);
   recap.sendDiscover('t0');
@@ -362,7 +362,6 @@ test('an older recap is drawn as sections, the paper path\'s "What you took from
     assert.match(follow, /data-agent="brainstorm" placeholder="Respond…" aria-label="Ask a follow-up"/, 'the conversation\'s next turn, as Chat\'s field is');
     assert.ok(!follow.includes('data-empty'), 'it is not sent empty');
     assert.match(follow, />@brainstorm<\/span>/);
-    m.editor.replyOpen.add(0); // Reply opened it (2026-10-13)
     const page = m.editor.editorHtml();
     assert.ok(page.indexOf('data-recap-discover="0"') > page.indexOf('data-followup="0"'), 'Send to Discover, a row of its own under it');
     assert.ok(!page.includes('Orient again'));
@@ -417,7 +416,7 @@ test('Send to Discover is not drawn after @bart or @discover answers, under a re
   bart.editor.discoverText.set('t0', 'x');
   bart.editor.sendDiscover('t0');
   assert.deepEqual(bart.asks, [], 'a target that is not drawn sends nothing');
-  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, '@bart\'s follow-up field, always open (2026-10-16, David: no Reply button)');
+  assert.match(bart.editor.editorHtml(), /aria-label="Ask a follow-up"/, '@bart\'s follow-up field, there without a Reply (2026-10-16)');
 });
 
 test('the @ menu no longer offers Orient: the editor, the rail model and the workspace list Bart, Chat, Brainstorm and Discover; the rail names no Orient (M-01)', async () => {
@@ -491,7 +490,7 @@ test('the walkthrough\'s handoff asks @discover on the last brainstorm result, o
 
 /* ------------------------------------------------------------- @brainstorm as a conversation (2026-10-14) */
 
-test('an @brainstorm answer in prose is drawn as Chat\'s: its own lines, Copy and Regenerate on its foot, no card, Skip, Wrap up, Send to Discover or result line; one that asks nothing still takes a reply, which goes on in the same thread', async () => {
+test('an @brainstorm answer in prose is drawn as Chat\'s: its own lines, Copy and Regenerate on its foot, the reply field under it, no card, Skip, Wrap up, Send to Discover or result line; one that asks nothing still takes a reply, which goes on in the same thread', async () => {
   const prose = (text) => replyLines(text, { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: false, agent: 'brainstorm' });
   const REFLECT = 'So the rubric did more than the model swap.';
   const lines = ['@brainstorm why did the second version feel better', ...prose('Was it the model, or the rubric you wrote at the same time?'), '@brainstorm the rubric, I think', ...prose(`${REFLECT}\n\nWhat you know: the comparison mixed two changes.`), ''];
@@ -502,10 +501,9 @@ test('an @brainstorm answer in prose is drawn as Chat\'s: its own lines, Copy an
   assert.ok(!page.includes('data-recap-discover'), 'a line that reads like an older recap section is not one: no Send to Discover');
   assert.doesNotMatch(await lineOf(m, m.lines().indexOf('bart> What you know: the comparison mixed two changes.')), />What you know<\/span>/, 'nor drawn as a section');
   assert.match(page, /data-act="regen"[^>]*data-plain="1"/, 'Regenerate, on its one model');
+  assert.ok(!page.includes('data-act="reply"') && page.indexOf('data-followup="0"') > page.indexOf('data-foot="4"'), 'the reply field under the last turn, though it asked nothing (2026-10-16: no Reply)');
   assert.match(page, /aria-label="Ask a follow-up"/, 'its reply field, though it asked nothing (always open since 2026-10-16)');
-  assert.ok(!page.includes('data-act="reply"'), 'no Reply button');
   assert.match(await lineOf(m, m.lines().indexOf(`bart> ${REFLECT}`)), /So the rubric did more than the model swap\./, 'its words as written');
-  m.editor.replyOpen.add(0);
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/doc.js')).href);
   assert.match(m.editor.followHtml(m.lines(), model.threads(m.lines())[0]), /data-agent="brainstorm" placeholder="Respond…" aria-label="Ask a follow-up"/);
   m.editor.followText.set(0, 'and the rubric came from the tutors');

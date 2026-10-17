@@ -614,15 +614,16 @@ test('in an answer line, the hammer builds that turn as the footer\'s Build does
   assert.ok(!mounted([...SPEC, '']).editor.editorHtml().includes('data-build-icon'));
 });
 
-test('the [[build]] line clicked into: the hammer stays drawn and builds, by the mouse or the keyboard (an answer is read only, 2026-10-16)', () => {
+test('the [[build]] line is read only like the rest of its answer (2026-10-16): with the caret put there, the hammer stays drawn and builds; its source never shows', () => {
   const at = ROUTED_SPEC.indexOf(`bart> ${BUILD_LINE}`), after = 'Press [[build]]'.length;
   const m = mounted(ROUTED_SPEC);
-  m.editor.state.activeLine = at; m.editor.caret = { line: at, offset: after };
+  assert.equal(m.editor.lockedAt(m.lines(), at), true, 'an answer line');
   for (const byMouse of [true, false]) {
-    m.editor.byMouse = byMouse;
+    m.editor.state.activeLine = at; m.editor.caret = { line: at, offset: after }; m.editor.byMouse = byMouse;
     const html = m.editor.editorHtml();
-    assert.match(html, /<span data-build-icon="1" contenteditable="false" data-act="footbuild" data-turn="1"/, `${byMouse ? 'the mouse' : 'the keyboard'}: still the hammer, still the turn's Build`);
-    assert.ok(!html.includes('data-src="[[build]]"'), 'no source');
+    assert.match(html, new RegExp(`<div data-line="${at}" data-raw="[^"]*"[^>]* contenteditable="false" data-readonly="1"`), 'not a place to type');
+    assert.match(html, /<span data-build-icon="1" contenteditable="false" data-act="footbuild" data-turn="1"/, 'still the hammer, still the turn\'s Build');
+    assert.ok(!html.includes('data-open="1">[[build]]') && !html.includes('data-src="[[build]]"'), 'never its source');
   }
 });
 

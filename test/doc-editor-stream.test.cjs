@@ -402,7 +402,7 @@ for (const routed of [false, true]) {
   test(`a follow-up ${routed ? 'routed through Bart' : 'sent straight'} in a titled conversation of three turns, scrolled to the third: its question takes the field's place on screen, the two turns above folding`, async () => {
     const ls = titled(), from = ls.indexOf('@chat first question'), third = ls.indexOf('@chat third question');
     const m = mounted(ls, {}, { laid: true, ...(routed ? { onRoute: () => Promise.resolve({ agent: 'bart', sure: 1, by: 'rule' }) } : {}) });
-    m.editor.replyOpen.add(from); m.editor.lastHtml = null; // Reply pressed
+    m.editor.lastHtml = null; // its reply field is there without a Reply (2026-10-16)
     m.pane.scrollTop = m.ed.offsetOf(m.rowAt(third)) - 120; m.update(() => {});
     const field = m.ed.querySelector(`[data-follow-input="${from}"]`);
     assert.ok(field, 'its reply field is open');
@@ -452,7 +452,7 @@ test('a question sent just after a wheel scroll, or with a button down, leaves t
   for (const before of [(e) => { e.wheelAt = Date.now(); }, (e) => { e.pressed = true; }]) {
     const ls = titled(), from = ls.indexOf('@chat first question'), third = ls.indexOf('@chat third question');
     const m = mounted(ls, {}, { laid: true });
-    m.editor.replyOpen.add(from); m.editor.lastHtml = null;
+    m.editor.lastHtml = null;
     m.pane.scrollTop = m.ed.offsetOf(m.rowAt(third)) - 120; m.update(() => {});
     assert.ok(m.editor.fieldTop(m.ed, from) != null, 'its field open and in view');
     const scrolled = m.pane.scrollTop;
@@ -464,7 +464,7 @@ test('a question sent just after a wheel scroll, or with a button down, leaves t
   }
   const ls = titled(), from = ls.indexOf('@chat first question'), third = ls.indexOf('@chat third question');
   const m = mounted(ls, {}, { laid: true });
-  m.editor.replyOpen.add(from); m.editor.lastHtml = null;
+  m.editor.lastHtml = null;
   m.pane.scrollTop = m.ed.offsetOf(m.rowAt(third)) - 120; m.update(() => {});
   m.editor.followText.set(from, 'and then?');
   m.update(() => m.editor.sendFollow(from));
@@ -486,7 +486,7 @@ test('collapsing open conversations when a document is shown (autoCollapse) does
   m.update((p) => { p.text = open; }); // the person opened them again
   assert.equal(folded(), 0);
   const from = m.props.text.split('\n').indexOf('@chat first question');
-  m.editor.replyOpen.add(from); m.editor.lastHtml = null; m.update(() => {});
+  m.editor.lastHtml = null; m.update(() => {});
   m.editor.followText.set(from, 'and then?');
   m.update(() => m.editor.sendFollow(from));
   const { id } = asked(m);
