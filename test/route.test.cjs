@@ -1091,14 +1091,15 @@ test('a click on Regenerate opens the model selector (2026-10-16, David: as hove
   assert.equal(m.editor.state.picker.kind, 'regen');
 });
 
-test('a conversation\'s Collapse is its first exchange\'s, a double chevron named Collapse conversation (2026-10-16, David); every later exchange\'s folds it alone', () => {
+test('a conversation\'s Collapse is its first exchange\'s, named Collapse conversation and drawn as every other exchange\'s (2026-10-16, David); every later exchange\'s folds it alone', () => {
   const DOUBLE = '<path d="m17 11-5-5-5 5"></path><path d="m17 18-5-5-5 5"></path>', SINGLE = '<path d="m6 9 6 6 6-6"></path>';
+  const iconOf = (html, q) => rowOf(html, q).match(new RegExp(`data-turn="${q}"[^>]*>(<svg[\\s\\S]*?</svg>)</button>`))[1];
   // Titled, its only exchange: the corner's Collapse collapses the conversation to its title's row.
   const titled = mounted(TITLED);
   const html = titled.editor.editorHtml();
   assert.ok(!rowOf(html, 1).includes('data-chip'), 'no chip beside an answered question');
   assert.match(rowOf(html, 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg/, 'its Collapse, top right');
-  assert.ok(rowOf(html, 1).includes(DOUBLE), 'a double chevron');
+  assert.ok(rowOf(html, 1).includes(SINGLE) && !rowOf(html, 1).includes(DOUBLE), 'the single chevron');
   assert.ok(!/data-foot="1"[^>]*>(?:(?!<\/div><div data-line)[\s\S])*data-act="fold"/.test(html), 'not on the button row');
   clickAct(titled, { act: 'fold', turn: '1' });
   assert.equal(titled.lines()[0], 'bart#+ [chat 2026-10-13T09:00:00Z] Retry logic', 'collapsed to its title');
@@ -1109,7 +1110,7 @@ test('a conversation\'s Collapse is its first exchange\'s, a double chevron name
   const replies = (m, q) => m.lines().slice(q + 1, q + 3);
   const three = mounted(threeLines), drawn = three.editor.editorHtml();
   assert.match(rowOf(drawn, 1), /data-corner="1"[^>]*><button[^>]*data-act="fold" data-turn="1"[^>]*aria-label="Collapse conversation"/, 'the first: the conversation\'s');
-  assert.ok(rowOf(drawn, 1).includes(DOUBLE));
+  for (const q of [4, 7]) assert.equal(iconOf(drawn, 1), iconOf(drawn, q), `the first's icon is turn ${q}'s, markup and all`);
   for (const q of [4, 7]) {
     assert.match(rowOf(drawn, q), new RegExp(`data-corner="${q}"[^>]*><button type="button" class="bart-fold" data-act="fold" data-turn="${q}" aria-expanded="true" aria-label="Collapse" title="Collapse"><svg`), `turn at ${q}: its own`);
     assert.ok(rowOf(drawn, q).includes(SINGLE) && !rowOf(drawn, q).includes(DOUBLE), `turn at ${q}: the single chevron`);

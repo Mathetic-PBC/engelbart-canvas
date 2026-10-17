@@ -129,10 +129,10 @@ test('drawn: the box stands in the card of the reply that asked for it (2026-10-
   assert.ok(!m.html().replace(/ data-raw="[^"]*"/g, '').includes('A paper'));
 });
 
-test('a research box that is its titled conversation\'s first exchange: its Collapse collapses the conversation, a double chevron named Collapse conversation (2026-10-16, David)', () => {
+test('a research box that is its titled conversation\'s first exchange: its Collapse collapses the conversation, named Collapse conversation, the single chevron (2026-10-16, David)', () => {
   const lines = ['bart# [discover 2026-10-13T10:00:00Z] Tutors', '@discover --research how do tutors notice struggle?', 'bart> ## Start here', 'bart> **A paper**', 'bart>', 'bart> *Discover · Opus · high · 2 s*', ''];
   const m = mounted(lines);
-  assert.match(rowOf(m.html(), 1), /data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg[^>]*><path d="m17 11-5-5-5 5"><\/path><path d="m17 18-5-5-5 5"><\/path><\/svg>/);
+  assert.match(rowOf(m.html(), 1), /data-act="fold" data-turn="1" aria-expanded="true" aria-label="Collapse conversation" title="Collapse conversation"><svg width="16"[^>]*stroke-width="1.75"[^>]*><path d="m6 9 6 6 6-6"><\/path><\/svg>/);
   m.click('fold', { turn: '1' });
   assert.match(m.lines()[0], /^bart#\+ /, 'the conversation collapses');
   assert.deepEqual(m.lines().slice(1), lines.slice(1), 'the box\'s lines as they were');

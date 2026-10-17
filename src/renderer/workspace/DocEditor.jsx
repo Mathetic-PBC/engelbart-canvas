@@ -325,9 +325,6 @@ const ICON = {
   folded: icon('<path d="m9 18 6-6-6-6"></path>', 14, 1.75),
   // An open exchange's Collapse, at the top right of its question (2026-10-15): Lucide's chevron-down, its folded row's turned.
   open: icon('<path d="m6 9 6 6 6-6"></path>', 16, 1.75),
-  // The first exchange's Collapse, which collapses the whole conversation (2026-10-16, David): Lucide's chevrons-up, as
-  // the single chevron is drawn, so it reads as doing more.
-  openAll: icon('<path d="m17 11-5-5-5 5"></path><path d="m17 18-5-5-5 5"></path>', 16, 1.75),
   pointer: icon(`<path d="${AGENTS_PATH}"></path>`, 15, 1.75),
   // An older @bart answer's Reply (2026-10-15): Lucide's reply.
   reply: icon('<path d="m9 17-5-5 5-5"></path><path d="M20 18v-2a4 4 0 0 0-4-4H4"></path>'),
@@ -2253,14 +2250,14 @@ export default class DocEditor extends React.Component {
   // `whole`: a titled Build's conversation (foldthread); `asking`: a question still being answered, which collapses the
   // whole conversation (collapseAll); else the exchange's (fold, collapseTurn). A chevron (2026-10-16, David; the word
   // Collapse before it, that morning): down while open, as the folded row's points right, named Collapse for a hover and
-  // a screen reader. The first exchange of a titled conversation at rest collapses all of it, and says so: a double
-  // chevron, named Collapse conversation (2026-10-16, David).
+  // a screen reader. The first exchange of a titled conversation at rest collapses all of it, and says so in its name,
+  // Collapse conversation; it is drawn as every other exchange's (2026-10-16, David: it was a double chevron).
   cornerHtml(at, whole = false, asking = false) {
     const { thread, turn } = at, running = whole && isBuilding(thread, this.props.builds);
     const all = !whole && !asking && this.collapsesThread(thread, turn), label = all ? 'Collapse conversation' : 'Collapse';
     const button = whole
       ? `<button type="button" class="bart-fold" data-act="foldthread" data-row="${thread.titleLine}" aria-expanded="true" aria-label="Collapse"${running ? ' disabled title="Collapse once it answers"' : ' title="Collapse"'}>${ICON.open}</button>`
-      : `<button type="button" class="bart-fold" data-act="${asking ? 'foldall' : 'fold'}" data-turn="${turn.q}" aria-expanded="true" aria-label="${label}" title="${label}">${all ? ICON.openAll : ICON.open}</button>`;
+      : `<button type="button" class="bart-fold" data-act="${asking ? 'foldall' : 'fold'}" data-turn="${turn.q}" aria-expanded="true" aria-label="${label}" title="${label}">${ICON.open}</button>`;
     return `<span contenteditable="false" data-corner="${turn.q}" style="user-select:none;flex:none;position:relative;display:inline-flex;margin:-2px -6px -2px auto;height:28px">${button}</span>`;
   }
   // A turn folded by a follow-up (2026-10-13): one row, its question on one line cut off with an ellipsis, grey and small,
@@ -2315,7 +2312,7 @@ export default class DocEditor extends React.Component {
       // The first exchange of a titled conversation's collapses the conversation (collapseTurn), drawn as its corner's is.
       + (done ? (() => {
         const all = this.collapsesThread(thread, turn), label = turn.folded ? 'Expand' : all ? 'Collapse conversation' : 'Collapse';
-        return `<span style="flex:none;display:inline-flex;margin:-4px -6px -4px auto;padding-left:10px"><button type="button" class="bart-fold" data-act="fold" data-turn="${turn.q}" aria-expanded="${!turn.folded}" aria-label="${label}" title="${label}">${turn.folded ? ICON.folded : all ? ICON.openAll : ICON.open}</button></span>`;
+        return `<span style="flex:none;display:inline-flex;margin:-4px -6px -4px auto;padding-left:10px"><button type="button" class="bart-fold" data-act="fold" data-turn="${turn.q}" aria-expanded="${!turn.folded}" aria-label="${label}" title="${label}">${turn.folded ? ICON.folded : ICON.open}</button></span>`;
       })() : '')
       + '</div>';
     const running = state === 'running', status = running || (done && turn.folded) ? '' : this.boxStatusHtml(ls, i, turn, state, can);
