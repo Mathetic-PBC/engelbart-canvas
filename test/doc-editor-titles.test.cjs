@@ -382,33 +382,33 @@ test('a title with no question under it is the text it is; deleting a titled con
   assert.deepEqual(m.lines(), ['Notes', '', 'After']);
 });
 
-test('the card (2026-10-13): question 14px 16px, answer 12px under it in a 14px rule, button row 12px 10px 10px 16px closing it, 8px under a card; no reply field until Reply', () => {
+test('the card (2026-10-13): question 14px 16px, answer 12px under it in a 14px rule, button row 12px 10px 6px 16px, the reply field 4px 10px 10px 16px closing it, 8px under a card; no Reply button (2026-10-16)', () => {
   const html = mounted(['@chat first?', ...answer('one'), '@chat second?', ...answer('two'), '']).html();
   assert.match(rowOf(html, 0), /padding:14px 16px 0px;background:#fafafa;border-radius:10px 10px 0 0/);
   assert.match(rowOf(html, 0), /color:#171717/);
   assert.match(rowOf(html, 1), /padding:12px 16px 0px;[^"]*color:#262626;font-size:16px;line-height:1\.65[^"]*"><span style="display:block;padding:2px 0 2px 14px;border-left:2px solid #d6d6d6"/);
   assert.match(rowOf(html, 4), /padding:14px 16px 0px/, 'a question under an open answer');
   assert.match(html, /padding:12px 10px 6px 16px/);
-  assert.match(html, /padding:12px 10px 10px 16px;background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:8px/);
-  assert.ok(!html.includes('data-followup=') && html.includes('data-act="reply" data-thread="0"'), 'Reply, no field');
+  assert.match(html, /data-followup="0" style="user-select:none;padding:4px 10px 10px 16px;background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:8px"/, 'the field closes the card');
+  assert.ok(!html.includes('data-act="reply"'), 'no Reply');
 });
 
-test('the button row (2026-10-13): Reply, Copy and Regenerate on the left; then Delete on the right, the closing line\'s words not drawn (2026-10-15), Collapse being in the question\'s corner (2026-10-15); the closing line is kept', () => {
+test('the button row (2026-10-13): Copy and Regenerate on the left (no Reply, 2026-10-16); then Delete on the right, the closing line\'s words not drawn (2026-10-15), Collapse being in the question\'s corner (2026-10-15); the closing line is kept', () => {
   const footOf = (html) => { const at = html.indexOf('data-foot='); assert.ok(at >= 0, 'a foot is drawn'); const start = html.lastIndexOf('<div', at); return html.slice(start, html.indexOf('</div>', at) + 6); };
   const shown = (html) => html.replace(/<span class="bart-tip"[^>]*>[^<]*<\/span>/g, '').replace(/<[^>]+>/g, '').trim();
   for (const [line, closing, meta] of [['@bart make the icons bigger', '*Build · Opus · high · 39 s*', 'Opus · high · 39 s'], ['@chat why retry?', '*Chat · Opus · high · 17 s*', 'Opus · high · 17 s'], ['@bart why retry?', '*Chat · 48 s · via Bart*', '48 s'], ['@chat why retry?', '*Opus · high · 9 s · moved up from Sonnet medium*', 'Opus · high · 9 s']]) {
     const lines = ['bart# [chat 2026-10-12T21:41:00Z] Retry logic', line, 'bart> because', `bart> ${closing}`, ''];
     const m = mounted(lines), foot = footOf(m.html());
-    assert.equal(shown(foot), 'Reply', `${closing}: Reply, and not ${meta}`);
+    assert.equal(shown(foot), '', `${closing}: no words, not ${meta}`);
     assert.ok(!foot.includes('data-foot-meta'), 'no meta');
-    assert.match(foot, /<button type="button" class="bart-reply" data-act="reply" data-thread="1"/, 'Reply');
+    assert.ok(!foot.includes('data-act="reply"'), 'no Reply');
     assert.match(foot, /data-act="copybart" data-turn="1" aria-label="Copy"/, 'Copy');
     assert.match(foot, /data-act="regen" data-turn="1" data-quiet="1" aria-label="Regenerate"/, 'Regenerate, opening no selector on hover (a click opens it, 2026-10-16)');
     assert.ok(!foot.includes('data-act="fold"'), 'no Collapse here');
     assert.match(rowOf(m.html(), 1), /data-corner="1"[^>]*><button type="button" class="bart-fold" data-act="(?:fold" data-turn="1|foldthread" data-row="0)" aria-expanded="true" aria-label="Collapse(?: conversation)?"[^>]*><svg/, 'Collapse, a chevron (2026-10-16), in the question\'s top right');
     assert.match(foot, /data-act="dropturn" data-turn="1" aria-label="Delete"/, 'Delete');
-    const order = ['data-act="reply"', 'copybart', 'data-act="regen"', 'dropturn'].map((k) => foot.indexOf(k));
-    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'Reply, Copy, Regenerate, Delete');
+    const order = ['copybart', 'data-act="regen"', 'dropturn'].map((k) => foot.indexOf(k));
+    assert.deepEqual(order, [...order].sort((a, b) => a - b), 'Copy, Regenerate, Delete');
     assert.match(foot, /<span style="margin-left:auto"><\/span><span style="flex:none;position:relative;display:inline-flex;"><button class="bart-ic" data-danger="1" data-act="dropturn"/, 'Delete pushed right');
     assert.ok(!foot.includes('editturn') && !foot.includes('footbuild'), 'no Edit, no Build');
     assert.equal(m.lines()[3], `bart> ${closing}`, 'the closing line in the file is as it was');
@@ -424,8 +424,7 @@ test('the follow-up field says @bart whichever agent answered, since what is typ
   for (const line of ['@chat why retry?', '@discover retries', '@brainstorm a plan']) {
     const m = mounted([line, ...answer('x'), '']);
     m.props.onRoute = () => {};
-    assert.ok(!m.html().includes('data-followup='), `${line}: shut until Reply`);
-    m.click('reply', { thread: '0' });
+    assert.ok(!m.html().includes('data-act="reply"'), `${line}: no Reply; the field is open`);
     const routed = field(m.html());
     assert.match(routed, /font-size:16px;line-height:24px">@bart<\/span>/, `${line}: @bart`);
     assert.ok(!/>@(chat|discover|brainstorm)</.test(routed), `${line}: not the agent that answered`);
@@ -805,7 +804,7 @@ test('three turns: the follow-up that makes the third collapses the first and le
   assert.ok(n.lines().slice(2, 2 + answer('x').length).every((l) => /^bart>/.test(l)), 'two turns: nothing collapsed');
 });
 
-test('a click that expands a collapsed conversation, or its last exchange, opens its reply field, with the keyboard in it when it is in sight (2026-10-15; the pane stays put, 2026-10-16); an earlier exchange opens nothing', () => {
+test('a click that expands a collapsed conversation, or its last exchange, opens its reply field, with the keyboard in it when it is in sight (2026-10-15; the pane stays put, 2026-10-16); an earlier exchange sends no keyboard', () => {
   const field = (m) => { const at = /data-follow-input="(\d+)"/.exec(m.html()); return at ? Number(at[1]) : null; };
   const focusing = (m) => {
     const input = { focused: 0, focus() { input.focused += 1; } };
@@ -842,7 +841,7 @@ test('a click that expands a collapsed conversation, or its last exchange, opens
   // An earlier exchange expanded opens nothing: the field is the conversation's last exchange's.
   const two = mounted(['bart# Retry logic', '@chat why retry?', ...answer('because').map((l) => l.replace(/^bart>/, 'bart+>')), '@chat and more?', ...answer('more'), '']);
   two.click('fold', { turn: '1' });
-  assert.equal(field(two), null);
+  assert.equal(field(two), 1, 'the field, always open at the bottom (2026-10-16), is the conversation\'s, not opened by the click');
   assert.equal(two.editor.replyFocus, null);
 });
 

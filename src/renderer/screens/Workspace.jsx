@@ -25,7 +25,7 @@ import { connectInbox, dockLine } from '../model/connect.js';
 import RecentPages from '../workspace/RecentPages.jsx';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper } from '../model/guide.js';
-import { buildLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, researchLine } from '../model/doc.js';
+import { buildLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, madeMentionOf, researchLine, REPLY_RE } from '../model/doc.js';
 import { cardOfAnswer, questionOf } from '../../main/bart/card.cjs';
 import { fallbackAgent } from '../model/route.js';
 // An ask's id, as the editor makes them (DocEditor newAskId): a research box this window puts in (askBart) takes one.
@@ -78,6 +78,8 @@ const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
 // library folder (MATH-22), which is no row of its own, and `@[Title](zotero:<key>)` a Zotero item (MATH-65), no row either.
 const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:|\(lib:[\w-]+:|\(zotero:)/g;
 const SAVE_DELAY = 400;
+// The files a run's answer stands for: its `bart> @[name](made:<askId>/<path>)` rows (main/bart/create.cjs), this run's only.
+const madeIn = (lines, askId) => (lines || []).map((line) => { const m = REPLY_RE.exec(String(line)); return m ? madeMentionOf(m[2]) : null; }).filter((made) => made && made.askId === askId);
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
 const basename = (value) => String(value || '').split('/').pop();
@@ -629,6 +631,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // search and goes on from it in its session, told what was added (bart/ask.cjs pausedFor), under this ask's pending line.
   // `refine`: a turn of Discover's Refine (2026-10-15, the editor's refiningAt): the direction it settles waits in its box
   // until the person presses Start research or Restart research there (DocEditor startResearch); nothing is searched.
+  // Set once saveMade and openMade are (the @create section below): what Create made, kept and opened as it lands.
+  const madeLanded = React.useRef(() => {});
   const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false, steer = null }) => {
     if (!key || !ref || !topic) return;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
@@ -728,6 +732,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       if (ownTopic && !out.stopped && !out.failed) { if (out.topic) retitleTo(out.topic); else if (name && !later) nameAs(text); }
       // The Welcome walkthrough's last card answered (main's ask.cjs, the welcome path): Discover starts on their next steps.
       if (out.welcome === 'result') handOff(key, askId);
+      // What Create made (2026-10-16, David): saved to the library and this workspace, and opened in the Stage, without
+      // its row's Save or name being clicked (madeLanded).
+      if (!out.stopped && answered != null) madeLanded.current(madeIn(out.lines, askId));
     } catch (error) {
       place([`bart> **No answer.** ${errorMessage(error)}`]);
       if (later && !ownTopic) nameAs('');
@@ -1260,6 +1267,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       onError(error);
     }
   }, [madeFiles, project.id, showRight, onError]);
+  // A Create run's answer placed (askBart, 2026-10-16, David): each file it made saved (into the library, linked here, as
+  // its row's Save does), then the first opened in the Stage (as its name's click does). A save that fails is told and
+  // the file is still opened.
+  madeLanded.current = (list) => {
+    if (!list.length) return;
+    (async () => {
+      for (const made of list) await saveMade(made);
+      await openMade(list[0]);
+    })();
+  };
   // Which made files a Stage tab shows (the editor greys their rows), and the one in front, whose Save is the row's.
   const [stagePlaces, setStagePlaces] = React.useState([]);
   const madeOpen = React.useMemo(() => new Set(stagePlaces.map(madeAt).filter(Boolean).map(madeKey)), [stagePlaces]);
@@ -1847,6 +1864,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // has no copy (the address, named with its title, linked here; main keeps its pdf straight away), + Workspace links the
   // library's row. Two clicks never make two rows: the second finds it here, or main refuses it as already in the library.
   const saveGuidePaper = ({ address, title }) => savePaper({ address, title, library, inRail }, { addInput, linkIds });
+  // Its filled bookmark clicked (2026-10-16, David: unbookmark): the paper leaves this workspace and stays in the library,
+  // as the rail's trash does; the bookmark then reads + (in the library, not here).
+  const unsaveGuidePaper = async ({ address }) => {
+    const { state, row } = paperState(library, address, inRail);
+    if (state !== 'here' || !topic) return;
+    await api.unlinkFromWorkspace(project.id, topic.id, row.id);
+    if (tabs.some((tab) => tab.id === row.id)) closeTab(row.id);
+    await reload();
+  };
   // The Browser's Save: the page as a new row, named in the card, into the library alone or also into this workspace.
   const savePage = async (name, here) => {
     if (!openPage) return;
@@ -2113,6 +2139,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     docTextOf: (key) => docsRef.current[key],
     paperState: guidePaperState,
     onSavePaper: saveGuidePaper,
+    onUnsavePaper: unsaveGuidePaper,
     madeFiles,
     madeOpen,
     onMadeNeeded: needMade,

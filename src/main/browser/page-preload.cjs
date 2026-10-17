@@ -485,12 +485,29 @@ function runInPage() {
     const shown = new Highlight(tint);
     shown.priority = -1; // under find's matches (⌘F's), as a pdf's section is
     h.set(SECTION, shown);
-    const at = from && from.closest(BLOCKS) || from;
-    if (at && typeof at.scrollIntoView === 'function') {
-      at.scrollIntoView({ block: 'start', inline: 'nearest' });
-      window.scrollBy(0, -Math.round(Math.min(120, window.innerHeight / 6))); // the date or heading above it in view too
-    }
+    scrollToWords(range, from);
     return true;
+  }
+  // The section's start words a little below the top of each box that scrolls around them, the innermost first, then the
+  // page: the date or heading above them in view too. The words' own place, not their block's (2026-10-16, David: an old
+  // page, cs.brown.edu's, holds its whole text loose in one table cell, its "block", whose top is the page's), and at once
+  // (a page's `scroll-behavior: smooth` let the second scroll cancel the first, which left the page at its top).
+  function scrollToWords(range, from) {
+    const pad = Math.round(Math.min(120, window.innerHeight / 6));
+    const page = document.scrollingElement || document.documentElement;
+    const boxes = [];
+    for (let el = from; el && el !== page && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+      const y = getComputedStyle(el).overflowY;
+      if ((y === 'auto' || y === 'scroll' || y === 'overlay') && el.scrollHeight > el.clientHeight) boxes.push(el);
+    }
+    boxes.push(page);
+    for (const box of boxes) {
+      const rect = (range.getClientRects && range.getClientRects()[0]) || range.getBoundingClientRect();
+      if (!rect || (!rect.height && !rect.width)) { const at = from && from.closest(BLOCKS) || from; if (at && at.scrollIntoView) at.scrollIntoView({ block: 'start', inline: 'nearest', behavior: 'instant' }); return; }
+      const top = box === page ? 0 : box.getBoundingClientRect().top;
+      const by = Math.round(rect.top - top - pad);
+      if (box === page) window.scrollBy({ top: by, behavior: 'instant' }); else box.scrollBy({ top: by, behavior: 'instant' });
+    }
   }
   // { nonce, words } → { nonce, shown } (a bare string, as before 2026-10-15: no reply).
   ipcRenderer.on(CHANNELS.section, (_event, asked) => {

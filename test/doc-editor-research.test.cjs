@@ -227,7 +227,7 @@ test('Discover\'s card (2026-10-14, the mock): bordered rows with a radio, a pic
   m.click('cardopt', { turn: '0', opt: '1' });
   assert.equal(m.asks.length, 0, 'a pick is not sent');
   html = m.html();
-  assert.match(html, /class="dv-opt"[^>]*aria-checked="true"><span aria-hidden="true" class="dv-radio"><\/span><span[^>]*><span class="dv-label">Listening/);
+  assert.match(html, /class="dv-opt"[^>]*aria-checked="true"><span aria-hidden="true" class="dv-check"><svg[^>]*><path[^>]*><\/path><\/svg><\/span><span[^>]*><span class="dv-label">Listening/);
   assert.match(html, /class="dv-submit"[^>]*style="background:#0070f3/, 'Submit blue once something is picked');
   m.click('sendfollow', { thread: '0' });
   assert.equal(m.asks.length, 1);
@@ -314,7 +314,7 @@ test('an @discover run\'s steps, opened, are drawn by part of the trace (2026-10
   const m2 = mounted(['Notes', '@discover q', 'bart~> run-2'], { asks: { 'run-2': { ...ask, trace: between } } });
   assert.match(rowOf(m2.html(), 2), /Found 9 newer papers that cite “X”/);
   const m3 = mounted(['Notes', '@discover q', 'bart~> run-3'], { asks: { 'run-3': { ...ask, activity: 'Thinking', trace: between } } });
-  assert.match(rowOf(m3.html(), 2), /class="t"[^>]*>Thinking/);
+  assert.match(rowOf(m3.html(), 2), /class="t[^"]*"[^>]*>Thinking/);
   // A new step starts over.
   assert.equal(askProgressed(ask, { step: 2, name: 'Fable', effort: 'xhigh' }).trace, null);
 });
