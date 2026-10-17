@@ -1422,7 +1422,7 @@ export default class DocEditor extends React.Component {
       // A folded turn's foot is not drawn: the turn is its question's one row (foldedHtml). A research box keeps its own.
       if (at && at.role === 'foot' && at.turn.answered && !at.turn.pending && at.turn.folded && !at.box) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.role === 'foot' && at.chat) return this.chatFootHtml({ raw, at, closes: at.closes });
-      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), busy: isRunning(at.thread, this.props.builds), box: at.box, refine: at.refine, guide: at.agent === 'discover' && !at.box ? at.turn : null });
+      if (at && at.role === 'foot') return this.footHtml({ raw, q: at.turn.q, text: p.text.slice(1, -1), folded: at.turn.folded, closes: at.closes, plain: oneModel(at.agent), busy: isRunning(at.thread, this.props.builds), box: at.box, refine: at.refine, guide: at.agent === 'discover' && (!at.box || at.boxState === 'finished') ? at.turn : null });
       // Folded away, or the empty line the runner leaves before the closing line: in the document, not on the page.
       if (p.folded || (at && (at.gap || at.underCard))) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
       if (at && at.card) return this.cardHtml(raw, at.card);
@@ -2444,6 +2444,7 @@ export default class DocEditor extends React.Component {
     // Collapse is at the top right: the question's corner, or a research box's head (2026-10-16, David). Never here.
     const fold = '<span style="margin-left:auto"></span>';
     // An @discover guide's Add all (2026-10-16, David): words, not a pill, while any of its papers is not in this project.
+    // A research box's too, once it has finished (2026-10-16, David: every Discover guide is one now).
     const left = guide && !folded && this.props.onSavePaper ? this.unsavedPapers(ls, guide) : [], adding = guide && this.savingAll.has(guide.q);
     if (left.length || adding) lefts.push(`<button type="button" class="bart-text" data-act="papersaveall" data-turn="${guide.q}"${adding ? ' disabled' : ''} style="user-select:none;flex:none;margin-left:6px">${adding ? 'Adding to library…' : 'Add all to library'}</button>`);
     // The row starts with Copy's 28px box (2026-10-16: Reply went), 10px in as Delete is from the right, so its glyph stands
@@ -2791,7 +2792,7 @@ export default class DocEditor extends React.Component {
       // Under an answer's last line, its Show more (2026-10-13), shown by applyClips once it is long enough to cut.
       if (where && where.lastBody && where.role === 'answer' && !where.box && !where.turn.pending && !where.turn.folded && !where.turn.build && !cards.byQ.has(where.turn.q)) out += where.chat ? this.chatMoreHtml(ls, where) : this.moreHtml(ls, where.turn, where.turn === where.thread.turns[0] || where.turn === [...where.thread.turns].reverse().find((t) => t.answered && !t.pending));
       if (where && where.footAfter && where.chat && !where.turn.folded) out += dimmed(this.chatFootHtml({ at: where, closes: (where.tail && !where.drawnAfter) || where.cut }));
-      else if (where && where.footAfter && !(where.turn.folded && !where.box) && !(where.box && ['stopped', 'failed'].includes(where.boxState))) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), box: where.box, guide: where.agent === 'discover' && !where.box ? where.turn : null }));
+      else if (where && where.footAfter && !(where.turn.folded && !where.box) && !(where.box && ['stopped', 'failed'].includes(where.boxState))) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), box: where.box, guide: where.agent === 'discover' && (!where.box || where.boxState === 'finished') ? where.turn : null }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
       // card (MATH-31; under it, not above, since 2026-10-05: the agent's own field comes first).
       const recap = !!where && where.followAfter && this.endsInRecap(ls, where.thread);

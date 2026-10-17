@@ -209,6 +209,14 @@ test('Add all to library: one text button on the @discover answer\'s foot saves 
   assert.ok(!editor.editorHtml().includes('data-act="papersaveall"'), 'all here: no button');
 });
 
+test('Add all to library is on a finished research box\'s foot too (2026-10-16), not on one stopped', () => {
+  const boxed = (text) => new DocEditor({ text, paperState: () => 'none', onSavePaper() {}, onAsk() {}, onChange() {} }).editorHtml();
+  const research = GUIDE.replace('@discover tools that help people read papers', '@discover --research tools that help people read papers');
+  assert.equal([...boxed(research).matchAll(/data-act="papersaveall"[^>]*>Add all to library</g)].length, 1, 'a finished box');
+  const stopped = research.replace("bart> ## Start here", "bart> Stopped.\nbart> ## Start here");
+  assert.ok(!boxed(stopped).includes('data-act="papersaveall"'), 'a stopped box has no foot');
+});
+
 // The Workspace's side, against the real library and workspace (ipc.cjs): + Save is addInput (add, then link), + Workspace
 // is linkIds, as Workspace.jsx wires them. `sandbox` stands in for main's (src/main/sandbox), none by default.
 async function workspaceHarness(t, { doc = GUIDE, sandbox = null } = {}) {
