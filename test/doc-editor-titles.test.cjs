@@ -263,6 +263,10 @@ test('a conversation at work collapses all the same (2026-10-15, David): the que
   const row = rowOf(m.html(), 0);
   assert.match(row, /data-thread-row/);
   assert.match(row, /data-thread-running="1"/, 'its title row shows it working');
+  assert.match(row, /class="bart-thread-name eb-wave"[^>]*text-overflow:ellipsis[^>]*>Retry logic<\/span>/, 'its title in the grey wave of text at work, still cut off with an ellipsis (2026-10-17, David)');
+  assert.ok(!row.includes('made-spin') && !row.includes('#0070f3'), 'no blue spinner beside it');
+  assert.ok(!row.includes('data-thread-when'), 'no time until it is done');
+  assert.match(row, /data-act="foldthread" data-row="0"/, 'a click still expands it');
   m.editor.foldAll(false);
   assert.equal(m.lines()[0], 'bart# Retry logic', 'Expand all opens it');
   m.editor.foldAll(true);

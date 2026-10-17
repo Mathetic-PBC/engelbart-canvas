@@ -2221,13 +2221,15 @@ export default class DocEditor extends React.Component {
         + `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:15px/1.4 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
         + '</div>';
     }
-    const link = row + `<span class="bart-link" data-act="foldthread" data-row="${i}" role="button" tabindex="0" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" title="⌥-click to rename" style="flex:0 1 auto;display:inline-flex;align-items:center;gap:8px;min-width:0">`
-      + `<span style="flex:none;display:inline-flex">${ICON.pointer}</span>`
-      + `<span class="bart-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span>`
+    // Still at work (collapsed while it runs, 2026-10-15): the title in the grey wave of other text at work (.eb-wave, put
+    // on the page's clock by keepWaves) and its pointer in grey, not the link's blue; no spinner, and no time until it is done
+    // (2026-10-17, David: the blue title and spinner went).
+    const running = !!at.running;
+    const link = row + `<span class="bart-link" data-act="foldthread" data-row="${i}"${running ? ' data-thread-running="1" aria-busy="true"' : ''} role="button" tabindex="0" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" title="⌥-click to rename" style="flex:0 1 auto;display:inline-flex;align-items:center;gap:8px;min-width:0">`
+      + `<span style="flex:none;display:inline-flex${running ? ';color:#8f8f8f' : ''}">${ICON.pointer}</span>`
+      + `<span class="bart-thread-name${running ? ' eb-wave' : ''}" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span>`
       + '</span>'
-      // Still at work (collapsed while it runs, 2026-10-15): a spinner where the time will be.
-      + (at.running ? `<span data-thread-running="1" title="Working…" style="flex:none;margin-left:auto;display:inline-flex">${SPINNER}</span>`
-        : when ? `<span data-thread-when="1" style="flex:none;margin-left:auto;font:12px/1 var(--font-sans);color:#8f8f8f;white-space:nowrap">${esc(when)}</span>` : '')
+      + (!running && when ? `<span data-thread-when="1" style="flex:none;margin-left:auto;font:12px/1 var(--font-sans);color:#8f8f8f;white-space:nowrap">${esc(when)}</span>` : '')
       + '</div>';
     // A Create conversation (2026-10-14): its files' rows stay under its title, each on a line of its own, flush with the
     // title's icon (2026-10-15, David: not indented under its words).
