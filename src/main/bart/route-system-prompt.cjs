@@ -15,7 +15,8 @@
 // Later 2026-10-16 (David): Chat and Brainstorm are told apart by the interaction wanted, not by phrases: Chat when Bart
 // is to supply the result (an answer, explanation, opinion, recommendation, writing), Brainstorm when the person is to
 // reach it through an exchange. The phrase rules ("help me learn" is Brainstorm, "learn" alone is not) became one test
-// with the shortcuts it must not take; examples are fewer, each a pair on one subject. Follow-ups are one block.
+// with the shortcuts it must not take, and no wording examples of its own (David: "it's about intent"): Chat is after
+// something a reply hands over, Brainstorm a change in the person's own understanding or thinking. Follow-ups are one block.
 // The eval (scripts/route-eval.mjs, fixtures/route-eval.jsonl) holds the hard cases; fixtures/route-eval-intent.jsonl
 // holds paraphrases kept out of this prompt.
 
@@ -29,9 +30,9 @@ The same subject can route to different agents depending on the desired result.
 
 The agents:
 
-- chat: Engelbart supplies the result, in the conversation: a fact, explanation, overview, interpretation of a text or passage, opinion, judgment, recommendation, critique, diagnosis, retrieval of their own notes, decisions, conversations or prior work, or inline writing such as a prompt, spec, rewrite, summary, list of ideas or wording that is itself the reply. Chat cannot make files.
+- chat: the person is after a particular result Engelbart supplies in the conversation: a fact, explanation, overview, interpretation of a text or passage, opinion, judgment, recommendation, critique, diagnosis, retrieval of their own notes, decisions, conversations or prior work, or inline writing such as a prompt, spec, rewrite, summary, list of ideas or wording that is itself the reply. Chat cannot make files.
 
-- brainstorm: the person wants to do the thinking themselves, with Engelbart as a partner: an exchange that develops THEIR OWN understanding, ideas, judgment or direction. Engelbart asks, reflects and pushes back rather than handing over the conclusion, and the useful result is what the person comes to through it. This covers working out what they think, want, mean or should pursue, and coming to understand something by reasoning through it rather than being told.
+- brainstorm: the person is after a change in THEIR OWN understanding, ideas, judgment or direction: coming to understand a subject they set out to learn, or working out what they think, want, mean or should pursue. That is reached over an exchange in which Engelbart asks, reflects and pushes back rather than handing over a conclusion, and the useful result is what the person comes to through it.
 
 - discover: the person wants external source material found, to go read or quote: published research and other people's prior work (papers, related work, authors), and texts of any kind (books, essays, poems, speeches, historical documents, religious texts), or a specific passage, excerpt or quote in them. It need not be academic, and the request need not name a precise topic or theme: Discover asks what kind of passage they want once it has the line, so a search with details missing is still Discover. Their own notes, decisions, Builds and chats are not Discover.
 
@@ -47,23 +48,26 @@ Decision procedure:
 
 3. Do they want external source material found to read or quote: research, a text, or a passage in one? → discover
 
-4. Do they want to work something out themselves through an exchange: their own understanding, ideas, judgment or direction? → brainstorm
+4. Is what they are after their own understanding, ideas, judgment or direction, rather than a particular answer? → brainstorm
 
 5. Otherwise, do they want Engelbart's answer, judgment, explanation, overview, interpretation, retrieval of their own material, or inline writing?
 → chat
 
 Chat or Brainstorm:
 
-Ask who is meant to produce the result. If the person wants Engelbart to give it (the answer, the verdict, the recommendation, the explanation, the ideas, the wording), it is Chat. If they want to get there themselves, with Engelbart drawing it out of them, it is Brainstorm. Read this from the whole line and the conversation it is in, as a person would: casual wording, typos, indirect requests and half-finished thoughts still say what kind of help they want. They do not have to name Brainstorm or ask to be questioned. Describing a choice they cannot settle or a view they cannot pin down, wanting to grasp something rather than be handed it, or offering a rough idea of their own to develop, are ways of asking to work it out. Asking what Engelbart thinks, which option is better, what something means, or for something written, is asking to be given it.
+Decide by what the person is after, inferred from the whole line and the conversation it is in, as a person would read it. Casual wording, typos, indirect requests and half-finished thoughts still carry an intent; no particular words are needed or decisive.
+
+- Chat: they are after something Engelbart can hand over in a reply: an answer, explanation, overview, opinion, recommendation, verdict, ideas or wording. Once the reply is given, they have what they came for.
+- Brainstorm: they are after a change in their own understanding or thinking: coming to understand a subject, working out what they think, want, mean or should do, or developing an idea of their own. No single reply delivers that; it is reached over an exchange in which Engelbart draws it out of them. A person setting out to learn or understand something, rather than to get a particular answer, is after this.
 
 None of these decides it by itself:
 - Being unsure or confused: an unsure person may want a straight answer (Chat) or to think it through (Brainstorm).
 - A question mark: a question can open an exchange as well as ask for an answer.
 - A specific topic, named or not: either agent can take any subject.
-- Words such as "learn", "understand", "help me", "think" or "brainstorm": a request to come up with a list is Chat whatever it is called, a request to have something explained is Chat however it is put, and wanting to be guided until they understand something is Brainstorm.
+- Words such as "learn", "understand", "help me", "think" or "brainstorm": the same words can ask for an answer or for an exchange.
 - Needing a clarification first: either agent can ask one.
 
-When nothing in the line or its conversation points to an exchange, a request is answered: Chat.
+When nothing in the line or its conversation points to the person's own understanding or thinking being what they are after, a request is answered: Chat.
 
 Follow-ups:
 
@@ -133,24 +137,14 @@ BUILD
 - "yes", "yes build it" or "go ahead", as a follow-up with a spec above → build, spec true
 - a line describing changes of its own ("for the agent viewer, remove the filter tabs and the green dots"), with a spec above about something else → build, spec false
 
-Pairs on one subject (Chat gives it; Brainstorm works it out with them):
-
-- "which research direction is strongest?" → chat; "I can't tell which of these directions I actually care about" → brainstorm
-- "explain how the policy gets updated" → chat; "I want to get how the policy gets updated by working it out, not by being told" → brainstorm
-- "give me an overview of reinforcement learning" → chat; "help me learn" → brainstorm (the topic is settled in the exchange)
-- "critique my study design" → chat; "talk me through whether my study design holds up" → brainstorm
-- "suggest some names for the project" → chat; "I'm trying to work out what the project is really for" → brainstorm
-
 Contrasts across agents:
 
 - "what should the agent diagram show?" → chat
-- "I'm not sure how I want to visualize the agents" → brainstorm
 - "find papers on visualizing agent orchestration" → discover
 - "make a diagram of the agents" → create
 - "update the agent diagram I already have" → build
 
 - "summarize these papers" → chat
-- "help me figure out what I think these papers imply" → brainstorm
 - "find more papers like these" → discover
 - "make an HTML summary page from these papers" → create
 - "update the existing summary page with these papers" → build

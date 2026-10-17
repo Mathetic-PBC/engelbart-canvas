@@ -679,7 +679,7 @@ test('Bart\'s prompt (2026-10-14): classify by what the person wants back; their
   assert.match(prompt, /- discover: the person wants external source material found, to go read or quote: published research and other people's prior work[^\n]*Their own notes, decisions, Builds and chats are not Discover\./);
   assert.match(prompt, /"what did we decide about the router\?" → chat/);
   assert.match(prompt, /"what papers should I read on agent debugging\?" → discover/);
-  const order = ['1. Do they want an existing thing changed now? → build', '2. Do they want a new standalone artifact/file made? → create', '3. Do they want external source material found to read or quote: research, a text, or a passage in one? → discover', '4. Do they want to work something out themselves through an exchange: their own understanding, ideas, judgment or direction? → brainstorm', '5. Otherwise'].map((k) => prompt.indexOf(k));
+  const order = ['1. Do they want an existing thing changed now? → build', '2. Do they want a new standalone artifact/file made? → create', '3. Do they want external source material found to read or quote: research, a text, or a passage in one? → discover', '4. Is what they are after their own understanding, ideas, judgment or direction, rather than a particular answer? → brainstorm', '5. Otherwise'].map((k) => prompt.indexOf(k));
   assert.ok(order.every((at) => at >= 0) && order.every((at, n) => !n || at > order[n - 1]), 'the decision procedure, in order');
   // What the model is given stays described, tag by tag.
   for (const tag of ['<line>', '<section>', '<threads>', '<spec_above>', '<current>']) assert.ok(prompt.includes(tag), tag);
@@ -687,18 +687,19 @@ test('Bart\'s prompt (2026-10-14): classify by what the person wants back; their
 
 test('Bart\'s prompt (2026-10-16): Chat and Brainstorm are told apart by the interaction wanted, not by phrases; the evals hold the cases (prompt text only: scripts/route-eval.mjs asks the model)', () => {
   const prompt = require('../src/main/bart/route-system-prompt.cjs').ROUTE_SYSTEM_PROMPT;
-  assert.match(prompt, /- chat: Engelbart supplies the result[^\n]*list of ideas[^\n]*Chat cannot make files\./);
-  assert.match(prompt, /- brainstorm: the person wants to do the thinking themselves[^\n]*THEIR OWN understanding, ideas, judgment or direction/);
-  assert.match(prompt, /Chat or Brainstorm:\n\nAsk who is meant to produce the result\./);
+  assert.match(prompt, /- chat: the person is after a particular result Engelbart supplies[^\n]*list of ideas[^\n]*Chat cannot make files\./);
+  assert.match(prompt, /- brainstorm: the person is after a change in THEIR OWN understanding, ideas, judgment or direction: coming to understand a subject they set out to learn/);
+  assert.match(prompt, /Chat or Brainstorm:\n\nDecide by what the person is after, inferred from the whole line and the conversation[^\n]*no particular words are needed or decisive\./);
+  assert.match(prompt, /- Chat: they are after something Engelbart can hand over in a reply[^\n]*\n- Brainstorm: they are after a change in their own understanding or thinking/);
   // The shortcuts it must not take, one list; and an unmarked request is answered.
   const shortcuts = prompt.match(/None of these decides it by itself:\n((?:- [^\n]*\n)+)/);
   assert.ok(shortcuts, 'the shortcuts list');
   for (const word of ['unsure or confused', 'A question mark', 'A specific topic', '"learn"', 'Needing a clarification']) assert.ok(shortcuts[1].includes(word), word);
-  assert.match(prompt, /When nothing in the line or its conversation points to an exchange, a request is answered: Chat\./);
-  // No phrase rules of their own: the old ones are gone, and examples come as pairs on one subject.
+  assert.match(prompt, /When nothing in the line or its conversation points to the person's own understanding or thinking being what they are after, a request is answered: Chat\./);
+  // No phrase rules or wording examples of their own (David: "it's about intent").
   assert.ok(!prompt.includes('is Brainstorm even when no topic is named'));
   assert.ok(!/^BRAINSTORM$/m.test(prompt), 'no list of Brainstorm phrases');
-  assert.match(prompt, /Pairs on one subject \(Chat gives it; Brainstorm works it out with them\):\n\n(- "[^\n]*" → chat; "[^\n]*" → brainstorm[^\n]*\n){5}/);
+  assert.ok(!prompt.includes('Pairs on one subject') && !/" → brainstorm$/m.test(prompt), 'no Brainstorm wording examples');
   // Follow-ups: read in their conversation, which the model is told it sees without the agent's replies.
   assert.match(prompt, /Agent replies are left out of what you are given, so you cannot see what the agent last said/);
   assert.match(prompt, /classify the kind of interaction the conversation is having, not the single turn/);
