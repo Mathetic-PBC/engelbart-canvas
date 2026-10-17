@@ -2215,7 +2215,11 @@ export default class DocEditor extends React.Component {
     const name = agentName(thread), when = whenShown(thread.at);
     const first = thread.turns && thread.turns[0], shown = title || (first ? questionLine(turnText(this.lines(), first).question, 60) : '') || name;
     const editing = !!this.titleEdit && this.titleEdit.line === i;
-    const row = `<div ${made.length ? '' : raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" style="user-select:none;display:flex;align-items:center;gap:12px;min-width:0;height:42px;box-sizing:border-box;font:15px/1.4 var(--font-sans)">`;
+    // Under it, the 8px an open card has under its last row (2026-10-17): a press there lands on the editor, and gapAt puts
+    // the caret on a line under the conversation, as it does under an open one (two collapsed ones had no space between).
+    // It is margin, outside the row: the row's own click target stays its 42px.
+    const under = 'margin-bottom:8px';
+    const row = `<div ${made.length ? '' : raw} contenteditable="false" data-readonly="1" data-thread-row="${i}" style="user-select:none;display:flex;align-items:center;gap:12px;min-width:0;height:42px;box-sizing:border-box;font:15px/1.4 var(--font-sans)${made.length ? '' : `;${under}`}">`;
     if (editing) {
       return row + `<span style="flex:none;display:inline-flex;color:#0070f3;margin-right:-4px">${ICON.pointer}</span>`
         + `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:15px/1.4 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
@@ -2233,7 +2237,7 @@ export default class DocEditor extends React.Component {
       + '</div>';
     // A Create conversation (2026-10-14): its files' rows stay under its title, each on a line of its own, flush with the
     // title's icon (2026-10-15, David: not indented under its words).
-    return made.length ? `<div ${raw} contenteditable="false" data-readonly="1" data-made-folded="1" style="user-select:none">${link}<div style="padding:0 0 6px">${made.map((one) => this.madeHtml(one, { inCard: false })).join('')}</div></div>` : link;
+    return made.length ? `<div ${raw} contenteditable="false" data-readonly="1" data-made-folded="1" style="user-select:none;${under}">${link}<div style="padding:0 0 6px">${made.map((one) => this.madeHtml(one, { inCard: false })).join('')}</div></div>` : link;
   }
   // A Brainstorm conversation's topic chip (2026-10-14): beside its first question, the label its title holds, in the
   // look of a line's model chip (plain words and a chevron). None until the conversation has a topic (topicOfThread):

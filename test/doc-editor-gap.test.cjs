@@ -26,6 +26,8 @@ const ANSWERED = ['@chat what is this', 'bart> An answer', 'bart> *Chat · 3 s*'
 /**
  * An editor as mounted, its text following its changes. Rows are laid out from the text as the page would: 30px a line,
  * a heading 44px plus the space above its text (12px right under a card, else 4px), and 8px under every card's last line.
+ * A collapsed conversation (2026-10-17) is its title's row, 42px, with the space under it its drawn row says (its
+ * margin-bottom); its other lines, and an open conversation's title, are not drawn (no height).
  */
 function mounted(lines, props = {}) {
   const changes = [];
@@ -35,10 +37,14 @@ function mounted(lines, props = {}) {
     querySelectorAll: (sel) => (sel === '[data-line]' ? rows() : []),
   };
   function rows() {
-    const ends = editor.cardEnds(); let y = 0;
-    return editor.lines().map((line, i) => {
-      const heading = /^#{1,3} /.test(line), lead = heading ? (i > 0 && ends[i - 1] === i - 1 ? 12 : 4) : 0, h = heading ? 44 + lead : 30, top = y;
-      y += h + (ends[i] === i ? 8 : 0);
+    const ends = editor.cardEnds(), ls = editor.lines(), ps = editor.parsedOf(ls), at = editor.layout(ls); let y = 0;
+    return ls.map((line, i) => {
+      const a = at.get(i), title = !!(a && a.role === 'title' && a.collapsed);
+      const heading = /^#{1,3} /.test(line), lead = heading ? (i > 0 && ends[i - 1] === i - 1 ? 12 : 4) : 0, top = y;
+      const h = a && (a.hidden || (a.role === 'title' && !a.collapsed)) ? 0 : title ? 42 : heading ? 44 + lead : 30;
+      const drawn = title ? editor.lineHtml(i, line, ps[i], false, false, a, false) : '';
+      const margin = title ? Number((/^<div[^>]*margin-bottom:(\d+)px/.exec(drawn) || [0, 0])[1]) : h && ends[i] === i ? 8 : 0;
+      y += h + margin;
       const row = { dataset: { line: String(i) }, getBoundingClientRect: () => ({ top, bottom: top + h, height: h }) };
       const t = { getBoundingClientRect: () => ({ top: top + lead, bottom: top + h - 4 }), matches: () => false, closest: (sel) => (sel === '[data-line]' ? row : sel === '[data-editor]' ? root : null) };
       Object.assign(row, { matches: (sel) => sel === '[data-line]', closest: (sel) => (sel === '[data-line]' ? row : sel === '[data-editor]' ? root : null), querySelector: (sel) => (sel === '.t' ? t : null), t });
@@ -154,4 +160,70 @@ test('a document that cannot be written in is not changed', () => {
   const h = m.row(3);
   assert.equal(m.clickAt(h.getBoundingClientRect().top + 6, h), false);
   assert.deepEqual(m.changes, []);
+});
+
+// Two conversations collapsed to their title rows, one right under the other (2026-10-17): the space under the first is
+// its row's own (8px, as under an open card), and a press there opens a line between them.
+const iso = '2026-10-12T21:41:00Z';
+const COLLAPSED = (name) => [`bart#+ [chat ${iso}] ${name}`, `@chat ${name}?`, 'bart> An answer', 'bart> *Chat · 3 s*'];
+const OPEN = (name) => [`bart# [chat ${iso}] ${name}`, `@chat ${name}?`, 'bart> An answer', 'bart> *Chat · 3 s*'];
+
+test('a collapsed conversation\'s row has 8px under it, outside its 42px', () => {
+  const m = mounted([...COLLAPSED('One'), ...COLLAPSED('Two')]);
+  const ls = m.editor.lines(), html = m.editor.lineHtml(0, ls[0], m.editor.parsedOf(ls)[0], false, false, m.editor.layout(ls).get(0), false);
+  assert.match(html, /^<div[^>]*data-thread-row="0"[^>]*height:42px;[^>]*margin-bottom:8px/);
+  assert.equal(m.row(0).getBoundingClientRect().height, 42);
+  assert.equal(m.row(1).getBoundingClientRect().height, 0, 'its other lines are not drawn');
+});
+
+test('two collapsed conversations: cardEnds holds each title to its last line, and a click between them opens a line there', () => {
+  const lines = [...COLLAPSED('One'), ...COLLAPSED('Two')];
+  const m = mounted(lines);
+  assert.deepEqual(m.editor.cardEnds(), [3, 3, 3, 3, 7, 7, 7, 7]);
+  const y = m.row(0).getBoundingClientRect().bottom + 4;
+  assert.deepEqual(m.editor.rowsAround(y), { above: 0, below: 4, level: false }, 'the hidden rows between are passed over');
+  assert.deepEqual(m.editor.gapAt(m.root, y), { at: 4, add: true });
+  m.clickAt(y);
+  assert.deepEqual(m.changes, [[...COLLAPSED('One'), '', ...COLLAPSED('Two')].join('\n')]);
+  assert.deepEqual(m.editor.caret, { line: 4, offset: 0 });
+  assert.equal(m.editor.state.activeLine, 4);
+  m.editor.state.activeLine = null; m.editor.caret = null;
+  m.clickAt(m.row(0).getBoundingClientRect().bottom + 4);
+  assert.equal(m.changes.length, 1, 'the empty line is there now: no other is made');
+  assert.deepEqual(m.editor.caret, { line: 4, offset: 0 });
+});
+
+test('a press on a collapsed row itself is not the gap', () => {
+  const m = mounted([...COLLAPSED('One'), ...COLLAPSED('Two')]);
+  assert.equal(m.editor.gapAt(m.root, m.row(0).getBoundingClientRect().top + 20), null, 'level with the row');
+  assert.equal(m.editor.gapAt(m.row(0), m.row(0).getBoundingClientRect().top + 20), null);
+});
+
+test('collapsed then open, open then collapsed, and two open conversations: the same', () => {
+  const cases = [
+    [COLLAPSED('One'), OPEN('Two')],
+    [OPEN('One'), COLLAPSED('Two')],
+    [OPEN('One'), OPEN('Two')],
+  ];
+  for (const [a, b] of cases) {
+    const m = mounted([...a, ...b]);
+    const drawn = m.rows().slice(0, 4).filter((r) => r.getBoundingClientRect().height).pop();
+    m.clickAt(drawn.getBoundingClientRect().bottom + 4);
+    assert.deepEqual(m.changes, [[...a, '', ...b].join('\n')], `${a[0]} / ${b[0]}`);
+    assert.deepEqual(m.editor.caret, { line: 4, offset: 0 });
+  }
+});
+
+test('a collapsed conversation with a heading or text under it: the same', () => {
+  const heading = mounted([...COLLAPSED('One'), '## Heading']);
+  heading.clickAt(heading.row(0).getBoundingClientRect().bottom + 4);
+  assert.deepEqual(heading.changes, [[...COLLAPSED('One'), '', '## Heading'].join('\n')]);
+  const text = mounted([...COLLAPSED('One'), 'After']);
+  text.clickAt(text.row(0).getBoundingClientRect().bottom + 4);
+  assert.deepEqual(text.changes, [[...COLLAPSED('One'), '', 'After'].join('\n')]);
+  assert.deepEqual(text.editor.caret, { line: 4, offset: 0 });
+  const padded = mounted([...COLLAPSED('One'), '## Heading']);
+  const top = padded.row(4).getBoundingClientRect().top;
+  assert.equal(padded.clickAt(top + 6, padded.row(4)), true, 'the heading\'s space above its text, under a collapsed conversation');
+  assert.deepEqual(padded.changes, [[...COLLAPSED('One'), '', '## Heading'].join('\n')]);
 });
