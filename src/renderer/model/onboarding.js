@@ -364,3 +364,22 @@ export function afterAllow(browsers) {
 
 /** The run's `keychain` (S11): from the answer alone. Declined, refused or never answered, macOS is never asked. */
 export const runKeychain = (browsers) => !!browsers && browsers.keychain === 'allowed';
+
+/* ------------------------------------------------------------------------------------------------------------------ */
+// Paths the Obsidian picker shows (2026-10-18, the beta's Windows catch-up): a Windows path's parts are split by `\` as well
+// as `/`, so a note is named by its file and a folder chosen covers what is under it there too.
+
+/** A path's last part: 'Note.md' for '/Vault/Note.md' or 'C:\Vault\Note.md'. */
+export const lastPart = (file) => String(file || '').split(/[\\/]/).pop();
+/** Whether `file` is under `folder` (not the folder itself). */
+export const within = (file, folder) => String(file).startsWith(`${folder}/`) || String(file).startsWith(`${folder}\\`);
+
+/**
+ * "Import context using background agents" (2026-10-18, the beta's Windows catch-up): on a Mac the agents use the person's
+ * signed-in browser (its sign-ins copied); elsewhere nothing is copied, and they use Engelbart's own browser, where the
+ * person signs in.
+ */
+export function agentsConsentText({ cli, browser, company, platform }) {
+  const where = platform === 'darwin' ? `your signed-in ${browser}` : 'its own browser, where you sign in,';
+  return `Engelbart will use ${cli} and ${where} to find and import context from the sources you selected. Agents run in the background, and imported files are saved locally on your device. Content the agents read may be sent to ${company} for processing.`;
+}

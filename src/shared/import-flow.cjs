@@ -32,6 +32,9 @@ const GROUPS = Object.freeze(SOURCES.map((source) => ({ id: source.id, label: so
   .filter((group) => !group.emptied).map(({ id, label, apps }) => Object.freeze({ id, label, apps: Object.freeze(apps) })));
 const GROUP_IDS = Object.freeze(GROUPS.map((group) => group.id));
 
+/** A category's apps as the picker shows them on `platform`: Apple Notes (macOS Automation) only on a Mac (2026-10-18). */
+const pickerApps = (apps, platform) => (platform === 'darwin' ? apps : apps.filter((app) => app !== 'Apple Notes'));
+
 const groupOfApp = (app) => (app === SITES ? 'sites' : (GROUPS.find((group) => group.apps.includes(app)) || {}).id || null);
 
 /** A category the tool agent named, as one of GROUPS (its id or its label, any case), else Other. */
@@ -293,7 +296,7 @@ function importPlan({ app, mode, projects, roles = [], work = '', scope = null, 
 const isWebApp = (app) => reachOf(app) === 'web';
 
 module.exports = {
-  LOCAL_FOLDERS, SITES, PAUSED_APPS, GROUPS, GROUP_IDS, CATALOG, CATALOG_IDS, categoryOf, ROLES, ROLE_NAMES, PROVIDER_IDS, PROVIDER_NAMES, BROWSERS,
+  pickerApps, LOCAL_FOLDERS, SITES, PAUSED_APPS, GROUPS, GROUP_IDS, CATALOG, CATALOG_IDS, categoryOf, ROLES, ROLE_NAMES, PROVIDER_IDS, PROVIDER_NAMES, BROWSERS,
   groupOfApp, reachOf, isLocal, isWebApp, catalogTool, chooseProvider, browserById, browserIdOfName, orderBrowsers,
   jsonOf, readProjects, readTools, scopeKind, emptyScope, scopeReady, scopeOptions, importPlan,
 };

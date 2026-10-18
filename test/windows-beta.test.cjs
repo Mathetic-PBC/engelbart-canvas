@@ -199,3 +199,29 @@ test('the person\'s own Codex connectors on Windows: `codex mcp list` through Gi
   assert.equal(options.windowsHide, true);
   assert.deepEqual(codexListCall({ A: '1' }, 'darwin').slice(0, 2), ['codex', ['mcp', 'list', '--json']], 'a Mac\'s as before');
 });
+
+const { pathToFileURL } = require('node:url');
+const onboardingModel = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/onboarding.js')).href);
+
+test('the Obsidian picker on Windows: a file\'s name is its last part after \\ too, and a folder chosen covers what is under it', async () => {
+  const { lastPart, within } = await onboardingModel();
+  assert.equal(lastPart('C:\\Users\\ada\\Vault\\Memex\\Note.md'), 'Note.md');
+  assert.equal(lastPart('/Users/ada/Vault/Note.md'), 'Note.md');
+  assert.equal(within('C:\\Users\\ada\\Vault\\Memex\\Note.md', 'C:\\Users\\ada\\Vault\\Memex'), true);
+  assert.equal(within('C:\\Users\\ada\\Vault\\Memex2\\Note.md', 'C:\\Users\\ada\\Vault\\Memex'), false);
+  assert.equal(within('/Users/ada/Vault/Memex/Note.md', '/Users/ada/Vault/Memex'), true);
+  assert.equal(within('/Users/ada/Vault/Memex', '/Users/ada/Vault/Memex'), false, 'itself is not under itself');
+});
+
+const { pickerApps } = require('../src/shared/import-flow.cjs');
+
+test('the import\'s picker off the Mac has no Apple Notes (macOS Automation: it can\'t be read there); a Mac\'s as before', () => {
+  assert.deepEqual(pickerApps(['Obsidian', 'Apple Notes', 'Notion'], 'win32'), ['Obsidian', 'Notion']);
+  assert.deepEqual(pickerApps(['Obsidian', 'Apple Notes', 'Notion'], 'darwin'), ['Obsidian', 'Apple Notes', 'Notion']);
+});
+
+test('"Import context using background agents" off the Mac names Engelbart\'s own browser, not the person\'s signed-in one', async () => {
+  const { agentsConsentText } = await onboardingModel();
+  assert.equal(agentsConsentText({ cli: 'Codex', browser: 'Chrome', company: 'OpenAI', platform: 'darwin' }), 'Engelbart will use Codex and your signed-in Chrome to find and import context from the sources you selected. Agents run in the background, and imported files are saved locally on your device. Content the agents read may be sent to OpenAI for processing.');
+  assert.equal(agentsConsentText({ cli: 'Codex', browser: 'Chrome', company: 'OpenAI', platform: 'other' }), 'Engelbart will use Codex and its own browser, where you sign in, to find and import context from the sources you selected. Agents run in the background, and imported files are saved locally on your device. Content the agents read may be sent to OpenAI for processing.');
+});
