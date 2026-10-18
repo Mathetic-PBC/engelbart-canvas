@@ -32,7 +32,7 @@ const until = async (read, check, what, tries = 800) => {
 };
 
 function connectWith(rest) {
-  return createConnect({ ready: () => ['anthropic', 'openai'], context: async () => ctx, homeDir, env: {}, notify: () => {}, openBridge: openToolBridge, ...rest, deps: { stepPollMs: 15, recoverWaitsMs: [0], ...(rest.deps || {}) } });
+  return createConnect({ ready: () => ['anthropic', 'openai'], context: async () => ctx, homeDir, env: {}, notify: () => {}, openBridge: openToolBridge, platform: 'darwin', ...rest, deps: { stepPollMs: 15, recoverWaitsMs: [0], ...(rest.deps || {}) } });
 }
 
 /** Fake agents whose import of an Other tool calls needs_you for a sign-in, once, and says what it was told. */

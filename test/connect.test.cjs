@@ -647,7 +647,7 @@ function fakeConnect({ home = homeDir, delayMs = 5, agents = null, ask = false, 
   const snapshots = [];
   // recoverWaitsMs: a sign-in brought back (recover) is copied again once, at once, before its card.
   const deps = { recoverWaitsMs: [0], ...(ask ? {} : { allowed: true }), ...(rest.deps || {}) };
-  const connect = createConnect({ agents: agents || createFakeConnectAgents({ delayMs }), ready: () => ALL, context: async () => ctx, homeDir: home, env: {}, notify: (snapshot) => snapshots.push(snapshot), openBridge: openToolBridge, ...rest, deps });
+  const connect = createConnect({ agents: agents || createFakeConnectAgents({ delayMs }), ready: () => ALL, context: async () => ctx, homeDir: home, env: {}, notify: (snapshot) => snapshots.push(snapshot), openBridge: openToolBridge, platform: 'darwin', ...rest, deps });
   return { connect, snapshots, state: (id) => () => connect.state(id) };
 }
 

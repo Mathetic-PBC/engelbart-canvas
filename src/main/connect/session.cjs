@@ -1680,6 +1680,9 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
    */
   async function quietly(s, rec) {
     if (s.choices.keychain === false || !webSignIn) return null;
+    // Off the Mac (2026-10-18, the beta's Windows catch-up): no browser's sign-ins are copied there, so the quiet tries
+    // could only drop Engelbart's own and wait (~28 s): the card comes at once.
+    if (platform !== 'darwin') return null;
     for (const wait of deps.recoverWaitsMs || RECOVER_WAITS_MS) {
       if (wait) await pause(wait);
       if (s.stopped || leftAlready(s, rec)) return null;
@@ -2411,7 +2414,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     const plan = importFlow.importPlan({ app, mode: d.mode, projects: d.projects, roles: d.roles, work: d.work, scope, period: periodName(s.choices.days), browser: route ? s.choices.browserAgents.browserName : '' });
     const where = (folders) => (folders.length ? `\n\nThe folders: ${folders.map((dir) => readers.shownPath(homeDir, dir)).join(', ')}.` : '');
     if (app === importFlow.SITES) return dispatch(s, { kind: 'import', source: 'sites', apps: [], label: 'Pages from your browser history', plan });
-    if (app === importFlow.LOCAL_FOLDERS) return dispatch(s, { kind: 'import', source: 'code', apps: [], label: 'Folders on this Mac', plan: `${plan}${where(s.choices.sources.code.folders)}` });
+    if (app === importFlow.LOCAL_FOLDERS) return dispatch(s, { kind: 'import', source: 'code', apps: [], label: shownName(importFlow.LOCAL_FOLDERS), plan: `${plan}${where(s.choices.sources.code.folders)}` });
     if (app === 'GitHub') return dispatch(s, { kind: 'import', source: 'code', apps: ['GitHub'], label: 'GitHub', plan });
     const source = importFlow.groupOfApp(app);
     if (!source) return null;
@@ -2716,6 +2719,26 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     if (SIGNIN_KINDS.has(found.kind) && s.choices.keychain === false && webSignIn) {
       const name = webSignIn.browserName ? webSignIn.browserName() : '';
       closeNeed(s, found, readElsewhere(s, found.app, name) ? 'done' : 'skip', 'its sign-in can only be used with your browser’s sign-ins, which you turned down');
+      return snapshot(s);
+    }
+    // Off the Mac (2026-10-18, the beta's Windows catch-up) nothing made in their browser can be brought over: an app whose
+    // sign-in cookie isn't known (OneNote, Evernote…) signs in inside Engelbart's window, as every sign-in there does
+    // (./signin-window.cjs open: its own sites, signed in when their cookies changed), and the step closes once it is.
+    if (SIGNIN_KINDS.has(found.kind) && platform !== 'darwin' && signInWindow && webSignIn && !webSignIn.supports(found.app)) {
+      if (found.busy) return snapshot(s);
+      found.busy = true;
+      found.opened = true;
+      found.cancel = () => { try { signInWindow.close(); } catch { /* closed */ } };
+      emit(s);
+      Promise.resolve().then(() => signInWindow.open(found.app)).catch(() => ({ status: 'closed' })).then((out) => {
+        found.busy = false;
+        found.cancel = null;
+        if (found.closed) return;
+        if (out && out.status === 'signed-in') { logAction(s, null, `Signed in to ${shownName(found.app)} inside Engelbart`, 'You'); closeNeed(s, found, 'done'); return; }
+        found.opened = false;
+        found.error = `Not signed in to ${shownName(found.app)} yet.`;
+        emit(s);
+      });
       return snapshot(s);
     }
     // An app whose sign-in cookie isn't known (OneNote, Evernote…): its page opens in the browser they chose, and "I'm signed
