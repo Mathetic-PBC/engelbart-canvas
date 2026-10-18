@@ -467,12 +467,11 @@ const MADE_ICON = {
 };
 const madeGlyph = (noun) => (noun === 'Script' ? MADE_ICON.code : noun === 'Dataset' || noun === 'Data' || noun === 'Spreadsheet' ? MADE_ICON.table : noun === 'Image' || noun === 'Diagram' ? MADE_ICON.image : MADE_ICON.doc);
 // A made file's icon: Phosphor's shapes (bold), 20px in #525252, with nothing behind it and the name 8px after it
-// (2026-10-15, David: it was on a #f2f2f2 square, the name far from it); a Create run's spinner sits where it will.
+// (2026-10-15, David: it was on a #f2f2f2 square, the name far from it).
 const MADE_SQUARE = (bg = 'transparent') => `flex:none;display:inline-flex;align-items:center;justify-content:center;width:20px;height:32px;border-radius:8px;background:${bg};color:#525252`;
 const SHAPES_ICON = SHAPES_SVG.replace('<svg ', '<svg width="20" height="20" aria-hidden="true" style="display:block" ');
 // Text at work waves (../ui/wave.js waveText); every wave on the page's clock (keepWaves), exported for the tests.
 export { keepWaves };
-const SPINNER = '<span aria-hidden="true" style="display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:made-spin .8s linear infinite"></span>';
 // @discover's steps by the part of the trace they are in (2026-10-15, David's mockup): a part done has a check, the one
 // still going a grey ring; under each, what its steps found, the step still waiting darker. `writing`: the trace is over.
 export function traceHtml(trace, { writing = false } = {}) {
@@ -2828,7 +2827,8 @@ export default class DocEditor extends React.Component {
     return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:${first ? 12 : 2}px 16px ${closes ? 10 : 2}px 32px;background:#fafafa;border-radius:${radius(false, closes)};margin-bottom:${closes ? 8 : 0}px">${this.madeHtml(made)}</div>`;
   }
   // A Create run at work (board 1): what it said it is making, as the answer's text will stand, then the row that will
-  // become the file's: a blue spinner in its square, "Creating a diagram", what it is doing in grey, m:ss and Stop.
+  // become the file's: "Creating a diagram", what it is doing in the grey wave, m:ss and Stop. No spinner, and no empty
+  // square where it was (2026-10-17, David): the wave says it is at work, and the words start at the row's edge.
   // What a Create run is making, its line (main/bart/making.cjs, 2026-10-15: a quick model's, a second or two in), and the
   // file it is writing, if any; `shows`: whether its row is drawn yet (either one is there).
   createSaid(ask) {
@@ -2854,7 +2854,7 @@ export default class DocEditor extends React.Component {
     return `<div ${raw} data-pending="${esc(p.id)}" data-create-pending="1" contenteditable="false" data-readonly="1" style="user-select:none;cursor:default;padding:${at ? 12 : 2}px 16px 10px 32px;background:#fafafa;border-radius:${radius(!at, closes)};margin-bottom:${closes ? '8px' : '0'}">`
       + sentence
       + '<div style="display:flex;align-items:center;gap:8px;min-width:0;height:48px">'
-      + `<span aria-hidden="true" style="${MADE_SQUARE()}">${ask ? SPINNER : ''}</span>`
+      + (ask ? '' : `<span aria-hidden="true" style="${MADE_SQUARE()}"></span>`)
       // The label is the line above once it has come (2026-10-15); before that, an interrupted run's row names it.
       + '<span style="flex:1;min-width:0;display:flex;align-items:baseline;gap:12px">'
       + (sentence ? '' : `<span style="flex:none;font:15.5px/1.4 var(--font-sans);color:#262626;white-space:nowrap">${esc(label)}</span>`)
