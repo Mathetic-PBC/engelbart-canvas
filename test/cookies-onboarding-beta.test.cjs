@@ -334,7 +334,7 @@ test('C4: browsers.list gives each browser\'s profiles, the chosen profile and S
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'prefs-'));
   const prefs = { get: () => prefsFile.get(root), set: (patch) => prefsFile.set(root, patch) };
   const unlocked = [];
-  const browsers = createBrowsers({
+  const browsers = createBrowsers({ platform: 'darwin',
     installedApps: null,
     override: ['chrome', 'safari'],
     prefs,
@@ -362,7 +362,7 @@ test('C5: Allow asks macOS for the chosen browser at once and resolves on its an
   const prefs = { get: () => prefsFile.get(root), set: (patch) => prefsFile.set(root, patch) };
   const answers = { chrome: { keychain: 'allowed' }, brave: { keychain: 'refused', browser: 'Brave' } };
   const unlocked = [];
-  const browsers = createBrowsers({ installedApps: null, override: ['chrome', 'brave'], prefs, unlock: async (id) => { unlocked.push(id); return answers[id]; } });
+  const browsers = createBrowsers({ platform: 'darwin', installedApps: null, override: ['chrome', 'brave'], prefs, unlock: async (id) => { unlocked.push(id); return answers[id]; } });
   await browsers.list();
   assert.deepEqual(await browsers.setKeychain('declined'), { keychain: 'declined' });
   assert.deepEqual(unlocked, [], 'declined: macOS never asked');

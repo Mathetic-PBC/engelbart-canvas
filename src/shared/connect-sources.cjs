@@ -119,8 +119,23 @@ const signsInThroughBrowser = (app) => Object.hasOwn(SIGN_IN_COOKIES, app) && si
 // shown as Google Drive. The id stays a key everywhere (APPS, the groups, sign-ins, the scan, skills, logos, picks, saved
 // sessions); only what is drawn or said to the person goes through shownName.
 const SHOWN_NAMES = Object.freeze({ 'Google Docs': 'Google Drive' });
+
+// Off the Mac (2026-10-18, the beta's Windows catch-up, docs/windows-port-log.md): what an id or a line calls "this Mac"
+// is shown as "this computer" (the id stays: 'PDFs on this Mac' is a key in saved choices). The platform is main's own,
+// or in the window the one preload marks on <html> (data-platform), else the browser's.
+function hostPlatform() {
+  if (typeof process !== 'undefined' && process && typeof process.platform === 'string' && process.type !== 'renderer') return process.platform;
+  try { const marked = document.documentElement.dataset.platform; if (marked) return marked; } catch { /* not a page */ }
+  try { return /Mac/i.test(navigator.platform || '') ? 'darwin' : 'other'; } catch { return 'darwin'; }
+}
+/** "this Mac" on a Mac, "this computer" elsewhere. */
+const thisMachine = (platform = hostPlatform()) => (platform === 'darwin' ? 'this Mac' : 'this computer');
+/** `text` with "this Mac" said as `platform` says it. */
+const onThisMachine = (text, platform = hostPlatform()) => (platform === 'darwin' || typeof text !== 'string' ? text : text.replace(/\bthis Mac\b/g, thisMachine(platform)));
+/** The name the person sees for an app on `platform`: 'Google Drive' for 'Google Docs', 'PDFs on this computer' off the Mac. */
+const shownNameOn = (app, platform) => onThisMachine(Object.hasOwn(SHOWN_NAMES, app) ? SHOWN_NAMES[app] : app, platform);
 /** The name the person sees for an app: 'Google Drive' for 'Google Docs', any other app its own. */
-const shownName = (app) => (Object.hasOwn(SHOWN_NAMES, app) ? SHOWN_NAMES[app] : app);
+const shownName = (app) => shownNameOn(app, hostPlatform());
 
 const SOURCE_IDS = Object.freeze(SOURCES.map((source) => source.id));
 const sourceOf = (id) => SOURCES.find((source) => source.id === id) || null;
@@ -158,4 +173,4 @@ const cleanDays = (value) => (value === 182 || value === 365 ? value : null);
 /** "the past year" for 365, "the past 6 months" for 182, "all time" otherwise. */
 const periodName = (days) => (PERIODS.find((period) => period.days === cleanDays(days)) || PERIODS[2]).label;
 
-module.exports = { SOURCES, APPS, LOCAL_PDFS, ITEM_SOURCES, ITEM_CATEGORIES, GROUP_CATEGORIES, CHAT_APPS, categoryOfApp, READABLE_NAMES, SIGN_IN_SITES, SIGN_IN_COOKIES, signInGroup, sharesSignIn, signsInThroughBrowser, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, sourceOf, appOf, sourceOfApp, recallApps, webApps, fallbackOf, cleanDays, periodName };
+module.exports = { SOURCES, APPS, LOCAL_PDFS, ITEM_SOURCES, ITEM_CATEGORIES, GROUP_CATEGORIES, CHAT_APPS, categoryOfApp, READABLE_NAMES, SIGN_IN_SITES, SIGN_IN_COOKIES, signInGroup, sharesSignIn, signsInThroughBrowser, SOURCE_IDS, PERIODS, DEFAULT_PERIOD_DAYS, SHOWN_NAMES, shownName, shownNameOn, thisMachine, onThisMachine, hostPlatform, sourceOf, appOf, sourceOfApp, recallApps, webApps, fallbackOf, cleanDays, periodName };
