@@ -3,6 +3,135 @@
 The run that follows docs/windows-port.md, on branch `windows-port` (cut from `hudsons-feedback` at 22d738c).
 Newest status first; the sections below are kept current.
 
+## Beta catch-up to 0.1.23 on linux-beta-deployment
+
+Goal (2026-10-18): `linux-beta-deployment` (from 47c66a6: the 0.1.23 beta with origin/windows-port merged in) is the
+beta's features working on Linux x64 (Ubuntu 22.04/24.04 first), with windows-port's Linux decisions (AppImage,
+install-linux.sh, engelbart-launch, /proc for lsof, bash when zsh is missing, Engelbart's own sign-in window). And the
+bug Hudson saw: "on Linux it is not accessing Obsidian files and other files well". Nothing pushed, no release.
+
+### Status
+
+- 2026-10-18, **the app on Linux (arm64 container, `electron .` under xvfb)**, a throwaway home with an Obsidian vault in
+  ~/.config/obsidian and one in Flatpak's place, Chrome's and Firefox's .desktop entries and a Chrome profile, asked
+  through its own preload: on 47c66a6 the import's Obsidian picker had **no vaults**, Connect's detect found no Obsidian
+  and no browser history, and the browser list was all nine (safari, chrome, brave, firefox, arc, edge, opera, chromium,
+  comet). On fba6a4d: the picker lists both vaults with their notes (Flatpak vault ▸ Paper notes, Plain vault ▸ Idea),
+  detect says Obsidian "~/Flatpak vault, ~/Notes/Plain vault" and sites "Chrome", the browsers are chrome and firefox.
+  (The driver is a scratch script, not committed; scripts/smoke-linux.cjs is unchanged.)
+- 2026-10-18, **Linux npm test** in an ubuntu:24.04 container (Colima profile engelbart-linux, aarch64, 4 CPUs, 8 GB; Node
+  22.20.0, zsh, sqlite3 and unzip installed; a git clone of the branch, `npm ci` building node-pty there; /etc/hosts as
+  Ubuntu writes it: Docker's own puts `localhost` on ::1 too, so the run-step tests' server, listening on localhost,
+  was on ::1 while fetch tried 127.0.0.1). 47c66a6: 2237 tests, 2215 pass, 7 fail, 15 skipped. fba6a4d: 2248 tests, 2228
+  pass, 5 fail, 15 skipped. The 5 are this container's, on both commits: build.test.cjs and projects.test.cjs killed by
+  the kernel's OOM killer (cgroup oom_kill counted; build.test.cjs peaks at 5.9 GB resident on the Mac too, so 8 GB with
+  three files at once is not enough); install-linux.sh's two tests (an arm64 computer: "Engelbart for Linux runs on 64-bit
+  Intel and AMD computers"); the sandbox benchmark's `git show d0cb837` (a commit on another branch, not in this one's
+  history). Fixed between them: the PDF folders test's tie (failed on 47c66a6 here). On 47c66a6 shell-rc's zsh launcher
+  test also failed once (exit 13 after 12 s, under the same memory pressure); it passed in both runs of the branch. The
+  first run on 47c66a6 (a `git archive` copy, Docker's hosts file) had 13 failures: these plus the 5 run-step tests
+  (localhost) and an updates test, and the release-site test (`git show` without a .git).
+- 2026-10-18, **Mac**: `npm test` on 47c66a6 2262 tests, 2258 pass, 4 skipped, 0 failed; on f4323b7 2273, 2269 pass,
+  4 skipped, 0 failed (the 11 new tests); FINAL_MAC. `npm run build` passes.
+- 2026-10-18: f4323b7 (the fix), fba6a4d (the Mac-layout fixtures name the Mac).
+
+### What changed
+
+- **Obsidian** (src/main/connect/readers.cjs `obsidianVaults(homeDir, platform, env)`): on Linux it read only the Mac's
+  ~/Library/Application Support/obsidian/obsidian.json, so it found no vault and everything on it failed: Connect's scan
+  and detect, the import's Obsidian picker ("Obsidian has no vaults on this Mac"), the link import, the session's folders.
+  Now on Linux it reads `$XDG_CONFIG_HOME/obsidian/obsidian.json` (~/.config when unset or not absolute; obsidian.md/help
+  "How Obsidian stores data": "$XDG_CONFIG_HOME/obsidian/ or ~/.config/obsidian/"), Flathub's md.obsidian.Obsidian
+  (~/.var/app/md.obsidian.Obsidian/config/obsidian, a Flatpak's XDG_CONFIG_HOME) and the Snap's
+  (~/snap/obsidian/current/.config/obsidian; a forum log shows /root/snap/obsidian/40/.config/obsidian/obsidian.json).
+  **All of them, merged**, one entry per vault folder with its newest time and `open` if any says so: someone who moved
+  from the .deb to the Flatpak (or has both) has vaults in each, and a vault an unused install lists is still a folder of
+  their notes; taking only the most recent file would hide the others'. A vault folder that is gone is left out as before.
+  obsidianTree (the picker) and scan.detect take `platform`/`env`. The Mac and Windows read as before.
+- **Chromium browsers** (`browserProfiles(homeDir, platform, env)`): Linux's $XDG_CONFIG_HOME/google-chrome,
+  BraveSoftware/Brave-Browser, microsoft-edge, chromium, vivaldi; their Flathub folders (~/.var/app/<id>/config/…); the
+  Snaps of Chromium (~/snap/chromium/common/chromium) and Brave. Opera keeps its one profile in ~/.config/opera itself, no
+  Default folder: not read (as on the Mac). **Firefox** history (discover.cjs historySites): ~/.mozilla/firefox, the Snap's
+  and Flathub's org.mozilla.firefox profiles.
+- **sqlite3 and unzip may be missing** (Ubuntu's desktop has no sqlite3): `readers.sqliteRunner(env, platform)` runs the
+  command where it is on PATH, else node:sqlite in this process (windows-port's sqliteHere), on Windows always; used by
+  browserHistory and historySites (Chromium, Firefox). An export's .zip without unzip is read with
+  ../overleaf/copy.cjs readZip (`exportText`).
+- **Cursor**: ~/.config/Cursor/User/globalStorage/state.vscdb ($XDG_CONFIG_HOME) on Linux.
+- **PDF folders**: on Linux also the Downloads, Documents and Desktop folders xdg-user-dirs names in the person's language
+  ($XDG_CONFIG_HOME/user-dirs.dirs; a Desktop set to the home itself is not taken).
+- **Installed apps and browsers** (new src/main/connect/linux-apps.cjs): from .desktop entries (Name= of the
+  [Desktop Entry] group, or the entry's id; Hidden=true ones not) in $XDG_DATA_HOME, $XDG_DATA_DIRS,
+  ~/.local/share/flatpak/exports, /var/lib/flatpak/exports and /var/lib/snapd/desktop. Obsidian also counts when any of its
+  obsidian.json is there (an AppImage run without an integrator leaves no entry). scan.detect and discover's toolEvidence
+  use it on Linux in place of .app bundles. index.cjs uses `createLinuxInstalledApps` for the browsers: before, the
+  missing /usr/bin/mdfind made Spotlight's answer "can't tell", which counts as installed, so every browser, Safari, Arc
+  and Comet included, was offered on Linux.
+- **The browser's sign-ins question** (renderer/model/onboarding.js `keychainStep(browsers, platform)`, ImportFlow passes
+  its platform): off the Mac nothing is ever copied from a browser (copiesSignIns), so "Allow Engelbart to use your
+  <browser> sign-ins" is never shown and is answered 'declined' (saved, so the recent projects never wait ten minutes for
+  it). The browser list still says whose history the tools screen reads.
+- **"this Mac"** off the Mac: the tools screen's evidence (discover.cjs: "Found on this computer", "N repositories on this
+  computer", "<browser> history on this computer"), Connect's detect `where` ("on this computer"), and the empty Obsidian
+  picker ("Obsidian has no vaults on this computer.", from the preload's data-platform). The Mac's words are unchanged.
+- Tests: test/linux-platform.test.cjs (11, each with `platform: 'linux'`, a fake home and env, so they run on the Mac;
+  10 fail on 47c66a6, the 11th needs linux-apps.cjs, which 47c66a6 has not). Mac-layout fixtures name the Mac
+  (`platform: 'darwin'`: connect.test.cjs's detect and Chromium tests, obsidian-tree.test.cjs); the Cursor test puts its
+  database where cursorDb says; the PDF folders test's Downloads files are a minute older than the HCI folder's (they tied
+  on Linux, written in one millisecond).
+
+### Mac-only paths in the beta's new code, and what was done
+
+| Where | What | Done |
+|---|---|---|
+| connect/readers.cjs obsidianVaults | ~/Library/…/obsidian.json only | fixed: XDG, Flatpak, Snap, merged |
+| connect/readers.cjs browserProfiles, onboarding/discover.cjs historySites | ~/Library Chromium and Firefox folders | fixed: XDG, Flatpak, Snap |
+| connect/readers.cjs browserHistory, discover historySites | the sqlite3 command | fixed: node:sqlite when it is missing |
+| connect/readers.cjs exportText | the unzip command | fixed: readZip when it is missing |
+| connect/cursor.cjs cursorDb | ~/Library/…/Cursor | fixed: ~/.config/Cursor |
+| connect/readers.cjs pdfRoots | English folder names, iCloud, ~/Library/CloudStorage | fixed: xdg-user-dirs too; iCloud and CloudStorage simply absent |
+| connect/scan.cjs BUNDLES, onboarding/discover.cjs DESKTOP | .app bundles in /Applications | fixed: .desktop entries (linux-apps.cjs) |
+| browser/installed-apps.cjs | /Applications, mdfind | fixed on Linux: linux-apps.cjs createLinuxInstalledApps |
+| onboarding/browsers.cjs + ImportFlow keychain dialog | Keychain / Safari Full Disk Access question | degraded on purpose: never asked off the Mac, 'declined' |
+| onboarding/browser-agents.cjs | extensions under ~/Library | already off the Mac: not available (browsersFor → []) |
+| onboarding/disk-access.cjs | TCC.db probe, System Settings | already: off the Mac `granted: true`, open() does nothing; ImportFlow's folders popup is darwin-only |
+| connect/folder-access.cjs, session.cjs findMessage | protected folders | already: nothing protected off the Mac (windows-port) |
+| browser/import-cookies.cjs, safari-cookies.cjs, connect/web-signin.cjs copying | Keychain, Safari cookies | already: created on darwin only; off the Mac every sign-in is Engelbart's window |
+| index.cjs openChosen / openIn / openInProfile / openBrowserApp | `open -b` | already: openChosen uses shell.openExternal off the Mac; openIn/openInProfile are reached only through copying (Mac); openBrowserApp refuses (browser agents, Mac only) |
+| tools/detect.cjs desktopCopies | Claude desktop's bundled claude-code under ~/Library | left: no Linux Claude desktop; the path is just absent |
+| connect/apple-notes.cjs | osascript | already: refuses off a Mac |
+| onboarding/obsidian-tree.cjs, ObsidianPicker.jsx | obsidian.json via readers, "this Mac" | fixed |
+| discover.cjs and scan.cjs evidence words | "this Mac" | fixed: "this computer" off the Mac |
+| shared/connect-sources.cjs LOCAL_PDFS "PDFs on this Mac", shared/import-flow.cjs LOCAL_FOLDERS "Folders on this Mac" | ids shown as names in the picker and tools screen | left: they are keys (saved sessions, picks, tests); see Needs a decision |
+| renderer/screens/ConnectLibrary.jsx, model/connect.js (~100 lines of "this Mac"/macOS copy) | the manual import's librarian page | left: copy only, the flows are windows-port's off-Mac ones; see Needs a decision |
+| agent prompts (shared/import-flow.cjs, connect/prompts.cjs, discover's notes) | "on this Mac" | left: words to the model, not the person |
+
+### Tests skipped (with reasons)
+
+None added, on any platform. Mac: 4 skipped, as before.
+
+### Needs a decision
+
+- The names "PDFs on this Mac" and "Folders on this Mac" are also ids (APPS keys, saved sessions, picks, the agents'
+  prompts). Showing "PDFs on this computer" off the Mac would go through shownName (SHOWN_NAMES), platform-aware in both
+  main and the renderer. Not done: tests that read the shown names would then differ by platform.
+- ConnectLibrary.jsx and model/connect.js say "this Mac" and "macOS" in ~100 lines on the manual import's page. A pass
+  with one `machine` word (Mac / computer) would cover them; left for a copy decision.
+- Off the Mac the recent-projects route never asks ChatGPT and Claude (the sign-ins answer is 'declined'). Engelbart's
+  own browser may hold their sign-ins (made in its sign-in window); asking them then would need the person's leave in
+  some other words than "use your <browser> sign-ins".
+- When several obsidian.json files exist on Linux their vaults are merged (above). The alternative, only the most
+  recently changed file, was not taken.
+
+### Left for a hand test
+
+- On Ubuntu 24.04 with Obsidian installed as a .deb, then as a Flatpak, then as a Snap (and an AppImage): Import context ▸
+  Choose files under Obsidian lists the vaults; Connect's choose screen ticks Obsidian; a librarian import reads a vault.
+- The tools screen with Chrome (deb), Chromium (Snap) and Firefox (Snap) installed: only those browsers offered, no
+  sign-ins question, the history evidence filled (sqlite3 not installed).
+- A ChatGPT or Claude export .zip on a machine without unzip.
+- Engelbart's sign-in window for Google Drive and ChatGPT on Linux (windows-port's path; not exercised here).
+
 ## Catch-up to 0.1.19
 
 Goal (2026-10-12): merge origin/david-onboarding-revisions a215457 (Release 0.1.19) into windows-port, keeping the port
