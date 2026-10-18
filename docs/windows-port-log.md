@@ -12,6 +12,16 @@ bug Hudson saw: "on Linux it is not accessing Obsidian files and other files wel
 
 ### Status
 
+- 2026-10-18, **after the agent's run** (in the session that started it): taken from windows-beta-deployment, because each
+  applies off the Mac, not on Windows alone: 96caea2 (release builds copy src/main's .html pages: left unstaged in the
+  merge 47c66a6), 2c96f08 and 7cd955c (import sign-ins off the Mac: OneNote's and Evernote's inside Engelbart, the card
+  at once, a lapsed one offered again), 6c5710e (the workspace's shortcuts take Ctrl off the Mac: on Linux ⌘'s were
+  the Super key; its test in test/keys.test.cjs), a91c881 (main's browsers.list answers the sign-ins question
+  'allowed' off the Mac; installed-apps' Windows places, which Linux never reaches). Their subjects still say
+  "Windows:". Then e8101ad: f4323b7 had answered that question 'declined' off the Mac, and the run's keychain: false made
+  connect/session.cjs close every sign-in step as "which you turned down": Google Drive, ChatGPT and every app needing a
+  sign-in were left out on Linux. Now 'allowed', as on Windows, and recent projects never waits for an answer. The two
+  tests for it failed first.
 - 2026-10-18, **the app on Linux (arm64 container, `electron .` under xvfb)**, a throwaway home with an Obsidian vault in
   ~/.config/obsidian and one in Flatpak's place, Chrome's and Firefox's .desktop entries and a Chrome profile, asked
   through its own preload: on 47c66a6 the import's Obsidian picker had **no vaults**, Connect's detect found no Obsidian
@@ -117,9 +127,10 @@ None added, on any platform. Mac: 4 skipped, as before.
   main and the renderer. Not done: tests that read the shown names would then differ by platform.
 - ConnectLibrary.jsx and model/connect.js say "this Mac" and "macOS" in ~100 lines on the manual import's page. A pass
   with one `machine` word (Mac / computer) would cover them; left for a copy decision.
-- Off the Mac the recent-projects route never asks ChatGPT and Claude (the sign-ins answer is 'declined'). Engelbart's
-  own browser may hold their sign-ins (made in its sign-in window); asking them then would need the person's leave in
-  some other words than "use your <browser> sign-ins".
+- Off the Mac the sign-ins question is answered 'allowed' without asking (e8101ad, as windows-beta-deployment does), so
+  sign-ins made in Engelbart's own window are used, and recent projects asks ChatGPT and Claude through that window. A
+  Linux user has no way to say "use no sign-ins"; offering one would need a question in other words than "use your
+  <browser> sign-ins", which never happens off the Mac.
 - When several obsidian.json files exist on Linux their vaults are merged (above). The alternative, only the most
   recently changed file, was not taken.
 
