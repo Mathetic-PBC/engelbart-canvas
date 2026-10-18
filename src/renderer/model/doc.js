@@ -1,6 +1,9 @@
 // Pure document model for the Obsidian-style editor.
 import katex from 'katex';
 import { hammerSvg } from './hammer.js';
+import { isAddress, webLabel } from './web-name.js';
+
+export { isAddress, sameAddress, webLabel, webName } from './web-name.js'; // a web page's mention (2026-10-17)
 // Ported verbatim from design/goal-canvas/Goal Canvas.dc.html (lines 403–404, 439–456, 692–730, 801–812).
 // One markdown string per document; the caret's line shows its source, every other line renders.
 
@@ -217,7 +220,7 @@ export const wsMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/
 // name is the item's as it was picked; the id finds the item after a rename, or tells that it has left the library.
 // Before the plain mention in INLINE too, for the same reason.
 export const LIB_MENTION_RE = /^@\[([^\]\n]+)\]\(lib:([\w-]+)\)$/;
-/** The token that mentions a library item. */
+/** The token that mentions a library item. A web page's is written under model/web-name.js webName (2026-10-17). */
 export const libMention = (name, id) => `@[${String(name || '').replace(/[[\]\n]/g, '').trim() || 'Untitled'}](lib:${id})`;
 // A file inside a library folder (MATH-22, 2026-10-06): `@[Name](lib:<folderId>:<path>)`, the folder's library id and
 // the file's path relative to it, each segment percent-encoded (encodeRel) so a space, a bracket, a parenthesis, a `#` or
@@ -320,6 +323,11 @@ const FILE_ICONS = {
   folder: svgIcon('<path d="M1.5 4a1 1 0 0 1 1-1h3.3l1.5 1.8h6.2a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"/>'),
 };
 FILE_ICONS.file = FILE_ICONS.pdf;
+// A web page's glyph: ui/Icons.jsx GLOBE; a repository's: GH (2026-10-17).
+const WEB_ICONS = {
+  website: svgIcon('<path d="M8 1.75a6.25 6.25 0 1 1 0 12.5 6.25 6.25 0 0 1 0-12.5z"/><path d="M1.75 8h12.5"/><path d="M8 1.75c1.8 1.7 2.7 3.8 2.7 6.25S9.8 12.55 8 14.25"/><path d="M8 1.75C6.2 3.45 5.3 5.55 5.3 8s.9 4.55 2.7 6.25"/>'),
+  git: `<svg viewBox="0 0 16 16" width="0.8em" height="0.8em" fill="currentColor" aria-hidden="true" style="display:inline-block;vertical-align:-0.06em;margin:0 0.2em 0 0.1em"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0 0 16 8c0-4.42-3.58-8-8-8z"/></svg>`,
+};
 // A Zotero item's glyph: a book.
 const ZOTERO_ICON = svgIcon('<path d="M3 2.5h7.5a1.5 1.5 0 0 1 1.5 1.5v9.5H4.5A1.5 1.5 0 0 1 3 12z"/><path d="M3 12a1.5 1.5 0 0 1 1.5-1.5H12"/>');
 // A bare address, typed, pasted or written by @bart, is a link as it stands (closing punctuation is not part of it).
@@ -499,7 +507,7 @@ export function tokShown(tok, opts) {
   const zotero = tok.match(ZOTERO_MENTION_RE); if (zotero) return { shown: '@' + zotero[1], pre: 1 }; // nor a Zotero item's
   const made = tok.match(MADE_MENTION_RE); if (made) return { shown: '@' + made[1], pre: 1 };
   const lib = tok.match(LIB_MENTION_RE); if (lib) return { shown: '@' + libShown(lib[1], lib[2], opts && opts.libName), pre: 1 };
-  if (tok.startsWith('@[')) { const nm = tok.slice(2, -1), chat = chatMention(nm); return { shown: '@' + (chat ? chat.shown : nm), pre: 1 }; }
+  if (tok.startsWith('@[')) { const nm = tok.slice(2, -1), chat = chatMention(nm); return { shown: '@' + (chat ? chat.shown : nameShown(nm)), pre: 1 }; } // a web page's glyph is not text either
   const m = tok.match(LINK_RE); if (m) return { shown: m[1], pre: 1 };
   return { shown: tok, pre: 0 };
 }
@@ -704,14 +712,20 @@ const MENTION_LOOK = 'color:#0070f3;font-weight:500;cursor:pointer;border-bottom
 const TRASHED_LOOK = 'color:#8f8f8f;font-weight:500;cursor:pointer;border-bottom:1px dotted #d9d9d9';
 const trashedOf = (trashed, name, id) => typeof trashed === 'function' && trashed(name, id) === true;
 // The name a library mention shows: its item's name now when `libName(id)` gives one, else the name it was written with.
-const libShown = (name, id, libName) => { const now = typeof libName === 'function' ? libName(id) : undefined; return typeof now === 'string' && now ? now : name; };
+// A name that is an address (an older page mention, 2026-10-17) shows as webLabel does.
+const libShown = (name, id, libName) => { const now = typeof libName === 'function' ? libName(id) : undefined; return nameShown(typeof now === 'string' && now ? now : name); };
+const nameShown = (name) => (isAddress(name) ? webLabel(name) : name);
+// The glyph after the @ of a mention of a web page (2026-10-17): `opts.webKind(name, id)` says 'website' or 'git' for a
+// page or a repository known by its address, anything else for the rest, which keep no glyph.
+const webIcon = (opts, name, id) => { const kind = opts && typeof opts.webKind === 'function' ? opts.webKind(name, id) : null; return WEB_ICONS[kind] || ''; };
 // A library mention's chip: blue and clickable as a mention is, `data-lib` holding the id. `libName(id)` (optional) is the
 // item's name now, shown in place of the one saved; null when the library no longer holds it, which leaves the saved name
 // in grey with nothing to click.
-function libHtml(name, id, libName, trashed) {
-  if (typeof libName === 'function' && libName(id) === null) return goneHtml(name, 'No longer in the library');
-  const shown = libShown(name, id, libName), bin = trashedOf(trashed, shown, id);
-  return `<span data-mention="${esc(shown)}" data-lib="${esc(id)}"${bin ? ' title="In trash"' : ''} style="${bin ? TRASHED_LOOK : MENTION_LOOK}">@${esc(shown)}</span>`;
+// A web page's has its glyph after the @ (webIcon), on one line as a file's chip is.
+function libHtml(name, id, libName, trashed, opts) {
+  if (typeof libName === 'function' && libName(id) === null) return goneHtml(nameShown(name), 'No longer in the library');
+  const shown = libShown(name, id, libName), bin = trashedOf(trashed, shown, id), icon = webIcon(opts, name, id);
+  return `<span data-mention="${esc(shown)}" data-lib="${esc(id)}"${bin ? ' title="In trash"' : ''} style="${bin ? TRASHED_LOOK : MENTION_LOOK}${icon ? ';white-space:nowrap' : ''}">@${icon}${esc(shown)}</span>`;
 }
 // A file mention's chip (MATH-22): the @, the file's kind glyph, its name; the pointer resting on it says `folder / path`.
 // `data-folder` and `data-file` (the path, decoded) are what a click opens. `opts.fileState(folderId, rel)` is false when
@@ -734,12 +748,18 @@ function zoteroHtml(name, key) {
 // A mention by name, `@[Name]`. A chat's (chatMention) shows its word: Bart's is blue, a chat that is gone grey. Anything
 // else is a note or a library item: `named(name)` (optional) is false when nothing goes by that name, which leaves it grey;
 // `trashed(name)` true for a note in the trash, grey but still clickable.
-function nameHtml(name, named, trashed) {
+// A mention by an address (`@[https://…]`, as the open page was mentioned before 2026-10-17) shows its host and path with
+// the globe; one the library holds no page for is still the page's: `data-url`, which a click opens in the Stage.
+function nameHtml(name, named, trashed, opts) {
   const chat = chatMention(name);
   if (chat && !chat.live) return goneHtml(chat.shown, 'This chat is gone');
+  const address = !chat && isAddress(name);
+  if (address && typeof named === 'function' && named(name) === false) {
+    return `<span data-mention="${esc(name)}" data-url="${esc(name)}" title="${esc(name)}" style="${MENTION_LOOK};white-space:nowrap">@${WEB_ICONS.website}${esc(webLabel(name))}</span>`;
+  }
   if (!chat && typeof named === 'function' && named(name) === false) return goneHtml(name, 'Not in the library');
-  const bin = !chat && trashedOf(trashed, name, null);
-  return `<span data-mention="${esc(name)}"${bin ? ' title="In trash"' : ''} style="${bin ? TRASHED_LOOK : MENTION_LOOK}">@${esc(chat ? chat.shown : name)}</span>`;
+  const bin = !chat && trashedOf(trashed, name, null), icon = chat ? '' : address ? webIcon(opts, name, null) || WEB_ICONS.website : webIcon(opts, name, null);
+  return `<span data-mention="${esc(name)}"${bin ? ' title="In trash"' : ''} style="${bin ? TRASHED_LOOK : MENTION_LOOK}${icon ? ';white-space:nowrap' : ''}">@${icon}${esc(chat ? chat.shown : nameShown(name))}</span>`;
 }
 
 // A link's box (2026-10-12): 5px above and below its letters and 2px either side, so a click on its underline, in the gap
@@ -776,13 +796,13 @@ export function inlineHtml(text, opts) {
     const ws = p.match(WS_MENTION_RE);
     if (ws) return `<span data-mention="${esc(ws[1])}" data-ws="${esc(ws[2])}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9;white-space:nowrap">@${WS_ICON}${esc(ws[1])}</span>`;
     const lib = p.match(LIB_MENTION_RE);
-    if (lib) return libHtml(lib[1], lib[2], opts && opts.libName, opts && opts.trashed);
+    if (lib) return libHtml(lib[1], lib[2], opts && opts.libName, opts && opts.trashed, opts);
     if (FILE_MENTION_RE.test(p)) return fileHtml(p, opts);
     const zotero = p.match(ZOTERO_MENTION_RE);
     if (zotero) return zoteroHtml(zotero[1], zotero[2]);
     const made = madeMentionOf(p);
     if (made) return `<span data-mention="${esc(made.name)}" data-made="${esc(madeKey(made))}" style="${MENTION_LOOK};white-space:nowrap">@${esc(made.name)}</span>`;
-    if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named, opts && opts.trashed);
+    if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named, opts && opts.trashed, opts);
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="${LINK_LOOK}">${esc(m[1])}</a>`;
     if (URL_RE.test(p)) return `<a href="${esc(p)}" data-link="1" style="${LINK_LOOK}">${esc(p)}</a>`;
@@ -819,7 +839,7 @@ export function noteHtml(text, opts) {
     if (i === at) return agentLabelHtml(p);
     const lib = p.match(LIB_MENTION_RE);
     if (FILE_MENTION_RE.test(p)) return fileHtml(p, opts);
-    return lib ? libHtml(lib[1], lib[2], opts && opts.libName) : esc(p);
+    return lib ? libHtml(lib[1], lib[2], opts && opts.libName, undefined, opts) : esc(p);
   }).join('');
 }
 /**

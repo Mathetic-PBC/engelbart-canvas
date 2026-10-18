@@ -5,6 +5,7 @@
 import { kindLabel, libraryFilter } from './kind.js';
 import { findWorkspaces } from './nav.js';
 import { letGo } from '../../shared/project-holds.cjs';
+import { webName } from './web-name.js';
 
 // A web address without its scheme (github.com, example.org/page), as the main process reads one (store/library.cjs).
 const BARE_HOST = /^(?:www\.)?(?:[a-z\d](?:[a-z\d-]{0,61}[a-z\d])?\.)+[a-z]{2,24}(?::\d{1,5})?(?:[/?#]\S*)?$/i;
@@ -195,7 +196,8 @@ export function mentionRows({ query, library, page, pageRow, workspaces = [], he
   const out = [...verbs];
   if (page && page.title && (!needle || `${page.title} ${page.input}`.toLowerCase().includes(needle))) {
     if (pageRow) { out.push({ kind: 'item', key: pageRow.id, row: pageRow, name: pageRow.name, open: true }); hits = hits.filter((hit) => hit.key !== pageRow.id); }
-    else out.push({ kind: 'fresh', key: `page:${page.input}`, name: mentionName(page.title), input: page.input, open: true });
+    // A page with no title yet is called by its address's host and path, not the address (2026-10-17, model/web-name.js).
+    else out.push({ kind: 'fresh', key: `page:${page.input}`, name: /^https?:\/\//i.test(page.input || '') ? webName(page.title, page.input) : mentionName(page.title), input: page.input, open: true });
   }
   const others = workspaces.filter((workspace) => workspace.id !== hereId);
   const named = needle ? findWorkspaces(others, needle) : [];

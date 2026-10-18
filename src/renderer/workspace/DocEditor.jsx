@@ -53,7 +53,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { HAMMER_PATHS } from '../model/hammer.js';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, ATTACH_RE, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchText, isRefine, refineLine, wsMention, fileMention, zoteroMention, madeMentionOf, madeKey, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf, topicOfThread, whenShown } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, ATTACH_RE, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchText, isRefine, refineLine, wsMention, libMention, webName, isAddress, sameAddress, fileMention, zoteroMention, madeMentionOf, madeKey, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf, topicOfThread, whenShown } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, isResultOffer, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -76,7 +76,7 @@ import { guideTitle } from '../model/guide.js';
 import { guideSections, splitTarget, parseTable } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
-import { isNote } from '../model/kind.js';
+import { isNote, kindKey } from '../model/kind.js';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
@@ -168,12 +168,18 @@ const withAttachments = (text, images) => {
   return text.replace(/(?<!!)\[Attachment (\d+)\](?!\()/g, (token, n) => (ids.has(Number(n)) ? `![Attachment ${n}](img:${ids.get(Number(n))})` : token));
 };
 // The token a picked row of the @ menu writes: a workspace's, a Zotero item's (MATH-65 build 2), a file's or a subfolder's
-// in a library folder (MATH-22), else a mention by name. `pickedRow`: the library row picking it links to the workspace (a
-// file's is its folder's); null for a Zotero item, which links nothing.
+// in a library folder (MATH-22), a web page's by its id under its title (2026-10-17: never its address, model/web-name.js),
+// else a mention by name. The open page the library does not hold yet has no id: it is mentioned by name, its title's.
+// `pickedRow`: the library row picking it links to the workspace (a file's is its folder's); null for a Zotero item, which
+// links nothing.
 const mentionToken = (r) => (r.kind === 'workspace' ? wsMention(r.name, r.id)
   : r.kind === 'entry' && r.zotero ? zoteroMention(r.name, r.zotero)
     : (r.kind === 'entry' || r.kind === 'self') && r.rel ? fileMention(r.kind === 'self' ? r.entryName : r.name, r.row.id, r.rel)
-      : `@[${r.name}]`);
+      : r.kind === 'item' && isWebRow(r.row) ? libMention(webName(r.row.name, r.row.url), r.row.id)
+        : r.kind === 'fresh' && isAddress(r.input) ? `@[${webName(r.name, r.input)}]`
+          : `@[${r.name}]`);
+// A library row of a page on the web, a repository known by its address among them: it has an address and nothing on this Mac.
+const isWebRow = (row) => !!row && row.type === 'website' && !!row.url && !row.path && !row.folder_path;
 // The Zotero item's chip a drag of files is over (MATH-65 build 4), or null.
 const zoteroChipFor = (e) => {
   const types = [...((e && e.dataTransfer && e.dataTransfer.types) || [])];
@@ -3902,6 +3908,8 @@ export default class DocEditor extends React.Component {
       if (this.props.onOpenFile) this.props.onOpenFile({ folderId: m.dataset.folder, rel: m.dataset.file, name: m.dataset.mention }, newTabClick(e) ? { newTab: true } : undefined);
       return;
     }
+    // A page mentioned by an address the library holds no page for opens in the Stage, as a link does (2026-10-17).
+    if (m && m.dataset.url && !this.findRes(m.dataset.mention)) { e.preventDefault(); this.hidePop(); this.openLink(m.dataset.url, newTabClick(e) ? { newTab: true } : undefined); return; }
     // A workspace's document opens in the pane beside this one (MATH-23); ⌘-click goes there, as a click did before.
     if (m && m.dataset.ws) {
       e.preventDefault(); this.hidePop();
@@ -4916,7 +4924,9 @@ export default class DocEditor extends React.Component {
     if (libId) return rows.find((r) => r && r.type !== 'chat' && r.id === libId) || null;
     const chat = chatMention(name); if (chat) return chat.live ? this.bartItem() : null;
     const n = String(name).toLowerCase();
-    return rows.find((r) => r && r.id !== 'bart' && r.id !== 'chat' && (r.name || '').toLowerCase() === n) || null;
+    const byName = rows.find((r) => r && r.id !== 'bart' && r.id !== 'chat' && (r.name || '').toLowerCase() === n) || null;
+    // A page mentioned by its address (`@[https://…]`, before 2026-10-17) is the library's page at that address.
+    return byName || (isAddress(name) ? rows.find((r) => isWebRow(r) && sameAddress(r.url, name)) || null : null);
   }
   // What a line's mentions are drawn with (model/doc.js inlineHtml): a library mention under its item's name now, and a
   // mention of something no longer here in grey. Until there is a library to ask (none given, or none yet), as written.
@@ -4925,6 +4935,8 @@ export default class DocEditor extends React.Component {
     libName: (id) => { if (!this.libraryKnown()) return undefined; const row = this.findRes('', id); return row ? row.name || '' : null; },
     named: (name) => (this.libraryKnown() ? !!this.findRes(name) : undefined),
     trashed: (name, id) => { const row = id ? this.findRes('', id) : this.findRes(name); return !!(row && row.trashed); }, // MATH-58 follow-up
+    // A web page's chip carries the globe, a repository's known by its address GitHub's mark (2026-10-17).
+    webKind: (name, id) => { const row = id ? this.findRes('', id) : this.findRes(name); return isWebRow(row) ? (kindKey(row) === 'git' ? 'git' : 'website') : null; },
     // A file in a library folder (MATH-22): false when it is no longer there, undefined until that is known.
     fileState: (folderId, rel) => (typeof this.props.fileState === 'function' ? this.props.fileState(folderId, rel) : undefined),
   };

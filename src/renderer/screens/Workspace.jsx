@@ -79,6 +79,7 @@ const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
 // A note or a library row by its name; `@[Name](ws:<id>)` is a workspace, `@[Name](lib:<folderId>:<path>)` a file in a
 // library folder (MATH-22), which is no row of its own, and `@[Title](zotero:<key>)` a Zotero item (MATH-65), no row either.
 const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:|\(lib:[\w-]+:|\(zotero:)/g;
+const LIB_ID_RE = /@\[[^\]\n]+\]\(lib:([\w-]+)\)/g;
 const SAVE_DELAY = 400;
 // The files a run's answer stands for: its `bart> @[name](made:<askId>/<path>)` rows (main/bart/create.cjs), this run's only.
 const madeIn = (lines, askId) => (lines || []).map((line) => { const m = REPLY_RE.exec(String(line)); return m ? madeMentionOf(m[2]) : null; }).filter((made) => made && made.askId === askId);
@@ -1072,8 +1073,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const mentioned = React.useMemo(() => {
     const text = topic ? docs[`ws:${topic.id}`] || '' : '';
     const names = new Set([...text.matchAll(MENTION_RE)].map((match) => match[1].toLowerCase()));
+    // A library mention is its item whatever name it was written with: a web page's is never its address (2026-10-17).
+    const ids = new Set([...text.matchAll(LIB_ID_RE)].map((match) => match[1]));
     const shown = new Set([...text.matchAll(IMAGE_REF_RE)].map((match) => match[1])); // pasted images are context without an @mention
-    return library.filter((row) => (row.type === 'image' ? shown.has(row.id) : names.has(row.name.toLowerCase())));
+    return library.filter((row) => (row.type === 'image' ? shown.has(row.id) : names.has(row.name.toLowerCase()) || ids.has(row.id)));
   }, [docs, topic, library]);
 
   const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
