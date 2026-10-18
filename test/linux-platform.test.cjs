@@ -165,14 +165,37 @@ test('the browsers on Linux: by their .desktop entries; Safari, Arc and Comet ne
   assert.equal(fixed.has('org.mozilla.firefox'), false, 'ENGELBART_INSTALLED_BROWSERS stands in for the machine');
 });
 
-test('off the Mac the browser\'s sign-ins are never asked about: nothing is copied from it (copiesSignIns)', async () => {
+test('off the Mac the browser\'s sign-ins are never asked about, and the run keeps its sign-ins: those made in Engelbart\'s own window (copiesSignIns)', async () => {
   const m = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/onboarding.js')).href);
   const chrome = { id: 'chrome', name: 'Chrome', keychain: true, profiles: [] };
-  assert.deepEqual(m.keychainStep({ browsers: [chrome], chosenId: 'chrome', keychain: null }, 'other'), { go: 'declined' });
-  assert.deepEqual(m.keychainStep({ browsers: [{ id: 'safari', name: 'Safari' }], chosenId: 'safari', keychain: null, safari: { diskAccess: false } }, 'linux'), { go: 'declined' });
+  assert.deepEqual(m.keychainStep({ browsers: [chrome], chosenId: 'chrome', keychain: null }, 'other'), { go: 'allowed' });
+  assert.deepEqual(m.keychainStep({ browsers: [{ id: 'safari', name: 'Safari' }], chosenId: 'safari', keychain: null, safari: { diskAccess: false } }, 'linux'), { go: 'allowed' });
   assert.equal(m.keychainStep(null, 'other'), 'wait');
   assert.equal(m.keychainStep({ browsers: [chrome], chosenId: 'chrome', keychain: null }, 'darwin'), 'ask', 'the Mac as before');
   assert.equal(m.keychainStep({ browsers: [chrome], chosenId: 'chrome', keychain: null }), 'ask', 'no platform given: the Mac');
+  // Declined, the import would leave out every app that needs a sign-in (connect/session.cjs: "its sign-in can only be used
+  // with your browser's sign-ins, which you turned down"), when nobody was asked and Engelbart's window can sign in.
+  assert.equal(m.runKeychain({ browsers: [chrome], keychain: 'allowed' }), true);
+});
+
+test('recent projects on Linux: ChatGPT and Claude asked at once, never after a wait for a sign-ins answer nobody is asked for', async () => {
+  const { createDiscovery } = require('../src/main/onboarding/discover.cjs');
+  const home = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-linux-discovery-')));
+  const dataRoot = path.join(home, 'root');
+  const asked = [];
+  let last = null;
+  const providers = { status: async () => ({ providers: [{ id: 'anthropic', installed: true, signedIn: true }], decision: { pick: 'anthropic' } }) };
+  const discovery = createDiscovery({
+    platform: 'linux', agents: { turn: async () => ({ text: 'null' }) }, context: async () => ({ dataRoot }), homeDir: home, providers,
+    notify: (state) => { last = state; }, assistants: { ask: async (input) => { asked.push(input); return [{ app: 'Claude', outcome: 'none' }, { app: 'ChatGPT', outcome: 'none' }]; } },
+    keychainWaitMs: 10 * 60_000, keychainPollMs: 5,
+  });
+  const started = Date.now();
+  await discovery.startProjects({ provider: 'anthropic' });
+  while (!(last && last.projects.status !== 'running') && Date.now() - started < 5000) await new Promise((resolve) => { setTimeout(resolve, 10); });
+  assert.equal(last.projects.status, 'done');
+  assert.equal(asked.length, 1, 'asked, through Engelbart\'s own browser');
+  assert.ok(Date.now() - started < 5000);
 });
 
 test('Cursor on Linux: ~/.config/Cursor (or $XDG_CONFIG_HOME)', () => {

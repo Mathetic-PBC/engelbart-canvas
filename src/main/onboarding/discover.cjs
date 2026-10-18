@@ -193,7 +193,7 @@ async function toolEvidence({ homeDir, env = process.env, browserId, access = nu
  * Keychain answer, by data root); `assistants` (./assistant-projects.cjs, made from webSignIn and agentBrowser when not
  * given); `diskAccess()` whether Full Disk Access is granted (Safari's history).
  */
-function createDiscovery({ agents, models = () => null, context, homeDir, env = process.env, providers, webSignIn = null, cookieImport = null, agentBrowser = null, openBridge = null, zotero = null, zoteroRoot = () => null, github = null, connectors = null, deps = {}, notify = () => {}, trace = null, access = () => null, existingProjects = () => [], scanner = null, now = () => new Date().toISOString(), prefs = onboardingPrefs, assistants = null, keychainWaitMs = KEYCHAIN_WAIT_MS, keychainPollMs = 1000, diskAccess = diskGranted(homeDir) }) {
+function createDiscovery({ agents, models = () => null, context, homeDir, env = process.env, providers, webSignIn = null, cookieImport = null, agentBrowser = null, openBridge = null, zotero = null, zoteroRoot = () => null, github = null, connectors = null, deps = {}, notify = () => {}, trace = null, access = () => null, existingProjects = () => [], scanner = null, now = () => new Date().toISOString(), prefs = onboardingPrefs, assistants = null, keychainWaitMs = KEYCHAIN_WAIT_MS, keychainPollMs = 1000, diskAccess = diskGranted(homeDir), platform = process.platform }) {
   const roots = new Map(); // dataRoot → { projects, tools, controllers }
   const say = (kind, text, detail) => { if (trace) trace.event({ kind, text, detail }); };
   const askers = assistants || (webSignIn && agentBrowser ? createAssistantProjects({ webSignIn, agentBrowser, log: (text, detail) => say('discovery', text, detail) }) : null);
@@ -317,6 +317,8 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
 
   /** The Keychain answer for `dataRoot` (./prefs.cjs), waited for while it is missing → 'allowed' | 'declined' | null. */
   async function keychainAnswer(dataRoot, signal) {
+    // Off the Mac nobody is asked (./browsers.cjs copiesSignIns): answered, with sign-ins made in Engelbart's own window.
+    if (platform !== 'darwin') return 'allowed';
     const read = () => { try { return (prefs.get(dataRoot) || {}).keychain || null; } catch { return null; } };
     const until = Date.now() + keychainWaitMs;
     let answer = read();
@@ -334,7 +336,7 @@ function createDiscovery({ agents, models = () => null, context, homeDir, env = 
    */
   async function askAssistants(ctx, st, controller, chosen) {
     if (!askers) return [];
-    if (!(prefs.get(ctx.dataRoot) || {}).keychain) { st.projects = { ...st.projects, route: 'assistants', waiting: 'keychain' }; changed(ctx.dataRoot); }
+    if (platform === 'darwin' && !(prefs.get(ctx.dataRoot) || {}).keychain) { st.projects = { ...st.projects, route: 'assistants', waiting: 'keychain' }; changed(ctx.dataRoot); }
     const answer = await keychainAnswer(ctx.dataRoot, controller.signal);
     if (controller.signal.aborted) return [];
     if (answer !== 'allowed') {
