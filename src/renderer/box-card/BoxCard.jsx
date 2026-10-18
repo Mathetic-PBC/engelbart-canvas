@@ -3,16 +3,19 @@ import { createRoot } from 'react-dom/client';
 import '../tokens/typography.css';
 import '@fontsource/caveat/500.css';
 import 'katex/dist/katex.min.css';
+import '../wave.css'; // .eb-wave, the document's text at work (this page has no styles.css)
 import { inlineHtml, noteInkHtml } from '../model/doc.js';
 import { noteQuestion, askedByNote, runningLabel } from '../pdf/canvas.js';
-import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, LABEL_INK, ERROR_INK, ANSWER_GAP, SPINNER as SPINNER_CSS, CARD_GROUND, cardCss, styleOf } from '../pdf/card-look.js';
+import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, ERROR_INK, ANSWER_GAP, CARD_GROUND, cardCss, styleOf } from '../pdf/card-look.js';
+import { WAVE_SPAN, keepWaves } from '../ui/wave.js';
 
 // The card beside a selected box on a web page (MATH-70 build 2, 2026-10-07): its own small view, one per window, which
 // main places beside the box and moves with it (src/main/browser/views.cjs `card`). The one component Hudson will replace:
 // everything it needs comes through window.boxCardAPI (src/main/browser/box-card-preload.cjs). It looks as the pdf's card
 // does (2026-10-17, David: "exactly like the annotation card on PDFs"), from the same values (src/renderer/pdf/card-look.js,
 // imported, never copied): the Caveat note, the answers' type and inks, room rather than a rule between the note and each
-// answer, the buttons, the answer's paragraphs and the spinner. The pdf's card has no box of its own, only handwriting on
+// answer, the buttons and the answer's paragraphs. What Bart is doing while he answers waves as the document's text at
+// work does (2026-10-17, David: no spinner; ../ui/wave.js, ../wave.css). The pdf's card has no box of its own, only handwriting on
 // the paper's white; over a web page this one is given that white (CARD_GROUND) and no edge, corners or shadow. ASK_W wide,
 // with the trash.
 // The note is saved on the box's mark as it is typed; Enter in a note that starts with @bart asks (Shift+Enter is a new
@@ -27,11 +30,11 @@ const ASK_W = 320;
 // its longest line, measured in the note's ink, and the field's padding and edge.
 const MIN_W = 140;
 const NOTE_ROOM = 12 + 2 + 6;
-const PLACEHOLDER = 'Note, or @bart and a question';
+const PLACEHOLDER = 'Write a note or ask @bart'; // one line: the card is as wide as it (MIN_W..ASK_W), see noteWidth
 const GRIP = { height: 12, position: 'relative' }; // the trash's row (the pdf's card has no grip bar since 2026-10-16)
 const TRASH = { position: 'absolute', top: 1, right: 3, width: 18, height: 18, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: 5, border: 0, background: 'rgba(255,255,255,.97)', color: '#8f8f8f', cursor: 'pointer' };
 const GAP = styleOf(ANSWER_GAP); // between the note and an answer, and between two answers
-const SPINNER = styleOf(SPINNER_CSS);
+const WAVE = styleOf(WAVE_SPAN);
 const ANSWER_MAX = 320; // an answer scrolls inside past this many pixels
 
 const CSS = `
@@ -58,11 +61,29 @@ const answerHtml = (text) => answerParas(text).map((inside) => `<p>${inside}</p>
 // a link in an answer never takes the card's page anywhere (main refuses it too)
 const noFollow = (event) => { if (event.target.closest && event.target.closest('a[href]')) event.preventDefault(); };
 
-/** The note: a field in the note's ink, a leading @bart drawn as the document's blue label under its transparent text. */
-function Note({ value, onChange, onKeyDown, fieldRef }) {
+/** The card's width: ASK_W once it has answers or one is coming, else as wide as the note's longest line `noteW` (its
+ *  ink, measured) and the field's room, from MIN_W to ASK_W. */
+function noteWidth(noteW, answered) {
+  return answered ? ASK_W : Math.min(ASK_W, Math.max(MIN_W, Math.ceil(Number(noteW) || 0) + NOTE_ROOM));
+}
+
+/** The field as tall as its lines at the width it has now: its height let go first, so what it had cannot hold it up. */
+function fitField(ta) {
+  if (!ta) return;
+  ta.style.height = '0px';
+  ta.style.height = `${ta.scrollHeight}px`;
+}
+
+/** The note: a field in the note's ink, a leading @bart drawn as the document's blue label under its transparent text.
+ *  Its height follows its lines, and how many lines it has is its text at its width: so it is fitted again when either
+ *  changes (`width`, the card's; `refit`, a font loaded). The card's width follows the note too, and is set after this
+ *  field has been fitted to the text (BoxCard measures it in its own layout effect, which runs after this one): fitted on
+ *  the text alone, a keystroke that widened the card left the field as tall as it was at the narrower width, where its
+ *  last word had wrapped, a line too tall until the next keystroke (2026-10-17). Both passes come before the card is
+ *  painted, so it is never seen at the wrong height. */
+function Note({ value, onChange, onKeyDown, fieldRef, width, refit }) {
   const inked = noteQuestion(value) != null;
-  const grow = React.useCallback(() => { const ta = fieldRef.current; if (ta) { ta.style.height = '0px'; ta.style.height = `${ta.scrollHeight}px`; } }, [fieldRef]);
-  React.useLayoutEffect(grow, [value, grow]);
+  React.useLayoutEffect(() => fitField(fieldRef.current), [value, width, refit, fieldRef]);
   const field = { ...NOTE_LOOK, display: 'block', width: '100%', margin: 0, border: 0, background: 'transparent', resize: 'none', overflow: 'hidden', outline: 'none', ...(inked ? { position: 'relative', color: 'transparent', caretColor: NOTE_INK } : {}) };
   return (
     <div style={{ flex: 'none', paddingBottom: 4, position: 'relative' }}>
@@ -84,7 +105,7 @@ function Answer({ ask, note, divided }) {
   );
 }
 
-/** An answer being written: what Bart is doing with a spinner and Stop, then the answer as it comes; a failure says why, with ×. */
+/** An answer being written: what Bart is doing, in the wave, and Stop, then the answer as it comes; a failure says why, with ×. */
 function Running({ run, note, divided }) {
   const failed = run.error != null;
   const lines = !failed && run.activity === 'Writing' && Array.isArray(run.lines) ? run.lines : [];
@@ -93,7 +114,7 @@ function Running({ run, note, divided }) {
     <div data-ask-run={run.askId} style={{ ...(divided ? GAP : {}), flex: 'none', display: 'flex', flexDirection: 'column', ...ANSWER_LOOK }}>
       <div style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 8, padding: '0 0 4px 6px' }}>
         {failed ? <span style={{ flex: 1, minWidth: 0, fontWeight: 500, color: ANSWER_INK }}>Bart · No answer</span>
-          : <><span style={SPINNER} /><span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', color: LABEL_INK }}>{runningLabel(run)}</span></>}
+          : <span style={{ flex: 1, minWidth: 0, overflow: 'hidden' }}><span className="eb-wave" style={WAVE}>{runningLabel(run)}</span></span>}
         <button type="button" aria-label={failed ? 'Close' : 'Stop'} onClick={() => api.stop(run.askId)}>{failed ? '×' : 'Stop'}</button>
       </div>
       {asked && <div title={asked} style={{ flex: 'none', padding: '0 6px 6px', color: QUESTION_INK, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{asked}</div>}
@@ -109,6 +130,7 @@ function BoxCard() {
   const [state, setState] = React.useState(null); // { mark: { id, note, asks }, running }
   const [note, setNote] = React.useState('');
   const [noteW, setNoteW] = React.useState(0);
+  const [fonts, setFonts] = React.useState(0); // a font loaded: the note measured again (Caveat may come after the first draw)
   const field = React.useRef(null), root = React.useRef(null), mirror = React.useRef(null), shown = React.useRef(null), timer = React.useRef(0), unsaved = React.useRef(null);
 
   const flush = React.useCallback(() => {
@@ -128,13 +150,22 @@ function BoxCard() {
     api.ready();
     return () => { off(); flush(); };
   }, [flush]);
-  // the note's longest line (the placeholder's while it is empty), for the card's width
+  React.useEffect(() => {
+    const set = document.fonts;
+    if (!set || typeof set.addEventListener !== 'function') return undefined;
+    const again = () => setFonts((n) => n + 1);
+    set.addEventListener('loadingdone', again);
+    return () => set.removeEventListener('loadingdone', again);
+  }, []);
+  // the note's longest line (the placeholder's while it is empty), for the card's width; the field is fitted again at it
   React.useLayoutEffect(() => {
     const el = mirror.current;
     if (!el) return;
     el.textContent = note || PLACEHOLDER;
     setNoteW(el.getBoundingClientRect().width);
-  }, [note]);
+  }, [note, fonts]);
+  // what Bart is doing waves on the page's clock, so a row drawn again goes on where it was (as the document's do)
+  React.useLayoutEffect(() => keepWaves(root.current));
   // how big it is, for main to give its view that size
   React.useEffect(() => {
     const el = root.current;
@@ -162,7 +193,7 @@ function BoxCard() {
 
   const asks = state && state.mark ? state.mark.asks || [] : [];
   const running = state && Array.isArray(state.running) ? state.running : [];
-  const width = asks.length || running.length ? ASK_W : Math.min(ASK_W, Math.max(MIN_W, Math.ceil(noteW) + NOTE_ROOM));
+  const width = noteWidth(noteW, asks.length > 0 || running.length > 0);
   return (
     <div ref={root} style={{ padding: 8, width: width + 16 }}>
       <style>{CSS}</style>
@@ -171,7 +202,7 @@ function BoxCard() {
         <div style={GRIP}>
           <button type="button" data-trash="1" title="Remove box" aria-label="Remove box" onMouseDown={(event) => event.preventDefault()} onClick={() => api.remove()} style={TRASH}>{TRASH_SVG}</button>
         </div>
-        <Note value={note} onChange={change} onKeyDown={key} fieldRef={field} />
+        <Note value={note} onChange={change} onKeyDown={key} fieldRef={field} width={width} refit={fonts} />
         {/* the note is first: every answer comes with room above it */}
         {asks.map((ask, i) => <Answer key={ask.id || `ask-${i}`} ask={ask} note={note} divided />)}
         {running.map((run) => <Running key={run.askId} run={run} note={note} divided />)}
@@ -180,6 +211,6 @@ function BoxCard() {
   );
 }
 
-export { answerHtml }; // for test/math.test.cjs
+export { answerHtml, noteWidth, fitField, Running, PLACEHOLDER, ASK_W, MIN_W }; // for test/math.test.cjs and test/box-card.test.cjs
 
 createRoot(document.getElementById('root')).render(<BoxCard />);

@@ -78,6 +78,7 @@ import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
 import { isNote, kindKey } from '../model/kind.js';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
+import { waveText, keepWaves } from '../ui/wave.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -469,18 +470,8 @@ const madeGlyph = (noun) => (noun === 'Script' ? MADE_ICON.code : noun === 'Data
 // (2026-10-15, David: it was on a #f2f2f2 square, the name far from it); a Create run's spinner sits where it will.
 const MADE_SQUARE = (bg = 'transparent') => `flex:none;display:inline-flex;align-items:center;justify-content:center;width:20px;height:32px;border-radius:8px;background:${bg};color:#525252`;
 const SHAPES_ICON = SHAPES_SVG.replace('<svg ', '<svg width="20" height="20" aria-hidden="true" style="display:block" ');
-// Text at work (2026-10-16, David: no blinking blue dot beside it): the wave of styles.css's .eb-wave, on a span as wide as
-// the words, so the band crosses them rather than the empty end of a wide row; a line too long ends in its ellipsis, which
-// waves with it. `html` is escaped already.
-const waveText = (html) => `<span class="eb-wave" style="display:inline-block;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:top">${html}</span>`;
-// The rows at work are drawn again as they change (a Create run's clock each second, an answer as it streams), which would
-// start each wave over before it crosses its words: every wave is put on the page's clock instead, so a row drawn again
-// goes on where the last one was. Its HTML is left as it was (the Web Animations API, not a style), so patchPending's
-// comparisons still hold.
-export function keepWaves(root) {
-  if (!root || typeof root.querySelectorAll !== 'function') return;
-  for (const el of root.querySelectorAll('.eb-wave')) for (const anim of (typeof el.getAnimations === 'function' ? el.getAnimations() : [])) if (anim.startTime !== 0) anim.startTime = 0;
-}
+// Text at work waves (../ui/wave.js waveText); every wave on the page's clock (keepWaves), exported for the tests.
+export { keepWaves };
 const SPINNER = '<span aria-hidden="true" style="display:block;width:14px;height:14px;box-sizing:border-box;border:2px solid #c9d9f2;border-top-color:#0070f3;border-radius:50%;animation:made-spin .8s linear infinite"></span>';
 // @discover's steps by the part of the trace they are in (2026-10-15, David's mockup): a part done has a check, the one
 // still going a grey ring; under each, what its steps found, the step still waiting darker. `writing`: the trace is over.
