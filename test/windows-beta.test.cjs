@@ -187,3 +187,15 @@ test('Claude Code\'s plan on Windows: asked through Git Bash (npm\'s claude is a
   assert.equal(calls[0].options.windowsHide, true);
   assert.equal(out.providers.find((one) => one.id === 'anthropic').signedIn, true);
 });
+
+const { codexListCall } = require('../src/main/connect/own-connectors.cjs');
+
+test('the person\'s own Codex connectors on Windows: `codex mcp list` through Git Bash (npm\'s codex is a .cmd and a shell script), no console window', () => {
+  const env = { ProgramFiles: 'C:\\Program Files', ENGELBART_CODEX_BIN: 'C:\\Users\\ada\\AppData\\Roaming\\npm\\codex' };
+  const [file, args, options] = codexListCall(env, 'win32');
+  assert.match(file, /bash\.exe$/);
+  assert.match(args.join(' '), /exec "\$\{ENGELBART_CODEX_BIN:-codex\}" mcp list --json/);
+  assert.equal(options.env, env);
+  assert.equal(options.windowsHide, true);
+  assert.deepEqual(codexListCall({ A: '1' }, 'darwin').slice(0, 2), ['codex', ['mcp', 'list', '--json']], 'a Mac\'s as before');
+});

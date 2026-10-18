@@ -70,7 +70,7 @@ const { createConnectAgents } = require('./connect/agents.cjs');
 const { createFakeConnectAgents, createCliGatedAgents } = require('./connect/fake.cjs');
 const { createAgentBrowser } = require('./connect/browser.cjs');
 const { createConnectors } = require('./connect/connectors.cjs');
-const { createOwnConnectors } = require('./connect/own-connectors.cjs');
+const { createOwnConnectors, codexListCall } = require('./connect/own-connectors.cjs');
 const { createWebSignIn, SIGN_IN_COOKIES, profileOpenArgs } = require('./connect/web-signin.cjs');
 const { createAppleNotes } = require('./connect/apple-notes.cjs');
 const { createSignInWindow } = require('./connect/signin-window.cjs');
@@ -1019,7 +1019,7 @@ if (!hasSingleInstanceLock) {
       own: createOwnConnectors({
         homeDir,
         codexList: () => new Promise((resolve, reject) => {
-          execFile('codex', ['mcp', 'list', '--json'], { env: { ...process.env, ...(tools ? tools.environment() : {}) }, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => (error ? reject(error) : resolve(stdout)));
+          execFile(...codexListCall({ ...process.env, ...(tools ? tools.environment() : {}) }), (error, stdout) => (error ? reject(error) : resolve(stdout)));
         }),
       }),
     });
