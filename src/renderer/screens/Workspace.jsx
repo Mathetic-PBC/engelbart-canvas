@@ -1076,7 +1076,8 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     // A library mention is its item whatever name it was written with: a web page's is never its address (2026-10-17).
     const ids = new Set([...text.matchAll(LIB_ID_RE)].map((match) => match[1]));
     const shown = new Set([...text.matchAll(IMAGE_REF_RE)].map((match) => match[1])); // pasted images are context without an @mention
-    return library.filter((row) => (row.type === 'image' ? shown.has(row.id) : names.has(row.name.toLowerCase()) || ids.has(row.id)));
+    // A picture is mentioned by its id alone (2026-10-17): pasted ones share names ("Attachment 1").
+    return library.filter((row) => (row.type === 'image' ? shown.has(row.id) || ids.has(row.id) : names.has(row.name.toLowerCase()) || ids.has(row.id)));
   }, [docs, topic, library]);
 
   const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
@@ -1119,11 +1120,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // What the @ menu and the sidebar's search offer (MATH-58): the library less the notes trashed from their last
   // workspace. `mentionable`, which an @mention already written is opened by, keeps the whole library, those notes marked
-  // `trashed` so their mentions show grey (still opened by a click).
+  // `trashed` so their mentions show grey (still opened by a click). Pictures are in both (2026-10-17).
   const letGo = React.useMemo(() => letGoNotes({ workspaces: tree.workspaces, notes: tree.notes }), [tree.workspaces, tree.notes]);
   const findable = React.useMemo(() => (letGo.size ? library.filter((row) => !letGo.has(row.id)) : library), [library, letGo]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, ...library.filter((row) => row.type !== 'image').map((row) => (letGo.has(row.id) ? { ...describe(row, project.id), trashed: true } : describe(row, project.id)))], [library, letGo, project.id]);
+  const mentionable = React.useMemo(() => [BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, ...library.map((row) => (letGo.has(row.id) ? { ...describe(row, project.id), trashed: true } : describe(row, project.id)))], [library, letGo, project.id]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.map((row) => row.id)), [rows]);

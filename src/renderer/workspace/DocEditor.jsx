@@ -169,7 +169,8 @@ const withAttachments = (text, images) => {
   return text.replace(/(?<!!)\[Attachment (\d+)\](?!\()/g, (token, n) => (ids.has(Number(n)) ? `![Attachment ${n}](img:${ids.get(Number(n))})` : token));
 };
 // The token a picked row of the @ menu writes: a workspace's, a Zotero item's (MATH-65 build 2), a file's or a subfolder's
-// in a library folder (MATH-22), a web page's by its id under its title (2026-10-17: never its address, model/web-name.js),
+// in a library folder (MATH-22), a web page's by its id under its title (2026-10-17: never its address, model/web-name.js), a
+// picture's by its id under its name (2026-10-17: pasted ones share names, "Attachment 1"),
 // else a mention by name. The open page the library does not hold yet has no id: it is mentioned by name, its title's.
 // `pickedRow`: the library row picking it links to the workspace (a file's is its folder's); null for a Zotero item, which
 // links nothing.
@@ -177,6 +178,7 @@ const mentionToken = (r) => (r.kind === 'workspace' ? wsMention(r.name, r.id)
   : r.kind === 'entry' && r.zotero ? zoteroMention(r.name, r.zotero)
     : (r.kind === 'entry' || r.kind === 'self') && r.rel ? fileMention(r.kind === 'self' ? r.entryName : r.name, r.row.id, r.rel)
       : r.kind === 'item' && isWebRow(r.row) ? libMention(webName(r.row.name, r.row.url), r.row.id)
+        : r.kind === 'item' && r.row && r.row.type === 'image' ? libMention(r.row.name, r.row.id)
         : r.kind === 'fresh' && isAddress(r.input) ? `@[${webName(r.name, r.input)}]`
           : `@[${r.name}]`);
 // A library row of a page on the web, a repository known by its address among them: it has an address and nothing on this Mac.
