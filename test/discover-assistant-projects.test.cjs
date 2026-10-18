@@ -242,7 +242,7 @@ function discoveryOn({ cli = 'none', reply = JSON.stringify(PROJECTS), fail = nu
   const asked = [];
   const assistants = { ask: async (input) => { asked.push(input); return (answers || [{ app: 'Claude', outcome: 'none' }, { app: 'ChatGPT', outcome: 'none' }]); } };
   let last = null;
-  const discovery = createDiscovery({ agents, context: async () => ({ dataRoot }), homeDir: home, providers, notify: (state) => { last = state; }, assistants, keychainWaitMs, keychainPollMs: 5 });
+  const discovery = createDiscovery({ platform: 'darwin', agents, context: async () => ({ dataRoot }), homeDir: home, providers, notify: (state) => { last = state; }, assistants, keychainWaitMs, keychainPollMs: 5 });
   const settled = () => until(() => last, (state) => state && state.projects.status !== 'running', 'the project search');
   return { discovery, dataRoot, turns, asked, settled, last: () => last };
 }
@@ -355,11 +355,11 @@ test('D4: Safari\'s history is read only with Full Disk Access; without it the t
   fs.writeFileSync(path.join(home, 'Library', 'Safari', 'History.db'), '');
   let reads = 0;
   const run = (cmd, args, opts, cb) => { reads += 1; const done = typeof opts === 'function' ? opts : cb; done(null, JSON.stringify([{ url: 'https://www.notion.so/x', visits: 9 }]), ''); };
-  const denied = await toolEvidence({ homeDir: home, browserId: 'safari', run, detected: { apps: {}, localRepos: [] }, applications: [], diskAccess: async () => false });
+  const denied = await toolEvidence({ platform: 'darwin', homeDir: home, browserId: 'safari', run, detected: { apps: {}, localRepos: [] }, applications: [], diskAccess: async () => false });
   assert.equal(reads, 0, 'the file was not touched');
   assert.equal(denied.history, 'needs-disk-access');
   assert.equal(denied.evidence[SITES].evidence, 'Safari history needs Full Disk Access');
-  const granted = await toolEvidence({ homeDir: home, browserId: 'safari', run, detected: { apps: {}, localRepos: [] }, applications: [], diskAccess: async () => true });
+  const granted = await toolEvidence({ platform: 'darwin', homeDir: home, browserId: 'safari', run, detected: { apps: {}, localRepos: [] }, applications: [], diskAccess: async () => true });
   assert.equal(reads, 1);
   assert.equal(granted.history, undefined);
   assert.equal(granted.evidence.Notion.used, true, JSON.stringify(granted.evidence.Notion));

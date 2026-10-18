@@ -88,7 +88,7 @@ test('detect: Obsidian\'s vaults from obsidian.json, apps installed or signed in
   const apps = path.join(homeDir, 'Apps');
   fs.mkdirSync(path.join(apps, 'Granola.app'), { recursive: true });
   fs.mkdirSync(path.join(apps, 'Perplexity.app'), { recursive: true });
-  const found = detect({ homeDir, applications: [apps], signedIn: ['ChatGPT'] }).apps;
+  const found = detect({ platform: 'darwin', homeDir, applications: [apps], signedIn: ['ChatGPT'] }).apps;
   assert.equal(found.Obsidian.found, true);
   assert.equal(found['Claude Code'].found, false);
   assert.deepEqual([found.Granola.found, found.Granola.where], [true, 'on this Mac']);

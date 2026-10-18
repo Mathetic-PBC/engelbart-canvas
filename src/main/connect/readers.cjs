@@ -487,7 +487,10 @@ function exportTranscript(file, id) {
 
 const CHROMIUM = [['Chrome', ['Google', 'Chrome']], ['Arc', ['Arc', 'User Data']], ['Brave', ['BraveSoftware', 'Brave-Browser']], ['Edge', ['Microsoft Edge']], ['Chromium', ['Chromium']], ['Vivaldi', ['Vivaldi']], ['Opera', ['com.operasoftware.Opera']], ['Comet', ['Comet']]];
 // Under AppData\Local on Windows.
-const WINDOWS_CHROMIUM = [['Chrome', ['Google', 'Chrome', 'User Data']], ['Brave', ['BraveSoftware', 'Brave-Browser', 'User Data']], ['Edge', ['Microsoft', 'Edge', 'User Data']], ['Chromium', ['Chromium', 'User Data']], ['Vivaldi', ['Vivaldi', 'User Data']]];
+// Comet (2026-10-18, the beta's browsers): its installer's usual place, not checked on a Windows machine.
+const WINDOWS_CHROMIUM = [['Chrome', ['Google', 'Chrome', 'User Data']], ['Brave', ['BraveSoftware', 'Brave-Browser', 'User Data']], ['Edge', ['Microsoft', 'Edge', 'User Data']], ['Chromium', ['Chromium', 'User Data']], ['Vivaldi', ['Vivaldi', 'User Data']], ['Comet', ['Perplexity', 'Comet', 'User Data']]];
+// Opera on Windows (2026-10-18) keeps one profile, its folder itself, under AppData\Roaming (no User Data of profiles).
+const WINDOWS_ONE_PROFILE = [['Opera', ['Opera Software', 'Opera Stable']]];
 
 /**
  * The Chromium browsers' profiles on this Mac that have a history or bookmarks → [{ browser, profile, name, dir, used }],
@@ -507,6 +510,13 @@ function browserProfiles(homeDir = os.homedir(), platform = process.platform) {
       const dir = path.join(base, name);
       const history = statOf(path.join(dir, 'History'));
       if (history || statOf(path.join(dir, 'Bookmarks'))) out.push({ browser, profile: name, name: clip((info[name] && info[name].name) || name, 60), dir, used: iso(history ? history.mtimeMs : 0) });
+    }
+  }
+  if (platform === 'win32') {
+    for (const [browser, parts] of WINDOWS_ONE_PROFILE) {
+      const dir = roaming(homeDir, ...parts);
+      const history = statOf(path.join(dir, 'History'));
+      if (history || statOf(path.join(dir, 'Bookmarks'))) out.push({ browser, profile: 'Default', name: browser, dir, used: iso(history ? history.mtimeMs : 0) });
     }
   }
   return out.sort((a, b) => String(b.used).localeCompare(String(a.used)));
@@ -862,6 +872,6 @@ function pdfFiles(dir, { days = null, query = '', kind = '', include = [], exclu
 module.exports = {
   NOTE_EXT, IMAGE_EXT, shownPath, expandPath, walkFiles, folderOverview, noteFiles, obsidianDailyFolder, obsidianVaults,
   localChats, localChatCounts, localChatFile, localTranscript, readExport, exportChat, exportChats, exportCounts, exportTranscript,
-  browserProfiles, profileOf, browserHistory, browserBookmarks, linksIn, hostOf, chromeTime, zoteroCollections, zoteroItems,
+  browserProfiles, profileOf, browserHistory, sqliteHere, browserBookmarks, linksIn, hostOf, chromeTime, zoteroCollections, zoteroItems,
   pdfRoots, pdfFolders, pdfFiles, pdfTitle, pdfGuess,
 };

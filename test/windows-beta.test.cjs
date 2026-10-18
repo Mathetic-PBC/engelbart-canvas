@@ -70,3 +70,83 @@ test('the browser\'s sign-ins off the Mac: never asked (nothing is copied; sign-
   assert.deepEqual(onMac.browsers.map((browser) => browser.id), ['chrome', 'safari', 'firefox']);
   assert.equal(onMac.keychain, null);
 });
+
+const fs = require('node:fs');
+const os = require('node:os');
+const readers = require('../src/main/connect/readers.cjs');
+const { historySites, toolEvidence, createDiscovery } = require('../src/main/onboarding/discover.cjs');
+
+const temp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-windows-beta-')));
+/** A history database where `file` is: Chromium's urls (`kind` 'chromium') or Firefox's moz_places. */
+function historyAt(file, kind) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(file);
+  if (kind === 'chromium') {
+    const recent = readers.chromeTime(Date.now() - 86_400_000);
+    db.exec(`CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, typed_count INTEGER, last_visit_time INTEGER, hidden INTEGER DEFAULT 0);
+      INSERT INTO urls(url,title,visit_count,last_visit_time) VALUES ('https://www.notion.so/a','A',7,${recent}),('https://github.com/x','X',4,${recent});`);
+  } else {
+    const recent = (Date.now() - 86_400_000) * 1000;
+    db.exec(`CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url TEXT, visit_count INTEGER, last_visit_date INTEGER);
+      INSERT INTO moz_places(url,visit_count,last_visit_date) VALUES ('https://www.overleaf.com/project','9',${recent});`);
+  }
+  db.close();
+}
+/** `fn` run with no sqlite3 command to be found (Windows has none). */
+async function withoutSqlite3(fn) {
+  const was = process.env.PATH;
+  process.env.PATH = temp();
+  try { return await fn(); } finally { process.env.PATH = was; }
+}
+
+test('the tools screen\'s history on Windows: Chrome\'s and Opera\'s from AppData\\Local and Roaming, Firefox\'s from Roaming, all with node:sqlite; Safari has none', async () => {
+  const home = temp();
+  historyAt(path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'Default', 'History'), 'chromium');
+  historyAt(path.join(home, 'AppData', 'Roaming', 'Opera Software', 'Opera Stable', 'History'), 'chromium');
+  historyAt(path.join(home, 'AppData', 'Roaming', 'Mozilla', 'Firefox', 'Profiles', 'abc.default-release', 'places.sqlite'), 'firefox');
+  const chrome = await withoutSqlite3(() => historySites({ homeDir: home, browserId: 'chrome', platform: 'win32' }));
+  assert.deepEqual(chrome.map((site) => [site.host, site.visits]), [['notion.so', 7], ['github.com', 4]]);
+  const opera = await withoutSqlite3(() => historySites({ homeDir: home, browserId: 'opera', platform: 'win32' }));
+  assert.deepEqual(opera.map((site) => site.host), ['notion.so', 'github.com'], 'Opera keeps one profile, its folder itself');
+  const firefox = await withoutSqlite3(() => historySites({ homeDir: home, browserId: 'firefox', platform: 'win32' }));
+  assert.deepEqual(firefox.map((site) => [site.host, site.visits]), [['overleaf.com', 9]]);
+  assert.deepEqual(await historySites({ homeDir: home, browserId: 'safari', platform: 'win32', diskAccess: async () => true }), []);
+});
+
+test('the tools screen on Windows says "this computer", and a desktop app counts by its program in AppData or Program Files', async () => {
+  const home = temp();
+  historyAt(path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'Default', 'History'), 'chromium');
+  const env = { LOCALAPPDATA: path.join(home, 'AppData', 'Local'), APPDATA: path.join(home, 'AppData', 'Roaming'), ProgramFiles: path.join(home, 'Program Files') };
+  fs.mkdirSync(path.join(env.LOCALAPPDATA, 'Programs', 'Evernote'), { recursive: true });
+  fs.writeFileSync(path.join(env.LOCALAPPDATA, 'Programs', 'Evernote', 'Evernote.exe'), '');
+  const detected = { apps: { Obsidian: { found: true, where: '~/Vault' } }, localRepos: ['a', 'b'] };
+  const out = await withoutSqlite3(() => toolEvidence({ homeDir: home, env, browserId: 'chrome', detected, platform: 'win32' }));
+  assert.doesNotMatch(Object.values(out.evidence).map((fact) => fact.evidence).join('\n'), /this Mac/);
+  assert.equal(out.evidence.__sites.evidence, 'Chrome history on this computer');
+  assert.equal(out.evidence['Folders on this Mac'].evidence, '2 repositories on this computer');
+  assert.equal(out.evidence.Obsidian.evidence, 'Found on this computer (~/Vault)');
+  assert.deepEqual([out.evidence.Evernote.used, out.evidence.Evernote.method], [true, 'app'], 'Evernote.exe in AppData\\Local\\Programs');
+  // A Mac's words as before.
+  const mac = await toolEvidence({ homeDir: home, env, browserId: 'chrome', detected, platform: 'darwin', applications: [] });
+  assert.equal(mac.evidence['Folders on this Mac'].evidence, '2 repositories on this Mac');
+});
+
+test('recent projects off the Mac: ChatGPT and Claude asked at once, never after a wait for a sign-ins answer nobody is asked for', async () => {
+  const home = temp();
+  const dataRoot = path.join(home, 'root');
+  const asked = [];
+  let last = null;
+  const providers = { status: async () => ({ providers: [{ id: 'anthropic', installed: true, signedIn: true }], decision: { pick: 'anthropic' } }) };
+  const discovery = createDiscovery({
+    platform: 'win32', agents: { turn: async () => ({ text: 'null' }) }, context: async () => ({ dataRoot }), homeDir: home, providers,
+    notify: (state) => { last = state; }, assistants: { ask: async (input) => { asked.push(input); return [{ app: 'Claude', outcome: 'none' }, { app: 'ChatGPT', outcome: 'none' }]; } },
+    keychainWaitMs: 10 * 60_000, keychainPollMs: 5,
+  });
+  const started = Date.now();
+  await discovery.startProjects({ provider: 'anthropic' });
+  while (!(last && last.projects.status !== 'running') && Date.now() - started < 5000) await new Promise((resolve) => { setTimeout(resolve, 10); });
+  assert.equal(last.projects.status, 'done');
+  assert.equal(asked.length, 1, 'asked, through Engelbart\'s own browser');
+  assert.ok(Date.now() - started < 5000);
+});
