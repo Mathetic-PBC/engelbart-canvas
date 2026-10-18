@@ -45,7 +45,7 @@ async function machine(spec) {
   await tools.check();
   return { tools, fake, installs: () => installs };
 }
-const providersOn = (m, home = temp()) => createProviders({ tools: m.tools, prefs: { get: () => ({}), set() {} }, homeDir: home, fake: '', run: m.fake.execFile });
+const providersOn = (m, home = temp()) => createProviders({ platform: 'darwin', tools: m.tools, prefs: { get: () => ({}), set() {} }, homeDir: home, fake: '', run: m.fake.execFile });
 
 /* ------------------------------------------------------------------------------------------------- what a failure is */
 

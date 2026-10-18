@@ -150,3 +150,40 @@ test('recent projects off the Mac: ChatGPT and Claude asked at once, never after
   assert.equal(asked.length, 1, 'asked, through Engelbart\'s own browser');
   assert.ok(Date.now() - started < 5000);
 });
+
+const { createRules, CLAUDE_TOOLS } = require('../src/main/bart/ask.cjs');
+
+test('@create\'s write rules on Windows name its folder as Claude Code matches a Windows path (C:\\ as /c/), so its writes are not refused', () => {
+  assert.equal(createRules('C:\\Users\\ada\\Engelbart\\.create\\r1', 'win32'), `${CLAUDE_TOOLS},Edit(//c/Users/ada/Engelbart/.create/r1/**),Write(//c/Users/ada/Engelbart/.create/r1/**)`);
+  assert.equal(createRules('/a/b', 'darwin'), `${CLAUDE_TOOLS},Edit(//a/b/**),Write(//a/b/**)`, 'a Mac\'s as before');
+});
+
+const { createQuickRun } = require('../src/main/bart/name-chat.cjs');
+const { createRouter } = require('../src/main/bart/route.cjs');
+const { createProviders } = require('../src/main/onboarding/providers.cjs');
+
+test('@bart\'s quick runs (a chat\'s title, @create\'s line, the router) start Git Bash with no console window on Windows', async () => {
+  const seen = [];
+  const run = (file, args, options, done) => { seen.push(options); done(null, ''); };
+  const dir = temp();
+  const quickRun = createQuickRun({ environment: { SHELL: '/bin/zsh', PATH: '/usr/bin' }, runDirectory: dir, codexHome: path.join(dir, 'codex'), run });
+  await quickRun({ provider: 'anthropic', model: 'haiku', effort: 'low' }, 'system', 'input');
+  const router = createRouter({ readModels: () => ({ provider: 'anthropic', anthropic: { models: { haiku: { id: 'claude-haiku', name: 'Haiku', efforts: ['low'] } } } }), environment: { SHELL: '/bin/zsh', PATH: '/usr/bin' }, runDirectory: dir, codexHome: path.join(dir, 'codex2'), run });
+  await router.route({ projectId: 'p', text: 'what is this', section: '@bart what is this', threads: [] });
+  assert.ok(seen.length >= 1, 'ran');
+  for (const options of seen) assert.equal(options.windowsHide, true);
+});
+
+test('Claude Code\'s plan on Windows: asked through Git Bash (npm\'s claude is a shell script there), with no console window', async () => {
+  const calls = [];
+  const run = (file, args, options, done) => { calls.push({ file, args, options }); done(null, JSON.stringify({ loggedIn: true, subscriptionType: 'max' })); };
+  const tools = { snapshot: () => ({ tools: { claude: { installed: true, status: 'ready', signedIn: true, path: 'C:\\Users\\ada\\AppData\\Roaming\\npm\\claude' }, codex: { installed: false, status: 'missing' } } }), environment: () => ({}) };
+  const providers = createProviders({ tools, prefs: { get: () => ({}), set() {} }, homeDir: temp(), environment: { ProgramFiles: 'C:\\Program Files', PATH: '' }, run, fake: '', platform: 'win32' });
+  const out = await providers.status({ fresh: true });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].file, /bash\.exe$/);
+  assert.match(calls[0].args.join(' '), /exec "\$ENGELBART_TOOL" auth status --json/);
+  assert.equal(calls[0].options.env.ENGELBART_TOOL, 'C:\\Users\\ada\\AppData\\Roaming\\npm\\claude');
+  assert.equal(calls[0].options.windowsHide, true);
+  assert.equal(out.providers.find((one) => one.id === 'anthropic').signedIn, true);
+});

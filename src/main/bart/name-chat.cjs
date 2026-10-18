@@ -97,7 +97,7 @@ function createQuickRun({ environment = process.env, runDirectory, codexHome, co
     return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra };
   };
   const execute = (command, env) => new Promise((resolve) => {
-    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 }, (error, out) => resolve({ stdout: out, failure: error }));
+    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, out) => resolve({ stdout: out, failure: error }));
   });
 
   // Every flag is a literal and every value arrives through the environment, as the summary sweep's runs.
