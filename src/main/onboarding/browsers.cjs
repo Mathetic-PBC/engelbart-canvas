@@ -19,6 +19,13 @@ const { BROWSERS, browserById, browserIdOfName, orderBrowsers } = require('../..
 
 const SETTLE_MS = 2500;
 
+// Off the Mac (2026-10-18, the beta's Windows catch-up, docs/windows-port-log.md): no browser's sign-ins are copied there
+// (Chrome's cookies on Windows are app-bound; windows-port's decision: every sign-in goes through Engelbart's own window),
+// so "Allow Engelbart to use your … sign-ins" has nothing to ask. It counts as answered ('allowed': the run uses sign-ins,
+// made in Engelbart's window) and macOS's unlock is never called. Safari is the Mac's alone. The installed browsers are
+// still listed: the tools screen reads the chosen one's history.
+const copiesSignIns = (platform) => platform === 'darwin';
+
 /**
  * `installedApps` (../browser/installed-apps.cjs); `defaultName()` macOS's name for the default browser; `prefs` { get, set }.
  * `override` ids standing in for this Mac's browsers (ENGELBART_ONBOARDING_BROWSERS in scripted runs) with the first the
@@ -26,7 +33,7 @@ const SETTLE_MS = 2500;
  * { keychain: 'allowed' } | { keychain: 'refused', browser } once macOS answered (webSignIn.unlockBrowser);
  * `diskAccess()` → { granted } (./disk-access.cjs status).
  */
-function createBrowsers({ installedApps, defaultName = () => '', prefs, override = null, profilesOf = () => [], unlock = null, diskAccess = null }) {
+function createBrowsers({ installedApps, defaultName = () => '', prefs, override = null, profilesOf = () => [], unlock = null, diskAccess = null, platform = process.platform }) {
   let last = null;
 
   const defaultId = () => (override ? override[0] || null : browserIdOfName(defaultName()));
@@ -37,6 +44,7 @@ function createBrowsers({ installedApps, defaultName = () => '', prefs, override
     try { await Promise.race([installedApps.ask(BROWSERS.map((browser) => browser.bundle)), new Promise((resolve) => { setTimeout(resolve, SETTLE_MS); })]); } catch { /* answered as installed */ }
     const out = [];
     for (const browser of BROWSERS) {
+      if (browser.id === 'safari' && platform !== 'darwin') continue;
       let yes = false;
       try { yes = await installedApps.settled(browser.bundle, { maxMs: SETTLE_MS }); } catch { yes = false; }
       if (yes) out.push(browser.id);
@@ -67,7 +75,7 @@ function createBrowsers({ installedApps, defaultName = () => '', prefs, override
       defaultId: defaultId(),
       chosenId,
       chosenProfile,
-      keychain: remembered.keychain || null,
+      keychain: copiesSignIns(platform) ? remembered.keychain || null : 'allowed',
       safari: { diskAccess: await granted() },
     };
   }
@@ -103,6 +111,7 @@ function createBrowsers({ installedApps, defaultName = () => '', prefs, override
    */
   async function setKeychain(answer) {
     if (answer !== 'allowed' && answer !== 'declined') throw new TypeError('answer is invalid');
+    if (!copiesSignIns(platform)) return { keychain: 'allowed' };
     prefs.set({ keychain: answer });
     if (answer === 'declined' || typeof unlock !== 'function') return { keychain: answer };
     const remembered = (prefs.get() || {}).browser || null;
@@ -131,4 +140,4 @@ function createBrowsers({ installedApps, defaultName = () => '', prefs, override
   return { list, choose, chooseProfile, setKeychain, preferredName, defaultId };
 }
 
-module.exports = { createBrowsers };
+module.exports = { createBrowsers, copiesSignIns };

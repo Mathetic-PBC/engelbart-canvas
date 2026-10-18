@@ -31,6 +31,32 @@ const APP_NAMES = Object.freeze({
   'ai.perplexity.comet': ['Comet.app'],
 });
 
+// Windows (2026-10-18, the beta's Windows catch-up, docs/windows-port-log.md): no .app bundles and no Spotlight. A browser
+// counts as installed when its program is where its installer puts it, under Program Files (both) or the person's
+// AppData\Local (one-person installs): `[base, ...parts]`, base 'programs' (both Program Files) or 'local'. A few file
+// checks, no process. Safari and Arc (a Store package) are not looked for; Comet's place is its installer's usual one,
+// not checked on a Windows machine.
+const WINDOWS_EXES = Object.freeze({
+  'com.google.Chrome': [['programs', 'Google', 'Chrome', 'Application', 'chrome.exe'], ['local', 'Google', 'Chrome', 'Application', 'chrome.exe']],
+  'com.brave.Browser': [['programs', 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe'], ['local', 'BraveSoftware', 'Brave-Browser', 'Application', 'brave.exe']],
+  'com.microsoft.edgemac': [['programs', 'Microsoft', 'Edge', 'Application', 'msedge.exe']],
+  'com.vivaldi.Vivaldi': [['programs', 'Vivaldi', 'Application', 'vivaldi.exe'], ['local', 'Vivaldi', 'Application', 'vivaldi.exe']],
+  'com.operasoftware.Opera': [['local', 'Programs', 'Opera', 'opera.exe'], ['programs', 'Opera', 'opera.exe']],
+  'org.chromium.Chromium': [['local', 'Chromium', 'Application', 'chrome.exe']],
+  'org.mozilla.firefox': [['programs', 'Mozilla Firefox', 'firefox.exe'], ['local', 'Mozilla Firefox', 'firefox.exe']],
+  'ai.perplexity.comet': [['local', 'Perplexity', 'Comet', 'Application', 'comet.exe']],
+});
+
+/** The places `bundleId`'s program may be on Windows, from `env` (any case) and `homeDir`. */
+function windowsExes(bundleId, { env = process.env, homeDir = os.homedir() } = {}) {
+  const variable = (key) => { const found = Object.keys(env || {}).find((each) => each.toUpperCase() === key.toUpperCase()); return found ? env[found] : ''; };
+  const bases = {
+    programs: [...new Set([variable('ProgramFiles') || 'C:\\Program Files', variable('ProgramFiles(x86)') || 'C:\\Program Files (x86)'])],
+    local: [variable('LOCALAPPDATA') || path.win32.join(homeDir, 'AppData', 'Local')],
+  };
+  return (WINDOWS_EXES[bundleId] || []).flatMap(([base, ...parts]) => bases[base].map((dir) => path.win32.join(dir, ...parts)));
+}
+
 const SETTLE_MS = 2000;
 // A found app is looked for again after this (it may have gone to the Trash); Spotlight's answer is kept this long.
 const LOCAL_MS = 60_000;
@@ -80,6 +106,9 @@ function createInstalledApps({
   },
   settleMs = SETTLE_MS,
   now = () => Date.now(),
+  platform = process.platform,
+  env = process.env,
+  homeDir = os.homedir(),
 } = {}) {
   const local = new Map(); // bundle → { at, path }
   const answers = new Map(); // bundle → { at, yes }
@@ -89,6 +118,7 @@ function createInstalledApps({
 
   /** The app with `bundleId` in appDirs → its path, or ''. No process: a few file reads. */
   function lookLocally(bundleId) {
+    if (platform === 'win32') return windowsExes(bundleId, { env, homeDir }).find((file) => fsx.exists(file)) || '';
     for (const dir of appDirs) {
       for (const name of APP_NAMES[bundleId] || []) {
         const app = path.join(dir, name);
@@ -141,6 +171,7 @@ function createInstalledApps({
     if (!safeId(bundleId)) return false;
     if (override) return overridden(bundleId);
     if (where(bundleId)) return true;
+    if (platform === 'win32') return false; // its program's places are the whole answer: no Spotlight
     const answer = answers.get(bundleId);
     if (answer) {
       if (now() - answer.at >= SPOTLIGHT_MS) void askOne(bundleId);
@@ -152,7 +183,7 @@ function createInstalledApps({
 
   /** Spotlight asked about each browser not in appDirs, in the background (the choose screen opening). */
   function ask(bundleIds = Object.keys(APP_NAMES)) {
-    if (override) return Promise.resolve();
+    if (override || platform === 'win32') return Promise.resolve();
     return Promise.all(bundleIds.filter((id) => safeId(id) && !where(id)).map(askOne)).then(() => undefined);
   }
 
@@ -161,6 +192,7 @@ function createInstalledApps({
     if (!safeId(bundleId)) return Promise.resolve(false);
     if (override) return Promise.resolve(overridden(bundleId));
     if (where(bundleId)) return Promise.resolve(true);
+    if (platform === 'win32') return Promise.resolve(false);
     let timer = null;
     const late = new Promise((resolve) => { timer = setTimeout(() => resolve(true), maxMs); });
     return Promise.race([askOne(bundleId), late]).finally(() => clearTimeout(timer));
@@ -169,4 +201,4 @@ function createInstalledApps({
   return { has, ask, settled, where };
 }
 
-module.exports = { createInstalledApps, installedApp, plistNames, APP_NAMES };
+module.exports = { createInstalledApps, installedApp, plistNames, windowsExes, APP_NAMES, WINDOWS_EXES };

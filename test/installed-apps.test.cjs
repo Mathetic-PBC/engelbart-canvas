@@ -37,7 +37,7 @@ function fakeFs(apps) {
 test('an app in /Applications needs no Spotlight: by its known name, or any app whose Info.plist names the bundle id', async () => {
   const asked = [];
   const { fsx } = fakeFs({ '/Applications/Google Chrome.app': 'com.google.Chrome', '/Applications/Brave Browser.app': null, '/Applications/My Firefox.app': 'org.mozilla.firefox' });
-  const apps = createInstalledApps({ appDirs: ['/Applications'], fsx, spotlight: async (id) => { asked.push(id); return false; } });
+  const apps = createInstalledApps({ platform: 'darwin', appDirs: ['/Applications'], fsx, spotlight: async (id) => { asked.push(id); return false; } });
   assert.equal(apps.has('com.google.Chrome'), true);
   assert.equal(apps.has('com.brave.Browser'), true, 'a binary Info.plist is taken on its name');
   assert.equal(apps.has('org.mozilla.firefox'), true, 'renamed, found by its bundle id');
@@ -48,7 +48,7 @@ test('an app in /Applications needs no Spotlight: by its known name, or any app 
 
 test('a known name whose Info.plist names another app is not taken', () => {
   const { fsx } = fakeFs({ '/Applications/Google Chrome.app': 'com.example.Other' });
-  const apps = createInstalledApps({ appDirs: ['/Applications'], fsx, spotlight: async () => false });
+  const apps = createInstalledApps({ platform: 'darwin', appDirs: ['/Applications'], fsx, spotlight: async () => false });
   assert.equal(apps.where('com.google.Chrome'), '');
 });
 
@@ -56,7 +56,7 @@ test('not in /Applications: counts as installed until Spotlight answers in the b
   const asked = [];
   let answer;
   const { fsx } = fakeFs({});
-  const apps = createInstalledApps({ appDirs: ['/Applications'], fsx, spotlight: (id) => { asked.push(id); return new Promise((resolve) => { answer = resolve; }); } });
+  const apps = createInstalledApps({ platform: 'darwin', appDirs: ['/Applications'], fsx, spotlight: (id) => { asked.push(id); return new Promise((resolve) => { answer = resolve; }); } });
   assert.equal(apps.has('com.brave.Browser'), true, 'no answer yet: installed');
   assert.deepEqual(asked, ['com.brave.Browser'], 'asked once, in the background');
   assert.equal(apps.has('com.brave.Browser'), true);
@@ -70,17 +70,17 @@ test('not in /Applications: counts as installed until Spotlight answers in the b
 
 test('settled waits for Spotlight at most ~2 s (settleMs); no answer by then counts as installed', async () => {
   const { fsx } = fakeFs({});
-  const apps = createInstalledApps({ appDirs: ['/Applications'], fsx, spotlight: () => new Promise(() => {}), settleMs: 20 });
+  const apps = createInstalledApps({ platform: 'darwin', appDirs: ['/Applications'], fsx, spotlight: () => new Promise(() => {}), settleMs: 20 });
   const started = Date.now();
   assert.equal(await apps.settled('com.brave.Browser'), true);
   assert.ok(Date.now() - started < 1000);
-  const quick = createInstalledApps({ appDirs: ['/Applications'], fsx, spotlight: async () => false, settleMs: 2000 });
+  const quick = createInstalledApps({ platform: 'darwin', appDirs: ['/Applications'], fsx, spotlight: async () => false, settleMs: 2000 });
   assert.equal(await quick.settled('com.brave.Browser'), false, 'answered in time: not installed');
 });
 
 test('ENGELBART_INSTALLED_BROWSERS stands in for this Mac: nothing looked at or asked', async () => {
   const { fsx, reads } = fakeFs({ '/Applications/Google Chrome.app': 'com.google.Chrome' });
-  const apps = createInstalledApps({ appDirs: ['/Applications'], fsx, override: ['org.mozilla.firefox'], spotlight: async () => { throw new Error('never asked'); } });
+  const apps = createInstalledApps({ platform: 'darwin', appDirs: ['/Applications'], fsx, override: ['org.mozilla.firefox'], spotlight: async () => { throw new Error('never asked'); } });
   assert.equal(apps.has('com.google.Chrome'), false);
   assert.equal(apps.has('org.mozilla.firefox'), true);
   assert.equal(await apps.settled('com.google.Chrome'), false);
