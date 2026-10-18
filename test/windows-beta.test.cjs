@@ -239,3 +239,34 @@ test('the workspace\'s shortcuts off the Mac: Ctrl where a Mac has ⌘ (next age
   assert.deepEqual(keyLabels(true), { mod: '⌘', ctrl: '⌃', alt: '⌥' });
   assert.deepEqual(keyLabels(false), { mod: 'Ctrl+', ctrl: 'Ctrl+', alt: 'Alt' });
 });
+
+const { createAgentTerminal } = require('../src/main/terminal/agent-terminal.cjs');
+const { recentRepos } = require('../src/main/onboarding/digest.cjs');
+
+test('an agent\'s terminal on Windows is stopped without a signal (node-pty there has none), so Stop ends it', async () => {
+  const kills = [];
+  let exit = null;
+  const pty = { spawn: () => ({
+    onData: () => ({ dispose() {} }),
+    onExit: (fn) => { exit = fn; return { dispose() {} }; },
+    kill: (sig) => { kills.push(sig); if (sig) throw new Error('Signals not supported on windows.'); exit({ exitCode: 1 }); },
+  }) };
+  const terminal = createAgentTerminal({ pty, platform: 'win32', environment: { ProgramFiles: 'C:\\Program Files', PATH: '' } });
+  const controller = new AbortController();
+  const running = terminal.run({ command: 'claude -p hi', cwd: temp(), signal: controller.signal });
+  controller.abort();
+  const out = await running;
+  assert.equal(out.stopped, true);
+  assert.deepEqual(kills, [undefined]);
+});
+
+test('recent repositories on Windows: AppData (hundreds of app folders) is not looked through', () => {
+  const home = temp();
+  for (const dir of [path.join(home, 'AppData', 'Local', 'app', '.git'), path.join(home, 'work', 'study', '.git')]) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'HEAD'), 'ref: refs/heads/main\n');
+  }
+  const names = (platform) => recentRepos(home, { platform }).map((repo) => path.basename(repo.path || repo.full || repo.folder || ''));
+  assert.deepEqual(names('win32'), ['study']);
+  assert.deepEqual(names('darwin').sort(), ['app', 'study'], 'a Mac\'s as before');
+});

@@ -142,7 +142,7 @@ test('the Engelbart terminal: a login shell, the terminal\'s questions answered,
   assert.deepEqual(run.handle.written, ['\x1b[?62;22c'], 'the terminal question answered as xterm.js answers it');
   const hung = fakePty(() => {});
   const controller = new AbortController();
-  const pending = createAgentTerminal({ pty: hung, environment: { SHELL: '/bin/zsh' } }).run({ command: 'sleep 99', cwd: '/tmp', signal: controller.signal });
+  const pending = createAgentTerminal({ platform: 'darwin', pty: hung, environment: { SHELL: '/bin/zsh' } }).run({ command: 'sleep 99', cwd: '/tmp', signal: controller.signal });
   controller.abort();
   const stopped = await pending;
   assert.equal(stopped.stopped, true);
