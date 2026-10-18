@@ -77,3 +77,34 @@ test('off the Mac OneNote\'s sign-in (no known cookie) is made in Engelbart\'s w
   assert.equal(answers[0].status, 'done');
   connect.stop(started.id);
 });
+
+/** Fake agents whose import of `app` calls needs_you for a sign-in twice (its page still says signed out), saying each answer. */
+function twiceAgents(app, answers) {
+  const base = createFakeConnectAgents({ delayMs: 5 });
+  return {
+    async turn(args) {
+      const meta = args.meta;
+      if (!meta || meta.kind !== 'import' || !meta.job.apps.includes(app)) return base.turn(args);
+      answers.push(await meta.callTool('needs_you', { kind: 'signin', reason: `${app} shows its login page` }));
+      answers.push(await meta.callTool('needs_you', { kind: 'signin', reason: `${app} still shows its login page` }));
+      return { text: `${app}: ${answers.map((one) => one.status).join(', ')}`, session: null };
+    },
+  };
+}
+
+test('off the Mac a sign-in an agent finds signed out twice, though its cookie is still there, is offered in Engelbart\'s window, not dropped', async () => {
+  const answers = [];
+  const webSignIn = { ...offMac(), canSignIn: (app) => app === 'ChatGPT', signInQuiet: async () => ({ signedIn: true, browser: '' }), signedIn: async () => true, stillSignedIn: async () => true };
+  const signInWindow = { open: async () => ({ status: 'closed' }), openSite: async () => ({ status: 'closed' }), close: () => {} };
+  const connect = connectWith({ platform: 'win32', agents: twiceAgents('ChatGPT', answers), webSignIn, signInWindow, deps: { allowed: true, recoverWaitsMs: [0] } });
+  const started = await connect.start({ librarian: true, provider: 'openai', direct: { mode: 'manual', projects: [{ title: 'Study', description: 'A study.' }], roles: [], work: '', apps: ['ChatGPT'], scopes: {}, additional: [] } });
+  const state = () => connect.state(started.id);
+  const asked = await until(state, (s) => s.chat.some((entry) => entry.ask || entry.grant), 'the first question');
+  if (asked.chat.some((entry) => entry.grant)) connect.grant(started.id, { apps: ['ChatGPT'] });
+  await until(state, (s) => s.chat.some((entry) => entry.ask), 'the survey\'s question');
+  await connect.importNow(started.id);
+  const now = await until(state, (s) => s.needs.some((need) => need.kind === 'signin-here' && need.app === 'ChatGPT'), 'ChatGPT\'s card');
+  assert.ok(now.needs.some((need) => need.kind === 'signin-here'));
+  assert.equal(answers.length, 1, 'the first answer: still signed in, reload');
+  connect.stop(started.id);
+});

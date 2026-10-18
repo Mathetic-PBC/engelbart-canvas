@@ -1625,6 +1625,10 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // Already being brought back for another agent (Gmail and Drive share Google's): this one waits for the same answer.
     if (recovering(s, { app })) return recover(s, job, { app });
     const skippedNote = () => ({ status: 'skipped', note: `${shownName(app)} was left out for this run. Do not ask again: finish without it.` });
+    // Off the Mac (2026-10-18, the beta's Windows catch-up) no site's check page is asked (that is the cookie importer's), so a
+    // sign-in that has lapsed with its cookie still there looks signed in: the same agent saying so again has it made anew in
+    // Engelbart's window (recover's card) rather than left out.
+    if (again.stood.has(job.id) && platform !== 'darwin') return recover(s, job, { app });
     if (again.stood.has(job.id)) {
       logAction(s, job, `Carried on without ${shownName(app)}: it still looked signed in`);
       emit(s);
