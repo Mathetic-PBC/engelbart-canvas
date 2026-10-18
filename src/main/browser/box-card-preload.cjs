@@ -2,13 +2,16 @@
 // The card beside a selected box (MATH-70 build 2, 2026-10-07): its own small view (views.cjs `card`, one per window),
 // engelbart://app/box-card.html, drawn by src/renderer/box-card/BoxCard.jsx. These are its only channels, on its own
 // view's ipc; main binds every one to the box the card is showing, so the card names no box, tab or page.
-//   in:  state { mark: { id, note, asks }, running }: the box's note and answers as kept, and what is being asked from it
-//   out: ready(), note(text), ask(question), stop(askId), remove(), size({ height, width })
+//   in:  state { mark: { id, note, asks }, running }: the box's note and answers as kept, and what is being asked from it;
+//        a selection's card (2026-10-18) has { mode: 'selection', offer } too, and no mark until a note is begun in it
+//        (`typed`: begun by a key in the page, and the card has the keyboard now)
+//   out: ready(), note(text), ask(question), stop(askId), remove(), size({ height, width }), keep(text): a selection's
+//        card's note begun (or Enter in it empty: ''), for main to keep its highlight
 // Sandboxed and isolated: the card's page gets `window.boxCardAPI` and nothing else.
 
 const CHANNELS = Object.freeze({
   state: 'box-card:state', ready: 'box-card:ready', note: 'box-card:note', ask: 'box-card:ask',
-  stop: 'box-card:stop', remove: 'box-card:remove', size: 'box-card:size',
+  stop: 'box-card:stop', remove: 'box-card:remove', size: 'box-card:size', keep: 'box-card:keep',
 });
 
 function runInCard() {
@@ -24,6 +27,7 @@ function runInCard() {
     ask: (question) => ipcRenderer.send(CHANNELS.ask, String(question)),
     stop: (askId) => ipcRenderer.send(CHANNELS.stop, String(askId)),
     remove: () => ipcRenderer.send(CHANNELS.remove),
+    keep: (text) => ipcRenderer.send(CHANNELS.keep, String(text)),
     size: ({ height, width } = {}) => ipcRenderer.send(CHANNELS.size, { height: Number(height), width: Number(width) }),
   }));
 }

@@ -763,9 +763,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   boxHandlers.current = { onAsk, onStopAsk, onDismissAsk, pendingAsks };
   React.useEffect(() => {
     if (!api.onBrowserBoxAsk) return undefined;
-    const offAsk = api.onBrowserBoxAsk(({ markId, url, title, question, note, turns }) => {
+    // a highlight's card (2026-10-18, a selection's) sends its quote and the page's text around it; a box's has none
+    const offAsk = api.onBrowserBoxAsk(({ markId, url, title, question, note, turns, quote, pageText }) => {
       const h = boxHandlers.current;
-      if (h.onAsk && markId && url && question) void h.onAsk({ markId, source: 'web', url, question, note: note || '', turns: turns || [], quote: '', pageText: '', paper: title || '' });
+      if (h.onAsk && markId && url && question) void h.onAsk({ markId, source: 'web', url, question, note: note || '', turns: turns || [], quote: typeof quote === 'string' ? quote : '', pageText: typeof pageText === 'string' ? pageText : '', paper: title || '' });
     });
     const offStop = api.onBrowserBoxStop(({ askId }) => {
       const h = boxHandlers.current, held = (h.pendingAsks || []).find((p) => p && p.askId === askId);

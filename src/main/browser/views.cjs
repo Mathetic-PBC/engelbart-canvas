@@ -5,6 +5,7 @@ const PAGE = require('./page-preload.cjs');
 const BOX = require('./boxes.cjs');
 const LAYER = require('./box-layer-preload.cjs');
 const CARD = require('./box-card-preload.cjs');
+const SEL = require('../../shared/selection-card.cjs');
 const { assertTrustedRenderer } = require('../ipc-validation.cjs');
 const OVERLEAF = require('../overleaf/editor.cjs');
 
@@ -268,6 +269,26 @@ function selectionInput(value) {
   if (!quote) return null;
   const pageText = typeof value.pageText === 'string' ? value.pageText.slice(0, MAX_PAGE_TEXT) : '';
   return { quote, pageText };
+}
+
+/**
+ * A selection's card as a page's preload says it (2026-10-18): { token: null } (taken back), or { token, line, rect,
+ * viewport }, where its last line and all of it are in the viewport ({ x, y, w, h } or null), with { quote (quoteInput's),
+ * pageText } when it is newly offered; null for anything else.
+ */
+function selectionCardInput(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  if (value.token === null) return { token: null };
+  if (typeof value.token !== 'string' || !/^[\w-]{1,32}$/.test(value.token)) return null;
+  const ok = (n) => typeof n === 'number' && Number.isFinite(n) && Math.abs(n) <= 1e6;
+  const rect = (r) => (r && typeof r === 'object' && [r.x, r.y, r.w, r.h].every(ok) && r.w >= 0 && r.h >= 0 ? { x: r.x, y: r.y, w: r.w, h: r.h } : null);
+  const v = value.viewport;
+  if (!v || typeof v !== 'object' || !ok(v.width) || !ok(v.height)) return null;
+  const out = { token: value.token, line: rect(value.line), rect: rect(value.rect), viewport: { width: v.width, height: v.height } };
+  if (value.quote === undefined) return out;
+  const quote = quoteInput(value.quote);
+  if (!quote) return null;
+  return { ...out, quote, pageText: typeof value.pageText === 'string' ? value.pageText.slice(0, MAX_PAGE_TEXT) : '' };
 }
 
 /**
@@ -708,13 +729,28 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       if (waiting && fromTab(event, id, entry)) waiting();
     });
     contents.ipc.on(PAGE.CHANNELS.cursor, (event, value) => { if (fromTab(event, id, entry)) setCursor(entry, contents, CURSOR_VALUES.has(value) ? value : ''); });
+    // a selection's card (2026-10-18): a settled selection offered, where it is now, or taken back
+    contents.ipc.on(PAGE.CHANNELS.selectionCard, (event, value) => {
+      if (!fromTab(event, id, entry)) return;
+      const got = selectionCardInput(value);
+      if (!got) return;
+      if (!got.token) { dropOffer(id, entry); return; }
+      if (got.quote) {
+        // a page whose ink is not kept, a field with the keyboard, a box being drawn or selected: no card
+        if (!pageMarks || entry.editing || !fileablePage(contents.getURL()) || layer.tab === id || selectedBox(entry)) { dropOffer(id, entry); return; }
+        if (card.tab === id && card.mode === 'selection') hideCard(); // the last selection's card, typed in or not
+        entry.offer = got;
+      } else if (entry.offer && entry.offer.token === got.token) entry.offer = { ...entry.offer, line: got.line, rect: got.rect, viewport: got.viewport };
+      else return;
+      if (entry.view.getVisible()) placeCard(id);
+    });
     // the page's tints are styled anew with each document (insertCSS lasts until the page goes)
     contents.on('dom-ready', () => { if (!contents.isDestroyed()) contents.insertCSS(MARK_CSS).catch(() => {}); });
     // a new document has none of the boxes' rule, nothing selected and no field with the keyboard yet
     // (the keys of the rules inserted before are kept and taken out at the next drawing: a page given back from the
     // back-forward cache still has them; for a new one, removing them does nothing)
     contents.on('did-navigate', () => {
-      entry.boxes = null; entry.boxCss = null; entry.editing = false; entry.boxView = { id: null }; entry.boxHide = null;
+      entry.boxes = null; entry.boxCss = null; entry.editing = false; entry.boxView = { id: null }; entry.boxHide = null; entry.offer = null;
       setCursor(entry, contents, '');
       if (layer.tab === id) endBox(false);
       if (card.tab === id) hideCard();
@@ -939,7 +975,9 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   /* --------------------------------------------------------------------------------- the selected box's card */
 
   // One per window, made the first time a box is selected: { view, ready, tab, markId, height, running, note }.
-  const card = { view: null, ready: false, tab: null, markId: null, height: 0, width: 0, sizes: new Map(), running: [], note: null, saving: Promise.resolve(), queued: null };
+  // A selection's card (2026-10-18) is this view too, in mode 'selection' (else 'box'): `offer`, the selection's token,
+  // `markId` null until a note is begun in it; `last`, the mark it was for before, whose note may still come.
+  const card = { view: null, ready: false, tab: null, markId: null, mode: null, offer: null, pageText: '', last: null, height: 0, width: 0, sizes: new Map(), running: [], note: null, saving: Promise.resolve(), queued: null };
   /** Messages from the card's own page alone (box-card.html, its main frame). */
   function fromCard(event) {
     try { assertTrustedRenderer(event, BOX_CARD_URL); } catch { return false; }
@@ -955,15 +993,24 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     contents.on('did-finish-load', () => { card.ready = true; if (card.queued) { contents.send(CARD.CHANNELS.state, card.queued); card.queued = null; } });
     contents.on('will-navigate', (event) => event.preventDefault());
     contents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    // Esc in the card gives the keyboard back to the page, the box still selected
+    // Esc in the card gives the keyboard back to the page, the box still selected; a selection's card it closes
     contents.on('before-input-event', (event, input) => {
       if (input.type !== 'keyDown' || input.key !== 'Escape') return;
       const entry = card.tab ? entries.get(card.tab) : null;
-      if (entry && !entry.view.webContents.isDestroyed()) { event.preventDefault(); entry.view.webContents.focus(); }
+      if (!entry || entry.view.webContents.isDestroyed()) return;
+      event.preventDefault();
+      if (card.mode === 'selection') { entry.offer = null; hideCard(); }
+      entry.view.webContents.focus();
     });
     if (contents.ipc) {
       contents.ipc.on(CARD.CHANNELS.ready, (event) => { if (fromCard(event)) void refreshCard(); });
       contents.ipc.on(CARD.CHANNELS.note, (event, text) => { if (fromCard(event) && typeof text === 'string' && text.length <= 20000) saveCardNote(text); });
+      // a selection's card: its note begun (the highlight kept with it), or Enter in it empty (the highlight alone)
+      contents.ipc.on(CARD.CHANNELS.keep, (event, text) => {
+        if (!fromCard(event) || typeof text !== 'string' || text.length > 20000 || card.mode !== 'selection') return;
+        const entry = card.tab ? entries.get(card.tab) : null;
+        if (entry) keepSelection(card.tab, entry, text, { close: !text });
+      });
       contents.ipc.on(CARD.CHANNELS.ask, (event, question) => { if (fromCard(event) && typeof question === 'string' && question.trim() && question.length <= 8000) void cardAsk(question.trim()); });
       contents.ipc.on(CARD.CHANNELS.stop, (event, askId) => { if (fromCard(event) && typeof askId === 'string' && askId.length <= 64) send('browser:box-stop', { askId }); });
       contents.ipc.on(CARD.CHANNELS.remove, (event) => { if (fromCard(event) && card.tab && card.markId) void removeBox(card.tab, card.markId); });
@@ -997,15 +1044,68 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     try { list = await pageMarks.list(entry.view.webContents.getURL()); } catch { list = []; }
     if (card.tab !== tab || card.markId !== markId) return;
     const m = (Array.isArray(list) ? list : []).find((x) => x && x.id === markId);
-    sendCard({ mark: m ? { id: m.id, note: typeof m.note === 'string' ? m.note : '', asks: cardAsks(m.asks) } : { id: markId, note: '', asks: [] }, running: card.running.filter((p) => p.markId === markId) });
+    sendCard({ mode: card.mode, offer: card.offer, mark: m ? { id: m.id, note: typeof m.note === 'string' ? m.note : '', asks: cardAsks(m.asks) } : { id: markId, note: '', asks: [] }, running: card.running.filter((p) => p.markId === markId) });
   }
-  /** The card's note saved on its mark, one save after another. */
+  /**
+   * The card's note saved on its mark, one save after another. A note that comes once the card has gone (or has gone on
+   * to a selection with no mark yet) is the mark's it was showing (`card.last`): what was typed there last is kept.
+   */
   function saveCardNote(text) {
-    const entry = card.tab ? entries.get(card.tab) : null, markId = card.markId;
+    const at = card.markId ? { tab: card.tab, markId: card.markId, url: null } : card.last;
+    const entry = at && at.tab ? entries.get(at.tab) : null, markId = at && at.markId;
     if (!entry || !markId || !pageMarks || !pageMarks.update) return;
-    card.note = { markId, text };
-    const url = entry.view.webContents.getURL();
+    if (card.markId) card.note = { markId, text };
+    const url = at.url || entry.view.webContents.getURL();
     card.saving = card.saving.then(() => pageMarks.update(url, markId, { note: text })).catch(() => null);
+  }
+  /** The card's mark, before it is let go of or another is shown: a note still on its way is that one's. */
+  function rememberCard() {
+    const entry = card.tab && card.markId ? entries.get(card.tab) : null;
+    card.last = entry && !entry.view.webContents.isDestroyed() ? { tab: card.tab, markId: card.markId, url: entry.view.webContents.getURL() } : card.last;
+  }
+  /**
+   * Tab `id`'s offered selection kept as a highlight (2026-10-18): as the right-click menu's Highlight keeps it (its quote,
+   * then the page told to tint it, the offer's token for its nonce), with `text` for its note when there is one. The card
+   * shows the mark from now on (`focus`: and has the keyboard); `close`: the card goes instead. → the mark, or null.
+   */
+  function keepSelection(id, entry, text, { focus = false, close = false } = {}) {
+    const offer = entry.offer, contents = entry.view.webContents;
+    if (!offer || !offer.quote || !pageMarks || card.tab !== id || card.mode !== 'selection' || card.offer !== offer.token || card.markId || contents.isDestroyed()) return null;
+    const url = contents.getURL();
+    if (!fileablePage(url)) return null;
+    const mark = { id: newId(), quote: offer.quote, note: text || null, at: new Date().toISOString() };
+    card.markId = mark.id;
+    card.note = text ? { markId: mark.id, text } : null;
+    card.pageText = offer.pageText || '';
+    const filed = card.saving.then(() => pageMarks.add(url, mark)).then((saved) => !!saved, () => false);
+    card.saving = filed.then(() => null);
+    void filed.then((saved) => {
+      if (saved && !contents.isDestroyed() && contents.getURL() === url) contents.send(PAGE.CHANNELS.add, { nonce: offer.token, mark: { id: mark.id, quote: mark.quote } });
+    });
+    if (close) { entry.offer = null; hideCard(); return mark; }
+    sendCard({ mode: 'selection', offer: offer.token, mark: { id: mark.id, note: text, asks: [] }, running: [], typed: focus });
+    if (focus && card.view && !card.view.webContents.isDestroyed()) card.view.webContents.focus();
+    return mark;
+  }
+  /** Tab `id`'s selection taken back: its card, typed in or not, goes. */
+  function dropOffer(id, entry) {
+    entry.offer = null;
+    if (card.tab === id && card.mode === 'selection') hideCard();
+  }
+  /**
+   * A key in tab `id`'s page while its selection's card shows, no note begun (2026-10-18): a printable one begins the note
+   * (the highlight is kept and the card takes the keyboard), Enter keeps the highlight alone, Esc closes the card. Every
+   * other key (⌘C, ⌘A, the arrows) is the page's. → whether the key was the card's.
+   */
+  function selectionKey(id, entry, event, input) {
+    if (input.type !== 'keyDown' || !entry.offer || card.tab !== id || card.mode !== 'selection' || card.offer !== entry.offer.token || !card.view || !card.view.getVisible()) return false;
+    if (input.key === 'Escape' && !input.meta && !input.control && !input.alt) { event.preventDefault(); entry.offer = null; hideCard(); return true; }
+    if (card.markId || input.meta || input.control || input.alt || input.isComposing) return false;
+    if (input.key === 'Enter') { event.preventDefault(); keepSelection(id, entry, '', { close: true }); return true; }
+    if ([...String(input.key)].length !== 1) return false;
+    event.preventDefault();
+    keepSelection(id, entry, input.key, { focus: true });
+    return true;
   }
   /** @bart from the card: the window's renderer asks it as it asks from a highlight (Stage.jsx), with the mark's answers so far. */
   async function cardAsk(question) {
@@ -1016,10 +1116,12 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     let list = [];
     try { list = await pageMarks.list(url); } catch { list = []; }
     const m = (Array.isArray(list) ? list : []).find((x) => x && x.id === markId);
-    if (!m || !BOX.isBox(m) || card.tab !== tab || contents.isDestroyed()) return;
+    // a box's, or (2026-10-18) a highlight's from a selection's card
+    const box = BOX.isBox(m);
+    if (!m || !(box || (m.quote && typeof m.quote.exact === 'string')) || card.tab !== tab || contents.isDestroyed()) return;
     const note = card.note && card.note.markId === markId ? card.note.text : String(m.note || '');
     const turns = cardAsks(m.asks).slice(-40).map((a) => ({ question: a.question, answer: a.answer }));
-    send('browser:box-ask', { tab, markId, url, title: contents.getTitle(), question, note, turns });
+    send('browser:box-ask', { tab, markId, url, title: contents.getTitle(), question, note, turns, ...(box ? {} : { quote: m.quote.exact, pageText: card.pageText }) });
   }
   /** What the Stage has running from boxes' cards (Stage.jsx): the card shows its own box's, and reads its mark again. */
   function setBoxAsks(list) {
@@ -1035,12 +1137,15 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const entry = card.tab ? entries.get(card.tab) : null;
     if (had && entry && !entry.view.webContents.isDestroyed()) entry.view.webContents.focus();
   }
-  /** The card gone: no box is selected on a tab in front. */
+  /** The card gone: no box is selected on a tab in front (nor a selection offered). */
   function hideCard() {
+    rememberCard();
     hideCardView();
     card.tab = null;
     card.markId = null;
     card.note = null;
+    card.mode = null;
+    card.offer = null;
   }
   /**
    * The card beside the box selected on tab `id`, when that tab is in front and the box in view (BOX.cardPlace), at the
@@ -1049,10 +1154,12 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   function placeCard(id) {
     const entry = entries.get(id), win = getWindow();
     const sel = entry && entry.boxView && entry.boxView.id ? entry.boxView : null;
+    if (sel && entry.offer) dropOffer(id, entry); // a box selected: its card, not the selection's
+    if (!sel && entry && entry.offer) { placeSelectionCard(id, entry); return; }
     if (!sel || !entry.view.getVisible() || !pageMarks || !win || win.isDestroyed()) { if (card.tab === id) hideCard(); return; }
     if (layer.tab === id) { hideCardView(); return; }
     const view = cardView();
-    if (card.tab !== id || card.markId !== sel.id) { hideCardView(); card.tab = id; card.markId = sel.id; card.note = null; const kept = card.sizes.get(sel.id); card.height = kept ? kept.height : 0; card.width = kept ? kept.width : 0; void refreshCard(); }
+    if (card.tab !== id || card.markId !== sel.id || card.mode !== 'box') { rememberCard(); hideCardView(); card.tab = id; card.markId = sel.id; card.mode = 'box'; card.offer = null; card.note = null; const kept = card.sizes.get(sel.id); card.height = kept ? kept.height : 0; card.width = kept ? kept.width : 0; void refreshCard(); }
     if (CARD_HIDE_WHILE_SCROLLING && sel.scrolling) { hideCardView(); return; }
     const zoom = entry.view.webContents.getZoomFactor() || 1, page = entry.view.getBounds();
     const box = { x: page.x + sel.rect.x * zoom, y: page.y + sel.rect.y * zoom, width: sel.rect.w * zoom, height: sel.rect.h * zoom };
@@ -1063,6 +1170,37 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setBounds(at);
     if (!view.getVisible()) {
       win.contentView.addChildView(view); // on top of the page (a tab made after it went in under it)
+      view.setVisible(true);
+      onLayerChange();
+    }
+  }
+
+  /**
+   * The card for the selection offered on tab `id` (2026-10-18): empty at first, under the selection's last line and
+   * left with it, or above the selection with no room below, inside the page (SEL.selectionCardPlace), at the app's zoom.
+   * The view's own padding (BoxCard's 8px about the card) is taken off, so the card itself is CARD_GAP from the text. The
+   * selection gone out of view: an empty card closes, one with a note begun waits out of sight.
+   */
+  function placeSelectionCard(id, entry) {
+    const win = getWindow(), offer = entry.offer;
+    if (!entry.view.getVisible() || !pageMarks || !win || win.isDestroyed()) { if (card.tab === id) hideCardView(); return; }
+    if (layer.tab === id) { dropOffer(id, entry); return; }
+    const view = cardView();
+    if (card.tab !== id || card.mode !== 'selection' || card.offer !== offer.token) {
+      rememberCard(); hideCardView();
+      card.tab = id; card.mode = 'selection'; card.offer = offer.token; card.markId = null; card.note = null; card.pageText = offer.pageText || ''; card.height = 0; card.width = 0;
+      sendCard({ mode: 'selection', offer: offer.token, mark: null, running: [] });
+    }
+    const zoom = entry.view.webContents.getZoomFactor() || 1, page = entry.view.getBounds();
+    const appZoom = (win.webContents && win.webContents.getZoomFactor && win.webContents.getZoomFactor()) || 1;
+    const inWindow = (r) => (r ? { x: page.x + r.x * zoom, y: page.y + r.y * zoom, width: r.w * zoom, height: r.h * zoom } : null);
+    const line = inWindow(offer.line), all = inWindow(offer.rect), pad = 8 * appZoom;
+    const at = line && SEL.selectionCardPlace({ ...line, x: line.x - pad }, all, page, { width: (card.width || CARD_W) * appZoom, height: (card.height || CARD_MIN_H) * appZoom }, SEL.CARD_GAP * appZoom - pad);
+    if (!at) { if (card.markId) hideCardView(); else dropOffer(id, entry); return; }
+    if (view.webContents.getZoomFactor && view.webContents.getZoomFactor() !== appZoom) view.webContents.setZoomFactor(appZoom);
+    view.setBounds(at);
+    if (!view.getVisible()) {
+      win.contentView.addChildView(view);
       view.setVisible(true);
       onLayerChange();
     }
@@ -1220,7 +1358,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map(), sectionWaits: new Map(), editing: false, boxWait: null, boxes: null, boxCss: '', boxKey: null, boxDraw: Promise.resolve(), removed: null, boxView: { id: null }, boxHide: null, frameWaits: new Map(), cursor: '', cursorKey: null, cursorDraw: Promise.resolve() };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map(), sectionWaits: new Map(), editing: false, boxWait: null, boxes: null, boxCss: '', boxKey: null, boxDraw: Promise.resolve(), removed: null, boxView: { id: null }, boxHide: null, frameWaits: new Map(), cursor: '', cursorKey: null, cursorDraw: Promise.resolve(), offer: null };
     entries.set(id, entry);
 
     const contents = view.webContents;
@@ -1257,6 +1395,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     // (shortcut below), which a page that has its own find (Google Docs) gets to first.
     contents.on('before-input-event', (event, input) => {
       if (boxKey(id, entry, event, input)) return;
+      if (selectionKey(id, entry, event, input)) return;
       if (input.type !== 'keyDown' || input.alt || !(process.platform === 'darwin' ? input.meta : input.control)) return;
       const key = String(input.key).toLowerCase();
       if (key === 'r') command(id, 'reload');
@@ -1383,7 +1522,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const win = getWindow();
     const bounds = boundsFrom(rect, win && !win.isDestroyed() ? win.webContents.getZoomFactor() : 1);
     for (const [other, item] of entries) {
-      if (other !== id) { item.seq += 1; item.view.setVisible(false); }
+      if (other !== id) { item.seq += 1; item.view.setVisible(false); item.offer = null; } // a tab left: its selection's card is not kept
     }
     entry.seq += 1;
     entry.view.setBounds(bounds);
@@ -1392,7 +1531,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     else if (layer.tab === id && layer.view) layer.view.setBounds(bounds);
     if (card.tab && card.tab !== id) hideCard();
     onLayerChange();
-    if (entry.boxView && entry.boxView.id) placeCard(id);
+    if ((entry.boxView && entry.boxView.id) || entry.offer) placeCard(id);
     return true;
   }
 
@@ -1419,6 +1558,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     hideCard();
     let picture = null;
     for (const entry of entries.values()) {
+      entry.offer = null; // a selection's card is not brought back: its highlight, if begun, is kept
       if (!entry.view.getVisible()) continue;
       const seq = entry.seq;
       if (options && options.snapshot) picture = await capture(entry);
@@ -1563,4 +1703,4 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   }
 }
 
-module.exports = { PAGE_PRELOAD, BOX_LAYER_PRELOAD, BOX_CARD_PRELOAD, BOX_CARD_URL, CARD_W, CARD_HIDE_WHILE_SCROLLING, boxViewInput, boxResizeInput, boxAsksInput, cardAsks, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PAGE_PRELOAD, BOX_LAYER_PRELOAD, BOX_CARD_PRELOAD, BOX_CARD_URL, CARD_W, CARD_HIDE_WHILE_SCROLLING, boxViewInput, selectionCardInput, boxResizeInput, boxAsksInput, cardAsks, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

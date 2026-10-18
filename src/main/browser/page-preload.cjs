@@ -41,6 +41,14 @@
 // or <main>), whose end ends the last section; with no end in SECTION_MAX characters, the paragraph they are in.
 // Another passage, or none, takes its place; a new document has none.
 //
+// A selection's card (2026-10-18, David: "the annotation card should appear by itself just under the selection"): once a
+// selection settles (the pointer let go, or keys that changed it still for SELECTION_SETTLE_MS) with text in it, outside
+// any field, the page offers it to main (`engelbart-page:selection-card`): a token, its quote and the page's text around it
+// (as `selection` gives them), and where its last line and all of it are in the viewport. As the page scrolls or reflows
+// the same token comes again with only where it is (once a frame), and a press anywhere in the page, another selection
+// or none takes it back ({ token: null }). Main shows its card for it and, once a note is begun there, keeps the quote as
+// a highlight and tints it as the right-click menu's Highlight does (`add`, with the token for its nonce).
+//
 // Sandboxed, this can require only 'electron'. The finding is plain functions over text, exported below for the tests
 // when Node loads this file; in a page, `module` is no CommonJS module and the page part runs instead.
 
@@ -57,6 +65,8 @@ const CHANNELS = Object.freeze({
   boxResize: 'engelbart-page:box-resize', boxView: 'engelbart-page:box-view', frame: 'engelbart-page:frame', cursor: 'engelbart-page:cursor',
   // a guide's section (2026-10-15): the words it starts with, or '' to clear it
   section: 'engelbart-page:section',
+  // a selection's card (2026-10-18): a settled selection offered, where it is now, or taken back
+  selectionCard: 'engelbart-page:selection-card',
 });
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
 const SECTION = 'engelbart-web-section'; // a guide's section, styled by main's insertCSS as a pdf's (PaperView pdf-section)
@@ -87,6 +97,7 @@ const CURSORS = { nw: 'nwse-resize', se: 'nwse-resize', ne: 'nesw-resize', sw: '
 // frame, and main skips a report a newer one has overtaken; so it does not lag behind the pointer.
 const LIVE_RESIZE = true;
 const SCROLL_END_MS = 150; // the page has stopped scrolling when it has not scrolled for this long
+const SELECTION_SETTLE_MS = 450; // a selection changed by keys is offered once it has not changed for this long
 const VISIBILITY = Object.freeze({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true });
 
 /**
@@ -372,6 +383,22 @@ function resizeRect(start, handle, dx, dy, bounds, min = MIN_BOX) {
   return { x: l, y: t, w: r - l, h: b - t };
 }
 
+/**
+ * A selection's client rects ([{ left, top, width, height }], the viewport's) → { line, rect }, each { x, y, w, h }: its
+ * last line (the boxes level with the lowest one) and all of it; null when it has no box with any size.
+ */
+function selectionBoxes(rects) {
+  const boxes = (rects || []).filter((r) => r && r.width > 0.5 && r.height > 0.5 && [r.left, r.top, r.width, r.height].every(Number.isFinite));
+  if (!boxes.length) return null;
+  const low = boxes.reduce((a, b) => (b.top + b.height > a.top + a.height ? b : a));
+  const span = (list) => {
+    const x = Math.min(...list.map((b) => b.left)), y = Math.min(...list.map((b) => b.top));
+    const round = (n) => Math.round(n * 10) / 10;
+    return { x: round(x), y: round(y), w: round(Math.max(...list.map((b) => b.left + b.width)) - x), h: round(Math.max(...list.map((b) => b.top + b.height)) - y) };
+  };
+  return { line: span(boxes.filter((b) => b.top < low.top + low.height && b.top + b.height > low.top)), rect: span(boxes) };
+}
+
 const inRect = (x, y, r) => x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height;
 function intersect(a, b) {
   const left = Math.max(a.left, b.left), top = Math.max(a.top, b.top);
@@ -579,8 +606,8 @@ function runInPage() {
   ipcRenderer.on(CHANNELS.add, (_event, value) => {
     const { nonce, mark } = value || {};
     if (!mark || typeof mark.id !== 'string') return;
-    const range = pending && pending.nonce === nonce ? pending.range : null;
-    pending = null;
+    const range = pending && pending.nonce === nonce ? pending.range : offered && offered.token === nonce ? offered.range : null;
+    if (pending && pending.nonce === nonce) pending = null;
     if (range) { painted.set(mark.id, range); paint(); } else place([mark]);
   });
 
@@ -861,6 +888,58 @@ function runInPage() {
   window.addEventListener('focusin', focusChanged, true);
   window.addEventListener('focusout', focusChanged, true);
 
+  // A selection's card (2026-10-18): the settled selection offered to main, followed as the page moves, taken back.
+  let offered = null, offerSeq = 0, settleTimer = 0, offerFrame = 0, pointerDown = false;
+  const fieldNode = (node) => { const el = node && (node.nodeType === 1 ? node : node.parentElement); return !!(el && el.closest && el.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])')); };
+  function withdraw() {
+    clearTimeout(settleTimer); settleTimer = 0;
+    if (!offered) return;
+    offered = null;
+    ipcRenderer.send(CHANNELS.selectionCard, { token: null });
+  }
+  function offerView() {
+    if (offerFrame) { cancelAnimationFrame(offerFrame); offerFrame = 0; }
+    if (!offered) return null;
+    let at = null;
+    try { at = selectionBoxes([...offered.range.getClientRects()]); } catch { at = null; }
+    return { token: offered.token, line: at ? at.line : null, rect: at ? at.rect : null, viewport: viewportSize() };
+  }
+  const followSoon = () => { if (offered && !offerFrame) offerFrame = requestAnimationFrame(() => { offerFrame = 0; const view = offerView(); if (view) ipcRenderer.send(CHANNELS.selectionCard, view); }); };
+  function offer() {
+    clearTimeout(settleTimer); settleTimer = 0;
+    const selection = document.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount || editing || isField(document.activeElement) || fieldNode(selection.anchorNode) || fieldNode(selection.focusNode)) { withdraw(); return; }
+    let got = null;
+    try { got = selected(); } catch { got = null; }
+    if (!got || !got.range) { withdraw(); return; }
+    // the same passage again (a click's second selectionchange, a page setting it anew): the card it has stays
+    const same = offered && offered.range.compareBoundaryPoints(Range.START_TO_START, got.range) === 0 && offered.range.compareBoundaryPoints(Range.END_TO_END, got.range) === 0;
+    if (same) { followSoon(); return; }
+    offered = { token: `s${(offerSeq += 1)}`, range: got.range, text: selection.toString() };
+    const view = offerView();
+    ipcRenderer.send(CHANNELS.selectionCard, { ...view, quote: got.quote, pageText: got.pageText });
+  }
+  window.addEventListener('mousedown', (event) => { pointerDown = event.button === 0; withdraw(); }, true);
+  window.addEventListener('mouseup', (event) => {
+    if (event.button !== 0) return;
+    pointerDown = false;
+    if (swallow || drag) return; // a box's edge or handle: no selection was made
+    setTimeout(offer, 0); // the selection as the press left it (a double or triple click's too)
+  }, true);
+  document.addEventListener('selectionchange', () => {
+    if (pointerDown) return;
+    const selection = document.getSelection();
+    if (!selection || selection.isCollapsed) { withdraw(); return; }
+    // changed by keys (⇧ and an arrow, ⌘A): the card for what it was goes now, the new one once it settles
+    if (offered && selection.toString() !== offered.text) withdraw();
+    clearTimeout(settleTimer);
+    settleTimer = setTimeout(offer, SELECTION_SETTLE_MS);
+  });
+  document.addEventListener('scroll', followSoon, { capture: true, passive: true });
+  window.addEventListener('resize', followSoon);
+  window.addEventListener('blur', () => { pointerDown = false; });
+  window.addEventListener('pagehide', withdraw);
+
   const load = () => ipcRenderer.invoke(CHANNELS.marks).then((marks) => {
     const list = Array.isArray(marks) ? marks : [];
     waiting = place(list);
@@ -874,4 +953,4 @@ function runInPage() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
