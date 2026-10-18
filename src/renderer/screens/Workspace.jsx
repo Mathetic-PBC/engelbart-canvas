@@ -48,6 +48,7 @@ import PostItTask from '../post-its/PostItTask.jsx';
 import { useSandboxes } from '../ui/SandboxProgress.jsx';
 import { availableBuildNotifications, canOpenPreview, canOpenTerminal, repositoryClick, OPEN_SANDBOX_TERMINAL } from '../model/sandbox-notifications.js';
 import SidebarTour, { TOUR_STEPS, tourSeen, markTourSeen } from '../workspace/SidebarTour.jsx';
+import { modDown } from '../ui/keys.js';
 
 // The import's "Open library" requests (App.jsx tourRequest) already taken, by their n: a project opened again later
 // must not go back to its Welcome page or start the tour again.
@@ -1565,7 +1566,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   React.useEffect(() => {
     if (!active) return undefined;
     const onKey = (event) => {
-      if (!event.metaKey || event.ctrlKey || event.altKey || event.shiftKey || String(event.key).toLowerCase() !== 'j') return;
+      if (!modDown(event) || event.altKey || event.shiftKey || String(event.key).toLowerCase() !== 'j') return; // ⌘J, Ctrl+J off the Mac
       event.preventDefault();
       event.stopPropagation();
       if (!event.repeat) goNext.current();
@@ -2069,7 +2070,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   React.useEffect(() => {
     if (!active) return undefined;
     const onKey = (event) => {
-      if (!event.metaKey || event.ctrlKey || event.altKey || event.defaultPrevented || !keysToDoc()) return;
+      if (!modDown(event) || event.altKey || event.defaultPrevented || !keysToDoc()) return; // ⌘, Ctrl off the Mac
       const key = String(event.key).toLowerCase(), k = docKeys.current;
       const take = () => { event.preventDefault(); event.stopPropagation(); };
       if (key === 'g') { if (k.finding) { take(); k.step(event.shiftKey ? -1 : 1); } return; }
