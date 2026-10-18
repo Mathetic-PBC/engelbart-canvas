@@ -53,7 +53,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { HAMMER_PATHS } from '../model/hammer.js';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, ATTACH_RE, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchText, isRefine, refineLine, wsMention, libMention, webName, isAddress, sameAddress, fileMention, zoteroMention, madeMentionOf, madeKey, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf, topicOfThread, whenShown } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, ATTACH_RE, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchText, isRefine, refineLine, isAddress, sameAddress, madeMentionOf, madeKey, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf, topicOfThread, whenShown } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, isResultOffer, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -76,6 +76,7 @@ import { guideTitle } from '../model/guide.js';
 import { guideSections, splitTarget, parseTable } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
+import { mentionToken, isWebRow, menuItem, rowMention, carriesLibRows, readLibDrag } from '../model/mention.js';
 import { isNote, kindKey } from '../model/kind.js';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
 import { waveText, keepWaves } from '../ui/wave.js';
@@ -168,26 +169,14 @@ const withAttachments = (text, images) => {
   const ids = new Map(images.filter((image) => image.id).map((image) => [image.n, image.id]));
   return text.replace(/(?<!!)\[Attachment (\d+)\](?!\()/g, (token, n) => (ids.has(Number(n)) ? `![Attachment ${n}](img:${ids.get(Number(n))})` : token));
 };
-// The token a picked row of the @ menu writes: a workspace's, a Zotero item's (MATH-65 build 2), a file's or a subfolder's
-// in a library folder (MATH-22), a web page's by its id under its title (2026-10-17: never its address, model/web-name.js), a
-// picture's by its id under its name (2026-10-17: pasted ones share names, "Attachment 1"),
-// else a mention by name. The open page the library does not hold yet has no id: it is mentioned by name, its title's.
-// `pickedRow`: the library row picking it links to the workspace (a file's is its folder's); null for a Zotero item, which
-// links nothing.
-const mentionToken = (r) => (r.kind === 'workspace' ? wsMention(r.name, r.id)
-  : r.kind === 'entry' && r.zotero ? zoteroMention(r.name, r.zotero)
-    : (r.kind === 'entry' || r.kind === 'self') && r.rel ? fileMention(r.kind === 'self' ? r.entryName : r.name, r.row.id, r.rel)
-      : r.kind === 'item' && isWebRow(r.row) ? libMention(webName(r.row.name, r.row.url), r.row.id)
-        : r.kind === 'item' && r.row && r.row.type === 'image' ? libMention(r.row.name, r.row.id)
-        : r.kind === 'fresh' && isAddress(r.input) ? `@[${webName(r.name, r.input)}]`
-          : `@[${r.name}]`);
-// A library row of a page on the web, a repository known by its address among them: it has an address and nothing on this Mac.
-const isWebRow = (row) => !!row && row.type === 'website' && !!row.url && !row.path && !row.folder_path;
 // The Zotero item's chip a drag of files is over (MATH-65 build 4), or null.
 const zoteroChipFor = (e) => {
   const types = [...((e && e.dataTransfer && e.dataTransfer.types) || [])];
   return types.includes('Files') && e.target && e.target.closest ? e.target.closest('[data-zotero]') : null;
 };
+// The token a picked row of the @ menu writes, and a row of the sidebar dropped here: model/mention.js mentionToken.
+// `pickedRow`: the library row picking it links to the workspace (a file's is its folder's); null for a Zotero item, which
+// links nothing.
 const pickedRow = (r) => (r.kind === 'entry' && r.zotero ? null : (r.kind === 'entry' || r.kind === 'self') && r.row ? { kind: 'item', key: r.row.id, row: r.row, name: r.row.name } : r);
 // The mention token of `text` that ends at `at` (`before`) or starts there → [start, end], or null: the line's own
 // tokens (doc.js INLINE), so a mention inside bold or a link's text is not one here.
@@ -681,9 +670,23 @@ export default class DocEditor extends React.Component {
       // Nothing dropped in the editor is the browser's to place. A drop into one of its fields stays refused (2026-10-05).
       // The page around the text takes a drop too (2026-10-05: let go in the margin or below the last line, a picture
       // from Finder flew back): it goes in at the nearest place in the text (dropPoint). The page's own fields are theirs.
-      dragover: (e) => { if (inEd(e) || onPage(e)) e.preventDefault(); this.markDropChip(inEd(e) ? zoteroChipFor(e) : null); },
+      // A row of the sidebar (2026-10-17) is taken by the document, the page around it and a follow-up's field, and by
+      // nothing in a document that is read only or in another of its fields; it never reaches editorDrop (libDrop).
+      dragover: (e) => {
+        if (carriesLibRows(e)) {
+          this.markDropChip(null);
+          if (this.props.readOnly || !(inEd(e) || onPage(e)) || (inFollow(e) && !inAsk(e))) return;
+          e.preventDefault(); if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+          return;
+        }
+        if (inEd(e) || onPage(e)) e.preventDefault(); this.markDropChip(inEd(e) ? zoteroChipFor(e) : null);
+      },
       dragleave: (e) => { if (this.dropChip && !(e.relatedTarget && this.dropChip.contains(e.relatedTarget))) this.markDropChip(null); },
-      drop: (e) => { this.markDropChip(null); if (!inEd(e) && !onPage(e)) return; e.preventDefault(); if (!inFollow(e)) this.editorDrop(e); },
+      drop: (e) => {
+        this.markDropChip(null); if (!inEd(e) && !onPage(e)) return; e.preventDefault();
+        if (carriesLibRows(e)) { if (!inFollow(e) || inAsk(e)) this.libDrop(e, inAsk(e) ? e.target : null); return; }
+        if (!inFollow(e)) this.editorDrop(e);
+      },
       // Switching to another app blurs the page too; that is not leaving the line, and redrawing it would drop a selection.
       // Leaving it otherwise puts back a question being edited (2026-10-03).
       focusout: (e) => { if (inEd(e) && !(e.relatedTarget && this.editorEl() && this.editorEl().contains(e.relatedTarget))) this.disarm(); if (inEd(e) && inTitle(e) && document.hasFocus()) { if (!this.syncing) this.commitTitle(e.target); return; } if (inEd(e) && inAsk(e) && document.hasFocus()) this.leftReply(Number(e.target.dataset.followInput)); if (inEd(e) && document.hasFocus() && !(e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-mention-menu]'))) { this.focusInto = e.relatedTarget && e.relatedTarget.matches && e.relatedTarget.matches('[data-follow-input]') ? { key: e.relatedTarget.dataset.followInput, a: 1e6, b: 1e6 } : null; if (this.focusInto) this.timer(() => { this.focusInto = null; }, 0); this.cancelEdit(); this.setState({ activeLine: null, mention: null }); } },
@@ -3554,6 +3557,48 @@ export default class DocEditor extends React.Component {
     const fileOf = (item) => (item.kind === 'bytes' ? item.file : files[items.indexOf(item)]);
     if (pictures.length) void this.pasteImages(pictures.map(fileOf).filter(Boolean), this.dropPoint(e));
     if (rest.length && this.props.onDropItems) Promise.resolve(this.props.onDropItems(rest)).catch((error) => { if (this.props.onError) this.props.onError(error); });
+  }
+  // Rows of the sidebar let go on the document (2026-10-17): their mentions as the @ menu writes them (model/mention.js),
+  // where they were let go; in a follow-up's field, at its caret, where nothing is sent until the person sends it. Each
+  // row comes into the workspace as a picked one does (props.onMentionPicked); nothing is added to the library and nothing
+  // is asked. `input`: the follow-up's field it was let go on, else null.
+  libDrop(e, input) {
+    if (this.props.readOnly) return;
+    const known = new Map((this.props.mentionable || []).filter((r) => r && r.id != null).map((r) => [String(r.id), r]));
+    const rows = readLibDrag(e.dataTransfer).map((row) => known.get(String(row.id)) || row);
+    if (!rows.length) return;
+    const text = rows.map(rowMention).join(' ');
+    if (input) {
+      const end = input.value.length, mine = document.activeElement === input;
+      const a = mine ? Math.min(input.selectionStart ?? end, end) : end, b = mine ? Math.min(input.selectionEnd ?? end, end) : end;
+      const ins = `${a > 0 && !/\s$/.test(input.value.slice(0, a)) ? ' ' : ''}${text}${b < end && !/^\s/.test(input.value.slice(b)) ? ' ' : ''}`;
+      if (!mine) input.focus({ preventScroll: true });
+      input.setRangeText(ins, a, b, 'end');
+      this.followInput(input);
+    } else this.placeDropped(text, this.dropPoint(e));
+    if (this.props.onMentionPicked) for (const row of rows) this.props.onMentionPicked(menuItem(row));
+  }
+  // `text` let go at `at`: in that line's text, a space either side where a word would touch it; on a line of its own
+  // under it when the line is not typed in (an answer, an asked @bart line: under its conversation), and beside a picture
+  // alone on its line (besidePicture).
+  placeDropped(text, at) {
+    const ls = this.lines();
+    let i = Math.min(Math.max(0, at.line), ls.length - 1);
+    const line = ls[i] ?? '', p = this.parsedOf(ls)[i] || parseLine(line);
+    if (this.lockedAt(ls, i)) {
+      const t = threads(ls, this.parsedOf(ls)).find((x) => i >= x.from && i <= x.to);
+      if (t) i = Math.max(i, t.to);
+      this.setLines((x) => { const out = [...x]; out.splice(i + 1, 0, text); return out; }, { line: i + 1, offset: text.length });
+      this.setState({ activeLine: i + 1, mention: null });
+    } else if (p.type === 'img') {
+      this.besidePicture(i, Math.min(at.offset, 1), text);
+    } else {
+      const cur = lineText(p, line), a = Math.min(at.offset, cur.length);
+      const ins = `${a > 0 && !/\s$/.test(cur.slice(0, a)) ? ' ' : ''}${text}${a < cur.length && !/^\s/.test(cur.slice(a)) ? ' ' : ''}`;
+      this.writeText(i, cur.slice(0, a) + ins + cur.slice(a), { line: i, offset: a + ins.length });
+      this.setState({ activeLine: i, mention: null });
+    }
+    this.wantFocus = true;
   }
   // Where a drop was let go, as a place in the source: the point under the pointer, else the caret, else the document's end.
   // Let go beside the text, it is the nearest point on that line; below the text, the document's end.

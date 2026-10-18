@@ -15,6 +15,7 @@ import { useAddRun } from './useAddRun.js';
 import { usePlaced } from '../ui/usePlaced.js';
 import { useBodies } from './useBodies.js';
 import { carriesDrop, readDrop } from '../model/drop.js';
+import { carriesLibRows, writeLibDrag } from '../model/mention.js';
 import TrashPanel from '../post-its/TrashPanel.jsx';
 import { openSettings } from '../ui/Settings.jsx';
 import * as I from '../ui/SidebarIcons.jsx';
@@ -325,6 +326,16 @@ function useStored(key, fallback) {
 // A press on a row does not focus it (the keyboard's ring would show on it once Escape closed what it opened); a name
 // being typed in it keeps its caret.
 const keepFocus = (event) => { if (!(event.target.closest && event.target.closest('input'))) event.preventDefault(); };
+// A row that can be dragged (2026-10-17) cannot keep the press from it: a press marked as used starts no drag. It hands the
+// keyboard back to where it was instead, as soon as the press has given it to the row.
+const pressed = new WeakSet();
+const pressToDrag = (event) => { if (!(event.target.closest && event.target.closest('input'))) pressed.add(event.currentTarget); };
+const giveBack = (event) => {
+  if (!pressed.has(event.currentTarget)) return;
+  pressed.delete(event.currentTarget);
+  const back = event.relatedTarget;
+  if (back && back.focus) back.focus({ preventScroll: true }); else event.currentTarget.blur();
+};
 
 const CHEV = (size = 13) => <I.ChevronDown size={size} stroke={2.4} />;
 
@@ -354,7 +365,8 @@ function Row({ icon, label, title, indent = false, active = false, holds = false
       aria-expanded={expanded}
       title={title}
       onClick={onClick}
-      onMouseDown={keepFocus}
+      onMouseDown={rest.draggable ? pressToDrag : keepFocus}
+      onFocus={rest.draggable ? giveBack : undefined}
       onKeyDown={(event) => { if ((event.key === 'Enter' || event.key === ' ') && event.target === event.currentTarget && onClick) { event.preventDefault(); onClick(event); } }}
       onDoubleClick={onDoubleClick}
       onContextMenu={onContextMenu}
@@ -670,6 +682,9 @@ export default function Rail({
       onContextMenu={(event) => sourceMenu(event, row, folder)}
       onMouseEnter={(event) => { if (renaming !== row.id && !panel) peek.open(row, event.currentTarget, panelEdge(event.currentTarget)); }}
       onMouseLeave={peek.close}
+      // Dragged onto the document or a follow-up's field, it is mentioned there as the @ menu would (DocEditor libDrop).
+      draggable={renaming !== row.id}
+      onDragStart={(event) => { peek.drop(); if (!writeLibDrag(event.dataTransfer, [row])) event.preventDefault(); }}
       right={renaming === row.id ? null : (
         folder
           ? <RowAction label={`Remove from ${folder.name}`} onClick={() => { peek.drop(); onRemoveFromFolder(folder.id, row.id); }} data-sb-remove={row.id}><I.MinusCircleIcon size={15} /></RowAction>
@@ -726,15 +741,18 @@ export default function Rail({
 
   // Files from Finder, a picture or a link from a browser, dropped on Sources (MATH-19): each a row of the library, in
   // this project.
-  const dragOver = (event) => { if (!onDropItems || !carriesDrop(event)) return; event.preventDefault(); setDropping(true); };
+  // A row of the sidebar is not one of them: dropped back on the sidebar, it does nothing (refuse, below).
+  const dragOver = (event) => { if (carriesLibRows(event) || !onDropItems || !carriesDrop(event)) return; event.preventDefault(); setDropping(true); };
   const dragLeave = (event) => { if (!event.currentTarget.contains(event.relatedTarget)) setDropping(false); };
   const drop = (event) => {
-    if (!onDropItems || !carriesDrop(event)) return;
+    if (carriesLibRows(event) || !onDropItems || !carriesDrop(event)) return;
     event.preventDefault();
     setDropping(false);
     const items = readDrop(event.dataTransfer, api.pathForFile); // now: the drop's data is gone once the event is over
     if (items.length) void onDropItems(items);
   };
+  // Anywhere on the sidebar, its fields too (a text field would take the mention as typed text), a row of it is refused.
+  const refuse = (event) => { if (!carriesLibRows(event)) return; event.preventDefault(); event.stopPropagation(); if (event.dataTransfer) event.dataTransfer.dropEffect = 'none'; };
 
   /* ---------------------------------------------------------------- agents */
   const agentsSummary = React.useMemo(() => summarize(entries), [entries]); // the repositories' builds are among them (2026-10-16)
@@ -746,7 +764,7 @@ export default function Rail({
   const addHas = React.useCallback((id) => (addFolder ? addFolder.items.includes(id) : inRail(id)), [addFolder, inRail]);
 
   return (
-    <aside ref={asideRef} aria-label="Sidebar" data-sidebar="1" style={{ flex: 'none', width, minHeight: 0, display: hidden ? 'none' : 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, boxSizing: 'border-box', padding: '0 8px', background: '#fafafa' }}>
+    <aside ref={asideRef} aria-label="Sidebar" data-sidebar="1" onDragOverCapture={refuse} onDropCapture={refuse} style={{ flex: 'none', width, minHeight: 0, display: hidden ? 'none' : 'flex', flexDirection: 'column', position: 'relative', zIndex: 7, boxSizing: 'border-box', padding: '0 8px', background: '#fafafa' }}>
       {/* The head: the top-level project, then Settings and New note. */}
       <div data-sb-head="project" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 2, height: 36 }}>
         {renaming === 'project'
