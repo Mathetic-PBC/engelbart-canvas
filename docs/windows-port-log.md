@@ -32,7 +32,7 @@ bug Hudson saw: "on Linux it is not accessing Obsidian files and other files wel
   first run on 47c66a6 (a `git archive` copy, Docker's hosts file) had 13 failures: these plus the 5 run-step tests
   (localhost) and an updates test, and the release-site test (`git show` without a .git).
 - 2026-10-18, **Mac**: `npm test` on 47c66a6 2262 tests, 2258 pass, 4 skipped, 0 failed; on f4323b7 2273, 2269 pass,
-  4 skipped, 0 failed (the 11 new tests); FINAL_MAC. `npm run build` passes.
+  4 skipped, 0 failed (the 11 new tests); on 36c166a (the log) the same, 2273, 2269 pass, 4 skipped, 0 failed (a run before it, while the machine's load average was 84, timed out two tests in connect-web-signin.test.cjs and install-mac.test.cjs, which pass alone and in this run). `npm run build` passes.
 - 2026-10-18: f4323b7 (the fix), fba6a4d (the Mac-layout fixtures name the Mac).
 
 ### What changed
