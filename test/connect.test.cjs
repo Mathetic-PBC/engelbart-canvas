@@ -33,7 +33,7 @@ const { importToolLabel, writeImportConfig, claudeServers, claudeToolsFor } = re
 const { hostAllowed, hostsFor, fileNameOf } = require('../src/main/connect/browser.cjs');
 const { listWebChats, readWebChat, CHATGPT_LIST, CHATGPT_ONE, CLAUDE_LIST, CLAUDE_ONE } = require('../src/main/connect/web-chats.cjs');
 const { createAppleNotes, noteMarkdown } = require('../src/main/connect/apple-notes.cjs');
-const { cursorChats, cursorTranscript } = require('../src/main/connect/cursor.cjs');
+const { cursorChats, cursorTranscript, cursorDb } = require('../src/main/connect/cursor.cjs');
 const { createConnectors } = require('../src/main/connect/connectors.cjs');
 const memory = require('../src/main/connect/memory.cjs');
 const { SKILLS, skillOf, skillsFor } = require('../src/main/connect/skills.cjs');
@@ -84,11 +84,12 @@ test('a folder at a glance: notes per top folder, the daily-notes folder from Ob
 
 test('detect: Obsidian\'s vaults from obsidian.json, apps installed or signed in to count as found, Apple Notes only once ticked', () => {
   write('Library/Application Support/obsidian/obsidian.json', JSON.stringify({ vaults: { a: { path: vault, ts: 1759900000000, open: true }, b: { path: path.join(homeDir, 'gone') } } }));
-  assert.deepEqual(readers.obsidianVaults(homeDir).map((entry) => [entry.name, entry.shown, entry.open]), [['Vault', '~/Vault', true]]);
+  // A Mac's layout (obsidian.json and .app bundles), so the Mac's (2026-10-18: Linux reads its own places).
+  assert.deepEqual(readers.obsidianVaults(homeDir, 'darwin').map((entry) => [entry.name, entry.shown, entry.open]), [['Vault', '~/Vault', true]]);
   const apps = path.join(homeDir, 'Apps');
   fs.mkdirSync(path.join(apps, 'Granola.app'), { recursive: true });
   fs.mkdirSync(path.join(apps, 'Perplexity.app'), { recursive: true });
-  const found = detect({ homeDir, applications: [apps], signedIn: ['ChatGPT'] }).apps;
+  const found = detect({ homeDir, applications: [apps], signedIn: ['ChatGPT'], platform: 'darwin' }).apps;
   assert.equal(found.Obsidian.found, true);
   assert.equal(found['Claude Code'].found, false);
   assert.deepEqual([found.Granola.found, found.Granola.where], [true, 'on this Mac']);
@@ -216,7 +217,7 @@ test('a Chromium browser: bookmarks, and its history by site from a copy of the 
     INSERT INTO urls(url,title,visit_count,last_visit_time) VALUES ('https://distill.pub/a','A',5,${recent}),('https://distill.pub/b','B',3,${recent}),('https://mail.google.com/','Mail',90,${recent}),('https://old.example/','Old',50,1);`]);
   const sites = await readers.browserHistory(dir, { days: 30, exclude: ['mail.google.com'] });
   assert.deepEqual(sites.map((site) => [site.host, site.visits, site.pages]), [['distill.pub', 8, 2]]);
-  assert.equal(readers.browserProfiles(homeDir)[0].browser, 'Chrome');
+  assert.equal(readers.browserProfiles(homeDir, 'darwin')[0].browser, 'Chrome', 'Chrome\'s folder on a Mac');
 });
 
 test('a Markdown file as a note: Obsidian links become mentions, pictures are set aside and saved into the project', async () => {
@@ -530,7 +531,7 @@ test('Apple Notes through macOS Automation: folders, notes, a note\'s HTML as Ma
 test('Cursor\'s chats, read from its database in place', (t) => {
   let DatabaseSync;
   try { ({ DatabaseSync } = require('node:sqlite')); } catch { t.skip('no node:sqlite'); return; }
-  const file = path.join(homeDir, 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+  const file = cursorDb(homeDir); // where this platform's Cursor keeps it (a Mac's: ~/Library/Application Support/Cursor/…)
   fs.mkdirSync(path.dirname(file), { recursive: true });
   const fixture = new DatabaseSync(file);
   fixture.exec('CREATE TABLE cursorDiskKV (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB)');
@@ -2367,6 +2368,9 @@ const pdfHome = () => {
   put('Documents/Research/HCI/Lecture 3 slides.pdf', '');
   put('Downloads/Some.app/Contents/Resources/manual.pdf', '');
   put('Zotero/storage/ABCD/paper.pdf', '');
+  // The HCI folder's PDFs are the newest: written in the same millisecond as Downloads' (Linux, 2026-10-18), the two
+  // folders of three tied and came in the order they were walked.
+  ['2310.01234v2.pdf', 'Invoice-2026-09.pdf', 'scan.pdf'].forEach((name, i) => { const at = new Date(Date.now() - 63_000 + i * 1000); fs.utimesSync(path.join(home, 'Downloads', name), at, at); });
   return home;
 };
 

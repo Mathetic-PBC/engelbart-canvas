@@ -26,7 +26,7 @@ function home() {
 
 test('folders first, then notes without .md, by name as Obsidian sorts; hidden folders and unreadable files left out', async () => {
   const root = home();
-  const out = await obsidianTree(root);
+  const out = await obsidianTree(root, { platform: 'darwin' }); // the fixture is a Mac's: ~/Library/Application Support/obsidian
   assert.equal(out.vaults.length, 1, 'a vault that is gone is left out');
   const [vault] = out.vaults;
   assert.equal(vault.name, 'Vault');
@@ -39,7 +39,7 @@ test('folders first, then notes without .md, by name as Obsidian sorts; hidden f
 });
 
 test('capped, and says so', async () => {
-  const out = await obsidianTree(home(), { maxEntries: 3 });
+  const out = await obsidianTree(home(), { maxEntries: 3, platform: 'darwin' });
   const count = (nodes) => nodes.reduce((n, node) => n + 1 + (node.children ? count(node.children) : 0), 0);
   assert.ok(count(out.vaults[0].tree) <= 3);
   assert.equal(out.truncated, true);
