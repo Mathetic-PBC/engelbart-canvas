@@ -10,6 +10,8 @@ const Svg = ({ d }) => <svg viewBox="0 0 24 24" aria-hidden="true" dangerouslySe
 const CHEV = <Svg d={'<path d="m9 6 6 6-6 6"/>'} />;
 const CHECK = <Svg d={'<path d="m5 12 4 4 10-10"/>'} />;
 const SEARCH = <Svg d={'<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>'} />;
+// Linux (2026-10-18): the empty picker names the computer, not a Mac (the preload's data-platform, as DocEditor reads it).
+const ON_MAC = typeof document === 'undefined' || /^(darwin|mac)/i.test((document.documentElement && document.documentElement.dataset.platform) || (typeof navigator !== 'undefined' && navigator.platform) || 'darwin');
 
 /** Every node of `tree` whose name matches `query`, with the folders above it (a flat list for the search). */
 function matches(tree, query, trail = []) {
@@ -81,7 +83,7 @@ export default function ObsidianPicker({ api, chosen = [], onChoose, onCancel })
       <div className="ob-tree" role="tree">
         {!data && !error && <div className="ob-empty">Reading your vaults…</div>}
         {error && <div className="ob-empty">{error}</div>}
-        {data && !vaults.length && <div className="ob-empty">Obsidian has no vaults on this Mac.</div>}
+        {data && !vaults.length && <div className="ob-empty">{`Obsidian has no vaults on this ${ON_MAC ? 'Mac' : 'computer'}.`}</div>}
         {vaults.map((vault) => (
           <div key={vault.path} className="ob-vault">
             {vaults.length > 1 || !q ? row({ name: vault.name, path: vault.path, dir: true, children: vault.tree }, 0) : null}

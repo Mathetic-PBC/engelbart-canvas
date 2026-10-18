@@ -336,10 +336,13 @@ export function agentChoice(snapshot, providers, choice, { refused = null } = {}
  *   'safari'          Safari chosen without Full Disk Access: "Engelbart requires additional permissions to access Safari"
  *   'ask'             "Allow Engelbart to use your {browser} sign-ins"
  */
-export function keychainStep(browsers) {
+export function keychainStep(browsers, platform) {
   if (!browsers) return 'wait';
   if (browsers.keychain === 'allowed') return { go: 'allowed' };
   if (browsers.keychain === 'declined' || browsers.keychain === 'refused') return { go: 'declined' };
+  // Off the Mac (2026-10-18, Linux; `platform` the flow's, model/connect.js copiesSignIns): no browser's sign-ins are ever
+  // copied (every sign-in goes through Engelbart's own window), so there is nothing to ask: declined, never shown.
+  if (platform && platform !== 'darwin') return { go: 'declined' };
   if (!Array.isArray(browsers.browsers) || !browsers.browsers.length) return { go: 'declined' };
   if (browsers.chosenId === 'safari' && !(browsers.safari && browsers.safari.diskAccess === true)) return 'safari';
   return 'ask';

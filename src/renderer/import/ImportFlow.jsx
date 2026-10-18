@@ -375,7 +375,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
     routeKeychain(browsers);
   };
   const routeKeychain = (now, { fresh = false } = {}) => {
-    const step = keychainStep(fresh && now ? { ...now, keychain: null } : now);
+    const step = keychainStep(fresh && now ? { ...now, keychain: null } : now, platform);
     if (step === 'wait') { set({ dialog: 'keychain' }); return; }
     // No browser whose sign-ins can be read: declined without a question, and saved as declined, so nothing waits for an
     // answer (2026-10-16: the recent projects waited ten minutes for one, discover.cjs keychainAnswer).

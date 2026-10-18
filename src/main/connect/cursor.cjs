@@ -16,8 +16,10 @@ const ID_RE = /^[0-9a-f-]{8,64}$/i;
 const clip = (text, max) => { const value = String(text || '').replace(/\s+/g, ' ').trim(); return value.length > max ? `${value.slice(0, max - 1)}…` : value; };
 
 const STATE = ['Cursor', 'User', 'globalStorage', 'state.vscdb'];
-// Windows (docs/windows-port-log.md "Catch-up to 0.1.13"): under AppData\Roaming, where the Mac's is not.
-const cursorDb = (homeDir = os.homedir(), platform = process.platform) => {
+// Windows (docs/windows-port-log.md "Catch-up to 0.1.13"): under AppData\Roaming, where the Mac's is not. Linux
+// (2026-10-18, "Beta catch-up to 0.1.23 on linux-beta-deployment"): under $XDG_CONFIG_HOME, ~/.config by default, as VS Code's.
+const cursorDb = (homeDir = os.homedir(), platform = process.platform, env = process.env) => {
+  if (platform === 'linux') return path.join(env && env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : path.join(homeDir, '.config'), ...STATE);
   const mac = path.join(homeDir, 'Library', 'Application Support', ...STATE);
   return platform === 'win32' && !fs.existsSync(mac) ? path.join(homeDir, 'AppData', 'Roaming', ...STATE) : mac;
 };

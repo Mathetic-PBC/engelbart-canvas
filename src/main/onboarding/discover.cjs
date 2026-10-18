@@ -31,8 +31,8 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { execFile } = require('node:child_process');
 const readers = require('../connect/readers.cjs');
+const linuxApps = require('../connect/linux-apps.cjs');
 const scan = require('../connect/scan.cjs');
 const { createImportTools } = require('../connect/tools.cjs');
 const { connectChoice } = require('../connect/session.cjs');
@@ -70,8 +70,17 @@ const DESKTOP = { ChatGPT: ['ChatGPT.app'], Claude: ['Claude.app'], Granola: ['G
 // tools screen said "No history found", as if there were none. `diskAccess()` → whether it is granted (./disk-access.cjs).
 const diskGranted = (homeDir) => async () => { try { return !!(await createDiskAccess({ homeDir }).status()).granted; } catch { return false; } };
 
-/** A browser's most visited sites, from its history file (Chromium, Firefox, or Safari with Full Disk Access) → [{ host, visits }]. */
-async function historySites({ homeDir, browserId, days = HISTORY_DAYS, run = execFile, diskAccess = diskGranted(homeDir) }) {
+// Firefox's profiles on Linux (2026-10-18): ~/.mozilla/firefox, the Snap's (~/snap/firefox/common/.mozilla/firefox) and
+// Flathub's org.mozilla.firefox (~/.var/app/<id>/.mozilla/firefox); each profile is a folder holding places.sqlite.
+const firefoxRoots = (homeDir, platform) => (platform === 'linux'
+  ? [path.join(homeDir, '.mozilla', 'firefox'), path.join(homeDir, 'snap', 'firefox', 'common', '.mozilla', 'firefox'), path.join(homeDir, '.var', 'app', 'org.mozilla.firefox', '.mozilla', 'firefox')]
+  : [path.join(homeDir, 'Library', 'Application Support', 'Firefox', 'Profiles')]);
+
+/**
+ * A browser's most visited sites, from its history file (Chromium, Firefox, or Safari with Full Disk Access) → [{ host, visits }].
+ * `run` runs sqlite3 (readers.sqliteRunner: in this process where the command is missing, as on many Linux installs).
+ */
+async function historySites({ homeDir, browserId, days = HISTORY_DAYS, run = readers.sqliteRunner(), diskAccess = diskGranted(homeDir), platform = process.platform }) {
   const sqlite = async (file, query) => {
     const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-history-'));
     try {
@@ -92,9 +101,8 @@ async function historySites({ homeDir, browserId, days = HISTORY_DAYS, run = exe
   const browser = browserById(browserId);
   if (!browser) return [];
   if (browserId === 'firefox') {
-    const root = path.join(homeDir, 'Library', 'Application Support', 'Firefox', 'Profiles');
-    let profiles = [];
-    try { profiles = fs.readdirSync(root).map((name) => path.join(root, name, 'places.sqlite')).filter(exists); } catch { profiles = []; }
+    const profiles = [];
+    for (const root of firefoxRoots(homeDir, platform)) { try { profiles.push(...fs.readdirSync(root).map((name) => path.join(root, name, 'places.sqlite')).filter(exists)); } catch { /* none here */ } }
     const since = (Date.now() - days * 864e5) * 1000;
     const rows = [];
     for (const file of profiles.slice(0, 3)) { try { rows.push(...await sqlite(file, `SELECT url, visit_count AS visits FROM moz_places WHERE last_visit_date > ${since} ORDER BY visit_count DESC LIMIT 5000;`)); } catch { /* locked */ } }
@@ -106,7 +114,7 @@ async function historySites({ homeDir, browserId, days = HISTORY_DAYS, run = exe
     const since = (Date.now() / 1000) - 978307200 - days * 86400;
     try { return tally(await sqlite(file, `SELECT i.url AS url, COUNT(v.id) AS visits FROM history_items i JOIN history_visits v ON v.history_item = i.id WHERE v.visit_time > ${since} GROUP BY i.id ORDER BY visits DESC LIMIT 5000;`)); } catch { return []; } // Full Disk Access not given
   }
-  const profiles = readers.browserProfiles(homeDir).filter((profile) => profile.browser.toLowerCase() === browser.name.toLowerCase());
+  const profiles = readers.browserProfiles(homeDir, platform).filter((profile) => profile.browser.toLowerCase() === browser.name.toLowerCase());
   const rows = [];
   for (const profile of profiles.slice(0, 4)) {
     try { rows.push(...(await readers.browserHistory(profile.dir, { days, limit: 400, by: 'site', run })).map((site) => ({ url: `https://${site.host}/`, visits: site.visits }))); } catch { /* locked or none */ }
@@ -138,34 +146,38 @@ const sharedSignIn = (app) => Object.keys(SIGN_IN_COOKIES).some((other) => other
  * history? } (`history: 'needs-disk-access'` when the browser is Safari and Full Disk Access is not granted, so its
  * history was not read). `cookies(app)` → whether the chosen browser holds the app's sign-in cookie (names only).
  */
-async function toolEvidence({ homeDir, env = process.env, browserId, access = null, github = null, zotero = null, connectors = null, cookies = () => false, applications = ['/Applications', path.join(homeDir, 'Applications')], run = execFile, detected: given = null, diskAccess = diskGranted(homeDir) }) {
+async function toolEvidence({ homeDir, env = process.env, browserId, access = null, github = null, zotero = null, connectors = null, cookies = () => false, applications = ['/Applications', path.join(homeDir, 'Applications')], run = readers.sqliteRunner(env), detected: given = null, diskAccess = diskGranted(homeDir), platform = process.platform }) {
   const evidence = {};
   const set = (id, used, method, text) => { evidence[id] = { used: !!used, method, evidence: text }; };
   // `detected`: scan.detect's answer, read in the scanner process (../connect/scan-child.cjs) so the window never waits.
   let detected = given || { apps: {}, localRepos: [] };
-  if (!given) { try { detected = scan.detect({ homeDir, env, access, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), connectors: (app) => !!(connectors && connectors.status(app).connected), applications }); } catch { /* nothing found */ } }
-  const appInstalled = (app) => (DESKTOP[app] || []).some((bundle) => applications.some((dir) => exists(path.join(dir, bundle))));
+  if (!given) { try { detected = scan.detect({ homeDir, env, access, platform, zotero: () => (zotero ? zotero.status() : null), github: () => (github ? github.status() : null), connectors: (app) => !!(connectors && connectors.status(app).connected), applications }); } catch { /* nothing found */ } }
+  // Linux (2026-10-18): its .desktop entry, not an .app bundle (../connect/linux-apps.cjs).
+  const entries = platform === 'linux' ? linuxApps.desktopEntries({ homeDir, env }) : null;
+  const appInstalled = (app) => (platform === 'linux' ? linuxApps.installed(app, { homeDir, env, entries }) : (DESKTOP[app] || []).some((bundle) => applications.some((dir) => exists(path.join(dir, bundle)))));
   const blocked = browserId === 'safari' && !(await Promise.resolve().then(() => diskAccess()).catch(() => false));
-  const sites = blocked ? [] : await historySites({ homeDir, browserId, run, diskAccess: async () => true }).catch(() => []);
+  const sites = blocked ? [] : await historySites({ homeDir, browserId, run, diskAccess: async () => true, platform }).catch(() => []);
   const browserName = (browserById(browserId) || {}).name || 'your browser';
+  // What the tools screen says, off the Mac too (2026-10-18: "this Mac" on a Linux computer).
+  const here = platform === 'darwin' ? 'this Mac' : 'this computer';
   for (const tool of CATALOG) {
     const id = tool.id;
-    if (id === SITES) { set(id, sites.length > 0, 'local', sites.length ? `${browserName} history on this Mac` : blocked ? 'Safari history needs Full Disk Access' : 'No history found'); continue; }
-    if (id === LOCAL_FOLDERS) { const repos = Array.isArray(detected.localRepos) ? detected.localRepos : []; set(id, repos.length > 0, 'local', repos.length ? `${repos.length} repositories on this Mac` : ''); continue; }
+    if (id === SITES) { set(id, sites.length > 0, 'local', sites.length ? `${browserName} history on ${here}` : blocked ? 'Safari history needs Full Disk Access' : 'No history found'); continue; }
+    if (id === LOCAL_FOLDERS) { const repos = Array.isArray(detected.localRepos) ? detected.localRepos : []; set(id, repos.length > 0, 'local', repos.length ? `${repos.length} repositories on ${here}` : ''); continue; }
     if (id === 'GitHub') {
       const signed = github && github.status().connected;
       const repos = Array.isArray(detected.localRepos) ? detected.localRepos.length : 0;
-      set(id, signed || repos > 0 || visitsTo(sites, 'GitHub') > 0 || sites.some((site) => site.host === 'github.com'), signed ? 'local' : 'history', signed ? 'Signed in to Engelbart' : repos ? `${repos} repositories on this Mac` : 'In your browser history');
+      set(id, signed || repos > 0 || visitsTo(sites, 'GitHub') > 0 || sites.some((site) => site.host === 'github.com'), signed ? 'local' : 'history', signed ? 'Signed in to Engelbart' : repos ? `${repos} repositories on ${here}` : 'In your browser history');
       continue;
     }
     const found = detected.apps && detected.apps[id];
-    if (tool.local && found && found.found) { set(id, true, 'local', found.where ? `Found on this Mac (${found.where})` : 'Found on this Mac'); continue; }
+    if (tool.local && found && found.found) { set(id, true, 'local', found.where ? `Found on ${here} (${found.where})` : `Found on ${here}`); continue; }
     if (tool.local) { set(id, false, 'local', ''); continue; }
     const visits = visitsTo(sites, id);
     if (SIGN_IN_COOKIES[id] && (!sharedSignIn(id) || visits > 0) && cookies(id)) { set(id, true, 'cookie', `Signed in in ${browserName}`); continue; }
     if (visits >= 3) { set(id, true, 'history', `${visits} visits in ${browserName} lately`); continue; }
     if (appInstalled(id)) { set(id, true, 'app', 'Its app is installed'); continue; }
-    if (found && found.found) { set(id, true, 'app', found.where || 'Found on this Mac'); continue; }
+    if (found && found.found) { set(id, true, 'app', found.where || `Found on ${here}`); continue; }
     set(id, false, 'none', visits ? `${visits} visits lately` : '');
   }
   return { evidence, sites: sites.slice(0, 80), ...(blocked ? { history: 'needs-disk-access' } : {}) };

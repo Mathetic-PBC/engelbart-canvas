@@ -12,6 +12,7 @@ const path = require('node:path');
 const readers = require('./readers.cjs');
 const folderAccess = require('./folder-access.cjs');
 const { cursorDb, cursorChats } = require('./cursor.cjs');
+const linuxApps = require('./linux-apps.cjs');
 const { APPS, LOCAL_PDFS, sourceOf, periodName } = require('../../shared/connect-sources.cjs');
 
 const exists = (file) => { try { fs.accessSync(file); return true; } catch { return false; } };
@@ -33,18 +34,21 @@ function installed(homeDir, app, roots) {
  * holds a sign-in for (index.cjs reads the Stage's cookies), which count as found too. `connectors(app)`: whether Engelbart
  * is signed in to an app's connector.
  */
-function detect({ homeDir, env = process.env, zotero = () => null, github = () => null, signedIn = [], connectors = () => false, applications = ['/Applications', path.join(homeDir || '', 'Applications')], access = null } = {}) {
+function detect({ homeDir, env = process.env, zotero = () => null, github = () => null, signedIn = [], connectors = () => false, applications = ['/Applications', path.join(homeDir || '', 'Applications')], access = null, platform = process.platform } = {}) {
   const apps = {};
   const set = (app, found, where = '') => { apps[app] = { found: !!found, where }; };
-  const has = (app) => installed(homeDir, app, applications);
+  // Linux (2026-10-18): no .app bundles; an app's .desktop entry says it is installed (./linux-apps.cjs), read once here.
+  const entries = platform === 'linux' ? linuxApps.desktopEntries({ homeDir, env }) : null;
+  const has = (app) => (platform === 'linux' ? linuxApps.installed(app, { homeDir, env, entries }) : installed(homeDir, app, applications));
   const web = new Set(signedIn || []);
-  const vaults = readers.obsidianVaults(homeDir);
+  const here = platform === 'darwin' ? 'on this Mac' : 'on this computer';
+  const vaults = readers.obsidianVaults(homeDir, platform, env);
   set('Obsidian', vaults.length, vaults.map((vault) => vault.shown).join(', '));
   const claude = path.join(homeDir, '.claude', 'projects');
   set('Claude Code', exists(claude), '~/.claude/projects');
   const codex = path.join(env.CODEX_HOME || path.join(homeDir, '.codex'), 'sessions');
   set('Codex', exists(codex), readers.shownPath(homeDir, codex));
-  set('Cursor', exists(cursorDb(homeDir)), 'its chats on this Mac');
+  set('Cursor', exists(cursorDb(homeDir, platform, env)), `its chats ${here}`);
   const zoom = path.join(homeDir, 'Documents', 'Zoom');
   set('Zoom', exists(zoom), exists(zoom) ? '~/Documents/Zoom' : '');
   const drives = googleDrives(homeDir);
@@ -56,19 +60,19 @@ function detect({ homeDir, env = process.env, zotero = () => null, github = () =
   const zs = zotero() || {};
   set('Zotero', zs.connected || exists(path.join(homeDir, 'Zotero')), zs.connected ? `signed in${zs.username ? ` as ${zs.username}` : ''}` : (exists(path.join(homeDir, 'Zotero')) ? '~/Zotero (sign in to read it)' : ''));
   // Only whether the folders are there: reading inside Downloads or Documents is left to the scan, after the person picked.
-  const roots = readers.pdfRoots(homeDir).map((dir) => path.basename(dir));
+  const roots = readers.pdfRoots(homeDir, { platform, env }).map((dir) => path.basename(dir));
   set(LOCAL_PDFS, roots.length, roots.slice(0, 3).join(', '));
   for (const app of Object.keys(APPS)) {
     if (apps[app] || app === 'GitHub') continue;
     const reach = APPS[app].reach;
-    if (reach === 'connector') { const on = connectors(app); set(app, on || has(app), on ? 'connected' : has(app) ? 'on this Mac' : ''); continue; }
-    if (reach === 'automation') { set(app, false, 'on this Mac'); continue; } // macOS asks first, so only when ticked
+    if (reach === 'connector') { const on = connectors(app); set(app, on || has(app), on ? 'connected' : has(app) ? here : ''); continue; }
+    if (reach === 'automation') { set(app, false, here); continue; } // macOS asks first, so only when ticked
     // Found because its desktop app is installed is not the same as reachable: the agents read it in Engelbart's browser,
     // which needs a sign-in there (MATH-114: "Sign in to add", not "on this Mac").
     set(app, web.has(app) || has(app), web.has(app) ? 'signed in to Engelbart' : has(app) ? 'Sign in to add' : '');
     apps[app].signedIn = web.has(app);
   }
-  const profiles = readers.browserProfiles(homeDir);
+  const profiles = readers.browserProfiles(homeDir, platform, env);
   const gs = github() || {};
   return {
     apps,

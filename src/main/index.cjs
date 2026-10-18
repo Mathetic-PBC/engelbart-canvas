@@ -47,6 +47,7 @@ const { stagePartition, createBrowserViews, registerBrowserIpc, cleanUserAgent }
 const { execFile } = require('node:child_process');
 const { createCookieImport, keychainRunner, bundleOf } = require('./browser/import-cookies.cjs');
 const { createInstalledApps } = require('./browser/installed-apps.cjs');
+const { createLinuxInstalledApps } = require('./connect/linux-apps.cjs');
 const { createGithub } = require('./github/connection.cjs');
 const { macOrgs } = require('./github/orgs.cjs');
 const { localRepos } = require('./connect/scan.cjs');
@@ -819,7 +820,10 @@ if (!hasSingleInstanceLock) {
     // looked for in /Applications first, else Spotlight asked in the background and its answer kept, never synchronously
     // (./browser/installed-apps.cjs). ENGELBART_INSTALLED_BROWSERS (bundle ids, comma-separated) stands in for it in
     // scripted runs, so they never depend on this Mac's apps.
-    const installedApps = createInstalledApps({
+    // On Linux (2026-10-18) there is no /Applications or Spotlight: a browser is installed when it has a .desktop entry
+    // (./connect/linux-apps.cjs). Before, the missing mdfind counted every browser as installed, Safari's and Arc's too.
+    const installedApps = (process.platform === 'linux' ? createLinuxInstalledApps : createInstalledApps)({
+      ...(process.platform === 'linux' ? { homeDir } : {}),
       override: process.env.ENGELBART_INSTALLED_BROWSERS != null ? process.env.ENGELBART_INSTALLED_BROWSERS.split(',').map((id) => id.trim()).filter(Boolean) : null,
     });
     const browserInstalled = (bundle) => installedApps.has(bundle);

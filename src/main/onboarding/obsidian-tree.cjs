@@ -22,7 +22,7 @@ const byName = (a, b) => a.name.localeCompare(b.name, undefined, { numeric: true
  * → { vaults: [{ name, path, tree: [{ name, path, dir, children? }] }], truncated } for `homeDir`'s Obsidian vaults.
  * A file's `name` is shown as Obsidian shows it: a note without its .md.
  */
-async function obsidianTree(homeDir, { maxEntries = MAX_ENTRIES } = {}) {
+async function obsidianTree(homeDir, { maxEntries = MAX_ENTRIES, platform = process.platform, env = process.env } = {}) {
   let seen = 0;
   let truncated = false;
   async function read(dir, depth) {
@@ -46,7 +46,7 @@ async function obsidianTree(homeDir, { maxEntries = MAX_ENTRIES } = {}) {
     return [...folders, ...files];
   }
   const vaults = [];
-  for (const vault of readers.obsidianVaults(homeDir)) vaults.push({ name: vault.name, path: vault.path, tree: await read(vault.path, 0) });
+  for (const vault of readers.obsidianVaults(homeDir, platform, env)) vaults.push({ name: vault.name, path: vault.path, tree: await read(vault.path, 0) });
   return { vaults, truncated };
 }
 

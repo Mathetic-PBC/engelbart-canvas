@@ -42,6 +42,20 @@ function readJsonFile(file) { try { return JSON.parse(fs.readFileSync(file, 'utf
 const WINDOWS = process.platform === 'win32';
 const roaming = (homeDir, ...parts) => path.join(homeDir, 'AppData', 'Roaming', ...parts);
 const local = (homeDir, ...parts) => path.join(homeDir, 'AppData', 'Local', ...parts);
+// Linux (2026-10-18, Hudson: "on Linux it is not accessing Obsidian files and other files well"; docs/windows-port-log.md
+// "Beta catch-up to 0.1.23 on linux-beta-deployment"): apps keep their settings in $XDG_CONFIG_HOME (~/.config when it is
+// unset or not absolute, as the XDG Base Directory spec says), a Flatpak's in ~/.var/app/<id>/config and a Snap's in
+// ~/snap/<name>/current/.config (or common/); the sqlite3 and unzip commands are not always installed, so a browser's
+// history and an export's .zip are read in this process when they are missing.
+const configHome = (homeDir, env = process.env) => (env && env.XDG_CONFIG_HOME && path.isAbsolute(env.XDG_CONFIG_HOME) ? env.XDG_CONFIG_HOME : path.join(homeDir, '.config'));
+const flatpakConfig = (homeDir, id, ...parts) => path.join(homeDir, '.var', 'app', id, 'config', ...parts);
+const snapConfig = (homeDir, name, ...parts) => path.join(homeDir, 'snap', name, 'current', '.config', ...parts);
+
+/** Whether `name` is a program on `env`'s PATH (an executable file in one of its folders). */
+function hasCommand(name, env = process.env, platform = process.platform) {
+  const dirs = String((env && (env.PATH || env.Path)) || '').split(platform === 'win32' ? ';' : ':').filter(Boolean);
+  return dirs.some((dir) => { try { fs.accessSync(path.join(dir, name), fs.constants.X_OK); return statOf(path.join(dir, name)).isFile(); } catch { return false; } });
+}
 
 /** `~/x` or an absolute path → absolute; anything else null. */
 function expandPath(homeDir, value) {
@@ -147,12 +161,43 @@ function noteFiles(dir, { include = [], exclude = [], days = null, max = 2000, r
 
 /* ------------------------------------------------------------------------------------------------------- Obsidian */
 
-/** The vaults Obsidian knows on this Mac that are still there → [{ name, path, shown, open, lastOpened }]. */
-function obsidianVaults(homeDir = os.homedir(), platform = process.platform) {
+/**
+ * Where Obsidian keeps obsidian.json on Linux (obsidian.md/help "How Obsidian stores data": "$XDG_CONFIG_HOME/obsidian/ or
+ * ~/.config/obsidian/"): the .deb's and the AppImage's, Flathub's md.obsidian.Obsidian (its XDG_CONFIG_HOME is
+ * ~/.var/app/<id>/config) and the Snap's (~/snap/obsidian/<revision>/.config, `current` the revision in use).
+ */
+const obsidianConfigs = (homeDir, env = process.env) => [
+  path.join(configHome(homeDir, env), 'obsidian', 'obsidian.json'),
+  flatpakConfig(homeDir, 'md.obsidian.Obsidian', 'obsidian', 'obsidian.json'),
+  snapConfig(homeDir, 'obsidian', 'obsidian', 'obsidian.json'),
+];
+
+/**
+ * The vaults Obsidian knows on this Mac that are still there → [{ name, path, shown, open, lastOpened }]. On Linux every
+ * install's obsidian.json is read and their vaults put together, one entry per folder with its newest time: a person who
+ * moved from the .deb to the Flatpak (or has both) has vaults in each, and a vault listed by an install no longer used is
+ * still a folder of their notes; the most recently changed file alone would hide the others' vaults.
+ */
+function obsidianVaults(homeDir = os.homedir(), platform = process.platform, env = process.env) {
+  if (platform === 'linux') {
+    const byPath = new Map();
+    for (const config of obsidianConfigs(homeDir, env).map(readJsonFile).filter(Boolean)) {
+      for (const vault of Object.values(config.vaults || {})) {
+        if (!vault || typeof vault.path !== 'string') continue;
+        const held = byPath.get(vault.path);
+        byPath.set(vault.path, held ? { ...vault, ts: Math.max(Number(held.ts) || 0, Number(vault.ts) || 0), open: !!(held.open || vault.open) } : vault);
+      }
+    }
+    return listVaults([...byPath.values()], homeDir);
+  }
   const files = [path.join(homeDir, 'Library', 'Application Support', 'obsidian', 'obsidian.json'), ...(platform === 'win32' ? [roaming(homeDir, 'obsidian', 'obsidian.json')] : [])];
   const config = files.map(readJsonFile).find(Boolean);
   if (!config) return [];
-  return Object.values((config && config.vaults) || {})
+  return listVaults(Object.values((config && config.vaults) || {}), homeDir);
+}
+
+function listVaults(vaults, homeDir) {
+  return vaults
     .filter((vault) => vault && typeof vault.path === 'string' && isDir(vault.path))
     .map((vault) => ({ name: path.basename(vault.path), path: vault.path, shown: shownPath(homeDir, vault.path), open: !!vault.open, lastOpened: iso(Number(vault.ts)) }))
     .sort((a, b) => String(b.lastOpened).localeCompare(String(a.lastOpened)));
@@ -407,8 +452,21 @@ function sqliteHere(command, args, options, callback) {
   return null;
 }
 
-/** The conversations.json an export holds: the file itself, inside a folder, or inside a .zip (read with unzip). */
-function exportText(file) {
+/**
+ * How `sqlite3 -json -readonly <file> <query>` is run: the command (execFile) where it is installed, else in this process
+ * (sqliteHere): Windows has none, and many Linux installs do not either (Ubuntu's desktop leaves it out).
+ */
+function sqliteRunner(env = process.env, platform = process.platform) {
+  if (platform === 'win32') return sqliteHere;
+  if (platform === 'linux' && !hasCommand('sqlite3', env, platform)) return sqliteHere;
+  return execFile;
+}
+
+/**
+ * The conversations.json an export holds: the file itself, inside a folder, or inside a .zip (read with unzip; Windows'
+ * tar there; on Linux without unzip, read here with ../overleaf/copy.cjs readZip).
+ */
+function exportText(file, { env = process.env, platform = process.platform } = {}) {
   const stat = statOf(file);
   if (!stat) throw new Error(`Nothing is at ${file}`);
   if (stat.isDirectory()) {
@@ -417,6 +475,12 @@ function exportText(file) {
     return fs.readFileSync(inside, 'utf8');
   }
   if (/\.zip$/i.test(file)) {
+    if (platform === 'linux' && !hasCommand('unzip', env, platform)) {
+      let entry = null;
+      try { entry = require('../overleaf/copy.cjs').readZip(fs.readFileSync(file)).files.find((one) => one.name === 'conversations.json'); } catch { entry = null; }
+      if (!entry) throw new Error(`No conversations.json in ${path.basename(file)}`);
+      return entry.data.toString('utf8');
+    }
     const [command, args] = WINDOWS ? [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe'), ['-xOf', file, 'conversations.json']] : ['unzip', ['-p', file, 'conversations.json']];
     try { return execFileSync(command, args, { maxBuffer: 2 * 1024 * 1024 * 1024, windowsHide: true }).toString('utf8'); } catch { throw new Error(`No conversations.json in ${path.basename(file)}`); }
   }
@@ -488,15 +552,24 @@ function exportTranscript(file, id) {
 const CHROMIUM = [['Chrome', ['Google', 'Chrome']], ['Arc', ['Arc', 'User Data']], ['Brave', ['BraveSoftware', 'Brave-Browser']], ['Edge', ['Microsoft Edge']], ['Chromium', ['Chromium']], ['Vivaldi', ['Vivaldi']], ['Opera', ['com.operasoftware.Opera']], ['Comet', ['Comet']]];
 // Under AppData\Local on Windows.
 const WINDOWS_CHROMIUM = [['Chrome', ['Google', 'Chrome', 'User Data']], ['Brave', ['BraveSoftware', 'Brave-Browser', 'User Data']], ['Edge', ['Microsoft', 'Edge', 'User Data']], ['Chromium', ['Chromium', 'User Data']], ['Vivaldi', ['Vivaldi', 'User Data']]];
+// On Linux: under $XDG_CONFIG_HOME, a Flatpak's (by its Flathub id) under ~/.var/app/<id>/config, and the Snaps of Chromium
+// (~/snap/chromium/common/chromium) and Brave. Opera keeps its one profile in ~/.config/opera itself, with no Default
+// folder: not read, as on the Mac.
+const LINUX_CHROMIUM = [['Chrome', ['google-chrome'], 'com.google.Chrome'], ['Brave', ['BraveSoftware', 'Brave-Browser'], 'com.brave.Browser'], ['Edge', ['microsoft-edge'], 'com.microsoft.Edge'], ['Chromium', ['chromium'], 'org.chromium.Chromium'], ['Vivaldi', ['vivaldi'], 'com.vivaldi.Vivaldi']];
+const linuxChromium = (homeDir, env) => [
+  ...LINUX_CHROMIUM.flatMap(([browser, parts, flatpak]) => [[browser, path.join(configHome(homeDir, env), ...parts)], [browser, flatpakConfig(homeDir, flatpak, ...parts)]]),
+  ['Chromium', path.join(homeDir, 'snap', 'chromium', 'common', 'chromium')],
+  ['Brave', snapConfig(homeDir, 'brave', 'BraveSoftware', 'Brave-Browser')],
+];
 
 /**
  * The Chromium browsers' profiles on this Mac that have a history or bookmarks → [{ browser, profile, name, dir, used }],
  * the one used last first. `name` is what the browser calls the profile (its Local State), `used` when its history last changed.
  */
-function browserProfiles(homeDir = os.homedir(), platform = process.platform) {
+function browserProfiles(homeDir = os.homedir(), platform = process.platform, env = process.env) {
   const out = [];
   const bases = [
-    ...CHROMIUM.map(([browser, parts]) => [browser, path.join(homeDir, 'Library', 'Application Support', ...parts)]),
+    ...(platform === 'linux' ? linuxChromium(homeDir, env) : CHROMIUM.map(([browser, parts]) => [browser, path.join(homeDir, 'Library', 'Application Support', ...parts)])),
     ...(platform === 'win32' ? WINDOWS_CHROMIUM.map(([browser, parts]) => [browser, local(homeDir, ...parts)]) : []),
   ];
   for (const [browser, base] of bases) {
@@ -527,7 +600,7 @@ const fromChromeTime = (value) => (Number(value) > 0 ? Number(value) / 1000 - 11
  * A browser profile's most visited pages since `days` ago, grouped by site (`by` 'site': { host, visits, pages, title,
  * url } with its most visited page) or as pages ('page': { url, title, visits, last }). `exclude`: hosts left out.
  */
-async function browserHistory(dir, { days = 90, limit = 50, by = 'site', exclude = [], sqlite = 'sqlite3', run = WINDOWS ? sqliteHere : execFile } = {}) {
+async function browserHistory(dir, { days = 90, limit = 50, by = 'site', exclude = [], sqlite = 'sqlite3', run = sqliteRunner() } = {}) {
   const source = path.join(dir, 'History');
   if (!statOf(source)) throw new Error('This browser profile has no history');
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-history-'));
@@ -657,9 +730,24 @@ const PDF_SKIP = new Set(['Zotero', 'Library', 'site-packages', 'dist', 'build',
  * The folders PDFs are looked for in: those of PDF_ROOTS that are here, and Google Drive's when it syncs to this Mac.
  * `readable` (MATH-110): only those it lets through, so a protected folder macOS was not let to show is left out.
  */
-function pdfRoots(homeDir = os.homedir(), { readable = null } = {}) {
+function pdfRoots(homeDir = os.homedir(), { readable = null, platform = process.platform, env = process.env } = {}) {
+  // Linux (2026-10-18): the desktop's own Downloads, Documents and Desktop, which xdg-user-dirs names in the person's
+  // language (~/Téléchargements, ~/Dokumente) in $XDG_CONFIG_HOME/user-dirs.dirs, besides the English names.
+  const named = platform === 'linux' ? userDirs(homeDir, env) : [];
   const drives = (() => { try { return fs.readdirSync(path.join(homeDir, 'Library', 'CloudStorage')).filter((name) => /^(?:GoogleDrive|Dropbox|OneDrive)/.test(name)).map((name) => path.join(homeDir, 'Library', 'CloudStorage', name)); } catch { return []; } })();
-  return [...PDF_ROOTS.map((rel) => path.join(homeDir, rel)), ...drives].filter((dir) => !readable || readable(dir)).filter(isDir);
+  return [...new Set([...PDF_ROOTS.map((rel) => path.join(homeDir, rel)), ...named, ...drives])].filter((dir) => !readable || readable(dir)).filter(isDir);
+}
+
+/** The Downloads, Documents and Desktop folders user-dirs.dirs names (XDG_DOWNLOAD_DIR="$HOME/…"), absolute, or []. */
+function userDirs(homeDir, env = process.env) {
+  let text = '';
+  try { text = fs.readFileSync(path.join(configHome(homeDir, env), 'user-dirs.dirs'), 'utf8'); } catch { return []; }
+  const out = [];
+  for (const match of text.matchAll(/^\s*XDG_(?:DOWNLOAD|DOCUMENTS|DESKTOP)_DIR\s*=\s*"([^"]*)"/gm)) {
+    const value = match[1].replace(/^\$HOME(?=\/|$)/, homeDir);
+    if (path.isAbsolute(value) && path.resolve(value) !== path.resolve(homeDir)) out.push(path.resolve(value));
+  }
+  return out;
 }
 
 /** Every PDF under `dir`, depth first to `depth` levels, packages and code folders passed over, at most `max` entries seen. */
@@ -863,5 +951,5 @@ module.exports = {
   NOTE_EXT, IMAGE_EXT, shownPath, expandPath, walkFiles, folderOverview, noteFiles, obsidianDailyFolder, obsidianVaults,
   localChats, localChatCounts, localChatFile, localTranscript, readExport, exportChat, exportChats, exportCounts, exportTranscript,
   browserProfiles, profileOf, browserHistory, browserBookmarks, linksIn, hostOf, chromeTime, zoteroCollections, zoteroItems,
-  pdfRoots, pdfFolders, pdfFiles, pdfTitle, pdfGuess,
+  pdfRoots, pdfFolders, pdfFiles, pdfTitle, pdfGuess, exportText, hasCommand, sqliteRunner, configHome, obsidianConfigs,
 };
