@@ -15,7 +15,7 @@ const { createGit } = require('../src/main/build/git.cjs');
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-bundled-git-'));
 const ROOT = path.join(__dirname, '..');
 
-test('findBundledGit: the app\'s Resources first, then a checkout\'s vendor/git for this architecture; only a launcher that runs', () => {
+test('findBundledGit: the app\'s Resources first, then a checkout\'s vendor/git for this architecture; only a launcher that runs', { skip: process.platform !== 'darwin' && 'macOS only: Engelbart\'s own Git ships for the Mac alone, and a launcher without the execute bit (which Windows has not) is what is passed over' }, () => {
   const resources = temp();
   const appRoot = temp();
   assert.equal(findBundledGit({ resourcesPath: resources, appRoot, platform: 'darwin', override: '' }), null, 'neither');

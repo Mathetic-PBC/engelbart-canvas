@@ -167,7 +167,7 @@ test('sign-in: broker start with loopback port, state and PKCE challenge; the ti
   assert.equal(saved.username, 'researcher');
   assert.notEqual(saved.key, KEY);
   assert.ok(!fs.readFileSync(file, 'utf8').includes(KEY), 'the key is encrypted on disk');
-  assert.equal(fs.statSync(file).mode & 0o777, 0o600);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(file).mode & 0o777, 0o600); // Windows has no such modes
   for (const change of changes) assert.ok(!JSON.stringify(change).includes(KEY), 'no status sent to the window carries the key');
 
   // A new launch reads the file: still connected, nothing to refresh, no request to Zotero.

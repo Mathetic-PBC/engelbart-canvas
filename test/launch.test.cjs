@@ -135,7 +135,7 @@ test('validateCreateRequest requires an existing directory and bounded dimension
   );
 });
 
-test('createLaunchSpec uses login-interactive shell args and fixed provider commands', (t) => {
+test('createLaunchSpec uses login-interactive shell args and fixed provider commands', { skip: process.platform === 'win32' && 'POSIX terminals only: a Windows terminal opens PowerShell (test/windows-platform.test.cjs)' }, (t) => {
   const cwd = temporaryDirectory(t);
   const environment = { HOME: cwd, SHELL: '/bin/zsh', PATH: '/usr/bin:/bin' };
 
@@ -153,7 +153,7 @@ test('createLaunchSpec uses login-interactive shell args and fixed provider comm
   assert.deepEqual(codex.args.slice(0, 2), ['-ilc', 'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; if [ -n "${ENGELBART_CODEX_BIN:-}" ]; then "$ENGELBART_CODEX_BIN"; else codex; fi; provider_status=$?; printf "\\r\\n[Codex exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il']);
 });
 
-test('an agent started from the terminal gets Engelbart\'s own Git first on PATH while it stands in; bash and fish too (2026-09-28)', (t) => {
+test('an agent started from the terminal gets Engelbart\'s own Git first on PATH while it stands in; bash and fish too (2026-09-28)', { skip: process.platform === 'win32' && 'POSIX terminals only: a Windows terminal opens PowerShell (test/windows-platform.test.cjs)' }, (t) => {
   const cwd = temporaryDirectory(t);
   const environment = { HOME: cwd, SHELL: '/bin/zsh', PATH: '/usr/bin:/bin', ENGELBART_GIT_BIN: '/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin' };
   const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment);
@@ -165,7 +165,7 @@ test('an agent started from the terminal gets Engelbart\'s own Git first on PATH
   assert.deepEqual(loginShellArgs('/bin/bash', 'codex', environment), ['-ilc', 'PATH="$ENGELBART_GIT_BIN:$PATH"; codex']);
 });
 
-test('Claude Code and Codex installed where the login shell\'s PATH misses them run by name in the terminal: their folders go last on PATH (2026-09-29)', (t) => {
+test('Claude Code and Codex installed where the login shell\'s PATH misses them run by name in the terminal: their folders go last on PATH (2026-09-29)', { skip: process.platform === 'win32' && 'POSIX terminals only: a Windows terminal opens PowerShell (test/windows-platform.test.cjs)' }, (t) => {
   const cwd = temporaryDirectory(t);
   const environment = { HOME: cwd, SHELL: '/bin/zsh', PATH: '/usr/bin:/bin', ENGELBART_AGENT_PATH: `${cwd}/.local/bin` };
   const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment);

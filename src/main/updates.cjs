@@ -47,7 +47,7 @@ function releaseInfo(appPath) {
 }
 
 /** The .app this process runs from (…/Engelbart.app/Contents/MacOS/Engelbart). */
-const bundleOf = (execPath) => path.resolve(path.dirname(execPath), '..', '..');
+const bundleOf = (execPath) => path.posix.resolve(path.posix.dirname(execPath), '..', '..'); // a Mac's .app (updates are Mac only)
 
 const unlink = (file) => { try { fs.unlinkSync(file); } catch { /* gone */ } };
 

@@ -658,7 +658,7 @@ test('with the tool check: a question holds its CLI\'s lock, and a CLI the login
   assert.equal(calls[0].env.ENGELBART_CODEX_BIN, '/Users/someone/.local/bin/codex');
 });
 
-test('while Engelbart\'s own Git stands in, a question\'s CLI finds it first on PATH (2026-09-28)', async () => {
+test('while Engelbart\'s own Git stands in, a question\'s CLI finds it first on PATH (2026-09-28)', { skip: process.platform === 'win32' && 'macOS only: Engelbart\'s own Git ships for the Mac alone' }, async () => {
   const authFile = path.join(homeDir, 'auth-git.json');
   fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));
   const calls = [];
@@ -769,7 +769,7 @@ test('the real runner streams while the CLI is still running: labels, then the t
   const ref = { kind: 'workspace', workspaceId: workspace.id };
   const out = await bart.ask(ctx, project.id, { askId: 's1', ref, workspaceId: workspace.id, text: '--opus why?' }, { onProgress: (p) => progress.push(p) });
   assert.equal(out.lines[0], 'bart> Half an answer, finished.');
-  assert.deepEqual(progress.map((p) => (p.step ? 'step' : p.activity || p.lines.join('\n'))), ['step', path.join('Reading src', 'a.js'), 'Writing', 'Half an']);
+  assert.deepEqual(progress.map((p) => (p.step ? 'step' : p.activity || p.lines.join('\n'))), ['step', 'Reading src/a.js', 'Writing', 'Half an']);
   assert.ok(!JSON.stringify(progress).includes('SECRET'), 'what a tool returned is never sent on');
 });
 

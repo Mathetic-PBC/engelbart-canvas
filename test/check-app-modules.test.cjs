@@ -22,7 +22,18 @@ async function appWith(files) {
   }
   const app = path.join(dir, 'Engelbart.app');
   fs.mkdirSync(path.join(app, 'Contents', 'Resources'), { recursive: true });
-  await asar.createPackage(src, path.join(app, 'Contents', 'Resources', 'app.asar'));
+  const archive = path.join(app, 'Contents', 'Resources', 'app.asar');
+  await asar.createPackage(src, archive);
+  // createPackage resolves at its stream's end(), before the files are written after the header: read at once, Windows
+  // gave NULs (port, 0.1.19). Done when it is as long as its header and every file.
+  const size = Object.values(files).reduce((sum, json) => sum + Buffer.byteLength(JSON.stringify(json)), 0);
+  for (const end = Date.now() + 10_000; ;) {
+    let done = false;
+    try { done = fs.statSync(archive).size >= 8 + asar.getRawHeader(archive).headerSize + size; } catch { /* not there yet */ }
+    if (done) break;
+    if (Date.now() > end) throw new Error(`${archive} was not written in full`);
+    await new Promise((resolve) => { setTimeout(resolve, 20); });
+  }
   return app;
 }
 const asarOf = (app) => path.join(app, 'Contents', 'Resources', 'app.asar');

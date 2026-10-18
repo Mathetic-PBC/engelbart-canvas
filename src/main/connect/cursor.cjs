@@ -15,7 +15,12 @@ const DAY_MS = 86_400_000;
 const ID_RE = /^[0-9a-f-]{8,64}$/i;
 const clip = (text, max) => { const value = String(text || '').replace(/\s+/g, ' ').trim(); return value.length > max ? `${value.slice(0, max - 1)}…` : value; };
 
-const cursorDb = (homeDir = os.homedir()) => path.join(homeDir, 'Library', 'Application Support', 'Cursor', 'User', 'globalStorage', 'state.vscdb');
+const STATE = ['Cursor', 'User', 'globalStorage', 'state.vscdb'];
+// Windows (docs/windows-port-log.md "Catch-up to 0.1.13"): under AppData\Roaming, where the Mac's is not.
+const cursorDb = (homeDir = os.homedir(), platform = process.platform) => {
+  const mac = path.join(homeDir, 'Library', 'Application Support', ...STATE);
+  return platform === 'win32' && !fs.existsSync(mac) ? path.join(homeDir, 'AppData', 'Roaming', ...STATE) : mac;
+};
 
 function open(homeDir) {
   const file = cursorDb(homeDir);

@@ -132,8 +132,12 @@ function scrubAgentSession(base) {
   return environment;
 }
 
-/** The environment terminal sessions start with: the process environment, minus an outer agent's session, with SHELL = the launcher. */
-function environmentForSessions(base, userDataDir) {
+/**
+ * The environment terminal sessions start with: the process environment, minus an outer agent's session, with SHELL = the
+ * launcher. On Windows the terminal is PowerShell (./terminal/launch.cjs), which starts as it is: no launcher.
+ */
+function environmentForSessions(base, userDataDir, platform = process.platform) {
+  if (platform === 'win32') return scrubAgentSession(base);
   const realShell = resolveShell(base);
   const environment = scrubAgentSession(base);
   environment.SHELL = prepareLauncher(userDataDir, realShell);

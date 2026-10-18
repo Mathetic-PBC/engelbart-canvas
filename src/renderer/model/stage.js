@@ -33,7 +33,8 @@ export function splitTarget(href) {
     return out.replace(/\s+/g, ' ').trim();
   };
   let address = link.slice(0, hash);
-  if (/^(?:\/|~\/)/.test(address) && /%[0-9a-f]{2}/i.test(address)) { try { address = decodeURIComponent(address); } catch { /* as written */ } }
+  // A path on disk (on Windows, C:\…, its colon and backslashes encoded too) is the file's path once decoded.
+  if (/^(?:\/|~\/|[a-z](?::|%3A))/i.test(address) && /%[0-9a-f]{2}/i.test(address)) { try { address = decodeURIComponent(address); } catch { /* as written */ } }
   return { address, find: words(m[1]), to: words(m[2]) };
 }
 

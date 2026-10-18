@@ -1,180 +1,175 @@
 'use strict';
 
-// npm run build && node scripts/smoke-windows.cjs
-// Several windows (2026-10-03, src/main/windows.cjs): the real app, hidden, against disposable data, run twice. First:
-// File ▸ New Window opens a second window on the same workspace; each keeps its own Stage tab; a document saved in one
-// shows in the other, and edits not yet saved there are kept behind a notice; a post-it made in one shows in the other;
-// closing one leaves the others working; the windows are written to state.json; then the app quits as it does. Second,
-// on the same data: both windows come back, where they were.
+// node scripts/smoke-windows.cjs [path/to/Engelbart.exe]          (default: release/win-unpacked/Engelbart.exe)
+// The packaged Windows app, started (2026-10-05, docs/windows-port.md; CI runs it after building the installer). The app
+// runs hidden (ENGELBART_HEADLESS) on a throwaway home and user data, and is driven through Chromium's DevTools
+// protocol, as nothing of the smoke test is inside it. It passes only when all of this happens:
+//   1. the window loads (the renderer's API is there and the app has drawn);
+//   2. a terminal session starts (PowerShell, through node-pty's Windows modules) and echoes a line back;
+//   3. the tool check, a POSIX script run through Git for Windows' bash (src/main/tools/detect.cjs lookupCommand),
+//      prints what it found: Git, at a Windows path;
+//   4. the app quits cleanly when its window closes, with exit code 0.
+// On a Mac it runs the same against a packaged Engelbart.app's executable (zsh in place of PowerShell and Git Bash).
+// On Linux (scripts/smoke-linux.cjs, under xvfb) against the app's launcher, engelbart-launch (bash; the system's Git),
+// and it also says whether Chromium's sandbox is on: SMOKE_SANDBOX=on or off fails it when it is not that.
+
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { spawn } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 
-const PHASE = process.env.ENGELBART_WINDOWS_SMOKE_PHASE;
-const root = process.env.ENGELBART_WINDOWS_SMOKE_ROOT;
+const ROOT = path.join(__dirname, '..');
+const linux = process.platform === 'linux';
+const NAME = linux ? 'smoke-linux' : 'smoke-windows';
+const app = path.resolve(process.argv[2] || (linux ? path.join(ROOT, 'release', 'linux-unpacked', 'engelbart-launch') : path.join(ROOT, 'release', 'win-unpacked', 'Engelbart.exe')));
+const LINE = `engelbart-smoke-${process.pid}`;
+const STEP_MS = 90_000;
 
-if (!process.versions.electron) {
-  // Under node: the two runs of the app, one after the other, on one disposable folder.
-  const electron = require('electron'); // its binary's path
-  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-windows-smoke-'));
-  const runApp = (phase) => new Promise((resolve) => {
-    const child = spawn(electron, [__filename], { stdio: 'inherit', env: { ...process.env, ENGELBART_WINDOWS_SMOKE_PHASE: phase, ENGELBART_WINDOWS_SMOKE_ROOT: folder } });
-    child.on('exit', (code) => resolve(code == null ? 1 : code));
-  });
-  (async () => {
-    let code = await runApp('run');
-    if (code === 0) code = await runApp('restore');
-    fs.rmSync(folder, { recursive: true, force: true });
-    process.exit(code);
-  })();
-} else {
-  smoke();
+const pause = (ms) => new Promise((resolve) => { setTimeout(resolve, ms); });
+async function until(fn, label, ms = STEP_MS) {
+  for (const end = Date.now() + ms; Date.now() < end;) {
+    const result = await fn().catch(() => null);
+    if (result) return result;
+    await pause(250);
+  }
+  throw new Error(`Timed out: ${label}`);
 }
 
-function smoke() {
-  const { app, BrowserWindow, Menu } = require('electron');
-  const assert = require('node:assert/strict');
-  const http = require('node:http');
-  app.setPath('userData', path.join(root, 'electron'));
-  Object.assign(process.env, {
-    ENGELBART_HOME_DIR: root, ENGELBART_SUMMARIES: 'off', ENGELBART_CONNECT_OFFER: 'off', ENGELBART_TOOLS: 'off', ENGELBART_BART_FAKE: '1', ENGELBART_HEADLESS: '1',
-    ENGELBART_SANDBOXES: 'off', ENGELBART_WEB_PDFS: 'off', ENGELBART_UPDATES: 'off', ENGELBART_RUN_STEP: 'off',
-  });
-  require('../src/main/index.cjs');
-
-  const pause = (ms = 50) => new Promise((resolve) => { setTimeout(resolve, ms); });
-  async function until(fn, label, tries = 200) {
-    for (let i = 0; i < tries; i += 1) { const result = await fn(); if (result) return result; await pause(); }
-    throw new Error(`Timed out: ${label}`);
-  }
-  const js = (wc, expression) => wc.executeJavaScript(expression, true);
-  const appWindows = () => BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed() && win.webContents.getURL().startsWith('engelbart://app/index.html'));
-  const state = () => JSON.parse(fs.readFileSync(path.join(root, '.engelbart', 'state.json'), 'utf8'));
-  const editorText = (win) => js(win.webContents, 'document.querySelector("main [data-editor]")?.innerText || ""').catch(() => '');
-  const here = (win) => js(win.webContents, 'document.querySelector("[data-workspace-here]")?.dataset.workspaceHere || null').catch(() => null);
-  const cards = (win) => win.contentView.children.filter((view) => view.webContents?.getURL() === 'engelbart://app/post-it.html');
-  const key = (wc, keyCode, ch) => { wc.sendInputEvent({ type: 'keyDown', keyCode }); if (ch) wc.sendInputEvent({ type: 'char', keyCode: ch }); wc.sendInputEvent({ type: 'keyUp', keyCode }); };
-  const typeKeys = async (wc, text) => { for (const ch of text) { key(wc, ch === ' ' ? 'Space' : ch, ch); await pause(8); } };
-  const ready = (win) => until(() => js(win.webContents, '!!window.engelbartAPI && !!document.querySelector("button")').catch(() => false), 'app bootstrap');
-  const inWorkspace = (win) => until(() => js(win.webContents, '!!document.querySelector("main [data-editor]")').catch(() => false), 'workspace document');
-  const closeTerminals = (win) => js(win.webContents, 'window.terminalAPI.bootstrap().then(s=>Promise.all(s.sessions.map(t=>window.terminalAPI.closeSession(t.id))))');
-
-  async function run() {
-    const server = http.createServer((req, res) => res.end(`<!doctype html><title>${req.url}</title><p>${req.url}</p>`));
-    await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
-    const url = `http://127.0.0.1:${server.address().port}`;
-    try {
-      const a = await until(() => appWindows()[0], 'first window');
-      a.setFocusable(false);
-      await ready(a);
-      const created = await js(a.webContents, `window.engelbartAPI.createProjectWithWelcome({name:'Windows smoke', directory:${JSON.stringify(root)}})`);
-      const pid = created.project.id, wid = created.workspaceId;
-      a.webContents.reload();
-      await inWorkspace(a);
-      assert.equal(await here(a), wid);
-
-      /* ---------------------------------------------- File ▸ New Window, on the workspace in front */
-      const file = Menu.getApplicationMenu().items.find((item) => item.label === 'File');
-      file.submenu.items.find((item) => item.label === 'New Window').click();
-      const b = await until(() => appWindows().find((win) => win !== a), 'second window');
-      b.setFocusable(false);
-      await inWorkspace(b);
-      assert.equal(await here(b), wid, 'opened from a workspace, the new window shows it');
-      assert.notDeepEqual(b.getBounds(), a.getBounds(), 'a step away from the window it came from');
-      console.log('PASS File ▸ New Window opens a second window on the same workspace');
-
-      /* ---------------------------------------------- each window its own Stage tab */
-      await js(a.webContents, `window.engelbartAPI.browserOpen('smoke-a', ${JSON.stringify(`${url}/a`)})`);
-      await js(b.webContents, `window.engelbartAPI.browserOpen('smoke-b', ${JSON.stringify(`${url}/b`)})`);
-      const pages = (win) => win.contentView.children.map((view) => view.webContents?.getURL() || '').filter((at) => at.startsWith(url));
-      await until(() => pages(a).length && pages(b).length, 'both tabs loaded');
-      assert.deepEqual(pages(a), [`${url}/a`]);
-      assert.deepEqual(pages(b), [`${url}/b`]);
-      console.log('PASS each window keeps its own Stage tab');
-
-      /* ---------------------------------------------- a save in one window shows in the other */
-      const ref = JSON.stringify({ kind: 'workspace', workspaceId: wid });
-      const saved = await js(a.webContents, `window.engelbartAPI.writeDoc(${JSON.stringify(pid)}, ${ref}, 'Saved in window A\\n')`);
-      assert.ok(saved.revision >= 1);
-      await until(async () => (await editorText(b)).includes('Saved in window A'), 'the other window shows the saved text');
-      console.log('PASS a document saved in one window appears in the other');
-
-      // Words typed in B and not saved yet when A saves: B keeps them and asks; Keep mine saves them.
-      await js(b.webContents, 'document.querySelector("main [data-editor]").focus()');
-      b.webContents.focus();
-      await js(b.webContents, '(()=>{const ed=document.querySelector("main [data-editor]");const r=document.createRange();r.selectNodeContents(ed);r.collapse(false);const s=getSelection();s.removeAllRanges();s.addRange(r);})()');
-      await typeKeys(b.webContents, ' typed in B');
-      await js(a.webContents, `window.engelbartAPI.writeDoc(${JSON.stringify(pid)}, ${ref}, 'Saved again in window A\\n')`);
-      await until(() => js(b.webContents, '!!document.querySelector("[data-doc-conflict]")'), 'the notice in the window with edits');
-      assert.ok((await editorText(b)).includes('typed in B'), 'its edits are still on screen');
-      await pause(600);
-      assert.equal(fs.readFileSync(path.join(created.project.dir, 'Getting started', 'workspace.md'), 'utf8'), 'Saved again in window A\n', 'its save waits for a choice');
-      await js(b.webContents, 'document.querySelector("[data-conflict-keep]").click()');
-      await until(() => fs.readFileSync(path.join(created.project.dir, 'Getting started', 'workspace.md'), 'utf8').includes('typed in B'), 'Keep mine saved');
-      await until(async () => (await editorText(a)).includes('typed in B'), 'and the first window shows it');
-      console.log('PASS edits not yet saved are kept behind Keep mine / Take theirs');
-
-      /* ---------------------------------------------- a post-it made in one window shows in the other */
-      await js(a.webContents, `window.engelbartAPI.postItsCreate(${JSON.stringify(pid)})`);
-      await until(() => cards(a).length === 1 && cards(b).length === 1, 'the card in both windows');
-      console.log('PASS a post-it made in one window shows in the other');
-
-      /* ---------------------------------------------- saved windows; closing one leaves the other */
-      b.setBounds({ x: 120, y: 90, width: 1000, height: 700 });
-      await js(b.webContents, 'document.querySelector("[data-sb-trigger=project]").click()'); // the project's menu → All projects
-      await until(() => js(b.webContents, '!!document.querySelector("[data-sb-switch-project]")'), 'the project menu');
-      await js(b.webContents, 'document.querySelector("[data-sb-switch-project]").click()');
-      await until(() => js(b.webContents, '!!document.querySelector("[data-sb-all-projects]")'), 'its projects');
-      await js(b.webContents, 'document.querySelector("[data-sb-all-projects]").click()');
-      await until(() => js(b.webContents, '!document.querySelector("main [data-editor]")'), 'second window on the projects screen');
-      await until(() => (state().windows || []).length === 2 && state().windows.some((entry) => entry.projectId === null), 'both windows in state.json');
-      const kept = state().windows;
-      assert.deepEqual(kept.find((entry) => entry.projectId === null).bounds, { x: 120, y: 90, width: 1000, height: 700 });
-      assert.deepEqual(kept.find((entry) => entry.projectId === pid).workspaceId, wid);
-      console.log('PASS the windows, where each is, are kept in state.json');
-
-      file.submenu.items.find((item) => item.label === 'New Window').click();
-      const c = await until(() => appWindows().find((win) => win !== a && win !== b), 'third window');
-      c.setFocusable(false);
-      await ready(c);
-      c.close();
-      await until(() => c.isDestroyed(), 'a window that is not the last really closes');
-      assert.equal(appWindows().length, 2);
-      assert.deepEqual(pages(a), [`${url}/a`], 'the other windows keep their tabs');
-      assert.equal(cards(a).length, 1, 'and their post-its');
-      await until(() => (state().windows || []).length === 2, 'a closed window leaves state.json');
-      console.log('PASS closing one window leaves the others working');
-
-      for (const win of appWindows()) await closeTerminals(win).catch(() => {});
-      fs.writeFileSync(path.join(root, 'smoke-expect.json'), JSON.stringify({ pid, wid, kept }));
-    } finally {
-      server.close();
-    }
-  }
-
-  async function restore() {
-    const expected = JSON.parse(fs.readFileSync(path.join(root, 'smoke-expect.json'), 'utf8'));
-    await until(() => appWindows().length === 2, 'both windows back');
-    const wins = appWindows();
-    for (const win of wins) { win.setFocusable(false); await ready(win); }
-    const onWorkspace = await until(async () => { for (const win of wins) if (await here(win) === expected.wid) return win; return null; }, 'the workspace window');
-    const onHome = wins.find((win) => win !== onWorkspace);
-    await until(() => js(onHome.webContents, '!document.querySelector("main [data-editor]") && !!document.querySelector("button")'), 'the projects-screen window');
-    assert.deepEqual(onHome.getBounds(), expected.kept.find((entry) => entry.projectId === null).bounds);
-    console.log('PASS after a relaunch every window comes back, where it was');
-    for (const win of appWindows()) await closeTerminals(win).catch(() => {});
-  }
-
-  app.whenReady().then(async () => {
-    try {
-      if (PHASE === 'restore') await restore();
-      else await run();
-    } catch (error) {
-      console.error(`FAIL ${error.stack || error.message}`);
-      app.exit(1);
-      return;
-    }
-    app.quit(); // as the app quits: state.json written before any window closes
+/** One DevTools connection (a page's WebSocket): send(method, params) → its result. */
+function devtools(url) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(url);
+    const waiting = new Map();
+    let next = 1;
+    socket.onmessage = (event) => {
+      const message = JSON.parse(String(event.data));
+      const entry = message.id && waiting.get(message.id);
+      if (!entry) return;
+      waiting.delete(message.id);
+      if (message.error) entry.reject(new Error(message.error.message)); else entry.resolve(message.result);
+    };
+    socket.onerror = () => reject(new Error(`No DevTools connection at ${url}`));
+    socket.onopen = () => resolve({
+      send: (method, params = {}) => new Promise((done, fail) => { const id = next++; waiting.set(id, { resolve: done, reject: fail }); socket.send(JSON.stringify({ id, method, params })); }),
+      close: () => { try { socket.close(); } catch { /* closed */ } },
+    });
   });
 }
+
+/** `expression` evaluated in the page, awaited (for at most `ms`). → its value */
+async function evaluate(page, expression, ms = STEP_MS) {
+  let timer;
+  const late = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`No answer within ${ms / 1000} s from: ${expression.slice(0, 120)}`)), ms); });
+  const { result, exceptionDetails } = await Promise.race([page.send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true }), late]).finally(() => clearTimeout(timer));
+  if (exceptionDetails) throw new Error(exceptionDetails.exception?.description || exceptionDetails.text);
+  return result.value;
+}
+
+async function main() {
+  process.exitCode = 1; // until every step has passed: Node ends with it if something is left waiting on nothing
+  if (!fs.existsSync(app)) throw new Error(`No app at ${app}: build it first (${linux ? 'npm run dist:linux' : 'npm run dist:win'}).`);
+  const folder = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-smoke-'));
+  const home = path.join(folder, 'home');
+  const userData = path.join(folder, 'user-data');
+  const work = path.join(folder, 'work');
+  for (const dir of [home, userData, work]) fs.mkdirSync(dir, { recursive: true });
+  let child = null;
+  let group = null; // Linux: the app's process group
+  let output = '';
+  try {
+    child = spawn(app, ['--remote-debugging-port=0', `--user-data-dir=${userData}`], {
+      env: {
+        ...process.env,
+        ENGELBART_HOME_DIR: home, ENGELBART_ROOT_DIR: path.join(home, '.engelbart'), ENGELBART_HEADLESS: '1',
+        ENGELBART_TOOLS: 'off', ENGELBART_SUMMARIES: 'off', ENGELBART_SANDBOXES: 'off', ENGELBART_WEB_PDFS: 'off', ENGELBART_UPDATES: 'off', ENGELBART_RUN_STEP: 'off',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+      detached: linux, // its own process group on Linux, so whatever it leaves running is stopped with it (below)
+    });
+    if (linux) group = child.pid;
+    const exited = new Promise((resolve) => child.once('exit', (code, signal) => resolve({ code, signal })));
+    for (const stream of [child.stdout, child.stderr]) stream.on('data', (chunk) => { output = (output + chunk).slice(-20_000); });
+    console.log(`Starting ${app}`);
+    // The port Chromium chose: printed, and written to DevToolsActivePort in the user data (a Windows app's printing can be lost).
+    const activePort = () => { try { return fs.readFileSync(path.join(userData, 'DevToolsActivePort'), 'utf8').split(/\r?\n/); } catch { return null; } };
+    const port = await until(async () => /DevTools listening on ws:\/\/[^:]+:(\d+)\//.exec(output)?.[1] || activePort()?.[0], 'the app to start (DevTools port)');
+
+    // 1. The window loads.
+    const target = await until(async () => {
+      const list = await (await fetch(`http://127.0.0.1:${port}/json/list`)).json();
+      return list.find((entry) => entry.type === 'page' && entry.url.startsWith('engelbart://app/index.html'));
+    }, 'the app window');
+    const page = await devtools(target.webSocketDebuggerUrl);
+    console.log(`DevTools on port ${port}`);
+    if (linux) { // the launcher execs the app in its own place: its arguments say whether the sandbox is off, and why
+      const args = fs.readFileSync(`/proc/${child.pid}/cmdline`, 'utf8').split('\0');
+      const sandbox = args.includes('--no-sandbox') ? 'off' : 'on';
+      const why = /starting without Chromium's sandbox: ([^\n]*)/.exec(output)?.[1];
+      console.log(`ok: Chromium's sandbox is ${sandbox}${why ? ` (${why})` : ''}`);
+      if (process.env.SMOKE_SANDBOX && process.env.SMOKE_SANDBOX !== sandbox) throw new Error(`Chromium's sandbox is ${sandbox}, not ${process.env.SMOKE_SANDBOX}.`);
+    }
+    await until(() => evaluate(page, '!!window.engelbartAPI && !!window.terminalAPI && !!document.querySelector("button")'), 'the window to load');
+    console.log('ok: the window loaded');
+    if (!fs.readdirSync(userData).length) throw new Error(`The app is not using the throwaway user data (${userData}).`);
+
+    // 2. A terminal session echoes a line back.
+    const session = await evaluate(page, `(async () => {
+      window.__smoke = '';
+      await terminalAPI.bootstrap(); // the window's terminal attached, as its pane does: output then comes to it
+      terminalAPI.onData((payload) => { window.__smoke += JSON.stringify(payload); });
+      return terminalAPI.createSession({ provider: 'shell', cwd: ${JSON.stringify(work)}, cols: 120, rows: 30 });
+    })()`);
+    console.log(`ok: a terminal session started (${session.shell})`);
+    await pause(1500); // the shell's own start
+    await evaluate(page, `terminalAPI.writeSession(${JSON.stringify(session.id)}, ${JSON.stringify(`echo ${LINE}-echo\r`)})`);
+    await until(() => evaluate(page, `window.__smoke.split(${JSON.stringify(`${LINE}-echo`)}).length > 2`), 'the terminal to echo the line back (typed, then printed)');
+    console.log('ok: the terminal echoed a line back');
+    await evaluate(page, `terminalAPI.closeSession(${JSON.stringify(session.id)})`);
+
+    // 3. A POSIX script through the login shell (Git for Windows' bash on Windows) prints its output: the tool check.
+    const checked = await evaluate(page, 'engelbartAPI.toolsCheck()');
+    const git = checked && checked.tools && checked.tools.git;
+    if (!git || git.status !== 'ready' || !git.path) {
+      let lookup = '';
+      if (linux) { // what the login shell itself answers, with the app's home (the check's own lookup, src/main/tools/detect.cjs)
+        const shell = process.env.SHELL || '/bin/bash';
+        try {
+          lookup = execFileSync(shell, ['-ilc', "printf '__mark__\\n'; type -aP git; echo \"PATH=$PATH\""], { env: { ...process.env, HOME: home }, encoding: 'utf8', timeout: 20_000, stdio: ['ignore', 'pipe', 'pipe'] });
+        } catch (error) {
+          lookup = `${error.message}\n${error.stdout || ''}${error.stderr || ''}`;
+        }
+        lookup = `\nThe login shell (${shell} -ilc, HOME=${home}) answers:\n${lookup}`;
+      }
+      throw new Error(`The tool check found no Git through the login shell: ${JSON.stringify(git)}${lookup}`);
+    }
+    if (process.platform === 'win32' && !/^[a-z]:\\/i.test(git.path)) throw new Error(`The tool check printed Git at ${git.path}, not a Windows path.`);
+    console.log(`ok: the login shell's script found Git ${git.version} at ${git.path}`);
+
+    // 4. The app quits cleanly when its window closes (on a Mac, where an app outlives its windows, when it is told to).
+    // Not waited for alone (0.1.19, run 38313878122): an app quitting before DevTools answers left Node waiting on
+    // nothing, so it ended with exit code 1 and no message.
+    await Promise.race([page.send('Runtime.evaluate', { expression: 'window.close()' }).catch(() => {}), exited, pause(5000)]);
+    page.close();
+    if (process.platform === 'darwin') {
+      const browser = await devtools(/DevTools listening on (ws:\/\/\S+)/.exec(output)?.[1] || `ws://127.0.0.1:${port}${activePort()[1]}`);
+      await Promise.race([browser.send('Browser.close').catch(() => {}), exited, pause(5000)]);
+      browser.close();
+    }
+    const { code, signal } = await Promise.race([exited, pause(STEP_MS).then(() => ({ code: null, signal: 'timeout' }))]);
+    if (code !== 0) throw new Error(`The app did not quit cleanly (exit code ${code}${signal ? `, ${signal}` : ''}).`);
+    child = null;
+    console.log('ok: the app quit cleanly');
+    process.exitCode = 0;
+  } catch (error) {
+    console.error(`\n${NAME} failed: ${error.message}\n\nThe app printed:\n${output}`);
+    process.exitCode = 1;
+  } finally {
+    if (child) child.kill();
+    if (group) try { process.kill(-group, 'SIGKILL'); } catch { /* the group is gone */ }
+    await pause(1000);
+    try { fs.rmSync(folder, { recursive: true, force: true }); } catch { /* left for the system to clear */ }
+    if (linux) process.exit(process.exitCode); // a helper process Chromium left holding the app's output open keeps Node waiting
+  }
+}
+
+main();

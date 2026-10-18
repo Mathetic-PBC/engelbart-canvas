@@ -76,7 +76,7 @@ test('a folder at a glance: notes per top folder, the daily-notes folder from Ob
   assert.equal(overview.images, 1);
   assert.equal(overview.dailyFolder, 'Journal');
   assert.deepEqual(overview.folders.map((entry) => [entry.name, entry.notes, entry.dated]), [['Journal', 3, 1], ['Research', 2, 0], ['Personal', 1, 0], ['attachments', 0, 0]]);
-  const files = readers.noteFiles(vault, { exclude: ['Journal', 'Personal'] }).map((file) => path.relative(vault, file)).sort();
+  const files = readers.noteFiles(vault, { exclude: ['Journal', 'Personal'] }).map((file) => path.relative(vault, file).split(path.sep).join('/')).sort();
   assert.deepEqual(files, ['Research/Idea.md', 'Research/Other note.md']);
   assert.deepEqual(readers.noteFiles(vault, { include: ['Personal'] }).map((file) => path.basename(file)), ['Secret.md']);
   assert.deepEqual(readers.linksIn(vault).map((link) => [link.url, link.count, link.notes]), [['https://example.org/paper', 1, ['Idea']]]);
@@ -225,7 +225,7 @@ test('a Markdown file as a note: Obsidian links become mentions, pictures are se
   const { body, images } = notes.convertMarkdown(fs.readFileSync(source, 'utf8'), { sourcePath: source, root: vault, index });
   assert.match(body, /builds on @\[Other note\] and @\[Third\]\./);
   assert.equal(images.length, 2, 'the embed found by name in the vault, the link by its relative path');
-  assert.deepEqual(images.map((image) => path.relative(vault, image.file)), ['attachments/pic.png', 'attachments/pic.png']);
+  assert.deepEqual(images.map((image) => path.relative(vault, image.file).split(path.sep).join('/')), ['attachments/pic.png', 'attachments/pic.png']);
   assert.match(body, /!\[pic\]\(engelbart-image:0\)/);
   assert.match(body, /!\[alt\]\(engelbart-image:1\)/);
   assert.match(notes.convertMarkdown('![[Idea]] and [x](Plan%20abcdef0123456789abcdef0123456789.md)').body, /^@\[Idea\] and @\[Plan\]$/);
@@ -1068,7 +1068,8 @@ test('MATH-110: the folder search keeps out of the protected folders macOS did n
   const agents = { turn: (args) => { if (args.meta && args.meta.job && args.meta.job.find) asked.push({ message: args.message, dirs: args.dirs }); return fake.turn(args); } };
   const answers = path.join(ctx.dataRoot, '.connect', 'folders.json');
   folderAccess.writeAnswers(ctx.dataRoot, { Desktop: 'allowed', Documents: 'denied' });
-  const { connect, state } = fakeConnect({ home: fresh, agents });
+  // The Mac's folder access, on every platform (off the Mac the search is told nothing is protected: the next test).
+  const { connect, state } = fakeConnect({ home: fresh, agents, platform: 'darwin' });
   let started = null;
   try {
     started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } } });
@@ -1090,7 +1091,7 @@ test('MATH-110: the folder search keeps out of the protected folders macOS did n
   // Zoom's usual places: Dropbox as a plain folder and what was allowed, never ~/Movies or ~/Documents.
   folderAccess.writeAnswers(ctx.dataRoot, { Downloads: 'allowed' });
   fs.mkdirSync(path.join(fresh, 'Dropbox'));
-  const zoom = fakeConnect({ home: fresh, agents });
+  const zoom = fakeConnect({ home: fresh, agents, platform: 'darwin' });
   try {
     started = await zoom.connect.start({ sources: { transcripts: { on: true, apps: ['Zoom'] } } });
     await until(zoom.state(started.id), (s) => findJobs(s, 'Zoom').every((job) => job.status === 'done') && findJobs(s, 'Zoom').length, 'the Zoom search');
@@ -1101,6 +1102,33 @@ test('MATH-110: the folder search keeps out of the protected folders macOS did n
     if (started) zoom.connect.stop(started.id);
     fs.rmSync(answers, { force: true });
   }
+});
+
+test('off the Mac (Windows, Linux) the folder search is told no folder is protected, and looks in Documents and Downloads too', async () => {
+  const fresh = fs.mkdtempSync(path.join(homeDir, 'find-free-'));
+  for (const dir of ['AppData', 'Desktop', 'Documents', 'Downloads', 'Projects']) fs.mkdirSync(path.join(fresh, dir), { recursive: true });
+  const fake = createFakeConnectAgents({ delayMs: 5 });
+  const asked = [];
+  const agents = { turn: (args) => { if (args.meta && args.meta.job && args.meta.job.find) asked.push(args.message); return fake.turn(args); } };
+  const answers = path.join(ctx.dataRoot, '.connect', 'folders.json');
+  folderAccess.writeAnswers(ctx.dataRoot, { Documents: 'denied' }); // a Mac's answer, which counts for nothing elsewhere
+  for (const platform of ['win32', 'linux']) {
+    const { connect, state } = fakeConnect({ home: fresh, agents, platform });
+    let started = null;
+    try {
+      started = await connect.start({ sources: { notes: { on: true, apps: ['Obsidian'] } } });
+      await until(state(started.id), (s) => !s.thinking && s.chat.some((entry) => entry.authorize), 'the Obsidian folder button');
+      const message = asked[asked.length - 1];
+      const look = message.match(/<look_in[^>]*>([^<]*)<\/look_in>/)[1].split(', ');
+      assert.deepEqual(look, ['~/Desktop', '~/Documents', '~/Downloads', '~/Projects'], `${platform}: every folder but AppData`);
+      assert.doesNotMatch(message, /macOS|Never look in|folders_allowed/, platform);
+      assert.match(message, /Skip hidden folders \(a vault's \.obsidian aside\) and ~\/AppData/);
+      assert.match(message, /Never Glob from the home folder itself/);
+    } finally {
+      if (started) connect.stop(started.id);
+    }
+  }
+  fs.rmSync(answers, { force: true });
 });
 
 test('an app\'s folder is looked for once a session, however often the scan runs again (MATH-117)', async () => {
@@ -2325,7 +2353,8 @@ test('the window\'s model, and the onboarding flow with Connect your library in 
 // Papers on this Mac (2026-10-08, "Agent onboarding": "add capability to search local papers ... the questions for this
 // should center around folders and genres of papers rather than individual ones").
 // MATH-110: macOS let Engelbart read every protected folder of `home` (Desktop, Documents, Downloads…), as after Continue.
-const allowAll = (home) => folderAccess.guard({ homeDir: home, answers: Object.fromEntries(folderAccess.protectedFolders({ homeDir: home }).map((folder) => [folder.id, 'allowed'])) });
+// The Mac's folder access, on every platform (off the Mac nothing is protected: connect-folder-access.test.cjs).
+const allowAll = (home) => folderAccess.guard({ platform: 'darwin', homeDir: home, answers: Object.fromEntries(folderAccess.protectedFolders({ platform: 'darwin', homeDir: home }).map((folder) => [folder.id, 'allowed'])) });
 
 const pdfHome = () => {
   const home = fs.realpathSync(fs.mkdtempSync(path.join(homeDir, 'pdfs-')));
@@ -2360,7 +2389,7 @@ test('PDFs on this Mac: the folders that hold them with counts, kinds and titles
   const scanned = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home, access: allowAll(home) });
   assert.equal(scanned.papers[LOCAL_PDFS].pdfs, 6);
   // MATH-110: macOS never asked (or Not now): nothing in Downloads or Documents is read, and the librarian is told why.
-  const unasked = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home })).papers[LOCAL_PDFS];
+  const unasked = (await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: true } }, { homeDir: home, platform: 'darwin' })).papers[LOCAL_PDFS];
   assert.equal(unasked.needs, 'folder');
   assert.deepEqual(unasked.notAllowed, ['Documents', 'Downloads']);
   const narrow = await scanFor({ sources: { papers: { on: true, apps: [LOCAL_PDFS], folders: [] } }, permissions: { files: false } }, { homeDir: home });
@@ -2388,6 +2417,9 @@ test('PDFs on this Mac with a project: each folder\'s examples begin with the PD
   const home = pdfHome();
   const old = new Date('2020-01-01T00:00:00Z');
   fs.utimesSync(path.join(home, 'Downloads', '2310.01234v2.pdf'), old, old); // the matching paper is the oldest in Downloads
+  // Downloads' others a minute older than ~/Documents' (made just after them): Windows' file times can tie within a few ms.
+  const minute = new Date(Date.now() - 60_000);
+  for (const name of ['Invoice-2026-09.pdf', 'scan.pdf']) fs.utimesSync(path.join(home, 'Downloads', name), minute, minute);
   const roots = [path.join(home, 'Downloads'), path.join(home, 'Documents')];
   const before = readers.pdfFolders(roots, { homeDir: home });
   assert.deepEqual(before.folders.map((entry) => entry.folder), ['~/Documents/Research/HCI', '~/Downloads'], 'most PDFs first, as before');
@@ -2424,6 +2456,9 @@ const periodHome = () => {
   const receipt = path.join(home, 'Downloads', 'Receipt debugging tutor.pdf'); // personal, shares the project's words
   fs.writeFileSync(receipt, '%PDF-1.4\n%%EOF\n');
   agePdf(receipt, 800);
+  // In the period, a day older than HCI's: two PDFs each, the folders go by their newest, and on Windows times written
+  // together can tie (port, 0.1.19).
+  for (const name of ['Invoice-2026-09.pdf', 'scan.pdf']) agePdf(path.join(home, 'Downloads', name), 1);
   return home;
 };
 const tutor = { name: 'Debugging tutor', description: 'How novices debug their code with scaffolding from an LLM' };

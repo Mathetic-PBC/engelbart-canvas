@@ -59,9 +59,11 @@ test('sourceOf tells how a program was installed from where its file really is',
   assert.equal(sourceOf('codex', '/opt/homebrew/Caskroom/codex/0.155.1/bin/codex'), 'homebrew');
   assert.equal(sourceOf('codex', '/Users/h/.codex/packages/standalone/releases/0.155.1/bin/codex'), 'standalone');
   assert.equal(sourceOf('claude', '/Users/h/.nvm/versions/node/v22/lib/node_modules/@anthropic-ai/claude-code/cli.js'), 'npm');
-  assert.equal(sourceOf('git', '/usr/bin/git'), 'apple');
+  assert.equal(sourceOf('git', '/usr/bin/git', 'darwin'), 'apple');
+  assert.equal(sourceOf('git', '/usr/bin/git', 'linux'), 'other', 'Linux\'s /usr/bin/git is Git itself (2026-10-07)');
   assert.equal(sourceOf('git', '/opt/homebrew/Cellar/git/2.51.0/bin/git'), 'homebrew');
-  assert.ok(knownPlaces('claude', '/Users/h').includes('/Users/h/.local/bin/claude'));
+  if (process.platform === 'win32') assert.ok(knownPlaces('claude', 'C:\\Users\\h').includes('C:\\Users\\h\\.local\\bin\\claude.exe')); // Windows' own places (test/windows-platform.test.cjs)
+  else assert.ok(knownPlaces('claude', '/Users/h').includes('/Users/h/.local/bin/claude'));
   assert.deepEqual(knownPlaces('git', '/Users/h'), []);
 });
 
@@ -100,7 +102,7 @@ function fakeRunner({ lookup = '', shell = {}, exec = {}, fish = false } = {}) {
 test('detectTools: never runs Apple\'s git stub without a developer folder (it would open Apple\'s installer)', async () => {
   const home = temp();
   const runner = fakeRunner({ lookup: '@tool git\n/usr/bin/git\n@tool claude\n@tool codex\n@env DISABLE_AUTOUPDATER=\n', exec: { '/usr/bin/xcode-select -p': { code: 2, stderr: 'xcode-select: error: unable to get active developer directory' } } });
-  const found = await detectTools({ runner, only: ['git'], home });
+  const found = await detectTools({ runner, only: ['git'], home, platform: 'darwin' });
   assert.deepEqual([found.git.status, found.git.installed], ['missing', false]);
   assert.ok(!runner.calls.some((call) => call.kind === 'exec' && call.file === '/usr/bin/git'), 'the stub was not run');
 });
@@ -113,9 +115,9 @@ test('detectTools: Apple git is read from the developer folder, and an unaccepte
   const realGit = path.join(developer, 'usr', 'bin', 'git');
   const base = { '/usr/bin/xcode-select -p': { stdout: `${developer}\n` }, [`${realGit} --version`]: { stdout: 'git version 2.50.1 (Apple Git-155)\n' } };
   const lookup = '@tool git\n/usr/bin/git\n@tool claude\n@tool codex\n';
-  const good = await detectTools({ runner: fakeRunner({ lookup, exec: { ...base, '/usr/bin/git --version': { stdout: 'git version 2.50.1' } } }), only: ['git'], home });
+  const good = await detectTools({ runner: fakeRunner({ lookup, exec: { ...base, '/usr/bin/git --version': { stdout: 'git version 2.50.1' } } }), only: ['git'], home, platform: 'darwin' });
   assert.deepEqual([good.git.status, good.git.version, good.git.source, good.git.path], ['ready', '2.50.1', 'apple', '/usr/bin/git']);
-  const license = await detectTools({ runner: fakeRunner({ lookup, exec: { ...base, '/usr/bin/git --version': { code: 69, stderr: 'You have not agreed to the Xcode license agreements.' } } }), only: ['git'], home });
+  const license = await detectTools({ runner: fakeRunner({ lookup, exec: { ...base, '/usr/bin/git --version': { code: 69, stderr: 'You have not agreed to the Xcode license agreements.' } } }), only: ['git'], home, platform: 'darwin' });
   assert.equal(license.git.status, 'failed');
   assert.match(license.git.error, /license/);
 });
@@ -125,9 +127,17 @@ test('detectTools: with no Git of the person\'s own, the one that came with Enge
   const bundled = '/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin/git';
   const exec = { '/usr/bin/xcode-select -p': { code: 2 }, [`${bundled} --version`]: { stdout: 'git version 2.53.0\n' } };
   const runner = fakeRunner({ lookup: '@tool git\n/usr/bin/git\n@tool claude\n@tool codex\n', exec });
-  const found = await detectTools({ runner, only: ['git'], home, bundledGit: bundled });
+  const found = await detectTools({ runner, only: ['git'], home, bundledGit: bundled, platform: 'darwin' });
   assert.deepEqual([found.git.status, found.git.installed, found.git.source, found.git.path, found.git.version, found.git.onPath], ['ready', true, 'bundled', bundled, '2.53.0', false]);
   assert.ok(!runner.calls.some((call) => call.kind === 'exec' && call.file === '/usr/bin/git'), 'the stub was not run');
+});
+
+test('detectTools: on Linux /usr/bin/git is Git itself, read as any other, and xcode-select is never asked (2026-10-07)', async () => {
+  const home = temp();
+  const runner = fakeRunner({ lookup: '@tool git\n/usr/bin/git\n@tool claude\n@tool codex\n@env DISABLE_AUTOUPDATER=\n', exec: { '/usr/bin/git --version': { stdout: 'git version 2.43.0\n' } } });
+  const found = await detectTools({ runner, only: ['git'], home, platform: 'linux' });
+  assert.deepEqual([found.git.status, found.git.installed, found.git.path, found.git.version, found.git.onPath, found.git.source], ['ready', true, '/usr/bin/git', '2.43.0', true, 'other']);
+  assert.ok(!runner.calls.some((call) => call.kind === 'exec' && /xcode-select/.test(call.file)), 'no xcode-select');
 });
 
 test('detectTools: the person\'s own Git is used when it works; Engelbart\'s only when theirs is broken or too old', async () => {
@@ -151,7 +161,7 @@ test('detectTools: the person\'s own Git is used when it works; Engelbart\'s onl
   assert.deepEqual([brokenBoth.git.status, brokenBoth.git.path], ['failed', '/opt/homebrew/bin/git'], 'their own is reported when neither runs');
 });
 
-test('detectTools: an agent off the login PATH is found where its installer puts it, run by full path, and asked about sign-in', async () => {
+test('detectTools: an agent off the login PATH is found where its installer puts it, run by full path, and asked about sign-in', { skip: process.platform === 'win32' && 'macOS install locations (~/.local/bin/claude); Windows\' are tested in test/windows-platform.test.cjs' }, async () => {
   const home = temp();
   fs.mkdirSync(path.join(home, '.local', 'bin'), { recursive: true });
   const claude = path.join(home, '.local', 'bin', 'claude');
@@ -299,7 +309,7 @@ test('roomFor refuses to start an install the disk cannot hold', () => {
   }
 });
 
-test('installAgent downloads the vendor\'s installer to a file first: a failed download is not a finished install', async () => {
+test('installAgent downloads the vendor\'s installer to a file first: a failed download is not a finished install', { skip: process.platform === 'win32' && 'macOS installers (curl, then bash); Windows uses PowerShell\'s and npm (test/windows-platform.test.cjs)' }, async () => {
   const runner = fakeRunner({ shell: { 'curl -fsSL': { code: 6, stdout: 'curl: (6) Could not resolve host: claude.ai' } } });
   const actions = createActions({ runner, home: os.homedir(), tmpDir: temp() });
   const out = await actions.installAgent('claude');
@@ -311,7 +321,7 @@ test('installAgent downloads the vendor\'s installer to a file first: a failed d
   assert.equal((await codex.installAgent('codex')).ok, true);
 });
 
-test('installGit: Apple\'s dialog, then waiting until git arrives or the installer is closed', async () => {
+test('installGit: Apple\'s dialog, then waiting until git arrives or the installer is closed', { skip: process.platform === 'win32' && 'macOS only: Apple\'s Command Line Tools installer' }, async () => {
   const developer = path.join(temp(), 'CommandLineTools');
   let clock = 0;
   const sleep = async (ms) => { clock += ms; };
@@ -344,7 +354,7 @@ test('installGit: Apple\'s dialog, then waiting until git arrives or the install
   }
 });
 
-test('rollback points a launcher back at the version that worked, in one rename', () => {
+test('rollback points a launcher back at the version that worked, in one rename', { skip: process.platform === 'win32' && 'macOS installers link the launcher; on Windows the rollback copies (test/windows-platform.test.cjs)' }, () => {
   const home = temp();
   const versions = path.join(home, '.local', 'share', 'claude', 'versions');
   fs.mkdirSync(versions, { recursive: true });
@@ -470,7 +480,7 @@ test('manager: the person\'s Skip and pin written by hand into config.json are n
   assert.deepEqual([readConfig(root).tools.git.skip, readConfig(root).tools.claude.pin], [true, '2.1.278']);
 });
 
-test('manager: an update that leaves the launcher broken is put back to the version that worked', async () => {
+test('manager: an update that leaves the launcher broken is put back to the version that worked', { skip: process.platform === 'win32' && 'macOS installers link the launcher; on Windows the rollback copies (test/windows-platform.test.cjs)' }, async () => {
   const home = temp();
   const versions = path.join(home, '.local', 'share', 'claude', 'versions');
   fs.mkdirSync(versions, { recursive: true });
@@ -704,7 +714,7 @@ function realShell() {
   return { root, bin, runner: createRunner({ environment: { HOME: root, ZDOTDIR: root, SHELL: '/bin/zsh', PATH: `${bin}:/usr/bin:/bin` } }) };
 }
 
-test('real zsh: an alias is reported to the terminal without its definition, and a hidden run is never given one', async () => {
+test('real zsh: an alias is reported to the terminal without its definition, and a hidden run is never given one', { skip: process.platform === 'win32' && 'macOS only: runs the real zsh and its aliases' }, async () => {
   const { root, bin, runner } = realShell();
   fs.writeFileSync(path.join(bin, 'codex'), '#!/bin/sh\ncase "$1" in --version) echo "codex-cli 0.155.1";; login) echo "Logged in using ChatGPT";; esac\n', { mode: 0o700 });
   fs.writeFileSync(path.join(root, '.zshrc'), "alias claude='printf super-secret-definition'\n");

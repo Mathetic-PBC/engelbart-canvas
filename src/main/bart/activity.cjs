@@ -25,7 +25,7 @@ function pathLabeller(dirs = []) {
     if (!path.isAbsolute(full)) return tail(full.replace(/^\.\//, '')); // already relative to where the agent stands
     for (const dir of dirs) {
       const inside = path.relative(dir, full);
-      if (inside && !inside.startsWith('..') && !path.isAbsolute(inside)) return tail(inside);
+      if (inside && !inside.startsWith('..') && !path.isAbsolute(inside)) return tail(inside.split(path.sep).join('/')); // with /, on Windows too
     }
     return path.basename(full);
   };

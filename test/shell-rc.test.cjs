@@ -19,7 +19,7 @@ function temporaryDirectory(t) {
   return directory;
 }
 
-test('the wrappers are written once; sessions launch through an executable launcher named after the shell', (t) => {
+test('the wrappers are written once; sessions launch through an executable launcher named after the shell', { skip: process.platform === 'win32' && 'POSIX terminals only: the zsh launcher; a Windows terminal starts PowerShell as it is' }, (t) => {
   const userData = temporaryDirectory(t);
   const dir = prepareZshDir(userData);
   assert.equal(dir, path.join(userData, 'zsh'));

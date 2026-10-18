@@ -1,6 +1,6 @@
 'use strict';
 
-// The app icon, drawn by Chromium and saved as build/icon.png (1024 px) and build/icon.icns, which
+// The app icon, drawn by Chromium and saved as build/icon.png (1024 px) and build/icon.icns (and build/icon.ico), which
 // electron-builder.config.cjs uses. Since 2026-09-29 it is Hudson's artwork (a serif E lit green and blue on black,
 // square and full bleed), kept as design/assets/app-icon.png and set in macOS's icon shape; before, a placeholder E with a
 // blue caret. Given a path, that image (any square picture) becomes the artwork first:
@@ -11,6 +11,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 const { app, BrowserWindow } = require('electron');
+const { writeIco } = require('./make-icon-ico.cjs');
 
 const SIZE = 1024;
 const BUILD = path.join(__dirname, '..', 'build');
@@ -47,6 +48,7 @@ app.whenReady().then(async () => {
   }
   execFileSync('iconutil', ['-c', 'icns', set, '-o', path.join(BUILD, 'icon.icns')]);
   fs.rmSync(set, { recursive: true, force: true });
-  console.log('build/icon.png, build/icon.icns');
+  writeIco(ART, path.join(BUILD, 'icon.ico')); // Windows: the artwork square, not in macOS's shape
+  console.log('build/icon.png, build/icon.icns, build/icon.ico');
   app.quit();
 }).catch((error) => { console.error(error); app.exit(1); });

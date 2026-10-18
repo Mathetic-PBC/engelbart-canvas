@@ -36,6 +36,26 @@ const signed = developerId();
 const source = process.env.ENGELBART_APP_SOURCE || null;
 const downloads = process.env.ENGELBART_DOWNLOAD_URL ? `${process.env.ENGELBART_DOWNLOAD_URL.replace(/\/+$/, '')}/` : null;
 
+/** What a Windows app (release/win-unpacked) must hold: node-pty's Windows modules, and every package it loads. */
+function afterPackWindows(context) {
+  const prebuilds = path.join(context.appOutDir, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds', `win32-${Arch[context.arch]}`);
+  for (const file of ['pty.node', 'conpty.node', path.join('conpty', 'conpty.dll'), path.join('conpty', 'OpenConsole.exe')]) {
+    if (!fs.existsSync(path.join(prebuilds, file))) throw new Error(`The Windows app has no ${file} for node-pty in ${prebuilds}: no terminal could start.`);
+  }
+  assertAppModules(context.appOutDir, `The Windows ${Arch[context.arch]} app`);
+}
+
+/** What a Linux app (release/linux-unpacked) must hold: node-pty's module (staged by scripts/package-linux.mjs), the
+ *  launcher that decides on Chromium's sandbox (build/linux/engelbart-launch), and every package it loads. */
+function afterPackLinux(context) {
+  const pty = path.join(context.appOutDir, 'resources', 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds', `linux-${Arch[context.arch]}`, 'pty.node');
+  if (!fs.existsSync(pty)) throw new Error(`The Linux app has no node-pty module at ${pty}: no terminal could start (build it with \`npm run dist:linux\`).`);
+  const launcher = path.join(context.appOutDir, 'engelbart-launch');
+  if (!fs.existsSync(launcher)) throw new Error(`The Linux app has no launcher at ${launcher}.`);
+  fs.chmodSync(launcher, 0o755);
+  assertAppModules(context.appOutDir, `The Linux ${Arch[context.arch]} app`);
+}
+
 module.exports = {
   appId: 'dev.engelbart.desktop', // the id every earlier build had: macOS keeps its permissions and settings under it
   productName: 'Engelbart', // names ~/Library/Application Support/Engelbart, where @bart's threads and settings are
@@ -72,17 +92,16 @@ module.exports = {
     // …and never draws, so not @napi-rs/canvas, pdf.js's optional drawing module (npm installs it for one architecture).
     '!node_modules/@napi-rs{,/**}',
     '!node_modules/**/*.map',
-    // node-pty: its prebuilt modules (N-API, so Electron loads them as they are) for both Macs; no build folder, so
-    // node-pty looks in prebuilds/, and no sources or Windows binaries.
+    // node-pty: its prebuilt modules (N-API, so Electron loads them as they are); no build folder, so node-pty looks in
+    // prebuilds/, and no sources. Which platform's prebuilds stay: mac.files, win.files.
     '!node_modules/node-pty/{build,deps,src,third_party,scripts,node-addon-api,binding.gyp}{,/**}',
-    '!node_modules/node-pty/prebuilds/win32-*{,/**}',
   ],
   asarUnpack: ['node_modules/node-pty/**', 'node_modules/@electric-sql/pglite/**'],
   npmRebuild: false, // nothing to compile: node-pty's prebuilt modules are used
   electronLanguages: ['en'], // Chromium's own strings in English only, as Engelbart's are (about 45 MB less)
-  // Engelbart's own Git for the architecture being built (scripts/fetch-git.mjs; src/main/tools/bundled-git.cjs).
-  extraResources: [{ from: 'vendor/git/darwin-${arch}', to: 'git', filter: ['**/*', '!.engelbart-git.json'] }],
   afterPack: (context) => {
+    if (context.electronPlatformName === 'win32') { afterPackWindows(context); return; }
+    if (context.electronPlatformName === 'linux') { afterPackLinux(context); return; }
     // node-pty's prebuilt spawn-helper comes from npm without its execute bit; without it no terminal starts.
     const unpacked = path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`, 'Contents', 'Resources', 'app.asar.unpacked', 'node_modules', 'node-pty', 'prebuilds');
     for (const dir of fs.existsSync(unpacked) ? fs.readdirSync(unpacked) : []) {
@@ -95,6 +114,9 @@ module.exports = {
     assertAppModules(path.join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`), `The ${Arch[context.arch]} app`);
   },
   mac: {
+    files: ['!node_modules/node-pty/prebuilds/win32-*{,/**}'], // both Macs' prebuilds, no Windows binaries
+    // Engelbart's own Git for the architecture being built (scripts/fetch-git.mjs; src/main/tools/bundled-git.cjs).
+    extraResources: [{ from: 'vendor/git/darwin-${arch}', to: 'git', filter: ['**/*', '!.engelbart-git.json'] }],
     target: [
       { target: 'dmg', arch: ['arm64', 'x64'] },
       { target: 'zip', arch: ['arm64', 'x64'] }, // what the install command and updates download
@@ -114,6 +136,31 @@ module.exports = {
       NSRemovableVolumesUsageDescription: 'Engelbart’s terminals and agents work in the folders you choose.',
       NSNetworkVolumesUsageDescription: 'Engelbart’s terminals and agents work in the folders you choose.',
     },
+  },
+  // Windows (2026-10-05, docs/windows-port.md): an installer and a zip for x64, unsigned. No Git inside: Engelbart runs
+  // with Git for Windows, whose bash runs its scripts (src/main/terminal/launch.cjs). No updates either (src/main/updates.cjs).
+  win: {
+    files: ['!node_modules/node-pty/prebuilds/{darwin-*,win32-arm64}{,/**}', '!node_modules/node-pty/prebuilds/**/*.pdb'],
+    target: [
+      { target: 'nsis', arch: ['x64'] },
+      { target: 'zip', arch: ['x64'] },
+    ],
+    icon: 'build/icon.ico',
+  },
+  // Linux (2026-10-07, docs/windows-port-log.md "Linux"): an AppImage for x64, which the install command unpacks (so no
+  // FUSE is needed) and starts through engelbart-launch. Like Windows, no Git inside: the system's, and no updates.
+  linux: {
+    files: ['!node_modules/node-pty/prebuilds/{darwin-*,win32-*}{,/**}'],
+    target: [{ target: 'AppImage', arch: ['x64'] }],
+    executableName: 'engelbart',
+    icon: 'build/icon.png',
+    category: 'Development',
+    synopsis: 'Tools for steering coding agents',
+    extraFiles: [{ from: 'build/linux/engelbart-launch', to: 'engelbart-launch' }],
+  },
+  nsis: {
+    oneClick: false, // asks where to install, for this user or everyone
+    allowToChangeInstallationDirectory: true,
   },
   dmg: {
     title: 'Engelbart ${version}',

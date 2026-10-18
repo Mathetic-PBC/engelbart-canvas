@@ -14,7 +14,11 @@ import { fileURLToPath } from 'node:url';
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const files = fs.readdirSync(path.join(root, 'test')).filter((name) => name.endsWith('.test.cjs')).sort().map((name) => path.join('test', name));
 const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'eb-test-')); // short: paths made inside it stay short
-const child = spawn(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: root, stdio: 'inherit', env: { ...process.env, TMPDIR: scratch } });
+// Windows (2026-10-05, docs/windows-port.md): os.tmpdir() reads TEMP and TMP there, not TMPDIR; and Git for Windows'
+// own settings (autocrlf, its credential helper) stay out of the repositories the tests make, as a Mac's have nothing
+// (the app's git drops GIT_* variables, so CI also sets core.autocrlf false: .github/workflows/ci.yml).
+const windows = process.platform === 'win32' ? { TEMP: scratch, TMP: scratch, GIT_CONFIG_NOSYSTEM: '1' } : {};
+const child = spawn(process.execPath, ['--test', ...process.argv.slice(2), ...files], { cwd: root, stdio: 'inherit', env: { ...process.env, TMPDIR: scratch, ...windows } });
 for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) process.on(signal, () => child.kill(signal));
 child.on('exit', (code, signal) => {
   try { fs.rmSync(scratch, { recursive: true, force: true }); } catch { /* left for macOS to clear */ }

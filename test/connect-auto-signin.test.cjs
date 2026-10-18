@@ -141,6 +141,20 @@ test('Select all with ChatGPT, Claude, Google Drive and Gmail not signed in: one
   assert.deepEqual(opened, ['ChatGPT window', 'Claude window', 'Google Docs window'], 'Gmail signed in with Drive');
 });
 
+test('off the Mac (port, 0.1.19): Google rows just ticked open Engelbart\'s window, never the browser, and a closed window ends the chain', async () => {
+  const m = await model();
+  for (const platform of ['win32', 'linux']) {
+    const rows = [['notes', 'Google Docs'], ['email', 'Gmail'], ['chats', 'ChatGPT']];
+    const { turnedDown, opened, answer, settle } = chainOf(m, { state: await picksWith(m, rows), platform });
+    const done = turnedDown(rows.map(([id, app]) => ({ id, app })));
+    await settle();
+    assert.deepEqual(opened, ['Google Docs window'], `${platform}: Drive and Gmail share the one window`);
+    await answer('Google Docs', 'closed');
+    await done; // nothing left waiting
+    assert.deepEqual(opened, ['Google Docs window'], `${platform}: closed without signing in stops it; ChatGPT keeps its Sign in`);
+  }
+});
+
 test('a window closed without signing in stops the chain; a window replaced by another, or a modal gone unanswered, does not', async () => {
   const m = await model();
   const rows = [['chats', 'ChatGPT'], ['chats', 'Claude'], ['chats', 'Grok'], ['chats', 'Perplexity']];

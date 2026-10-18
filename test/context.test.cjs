@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { resolveShell } = require('../src/main/terminal/launch.cjs');
 const db = require('../src/main/store/db.cjs');
 const { ensureHome } = require('../src/main/store/home.cjs');
 const projects = require('../src/main/store/projects.cjs');
@@ -229,12 +230,13 @@ test('providers: switched by the config on every call, both held to the subscrip
   const viaCodex = await summarize({ name: 'Note', text: 'body', currentSummary: 'old' });
   assert.equal(viaCodex.summary, 'From Codex.');
   assert.deepEqual([viaCodex.meta.provider, viaCodex.meta.model, viaCodex.meta.effort, viaCodex.meta.usage.cached_input_tokens], ['openai', 'gpt-5.6-luna', 'high', 8960]);
-  assert.deepEqual([seen.file, seen.args[0]], ['/bin/zsh', '-ilc']);
+  assert.deepEqual([seen.file, seen.args[0]], [process.platform === 'win32' ? resolveShell(environment) : '/bin/zsh', '-ilc']); // Windows: Git for Windows' bash
   for (const flag of ['codex exec', '--skip-git-repo-check', '--ephemeral', '-s read-only', `model_reasoning_effort="high"`, 'project_doc_max_bytes=0', '--json']) assert.ok(seen.args[1].includes(flag), flag);
   assert.ok(!seen.args[1].includes('body'), 'the note never appears on a command line');
   assert.equal(seen.env.CODEX_HOME, codexHome, 'a private CODEX_HOME: none of your MCP servers, hooks or AGENTS.md');
   assert.equal(fs.readFileSync(path.join(codexHome, 'AGENTS.md'), 'utf8'), SUMMARY_SYSTEM_PROMPT, 'the system prompt is that home\'s AGENTS.md');
-  assert.equal(fs.readlinkSync(path.join(codexHome, 'auth.json')), authFile, 'your sign-in is linked, not copied');
+  if (process.platform === 'win32') assert.equal(fs.statSync(path.join(codexHome, 'auth.json')).ino, fs.statSync(authFile).ino, 'your sign-in is hard-linked, not copied'); // Windows: no symlink without admin rights
+  else assert.equal(fs.readlinkSync(path.join(codexHome, 'auth.json')), authFile, 'your sign-in is linked, not copied');
   assert.deepEqual([seen.env.OPENAI_API_KEY, seen.env.ANTHROPIC_API_KEY, seen.env.CLAUDECODE], [undefined, undefined, undefined], 'no API key, no outer agent session');
   assert.match(seen.input, /<current_summary>\nold/);
 

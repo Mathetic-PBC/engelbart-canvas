@@ -83,7 +83,7 @@ test('device flow: a code, the window, waiting (and slowing down when told), the
 
   const kept = fs.readFileSync(file, 'utf8');
   assert.equal(kept.includes('ghu_first') || kept.includes('ghr_first'), false, 'the tokens are never written in the clear');
-  assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600');
+  if (process.platform !== 'win32') assert.equal((fs.statSync(file).mode & 0o777).toString(8), '600'); // Windows has no such modes (its user folder's ACLs keep it)
   const later = { t: 1_000_000 + 60 * 1000 };
   const again = createGithub({ fetch: async () => reply(500, {}), settings: () => ({ clientId: CLIENT }), file, crypt, now: () => later.t });
   assert.equal(again.status().login, 'hudsonmp', 'a restart is still signed in');

@@ -34,7 +34,8 @@ function loadAsar() {
 function checkAppModules(asarPath) {
   const asar = loadAsar();
   const files = new Set(asar.listPackage(asarPath).map((file) => file.split(path.sep).join('/')));
-  const readJson = (file) => JSON.parse(asar.extractFile(asarPath, file.replace(/^\//, '')).toString('utf8'));
+  // asar names files with the platform's separator (\ on Windows); the paths here use /.
+  const readJson = (file) => JSON.parse(asar.extractFile(asarPath, file.replace(/^\//, '').split('/').join(path.sep)).toString('utf8'));
   // The folder `name` resolves to from package folder `dir` ('' is the app), as Node looks: nearest node_modules first.
   const resolve = (dir, name) => {
     for (let at = dir; ; at = at.slice(0, at.lastIndexOf('/node_modules/'))) {
@@ -57,9 +58,14 @@ function checkAppModules(asarPath) {
   return { checked: seen.size, missing };
 }
 
-/** The same for an app folder (Engelbart.app). Throws when anything is missing, naming each and why it is needed. */
+/**
+ * The same for an app folder (Engelbart.app, or Windows' win-unpacked, which keeps app.asar in resources/). Throws when
+ * anything is missing, naming each and why it is needed.
+ */
 function assertAppModules(appPath, label = path.basename(appPath)) {
-  const asarPath = path.join(appPath, 'Contents', 'Resources', 'app.asar');
+  const mac = path.join(appPath, 'Contents', 'Resources', 'app.asar');
+  const windows = path.join(appPath, 'resources', 'app.asar');
+  const asarPath = !fs.existsSync(mac) && fs.existsSync(windows) ? windows : mac;
   if (!fs.existsSync(asarPath)) throw new Error(`${label}: no app.asar at ${asarPath}`);
   const { checked, missing } = checkAppModules(asarPath);
   if (missing.length) {

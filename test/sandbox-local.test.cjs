@@ -24,7 +24,7 @@ test('subscription environment excludes every API, OAuth, parent-session and Ele
 
 test('local Claude missing from the login shell\'s PATH is found where its installer put it (a new account, 2026-09-29)', async () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-local-claude-'));
-  const launcher = path.join(home, '.local', 'bin', 'claude');
+  const launcher = path.join(home, '.local', 'bin', process.platform === 'win32' ? 'claude.exe' : 'claude'); // where each installer puts it
   fs.mkdirSync(path.dirname(launcher), { recursive: true });
   fs.writeFileSync(launcher, '#!/bin/sh\n', { mode: 0o755 });
   const asked = [];
@@ -56,10 +56,10 @@ test('CLI streams messages, requires connected sandbox tools and a successful re
   let directory, seen, input = '', messages = [];
   const spawnProcess = (file, args, options) => {
     seen = { file, args, options }; directory = options.cwd;
-    assert.equal(fs.statSync(directory).mode & 0o777, 0o700);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(directory).mode & 0o777, 0o700); // Windows has no such modes
     const config = JSON.parse(fs.readFileSync(args[args.indexOf('--mcp-config') + 1]));
     assert.equal(config.mcpServers.canvas.env.ELECTRON_RUN_AS_NODE, '1');
-    assert.equal(fs.statSync(config.mcpServers.canvas.args[1]).mode & 0o777, 0o600);
+    if (process.platform !== 'win32') assert.equal(fs.statSync(config.mcpServers.canvas.args[1]).mode & 0o777, 0o600);
     const child = new EventEmitter();
     child.stdout = new PassThrough(); child.stderr = new PassThrough(); child.stdin = new PassThrough();
     child.stdin.on('data', (chunk) => { input += chunk; });

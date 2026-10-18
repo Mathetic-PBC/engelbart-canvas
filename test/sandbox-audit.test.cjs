@@ -79,7 +79,7 @@ for (const failure of [false, true]) {
   });
 }
 
-test('npm audit discovery, vulnerability exit codes, limits and non-mutating commands', () => {
+test('npm audit discovery, vulnerability exit codes, limits and non-mutating commands', { skip: process.platform === 'win32' && 'E2B sandbox helper: it runs in the sandbox\'s Linux, never on Windows, and needs POSIX Python (fcntl, os.killpg)' }, () => {
   const result = spawnSync('python3', [path.join(__dirname, 'sandbox_audit_check.py')], {
     encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' },
   });

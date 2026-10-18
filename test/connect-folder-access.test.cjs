@@ -3,6 +3,7 @@
 // MATH-110 (2026-10-11): macOS's folder access asked for once, on Connect your library's choose screen
 // (src/main/connect/folder-access.cjs): which protected folders a run would read, asking about them one at a time, the
 // answers kept in <dataRoot>/.connect/folders.json, the PDF scan keeping out of the ones not allowed, and the panel's words.
+// The Mac's behaviour is checked on every platform (platform: 'darwin'); off the Mac nothing is protected (the last test).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -14,8 +15,9 @@ const folderAccess = require('../src/main/connect/folder-access.cjs');
 const { pdfsAtAGlance } = require('../src/main/connect/scan.cjs');
 const { LOCAL_PDFS } = require('../src/shared/connect-sources.cjs');
 
-const HOME = '/Users/ada';
-const DATA = '/Users/ada/.engelbart';
+// Resolved, so that on Windows (where these run too) it is the absolute path guard() compares with: D:\Users\ada.
+const HOME = path.resolve('/Users/ada');
+const DATA = path.join(HOME, '.engelbart');
 
 /**
  * A fake fs: `dirs` the folders that are there, `denied` the ones macOS says no to (EPERM on readdir), `files` path →
@@ -58,7 +60,7 @@ const pdfChoices = (files = true) => ({ sources: { papers: { on: true, apps: [LO
 
 test('protectedFolders: only those on this Mac, by the names the panel shows', () => {
   const fs = fakeFs({ dirs: MAC });
-  assert.deepEqual(folderAccess.protectedFolders({ homeDir: HOME, fs }).map((folder) => [folder.id, folder.name]), [
+  assert.deepEqual(folderAccess.protectedFolders({ platform: 'darwin', homeDir: HOME, fs }).map((folder) => [folder.id, folder.name]), [
     ['Desktop', 'Desktop'], ['Documents', 'Documents'], ['Downloads', 'Downloads'],
     [path.join('Library', 'CloudStorage', 'GoogleDrive-ada@lab.org'), 'Google Drive'],
   ], 'no iCloud Drive here, and ~/Papers is not protected');
@@ -67,9 +69,9 @@ test('protectedFolders: only those on this Mac, by the names the panel shows', (
 
 test('needed(): PDFs ticked with file access → every protected folder here; a repo under ~/Documents → Documents; nothing ticked → none; asked before → not again', () => {
   const fs = fakeFs({ dirs: MAC });
-  const ids = (choices) => folderAccess.needed(choices, { homeDir: HOME, dataRoot: DATA, fs }).map((folder) => folder.id);
+  const ids = (choices) => folderAccess.needed(choices, { platform: 'darwin', homeDir: HOME, dataRoot: DATA, fs }).map((folder) => folder.id);
   assert.deepEqual(ids(pdfChoices()), ['Desktop', 'Documents', 'Downloads', path.join('Library', 'CloudStorage', 'GoogleDrive-ada@lab.org')]);
-  assert.deepEqual(folderAccess.needed(pdfChoices(), { homeDir: HOME, dataRoot: DATA, fs }).map((folder) => folder.name), ['Desktop', 'Documents', 'Downloads', 'Google Drive']);
+  assert.deepEqual(folderAccess.needed(pdfChoices(), { platform: 'darwin', homeDir: HOME, dataRoot: DATA, fs }).map((folder) => folder.name), ['Desktop', 'Documents', 'Downloads', 'Google Drive']);
   assert.deepEqual(ids(pdfChoices(false)), [], 'PDFs without file access read only the folders picked');
   assert.deepEqual(ids({ sources: { code: { on: true, apps: [], folders: [at('Documents', 'tutor')] } } }), ['Documents']);
   assert.deepEqual(ids({ sources: { code: { on: true, apps: [], folders: ['~/Documents/tutor', at('Papers', 'x')] } } }), ['Documents'], '~/ paths too, an unprotected one adds nothing');
@@ -82,23 +84,23 @@ test('needed(): PDFs ticked with file access → every protected folder here; a 
 
 test('ask(): one folder at a time, in order; readdir ok → allowed, EPERM → denied; the answers kept in folders.json', async () => {
   const fs = fakeFs({ dirs: MAC, denied: [at('Downloads')] });
-  const answers = await folderAccess.ask(['Desktop', 'Documents', 'Downloads', 'Nope'], { homeDir: HOME, dataRoot: DATA, fs, now: () => new Date('2026-10-11T12:00:00Z') });
+  const answers = await folderAccess.ask(['Desktop', 'Documents', 'Downloads', 'Nope'], { platform: 'darwin', homeDir: HOME, dataRoot: DATA, fs, now: () => new Date('2026-10-11T12:00:00Z') });
   assert.deepEqual(answers, { Desktop: 'allowed', Documents: 'allowed', Downloads: 'denied' }, 'a folder not on this Mac is left out');
   assert.deepEqual(fs.calls, [at('Desktop'), at('Documents'), at('Downloads')], 'in the order asked');
   assert.equal(fs.most, 1, 'never two at once: macOS shows its prompts one after another');
   const saved = JSON.parse(fs.written[path.join(DATA, '.connect', 'folders.json')]);
   assert.deepEqual(saved, { asked: { Desktop: { answer: 'allowed', at: '2026-10-11T12:00:00.000Z' }, Documents: { answer: 'allowed', at: '2026-10-11T12:00:00.000Z' }, Downloads: { answer: 'denied', at: '2026-10-11T12:00:00.000Z' } } });
   assert.deepEqual(folderAccess.readAnswers(DATA, { fs }), answers);
-  assert.deepEqual(folderAccess.needed(pdfChoices(), { homeDir: HOME, dataRoot: DATA, fs }).map((folder) => folder.name), ['Google Drive'], 'the panel does not come back for them');
+  assert.deepEqual(folderAccess.needed(pdfChoices(), { platform: 'darwin', homeDir: HOME, dataRoot: DATA, fs }).map((folder) => folder.name), ['Google Drive'], 'the panel does not come back for them');
   // EACCES is a no too.
   const other = fakeFs({ dirs: MAC });
   other.promises.readdir = async () => { throw Object.assign(new Error('EACCES'), { code: 'EACCES' }); };
-  assert.deepEqual(await folderAccess.ask(['Desktop'], { homeDir: HOME, dataRoot: DATA, fs: other }), { Desktop: 'denied' });
+  assert.deepEqual(await folderAccess.ask(['Desktop'], { platform: 'darwin', homeDir: HOME, dataRoot: DATA, fs: other }), { Desktop: 'denied' });
 });
 
 test('guard: a protected folder not allowed is not readable, a picked folder inside it is; the home folder and unprotected ones are', () => {
   const fs = fakeFs({ dirs: MAC });
-  const access = folderAccess.guard({ homeDir: HOME, answers: { Desktop: 'allowed', Documents: 'denied' }, picked: [at('Documents', 'Papers')], fs });
+  const access = folderAccess.guard({ platform: 'darwin', homeDir: HOME, answers: { Desktop: 'allowed', Documents: 'denied' }, picked: [at('Documents', 'Papers')], fs });
   assert.deepEqual([HOME, at('Papers'), at('Desktop', 'x'), at('Documents'), at('Documents', 'y'), at('Documents', 'Papers', 'z'), at('Downloads'), at('Library', 'Mobile Documents', 'com~apple~CloudDocs', 'a')].map(access.readable),
     [true, true, true, false, false, true, false, false], 'Downloads never asked about counts as not allowed; iCloud Drive is guarded even when not here');
   assert.deepEqual(access.allowed.map((folder) => folder.name), ['Desktop']);
@@ -124,9 +126,9 @@ test('pdfsAtAGlance with Documents denied never lists or reads anything under ~/
   });
   let glance, alsoPicked;
   try {
-    const access = folderAccess.guard({ homeDir: home, answers: { Documents: 'denied', Downloads: 'allowed' } });
+    const access = folderAccess.guard({ platform: 'darwin', homeDir: home, answers: { Documents: 'denied', Downloads: 'allowed' } });
     glance = pdfsAtAGlance([], { homeDir: home, everywhere: true, access });
-    const withPick = folderAccess.guard({ homeDir: home, answers: { Documents: 'denied', Downloads: 'allowed' }, picked: [picked] });
+    const withPick = folderAccess.guard({ platform: 'darwin', homeDir: home, answers: { Documents: 'denied', Downloads: 'allowed' }, picked: [picked] });
     alsoPicked = pdfsAtAGlance([picked], { homeDir: home, everywhere: true, access: withPick });
   } finally { spies.forEach((undo) => undo()); }
   assert.deepEqual(glance.lookedIn.sort(), ['~/Downloads', '~/Papers']);
@@ -141,7 +143,7 @@ test('pdfsAtAGlance with Documents denied never lists or reads anything under ~/
 test('the panel names only the folders that are there, joined with "and"; the PDFs row while and after macOS asks', async () => {
   const model = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/connect.js')).href);
   const fs = fakeFs({ dirs: MAC });
-  const panel = model.folderPanel(folderAccess.needed(pdfChoices(), { homeDir: HOME, dataRoot: '/nowhere', fs }));
+  const panel = model.folderPanel(folderAccess.needed(pdfChoices(), { platform: 'darwin', homeDir: HOME, dataRoot: '/nowhere', fs }));
   assert.equal(panel.folders, 'Desktop, Documents, Downloads and Google Drive');
   assert.deepEqual(panel.names, ['Desktop', 'Documents', 'Downloads', 'Google Drive']);
   assert.equal(panel.title, 'Let Engelbart read your folders?');
@@ -164,4 +166,21 @@ test('the panel names only the folders that are there, joined with "and"; the PD
   // The folders chosen in the folder picker go with the choices.
   assert.deepEqual(model.choicesOf({ picks: { papers: true }, apps: {}, folders: { papers: ['/Users/ada/Documents/P'] }, picked: ['/Users/ada/Documents/P'] }).picked, ['/Users/ada/Documents/P']);
   assert.equal('picked' in model.choicesOf({ picks: {}, apps: {} }), false);
+});
+
+test('off the Mac (Windows, Linux) no folder is protected: none needed or asked about, and every folder readable', async () => {
+  for (const platform of ['win32', 'linux']) {
+    const fs = fakeFs({ dirs: MAC });
+    assert.deepEqual(folderAccess.protectedFolders({ platform, homeDir: HOME, fs }), [], platform);
+    assert.deepEqual(folderAccess.needed(pdfChoices(), { platform, homeDir: HOME, dataRoot: DATA, fs }), [], platform);
+    assert.deepEqual(folderAccess.needed({ sources: { code: { on: true, folders: ['~/Documents/repo'] } } }, { platform, homeDir: HOME, dataRoot: DATA, fs }), [], platform);
+    assert.deepEqual(await folderAccess.ask(['Desktop', 'Documents'], { platform, homeDir: HOME, dataRoot: DATA, fs }), {}, platform);
+    assert.deepEqual(fs.calls, [], `${platform}: nothing read to ask`);
+    assert.equal(path.join(DATA, '.connect', 'folders.json') in fs.written, false, `${platform}: no answers written`);
+    const access = folderAccess.guard({ platform, homeDir: HOME, answers: { Documents: 'denied' }, fs });
+    for (const dir of [at('Desktop'), at('Documents', 'Papers'), at('Downloads'), at('Library', 'CloudStorage', 'GoogleDrive-ada@lab.org'), at('Papers')]) assert.equal(access.readable(dir), true, `${platform}: ${dir}`);
+    assert.deepEqual([access.allowed, access.blocked], [[], []], platform);
+    assert.equal(folderAccess.guards(platform), false);
+  }
+  assert.equal(folderAccess.guards('darwin'), true);
 });

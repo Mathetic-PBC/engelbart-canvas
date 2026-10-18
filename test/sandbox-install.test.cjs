@@ -405,7 +405,7 @@ test('real setup starts managed install before Claude, allows parallel reads ove
   assert.ok(f.calls.some((call) => call.includes('install-job.py stop')));
 });
 
-test('remote helper bounds inspection, fences delayed starts and confirms owned process-tree termination', () => {
+test('remote helper bounds inspection, fences delayed starts and confirms owned process-tree termination', { skip: process.platform === 'win32' && 'E2B sandbox helper: it runs in the sandbox\'s Linux, never on Windows, and needs POSIX Python (fcntl, os.killpg)' }, () => {
   const result = spawnSync('python3', [path.join(__dirname, 'sandbox_install_check.py')], { encoding: 'utf8', env: { ...process.env, PYTHONDONTWRITEBYTECODE: '1' } });
   assert.equal(result.status, 0, result.stdout + result.stderr);
 });

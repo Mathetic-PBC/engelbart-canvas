@@ -15,6 +15,10 @@
 // names a developer folder that holds git, because otherwise running it opens Apple's installer unasked.
 // When the person's own Git is missing, cannot run or is too old, the Git that came with Engelbart stands
 // in (2026-09-28; ./bundled-git.cjs), recorded with the source `bundled`.
+//
+// Windows (2026-10-05, docs/windows-port.md): the login shell is Git for Windows' bash, whose paths (/c/Users/…) are
+// printed the Windows way (cygpath -w) and with the .exe a program has; the installers' folders are the Windows ones
+// (knownPlaces). There is no Apple stub, and no Git of Engelbart's own: Git for Windows is the Git.
 
 const fs = require('node:fs');
 const os = require('node:os');
@@ -32,7 +36,10 @@ const firstLine = (text) => String(text || '').split(/\r?\n/).map((line) => line
 // Every program of each name on PATH, in PATH order; whether the name is (also) a shell alias or function,
 // which the terminal can run and a hidden run cannot (its definition is never printed); and the one
 // switch the shell's environment can hold.
-function lookupCommand(fish) {
+function lookupCommand(fish, platform = process.platform) {
+  if (platform === 'win32') {
+    return "for tool in git claude codex; do printf '@tool %s\\n' \"$tool\"; type -aP \"$tool\" 2>/dev/null | while IFS= read -r found; do [ -f \"$found.exe\" ] && found=\"$found.exe\"; cygpath -w \"$found\"; done; kind=\"$tool: $(type -t \"$tool\" 2>/dev/null)\"; case \"$kind\" in *alias|*function) printf '@alias %s\\n' \"$tool\";; esac; done; printf '@env DISABLE_AUTOUPDATER=%s\\n' \"${DISABLE_AUTOUPDATER:-}\"";
+  }
   if (fish) {
     return "for tool in git claude codex; printf '@tool %s\\n' $tool; command -a -s $tool 2>/dev/null; if functions -q $tool; printf '@alias %s\\n' $tool; end; end; printf '@env DISABLE_AUTOUPDATER=%s\\n' \"$DISABLE_AUTOUPDATER\"";
   }
@@ -53,7 +60,7 @@ function parseLookup(stdout) {
     if (alias) { if (Object.hasOwn(paths, alias[1]) && !aliases.includes(alias[1])) aliases.push(alias[1]); continue; }
     const setting = /^@env (\w+)=(.*)$/.exec(line);
     if (setting) { env[setting[1]] = setting[2]; current = null; continue; }
-    if (current && path.isAbsolute(line) && !paths[current].includes(line)) paths[current].push(line);
+    if (current && (path.isAbsolute(line) || path.win32.isAbsolute(line)) && !paths[current].includes(line)) paths[current].push(line);
   }
   return { paths, aliases, env };
 }
@@ -89,9 +96,27 @@ function realPath(file) {
 
 const SYSTEM_BINS = Object.freeze(['/opt/homebrew/bin', '/usr/local/bin']);
 
+/**
+ * Where Claude Code's and Codex's installers put them on Windows: Claude Code's own installer in %USERPROFILE%\.local\bin,
+ * npm's global folder (%APPDATA%\npm, or Node's own folder under Program Files), and %LOCALAPPDATA%\Programs.
+ */
+function windowsPlaces(name, home, env = process.env) {
+  const variable = (key) => { const found = Object.keys(env).find((each) => each.toUpperCase() === key.toUpperCase()); return found ? env[found] : ''; };
+  const appData = variable('APPDATA') || path.win32.join(home, 'AppData', 'Roaming');
+  const localAppData = variable('LOCALAPPDATA') || path.win32.join(home, 'AppData', 'Local');
+  const programFiles = variable('ProgramFiles') || 'C:\\Program Files';
+  return [
+    path.win32.join(home, '.local', 'bin', `${name}.exe`),
+    path.win32.join(appData, 'npm', name), // npm's shim for bash (beside the .cmd that PowerShell and cmd run)
+    path.win32.join(localAppData, 'Programs', name, `${name}.exe`),
+    path.win32.join(programFiles, 'nodejs', name),
+  ];
+}
+
 /** Where installers put each program when PATH does not reach it. Newest nvm Node first. */
-function knownPlaces(name, home, systemBins = SYSTEM_BINS) {
+function knownPlaces(name, home, systemBins = SYSTEM_BINS, { platform = process.platform, env = process.env } = {}) {
   if (name === 'git') return [];
+  if (platform === 'win32') return windowsPlaces(name, home, env);
   const inHome = {
     claude: ['.local/bin/claude', '.claude/local/claude', '.bun/bin/claude', '.npm-global/bin/claude', '.volta/bin/claude'],
     codex: ['.local/bin/codex', '.bun/bin/codex', '.npm-global/bin/codex', '.volta/bin/codex'],
@@ -131,19 +156,21 @@ function desktopCopies(name, home) {
 const isDesktopCopy = (file) => /\/Application Support\/Claude\/claude-code\//.test(String(file || ''));
 
 /** How a program was installed, from where its file really is: this decides how it updates and whether an update can be undone. */
-function sourceOf(name, file) {
+function sourceOf(name, file, platform = process.platform) {
   const real = realPath(file);
   if (name === 'claude' && isDesktopCopy(real)) return 'desktop'; // the Claude app's own: it updates it, never Engelbart
   if (name === 'git') {
-    if (real === APPLE_GIT_STUB || real.startsWith('/Applications/Xcode') || real.startsWith('/Library/Developer/CommandLineTools/')) return 'apple';
+    if ((platform === 'darwin' && real === APPLE_GIT_STUB) || real.startsWith('/Applications/Xcode') || real.startsWith('/Library/Developer/CommandLineTools/')) return 'apple';
     if (/\/(Cellar|Homebrew|homebrew)\//.test(real) || real.startsWith('/opt/homebrew/')) return 'homebrew';
     return 'other';
   }
-  if (name === 'claude' && real.includes(`${path.sep}.local${path.sep}share${path.sep}claude${path.sep}versions${path.sep}`)) return 'native';
-  if (name === 'codex' && real.includes(`${path.sep}.codex${path.sep}packages${path.sep}standalone${path.sep}`)) return 'standalone';
-  if (/\/Caskroom\/|\/Cellar\//.test(real)) return 'homebrew';
-  if (real.includes('/node_modules/')) return real.includes(`${path.sep}.bun${path.sep}`) ? 'bun' : 'npm';
-  if (real.includes(`${path.sep}.bun${path.sep}`)) return 'bun';
+  const slashed = real.split(path.sep).join('/'); // a Windows path matched as a Mac one is
+  if (name === 'claude' && slashed.includes('/.local/share/claude/versions/')) return 'native';
+  if (name === 'claude' && /[\\/]\.local[\\/]bin[\\/]claude\.exe$/i.test(real)) return 'native'; // Windows: the installer's copy
+  if (name === 'codex' && slashed.includes('/.codex/packages/standalone/')) return 'standalone';
+  if (/\/Caskroom\/|\/Cellar\//.test(slashed)) return 'homebrew';
+  if (slashed.includes('/node_modules/')) return slashed.includes('/.bun/') ? 'bun' : 'npm';
+  if (slashed.includes('/.bun/')) return 'bun';
   return 'other';
 }
 
@@ -278,13 +305,14 @@ function observed(name, { file = null, onPath = null, source = null, version = n
   return out;
 }
 
-/** The person's own Git: the first on the login shell's PATH (Apple's stub read through, never run bare). */
-async function detectOwnGit(runner, candidates) {
+/** The person's own Git: the first on the login shell's PATH (Apple's stub read through, never run bare). Only macOS
+ *  has the stub: on Linux /usr/bin/git is Git itself (2026-10-07, docs/windows-port-log.md "Linux"). */
+async function detectOwnGit(runner, candidates, platform = process.platform) {
   const first = candidates[0] || null;
   if (!first) return observed('git', {});
-  if (realPath(first) !== APPLE_GIT_STUB) {
+  if (platform !== 'darwin' || realPath(first) !== APPLE_GIT_STUB) {
     const read = await readVersion(runner, 'git', first, { direct: true });
-    return observed('git', { file: first, onPath: true, source: sourceOf('git', first), ...read });
+    return observed('git', { file: first, onPath: true, source: sourceOf('git', first, platform), ...read });
   }
   // Apple's stub: which git it hands over to, if any. No developer folder = no git, and the stub is not touched.
   const selected = await runner.exec('/usr/bin/xcode-select', ['-p'], { timeout: 5000 });
@@ -302,8 +330,8 @@ async function detectOwnGit(runner, candidates) {
 }
 
 /** Their own Git when it works; else Engelbart's (`bundled`: its launcher), unless that cannot run either. `preferBundled`: tests of the stand-in on a Mac that has Git. */
-async function detectGit(runner, candidates, { bundled = null, preferBundled = false } = {}) {
-  const own = preferBundled && bundled ? observed('git', {}) : await detectOwnGit(runner, candidates);
+async function detectGit(runner, candidates, { bundled = null, preferBundled = false, platform = process.platform } = {}) {
+  const own = preferBundled && bundled ? observed('git', {}) : await detectOwnGit(runner, candidates, platform);
   if (!bundled || own.status === 'ready') return own;
   const read = await readVersion(runner, 'git', bundled, { direct: true });
   if (!read.ran && own.installed) return own;
@@ -323,7 +351,7 @@ function removal(name, file) {
 }
 
 /** Every copy of `name`: those PATH reaches, in its order, then those where installers put them; each file once. */
-function copiesOf(name, candidates, { home, systemBins }) {
+function copiesOf(name, candidates, { home, systemBins, platform = process.platform }) {
   const seen = new Set();
   const copies = [];
   const add = (file, onPath) => {
@@ -333,12 +361,12 @@ function copiesOf(name, candidates, { home, systemBins }) {
     copies.push({ file, onPath });
   };
   for (const file of candidates) add(file, true);
-  for (const file of knownPlaces(name, home, systemBins)) if (isExecutable(file)) add(file, false);
+  for (const file of knownPlaces(name, home, systemBins, { platform })) if (isExecutable(file)) add(file, false);
   for (const file of desktopCopies(name, home)) add(file, false);
   return copies;
 }
 
-async function detectAgent(runner, name, candidates, { env, home, systemBins }) {
+async function detectAgent(runner, name, candidates, { env, home, systemBins, platform = process.platform }) {
   const label = REQUIREMENTS[name].name;
   const shellEnv = { ...process.env, ...env };
   const updater = updaterOff(name, { env: shellEnv, home });
@@ -346,7 +374,7 @@ async function detectAgent(runner, name, candidates, { env, home, systemBins }) 
   let first = null;
   let chosen = null;
   let other = null; // the first program of the same name that is not it
-  for (const copy of copiesOf(name, candidates, { home, systemBins })) {
+  for (const copy of copiesOf(name, candidates, { home, systemBins, platform })) {
     const read = await readVersion(runner, name, copy.file);
     if (read.other) { other = other || { ...copy, read }; continue; }
     const entry = { ...copy, read };
@@ -387,13 +415,13 @@ async function detectAgent(runner, name, candidates, { env, home, systemBins }) 
  * shell could not be asked (then only the installers' folders are). `bundledGit`: the launcher of the Git
  * that came with Engelbart (./bundled-git.cjs), or null.
  */
-async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = os.homedir(), systemBins = SYSTEM_BINS, now = () => new Date(), bundledGit = null, preferBundledGit = false }) {
-  const lookup = await runner.shell(lookupCommand(runner.fish), { timeout: LOOKUP_TIMEOUT_MS });
+async function detectTools({ runner, only = ['git', 'claude', 'codex'], home = os.homedir(), systemBins = SYSTEM_BINS, now = () => new Date(), bundledGit = null, preferBundledGit = false, platform = process.platform }) {
+  const lookup = await runner.shell(lookupCommand(runner.fish, platform), { timeout: LOOKUP_TIMEOUT_MS });
   const { paths, aliases, env } = parseLookup(lookup.stdout);
   const lookupError = lookup.marked ? null : lookup.timedOut ? `The login shell (${runner.shellPath}) did not answer within ${LOOKUP_TIMEOUT_MS / 1000} seconds.` : shellSilent(runner);
   const checkedAt = now().toISOString();
   const jobs = only.map(async (name) => {
-    const found = name === 'git' ? await detectGit(runner, paths.git, { bundled: bundledGit, preferBundled: preferBundledGit }) : await detectAgent(runner, name, paths[name], { env, home, systemBins });
+    const found = name === 'git' ? await detectGit(runner, paths.git, { bundled: bundledGit, preferBundled: preferBundledGit, platform }) : await detectAgent(runner, name, paths[name], { env, home, systemBins, platform });
     return [name, { ...found, error: found.error || (found.status === 'missing' ? lookupError : null), checkedAt }];
   });
   return { ...Object.fromEntries(await Promise.all(jobs)), aliases, lookupError };

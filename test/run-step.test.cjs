@@ -151,9 +151,12 @@ test('run_command runs to its end in the worktree and refuses launches, the back
   const processes = processesOf({ environment });
   const handlers = { declare: async () => ({}), start: async () => ({}), status: async () => ({}) };
   const call = createRunTools({ root, runnables: handlers, processes, key: 'test' });
-  const ran = await call('run_command', { command: 'pwd && echo made > made.txt', cwd: '.' });
+  // Windows: Git Bash's pwd is its own (/tmp/…), so node says where it is, read back as Windows has it (no 8.3 names).
+  const [here, real] = process.platform === 'win32' ? ['node -p "process.cwd()"', fs.realpathSync.native] : ['pwd', fs.realpathSync];
+  const ran = await call('run_command', { command: `${here} && echo made > made.txt`, cwd: '.' });
   assert.equal(ran.exit_code, 0);
-  assert.equal(ran.output.trim().split('\n').pop(), fs.realpathSync(root));
+  const printed = ran.output.trim().split('\n').pop();
+  assert.equal(process.platform === 'win32' ? real(printed.trim()) : printed, real(root));
   assert.equal(fs.readFileSync(path.join(root, 'made.txt'), 'utf8'), 'made\n');
   assert.equal((await call('run_command', { command: 'exit 3' })).exit_code, 3);
   const slow = await call('run_command', { command: 'sleep 5', timeout_seconds: 1 });
@@ -175,7 +178,10 @@ test('run_command runs to its end in the worktree and refuses launches, the back
 
 test('Engelbart\'s processes: a UI answers on its port, an app is alive after its wait, a terminal program exits 0; stopping stops the whole group', async () => {
   const root = repository('processes');
-  const processes = processesOf({ environment, appAliveMs: 400, uiReadyMs: 8000 });
+  // How long an app must stay up, and a quick program is seen to exit within: Git Bash's login shell can take longer
+  // than 0.4 s to start on Windows (CI, 2026-10-05), so there it is 5 s.
+  const aliveMs = process.platform === 'win32' ? 5000 : 400;
+  const processes = processesOf({ environment, appAliveMs: aliveMs, uiReadyMs: 8000 });
   const port = await freePort();
   await processes.start('web', `PORT=${port} node server.cjs`, root);
   const web = await processes.check('web', 'ui', { port });
@@ -196,7 +202,7 @@ test('Engelbart\'s processes: a UI answers on its port, an app is alive after it
   await processes.stop('app');
   await processes.start('quick', 'echo bye', root);
   const quick = await processes.check('quick', 'app');
-  assert.match(quick.failed_check, /exited within 0.4 seconds \(exit code 0\)/);
+  assert.match(quick.failed_check, new RegExp(`exited within ${aliveMs / 1000} seconds \\(exit code 0\\)`));
 
   assert.deepEqual((await processes.runToExit('cli', 'node cli.cjs --help', root)).code, 0);
   assert.notEqual((await processes.runToExit('cli', 'node missing.cjs', root)).code, 0);
@@ -458,7 +464,7 @@ test('every stored command passes, but the launch facts name a folder no row cov
   await builds.discard(ctx, project.id, task.id);
 });
 
-test('a desktop app opened from Review: its window is brought forward, found among the processes of its group', async () => {
+test('a desktop app opened from Review: its window is brought forward, found among the processes of its group', { skip: process.platform === 'win32' && 'macOS only: a desktop app\'s window is brought forward with AppKit, found with ps' }, async () => {
   const { project, workspace, target } = await scene();
   const agent = bridgeAgent(async (use) => {
     await use('declare_runnables', { runnables: [{ name: 'desk', folder: '.', type: 'app' }] });
@@ -614,7 +620,7 @@ test('Accept keeps what runs up on the code that landed, its copy detached there
   await assert.rejects(builds.stopRunnable(ctx, project.id, task.id, null), /Nothing of this Build is running/);
 });
 
-test('a kept copy goes when Engelbart quits, and one a crash left behind is swept when it starts: its processes stopped only while they are still its own', async () => {
+test('a kept copy goes when Engelbart quits, and one a crash left behind is swept when it starts: its processes stopped only while they are still its own', { skip: process.platform === 'win32' && 'POSIX only: a crash\'s leftovers are found with lsof and stopped as a process group; Windows skips that sweep (src/main/build/run-processes.cjs)' }, async () => {
   const { project, workspace, target } = await scene();
   const agent = bridgeAgent(async (use) => {
     await use('declare_runnables', { runnables: [{ name: 'web', folder: '.', type: 'ui' }] });
@@ -651,7 +657,7 @@ test('a kept copy goes when Engelbart quits, and one a crash left behind is swep
   await crashed.builds.stopAll();
 });
 
-test('a process group left behind is stopped only while its leader is the one started there: a folder elsewhere is never touched', async () => {
+test('a process group left behind is stopped only while its leader is the one started there: a folder elsewhere is never touched', { skip: process.platform === 'win32' && 'POSIX only: a leftover is found with lsof and stopped as a process group; Windows skips it (src/main/build/run-processes.cjs)' }, async () => {
   const inside = fs.mkdtempSync(path.join(homeDir, 'leftover-'));
   const elsewhere = fs.mkdtempSync(path.join(homeDir, 'elsewhere-'));
   const { spawn } = require('node:child_process');
@@ -756,14 +762,15 @@ test('a Build that adds a plain page to a desktop app\'s repository: the run ste
     assert.match(input.prompt, /What the Build changed since it started[^\n]*\n\["chi\/index\.html"\]/);
     await assert.rejects(use('declare_runnables', { runnables: [{ name: 'desktop', folder: '.', type: 'app' }] }), /desktop is not a web UI/);
     await use('declare_runnables', { runnables: [{ name: 'page', folder: 'chi', type: 'ui' }] });
-    assert.equal((await use('start_runnable', { name: 'page', run_command: 'python3 -m http.server {port} --bind 127.0.0.1' })).ok, true);
+    const served = await use('start_runnable', { name: 'page', run_command: 'python3 -m http.server {port} --bind 127.0.0.1' });
+    assert.equal(served.ok, true, JSON.stringify(served));
     return 'page runs.';
   });
   const { builds } = manager(build, agent, { kinds: RUN_KINDS });
   const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, target });
   const task = await stepped(builds, project, started.id, 1);
   assert.equal(agent.seen.length, 1, 'the agent ran: nothing stored is a web interface');
-  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.type, item.folder, item.status]), [['page', 'ui', 'chi', 'running']]);
+  assert.deepEqual(task.runStep.runnables.map((item) => [item.name, item.type, item.folder, item.status]), [['page', 'ui', 'chi', 'running']], JSON.stringify(task.runStep));
   assert.match(await (await fetch(task.runStep.runnables[0].url)).text(), /CHI submissions, 2017-2026/, 'the page the Build made is what answers');
   await builds.stopAll();
   assert.equal(await answers(task.runStep.runnables[0].url), false);

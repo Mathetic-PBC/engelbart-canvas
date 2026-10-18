@@ -260,7 +260,8 @@ class SessionManager extends EventEmitter {
       record.process.kill();
       if (await exited === 'timeout' && record.status === 'running') {
         const forcedExit = waitForExit(record, this.forceCloseTimeoutMs);
-        record.process.kill('SIGKILL');
+        if (process.platform === 'win32') record.process.kill(); // node-pty on Windows takes no signal: it ends the console's processes
+        else record.process.kill('SIGKILL');
         if (await forcedExit === 'timeout' && record.status === 'running') {
           throw new Error('PTY did not exit after termination signals');
         }

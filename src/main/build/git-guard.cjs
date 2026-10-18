@@ -21,6 +21,14 @@
 //      undone there.
 //
 // Engelbart's own git (./git.cjs) runs without any of it: its environment has no GIT_* variables and its hooks are off.
+//
+// Windows (2026-10-09, docs/windows-port-log.md "Catch-up to 0.1.13"): the agent starts in Git for Windows' bash, whose
+// PATH is written the POSIX way (/c/Users/…), so the guard's folder is converted before it goes first (cygpath, as
+// ../terminal/launch.cjs does for Engelbart's Git), and the shim asks whether two names are the same folder (-ef: the
+// case of a name, or a short name like RUNNER~1, does not matter). Git reads includeIf patterns and include paths with
+// forward slashes, and the repository's folder is named as Git names it (its long name, in its own case; gitdir/i
+// besides). Claude Code runs its commands in that bash, so it meets the shim; a git started outside it (from
+// PowerShell, by its .exe) meets the hooks, which Git for Windows runs with its own sh.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -31,10 +39,10 @@ const FILES = 'add|rm|mv|restore|apply|clean|clone|init|submodule|update-index|r
 
 const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
 
-const SHIM = (guard) => `#!/bin/sh
+const SHIM = (guard, windows) => `#!/bin/sh
 # Engelbart's git for a Build's agent (src/main/build/git-guard.cjs). The real git does everything, except what would
 # write the history, refs or settings of the Build's own repository: Engelbart commits the agent's work after each turn.
-guard=${quote(guard)}
+guard=${windows ? `$(cygpath -u ${quote(guard)})` : quote(guard)}
 set -f
 real=
 saved_ifs=$IFS
@@ -174,7 +182,9 @@ esac
 if [ -n "\${ENGELBART_BUILD_GIT_DIR:-}" ]; then
   extra='rev-parse --path-format=absolute --git-common-dir'
   common=$(before "$@" 2>/dev/null)
-  if [ -n "$common" ] && [ "$(cd "$common" 2>/dev/null && pwd -P)" = "$ENGELBART_BUILD_GIT_DIR" ]; then refuse "$sub"; fi
+${windows
+    ? `  if [ -n "$common" ] && [ "$common" -ef "$(cygpath -u "$ENGELBART_BUILD_GIT_DIR")" ]; then refuse "$sub"; fi`
+    : `  if [ -n "$common" ] && [ "$(cd "$common" 2>/dev/null && pwd -P)" = "$ENGELBART_BUILD_GIT_DIR" ]; then refuse "$sub"; fi`}
 fi
 exec "$real" "$@"
 `;
@@ -210,11 +220,11 @@ function writeIfChanged(file, text, mode) {
 }
 
 /** The guard's files under `dir` (written when they differ). → { bin: the folder that goes first on PATH, config } */
-function prepareGitGuard(dir) {
+function prepareGitGuard(dir, platform = process.platform) {
   const bin = path.join(dir, 'bin');
   const hooks = path.join(dir, 'hooks');
   for (const folder of [bin, hooks]) fs.mkdirSync(folder, { recursive: true, mode: 0o700 });
-  writeIfChanged(path.join(bin, 'git'), SHIM(bin), 0o755);
+  writeIfChanged(path.join(bin, 'git'), SHIM(bin, platform === 'win32'), 0o755);
   writeIfChanged(path.join(hooks, 'reference-transaction'), REFERENCE_TRANSACTION, 0o755);
   writeIfChanged(path.join(hooks, 'pre-push'), PRE_PUSH, 0o755);
   const config = path.join(dir, 'build.gitconfig');
@@ -227,16 +237,17 @@ function prepareGitGuard(dir) {
  * none. Read from the files git keeps (.git, commondir), so it needs no git.
  */
 function gitCommonDir(worktree) {
+  const realpath = process.platform === 'win32' ? fs.realpathSync.native : fs.realpathSync; // Windows: long names, as Git gives them
   try {
     const dotGit = path.join(worktree, '.git');
     const stat = fs.statSync(dotGit);
-    if (stat.isDirectory()) return fs.realpathSync(dotGit);
+    if (stat.isDirectory()) return realpath(dotGit);
     const named = fs.readFileSync(dotGit, 'utf8').match(/^gitdir:\s*(.+?)\s*$/m);
     if (!named) return null;
     const own = path.resolve(worktree, named[1]);
     let common = own;
     try { common = path.resolve(own, fs.readFileSync(path.join(own, 'commondir'), 'utf8').trim()); } catch { /* a repository's own git folder */ }
-    return fs.realpathSync(common);
+    return realpath(common);
   } catch {
     return null;
   }
@@ -248,11 +259,13 @@ function gitCommonDir(worktree) {
  * the config that brings the hooks to that repository alone and turns network pushes away everywhere. The person's own
  * GIT_CONFIG_PARAMETERS, when set, come after (theirs win where they say the same thing, as `git -c` would).
  */
-function guardEnvironment(guard, gitDir, base = {}) {
+function guardEnvironment(guard, gitDir, base = {}, platform = process.platform) {
   const pair = (key, value) => `${quote(key)}=${quote(value)}`;
+  const windows = platform === 'win32';
+  const [condition, dir, config] = windows ? ['gitdir/i', gitDir.replace(/\\/g, '/'), guard.config.replace(/\\/g, '/')] : ['gitdir', gitDir, guard.config];
   const entries = [
-    pair(`includeIf.gitdir:${gitDir}.path`, guard.config),
-    pair(`includeIf.gitdir:${gitDir}/**.path`, guard.config),
+    pair(`includeIf.${condition}:${dir}.path`, config),
+    pair(`includeIf.${condition}:${dir}/**.path`, config),
     ...NETWORK.map((prefix) => pair(`url.${NO_PUSH}.pushInsteadOf`, prefix)),
   ];
   const theirs = typeof base.GIT_CONFIG_PARAMETERS === 'string' && base.GIT_CONFIG_PARAMETERS.trim() ? ` ${base.GIT_CONFIG_PARAMETERS.trim()}` : '';
@@ -261,7 +274,11 @@ function guardEnvironment(guard, gitDir, base = {}) {
 
 const POSIX_GUARD_PATH = 'PATH="$ENGELBART_BUILD_GUARD:$PATH"; ';
 const FISH_GUARD_PATH = 'set -gx PATH $ENGELBART_BUILD_GUARD $PATH; ';
+const WINDOWS_GUARD_PATH = 'PATH="$(cygpath -u "$ENGELBART_BUILD_GUARD"):$PATH"; ';
 /** The start of the agent's command that puts the guard first on PATH, in `shell`'s language. */
-const guardPath = (shell) => (path.basename(String(shell || '')) === 'fish' ? FISH_GUARD_PATH : POSIX_GUARD_PATH);
+const guardPath = (shell, platform = process.platform) => {
+  if (platform === 'win32') return WINDOWS_GUARD_PATH; // Git for Windows' bash
+  return path.basename(String(shell || '')) === 'fish' ? FISH_GUARD_PATH : POSIX_GUARD_PATH;
+};
 
 module.exports = { prepareGitGuard, gitCommonDir, guardEnvironment, guardPath, NO_PUSH };
