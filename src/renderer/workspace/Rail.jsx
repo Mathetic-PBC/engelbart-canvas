@@ -18,6 +18,7 @@ import { carriesDrop, readDrop } from '../model/drop.js';
 import TrashPanel from '../post-its/TrashPanel.jsx';
 import { openSettings } from '../ui/Settings.jsx';
 import * as I from '../ui/SidebarIcons.jsx';
+import { keyLabels } from '../ui/keys.js';
 import {
   AddPicker, AgentsPanel, ContextMenu, Count, CreateProjectDialog, FolderDialog, LibraryPanel, Pill, PeekCard, ProjectFlyout,
   ProjectMenu, ProjectsPanel, RenameField, RowAction, SearchDialog, ShortcutsDialog, SiblingsPanel, SourcesPanel, Tip, panelEdge,
@@ -786,7 +787,7 @@ export default function Rail({
         {/* Projects: the shortlist, what is open under it, More. */}
         <section data-sb-section="projects" style={{ flex: 'none', display: 'flex', flexDirection: 'column' }}>
           <SectionHead label="Projects" open={projectsOpen} onToggle={() => toggleStored('section:projects', true)} data-sb-head="projects">
-            <button type="button" className="sb-shortcut hov-wash" data-sb-next-agent="1" aria-label="Next agent needing attention (⌘J)" onMouseEnter={(event) => labelTip(event.currentTarget, 'Next agent needing attention')} onMouseLeave={() => showTip(null)} onClick={() => { showTip(null); onNextAgent(); }} style={{ marginRight: 8, padding: '2px 3px', border: 0, borderRadius: 4, background: 'transparent', cursor: 'pointer' }}>⌘J</button>
+            <button type="button" className="sb-shortcut hov-wash" data-sb-next-agent="1" aria-label={`Next agent needing attention (${keyLabels().mod}J)`} onMouseEnter={(event) => labelTip(event.currentTarget, 'Next agent needing attention')} onMouseLeave={() => showTip(null)} onClick={() => { showTip(null); onNextAgent(); }} style={{ marginRight: 8, padding: '2px 3px', border: 0, borderRadius: 4, background: 'transparent', cursor: 'pointer' }}>{`${keyLabels().mod}J`}</button>
             <AddButton label={`Create project within ${project.name}`} data-sb-new-workspace="1" onClick={() => create(null)} onTip={labelTip} />
           </SectionHead>
           {projectsOpen && (
@@ -850,7 +851,7 @@ export default function Rail({
       {peek.peek && !panel && !menu && <PeekCard peek={peek.peek} more={peek.more} onHold={peek.hold} onClose={peek.close} onOpenWorkspace={(pid, wid) => { peek.drop(); onOpenHeld(pid, wid); }} />}
       {flyout && tree.has(flyout.id) && <ProjectFlyout flyout={flyout} tree={tree} counts={counts} hereId={hereId} onGo={go} onHold={holdFly} onLeave={leaveFly} />}
       {tip && (tip.kind === 'shortcut'
-        ? <Tip at={tip.at} data-sb-tip="shortcut"><span className="sb-tip-key">⌃{tip.n}</span><span>Toggle project with <kbd>Ctrl + {tip.n}</kbd></span></Tip>
+        ? <Tip at={tip.at} data-sb-tip="shortcut"><span className="sb-tip-key">{keyLabels().ctrl}{tip.n}</span><span>Toggle project with <kbd>Ctrl + {tip.n}</kbd></span></Tip>
         : <Tip at={tip.at} data-sb-tip="label">{tip.label}</Tip>)}
 
       {panel && panel.kind === 'project' && <ProjectMenu anchor={panel.anchor} project={project} counts={projectCounts} onSwitch={onOpenProject} onNewProject={onNewProject} onAllProjects={onAllProjects} onRename={() => setRenaming('project')} onProjectPage={onOpenProjectPage} onShortcuts={() => setShortcuts(true)} onClose={close} ignore={ignore('project')} />}

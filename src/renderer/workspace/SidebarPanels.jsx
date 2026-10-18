@@ -22,6 +22,7 @@ import { useAddRun } from './useAddRun.js';
 import GithubPane from './GithubPane.jsx';
 import { ItemPeek } from '../screens/Home.jsx';
 import * as I from '../ui/SidebarIcons.jsx';
+import { keyLabels } from '../ui/keys.js';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 export const text = (size, color = '#171717', weight = 400) => ({ font: `${weight} ${size}px/1.4 var(--font-sans)`, color });
@@ -362,7 +363,7 @@ export function AgentsPanel({ anchor, entries, crumbOf, onGo, onDismiss, onNext,
           </Scroll>
         )}
       <button type="button" className="hov-wash" data-agents-next="1" onClick={() => { onClose(); onNext(); }} style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 20, width: '100%', minHeight: 38, boxSizing: 'border-box', padding: '8px 14px', border: 0, background: 'transparent', cursor: 'pointer', textAlign: 'left', ...text(13.5) }}>
-        <span>Next agent needing attention</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>⌘J</span>
+        <span>Next agent needing attention</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>{`${keyLabels().mod}J`}</span>
       </button>
     </Floating>
   );
@@ -953,7 +954,7 @@ export function ProjectMenu({ anchor, project, counts = new Map(), onSwitch, onN
         <div style={{ height: 1, margin: '4px 6px', background: '#efefef' }} />
         <button type="button" className="hov-wash" data-sb-shortcuts="1" onMouseEnter={shutSub} onClick={() => { onClose(); onShortcuts(); }} style={item}>
           <span style={{ flex: 1 }}>Keyboard shortcuts</span>
-          <span className="sb-shortcut">⌃1–9 · ⌘J</span>
+          <span className="sb-shortcut">{`${keyLabels().ctrl}1–9 · ${keyLabels().mod}J`}</span>
         </button>
       </Floating>
       {sub && (
@@ -992,7 +993,7 @@ export function ShortcutsDialog({ roots, railHidden = false, onNext, onGo, onTog
         </div>
         {/* 2026-10-14, Hudson: no subtext and no horizontal dividing lines here ("they are useless"); the groups are set
             apart by space alone. */}
-        <button type="button" className="hov-wash" onClick={() => { onClose(); onNext(); }} style={row}><span>Next agent needing attention</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>⌘J</span></button>
+        <button type="button" className="hov-wash" onClick={() => { onClose(); onNext(); }} style={row}><span>Next agent needing attention</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>{`${keyLabels().mod}J`}</span></button>
         {ids.length > 0 && (
           <>
             <div style={{ padding: '14px 14px 4px', ...text(12, '#8f8f8f', 500) }}>Projects</div>
@@ -1003,7 +1004,7 @@ export function ShortcutsDialog({ roots, railHidden = false, onNext, onGo, onTog
           </>
         )}
         <div style={{ height: 10 }} />
-        <button type="button" className="hov-wash" onClick={() => { onClose(); onToggleRail(); }} style={row}><span>{railHidden ? 'Show' : 'Hide'} sidebar</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>⌘\</span></button>
+        <button type="button" className="hov-wash" onClick={() => { onClose(); onToggleRail(); }} style={row}><span>{railHidden ? 'Show' : 'Hide'} sidebar</span><span className="sb-shortcut" style={{ marginLeft: 'auto' }}>{`${keyLabels().mod}\\`}</span></button>
       </div>
     </Centered>
   );

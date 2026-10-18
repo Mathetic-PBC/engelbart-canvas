@@ -225,3 +225,17 @@ test('"Import context using background agents" off the Mac names Engelbart\'s ow
   assert.equal(agentsConsentText({ cli: 'Codex', browser: 'Chrome', company: 'OpenAI', platform: 'darwin' }), 'Engelbart will use Codex and your signed-in Chrome to find and import context from the sources you selected. Agents run in the background, and imported files are saved locally on your device. Content the agents read may be sent to OpenAI for processing.');
   assert.equal(agentsConsentText({ cli: 'Codex', browser: 'Chrome', company: 'OpenAI', platform: 'other' }), 'Engelbart will use Codex and its own browser, where you sign in, to find and import context from the sources you selected. Agents run in the background, and imported files are saved locally on your device. Content the agents read may be sent to OpenAI for processing.');
 });
+
+const keysModule = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/ui/keys.js')).href);
+
+test('the workspace\'s shortcuts off the Mac: Ctrl where a Mac has ⌘ (next agent, a doc\'s tabs and find), and their labels say so', async () => {
+  const { modDown, keyLabels } = await keysModule();
+  const press = (fields) => ({ metaKey: false, ctrlKey: false, ...fields });
+  assert.equal(modDown(press({ metaKey: true }), true), true);
+  assert.equal(modDown(press({ ctrlKey: true }), true), false, 'on a Mac Ctrl is another key');
+  assert.equal(modDown(press({ ctrlKey: true }), false), true);
+  assert.equal(modDown(press({ metaKey: true }), false), false, 'the Windows key is not it');
+  assert.equal(modDown(press({ ctrlKey: true, metaKey: true }), false), false);
+  assert.deepEqual(keyLabels(true), { mod: '⌘', ctrl: '⌃', alt: '⌥' });
+  assert.deepEqual(keyLabels(false), { mod: 'Ctrl+', ctrl: 'Ctrl+', alt: 'Alt' });
+});

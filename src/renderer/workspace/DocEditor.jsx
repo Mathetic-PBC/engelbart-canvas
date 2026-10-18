@@ -78,6 +78,7 @@ import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
 import { isNote } from '../model/kind.js';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
+import { keyLabels } from '../ui/keys.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -2221,7 +2222,7 @@ export default class DocEditor extends React.Component {
         + `<input data-title-input="${i}" value="${esc(this.titleEdit.value)}" aria-label="Conversation title" spellcheck="false" autocomplete="off" maxlength="200" style="flex:1;min-width:0;margin:0;padding:0;border:0;background:none;outline:none;font:15px/1.4 var(--font-sans);color:#171717;user-select:text;-webkit-user-select:text">`
         + '</div>';
     }
-    const link = row + `<span class="bart-link" data-act="foldthread" data-row="${i}" role="button" tabindex="0" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" title="⌥-click to rename" style="flex:0 1 auto;display:inline-flex;align-items:center;gap:8px;min-width:0">`
+    const link = row + `<span class="bart-link" data-act="foldthread" data-row="${i}" role="button" tabindex="0" aria-label="${esc(`Expand ${shown}`)}" aria-expanded="false" title="${keyLabels().alt}-click to rename" style="flex:0 1 auto;display:inline-flex;align-items:center;gap:8px;min-width:0">`
       + `<span style="flex:none;display:inline-flex">${ICON.pointer}</span>`
       + `<span class="bart-thread-name" style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(shown)}</span>`
       + '</span>'
