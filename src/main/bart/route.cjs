@@ -26,7 +26,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
+const { resolveShell, sanitizeEnvironment, loginShellArgs, OWN_SESSION } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
@@ -155,7 +155,7 @@ function createRouter({ readModels, environment = process.env, runDirectory = pa
     return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra };
   };
   const execute = (command, env) => new Promise((resolve) => {
-    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, out) => resolve({ stdout: out, failure: error }));
+    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout, maxBuffer: 4 * 1024 * 1024, windowsHide: true, detached: OWN_SESSION }, (error, out) => resolve({ stdout: out, failure: error }));
   });
 
   // Every flag is a literal and every value arrives through the environment, as for summaries (../context/summarizer.cjs).

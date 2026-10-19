@@ -22,7 +22,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
+const { resolveShell, sanitizeEnvironment, loginShellArgs, OWN_SESSION } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { normalizeSummarizer } = require('../store/home.cjs');
 const { SUMMARY_SYSTEM_PROMPT } = require('./summary-prompt.cjs');
@@ -131,7 +131,7 @@ function createCliSummarizer({ readSettings, environment = process.env, runDirec
     return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra }; // Engelbart's own Git, when it stands in (../tools/bundled-git.cjs)
   };
   const execute = (command, env, signal) => new Promise((resolve) => {
-    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, signal, windowsHide: true }, (error, out) => resolve({ stdout: out, failure: error }));
+    run(shell, loginShellArgs(shell, command, env), { cwd: runDirectory, env, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024, signal, windowsHide: true, detached: OWN_SESSION }, (error, out) => resolve({ stdout: out, failure: error }));
   });
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');
 

@@ -65,6 +65,13 @@ const agentPathFor = (shell, environment, platform) => (environment && environme
  * worth using). `environment`: what the shell will be started with; ENGELBART_GIT_BIN in it goes first on PATH,
  * ENGELBART_AGENT_PATH's folders last. On Windows the shell is Git for Windows' bash (resolveShell).
  */
+// A login shell run without a terminal of its own gets a session of its own off Windows (`detached`, Node's setsid;
+// 2026-10-19, Linux): `bash -i` opens the terminal Engelbart was started from (/dev/tty) and takes it over for its job
+// control, and with two at once bash stopped Engelbart itself ("Stopped": SIGTTIN to Engelbart's process group), every
+// time it was started from a terminal. In its own session it has no terminal to take. On Windows `detached` would open
+// a console window instead.
+const OWN_SESSION = process.platform !== 'win32';
+
 function loginShellArgs(shell, command, environment = {}, platform = process.platform) {
   const full = `${gitPathFor(shell, environment, platform)}${agentPathFor(shell, environment, platform)}${command}`;
   return isFish(shell) ? ['--login', '--interactive', '--command', full] : ['-ilc', full];
@@ -256,6 +263,7 @@ module.exports = {
   createLaunchSpec,
   findGitBash,
   loginShellArgs,
+  OWN_SESSION,
   resolvePowerShell,
   resolveShell,
   sanitizeEnvironment,

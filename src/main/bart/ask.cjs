@@ -77,7 +77,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomUUID, createHash } = require('node:crypto');
-const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
+const { resolveShell, sanitizeEnvironment, loginShellArgs, OWN_SESSION } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
 const { BART_SYSTEM_PROMPT } = require('./system-prompt.cjs');
@@ -686,7 +686,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
   };
   // execFile still collects stdout for the result; the same stream is also read line by line as it arrives.
   const execute = (command, cwd, env, signal, onEvent, timeout = STEP_TIMEOUT_MS) => new Promise((resolve) => {
-    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout, maxBuffer: 64 * 1024 * 1024, signal, windowsHide: true }, (error, out) => resolve({ stdout: out, failure: error }));
+    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout, maxBuffer: 64 * 1024 * 1024, signal, windowsHide: true, detached: OWN_SESSION }, (error, out) => resolve({ stdout: out, failure: error }));
     if (onEvent && child && child.stdout) child.stdout.on('data', eventReader(onEvent));
   });
   // The paper tools' MCP server, as either CLI is told to start it.

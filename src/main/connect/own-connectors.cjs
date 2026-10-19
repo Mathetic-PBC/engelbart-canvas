@@ -60,7 +60,7 @@ function codexListCall(env, platform = process.platform) {
   const options = { env, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 };
   if (platform !== 'win32') return ['codex', ['mcp', 'list', '--json'], options];
   const shell = resolveShell(env, platform);
-  return [shell, loginShellArgs(shell, 'exec "${ENGELBART_CODEX_BIN:-codex}" mcp list --json', env, platform), { ...options, windowsHide: true }];
+  return [shell, loginShellArgs(shell, 'exec "${ENGELBART_CODEX_BIN:-codex}" mcp list --json', env, platform), { ...options, windowsHide: true, detached: platform !== 'win32' }]; // its own session: ../terminal/launch.cjs OWN_SESSION
 }
 
 /**

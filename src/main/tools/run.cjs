@@ -7,11 +7,13 @@
 
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { resolveShell, sanitizeEnvironment } = require('../terminal/launch.cjs');
+const { resolveShell, sanitizeEnvironment, OWN_SESSION } = require('../terminal/launch.cjs');
 
 const MARK = '__ENGELBART_TOOLS__';
 
-function createRunner({ environment = process.env, execFileImpl = execFile } = {}) {
+// `detached`: each program in a session of its own off Windows, so a login shell (`-ilc`) never takes over the terminal
+// Engelbart was started from (../terminal/launch.cjs OWN_SESSION).
+function createRunner({ environment = process.env, execFileImpl = execFile, detached = OWN_SESSION } = {}) {
   const shellPath = resolveShell(environment);
   const fish = path.basename(shellPath) === 'fish';
   // Read at each run, not once (2026-10-14): a variable set after launch (CLAUDE_CONFIG_DIR, CODEX_HOME) reaches the checks
@@ -21,7 +23,7 @@ function createRunner({ environment = process.env, execFileImpl = execFile } = {
   /** → { code, signal, stdout, stderr, timedOut, missing } */
   function exec(file, args, { env = {}, timeout = 20_000, cwd, input } = {}) {
     return new Promise((resolve) => {
-      const child = execFileImpl(file, args, { env: { ...base(), ...env }, timeout, cwd, maxBuffer: 4 * 1024 * 1024, windowsHide: true }, (error, stdout, stderr) => {
+      const child = execFileImpl(file, args, { env: { ...base(), ...env }, timeout, cwd, maxBuffer: 4 * 1024 * 1024, windowsHide: true, detached }, (error, stdout, stderr) => {
         const code = error ? (typeof error.code === 'number' ? error.code : null) : 0;
         resolve({
           code,

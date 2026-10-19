@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { sanitizeEnvironment, resolveShell, loginShellArgs } = require('../terminal/launch.cjs');
+const { sanitizeEnvironment, resolveShell, loginShellArgs, OWN_SESSION } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { chooseProvider, PROVIDER_NAMES } = require('../../shared/import-flow.cjs');
 
@@ -107,7 +107,7 @@ function createProviders({ tools, prefs, homeDir = os.homedir(), environment = p
         if (platform === 'win32') {
           const shell = resolveShell(environment, platform);
           const withTool = { ...env, ENGELBART_TOOL: file };
-          run(shell, loginShellArgs(shell, 'exec "$ENGELBART_TOOL" auth status --json', withTool, platform), { env: withTool, timeout: AUTH_TIMEOUT_MS, maxBuffer: 1024 * 1024, windowsHide: true }, answer);
+          run(shell, loginShellArgs(shell, 'exec "$ENGELBART_TOOL" auth status --json', withTool, platform), { env: withTool, timeout: AUTH_TIMEOUT_MS, maxBuffer: 1024 * 1024, windowsHide: true, detached: OWN_SESSION }, answer);
           return;
         }
         run(file, ['auth', 'status', '--json'], { env, timeout: AUTH_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, answer);

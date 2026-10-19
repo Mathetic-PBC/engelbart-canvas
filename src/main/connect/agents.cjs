@@ -39,7 +39,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
+const { resolveShell, sanitizeEnvironment, loginShellArgs, OWN_SESSION } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
 const { pathLabeller, claudeUpdate, codexUpdate, eventReader } = require('../bart/activity.cjs');
@@ -387,7 +387,7 @@ function createConnectAgents({ environment = process.env, runDirectory = path.jo
     return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra };
   };
   const execute = (command, cwd, env, signal, onEvent, timeout) => new Promise((resolve) => {
-    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout, maxBuffer: 128 * 1024 * 1024, signal }, (error, out) => resolve({ stdout: out, failure: error }));
+    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout, maxBuffer: 128 * 1024 * 1024, signal, detached: OWN_SESSION }, (error, out) => resolve({ stdout: out, failure: error }));
     if (onEvent && child && child.stdout) child.stdout.on('data', eventReader(onEvent));
   });
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');

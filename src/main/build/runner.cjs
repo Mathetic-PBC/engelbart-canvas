@@ -20,7 +20,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { randomUUID } = require('node:crypto');
-const { resolveShell, sanitizeEnvironment, loginShellArgs } = require('../terminal/launch.cjs');
+const { resolveShell, sanitizeEnvironment, loginShellArgs, OWN_SESSION } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, lastResultLine } = require('../context/summarizer.cjs');
 const { pathLabeller, claudeUpdate, codexUpdate, eventReader } = require('../bart/activity.cjs');
@@ -88,7 +88,7 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
     return { ...base, ...(tools && tools.environment ? tools.environment() : {}), ...extra }; // Engelbart's own Git, when it stands in (../tools/bundled-git.cjs)
   };
   const execute = (command, cwd, env, { signal, timeoutMs, onEvent }) => new Promise((resolve) => {
-    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024, signal, windowsHide: true }, (error, out) => resolve({ stdout: out, failure: error }));
+    const child = run(shell, loginShellArgs(shell, command, env), { cwd, env, timeout: timeoutMs, maxBuffer: 256 * 1024 * 1024, signal, windowsHide: true, detached: OWN_SESSION }, (error, out) => resolve({ stdout: out, failure: error }));
     if (onEvent && child && child.stdout) child.stdout.on('data', eventReader(onEvent));
   });
   const notFound = (failure) => failure && (failure.code === 127 || failure.code === 'ENOENT');
