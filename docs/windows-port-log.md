@@ -12,6 +12,12 @@ bug Hudson saw: "on Linux it is not accessing Obsidian files and other files wel
 
 ### Status
 
+- 2026-10-19, **first CI run** (39181647830, on c5a487e): Mac ✓; Linux 2 failed, Windows 11 failed, so neither
+  packaged. Fixed for Linux (David's session), both tests that assumed the runner is a Mac: discover-assistant-projects'
+  D2 runs the discovery as the Mac's (`platform: 'darwin'`; off the Mac the sign-ins question is answered 'allowed',
+  e8101ad), and the collapsed title's rename hint is `Alt` off the Mac. The Windows job is left: its failures are the
+  Windows port's (@create's rules in Claude Code's POSIX form, bdfad42 on windows-beta-deployment, and tests written for
+  a Mac or Linux runner); this branch's installer is the AppImage.
 - 2026-10-18, **after the agent's run** (in the session that started it): taken from windows-beta-deployment, because each
   applies off the Mac, not on Windows alone: 96caea2 (release builds copy src/main's .html pages: left unstaged in the
   merge 47c66a6), 2c96f08 and 7cd955c (import sign-ins off the Mac: OneNote's and Evernote's inside Engelbart, the card

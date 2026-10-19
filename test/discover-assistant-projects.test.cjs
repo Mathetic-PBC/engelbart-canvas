@@ -228,7 +228,7 @@ test('D2: not signed in is "unavailable" (no window, or nothing typed); a missin
 
 /* ------------------------------------------------------------------------------------------------- the discovery */
 
-function discoveryOn({ cli = 'none', reply = JSON.stringify(PROJECTS), fail = null, keychain = 'allowed', answers = null, provider = 'anthropic', keychainWaitMs = 2000 } = {}) {
+function discoveryOn({ cli = 'none', reply = JSON.stringify(PROJECTS), fail = null, keychain = 'allowed', answers = null, provider = 'anthropic', keychainWaitMs = 2000, platform = 'darwin' } = {}) {
   const home = temp();
   if (cli === 'evidence') {
     fs.mkdirSync(path.join(home, 'help-seeking', '.git'), { recursive: true });
@@ -242,7 +242,8 @@ function discoveryOn({ cli = 'none', reply = JSON.stringify(PROJECTS), fail = nu
   const asked = [];
   const assistants = { ask: async (input) => { asked.push(input); return (answers || [{ app: 'Claude', outcome: 'none' }, { app: 'ChatGPT', outcome: 'none' }]); } };
   let last = null;
-  const discovery = createDiscovery({ agents, context: async () => ({ dataRoot }), homeDir: home, providers, notify: (state) => { last = state; }, assistants, keychainWaitMs, keychainPollMs: 5 });
+  // The Mac's: the sign-ins question is asked there alone (off the Mac it is answered 'allowed', linux-platform.test.cjs).
+  const discovery = createDiscovery({ agents, context: async () => ({ dataRoot }), homeDir: home, providers, notify: (state) => { last = state; }, assistants, keychainWaitMs, keychainPollMs: 5, platform });
   const settled = () => until(() => last, (state) => state && state.projects.status !== 'running', 'the project search');
   return { discovery, dataRoot, turns, asked, settled, last: () => last };
 }

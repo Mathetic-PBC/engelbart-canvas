@@ -204,7 +204,7 @@ test('collapsed: one 42px line, the pointer and the title as a link, when it was
   assert.ok(!/data-act|background|border:|border-radius/.test(open), 'the row is not the button, and nothing is drawn around it');
   assert.match(open, /height:42px;box-sizing:border-box;font:15px\/1\.4 var\(--font-sans\)/, 'one 42px line, 15px');
   const link = row.slice(row.indexOf('<span class="bart-link"'));
-  assert.match(link, /^<span class="bart-link" data-act="foldthread" data-row="1" role="button" tabindex="0" aria-label="Expand Retry logic" aria-expanded="false" title="⌥-click to rename"/, 'the link is the button');
+  assert.match(link, new RegExp(`^<span class="bart-link" data-act="foldthread" data-row="1" role="button" tabindex="0" aria-label="Expand Retry logic" aria-expanded="false" title="${process.platform === 'darwin' ? '⌥' : 'Alt'}-click to rename"`), 'the link is the button (the rename key is the platform\'s: ⌥ on a Mac, Alt elsewhere)');
   assert.match(link, /<span style="flex:none;display:inline-flex"><svg width="15"[^>]*><path d="M4\.04 4\.69/, 'the mouse-pointer-2, 15px, in the link\'s colour');
   assert.equal((row.match(/<svg/g) || []).length, 1, 'no other icon: no chevron');
   assert.match(link, /class="bart-thread-name"[^>]*text-overflow:ellipsis[^>]*>Retry logic<\/span><\/span><span data-thread-when="1" style="flex:none;margin-left:auto;font:12px\/1 var\(--font-sans\);color:#8f8f8f;white-space:nowrap">9:41 PM<\/span><\/div>$/, 'the title, then on its right when it was asked, never the agent (2026-10-15, David)');
