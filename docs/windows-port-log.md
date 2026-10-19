@@ -14,6 +14,13 @@ pushed: **nothing here has run on Windows** (no CI run); every Windows branch is
 
 ### Status (newest first)
 
+- 2026-10-19, **first CI run** (39181645504, on 96caea2): Mac ✓; Windows 8 failed, Linux 1 failed, so neither
+  packaged. Fixed (David's session): `createRules` resolves a POSIX draft with `path.posix` (on Windows `path.resolve`
+  made `/a/b` into `D:\a\b`), and the agent map names its placeholder draft in POSIX form on every machine. Tests that
+  assumed the runner is a Mac now say so: create.test.cjs expects Claude Code's `//c/…` form on Windows; the collapsed
+  title's rename hint is `Alt` off the Mac; skipped on Windows (see Tests skipped): browser-agents' terminal (zsh),
+  cookies C1 (chmod 000), provider-connect's Claude app copy (claude.app). run-step's "after a turn ends in review"
+  failed once ('failed' for 'done') and passed in the same commit's other Windows run: left as intermittent.
 - 2026-10-18: 9 commits (a91c881 … 78bc4b5). Mac `npm test` at 47c66a6: 2262 tests, 2257 pass, 4 skipped, 1 failed
   (install-mac.test.cjs "once ready it waits … past the old 30-minute limit": a timing test under load from parallel
   runs; it passes alone). At 6c5710e: 2279 tests, 2275 pass, 4 skipped, 0 failed. At 78bc4b5 (the last code commit):
@@ -111,7 +118,15 @@ pushed: **nothing here has run on Windows** (no CI run); every Windows branch is
 
 ### Tests skipped
 
-None added. No Mac test deleted, weakened or newly skipped.
+Added on Windows only (2026-10-19, after the first CI run); the Mac and Linux run them as before:
+
+| Test file | Test | Reason |
+|---|---|---|
+| browser-agents.test.cjs | the Engelbart terminal: a login shell… | POSIX terminals only: on Windows the shell is Git Bash (windows-platform.test.cjs) |
+| cookies-onboarding-beta.test.cjs | C1: macOS refusing the read anyway… | Windows has no file modes: chmod 000 does not refuse the read |
+| provider-connect.test.cjs | the Claude app's own Claude Code counts as installed… | macOS only: the Claude app keeps its Claude Code inside claude.app |
+
+No Mac test deleted, weakened or newly skipped.
 
 ### Needs a decision
 

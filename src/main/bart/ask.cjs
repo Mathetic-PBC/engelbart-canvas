@@ -632,7 +632,7 @@ const createdRow = (file) => ({ name: file.name, type: file.type, path: file.rel
 // first folder (C:\Users\ada → /c/Users/ada), so the folder is written that way: as it was, no write would match and all
 // of @create's would be refused.
 function createRules(draft, platform = process.platform) {
-  const full = platform === 'win32' ? path.win32.resolve(draft) : path.resolve(draft);
+  const full = platform === 'win32' ? path.win32.resolve(draft) : path.posix.resolve(draft);
   const posix = platform === 'win32' ? `/${full.slice(0, 1).toLowerCase()}${full.slice(2).replace(/\\/g, '/')}` : full;
   const under = `/${posix}/**`;
   return `${CLAUDE_TOOLS},Edit(${under}),Write(${under})`;

@@ -105,7 +105,8 @@ test('Claude Code: Write and Edit on the draft folder alone (dontAsk refuses any
   assert.ok(!/Bash/.test(call.command) && !/Bash/.test(call.env.ENGELBART_BART_RULES), 'no Bash');
   assert.match(call.command, /--restricted --setting-sources "" /);
   assert.match(call.command, /--allowedTools "\$ENGELBART_BART_RULES" --permission-mode dontAsk /);
-  assert.equal(call.env.ENGELBART_BART_RULES, `${CLAUDE_TOOLS},Edit(/${call.cwd}/**),Write(/${call.cwd}/**)`, 'writes allowed under the draft alone, an absolute path written //…');
+  const written = process.platform === 'win32' ? `/${call.cwd.slice(0, 1).toLowerCase()}${call.cwd.slice(2).replace(/\\/g, '/')}` : call.cwd; // Claude Code's form of C:\ is /c/
+  assert.equal(call.env.ENGELBART_BART_RULES, `${CLAUDE_TOOLS},Edit(/${written}/**),Write(/${written}/**)`, 'writes allowed under the draft alone, an absolute path written //…');
   assert.equal(createRules('/a/b', 'darwin'), `${CLAUDE_TOOLS},Edit(//a/b/**),Write(//a/b/**)`);
   for (let n = 0; call.env[`ENGELBART_BART_DIR${n}`]; n++) assert.ok(!call.env.ENGELBART_BART_RULES.includes(`(/${call.env[`ENGELBART_BART_DIR${n}`]}/**)`), 'the folders it reads (the data root holds the draft) get no write rule');
   assert.equal(call.timeout, CREATE_TIMEOUT_MS);

@@ -197,7 +197,7 @@ test('Connect on a CLI whose sign-in check could not tell: checked again, then s
 
 /* ------------------------------------------------------------------------------------- the Claude app's Claude Code */
 
-test('the Claude app\'s own Claude Code counts as installed (no install, no "Installing"); one too old is passed over', async () => {
+test('the Claude app\'s own Claude Code counts as installed (no install, no "Installing"); one too old is passed over', { skip: process.platform === 'win32' && 'macOS only: the Claude app keeps its Claude Code inside claude.app' }, async () => {
   const home = temp();
   const dir = path.join(home, 'Library', 'Application Support', 'Claude', 'claude-code', '2.1.295', '9d6405864fdc', 'claude.app', 'Contents', 'MacOS');
   fs.mkdirSync(dir, { recursive: true });

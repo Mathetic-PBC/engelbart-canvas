@@ -28,7 +28,8 @@ const { LIMITS, TURN_MS } = require('../build/manager.cjs');
 // titled Chat; @bart is the router.
 const TITLES = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discover', create: 'Create' };
 const TOKENS = { bart: 'chat', brainstorm: 'brainstorm', discover: 'discover', create: 'create' };
-// Where @create writes, named as a placeholder (each run's is its own, ../bart/create.cjs).
+// Where @create writes, named as a placeholder (each run's is its own, ../bart/create.cjs); shown in POSIX form on
+// every machine, so its rule reads the same on Windows.
 const DRAFT = '/<data root>/.create/<ask id>';
 
 /** Bart, the router (../bart/route.cjs): its rules, model, prompt and inputs. */
@@ -70,7 +71,7 @@ function promptOf(dataRoot, agent) {
 function toolsOf(agent) {
   if (agent === 'create') {
     return {
-      anthropic: { tools: CREATE_TOOLS, allowedTools: `${createRules(DRAFT)} --permission-mode dontAsk`, papers: false },
+      anthropic: { tools: CREATE_TOOLS, allowedTools: `${createRules(DRAFT, 'posix')} --permission-mode dontAsk`, papers: false },
       openai: { overrides: [`-C ${DRAFT}`, ...CREATE_CODEX, 'tools.web_search=true'] },
     };
   }
