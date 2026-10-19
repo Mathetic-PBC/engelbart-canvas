@@ -59,7 +59,7 @@ function answersFor(data) {
  * `env`, when given, is the whole environment the session starts with (the caller has taken out what must not reach the
  * CLI, such as API keys); else the terminal's own.
  */
-function createAgentTerminal({ pty = null, environment = process.env, extraEnvironment = () => ({}) } = {}) {
+function createAgentTerminal({ pty = null, environment = process.env, extraEnvironment = () => ({}), platform = process.platform } = {}) {
   const ptyModule = () => pty || require('node-pty'); // eslint-disable-line global-require
 
   function run({ command, env = null, cwd, signal = null, timeout = 45 * 60_000, onLine = () => {}, cols = 220, rows = 50 }) {
@@ -90,6 +90,8 @@ function createAgentTerminal({ pty = null, environment = process.env, extraEnvir
         resolve({ output: kept, exitCode, signal: exitSignal || null, timedOut, stopped });
       };
       const kill = () => {
+        // node-pty on Windows takes no signal (it throws), and its kill() ends the tree (2026-10-18, as session-manager.cjs).
+        if (platform === 'win32') { try { handle.kill(); } catch { /* gone */ } return; }
         try { handle.kill('SIGTERM'); } catch { /* gone */ }
         killTimer = setTimeout(() => { try { handle.kill('SIGKILL'); } catch { /* gone */ } }, KILL_GRACE_MS);
         if (killTimer.unref) killTimer.unref();

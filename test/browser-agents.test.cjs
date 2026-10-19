@@ -125,7 +125,7 @@ function fakePty(script) {
   };
 }
 
-test('the Engelbart terminal: a login shell, the terminal\'s questions answered, lines without escape codes, Stop ends it', async () => {
+test('the Engelbart terminal: a login shell, the terminal\'s questions answered, lines without escape codes, Stop ends it', { skip: process.platform === 'win32' && 'POSIX terminals only: on Windows the shell is Git Bash (windows-platform.test.cjs)' }, async () => {
   assert.equal(plain('\x1b[1mbold\x1b[0m\r\n\x1b]0;title\x07next\rline'), 'bold\nnext\nline');
   assert.deepEqual(answersFor('\x1b[c\x1b[>q'), ['\x1b[?62;22c', '\x1bP>|xterm.js(6.0.0)\x1b\\']);
   const pty = fakePty((handle) => { handle.print('\x1b[c{"type":"a"}\r\n{"type":'); handle.print('"b"}\r\npartial'); handle.exit(0); });
@@ -142,7 +142,7 @@ test('the Engelbart terminal: a login shell, the terminal\'s questions answered,
   assert.deepEqual(run.handle.written, ['\x1b[?62;22c'], 'the terminal question answered as xterm.js answers it');
   const hung = fakePty(() => {});
   const controller = new AbortController();
-  const pending = createAgentTerminal({ pty: hung, environment: { SHELL: '/bin/zsh' } }).run({ command: 'sleep 99', cwd: '/tmp', signal: controller.signal });
+  const pending = createAgentTerminal({ platform: 'darwin', pty: hung, environment: { SHELL: '/bin/zsh' } }).run({ command: 'sleep 99', cwd: '/tmp', signal: controller.signal });
   controller.abort();
   const stopped = await pending;
   assert.equal(stopped.stopped, true);

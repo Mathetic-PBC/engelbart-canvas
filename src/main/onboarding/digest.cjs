@@ -21,7 +21,7 @@ const GUARDED = new Set(['Desktop', 'Documents', 'Downloads']);
  * folders down, a repository not looked inside, a folder macOS guards only when `access` says it may be read. Each one's
  * folder, the day its history last changed (.git's logs/HEAD, index or HEAD) and its README's first heading.
  */
-function recentRepos(homeDir, { days = DIGEST_DAYS, access = null, max = 15, depth = 3, now = Date.now() } = {}) {
+function recentRepos(homeDir, { days = DIGEST_DAYS, access = null, max = 15, depth = 3, now = Date.now(), platform = process.platform } = {}) {
   const since = now - days * 86_400_000;
   const found = [];
   let level = [homeDir];
@@ -32,6 +32,8 @@ function recentRepos(homeDir, { days = DIGEST_DAYS, access = null, max = 15, dep
       try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { continue; }
       for (const entry of entries) {
         if (!entry.isDirectory() || entry.name.startsWith('.') || REPO_SKIP.has(entry.name)) continue;
+        // Windows (2026-10-18): the home's AppData holds hundreds of apps' folders, which filled the 400 looked in at the next level.
+        if (platform === 'win32' && dir === homeDir && entry.name === 'AppData') continue;
         const full = path.join(dir, entry.name);
         if (dir === homeDir && GUARDED.has(entry.name) && !(access && access.readable(full))) continue;
         if (access && !access.readable(full)) continue;

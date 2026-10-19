@@ -13,7 +13,7 @@ const readers = require('./readers.cjs');
 const folderAccess = require('./folder-access.cjs');
 const { cursorDb, cursorChats } = require('./cursor.cjs');
 const linuxApps = require('./linux-apps.cjs');
-const { APPS, LOCAL_PDFS, sourceOf, periodName } = require('../../shared/connect-sources.cjs');
+const { APPS, LOCAL_PDFS, sourceOf, periodName, onThisMachine } = require('../../shared/connect-sources.cjs');
 
 const exists = (file) => { try { fs.accessSync(file); return true; } catch { return false; } };
 
@@ -24,7 +24,35 @@ function googleDrives(homeDir) {
 
 // An app installed on this Mac (its bundle in /Applications or ~/Applications) counts as found: the person uses it.
 const BUNDLES = { ChatGPT: ['ChatGPT.app'], Claude: ['Claude.app'], Granola: ['Granola.app'], Notion: ['Notion.app'], Evernote: ['Evernote.app'], OneNote: ['Microsoft OneNote.app'], Perplexity: ['Perplexity.app'], Cursor: ['Cursor.app'], Zoom: ['zoom.us.app'], Obsidian: ['Obsidian.app'], 'Google Docs': ['Google Drive.app'], Zotero: ['Zotero.app'] };
-function installed(homeDir, app, roots) {
+// On Windows (2026-10-18, the beta's Windows catch-up): an app's program where its installer usually puts it, under the
+// person's AppData\Local (most: `local`), AppData\Roaming (`roaming`) or Program Files (`programs`). Not checked against
+// each installer on a Windows machine; an app installed elsewhere is found by its other signs (history, sign-ins).
+const WINDOWS_PROGRAMS = Object.freeze({
+  Claude: [['local', 'AnthropicClaude', 'claude.exe']],
+  Granola: [['local', 'Programs', 'Granola', 'Granola.exe']],
+  Notion: [['local', 'Programs', 'Notion', 'Notion.exe']],
+  Evernote: [['local', 'Programs', 'Evernote', 'Evernote.exe']],
+  OneNote: [['programs', 'Microsoft Office', 'root', 'Office16', 'ONENOTE.EXE']],
+  Perplexity: [['local', 'Programs', 'Perplexity', 'Perplexity.exe']],
+  Cursor: [['local', 'Programs', 'cursor', 'Cursor.exe']],
+  Zoom: [['roaming', 'Zoom', 'bin', 'Zoom.exe']],
+  Obsidian: [['local', 'Programs', 'Obsidian', 'Obsidian.exe'], ['local', 'Obsidian', 'Obsidian.exe']],
+  'Google Docs': [['programs', 'Google', 'Drive File Stream']],
+  Zotero: [['programs', 'Zotero', 'zotero.exe']],
+});
+/** The places `app`'s program may be on Windows, from `env` (any case) and `homeDir`. */
+function windowsPrograms(app, { homeDir = '', env = process.env } = {}) {
+  const variable = (key) => { const found = Object.keys(env || {}).find((each) => each.toUpperCase() === key.toUpperCase()); return found ? env[found] : ''; };
+  const bases = {
+    local: [variable('LOCALAPPDATA') || path.join(homeDir, 'AppData', 'Local')],
+    roaming: [variable('APPDATA') || path.join(homeDir, 'AppData', 'Roaming')],
+    programs: [...new Set([variable('ProgramFiles') || 'C:\\Program Files', variable('ProgramFiles(x86)') || 'C:\\Program Files (x86)'])],
+  };
+  return (WINDOWS_PROGRAMS[app] || []).flatMap(([base, ...parts]) => bases[base].map((dir) => path.join(dir, ...parts)));
+}
+/** Whether `app`'s desktop app is installed: its bundle in `roots` on a Mac, its program's usual place on Windows. */
+function installed(homeDir, app, roots, { platform = process.platform, env = process.env } = {}) {
+  if (platform === 'win32') return windowsPrograms(app, { homeDir, env }).some(exists);
   return (BUNDLES[app] || []).some((bundle) => roots.some((root) => exists(path.join(root, bundle))));
 }
 
@@ -36,10 +64,10 @@ function installed(homeDir, app, roots) {
  */
 function detect({ homeDir, env = process.env, zotero = () => null, github = () => null, signedIn = [], connectors = () => false, applications = ['/Applications', path.join(homeDir || '', 'Applications')], access = null, platform = process.platform } = {}) {
   const apps = {};
-  const set = (app, found, where = '') => { apps[app] = { found: !!found, where }; };
+  const set = (app, found, where = '') => { apps[app] = { found: !!found, where: onThisMachine(where, platform) }; };
   // Linux (2026-10-18): no .app bundles; an app's .desktop entry says it is installed (./linux-apps.cjs), read once here.
   const entries = platform === 'linux' ? linuxApps.desktopEntries({ homeDir, env }) : null;
-  const has = (app) => (platform === 'linux' ? linuxApps.installed(app, { homeDir, env, entries }) : installed(homeDir, app, applications));
+  const has = (app) => (platform === 'linux' ? linuxApps.installed(app, { homeDir, env, entries }) : installed(homeDir, app, applications, { platform, env }));
   const web = new Set(signedIn || []);
   const here = platform === 'darwin' ? 'on this Mac' : 'on this computer';
   const vaults = readers.obsidianVaults(homeDir, platform, env);
@@ -272,4 +300,4 @@ function gitFolders(dir, depth = 2) {
   return entries.filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && entry.name !== 'node_modules').flatMap((entry) => gitFolders(path.join(dir, entry.name), depth - 1)).slice(0, 100);
 }
 
-module.exports = { detect, scanFor, gitFolders, localRepos, googleDrives, pdfsAtAGlance };
+module.exports = { detect, scanFor, gitFolders, localRepos, googleDrives, pdfsAtAGlance, installed, windowsPrograms };

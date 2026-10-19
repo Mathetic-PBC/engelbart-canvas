@@ -70,3 +70,203 @@ test('the browser\'s sign-ins off the Mac: never asked (nothing is copied; sign-
   assert.deepEqual(onMac.browsers.map((browser) => browser.id), ['chrome', 'safari', 'firefox']);
   assert.equal(onMac.keychain, null);
 });
+
+const fs = require('node:fs');
+const os = require('node:os');
+const readers = require('../src/main/connect/readers.cjs');
+const { historySites, toolEvidence, createDiscovery } = require('../src/main/onboarding/discover.cjs');
+
+const temp = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-windows-beta-')));
+/** A history database where `file` is: Chromium's urls (`kind` 'chromium') or Firefox's moz_places. */
+function historyAt(file, kind) {
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  const { DatabaseSync } = require('node:sqlite');
+  const db = new DatabaseSync(file);
+  if (kind === 'chromium') {
+    const recent = readers.chromeTime(Date.now() - 86_400_000);
+    db.exec(`CREATE TABLE urls(id INTEGER PRIMARY KEY, url TEXT, title TEXT, visit_count INTEGER, typed_count INTEGER, last_visit_time INTEGER, hidden INTEGER DEFAULT 0);
+      INSERT INTO urls(url,title,visit_count,last_visit_time) VALUES ('https://www.notion.so/a','A',7,${recent}),('https://github.com/x','X',4,${recent});`);
+  } else {
+    const recent = (Date.now() - 86_400_000) * 1000;
+    db.exec(`CREATE TABLE moz_places(id INTEGER PRIMARY KEY, url TEXT, visit_count INTEGER, last_visit_date INTEGER);
+      INSERT INTO moz_places(url,visit_count,last_visit_date) VALUES ('https://www.overleaf.com/project','9',${recent});`);
+  }
+  db.close();
+}
+/** `fn` run with no sqlite3 command to be found (Windows has none). */
+async function withoutSqlite3(fn) {
+  const was = process.env.PATH;
+  process.env.PATH = temp();
+  try { return await fn(); } finally { process.env.PATH = was; }
+}
+
+test('the tools screen\'s history on Windows: Chrome\'s and Opera\'s from AppData\\Local and Roaming, Firefox\'s from Roaming, all with node:sqlite; Safari has none', async () => {
+  const home = temp();
+  historyAt(path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'Default', 'History'), 'chromium');
+  historyAt(path.join(home, 'AppData', 'Roaming', 'Opera Software', 'Opera Stable', 'History'), 'chromium');
+  historyAt(path.join(home, 'AppData', 'Roaming', 'Mozilla', 'Firefox', 'Profiles', 'abc.default-release', 'places.sqlite'), 'firefox');
+  const chrome = await withoutSqlite3(() => historySites({ homeDir: home, browserId: 'chrome', platform: 'win32' }));
+  assert.deepEqual(chrome.map((site) => [site.host, site.visits]), [['notion.so', 7], ['github.com', 4]]);
+  const opera = await withoutSqlite3(() => historySites({ homeDir: home, browserId: 'opera', platform: 'win32' }));
+  assert.deepEqual(opera.map((site) => site.host), ['notion.so', 'github.com'], 'Opera keeps one profile, its folder itself');
+  const firefox = await withoutSqlite3(() => historySites({ homeDir: home, browserId: 'firefox', platform: 'win32' }));
+  assert.deepEqual(firefox.map((site) => [site.host, site.visits]), [['overleaf.com', 9]]);
+  assert.deepEqual(await historySites({ homeDir: home, browserId: 'safari', platform: 'win32', diskAccess: async () => true }), []);
+});
+
+test('the tools screen on Windows says "this computer", and a desktop app counts by its program in AppData or Program Files', async () => {
+  const home = temp();
+  historyAt(path.join(home, 'AppData', 'Local', 'Google', 'Chrome', 'User Data', 'Default', 'History'), 'chromium');
+  const env = { LOCALAPPDATA: path.join(home, 'AppData', 'Local'), APPDATA: path.join(home, 'AppData', 'Roaming'), ProgramFiles: path.join(home, 'Program Files') };
+  fs.mkdirSync(path.join(env.LOCALAPPDATA, 'Programs', 'Evernote'), { recursive: true });
+  fs.writeFileSync(path.join(env.LOCALAPPDATA, 'Programs', 'Evernote', 'Evernote.exe'), '');
+  const detected = { apps: { Obsidian: { found: true, where: '~/Vault' } }, localRepos: ['a', 'b'] };
+  const out = await withoutSqlite3(() => toolEvidence({ homeDir: home, env, browserId: 'chrome', detected, platform: 'win32' }));
+  assert.doesNotMatch(Object.values(out.evidence).map((fact) => fact.evidence).join('\n'), /this Mac/);
+  assert.equal(out.evidence.__sites.evidence, 'Chrome history on this computer');
+  assert.equal(out.evidence['Folders on this Mac'].evidence, '2 repositories on this computer');
+  assert.equal(out.evidence.Obsidian.evidence, 'Found on this computer (~/Vault)');
+  assert.deepEqual([out.evidence.Evernote.used, out.evidence.Evernote.method], [true, 'app'], 'Evernote.exe in AppData\\Local\\Programs');
+  // A Mac's words as before.
+  const mac = await toolEvidence({ homeDir: home, env, browserId: 'chrome', detected, platform: 'darwin', applications: [] });
+  assert.equal(mac.evidence['Folders on this Mac'].evidence, '2 repositories on this Mac');
+});
+
+test('recent projects off the Mac: ChatGPT and Claude asked at once, never after a wait for a sign-ins answer nobody is asked for', async () => {
+  const home = temp();
+  const dataRoot = path.join(home, 'root');
+  const asked = [];
+  let last = null;
+  const providers = { status: async () => ({ providers: [{ id: 'anthropic', installed: true, signedIn: true }], decision: { pick: 'anthropic' } }) };
+  const discovery = createDiscovery({
+    platform: 'win32', agents: { turn: async () => ({ text: 'null' }) }, context: async () => ({ dataRoot }), homeDir: home, providers,
+    notify: (state) => { last = state; }, assistants: { ask: async (input) => { asked.push(input); return [{ app: 'Claude', outcome: 'none' }, { app: 'ChatGPT', outcome: 'none' }]; } },
+    keychainWaitMs: 10 * 60_000, keychainPollMs: 5,
+  });
+  const started = Date.now();
+  await discovery.startProjects({ provider: 'anthropic' });
+  while (!(last && last.projects.status !== 'running') && Date.now() - started < 5000) await new Promise((resolve) => { setTimeout(resolve, 10); });
+  assert.equal(last.projects.status, 'done');
+  assert.equal(asked.length, 1, 'asked, through Engelbart\'s own browser');
+  assert.ok(Date.now() - started < 5000);
+});
+
+const { createRules, CLAUDE_TOOLS } = require('../src/main/bart/ask.cjs');
+
+test('@create\'s write rules on Windows name its folder as Claude Code matches a Windows path (C:\\ as /c/), so its writes are not refused', () => {
+  assert.equal(createRules('C:\\Users\\ada\\Engelbart\\.create\\r1', 'win32'), `${CLAUDE_TOOLS},Edit(//c/Users/ada/Engelbart/.create/r1/**),Write(//c/Users/ada/Engelbart/.create/r1/**)`);
+  assert.equal(createRules('/a/b', 'darwin'), `${CLAUDE_TOOLS},Edit(//a/b/**),Write(//a/b/**)`, 'a Mac\'s as before');
+});
+
+const { createQuickRun } = require('../src/main/bart/name-chat.cjs');
+const { createRouter } = require('../src/main/bart/route.cjs');
+const { createProviders } = require('../src/main/onboarding/providers.cjs');
+
+test('@bart\'s quick runs (a chat\'s title, @create\'s line, the router) start Git Bash with no console window on Windows', async () => {
+  const seen = [];
+  const run = (file, args, options, done) => { seen.push(options); done(null, ''); };
+  const dir = temp();
+  const quickRun = createQuickRun({ environment: { SHELL: '/bin/zsh', PATH: '/usr/bin' }, runDirectory: dir, codexHome: path.join(dir, 'codex'), run });
+  await quickRun({ provider: 'anthropic', model: 'haiku', effort: 'low' }, 'system', 'input');
+  const router = createRouter({ readModels: () => ({ provider: 'anthropic', anthropic: { models: { haiku: { id: 'claude-haiku', name: 'Haiku', efforts: ['low'] } } } }), environment: { SHELL: '/bin/zsh', PATH: '/usr/bin' }, runDirectory: dir, codexHome: path.join(dir, 'codex2'), run });
+  await router.route({ projectId: 'p', text: 'what is this', section: '@bart what is this', threads: [] });
+  assert.ok(seen.length >= 1, 'ran');
+  for (const options of seen) assert.equal(options.windowsHide, true);
+});
+
+test('Claude Code\'s plan on Windows: asked through Git Bash (npm\'s claude is a shell script there), with no console window', async () => {
+  const calls = [];
+  const run = (file, args, options, done) => { calls.push({ file, args, options }); done(null, JSON.stringify({ loggedIn: true, subscriptionType: 'max' })); };
+  const tools = { snapshot: () => ({ tools: { claude: { installed: true, status: 'ready', signedIn: true, path: 'C:\\Users\\ada\\AppData\\Roaming\\npm\\claude' }, codex: { installed: false, status: 'missing' } } }), environment: () => ({}) };
+  const providers = createProviders({ tools, prefs: { get: () => ({}), set() {} }, homeDir: temp(), environment: { ProgramFiles: 'C:\\Program Files', PATH: '' }, run, fake: '', platform: 'win32' });
+  const out = await providers.status({ fresh: true });
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].file, /bash\.exe$/);
+  assert.match(calls[0].args.join(' '), /exec "\$ENGELBART_TOOL" auth status --json/);
+  assert.equal(calls[0].options.env.ENGELBART_TOOL, 'C:\\Users\\ada\\AppData\\Roaming\\npm\\claude');
+  assert.equal(calls[0].options.windowsHide, true);
+  assert.equal(out.providers.find((one) => one.id === 'anthropic').signedIn, true);
+});
+
+const { codexListCall } = require('../src/main/connect/own-connectors.cjs');
+
+test('the person\'s own Codex connectors on Windows: `codex mcp list` through Git Bash (npm\'s codex is a .cmd and a shell script), no console window', () => {
+  const env = { ProgramFiles: 'C:\\Program Files', ENGELBART_CODEX_BIN: 'C:\\Users\\ada\\AppData\\Roaming\\npm\\codex' };
+  const [file, args, options] = codexListCall(env, 'win32');
+  assert.match(file, /bash\.exe$/);
+  assert.match(args.join(' '), /exec "\$\{ENGELBART_CODEX_BIN:-codex\}" mcp list --json/);
+  assert.equal(options.env, env);
+  assert.equal(options.windowsHide, true);
+  assert.deepEqual(codexListCall({ A: '1' }, 'darwin').slice(0, 2), ['codex', ['mcp', 'list', '--json']], 'a Mac\'s as before');
+});
+
+const { pathToFileURL } = require('node:url');
+const onboardingModel = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/model/onboarding.js')).href);
+
+test('the Obsidian picker on Windows: a file\'s name is its last part after \\ too, and a folder chosen covers what is under it', async () => {
+  const { lastPart, within } = await onboardingModel();
+  assert.equal(lastPart('C:\\Users\\ada\\Vault\\Memex\\Note.md'), 'Note.md');
+  assert.equal(lastPart('/Users/ada/Vault/Note.md'), 'Note.md');
+  assert.equal(within('C:\\Users\\ada\\Vault\\Memex\\Note.md', 'C:\\Users\\ada\\Vault\\Memex'), true);
+  assert.equal(within('C:\\Users\\ada\\Vault\\Memex2\\Note.md', 'C:\\Users\\ada\\Vault\\Memex'), false);
+  assert.equal(within('/Users/ada/Vault/Memex/Note.md', '/Users/ada/Vault/Memex'), true);
+  assert.equal(within('/Users/ada/Vault/Memex', '/Users/ada/Vault/Memex'), false, 'itself is not under itself');
+});
+
+const { pickerApps } = require('../src/shared/import-flow.cjs');
+
+test('the import\'s picker off the Mac has no Apple Notes (macOS Automation: it can\'t be read there); a Mac\'s as before', () => {
+  assert.deepEqual(pickerApps(['Obsidian', 'Apple Notes', 'Notion'], 'win32'), ['Obsidian', 'Notion']);
+  assert.deepEqual(pickerApps(['Obsidian', 'Apple Notes', 'Notion'], 'darwin'), ['Obsidian', 'Apple Notes', 'Notion']);
+});
+
+test('"Import context using background agents" off the Mac names Engelbart\'s own browser, not the person\'s signed-in one', async () => {
+  const { agentsConsentText } = await onboardingModel();
+  assert.equal(agentsConsentText({ cli: 'Codex', browser: 'Chrome', company: 'OpenAI', platform: 'darwin' }), 'Engelbart will use Codex and your signed-in Chrome to find and import context from the sources you selected. Agents run in the background, and imported files are saved locally on your device. Content the agents read may be sent to OpenAI for processing.');
+  assert.equal(agentsConsentText({ cli: 'Codex', browser: 'Chrome', company: 'OpenAI', platform: 'other' }), 'Engelbart will use Codex and its own browser, where you sign in, to find and import context from the sources you selected. Agents run in the background, and imported files are saved locally on your device. Content the agents read may be sent to OpenAI for processing.');
+});
+
+const keysModule = () => import(pathToFileURL(path.join(__dirname, '../src/renderer/ui/keys.js')).href);
+
+test('the workspace\'s shortcuts off the Mac: Ctrl where a Mac has ⌘ (next agent, a doc\'s tabs and find), and their labels say so', async () => {
+  const { modDown, keyLabels } = await keysModule();
+  const press = (fields) => ({ metaKey: false, ctrlKey: false, ...fields });
+  assert.equal(modDown(press({ metaKey: true }), true), true);
+  assert.equal(modDown(press({ ctrlKey: true }), true), false, 'on a Mac Ctrl is another key');
+  assert.equal(modDown(press({ ctrlKey: true }), false), true);
+  assert.equal(modDown(press({ metaKey: true }), false), false, 'the Windows key is not it');
+  assert.equal(modDown(press({ ctrlKey: true, metaKey: true }), false), false);
+  assert.deepEqual(keyLabels(true), { mod: '⌘', ctrl: '⌃', alt: '⌥' });
+  assert.deepEqual(keyLabels(false), { mod: 'Ctrl+', ctrl: 'Ctrl+', alt: 'Alt' });
+});
+
+const { createAgentTerminal } = require('../src/main/terminal/agent-terminal.cjs');
+const { recentRepos } = require('../src/main/onboarding/digest.cjs');
+
+test('an agent\'s terminal on Windows is stopped without a signal (node-pty there has none), so Stop ends it', async () => {
+  const kills = [];
+  let exit = null;
+  const pty = { spawn: () => ({
+    onData: () => ({ dispose() {} }),
+    onExit: (fn) => { exit = fn; return { dispose() {} }; },
+    kill: (sig) => { kills.push(sig); if (sig) throw new Error('Signals not supported on windows.'); exit({ exitCode: 1 }); },
+  }) };
+  const terminal = createAgentTerminal({ pty, platform: 'win32', environment: { ProgramFiles: 'C:\\Program Files', PATH: '' } });
+  const controller = new AbortController();
+  const running = terminal.run({ command: 'claude -p hi', cwd: temp(), signal: controller.signal });
+  controller.abort();
+  const out = await running;
+  assert.equal(out.stopped, true);
+  assert.deepEqual(kills, [undefined]);
+});
+
+test('recent repositories on Windows: AppData (hundreds of app folders) is not looked through', () => {
+  const home = temp();
+  for (const dir of [path.join(home, 'AppData', 'Local', 'app', '.git'), path.join(home, 'work', 'study', '.git')]) {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'HEAD'), 'ref: refs/heads/main\n');
+  }
+  const names = (platform) => recentRepos(home, { platform }).map((repo) => path.basename(repo.path || repo.full || repo.folder || ''));
+  assert.deepEqual(names('win32'), ['study']);
+  assert.deepEqual(names('darwin').sort(), ['app', 'study'], 'a Mac\'s as before');
+});

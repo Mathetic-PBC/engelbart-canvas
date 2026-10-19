@@ -69,7 +69,7 @@ test('Chromium browsers on Linux: ~/.config\'s, Flatpak\'s and Snap\'s profiles;
   profile(path.join(home, '.config', 'vivaldi'));
   profile(path.join(home, '.var', 'app', 'com.google.Chrome', 'config', 'google-chrome'));
   const found = readers.browserProfiles(home, 'linux', {});
-  const seen = found.map((one) => `${one.browser}:${path.relative(home, one.dir)}`).sort();
+  const seen = found.map((one) => `${one.browser}:${path.relative(home, one.dir).split(path.sep).join('/')}`).sort();
   assert.deepEqual(seen, [
     'Brave:.config/BraveSoftware/Brave-Browser/Default',
     'Chrome:.config/google-chrome/Default',
@@ -87,7 +87,7 @@ test('Chromium browsers on Linux: ~/.config\'s, Flatpak\'s and Snap\'s profiles;
   assert.deepEqual(readers.browserProfiles(home, 'darwin', {}), [], 'a Mac does not read ~/.config');
 });
 
-test('a browser\'s history without the sqlite3 command: read in this process (node:sqlite), as on Windows', async (t) => {
+test('a browser\'s history without the sqlite3 command: read in this process (node:sqlite), as on Windows', { skip: process.platform === 'win32' && 'Linux\'s PATH and XDG_DATA_DIRS are lists split at ":", which a Windows runner\'s temp folders (D:\\…) hold' }, async (t) => {
   let DatabaseSync;
   try { ({ DatabaseSync } = require('node:sqlite')); } catch { t.skip('no node:sqlite'); return; }
   const dir = path.join(temp(), 'Default');
@@ -119,7 +119,7 @@ test('Firefox\'s history on Linux: ~/.mozilla/firefox, Snap\'s and Flatpak\'s pr
   assert.deepEqual(sites, [{ host: 'scholar.google.com', visits: 9 }]);
 });
 
-test('apps on Linux: found by their .desktop entries (deb, Flatpak, Snap, an AppImage\'s) and Obsidian by its settings', () => {
+test('apps on Linux: found by their .desktop entries (deb, Flatpak, Snap, an AppImage\'s) and Obsidian by its settings', { skip: process.platform === 'win32' && 'Linux\'s PATH and XDG_DATA_DIRS are lists split at ":", which a Windows runner\'s temp folders (D:\\…) hold' }, () => {
   const home = temp();
   const system = temp();
   const entry = (dir, id, name) => write(path.join(dir, `${id}.desktop`), `[Desktop Entry]\nType=Application\nName=${name}\nName[de]=Anders\nExec=x\n\n[Desktop Action new]\nName=New Window\n`);
@@ -140,7 +140,7 @@ test('apps on Linux: found by their .desktop entries (deb, Flatpak, Snap, an App
   assert.equal(evidence.apps.Zotero.found, false, 'Zotero is found by its sign-in or ~/Zotero, as on the Mac');
 });
 
-test('the browsers on Linux: by their .desktop entries; Safari, Arc and Comet never', async () => {
+test('the browsers on Linux: by their .desktop entries; Safari, Arc and Comet never', { skip: process.platform === 'win32' && 'Linux\'s PATH and XDG_DATA_DIRS are lists split at ":", which a Windows runner\'s temp folders (D:\\…) hold' }, async () => {
   const home = temp();
   const system = temp();
   const entry = (dir, id, name) => write(path.join(dir, `${id}.desktop`), `[Desktop Entry]\nName=${name}\n`);

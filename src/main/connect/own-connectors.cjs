@@ -16,6 +16,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { APPS } = require('../../shared/connect-sources.cjs');
+const { resolveShell, loginShellArgs } = require('../terminal/launch.cjs');
 
 const KEEP_MS = 5 * 60_000;
 const NAME_RE = /^[a-z][a-z0-9-]{0,40}$/;
@@ -51,10 +52,22 @@ function codexServersOf(text) {
 }
 
 /**
+ * How `codex mcp list --json` is run with `env` → [file, args, options] for execFile. On Windows (2026-10-18, the beta's
+ * Windows catch-up) through Git Bash, as every agent run is: npm's codex there is a .cmd and a shell script, which execFile
+ * cannot start by name; the tools' own copy (ENGELBART_CODEX_BIN) first, and no console window.
+ */
+function codexListCall(env, platform = process.platform) {
+  const options = { env, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 };
+  if (platform !== 'win32') return ['codex', ['mcp', 'list', '--json'], options];
+  const shell = resolveShell(env, platform);
+  return [shell, loginShellArgs(shell, 'exec "${ENGELBART_CODEX_BIN:-codex}" mcp list --json', env, platform), { ...options, windowsHide: true }];
+}
+
+/**
  * `homeDir`, `env`; `codexList()` → Promise<string> the JSON of `codex mcp list --json` (index.cjs runs it with the tools'
  * environment). → { serversFor(apps, provider), reaches(app, provider) }
  */
-function createOwnConnectors({ homeDir, env = process.env, codexList = () => new Promise((resolve, reject) => { execFile('codex', ['mcp', 'list', '--json'], { env, timeout: 30_000, maxBuffer: 4 * 1024 * 1024 }, (error, stdout) => (error ? reject(error) : resolve(stdout))); }), readFile, now = Date.now } = {}) {
+function createOwnConnectors({ homeDir, env = process.env, codexList = () => new Promise((resolve, reject) => { execFile(...codexListCall(env), (error, stdout) => (error ? reject(error) : resolve(stdout))); }), readFile, now = Date.now } = {}) {
   const kept = new Map(); // provider → { at, servers: Promise<[{ app, name, url, type }]> }
 
   function serversOf(provider) {
@@ -85,4 +98,4 @@ function createOwnConnectors({ homeDir, env = process.env, codexList = () => new
   return { serversFor, reaches };
 }
 
-module.exports = { createOwnConnectors, claudeServersOf, codexServersOf, officialServers };
+module.exports = { codexListCall, createOwnConnectors, claudeServersOf, codexServersOf, officialServers };

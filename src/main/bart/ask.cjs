@@ -628,8 +628,13 @@ const createdRow = (file) => ({ name: file.name, type: file.type, path: file.rel
  * and what is under it alone, written as Claude Code writes an absolute path in a rule ("//" then the path without its
  * leading "/"). With --permission-mode dontAsk a write anywhere else is refused, not asked.
  */
-function createRules(draft) {
-  const under = `/${path.resolve(draft)}/**`;
+// On Windows (2026-10-18, the beta's Windows catch-up) Claude Code matches a rule's path in POSIX form, the drive as its
+// first folder (C:\Users\ada → /c/Users/ada), so the folder is written that way: as it was, no write would match and all
+// of @create's would be refused.
+function createRules(draft, platform = process.platform) {
+  const full = platform === 'win32' ? path.win32.resolve(draft) : path.posix.resolve(draft);
+  const posix = platform === 'win32' ? `/${full.slice(0, 1).toLowerCase()}${full.slice(2).replace(/\\/g, '/')}` : full;
+  const under = `/${posix}/**`;
   return `${CLAUDE_TOOLS},Edit(${under}),Write(${under})`;
 }
 

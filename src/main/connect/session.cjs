@@ -463,7 +463,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
   const chosenBrowser = () => { try { return webSignIn && webSignIn.browserName ? webSignIn.browserName() : ''; } catch { return ''; } };
   // The browser its sign-in opens in (2026-10-15: "Open Safari" on a card whose sign-in Safari can never give Engelbart).
   const opensIn = (app) => { try { return (webSignIn && typeof webSignIn.opensIn === 'function' && webSignIn.opensIn(app)) || ''; } catch { return ''; } };
-  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, jobIds: [...need.jobs], opened: need.opened, busy: need.busy, browser: need.browser || need.own || (SIGNIN_KINDS.has(need.kind) && opensIn(need.app)) || chosenBrowser(), error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}), ...(need.code ? { code: need.code } : {}), ...(need.kind === SIGNIN_HERE ? { where: need.where || 'here' } : {}) });
+  const publicNeed = (need) => ({ id: need.id, app: need.app, kind: need.kind, reason: need.reason, jobs: need.jobs.length, jobIds: [...need.jobs], opened: need.opened, busy: need.busy, browser: need.browser || need.own || (SIGNIN_KINDS.has(need.kind) && opensIn(need.app)) || chosenBrowser(), error: need.error, note: need.note || '', at: need.at, ...(need.own ? { own: true } : {}), ...(need.code ? { code: need.code } : {}), ...(need.kind === SIGNIN_HERE ? { where: need.where || 'here' } : {}), ...(need.here ? { here: true } : {}) });
   // What was left out of the run and why, in the person's words (2026-10-14: "when she finally hit later, nothing was
   // imported, so she was super confused"): the status's completion names each, with its reason.
   const publicLeftOut = (s) => [...(s.leftOut || new Map())].map(([app, why]) => ({ app, why }));
@@ -1575,6 +1575,8 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     let need = s.needs.find((entry) => !entry.closed && entry.app === app && entry.kind === kind);
     if (!need) {
       need = { id: randomUUID(), app, kind, reason, jobs: [], waiters: new Map(), opened: false, busy: false, error: '', note: noteFor(app, kind), closed: false, at: now() };
+      // Off the Mac a sign-in step for an app with no known sign-in cookie is made inside Engelbart (need's `here`, below).
+      if (platform !== 'darwin' && SIGNIN_KINDS.has(kind) && signInWindow && webSignIn && !webSignIn.supports(app)) need.here = true;
       s.needs.push(need);
       logAction(s, job, `Needs you: ${reason}`);
       traced({ kind: 'need', sessionId: s.id, jobId: job.id, text: `Needs the person (${kind}, ${shownName(app)}): ${reason}` });
@@ -2728,7 +2730,7 @@ function createConnect({ agents, models = () => null, ready = () => [...PROVIDER
     // Off the Mac (2026-10-18, the beta's Windows catch-up) nothing made in their browser can be brought over: an app whose
     // sign-in cookie isn't known (OneNote, Evernote…) signs in inside Engelbart's window, as every sign-in there does
     // (./signin-window.cjs open: its own sites, signed in when their cookies changed), and the step closes once it is.
-    if (SIGNIN_KINDS.has(found.kind) && platform !== 'darwin' && signInWindow && webSignIn && !webSignIn.supports(found.app)) {
+    if (found.here) {
       if (found.busy) return snapshot(s);
       found.busy = true;
       found.opened = true;

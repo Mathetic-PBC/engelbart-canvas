@@ -30,6 +30,13 @@ export function needCopy(need) {
     if (need.busy) return { title: `Sign in to ${app}`, text: '', primary: 'Waiting…', secondary: 'Skip', waiting: true };
     return { title: `Sign in to ${app}`, text: '', primary: need.where === 'browser' ? `Sign in in ${browser}` : 'Sign in inside Engelbart', secondary: 'Skip' };
   }
+  // Off the Mac (2026-10-18, the beta's Windows catch-up) an app with no known sign-in cookie (OneNote, Evernote…) signs in,
+  // or finishes its code or check, in Engelbart's own window (`here`): the step closes by itself once it is made.
+  if (need.here) {
+    const title = need.kind === 'code' || need.kind === '2fa' ? `Enter the code for ${app}` : need.kind === 'captcha' ? `Finish the check for ${app}` : `Sign in to ${app}`;
+    if (need.busy) return { title, text: '', primary: 'Waiting…', secondary: 'Skip', waiting: true };
+    return { title, text: '', primary: 'Sign in inside Engelbart', secondary: 'Skip' };
+  }
   if (need.kind === 'permission') return { title: `Allow Engelbart to read ${app}?`, text: '', primary: 'Allow', secondary: 'Don’t allow' };
   if (need.kind === 'folder') return { title: `Choose your ${app} folder`, text: '', primary: 'Choose folder', secondary: 'Skip' };
   // A connector's sign-in opens in the default browser (connectors.cjs), whichever browser was chosen for the copies.
@@ -50,7 +57,7 @@ export default function NeedPopup({ need, onOpen, onDone, onSkip, onLater }) {
   // "I'm signed in" / Done: only for a step the person finishes themselves. Zotero's, GitHub's and a connector's close by
   // themselves once signed in, so their button opens the sign-in (again).
   const own = need.app === 'GitHub' || need.app === 'Zotero';
-  const finishing = need.opened && !own && need.kind !== 'connector' && need.kind !== 'permission' && need.kind !== 'folder' && need.kind !== 'confirm';
+  const finishing = need.opened && !own && !need.here && need.kind !== 'connector' && need.kind !== 'permission' && need.kind !== 'folder' && need.kind !== 'confirm';
   React.useEffect(() => {
     const onKey = (event) => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onLater(); } };
     window.addEventListener('keydown', onKey, true);

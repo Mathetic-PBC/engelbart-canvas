@@ -15,6 +15,19 @@ const { ensureHome } = require('../src/main/store/home.cjs');
 const { createConnect } = require('../src/main/connect/session.cjs');
 const { createFakeConnectAgents } = require('../src/main/connect/fake.cjs');
 const { openToolBridge } = require('../src/main/sandbox/local-tools.cjs');
+const Module = require('node:module');
+const { buildSync } = require('esbuild');
+
+/** NeedPopup.jsx's needCopy, built as the window builds it. */
+function needCopyOf() {
+  const built = buildSync({ entryPoints: [path.join(__dirname, '../src/renderer/import/NeedPopup.jsx')], bundle: true, platform: 'node', format: 'cjs', jsx: 'automatic', write: false, external: ['react', 'react-dom'], loader: { '.svg': 'dataurl', '.png': 'dataurl' } });
+  const filename = path.join(__dirname, '__NeedPopup-windows.cjs');
+  const mod = new Module(filename, module);
+  mod.paths = module.paths;
+  mod._compile(built.outputFiles[0].text, filename);
+  return mod.exports.needCopy;
+}
+const needCopy = (need) => needCopyOf()(need);
 
 const homeDir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-connect-windows-')));
 const layout = ensureHome(homeDir);
@@ -71,6 +84,9 @@ test('off the Mac OneNote\'s sign-in (no known cookie) is made in Engelbart\'s w
   await connect.importNow(started.id);
   const now = await until(state, (s) => s.needs.some((need) => need.app === 'OneNote' && !need.closed), 'OneNote\'s step');
   const need = now.needs.find((one) => one.app === 'OneNote' && !one.closed);
+  assert.equal(need.here, true, 'its popup says inside Engelbart');
+  assert.deepEqual(needCopy(need), { title: 'Sign in to OneNote', text: '', primary: 'Sign in inside Engelbart', secondary: 'Skip' });
+  assert.deepEqual(needCopy({ ...need, busy: true, opened: true }), { title: 'Sign in to OneNote', text: '', primary: 'Waiting…', secondary: 'Skip', waiting: true });
   await connect.need(started.id, need.id, 'open');
   await until(state, () => answers.length === 1, 'the agent told');
   assert.deepEqual(opened, ['OneNote'], 'Engelbart\'s own window');

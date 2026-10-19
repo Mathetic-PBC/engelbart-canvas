@@ -164,7 +164,7 @@ test('C1: without Full Disk Access Safari is never touched: one locked profile, 
   assert.equal(session.calls.set.length, 0, 'nothing written');
 });
 
-test('C1: macOS refusing the read anyway (EACCES/EPERM) is needs disk-access too', async () => {
+test('C1: macOS refusing the read anyway (EACCES/EPERM) is needs disk-access too', { skip: process.platform === 'win32' && 'Windows has no file modes: chmod 000 does not refuse the read' }, async () => {
   if (process.getuid && process.getuid() === 0) return; // root reads anything
   const home = safariHome({ main: [{ domain: '.linear.app', name: 'session', value: 'lin' }] });
   fs.chmodSync(safari.CONTAINER_FILE(home), 0o000);

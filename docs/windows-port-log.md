@@ -12,6 +12,13 @@ bug Hudson saw: "on Linux it is not accessing Obsidian files and other files wel
 
 ### Status
 
+- 2026-10-19, **windows-beta-deployment merged in** (at 0869062), so this branch is green on all three: it had
+  taken 6 of the Windows branch's 12 commits; the other 6 (bdfad42 @create's POSIX rules, 0b047e6 node:sqlite history,
+  789a8cb, bb3c149, 78bc4b5, 0869062 the Windows CI fixes) were missing, so its Windows job failed. Conflicts kept both:
+  readers' Linux and Windows browser lists (Comet, Opera's one profile), discover's Firefox roots for all three and
+  sqliteRunner(env, platform) (which already answers sqliteHere on Windows), scan.detect's Linux .desktop entries and
+  Windows programs, onThisMachine for the shown words. linux-platform.test.cjs on a Windows runner: the Chromium
+  profiles test compares `/` paths; three skipped there (see Tests skipped).
 - 2026-10-19, **first CI run** (39181647830, on c5a487e): Mac ✓; Linux 2 failed, Windows 11 failed, so neither
   packaged. Fixed for Linux (David's session), both tests that assumed the runner is a Mac: discover-assistant-projects'
   D2 runs the discovery as the Mac's (`platform: 'darwin'`; off the Mac the sign-ins question is answered 'allowed',
@@ -124,7 +131,9 @@ bug Hudson saw: "on Linux it is not accessing Obsidian files and other files wel
 
 ### Tests skipped (with reasons)
 
-None added, on any platform. Mac: 4 skipped, as before.
+On Windows only, linux-platform.test.cjs: "a browser's history without the sqlite3 command", "apps on Linux: found by
+their .desktop entries", "the browsers on Linux: by their .desktop entries". Linux's PATH and XDG_DATA_DIRS are lists
+split at `:`, and a Windows runner's temp folders (D:\…) hold one. Mac: 4 skipped, as before.
 
 ### Needs a decision
 
@@ -148,6 +157,149 @@ None added, on any platform. Mac: 4 skipped, as before.
   sign-ins question, the history evidence filled (sqlite3 not installed).
 - A ChatGPT or Claude export .zip on a machine without unzip.
 - Engelbart's sign-in window for Google Drive and ChatGPT on Linux (windows-port's path; not exercised here).
+## Beta catch-up to 0.1.23 on windows-beta-deployment
+
+Goal (2026-10-18): `windows-beta-deployment` (from 47c66a6: the 0.1.23 beta with origin/windows-port merged in) = the
+beta's features working on Windows 10/11 x64 with Git for Windows, on windows-port's architecture (Git Bash for POSIX
+scripts, PowerShell terminals, AppData, taskkill, node:sqlite, tar.exe, Engelbart's own sign-in window, NSIS). Every
+module added or changed since a215457 (0.1.19) audited for Mac-only assumptions. The Mac does not change. Nothing was
+pushed: **nothing here has run on Windows** (no CI run); every Windows branch is tested on the Mac with an injected
+`platform: 'win32'`, Windows-shaped homes or fakes.
+
+### Status (newest first)
+
+- 2026-10-19, **first CI run** (39181645504, on 96caea2): Mac ✓; Windows 8 failed, Linux 1 failed, so neither
+  packaged. Fixed (David's session): `createRules` resolves a POSIX draft with `path.posix` (on Windows `path.resolve`
+  made `/a/b` into `D:\a\b`), and the agent map names its placeholder draft in POSIX form on every machine. Tests that
+  assumed the runner is a Mac now say so: create.test.cjs expects Claude Code's `//c/…` form on Windows; the collapsed
+  title's rename hint is `Alt` off the Mac; skipped on Windows (see Tests skipped): browser-agents' terminal (zsh),
+  cookies C1 (chmod 000), provider-connect's Claude app copy (claude.app). run-step's "after a turn ends in review"
+  failed once ('failed' for 'done') and passed in the same commit's other Windows run: left as intermittent.
+- 2026-10-18: 9 commits (a91c881 … 78bc4b5). Mac `npm test` at 47c66a6: 2262 tests, 2257 pass, 4 skipped, 1 failed
+  (install-mac.test.cjs "once ready it waits … past the old 30-minute limit": a timing test under load from parallel
+  runs; it passes alone). At 6c5710e: 2279 tests, 2275 pass, 4 skipped, 0 failed. At 78bc4b5 (the last code commit):
+  2281 tests, 2276 pass, 4 skipped, 1 failed: windows-platform.test.cjs "an app packed for Windows keeps app.asar …"
+  read NULs from an asar just written (the createPackage race "Catch-up to 0.1.19" describes; that run took 643 s beside
+  another worktree's suite); the file alone passed 3 of 3. discover-assistant-projects' "wired" test failed once in a
+  combined run under the same load and passed 6 of 6 after. `npm run build` passes.
+- New tests: test/windows-beta.test.cjs (16) and test/connect-windows-beta.test.cjs (3), all platform-injected, so
+  they run on the Mac too. Mac-behaviour tests that relied on the runner's own platform now name `platform: 'darwin'`
+  (installed-apps, cookies-onboarding-beta's createBrowsers, discover-assistant-projects' Safari test and harness,
+  connect.test's detect and fakeConnect, connect-onboarding-beta's and connect-own-signins' harnesses,
+  provider-connect's providers, browser-agents' Stop test, create.test's createRules): what they check is unchanged; on
+  Windows CI they would otherwise have run the new Windows branches.
+
+### What changed
+
+- **Browsers on Windows** (browser/installed-apps.cjs `platform`, `windowsExes`): a browser counts as installed when its
+  program is where its installer puts it (Program Files, Program Files (x86), %LOCALAPPDATA%): Chrome, Brave, Edge,
+  Vivaldi, Opera (`%LOCALAPPDATA%\Programs\Opera`), Chromium, Firefox, Comet. No Spotlight (it used to fail with ENOENT
+  there, which counted every browser, Safari and Arc included, as installed). Safari and Arc are never found on Windows.
+- **The sign-ins question off the Mac** (onboarding/browsers.cjs `copiesSignIns`): "Allow Engelbart to use your …
+  sign-ins" is never drawn (list() reports `keychain: 'allowed'`, setKeychain never calls unlock, Safari never listed).
+  'allowed' because the run's sign-ins are used, made in Engelbart's window; 'declined' would have skipped every web
+  sign-in. discover.cjs `keychainAnswer` answers 'allowed' at once off the Mac: it used to poll prefs for up to 10
+  minutes for an answer nobody is asked for, with "Finding recent projects…" on screen.
+- **The tools screen** (onboarding/discover.cjs `platform`): history read with node:sqlite on Windows (historySites
+  passed execFile to readers.browserHistory, overriding its Windows default: the sqlite3 command, missing there);
+  Firefox's profiles under AppData\Roaming\Mozilla\Firefox\Profiles; Safari none; the evidence says "this computer";
+  desktop apps by their programs (connect/scan.cjs `installed`/`windowsPrograms`: Claude, Notion, Evernote, Granola,
+  Cursor, Obsidian, Perplexity, Zoom, Zotero, OneNote, Google Drive at their installers' usual places); detect's `where`
+  strings ("on this Mac", "its chats on this Mac") through `onThisMachine`.
+- **Chromium profiles** (connect/readers.cjs): Opera's single profile at AppData\Roaming\Opera Software\Opera Stable;
+  Comet's `AppData\Local\Perplexity\Comet\User Data`; `sqliteHere` exported.
+- **"this Mac"** (shared/connect-sources.cjs `hostPlatform`, `thisMachine`, `onThisMachine`, `shownNameOn`):
+  shownName says "PDFs on this computer" / "Folders on this computer" off the Mac (ids unchanged: they are keys in saved
+  choices). The renderer reads the platform preload marks on `<html>`. The folders job's label uses it too.
+- **@create on Claude** (bart/ask.cjs `createRules`): on Windows the draft folder is written in Claude Code's POSIX
+  rule form (`//c/Users/…/**`); `/C:\Users…/**` never matched, so with dontAsk every write was refused.
+- **No console windows** (`windowsHide`): bart/route.cjs and bart/name-chat.cjs quick runs (router, chat titles,
+  @create's making line). onboarding/providers.cjs asks Claude Code's plan through Git Bash on Windows (npm's `claude` is
+  a shell script execFile cannot start), hidden.
+- **The person's own Codex connectors** (connect/own-connectors.cjs `codexListCall`, used by index.cjs): `codex mcp
+  list --json` through Git Bash on Windows (`${ENGELBART_CODEX_BIN:-codex}`), hidden; execFile('codex') could not start
+  npm's codex.cmd, and the failure read as "none".
+- **Sign-ins in the import off the Mac** (connect/session.cjs `platform`):
+  - quietly(): no quiet copies (they could only drop Engelbart's own sign-in and wait ~28 s): the "Sign in inside
+    Engelbart" card at once.
+  - An app with no known sign-in cookie (OneNote, Evernote, Linear's web route) asking for a sign-in, a code or a check
+    gets `here`: its popup says "Sign in inside Engelbart" (NeedPopup.jsx needCopy), Open opens Engelbart's sign-in
+    window (signin-window.cjs open → openSite), and the step closes once signed in. It used to open the person's
+    browser and wait for "I'm signed in", whose copy can never work off the Mac.
+  - signInAgain: an agent reporting the same app signed out twice, its cookie still there (off the Mac no site's check
+    page is asked), gets the card instead of being left out.
+- **Import flow renderer**: ObsidianPicker names files and covers folders with `\` paths too (model/onboarding.js
+  `lastPart`, `within`) and says "no vaults on this computer"; no Apple Notes row off the Mac (shared/import-flow.cjs
+  `pickerApps`); "Import context using background agents" names Engelbart's own browser off the Mac
+  (`agentsConsentText`).
+- **Shortcuts** (renderer/ui/keys.js `modDown`, `keyLabels`): next agent (⌘J → Ctrl+J) and a doc's tabs and find
+  (⌘T/⌘W/⌘F/⌘G → Ctrl) take Ctrl off the Mac (they checked metaKey alone); the labels in the sidebar, rail and project
+  menu say Ctrl+J, Ctrl+1–9, Ctrl+\, and a thread link's tooltip "Alt-click to rename".
+- **Agent terminal** (terminal/agent-terminal.cjs): node-pty on Windows takes no signal; Stop and timeouts call kill()
+  there (latent: browser agents, its only caller, are Mac-only).
+- **Recent repositories** (onboarding/digest.cjs): AppData not looked through on Windows (its hundreds of folders
+  filled the 400 looked in at the next level).
+
+### Degraded on purpose (as before, or by the beta's own gates)
+
+- No browser cookie copying, Keychain prompt, Safari, Full Disk Access or folder-access popup off the Mac
+  (cookieImport null; disk-access.cjs grants off the Mac; ImportFlow's organize popup is darwin-only).
+- Browser agents off the Mac: none (browser-agents.cjs `browsersFor` returns [] off darwin).
+- ChatGPT/Claude asked for recent projects off the Mac only through Engelbart's own browser: on a fresh install it is
+  signed in to neither, so they answer 'unavailable' and the person adds a project.
+- Ctrl+1–9 is the level-2 projects' (the beta's 2026-10-13 choice); doc tabs by number have no key off the Mac (on
+  0.1.19 Ctrl+1–9 switched them).
+
+### Left (listed, not changed)
+
+- LLM prompt text that says "this Mac" (connect/prompts.cjs INTERVIEW/IMPORT/SURVEY, skills.cjs, discover.cjs's digest
+  note): the librarian could repeat it to a Windows user. Cheap to pass through `onThisMachine` if wanted.
+- "Couldn't check the X sign-in (no answer): counted as signed in" is logged for ChatGPT/Claude/Google off the Mac
+  (no check page there); the sign-in is used as before.
+- tools/detect.cjs: "Codex keeps its sign-in in the keychain" (on Windows: Credential Manager).
+- digest.cjs repoOf matches `${repo}/` only: a folder outside the home on Windows gets no repository.
+- bart/trace.cjs: "Reading C:\Users\…" (splits on `/`): cosmetic.
+- store/library.cjs outsideHomeCopy/`startsWith(homeReal + sep)`: case-sensitive; a home path typed in another case
+  is copied rather than linked (the same comparison predates 0.1.19).
+- index.cjs openIn/openInProfile run `open` without a platform check: unreachable off the Mac (no cookieImport).
+- Aborting a connect turn kills only bash.exe, not the claude.exe/codex.exe under it (agents.cjs execFile with a
+  signal; predates 0.1.19). run-processes.cjs's taskkill tree would fix it.
+- session.cjs cleanDirect accepts folders under the home only: a project on D:\ is dropped (policy, as /Volumes on
+  a Mac).
+- Arc on Windows (a Store package) is not found; Comet's and several desktop apps' Windows places are their
+  installers' usual ones, not checked on a Windows machine.
+- connect/cursor.cjs on Linux (the Linux branch's).
+
+### Tests skipped
+
+Added on Windows only (2026-10-19, after the first CI run); the Mac and Linux run them as before:
+
+| Test file | Test | Reason |
+|---|---|---|
+| browser-agents.test.cjs | the Engelbart terminal: a login shell… | POSIX terminals only: on Windows the shell is Git Bash (windows-platform.test.cjs) |
+| cookies-onboarding-beta.test.cjs | C1: macOS refusing the read anyway… | Windows has no file modes: chmod 000 does not refuse the read |
+| provider-connect.test.cjs | the Claude app's own Claude Code counts as installed… | macOS only: the Claude app keeps its Claude Code inside claude.app |
+
+No Mac test deleted, weakened or newly skipped.
+
+### Needs a decision
+
+- Off the Mac the sign-ins answer is fixed at 'allowed' (sign-ins made in Engelbart's window are used). There is no
+  way to say "don't use any sign-ins" there; the question it replaces was about copying the browser's, which never
+  happens off the Mac.
+- "this computer" is the off-Mac word everywhere (Windows and Linux). The Linux branch may have chosen differently.
+
+### Left for a hand test (Windows 11 + Git for Windows, installer from `npm run dist:win`)
+
+1. Install; onboarding: the agent popup, Claude Code's plan read (no console flash), no sign-ins question, no Safari.
+2. Import context: the browser list shows only installed browsers; the tools screen's history (Chrome, Edge, Firefox,
+   Opera); desktop apps ticked by their programs; nothing says "this Mac".
+3. Import from Obsidian (the picker: choose a folder, then a note inside it), Chrome history, a local folder.
+4. A web sign-in: ChatGPT signed out → "Sign in inside Engelbart" card at once; OneNote → its popup opens Engelbart's
+   window and closes when signed in.
+5. An @bart line (routed with no console window), an @create (files written: the rule form), a Build.
+6. Ctrl+J, Ctrl+T/W/F in a doc; the labels.
+7. Not verified anywhere: Codex @create's workspace-write sandbox on native Windows.
 
 ## Catch-up to 0.1.19
 

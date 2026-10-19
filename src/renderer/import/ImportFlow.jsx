@@ -6,9 +6,9 @@ import { TOOL_LOGOS, WORKS, BROWSER_LOGOS, PROVIDER_LOGOS } from './logos.js';
 import ObsidianPicker from './ObsidianPicker.jsx';
 import { AgentSetupBody } from './AgentSetup.jsx';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
-import { keychainStep, afterAllow, profilesOf, runKeychain, cliOfProvider, providerOfCli } from '../model/onboarding.js';
+import { keychainStep, afterAllow, profilesOf, runKeychain, cliOfProvider, providerOfCli, agentsConsentText } from '../model/onboarding.js';
 import {
-  CATALOG, CATALOG_IDS, ROLES, GROUPS, GROUP_IDS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp,
+  CATALOG, CATALOG_IDS, ROLES, GROUPS, GROUP_IDS, LOCAL_FOLDERS, SITES, PROVIDER_NAMES, BROWSERS, catalogTool, isLocal, reachOf, isWebApp, pickerApps,
   scopeKind, emptyScope, scopeReady,
 } from '../../shared/import-flow.cjs';
 import { LOCAL_PDFS, PERIODS, DEFAULT_PERIOD_DAYS, cleanDays, shownName } from '../../shared/connect-sources.cjs';
@@ -711,7 +711,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   /** A category's rows: its apps (Websites: the browser's saved URLs, then each notes app's saved websites), then the tools
    *  the agents found in it. Other: its own apps (Linear, 2026-10-16) and those, shown when it has either. */
   const keysOf = (group, now = F) => {
-    const own = (group.apps.length ? group.apps : group.id === 'other' ? [] : [`__${group.id}`]).map((key) => (key === '__sites' ? SITES : key));
+    const own = pickerApps((group.apps.length ? group.apps : group.id === 'other' ? [] : [`__${group.id}`]).map((key) => (key === '__sites' ? SITES : key)), platform);
     const links = group.id === 'sites' ? NOTES_APPS.filter((app) => now.picks.includes(app)).map(linksOf) : [];
     const found = now.added.filter((tool) => groupOfId(tool.id, now) === group.id).map((tool) => tool.id);
     return [...own, ...links, ...found];
@@ -1062,7 +1062,7 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
       return (
         <>
           <h3>Import context using background agents</h3>
-          <p>{`Engelbart will use ${cli} and your signed-in ${browser} to find and import context from the sources you selected. Agents run in the background, and imported files are saved locally on your device. Content the agents read may be sent to ${company} for processing.`}</p>
+          <p>{agentsConsentText({ cli, browser, company, platform })}</p>
           <div className="mf agents-consent-actions">
             <button type="button" className="link mf-left" onClick={() => set({ dialog: 'import-method' })}>Back</button>
             <button type="button" className="btn secondary small" data-import-manually="1" onClick={manually}>Import manually</button>

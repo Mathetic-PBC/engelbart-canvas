@@ -15,7 +15,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
-const { sanitizeEnvironment } = require('../terminal/launch.cjs');
+const { sanitizeEnvironment, resolveShell, loginShellArgs } = require('../terminal/launch.cjs');
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { chooseProvider, PROVIDER_NAMES } = require('../../shared/import-flow.cjs');
 
@@ -94,14 +94,23 @@ const FAKES = {
  * `tools` the tool manager (snapshot()); `prefs` { get(), set(patch) } for the remembered pick; `run` execFile or a fake.
  * → { status() → { providers, decision, names }, remember(id) }
  */
-function createProviders({ tools, prefs, homeDir = os.homedir(), environment = process.env, run = execFile, fake = process.env.ENGELBART_PROVIDERS_FAKE || '', now = () => Date.now() }) {
+function createProviders({ tools, prefs, homeDir = os.homedir(), environment = process.env, run = execFile, fake = process.env.ENGELBART_PROVIDERS_FAKE || '', now = () => Date.now(), platform = process.platform }) {
   let cache = null;
 
   function claudeStatus(file) {
     return new Promise((resolve) => {
       const env = { ...sanitizeEnvironment(scrubAgentSession(environment)), ...(tools && tools.environment ? tools.environment() : {}) };
+      const answer = (error, stdout) => resolve(error && !stdout ? '' : String(stdout || ''));
       try {
-        run(file, ['auth', 'status', '--json'], { env, timeout: AUTH_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, (error, stdout) => resolve(error && !stdout ? '' : String(stdout || '')));
+        // Windows (2026-10-18, the beta's Windows catch-up): npm's claude is a shell script there, which only Git Bash runs
+        // (as the tool check asks it, ../tools/detect.cjs), and nothing opens a console window.
+        if (platform === 'win32') {
+          const shell = resolveShell(environment, platform);
+          const withTool = { ...env, ENGELBART_TOOL: file };
+          run(shell, loginShellArgs(shell, 'exec "$ENGELBART_TOOL" auth status --json', withTool, platform), { env: withTool, timeout: AUTH_TIMEOUT_MS, maxBuffer: 1024 * 1024, windowsHide: true }, answer);
+          return;
+        }
+        run(file, ['auth', 'status', '--json'], { env, timeout: AUTH_TIMEOUT_MS, maxBuffer: 1024 * 1024 }, answer);
       } catch { resolve(''); }
     });
   }

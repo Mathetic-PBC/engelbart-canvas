@@ -1,4 +1,6 @@
 import React from 'react';
+import { lastPart, within } from '../model/onboarding.js';
+import { thisMachine } from '../../shared/connect-sources.cjs';
 
 // Choose files under Obsidian (2026-10-14: "clicking choose files on obsidian should open a picker like the obsidian
 // sidebar … there is no way for me to find the obsidian files easily"): the vaults Obsidian knows, drawn like its file
@@ -11,7 +13,6 @@ const CHEV = <Svg d={'<path d="m9 6 6 6-6 6"/>'} />;
 const CHECK = <Svg d={'<path d="m5 12 4 4 10-10"/>'} />;
 const SEARCH = <Svg d={'<circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/>'} />;
 // Linux (2026-10-18): the empty picker names the computer, not a Mac (the preload's data-platform, as DocEditor reads it).
-const ON_MAC = typeof document === 'undefined' || /^(darwin|mac)/i.test((document.documentElement && document.documentElement.dataset.platform) || (typeof navigator !== 'undefined' && navigator.platform) || 'darwin');
 
 /** Every node of `tree` whose name matches `query`, with the folders above it (a flat list for the search). */
 function matches(tree, query, trail = []) {
@@ -27,7 +28,7 @@ export default function ObsidianPicker({ api, chosen = [], onChoose, onCancel })
   const [data, setData] = React.useState(null);
   const [error, setError] = React.useState('');
   const [open, setOpen] = React.useState(() => new Set());
-  const [picked, setPicked] = React.useState(() => new Map(chosen.map((path) => [path, { path, name: path.split('/').pop(), file: /\.[a-z0-9]+$/i.test(path) }])));
+  const [picked, setPicked] = React.useState(() => new Map(chosen.map((path) => [path, { path, name: lastPart(path), file: /\.[a-z0-9]+$/i.test(path) }])));
   const [query, setQuery] = React.useState('');
 
   React.useEffect(() => {
@@ -43,14 +44,14 @@ export default function ObsidianPicker({ api, chosen = [], onChoose, onCancel })
 
   const toggleOpen = (path) => setOpen((now) => { const next = new Set(now); if (next.has(path)) next.delete(path); else next.add(path); return next; });
   // A path is chosen when it or a folder above it is.
-  const covered = (path) => [...picked.keys()].some((one) => path === one || path.startsWith(`${one}/`));
+  const covered = (path) => [...picked.keys()].some((one) => path === one || within(path, one));
   const togglePick = (node) => setPicked((now) => {
     const next = new Map(now);
     if (next.has(node.path)) next.delete(node.path);
     else {
       // A folder chosen holds what was chosen inside it.
-      for (const one of [...next.keys()]) if (one.startsWith(`${node.path}/`)) next.delete(one);
-      next.set(node.path, { path: node.path, name: node.dir ? node.name : node.path.split('/').pop(), file: !node.dir });
+      for (const one of [...next.keys()]) if (within(one, node.path)) next.delete(one);
+      next.set(node.path, { path: node.path, name: node.dir ? node.name : lastPart(node.path), file: !node.dir });
     }
     return next;
   });
@@ -83,7 +84,7 @@ export default function ObsidianPicker({ api, chosen = [], onChoose, onCancel })
       <div className="ob-tree" role="tree">
         {!data && !error && <div className="ob-empty">Reading your vaults…</div>}
         {error && <div className="ob-empty">{error}</div>}
-        {data && !vaults.length && <div className="ob-empty">{`Obsidian has no vaults on this ${ON_MAC ? 'Mac' : 'computer'}.`}</div>}
+        {data && !vaults.length && <div className="ob-empty">{`Obsidian has no vaults on ${thisMachine()}.`}</div>}
         {vaults.map((vault) => (
           <div key={vault.path} className="ob-vault">
             {vaults.length > 1 || !q ? row({ name: vault.name, path: vault.path, dir: true, children: vault.tree }, 0) : null}
