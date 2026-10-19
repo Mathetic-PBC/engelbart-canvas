@@ -43,6 +43,7 @@ const { build, Platform, Arch } = builder;
 const config = require('../electron-builder.config.cjs');
 const { version } = JSON.parse(fs.readFileSync(path.join(ROOT, 'package.json'), 'utf8'));
 
+run('node', ['scripts/fetch-git.mjs', 'linux-x64']); // Engelbart's own Git, for a computer without one (bundled-git.cjs)
 run('node', ['scripts/build.mjs'], { NODE_ENV: 'production', ENGELBART_DEVELOPER: '0' }); // what ships has no test mode
 fs.mkdirSync(path.join(ROOT, 'release'), { recursive: true });
 for (const stale of fs.readdirSync(path.join(ROOT, 'release'), { withFileTypes: true })) {

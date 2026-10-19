@@ -30,7 +30,22 @@ test('findBundledGit: the app\'s Resources first, then a checkout\'s vendor/git 
   assert.equal(findBundledGit({ resourcesPath: resources, appRoot, arch: 'arm64', platform: 'darwin', override: '' }), inCheckout, 'not executable: passed over');
   fs.chmodSync(inApp, 0o755);
   assert.equal(findBundledGit({ resourcesPath: resources, appRoot, arch: 'arm64', platform: 'darwin', override: '' }), inApp);
-  assert.equal(findBundledGit({ resourcesPath: resources, appRoot, arch: 'arm64', platform: 'win32', override: '' }), null, 'Macs only, for now');
+  assert.equal(findBundledGit({ resourcesPath: resources, appRoot, arch: 'arm64', platform: 'win32', override: '' }), null, 'not on Windows (Git for Windows is the person\'s)');
+});
+
+test('findBundledGit on Linux (2026-10-19): the AppImage\'s resources/git, then a checkout\'s vendor/git/linux-<arch>', { skip: process.platform === 'win32' && 'a launcher without the execute bit (which Windows has not) is what is passed over' }, () => {
+  const resources = temp();
+  const appRoot = temp();
+  assert.equal(findBundledGit({ resourcesPath: resources, appRoot, arch: 'x64', platform: 'linux', override: '' }), null, 'neither');
+  const inCheckout = path.join(appRoot, 'vendor', 'git', 'linux-x64', LAUNCHER);
+  fs.mkdirSync(path.dirname(inCheckout), { recursive: true });
+  fs.writeFileSync(inCheckout, '#!/bin/sh\n', { mode: 0o755 });
+  assert.equal(findBundledGit({ resourcesPath: resources, appRoot, arch: 'x64', platform: 'linux', override: '' }), inCheckout);
+  assert.equal(findBundledGit({ resourcesPath: resources, appRoot, arch: 'x64', platform: 'darwin', override: '' }), null, 'a Mac\'s is darwin-x64, not Linux\'s');
+  const inApp = path.join(resources, 'git', LAUNCHER);
+  fs.mkdirSync(path.dirname(inApp), { recursive: true });
+  fs.writeFileSync(inApp, '#!/bin/sh\n', { mode: 0o755 });
+  assert.equal(findBundledGit({ resourcesPath: resources, appRoot, arch: 'x64', platform: 'linux', override: '' }), inApp);
 });
 
 const real = findBundledGit({ resourcesPath: null, appRoot: ROOT, override: '' });

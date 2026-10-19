@@ -7,6 +7,8 @@
 // through its launcher, engelbart-bin/git, which tells it where its helpers and templates are; while it stands in,
 // that folder goes first on PATH for everything Engelbart starts (../terminal/launch.cjs, ENGELBART_GIT_BIN), so
 // Claude Code and Codex find it and never reach Apple's stub. A person's own Git, once they have one, is used instead.
+// On Linux too (2026-10-19): Ubuntu's desktop has no Git, and installing one needs the admin password; the AppImage has
+// it at resources/git, a checkout at vendor/git/linux-<arch>.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -27,8 +29,8 @@ function isExecutable(file) {
  * `appRoot`: the checkout (`npm start`); `override`: ENGELBART_BUNDLED_GIT, a folder laid out the same way (tests).
  */
 function findBundledGit({ resourcesPath = process.resourcesPath, appRoot = path.join(__dirname, '..', '..', '..'), arch = process.arch, platform = process.platform, override = process.env.ENGELBART_BUNDLED_GIT } = {}) {
-  if (platform !== 'darwin' && !override) return null;
-  const folders = override ? [override] : [resourcesPath && path.join(resourcesPath, 'git'), path.join(appRoot, 'vendor', 'git', `darwin-${arch}`)];
+  if (platform !== 'darwin' && platform !== 'linux' && !override) return null;
+  const folders = override ? [override] : [resourcesPath && path.join(resourcesPath, 'git'), path.join(appRoot, 'vendor', 'git', `${platform}-${arch}`)];
   for (const folder of folders.filter(Boolean)) {
     const launcher = path.join(folder, LAUNCHER);
     if (isExecutable(launcher)) return launcher;

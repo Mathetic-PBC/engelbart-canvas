@@ -23,6 +23,12 @@ bug Hudson saw: "on Linux it is not accessing Obsidian files and other files wel
   in a terminal open it by itself?) decides whether the AppImage's own variables (APPDIR, APPIMAGE, OWD, ARGV0) are
   taken out of what Engelbart starts. Settings' tool rows (model/tools.js) have no code box yet. The error line under
   the popup sits over Welcome's own Continue in a small window, as on the Mac (the popup's scrim): left.
+  (3) Git: Ubuntu's desktop has none, and installing it needs the admin password. The AppImage now brings its own, as the
+  Mac app does: dugite-native's Ubuntu build (scripts/fetch-git.mjs linux-x64, checksums from the release's .sha256
+  files; Git Credential Manager taken out: 56 MB), at resources/git (electron-builder linux.extraResources; afterPackLinux
+  checks it), found by tools/bundled-git.cjs off the Mac too. Git itself needs only libc and zlib; its https helper
+  uses the system's libcurl (libcurl.so.4), which a computer without it lacks for clone and push over https only.
+  installGit off the Mac runs nothing and says `sudo apt install git`.
 - 2026-10-19, **windows-beta-deployment merged in** (at 0869062), so this branch is green on all three: it had
   taken 6 of the Windows branch's 12 commits; the other 6 (bdfad42 @create's POSIX rules, 0b047e6 node:sqlite history,
   789a8cb, bb3c149, 78bc4b5, 0869062 the Windows CI fixes) were missing, so its Windows job failed. Conflicts kept both:

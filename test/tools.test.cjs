@@ -353,7 +353,7 @@ test('installGit: Apple\'s dialog, then waiting until git arrives or the install
       },
       '/usr/bin/pgrep': { code: 0 },
     } }),
-    sleep, now: () => clock,
+    sleep, now: () => clock, platform: 'darwin',
   });
   const phases = [];
   const statfs = fs.statfsSync;
@@ -364,13 +364,20 @@ test('installGit: Apple\'s dialog, then waiting until git arrives or the install
     clock = 0;
     const closed = createActions({
       runner: fakeRunner({ exec: { '/usr/bin/xcode-select --install': { stdout: 'install requested' }, '/usr/bin/xcode-select -p': { code: 2 }, '/usr/bin/pgrep': () => ({ code: clock < 10_000 ? 0 : 1 }) } }),
-      sleep, now: () => clock,
+      sleep, now: () => clock, platform: 'darwin',
     });
     const out = await closed.installGit();
     assert.deepEqual([out.ok, out.kind], [false, 'cancelled']);
   } finally {
     fs.statfsSync = statfs;
   }
+});
+
+test('installGit on Linux runs nothing: Engelbart\'s own Git stands in, and installing one needs the admin password (2026-10-19)', async () => {
+  const runner = fakeRunner();
+  const out = await createActions({ runner, platform: 'linux' }).installGit();
+  assert.deepEqual(out, { ok: false, kind: 'other', error: 'Install Git (in a terminal: sudo apt install git), then check again.' });
+  assert.deepEqual(runner.calls, [], 'no xcode-select');
 });
 
 test('rollback points a launcher back at the version that worked, in one rename', { skip: process.platform === 'win32' && 'macOS installers link the launcher; on Windows the rollback copies (test/windows-platform.test.cjs)' }, () => {

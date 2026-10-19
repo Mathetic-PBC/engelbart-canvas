@@ -2,10 +2,13 @@
 // `dugite` downloads, fetched for each Mac architecture into vendor/git/darwin-<arch>/, where the packaged app picks
 // it up (electron-builder.config.cjs → extraResources) and a checkout run with `npm start` finds it too
 // (src/main/tools/bundled-git.cjs). It stands in for a Mac without Apple's developer tools, whose /usr/bin/git only
-// opens Apple's installer.
+// opens Apple's installer. On Linux (2026-10-19, David's hand test: Ubuntu's desktop has no git, and installing one
+// needs the admin password) dugite-native's Ubuntu build, into vendor/git/linux-<arch>/: Git needs only libc and zlib,
+// its https helper the system's libcurl.
 //
-//   node scripts/fetch-git.mjs            both architectures (a release builds both)
-//   node scripts/fetch-git.mjs arm64      one
+//   node scripts/fetch-git.mjs              both Mac architectures (a Mac release builds both)
+//   node scripts/fetch-git.mjs arm64        one Mac's
+//   node scripts/fetch-git.mjs linux-x64    Linux's (scripts/package-linux.mjs)
 //
 // The archives are checked against the checksums below (dugite 3.2.3's script/embedded-git.json) and kept in
 // vendor/git/.cache, so a second run is offline. What is taken out: Git Credential Manager, a .NET program with
@@ -22,9 +25,12 @@ import path from 'node:path';
 
 const VERSION = '2.53.0';
 const RELEASE = 'https://github.com/desktop/dugite-native/releases/download/v2.53.0-4';
+// The Linux ones' checksums are the release's own .sha256 files (2026-10-19).
 const ARCHIVES = {
-  arm64: { name: 'dugite-native-v2.53.0-4098283-macOS-arm64.tar.gz', sha256: 'f9dc64635a5b62fbd7ad95db73268bbb8912255ac516d65d37bf7af22fcb8ffe' },
-  x64: { name: 'dugite-native-v2.53.0-4098283-macOS-x64.tar.gz', sha256: 'ae6686718aa34f4140424db16b92a47dcffd6d1f312eb8b5f3b267f7404e2680' },
+  'darwin-arm64': { name: 'dugite-native-v2.53.0-4098283-macOS-arm64.tar.gz', sha256: 'f9dc64635a5b62fbd7ad95db73268bbb8912255ac516d65d37bf7af22fcb8ffe' },
+  'darwin-x64': { name: 'dugite-native-v2.53.0-4098283-macOS-x64.tar.gz', sha256: 'ae6686718aa34f4140424db16b92a47dcffd6d1f312eb8b5f3b267f7404e2680' },
+  'linux-x64': { name: 'dugite-native-v2.53.0-4098283-ubuntu-x64.tar.gz', sha256: 'cca76aa31ad9e835e771ee7f55b73934777fbd8d16757a10d307ba06de860901' },
+  'linux-arm64': { name: 'dugite-native-v2.53.0-4098283-ubuntu-arm64.tar.gz', sha256: 'a161f45af4626bb7e0c688854bd4a9aee47cc514bca404cff0a5e3536ef1c0af' },
 };
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VENDOR = path.join(ROOT, 'vendor', 'git');
@@ -59,38 +65,41 @@ async function download(archive) {
   return file;
 }
 
-/** Everything in libexec/git-core that is not Git: Git Credential Manager and the .NET runtime it brings. */
+/** Everything in libexec/git-core that is not Git: Git Credential Manager and the .NET runtime it brings (on Linux, its
+ *  libSkiaSharp and libHarfBuzzSharp too). */
 function prune(dir) {
   const core = path.join(dir, 'libexec', 'git-core');
   const keep = (name) => (name.startsWith('git') && !name.startsWith('git-credential-manager')) || name === 'scalar' || name === 'mergetools';
   for (const name of readdirSync(core)) if (!keep(name)) rmSync(path.join(core, name), { recursive: true, force: true });
 }
 
-async function fetchGit(arch) {
-  const archive = ARCHIVES[arch];
-  if (!archive) throw new Error(`no Git for darwin-${arch} (known: ${Object.keys(ARCHIVES).join(', ')})`);
-  const target = path.join(VENDOR, `darwin-${arch}`);
+/** `which`: darwin-arm64, linux-x64…, or a bare architecture for a Mac's. */
+async function fetchGit(which) {
+  const key = which.includes('-') ? which : `darwin-${which}`;
+  const archive = ARCHIVES[key];
+  if (!archive) throw new Error(`no Git for ${key} (known: ${Object.keys(ARCHIVES).join(', ')})`);
+  const target = path.join(VENDOR, key);
   try {
-    if (JSON.parse(readFileSync(path.join(target, MARKER), 'utf8')).sha256 === archive.sha256) { console.log(`vendor/git/darwin-${arch}: Git ${VERSION}, up to date`); return; }
+    if (JSON.parse(readFileSync(path.join(target, MARKER), 'utf8')).sha256 === archive.sha256) { console.log(`vendor/git/${key}: Git ${VERSION}, up to date`); return; }
   } catch { /* not there yet */ }
   const file = await download(archive);
   const staging = `${target}.partial`;
   rmSync(staging, { recursive: true, force: true });
   mkdirSync(staging, { recursive: true });
-  execFileSync('tar', ['-xzf', file, '-C', staging]); // bsdtar keeps the symlinks (git-core is mostly links to git)
+  execFileSync('tar', ['-xzf', file, '-C', staging]); // bsdtar and GNU tar keep the symlinks (git-core is mostly links to git)
   prune(staging);
   mkdirSync(path.join(staging, 'engelbart-bin'));
   writeFileSync(path.join(staging, 'engelbart-bin', 'git'), LAUNCHER);
   chmodSync(path.join(staging, 'engelbart-bin', 'git'), 0o755);
-  if (arch === process.arch) { // the other architecture may not run here (no Rosetta)
+  if (key === `${process.platform}-${process.arch}`) { // another platform's or architecture's may not run here (no Rosetta)
     const version = execFileSync(path.join(staging, 'engelbart-bin', 'git'), ['--version'], { encoding: 'utf8', env: { PATH: '/usr/bin:/bin' } }).trim();
-    if (!version.includes(VERSION)) throw new Error(`darwin-${arch}: the launcher printed "${version}"`);
+    if (!version.includes(VERSION)) throw new Error(`${key}: the launcher printed "${version}"`);
   }
   writeFileSync(path.join(staging, MARKER), `${JSON.stringify({ version: VERSION, archive: archive.name, sha256: archive.sha256 }, null, 2)}\n`);
   rmSync(target, { recursive: true, force: true });
   renameSync(staging, target);
-  console.log(`vendor/git/darwin-${arch}: Git ${VERSION}, ${megabytes(target).toFixed(0)} MB`);
+  console.log(`vendor/git/${key}: Git ${VERSION}, ${megabytes(target).toFixed(0)} MB`);
 }
 
 const wanted = process.argv.slice(2);
-for (const arch of wanted.length ? wanted : Object.keys(ARCHIVES)) await fetchGit(arch);
+for (const which of wanted.length ? wanted : ['darwin-arm64', 'darwin-x64']) await fetchGit(which);

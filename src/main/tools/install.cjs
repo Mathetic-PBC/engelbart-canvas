@@ -98,6 +98,8 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), inst
   /** Apple's dialog, then waiting for it. `onPhase(text)` reports what it is waiting for. */
   async function installGit({ onPhase = () => {} } = {}) {
     if (platform === 'win32') return { ok: false, kind: 'other', error: `Install Git for Windows from ${GIT_FOR_WINDOWS}, then check again.` };
+    // Linux (2026-10-19): the AppImage's own Git stands in (./bundled-git.cjs); installing one needs the admin password.
+    if (platform !== 'darwin') return { ok: false, kind: 'other', error: 'Install Git (in a terminal: sudo apt install git), then check again.' };
     const full = roomFor('git', '/Library');
     if (full) return full;
     const asked = await runner.exec('/usr/bin/xcode-select', ['--install'], { timeout: 30_000 });

@@ -53,6 +53,8 @@ function afterPackLinux(context) {
   const launcher = path.join(context.appOutDir, 'engelbart-launch');
   if (!fs.existsSync(launcher)) throw new Error(`The Linux app has no launcher at ${launcher}.`);
   fs.chmodSync(launcher, 0o755);
+  const git = path.join(context.appOutDir, 'resources', 'git', 'engelbart-bin', 'git');
+  if (!fs.existsSync(git)) throw new Error(`No Git for Linux ${Arch[context.arch]} in the app: run \`node scripts/fetch-git.mjs linux-${Arch[context.arch]}\` first.`);
   assertAppModules(context.appOutDir, `The Linux ${Arch[context.arch]} app`);
 }
 
@@ -157,6 +159,8 @@ module.exports = {
     category: 'Development',
     synopsis: 'Tools for steering coding agents',
     extraFiles: [{ from: 'build/linux/engelbart-launch', to: 'engelbart-launch' }],
+    // Engelbart's own Git (2026-10-19; scripts/fetch-git.mjs linux-x64, src/main/tools/bundled-git.cjs), as on the Mac.
+    extraResources: [{ from: 'vendor/git/linux-${arch}', to: 'git', filter: ['**/*', '!.engelbart-git.json'] }],
   },
   nsis: {
     oneClick: false, // asks where to install, for this user or everyone
