@@ -10,7 +10,8 @@
 // 2026-10-14 (onboarding's connect edge cases): " unknown" after a version is a CLI whose sign-in check does not answer
 // (signedIn null, as `auth status` timing out); " no-plan" one signed in without a subscription; `signInNever` names
 // agents whose sign-in waits in the browser until it is cancelled; `execFile` answers `claude auth status --json` for this
-// machine (../onboarding/providers.cjs).
+// machine (../onboarding/providers.cjs). `signInCode` (2026-10-19) names agents whose sign-in asks for the page's code
+// and finishes once one is sent (./sign-in.cjs onCode, send).
 
 const { REQUIREMENTS, TOOL_NAMES } = require('./requirements.cjs');
 const { observed } = require('./detect.cjs');
@@ -28,11 +29,11 @@ function parseSpec(value) {
     else if (text === 'broken') state[name] = { present: true, broken: true };
     else { const [version, flag] = text.split(/\s+/); state[name] = { present: true, version, signedIn: flag === 'unknown' ? null : flag !== 'signed-out', plan: flag === 'no-plan' ? null : name === 'codex' ? 'plus' : 'max' }; }
   }
-  return { state, failInstall: Array.isArray(input.failInstall) ? input.failInstall : [], signInNever: Array.isArray(input.signInNever) ? input.signInNever : [] };
+  return { state, failInstall: Array.isArray(input.failInstall) ? input.failInstall : [], signInNever: Array.isArray(input.signInNever) ? input.signInNever : [], signInCode: Array.isArray(input.signInCode) ? input.signInCode : [] };
 }
 
 function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), now = () => new Date() } = {}) {
-  const { state, failInstall, signInNever } = parseSpec(spec);
+  const { state, failInstall, signInNever, signInCode } = parseSpec(spec);
   /** The pretend machine as it started (test mode's reset, 2026-10-15: its installs stayed, so setup never showed again). */
   const reset = () => { const fresh = parseSpec(spec).state; for (const name of Object.keys(state)) state[name] = fresh[name]; };
   const fakePath = (name) => (name === 'git' ? (state.git.bundled ? '/Users/fake/Applications/Engelbart.app/Contents/Resources/git/engelbart-bin/git' : '/usr/bin/git') : `/Users/fake/.local/bin/${name}`);
@@ -76,12 +77,15 @@ function createFakeTools(spec, { delayMs = 2500, sleep = (ms) => new Promise((re
     },
   };
 
-  function signInProcess(name, _file, { onUrl }) {
+  function signInProcess(name, _file, { onUrl, onCode = () => {} }) {
     let finish = null;
     const done = new Promise((resolve) => { finish = resolve; });
-    const timer = setTimeout(() => { onUrl(`https://example.invalid/${name}/sign-in`); }, 200);
-    const complete = signInNever.includes(name) ? null : setTimeout(() => { state[name] = { ...state[name], signedIn: true }; finish({ code: 0, output: '' }); }, delayMs);
-    return { done, kill: () => { clearTimeout(timer); clearTimeout(complete); finish({ code: 130, output: 'Cancelled.' }); } };
+    const asks = signInCode.includes(name);
+    const timer = setTimeout(() => { onUrl(`https://example.invalid/${name}/sign-in${asks ? '?code=true' : ''}`); if (asks) onCode(); }, 200);
+    const signedIn = () => { state[name] = { ...state[name], signedIn: true }; finish({ code: 0, output: '' }); };
+    const complete = signInNever.includes(name) || asks ? null : setTimeout(signedIn, delayMs);
+    const send = (code) => { if (!asks || !code) return false; setTimeout(signedIn, Math.min(400, delayMs)); return true; };
+    return { done, send, kill: () => { clearTimeout(timer); clearTimeout(complete); finish({ code: 130, output: 'Cancelled.' }); } };
   }
 
   async function signOutProcess(name) {

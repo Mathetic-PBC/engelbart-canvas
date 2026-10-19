@@ -77,6 +77,9 @@ test('S3: the popup for each choice: install, update, connect, and on by itself 
   assert.equal(half.done, true, 'one runs: the flow goes on while the other installs');
   const signing = m.agentChoice(snap({ claude: { status: 'signed-out', busy: { action: 'sign-in', url: 'https://claude.ai/x' } } }), prov(), 'claude');
   assert.deepEqual([signing.primary.action, signing.primary.url], ['open', 'https://claude.ai/x']);
+  assert.equal(signing.code, null, 'no code asked for: no box');
+  const asking = m.agentChoice(snap({ claude: { status: 'signed-out', busy: { action: 'sign-in', url: 'https://claude.ai/x?code=true', code: true } } }), prov(), 'claude');
+  assert.deepEqual([asking.code, asking.primary.action], ['claude', 'open'], 'the page\'s code asked for (2026-10-19): the box, and the page can still be opened');
   const failed = m.agentChoice(snap({ codex: { status: 'missing', error: 'The installer could not be reached: no internet connection. More.' } }), prov(), 'codex');
   assert.deepEqual([failed.primary.label, failed.problem], ['Try again', 'The installer could not be reached: no internet connection.']);
   assert.equal(m.agentChoice(snap(), prov(), null).primary.disabled, true, 'nothing chosen yet');

@@ -7,6 +7,11 @@
 // the terminal (../terminal/launch.cjs): Claude Code found where the login shell's PATH does not reach (~/.local/bin
 // on a new account) otherwise signs in saying its installation "is not in your PATH" (2026-09-29).
 //
+// A code to paste back (2026-10-19, Linux in a VM): when the CLI cannot open the browser itself, the page it prints is
+// its other sign-in, whose page ends with a code to paste into the CLI ("Paste code here if prompted"), and the hidden
+// terminal had nowhere to paste it, so the sign-in waited for ever. `onCode()` says the CLI takes one (its prompt, or a
+// page asking for a code, `code=true`); `send(code)` types it there and presses Enter.
+//
 // Signing out (2026-10-03, Connections): the CLI's own logout, `claude auth logout` / `codex logout` (both listed by
 // --help on Claude Code 2.1.223 and 2.1.288, Codex 0.159.3). Neither asks anything, so it runs in the login shell as the
 // sign-in check does (./detect.cjs AUTH), not in a terminal.
@@ -28,9 +33,11 @@ const SIGN_OUT_COMMANDS = Object.freeze({
 const SIGN_OUT_TIMEOUT_MS = 30_000;
 const ANSI = /\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
 const URL_RE = /https:\/\/[^\s"'<>]+/;
+const CODE_PROMPT = /paste (?:the |your )?code|code here/i;
+const CODE_PAGE = /[?&]code=true(?:&|$)/;
 
 function createSignInProcess({ pty, shell, environment = process.env }) {
-  return (name, file, { onUrl = () => {} } = {}) => {
+  return (name, file, { onUrl = () => {}, onCode = () => {} } = {}) => {
     const env = { ...sanitizeEnvironment(environment), ENGELBART_TOOL: file, ENGELBART_AGENT_PATH: path.dirname(file) };
     const child = pty.spawn(shell, loginShellArgs(shell, COMMANDS[name], env), {
       name: 'xterm-256color',
@@ -42,6 +49,7 @@ function createSignInProcess({ pty, shell, environment = process.env }) {
     let output = '';
     let url = null;
     let pressed = false;
+    let asks = false;
     child.onData((data) => {
       output = (output + data).slice(-50_000);
       const text = output.replace(ANSI, '');
@@ -49,6 +57,7 @@ function createSignInProcess({ pty, shell, environment = process.env }) {
         const match = URL_RE.exec(text);
         if (match) { url = match[0]; onUrl(url); }
       }
+      if (!asks && (CODE_PROMPT.test(text) || (url && CODE_PAGE.test(url)))) { asks = true; onCode(); }
       if (!pressed && /press (enter|return)/i.test(text)) { pressed = true; try { child.write('\r'); } catch { /* ended */ } }
     });
     // A sign-in ended by Cancel (or the ten-minute limit) comes back with a signal and exit code 0 from node-pty:
@@ -58,7 +67,13 @@ function createSignInProcess({ pty, shell, environment = process.env }) {
       const lines = output.replace(ANSI, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
       resolve({ code: exitCode, output: exitCode === 0 ? '' : (lines[lines.length - 1] || '').slice(0, 200) });
     }));
-    return { done, kill: () => { try { child.kill(); } catch { /* already gone */ } } };
+    // The code, then Enter a moment later: a CLI drawing its prompt (Claude Code's) takes a pasted Enter as part of the text.
+    const send = (code) => {
+      try { child.write(code); } catch { return false; }
+      setTimeout(() => { try { child.write('\r'); } catch { /* ended */ } }, 150);
+      return true;
+    };
+    return { done, send, kill: () => { try { child.kill(); } catch { /* already gone */ } } };
   };
 }
 

@@ -2,6 +2,7 @@ import React from 'react';
 import { IMPORT_CSS } from './import-css.js';
 import { ROUND3_CSS } from './round3-css.js';
 import { ROUND4_CSS } from './round4-css.js';
+import SignInCode from './SignInCode.jsx';
 
 // "Connect Claude Code" / "Connect Codex" over the workspace (2026-10-14, a beta tester's import that failed before it
 // brought anything in: "ensure that in the app if they have already onboarded but context import failed before importing
@@ -41,9 +42,10 @@ export function providerCopy(provider, tool, { why = '', changed = false } = {})
 
 /**
  * `session` the run (its `blocked`: { provider, name, error }); `tools` the tool check's snapshot; `onConnect(cli)`,
- * `onOpenPage(url)`, `onContinue(provider)` (the run goes on, on `provider`) and `onLater()`.
+ * `onOpenPage(url)`, `onSignInCode(cli, code)` (the sign-in page's code, when its sign-in asks for one), `onContinue(provider)`
+ * (the run goes on, on `provider`) and `onLater()`.
  */
-export default function ProviderPopup({ session, tools, onConnect, onSignIn, onOpenPage, onContinue, onLater }) {
+export default function ProviderPopup({ session, tools, onConnect, onSignIn, onOpenPage, onSignInCode = () => false, onContinue, onLater }) {
   const provider = session.blocked.provider === 'openai' ? 'openai' : 'anthropic';
   const other = provider === 'anthropic' ? 'openai' : 'anthropic';
   const tool = tools && tools.tools ? tools.tools[CLI[provider]] : null;
@@ -85,6 +87,7 @@ export default function ProviderPopup({ session, tools, onConnect, onSignIn, onO
         <section className="modal need-modal" role="dialog" aria-modal="true" aria-label={`Connect ${NAME[provider]}`}>
           <h3>{`Connect ${NAME[provider]}`}</h3>
           {line ? <p className={error || (words.problem && (pressed || words.state === 'refused')) ? 'need-error' : undefined} role="status" data-provider-line="1">{line}</p> : null}
+          {words.state === 'signing-in' && tool.busy.code ? <SignInCode cli={CLI[provider]} onSend={onSignInCode} /> : null}
           <div className="mf">
             {otherReady ? <button type="button" className="link" data-provider-other={other} onClick={() => Promise.resolve(onContinue(other)).catch((failure) => setError(String((failure && failure.message) || failure)))}>{`Use ${NAME[other]}`}</button> : null}
             <button type="button" className="link" data-provider-later="1" onClick={onLater}>Skip</button>

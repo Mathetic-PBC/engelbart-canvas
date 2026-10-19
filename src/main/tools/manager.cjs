@@ -212,9 +212,12 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
   async function signIn(name) {
     if (!AGENTS.includes(name) || !signInProcess || !records[name].path) return snapshot();
     if (signIns.has(name)) return snapshot();
-    busy[name] = { action: 'sign-in', url: null };
+    busy[name] = { action: 'sign-in', url: null, code: false };
     emit();
-    const run = signInProcess(name, records[name].path, { onUrl: (url) => { if (busy[name]) { busy[name].url = url; emit(); } } });
+    const run = signInProcess(name, records[name].path, {
+      onUrl: (url) => { if (busy[name]) { busy[name].url = url; emit(); } },
+      onCode: () => { if (busy[name]) { busy[name].code = true; emit(); } }, // the CLI takes a code pasted from the page
+    });
     signIns.set(name, run);
     const timer = setTimer(() => run.kill(), SIGN_IN_MS);
     let exit = null;
@@ -254,6 +257,16 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     })().finally(() => connecting.delete(name));
     connecting.set(name, run);
     return run;
+  }
+
+  /** The code the sign-in page shows, typed into the CLI's sign-in (./sign-in.cjs send). → whether it was sent. */
+  function signInCode(name, code) {
+    const run = signIns.get(name);
+    const clean = String(code == null ? '' : code).replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 2000);
+    if (!run || typeof run.send !== 'function' || !clean) return false;
+    const sent = !!run.send(clean);
+    if (sent && busy[name]) { busy[name].sent = true; emit(); }
+    return sent;
   }
 
   function cancelSignIn(name) {
@@ -372,7 +385,7 @@ function createTools({ readTools, writeTools, detect, actions, signInProcess = n
     ];
   }
 
-  return { start, check, update, install, connect, signIn, cancelSignIn, stopSignIns, signOut, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
+  return { start, check, update, install, connect, signIn, signInCode, cancelSignIn, stopSignIns, signOut, skip, askAgain, setUpdates, ensure, use, usableAgents, binaryFor, environment, providers, snapshot, canAutoUpdate };
 }
 
 module.exports = { createTools, STALE_MS, RETRY_UPDATE_MS };

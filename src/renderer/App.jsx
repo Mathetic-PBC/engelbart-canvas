@@ -687,7 +687,7 @@ export default function App() {
       )}
       {providerUp && (
         <ProviderPopup key={`${blockedSession.id}:${blockedSession.blocked.at || ''}`} session={blockedSession} tools={tools}
-          onConnect={(cli) => api.toolsConnect(cli)} onSignIn={(cli) => api.toolsSignIn(cli)} onOpenPage={(url) => api.openExternal(url).catch(fail)}
+          onConnect={(cli) => api.toolsConnect(cli)} onSignIn={(cli) => api.toolsSignIn(cli)} onOpenPage={(url) => api.openExternal(url).catch(fail)} onSignInCode={(cli, code) => api.toolsSignInCode(cli, code)}
           onContinue={(provider) => api.connectUnblock(blockedSession.id, provider)}
           onLater={() => { laterProvider.current.add(blockedSession.id); setProviderTick((n) => n + 1); }} />
       )}

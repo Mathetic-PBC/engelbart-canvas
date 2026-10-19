@@ -299,7 +299,8 @@ export function agentGate(snapshot, providers) {
 
 /**
  * The agent popup for a choice (S3: "Claude Code, Codex, or both") → { stages: { id: stage }, install, update, signIn,
- * failed, done, primary: { label, action: null | 'sign-in' | 'open' | 'retry', ids, url?, disabled }, problem }.
+ * failed, done, primary: { label, action: null | 'sign-in' | 'open' | 'retry', ids, url?, disabled }, problem, code }.
+ * `code`: the CLI whose sign-in takes the page's code (busy.code, src/main/tools/sign-in.cjs), else null.
  * Choosing installs what is missing (`install`) and updates what is out of date (`update`) at once; one installed and up
  * to date but not signed in waits for one press, "Connect to Claude" (or ChatGPT, or both), which opens that CLI's own
  * sign-in. `done`: one of them runs, and the flow goes on by itself. `problem`: why one stopped, in its own words.
@@ -315,6 +316,7 @@ export function agentChoice(snapshot, providers, choice, { refused = null } = {}
   const signing = having('signing-in');
   const done = having('ready').length > 0;
   const errorOf = (list) => { for (const id of list) { const tool = toolOf(snapshot, id); if (tool && tool.error) return String(tool.error).split(/(?<=[.!?])\s/)[0].slice(0, 160); } return ''; };
+  const asking = signing.find((id) => { const busy = toolOf(snapshot, id).busy; return !!(busy && busy.code); }) || null;
   let primary;
   if (!ids.length) primary = { label: 'Continue', action: null, ids: [], disabled: true };
   else if (done) primary = { label: 'Connected', action: null, ids: [], disabled: true };
@@ -324,7 +326,7 @@ export function agentChoice(snapshot, providers, choice, { refused = null } = {}
     primary = busy.url ? { label: 'Open sign-in page', action: 'open', ids: signing.slice(0, 1), url: busy.url, disabled: false } : { label: 'Finish signing in…', action: null, ids: [], disabled: true };
   } else if (failed.length && failed.length === ids.length - having('ready').length) primary = { label: 'Try again', action: 'retry', ids: failed, disabled: false };
   else primary = { label: 'Connecting…', action: null, ids: [], disabled: true };
-  return { stages, install, update, signIn, failed, done, primary, problem: failed.length ? errorOf(failed) : '' };
+  return { stages, install, update, signIn, failed, done, primary, problem: failed.length ? errorOf(failed) : '', code: done ? null : asking };
 }
 
 /**

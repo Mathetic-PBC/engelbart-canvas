@@ -131,6 +131,7 @@ function createMockApi(getConfig) {
     toolsUpdate: async () => snapTools(),
     toolsSignIn: async (id) => { if (cli[id] && cli[id].state !== 'missing') signIn(id); return snapTools(); },
     toolsConnect: async (id) => { if (!cli[id]) return snapTools(); if (cli[id].state === 'missing') install(id); else if (cli[id].state !== 'ready') signIn(id); return snapTools(); },
+    toolsSignInCode: async () => true,
     toolsCancelSignIn: async () => true,
     openExternal: async () => true,
     detect: async () => ({ apps: { Obsidian: { found: true }, 'Claude Code': { found: true }, Codex: { found: true }, Cursor: { found: true }, [CATALOG.find((tool) => tool.id === 'PDFs on this Mac').id]: { found: true } }, sites: { found: true }, github: { found: false }, localRepos: [] }),

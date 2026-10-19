@@ -315,10 +315,29 @@ test('installAgent downloads the vendor\'s installer to a file first: a failed d
   const out = await actions.installAgent('claude');
   assert.deepEqual([out.ok, out.kind], [false, 'network']);
   const call = runner.calls.find((item) => item.kind === 'shell');
-  assert.match(call.command, /curl -fsSL .* -o "\$ENGELBART_INSTALLER" "\$ENGELBART_INSTALLER_URL" && bash "\$ENGELBART_INSTALLER"/);
+  assert.match(call.command, /curl -fsSL .* -o "\$ENGELBART_INSTALLER" "\$ENGELBART_INSTALLER_URL"; .*' && bash "\$ENGELBART_INSTALLER"/);
   assert.equal(call.env.ENGELBART_INSTALLER_URL, 'https://claude.ai/install.sh');
   const codex = createActions({ runner: fakeRunner({ shell: { 'curl -fsSL': { stdout: '==> Installed' } } }), tmpDir: temp() });
   assert.equal((await codex.installAgent('codex')).ok, true);
+});
+
+test('installAgent without curl downloads with wget (Ubuntu\'s desktop has no curl), and says so when neither is there', { skip: process.platform === 'win32' && 'POSIX installers (sh, curl or wget); Windows uses PowerShell\'s and npm' }, async () => {
+  const { execFile } = require('node:child_process');
+  // A PATH with only sh, and wget where there is one: `wget -q --tries=3 --timeout=20 -O FILE URL` writes an installer.
+  const onPath = (withWget) => {
+    const bin = temp();
+    fs.symlinkSync('/bin/sh', path.join(bin, 'sh'));
+    if (withWget) fs.writeFileSync(path.join(bin, 'wget'), '#!/bin/sh\nprintf \'echo Installed\\n\' > "$5"\n', { mode: 0o755 });
+    return { calls: [], async shell(command, options = {}) {
+      this.calls.push(command);
+      return new Promise((resolve) => execFile('/bin/sh', ['-c', command], { env: { ...options.env, PATH: bin } }, (error, stdout, stderr) => resolve({ code: error ? error.code : 0, stdout, stderr, timedOut: false, marked: true })));
+    } };
+  };
+  const installers = { claude: { url: 'https://example.invalid/install.sh', interpreter: 'sh', env: {} } };
+  const wget = onPath(true);
+  assert.deepEqual(await createActions({ runner: wget, tmpDir: temp(), installers }).installAgent('claude'), { ok: true });
+  const none = await createActions({ runner: onPath(false), tmpDir: temp(), installers }).installAgent('claude');
+  assert.deepEqual([none.ok, none.error], [false, 'Downloading the installer needs curl or wget. In a terminal: sudo apt install curl, then Try again.']);
 });
 
 test('installGit: Apple\'s dialog, then waiting until git arrives or the installer is closed', { skip: process.platform === 'win32' && 'macOS only: Apple\'s Command Line Tools installer' }, async () => {
@@ -517,6 +536,21 @@ test('manager: sign-in waits for the CLI, shows its page, and checks again', asy
   await tools.start();
   await tools.signIn('claude');
   assert.ok(seen.some((snapshot) => snapshot.tools.claude.busy && snapshot.tools.claude.busy.action === 'sign-in'));
+  assert.deepEqual([readConfig(root).tools.claude.signedIn, readConfig(root).tools.claude.status], [true, 'ready']);
+});
+
+test('manager: a sign-in that asks for the page\'s code says so, and the code typed in finishes it (2026-10-19, Linux)', async () => {
+  const { tools, root, seen } = managerFor({ claude: '2.1.300 signed-out', signInCode: ['claude'] });
+  await tools.start();
+  assert.equal(tools.signInCode('claude', 'abc'), false, 'no sign-in under way: nothing to send to');
+  const signing = tools.signIn('claude');
+  const until = async (test) => { for (let i = 0; i < 100 && !test(); i += 1) await new Promise((resolve) => { setTimeout(resolve, 10); }); };
+  await until(() => seen.some((snapshot) => snapshot.tools.claude.busy && snapshot.tools.claude.busy.code));
+  const asking = seen.find((snapshot) => snapshot.tools.claude.busy && snapshot.tools.claude.busy.code).tools.claude.busy;
+  assert.deepEqual([asking.action, asking.code, asking.url], ['sign-in', true, 'https://example.invalid/claude/sign-in?code=true']);
+  assert.equal(tools.signInCode('claude', '  \n'), false, 'an empty code is not sent');
+  assert.equal(tools.signInCode('claude', ' abc#123\r\n'), true);
+  await signing;
   assert.deepEqual([readConfig(root).tools.claude.signedIn, readConfig(root).tools.claude.status], [true, 'ready']);
 });
 

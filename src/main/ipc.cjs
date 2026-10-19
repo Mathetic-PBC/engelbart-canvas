@@ -1240,6 +1240,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     handle('tools-sign-in', (name) => { void tools.signIn(toolName(name)).catch(() => {}); return tools.snapshot(); });
     // Connect (2026-10-14): installed, updated, checked and signed in, whichever it still needs, from one press.
     handle('tools-connect', (name) => { void tools.connect(toolName(name)).catch(() => {}); return tools.snapshot(); });
+    handle('tools-sign-in-code', (name, code) => tools.signInCode(toolName(name), typeof code === 'string' ? code : ''));
     handle('tools-cancel-sign-in', (name) => tools.cancelSignIn(toolName(name)));
     handle('tools-sign-out', (name) => tools.signOut(toolName(name)));
     handle('tools-skip', (names) => tools.skip(toolNames(names)));

@@ -4,6 +4,7 @@ import { ROUND3_CSS } from './round3-css.js';
 import { ROUND4_CSS } from './round4-css.js';
 import { PROVIDER_LOGOS } from './logos.js';
 import { agentChoice, providerOfCli } from '../model/onboarding.js';
+import SignInCode from './SignInCode.jsx';
 
 // The agent popup (2026-10-16, the onboarding beta's S3; Hudson: "a popup on this screen (there should be no auth screen
 // that looks like this) should ask if they would like to use Claude Code, Codex, or both. it should then download
@@ -24,7 +25,7 @@ const tidy = (failure) => String((failure && failure.message) || failure || '').
 
 /**
  * The popup's contents, inside an `.ix` (ImportFlow's modal, or AgentSetupPopup below). `api`: toolsInstall, toolsUpdate
- * (else toolsConnect), toolsSignIn, openExternal. `tools` the tool check's snapshot, `providers` providers.cjs's status.
+ * (else toolsConnect), toolsSignIn, toolsSignInCode (the page's code, when the sign-in asks for one), openExternal. `tools` the tool check's snapshot, `providers` providers.cjs's status.
  * `initial` the choice to start on ('claude' | 'codex' | 'both' | null: a provider the flow asked for), `refused` the CLI
  * that turned the agents away while signed in. `onDone(choice)` once one of them runs (`watchDone`: the host may decide that
  * itself, as Import your context does); `onSkip()`.
@@ -81,6 +82,7 @@ export function AgentSetupBody({ api, tools, providers, initial = null, refused 
           </button>
         ))}
       </div>
+      {plan.code ? <SignInCode key={plan.code} cli={plan.code} onSend={(id, code) => (api.toolsSignInCode ? api.toolsSignInCode(id, code) : false)} /> : null}
       {line ? <p className="need-error" role="status" data-agent-line="1">{line}</p> : null}
       <div className="mf agent-actions">
         <button type="button" className="link mf-left" data-agent-skip="1" onClick={onSkip}>Skip</button>

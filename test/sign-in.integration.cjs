@@ -30,6 +30,22 @@ test('sign-in answers "press Enter", passes the page on, and ends when the CLI d
   assert.deepEqual(pages, ['https://claude.ai/oauth/authorize?code=true&state=abc']);
 });
 
+test('a sign-in that asks for the page\'s code says so, and the code sent is typed in with Enter (2026-10-19, Linux)', async (t) => {
+  const { bin, environment } = fixture(t);
+  const cli = path.join(bin, 'claude');
+  // Stands in for Claude Code when the browser could not be opened: the page's code is pasted into its prompt.
+  fs.writeFileSync(cli, '#!/bin/sh\necho "Browser didn\'t open? Use the url below to sign in"\necho "https://claude.ai/oauth/authorize?code=true&state=abc"\nprintf "Paste code here if prompted > "\nread code\n[ "$code" = "abc#123" ] || { echo "Wrong code: $code"; exit 3; }\necho "Login successful."\n', { mode: 0o755 });
+  const signIn = createSignInProcess({ pty, shell: '/bin/zsh', environment });
+  let asked = 0;
+  const run = signIn('claude', cli, { onCode: () => { asked += 1; } });
+  const start = Date.now();
+  while (!asked && Date.now() - start < 5000) await new Promise((resolve) => { setTimeout(resolve, 20); });
+  assert.equal(asked, 1, 'asked once');
+  assert.equal(run.send('abc#123'), true);
+  const exit = await Promise.race([run.done, new Promise((_, reject) => setTimeout(() => reject(new Error('sign-in did not end')), 8000))]);
+  assert.deepEqual(exit, { code: 0, output: '' });
+});
+
 test('a sign-in that fails reports its last line, and Cancel ends one that waits for ever', async (t) => {
   const { bin, environment } = fixture(t);
   const failing = path.join(bin, 'codex');

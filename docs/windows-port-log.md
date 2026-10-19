@@ -12,6 +12,17 @@ bug Hudson saw: "on Linux it is not accessing Obsidian files and other files wel
 
 ### Status
 
+- 2026-10-19, **David's first hand test (Ubuntu 24.04 in VirtualBox, the AppImage from 39186106461)**: onboarding's agent
+  popup stopped twice. (1) Installing Claude Code: "It did not finish (sudo apt install curl)": Ubuntu's desktop has no
+  curl. tools/install.cjs now downloads with curl, else wget (which Ubuntu has; Claude Code's installer takes either),
+  else says to install curl. (2) Signing in: Claude Code could not open the browser itself, so the page Engelbart opened
+  was its other sign-in, which ends with a code to paste into Claude Code, and the hidden terminal had nowhere to paste
+  it. tools/sign-in.cjs now says when the CLI takes a code (its "Paste code here" prompt, or a `code=true` page) and
+  types one in (`send`); the agent popup and Connect Claude Code show a box for it (import/SignInCode.jsx). Why Claude
+  Code could not open Firefox from the AppImage is not known yet: David's check (does `claude auth login --claudeai`
+  in a terminal open it by itself?) decides whether the AppImage's own variables (APPDIR, APPIMAGE, OWD, ARGV0) are
+  taken out of what Engelbart starts. Settings' tool rows (model/tools.js) have no code box yet. The error line under
+  the popup sits over Welcome's own Continue in a small window, as on the Mac (the popup's scrim): left.
 - 2026-10-19, **windows-beta-deployment merged in** (at 0869062), so this branch is green on all three: it had
   taken 6 of the Windows branch's 12 commits; the other 6 (bdfad42 @create's POSIX rules, 0b047e6 node:sqlite history,
   789a8cb, bb3c149, 78bc4b5, 0869062 the Windows CI fixes) were missing, so its Windows job failed. Conflicts kept both:

@@ -10,7 +10,9 @@
 //                (./bundled-git.cjs) is missing too: it stands in for a Mac without one.
 //   Claude Code  https://claude.ai/install.sh      } each vendor's installer: SHA-256 checked, into the
 //   Codex        https://chatgpt.com/codex/install.sh } home folder, no admin password. Downloaded to a
-//                file first, so a failed download is not mistaken for a finished install.
+//                file first, so a failed download is not mistaken for a finished install. With curl, or wget
+//                where there is no curl (2026-10-19: Ubuntu's desktop has wget and no curl, and onboarding stopped at
+//                "It did not finish (sudo apt install curl)"; Claude Code's installer itself takes either).
 //   Updates      `claude update` / `codex update`: each CLI knows whether it came from its installer,
 //                npm or Homebrew. Git is Apple's or Homebrew's to update.
 //
@@ -40,6 +42,12 @@ const APPLE_INSTALLER = 'Install Command Line Developer Tools';
 const CLAUDE_WINDOWS_INSTALLER = 'https://claude.ai/install.ps1';
 const GIT_FOR_WINDOWS = 'https://git-scm.com/download/win';
 
+// The download, in sh (the login shell may be fish): curl, else wget, else it says neither is there.
+const DOWNLOAD = 'sh -c \'if command -v curl >/dev/null 2>&1; then curl -fsSL --retry 2 --connect-timeout 20 -o "$ENGELBART_INSTALLER" "$ENGELBART_INSTALLER_URL"; '
+  + 'elif command -v wget >/dev/null 2>&1; then wget -q --tries=3 --timeout=20 -O "$ENGELBART_INSTALLER" "$ENGELBART_INSTALLER_URL"; '
+  + 'else echo "no curl or wget to download the installer"; exit 127; fi\'';
+const NO_DOWNLOADER = /no curl or wget to download the installer/;
+
 const lastLines = (text, count = 3) => String(text || '').replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, '').split(/\r?\n/).map((line) => line.trim()).filter(Boolean).slice(-count);
 
 /** One line saying what went wrong, from what the installer printed. */
@@ -47,6 +55,7 @@ function classifyFailure(text, code = null) {
   const output = String(text || '');
   const detail = lastLines(output, 1)[0] || (code == null ? '' : `exit status ${code}`);
   const tail = detail ? ` (${detail.slice(0, 160)})` : '';
+  if (NO_DOWNLOADER.test(output)) return { kind: 'other', error: 'Downloading the installer needs curl or wget. In a terminal: sudo apt install curl, then Try again.' };
   if (/\b407\b|proxy/i.test(output)) return { kind: 'proxy', error: `A proxy stopped the download${tail}.` };
   if (/ssl|certificate|curl: \((35|51|58|59|60|77|83)\)/i.test(output)) return { kind: 'network', error: `The download failed its certificate check; a proxy or firewall may be in the way${tail}.` };
   if (/could not resolve|failed to connect|connection (refused|reset|timed out)|network is unreachable|timed out|ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|curl: \((5|6|7|28|52|55|56)\)/i.test(output)) return { kind: 'network', error: `The installer could not be reached: no internet connection${tail}.` };
@@ -132,7 +141,7 @@ function createActions({ runner, home = os.homedir(), tmpDir = os.tmpdir(), inst
     const installer = installers[name];
     const script = path.join(tmpDir, `engelbart-${name}-install-${process.pid}-${now()}.sh`);
     try {
-      const out = await runner.shell(`curl -fsSL --retry 2 --connect-timeout 20 -o "$ENGELBART_INSTALLER" "$ENGELBART_INSTALLER_URL" && ${installer.interpreter} "$ENGELBART_INSTALLER" < /dev/null 2>&1`, {
+      const out = await runner.shell(`${DOWNLOAD} && ${installer.interpreter} "$ENGELBART_INSTALLER" < /dev/null 2>&1`, {
         env: { ENGELBART_INSTALLER: script, ENGELBART_INSTALLER_URL: installer.url, ...installer.env },
         timeout: INSTALL_TIMEOUT_MS,
       });

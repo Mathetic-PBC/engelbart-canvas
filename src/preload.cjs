@@ -369,6 +369,7 @@ const engelbartAPI = Object.freeze({
   toolsUpdate: invoke('tools-update'),
   toolsSignIn: invoke('tools-sign-in'),
   toolsConnect: invoke('tools-connect'), // (name) → snapshot; installs, updates, checks and signs in, whichever it needs
+  toolsSignInCode: invoke('tools-sign-in-code'), // (name, code) → whether the code reached the CLI's sign-in
   toolsCancelSignIn: invoke('tools-cancel-sign-in'),
   toolsSignOut: invoke('tools-sign-out'),
   toolsSkip: invoke('tools-skip'),
