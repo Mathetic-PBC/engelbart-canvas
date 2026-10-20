@@ -75,6 +75,31 @@ test('afterClose: the tab to the right comes forward, else the one to the left; 
   assert.equal(afterClose(1, 0, 0), -1);
 });
 
+test('tabWidth: 220px while there is room, an equal share when not, never under 36px (the strip scrolls)', async () => {
+  const { tabWidth, TAB_MAX_W, TAB_MIN_W } = await load('stage');
+  assert.equal(tabWidth(1000, 3), TAB_MAX_W);
+  assert.equal(tabWidth(1000, 8), 125);
+  assert.equal(tabWidth(601, 15), 40); // floored, so the tabs never overflow by a fraction of a pixel
+  assert.equal(tabWidth(300, 15), TAB_MIN_W);
+  assert.equal(tabWidth(0, 15), TAB_MIN_W);
+  assert.equal(tabWidth(500, 0), TAB_MAX_W);
+  // 36px holds a 20px × with at least 4px each side, inside the inactive tab's 2px margins
+  assert.ok(TAB_MIN_W - 4 >= 20 + 8);
+});
+
+test('tabLook: full above 90px; narrower, the icon alone, or the tab in front its × (with the icon from 56px)', async () => {
+  const { tabLook, TAB_NARROW_W, TAB_ICON_X_W } = await load('stage');
+  assert.equal(tabLook(220, false), 'full');
+  assert.equal(tabLook(220, true), 'full');
+  assert.equal(tabLook(TAB_NARROW_W, false), 'full');
+  assert.equal(tabLook(TAB_NARROW_W - 1, false), 'icon');
+  assert.equal(tabLook(36, false), 'icon');
+  assert.equal(tabLook(TAB_NARROW_W - 1, true), 'icon-x');
+  assert.equal(tabLook(TAB_ICON_X_W, true), 'icon-x');
+  assert.equal(tabLook(TAB_ICON_X_W - 1, true), 'x');
+  assert.equal(tabLook(36, true), 'x');
+});
+
 test('tabPlace: a site for a page, the path for a file', async () => {
   const { tabPlace } = await load('stage');
   assert.equal(tabPlace('https://www.anthropic.com/engineering/x'), 'anthropic.com');

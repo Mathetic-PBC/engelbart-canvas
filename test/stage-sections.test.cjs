@@ -665,7 +665,7 @@ function keptStage(options) {
   globalThis.ResizeObserver = class { observe() {} disconnect() {} };
   globalThis.MutationObserver = class { observe() {} disconnect() {} };
   const slot = { getBoundingClientRect: () => ({ left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 }), parentElement: null };
-  return stage({ nodes: { 'data-browser-slot': slot }, ...options });
+  return stage({ ...options, nodes: { 'data-browser-slot': slot, ...(options && options.nodes) } });
 }
 const choose = (s, i) => { findAll(tabEls(s)[i], (p) => typeof p.onMouseDown === 'function')[0].props.onMouseDown({ button: 0 }); s.rerender(); };
 
@@ -727,5 +727,65 @@ test.describe('the Stage\'s tabs kept across ⌘R and quitting (MATH-10)', () =>
     assert.deepEqual(labels(s), ['New tab']);
     s.fire('pagehide');
     assert.deepEqual(named(s, 'setStage').map((call) => call[2]).pop(), { active: 0, tabs: [] }, 'one blank tab the next time');
+  });
+});
+
+// Many tabs (2026-10-18): the strip gives each tab its share of the room; a narrow tab shows its icon or its ×, never both
+// on top of each other; a middle click and the right-click menu close tabs; a tab closed by mouse leaves the others as wide
+// as they were until the pointer leaves the strip.
+test.describe('the Stage\'s tab strip with many tabs', () => {
+  test.afterEach(() => { delete globalThis.window; delete globalThis.requestAnimationFrame; globalThis.document = { baseURI: 'file:///app/index.html' }; });
+  const strip = (width) => ({ clientWidth: width, getBoundingClientRect: () => ({ left: 0, top: 0, right: width, bottom: 40, width, height: 40 }) });
+  const looks = (s) => tabEls(s).map((el) => el.props['data-stage-tab-look']);
+  const widths = (s) => tabEls(s).map((el) => el.props.style.width);
+  const THREE = { active: 1, tabs: [{ address: 'https://example.org/a', title: 'A' }, { address: 'https://example.org/b', title: 'B' }, { address: 'https://example.org/c', title: 'C' }] };
+
+  test('narrow: the tabs behind show their icon, the one in front its ×; wide: as before', async () => {
+    const s = keptStage({ api: { stage: async () => THREE }, nodes: { 'data-stage-strip': strip(58 + 3 * 50) } });
+    await s.settle();
+    assert.deepEqual([widths(s), looks(s)], [[50, 50, 50], ['icon', 'x', 'icon']]);
+    const wide = keptStage({ api: { stage: async () => THREE }, nodes: { 'data-stage-strip': strip(58 + 3 * 300) } });
+    await wide.settle();
+    assert.deepEqual([widths(wide), looks(wide)], [[220, 220, 220], ['full', 'full', 'full']]);
+    const many = keptStage({ api: { stage: async () => THREE }, nodes: { 'data-stage-strip': strip(100) } });
+    await many.settle();
+    assert.deepEqual(widths(many), [36, 36, 36], 'never under 36px: the strip scrolls instead');
+    for (const el of tabEls(s)) assert.equal(findAll(el, (p) => p['aria-label'] === 'Close tab').length, 1, 'one × a tab, whatever its look');
+  });
+
+  test('a middle click closes a tab, and the others keep their width until the pointer leaves the strip', async () => {
+    const s = keptStage({ api: { stage: async () => THREE }, nodes: { 'data-stage-strip': strip(58 + 3 * 80) } });
+    await s.settle();
+    assert.deepEqual(widths(s), [80, 80, 80]);
+    tabEls(s)[0].props.onAuxClick({ button: 1, preventDefault() {} });
+    s.rerender();
+    assert.deepEqual([labels(s).length, widths(s)], [2, [80, 80]], 'frozen');
+    findAll(tabEls(s)[0], (p) => p['aria-label'] === 'Close tab')[0].props.onClick({ stopPropagation() {} });
+    s.rerender();
+    assert.deepEqual(widths(s), [80], 'still, for the next ×');
+    findAll(s.tree, (p) => p['data-stage-strip'] != null)[0].props.onMouseLeave();
+    s.rerender();
+    assert.deepEqual(widths(s), [220], 'laid out again');
+  });
+
+  test('the right-click menu closes the other tabs, or those to the right', async () => {
+    const s = keptStage({ api: { stage: async () => THREE } });
+    await s.settle();
+    const menu = (i) => { tabEls(s)[i].props.onContextMenu({ preventDefault() {}, clientX: 10, clientY: 10 }); s.rerender(); return s.one('ContextMenu').props.items; };
+    const item = (items, label) => items.find((x) => x.label === label);
+    assert.equal(item(menu(2), 'Close tabs to the right').disabled, true, 'nothing right of the last');
+    item(menu(0), 'Close tabs to the right').onClick();
+    s.rerender();
+    assert.deepEqual(labels(s), ['A'], 'the one in front among them: the tab clicked comes forward');
+    const again = keptStage({ api: { stage: async () => THREE } });
+    await again.settle();
+    again.rerender();
+    tabEls(again)[2].props.onContextMenu({ preventDefault() {}, clientX: 10, clientY: 10 });
+    again.rerender();
+    item(again.one('ContextMenu').props.items, 'Close other tabs').onClick();
+    again.rerender();
+    assert.deepEqual(labels(again), ['C']);
+    again.fire('pagehide');
+    assert.equal(named(again, 'setStage').pop()[2].active, 0, 'C in front');
   });
 });

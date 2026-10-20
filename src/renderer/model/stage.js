@@ -304,6 +304,31 @@ export function afterClose(count, activeIndex, closedIndex) {
   return Math.min(activeIndex, left - 1);
 }
 
+// The tab strip's widths, as Chrome's (2026-10-18): a tab is 220px while there is room, shares the room when there is
+// not, and stops at 36px (a 20px × with 8px each side); past that the strip scrolls.
+export const TAB_MAX_W = 220;
+export const TAB_MIN_W = 36;
+export const TAB_NARROW_W = 90; // below it the title goes
+export const TAB_ICON_X_W = 56; // the tab in front keeps its icon beside the × from here up
+
+/** How wide each tab is, given the room the strip has for tabs (px) and how many there are. */
+export function tabWidth(room, count) {
+  if (!(count > 0)) return TAB_MAX_W;
+  const share = Math.floor((Number(room) || 0) / count);
+  return Math.max(TAB_MIN_W, Math.min(TAB_MAX_W, share));
+}
+
+/**
+ * What a tab of this width shows: 'full' (icon, title, ×); 'icon', a tab not in front: its icon alone, which the ×
+ * takes the place of under the pointer; 'icon-x', the tab in front: icon and × without the title; 'x', the tab in
+ * front too narrow for both: the × alone. The icon and the × never share a spot.
+ */
+export function tabLook(width, active) {
+  if (width >= TAB_NARROW_W) return 'full';
+  if (!active) return 'icon';
+  return width >= TAB_ICON_X_W ? 'icon-x' : 'x';
+}
+
 /** What the tab's hover card says under its title: the site for a page, the path for a file. */
 export function tabPlace(value) {
   const v = String(value || '');

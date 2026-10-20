@@ -8,12 +8,13 @@ import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
 import { previewLibraryId } from '../model/sandbox-notifications.js';
 import { KindGlyph, SEARCH, FOLDER, Expand, Collapse } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, SAVE_LABEL, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
+import { MAX_TABS, SAVE_LABEL, tabLook, tabWidth, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 import { withAsk } from '../pdf/canvas.js';
 import ImportSignins from './ImportSignins.jsx';
 import FindCard from '../ui/FindCard.jsx';
+import { ContextMenu } from './SidebarPanels.jsx';
 
 const IS_MAC = typeof navigator !== 'undefined' && /Mac/i.test(navigator.platform || '');
 
@@ -406,7 +407,13 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const [findText, setFindText] = React.useState('');
   const [matches, setMatches] = React.useState(null); // { matches, active } in the tab in front
   const [findFocus, setFindFocus] = React.useState(0); // bumped to put the keyboard in the find field
-  const [hover, setHover] = React.useState(null); // { id, left, width }: the tab whose card shows
+  const [hover, setHover] = React.useState(null); // { id, left, width }: the tab whose card shows (left in the strip)
+  const [room, setRoom] = React.useState(null); // the px the strip has for tabs, measured
+  const [frozen, setFrozen] = React.useState(null); // a tab width kept after a close by mouse, until the pointer leaves
+  const [edges, setEdges] = React.useState({ left: false, right: false }); // tabs scrolled out of sight on either side
+  const [tabMenu, setTabMenu] = React.useState(null); // { at, items }: a tab's right click
+  const stripRef = React.useRef(null);
+  const tabsBoxRef = React.useRef(null);
   const hoverTimer = React.useRef(0);
   const hoverWarm = React.useRef(false);
   const warmTimer = React.useRef(0);
@@ -1200,14 +1207,16 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   };
 
   /* ------------------------------------------------------------------------------------------ tab cards */
-  const enterTab = (event, t) => {
+  // `card`: whether this tab gets one — not the tab in front, unless it is too narrow to show its title.
+  const enterTab = (event, t, card) => {
     clearTimeout(hoverTimer.current);
-    if (t.id === tab.id) return;
+    if (!card) return;
     const r = event.currentTarget.getBoundingClientRect();
     const pane = rootRef.current ? rootRef.current.getBoundingClientRect() : { left: 0, right: window.innerWidth };
+    const strip = stripRef.current ? stripRef.current.getBoundingClientRect() : { left: 0 };
     const width = Math.max(160, Math.min(260, pane.right - pane.left - 16));
     const left = Math.max(pane.left + 8, Math.min(r.left + 4, pane.right - 8 - width));
-    hoverTimer.current = setTimeout(() => { hoverWarm.current = true; setHover({ id: t.id, left: Math.round(left - r.left), width: Math.round(width) }); }, hoverWarm.current ? 60 : HOVER_MS);
+    hoverTimer.current = setTimeout(() => { hoverWarm.current = true; setHover({ id: t.id, left: Math.round(left - strip.left), width: Math.round(width) }); }, hoverWarm.current ? 60 : HOVER_MS);
   };
   const leaveTab = () => {
     clearTimeout(hoverTimer.current);
@@ -1230,6 +1239,85 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const keptPlace = (entry) => { const row = entry.item ? rowOf(entry.item) : null; return row ? row.url || row.path || row.folder_path : entry.address || ''; };
   const placeOf = (t) => (t.restore ? tabPlace(keptPlace(t.restore)) : t.url === 'about:blank' && !t.pdf && !t.file ? 'new tab' : tabPlace(t.pdf ? (t.pdf.input || t.pdf.url) : t.file && t.file.path ? t.file.path : (t.web && t.web.url) || t.url));
 
+  /* ----------------------------------------------------------------------------------- the tab strip */
+  // Chrome's tab strip (2026-10-18). Each tab's width comes from the room the strip has (model/stage.js tabWidth); below
+  // 90px a tab drops its title (tabLook), and at 36px it stops shrinking and the tabs scroll under the + and full-screen
+  // buttons, which stay put. A tab closed by mouse leaves the others as wide as they were until the pointer leaves the
+  // strip, so the next tab's × comes under the pointer and several close in a row.
+  React.useLayoutEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return undefined;
+    // the strip's padding (10 + 8), the + (28, 6 each side), the full-screen button (28)
+    const measure = () => { const w = strip.clientWidth; if (w > 0) setRoom(w - 18 - 40 - (onFull ? 28 : 0)); };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [!!onFull]);
+  const tabCount = React.useRef(tabs.length);
+  React.useEffect(() => {
+    if (tabs.length > tabCount.current) setFrozen(null); // one opened: lay the strip out again
+    tabCount.current = tabs.length;
+  }, [tabs.length]);
+  const tabW = frozen != null ? frozen : room == null ? 220 : tabWidth(room, tabs.length);
+  const closeByMouse = (id) => { setFrozen(tabW); closeTab(id); };
+  const closeOthers = (t) => {
+    if (t.id !== tab.id) select(t);
+    for (const other of tabsRef.current) if (other.id !== t.id) closeTab(other.id);
+  };
+  const closeRight = (t) => {
+    const at = tabsRef.current.findIndex((x) => x.id === t.id);
+    const right = tabsRef.current.slice(at + 1);
+    if (right.some((x) => x.id === tab.id)) select(t);
+    for (const other of right) closeTab(other.id);
+  };
+  const pressTab = (event, t) => {
+    if (event.button === 0) select(t);
+    else if (event.button === 1) event.preventDefault(); // a middle click closes it (onAuxClick), and starts no autoscroll
+  };
+  const openTabMenu = (event, t) => {
+    event.preventDefault();
+    clearTimeout(hoverTimer.current);
+    setHover(null);
+    const at = tabs.findIndex((x) => x.id === t.id);
+    setTabMenu({ at: { x: event.clientX, y: event.clientY }, items: [
+      { label: 'Close tab', onClick: () => closeTab(t.id) },
+      { label: 'Close other tabs', disabled: tabs.length < 2, onClick: () => closeOthers(t) },
+      { label: 'Close tabs to the right', disabled: at < 0 || at >= tabs.length - 1, onClick: () => closeRight(t) },
+    ] });
+  };
+  const readEdges = React.useCallback(() => {
+    const box = tabsBoxRef.current;
+    if (!box) return;
+    const left = box.scrollLeft > 1;
+    const right = box.scrollLeft + box.clientWidth < box.scrollWidth - 1;
+    setEdges((e) => (e.left === left && e.right === right ? e : { left, right }));
+  }, []);
+  React.useLayoutEffect(readEdges, [readEdges, tabs.length, tabW, room, visible]);
+  // The tab in front scrolls into sight when it is chosen or opened (and stays there as the strip narrows).
+  React.useLayoutEffect(() => {
+    const box = tabsBoxRef.current;
+    if (!box || !visible) return;
+    const el = [...box.children].find((child) => child.dataset && child.dataset.stageTab === tab.id);
+    if (!el) return;
+    const margin = 28; // clear of the fade
+    if (el.offsetLeft - margin < box.scrollLeft) box.scrollLeft = el.offsetLeft - margin;
+    else if (el.offsetLeft + el.offsetWidth + margin > box.scrollLeft + box.clientWidth) box.scrollLeft = el.offsetLeft + el.offsetWidth + margin - box.clientWidth;
+    readEdges();
+  }, [tab.id, tabW, visible, readEdges]);
+  // A mouse wheel scrolls the tabs sideways; a trackpad's sideways swipe and shift+wheel already do.
+  const onTabsWheel = (event) => {
+    const box = event.currentTarget;
+    if (event.shiftKey || box.scrollWidth <= box.clientWidth) return;
+    if (Math.abs(event.deltaY) > Math.abs(event.deltaX)) box.scrollLeft += event.deltaY;
+  };
+  const onTabsScroll = () => { readEdges(); clearTimeout(hoverTimer.current); setHover(null); };
+  const FADE = 28;
+  const tabsMask = edges.left && edges.right ? `linear-gradient(90deg,transparent,#000 ${FADE}px,#000 calc(100% - ${FADE}px),transparent)`
+    : edges.left ? `linear-gradient(90deg,transparent,#000 ${FADE}px)`
+      : edges.right ? `linear-gradient(90deg,#000 calc(100% - ${FADE}px),transparent)` : 'none';
+  const hoverTab = hover ? tabs.find((t) => t.id === hover.id) : null;
+
   const dev = DEVICES.find((d) => d.id === device);
   const width = device === 'custom' ? (Number(customW) || 390) : (dev ? dev.w : 0);
   const slotStyle = width ? { flex: 'none', width, height: '100%', background: '#fff', margin: '0 auto' } : { flex: 1, width: '100%', background: '#fff' };
@@ -1240,44 +1328,68 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   return (
     <div ref={rootRef} data-stage="1" data-browser="1" style={{ flex: 1, minHeight: 0, display: visible ? 'flex' : 'none', flexDirection: 'column', background: '#fff', overflow: 'hidden' }}>
       {/* The tabs: the one in front is white and runs into the address row below; the rest have no box. */}
-      <div style={{ flex: 'none', position: 'relative', zIndex: 5, display: 'flex', alignItems: 'flex-end', height: 40, boxSizing: 'border-box', padding: '0 8px 0 10px', background: '#fafafa' }}>
-        <div style={{ flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%' }}>
+      <div ref={stripRef} data-stage-strip="1" onMouseLeave={() => setFrozen(null)} style={{ flex: 'none', position: 'relative', zIndex: 5, display: 'flex', alignItems: 'flex-end', height: 40, boxSizing: 'border-box', padding: '0 8px 0 10px', background: '#fafafa' }}>
+        {/* 10px each side inside the scroller for the front tab's curved corners; the margins put it back where it was */}
+        <div ref={tabsBoxRef} className="stage-tabs" data-stage-tabs="1" onWheel={onTabsWheel} onScroll={onTabsScroll} style={{ position: 'relative', flex: '0 1 auto', minWidth: 0, display: 'flex', alignItems: 'flex-end', height: '100%', boxSizing: 'border-box', margin: '0 -10px', padding: '0 10px', overflowX: 'auto', overflowY: 'hidden', WebkitMaskImage: tabsMask, maskImage: tabsMask }}>
           {tabs.map((t, i) => {
             const on = t.id === tab.id;
+            const look = tabLook(tabW, on);
             const sep = !on && tabs[i + 1] && tabs[i + 1].id !== tab.id;
             const isBlank = t.url === 'about:blank' && !t.pdf && !t.file && !t.restore;
             const title = titleOf(t);
             const glyph = <KindGlyph item={glyphItem(t, rowOf)} box={16} color={on ? '#4d4d4d' : '#8f8f8f'} />;
             const titleSpan = <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', whiteSpace: 'nowrap', WebkitMaskImage: 'linear-gradient(90deg,#000 calc(100% - 22px),transparent)', maskImage: 'linear-gradient(90deg,#000 calc(100% - 22px),transparent)', font: '400 12.5px/1.3 var(--font-sans)', color: isBlank ? '#8f8f8f' : on ? '#171717' : '#4d4d4d' }}>{title}</span>;
-            const close = <button type="button" className="hov-x" onClick={(event) => { event.stopPropagation(); closeTab(t.id); }} onMouseDown={(event) => event.stopPropagation()} aria-label="Close tab" title="⌘W" style={{ flex: 'none', width: 20, height: 20, padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '14px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' }}>×</button>;
+            const closeStyle = { flex: 'none', width: 20, height: 20, padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '14px/1 var(--font-sans)', color: '#8f8f8f', transition: 'background 120ms' };
+            const closeProps = { type: 'button', 'data-stage-tab-close': t.id, onClick: (event) => { event.stopPropagation(); closeByMouse(t.id); }, onMouseDown: (event) => event.stopPropagation(), 'aria-label': 'Close tab', title: '⌘W' };
+            const close = <button {...closeProps} className="hov-x" style={closeStyle}>×</button>;
+            const narrow = look !== 'full';
             return (
-              <div key={t.id} data-stage-tab={t.id} onMouseEnter={(event) => enterTab(event, t)} onMouseLeave={leaveTab} style={{ position: 'relative', flex: '0 1 220px', width: 220, minWidth: 44, height: 34, display: 'flex', alignItems: 'stretch' }}>
+              <div
+                key={t.id}
+                data-stage-tab={t.id}
+                data-stage-tab-look={look}
+                onMouseEnter={(event) => enterTab(event, t, !on || narrow)}
+                onMouseLeave={leaveTab}
+                onAuxClick={(event) => { if (event.button === 1) { event.preventDefault(); closeByMouse(t.id); } }}
+                onContextMenu={(event) => openTabMenu(event, t)}
+                style={{ position: 'relative', flex: 'none', width: tabW, height: 34, display: 'flex', alignItems: 'stretch' }}
+              >
                 {on ? (
-                  <div onMouseDown={(event) => { if (event.button === 0) select(t); }} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', padding: '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0', cursor: 'default' }}>
+                  <div onMouseDown={(event) => pressTab(event, t)} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: narrow ? 'center' : 'flex-start', gap: narrow ? 4 : 8, boxSizing: 'border-box', padding: narrow ? 0 : '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0', cursor: 'default' }}>
                     <span aria-hidden="true" style={{ position: 'absolute', left: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 0 0, transparent 9.5px, #fff 10px)' }} />
                     <span aria-hidden="true" style={{ position: 'absolute', right: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 100% 0, transparent 9.5px, #fff 10px)' }} />
+                    {look === 'full' ? <>{glyph}{titleSpan}{close}</> : look === 'icon-x' ? <>{glyph}{close}</> : close}
+                  </div>
+                ) : look === 'full' ? (
+                  <div className="hov-tab" onMouseDown={(event) => pressTab(event, t)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', margin: '0 2px 4px', padding: '0 4px 0 10px', borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
                     {glyph}{titleSpan}{close}
                   </div>
                 ) : (
-                  <div className="hov-tab" onMouseDown={(event) => { if (event.button === 0) select(t); }} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', gap: 8, boxSizing: 'border-box', margin: '0 2px 4px', padding: '0 4px 0 10px', borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
-                    {glyph}{titleSpan}{close}
+                  // The icon alone; under the pointer the × takes its spot. The × is always there (only unseen), so a
+                  // click on that spot closes the tab even before the hover shows.
+                  <div className="hov-tab stage-tab-icon" onMouseDown={(event) => pressTab(event, t)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', margin: '0 2px 4px', padding: 0, borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
+                    <span style={{ position: 'relative', flex: 'none', width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                      <span className="stage-tab-glyph" style={{ display: 'flex' }}>{glyph}</span>
+                      <button {...closeProps} className="hov-x stage-tab-x" style={{ ...closeStyle, position: 'absolute', inset: 0 }}>×</button>
+                    </span>
                   </div>
                 )}
                 {sep && <span aria-hidden="true" style={{ position: 'absolute', right: 0, top: 9, width: 1, height: 16, background: '#c9c9c9' }} />}
-                {hover && hover.id === t.id && !on && (
-                  <div data-overlay="1" style={{ position: 'absolute', left: hover.left, top: 'calc(100% + 6px)', zIndex: 60, width: hover.width, boxSizing: 'border-box', padding: '10px 12px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, pointerEvents: 'none', animation: `rise 160ms ${EASE}` }}>
-                    <div style={{ font: '500 13px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere', textWrap: 'pretty' }}>{title}</div>
-                    <div style={{ marginTop: 3, font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflowWrap: 'anywhere' }}>{placeOf(t)}</div>
-                  </div>
-                )}
               </div>
             );
           })}
         </div>
-        <button type="button" className="hov-tab-plus" onClick={newTab} disabled={tabsFull} aria-label="New tab" title={tabsFull ? '15 tabs is the most — close one first' : '⌘T'} style={{ flex: 'none', opacity: tabsFull ? 0.4 : 1, alignSelf: 'center', width: 28, height: 28, margin: '2px 0 0 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: tabsFull ? 'default' : 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>
+        {hover && hoverTab && (hoverTab.id !== tab.id || tabLook(tabW, true) !== 'full') && (
+          <div data-overlay="1" style={{ position: 'absolute', left: hover.left, top: 'calc(100% + 6px)', zIndex: 60, width: hover.width, boxSizing: 'border-box', padding: '10px 12px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, pointerEvents: 'none', animation: `rise 160ms ${EASE}` }}>
+            <div style={{ font: '500 13px/1.4 var(--font-sans)', color: '#171717', overflowWrap: 'anywhere', textWrap: 'pretty' }}>{titleOf(hoverTab)}</div>
+            <div style={{ marginTop: 3, font: '12px/1.4 var(--font-sans)', color: '#8f8f8f', overflowWrap: 'anywhere' }}>{placeOf(hoverTab)}</div>
+          </div>
+        )}
+        <button type="button" className="hov-tab-plus" onClick={newTab} disabled={tabsFull} aria-label="New tab" title={tabsFull ? '15 tabs is the most — close one first' : '⌘T'} style={{ position: 'relative', flex: 'none', opacity: tabsFull ? 0.4 : 1, alignSelf: 'center', width: 28, height: 28, margin: '2px 6px 0 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: tabsFull ? 'default' : 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>
         {onFull && (
           <button type="button" className="hov-wash2" onClick={() => { setHover(null); onFull(); }} aria-label={full ? 'Exit full screen' : 'Full screen'} title={full ? 'Exit full screen' : 'Full screen'} data-stage-full={full ? '1' : '0'} style={{ flex: 'none', alignSelf: 'center', width: 28, height: 28, margin: '2px 0 0 auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{full ? <Collapse /> : <Expand />}</button>
         )}
+        {tabMenu && <ContextMenu at={tabMenu.at} items={tabMenu.items} onClose={() => setTabMenu(null)} />}
       </div>
 
       <div style={{ position: 'relative', flex: 'none', display: 'flex', alignItems: 'center', gap: 6, padding: '8px 10px', borderBottom: '1px solid #eaeaea' }}>
