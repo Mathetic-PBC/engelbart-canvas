@@ -46,8 +46,12 @@
 // any field, the page offers it to main (`engelbart-page:selection-card`): a token, its quote and the page's text around it
 // (as `selection` gives them), and where its last line and all of it are in the viewport. As the page scrolls or reflows
 // the same token comes again with only where it is (once a frame), and a press anywhere in the page, another selection
-// or none takes it back ({ token: null }). Main shows its card for it and, once a note is begun there, keeps the quote as
-// a highlight and tints it as the right-click menu's Highlight does (`add`, with the token for its nonce).
+// or none takes it back ({ token: null }). Main shows its card for it and, on Save, keeps the quote as a highlight and
+// tints it as the right-click menu's Highlight does (`add`, with the token for its nonce); Cancel keeps nothing
+// (`card-gone`). A selection wholly inside a highlight is that highlight: its own card opens (with its markId), and no
+// second mark is made for one passage. A plain click on a highlight's text or on its note's symbol opens its card too; a
+// highlight with a note or an answer has its symbol (`noted`), drawn in the boxes' html::after rule over the top right of
+// its first line, following it as the page scrolls or reflows; Remove in its card takes it off (`unmark`).
 //
 // Sandboxed, this can require only 'electron'. The finding is plain functions over text, exported below for the tests
 // when Node loads this file; in a page, `module` is no CommonJS module and the page part runs instead.
@@ -65,8 +69,10 @@ const CHANNELS = Object.freeze({
   boxResize: 'engelbart-page:box-resize', boxView: 'engelbart-page:box-view', frame: 'engelbart-page:frame', cursor: 'engelbart-page:cursor',
   // a guide's section (2026-10-15): the words it starts with, or '' to clear it
   section: 'engelbart-page:section',
-  // a selection's card (2026-10-18): a settled selection offered, where it is now, or taken back
-  selectionCard: 'engelbart-page:selection-card',
+  // a selection's card (2026-10-18): a settled selection offered (or a highlight's card asked for: its markId), where it
+  // is now, or taken back; main says when it closed the card (cardGone, the offer's token), whether a highlight has a
+  // note (noted: { id, on }, for its symbol) and that one was removed (unmark: its id)
+  selectionCard: 'engelbart-page:selection-card', cardGone: 'engelbart-page:card-gone', noted: 'engelbart-page:noted', unmark: 'engelbart-page:unmark',
 });
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
 const SECTION = 'engelbart-web-section'; // a guide's section, styled by main's insertCSS as a pdf's (PaperView pdf-section)
@@ -399,6 +405,60 @@ function selectionBoxes(rects) {
   return { line: span(boxes.filter((b) => b.top < low.top + low.height && b.top + b.height > low.top)), rect: span(boxes) };
 }
 
+// A highlight's card from the highlight itself (2026-10-18, David): a click on its tinted text or on its note's symbol
+// opens it, and a selection wholly inside one opens that one's card rather than offering a new highlight (selecting
+// highlighted text again had saved the same passage a second and third time).
+const CHIP = 15; // a note's symbol, CSS pixels across: a blue disc at the top right of its highlight's first line
+const CHIP_SLOP = 3; // pixels about the symbol a click still finds it within
+const MAX_CHIPS = 500;
+const CLICK_SLOP = 4; // pixels a press may move and still be a click, not a drag
+const START_TO_START = 0, END_TO_END = 2; // Range's compareBoundaryPoints how (Range is not there in node)
+
+/** A box as the page's DOMRects have it or as ours do ({ x, y, w, h }) → { left, top, width, height }, or null. */
+function boxOf(r) {
+  if (!r) return null;
+  const left = Number.isFinite(r.left) ? r.left : r.x, top = Number.isFinite(r.top) ? r.top : r.y;
+  const width = Number.isFinite(r.width) ? r.width : r.w, height = Number.isFinite(r.height) ? r.height : r.h;
+  return [left, top, width, height].every(Number.isFinite) ? { left, top, width, height } : null;
+}
+/** Whether (x, y) is in one of `rects` (boxOf's either shape), `slop` pixels about each counted in. Empty boxes hold nothing. */
+function inRects(rects, x, y, slop = 0) {
+  for (const one of rects || []) {
+    const b = boxOf(one);
+    if (b && b.width > 0 && b.height > 0 && x >= b.left - slop && x <= b.left + b.width + slop && y >= b.top - slop && y <= b.top + b.height + slop) return true;
+  }
+  return false;
+}
+/** The highlight at (x, y): of `list` ([{ id, rects }], each its Range's client rects), the last one whose text is there (the
+ *  one painted over the others), or null. */
+function highlightAt(list, x, y) {
+  let hit = null;
+  for (const one of list || []) if (one && inRects(one.rects, x, y)) hit = one.id;
+  return hit;
+}
+/** The highlight `range` lies wholly inside, of `painted` (Map id → Range): its id, the smallest such if several, or null.
+ *  A range that reaches past every highlight is a new passage. */
+function holdingHighlight(painted, range) {
+  if (!range) return null;
+  let best = null, bestLen = Infinity;
+  for (const [id, held] of painted || []) {
+    try {
+      if (held.compareBoundaryPoints(START_TO_START, range) > 0 || held.compareBoundaryPoints(END_TO_END, range) < 0) continue;
+    } catch { continue; } // another document's range, or one gone
+    const len = String(held).length;
+    if (len < bestLen) { best = id; bestLen = len; }
+  }
+  return best;
+}
+/** Where a highlight's note symbol goes, from its Range's client rects (`rects`, the viewport's): over the top right corner
+ *  of its first line, a little out from it → { x, y, size } (its top left, CSS pixels), or null for a highlight with no box. */
+function symbolPlace(rects, size = CHIP) {
+  const first = (rects || []).map(boxOf).find((b) => b && b.width > 0.5 && b.height > 0.5);
+  if (!first) return null;
+  const round = (n) => Math.round(n * 10) / 10;
+  return { x: round(first.left + first.width - size * 0.35), y: round(first.top - size * 0.6), size };
+}
+
 const inRect = (x, y, r) => x >= r.left && x <= r.left + r.width && y >= r.top && y <= r.top + r.height;
 function intersect(a, b) {
   const left = Math.max(a.left, b.left), top = Math.max(a.top, b.top);
@@ -429,6 +489,8 @@ function shows(rect, box, viewport, probe, { part = false } = {}) {
 function runInPage() {
   const { ipcRenderer } = require('electron');
   const painted = new Map(); // mark id → Range
+  const quotes = new Map(); // mark id → its quote, for the page's text around it when its card asks @bart
+  const noted = new Set(); // the ids of highlights with a note or an answer: each has its symbol
   let waiting = []; // marks not found yet: tried again once the page has loaded
   let pending = null; // { nonce, range }: the selection main asked for, until it says it was saved
 
@@ -463,7 +525,8 @@ function runInPage() {
     for (const m of marks) {
       if (!m || !m.quote || m.box) continue; // a box is no passage (boxes, below)
       const at = anchor(map.text, m.quote), range = at && domRange(rangeOf(map, at.start, at.end));
-      if (range) painted.set(m.id, range); else missed.push(m);
+      if (range) { painted.set(m.id, range); quotes.set(m.id, m.quote); } else missed.push(m);
+      if (m.noted) noted.add(m.id);
     }
     paint();
     return missed;
@@ -606,9 +669,32 @@ function runInPage() {
   ipcRenderer.on(CHANNELS.add, (_event, value) => {
     const { nonce, mark } = value || {};
     if (!mark || typeof mark.id !== 'string') return;
-    const range = pending && pending.nonce === nonce ? pending.range : offered && offered.token === nonce ? offered.range : null;
+    const mine = offered && offered.token === nonce;
+    const range = pending && pending.nonce === nonce ? pending.range : mine ? offered.range : null;
     if (pending && pending.nonce === nonce) pending = null;
-    if (range) { painted.set(mark.id, range); paint(); } else place([mark]);
+    if (mark.noted) noted.add(mark.id); else noted.delete(mark.id);
+    if (range) { painted.set(mark.id, range); if (mark.quote) quotes.set(mark.id, mark.quote); paint(); } else place([mark]);
+    if (mine) offered.markId = mark.id;
+    // saved and its card closed: the selection let go of, so the passage shows as a highlight (its card's offer gone first,
+    // so letting go of it closes nothing)
+    if (mine && value.clear) {
+      offered = null;
+      const selection = document.getSelection();
+      if (selection && !selection.isCollapsed) selection.removeAllRanges();
+    }
+    schedule();
+  });
+  ipcRenderer.on(CHANNELS.noted, (_event, value) => {
+    if (!value || typeof value.id !== 'string') return;
+    if (value.on === true) noted.add(value.id); else noted.delete(value.id);
+    schedule();
+  });
+  ipcRenderer.on(CHANNELS.unmark, (_event, id) => {
+    if (typeof id !== 'string') return;
+    painted.delete(id); quotes.delete(id); noted.delete(id);
+    if (offered && offered.markId === id) offered = null;
+    paint();
+    schedule();
   });
 
   /* ------------------------------------------------------------------------------------------- boxes (MATH-70) */
@@ -671,10 +757,14 @@ function runInPage() {
       if (r) rects.push({ id, x: r.x - at.x, y: r.y - at.y, w: r.w, h: r.h }); else missing.push(id);
     }
     if (picked && !boxes.has(picked)) picked = null;
+    const chips = noteChips();
+    lastChips = chips;
     const html = document.documentElement;
     const size = html ? { width: html.scrollWidth, height: html.scrollHeight } : null;
     const round = (n) => Math.round(n * 10) / 10;
     const report = { rects: rects.map((r) => ({ id: r.id, x: round(r.x), y: round(r.y), w: round(r.w), h: round(r.h) })), selected: picked, size, missing };
+    // the notes' symbols, drawn in the boxes' rule (2026-10-18)
+    if (chips.length) report.notes = chips.map((c) => ({ id: c.id, x: round(c.x - at.x), y: round(c.y - at.y), size: c.size }));
     // the box being resized and where the pointer is in the viewport: main draws its size beside it
     if (drag && drag.pointer) report.resizing = { id: drag.id, x: round(drag.pointer.x), y: round(drag.pointer.y), viewport: viewportSize() };
     lastRects = report.rects.map((r) => ({ ...r, x: r.x + at.x, y: r.y + at.y }));
@@ -685,6 +775,35 @@ function runInPage() {
     ipcRenderer.send(CHANNELS.boxes, report);
   }
   function schedule() { if (!measuring) measuring = setTimeout(measure, 50); }
+  /** Each noted highlight's symbol where its first line is now (symbolPlace), in the document; none for one that does not
+   *  show, or that a box scrolling inside the page has scrolled out of its view. */
+  let lastChips = [];
+  function noteChips() {
+    const out = [];
+    for (const id of noted) {
+      const range = painted.get(id);
+      if (!range) continue;
+      let at = null;
+      try { at = symbolPlace([...range.getClientRects()]); } catch { at = null; }
+      if (!at || !unclipped(range, at)) continue;
+      out.push({ id, x: at.x + window.scrollX, y: at.y + window.scrollY, size: at.size });
+      if (out.length >= MAX_CHIPS) break;
+    }
+    return out;
+  }
+  // whether the symbol's corner shows inside every box around the highlight that clips what it holds (the page's own
+  // scrolling aside: the symbol scrolls with the document)
+  function unclipped(range, at) {
+    const x = at.x + at.size * 0.35, y = at.y + at.size * 0.6; // the line's corner
+    const page = document.scrollingElement || document.documentElement;
+    for (let el = range.startContainer && (range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement); el && el !== page && el !== document.body && el !== document.documentElement; el = el.parentElement) {
+      const style = getComputedStyle(el);
+      if (style.overflowX === 'visible' && style.overflowY === 'visible') continue;
+      const r = el.getBoundingClientRect();
+      if (x < r.left - 1 || x > r.right + 1 || y < r.top - 1 || y > r.bottom + 1) return false;
+    }
+    return true;
+  }
   function setBoxes(marks) {
     for (const held of boxes.values()) if (held.el && resized) resized.unobserve(held.el);
     boxes.clear();
@@ -859,7 +978,7 @@ function runInPage() {
   // scrolling moves no box in the document (the rule scrolls with it), but moves the selected one in the viewport.
   window.addEventListener('resize', schedule);
   document.addEventListener('scroll', (event) => {
-    if (!boxes.size) return;
+    if (!boxes.size && !noted.size) return;
     if (event.target !== document) { schedule(); return; }
     if (!picked) return;
     scrolling = true;
@@ -888,8 +1007,10 @@ function runInPage() {
   window.addEventListener('focusin', focusChanged, true);
   window.addEventListener('focusout', focusChanged, true);
 
-  // A selection's card (2026-10-18): the settled selection offered to main, followed as the page moves, taken back.
-  let offered = null, offerSeq = 0, settleTimer = 0, offerFrame = 0, pointerDown = false;
+  // A selection's card (2026-10-18): the settled selection offered to main, followed as the page moves, taken back. A
+  // highlight's own card is offered the same way, with its id (markId): for a selection wholly inside it, a click on its
+  // text (not a link's), or on its note's symbol. `offered.range` is where the card goes: the highlight's, for its card.
+  let offered = null, offerSeq = 0, settleTimer = 0, offerFrame = 0, pointerDown = false, down = null;
   const fieldNode = (node) => { const el = node && (node.nodeType === 1 ? node : node.parentElement); return !!(el && el.closest && el.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])')); };
   function withdraw() {
     clearTimeout(settleTimer); settleTimer = 0;
@@ -905,6 +1026,24 @@ function runInPage() {
     return { token: offered.token, line: at ? at.line : null, rect: at ? at.rect : null, viewport: viewportSize() };
   }
   const followSoon = () => { if (offered && !offerFrame) offerFrame = requestAnimationFrame(() => { offerFrame = 0; const view = offerView(); if (view) ipcRenderer.send(CHANNELS.selectionCard, view); }); };
+  /** The page's text around highlight `id`, as a selection's comes with it, for an @bart asked from its card. */
+  function pageTextOf(id) {
+    const quote = quotes.get(id);
+    if (!quote) return '';
+    const map = textMap(textNodes()), at = anchor(map.text, quote);
+    return at ? textAround(map.text, at.start, at.end) : '';
+  }
+  /** Highlight `id`'s card, under the highlight, its note in it (main reads it from the page's ink). */
+  function openMark(id) {
+    const range = painted.get(id);
+    if (!range) return;
+    clearTimeout(settleTimer); settleTimer = 0;
+    const selection = document.getSelection();
+    offered = { token: `s${(offerSeq += 1)}`, range, text: selection && !selection.isCollapsed ? selection.toString() : '', markId: id };
+    let pageText = '';
+    try { pageText = pageTextOf(id); } catch { pageText = ''; }
+    ipcRenderer.send(CHANNELS.selectionCard, { ...offerView(), markId: id, pageText });
+  }
   function offer() {
     clearTimeout(settleTimer); settleTimer = 0;
     const selection = document.getSelection();
@@ -915,26 +1054,64 @@ function runInPage() {
     // the same passage again (a click's second selectionchange, a page setting it anew): the card it has stays
     const same = offered && offered.range.compareBoundaryPoints(Range.START_TO_START, got.range) === 0 && offered.range.compareBoundaryPoints(Range.END_TO_END, got.range) === 0;
     if (same) { followSoon(); return; }
+    // inside a highlight already kept: that highlight's card, never a second mark for it
+    const held = holdingHighlight(painted, got.range);
+    if (held) { if (offered && offered.markId === held) followSoon(); else openMark(held); return; }
     offered = { token: `s${(offerSeq += 1)}`, range: got.range, text: selection.toString() };
     const view = offerView();
     ipcRenderer.send(CHANNELS.selectionCard, { ...view, quote: got.quote, pageText: got.pageText });
   }
-  window.addEventListener('mousedown', (event) => { pointerDown = event.button === 0; withdraw(); }, true);
+  /** The note symbol at (x, y) in the viewport, as last drawn: its highlight's id, or null. */
+  const chipAt = (x, y) => {
+    for (const c of lastChips) if (inRects([{ x: c.x - window.scrollX, y: c.y - window.scrollY, w: c.size, h: c.size }], x, y, CHIP_SLOP)) return c.id;
+    return null;
+  };
+  /** A click's end: on a highlight's text (no selection made, no link) its card; otherwise the selection, if any, offered. */
+  function clicked(event, from) {
+    const selection = document.getSelection();
+    const plain = from && event.button === 0 && event.detail <= 1 && !event.metaKey && !event.ctrlKey && !event.shiftKey && !event.altKey && Math.abs(event.clientX - from.x) <= CLICK_SLOP && Math.abs(event.clientY - from.y) <= CLICK_SLOP;
+    const target = event.target && event.target.nodeType === 1 ? event.target : event.target && event.target.parentElement;
+    if (plain && (!selection || selection.isCollapsed) && painted.size && !(target && target.closest && target.closest('a[href],button,input,textarea,select,label,summary'))) {
+      let id = null;
+      try { id = highlightAt([...painted].map(([one, range]) => ({ id: one, rects: [...range.getClientRects()] })), event.clientX, event.clientY); } catch { id = null; }
+      if (id) { openMark(id); return; }
+    }
+    offer();
+  }
+  window.addEventListener('mousedown', (event) => {
+    pointerDown = event.button === 0;
+    down = event.button === 0 ? { x: event.clientX, y: event.clientY } : null;
+    // a note's symbol: its highlight's card, and the press goes no further into the page (a link under it stays put). A
+    // box's edge or handle never comes here (its press is stopped), so what `swallow` says now is a press before this one's.
+    swallow = false;
+    const chip = event.button === 0 && lastChips.length ? chipAt(event.clientX, event.clientY) : null;
+    withdraw();
+    if (!chip) return;
+    stop(event);
+    swallow = true;
+    pointerDown = false;
+    openMark(chip);
+  }, true);
   window.addEventListener('mouseup', (event) => {
     if (event.button !== 0) return;
     pointerDown = false;
-    if (swallow || drag) return; // a box's edge or handle: no selection was made
-    setTimeout(offer, 0); // the selection as the press left it (a double or triple click's too)
+    if (swallow || drag) return; // a box's edge or handle, or a symbol: no selection was made
+    const from = down;
+    down = null;
+    setTimeout(() => clicked(event, from), 0); // the selection as the press left it (a double or triple click's too)
   }, true);
   document.addEventListener('selectionchange', () => {
     if (pointerDown) return;
     const selection = document.getSelection();
-    if (!selection || selection.isCollapsed) { withdraw(); return; }
+    // nothing selected: a selection's card goes (a highlight's opened by a click has no selection to lose)
+    if (!selection || selection.isCollapsed) { if (!offered || offered.text) withdraw(); return; }
     // changed by keys (⇧ and an arrow, ⌘A): the card for what it was goes now, the new one once it settles
     if (offered && selection.toString() !== offered.text) withdraw();
     clearTimeout(settleTimer);
     settleTimer = setTimeout(offer, SELECTION_SETTLE_MS);
   });
+  // main closed the card (Cancel, Esc, Save): the passage is not offered any more, so selecting it again opens one again
+  ipcRenderer.on(CHANNELS.cardGone, (_event, token) => { if (offered && offered.token === token) offered = null; });
   document.addEventListener('scroll', followSoon, { capture: true, passive: true });
   window.addEventListener('resize', followSoon);
   window.addEventListener('blur', () => { pointerDown = false; });
@@ -953,4 +1130,4 @@ function runInPage() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, CHIP, CHIP_SLOP, MAX_CHIPS, CLICK_SLOP, inRects, highlightAt, holdingHighlight, symbolPlace, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };

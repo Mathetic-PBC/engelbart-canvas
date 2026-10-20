@@ -8,6 +8,7 @@ import { inlineHtml, noteInkHtml } from '../model/doc.js';
 import { noteQuestion, askedByNote, runningLabel } from '../pdf/canvas.js';
 import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, ERROR_INK, ANSWER_GAP, CARD_GROUND, cardCss, styleOf } from '../pdf/card-look.js';
 import { WAVE_SPAN, keepWaves } from '../ui/wave.js';
+import { SEL_CARD_W, CARD_SHADE } from '../../shared/selection-card.cjs';
 
 // The card beside a selected box on a web page (MATH-70 build 2, 2026-10-07): its own small view, one per window, which
 // main places beside the box and moves with it (src/main/browser/views.cjs `card`). The one component Hudson will replace:
@@ -21,11 +22,9 @@ import { WAVE_SPAN, keepWaves } from '../ui/wave.js';
 // The note is saved on the box's mark as it is typed; Enter in a note that starts with @bart asks (Shift+Enter is a new
 // line), and the answer comes in under it. Keys typed here are the card's: Backspace never removes the box.
 // A selection's card (2026-10-18, David: "the annotation card should appear by itself just under the selection, ready to
-// type into"): main shows this card, mode 'selection', under a web page's selection, empty and with no mark. Its field
-// is the document's focused element from the start, and while the page keeps the keyboard (⌘C there copies the
-// selection) a caret is drawn where typing goes. The first key, typed in the page (main begins the note and gives this
-// card the keyboard) or here, keeps the highlight with it (api.keep); Enter in it empty keeps the highlight alone. Such a
-// card has no trash: a highlight is not a box.
+// type into"), and a highlight's own: this view too, mode 'selection', drawn by SelectionCard below in its own look (David's
+// picture, 2026-10-18). Its field is the document's focused element from the start, and while the page keeps the keyboard
+// (⌘C there copies the selection) a caret is drawn where typing goes; a key typed in the page comes here (`typed`).
 
 const api = window.boxCardAPI;
 
@@ -44,7 +43,6 @@ const WAVE = styleOf(WAVE_SPAN);
 const ANSWER_MAX = 320; // an answer scrolls inside past this many pixels
 
 const CSS = `
-@keyframes sel-caret{50%{opacity:0}}
 *{box-sizing:border-box}
 html,body,#root{margin:0;background:transparent;color:${ANSWER_INK};${ANSWER_FONT};overflow:hidden}
 ${cardCss('[data-card]')}
@@ -88,14 +86,13 @@ function fitField(ta) {
  *  the text alone, a keystroke that widened the card left the field as tall as it was at the narrower width, where its
  *  last word had wrapped, a line too tall until the next keystroke (2026-10-17). Both passes come before the card is
  *  painted, so it is never seen at the wrong height. */
-function Note({ value, onChange, onKeyDown, fieldRef, width, refit, caret }) {
+function Note({ value, onChange, onKeyDown, fieldRef, width, refit }) {
   const inked = noteQuestion(value) != null;
   React.useLayoutEffect(() => fitField(fieldRef.current), [value, width, refit, fieldRef]);
   const field = { ...NOTE_LOOK, display: 'block', width: '100%', margin: 0, border: 0, background: 'transparent', resize: 'none', overflow: 'hidden', outline: 'none', ...(inked ? { position: 'relative', color: 'transparent', caretColor: NOTE_INK } : {}) };
   return (
     <div style={{ flex: 'none', paddingBottom: 4, position: 'relative' }}>
       {inked && <div aria-hidden="true" style={{ ...NOTE_LOOK, position: 'absolute', inset: 0, margin: 0, whiteSpace: 'pre-wrap', overflowWrap: 'break-word', overflow: 'hidden', pointerEvents: 'none' }} dangerouslySetInnerHTML={{ __html: noteInkHtml(value) }} />}
-      {caret && <div aria-hidden="true" data-sel-caret="1" style={{ ...NOTE_LOOK, position: 'absolute', inset: 0, margin: 0, color: 'transparent', pointerEvents: 'none', zIndex: 1 }}><span style={{ display: 'inline-block', width: 1.5, height: '1.1em', verticalAlign: 'text-bottom', background: NOTE_INK, animation: 'sel-caret 1.06s steps(1) infinite' }} /></div>}
       <textarea ref={fieldRef} rows={1} value={value} placeholder={PLACEHOLDER} spellCheck={false} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} style={field} />
     </div>
   );
@@ -134,17 +131,14 @@ function Running({ run, note, divided }) {
 
 const NOTE_SAVE_MS = 300;
 
-function BoxCard() {
+/** A box's card: its note saved as it is typed, Enter in an @bart note asks; `msg`, what main last said. */
+function BoxCard({ msg }) {
   const [state, setState] = React.useState(null); // { mark: { id, note, asks }, running }
   const [note, setNote] = React.useState('');
   const [noteW, setNoteW] = React.useState(0);
   const [fonts, setFonts] = React.useState(0); // a font loaded: the note measured again (Caveat may come after the first draw)
-  const field = React.useRef(null), root = React.useRef(null), mirror = React.useRef(null), shown = React.useRef(null), timer = React.useRef(0), unsaved = React.useRef(null);
-  // a selection's card: the offer its note was begun for here (api.keep sent, its mark not come yet), and a turn to take
-  // the field again (a new offer, or a note begun by a key in the page)
-  const kept = React.useRef(null);
-  const [take, setTake] = React.useState(0);
-  const [focused, setFocused] = React.useState(() => document.hasFocus());
+  const field = React.useRef(null), mirror = React.useRef(null), shown = React.useRef(null), timer = React.useRef(0), unsaved = React.useRef(null);
+  const [take, setTake] = React.useState(0); // a turn to take the field (a note begun by a key in the page)
 
   const flush = React.useCallback(() => {
     clearTimeout(timer.current);
@@ -152,31 +146,21 @@ function BoxCard() {
     if (unsaved.current != null) { api.note(unsaved.current); unsaved.current = null; }
   }, []);
   React.useEffect(() => {
-    const off = api.onState((next) => {
-      if (!next) return;
-      const selection = next.mode === 'selection';
-      // a selection offered: an empty card, the field ready for the keyboard
-      if (selection && !next.mark) { flush(); shown.current = null; kept.current = null; setNote(''); setState(next); setTake((n) => n + 1); return; }
-      if (!next.mark) return;
-      // its note begun here: the mark is the one being typed in, and what was typed since goes on to it as ever
-      if (selection && kept.current && kept.current === next.offer && shown.current == null) { shown.current = next.mark.id; kept.current = null; setState(next); return; }
-      if (!selection && document.activeElement === field.current && !document.hasFocus()) field.current.blur();
-      // another box: its note, whatever was typed for the last one saved first; the same box: the kept note, unless
-      // this one is being typed in
-      if (shown.current !== next.mark.id) { flush(); shown.current = next.mark.id; setNote(next.mark.note || ''); }
-      else if (document.activeElement !== field.current && unsaved.current == null) setNote(next.mark.note || '');
-      setState(next);
-      if (next.typed) setTake((n) => n + 1);
-    });
-    api.ready();
-    return () => { off(); flush(); };
-  }, [flush]);
-  // whether this card has the keyboard: a selection's card without it draws its caret
+    const next = msg;
+    if (!next || !next.mark) return;
+    if (document.activeElement === field.current && !document.hasFocus()) field.current.blur();
+    // another box: its note, whatever was typed for the last one saved first; the same box: the kept note, unless
+    // this one is being typed in
+    if (shown.current !== next.mark.id) { flush(); shown.current = next.mark.id; setNote(next.mark.note || ''); }
+    else if (document.activeElement !== field.current && unsaved.current == null) setNote(next.mark.note || '');
+    setState(next);
+    if (next.typed) setTake((n) => n + 1);
+  }, [msg, flush]);
+  React.useEffect(() => () => flush(), [flush]);
   React.useEffect(() => {
-    const on = () => setFocused(true), off = () => { setFocused(false); flush(); };
-    window.addEventListener('focus', on);
+    const off = () => flush();
     window.addEventListener('blur', off);
-    return () => { window.removeEventListener('focus', on); window.removeEventListener('blur', off); };
+    return () => window.removeEventListener('blur', off);
   }, [flush]);
   // the field taken, its caret after what it has
   React.useEffect(() => {
@@ -200,25 +184,8 @@ function BoxCard() {
     el.textContent = note || PLACEHOLDER;
     setNoteW(el.getBoundingClientRect().width);
   }, [note, fonts]);
-  // what Bart is doing waves on the page's clock, so a row drawn again goes on where it was (as the document's do)
-  React.useLayoutEffect(() => keepWaves(root.current));
-  // how big it is, for main to give its view that size
-  React.useEffect(() => {
-    const el = root.current;
-    if (!el || typeof ResizeObserver !== 'function') return undefined;
-    const observer = new ResizeObserver(() => api.size({ height: el.offsetHeight, width: el.offsetWidth }));
-    observer.observe(el);
-    return () => observer.disconnect();
-  }, []);
 
-  const selecting = !!(state && state.mode === 'selection');
   const change = (value) => {
-    // a selection's card: its first key keeps the highlight, with the note begun
-    if (selecting && !shown.current) {
-      setNote(value);
-      if (!kept.current && value) { kept.current = state.offer; api.keep(value); }
-      return;
-    }
     setNote(value);
     unsaved.current = value;
     clearTimeout(timer.current);
@@ -226,8 +193,6 @@ function BoxCard() {
   };
   const key = (event) => {
     if (event.key !== 'Enter' || event.shiftKey || event.nativeEvent.isComposing) return;
-    // Enter in a selection's card with nothing in it: the highlight alone
-    if (selecting && !shown.current && !kept.current && !event.currentTarget.value) { event.preventDefault(); kept.current = state.offer; api.keep(''); return; }
     const question = noteQuestion(event.currentTarget.value);
     if (question == null) return;
     event.preventDefault();
@@ -240,14 +205,13 @@ function BoxCard() {
   const running = state && Array.isArray(state.running) ? state.running : [];
   const width = noteWidth(noteW, asks.length > 0 || running.length > 0);
   return (
-    <div ref={root} style={{ padding: 8, width: width + 16 }}>
-      <style>{CSS}</style>
+    <div style={{ padding: 8, width: width + 16 }}>
       <span ref={mirror} aria-hidden="true" style={{ ...NOTE_LOOK, padding: 0, position: 'absolute', left: -9999, top: 0, visibility: 'hidden', whiteSpace: 'pre' }} />
       <div data-card="1" style={{ width, display: 'flex', flexDirection: 'column', background: CARD_GROUND, paddingBottom: 4 }}>
         <div style={GRIP}>
-          {!selecting && <button type="button" data-trash="1" title="Remove box" aria-label="Remove box" onMouseDown={(event) => event.preventDefault()} onClick={() => api.remove()} style={TRASH}>{TRASH_SVG}</button>}
+          <button type="button" data-trash="1" title="Remove box" aria-label="Remove box" onMouseDown={(event) => event.preventDefault()} onClick={() => api.remove()} style={TRASH}>{TRASH_SVG}</button>
         </div>
-        <Note value={note} onChange={change} onKeyDown={key} fieldRef={field} width={width} refit={fonts} caret={selecting && !focused && !note} />
+        <Note value={note} onChange={change} onKeyDown={key} fieldRef={field} width={width} refit={fonts} />
         {/* the note is first: every answer comes with room above it */}
         {asks.map((ask, i) => <Answer key={ask.id || `ask-${i}`} ask={ask} note={note} divided />)}
         {running.map((run) => <Running key={run.askId} run={run} note={note} divided />)}
@@ -256,6 +220,137 @@ function BoxCard() {
   );
 }
 
-export { answerHtml, noteWidth, fitField, Running, PLACEHOLDER, ASK_W, MIN_W }; // for test/math.test.cjs and test/box-card.test.cjs
+// A selection's or a highlight's card on a web page (2026-10-18, David's picture): a plain white card with rounded corners,
+// a hairline edge and a soft shadow, SEL_CARD_W wide, in the view's CARD_SHADE of room for the shadow. The note is typed in
+// the app's sans, not the pdf's Caveat; under it, Cancel and a blue Save. Nothing is kept until Save (or ⌘Enter): then
+// the note is the highlight's, and the card closes, unless the note starts with @bart: that is asked, and the answer comes
+// in under it in the answers' type while Bart's work waves. Enter is a new line; Cancel or Esc closes the card unsaved (a
+// new selection leaves no highlight). A highlight's own card (its text or its symbol clicked, or a selection inside it)
+// has its note in the field and Remove at the bottom left. Save is there for an empty field only where it clears a note.
+const SEL_INK = '#1f2633';
+const SEL_FIELD = { display: 'block', width: '100%', margin: 0, padding: 0, border: 0, background: 'transparent', resize: 'none', overflow: 'hidden', outline: 'none', font: '15px/1.5 var(--font-sans)', color: SEL_INK };
+const SEL_CSS = `
+@keyframes sel-caret{50%{opacity:0}}
+[data-sel-card] textarea::placeholder{color:#9a9a9a;opacity:1}
+[data-sel-card] [data-sel-cancel],[data-sel-card] [data-sel-remove]{border:0;background:transparent;padding:6px 8px;border-radius:999px;font:14px/1.2 var(--font-sans);color:#6b6b6b;cursor:pointer}
+[data-sel-card] [data-sel-remove]{font-size:13px;color:#8f8f8f;margin-left:-8px}
+[data-sel-card] [data-sel-cancel]:hover,[data-sel-card] [data-sel-remove]:hover{background:#f2f2f2;color:#171717}
+[data-sel-card] [data-sel-save]{border:0;background:#0070f3;padding:6px 16px;border-radius:999px;font:500 14px/1.2 var(--font-sans);color:#fff;cursor:pointer}
+[data-sel-card] [data-sel-save]:hover:not(:disabled){background:#0060d1}
+[data-sel-card] [data-sel-save]:disabled{opacity:.4;cursor:default}
+${cardCss('[data-sel-answers]')}
+`;
 
-createRoot(document.getElementById('root')).render(<BoxCard />);
+/** Whether Save can be pressed: a note to keep, or (a highlight's) one to clear. */
+function canSave(note, saved, kept) {
+  return String(note || '').trim() !== '' || (!!kept && String(saved || '').trim() !== '');
+}
+
+function SelectionCard({ msg }) {
+  const [view, setView] = React.useState(null); // { mark, running }
+  const [note, setNote] = React.useState('');
+  const field = React.useRef(null), offer = React.useRef(null), markId = React.useRef(null), saved = React.useRef(''), typedNote = React.useRef('');
+  const [take, setTake] = React.useState(0);
+  const [focused, setFocused] = React.useState(() => document.hasFocus());
+  const set = (value) => { typedNote.current = value; setNote(value); };
+  // whether this card has the keyboard: without it, an empty card draws its caret where typing goes
+  React.useEffect(() => {
+    const on = () => setFocused(true), off = () => setFocused(false);
+    window.addEventListener('focus', on);
+    window.addEventListener('blur', off);
+    return () => { window.removeEventListener('focus', on); window.removeEventListener('blur', off); };
+  }, []);
+  React.useEffect(() => {
+    const next = msg;
+    if (!next) return;
+    const mark = next.mark || null;
+    if (next.offer !== offer.current) {
+      // a new card: empty, or the highlight's note
+      offer.current = next.offer;
+      markId.current = mark ? mark.id : null;
+      saved.current = mark ? mark.note || '' : '';
+      set(saved.current);
+      setTake((n) => n + 1);
+    } else if (mark) {
+      // the highlight read from its ink (opened, saved, answered): its note, unless something else has been typed since
+      const dirty = typedNote.current !== saved.current;
+      markId.current = mark.id;
+      saved.current = mark.note || '';
+      if (!dirty) set(saved.current);
+    }
+    // a key typed in the page: the note's, and the field has the keyboard
+    if (typeof next.typed === 'string') { set(typedNote.current + next.typed); setTake((n) => n + 1); return; }
+    setView({ mark, running: Array.isArray(next.running) ? next.running : [] });
+  }, [msg]);
+  React.useEffect(() => {
+    const el = field.current;
+    if (!take || !el) return;
+    el.focus({ preventScroll: true });
+    const n = el.value.length;
+    try { el.setSelectionRange(n, n); } catch { /* not a field that has one */ }
+  }, [take]);
+  React.useLayoutEffect(() => fitField(field.current), [note]);
+
+  const kept = !!(view && view.mark);
+  const ready = canSave(note, saved.current, kept);
+  const save = () => { if (!ready) return; saved.current = note; api.save(note); };
+  const key = (event) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.nativeEvent.isComposing) { event.preventDefault(); save(); }
+  };
+  const asks = kept ? view.mark.asks || [] : [];
+  const running = view ? view.running : [];
+  return (
+    <div style={{ padding: `${CARD_SHADE.top}px ${CARD_SHADE.side}px ${CARD_SHADE.bottom}px` }}>
+      <div data-sel-card="1" style={{ width: SEL_CARD_W, display: 'flex', flexDirection: 'column', background: CARD_GROUND, borderRadius: 12, border: '1px solid #ececec', boxShadow: '0 6px 24px rgba(0,0,0,.12)', padding: '16px 18px 14px' }}>
+        <div style={{ position: 'relative' }}>
+          {!focused && !note && <div aria-hidden="true" data-sel-caret="1" style={{ ...SEL_FIELD, position: 'absolute', inset: 0, pointerEvents: 'none', color: 'transparent' }}><span style={{ display: 'inline-block', width: 1.5, height: '1.2em', verticalAlign: 'text-bottom', background: SEL_INK, animation: 'sel-caret 1.06s steps(1) infinite' }} /></div>}
+          <textarea ref={field} rows={1} value={note} placeholder={PLACEHOLDER} spellCheck={false} onChange={(event) => set(event.target.value)} onKeyDown={key} style={SEL_FIELD} />
+        </div>
+        {(asks.length > 0 || running.length > 0) && (
+          <div data-sel-answers="1" style={{ display: 'flex', flexDirection: 'column', margin: '0 -6px' }}>
+            {asks.map((ask, i) => <Answer key={ask.id || `ask-${i}`} ask={ask} note={note} divided />)}
+            {running.map((run) => <Running key={run.askId} run={run} note={note} divided />)}
+          </div>
+        )}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 14 }}>
+          {kept && <button type="button" data-sel-remove="1" onMouseDown={(event) => event.preventDefault()} onClick={() => api.remove()}>Remove</button>}
+          <span style={{ flex: 1 }} />
+          <button type="button" data-sel-cancel="1" onMouseDown={(event) => event.preventDefault()} onClick={() => api.cancel()}>Cancel</button>
+          <button type="button" data-sel-save="1" disabled={!ready} title="Save (⌘↩)" onMouseDown={(event) => event.preventDefault()} onClick={save}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/** The card's page: main's state to whichever card it is for, and the card's size back for main to size the view. */
+function CardPage() {
+  const [msg, setMsg] = React.useState(null);
+  const root = React.useRef(null);
+  React.useEffect(() => {
+    const off = api.onState((next) => { if (next) setMsg(next); });
+    api.ready();
+    return off;
+  }, []);
+  // what Bart is doing waves on the page's clock, so a row drawn again goes on where it was (as the document's do)
+  React.useLayoutEffect(() => keepWaves(root.current));
+  // how big it is, for main to give its view that size
+  React.useEffect(() => {
+    const el = root.current;
+    if (!el || typeof ResizeObserver !== 'function') return undefined;
+    const observer = new ResizeObserver(() => api.size({ height: el.offsetHeight, width: el.offsetWidth }));
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  const selection = !!(msg && msg.mode === 'selection');
+  return (
+    <div ref={root} style={{ display: 'inline-block', verticalAlign: 'top' }}>
+      <style>{CSS}{SEL_CSS}</style>
+      {selection ? <SelectionCard msg={msg} /> : <BoxCard msg={msg} />}
+    </div>
+  );
+}
+
+export { answerHtml, noteWidth, fitField, canSave, Running, SelectionCard, PLACEHOLDER, ASK_W, MIN_W, SEL_CSS }; // for test/math.test.cjs and test/box-card.test.cjs
+
+createRoot(document.getElementById('root')).render(<CardPage />);

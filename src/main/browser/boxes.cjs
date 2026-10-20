@@ -31,6 +31,8 @@ const SELECTOR_MAX = 1000;
 const ANCHOR_TEXT = 80; // characters of the anchor element's own text kept to check it is the same one
 const SRC_MAX = 2048;
 const MAX_BOXES = 200; // drawn on one page
+const MAX_NOTES = 500; // notes' symbols drawn on one page (page-preload.cjs MAX_CHIPS)
+const NOTE_CHIP = '#0070f3'; // a note's symbol: Engelbart's blue
 // The look of a box, here and in the drawing layer (box-layer-preload.cjs, the same text).
 const LINE = '#fff'; // a box's 1px edge
 const HALO = 'rgba(0,0,0,0.5)'; // 1px just outside the edge, and a handle's stroke
@@ -133,12 +135,15 @@ function cardPlace(box, page, size, gap = CARD_GAP) {
  * right and bottom, so it never adds to what scrolls; past its left and top it adds nothing (a box's handles there are
  * not cut off). '' when there is nothing to draw.
  */
-function boxesCss(rects, selected = null, size = null, resizing = null) {
+function boxesCss(rects, selected = null, size = null, resizing = null, notes = []) {
   const shown = (Array.isArray(rects) ? rects : []).filter((r) => r && [r.x, r.y, r.w, r.h].every((n) => finite(n)) && r.w > 0 && r.h > 0).slice(0, MAX_BOXES);
-  if (!shown.length) return '';
+  // the notes' symbols on web highlights (2026-10-18), drawn in the same rule: each a square `size` across at x, y
+  const chips = (Array.isArray(notes) ? notes : []).filter((c) => c && [c.x, c.y, c.size].every((n) => finite(n)) && c.size > 0 && c.size <= 64).slice(0, MAX_NOTES);
+  if (!shown.length && !chips.length) return '';
+  const all = [...shown, ...chips.map((c) => ({ x: c.x, y: c.y, w: c.size, h: c.size }))];
   const maxW = size && finite(size.width) && size.width > 0 ? size.width : Infinity, maxH = size && finite(size.height) && size.height > 0 ? size.height : Infinity;
-  const left = Math.floor(Math.min(...shown.map((r) => r.x)) - PAD), top = Math.floor(Math.min(...shown.map((r) => r.y)) - PAD);
-  const right = Math.min(maxW, Math.ceil(Math.max(...shown.map((r) => r.x + r.w)) + PAD)), bottom = Math.min(maxH, Math.ceil(Math.max(...shown.map((r) => r.y + r.h)) + PAD));
+  const left = Math.floor(Math.min(...all.map((r) => r.x)) - PAD), top = Math.floor(Math.min(...all.map((r) => r.y)) - PAD);
+  const right = Math.min(maxW, Math.ceil(Math.max(...all.map((r) => r.x + r.w)) + PAD)), bottom = Math.min(maxH, Math.ceil(Math.max(...all.map((r) => r.y + r.h)) + PAD));
   const W = Math.max(1, right - left), H = Math.max(1, bottom - top);
   // whole pixels, the 1px lines on them: a line between two pixels is drawn as two pale ones
   const shapes = shown.map((r) => {
@@ -150,7 +155,7 @@ function boxesCss(rects, selected = null, size = null, resizing = null) {
     const half = (HANDLE - 1) / 2; // the square inside its stroke
     const handles = handlesOf({ x, y, w, h }).map((p) => `<rect x="${Math.round(p.x) - half}" y="${Math.round(p.y) - half}" width="${HANDLE - 1}" height="${HANDLE - 1}" fill="${LINE}" stroke="${HALO}" stroke-width="1"/>`);
     return outline + handles.join('');
-  }).join('');
+  }).join('') + chips.map((c) => noteChip(c.x - left, c.y - top, c.size)).join('');
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" shape-rendering="crispEdges">${shapes}</svg>`;
   const url = `data:image/svg+xml,${encodeURIComponent(svg)}`;
   const rule = [
@@ -159,6 +164,17 @@ function boxesCss(rects, selected = null, size = null, resizing = null) {
     `background:url("${url}") no-repeat 0 0 / ${W}px ${H}px`,
   ].map((p) => `${p} !important`).join(';');
   return `html::after{${rule}}`;
+}
+
+/**
+ * A note's symbol at (x, y), `size` across (2026-10-18): a disc in Engelbart's blue with a 1px white ring, so it shows on a
+ * light page and a dark one, and three short white lines in it, a note's. Smooth, unlike the boxes' crisp lines.
+ */
+function noteChip(x, y, size) {
+  const r = size / 2, cx = Math.round((x + r) * 10) / 10, cy = Math.round((y + r) * 10) / 10, k = size / 16;
+  const line = (dy, w) => `M${Math.round((cx - 3.5 * k) * 100) / 100} ${Math.round((cy + dy * k) * 100) / 100}h${Math.round(w * k * 100) / 100}`;
+  return `<g shape-rendering="geometricPrecision"><circle cx="${cx}" cy="${cy}" r="${r - 0.5}" fill="${NOTE_CHIP}" stroke="#fff" stroke-width="1"/>`
+    + `<path d="${line(-2.5, 7)}${line(0, 7)}${line(2.5, 4.5)}" fill="none" stroke="#fff" stroke-width="${Math.round(1.4 * k * 100) / 100}" stroke-linecap="round"/></g>`;
 }
 
 /**
@@ -185,4 +201,4 @@ function readoutCss({ x, y, w, h, zoom = 1, viewport = null } = {}) {
   return `html::before{${rule}}`;
 }
 
-module.exports = { LINE, HALO, TINT, READOUT_CSS, READOUT_GAP, readoutCss, TEXT_MAX, SELECTOR_MAX, ANCHOR_TEXT, MAX_BOXES, HANDLE, PAD, HANDLES, CARD_GAP, anchorInput, boxInput, isBox, cropName, CROP_RE, cropNumber, cropsOf, nextCropName, handlesOf, cardPlace, boxesCss };
+module.exports = { NOTE_CHIP, MAX_NOTES, noteChip, LINE, HALO, TINT, READOUT_CSS, READOUT_GAP, readoutCss, TEXT_MAX, SELECTOR_MAX, ANCHOR_TEXT, MAX_BOXES, HANDLE, PAD, HANDLES, CARD_GAP, anchorInput, boxInput, isBox, cropName, CROP_RE, cropNumber, cropsOf, nextCropName, handlesOf, cardPlace, boxesCss };

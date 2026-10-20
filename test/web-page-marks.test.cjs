@@ -168,8 +168,8 @@ test('the preload is registered once on the browsing session, and tabs a page op
   assert.deepEqual(made.css, [[MARK_CSS, undefined]]); // an author sheet: Chromium paints ::highlight() from no user sheet
 });
 
-test('the tint is the pdf highlight blue, a guide\'s section the pdf section\'s yellow, and the preload and main agree on names and limits', () => {
-  assert.match(MARK_CSS, /^::highlight\(engelbart-web-mark\)\{background-color:rgba\(0,112,243,\.14\) !important\}::highlight\(engelbart-web-section\)\{background-color:rgba\(255,196,0,\.13\) !important\}$/);
+test('the tint is a soft yellow with a 2px underline (2026-10-18), a guide\'s section the pdf section\'s yellow, and the preload and main agree on names and limits', () => {
+  assert.equal(MARK_CSS, '::highlight(engelbart-web-mark){background-color:rgba(255,214,0,.22) !important;text-decoration-line:underline !important;text-decoration-style:solid !important;text-decoration-color:rgba(240,190,0,.9) !important;text-decoration-thickness:2px !important;text-underline-offset:3px !important}::highlight(engelbart-web-section){background-color:rgba(255,196,0,.13) !important}');
   assert.equal(PAGE.HIGHLIGHT, 'engelbart-web-mark');
   const preload = fs.readFileSync(PAGE_PRELOAD, 'utf8').replace(/^\s*\/\/.*$/gm, ''); // its code, not its comments
   assert.doesNotMatch(preload, /contextBridge|exposeInMainWorld/); // the page is given nothing
@@ -257,7 +257,9 @@ test('shapes main accepts and gives', () => {
   assert.deepEqual(quoteInput({ exact: 'a' }), { exact: 'a', prefix: '', suffix: '' });
   for (const bad of [null, 'a', ['a'], { exact: '' }, { exact: '  ' }, { exact: 'a', prefix: 3 }, { exact: 'x'.repeat(PAGE.MAX_EXACT + 1) }]) assert.equal(quoteInput(bad), null);
   const list = [{ id: 'ok', quote: { exact: 'a', prefix: 'p'.repeat(100), suffix: 's'.repeat(100) }, note: 'kept out', asks: [1] }, { id: 7, quote: { exact: 'a' } }, { id: 'no-quote' }, null];
-  assert.deepEqual(marksForPage(list), [{ id: 'ok', quote: { exact: 'a', prefix: 'p'.repeat(PAGE.MAX_AFFIX), suffix: 's'.repeat(PAGE.MAX_AFFIX) } }]);
+  // a mark with a note is given its symbol (noted), never its note's words
+  assert.deepEqual(marksForPage(list), [{ id: 'ok', quote: { exact: 'a', prefix: 'p'.repeat(PAGE.MAX_AFFIX), suffix: 's'.repeat(PAGE.MAX_AFFIX) }, noted: true }]);
+  assert.deepEqual(marksForPage([{ id: 'a', quote: { exact: 'a' }, note: '  ' }, { id: 'b', quote: { exact: 'b' }, asks: [{ answer: 'yes' }] }, { id: 'c', quote: { exact: 'c' }, asks: [{ answer: 'gone', deleted: true }] }]).map((m) => [m.id, !!m.noted]), [['a', false], ['b', true], ['c', false]]);
   assert.equal(marksForPage(Array.from({ length: 2500 }, (_, i) => ({ id: `m${i}`, quote: { exact: 'a' } }))).length, 2000);
 });
 

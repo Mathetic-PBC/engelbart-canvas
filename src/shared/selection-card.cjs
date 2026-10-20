@@ -30,4 +30,29 @@ function selectionCardPlace(line, all, pane, size, gap = CARD_GAP) {
   return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
 }
 
-module.exports = { CARD_GAP, selectionCardPlace };
+// A web page's selection card (2026-10-18, David's picture): a white card SEL_CARD_W wide with a soft shadow, in its own
+// view (views.cjs, renderer/box-card/BoxCard.jsx). The view has CARD_SHADE about the card for the shadow to fade out in,
+// so it is placed by the card's own size in the pane less that room: the card CARD_GAP from the text, below or above it,
+// and the whole view, shadow and all, inside the pane.
+const SEL_CARD_W = 340;
+const CARD_SHADE = Object.freeze({ top: 18, side: 24, bottom: 30 }); // 0 6px 24px: its blur out from the card, less its drop
+
+/**
+ * The view's place for a card `size` ({ width, height }, the card alone) with `shade` about it, for a selection (`line`,
+ * `all`) in `pane`, as selectionCardPlace's arguments → the view's { x, y, width, height }, or null when the selection
+ * shows nowhere in the pane.
+ */
+function shadedCardPlace(line, all, pane, size, shade = CARD_SHADE, gap = CARD_GAP) {
+  if (!isRect(pane) || !size || !finite(size.width) || !finite(size.height) || !selectionCardPlace(line, all, pane, size, gap)) return null;
+  const inner = { x: pane.x + shade.side, y: pane.y + shade.top, width: Math.max(0, pane.width - 2 * shade.side), height: Math.max(0, pane.height - shade.top - shade.bottom) };
+  const at = selectionCardPlace(line, all, inner, size, gap);
+  if (!at) {
+    // the selection only in the pane's rim: the card as near it as the pane lets it be
+    const x = Math.max(inner.x, Math.min(line.x, inner.x + inner.width - size.width));
+    const y = Math.max(inner.y, Math.min(line.y + line.height + gap, inner.y + inner.height - size.height));
+    return { x: Math.round(x - shade.side), y: Math.round(y - shade.top), width: Math.round(Math.min(size.width, inner.width) + 2 * shade.side), height: Math.round(Math.min(size.height, inner.height) + shade.top + shade.bottom) };
+  }
+  return { x: Math.round(at.x - shade.side), y: Math.round(at.y - shade.top), width: Math.round(at.width + 2 * shade.side), height: Math.round(at.height + shade.top + shade.bottom) };
+}
+
+module.exports = { CARD_GAP, SEL_CARD_W, CARD_SHADE, selectionCardPlace, shadedCardPlace };

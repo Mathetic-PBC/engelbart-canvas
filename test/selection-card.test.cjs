@@ -3,8 +3,8 @@
 // A selection's card (2026-10-18, David: "the annotation card should appear by itself just under the selection, ready to
 // type into"): where it goes (src/shared/selection-card.cjs), the pdf's empty card and its keys (src/renderer/pdf/
 // PaperView.jsx, in a small fake DOM as test/paper-blank-arrows.test.cjs lays it out), and a web page's, main's card view in
-// its 'selection' mode (src/main/browser/views.cjs, a fake Electron as test/web-boxes.test.cjs has). Nothing is kept until
-// a note is begun in it, or Enter keeps the highlight alone; Esc, a click elsewhere or the selection gone leaves nothing.
+// its 'selection' mode (src/main/browser/views.cjs, a fake Electron as test/web-boxes.test.cjs has). On a web page
+// (2026-10-18) nothing is kept until Save; Cancel, Esc, a click elsewhere or the selection gone leaves nothing.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -13,7 +13,7 @@ const Module = require('node:module');
 const { EventEmitter } = require('node:events');
 const { buildSync } = require('esbuild');
 
-const { CARD_GAP, selectionCardPlace } = require('../src/shared/selection-card.cjs');
+const { CARD_GAP, SEL_CARD_W, CARD_SHADE, selectionCardPlace, shadedCardPlace } = require('../src/shared/selection-card.cjs');
 const PAGE = require('../src/main/browser/page-preload.cjs');
 const CARD = require('../src/main/browser/box-card-preload.cjs');
 const VIEWS = require('../src/main/browser/views.cjs');
@@ -311,7 +311,7 @@ function setup() {
     list: async () => saved.map(([, mark]) => mark),
     add: async (url, mark) => { saved.push([url, mark]); return true; },
     update: async (url, markId, patch) => { updated.push([url, markId, patch]); return { id: markId, ...patch }; },
-    remove: async () => null,
+    remove: async (url, markId) => { const i = saved.findIndex(([, m]) => m.id === markId); return i < 0 ? null : saved.splice(i, 1)[0][1]; },
   };
   let n = 0;
   const views = VIEWS.createBrowserViews({ electron: fake.electron, getWindow: () => fake.win, send: (channel, payload) => { told.push([channel, payload]); }, appName: 'Engelbart', pageMarks, newId: () => `h-${(n += 1)}` });
@@ -331,7 +331,7 @@ const settle = () => new Promise((r) => setTimeout(r, 10));
 const QUOTE = { exact: 'the oNLine System', prefix: 'demonstrated ', suffix: ' in 1968' };
 const at = (token, line, rect) => ({ token, line, rect: rect || line, viewport: { width: 800, height: 600 } });
 
-test('web: a settled selection gets the card view under its last line (its padding taken off), above it with no room, kept in the page', () => {
+test('web: a settled selection gets the card view under its last line (its shadow\'s room about it), above it with no room, kept in the page', () => {
   const { offer, cardView, lastState } = setup();
   offer({ ...at('s1', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE, pageText: 'Engelbart demonstrated the oNLine System in 1968' });
   const card = cardView();
@@ -339,14 +339,25 @@ test('web: a settled selection gets the card view under its last line (its paddi
   card.webContents.emit('did-finish-load');
   assert.deepEqual(lastState(), { mode: 'selection', offer: 's1', mark: null, running: [] }, 'empty');
   assert.equal(card.visible, true);
-  // the page is at y 40: the line's bottom is at 110 in the window, the card's own top 8px under it (the view's padding)
-  assert.deepEqual(card.bounds, { x: 92, y: 110, width: VIEWS.CARD_W, height: 64 });
-  // the page scrolled: it follows; near the bottom it goes above; near the right edge it is pushed in
+  // the page is at y 40: the line's bottom is at 110 in the window, the card itself CARD_GAP under it, its view the
+  // shadow's room bigger on every side
+  const { side, top, bottom } = CARD_SHADE;
+  assert.deepEqual(card.bounds, { x: 100 - side, y: 110 + CARD_GAP - top, width: SEL_CARD_W + 2 * side, height: 96 + top + bottom });
+  // the page scrolled: it follows; near the bottom it goes above; near the right edge it is pushed in, its shadow too
   offer(at('s1', { x: 700, y: 560, w: 60, h: 20 }, { x: 100, y: 540, w: 660, h: 40 }));
-  assert.deepEqual(card.bounds, { x: 800 - VIEWS.CARD_W, y: 40 + 540 - 64, width: VIEWS.CARD_W, height: 64 });
+  assert.deepEqual(card.bounds, { x: 800 - SEL_CARD_W - 2 * side, y: 40 + 540 - CARD_GAP - 96 - top, width: SEL_CARD_W + 2 * side, height: 96 + top + bottom });
   // another token's whereabouts (an old selection's) move nothing
   offer(at('s0', { x: 10, y: 10, w: 60, h: 20 }));
-  assert.equal(card.bounds.y, 40 + 540 - 64);
+  assert.equal(card.bounds.y, 40 + 540 - CARD_GAP - 96 - top);
+});
+
+test('shadedCardPlace: the card where selectionCardPlace puts it in the pane less the shadow\'s room, the view that room bigger', () => {
+  const page = { x: 0, y: 40, width: 800, height: 600 }, line = { x: 100, y: 90, width: 300, height: 20 };
+  assert.deepEqual(shadedCardPlace(line, line, page, { width: 340, height: 96 }), { x: 76, y: 100, width: 388, height: 144 });
+  assert.equal(shadedCardPlace({ x: 100, y: 900, width: 30, height: 20 }, null, page, { width: 340, height: 96 }), null, 'out of the pane');
+  // a selection in the pane's rim only: the card as near it as the room lets it be, still all in the pane
+  const rim = shadedCardPlace({ x: 790, y: 41, width: 8, height: 10 }, null, page, { width: 340, height: 96 });
+  assert.ok(rim.x >= 0 && rim.x + rim.width <= 800 && rim.y >= 40 && rim.y + rim.height <= 640, JSON.stringify(rim));
 });
 
 test('web: Esc, a click in the page (the offer taken back), the selection out of view or another tab close the empty card and keep nothing', async () => {
@@ -375,61 +386,127 @@ test('web: Esc, a click in the page (the offer taken back), the selection out of
   assert.equal(page.sent.filter(([c]) => c === PAGE.CHANNELS.add).length, 0, 'nothing tinted');
 });
 
-test('web: the first key in the page keeps the highlight with that note and gives the card the keyboard; ⌘C and the arrows stay the page\'s', async () => {
-  const { page, offer, cardView, lastState, saved, onCard, fromCard, updated, told } = setup();
+const added = (page) => page.sent.filter(([c]) => c === PAGE.CHANNELS.add);
+const sentOn = (page, channel) => page.sent.filter(([c]) => c === channel).map(([, v]) => v);
+
+test('web: a key in the page goes into the card, which takes the keyboard; nothing is kept until Save; ⌘C, Enter and the arrows stay the page\'s', async () => {
+  const { page, offer, cardView, lastState, saved, updated } = setup();
   offer({ ...at('s1', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE, pageText: 'Engelbart demonstrated the oNLine System in 1968' });
   const card = cardView();
   card.webContents.emit('did-finish-load');
   assert.equal(key(page, { key: 'c', meta: true }), false, '⌘C copies the selection');
   assert.equal(key(page, { key: 'a', meta: true }), false);
   assert.equal(key(page, { key: 'ArrowDown' }), false);
+  assert.equal(key(page, { key: 'Enter' }), false, 'Enter keeps nothing now');
   assert.equal(key(page, { key: 'Shift' }), false);
   assert.equal(key(page, { key: '@', shift: true }), true, 'the first character is the note\'s');
   assert.ok(card.webContents.focused > 0, 'the card has the keyboard');
-  assert.deepEqual(lastState(), { mode: 'selection', offer: 's1', mark: { id: 'h-1', note: '@', asks: [] }, running: [], typed: true });
+  assert.deepEqual(lastState(), { mode: 'selection', offer: 's1', mark: null, running: [], typed: '@' });
   await settle();
-  assert.equal(saved.length, 1);
-  assert.deepEqual(saved[0][1], { id: 'h-1', quote: QUOTE, note: '@', at: saved[0][1].at });
-  assert.equal(saved[0][0], URL_A);
-  assert.deepEqual(page.sent.filter(([c]) => c === PAGE.CHANNELS.add).at(-1)[1], { nonce: 's1', mark: { id: 'h-1', quote: QUOTE } }, 'tinted where it is selected');
-  assert.equal(key(page, { key: 'b' }), false, 'the note begun: the page\'s keys are its own');
-  // the note goes on in the card, and @bart asks from it with the quote and the page's text
-  onCard('note')(fromCard(), '@bart what is this');
-  onCard('ask')(fromCard(), 'what is this');
-  await settle();
-  assert.deepEqual(updated.at(-1), [URL_A, 'h-1', { note: '@bart what is this' }]);
-  const asked = told.filter(([c]) => c === 'browser:box-ask').at(-1)[1];
-  assert.deepEqual(asked, { tab: 'a', markId: 'h-1', url: URL_A, title: 'Title', question: 'what is this', note: '@bart what is this', turns: [], quote: QUOTE.exact, pageText: 'Engelbart demonstrated the oNLine System in 1968' });
-  // Esc in the card: it goes, the highlight and its note kept
-  card.webContents.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: 'Escape' });
-  assert.equal(card.visible, false);
-  assert.equal(saved.length, 1);
+  assert.deepEqual(saved, [], 'nothing kept');
+  assert.deepEqual(updated, []);
+  assert.equal(added(page).length, 0, 'nothing tinted');
 });
 
-test('web: Enter in the page or the empty card keeps the highlight alone; a note begun in the card keeps it with the note; a note on its way after the card went is still that mark\'s', async () => {
+test('web: Cancel (or Esc) on a new selection\'s card leaves no mark; the page is told the card went', async () => {
+  const { page, offer, cardView, saved, onCard, fromCard } = setup();
+  offer({ ...at('s1', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE });
+  const card = cardView();
+  card.webContents.emit('did-finish-load');
+  key(page, { key: 'H' });
+  onCard('cancel')(fromCard());
+  assert.equal(card.visible, false);
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.cardGone), ['s1']);
+  offer({ ...at('s2', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE });
+  card.webContents.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: 'Escape' });
+  assert.equal(card.visible, false);
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.cardGone), ['s1', 's2']);
+  // a Save that comes after the card went keeps nothing either
+  onCard('save')(fromCard(), 'too late');
+  await settle();
+  assert.deepEqual(saved, []);
+  assert.equal(added(page).length, 0);
+});
+
+test('web: Save keeps the highlight with its note and closes the card; an empty Save keeps nothing; the same passage again is that mark, not a second', async () => {
   const { page, offer, cardView, saved, onCard, fromCard, updated } = setup();
   offer({ ...at('s1', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE });
   const card = cardView();
   card.webContents.emit('did-finish-load');
-  assert.equal(key(page, { key: 'Enter' }), true);
-  assert.equal(card.visible, false);
+  onCard('save')(fromCard(), '   ');
   await settle();
-  assert.deepEqual(saved.map(([, m]) => [m.id, m.note]), [['h-1', null]]);
-  offer({ ...at('s2', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE });
-  onCard('keep')(fromCard(), '');
+  assert.deepEqual(saved, [], 'an empty note keeps nothing');
+  assert.equal(card.visible, true, 'and the card stays');
+  onCard('save')(fromCard(), 'The demo');
+  onCard('save')(fromCard(), 'The demo'); // a second Save for the same selection keeps nothing more
   await settle();
-  assert.deepEqual(saved.map(([, m]) => [m.id, m.note]), [['h-1', null], ['h-2', null]]);
-  assert.equal(card.visible, false);
-  offer({ ...at('s3', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE });
-  onCard('keep')(fromCard(), 'Hi');
-  onCard('keep')(fromCard(), 'Hi again'); // a second keep for the same selection keeps nothing more
+  assert.deepEqual(saved.map(([url, m]) => [url, m.id, m.note]), [[URL_A, 'h-1', 'The demo']]);
+  assert.deepEqual(saved[0][1].quote, QUOTE);
+  assert.deepEqual(added(page).at(-1)[1], { nonce: 's1', mark: { id: 'h-1', quote: QUOTE, noted: true }, clear: true }, 'tinted, its symbol shown, the selection let go');
+  assert.equal(card.visible, false, 'closed');
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.cardGone), ['s1']);
+  // the same passage selected again from scratch (as the duplicates were made): its note goes on the mark there is
+  offer({ ...at('s2', { x: 100, y: 50, w: 300, h: 20 }), quote: { ...QUOTE } });
+  onCard('save')(fromCard(), 'Second thoughts');
+  await settle();
+  assert.equal(saved.length, 1, 'never two marks for one passage');
+  assert.deepEqual(updated.at(-1), [URL_A, 'h-1', { note: 'Second thoughts' }]);
+  assert.deepEqual(added(page).at(-1)[1], { nonce: 's2', mark: { id: 'h-1', quote: QUOTE, noted: true }, clear: true });
+  // another passage is a mark of its own
+  offer({ ...at('s3', { x: 100, y: 50, w: 300, h: 20 }), quote: { ...QUOTE, prefix: 'he demonstrated ' + 'x' } });
+  onCard('save')(fromCard(), 'Elsewhere');
+  await settle();
+  assert.deepEqual(saved.map(([, m]) => m.id), ['h-1', 'h-3']);
+});
+
+test('web: a note that starts with @bart is asked on Save, with the quote and the page\'s text; the card stays for the answer', async () => {
+  const { page, offer, cardView, saved, onCard, fromCard, told } = setup();
+  offer({ ...at('s1', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE, pageText: 'Engelbart demonstrated the oNLine System in 1968' });
+  const card = cardView();
+  card.webContents.emit('did-finish-load');
+  onCard('save')(fromCard(), '@bart what is this');
+  await settle();
+  assert.deepEqual(saved.map(([, m]) => [m.id, m.note]), [['h-1', '@bart what is this']]);
+  assert.deepEqual(added(page).at(-1)[1], { nonce: 's1', mark: { id: 'h-1', quote: QUOTE, noted: true } }, 'the selection kept while the card shows');
+  const asked = told.filter(([c]) => c === 'browser:box-ask').at(-1)[1];
+  assert.deepEqual(asked, { tab: 'a', markId: 'h-1', url: URL_A, title: 'Title', question: 'what is this', note: '@bart what is this', turns: [], quote: QUOTE.exact, pageText: 'Engelbart demonstrated the oNLine System in 1968' });
   assert.equal(card.visible, true);
-  offer({ token: null }); // a click in the page
-  assert.equal(card.visible, false);
-  onCard('note')(fromCard(), 'Hi there'); // the card's last keys, saved once it had gone
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.cardGone), []);
+});
+
+test('web: a highlight\'s own card (a click on it): its note to edit, Save keeps the edit, Cancel drops it, Remove takes the highlight out', async () => {
+  const { page, offer, cardView, lastState, saved, updated, onCard, fromCard } = setup();
+  saved.push([URL_A, { id: 'h-9', quote: QUOTE, note: 'Old note', at: '2026-10-01T00:00:00.000Z' }]);
+  offer({ ...at('m1', { x: 100, y: 50, w: 300, h: 20 }), markId: 'h-9', pageText: 'Engelbart demonstrated the oNLine System in 1968' });
+  const card = cardView();
+  card.webContents.emit('did-finish-load');
   await settle();
-  assert.deepEqual(saved.map(([, m]) => [m.id, m.note]), [['h-1', null], ['h-2', null], ['h-3', 'Hi']]);
-  assert.deepEqual(updated.at(-1), [URL_A, 'h-3', { note: 'Hi there' }]);
+  assert.deepEqual(lastState(), { mode: 'selection', offer: 'm1', mark: { id: 'h-9', note: 'Old note', asks: [] }, running: [] });
+  assert.equal(card.visible, true);
+  onCard('cancel')(fromCard());
+  await settle();
+  assert.deepEqual(updated, [], 'Cancel keeps the note it had');
+  offer({ ...at('m2', { x: 100, y: 50, w: 300, h: 20 }), markId: 'h-9' });
+  onCard('save')(fromCard(), '');
+  await settle();
+  assert.deepEqual(updated.at(-1), [URL_A, 'h-9', { note: '' }], 'a note cleared');
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.noted).at(-1), { id: 'h-9', on: false }, 'its symbol gone');
+  assert.equal(card.visible, false);
+  assert.equal(saved.length, 1, 'no mark made');
+});
+
+test('web: Remove in a highlight\'s card takes it out of the page\'s ink, its tint and symbol off, and closes the card', async () => {
+  const { page, offer, cardView, saved, onCard, fromCard } = setup();
+  saved.push([URL_A, { id: 'h-9', quote: QUOTE, note: 'Old note', at: '2026-10-01T00:00:00.000Z' }]);
+  offer({ ...at('m1', { x: 100, y: 50, w: 300, h: 20 }), markId: 'h-9' });
+  const card = cardView();
+  card.webContents.emit('did-finish-load');
+  onCard('remove')(fromCard());
+  await settle();
+  assert.deepEqual(saved, []);
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.unmark), ['h-9']);
+  assert.equal(card.visible, false);
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.cardGone), ['m1']);
 });
 
 test('web: no card while a field has the keyboard, on a page whose ink is not kept, or for a box selected', () => {
