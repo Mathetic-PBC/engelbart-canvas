@@ -361,6 +361,23 @@ test('checkCitations: a page in the library by its address alone is checked agai
   assert.deepEqual((await check(body.split('. As')[0], { library: rows, readRowText: () => 'something else' })).dropped.map((d) => d.reason), ['not-found']);
 });
 
+test('checkCitations: a passage of the person\'s context linked with no cite= is checked as a citation of the kind its label or source says', async () => {
+  const href = (address, find) => citeHref({ address, find, cite: 'you' }).replace(/&cite=you$/, '');
+  const body = [
+    `Struggle [You · Oct 22](${href(files.note, 'learners need to struggle a little')}).`,
+    `Waiting helps [TutorTrace p. 1](${href(files.pdf, 'Learners who waited for hints retained more')}).`,
+    `Asked [Chat · Oct 3](${href(path.join(projects.findWorkspace(ctx, project.id, other.id).workspace.dir, 'workspace.md'), 'waiting ten seconds before a hint')}).`,
+    `Wrong [You · Oct 22](${href(files.note, 'words the note never says')}).`,
+    `A paper on the web [Section 2](https://arxiv.org/pdf/2312.10893#find=We%20argue). A [plain](/x/y.md#find=z).`,
+  ].join('\n');
+  const out = await check(body);
+  assert.deepEqual(out.kept.map((k) => [k.source, k.cite, k.label]), [['Hints note', 'you', `You · ${TODAY}`], ['TutorTrace', 'source', 'TutorTrace p. 1'], ['Planning', 'other', `Chat · ${TODAY}`]]);
+  assert.deepEqual(out.dropped.map((d) => d.reason), ['not-found']);
+  assert.match(out.body.split('\n')[0], /#find=.*&cite=you\)/, 'written as a citation');
+  assert.equal(out.body.split('\n')[3], 'Wrong.');
+  assert.equal(out.body.split('\n')[4], body.split('\n')[4], 'a passage outside their context, and an unknown path, stay links');
+});
+
 test('the prompt asks for sentences that say their point without the citation, which shows only as a number', () => {
   const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
   assert.match(BART_SYSTEM_PROMPT, /makes sense with the citation taken out/);

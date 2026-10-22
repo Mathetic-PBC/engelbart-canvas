@@ -181,7 +181,7 @@ const threadText = (thread) => (thread || []).map((turn) => [turn && turn.questi
 async function checkCitations(body, { library = [], dataRoot = null, projectId = null, workspaceId = null, projectDir = null, workspaces = null, currentThread = [], readText = defaultReadText, readRowText = () => null, opened = null, today = new Date() } = {}) {
   const text = String(body == null ? '' : body);
   const kept = [], dropped = [];
-  if (!/[#&]cite=/.test(text)) return { body: text, kept, dropped };
+  if (!/[#&]cite=|#find=/.test(text)) return { body: text, kept, dropped };
   let dir = projectDir, spaces = workspaces;
   if ((!dir || !spaces) && dataRoot && projectId) {
     try {
@@ -252,12 +252,31 @@ async function checkCitations(body, { library = [], dataRoot = null, projectId =
     return who || shown !== label || /[()\s]/.test(href) ? `[${shown}](${citeHref({ address: target.address, find: target.find, to: target.to, cite, counter: target.counter })})` : `[${label}](${href})`;
   };
 
+  // A passage of a source in the person's context linked with no `cite=` (2026-10-22: a whole answer's were) is a citation
+  // that left out whose words they are: given the kind its label or source says, it is checked as any other, not let
+  // through unchecked. A passage of anything else (a paper on the web) stays a link.
+  const withKinds = (line) => {
+    const cites = citeLinks(line);
+    return line.replace(LINK_RE, (whole, label, href, at) => {
+    if (isCite(href) || !/#find=/.test(href) || /`/.test(label) || cites.some((m) => at < m.index + m[0].length && m.index < at + whole.length)) return whole;
+    const target = splitTarget(href);
+    if (!target.find) return whole;
+    const found = resolveSource(target.address, { library, projectDir: dir, workspaces: spaces, dataRoot });
+    if (found.reason) return whole;
+    const who = String(label).split(' · ')[0].trim();
+    const kind = /^you$/i.test(who) ? 'you' : String(label).includes(' · ') && who.length <= 24 ? 'other'
+      : found.kind === 'workspace' || /\.(?:md|markdown|txt)$/i.test(found.file || '') ? 'you' : 'source';
+    return `[${label}](${href}&cite=${kind})`;
+    });
+  };
+
   const out = [];
   let fence = null;
-  for (const line of text.split('\n')) {
+  for (let line of text.split('\n')) {
     if (fence) { out.push(line); if (new RegExp(`^ {0,3}${fence[0]}{${fence.length},}\\s*$`).test(line)) fence = null; continue; }
     const open = line.match(FENCE_RE);
     if (open) { fence = open[1]; out.push(line); continue; }
+    line = withKinds(line);
     // inline code is no link: its spans are kept out of the search, and put back as they were
     const masked = line.replace(/`[^`\n]*`/g, (code) => '\u0000'.repeat(code.length));
     const links = citeLinks(masked);

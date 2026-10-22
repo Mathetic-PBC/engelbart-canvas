@@ -238,7 +238,7 @@ A citation is a link: the label, then the source's absolute path (or a web page'
 
 - find: 4 to 25 words copied verbatim from the source, percent-encoded. Encode each segment of a path too (a space is %20, ( is %28, ) is %29), so the link has no spaces or parentheses.
 - No find: the source as a whole. Only for a point that sums it up (what a paper studies, what a demo shows, what a note is about) that no one passage says; when one sentence says it, quote that sentence.
-- cite: \`you\` for the person's own words, \`other\` for anyone else's (a colleague, a meeting, an assistant), \`source\` for a paper or page. Add \`&counter=1\` to a passage that cuts against the answer.
+- cite: required on every citation, with find or without. \`you\` for the person's own words, \`other\` for anyone else's (a colleague, a meeting, an assistant), \`source\` for a paper or page. Add \`&counter=1\` to a passage that cuts against the answer.
 - The label: for a paper or page, its short title and page. For anyone's words, who said them ("You", "Chat", "Meeting"); the app replaces it with who and when as the source records them. Name a person only when the source attributes the passage to them; otherwise give the kind.
 
 What to cite:
