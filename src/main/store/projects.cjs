@@ -653,7 +653,7 @@ function editedAt(dir) {
 
 function workspaceTree(parentDir, depth = 0) {
   if (depth > 32) return [];
-  return workspaceRecords(parentDir).map((workspace) => ({ ...publicWorkspace(workspace), edited: editedAt(workspace.dir), children: workspaceTree(workspace.dir, depth + 1) }));
+  return workspaceRecords(parentDir).map((workspace) => ({ ...publicWorkspace(workspace), folder: path.basename(workspace.dir), edited: editedAt(workspace.dir), children: workspaceTree(workspace.dir, depth + 1) }));
 }
 
 // A workspace's directory name: never one the project keeps for itself.

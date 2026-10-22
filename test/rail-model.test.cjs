@@ -61,7 +61,7 @@ test('@ menu: Bart, Chat, Brainstorm, Discover, Create and Note first (2026-10-1
   assert.equal(all.length, 6 + 10, 'ten from the library');
   assert.deepEqual(mentionRows({ query: 'cr', library, page: null, pageRow: null }).map((r) => r.key)[0], 'verb:create', '@create by its first letters (2026-10-13)');
   assert.deepEqual(mentionRows({ query: 'ch', library, page: null, pageRow: null }).map((r) => r.key)[0], 'verb:chat', '@chat by its first letters (2026-10-12)');
-  assert.equal(all.some((r) => r.key === 'i1'), false, 'pictures are not mentioned by hand');
+  assert.equal(all.some((r) => r.key === 'i1'), false, 'a picture comes after every other row before anything is typed (2026-10-17), here past the ten');
   assert.deepEqual(mentionRows({ query: 'b', library, page: null, pageRow: null }).map((r) => r.name).slice(0, 2), ['Bart', 'Brainstorm']);
   assert.deepEqual(mentionRows({ query: 'br', library, page: null, pageRow: null }).map((r) => r.key)[0], 'verb:brainstorm', '@brainstorm by its first letters (2026-09-30)');
   assert.deepEqual(mentionRows({ query: 'dis', library, page: null, pageRow: null }).map((r) => r.key)[0], 'verb:discover', '@discover by its first letters (2026-09-30)');

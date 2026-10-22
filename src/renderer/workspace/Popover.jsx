@@ -1,13 +1,25 @@
 // Hover card for an @[mention] (Goal Canvas.dc.html lines 380–387, popStyle at line 1077): under the mention, or above
-// it when there is no room below (2026-09-22).
+// it when there is no room below (2026-09-22). A citation's too (2026-10-21).
 import { kindOf } from '../ui/Icons.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
+import { citationCardHtml, CITE_CARD_STYLE } from '../model/cite.js';
 
 const EASE = 'cubic-bezier(.25,.1,.25,1)';
 
-export default function Popover({ item, anchor }) {
+// A citation's card (model/cite.js citationCard, citationCardHtml; 2026-10-21, David's mock): the quote, then who wrote it,
+// where and when. Its box as a CSS text, the same one an answer box's card has.
+const CITE_BOX = Object.fromEntries(CITE_CARD_STYLE.split(';').filter(Boolean).map((rule) => { const [k, ...v] = rule.split(':'); return [k.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v.join(':')]; }));
+
+// A citation's card takes the pointer, so it can be read and its words selected: `onEnter` and `onLeave` keep it up
+// while the pointer is on it (DocEditor's keepCiteCard, leaveCiteCard).
+export default function Popover({ item, anchor, onEnter, onLeave }) {
   const [ref, placed] = usePlaced(anchor, { gap: 8 });
   if (!item) return null;
+  if (item.quote != null) {
+    return (
+      <div ref={ref} data-overlay="1" data-hover="1" data-cite-card="1" onMouseEnter={onEnter} onMouseLeave={onLeave} style={{ ...CITE_BOX, ...placed, zIndex: 50, animation: `rise 160ms ${EASE}` }} dangerouslySetInnerHTML={{ __html: citationCardHtml(item) }} />
+    );
+  }
   const kind = kindOf(item);
   return (
     <div ref={ref} data-overlay="1" data-hover="1" style={{ ...placed, zIndex: 50, width: 330, padding: '14px 16px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', pointerEvents: 'none', animation: `rise 160ms ${EASE}` }}>

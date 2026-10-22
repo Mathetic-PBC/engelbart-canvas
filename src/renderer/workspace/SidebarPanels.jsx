@@ -14,7 +14,7 @@ import { isUntitled } from '../model/names.js';
 import { libraryPanelRows, looksAddable, parseSources, searchRows } from '../model/rail.js';
 import { LIBRARY_CHIPS, libraryCounts } from '../model/kind.js';
 import { findWorkspaces } from '../model/nav.js';
-import { countLabel, sinceWords, sourceIcon, shortcutProjects, versionsOf } from '../model/sidebar.js';
+import { countLabel, sinceWords, sourceIcon, shortcutProjects, versionsOf, buildInProgress } from '../model/sidebar.js';
 import { failureReason, sandboxStatus } from '../model/sandbox-notifications.js';
 import { usePlaced } from '../ui/usePlaced.js';
 import { useBodies } from './useBodies.js';
@@ -300,7 +300,8 @@ export function FitCrumb({ parts, style, ...rest }) {
 // 2026-10-16 (Hudson's "User Interface" notes): no "Earlier" (a row goes three days after it last changed, or a day after it
 // was clicked: model/sidebar.js keptAgents), so what is done is among what finished; the repositories' builds are rows here
 // too, not a section of their own.
-const AGENT_GROUPS = [['Failed', ['failed']], ['Needs you', ['needs']], ['Finished', ['unseen', 'done']], ['Running', ['running']]];
+// What runs comes first (2026-10-17): last, under three days of what finished, it was past the panel's foot and out of sight.
+export const AGENT_GROUPS = [['Running', ['running']], ['Failed', ['failed']], ['Needs you', ['needs']], ['Finished', ['unseen', 'done']]];
 const agentIcon = (kind) => (kind === 'connect' ? <I.LibraryIcon size={15} /> : kind === 'repo' ? <I.SourceIcon kind="git" size={15} /> : kind === 'bart' || kind === 'brainstorm' || kind === 'discover' ? <I.ChatIcon size={15} /> : <I.AgentsIcon size={15} />);
 
 /** Where a row is: a project's path, "A sticky" for a sticky's quick task, a repository build's state, or what a Connect note did. */
@@ -317,11 +318,11 @@ function agentWhere(entry, crumbOf) {
 }
 
 /**
- * Agents, with what was the Inbox (2026-10-13: "Combine inbox and Agents into just Agents"): what failed, what needs you,
- * what finished, and what runs, newest first in each, the repositories' builds among them. A row says where it is and how
+ * Agents, with what was the Inbox (2026-10-13: "Combine inbox and Agents into just Agents"): what runs, what failed, what needs you,
+ * and what finished, newest first in each, the repositories' builds among them. A row says where it is and how
  * long ago; a black dot while it waits to be looked at (2026-10-16: "The number should be replaced with a black circle to
  * indicate I need to view it"), its name in the import's wave while it runs; a press goes to it, its × (on hover, in the
- * upper right) puts it away. "Next agent needing attention" is ⌘J's. `entries`: model/sidebar.js agentEntries and
+ * upper right; none on a Build still running) puts it away. "Next agent needing attention" is ⌘J's. `entries`: model/sidebar.js agentEntries and
  * repoEntries, as keptAgents leaves them. `crumbOf(node)`: the project's path, names outermost first.
  * `onGo(entry, rect)`: the row's rect, for what opens beside it.
  */
@@ -346,7 +347,7 @@ export function AgentsPanel({ anchor, entries, crumbOf, onGo, onDismiss, onNext,
           {since(entry.at)}
           <span aria-hidden="true" style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: waiting ? '#171717' : 'transparent' }} data-agent-dot={waiting ? '1' : undefined} />
         </span>
-        {onDismiss && <RowAction label={`Remove ${entry.title}`} onClick={() => onDismiss(entry)} data-agent-dismiss={entry.id} style={{ position: 'absolute', top: 1, right: 1, width: 16, height: 16, padding: 0, border: 0, borderRadius: 4, background: 'transparent', cursor: 'pointer', color: '#8f8f8f', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><I.CloseIcon size={11} /></RowAction>}
+        {onDismiss && !buildInProgress(entry) && <RowAction label={`Remove ${entry.title}`} onClick={() => onDismiss(entry)} data-agent-dismiss={entry.id} style={{ position: 'absolute', top: 1, right: 1, width: 16, height: 16, padding: 0, border: 0, borderRadius: 4, background: 'transparent', cursor: 'pointer', color: '#8f8f8f', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><I.CloseIcon size={11} /></RowAction>}
       </div>
     );
   };

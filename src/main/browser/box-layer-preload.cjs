@@ -15,26 +15,32 @@
 // a darker rim, centred on the point. The numbers are large and black with a white outline (READOUT_CSS), x over y, just
 // below-right of the point; while dragging they are the width and height, and the rectangle is a flat light-grey fill
 // (FILL) with no edge. A box resized on the page looks the same (boxes.cjs, the same FILL and READOUT_CSS).
+// 2026-10-17 (David): smaller and lighter. The crosshair is CROSS + 1 pixels across, white 1px lines each over a 1px
+// half-black halo (LINE, HALO), round a small faint circle; the numbers are 11px white on a tiny dark pill (READOUT_CSS);
+// the rectangle being drawn is a 1px white edge with the halo just outside it and a 6% grey tint (TINT). The same look as
+// a box kept or resized on the page (boxes.cjs LINE, HALO, TINT, READOUT_CSS: the same text, held equal by the tests).
 
 const CHANNELS = Object.freeze({ start: 'engelbart-box:start', done: 'engelbart-box:done', click: 'engelbart-box:click', cancel: 'engelbart-box:cancel', altUp: 'engelbart-box:alt-up' });
 const MIN = 6; // pixels: a smaller drag is a click
 // What the readouts count in: 1, points (macOS's ⌘⇧4 on a Retina display, as far as we know); devicePixelRatio for pixels.
 const READOUT_SCALE = 'points';
-const READOUT_GAP = 14; // pixels from the point to the numbers' corner, clear of the circle
-// The numbers' look, here and on a page whose box is being resized (boxes.cjs READOUT_CSS: the same text).
-const READOUT_CSS = 'font:600 15px/1.1 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;font-variant-numeric:tabular-nums;'
-  + 'letter-spacing:0;color:#000;-webkit-text-stroke:2.5px #fff;paint-order:stroke fill;white-space:pre;text-align:left';
-const FILL = 'rgba(160,160,160,0.4)'; // the rectangle being drawn (boxes.cjs FILL)
-const CROSS = 40; // pixels: the crosshair's lines, end to end
-const CIRCLE = 24; // pixels: the circle's diameter
+const READOUT_GAP = 10; // pixels from the point to the numbers' corner, clear of the circle
+// The look, here and on a page whose box is kept or resized (boxes.cjs: the same text).
+const LINE = '#fff'; // the 1px edge, and the crosshair's lines
+const HALO = 'rgba(0,0,0,0.5)'; // 1px just outside the edge, either side of the crosshair's lines
+const TINT = 'rgba(128,128,128,0.06)'; // inside the rectangle being drawn
+const READOUT_CSS = 'font:500 11px/1.2 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;font-variant-numeric:tabular-nums;'
+  + 'letter-spacing:0;color:#fff;background:rgba(0,0,0,0.72);padding:2px 5px;border-radius:4px;white-space:pre;text-align:left';
+const CROSS = 20; // pixels: the crosshair's lines, end to end
+const CIRCLE = 12; // pixels: the circle's diameter
 // The crosshair, CROSS + 1 pixels square with the point at the middle of its middle pixel: the circle, then each line's
 // halo and the line on it.
 const CROSS_SVG = (() => {
   const c = CROSS / 2 + 0.5, end = CROSS + 1;
   const lines = (stroke, width) => `<path d="M0 ${c}H${end}M${c} 0V${end}" stroke="${stroke}" stroke-width="${width}" fill="none"/>`;
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${end}" height="${end}" viewBox="0 0 ${end} ${end}">`
-    + `<circle cx="${c}" cy="${c}" r="${CIRCLE / 2 - 0.5}" fill="rgba(128,128,128,0.3)" stroke="rgba(70,70,70,0.55)" stroke-width="1"/>`
-    + lines('rgba(255,255,255,0.4)', 3) + lines('#3a3a3a', 1) + '</svg>';
+    + `<circle cx="${c}" cy="${c}" r="${CIRCLE / 2 - 0.5}" fill="rgba(128,128,128,0.22)"/>`
+    + lines(HALO, 3) + lines(LINE, 1) + '</svg>';
 })();
 
 /** The two numbers the readout shows: the pointer's place before the press, the rectangle's size while dragging. */
@@ -59,7 +65,7 @@ function runInLayer() {
   function build() {
     const style = document.createElement('style');
     style.textContent = 'html,body{margin:0;height:100%;background:transparent;cursor:none;user-select:none;overflow:hidden}'
-      + `#f{position:fixed;display:none;background:${FILL};pointer-events:none}`
+      + `#f{position:fixed;display:none;box-sizing:border-box;background:${TINT};box-shadow:inset 0 0 0 1px ${LINE},0 0 0 1px ${HALO};pointer-events:none}`
       + `#c{position:fixed;left:0;top:0;display:none;width:${CROSS + 1}px;height:${CROSS + 1}px;pointer-events:none}#c svg{display:block}`
       + `#n{position:fixed;left:0;top:0;display:none;pointer-events:none;${READOUT_CSS}}`;
     document.head.appendChild(style);
@@ -126,4 +132,4 @@ function runInLayer() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInLayer();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, MIN, READOUT_SCALE, READOUT_GAP, READOUT_CSS, FILL, CROSS, CIRCLE, CROSS_SVG, readout, readoutAt };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, MIN, READOUT_SCALE, READOUT_GAP, LINE, HALO, TINT, READOUT_CSS, CROSS, CIRCLE, CROSS_SVG, readout, readoutAt };

@@ -94,12 +94,15 @@ test('a running Discover research box: its running row waves, no dot', () => {
   assert.match(waved(row)[0], /^Searching OpenAlex/);
 });
 
-test('a running Create row: what it is doing waves beside its spinner; no blue dot', () => {
+test('a running Create row: what it is doing waves, with no spinner, ring or blue dot', () => {
   const lines = ['@bart --create a diagram of this conversation', 'bart~> c1', ''];
   const row = pendingRow(mounted(lines, { c1: { agent: 'create', name: 'Opus', effort: 'high', making: 'a diagram of this conversation', activity: 'Thinking', at: Date.now() } }).html(), 'c1');
   assert.match(row, /data-create-pending="1"/);
   noDot(row, 'create');
-  assert.match(row, /animation:made-spin/, 'the spinner stays');
+  assert.ok(!/made-spin|border-radius:50%/.test(row), 'no spinner or ring');
+  assert.ok(!/width:20px;height:32px/.test(row), 'no empty square where the spinner was');
+  assert.match(row, /data-made-clock="1"/, 'its m:ss stays');
+  assert.match(row, /data-act="stopask"/, 'Stop stays');
   assert.equal(waved(row).length, 1, 'its doing text waves');
 });
 

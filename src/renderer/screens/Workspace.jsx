@@ -32,6 +32,7 @@ import { fallbackAgent } from '../model/route.js';
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 import { findAskLine, findBuildLine } from '../model/askLine.js';
 import { openBeside, closePane } from '../model/panes.js';
+import { citedDoc, passageLine } from '../model/cite-open.js';
 import { createSideTracker, docClose, docHasKeys } from '../model/key-side.js';
 import DocFind from '../workspace/DocFind.jsx';
 import { addDropped } from '../model/drop.js';
@@ -80,6 +81,7 @@ const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
 // A note or a library row by its name; `@[Name](ws:<id>)` is a workspace, `@[Name](lib:<folderId>:<path>)` a file in a
 // library folder (MATH-22), which is no row of its own, and `@[Title](zotero:<key>)` a Zotero item (MATH-65), no row either.
 const MENTION_RE = /@\[([^\]\n]+)\](?!\(ws:|\(lib:[\w-]+:|\(zotero:)/g;
+const LIB_ID_RE = /@\[[^\]\n]+\]\(lib:([\w-]+)\)/g;
 const SAVE_DELAY = 400;
 // The files a run's answer stands for: its `bart> @[name](made:<askId>/<path>)` rows (main/bart/create.cjs), this run's only.
 const madeIn = (lines, askId) => (lines || []).map((line) => { const m = REPLY_RE.exec(String(line)); return m ? madeMentionOf(m[2]) : null; }).filter((made) => made && made.askId === askId);
@@ -1073,8 +1075,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const mentioned = React.useMemo(() => {
     const text = topic ? docs[`ws:${topic.id}`] || '' : '';
     const names = new Set([...text.matchAll(MENTION_RE)].map((match) => match[1].toLowerCase()));
+    // A library mention is its item whatever name it was written with: a web page's is never its address (2026-10-17).
+    const ids = new Set([...text.matchAll(LIB_ID_RE)].map((match) => match[1]));
     const shown = new Set([...text.matchAll(IMAGE_REF_RE)].map((match) => match[1])); // pasted images are context without an @mention
-    return library.filter((row) => (row.type === 'image' ? shown.has(row.id) : names.has(row.name.toLowerCase())));
+    // A picture is mentioned by its id alone (2026-10-17): pasted ones share names ("Attachment 1").
+    return library.filter((row) => (row.type === 'image' ? shown.has(row.id) || ids.has(row.id) : names.has(row.name.toLowerCase()) || ids.has(row.id)));
   }, [docs, topic, library]);
 
   const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
@@ -1117,11 +1122,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   // What the @ menu and the sidebar's search offer (MATH-58): the library less the notes trashed from their last
   // workspace. `mentionable`, which an @mention already written is opened by, keeps the whole library, those notes marked
-  // `trashed` so their mentions show grey (still opened by a click).
+  // `trashed` so their mentions show grey (still opened by a click). Pictures are in both (2026-10-17).
   const letGo = React.useMemo(() => letGoNotes({ workspaces: tree.workspaces, notes: tree.notes }), [tree.workspaces, tree.notes]);
   const findable = React.useMemo(() => (letGo.size ? library.filter((row) => !letGo.has(row.id)) : library), [library, letGo]);
 
-  const mentionable = React.useMemo(() => [BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, ...library.filter((row) => row.type !== 'image').map((row) => (letGo.has(row.id) ? { ...describe(row, project.id), trashed: true } : describe(row, project.id)))], [library, letGo, project.id]);
+  const mentionable = React.useMemo(() => [BART_ITEM, CHAT_ITEM, BRAINSTORM_ITEM, DISCOVER_ITEM, CREATE_ITEM, ...library.map((row) => (letGo.has(row.id) ? { ...describe(row, project.id), trashed: true } : describe(row, project.id)))], [library, letGo, project.id]);
 
   // On the rail: what the search does not offer again, and what makes the Browser's Save read ✓.
   const railIds = React.useMemo(() => new Set(rows.map((row) => row.id)), [rows]);
@@ -1212,7 +1217,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     }
   }, [folderFiles.recheck, showRight, onError]); // eslint-disable-line react-hooks/exhaustive-deps
   // A link in a document goes to the Stage too, never to the default browser; `{ newTab: true }` (⌘-click), in a tab of its own.
+  // A citation of a workspace's document or a note goes beside the document instead (openCited, below).
+  // → whether it was one: a highlight's answer in the Stage asks too (Stage onOpenCited).
+  const citedRef = React.useRef(null);
+  const openIfCited = React.useCallback((href) => {
+    const cited = citedRef.current && citedDoc(href, citedRef.current.where);
+    if (cited) citedRef.current.open(cited);
+    return !!cited;
+  }, []);
   const openLink = React.useCallback((href, options) => {
+    if (openIfCited(href)) return;
     if (!stageRef.current) return;
     showRight('stage');
     stageRef.current.openInput(href, options);
@@ -1392,6 +1406,25 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     reveal.current = at;
     setBeside(next);
   };
+  // A citation of the person's own thinking (2026-10-21, model/cite-open.js): its workspace or note opened beside the
+  // document in front, or the one in front scrolled when it is that, to the passage it quotes, lit up (DocEditor
+  // showPassage). A passage no longer in the document opens the document alone.
+  const openCited = (cited) => {
+    openDocBeside({ kind: cited.kind, id: cited.id, name: cited.name }, '');
+    const key = cited.kind === 'workspace' ? `ws:${cited.id}` : `note:${cited.id}`;
+    let tries = 0;
+    const attempt = () => {
+      const editor = editorRefs.current.map((held) => held && held.current).find((held) => held && held.props && held.props.docKey === key);
+      if (!editor || typeof docsRef.current[key] !== 'string') { tries += 1; if (tries < 60) setTimeout(attempt, 100); return; }
+      const at = passageLine(editor.lines(), cited.find, cited.cite);
+      if (at < 0) return;
+      let drawn = 0;
+      const show = () => { if (!editor.showPassage(at, cited.find) && (drawn += 1) < 20) setTimeout(show, 100); };
+      setTimeout(show, 50);
+    };
+    setTimeout(attempt, 0);
+  };
+  citedRef.current = { open: openCited, where: { projectDir: project.dir, index, notes: [...notesById.values()] } };
   React.useEffect(() => {
     if (reveal.current == null) return;
     const at = reveal.current;
@@ -2562,6 +2595,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onDismissAsk={dropPaperAsk}
           onContinueAsk={topic ? continueAsk : undefined}
           onCopyText={(value) => api.copyText(value).catch((error) => onError(error))}
+          onOpenCited={openIfCited}
           onTabs={setStagePlaces}
           keysToDoc={keysToDoc}
           save={madeSave || (topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null)}

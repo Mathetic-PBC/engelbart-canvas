@@ -8,7 +8,8 @@
 // written one; a paper's text can run to hundreds of thousands of characters, its abstract cannot.
 // A mentioned workspace (`@[Name](ws:<id>)`, 2026-09-25) is included as a note is: its document, whole, under its
 // current name. A mention that leads nowhere says so where it stands. A pasted image becomes the path of its
-// file, which means something outside the app; img:<id> does not.
+// file, which means something outside the app; img:<id> does not. A picture mentioned (`@[Name](lib:<id>)`, 2026-10-17)
+// is where it is, under the line, as a pdf is, unless the same text pastes it, where it already is.
 // An item of the connected Zotero library (`@[Title](zotero:<itemKey>)`, MATH-65 build 2) is its <zotero_item> block
 // (zotero/mirror.cjs itemBlock): its metadata, BibTeX, notes and annotations, and where its file is. Build 5: an item of
 // a group is `@[Title](zotero:g<groupID>:<itemKey>)`, and its block says which library it is in.
@@ -112,6 +113,12 @@ async function expandLines(text, source, seen, tally) {
   const body = bare(text);
   const out = [];
   let placed = false; // a block was just placed: text that follows gets a blank line before it
+  // A picture pasted into this text is given where it is pasted (its path in place of img:<id>): a mention of the same
+  // picture, before the paste or after it, places nothing more (2026-10-17).
+  for (const token of body ? body.split('\n').flatMap((line) => line.split(INLINE)) : []) {
+    const image = token && token.match(IMAGE_TOKEN);
+    if (image && source.image && source.image(image[2])) seen.add(image[2]);
+  }
   for (const line of body ? body.split('\n') : []) {
     const blocks = [];
     let shown = '';
@@ -226,7 +233,8 @@ function projectSource(ctx, projectId, rows) {
   const byId = new Map(rows.map((row) => [row.id, row]));
   return {
     find: (name) => byName.get(name.toLowerCase()) || null,
-    get: (id) => { const row = byId.get(id); return row && row.type !== 'image' ? row : null; },
+    // By id, a picture too (2026-10-17: `@[Name](lib:<id>)`, its path under the line); by name, never one (find).
+    get: (id) => byId.get(id) || null,
     // A file inside a library folder (MATH-22) → store/folder-files.cjs fileInRow's answer, or null without the folder.
     file: (folderId, rel) => { const row = byId.get(folderId); return row && row.folder_path ? fileInRow(row, rel, ctx.homeDir) : null; },
     // An item of the connected Zotero library (MATH-65 build 2): read from the mirror; its file is downloaded now when

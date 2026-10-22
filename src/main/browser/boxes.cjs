@@ -19,25 +19,36 @@
 // MATH-70 build 3 (2026-10-07): a box being resized looks like one being drawn (box-layer-preload.cjs): a flat light-grey
 // fill (FILL) with no outline or handles, and its width and height in points beside the pointer, large and black with a
 // white outline (readoutCss: an html::before rule, fixed in the viewport, in the same look, READOUT_CSS).
+// 2026-10-17 (David: "much smaller and lighter, like ⌘⇧4"): no blue. Every box, drawn, resized or kept, is a 1px white
+// line (LINE) with a 1px half-black halo just outside it (HALO), so it shows on a white page and a dark one alike; a box
+// being drawn or resized has a faint grey tint (TINT, 6%) inside it as well. Handles are 5px white squares with the halo
+// as their stroke; what a press reaches is unchanged (page-preload.cjs EDGE, HANDLE_HIT), wider than what is drawn. The
+// numbers are 11px white on a small dark pill. The look is these constants, the drawing layer's the same text (it is
+// sandboxed and cannot require this file; the tests hold the two equal).
 
 const TEXT_MAX = 2000; // characters of the page's text under a box that are kept
 const SELECTOR_MAX = 1000;
 const ANCHOR_TEXT = 80; // characters of the anchor element's own text kept to check it is the same one
 const SRC_MAX = 2048;
 const MAX_BOXES = 200; // drawn on one page
-const STROKE = '#0070f3'; // the highlights' blue (views.cjs MARK_CSS)
-const HANDLE = 7; // a handle's side, its stroke included, in CSS pixels (page-preload.cjs HANDLE_HIT is the press's reach)
+const MAX_NOTES = 500; // notes' symbols drawn on one page (page-preload.cjs MAX_CHIPS)
+const NOTE_CHIP = '#0070f3'; // a note's symbol: Engelbart's blue
+// The look of a box, here and in the drawing layer (box-layer-preload.cjs, the same text).
+const LINE = '#fff'; // a box's 1px edge
+const HALO = 'rgba(0,0,0,0.5)'; // 1px just outside the edge, and a handle's stroke
+const TINT = 'rgba(128,128,128,0.06)'; // inside a box being drawn or resized
+const HANDLE = 5; // a handle's side, its stroke included, in CSS pixels (page-preload.cjs HANDLE_HIT is the press's reach)
 const PAD = Math.ceil(HANDLE / 2) + 2; // room around the boxes for a handle half outside its edge, and its stroke
 // The handles, by name (a resize moves the edges a name holds: n, e, s, w), as fractions of the box's width and height.
 const HANDLES = Object.freeze([['nw', 0, 0], ['n', 0.5, 0], ['ne', 1, 0], ['e', 1, 0.5], ['se', 1, 1], ['s', 0.5, 1], ['sw', 0, 1], ['w', 0, 0.5]]);
 const CARD_GAP = 8; // pixels between a box and its card
-// The drawing layer's look (box-layer-preload.cjs, the same text): the fill of a box being drawn or resized, and its numbers.
-const FILL = 'rgba(160,160,160,0.4)';
-const READOUT_CSS = 'font:600 15px/1.1 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;font-variant-numeric:tabular-nums;'
-  + 'letter-spacing:0;color:#000;-webkit-text-stroke:2.5px #fff;paint-order:stroke fill;white-space:pre;text-align:left';
-const READOUT_GAP = 14; // points from the pointer to the numbers' corner
-const READOUT_DIGIT = 10; // points a digit takes, about, to know when the numbers would not fit and go the other side
-const READOUT_HEIGHT = 34; // points the two lines take, about
+// The numbers beside the pointer (box-layer-preload.cjs, the same text): two lines on a small dark pill.
+const READOUT_CSS = 'font:500 11px/1.2 -apple-system,BlinkMacSystemFont,"SF Pro Text","Helvetica Neue",sans-serif;font-variant-numeric:tabular-nums;'
+  + 'letter-spacing:0;color:#fff;background:rgba(0,0,0,0.72);padding:2px 5px;border-radius:4px;white-space:pre;text-align:left';
+const READOUT_GAP = 10; // points from the pointer to the numbers' corner, clear of the crosshair's circle
+const READOUT_DIGIT = 7; // points a digit takes, about, to know when the numbers would not fit and go the other side
+const READOUT_PAD = 10; // points of the pill's padding across
+const READOUT_HEIGHT = 31; // points the pill's two lines take, about
 
 const finite = (v, limit = 1e6) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v) <= limit;
 const str = (v, max) => (typeof v === 'string' ? v.slice(0, max) : '');
@@ -119,28 +130,32 @@ function cardPlace(box, page, size, gap = CARD_GAP) {
 
 /**
  * The rule that draws `rects` ([{ id, x, y, w, h }] in the coordinates of html's containing block, CSS pixels): each a 1px
- * outline with no fill, `selected` (an id) with its 8 handles too, and `resizing` (an id) a flat fill instead, as a box
- * being drawn is. `size` ({ width, height }, the document's scroll size) keeps the rule from reaching past the page's
+ * white outline with a 1px halo outside it and no fill, `selected` (an id) with its 8 handles too, and `resizing` (an id)
+ * with the faint tint and no handles, as a box being drawn is. `size` ({ width, height }, the document's scroll size) keeps the rule from reaching past the page's
  * right and bottom, so it never adds to what scrolls; past its left and top it adds nothing (a box's handles there are
  * not cut off). '' when there is nothing to draw.
  */
-function boxesCss(rects, selected = null, size = null, resizing = null) {
+function boxesCss(rects, selected = null, size = null, resizing = null, notes = []) {
   const shown = (Array.isArray(rects) ? rects : []).filter((r) => r && [r.x, r.y, r.w, r.h].every((n) => finite(n)) && r.w > 0 && r.h > 0).slice(0, MAX_BOXES);
-  if (!shown.length) return '';
+  // the notes' symbols on web highlights (2026-10-18), drawn in the same rule: each a square `size` across at x, y
+  const chips = (Array.isArray(notes) ? notes : []).filter((c) => c && [c.x, c.y, c.size].every((n) => finite(n)) && c.size > 0 && c.size <= 64).slice(0, MAX_NOTES);
+  if (!shown.length && !chips.length) return '';
+  const all = [...shown, ...chips.map((c) => ({ x: c.x, y: c.y, w: c.size, h: c.size }))];
   const maxW = size && finite(size.width) && size.width > 0 ? size.width : Infinity, maxH = size && finite(size.height) && size.height > 0 ? size.height : Infinity;
-  const left = Math.floor(Math.min(...shown.map((r) => r.x)) - PAD), top = Math.floor(Math.min(...shown.map((r) => r.y)) - PAD);
-  const right = Math.min(maxW, Math.ceil(Math.max(...shown.map((r) => r.x + r.w)) + PAD)), bottom = Math.min(maxH, Math.ceil(Math.max(...shown.map((r) => r.y + r.h)) + PAD));
+  const left = Math.floor(Math.min(...all.map((r) => r.x)) - PAD), top = Math.floor(Math.min(...all.map((r) => r.y)) - PAD);
+  const right = Math.min(maxW, Math.ceil(Math.max(...all.map((r) => r.x + r.w)) + PAD)), bottom = Math.min(maxH, Math.ceil(Math.max(...all.map((r) => r.y + r.h)) + PAD));
   const W = Math.max(1, right - left), H = Math.max(1, bottom - top);
   // whole pixels, the 1px lines on them: a line between two pixels is drawn as two pale ones
   const shapes = shown.map((r) => {
     const x = Math.round(r.x - left), y = Math.round(r.y - top), w = Math.max(1, Math.round(r.w)), h = Math.max(1, Math.round(r.h));
-    if (resizing != null && r.id === resizing) return `<rect x="${x}" y="${y}" width="${w}" height="${h}" fill="${FILL}" stroke="none"/>`;
-    const outline = `<rect x="${x + 0.5}" y="${y + 0.5}" width="${Math.max(0, w - 1)}" height="${Math.max(0, h - 1)}" fill="none" stroke="${STROKE}" stroke-width="1"/>`;
-    if (r.id !== selected) return outline;
+    const halo = `<rect x="${x - 0.5}" y="${y - 0.5}" width="${w + 1}" height="${h + 1}" fill="none" stroke="${HALO}" stroke-width="1"/>`;
+    const tinted = resizing != null && r.id === resizing;
+    const outline = halo + `<rect x="${x + 0.5}" y="${y + 0.5}" width="${Math.max(0, w - 1)}" height="${Math.max(0, h - 1)}" fill="${tinted ? TINT : 'none'}" stroke="${LINE}" stroke-width="1"/>`;
+    if (tinted || r.id !== selected) return outline;
     const half = (HANDLE - 1) / 2; // the square inside its stroke
-    const handles = handlesOf({ x, y, w, h }).map((p) => `<rect x="${Math.round(p.x) - half}" y="${Math.round(p.y) - half}" width="${HANDLE - 1}" height="${HANDLE - 1}" fill="#fff" stroke="${STROKE}" stroke-width="1"/>`);
+    const handles = handlesOf({ x, y, w, h }).map((p) => `<rect x="${Math.round(p.x) - half}" y="${Math.round(p.y) - half}" width="${HANDLE - 1}" height="${HANDLE - 1}" fill="${LINE}" stroke="${HALO}" stroke-width="1"/>`);
     return outline + handles.join('');
-  }).join('');
+  }).join('') + chips.map((c) => noteChip(c.x - left, c.y - top, c.size)).join('');
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" shape-rendering="crispEdges">${shapes}</svg>`;
   const url = `data:image/svg+xml,${encodeURIComponent(svg)}`;
   const rule = [
@@ -152,6 +167,17 @@ function boxesCss(rects, selected = null, size = null, resizing = null) {
 }
 
 /**
+ * A note's symbol at (x, y), `size` across (2026-10-18): a disc in Engelbart's blue with a 1px white ring, so it shows on a
+ * light page and a dark one, and three short white lines in it, a note's. Smooth, unlike the boxes' crisp lines.
+ */
+function noteChip(x, y, size) {
+  const r = size / 2, cx = Math.round((x + r) * 10) / 10, cy = Math.round((y + r) * 10) / 10, k = size / 16;
+  const line = (dy, w) => `M${Math.round((cx - 3.5 * k) * 100) / 100} ${Math.round((cy + dy * k) * 100) / 100}h${Math.round(w * k * 100) / 100}`;
+  return `<g shape-rendering="geometricPrecision"><circle cx="${cx}" cy="${cy}" r="${r - 0.5}" fill="${NOTE_CHIP}" stroke="#fff" stroke-width="1"/>`
+    + `<path d="${line(-2.5, 7)}${line(0, 7)}${line(2.5, 4.5)}" fill="none" stroke="#fff" stroke-width="${Math.round(1.4 * k * 100) / 100}" stroke-linecap="round"/></g>`;
+}
+
+/**
  * The numbers beside the pointer while a box is resized: `w` and `h` (the box's size, the page's CSS pixels) in points
  * (times `zoom`, the page's zoom factor) as two lines, x over y, at READOUT_GAP points below and right of the pointer
  * (`x`, `y` in the viewport, CSS pixels) or on its other side where they would not fit in `viewport` ({ width, height }).
@@ -160,7 +186,7 @@ function boxesCss(rects, selected = null, size = null, resizing = null) {
 function readoutCss({ x, y, w, h, zoom = 1, viewport = null } = {}) {
   if (![x, y, w, h].every((n) => finite(n)) || !(finite(zoom) && zoom > 0)) return '';
   const pts = [w, h].map((n) => String(Math.max(0, Math.round(n * zoom))));
-  const gap = READOUT_GAP / zoom, width = (Math.max(...pts.map((t) => t.length)) * READOUT_DIGIT) / zoom, height = READOUT_HEIGHT / zoom;
+  const gap = READOUT_GAP / zoom, width = (Math.max(...pts.map((t) => t.length)) * READOUT_DIGIT + READOUT_PAD) / zoom, height = READOUT_HEIGHT / zoom;
   const vw = viewport && finite(viewport.width) ? viewport.width : Infinity, vh = viewport && finite(viewport.height) ? viewport.height : Infinity;
   const right = x + gap + width <= vw, below = y + gap + height <= vh;
   const left = Math.round((right ? x + gap : x - gap) * 100) / 100, top = Math.round((below ? y + gap : y - gap) * 100) / 100;
@@ -168,11 +194,11 @@ function readoutCss({ x, y, w, h, zoom = 1, viewport = null } = {}) {
   const transform = `scale(${Math.round((1 / zoom) * 1e4) / 1e4}) translate(${right ? 0 : '-100%'},${below ? 0 : '-100%'})`;
   const rule = [
     `content:"${pts[0]}\\A ${pts[1]}"`, 'display:block', 'position:fixed', `left:${left}px`, `top:${top}px`, 'right:auto', 'bottom:auto', 'width:auto', 'height:auto',
-    'margin:0', 'padding:0', 'border:0', 'background:none', 'box-shadow:none', 'filter:none', 'clip-path:none', 'mask:none', 'mix-blend-mode:normal',
+    'margin:0', 'border:0', 'box-shadow:none', 'filter:none', 'clip-path:none', 'mask:none', 'mix-blend-mode:normal',
     'opacity:1', 'visibility:visible', 'pointer-events:none', 'z-index:2147483647', 'text-transform:none', 'text-indent:0', 'text-decoration:none', 'text-shadow:none',
     'transform-origin:0 0', `transform:${transform}`, ...READOUT_CSS.split(';'),
   ].map((p) => `${p} !important`).join(';');
   return `html::before{${rule}}`;
 }
 
-module.exports = { FILL, READOUT_CSS, READOUT_GAP, readoutCss, TEXT_MAX, SELECTOR_MAX, ANCHOR_TEXT, MAX_BOXES, HANDLE, PAD, HANDLES, CARD_GAP, anchorInput, boxInput, isBox, cropName, CROP_RE, cropNumber, cropsOf, nextCropName, handlesOf, cardPlace, boxesCss };
+module.exports = { NOTE_CHIP, MAX_NOTES, noteChip, LINE, HALO, TINT, READOUT_CSS, READOUT_GAP, readoutCss, TEXT_MAX, SELECTOR_MAX, ANCHOR_TEXT, MAX_BOXES, HANDLE, PAD, HANDLES, CARD_GAP, anchorInput, boxInput, isBox, cropName, CROP_RE, cropNumber, cropsOf, nextCropName, handlesOf, cardPlace, boxesCss };

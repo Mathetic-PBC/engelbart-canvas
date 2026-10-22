@@ -109,19 +109,27 @@ test('boxesCss: one html::after rule, out of flow and inert, covering only the b
   assert.match(BOX.boxesCss([{ id: 'a', x: 0, y: 0, w: 100, h: 20 }], 'a', { width: 1200, height: 800 }), new RegExp(`left:${-P}px !important;top:${-P}px`));
 });
 
-test('boxesCss (build 2): a 1px outline with no fill; the selected box also has 8 small white square handles with a 1px stroke, none cut off', () => {
+test('boxesCss (2026-10-17): a 1px white outline with a 1px dark halo outside it, no fill; the selected box also has 8 small white handles with the halo as stroke, none cut off', () => {
   const P = BOX.PAD;
+  assert.equal(BOX.LINE, '#fff');
+  assert.equal(BOX.HALO, 'rgba(0,0,0,0.5)');
   const plain = svgOf(BOX.boxesCss([{ id: 'a', x: 100, y: 200, w: 300, h: 150 }], null));
-  assert.deepEqual(plain.match(/<rect [^>]*\/>/g), [`<rect x="${P + 0.5}" y="${P + 0.5}" width="299" height="149" fill="none" stroke="#0070f3" stroke-width="1"/>`]);
-  assert.ok(!/fill-opacity|fill="#0070f3"/.test(plain), 'no fill');
+  assert.deepEqual(plain.match(/<rect [^>]*\/>/g), [
+    `<rect x="${P - 0.5}" y="${P - 0.5}" width="301" height="151" fill="none" stroke="${BOX.HALO}" stroke-width="1"/>`,
+    `<rect x="${P + 0.5}" y="${P + 0.5}" width="299" height="149" fill="none" stroke="#fff" stroke-width="1"/>`,
+  ]);
+  assert.ok(!/0070f3/.test(plain), 'no blue');
 
   const svg = svgOf(BOX.boxesCss([{ id: 'a', x: 100, y: 200, w: 300, h: 150 }, { id: 'b', x: 600, y: 200, w: 40, h: 40 }], 'a'));
   const rects = svg.match(/<rect [^>]*\/>/g);
-  assert.equal(rects.length, 2 + 8); // two outlines, the selected one's 8 handles
+  assert.equal(rects.length, 2 * 2 + 8); // two outlines with their halos, the selected one's 8 handles
   const handles = rects.filter((r) => r.includes('fill="#fff"'));
   assert.equal(handles.length, 8);
+  assert.ok(BOX.HANDLE <= 5, 'small handles');
   const side = BOX.HANDLE - 1; // inside its 1px stroke: HANDLE across, stroke included
-  for (const h of handles) assert.match(h, new RegExp(`width="${side}" height="${side}" fill="#fff" stroke="#0070f3" stroke-width="1"`));
+  for (const h of handles) assert.match(h, new RegExp(`width="${side}" height="${side}" fill="#fff" stroke="${BOX.HALO.replace(/[().]/g, '\\$&')}" stroke-width="1"`));
+  // what a press reaches stays wider than what is drawn
+  assert.ok(PAGE.HANDLE_HIT * 2 > BOX.HANDLE && PAGE.EDGE >= 4);
   // the handles sit on the corners and the middles of the edges, all inside the drawing
   const W = Number(svg.match(/width="(\d+)"/)[1]), H = Number(svg.match(/height="(\d+)"/)[1]);
   const centres = handles.map((h) => { const [, x, y] = h.match(/x="([\d.-]+)" y="([\d.-]+)"/); return [Number(x) + side / 2, Number(y) + side / 2]; });
@@ -470,39 +478,39 @@ test('the drawing layer\'s readouts: the pointer\'s screen place before the pres
   assert.ok(!/Drag to box part of the page/.test(source));
 });
 
-test('the drawing layer looks like ⌘⇧4 (build 3): the system cursor hidden, its own crosshair and circle, outlined numbers, a flat fill', () => {
+test('the drawing layer looks like ⌘⇧4 (2026-10-17): the system cursor hidden, a small thin crosshair, small numbers on a dark pill, a thin edge and faint tint', () => {
   const source = fs.readFileSync(path.join(__dirname, '../src/main/browser/box-layer-preload.cjs'), 'utf8');
   assert.match(source, /cursor:none/);
   assert.doesNotMatch(source, /cursor:crosshair/);
   const svg = LAYER.CROSS_SVG, end = LAYER.CROSS + 1, c = LAYER.CROSS / 2 + 0.5;
-  assert.equal(LAYER.CROSS, 40);
-  assert.equal(LAYER.CIRCLE, 24);
+  assert.equal(LAYER.CROSS, 20);
+  assert.equal(LAYER.CIRCLE, 12);
   assert.match(svg, new RegExp(`width="${end}" height="${end}"`));
-  assert.match(svg, new RegExp(`<circle cx="${c}" cy="${c}" r="${LAYER.CIRCLE / 2 - 0.5}" fill="rgba\\(128,128,128,[0-9.]+\\)" stroke="rgba\\(70,70,70,`), 'a translucent grey circle with a darker rim');
+  assert.match(svg, new RegExp(`<circle cx="${c}" cy="${c}" r="${LAYER.CIRCLE / 2 - 0.5}" fill="rgba\\(128,128,128,0?\\.[0-9]+\\)"/>`), 'a small faint grey circle');
   const paths = [...svg.matchAll(/<path d="([^"]+)" stroke="([^"]+)" stroke-width="(\d+)"/g)].map((m) => [m[1], m[2], m[3]]);
   assert.deepEqual(paths.map((p) => p[0]), [`M0 ${c}H${end}M${c} 0V${end}`, `M0 ${c}H${end}M${c} 0V${end}`], 'both lines, end to end, through the point');
-  assert.deepEqual(paths.map((p) => p[2]), ['3', '1'], 'a light halo under each thin line');
-  assert.match(paths[0][1], /^rgba\(255,255,255,/);
-  assert.equal(paths[1][1], '#3a3a3a');
+  assert.deepEqual(paths.map((p) => p[2]), ['3', '1'], 'a dark halo under each thin line');
+  assert.equal(paths[0][1], LAYER.HALO);
+  assert.equal(paths[1][1], LAYER.LINE);
   assert.ok(svg.indexOf('<circle') < svg.indexOf('<path'), 'the circle under the lines');
-  assert.match(LAYER.READOUT_CSS, /color:#000/);
-  assert.match(LAYER.READOUT_CSS, /-webkit-text-stroke:[0-9.]+px #fff;paint-order:stroke fill/, 'black numbers with a white outline');
+  assert.match(LAYER.READOUT_CSS, /font:500 1[01](\.\d)?px\//, '10-11px numbers');
+  assert.match(LAYER.READOUT_CSS, /color:#fff;background:rgba\(0,0,0,0\.\d+\)/, 'white on a dark pill');
+  assert.match(LAYER.READOUT_CSS, /border-radius:\d+px/);
   assert.match(LAYER.READOUT_CSS, /white-space:pre/, 'x over y');
-  assert.match(source, /#f\{position:fixed;display:none;background:\$\{FILL\}/, 'a flat fill, no edge');
-  // a box resized on the page looks the same
-  assert.equal(BOX.FILL, LAYER.FILL);
-  assert.equal(BOX.READOUT_CSS, LAYER.READOUT_CSS);
-  assert.equal(BOX.READOUT_GAP, LAYER.READOUT_GAP);
+  assert.match(source, /#f\{[^}]*background:\$\{TINT\};box-shadow:inset 0 0 0 1px \$\{LINE\},0 0 0 1px \$\{HALO\}/, 'a 1px edge, its halo outside, a faint tint');
+  assert.ok(Number(LAYER.TINT.match(/,([0-9.]+)\)$/)[1]) <= 0.06, 'the tint at most 6%');
+  // a box kept or resized on the page looks the same
+  for (const k of ['LINE', 'HALO', 'TINT', 'READOUT_CSS', 'READOUT_GAP']) assert.equal(BOX[k], LAYER[k], k);
 });
 
-test('a box being resized (build 3): a flat fill with no outline or handles, its size in points beside the pointer, flipped at the edges', () => {
+test('a box being resized: its thin outline with the faint tint and no handles, its size in points beside the pointer, flipped at the edges', () => {
   const rects = [{ id: 'a', x: 100, y: 200, w: 300, h: 150 }, { id: 'b', x: 600, y: 200, w: 40, h: 40 }];
   const svg = svgOf(BOX.boxesCss(rects, 'a', null, 'a'));
   const shapes = svg.match(/<rect [^>]+>/g);
-  assert.equal(shapes.length, 2, 'the resized box is one rectangle, no handles; the other its outline');
-  assert.match(shapes[0], new RegExp(`fill="${BOX.FILL.replace(/[()]/g, '\\$&')}" stroke="none"`));
-  assert.match(shapes[1], /fill="none" stroke="#0070f3"/);
-  assert.equal(svgOf(BOX.boxesCss(rects, 'a')).match(/<rect /g).length, 2 + 8, 'not resizing: the outline and handles as before');
+  assert.equal(shapes.length, 4, 'each box its halo and its line; no handles while resizing');
+  assert.match(shapes[1], new RegExp(`fill="${BOX.TINT.replace(/[().]/g, '\\$&')}" stroke="#fff"`));
+  assert.match(shapes[3], /fill="none" stroke="#fff"/);
+  assert.equal(svgOf(BOX.boxesCss(rects, 'a')).match(/<rect /g).length, 2 * 2 + 8, 'not resizing: the outlines and handles as before');
 
   const css = BOX.readoutCss({ x: 100, y: 100, w: 240.4, h: 99.6, zoom: 1, viewport: { width: 800, height: 600 } });
   assert.match(css, /^html::before\{/);
@@ -510,7 +518,9 @@ test('a box being resized (build 3): a flat fill with no outline or handles, its
   assert.match(css, /position:fixed !important/);
   assert.match(css, new RegExp(`left:${100 + BOX.READOUT_GAP}px !important;top:${100 + BOX.READOUT_GAP}px !important`), 'below and right of the pointer');
   assert.match(css, /pointer-events:none !important/);
-  assert.match(css, /color:#000 !important/);
+  assert.match(css, /color:#fff !important/);
+  assert.match(css, /background:rgba\(0,0,0,0\.\d+\) !important/, 'a dark pill');
+  assert.doesNotMatch(css, /background:none|padding:0 !important/, 'nothing undoes the pill');
   assert.match(css, /transform:scale\(1\) translate\(0,0\) !important/);
   // zoomed: the numbers are points, the look the same size
   const zoomed = BOX.readoutCss({ x: 100, y: 100, w: 200, h: 50, zoom: 1.5, viewport: { width: 800, height: 600 } });

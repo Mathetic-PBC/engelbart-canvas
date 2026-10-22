@@ -495,13 +495,18 @@ export function markAgent(marks = {}, id, what, at = new Date().toISOString()) {
 /**
  * What Agents shows: no row put away with its × since it last changed, and no row that is not running once it is three days old or a day past
  * the click. A row clicked since it last changed (its `at`) is `viewed`: it has been looked at, so it no longer asks to be
- * (no dot, out of the counts and of ⌘J); one clicked while it ran and finished since is new again.
+ * (no dot, out of the counts and of ⌘J); one clicked while it ran and finished since is new again. A Build in progress
+ * (2026-10-17) stays whatever its marks say: its `at` holds still for a whole turn, so a × (or any mark at or after the
+ * turn began) would hide it until the turn ended; once it leaves running its new `at` decides as before.
  */
+export const BUILD_KINDS = new Set(['build', 'quick']);
+export const buildInProgress = (entry) => !!entry && entry.state === 'running' && BUILD_KINDS.has(entry.kind);
+
 export function keptAgents(entries = [], marks = {}, now = Date.now()) {
   const out = [];
   for (const entry of entries) {
     const mark = (marks && marks[entry.id]) || {};
-    if (mark.dismissed && time(mark.dismissed) >= time(entry.at)) continue; // put away; back if it changes again
+    if (mark.dismissed && time(mark.dismissed) >= time(entry.at) && !buildInProgress(entry)) continue; // put away; back if it changes again
     const clicked = time(mark.clicked) >= time(entry.at) ? time(mark.clicked) : 0;
     if (entry.state !== 'running') {
       if (entry.at && now - time(entry.at) > AGENT_KEPT_MS) continue;

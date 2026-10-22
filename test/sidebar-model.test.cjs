@@ -194,6 +194,31 @@ test('keptAgents drops old, clicked-a-day-ago and dismissed rows; a clicked row 
   assert.equal(next.new.clicked, ago(0));
 });
 
+test('a Build in progress stays in Agents and its count whatever its marks say, from start until it leaves running', async () => {
+  const { agentEntries, keptAgents, markAgent, summarize, AGENT_KEPT_MS } = await load();
+  const now = Date.parse('2026-10-17T12:00:00Z');
+  const ago = (minutes) => new Date(now - minutes * 60000).toISOString();
+  // `updated` is stamped when a turn starts and when it ends, not in between: a mark made during the turn is newer than it.
+  const task = (id, status, kind = 'build', updated = ago(40)) => ({ id, kind, projectId: 'p1', workspaceId: kind === 'quick' ? null : 'w1', title: `Build ${id}`, status, created: ago(60), updated });
+  const builds = [task('b1', 'setting-up'), task('b2', 'queued'), task('b3', 'running'), task('b4', 'accepting'), task('q1', 'running', 'quick'), task('d1', 'accepted'), task('f1', 'failed'), task('n1', 'needs-you')];
+  let marks = {};
+  for (const id of ['b1', 'b2', 'b3', 'b4', 'q1', 'd1', 'f1', 'n1']) marks = markAgent(marks, `build:${id}`, 'dismissed', ago(10)); // its × pressed mid-turn
+  marks = markAgent(marks, 'build:b3', 'clicked', ago(5));
+  const entries = agentEntries({ builds, projectId: 'p1' });
+  const kept = keptAgents(entries, marks, now);
+  assert.deepEqual(kept.map((entry) => [entry.id, entry.state, entry.title]).sort(), [
+    ['build:b1', 'running', 'Build b1'], ['build:b2', 'running', 'Build b2'], ['build:b3', 'running', 'Build b3'],
+    ['build:b4', 'running', 'Build b4'], ['build:q1', 'running', 'Build q1'],
+  ]);
+  assert.deepEqual(summarize(kept), { total: 5, running: 5, ready: 0 });
+  // Finished, failed and needs-you rows put away stay away; once a running one finishes (a newer `updated`), it is back.
+  const after = keptAgents(agentEntries({ builds: [task('b3', 'review', 'build', ago(1)), task('d1', 'accepted')], projectId: 'p1' }), marks, now);
+  assert.deepEqual(after.map((entry) => [entry.id, entry.state]), [['build:b3', 'needs']]);
+  // Other agents still go with their ×, and three days still apply to what is not running.
+  const others = keptAgents([{ id: 'agent:a1', kind: 'bart', state: 'running', at: ago(40) }, { id: 'repo:r1', kind: 'repo', state: 'running', at: ago(40) }, { id: 'build:old', kind: 'build', state: 'done', at: new Date(now - AGENT_KEPT_MS - 60000).toISOString() }], { 'agent:a1': { dismissed: ago(10) }, 'repo:r1': { dismissed: ago(10) } }, now);
+  assert.deepEqual(others, []);
+});
+
 test('repoEntries makes the bell\'s repository builds rows of Agents', async () => {
   const { repoEntries } = await load();
   const rows = [
@@ -215,4 +240,10 @@ test('byOpened puts what was opened last first, else by when it came in', async 
   assert.deepEqual(byOpened(list, { d: '2026-10-15T00:00:00Z', c: '2026-10-14T00:00:00Z' }).map((row) => row.id), ['d', 'c', 'b', 'a']);
   const many = noteOpened({ x: '2026-10-01T00:00:00Z', y: '2026-10-03T00:00:00Z' }, 'z', '2026-10-05T00:00:00Z', 2);
   assert.deepEqual(Object.keys(many).sort(), ['y', 'z']);
+});
+
+test('the Agents panel lists what runs first, so a Build in progress is not under three days of what finished, and gives it no ×', () => {
+  const panels = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/workspace/SidebarPanels.jsx'), 'utf8');
+  assert.match(panels, /export const AGENT_GROUPS = \[\['Running', \['running'\]\], \['Failed', \['failed'\]\], \['Needs you', \['needs'\]\], \['Finished', \['unseen', 'done'\]\]\];/);
+  assert.match(panels, /\{onDismiss && !buildInProgress\(entry\) && <RowAction/);
 });

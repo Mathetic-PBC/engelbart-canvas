@@ -4,6 +4,7 @@
 @import "./tokens/typography.css";
 @import "./tokens/spacing.css";
 @import "./tokens/effects.css";
+@import "./wave.css";
 
 /* The design's own <style> block (Goal Canvas.dc.html lines 26–44), verbatim. */
 html,body{margin:0;height:100%;overflow:hidden;background:#fff;color:#171717;font:14.5px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
@@ -85,11 +86,19 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .hov-tab:hover{background:#e6e6e6!important}
 .hov-tab-plus:not(:disabled):hover{background:#e6e6e6!important;color:#171717!important}
 .hov-x:hover{background:#e3e3e3!important;color:#171717!important}
+/* Many tabs (2026-10-18): the strip scrolls with no bar showing; a narrow tab shows its icon, and under the pointer its × in the same spot. */
+.stage-tabs{scrollbar-width:none}
+.stage-tabs::-webkit-scrollbar{display:none}
+.stage-tab-icon .stage-tab-x{opacity:0}
+.stage-tab-icon:hover .stage-tab-x{opacity:1}
+.stage-tab-icon:hover .stage-tab-glyph{opacity:0}
 ::highlight(stage-find){background-color:rgba(0,112,243,.16);color:inherit}
 ::highlight(stage-find-cur){background-color:rgba(0,112,243,.4);color:inherit}
 /* The middle canvas's ⌘F (2026-10-16, workspace/DocFind.jsx) paints as the Stage's does, under names of its own. */
 ::highlight(doc-find){background-color:rgba(0,112,243,.16);color:inherit}
 ::highlight(doc-find-cur){background-color:rgba(0,112,243,.4);color:inherit}
+/* A citation's passage, in the workspace or note it opened beside the document (DocEditor showPassage, 2026-10-21). */
+::highlight(cite-passage){background-color:rgba(0,112,243,.4);color:inherit}
 /* A project card's Delete (2026-10-03): only while the pointer is on the card; red-free, it darkens on its own hover. */
 .rail-minus{opacity:0;transition:opacity 120ms,color 120ms}
 [data-project-card]:hover .rail-minus,.rail-minus:focus-visible{opacity:1}
@@ -164,14 +173,8 @@ html[data-sidebar-gear] [data-window-controls] [data-settings]{display:none!impo
 html[data-sidebar-gear] [data-window-controls] .notification-control{display:none!important}
 /* Display math (2026-10-12, doc.js mathTokenHtml / mathBlockHtml): KaTeX's 1em above and below is too much in a line of the document. */
 [data-math]>.katex-display{margin:.35em 0}
-/* Work in progress said in words (2026-10-14, the title bar's "Importing 2/5"): a darker band moves through the text from
-   left to right, the way a model's "thinking" is shown. The text keeps its colour as the band's floor, so it reads as
-   grey text with a wave, never as a highlight. Reusable: any text with class eb-wave. */
-.eb-wave{color:transparent!important;background-image:linear-gradient(90deg,#a8a8a8 0%,#a8a8a8 38%,#171717 50%,#a8a8a8 62%,#a8a8a8 100%);background-size:260% 100%;background-repeat:no-repeat;-webkit-background-clip:text;background-clip:text;animation:eb-wave 2s cubic-bezier(.45,.05,.55,.95) infinite}
-/* The same wave in red: an import that needs the person (its popup says what). */
-.eb-wave.eb-wave-red{background-image:linear-gradient(90deg,#e0a39b 0%,#e0a39b 38%,#b42318 50%,#e0a39b 62%,#e0a39b 100%)}
-@keyframes eb-wave{from{background-position:100% 0}to{background-position:0 0}}
-@media(prefers-reduced-motion:reduce){.eb-wave{animation:none;background-position:50% 0}}
+/* Work in progress said in words: the moving grey wave, .eb-wave, is in ./wave.css (imported above), which a web box's
+   card (box-card/BoxCard.jsx, a page of its own) imports too. */
 /* A popup that covers the window (data-cover: the import's status and its sign-in popups, Import your context over the
    workspace, Connect, the guided setup's offer) is over everything of the window, the title bar's controls included
    (2026-10-14: the status modal sat under the header's "Needs you" / Test pill, which stayed bright over its veil). And

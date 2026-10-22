@@ -6,6 +6,7 @@ import { kindLabel, isNote } from './kind.js';
 import { looksAddable } from './rail.js';
 import { kindOf } from './address.js';
 import { addressKey } from '../../shared/address-key.cjs';
+import { splitTarget } from '../../shared/passage-link.cjs';
 
 /** The most tabs the Stage holds; past it, what is opened takes the place of the tab in front (Hudson, 2026-09-23). */
 export const MAX_TABS = 15;
@@ -14,29 +15,11 @@ export const MAX_TABS = 15;
 export { addressKey };
 
 /**
- * A link's target (2026-09-30, @discover's guide): the address, and the passage to find there, from a `#find=` fragment of
- * percent-encoded words (`https://arxiv.org/pdf/2312.10893#find=We%20argue%20that`), and where its section ends, from
- * `&to=` (round 2: the first words of the section after it). → { address, find, to }; `find` and `to` are '' when there
- * is none, and without `find` the address is the link as it came: any other fragment (#page=3, #section) stays on it.
- * Each value is decoded after the split, so an `&` in the words is `%26`. A path keeps its percent-encoding off
- * (`/Users/me/My%20Paper.pdf` is the file with a space), so it matches the library.
+ * A link's target (2026-09-30, @discover's guide): the address, the passage to find there (`#find=`), where its section
+ * ends (`&to=`), and since 2026-10-21 whose words a citation quotes (`&cite=`, `&counter=1`). Shared with main, which
+ * checks Chat's citations by it: see shared/passage-link.cjs.
  */
-export function splitTarget(href) {
-  const link = String(href == null ? '' : href).trim();
-  const hash = link.indexOf('#');
-  const fragment = hash >= 0 ? link.slice(hash + 1) : '';
-  const m = fragment.match(/^find=([\s\S]*?)&to=([^&]*)$/) || fragment.match(/^find=([\s\S]*)$/);
-  if (!m) return { address: link, find: '', to: '' };
-  const words = (value) => {
-    let out;
-    try { out = decodeURIComponent(value || ''); } catch { out = value || ''; }
-    return out.replace(/\s+/g, ' ').trim();
-  };
-  let address = link.slice(0, hash);
-  // A path on disk (on Windows, C:\…, its colon and backslashes encoded too) is the file's path once decoded.
-  if (/^(?:\/|~\/|[a-z](?::|%3A))/i.test(address) && /%[0-9a-f]{2}/i.test(address)) { try { address = decodeURIComponent(address); } catch { /* as written */ } }
-  return { address, find: words(m[1]), to: words(m[2]) };
-}
+export { splitTarget };
 
 // A link in an answer line as the editor draws one (model/doc.js INLINE): `[text](href)`, inside bold or not; code is not a link.
 const GUIDE_LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
@@ -303,6 +286,31 @@ export function afterClose(count, activeIndex, closedIndex) {
   if (left <= 0) return -1;
   if (closedIndex < activeIndex) return activeIndex - 1;
   return Math.min(activeIndex, left - 1);
+}
+
+// The tab strip's widths, as Chrome's (2026-10-18): a tab is 220px while there is room, shares the room when there is
+// not, and stops at 36px (a 20px × with 8px each side); past that the strip scrolls.
+export const TAB_MAX_W = 220;
+export const TAB_MIN_W = 36;
+export const TAB_NARROW_W = 90; // below it the title goes
+export const TAB_ICON_X_W = 56; // the tab in front keeps its icon beside the × from here up
+
+/** How wide each tab is, given the room the strip has for tabs (px) and how many there are. */
+export function tabWidth(room, count) {
+  if (!(count > 0)) return TAB_MAX_W;
+  const share = Math.floor((Number(room) || 0) / count);
+  return Math.max(TAB_MIN_W, Math.min(TAB_MAX_W, share));
+}
+
+/**
+ * What a tab of this width shows: 'full' (icon, title, ×); 'icon', a tab not in front: its icon alone, which the ×
+ * takes the place of under the pointer; 'icon-x', the tab in front: icon and × without the title; 'x', the tab in
+ * front too narrow for both: the × alone. The icon and the × never share a spot.
+ */
+export function tabLook(width, active) {
+  if (width >= TAB_NARROW_W) return 'full';
+  if (!active) return 'icon';
+  return width >= TAB_ICON_X_W ? 'icon-x' : 'x';
 }
 
 /** What the tab's hover card says under its title: the site for a page, the path for a file. */
