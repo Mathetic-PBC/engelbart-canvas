@@ -53,11 +53,12 @@ async function shot(wc, name) {
 }
 
 // What is lit in the pane beside: the highlighted words, and whether they are drawn where the pane shows them (inside
-// the pane's view, the topmost thing at their middle being in that pane).
+// the pane's view, none of them cut off by a box they are in, the topmost thing at their middle being in that pane).
 const LIT = `(()=>{const h=CSS.highlights.get('cite-passage');if(!h)return null;const r=[...h][0];if(!r)return null;
   const box=r.getClientRects()[0];const pane=document.querySelector(${JSON.stringify(PANE(1))});if(!box||!pane)return{text:r.toString(),seen:false};
   const p=pane.getBoundingClientRect();const x=box.left+Math.min(box.width/2,20),y=box.top+box.height/2;const at=document.elementFromPoint(x,y);
-  return{text:r.toString().replace(/\\s+/g,' ').trim(),seen:box.width>0&&box.top>=p.top&&box.bottom<=p.bottom&&!!at&&pane.contains(at)}})()`;
+  const rects=[...r.getClientRects()];let clipped=false;for(let el=r.startContainer.parentElement;el&&el!==pane;el=el.parentElement){const cs=getComputedStyle(el);if(cs.overflowX!=='visible'||cs.overflowY!=='visible'||cs.textOverflow==='ellipsis'){const c=el.getBoundingClientRect();if(rects.some((b)=>b.left<c.left-1||b.right>c.right+1||b.top<c.top-1||b.bottom>c.bottom+1))clipped=true}}
+  return{text:r.toString().replace(/\\s+/g,' ').trim(),seen:box.width>0&&!clipped&&rects.every((b)=>b.top>=p.top&&b.bottom<=p.bottom)&&!!at&&pane.contains(at),clipped}})()`;
 
 const answer = (paras) => replyLines(paras.join('\n\n'), { level: { name: 'Sonnet', effort: 'high' }, trail: [], ms: 3000 }, { model: false });
 const filler = (n, what) => Array.from({ length: n }, (_, i) => `${what} ${i + 1}: another sentence or two so this answer runs long enough to be cut.`);
@@ -66,6 +67,7 @@ const filler = (n, what) => Array.from({ length: n }, (_, i) => `${what} ${i + 1
 const IN_TITLED = 'the librarian gets the context before it answers';
 const ASKED_IN_TITLED = 'should we ask about the project before connect';
 const IN_FOLDED = 'previews should sleep instead of being deleted';
+const ASKED_FOLDED = 'what happens to the previews and the';
 const PAST_MORE = 'search by meaning came from OpenAlex itself';
 const DEEP = 'the related papers list is read';
 
@@ -97,7 +99,7 @@ app.whenReady().then(async () => {
       ...answer(['Yes, ask first.', `That way ${IN_TITLED}, not after.`]),
       '',
       // an answer collapsed to its question
-      '@chat what happens to idle sandboxes?',
+      `@chat ${ASKED_FOLDED} idle sandboxes?`,
       ...answer(['They stop.', `The ${IN_FOLDED} after a while.`]).map((l) => l.replace(/^bart> ?/, 'bart+> ').trimEnd()),
       '',
       // a long answer between a conversation's first and latest, cut after its first lines (Show more)
@@ -125,6 +127,7 @@ app.whenReady().then(async () => {
       `Asked first ${cite('Chat · Oct 10', IN_TITLED, 'other')}.`,
       `You asked ${cite('You · Oct 10', ASKED_IN_TITLED, 'you')}.`,
       `Sleeping ${cite('Chat · Oct 10', IN_FOLDED, 'other')}.`,
+      `Asked ${cite('You · Oct 10', ASKED_FOLDED, 'you')}.`,
       `Meaning ${cite('Chat · Oct 10', PAST_MORE, 'other')}.`,
       `Deep ${cite('Chat · Oct 12', DEEP, 'other')}.`,
       '',
@@ -133,13 +136,13 @@ app.whenReady().then(async () => {
     wc.reload();
     await until(() => js(wc, '!!document.querySelector("[data-doc-tab]")').catch(() => false), 'the workspace screen');
     await js(wc, `(()=>{const row=[...document.querySelectorAll('aside[aria-label="Sidebar"] *')].find((el)=>el.children.length===0&&el.textContent.trim()===${JSON.stringify(WS)});if(row)row.click()})()`);
-    await until(() => js(wc, `document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)}).length===5`).catch(() => false), 'the five citations, drawn as chips');
+    await until(() => js(wc, `document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)}).length===6`).catch(() => false), 'the six citations, drawn as chips');
     await pause(400);
     const chips = await js(wc, `[...document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)})].map((a)=>getComputedStyle(a,'::after').content)`);
-    assert.deepEqual(chips, ['"Chat · Oct 10"', '"You · Oct 10"', '"Chat · Oct 10"', '"Chat · Oct 10"', '"Chat · Oct 12"'], 'each chip shows its label');
+    assert.deepEqual(chips, ['"Chat · Oct 10"', '"You · Oct 10"', '"Chat · Oct 10"', '"You · Oct 10"', '"Chat · Oct 10"', '"Chat · Oct 12"'], 'each chip shows its label');
     console.log('PASS the citations are chips with their labels');
 
-    const cases = [['inside a collapsed conversation', IN_TITLED], ['a question inside a collapsed conversation', ASKED_IN_TITLED], ['inside a collapsed answer', IN_FOLDED], ['past a long answer\'s Show more', PAST_MORE], ['past Show more in a collapsed conversation', DEEP]];
+    const cases = [['inside a collapsed conversation', IN_TITLED], ['a question inside a collapsed conversation', ASKED_IN_TITLED], ['the question of an exchange collapsed to its row', ASKED_FOLDED], ['inside a collapsed answer', IN_FOLDED], ['past a long answer\'s Show more', PAST_MORE], ['past Show more in a collapsed conversation', DEEP]];
     for (const [where, words] of cases) {
       await press(wc, `${PANE(0)} [data-editor] a[data-cite][data-find="${words}"]`);
       const lit = await until(async () => { const now = await js(wc, LIT); return now && now.seen ? now : null; }, `the words ${where}, lit and in sight`, 100).catch(async (error) => { await shot(wc, `fail-${words.slice(0, 12)}`); console.log('lit:', JSON.stringify(await js(wc, LIT))); throw error; });

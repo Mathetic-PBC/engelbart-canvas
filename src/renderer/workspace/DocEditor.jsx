@@ -978,10 +978,12 @@ export default class DocEditor extends React.Component {
   // conversation by showLine: the caller asks again once it is drawn. → whether the line is drawn
   showPassage(i, find) {
     const ls = this.lines();
-    const turn = threads(ls, this.parsedOf(ls)).flatMap((thread) => thread.turns).find((t) => i > t.q && i <= t.to);
+    // an exchange collapsed to its question's row (2026-10-21, David: a quote of the question itself stayed in that cut-off
+    // row) is opened whether the words are in its question or its answer
+    const turn = threads(ls, this.parsedOf(ls)).flatMap((thread) => thread.turns).find((t) => i >= t.q && i <= t.to);
     if (turn && turn.folded && turn.answered && !turn.pending && !this.props.readOnly) { this.toggleFold(turn.q); return false; }
     // an answer cut to its first lines (its Show more, applyClips) is opened as its Show more opens it
-    const more = turn && this.editorEl() ? this.editorEl().querySelector(`[data-more="${turn.q}"]`) : null;
+    const more = turn && i > turn.q && this.editorEl() ? this.editorEl().querySelector(`[data-more="${turn.q}"]`) : null;
     if (more && more.style.display !== 'none' && !(more.dataset.open != null ? more.dataset.open === '1' : this.moreOpen.has(more.dataset.key))) {
       this.moreOpen.add(more.dataset.key); this.moreShut.delete(more.dataset.key); this.lastHtml = null; this.syncEditor(); return false;
     }
