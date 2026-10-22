@@ -21,6 +21,21 @@ const { matchPassage, foldPassage } = require('../../shared/passage-text.cjs');
 const { addressKey } = require('../../shared/address-key.cjs');
 
 const LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
+// A citation whose words were left with a space or a parenthesis in them, which LINK_RE stops at: the link runs to the
+// `)` after its `cite=` (and the keys after it), or its target is parenthesised one deep. Never across another link.
+const LOOSE_CITE_RE = /\[([^\]\n]+)\]\(((?:(?!\]\()[^\n])*?[#&]cite=[A-Za-z]*(?:&(?:to|counter)=[^&)\n]*)*)\)/g;
+const NESTED_LINK_RE = /\[([^\]\n]+)\]\(((?:[^()\s]|\([^()\s]*\))+)\)/g;
+const isCite = (href) => /[#&]cite=/.test(href);
+
+/** The citations of a line, in order, none overlapping → the matches ({ index, 0: whole, 1: label, 2: href }). */
+function citeLinks(line) {
+  const found = [];
+  const overlaps = (m) => found.some((f) => m.index < f.index + f[0].length && f.index < m.index + m[0].length);
+  for (const re of [LOOSE_CITE_RE, NESTED_LINK_RE, LINK_RE]) {
+    for (const m of line.matchAll(re)) if (isCite(m[2]) && !overlaps(m)) found.push(m);
+  }
+  return found.sort((a, b) => a.index - b.index);
+}
 const FENCE_RE = /^ {0,3}(`{3,}|~{3,})/;
 const MAX_TEXT_BYTES = 8 * 1024 * 1024;
 // Imported AI chats (../connect/tools.cjs chatNote): each turn opens with who said it.
@@ -171,17 +186,22 @@ async function checkCitations(body, { library = [], dataRoot = null, projectId =
     const hits = matchPassage(source, target.find, { prefixes: workspaceDoc, markdown });
     if (!hits.length) return cut('not-found');
     if (workspaceDoc && current && found.workspace.id === current.id && thread && thread.includes(foldPassage(target.find, { markdown: true }).text)) return cut('current-thread');
+    // The same words can be in more than one place (the person's question repeating Chat's suggestion): they are
+    // someone else's only when every place they are is.
     let cite = target.cite, who = '';
     if (cite === 'you') {
-      const at = hits[0].start;
-      if (workspaceDoc && ANSWER_LINE_RE.test(lineAt(source, at))) who = 'Chat';
-      else if (!workspaceDoc && markdown && isImportedChat(source)) { const speaker = speakerAt(source, at); if (speaker && speaker !== 'You') who = speaker; }
+      if (workspaceDoc && hits.every((h) => ANSWER_LINE_RE.test(lineAt(source, h.start)))) who = 'Chat';
+      else if (!workspaceDoc && markdown && isImportedChat(source)) {
+        const speakers = hits.map((h) => speakerAt(source, h.start));
+        if (speakers.every((speaker) => speaker && speaker !== 'You')) who = speakers[0];
+      }
       if (who) cite = 'other';
     }
     const address = found.row && found.row.url && /^https?:\/\//i.test(target.address) ? found.row.url : found.file;
     const shown = who ? relabel(label, who) : label;
     kept.push({ label: shown, address, source: found.name || path.basename(found.file || ''), find: target.find, cite, counter: !!target.counter, relabeled: !!who });
-    return who ? `[${shown}](${citeHref({ address: target.address, find: target.find, to: target.to, cite, counter: target.counter })})` : `[${label}](${href})`;
+    // written again when its words changed, or when a space or parenthesis in it would end the link early
+    return who || /[()\s]/.test(href) ? `[${shown}](${citeHref({ address: target.address, find: target.find, to: target.to, cite, counter: target.counter })})` : `[${label}](${href})`;
   };
 
   const out = [];
@@ -192,7 +212,7 @@ async function checkCitations(body, { library = [], dataRoot = null, projectId =
     if (open) { fence = open[1]; out.push(line); continue; }
     // inline code is no link: its spans are kept out of the search, and put back as they were
     const masked = line.replace(/`[^`\n]*`/g, (code) => '\u0000'.repeat(code.length));
-    const links = [...masked.matchAll(LINK_RE)].filter((m) => /[#&]cite=/.test(m[2]));
+    const links = citeLinks(masked);
     if (!links.length) { out.push(line); continue; }
     const results = [];
     for (const m of links) results.push(await check(m[1], m[2])); // in order, so kept and dropped are the answer's

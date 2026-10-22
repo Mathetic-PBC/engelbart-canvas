@@ -66,7 +66,9 @@ test('splitTarget: old #find= and &to= links read as before; cite and counter in
   assert.deepEqual(splitTarget('/a/b.md#find=x%20y&counter=1&cite=source&to=z'), { address: '/a/b.md', find: 'x y', to: 'z', cite: 'source', counter: true }, 'any order');
   assert.deepEqual(splitTarget('/a/b.md#counter=1&find=x&cite=source'), { address: '/a/b.md', find: 'x', to: '', cite: 'source', counter: true });
   assert.equal(splitTarget('/a/b.md#find=x&cite=nobody').cite, '', 'an unknown cite is none');
-  assert.equal(citeHref({ address: '/a/My Note (1).md', find: 'a & b', cite: 'you', counter: true }), '/a/My%20Note%20(1).md#find=a%20%26%20b&cite=you&counter=1');
+  assert.equal(citeHref({ address: '/a/My Note (1).md', find: 'a & (b)', cite: 'you', counter: true }), '/a/My%20Note%20%281%29.md#find=a%20%26%20%28b%29&cite=you&counter=1', 'no parenthesis ends the link early');
+  assert.deepEqual(splitTarget(citeHref({ address: '/a/My Note (1).md', find: 'a & (b)', cite: 'you' })), { address: '/a/My Note (1).md', find: 'a & (b)', to: '', cite: 'you', counter: false });
+  assert.equal(citeHref({ address: 'https://en.wikipedia.org/wiki/Hint_(education)', find: 'x', cite: 'source' }), 'https://en.wikipedia.org/wiki/Hint_%28education%29#find=x&cite=source');
 });
 
 /* ------------------------------------------------------------------ the check */
@@ -193,6 +195,38 @@ test('checkCitations: a workspace\'s lines: the person\'s stay `you`, an answer 
   const out = await check(body);
   assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.source]), [['Chat · Oct 1', 'other', 'Planning'], ['You · Oct 1', 'you', 'Planning'], ['You · Oct 1', 'you', 'Planning']]);
   assert.equal(out.dropped.length, 0);
+});
+
+test('checkCitations: a quote with parentheses is checked whether or not they were encoded, and comes back encoded', async () => {
+  const words = 'the tutor should (at first) wait';
+  fs.writeFileSync(files.note, `${fs.readFileSync(files.note, 'utf8')}\nSo the tutor should (at first) wait, then hint.\n`);
+  const raw = `[You · Oct 14](${files.note.split('/').map(encodeURIComponent).join('/')}#find=${encodeURIComponent(words)}&cite=you)`;
+  const spaced = `[You · Oct 14](${files.note}#find=${words}&cite=you)`;
+  const wrong = `[You · Oct 15](${files.note}#find=the tutor should (never) wait&cite=you)`;
+  const out = await check(`One ${raw}. Two ${link('You · Oct 14', files.note, words, 'you')}. Three ${spaced}. Four ${wrong}.`);
+  assert.equal(out.kept.length, 3, 'all three spellings are seen and confirmed');
+  assert.deepEqual(out.dropped.map((d) => d.reason), ['not-found'], 'one that is not there is seen too, and taken out');
+  const kept = link('You · Oct 14', files.note, words, 'you');
+  assert.equal(out.body, `One ${kept}. Two ${kept}. Three ${kept}. Four.`, 'each written so the editor reads it as one link');
+  assert.ok(!/\]\([^)]*\(/.test(out.body), 'no parenthesis inside a link target');
+});
+
+test('checkCitations: words the person repeated from an answer stay theirs; words only in answers are Chat\'s', async () => {
+  const space = await projects.createWorkspace(ctx, project.id, { name: 'Builds' });
+  await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: space.id }, [
+    '@bart what should the first build be?',
+    'bart+> Build: Ask about the project before Connect your library on the first screen.',
+    '@bart --build Ask about the project before Connect your library on the first screen.',
+    'bart> Sure, and keep the previews sleeping rather than deleted.',
+  ].join('\n'));
+  const doc = path.join(projects.findWorkspace(ctx, project.id, space.id).workspace.dir, 'workspace.md');
+  fs.writeFileSync(files.chat, `${fs.readFileSync(files.chat, 'utf8')}\n**ChatGPT:** Start with ten seconds then.\n`);
+  const out = await check([
+    `You asked for it ${link('You · Oct 20', doc, 'Ask about the project before Connect your library', 'you')}.`,
+    `Chat said ${link('You · Oct 20', doc, 'keep the previews sleeping rather than deleted', 'you')}.`,
+    `And ${link('You · Sep 2', files.chat, 'start with ten seconds then', 'you')}.`,
+  ].join('\n'));
+  assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.relabeled]), [['You · Oct 20', 'you', false], ['Chat · Oct 20', 'other', true], ['You · Sep 2', 'you', false]]);
 });
 
 test('checkCitations: a pdf and a saved web page are matched through their text; a file inside a library folder is citable', async () => {

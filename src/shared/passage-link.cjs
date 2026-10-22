@@ -67,12 +67,16 @@ function splitTarget(href) {
   return out;
 }
 
-/** A path as a citation's address spells it (fakeDiscover's): each segment percent-encoded. A web address as it is. */
-const linkAddress = (where) => (String(where || '').startsWith('/') ? String(where).split('/').map(encodeURIComponent).join('/') : String(where || ''));
+// Percent-encoded, parentheses too: a link's target ends at its first `)` (renderer/model/doc.js INLINE), and
+// encodeURIComponent leaves them as they are.
+const encode = (value) => encodeURIComponent(value).replace(/[()]/g, (c) => (c === '(' ? '%28' : '%29'));
 
-/** A citation's href: `address#find=…[&to=…]&cite=…[&counter=1]`. */
+/** A path as a citation's address spells it (fakeDiscover's): each segment percent-encoded. A web address as it is, but for its spaces and parentheses. */
+const linkAddress = (where) => (String(where || '').startsWith('/') ? String(where).split('/').map(encode).join('/') : String(where || '').replace(/[()\s]/g, (c) => (c === '(' ? '%28' : c === ')' ? '%29' : '%20')));
+
+/** A citation's href: `address#find=…[&to=…]&cite=…[&counter=1]`, with no space or parenthesis in it. */
 function citeHref({ address, find, to = '', cite, counter = false }) {
-  return `${linkAddress(address)}#find=${encodeURIComponent(find)}${to ? `&to=${encodeURIComponent(to)}` : ''}&cite=${cite}${counter ? '&counter=1' : ''}`;
+  return `${linkAddress(address)}#find=${encode(find)}${to ? `&to=${encode(to)}` : ''}&cite=${cite}${counter ? '&counter=1' : ''}`;
 }
 
 module.exports = { splitTarget, citeHref, linkAddress, CITES };

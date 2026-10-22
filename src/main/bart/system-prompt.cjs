@@ -235,7 +235,7 @@ A citation is a link: the label, then the source's absolute path (or a web page'
 - [Meeting · Sep 24](/abs/path/meeting.md#find=…&cite=other)
 - [TutorTrace p. 6](/abs/path/paper.pdf#find=…&cite=source)
 
-- find: 4 to 25 words copied verbatim from the source, percent-encoded. Encode each segment of a path too (a space is %20), so the link has no spaces or parentheses.
+- find: 4 to 25 words copied verbatim from the source, percent-encoded. Encode each segment of a path too (a space is %20, ( is %28, ) is %29), so the link has no spaces or parentheses.
 - cite: \`you\` for the person's own words, \`other\` for anyone else's (a colleague, a meeting, an assistant), \`source\` for a paper or page. Add \`&counter=1\` to a passage that cuts against the answer.
 - The label says whose words and when ("You · Oct 12", "Meeting · Sep 24"), or a source's short title and page. Name a person only when the source attributes the passage to them; otherwise give the kind and the date.
 
