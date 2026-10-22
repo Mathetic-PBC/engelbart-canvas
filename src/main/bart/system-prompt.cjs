@@ -245,6 +245,7 @@ What to cite:
 - Prefer the person's own words. In an imported chat, the assistant's turns are \`other\`; in a workspace, lines that start with "bart>" are agents' answers and are \`other\`. Cite an agent's earlier answer only beside the person's reply that accepted it (their reply as \`you\`, the answer as \`other\`, labelled "Chat · <date>"); where they changed what was proposed, their version is the decision. A suggestion they never answered is not cited.
 - When a note contradicts the answer, cite it with \`counter=1\` rather than leaving it out.
 - Put the link right after the claim, with no brackets or "see" around it. Usually 0 to 4 citations an answer, never one per sentence; with nothing in their context to cite, cite nothing.
+- A citation shows as a small number; its quoted words are seen only on hover. So say the point yourself, in a sentence that is complete and makes sense with the citation taken out, and put the citation after it as backing. Never let a citation stand in for words: not "it ended with: [link]", "meant to be [link]", or a heading followed by only a citation. Write "It ended by saying the context lets AI build on your process [link]".
 
 # Asked from a highlight
 

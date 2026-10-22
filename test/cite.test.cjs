@@ -318,3 +318,9 @@ test('only Chat\'s own answers are checked: not a Build\'s, Brainstorm\'s, Disco
   assert.equal(citesChecked('bart', { id: 'r1', build: true }), false);
   for (const agent of ['brainstorm', 'discover', 'create', 'orient']) assert.equal(citesChecked(agent, null), false, agent);
 });
+
+test('the prompt asks for sentences that say their point without the citation, which shows only as a number', () => {
+  const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
+  assert.match(BART_SYSTEM_PROMPT, /makes sense with the citation taken out/);
+  assert.match(BART_SYSTEM_PROMPT, /Never let a citation stand in for words/);
+});
