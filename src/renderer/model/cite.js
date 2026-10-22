@@ -13,6 +13,14 @@ const LINK_RE = /^\[([^\]]+)\]\(([^)]+)\)$/;
 const INLINE_LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
+// An answer still arriving (2026-10-21, David: the quote showed in the streamed text): its citations are left out until
+// it is in and main has checked them, and so is a link still being written at its end, whatever it turns out to be. The
+// citation's target may hold spaces and parentheses the model left in (as main's bart/cite.cjs LOOSE_CITE_RE reads it).
+const STREAM_CITE_RE = /[ \t]?\[[^\]\n]*\]\((?:(?!\]\()[^\n])*?[#&]cite=[A-Za-z]*(?:&(?:to|counter)=[^&)\n]*)*\)/g;
+const STREAM_TAIL_RE = /[ \t]?\[[^\]\n]*(?:\]\([^)\n]*)?$/;
+/** `text` (an answer so far) without its citations, or the link being written at its end. */
+export const streamingText = (text) => String(text ?? '').replace(STREAM_CITE_RE, '').replace(STREAM_TAIL_RE, '');
+
 /** Which source an address is, for numbering: a web address as addressKey spells it, a path as it is. */
 export const citationKey = (address) => (/^https?:\/\//i.test(address) ? addressKey(address) : String(address || ''));
 
@@ -120,12 +128,12 @@ export function openCitationRun(target) {
   return true;
 }
 
-/** A citation's card, as the document's hover card (Popover) draws it: its label ("You · Oct 12"), the quote, and where. */
+/** A citation's card, as the document's hover card (Popover) draws it: its label ("You · Oct 12"), where, the quote. */
 export const citationCard = (el) => ({
-  kindLabel: el.dataset.counter ? 'Cuts against this' : '',
-  title: el.dataset.label || '',
-  summary: el.dataset.find ? `“${el.dataset.find}”` : '',
-  facts: el.dataset.source || '',
+  label: el.dataset.label || '',
+  where: el.dataset.source || '',
+  quote: el.dataset.find || '',
+  counter: !!el.dataset.counter,
 });
 
 // The chip: 18px high, the grey of a chip, its label dark grey, on the text's baseline and never underlined. The person's
@@ -149,7 +157,7 @@ a[data-cite][data-counter]:hover{background:#f2f2f2}
 // over the page by itself, under the circle or above it where there is no room under, as a box clips what overflows it.
 // `over` and `out` take the box's pointer and focus events (mouseover/focusin, mouseout/focusout), so a circle reached by
 // Tab shows its card too.
-const TIP = 'position:fixed;z-index:1000;width:280px;box-sizing:border-box;padding:12px 14px;background:#fff;border:1px solid #c9c9c9;border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.06);pointer-events:none;text-align:left';
+const TIP = 'position:fixed;z-index:1000;width:300px;box-sizing:border-box;padding:11px 14px 12px;background:#fff;border:1px solid #c9c9c9;border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.06);pointer-events:none;text-align:left';
 export function citationTip(doc = typeof document === 'undefined' ? null : document) {
   let tip = null;
   const hide = () => { if (tip) { tip.remove(); tip = null; } };
@@ -161,10 +169,10 @@ export function citationTip(doc = typeof document === 'undefined' ? null : docum
     tip.setAttribute('data-cite-tip', '1');
     tip.setAttribute('role', 'tooltip');
     tip.style.cssText = TIP;
-    tip.innerHTML = (card.kindLabel ? `<div style="font:500 9px/1 var(--font-sans);letter-spacing:1.6px;text-transform:uppercase;color:#8f8f8f">${esc(card.kindLabel)}</div>` : '')
-      + `<div style="margin-top:${card.kindLabel ? 8 : 0}px;font:500 13.5px/1.4 var(--font-sans);color:#171717">${esc(card.title)}</div>`
-      + `<div style="margin-top:6px;font:12.5px/1.6 var(--font-sans);color:#4d4d4d">${esc(card.summary)}</div>`
-      + `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #eaeaea;font:12px/1.5 var(--font-sans);color:#8f8f8f">${esc(card.facts)}</div>`;
+    // drawn as the document's card is (workspace/Popover.jsx)
+    tip.innerHTML = `<div style="display:flex;align-items:baseline;gap:10px;font:500 12px/1.4 var(--font-sans);color:#4d4d4d"><span style="flex:none">${esc(card.label)}${card.counter ? '<span style="color:#8f8f8f;font-weight:400"> · cuts against this</span>' : ''}</span>`
+      + `<span style="margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400;color:#8f8f8f">${esc(card.where)}</span></div>`
+      + `<div style="margin-top:8px;padding:1px 0 1px 10px;border-left:2px solid #d6d6d6;font:13px/1.6 var(--font-sans);color:#171717">${esc(card.quote)}</div>`;
     doc.body.appendChild(tip);
     const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
     const vw = doc.documentElement.clientWidth || 800, vh = doc.documentElement.clientHeight || 600;

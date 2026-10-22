@@ -123,7 +123,7 @@ import { sideSpace, deskGeom, placeOf, posOf, spaceBoxes, noteQuestion, askedByN
 import { fieldCaret } from '../workspace/caret.js';
 import { selectionCardPlace } from '../../shared/selection-card.cjs';
 import { matchPassage } from '../../shared/passage-text.cjs';
-import { citationNumbers, citationTip, openCitationRun, libraryName, CITE_CSS } from '../model/cite.js';
+import { citationNumbers, citationTip, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
 // pdf.js 6: a document is torn down through its loading task (PDFDocumentProxy has no destroy()).
@@ -2123,7 +2123,7 @@ export default class PaperView extends React.Component {
     syncKids(list, open ? log.map((entry) => esc(entry)) : [], () => makeEl('div', 'overflow:hidden;text-overflow:ellipsis;white-space:nowrap'));
     const body = part('body'), atEnd = body.style.display === 'none' || body.scrollTop + body.clientHeight >= body.scrollHeight - 4;
     showEl(body, lines.length > 0);
-    syncKids(body, answerParas(lines.join('\n')), () => makeEl('p'));
+    syncKids(body, answerParas(streamingText(lines.join('\n'))), () => makeEl('p')); // its citations once main has checked them
     if (lines.length && atEnd) body.scrollTop = body.scrollHeight;
   }
   runClick(ev, askId, page) {

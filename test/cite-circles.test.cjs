@@ -95,12 +95,12 @@ test('inlineHtml draws circles: numbered, flagged, folded; the markdown keeps th
   assert.match(inlineHtml('[You · Oct 1](/p/Agents/workspace.md#find=a%20b%20c&cite=you)'), /data-source="Agents"/, 'a workspace\'s document by the workspace');
 });
 
-test('the card a chip shows is its label, the quote and where it is; "Cuts against this" above one that does', async () => {
+test('the card a chip shows is its label, where it is and the quote; one that cuts against the answer says so', async () => {
   const { citationCard, libraryName, CITE_CSS } = await citeModel();
   assert.match(CITE_CSS, /a\[data-cite\]::after\{content:attr\(data-label\)/, 'the chip shows its label, not its number');
   const el = { dataset: { cite: 'you', label: 'You · Oct 12', find: 'reading is slow', source: 'My note' } };
-  assert.deepEqual(citationCard(el), { kindLabel: '', title: 'You · Oct 12', summary: '“reading is slow”', facts: 'My note' });
-  assert.equal(citationCard({ dataset: { ...el.dataset, cite: 'other', counter: '1' } }).kindLabel, 'Cuts against this');
+  assert.deepEqual(citationCard(el), { label: 'You · Oct 12', where: 'My note', quote: 'reading is slow', counter: false });
+  assert.equal(citationCard({ dataset: { ...el.dataset, cite: 'other', counter: '1' } }).counter, true);
   const rows = [{ name: 'A paper', path: '/lib/a.pdf' }, { name: 'The page', url: 'https://www.example.org/x/' }, { name: 'Interviews', type: 'folder', path: '/lib/Interviews' }];
   assert.equal(libraryName(rows, '/lib/a.pdf'), 'A paper');
   assert.equal(libraryName(rows, 'https://example.org/x'), 'The page');
@@ -163,4 +163,13 @@ test('a click on a folded run\'s "…" opens the run; any other click is left al
   assert.equal(openCitationRun({ closest: () => null }), false);
   assert.equal(openCitationRun({ closest: () => ({}) }), false, 'something that is no "…"');
   assert.equal(openCitationRun(null), false);
+});
+
+test('an answer still arriving shows no citation, and no link still being written at its end', async () => {
+  const { streamingText } = await citeModel();
+  assert.equal(streamingText(`We chose OpenAlex ${NOTE}. Then more.`), 'We chose OpenAlex. Then more.', 'a whole citation is left out');
+  assert.equal(streamingText('Chosen [You · Oct 12](/a/b.md#find=papers (use openalex) and&cite=you).'), 'Chosen.', 'one the model left parentheses in too');
+  assert.equal(streamingText('We chose OpenAlex [You · Oct 1'), 'We chose OpenAlex', 'a label still arriving');
+  assert.equal(streamingText('We chose OpenAlex [You · Oct 12](/Users/me/x.md#find=I%20mean'), 'We chose OpenAlex', 'a target still arriving');
+  assert.equal(streamingText(`Read ${PLAIN} and - [ ] this [aside] here.`), `Read ${PLAIN} and - [ ] this [aside] here.`, 'an ordinary link, a box and brackets stay');
 });

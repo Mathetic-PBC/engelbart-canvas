@@ -68,7 +68,7 @@ import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
 import { fieldCaret } from './caret.js';
 import Popover from './Popover.jsx';
-import { citationNumbers, citationCard, openCitationRun, libraryName, CITE_CSS } from '../model/cite.js';
+import { citationNumbers, citationCard, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
 import MadePeek from './MadePeek.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import ImageViewer from './ImageViewer.jsx';
@@ -980,6 +980,11 @@ export default class DocEditor extends React.Component {
     const ls = this.lines();
     const turn = threads(ls, this.parsedOf(ls)).flatMap((thread) => thread.turns).find((t) => i > t.q && i <= t.to);
     if (turn && turn.folded && turn.answered && !turn.pending && !this.props.readOnly) { this.toggleFold(turn.q); return false; }
+    // an answer cut to its first lines (its Show more, applyClips) is opened as its Show more opens it
+    const more = turn && this.editorEl() ? this.editorEl().querySelector(`[data-more="${turn.q}"]`) : null;
+    if (more && more.style.display !== 'none' && !(more.dataset.open != null ? more.dataset.open === '1' : this.moreOpen.has(more.dataset.key))) {
+      this.moreOpen.add(more.dataset.key); this.moreShut.delete(more.dataset.key); this.lastHtml = null; this.syncEditor(); return false;
+    }
     if (!this.showLine(i, { flash: false })) return false;
     const ed = this.editorEl(), h = typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null;
     const nodes = [];
@@ -1402,7 +1407,8 @@ export default class DocEditor extends React.Component {
         if (role.get(n) === 'fence') return '<span style="display:block;height:6px"></span>';
         const end = n === tip;
         if (role.get(n) === 'code') return `<span style="display:block;min-height:22px;padding:0 0 0 14px;font:13px/1.7 var(--font-mono);color:#8f8f8f;tab-size:2;${end ? 'margin-bottom:10px;' : ''}">${esc(text) || (end ? '' : '<br>')}${end ? cursor : ''}</span>`;
-        const a = this.answerLook(text); a.content = a.content.replace(/color:#171717;font-weight:600/g, 'font-weight:600'); // all of it grey until it is the answer
+        // all of it grey until it is the answer, and its citations left out until main has checked them (streamingText)
+        const a = this.answerLook(streamingText(text)); a.content = a.content.replace(/color:#171717;font-weight:600/g, 'font-weight:600');
         return `<span style="display:block;min-height:${text ? 22 : 10}px;padding:1px 0 1px 14px;${a.look}color:#8f8f8f;font-size:14px;line-height:1.65;${end ? 'margin-bottom:10px;' : ''}">${end ? (/<\/span><\/span>$/.test(a.content) ? a.content.replace(/<\/span><\/span>$/, `${cursor}</span></span>`) : a.content + cursor) : (a.content || '<br>')}</span>`;
       }).join('');
       const closes = !at || at.closes;
