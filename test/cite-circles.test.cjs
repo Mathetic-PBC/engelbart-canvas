@@ -97,7 +97,8 @@ test('inlineHtml draws circles: numbered, flagged, folded; the markdown keeps th
 
 test('the card a chip shows is the quote, then who wrote it, where and when', async () => {
   const { citationCard, libraryName, CITE_CSS } = await citeModel();
-  assert.match(CITE_CSS, /a\[data-cite\]::after\{content:attr\(data-label\)/, 'the chip shows its label, not its number');
+  assert.match(CITE_CSS, /a\[data-cite\]::after\{content:attr\(data-n\)/, 'the circle shows its number');
+  assert.doesNotMatch(CITE_CSS, /data-you\]\{border-color/, 'no darker ring for the person\'s own words');
   const el = { dataset: { cite: 'you', label: 'You · Oct 12', find: 'reading is slow', source: 'flow' } };
   assert.deepEqual(citationCard(el), { quote: 'reading is slow', lead: 'You wrote this in', where: 'flow', when: 'Oct 12', counter: false });
   assert.deepEqual(citationCard({ dataset: { ...el.dataset, cite: 'other', label: 'Chat · Oct 12', counter: '1' } }), { quote: 'reading is slow', lead: 'Chat said this in', where: 'flow', when: 'Oct 12', counter: true });
@@ -178,4 +179,17 @@ test('an answer still arriving shows no citation, and no link still being writte
   assert.equal(streamingText('We chose OpenAlex [You · Oct 1'), 'We chose OpenAlex', 'a label still arriving');
   assert.equal(streamingText('We chose OpenAlex [You · Oct 12](/Users/me/x.md#find=I%20mean'), 'We chose OpenAlex', 'a target still arriving');
   assert.equal(streamingText(`Read ${PLAIN} and - [ ] this [aside] here.`), `Read ${PLAIN} and - [ ] this [aside] here.`, 'an ordinary link, a box and brackets stay');
+});
+
+test('an answer\'s sources: one a source, by its number and what it is, each linking to its first passage', async () => {
+  const { citationSources, citationSourcesHtml } = await citeModel();
+  const names = { '/Users/me/Meetings/Standup.md': 'Standup' };
+  const sources = citationSources(`A ${NOTE} b ${PAPER} c ${NOTE_AGAIN} d ${AGAINST}.`, { citeSource: (address) => names[address] || null });
+  assert.deepEqual(sources.map((s) => [s.n, s.name]), [[1, 'My note.md'], [2, 'example.org'], [3, 'Standup']], 'in the order first cited, the same source once');
+  assert.match(sources[0].href, /find=reading%20is%20slow/, 'its first passage');
+  const html = citationSourcesHtml(sources);
+  assert.match(html, /^<div[^>]*>Sources<\/div>/);
+  assert.equal((html.match(/data-cite-source="\d"/g) || []).length, 3);
+  assert.match(html, /<a href="[^"]*" data-link="1" data-cite-source="3" data-n="3"[^>]*><span data-cite-name="1">Standup<\/span><\/a>/);
+  assert.equal(citationSourcesHtml(citationSources('No citations here.')), '', 'nothing for an answer that cites nothing');
 });

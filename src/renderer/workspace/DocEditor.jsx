@@ -68,7 +68,7 @@ import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
 import { fieldCaret } from './caret.js';
 import Popover from './Popover.jsx';
-import { citationNumbers, citationCard, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
+import { citationNumbers, citationCard, citationSources, citationSourcesHtml, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
 import MadePeek from './MadePeek.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import ImageViewer from './ImageViewer.jsx';
@@ -1752,6 +1752,16 @@ export default class DocEditor extends React.Component {
     if (!this.citeMemo.has(answer)) this.citeMemo.set(answer, citationNumbers(answer));
     return this.citeMemo.get(answer);
   }
+  // An answer's sources (2026-10-21, David: "cite using number, and show sources at bottom"): under it, inside its rule, each
+  // source by its number and what it is, in the order the answer first cites it (model/cite.js citationSources). A row
+  // clicked opens the source as its number does (the click on a[data-link]). None for an answer that cites nothing.
+  citeSourcesHtml(ls, where) {
+    const cites = this.citesOf(where); if (!cites || !cites.size) return '';
+    const sources = citationSources(turnText(ls, where.turn).answer, { cites, citeSource: this.mentionOpts.citeSource });
+    const chat = !!where.chat;
+    return `<div contenteditable="false" data-readonly="1" data-cite-sources="${where.turn.q}" style="position:relative;user-select:none;cursor:default;padding:0 ${chat ? 18 : 16}px;background:#fafafa">`
+      + `<div style="padding:12px 0 2px ${chat ? 12 : 14}px;border-left:${chat ? '1.5px solid #e6e6e6' : '2px solid #d6d6d6'};font:12.5px/1.5 var(--font-sans)">${citationSourcesHtml(sources)}</div></div>`;
+  }
   /* ---------------------------------------------------------------- Build cards (2026-09-25) */
   // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends), props.buildProgress
   // (what a running turn is doing) and props.buildDiffs (what it has changed). The card is in parts — head, body, live,
@@ -2828,8 +2838,8 @@ export default class DocEditor extends React.Component {
       const dim = !!editing && !!where && !!where.turn && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
       const locked = this.lockedAt(ls, i);
       out += dimmed(p.type === 'reply' && locked ? unwritable(this.lineHtml(i, line, p, false, false, where, locked)) : this.lineHtml(i, line, p, active === i, false, where, locked));
-      // Under an answer's last line, its Show more (2026-10-13), shown by applyClips once it is long enough to cut.
-      if (where && where.lastBody && where.role === 'answer' && !where.box && !where.turn.pending && !where.turn.folded && !where.turn.build && !cards.byQ.has(where.turn.q)) out += where.chat ? this.chatMoreHtml(ls, where) : this.moreHtml(ls, where.turn, where.turn === where.thread.turns[0] || where.turn === [...where.thread.turns].reverse().find((t) => t.answered && !t.pending));
+      // Under an answer's last line, its Show more (2026-10-13), shown by applyClips once it is long enough to cut, then its sources.
+      if (where && where.lastBody && where.role === 'answer' && !where.box && !where.turn.pending && !where.turn.folded && !where.turn.build && !cards.byQ.has(where.turn.q)) out += (where.chat ? this.chatMoreHtml(ls, where) : this.moreHtml(ls, where.turn, where.turn === where.thread.turns[0] || where.turn === [...where.thread.turns].reverse().find((t) => t.answered && !t.pending))) + dimmed(this.citeSourcesHtml(ls, where));
       if (where && where.footAfter && where.chat && !where.turn.folded) out += dimmed(this.chatFootHtml({ at: where, closes: (where.tail && !where.drawnAfter) || where.cut }));
       else if (where && where.footAfter && !(where.turn.folded && !where.box) && !(where.box && ['stopped', 'failed'].includes(where.boxState))) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), box: where.box, guide: where.agent === 'discover' && (!where.box || where.boxState === 'finished') ? where.turn : null }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the

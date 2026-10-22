@@ -5,7 +5,7 @@ import '@fontsource/caveat/500.css';
 import 'katex/dist/katex.min.css';
 import '../wave.css'; // .eb-wave, the document's text at work (this page has no styles.css)
 import { inlineHtml, noteInkHtml } from '../model/doc.js';
-import { citationNumbers, openCitationRun, CITE_CSS } from '../model/cite.js';
+import { citationNumbers, citationSources, citationSourcesHtml, openCitationRun, CITE_CSS } from '../model/cite.js';
 import { noteQuestion, askedByNote, runningLabel } from '../pdf/canvas.js';
 import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, ERROR_INK, ANSWER_GAP, CARD_GROUND, cardCss, styleOf } from '../pdf/card-look.js';
 import { WAVE_SPAN, keepWaves } from '../ui/wave.js';
@@ -65,7 +65,11 @@ function answerParas(text) {
     return item ? `• ${inlineHtml(item[1], opts)}` : head ? `<strong>${inlineHtml(head[1], opts)}</strong>` : inlineHtml(line, opts);
   });
 }
-const answerHtml = (text) => answerParas(text).map((inside) => `<p>${inside}</p>`).join('');
+// and its sources under it (../model/cite.js citationSources)
+const answerHtml = (text) => {
+  const sources = citationSources(String(text || ''));
+  return answerParas(text).map((inside) => `<p>${inside}</p>`).join('') + (sources.length ? `<div data-cite-sources="1" style="margin-top:8px;padding-top:8px;border-top:1px solid #eaeaea;font:12px/1.5 var(--font-sans)">${citationSourcesHtml(sources)}</div>` : '');
+};
 // a link in an answer never takes the card's page anywhere (main refuses it too)
 const noFollow = (event) => { if (openCitationRun(event.target) || (event.target.closest && event.target.closest('a[href]'))) event.preventDefault(); };
 

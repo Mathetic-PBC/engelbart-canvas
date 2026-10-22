@@ -123,7 +123,7 @@ import { sideSpace, deskGeom, placeOf, posOf, spaceBoxes, noteQuestion, askedByN
 import { fieldCaret } from '../workspace/caret.js';
 import { selectionCardPlace } from '../../shared/selection-card.cjs';
 import { matchPassage } from '../../shared/passage-text.cjs';
-import { citationNumbers, citationTip, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
+import { citationNumbers, citationSources, citationSourcesHtml, citationTip, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
 // pdf.js 6: a document is torn down through its loading task (PDFDocumentProxy has no destroy()).
@@ -288,7 +288,11 @@ function answerParas(text, opts) {
     return item ? `• ${inlineHtml(item[1], opts)}` : head ? `<strong>${inlineHtml(head[1], opts)}</strong>` : inlineHtml(line, opts);
   });
 }
-const answerHtml = (text, opts) => answerParas(text, opts).map((inside) => `<p>${inside}</p>`).join('');
+// and its sources under it, each by its number and what it is (../model/cite.js citationSources)
+const answerHtml = (text, opts) => {
+  const sources = citationSources(String(text || ''), opts);
+  return answerParas(text, opts).map((inside) => `<p>${inside}</p>`).join('') + (sources.length ? `<div data-cite-sources="1" style="margin-top:8px;padding-top:8px;border-top:1px solid #eaeaea;font:12px/1.5 var(--font-sans)">${citationSourcesHtml(sources)}</div>` : '');
+};
 
 // A box being written is changed in place as Bart works (second pass, 2026-10-06): its Stop and "▸ steps" buttons stay
 // the elements they were, so a click on one never lands between two drawings of the box and is lost. `shownHtml`: what

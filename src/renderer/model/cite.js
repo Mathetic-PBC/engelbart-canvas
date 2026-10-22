@@ -1,11 +1,12 @@
 // Chat's citations as an answer draws them (2026-10-21): a link whose fragment has `cite=` (../../shared/passage-link.cjs;
-// main checked it against its source before the answer was written, main/bart/cite.cjs) is a small grey chip with its
-// label, as NotebookLM draws its sources: "You · Oct 12", "Chat · Oct 12", a paper's short title (David, 2026-10-21; a
-// number until then). Main writes who and when, from the source. The markdown keeps the whole link: this is drawing
-// only. Each distinct source still has its number by the answer (data-n), in the order the answer first cites it. Two
-// citations side by side are two chips; three or more are the first and a "…" that opens the rest on a click or the
-// pointer. A chip holds no text (its label is CSS's, from data-label), so what a line shows, and every offset into it,
-// is what it was without the citation (doc.js tokShown).
+// main checked it against its source before the answer was written, main/bart/cite.cjs) is a small grey circle with a
+// number, as NotebookLM draws its sources, and the answer ends with its sources, each by its number and what it is
+// (citationSources; David, 2026-10-21: "cite using number, and show sources at bottom"; a chip with its label for a few
+// hours before). The markdown keeps the whole link: this is drawing only. Numbers go by the answer: each distinct source
+// its own, in the order the answer first cites it, the same number again for the same source. Two citations side by side
+// are two circles; three or more are the first and a "…" circle that opens the rest on a click or the pointer. A circle
+// holds no text (its number is CSS's, from data-n), so what a line shows, and every offset into it, is what it was
+// without the citation (doc.js tokShown).
 import { splitTarget, CITES } from '../../shared/passage-link.cjs';
 import { addressKey } from '../../shared/address-key.cjs';
 
@@ -115,6 +116,23 @@ export function citationHtml(c, opts, fallback) {
   return `<a href="${esc(c.href)}" data-link="1" data-cite="${esc(c.cite)}" data-n="${n}" data-key="${esc(c.key)}" data-label="${esc(c.label)}" data-find="${esc(c.find)}" data-source="${esc(source)}"${c.cite === 'you' ? ' data-you="1"' : ''}${c.counter ? ' data-counter="1"' : ''} contenteditable="false"${opts && opts.citeFocus ? ' tabindex="0"' : ''}${opts && opts.citeTitle ? ` title="${esc(`${c.label}\n“${c.find}”\n${source}`)}"` : ''} aria-label="${esc(`${n}: ${c.label}, ${said}. “${c.find}” — ${source}`)}"></a>`;
 }
 
+/**
+ * An answer's sources, in the order it first cites each: [{ n, name, href }]. `name`: what the source is (citationSource:
+ * the library's name, the workspace's); `href`: its first citation's, so the source opens at the passage first quoted
+ * from it. `opts.cites` and `opts.citeSource` as citationHtml takes them.
+ */
+export function citationSources(text, opts = {}) {
+  const cites = (opts && opts.cites) || citationNumbers(text), seen = new Map();
+  for (const m of String(text ?? '').matchAll(INLINE_LINK_RE)) {
+    const c = citationOf(m[0]);
+    if (c && !seen.has(c.key)) seen.set(c.key, { n: cites.get(c.key) || seen.size + 1, name: citationSource(c, opts && opts.citeSource), href: c.href });
+  }
+  return [...seen.values()].sort((a, b) => a.n - b.n);
+}
+/** The sources under an answer: "Sources", then a row a source, its number's circle and its name, each a link to it. */
+export const citationSourcesHtml = (sources) => (sources.length ? `<div style="font:500 11px/1.4 var(--font-sans);letter-spacing:.2px;color:#8f8f8f;margin-bottom:4px">Sources</div>`
+  + sources.map((s) => `<a href="${esc(s.href)}" data-link="1" data-cite-source="${s.n}" data-n="${s.n}" contenteditable="false" title="${esc(s.name)}"><span data-cite-name="1">${esc(s.name)}</span></a>`).join('') : '');
+
 /** The "…" circle of a folded run: `more` citations, opened by a click (openCitationRun) or the pointer. */
 export const citationMoreHtml = (more) => `<span data-cite-more="1" data-n="…" contenteditable="false" role="button" aria-label="${more} more ${more === 1 ? 'citation' : 'citations'}" title="${more} more"></span>`;
 
@@ -155,22 +173,25 @@ export const citationCardHtml = (card) => `<div style="font:13.5px/1.55 var(--fo
 /** The card's box. */
 export const CITE_CARD_STYLE = 'width:280px;box-sizing:border-box;padding:12px 14px 10px;background:#fff;border:1px solid #e3e3e3;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.08);pointer-events:none;text-align:left';
 
-// The chip: 18px high, the grey of a chip, its label dark grey, on the text's baseline and never underlined. The person's
-// own words have a darker ring; a passage that cuts against the answer is hollow. A folded run's rest is hidden until the
-// pointer is on the run or its "…" was clicked.
-const CIRCLE = 'display:inline-block;box-sizing:border-box;min-width:18px;height:18px;padding:0 7px;margin:0 1px 0 3px;border-radius:9px;vertical-align:0;text-decoration:none;cursor:pointer;user-select:none;-webkit-user-select:none;white-space:nowrap';
-const NUMBER = 'display:block;font:500 11px/18px var(--font-sans);font-variant-numeric:tabular-nums;color:#4d4d4d;text-align:center';
+// The circle: 16px, the grey of a chip, its number dark grey, on the text's baseline and never underlined, every one alike
+// (the darker ring the person's own words had went, 2026-10-21, David); a passage that cuts against the answer is hollow.
+// A folded run's rest is hidden until the pointer is on the run or its "…" was clicked.
+const CIRCLE = 'display:inline-block;box-sizing:border-box;min-width:16px;height:16px;padding:0 4px;margin:0 1px 0 2px;border-radius:8px;vertical-align:1px;text-decoration:none;cursor:pointer;user-select:none;-webkit-user-select:none';
+const NUMBER = 'display:block;font:500 10px/16px var(--font-sans);font-variant-numeric:tabular-nums;color:#4d4d4d;text-align:center';
 export const CITE_CSS = `
 a[data-cite]{${CIRCLE};background:#ebebeb;border:1px solid #ebebeb;color:#4d4d4d;text-decoration:none!important}
-a[data-cite]::after{content:attr(data-label);${NUMBER};margin-top:-1px}
+a[data-cite]::after{content:attr(data-n);${NUMBER};margin-top:-1px}
 a[data-cite]:hover,a[data-cite]:focus-visible{background:#d6d6d6;border-color:#d6d6d6;outline:none}
-a[data-cite][data-you]{border-color:#8f8f8f}
 a[data-cite][data-counter]{background:#fff;border-color:#c9c9c9}
 a[data-cite][data-counter]:hover{background:#f2f2f2}
 [data-cite-more]{${CIRCLE};background:#f2f2f2;border:1px solid #eaeaea}
 [data-cite-more]::after{content:attr(data-n);${NUMBER};margin-top:-1px;color:#8f8f8f}
 [data-cite-run]:not([data-open]):not(:hover) [data-cite-rest]{display:none}
 [data-cite-run][data-open] [data-cite-more],[data-cite-run]:hover [data-cite-more]{display:none}
+[data-cite-source]{display:flex;align-items:baseline;gap:8px;padding:2px 0;color:#4d4d4d;text-decoration:none!important;cursor:pointer}
+[data-cite-source]:hover [data-cite-name]{text-decoration:underline;text-underline-offset:2px}
+[data-cite-source]::before{content:attr(data-n);flex:none;${CIRCLE};margin:0;background:#ebebeb;border:1px solid #ebebeb;${NUMBER}}
+[data-cite-name]{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 `;
 // An answer box's card (a highlight's box, a web page's box card): the document's hover card (workspace/Popover.jsx) drawn
 // over the page by itself, under the circle or above it where there is no room under, as a box clips what overflows it.

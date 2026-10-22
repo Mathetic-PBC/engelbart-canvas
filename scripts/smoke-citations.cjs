@@ -123,24 +123,43 @@ app.whenReady().then(async () => {
     ].join('\n');
     await write({ kind: 'workspace', workspaceId: source.id }, `${doc}\n`);
     const cite = (label, find, kind) => `[${label}](${citeHref({ address: file, find, cite: kind })})`;
+    // Chat's answer citing them, every citation of the one source, then a second source (a note) at the end
+    const note = await api(`createNote(${JSON.stringify(pid)}, {name:'Hints', workspaceId:${JSON.stringify(wid)}})`);
+    await write({ kind: 'note', id: note.id }, 'Hints\nThe tutor should wait before the first hint.\n');
+    const notePath = (await api(`library()`)).find((row) => row.id === note.id).path;
     await write({ kind: 'workspace', workspaceId: wid }, [
-      `Asked first ${cite('Chat · Oct 10', IN_TITLED, 'other')}.`,
-      `You asked ${cite('You · Oct 10', ASKED_IN_TITLED, 'you')}.`,
-      `Sleeping ${cite('Chat · Oct 10', IN_FOLDED, 'other')}.`,
-      `Asked ${cite('You · Oct 10', ASKED_FOLDED, 'you')}.`,
-      `Meaning ${cite('Chat · Oct 10', PAST_MORE, 'other')}.`,
-      `Deep ${cite('Chat · Oct 12', DEEP, 'other')}.`,
+      '@chat what did we decide?',
+      ...answer([
+        `Asked first ${cite('Chat · Oct 10', IN_TITLED, 'other')}.`,
+        `You asked ${cite('You · Oct 10', ASKED_IN_TITLED, 'you')}.`,
+        `Sleeping ${cite('Chat · Oct 10', IN_FOLDED, 'other')}.`,
+        `Asked ${cite('You · Oct 10', ASKED_FOLDED, 'you')}.`,
+        `Meaning ${cite('Chat · Oct 10', PAST_MORE, 'other')}.`,
+        `Deep ${cite('Chat · Oct 12', DEEP, 'other')}.`,
+        `Wait ${`[You · Oct 21](${citeHref({ address: notePath, find: 'The tutor should wait before the first hint', cite: 'you' })})`}.`,
+      ]),
       '',
     ].join('\n'));
 
     wc.reload();
     await until(() => js(wc, '!!document.querySelector("[data-doc-tab]")').catch(() => false), 'the workspace screen');
     await js(wc, `(()=>{const row=[...document.querySelectorAll('aside[aria-label="Sidebar"] *')].find((el)=>el.children.length===0&&el.textContent.trim()===${JSON.stringify(WS)});if(row)row.click()})()`);
-    await until(() => js(wc, `document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)}).length===6`).catch(() => false), 'the six citations, drawn as chips');
+    await until(() => js(wc, `document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)}).length===7`).catch(() => false), 'the seven citations, drawn as circles');
     await pause(400);
-    const chips = await js(wc, `[...document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)})].map((a)=>getComputedStyle(a,'::after').content)`);
-    assert.deepEqual(chips, ['"Chat · Oct 10"', '"You · Oct 10"', '"Chat · Oct 10"', '"You · Oct 10"', '"Chat · Oct 10"', '"Chat · Oct 12"'], 'each chip shows its label');
-    console.log('PASS the citations are chips with their labels');
+    const circles = await js(wc, `[...document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)})].map((a)=>getComputedStyle(a,'::after').content)`);
+    assert.deepEqual(circles, ['"1"', '"1"', '"1"', '"1"', '"1"', '"1"', '"2"'], 'a number a source, in the order first cited');
+    const sources = await js(wc, `[...document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-cite-sources] [data-cite-source]`)})].map((a)=>[getComputedStyle(a,'::before').content,a.textContent])`);
+    assert.deepEqual(sources, [['"1"', 'Source'], ['"2"', 'Hints']], 'the answer ends with its sources, each by its number and what it is');
+    console.log('PASS the citations are numbers, and the answer lists its sources under it');
+    await press(wc, `${PANE(0)} [data-cite-source="2"]`);
+    const fromList = await until(async () => { const now = await js(wc, LIT); return now && now.seen ? now : null; }, 'a source clicked in the list, opened and lit', 100);
+    assert.equal(fromList.text, 'The tutor should wait before the first hint');
+    assert.equal(await js(wc, `(document.querySelector('${PANE(1)} [data-doc-title]')||{}).value`), 'Hints', 'the note, beside the document');
+    await shot(wc, 'sources');
+    console.log('PASS a source clicked in the list opens beside, at its passage, lit');
+    await press(wc, '[data-pane-close]');
+    await until(() => js(wc, `!document.querySelector('${PANE(1)}')`), 'the pane closes');
+    await pause(300);
 
     const cases = [['inside a collapsed conversation', IN_TITLED], ['a question inside a collapsed conversation', ASKED_IN_TITLED], ['the question of an exchange collapsed to its row', ASKED_FOLDED], ['inside a collapsed answer', IN_FOLDED], ['past a long answer\'s Show more', PAST_MORE], ['past Show more in a collapsed conversation', DEEP]];
     for (const [where, words] of cases) {
