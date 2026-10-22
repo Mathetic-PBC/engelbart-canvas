@@ -319,8 +319,58 @@ test('only Chat\'s own answers are checked: not a Build\'s, Brainstorm\'s, Disco
   for (const agent of ['brainstorm', 'discover', 'create', 'orient']) assert.equal(citesChecked(agent, null), false, agent);
 });
 
+/* ------------------------------------------------------------------ a whole source (2026-10-22) */
+
+test('splitTarget and citeHref: a citation with no find is the whole source; any other fragment stays on the address', () => {
+  assert.deepEqual(splitTarget('/a/My%20Paper.pdf#cite=source'), { address: '/a/My Paper.pdf', find: '', to: '', cite: 'source', counter: false });
+  assert.deepEqual(splitTarget('/a/b.md#counter=1&cite=you'), { address: '/a/b.md', find: '', to: '', cite: 'you', counter: true });
+  assert.deepEqual(splitTarget('/a/b.pdf#page=3'), { address: '/a/b.pdf#page=3', find: '', to: '' });
+  assert.deepEqual(splitTarget('/a/b.md#cite=you&page=3'), { address: '/a/b.md#cite=you&page=3', find: '', to: '' }, 'an unknown key: no citation');
+  assert.equal(citeHref({ address: '/a/My Paper (v2).pdf', find: '', cite: 'source', counter: true }), '/a/My%20Paper%20%28v2%29.pdf#cite=source&counter=1');
+});
+
+test('checkCitations: a whole source is kept only when it was read while answering, never from a summary', async () => {
+  const { openedKey } = require('../src/main/bart/source-text.cjs');
+  const body = `The paper studies waiting ${link('TutorTrace', files.pdf, '', 'source')}. My note argues for struggle ${link('You', files.note, '', 'you')}.`;
+  const none = await check(body);
+  assert.equal(none.body, 'The paper studies waiting. My note argues for struggle.');
+  assert.deepEqual(none.dropped.map((d) => d.reason), ['not-read', 'not-read'], 'nothing said what was read');
+  const one = await check(body, { opened: new Set([openedKey(files.pdf)]) });
+  assert.deepEqual(one.kept.map((k) => [k.source, k.find, k.cite]), [['TutorTrace', '', 'source']]);
+  assert.deepEqual(one.dropped.map((d) => d.reason), ['not-read']);
+  const both = await check(body, { opened: new Set([openedKey(files.pdf), openedKey(files.note)]) });
+  assert.equal(both.dropped.length, 0);
+  assert.equal(both.kept[1].label, `You · ${TODAY}`, 'whose and when, as a passage\'s');
+  assert.match(both.body, /\(\/.*Hints%20note\.md#cite=you\)/);
+  const here = path.join(projects.findWorkspace(ctx, project.id, other.id).workspace.dir, 'workspace.md');
+  const space = await check(`X ${link('You', here, '', 'you')}.`, { opened: new Set([openedKey(here)]) });
+  assert.deepEqual(space.dropped.map((d) => d.reason), ['malformed'], 'a workspace is cited by its passages');
+});
+
+test('checkCitations: a page in the library by its address alone is checked against the text kept for it', async () => {
+  const { openedKey } = require('../src/main/bart/source-text.cjs');
+  const row = await ctx.libraryDb.insert({ id: randomUUID(), project_id: project.id, tags: [], name: 'Cocoa', type: 'website', url: 'https://example.org/cocoa' });
+  const rows = await ctx.libraryDb.list();
+  const body = `Co-planning ${link('Cocoa', 'https://example.org/cocoa', 'plans and executes alongside the person', 'source')}. As a whole ${link('Cocoa', 'https://example.org/cocoa', '', 'source')}.`;
+  const unread = await check(body, { library: rows });
+  assert.deepEqual(unread.dropped.map((d) => d.reason), ['no-text', 'not-read']);
+  const readRowText = (r) => (r.id === row.id ? 'Cocoa is an agent that plans and executes alongside the person, in a document.' : null);
+  const out = await check(body, { library: rows, readRowText, opened: new Set([openedKey('https://www.example.org/cocoa/')]) });
+  assert.deepEqual(out.dropped, []);
+  assert.deepEqual(out.kept.map((k) => [k.address, k.find === '']), [['https://example.org/cocoa', false], ['https://example.org/cocoa', true]]);
+  assert.deepEqual((await check(body.split('. As')[0], { library: rows, readRowText: () => 'something else' })).dropped.map((d) => d.reason), ['not-found']);
+});
+
 test('the prompt asks for sentences that say their point without the citation, which shows only as a number', () => {
   const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
   assert.match(BART_SYSTEM_PROMPT, /makes sense with the citation taken out/);
   assert.match(BART_SYSTEM_PROMPT, /Never let a citation stand in for words/);
+});
+
+test('the prompt: a summary is not evidence; a PDF is read from its text; a whole source only for a point that sums it up', () => {
+  const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
+  assert.match(BART_SYSTEM_PROMPT, /summary tells you which item to open; it is not evidence/);
+  assert.match(BART_SYSTEM_PROMPT, /read it rather than the PDF, which your Read tool cannot open/);
+  assert.match(BART_SYSTEM_PROMPT, /#cite=source\)/);
+  assert.match(BART_SYSTEM_PROMPT, /No find: the source as a whole/);
 });

@@ -30,7 +30,7 @@ test('citationOf reads a cite= link, and nothing else', async () => {
   assert.equal(citationOf(AGAINST).cite, 'other');
   assert.equal(citationOf(PLAIN), null, 'a passage link without cite= is a link');
   assert.equal(citationOf('[x](/a.md#find=b&cite=maybe)'), null, 'an unknown kind is no citation');
-  assert.equal(citationOf('[x](/a.md#cite=you)'), null, 'nor one with no passage');
+  assert.deepEqual(citationOf('[x](/a.md#cite=you)'), { label: 'x', href: '/a.md#cite=you', address: '/a.md', key: '/a.md', find: '', cite: 'you', counter: false }, 'one with no passage is the whole source');
   assert.equal(citationOf('plain words'), null);
 });
 
@@ -214,4 +214,25 @@ test('a colon or dash right before a citation is left out where the circle is dr
   assert.equal(shown(`Times like 10:30 matter ${NOTE}.`), 'Times like 10:30 matter ①.', 'a colon inside the words stays');
   assert.equal(shown(`\`a:\` ${NOTE}`).includes('a:'), true, 'code keeps its colon');
   assert.equal(shown('No citation here: just words.'), 'No citation here: just words.');
+});
+
+test('a whole source (2026-10-22): its own number beside its passages, a card with no quote, a row in Sources', async () => {
+  const { citationNumbers, citationOf, citationPassage, citationHtml, citationSources, citationSourcesHtml, citationCardHtml } = await citeModel();
+  const WHOLE = '[Welcome](/Users/me/Downloads/Welcome%20map.pdf#cite=source)';
+  const PART = '[Welcome p. 2](/Users/me/Downloads/Welcome%20map.pdf#find=a%20map%20of%20beliefs&cite=source)';
+  const text = `The demo is your project ${WHOLE}. It maps beliefs ${PART}, as said ${WHOLE}.`;
+  const n = citationNumbers(text);
+  assert.deepEqual([WHOLE, PART].map((l) => n.get(citationPassage(citationOf(l)))), [1, 2]);
+  const html = citationHtml(citationOf(WHOLE), { cites: n });
+  assert.match(html, /data-n="1"/);
+  assert.match(html, /data-find=""/);
+  assert.match(html, /The whole source/);
+  const sources = citationSources(text, { cites: n });
+  assert.equal(sources.length, 1);
+  assert.deepEqual(sources[0].passages.map((p) => [p.n, p.find]), [[1, ''], [2, 'a map of beliefs']]);
+  assert.match(citationSourcesHtml(sources), /aria-label="1: Welcome map.pdf. The whole source"/);
+  const card = citationCardHtml({ quote: '', lead: '', where: 'Welcome', when: '', counter: false });
+  assert.doesNotMatch(card, /“/);
+  assert.doesNotMatch(card, /border-top/, 'no divider under a quote that is not there');
+  assert.match(citationCardHtml({ quote: 'a map', lead: '', where: 'Welcome', when: '', counter: false }), /border-top/);
 });

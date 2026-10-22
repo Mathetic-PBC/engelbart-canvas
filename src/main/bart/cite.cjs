@@ -19,6 +19,7 @@ const projects = require('../store/projects.cjs');
 const { splitTarget, citeHref } = require('../../shared/passage-link.cjs');
 const { matchPassage, foldPassage } = require('../../shared/passage-text.cjs');
 const { addressKey } = require('../../shared/address-key.cjs');
+const { openedKey } = require('./source-text.cjs');
 
 const LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
 // A citation whose words were left with a space or a parenthesis in them, which LINK_RE stops at: the link runs to the
@@ -171,10 +172,13 @@ const threadText = (thread) => (thread || []).map((turn) => [turn && turn.questi
  * 'malformed', 'unresolved', 'memory', 'catalog', 'other-project', 'no-text', 'not-found', 'current-thread'.
  * `library`: the library's rows. `projectDir` and `workspaces` (each with its `dir`) are found from `dataRoot` and
  * `projectId` when not given. `currentThread`: [{ question, answer }], the exchange being answered, last question
- * included. `readText(file)`: a source file's text (defaultReadText). `today`: for the labels' dates, whose year is left
- * off in this one.
+ * included. `readText(file)`: a source file's text (defaultReadText). `readRowText(row)`: the text kept for a library
+ * item that has no file (a page saved by its address, ./source-text.cjs), or null. `opened`: what Chat read while it
+ * answered, as openedKey spells each (./source-text.cjs openedBy): a citation of a whole source (no `find`, 2026-10-22)
+ * is kept only when its source is among them, as a summary is no reading. `today`: for the labels' dates, whose year is
+ * left off in this one.
  */
-async function checkCitations(body, { library = [], dataRoot = null, projectId = null, workspaceId = null, projectDir = null, workspaces = null, currentThread = [], readText = defaultReadText, today = new Date() } = {}) {
+async function checkCitations(body, { library = [], dataRoot = null, projectId = null, workspaceId = null, projectDir = null, workspaces = null, currentThread = [], readText = defaultReadText, readRowText = () => null, opened = null, today = new Date() } = {}) {
   const text = String(body == null ? '' : body);
   const kept = [], dropped = [];
   if (!/[#&]cite=/.test(text)) return { body: text, kept, dropped };
@@ -193,18 +197,37 @@ async function checkCitations(body, { library = [], dataRoot = null, projectId =
     if (!reads.has(file)) reads.set(file, Promise.resolve().then(() => readText(file)).catch(() => null));
     return reads.get(file);
   };
+  const rowText = (row) => {
+    const key = `row:${row.id}`;
+    if (!reads.has(key)) reads.set(key, Promise.resolve().then(() => readRowText(row)).catch(() => null));
+    return reads.get(key);
+  };
+
+  // A whole source: a library item (not a workspace's document, whose passages are what it holds), read while answering.
+  // Whose it is goes by what was said, its label by when the source is from, as a passage's.
+  const whole = async (label, target, found, cut) => {
+    if (found.kind === 'workspace') return cut('malformed');
+    const keys = [found.file && openedKey(found.file), found.row && found.row.url && openedKey(found.row.url)].filter(Boolean);
+    if (!opened || !keys.some((key) => opened.has(key))) return cut('not-read');
+    const address = found.row && found.row.url && /^https?:\/\//i.test(target.address) ? found.row.url : found.file || target.address;
+    const source = found.file ? await read(found.file) : null;
+    const by = target.cite === 'you' ? 'You' : target.cite === 'other' ? otherOf('', 0, {}, label) : '';
+    const shown = by ? [by, dayLabel(sourceDate(found, source), today)].filter(Boolean).join(' · ') : label;
+    kept.push({ label: shown, address, source: found.name || path.basename(found.file || ''), find: '', cite: target.cite, counter: !!target.counter, relabeled: false });
+    return `[${shown}](${citeHref({ address: target.address, find: '', cite: target.cite, counter: target.counter })})`;
+  };
 
   const check = async (label, href) => {
     const target = splitTarget(href);
     const cut = (reason) => { dropped.push({ label, address: target.address || href, reason }); return null; };
-    if (!target.cite || !target.find) return cut('malformed');
+    if (!target.cite) return cut('malformed');
     const found = resolveSource(target.address, { library, projectDir: dir, workspaces: spaces, dataRoot });
     if (found.reason) return cut(found.reason);
-    if (!found.file) return cut('no-text');
-    const source = await read(found.file);
+    if (!target.find) return whole(label, target, found, cut);
+    const source = found.file ? await read(found.file) : found.row ? await rowText(found.row) : null;
     if (typeof source !== 'string' || !source.trim()) return cut('no-text');
     const workspaceDoc = found.kind === 'workspace';
-    const markdown = /\.(?:md|markdown|txt|html?)$/i.test(found.file);
+    const markdown = found.file ? /\.(?:md|markdown|txt|html?)$/i.test(found.file) : true; // a saved page's text has its links as markdown
     const hits = matchPassage(source, target.find, { prefixes: workspaceDoc, markdown });
     if (!hits.length) return cut('not-found');
     if (workspaceDoc && current && found.workspace.id === current.id && thread && thread.includes(foldPassage(target.find, { markdown: true }).text)) return cut('current-thread');

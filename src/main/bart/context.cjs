@@ -49,6 +49,7 @@ const { fileInRow } = require('../store/folder-files.cjs');
 const { saveShot } = require('./shots.cjs');
 const zoteroMirror = require('../zotero/mirror.cjs');
 const { overleafStageBlock, overleafTabsBlock } = require('../overleaf/stage.cjs');
+const { sourceTexts } = require('./source-text.cjs');
 
 const HERE = '<<< this is the question being asked now >>>';
 // @bart's <stage> with nothing in front, and a resumed turn's <highlights> when the documents mention nothing highlighted.
@@ -120,15 +121,17 @@ function catalogFor(project, rows, seen, { agent = 'bart', workspace = null, own
 /**
  * The library as the agent is shown it (Context.json): every item but pictures, `mentioned` when `seen` holds it. The
  * whole project's, or for @brainstorm this workspace's alone (catalogFor). A folder's `path` is the folder itself
- * (MATH-22, MF-06): it was null, and an agent told to open a mentioned folder had nowhere to look.
+ * (MATH-22, MF-06): it was null, and an agent told to open a mentioned folder had nowhere to look. `texts` (row id → a
+ * file, ./source-text.cjs): a PDF's text, or a page's kept by its address, as the item's `text` (Chat's, 2026-10-22).
  */
-function catalogEntries(project, rows, seen, scope) {
+function catalogEntries(project, rows, seen, scope, texts = new Map()) {
   return catalogFor(project, rows, seen, scope).filter((entry) => entry.type !== 'image').map((entry) => ({
     name: entry.name,
     type: entry.type,
     tags: entry.tags,
     path: entry.path ? path.resolve(project.dir, entry.path) : entry.folderPath ? path.resolve(entry.folderPath) : null,
     url: entry.url,
+    ...(texts.has(entry.id) ? { text: texts.get(entry.id) } : {}),
     summary: entry.summaryStale ? null : entry.summary,
     lastEdited: entry.lastEdited,
     mentioned: seen.has(entry.id),
@@ -387,7 +390,7 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
   const madeIn = await projects.notesMadeIn(project.dir);
   const own = scoped ? [...madeIn].filter(([, at]) => at === workspace.id).map(([id]) => id) : [];
   const scope = { agent, workspace, own, madeIn };
-  const entries = catalogEntries(project, rows, seen, scope);
+  const entries = catalogEntries(project, rows, seen, scope, agent === 'bart' ? await sourceTexts(ctx, rows) : undefined);
   const head = [
     '<engelbart>',
     `project: ${project.name}`,

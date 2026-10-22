@@ -130,9 +130,11 @@ const fileAddress = (file) => `file://${String(file).split('/').map(encodeURICom
  * guide reads offline); while the row is still its abstract page, the pdf's address opens, as before.
  */
 export function linkPlan(href, library) {
-  const { address, find, to } = splitTarget(href);
-  const kept = find ? paperRow(library, address) : null;
-  const row = find ? rowForAddress(library, address) || (kept && kept.type === 'pdf' && kept.path ? kept : null) : null;
+  const { address, find, to, cite } = splitTarget(href);
+  // a citation of a whole source (no passage, 2026-10-22) opens its row too
+  const passage = !!(find || cite);
+  const kept = passage ? paperRow(library, address) : null;
+  const row = passage ? rowForAddress(library, address) || (kept && kept.type === 'pdf' && kept.path ? kept : null) : null;
   if (row) return { address, find, to, row, key: `i:${row.id}` };
   const k = kindOf(address);
   const page = k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';

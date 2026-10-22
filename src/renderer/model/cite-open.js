@@ -27,7 +27,7 @@ function workspaceFile(projectDir, index, id) {
  */
 export function citedDoc(href, { projectDir, index, notes } = {}) {
   const target = splitTarget(href);
-  if (!target.cite || !target.find || !String(target.address).startsWith('/')) return null;
+  if (!target.cite || !String(target.address).startsWith('/')) return null; // a whole source's `find` is '': it opens at its top
   const address = target.address;
   if (address.endsWith('/workspace.md') && projectDir && index) {
     for (const [id, at] of index) {

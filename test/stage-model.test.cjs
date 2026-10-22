@@ -277,6 +277,8 @@ test('linkPlan: a passage to a library paper opens its row; other links open the
   assert.equal(linkPlan('https://anthropic.com/engineering/contextual-retrieval#find=x', library).row, library[3], 'by its url, however spelled');
   assert.equal(linkPlan('/Users/h/.engelbart/p/Saving.md#find=x', library).row, null, 'never a note: notes open in the middle');
   assert.equal(linkPlan('/Users/h/ColBERT.pdf', library).row, null, 'no passage: the link opens as it always did');
+  assert.deepEqual(linkPlan('/Users/h/ColBERT.pdf#cite=source', library), { address: '/Users/h/ColBERT.pdf', find: '', to: '', row: library[2], key: 'i:p1' }, 'a whole source cited: its row, at its top');
+  assert.equal(linkPlan('https://anthropic.com/engineering/contextual-retrieval#cite=source', library).row, library[3]);
   assert.deepEqual(linkPlan('https://arxiv.org/pdf/2312.10893#find=We%20argue', library), { address: 'https://arxiv.org/pdf/2312.10893', find: 'We argue', to: '', row: null, key: 'l:arxiv.org/pdf/2312.10893' });
   assert.equal(linkPlan('/Users/h/ColBERT.pdf#find=late%20interaction&to=Next%20we', library).to, 'Next we', 'the section\'s end goes with the passage');
   assert.equal(linkPlan('/Users/h/elsewhere.pdf', library).key, '', 'a path without a passage: a tab of its own, as before');

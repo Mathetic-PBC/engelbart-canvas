@@ -137,6 +137,7 @@ app.whenReady().then(async () => {
         `Meaning ${cite('Chat · Oct 10', PAST_MORE, 'other')}.`,
         `Deep ${cite('Chat · Oct 12', DEEP, 'other')}.`,
         `Wait ${`[You · Oct 21](${citeHref({ address: notePath, find: 'The tutor should wait before the first hint', cite: 'you' })})`}.`,
+        `The note as a whole ${`[You · Oct 21](${citeHref({ address: notePath, find: '', cite: 'you' })})`}.`,
       ]),
       '',
     ].join('\n'));
@@ -144,12 +145,12 @@ app.whenReady().then(async () => {
     wc.reload();
     await until(() => js(wc, '!!document.querySelector("[data-doc-tab]")').catch(() => false), 'the workspace screen');
     await js(wc, `(()=>{const row=[...document.querySelectorAll('aside[aria-label="Sidebar"] *')].find((el)=>el.children.length===0&&el.textContent.trim()===${JSON.stringify(WS)});if(row)row.click()})()`);
-    await until(() => js(wc, `document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)}).length===7`).catch(() => false), 'the seven citations, drawn as circles');
+    await until(() => js(wc, `document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)}).length===8`).catch(() => false), 'the eight citations, drawn as circles');
     await pause(400);
     const circles = await js(wc, `[...document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)})].map((a)=>getComputedStyle(a,'::after').content)`);
-    assert.deepEqual(circles, ['"1"', '"2"', '"3"', '"4"', '"5"', '"6"', '"7"'], 'a number a passage, in the order first cited');
+    assert.deepEqual(circles, ['"1"', '"2"', '"3"', '"4"', '"5"', '"6"', '"7"', '"8"'], 'a number a passage, in the order first cited; the whole note its own');
     const sources = await js(wc, `[...document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-cite-sources] [data-cite-row]`)})].map((row)=>[[...row.querySelectorAll('[data-cite-source]')].map((a)=>getComputedStyle(a,'::after').content).join(' '),row.querySelector('[data-cite-name]').textContent])`);
-    assert.deepEqual(sources, [['"1" "2" "3" "4" "5" "6"', 'Source'], ['"7"', 'Hints']], 'the answer ends with its sources, each by the numbers quoting it and what it is');
+    assert.deepEqual(sources, [['"1" "2" "3" "4" "5" "6"', 'Source'], ['"7" "8"', 'Hints']], 'the answer ends with its sources, each by the numbers quoting it and what it is');
     console.log('PASS the citations are numbers, and the answer lists its sources under it');
 
     // The card stays while the pointer is on it, and goes when the pointer leaves it and its circle.
@@ -173,6 +174,25 @@ app.whenReady().then(async () => {
     wc.sendInputEvent({ type: 'mouseMove', x: listed.x + 400, y: listed.y + 200 });
     await until(() => js(wc, '!document.querySelector("[data-cite-card]")'), 'and it goes when the pointer leaves');
     console.log('PASS the card stays while the pointer is on it, goes when it leaves, and a number in Sources has one');
+
+    // A whole source (2026-10-22): its card says where and when, no quote; a click opens it beside, nothing lit.
+    const whole = await until(() => spot(wc, `${PANE(0)} [data-editor] a[data-cite][data-n="8"]`), 'circle 8');
+    await pause(300);
+    wc.sendInputEvent({ type: 'mouseMove', x: whole.x, y: whole.y });
+    const wholeCard = await until(() => js(wc, CARD), 'the whole source\'s card');
+    assert.doesNotMatch(wholeCard.text, /“/, 'no quote');
+    assert.match(wholeCard.text, /Hints/);
+    await shot(wc, 'card-whole-source');
+    wc.sendInputEvent({ type: 'mouseMove', x: whole.x + 400, y: whole.y + 200 });
+    await until(() => js(wc, '!document.querySelector("[data-cite-card]")'), 'it goes');
+    await press(wc, `${PANE(0)} [data-editor] a[data-cite][data-n="8"]`);
+    await until(() => js(wc, `(document.querySelector('${PANE(1)} [data-doc-title]')||{}).value==='Hints'`), 'the whole note, beside the document');
+    await pause(600);
+    assert.equal(await js(wc, LIT), null, 'nothing lit');
+    await press(wc, '[data-pane-close]');
+    await until(() => js(wc, `!document.querySelector('${PANE(1)}')`), 'the pane closes');
+    await pause(300);
+    console.log('PASS a whole source: a card with no quote, opened beside with nothing lit');
 
     await press(wc, `${PANE(0)} [data-cite-source="7"]`);
     const fromList = await until(async () => { const now = await js(wc, LIT); return now && now.seen ? now : null; }, 'a source clicked in the list, opened and lit', 100);

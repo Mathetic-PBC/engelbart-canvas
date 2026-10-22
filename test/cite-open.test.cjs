@@ -29,6 +29,7 @@ test('citedDoc: a workspace\'s document, nested or with parentheses in its folde
   assert.equal(citedDoc(href(`${PROJECT}/Onboarding/workspace.md`), where).id, 'w1');
   assert.equal(citedDoc(href(`${PROJECT}/Notes (old)/workspace.md`), where).id, 'w3');
   assert.deepEqual(citedDoc(href(`${PROJECT}/Hints.md`, 'other'), where), { kind: 'note', id: 'n1', name: 'Hints', find: 'ask about the project first', cite: 'other' });
+  assert.deepEqual(citedDoc(citeHref({ address: `${PROJECT}/Hints.md`, find: '', cite: 'you' }), where), { kind: 'note', id: 'n1', name: 'Hints', find: '', cite: 'you' }, 'a whole note: opened, nothing lit');
 });
 
 test('citedDoc: a paper, a page, another project\'s workspace, a plain #find= link and a mention stay with the Stage', async () => {
