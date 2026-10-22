@@ -156,6 +156,11 @@ test('an answer in the document numbers its circles across its lines, with or wi
       assert.deepEqual(ns, ['3', '4'], `${active ? 'caret on it' : 'drawn'}: the answer's numbers, the note's other words the next`);
     }
     assert.ok(ls.some((l) => l.includes(NOTE_AGAIN)), 'the document keeps the whole link');
+    const said = ls.findIndex((l) => l.includes('Readers skim'));
+    ls[said] = ls[said].replace('figures first ', 'figures first: ');
+    const drawn = editor.lineHtml(said, ls[said], parseLine(ls[said]), false, false, editor.layout(ls).get(said), false);
+    assert.match(drawn, /figures first <a [^>]*data-cite/, 'drawn: the colon before the circle left out');
+    assert.match(ls[said], /figures first: \[/, 'the document keeps it');
   } finally {
     delete globalThis.getSelection; delete globalThis.document; delete globalThis.window;
   }
@@ -198,4 +203,15 @@ test('an answer\'s sources: one a source, by the numbers quoting it and what it 
   assert.deepEqual(citationCard({ dataset: attrs(3) }), { quote: 'figures first then text', lead: '', where: 'My note.md', when: 'Oct 14', counter: false }, 'a number in the list has the card its circle has');
   assert.equal(citationCard({ dataset: attrs(4) }).counter, true);
   assert.equal(citationSourcesHtml(citationSources('No citations here.')), '', 'nothing for an answer that cites nothing');
+});
+
+test('a colon or dash right before a citation is left out where the circle is drawn', async () => {
+  const { inlineHtml } = await docModel();
+  const shown = (text) => inlineHtml(text).replace(/<a [^>]*data-cite[^>]*><\/a>/g, '①');
+  assert.equal(shown(`They are your beliefs, not just "the process": ${NOTE}.`), 'They are your beliefs, not just &quot;the process&quot; ①.');
+  assert.equal(shown(`The first step toward preservation — ${NOTE}.`), 'The first step toward preservation ①.');
+  assert.equal(shown(`**It says**: ${NOTE}.`), '<strong style="font-weight:600">It says</strong> ①.', 'after bold too');
+  assert.equal(shown(`Times like 10:30 matter ${NOTE}.`), 'Times like 10:30 matter ①.', 'a colon inside the words stays');
+  assert.equal(shown(`\`a:\` ${NOTE}`).includes('a:'), true, 'code keeps its colon');
+  assert.equal(shown('No citation here: just words.'), 'No citation here: just words.');
 });

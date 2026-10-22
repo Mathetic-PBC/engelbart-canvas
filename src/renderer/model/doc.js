@@ -782,12 +782,21 @@ export function holdsLink(tok) {
  * the trash. Any may be left out, or answer undefined when it cannot tell: the mention is then drawn as written.
  * `opts.buildTurn`: in an answer line, its turn's question line, which a click on the hammer builds (buildIconHtml).
  */
+// What a citation's lead-in is (inlineHtml): a colon or dash at the end of the text before it, with the space around it;
+// never one inside a token (code, emphasis, a link, a mention).
+const CITE_LEAD_RE = /\s*[:\u2013\u2014]\s*$/;
+const CITE_LEAD_TOKEN = /^(?:\*|`|\[|@\[|!\[|\$)/;
 export function inlineHtml(text, opts) {
   const parts = String(text).split(INLINE).filter(Boolean);
   // Chat's citations (./cite.js): numbered by `opts.cites` (the answer's, citationNumbers), else in the order this text
   // cites its sources; a run of three or more folds into its first circle and "…".
   let runs = null;
   if (parts.some((p) => citationOf(p))) {
+    // A colon or dash right before a citation ('not just "the process": [cite]') reads as if the quote came next, and the
+    // circle shows only a number: it is left out where the circle is drawn, the document keeping it (2026-10-22, David).
+    for (let k = 0; k + 1 < parts.length; k += 1) {
+      if (citationOf(parts[k + 1]) && !citationOf(parts[k]) && !CITE_LEAD_TOKEN.test(parts[k])) parts[k] = parts[k].replace(CITE_LEAD_RE, ' ');
+    }
     runs = citationRuns(parts);
     if (!(opts && opts.cites)) opts = { ...(opts || {}), cites: citationNumbers(text) };
   }
