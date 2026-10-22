@@ -37,16 +37,20 @@ export function citationOf(tok) {
   return { label: m[1], href: m[2], address: t.address, key: citationKey(t.address), find: t.find, cite: t.cite, counter: !!t.counter };
 }
 
+/** Which passage a citation is, for numbering: its source and the words it quotes. */
+export const citationPassage = (c) => `${c.key}\n${c.find}`;
+
 /**
- * An answer's citation numbers: source key → 1, 2, … in the order the answer's `texts` (its lines, or the whole answer)
- * first cite each.
+ * An answer's citation numbers: passage (citationPassage) → 1, 2, … in the order the answer's `texts` (its lines, or the
+ * whole answer) first cite each. A number a passage, not a source (2026-10-21, David: three quotes of one document read
+ * "1, 1, 1"): the same words quoted again keep their number; other words of the same source take the next.
  */
 export function citationNumbers(texts) {
   const out = new Map();
   for (const text of [].concat(texts || [])) {
     for (const m of String(text ?? '').matchAll(INLINE_LINK_RE)) {
       const c = citationOf(m[0]);
-      if (c && !out.has(c.key)) out.set(c.key, out.size + 1);
+      if (c && !out.has(citationPassage(c))) out.set(citationPassage(c), out.size + 1);
     }
   }
   return out;
@@ -110,28 +114,37 @@ export function libraryName(rows, address) {
  */
 export function citationHtml(c, opts, fallback) {
   const cites = opts && opts.cites;
-  const n = (cites && cites.get && cites.get(c.key)) || fallback || 1;
+  const n = (cites && cites.get && cites.get(citationPassage(c))) || fallback || 1;
   const source = citationSource(c, opts && opts.citeSource);
   const said = c.counter ? 'Against this' : c.cite === 'you' ? 'Your words' : c.cite === 'other' ? 'Someone else’s words' : 'A source';
   return `<a href="${esc(c.href)}" data-link="1" data-cite="${esc(c.cite)}" data-n="${n}" data-key="${esc(c.key)}" data-label="${esc(c.label)}" data-find="${esc(c.find)}" data-source="${esc(source)}"${c.cite === 'you' ? ' data-you="1"' : ''}${c.counter ? ' data-counter="1"' : ''} contenteditable="false"${opts && opts.citeFocus ? ' tabindex="0"' : ''}${opts && opts.citeTitle ? ` title="${esc(`${c.label}\n“${c.find}”\n${source}`)}"` : ''} aria-label="${esc(`${n}: ${c.label}, ${said}. “${c.find}” — ${source}`)}"></a>`;
 }
 
 /**
- * An answer's sources, in the order it first cites each: [{ n, name, href }]. `name`: what the source is (citationSource:
- * the library's name, the workspace's); `href`: its first citation's, so the source opens at the passage first quoted
- * from it. `opts.cites` and `opts.citeSource` as citationHtml takes them.
+ * An answer's sources, in the order it first cites each: [{ n, name, href, passages }]. `name`: what the source is
+ * (citationSource: the library's name, the workspace's); `passages`: the numbers quoting it, each { n, href }; `n` and
+ * `href` its first one's, so the source opens at the passage first quoted from it. `opts.cites` and `opts.citeSource` as
+ * citationHtml takes them.
  */
 export function citationSources(text, opts = {}) {
   const cites = (opts && opts.cites) || citationNumbers(text), seen = new Map();
   for (const m of String(text ?? '').matchAll(INLINE_LINK_RE)) {
     const c = citationOf(m[0]);
-    if (c && !seen.has(c.key)) seen.set(c.key, { n: cites.get(c.key) || seen.size + 1, name: citationSource(c, opts && opts.citeSource), href: c.href });
+    if (!c) continue;
+    const n = cites.get(citationPassage(c)) || cites.size + 1;
+    if (!seen.has(c.key)) seen.set(c.key, { n, name: citationSource(c, opts && opts.citeSource), href: c.href, passages: [] });
+    const source = seen.get(c.key);
+    if (!source.passages.some((p) => p.n === n)) source.passages.push({ n, href: c.href });
   }
   return [...seen.values()].sort((a, b) => a.n - b.n);
 }
-/** The sources under an answer: "Sources", then a row a source, its number's circle and its name, each a link to it. */
+/**
+ * The sources under an answer: "Sources", then a row a source: the circles of the numbers quoting it, each a link to its
+ * passage, and its name, a link to the first.
+ */
 export const citationSourcesHtml = (sources) => (sources.length ? `<div style="font:500 11px/1.4 var(--font-sans);letter-spacing:.2px;color:#8f8f8f;margin-bottom:4px">Sources</div>`
-  + sources.map((s) => `<a href="${esc(s.href)}" data-link="1" data-cite-source="${s.n}" data-n="${s.n}" contenteditable="false" title="${esc(s.name)}"><span data-cite-name="1">${esc(s.name)}</span></a>`).join('') : '');
+  + sources.map((s) => `<div data-cite-row="${s.n}">${s.passages.map((p) => `<a href="${esc(p.href)}" data-link="1" data-cite-source="${p.n}" data-n="${p.n}" contenteditable="false" title="${esc(s.name)}" aria-label="${p.n}: ${esc(s.name)}"></a>`).join('')}`
+    + `<a href="${esc(s.href)}" data-link="1" data-cite-name="1" contenteditable="false" title="${esc(s.name)}">${esc(s.name)}</a></div>`).join('') : '');
 
 /** The "…" circle of a folded run: `more` citations, opened by a click (openCitationRun) or the pointer. */
 export const citationMoreHtml = (more) => `<span data-cite-more="1" data-n="…" contenteditable="false" role="button" aria-label="${more} more ${more === 1 ? 'citation' : 'citations'}" title="${more} more"></span>`;
@@ -188,22 +201,31 @@ a[data-cite][data-counter]:hover{background:#f2f2f2}
 [data-cite-more]::after{content:attr(data-n);${NUMBER};margin-top:-1px;color:#8f8f8f}
 [data-cite-run]:not([data-open]):not(:hover) [data-cite-rest]{display:none}
 [data-cite-run][data-open] [data-cite-more],[data-cite-run]:hover [data-cite-more]{display:none}
-[data-cite-source]{display:flex;align-items:baseline;gap:8px;padding:2px 0;color:#4d4d4d;text-decoration:none!important;cursor:pointer}
-[data-cite-source]:hover [data-cite-name]{text-decoration:underline;text-underline-offset:2px}
-[data-cite-source]::before{content:attr(data-n);flex:none;${CIRCLE};margin:0;background:#ebebeb;border:1px solid #ebebeb;${NUMBER}}
-[data-cite-name]{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+[data-cite-row]{display:flex;align-items:center;gap:3px;padding:2px 0}
+a[data-cite-source]{flex:none;${CIRCLE};margin:0;background:#ebebeb;border:1px solid #ebebeb;text-decoration:none!important}
+a[data-cite-source]::after{content:attr(data-n);${NUMBER};margin-top:-1px}
+a[data-cite-source]:hover{background:#d6d6d6;border-color:#d6d6d6}
+a[data-cite-name]{margin-left:5px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#4d4d4d;text-decoration:none!important;cursor:pointer}
+a[data-cite-name]:hover{text-decoration:underline!important;text-underline-offset:2px}
 `;
 // An answer box's card (a highlight's box, a web page's box card): the document's hover card (workspace/Popover.jsx) drawn
 // over the page by itself, under the circle or above it where there is no room under, as a box clips what overflows it.
 // `over` and `out` take the box's pointer and focus events (mouseover/focusin, mouseout/focusout), so a circle reached by
-// Tab shows its card too.
+// Tab shows its card too. The pointer leaving leaves the card up (2026-10-21, David): a press elsewhere, a scroll, Escape,
+// focus leaving or another circle takes it down.
 const TIP = `position:fixed;z-index:1000;${CITE_CARD_STYLE}`;
 export function citationTip(doc = typeof document === 'undefined' ? null : document) {
   let tip = null;
-  const hide = () => { if (tip) { tip.remove(); tip = null; } };
+  const away = (e) => { if (e.type !== 'keydown' || e.key === 'Escape') hide(); };
+  const hide = () => {
+    if (!tip) return;
+    tip.remove(); tip = null;
+    for (const type of ['pointerdown', 'scroll', 'keydown']) doc.removeEventListener(type, away, true);
+  };
   const show = (el) => {
     hide();
     if (!doc || !doc.body) return;
+    for (const type of ['pointerdown', 'scroll', 'keydown']) doc.addEventListener(type, away, true);
     const card = citationCard(el);
     tip = doc.createElement('div');
     tip.setAttribute('data-cite-tip', '1');
@@ -221,7 +243,7 @@ export function citationTip(doc = typeof document === 'undefined' ? null : docum
   const circle = (e) => (e && e.target && e.target.closest ? e.target.closest('a[data-cite]') : null);
   return {
     over: (e) => { const el = circle(e); if (el) show(el); },
-    out: (e) => { const el = circle(e); if (el && !(e.relatedTarget && el.contains(e.relatedTarget))) hide(); },
+    out: (e) => { const el = circle(e); if (el && /blur|focusout/.test(e.type) && !(e.relatedTarget && el.contains(e.relatedTarget))) hide(); },
     hide,
   };
 }

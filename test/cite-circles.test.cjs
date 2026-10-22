@@ -1,8 +1,8 @@
 'use strict';
 
 // Chat's citations as drawn (src/renderer/model/cite.js, src/renderer/model/doc.js, DocEditor's answer lines; 2026-10-21):
-// a `cite=` link is a grey numbered circle, numbered by the answer in the order it first cites each source, the same
-// number for the same source again; three or more side by side fold into the first and "…". The markdown keeps the link,
+// a `cite=` link is a grey numbered circle, numbered by the answer in the order it first cites each passage, the same
+// number for the same words again; three or more side by side fold into the first and "…". The markdown keeps the link,
 // a circle holds no text, and any other link is drawn as it was. The editor is a stand-in, as in doc-editor-answer-line.
 
 const test = require('node:test');
@@ -34,14 +34,13 @@ test('citationOf reads a cite= link, and nothing else', async () => {
   assert.equal(citationOf('plain words'), null);
 });
 
-test('numbers go by first appearance of each source, the same number for the same source', async () => {
-  const { citationNumbers, citationKey } = await citeModel();
-  const lines = [`Reading slows ${NOTE} and readers skim ${PAPER}.`, `- Against it ${AGAINST}, though ${PAPER_SAME} and ${NOTE_AGAIN}.`];
-  const n = citationNumbers(lines);
-  assert.equal(n.get('/Users/me/Notes/My note.md'), 1);
-  assert.equal(n.get(citationKey('https://example.org/paper.pdf')), 2, 'www. and a trailing slash are the same page');
-  assert.equal(n.get('/Users/me/Meetings/Standup.md'), 3);
-  assert.equal(n.size, 3);
+test('numbers go by first appearance of each passage: other words of the same source the next, the same words their own', async () => {
+  const { citationNumbers, citationOf, citationPassage } = await citeModel();
+  const lines = [`Reading slows ${NOTE} and readers skim ${PAPER}.`, `- Against it ${AGAINST}, though ${PAPER_SAME} and ${NOTE_AGAIN}, as said ${NOTE}.`];
+  const n = citationNumbers(lines), of = (link) => n.get(citationPassage(citationOf(link)));
+  assert.deepEqual([NOTE, PAPER, AGAINST, PAPER_SAME, NOTE_AGAIN].map(of), [1, 2, 3, 4, 5], 'a number a passage, the same source or not');
+  assert.equal(n.size, 5, 'the same words quoted again keep theirs');
+  assert.equal(of(PAPER.replace('www.', '')), 2, 'www. and a trailing slash are the same page');
   assert.deepEqual([...citationNumbers(lines.join('\n'))], [...n], 'the answer whole or line by line: the same numbers');
   assert.equal(citationNumbers(`only ${PLAIN}`).size, 0);
 });
@@ -153,7 +152,7 @@ test('an answer in the document numbers its circles across its lines, with or wi
     for (const active of [false, true]) {
       const html = editor.lineHtml(last, ls[last], parseLine(ls[last]), active, false, editor.layout(ls).get(last), false);
       const ns = [...html.matchAll(/data-cite="\w+" data-n="(\d+)"/g)].map((m) => m[1]);
-      assert.deepEqual(ns, ['3', '1'], `${active ? 'caret on it' : 'drawn'}: the answer's numbers, the note's again 1`);
+      assert.deepEqual(ns, ['3', '4'], `${active ? 'caret on it' : 'drawn'}: the answer's numbers, the note's other words the next`);
     }
     assert.ok(ls.some((l) => l.includes(NOTE_AGAIN)), 'the document keeps the whole link');
   } finally {
@@ -181,15 +180,17 @@ test('an answer still arriving shows no citation, and no link still being writte
   assert.equal(streamingText(`Read ${PLAIN} and - [ ] this [aside] here.`), `Read ${PLAIN} and - [ ] this [aside] here.`, 'an ordinary link, a box and brackets stay');
 });
 
-test('an answer\'s sources: one a source, by its number and what it is, each linking to its first passage', async () => {
+test('an answer\'s sources: one a source, by the numbers quoting it and what it is, each number linking to its passage', async () => {
   const { citationSources, citationSourcesHtml } = await citeModel();
   const names = { '/Users/me/Meetings/Standup.md': 'Standup' };
-  const sources = citationSources(`A ${NOTE} b ${PAPER} c ${NOTE_AGAIN} d ${AGAINST}.`, { citeSource: (address) => names[address] || null });
-  assert.deepEqual(sources.map((s) => [s.n, s.name]), [[1, 'My note.md'], [2, 'example.org'], [3, 'Standup']], 'in the order first cited, the same source once');
+  const sources = citationSources(`A ${NOTE} b ${PAPER} c ${NOTE_AGAIN} d ${AGAINST} e ${NOTE}.`, { citeSource: (address) => names[address] || null });
+  assert.deepEqual(sources.map((s) => [s.name, s.passages.map((p) => p.n)]), [['My note.md', [1, 3]], ['example.org', [2]], ['Standup', [4]]], 'in the order first cited, the same source once');
   assert.match(sources[0].href, /find=reading%20is%20slow/, 'its first passage');
+  assert.match(sources[0].passages[1].href, /find=figures%20first/, 'each number its own');
   const html = citationSourcesHtml(sources);
   assert.match(html, /^<div[^>]*>Sources<\/div>/);
-  assert.equal((html.match(/data-cite-source="\d"/g) || []).length, 3);
-  assert.match(html, /<a href="[^"]*" data-link="1" data-cite-source="3" data-n="3"[^>]*><span data-cite-name="1">Standup<\/span><\/a>/);
+  assert.equal((html.match(/data-cite-source="\d"/g) || []).length, 4);
+  assert.match(html, /<div data-cite-row="1"><a href="[^"]*reading[^"]*" data-link="1" data-cite-source="1" data-n="1"[^>]*><\/a><a href="[^"]*figures%20first[^"]*" data-link="1" data-cite-source="3" data-n="3"[^>]*><\/a><a href="[^"]*reading[^"]*" data-link="1" data-cite-name="1"[^>]*>My note\.md<\/a><\/div>/);
+  assert.match(html, /data-cite-source="4" data-n="4"[^>]*><\/a><a [^>]*data-cite-name="1"[^>]*>Standup<\/a>/);
   assert.equal(citationSourcesHtml(citationSources('No citations here.')), '', 'nothing for an answer that cites nothing');
 });

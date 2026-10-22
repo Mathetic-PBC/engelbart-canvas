@@ -704,6 +704,7 @@ export default class DocEditor extends React.Component {
     document.addEventListener('scroll', this.buildScrolled, true); // a card's diff scrolls on its own; redraws put it back
     document.addEventListener('keydown', this.touched, true); // replyArrived
     document.addEventListener('scroll', this.streamScrolled, true); // so does an answer so far (placeStreams)
+    document.addEventListener('pointerdown', this.citeCardDown, true);
     window.addEventListener('resize', this.fitFollows);
     this.syncEditor();
     this.needMade();
@@ -792,6 +793,7 @@ export default class DocEditor extends React.Component {
     document.removeEventListener('scroll', this.buildScrolled, true);
     document.removeEventListener('keydown', this.touched, true);
     document.removeEventListener('scroll', this.streamScrolled, true);
+    document.removeEventListener('pointerdown', this.citeCardDown, true);
     for (const id of this.timers) clearTimeout(id);
     this.timers.clear();
     // A Create counting down was going to be asked: it is, now, as the document is left (its answer lands in it all the same).
@@ -4055,7 +4057,8 @@ export default class DocEditor extends React.Component {
   // Leaving what opened the selector starts its closing clock, unless the pointer went straight onto the selector: React has
   // by then already handled that same event (the selector's onMouseEnter stops the clock), and this would start it again.
   editorOut = (e) => {
-    if (e.target.closest('[data-mention]') || e.target.closest('a[data-cite]')) this.hidePop();
+    // A citation's card stays up when the pointer leaves (2026-10-21, David); citeCardDown takes it down.
+    if (e.target.closest('[data-mention]')) this.hidePop();
     const peek = e.target.closest('[data-made-peek]');
     if (peek && !(e.relatedTarget && peek.contains(e.relatedTarget))) this.unpeekMade();
     const onto = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-bart-picker]');
@@ -5062,6 +5065,8 @@ export default class DocEditor extends React.Component {
   };
   showPop(res, e) { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pop: { res, anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } } }); }
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };
+  // A citation's card, left up by the pointer leaving its circle, goes at a press anywhere (as at a scroll or Escape).
+  citeCardDown = () => { const p = this.state.pop; if (p && p.res && p.res.quote != null) this.setState({ pop: null }); };
   // A made file's peek (2026-10-15, David, again: a small card over the page, so nothing in the document moves; for a
   // while it opened in its frame instead): once the pointer has rested on its name or icon a moment, MadePeek shows the
   // file under it; leaving hides it, as does anything pressed (madeAct). A file whose frame is open needs none.

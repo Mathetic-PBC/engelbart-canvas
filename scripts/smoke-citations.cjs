@@ -147,11 +147,25 @@ app.whenReady().then(async () => {
     await until(() => js(wc, `document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)}).length===7`).catch(() => false), 'the seven citations, drawn as circles');
     await pause(400);
     const circles = await js(wc, `[...document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-editor] a[data-cite]`)})].map((a)=>getComputedStyle(a,'::after').content)`);
-    assert.deepEqual(circles, ['"1"', '"1"', '"1"', '"1"', '"1"', '"1"', '"2"'], 'a number a source, in the order first cited');
-    const sources = await js(wc, `[...document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-cite-sources] [data-cite-source]`)})].map((a)=>[getComputedStyle(a,'::before').content,a.textContent])`);
-    assert.deepEqual(sources, [['"1"', 'Source'], ['"2"', 'Hints']], 'the answer ends with its sources, each by its number and what it is');
+    assert.deepEqual(circles, ['"1"', '"2"', '"3"', '"4"', '"5"', '"6"', '"7"'], 'a number a passage, in the order first cited');
+    const sources = await js(wc, `[...document.querySelectorAll(${JSON.stringify(`${PANE(0)} [data-cite-sources] [data-cite-row]`)})].map((row)=>[[...row.querySelectorAll('[data-cite-source]')].map((a)=>getComputedStyle(a,'::after').content).join(' '),row.querySelector('[data-cite-name]').textContent])`);
+    assert.deepEqual(sources, [['"1" "2" "3" "4" "5" "6"', 'Source'], ['"7"', 'Hints']], 'the answer ends with its sources, each by the numbers quoting it and what it is');
     console.log('PASS the citations are numbers, and the answer lists its sources under it');
-    await press(wc, `${PANE(0)} [data-cite-source="2"]`);
+
+    // The card stays up when the pointer leaves its circle, and goes at a press elsewhere.
+    const label = await until(() => spot(wc, `${PANE(0)} [data-cite-sources] > div > div`), 'the Sources label');
+    const circle = await until(() => spot(wc, `${PANE(0)} [data-editor] a[data-cite][data-n="7"]`), 'circle 7');
+    await pause(300); // spot scrolls the circle into view, and a scroll takes a card down
+    wc.sendInputEvent({ type: 'mouseMove', x: circle.x, y: circle.y });
+    await until(() => js(wc, '!!document.querySelector("[data-cite-card]")'), 'the card on hover');
+    wc.sendInputEvent({ type: 'mouseMove', x: circle.x + 160, y: circle.y + 60 });
+    await pause(400);
+    assert.equal(await js(wc, '!!document.querySelector("[data-cite-card]")'), true, 'the card stays when the pointer leaves');
+    await click(wc, label);
+    await until(() => js(wc, '!document.querySelector("[data-cite-card]")'), 'the card goes at a press elsewhere');
+    console.log('PASS the card stays up when the pointer leaves, and goes at a press');
+
+    await press(wc, `${PANE(0)} [data-cite-source="7"]`);
     const fromList = await until(async () => { const now = await js(wc, LIT); return now && now.seen ? now : null; }, 'a source clicked in the list, opened and lit', 100);
     assert.equal(fromList.text, 'The tutor should wait before the first hint');
     assert.equal(await js(wc, `(document.querySelector('${PANE(1)} [data-doc-title]')||{}).value`), 'Hints', 'the note, beside the document');
