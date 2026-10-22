@@ -94,19 +94,20 @@ test('inlineHtml draws circles: numbered, flagged, folded; the markdown keeps th
   assert.match(inlineHtml('[You · Oct 1](/p/Agents/workspace.md#find=a%20b%20c&cite=you)'), /data-source="Agents"/, 'a workspace\'s document by the workspace');
 });
 
-test('the card a chip shows is the quote, then who wrote it, where and when', async () => {
+test('the card a chip shows is the quote, then where and when it is from, an agent\'s words by name', async () => {
   const { citationCard, libraryName, CITE_CSS } = await citeModel();
   assert.match(CITE_CSS, /a\[data-cite\]::after\{content:attr\(data-n\)/, 'the circle shows its number');
   assert.doesNotMatch(CITE_CSS, /data-you\]\{border-color/, 'no darker ring for the person\'s own words');
   const el = { dataset: { cite: 'you', label: 'You · Oct 12', find: 'reading is slow', source: 'flow' } };
-  assert.deepEqual(citationCard(el), { quote: 'reading is slow', lead: 'You wrote this in', where: 'flow', when: 'Oct 12', counter: false });
-  assert.deepEqual(citationCard({ dataset: { ...el.dataset, cite: 'other', label: 'Chat · Oct 12', counter: '1' } }), { quote: 'reading is slow', lead: 'Chat said this in', where: 'flow', when: 'Oct 12', counter: true });
-  assert.equal(citationCard({ dataset: { ...el.dataset, cite: 'other', label: 'Meeting · Oct 15', source: 'Standup' } }).lead, 'From', 'a meeting, a colleague: where it is from');
-  assert.deepEqual(citationCard({ dataset: { cite: 'source', label: 'TutorTrace p. 6', find: 'x', source: 'TutorTrace' } }), { quote: 'x', lead: 'From', where: 'TutorTrace p. 6', when: '', counter: false });
+  assert.deepEqual(citationCard(el), { quote: 'reading is slow', lead: '', where: 'flow', when: 'Oct 12', counter: false });
+  assert.deepEqual(citationCard({ dataset: { ...el.dataset, cite: 'other', label: 'Chat · Oct 12', counter: '1' } }), { quote: 'reading is slow', lead: 'Chat', where: 'flow', when: 'Oct 12', counter: true });
+  assert.equal(citationCard({ dataset: { ...el.dataset, cite: 'other', label: 'Meeting · Oct 15', source: 'Standup' } }).lead, '', 'a meeting, a colleague: where it is from');
+  assert.deepEqual(citationCard({ dataset: { cite: 'source', label: 'TutorTrace p. 6', find: 'x', source: 'TutorTrace' } }), { quote: 'x', lead: '', where: 'TutorTrace p. 6', when: '', counter: false });
   const { citationCardHtml } = await citeModel();
   const html = citationCardHtml(citationCard(el));
   assert.match(html, /“reading is slow”/);
-  assert.match(html, /You wrote this in <span[^>]*>flow<\/span> · Oct 12/);
+  assert.match(html, /<\/span><span [^>]*><span[^>]*>flow<\/span> · Oct 12<\/span>/, 'where and when, no "You wrote this in"');
+  assert.match(citationCardHtml(citationCard({ dataset: { ...el.dataset, cite: 'other', label: 'Chat · Oct 12' } })), />Chat · <span[^>]*>flow<\/span> · Oct 12/);
   const rows = [{ name: 'A paper', path: '/lib/a.pdf' }, { name: 'The page', url: 'https://www.example.org/x/' }, { name: 'Interviews', type: 'folder', path: '/lib/Interviews' }];
   assert.equal(libraryName(rows, '/lib/a.pdf'), 'A paper');
   assert.equal(libraryName(rows, 'https://example.org/x'), 'The page');
@@ -194,7 +195,7 @@ test('an answer\'s sources: one a source, by the numbers quoting it and what it 
   assert.match(html, /data-cite-source="4" data-n="4"[^>]*><\/a><a [^>]*data-cite-name="1"[^>]*>Standup<\/a>/);
   const { citationCard } = await citeModel();
   const attrs = (n) => Object.fromEntries([...html.match(new RegExp(`<a [^>]*data-cite-source="${n}"[^>]*>`))[0].matchAll(/data-([a-z-]+)="([^"]*)"/g)].map(([, k, v]) => [k.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v]));
-  assert.deepEqual(citationCard({ dataset: attrs(3) }), { quote: 'figures first then text', lead: 'You wrote this in', where: 'My note.md', when: 'Oct 14', counter: false }, 'a number in the list has the card its circle has');
+  assert.deepEqual(citationCard({ dataset: attrs(3) }), { quote: 'figures first then text', lead: '', where: 'My note.md', when: 'Oct 14', counter: false }, 'a number in the list has the card its circle has');
   assert.equal(citationCard({ dataset: attrs(4) }).counter, true);
   assert.equal(citationSourcesHtml(citationSources('No citations here.')), '', 'nothing for an answer that cites nothing');
 });
