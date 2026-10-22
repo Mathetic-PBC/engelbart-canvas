@@ -2,6 +2,7 @@
 import katex from 'katex';
 import { hammerSvg } from './hammer.js';
 import { isAddress, webLabel } from './web-name.js';
+import { citationOf, citationRuns, citationNumbers, citationHtml, citationMoreHtml } from './cite.js';
 
 export { isAddress, sameAddress, webLabel, webName } from './web-name.js'; // a web page's mention (2026-10-17)
 // Ported verbatim from design/goal-canvas/Goal Canvas.dc.html (lines 403–404, 439–456, 692–730, 801–812).
@@ -508,6 +509,8 @@ export function tokShown(tok, opts) {
   const made = tok.match(MADE_MENTION_RE); if (made) return { shown: '@' + made[1], pre: 1 };
   const lib = tok.match(LIB_MENTION_RE); if (lib) return { shown: '@' + libShown(lib[1], lib[2], opts && opts.libName), pre: 1 };
   if (tok.startsWith('@[')) { const nm = tok.slice(2, -1), chat = chatMention(nm); return { shown: '@' + (chat ? chat.shown : nameShown(nm)), pre: 1 }; } // a web page's glyph is not text either
+  // A citation (2026-10-21, ./cite.js) is a circle whose number is CSS's: no text, one unit, as the hammer is.
+  if (citationOf(tok)) return { shown: '', pre: 1, unit: true };
   const m = tok.match(LINK_RE); if (m) return { shown: m[1], pre: 1 };
   return { shown: tok, pre: 0 };
 }
@@ -780,7 +783,15 @@ export function holdsLink(tok) {
  * `opts.buildTurn`: in an answer line, its turn's question line, which a click on the hammer builds (buildIconHtml).
  */
 export function inlineHtml(text, opts) {
-  return text.split(INLINE).map((p) => {
+  const parts = String(text).split(INLINE).filter(Boolean);
+  // Chat's citations (./cite.js): numbered by `opts.cites` (the answer's, citationNumbers), else in the order this text
+  // cites its sources; a run of three or more folds into its first circle and "…".
+  let runs = null;
+  if (parts.some((p) => citationOf(p))) {
+    runs = citationRuns(parts);
+    if (!(opts && opts.cites)) opts = { ...(opts || {}), cites: citationNumbers(text) };
+  }
+  const html = parts.map((p) => {
     if (!p) return '';
     if (p === '\\$') return '$';
     if (isMathToken(p)) return mathTokenHtml(p);
@@ -803,10 +814,19 @@ export function inlineHtml(text, opts) {
     const made = madeMentionOf(p);
     if (made) return `<span data-mention="${esc(made.name)}" data-made="${esc(madeKey(made))}" style="${MENTION_LOOK};white-space:nowrap">@${esc(made.name)}</span>`;
     if (p.startsWith('@[')) return nameHtml(p.slice(2, -1), opts && opts.named, opts && opts.trashed, opts);
+    const cite = citationOf(p);
+    if (cite) return citationHtml(cite, opts);
     const m = p.match(LINK_RE);
     if (m) return `<a href="${esc(m[2])}" data-link="1" style="${LINK_LOOK}">${esc(m[1])}</a>`;
     if (URL_RE.test(p)) return `<a href="${esc(p)}" data-link="1" style="${LINK_LOOK}">${esc(p)}</a>`;
     return esc(p);
+  });
+  if (!runs) return html.join('');
+  return html.map((h, k) => {
+    const r = runs[k];
+    if (!r) return h;
+    const open = r.role === 'first' ? `<span data-cite-run="1">${h}${citationMoreHtml(r.more)}<span data-cite-rest="1">` : h;
+    return k === r.last ? `${open}</span></span>` : open;
   }).join('');
 }
 

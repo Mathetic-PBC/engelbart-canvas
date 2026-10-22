@@ -122,6 +122,8 @@ import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, LABEL_INK, 
 import { sideSpace, deskGeom, placeOf, posOf, spaceBoxes, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, runningLabel, textColumn, fitWidth, freeNoteWidth, noteScale, NOTE_FLOOR, HIDE_ROOM, FREE_MIN, FREE_FIT, EDGE_PAD, NOTE_W, NOTE_MIN, BOX_GAP, SIDE_GAP, POS_DY, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import { selectionCardPlace } from '../../shared/selection-card.cjs';
+import { matchPassage } from '../../shared/passage-text.cjs';
+import { citationNumbers, citationTip, openCitationRun, libraryName, CITE_CSS } from '../model/cite.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
 
 // pdf.js 6: a document is torn down through its loading task (PDFDocumentProxy has no destroy()).
@@ -277,7 +279,10 @@ const NOTE_LOOK = `pointer-events:auto;${NOTE_TYPE};transition:opacity 120ms,bac
 
 // An answer as its box draws it (MATH-27): a paragraph a line, with what Bart was told a box may hold (bold, italic,
 // code, links), and a list's or a heading's mark taken off should one come anyway. answerParas: each paragraph's inside.
+// Chat's citations are its circles (../model/cite.js), numbered over the whole answer, each taking keyboard focus.
 function answerParas(text, opts) {
+  const cites = citationNumbers(String(text || ''));
+  if (cites.size) opts = { ...(opts || {}), cites, citeFocus: true };
   return String(text || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
     const item = line.match(/^[-*] (.*)$/), head = line.match(/^#{1,6} (.*)$/);
     return item ? `• ${inlineHtml(item[1], opts)}` : head ? `<strong>${inlineHtml(head[1], opts)}</strong>` : inlineHtml(line, opts);
@@ -319,6 +324,7 @@ function toBytes(src) {
 }
 
 export default class PaperView extends React.Component {
+  citeTip = citationTip(); // a citation's card, over a box's circle (../model/cite.js)
   constructor(props) {
     super(props);
     this.state = { note: 'Opening the paper…', page: 0, pages: 0, pct: 100, mention: null, mentionIdx: 0, removed: null, browse: null };
@@ -479,6 +485,7 @@ export default class PaperView extends React.Component {
   }
 
   componentWillUnmount() {
+    this.citeTip.hide();
     const host = this.host.current;
     if (host) {
       host.removeEventListener('mousedown', this.onDown);
@@ -1159,6 +1166,10 @@ export default class PaperView extends React.Component {
         spots.push({ page, from: m.index, to: m.index + m[0].length });
       }
     }
+    // A passage (a link's, a citation's: 2026-10-21) that differs from the text layer in its typography alone (curly
+    // quotes, dashes, the fi ligature, a soft hyphen): found as main checked it (shared/passage-text.cjs).
+    if (spots.length || query.trim().split(/\s+/).length < 3) return spots;
+    for (const { page, joined } of pages) for (const hit of matchPassage(joined, query)) spots.push({ page, from: hit.start, to: hit.end });
     return spots;
   }
 
@@ -1992,7 +2003,7 @@ export default class PaperView extends React.Component {
       return sec;
     }
     // the model that wrote it (a.meta) is kept but not shown (MATH-70 build 3)
-    const lib = { libName: (id) => this.libName(id) }, asked = askedByNote(a.question, m.note) ? '' : String(a.question || '');
+    const lib = { libName: (id) => this.libName(id), citeSource: (address) => libraryName(this.props.library, address) }, asked = askedByNote(a.question, m.note) ? '' : String(a.question || '');
     sec.style.cssText = `${line}flex:none;display:flex;flex-direction:column;${ANSWER_FONT};color:${ANSWER_INK}`;
     sec.innerHTML = (asked ? `<div title="${esc(asked)}" style="flex:none;padding:0 6px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${QUESTION_INK}">${esc(asked)}</div>` : '')
       + `<div data-ask-body="1" style="flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 6px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
@@ -2024,6 +2035,7 @@ export default class PaperView extends React.Component {
   }
 
   askClick(ev, m, a, page) {
+    if (openCitationRun(ev.target)) { ev.preventDefault(); ev.stopPropagation(); return; } // a folded run's "…"
     const link = ev.target.closest && ev.target.closest('a[href]');
     if (link) { // never the app's window: the Stage opens it
       ev.preventDefault(); ev.stopPropagation();
@@ -2115,6 +2127,7 @@ export default class PaperView extends React.Component {
     if (lines.length && atEnd) body.scrollTop = body.scrollHeight;
   }
   runClick(ev, askId, page) {
+    if (openCitationRun(ev.target)) { ev.preventDefault(); ev.stopPropagation(); return; } // a folded run's "…"
     const link = ev.target.closest && ev.target.closest('a[href]');
     if (link) { // never the app's window: the Stage opens it, as from an answer's box
       ev.preventDefault(); ev.stopPropagation();
@@ -2588,8 +2601,8 @@ export default class PaperView extends React.Component {
     const { title } = this.props;
     const { note, page, pages, pct, removed } = this.state;
     return (
-      <div ref={this.root} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: title ? 12 : 0 }}>
-        <style>{LAYER_CSS}</style>
+      <div ref={this.root} onMouseOver={this.citeTip.over} onMouseOut={this.citeTip.out} onFocus={this.citeTip.over} onBlur={this.citeTip.out} style={{ flex: 1, minHeight: 0, display: 'flex', flexDirection: 'column', gap: title ? 12 : 0 }}>
+        <style>{LAYER_CSS + CITE_CSS}</style>
         {title ? (
           <>
             <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16, padding: '14px 20px 0' }}>

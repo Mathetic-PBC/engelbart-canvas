@@ -5,6 +5,7 @@ import '@fontsource/caveat/500.css';
 import 'katex/dist/katex.min.css';
 import '../wave.css'; // .eb-wave, the document's text at work (this page has no styles.css)
 import { inlineHtml, noteInkHtml } from '../model/doc.js';
+import { citationNumbers, openCitationRun, CITE_CSS } from '../model/cite.js';
 import { noteQuestion, askedByNote, runningLabel } from '../pdf/canvas.js';
 import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, ERROR_INK, ANSWER_GAP, CARD_GROUND, cardCss, styleOf } from '../pdf/card-look.js';
 import { WAVE_SPAN, keepWaves } from '../ui/wave.js';
@@ -56,15 +57,17 @@ const TRASH_SVG = (
 
 // An answer as the pdf's box draws it: a paragraph a line, bold, italic, code and links, a list's or a heading's mark
 // taken off should one come anyway (PaperView answerParas).
+// Chat's citations are its circles (../model/cite.js), numbered over the whole answer, each its card as its tooltip.
 function answerParas(text) {
+  const cites = citationNumbers(String(text || '')), opts = cites.size ? { cites, citeFocus: true, citeTitle: true } : undefined;
   return String(text || '').split('\n').map((line) => line.trim()).filter(Boolean).map((line) => {
     const item = line.match(/^[-*] (.*)$/), head = line.match(/^#{1,6} (.*)$/);
-    return item ? `• ${inlineHtml(item[1])}` : head ? `<strong>${inlineHtml(head[1])}</strong>` : inlineHtml(line);
+    return item ? `• ${inlineHtml(item[1], opts)}` : head ? `<strong>${inlineHtml(head[1], opts)}</strong>` : inlineHtml(line, opts);
   });
 }
 const answerHtml = (text) => answerParas(text).map((inside) => `<p>${inside}</p>`).join('');
 // a link in an answer never takes the card's page anywhere (main refuses it too)
-const noFollow = (event) => { if (event.target.closest && event.target.closest('a[href]')) event.preventDefault(); };
+const noFollow = (event) => { if (openCitationRun(event.target) || (event.target.closest && event.target.closest('a[href]'))) event.preventDefault(); };
 
 /** The card's width: ASK_W once it has answers or one is coming, else as wide as the note's longest line `noteW` (its
  *  ink, measured) and the field's room, from MIN_W to ASK_W. */
@@ -345,7 +348,7 @@ function CardPage() {
   const selection = !!(msg && msg.mode === 'selection');
   return (
     <div ref={root} style={{ display: 'inline-block', verticalAlign: 'top' }}>
-      <style>{CSS}{SEL_CSS}</style>
+      <style>{CSS}{SEL_CSS}{CITE_CSS}</style>
       {selection ? <SelectionCard msg={msg} /> : <BoxCard msg={msg} />}
     </div>
   );

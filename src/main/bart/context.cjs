@@ -301,6 +301,13 @@ async function mentionedPapers(ctx, project, rows) {
   return out;
 }
 
+/** "this workspace: <path>" and a line for each of the project's other workspaces: its name and its document's path. */
+function workspaceLines(project, workspace) {
+  const doc = (dir) => path.join(dir, 'workspace.md');
+  const others = projects.flattenWorkspaces(project.dir).filter((w) => w.id !== workspace.id);
+  return [`this workspace's document: ${doc(workspace.dir)}`, ...others.map((w) => `other workspace "${w.path}": ${doc(path.join(project.dir, w.path))}`)];
+}
+
 /**
  * → { project, dirs, head, contextJson, mentionedFiles, files, documents, now, entries, workspaceName }. `head`,
  * `mentionedFiles` (<mentioned_files>, MATH-22; '' with none) and the documents are text; the caller adds the level and
@@ -388,6 +395,8 @@ async function buildContext(ctx, projectId, { ref, workspaceId, askId, agent = '
     `code directory: ${project.directory || 'none set'}`,
     `notes and workspaces: ${project.dir}`,
     `asked from: ${from}`,
+    // Chat cites passages of workspaces by their documents' paths (2026-10-21, ./cite.cjs): this one's, and the project's others.
+    ...(agent === 'bart' ? workspaceLines(project, workspace) : []),
     ...(ZOTERO_READERS.has(agent) && ctx.dataRoot ? [zoteroMirror.pointerLine(zoteroMirror.mirrorDir(ctx.dataRoot))].filter(Boolean) : []),
     '</engelbart>',
     instructionsBlock(ctx.dataRoot),

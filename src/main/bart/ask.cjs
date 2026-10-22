@@ -95,6 +95,8 @@ const { plainTitle, capTitle } = require('./name-chat.cjs');
 const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
+const { checkCitations } = require('./cite.cjs');
+const { citeHref } = require('../../shared/passage-link.cjs');
 const { clipMiddle } = require('./clip.cjs');
 const { pathLabeller, claudeReader, codexUpdate, eventReader, createFeed } = require('./activity.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
@@ -493,6 +495,28 @@ function withoutCopiedFoot(text) {
 }
 
 /**
+ * Chat's answer with its citations checked (2026-10-21, ./cite.cjs): each against what it cites, before the answer is
+ * written into the document and before its thread is kept, so a follow-up finds the same answer. What was kept and what
+ * was taken out is logged with the run. Build's replies, and the other agents', are as they came. Should the library not
+ * be read, every citation is taken out: none is kept unchecked.
+ */
+/** Whether a reply's citations are checked: Chat's own answers, a highlight's included; not a Build's, Brainstorm's, Discover's or Create's. */
+const citesChecked = (agent, routed) => agent === 'bart' && !(routed && routed.build);
+
+async function citedBody(ctx, { agent, routed, body, projectId, workspaceId, prior, question, log, logId }) {
+  if (!citesChecked(agent, routed)) return body;
+  const thread = { dataRoot: ctx.dataRoot, projectId, workspaceId, currentThread: [...(prior || []), { question }] };
+  let checked;
+  try {
+    checked = await checkCitations(body, { ...thread, library: await ctx.libraryDb.list() });
+  } catch {
+    checked = await checkCitations(body, { ...thread, library: [], readText: () => null });
+  }
+  if (checked.kept.length || checked.dropped.length) log((runs) => runs.amend(logId, { citations: { kept: checked.kept, dropped: checked.dropped } }));
+  return checked.body;
+}
+
+/**
  * The reply as the document keeps it, by agent: @discover's card when it asked one, else its guide as it came;
  * @brainstorm's opening card (2026-10-16), its labels only and at most four, else its prose (2026-10-14, as Chat's); @bart's
  * and @create's answer as it came. Each loses a copied foot at its end. (The Welcome walkthrough's cards are kept by
@@ -875,7 +899,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         // The Welcome walkthrough's cards always read the same (welcomeReply).
         const named = taken(agent, plan, out.text);
         // With nothing kept (a Build's request, refused), the line on what it was making is not said.
-        const body = made ? createdBody(createdSentence(made.files.length ? createdLine((await line) || requestSentence(question)) : '', out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : replyBody(agent, named.text);
+        const body = made ? createdBody(createdSentence(made.files.length ? createdLine((await line) || requestSentence(question)) : '', out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : await citedBody(ctx, { agent, routed, body: replyBody(agent, named.text), projectId, workspaceId, prior, question: text, log, logId });
         // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
         if (out.session && store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta, ...handedBack(named) };
@@ -959,6 +983,20 @@ function fakeTopic(reply, sent, question) {
  * Why, then a classic it cites, a paper that cites it and an essay; a follow-up that names one gets the same.
  * Nothing is looked up: every entry says it is fake.
  */
+/**
+ * A fake Chat answer's citations, when the question says "cite" (2026-10-21): one quoting the first words of the first
+ * note the library holds, which the check keeps, and one quoting words it does not have, which the check takes out.
+ */
+function fakeCitations(context) {
+  const note = context.entries.find((row) => row.path && /\.md$/i.test(row.path) && fs.existsSync(row.path));
+  if (!note) return '';
+  const words = fs.readFileSync(note.path, 'utf8').replace(/[#*_`>[\]()-]/g, ' ').split(/\s+/).filter(Boolean).slice(0, 6).join(' ');
+  if (words.split(' ').length < 4) return '';
+  const good = citeHref({ address: note.path, find: words, cite: 'you' });
+  const bad = citeHref({ address: note.path, find: 'words the fake note never says anywhere', cite: 'you' });
+  return `\n\nYou wrote this down before [You · Oct 12](${good}). And something else [You · Oct 13](${bad}).`;
+}
+
 function fakeDiscover(context, plan) {
   if (!plan.search) return fakeDirection(context, plan);
   const guided = plan.prior.some((turn) => /^## /.test(turn.answer));
@@ -1133,14 +1171,14 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
           first: message, session: held ? held.session : null,
           // What it was sent is what it reports: a resumed session gets the question alone (an @bart one, the Stage and
           // highlights as well), a new one gets everything.
-          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: create ? await actCreate(fakeCreate(draft, question)) : await act(plan.welcome ? fakeWelcome(plan) : brainstorm ? fakeTopic(fakeThink(plan, sent), sent, question) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}`) })),
+          turn: (input) => loggedTurn(log, logId, input, async ({ message: sent }) => ({ session: 'fake', text: create ? await actCreate(fakeCreate(draft, question)) : await act(plan.welcome ? fakeWelcome(plan) : brainstorm ? fakeTopic(fakeThink(plan, sent), sent, question) : discover ? fakeDiscover(context, plan) : /hard/.test(question) && /step 1 of/.test(sent) ? 'ESCALATE: the question says it is hard' : `FAKE ANSWER to "${question}".\n\n## Seen\n- **${context.documents.length}** characters of documents\n- \`${steps.length}\` steps${prior.length ? `\n- ${/<conversation>/.test(sent) ? `a new session, given ${prior.length} earlier ${prior.length === 1 ? 'turn' : 'turns'}` : /<engelbart>/.test(sent) ? 'a new session, given no earlier turns' : 'the same session, given the question alone'}` : ''}${/code/.test(question) ? `\n\nThe same as JSON:\n\n\`\`\`json\n{\n  "fake": true,\n  "steps": ${steps.length},\n  "note": "# not a heading"\n}\n\`\`\`` : ''}${/\bcite\b/.test(question) ? fakeCitations(context) : ''}`) })),
         });
         const meta = { provider, level: out.level, trail: out.trail, ms: out.ms, pinned, ...(routed ? { routed } : {}) };
         const made = create ? await keepCreated(ctx, projectId, logId, draft) : null;
         if (made) { meta.created = made.files.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
         if (made) await saveAllCreated(ctx, projectId, workspaceId, logId, made.files, { inspectPdf, onAdded }); // and saved (2026-10-15)
         const named = taken(agent, plan, out.text);
-        const body = made ? createdBody(createdSentence(made.files.length ? createdLine(line || requestSentence(question)) : '', out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : replyBody(agent, named.text);
+        const body = made ? createdBody(createdSentence(made.files.length ? createdLine(line || requestSentence(question)) : '', out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : await citedBody(ctx, { agent, routed, body: replyBody(agent, named.text), projectId, workspaceId, prior, question: text, log, logId });
         if (store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         const result = { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta, ...handedBack(named) };
         ended('done', result);
@@ -1158,4 +1196,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { takeTopic, takeResearch, withoutResearch, steersShown, steerMessage, isSearch, createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, welcomeReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, WELCOME_CARDS };
+module.exports = { citesChecked, takeTopic, takeResearch, withoutResearch, steersShown, steerMessage, isSearch, createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, welcomeReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, WELCOME_CARDS };

@@ -68,6 +68,7 @@ import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
 import { fieldCaret } from './caret.js';
 import Popover from './Popover.jsx';
+import { citationNumbers, citationCard, openCitationRun, libraryName, CITE_CSS } from '../model/cite.js';
 import MadePeek from './MadePeek.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import ImageViewer from './ImageViewer.jsx';
@@ -649,7 +650,7 @@ export default class DocEditor extends React.Component {
         if (grip && e.button === 0) { e.preventDefault(); this.startResize(e, grip); return; }
         const pic = e.target.closest && e.target.closest('[data-img]');
         if (pic && e.button === 0 && !this.props.readOnly) { e.preventDefault(); this.startImgDrag(e, pic); return; }
-        if (e.target.closest('button[data-act], [data-build-icon][data-act], .bart-chip, a[data-link], [data-mention], [data-folded-row], .made-name, [data-made-folded]')) { e.preventDefault(); return; }
+        if (e.target.closest('button[data-act], [data-build-icon][data-act], .bart-chip, a[data-link], [data-cite-more], [data-mention], [data-folded-row], .made-name, [data-made-folded]')) { e.preventDefault(); return; }
         this.downGap = e.button === 0 && !inFollow(e) ? this.gapAt(e.target, e.clientY) : null;
         if (this.downGap && !this.downOnRoot) { e.preventDefault(); return; }
         const near = e.button === 0 && !inFollow(e) ? this.nearLink(e.target, e.clientX, e.clientY) : null;
@@ -1417,7 +1418,7 @@ export default class DocEditor extends React.Component {
       const q = active ? parseLine(p.text) : null, cut = q && (q.type === 'h' || isMarked(q.type)) ? p.text.length - q.text.length : 0;
       const tokens = cut ? [p.text.slice(0, cut), ...p.text.slice(cut).split(INLINE).filter(Boolean)] : null;
       const hang = cut && q.type !== 'h' ? `padding-left:calc(${q.depth * 18}px + ${MARK_COL});` : '';
-      const own = at && at.turn && !isRunning(at.thread, this.props.builds) ? at.turn.q : null, a = this.answerLook(p.text, own), shut = active && this.linksShut(p), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`, shut, this.answerOpts(own)) : this.activeHtml(tokensOf(p, line), null, null, shut, this.answerOpts(own))) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : a.content + mark;
+      const own = at && at.turn && !isRunning(at.thread, this.props.builds) ? at.turn.q : null, cites = this.citesOf(at), a = this.answerLook(p.text, own, cites), shut = active && this.linksShut(p), content = active ? (tokens ? this.activeHtml(tokens, null, `color:#b5b5b5;${q.type === 'h' ? '' : `${MARK_EDITED};`}`, shut, this.answerOpts(own, cites)) : this.activeHtml(tokensOf(p, line), null, null, shut, this.answerOpts(own, cites))) : offer ? this.resultOfferHtml(i) : recap ? this.recapHtml(recap, first) : a.content + mark;
       return `<div ${rawA}${mark ? ' data-paper-line="1"' : ''} contenteditable="false" data-readonly="1" style="user-select:text;-webkit-user-select:text;padding:${first ? 12 : 0}px 16px ${closes ? 10 : 0}px;background:#fafafa;border-radius:${radius(!at && first, closes)};margin-bottom:${closes ? 8 : 0}px;color:#262626;font-size:16px;line-height:1.65;cursor:default"><span style="display:block;padding:${first ? 2 : 0}px 0 ${last ? 2 : 0}px 14px;border-left:2px solid #d6d6d6"><span class="t" style="display:block;min-height:${a.minHeight}px;border-radius:4px;${a.look}${hang}${mark ? 'position:relative;padding-right:28px;' : ''}${active ? 'background:#f5f5f5;box-shadow:0 0 0 4px #f5f5f5;' : ''}">${content || '<br>'}</span></span></div>`;
     }
     if (p.type === 'quote') {
@@ -1678,15 +1679,29 @@ export default class DocEditor extends React.Component {
   }
   // `turn`: the question line of the answered turn this line is in, which the [[build]] hammer in it builds when clicked
   // (model/doc.js inlineHtml); left out where there is nothing to build (a run still writing, a Build's messages).
-  answerLook(text, turn = null) {
+  answerLook(text, turn = null, cites = null) {
     const q = parseLine(text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
-    const opts = this.answerOpts(turn);
+    const opts = this.answerOpts(turn, cites);
     if (q.type === 'h') return { content: ink(inlineHtml(q.text, opts)), look: `font:600 ${[18, 17, 16][q.level - 1]}px/1.5 var(--font-sans);color:#171717;padding-top:8px;`, minHeight: 26 };
     if (isMarked(q.type)) return { content: `<span style="display:flex;padding-left:${q.depth * 18}px"><span contenteditable="false" style="${MARK_DRAWN};color:#8f8f8f;user-select:none">${esc(listMark(q))}</span><span style="flex:1;min-width:0">${ink(inlineHtml(q.text, opts))}</span></span>`, look: 'padding-top:4px;padding-bottom:4px;', minHeight: 26 };
     return { content: ink(inlineHtml(text, opts)), look: 'text-wrap:pretty;', minHeight: text ? 26 : 22 };
   }
   // inlineHtml's options for a line of turn `turn`'s answer: its [[build]] builds that turn, drawn or with the caret on it.
-  answerOpts(turn) { return Number.isInteger(turn) && this.props.onBuild && !this.props.readOnly ? { ...this.mentionOpts, buildTurn: turn } : this.mentionOpts; }
+  // `cites`: the answer's citation numbers (citesOf), so a circle has the same number on every line of it.
+  answerOpts(turn, cites = null) {
+    const build = Number.isInteger(turn) && this.props.onBuild && !this.props.readOnly;
+    return build || cites ? { ...this.mentionOpts, ...(build ? { buildTurn: turn } : {}), ...(cites ? { cites } : {}) } : this.mentionOpts;
+  }
+  // The citation numbers of the answer line `at` is in (model/cite.js citationNumbers): each source its own, in the order
+  // the answer first cites it. Kept by the answer's text, as every line of it asks while the document is drawn.
+  citesOf(at) {
+    if (!at || !at.turn) return null;
+    const answer = turnText(this.lines(), at.turn).answer;
+    if (!answer || !answer.includes('cite=')) return null;
+    if (!this.citeMemo || this.citeMemo.size > 200) this.citeMemo = new Map();
+    if (!this.citeMemo.has(answer)) this.citeMemo.set(answer, citationNumbers(answer));
+    return this.citeMemo.get(answer);
+  }
   /* ---------------------------------------------------------------- Build cards (2026-09-25) */
   // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends), props.buildProgress
   // (what a running turn is doing) and props.buildDiffs (what it has changed). The card is in parts — head, body, live,
@@ -2451,10 +2466,10 @@ export default class DocEditor extends React.Component {
   chatLineHtml(i, raw, p, active, at) {
     const ls = this.lines(), kind = chatKind(ls[i]), before = at.first ? null : chatKind(ls[i - 1] ?? '');
     const space = !before || before === 'blank' || kind === 'blank' ? 0 : kind === 'item' && before === 'item' ? 6 : kind !== before && (kind === 'item' || before === 'item') ? 8 : 0;
-    const own = !isRunning(at.thread, this.props.builds) ? at.turn.q : null, opts = this.answerOpts(own);
+    const own = !isRunning(at.thread, this.props.builds) ? at.turn.q : null, cites = this.citesOf(at), opts = this.answerOpts(own, cites);
     const q = parseLine(p.text), ink = (html) => html.replace(/<strong style="font-weight:600">/g, '<strong style="color:#171717;font-weight:600">');
     // A bullet's column is 14px; a number's or a todo's keeps the 1.75em one (MATH-69), drawn and edited alike.
-    const a = this.answerLook(p.text, own), dot = q.type === 'list' && q.num == null, col = dot ? '14px' : MARK_COL;
+    const a = this.answerLook(p.text, own, cites), dot = q.type === 'list' && q.num == null, col = dot ? '14px' : MARK_COL;
     let content, look = q.type === 'h' ? a.look : 'text-wrap:pretty;', hang = '';
     if (active) {
       const cut = q.type === 'h' || isMarked(q.type) ? p.text.length - q.text.length : 0, shut = this.linksShut(p);
@@ -3804,6 +3819,8 @@ export default class DocEditor extends React.Component {
     return <ImageViewer pics={lb.pics} at={lb.at} onStep={(at) => this.setState({ lightbox: { ...lb, at, src: lb.pics[at].src } })} onClose={this.closePicture} onCopy={this.copyPicture} />;
   }
   editorClick = (e) => {
+    // A folded run of citations' "…" opens the run (model/cite.js).
+    if (openCitationRun(e.target)) { e.preventDefault(); return; }
     const pic = e.target.closest && e.target.closest('[data-img]');
     if (pic && (this.resizing || this.imgDragged)) { e.preventDefault(); return; }
     if (pic && typeof pic.getAttribute === 'function') { e.preventDefault(); this.openPicture(pic); return; }
@@ -3967,6 +3984,8 @@ export default class DocEditor extends React.Component {
   editorOver = (e) => {
     const m = e.target.closest('[data-mention]'), res = m && m.dataset.file == null && m.dataset.zotero == null && m.dataset.made == null && (m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention, m.dataset.lib));
     if (res) this.showPop(res, { currentTarget: m });
+    // A citation's card (model/cite.js): whose words, the quote, and where they are.
+    const cite = e.target.closest('a[data-cite]'); if (cite) this.showPop(citationCard(cite), { currentTarget: cite });
     const peek = e.target.closest('[data-made-peek]'); if (peek) this.peekMade(peek);
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
@@ -3976,7 +3995,7 @@ export default class DocEditor extends React.Component {
   // Leaving what opened the selector starts its closing clock, unless the pointer went straight onto the selector: React has
   // by then already handled that same event (the selector's onMouseEnter stops the clock), and this would start it again.
   editorOut = (e) => {
-    if (e.target.closest('[data-mention]')) this.hidePop();
+    if (e.target.closest('[data-mention]') || e.target.closest('a[data-cite]')) this.hidePop();
     const peek = e.target.closest('[data-made-peek]');
     if (peek && !(e.relatedTarget && peek.contains(e.relatedTarget))) this.unpeekMade();
     const onto = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-bart-picker]');
@@ -4977,6 +4996,9 @@ export default class DocEditor extends React.Component {
     webKind: (name, id) => { const row = id ? this.findRes('', id) : this.findRes(name); return isWebRow(row) ? (kindKey(row) === 'git' ? 'git' : 'website') : null; },
     // A file in a library folder (MATH-22): false when it is no longer there, undefined until that is known.
     fileState: (folderId, rel) => (typeof this.props.fileState === 'function' ? this.props.fileState(folderId, rel) : undefined),
+    // A citation's source (model/cite.js, 2026-10-21): the library's name for the paper, page or note it quotes, a file in a
+    // library folder by the folder's name and its own; null when the library does not have it (a workspace's document).
+    citeSource: (address) => libraryName(this.props.mentionable, address),
   };
   showPop(res, e) { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pop: { res, anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } } }); }
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };
@@ -5027,7 +5049,7 @@ export default class DocEditor extends React.Component {
     // Compact (a post-it, 2026-09-22) never scrolls: it is as tall as its lines, and the card fits the type to its size.
     return (
       <>
-        <style>{RISE_CSS + CARD_CSS}</style>
+        <style>{RISE_CSS + CARD_CSS + CITE_CSS}</style>
         {lightbox && createPortal(lightbox, document.body)}
         {this.props.emptyHint && <style>{emptyHintCss(this.props.emptyHint)}</style>}
         {/* Past the last line the page keeps going for about half a window (2026-09-22), so the end of a document can be read and written mid-screen. */}

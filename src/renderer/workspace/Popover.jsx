@@ -1,5 +1,5 @@
 // Hover card for an @[mention] (Goal Canvas.dc.html lines 380–387, popStyle at line 1077): under the mention, or above
-// it when there is no room below (2026-09-22).
+// it when there is no room below (2026-09-22). A citation's too (2026-10-21).
 import { kindOf } from '../ui/Icons.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
 
@@ -8,7 +8,7 @@ const EASE = 'cubic-bezier(.25,.1,.25,1)';
 export default function Popover({ item, anchor }) {
   const [ref, placed] = usePlaced(anchor, { gap: 8 });
   if (!item) return null;
-  const kind = kindOf(item);
+  const kind = item.kindLabel ? { label: item.kindLabel } : kindOf(item); // a citation's card says whose words (model/cite.js citationCard)
   return (
     <div ref={ref} data-overlay="1" data-hover="1" style={{ ...placed, zIndex: 50, width: 330, padding: '14px 16px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', pointerEvents: 'none', animation: `rise 160ms ${EASE}` }}>
       <div style={{ font: '500 9px/1 var(--font-sans)', letterSpacing: '1.6px', textTransform: 'uppercase', color: '#8f8f8f' }}>{kind.label}</div>

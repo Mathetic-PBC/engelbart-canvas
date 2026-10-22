@@ -409,7 +409,7 @@ test('context from a workspace: the document with mentions in place, and Context
   await projects.createNote(ctx, project.id, { name: 'Unrelated', text: 'not mentioned' });
   await projects.writeDoc(ctx, project.id, { kind: 'workspace', workspaceId: workspace.id }, 'See @[Plan].\n@bart why?\nbart~> a1\n');
   const context = await buildContext(ctx, project.id, { ref: { kind: 'workspace', workspaceId: workspace.id }, workspaceId: workspace.id, askId: 'a1' });
-  assert.match(context.head, /^<engelbart>\nproject: Asking\ncode directory: .+\nnotes and workspaces: .+\nasked from: the workspace "Agents"\n<\/engelbart>$/);
+  assert.match(context.head, /^<engelbart>\nproject: Asking\ncode directory: .+\nnotes and workspaces: .+\nasked from: the workspace "Agents"\nthis workspace's document: .+\/Agents\/workspace\.md\n(?:other workspace "[^"]+": .+\/workspace\.md\n)*<\/engelbart>$/);
   assert.match(context.documents, /^<workspace name="Agents">\nSee @\[Plan\]\.\n\n<file name="Plan" type="md" tags="note" path="[^"]+">\nthe plan\n<\/file>\n\n@bart why\?\n<<< this is the question being asked now >>>\n<\/workspace>\n\n<stage>none<\/stage>$/, '@bart: <stage>none</stage> with nothing in front');
   assert.equal(context.now, '<stage>none</stage>\n\n<highlights>none</highlights>', 'what a resumed turn is sent');
   const entries = JSON.parse(context.contextJson.replace(/^<context_json>\n|\n<\/context_json>$/g, ''));

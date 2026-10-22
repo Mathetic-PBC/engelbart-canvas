@@ -2,6 +2,7 @@ import React from 'react';
 import { EDGE as WINDOW_EDGE } from '../ui/WindowEdges.jsx';
 import { isGithubSignIn } from '../../shared/github.cjs';
 import { isPreviewAddress } from '../../shared/address-key.cjs';
+import { matchPassage } from '../../shared/passage-text.cjs';
 import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
@@ -355,9 +356,10 @@ const highlights = () => (typeof CSS !== 'undefined' && CSS.highlights && typeof
 function textRanges(root, query) {
   const needle = String(query || '').toLowerCase();
   if (!root || !needle.trim()) return [];
-  const ranges = [];
+  const ranges = [], nodes = [];
   const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
   for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    nodes.push(node);
     const hay = node.data.toLowerCase();
     for (let at = hay.indexOf(needle); at >= 0; at = hay.indexOf(needle, at + needle.length)) {
       const range = document.createRange();
@@ -366,7 +368,27 @@ function textRanges(root, query) {
       ranges.push(range);
     }
   }
-  return ranges;
+  return ranges.length || needle.trim().split(/\s+/).length < 3 ? ranges : passageRanges(nodes, query);
+}
+// A passage a link or a citation names (2026-10-21) that no one text node holds: the words across the nodes bold, a link
+// or a line break split it into, folded as main checked the citation (shared/passage-text.cjs), a workspace's line
+// prefixes ("bart> ") left out. Nodes are joined with a line break, so words never run together and a prefix starts a line.
+function passageRanges(nodes, query) {
+  let joined = '';
+  const starts = [];
+  for (const node of nodes) { starts.push(joined.length); joined += `${node.data}\n`; }
+  const at = (offset, end) => {
+    let i = starts.length - 1;
+    while (i > 0 && (end ? starts[i] >= offset : starts[i] > offset)) i -= 1;
+    return { node: nodes[i], offset: Math.min(offset - starts[i], nodes[i].data.length) };
+  };
+  return matchPassage(joined, query, { prefixes: true }).map((hit) => {
+    const a = at(hit.start, false), b = at(hit.end, true);
+    const range = document.createRange();
+    range.setStart(a.node, a.offset);
+    range.setEnd(b.node, b.offset);
+    return range;
+  }).filter((range) => !range.collapsed);
 }
 function paintRanges(ranges, active, scroller) {
   const h = highlights();
