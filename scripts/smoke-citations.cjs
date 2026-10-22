@@ -152,18 +152,27 @@ app.whenReady().then(async () => {
     assert.deepEqual(sources, [['"1" "2" "3" "4" "5" "6"', 'Source'], ['"7"', 'Hints']], 'the answer ends with its sources, each by the numbers quoting it and what it is');
     console.log('PASS the citations are numbers, and the answer lists its sources under it');
 
-    // The card stays up when the pointer leaves its circle, and goes at a press elsewhere.
-    const label = await until(() => spot(wc, `${PANE(0)} [data-cite-sources] > div > div`), 'the Sources label');
+    // The card stays while the pointer is on it, and goes when the pointer leaves it and its circle.
+    const CARD = '(()=>{const c=document.querySelector("[data-cite-card]");if(!c)return null;const r=c.getBoundingClientRect();return{x:Math.round(r.x+r.width/2),y:Math.round(r.y+r.height/2),text:c.textContent}})()';
     const circle = await until(() => spot(wc, `${PANE(0)} [data-editor] a[data-cite][data-n="7"]`), 'circle 7');
     await pause(300); // spot scrolls the circle into view, and a scroll takes a card down
     wc.sendInputEvent({ type: 'mouseMove', x: circle.x, y: circle.y });
-    await until(() => js(wc, '!!document.querySelector("[data-cite-card]")'), 'the card on hover');
-    wc.sendInputEvent({ type: 'mouseMove', x: circle.x + 160, y: circle.y + 60 });
-    await pause(400);
-    assert.equal(await js(wc, '!!document.querySelector("[data-cite-card]")'), true, 'the card stays when the pointer leaves');
-    await click(wc, label);
-    await until(() => js(wc, '!document.querySelector("[data-cite-card]")'), 'the card goes at a press elsewhere');
-    console.log('PASS the card stays up when the pointer leaves, and goes at a press');
+    const card = await until(() => js(wc, CARD), 'the card on hover');
+    wc.sendInputEvent({ type: 'mouseMove', x: Math.round((circle.x + card.x) / 2), y: Math.round((circle.y + card.y) / 2) });
+    wc.sendInputEvent({ type: 'mouseMove', x: card.x, y: card.y });
+    await pause(500);
+    assert.ok(await js(wc, CARD), 'the card stays with the pointer on it');
+    wc.sendInputEvent({ type: 'mouseMove', x: card.x + 400, y: card.y + 200 });
+    await until(() => js(wc, '!document.querySelector("[data-cite-card]")'), 'the card goes when the pointer leaves it');
+    const listed = await until(() => spot(wc, `${PANE(0)} [data-cite-sources] a[data-cite-source="3"]`), 'number 3 in Sources');
+    await pause(300);
+    wc.sendInputEvent({ type: 'mouseMove', x: listed.x, y: listed.y });
+    const listedCard = await until(() => js(wc, CARD), 'the card of a number in Sources');
+    assert.match(listedCard.text, new RegExp(IN_FOLDED), "its own quote");
+    await shot(wc, 'card-from-sources');
+    wc.sendInputEvent({ type: 'mouseMove', x: listed.x + 400, y: listed.y + 200 });
+    await until(() => js(wc, '!document.querySelector("[data-cite-card]")'), 'and it goes when the pointer leaves');
+    console.log('PASS the card stays while the pointer is on it, goes when it leaves, and a number in Sources has one');
 
     await press(wc, `${PANE(0)} [data-cite-source="7"]`);
     const fromList = await until(async () => { const now = await js(wc, LIT); return now && now.seen ? now : null; }, 'a source clicked in the list, opened and lit', 100);

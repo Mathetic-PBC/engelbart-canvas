@@ -192,5 +192,9 @@ test('an answer\'s sources: one a source, by the numbers quoting it and what it 
   assert.equal((html.match(/data-cite-source="\d"/g) || []).length, 4);
   assert.match(html, /<div data-cite-row="1"><a href="[^"]*reading[^"]*" data-link="1" data-cite-source="1" data-n="1"[^>]*><\/a><a href="[^"]*figures%20first[^"]*" data-link="1" data-cite-source="3" data-n="3"[^>]*><\/a><a href="[^"]*reading[^"]*" data-link="1" data-cite-name="1"[^>]*>My note\.md<\/a><\/div>/);
   assert.match(html, /data-cite-source="4" data-n="4"[^>]*><\/a><a [^>]*data-cite-name="1"[^>]*>Standup<\/a>/);
+  const { citationCard } = await citeModel();
+  const attrs = (n) => Object.fromEntries([...html.match(new RegExp(`<a [^>]*data-cite-source="${n}"[^>]*>`))[0].matchAll(/data-([a-z-]+)="([^"]*)"/g)].map(([, k, v]) => [k.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v]));
+  assert.deepEqual(citationCard({ dataset: attrs(3) }), { quote: 'figures first then text', lead: 'You wrote this in', where: 'My note.md', when: 'Oct 14', counter: false }, 'a number in the list has the card its circle has');
+  assert.equal(citationCard({ dataset: attrs(4) }).counter, true);
   assert.equal(citationSourcesHtml(citationSources('No citations here.')), '', 'nothing for an answer that cites nothing');
 });

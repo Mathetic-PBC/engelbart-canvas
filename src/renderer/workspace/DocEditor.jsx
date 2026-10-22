@@ -68,7 +68,7 @@ import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
 import { fieldCaret } from './caret.js';
 import Popover from './Popover.jsx';
-import { citationNumbers, citationCard, citationSources, citationSourcesHtml, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
+import { citationNumbers, citationCard, citationSources, citationSourcesHtml, openCitationRun, libraryName, streamingText, CITE_CSS, CITE_CIRCLES, CARD_GRACE } from '../model/cite.js';
 import MadePeek from './MadePeek.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import ImageViewer from './ImageViewer.jsx';
@@ -794,6 +794,7 @@ export default class DocEditor extends React.Component {
     document.removeEventListener('keydown', this.touched, true);
     document.removeEventListener('scroll', this.streamScrolled, true);
     document.removeEventListener('pointerdown', this.citeCardDown, true);
+    clearTimeout(this.citeCardT);
     for (const id of this.timers) clearTimeout(id);
     this.timers.clear();
     // A Create counting down was going to be asked: it is, now, as the document is left (its answer lands in it all the same).
@@ -4047,7 +4048,7 @@ export default class DocEditor extends React.Component {
     const m = e.target.closest('[data-mention]'), res = m && m.dataset.file == null && m.dataset.zotero == null && m.dataset.made == null && (m.dataset.ws ? { ws: m.dataset.ws, name: m.dataset.mention } : this.findRes(m.dataset.mention, m.dataset.lib));
     if (res) this.showPop(res, { currentTarget: m });
     // A citation's card (model/cite.js): whose words, the quote, and where they are.
-    const cite = e.target.closest('a[data-cite]'); if (cite) this.showPop(citationCard(cite), { currentTarget: cite });
+    const cite = e.target.closest(CITE_CIRCLES); if (cite) { this.keepCiteCard(); this.showPop(citationCard(cite), { currentTarget: cite }); }
     const peek = e.target.closest('[data-made-peek]'); if (peek) this.peekMade(peek);
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
@@ -4057,8 +4058,11 @@ export default class DocEditor extends React.Component {
   // Leaving what opened the selector starts its closing clock, unless the pointer went straight onto the selector: React has
   // by then already handled that same event (the selector's onMouseEnter stops the clock), and this would start it again.
   editorOut = (e) => {
-    // A citation's card stays up when the pointer leaves (2026-10-21, David); citeCardDown takes it down.
     if (e.target.closest('[data-mention]')) this.hidePop();
+    // A citation's card waits for the pointer to come onto it (2026-10-21, David), and goes when it does not. Gone straight
+    // onto the card, nothing: React has by then already handled that same event (the card's onMouseEnter).
+    const cite = e.target.closest(CITE_CIRCLES), to = e.relatedTarget;
+    if (cite && !(to && to.closest && (cite.contains(to) || to.closest('[data-cite-card]')))) this.leaveCiteCard();
     const peek = e.target.closest('[data-made-peek]');
     if (peek && !(e.relatedTarget && peek.contains(e.relatedTarget))) this.unpeekMade();
     const onto = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-bart-picker]');
@@ -5065,8 +5069,17 @@ export default class DocEditor extends React.Component {
   };
   showPop(res, e) { const r = e.currentTarget.getBoundingClientRect(); this.setState({ pop: { res, anchor: { left: r.left, right: r.right, top: r.top, bottom: r.bottom } } }); }
   hidePop = () => { if (this.state.pop) this.setState({ pop: null }); };
-  // A citation's card, left up by the pointer leaving its circle, goes at a press anywhere (as at a scroll or Escape).
-  citeCardDown = () => { const p = this.state.pop; if (p && p.res && p.res.quote != null) this.setState({ pop: null }); };
+  // A citation's card stays while the pointer is on it or its circle, and goes CARD_GRACE ms after it left both; a press
+  // anywhere but on the card takes it down too (as a scroll or Escape does).
+  keepCiteCard = () => { clearTimeout(this.citeCardT); this.citeCardT = null; };
+  leaveCiteCard = () => {
+    this.keepCiteCard();
+    this.citeCardT = setTimeout(() => { this.citeCardT = null; const p = this.mounted && this.state.pop; if (p && p.res && p.res.quote != null) this.setState({ pop: null }); }, CARD_GRACE);
+  };
+  citeCardDown = (e) => {
+    const p = this.state.pop;
+    if (p && p.res && p.res.quote != null && !(e.target && e.target.closest && e.target.closest('[data-cite-card]'))) { this.keepCiteCard(); this.setState({ pop: null }); }
+  };
   // A made file's peek (2026-10-15, David, again: a small card over the page, so nothing in the document moves; for a
   // while it opened in its frame instead): once the pointer has rested on its name or icon a moment, MadePeek shows the
   // file under it; leaving hides it, as does anything pressed (madeAct). A file whose frame is open needs none.
@@ -5155,7 +5168,7 @@ export default class DocEditor extends React.Component {
           <>
             {s.mention && s.mention.anchor && <MentionMenu items={this.mentionList()} index={s.mentionIdx} anchor={s.mention.anchor} onPick={(r) => this.pickMention(r)} onHover={(i) => this.setState({ mentionIdx: i })} />}
             {s.pop && s.pop.made && <MadePeek name={s.pop.made.name} body={this.madeBodyHtml(s.pop.made, (this.props.madeFiles || {})[s.pop.made.key] || null)} anchor={s.pop.anchor} />}
-            {s.pop && s.pop.res && (s.pop.res.ws ? <WorkspacePeek id={s.pop.res.ws} name={s.pop.res.name} anchor={s.pop.anchor} peek={this.props.workspacePeek} /> : <Popover item={s.pop.res} anchor={s.pop.anchor} />)}
+            {s.pop && s.pop.res && (s.pop.res.ws ? <WorkspacePeek id={s.pop.res.ws} name={s.pop.res.name} anchor={s.pop.anchor} peek={this.props.workspacePeek} /> : <Popover item={s.pop.res} anchor={s.pop.anchor} onEnter={this.keepCiteCard} onLeave={this.leaveCiteCard} />)}
             {this.pickerView()}
             {this.topicView()}
           </>,

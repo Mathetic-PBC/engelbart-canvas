@@ -10,12 +10,14 @@ const EASE = 'cubic-bezier(.25,.1,.25,1)';
 // where and when. Its box as a CSS text, the same one an answer box's card has.
 const CITE_BOX = Object.fromEntries(CITE_CARD_STYLE.split(';').filter(Boolean).map((rule) => { const [k, ...v] = rule.split(':'); return [k.replace(/-([a-z])/g, (_, c) => c.toUpperCase()), v.join(':')]; }));
 
-export default function Popover({ item, anchor }) {
+// A citation's card takes the pointer, so it can be read and its words selected: `onEnter` and `onLeave` keep it up
+// while the pointer is on it (DocEditor's keepCiteCard, leaveCiteCard).
+export default function Popover({ item, anchor, onEnter, onLeave }) {
   const [ref, placed] = usePlaced(anchor, { gap: 8 });
   if (!item) return null;
   if (item.quote != null) {
     return (
-      <div ref={ref} data-overlay="1" data-hover="1" data-cite-card="1" style={{ ...CITE_BOX, ...placed, zIndex: 50, animation: `rise 160ms ${EASE}` }} dangerouslySetInnerHTML={{ __html: citationCardHtml(item) }} />
+      <div ref={ref} data-overlay="1" data-hover="1" data-cite-card="1" onMouseEnter={onEnter} onMouseLeave={onLeave} style={{ ...CITE_BOX, ...placed, zIndex: 50, animation: `rise 160ms ${EASE}` }} dangerouslySetInnerHTML={{ __html: citationCardHtml(item) }} />
     );
   }
   const kind = kindOf(item);

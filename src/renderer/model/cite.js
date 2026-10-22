@@ -134,16 +134,17 @@ export function citationSources(text, opts = {}) {
     const n = cites.get(citationPassage(c)) || cites.size + 1;
     if (!seen.has(c.key)) seen.set(c.key, { n, name: citationSource(c, opts && opts.citeSource), href: c.href, passages: [] });
     const source = seen.get(c.key);
-    if (!source.passages.some((p) => p.n === n)) source.passages.push({ n, href: c.href });
+    if (!source.passages.some((p) => p.n === n)) source.passages.push({ n, href: c.href, label: c.label, find: c.find, cite: c.cite, counter: c.counter });
   }
   return [...seen.values()].sort((a, b) => a.n - b.n);
 }
 /**
  * The sources under an answer: "Sources", then a row a source: the circles of the numbers quoting it, each a link to its
- * passage, and its name, a link to the first.
+ * passage with its card on hover as the circle in the text has (citationCard: data-kind for its data-cite), and its
+ * name, a link to the first.
  */
 export const citationSourcesHtml = (sources) => (sources.length ? `<div style="font:500 11px/1.4 var(--font-sans);letter-spacing:.2px;color:#8f8f8f;margin-bottom:4px">Sources</div>`
-  + sources.map((s) => `<div data-cite-row="${s.n}">${s.passages.map((p) => `<a href="${esc(p.href)}" data-link="1" data-cite-source="${p.n}" data-n="${p.n}" contenteditable="false" title="${esc(s.name)}" aria-label="${p.n}: ${esc(s.name)}"></a>`).join('')}`
+  + sources.map((s) => `<div data-cite-row="${s.n}">${s.passages.map((p) => `<a href="${esc(p.href)}" data-link="1" data-cite-source="${p.n}" data-n="${p.n}" data-kind="${esc(p.cite)}" data-label="${esc(p.label)}" data-find="${esc(p.find)}" data-source="${esc(s.name)}"${p.counter ? ' data-counter="1"' : ''} contenteditable="false" aria-label="${p.n}: ${esc(s.name)}. “${esc(p.find)}”"></a>`).join('')}`
     + `<a href="${esc(s.href)}" data-link="1" data-cite-name="1" contenteditable="false" title="${esc(s.name)}">${esc(s.name)}</a></div>`).join('') : '');
 
 /** The "…" circle of a folded run: `more` citations, opened by a click (openCitationRun) or the pointer. */
@@ -167,7 +168,7 @@ const AGENTS = new Set(['Chat', 'ChatGPT', 'Claude', 'Codex', 'Cursor']);
  * → { quote, lead, where, when, counter }, from the chip's label ("You · Oct 10") and source.
  */
 export function citationCard(el) {
-  const label = el.dataset.label || '', cite = el.dataset.cite || '';
+  const label = el.dataset.label || '', cite = el.dataset.cite || el.dataset.kind || '';
   const [who, ...rest] = label.split(' · ');
   const source = cite === 'source';
   return {
@@ -184,7 +185,7 @@ export const citationCardHtml = (card) => `<div style="font:13.5px/1.55 var(--fo
   + `<div style="margin-top:10px;padding-top:9px;border-top:1px solid #eaeaea;display:flex;align-items:center;gap:6px;font:11.5px/1.4 var(--font-sans);color:#8f8f8f">`
   + `<span style="flex:none;display:inline-flex">${DOC_ICON}</span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(card.lead)} <span style="font-weight:600;color:#4d4d4d">${esc(card.where)}</span>${card.when ? ` · ${esc(card.when)}` : ''}${card.counter ? ' · cuts against this' : ''}</span></div>`;
 /** The card's box. */
-export const CITE_CARD_STYLE = 'width:280px;box-sizing:border-box;padding:12px 14px 10px;background:#fff;border:1px solid #e3e3e3;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.08);pointer-events:none;text-align:left';
+export const CITE_CARD_STYLE = 'width:280px;box-sizing:border-box;padding:12px 14px 10px;background:#fff;border:1px solid #e3e3e3;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.08);text-align:left';
 
 // The circle: 16px, the grey of a chip, its number dark grey, on the text's baseline and never underlined, every one alike
 // (the darker ring the person's own words had went, 2026-10-21, David); a passage that cuts against the answer is hollow.
@@ -211,13 +212,21 @@ a[data-cite-name]:hover{text-decoration:underline!important;text-underline-offse
 // An answer box's card (a highlight's box, a web page's box card): the document's hover card (workspace/Popover.jsx) drawn
 // over the page by itself, under the circle or above it where there is no room under, as a box clips what overflows it.
 // `over` and `out` take the box's pointer and focus events (mouseover/focusin, mouseout/focusout), so a circle reached by
-// Tab shows its card too. The pointer leaving leaves the card up (2026-10-21, David): a press elsewhere, a scroll, Escape,
-// focus leaving or another circle takes it down.
+// Tab shows its card too. The card stays while the pointer is on it (2026-10-21, David), so the pointer can go from the
+// circle onto it; leaving both, a press elsewhere, a scroll, Escape or focus leaving takes it down. A number in an
+// answer's Sources shows its card as well.
 const TIP = `position:fixed;z-index:1000;${CITE_CARD_STYLE}`;
+/** What shows a citation's card on hover: a circle in an answer's text, a number in its Sources. */
+export const CITE_CIRCLES = 'a[data-cite],a[data-cite-source]';
+/** How long a card waits, the pointer gone from its circle, for the pointer to reach it. */
+export const CARD_GRACE = 200;
 export function citationTip(doc = typeof document === 'undefined' ? null : document) {
-  let tip = null;
-  const away = (e) => { if (e.type !== 'keydown' || e.key === 'Escape') hide(); };
+  let tip = null, closing = null;
+  const away = (e) => { if (e.type === 'keydown' ? e.key === 'Escape' : !(tip && tip.contains(e.target))) hide(); };
+  const stay = () => { clearTimeout(closing); closing = null; };
+  const leave = () => { stay(); closing = setTimeout(hide, CARD_GRACE); };
   const hide = () => {
+    stay();
     if (!tip) return;
     tip.remove(); tip = null;
     for (const type of ['pointerdown', 'scroll', 'keydown']) doc.removeEventListener(type, away, true);
@@ -232,6 +241,8 @@ export function citationTip(doc = typeof document === 'undefined' ? null : docum
     tip.setAttribute('role', 'tooltip');
     tip.style.cssText = TIP;
     tip.innerHTML = citationCardHtml(card); // as the document's card is (workspace/Popover.jsx)
+    tip.addEventListener('mouseenter', stay);
+    tip.addEventListener('mouseleave', leave);
     doc.body.appendChild(tip);
     const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
     const vw = doc.documentElement.clientWidth || 800, vh = doc.documentElement.clientHeight || 600;
@@ -240,10 +251,14 @@ export function citationTip(doc = typeof document === 'undefined' ? null : docum
     tip.style.left = `${left}px`;
     tip.style.top = `${top}px`;
   };
-  const circle = (e) => (e && e.target && e.target.closest ? e.target.closest('a[data-cite]') : null);
+  const circle = (e) => (e && e.target && e.target.closest ? e.target.closest(CITE_CIRCLES) : null);
   return {
-    over: (e) => { const el = circle(e); if (el) show(el); },
-    out: (e) => { const el = circle(e); if (el && /blur|focusout/.test(e.type) && !(e.relatedTarget && el.contains(e.relatedTarget))) hide(); },
+    over: (e) => { const el = circle(e); if (el) { stay(); show(el); } },
+    out: (e) => {
+      const el = circle(e), to = e.relatedTarget;
+      if (!el || (to && (el.contains(to) || (tip && tip.contains(to))))) return;
+      if (/blur|focusout/.test(e.type)) hide(); else leave();
+    },
     hide,
   };
 }
