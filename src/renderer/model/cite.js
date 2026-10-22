@@ -1,10 +1,11 @@
 // Chat's citations as an answer draws them (2026-10-21): a link whose fragment has `cite=` (../../shared/passage-link.cjs;
-// main checked it against its source before the answer was written, main/bart/cite.cjs) is a small grey circle with a
-// number, as NotebookLM draws its sources. The markdown keeps the whole link: this is drawing only. Numbers go by the
-// answer: each distinct source its own, in the order the answer first cites it, the same number again for the same
-// source. Two citations side by side are two circles; three or more are the first and a "…" circle that opens the rest
-// on a click or the pointer. A circle holds no text (its number is CSS's, from data-n), so what a line shows, and every
-// offset into it, is what it was without the citation (doc.js tokShown).
+// main checked it against its source before the answer was written, main/bart/cite.cjs) is a small grey chip with its
+// label, as NotebookLM draws its sources: "You · Oct 12", "Chat · Oct 12", a paper's short title (David, 2026-10-21; a
+// number until then). Main writes who and when, from the source. The markdown keeps the whole link: this is drawing
+// only. Each distinct source still has its number by the answer (data-n), in the order the answer first cites it. Two
+// citations side by side are two chips; three or more are the first and a "…" that opens the rest on a click or the
+// pointer. A chip holds no text (its label is CSS's, from data-label), so what a line shows, and every offset into it,
+// is what it was without the citation (doc.js tokShown).
 import { splitTarget, CITES } from '../../shared/passage-link.cjs';
 import { addressKey } from '../../shared/address-key.cjs';
 
@@ -119,22 +120,22 @@ export function openCitationRun(target) {
   return true;
 }
 
-/** A citation's card, as the document's hover card (Popover) draws it. */
+/** A citation's card, as the document's hover card (Popover) draws it: its label ("You · Oct 12"), the quote, and where. */
 export const citationCard = (el) => ({
-  kindLabel: el.dataset.counter ? 'Cuts against this' : el.dataset.cite === 'you' ? 'Your words' : el.dataset.cite === 'other' ? 'Someone else’s words' : 'Source',
+  kindLabel: el.dataset.counter ? 'Cuts against this' : '',
   title: el.dataset.label || '',
   summary: el.dataset.find ? `“${el.dataset.find}”` : '',
   facts: el.dataset.source || '',
 });
 
-// The circle: 16px, the grey of a chip, its number dark grey, on the text's baseline and never underlined. The person's
+// The chip: 18px high, the grey of a chip, its label dark grey, on the text's baseline and never underlined. The person's
 // own words have a darker ring; a passage that cuts against the answer is hollow. A folded run's rest is hidden until the
 // pointer is on the run or its "…" was clicked.
-const CIRCLE = 'display:inline-block;box-sizing:border-box;min-width:16px;height:16px;padding:0 4px;margin:0 1px 0 2px;border-radius:8px;vertical-align:1px;text-decoration:none;cursor:pointer;user-select:none;-webkit-user-select:none';
-const NUMBER = 'display:block;font:500 10px/16px var(--font-sans);font-variant-numeric:tabular-nums;color:#4d4d4d;text-align:center';
+const CIRCLE = 'display:inline-block;box-sizing:border-box;min-width:18px;height:18px;padding:0 7px;margin:0 1px 0 3px;border-radius:9px;vertical-align:0;text-decoration:none;cursor:pointer;user-select:none;-webkit-user-select:none;white-space:nowrap';
+const NUMBER = 'display:block;font:500 11px/18px var(--font-sans);font-variant-numeric:tabular-nums;color:#4d4d4d;text-align:center';
 export const CITE_CSS = `
 a[data-cite]{${CIRCLE};background:#ebebeb;border:1px solid #ebebeb;color:#4d4d4d;text-decoration:none!important}
-a[data-cite]::after{content:attr(data-n);${NUMBER};margin-top:-1px}
+a[data-cite]::after{content:attr(data-label);${NUMBER};margin-top:-1px}
 a[data-cite]:hover,a[data-cite]:focus-visible{background:#d6d6d6;border-color:#d6d6d6;outline:none}
 a[data-cite][data-you]{border-color:#8f8f8f}
 a[data-cite][data-counter]{background:#fff;border-color:#c9c9c9}
@@ -160,8 +161,8 @@ export function citationTip(doc = typeof document === 'undefined' ? null : docum
     tip.setAttribute('data-cite-tip', '1');
     tip.setAttribute('role', 'tooltip');
     tip.style.cssText = TIP;
-    tip.innerHTML = `<div style="font:500 9px/1 var(--font-sans);letter-spacing:1.6px;text-transform:uppercase;color:#8f8f8f">${esc(card.kindLabel)}</div>`
-      + `<div style="margin-top:8px;font:500 13.5px/1.4 var(--font-sans);color:#171717">${esc(card.title)}</div>`
+    tip.innerHTML = (card.kindLabel ? `<div style="font:500 9px/1 var(--font-sans);letter-spacing:1.6px;text-transform:uppercase;color:#8f8f8f">${esc(card.kindLabel)}</div>` : '')
+      + `<div style="margin-top:${card.kindLabel ? 8 : 0}px;font:500 13.5px/1.4 var(--font-sans);color:#171717">${esc(card.title)}</div>`
       + `<div style="margin-top:6px;font:12.5px/1.6 var(--font-sans);color:#4d4d4d">${esc(card.summary)}</div>`
       + `<div style="margin-top:8px;padding-top:8px;border-top:1px solid #eaeaea;font:12px/1.5 var(--font-sans);color:#8f8f8f">${esc(card.facts)}</div>`;
     doc.body.appendChild(tip);

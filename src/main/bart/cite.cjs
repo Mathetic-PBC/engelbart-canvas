@@ -126,8 +126,29 @@ function speakerAt(text, at) {
 }
 const isImportedChat = (text) => text.split('\n').some((line) => SPEAKER_RE.test(line) && !line.startsWith('**You:**'));
 
-// "You · Oct 12" when the words turned out to be someone else's: the name, the rest as it was.
-const relabel = (label, who) => (/^you\b/i.test(label) ? label.replace(/^you\b/i, who) : label);
+// When the cited words were written, as far as their source says (2026-10-21, David: "You · {date}"), → a Date or null:
+// an imported chat's date from its header line, the day a workspace was started (its lines are not dated one by one),
+// the day a library item was added, a library folder's file's own date.
+const CHAT_DATE_RE = /^\*[^*\n]*?·\s*(\d{4}-\d{2}-\d{2})\b/m;
+function sourceDate(found, source) {
+  const valid = (value) => { const date = value ? new Date(value) : null; return date && !Number.isNaN(date.getTime()) ? date : null; };
+  const header = String(source || '').slice(0, 400).match(CHAT_DATE_RE);
+  if (header) return valid(`${header[1]}T12:00:00`);
+  if (found.kind === 'workspace') { try { return valid(JSON.parse(fs.readFileSync(path.join(path.dirname(found.file), 'meta.json'), 'utf8')).created); } catch { return null; } }
+  if (found.kind === 'row' && found.row.created) return valid(found.row.created);
+  try { const stat = fs.statSync(found.file); return valid(stat.birthtimeMs > 0 ? stat.birthtime : stat.mtime); } catch { return null; }
+}
+/** "Oct 12", or "Oct 12, 2025" in another year than `today`'s. */
+const dayLabel = (date, today = new Date()) => (date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(date.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) }) : '');
+// Who said words cited as someone else's, where the source says: an answer line is Chat's, an imported chat's turn its
+// speaker's. Elsewhere (a meeting's notes, a colleague's) the name the citation gave, when it gave a short one.
+function otherOf(source, at, { workspaceDoc, chat }, label) {
+  if (workspaceDoc && ANSWER_LINE_RE.test(lineAt(source, at))) return 'Chat';
+  const speaker = chat ? speakerAt(source, at) : '';
+  if (speaker && speaker !== 'You') return speaker;
+  const named = String(label).split(' · ')[0].trim();
+  return String(label).includes(' · ') && named && named.length <= 24 && !/^you$/i.test(named) ? named : 'Someone';
+}
 
 /** The answer's text with a link taken out where it stood, its sentence kept: no doubled space or space before stray punctuation. */
 function tidyAround(line, start, end) {
@@ -150,9 +171,10 @@ const threadText = (thread) => (thread || []).map((turn) => [turn && turn.questi
  * 'malformed', 'unresolved', 'memory', 'catalog', 'other-project', 'no-text', 'not-found', 'current-thread'.
  * `library`: the library's rows. `projectDir` and `workspaces` (each with its `dir`) are found from `dataRoot` and
  * `projectId` when not given. `currentThread`: [{ question, answer }], the exchange being answered, last question
- * included. `readText(file)`: a source file's text (defaultReadText).
+ * included. `readText(file)`: a source file's text (defaultReadText). `today`: for the labels' dates, whose year is left
+ * off in this one.
  */
-async function checkCitations(body, { library = [], dataRoot = null, projectId = null, workspaceId = null, projectDir = null, workspaces = null, currentThread = [], readText = defaultReadText } = {}) {
+async function checkCitations(body, { library = [], dataRoot = null, projectId = null, workspaceId = null, projectDir = null, workspaces = null, currentThread = [], readText = defaultReadText, today = new Date() } = {}) {
   const text = String(body == null ? '' : body);
   const kept = [], dropped = [];
   if (!/[#&]cite=/.test(text)) return { body: text, kept, dropped };
@@ -198,10 +220,13 @@ async function checkCitations(body, { library = [], dataRoot = null, projectId =
       if (who) cite = 'other';
     }
     const address = found.row && found.row.url && /^https?:\/\//i.test(target.address) ? found.row.url : found.file;
-    const shown = who ? relabel(label, who) : label;
+    // Whose words and when is the code's to say, not the model's: "You · Oct 12", "Chat · Oct 12", "ChatGPT · Sep 2". A
+    // paper's or page's label is the model's (its short title and page).
+    const by = cite === 'you' ? 'You' : cite === 'other' ? who || otherOf(source, hits[0].start, { workspaceDoc, chat: !workspaceDoc && markdown && isImportedChat(source) }, label) : '';
+    const shown = by ? [by, dayLabel(sourceDate(found, source), today)].filter(Boolean).join(' · ') : label;
     kept.push({ label: shown, address, source: found.name || path.basename(found.file || ''), find: target.find, cite, counter: !!target.counter, relabeled: !!who });
-    // written again when its words changed, or when a space or parenthesis in it would end the link early
-    return who || /[()\s]/.test(href) ? `[${shown}](${citeHref({ address: target.address, find: target.find, to: target.to, cite, counter: target.counter })})` : `[${label}](${href})`;
+    // written again when its label or words changed, or when a space or parenthesis in it would end the link early
+    return who || shown !== label || /[()\s]/.test(href) ? `[${shown}](${citeHref({ address: target.address, find: target.find, to: target.to, cite, counter: target.counter })})` : `[${label}](${href})`;
   };
 
   const out = [];

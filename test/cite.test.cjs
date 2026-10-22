@@ -96,6 +96,8 @@ const homeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-cite-'));
 const layout = ensureHome(homeDir);
 let ctx, project, workspace, other, elsewhere, files, library;
 
+// The day a source made in this run was written (a workspace started, a note added): today, as the labels spell it.
+const TODAY = new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 const link = (label, address, find, cite, extra = {}) => `[${label}](${citeHref({ address, find, cite, ...extra })})`;
 const check = (body, options = {}) => checkCitations(body, { library, dataRoot: ctx.dataRoot, projectId: project.id, workspaceId: workspace.id, ...options });
 
@@ -159,10 +161,10 @@ test('checkCitations: exact and normalized quotes are kept; a missing quote is t
   ].join('\n');
   const out = await check(body);
   const lines = out.body.split('\n');
-  assert.ok(lines[0].startsWith('Wait first [You · Oct 12]('), 'kept, curly quotes, the ligature and the dash folded');
+  assert.ok(lines[0].startsWith(`Wait first [You · ${TODAY}](`), 'kept, curly quotes, the ligature and the dash folded; labelled by the note\'s date');
   assert.equal(lines[1], 'You also said, which matters.', 'the link is gone, the sentence kept and tidied');
   assert.equal(lines[3], `${link('In code', files.note, 'nothing', 'you')}`, 'a fenced block is not read');
-  assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.source, k.relabeled]), [['You · Oct 12', 'you', 'Hints note', false]]);
+  assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.source, k.relabeled]), [[`You · ${TODAY}`, 'you', 'Hints note', false]]);
   assert.deepEqual(out.dropped, [{ label: 'You · Oct 13', address: files.note, reason: 'not-found' }]);
 });
 
@@ -193,7 +195,7 @@ test('checkCitations: a workspace\'s lines: the person\'s stay `you`, an answer 
   const doc = path.join(projects.findWorkspace(ctx, project.id, other.id).workspace.dir, 'workspace.md');
   const body = `Chat proposed ten ${link('You · Oct 1', doc, 'waiting ten seconds before a hint lets the learner retry', 'you')}; you changed it ${link('You · Oct 1', doc, 'make it five seconds for beginners', 'you')}. You asked ${link('You · Oct 1', doc, 'should the tutor wait before hinting', 'you')}.`;
   const out = await check(body);
-  assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.source]), [['Chat · Oct 1', 'other', 'Planning'], ['You · Oct 1', 'you', 'Planning'], ['You · Oct 1', 'you', 'Planning']]);
+  assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.source]), [[`Chat · ${TODAY}`, 'other', 'Planning'], [`You · ${TODAY}`, 'you', 'Planning'], [`You · ${TODAY}`, 'you', 'Planning']], 'dated by the day the workspace was started');
   assert.equal(out.dropped.length, 0);
 });
 
@@ -206,7 +208,7 @@ test('checkCitations: a quote with parentheses is checked whether or not they we
   const out = await check(`One ${raw}. Two ${link('You · Oct 14', files.note, words, 'you')}. Three ${spaced}. Four ${wrong}.`);
   assert.equal(out.kept.length, 3, 'all three spellings are seen and confirmed');
   assert.deepEqual(out.dropped.map((d) => d.reason), ['not-found'], 'one that is not there is seen too, and taken out');
-  const kept = link('You · Oct 14', files.note, words, 'you');
+  const kept = link(`You · ${TODAY}`, files.note, words, 'you');
   assert.equal(out.body, `One ${kept}. Two ${kept}. Three ${kept}. Four.`, 'each written so the editor reads it as one link');
   assert.ok(!/\]\([^)]*\(/.test(out.body), 'no parenthesis inside a link target');
 });
@@ -226,7 +228,24 @@ test('checkCitations: words the person repeated from an answer stay theirs; word
     `Chat said ${link('You · Oct 20', doc, 'keep the previews sleeping rather than deleted', 'you')}.`,
     `And ${link('You · Sep 2', files.chat, 'start with ten seconds then', 'you')}.`,
   ].join('\n'));
-  assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.relabeled]), [['You · Oct 20', 'you', false], ['Chat · Oct 20', 'other', true], ['You · Sep 2', 'you', false]]);
+  assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.relabeled]), [[`You · ${TODAY}`, 'you', false], [`Chat · ${TODAY}`, 'other', true], ['You · Sep 2', 'you', false]]);
+});
+
+test('checkCitations: the label is the code\'s: whose words, and the day their source records, whatever the model wrote', async () => {
+  const meeting = path.join(path.dirname(files.note), 'Standup.md');
+  fs.writeFileSync(meeting, 'Lee said nobody looks at the figures before the text.\n');
+  await ctx.libraryDb.insert({ id: randomUUID(), project_id: project.id, tags: ['note'], name: 'Standup', type: 'md', path: meeting });
+  const rows = (await ctx.libraryDb.list()).map((row) => (row.path === meeting ? { ...row, created: new Date('2025-09-24T15:00:00Z') } : row)); // added last year
+  const out = await check([
+    `A ${link('get Claude Code\'s thoughts', files.note, 'learners need to struggle a little', 'you')}.`,
+    `B ${link('Meeting · Sep 30', meeting, 'nobody looks at the figures', 'other')}.`,
+    `C ${link('what Lee said', meeting, 'nobody looks at the figures', 'other')}.`,
+    `D ${link('Tutor chat', files.chat, 'Most systems wait between five and fifteen seconds', 'other')}.`,
+    `E ${link('TutorTrace p. 1', files.pdf, 'Learners who waited for hints retained more', 'source')}.`,
+  ].join('\n'), { library: rows, today: new Date('2026-10-21T12:00:00') });
+  assert.deepEqual(out.kept.map((k) => k.label), [`You · ${TODAY}`, 'Meeting · Sep 24, 2025', 'Someone · Sep 24, 2025', 'ChatGPT · Sep 2', 'TutorTrace p. 1'],
+    'a note by the day it was added, another year with its year; a name the model gave kept, none given is "Someone"; a chat by its header; a paper as the model named it');
+  assert.ok(out.body.startsWith(`A [You · ${TODAY}](`), 'the answer says so too');
 });
 
 test('checkCitations: a pdf and a saved web page are matched through their text; a file inside a library folder is citable', async () => {
@@ -271,7 +290,7 @@ test('a fake Chat answer citing one good and one bad passage: one citation kept,
   const out = await bart.ask(ctx, project.id, { askId: 'c1', ref, workspaceId: workspace.id, text: 'cite what I wrote', agent: 'bart' });
   const body = out.lines.map((line) => line.replace(/^bart> ?/, '')).join('\n');
   assert.equal((body.match(/&cite=/g) || []).length, 1, 'one citation is left');
-  assert.match(body, /You wrote this down before \[You · Oct 12\]\(/);
+  assert.match(body, new RegExp(`You wrote this down before \\[You · ${TODAY}\\]\\(`));
   assert.match(body, /And something else\./);
   const record = runLog.get('c1');
   assert.equal(record.citations.kept.length, 1);

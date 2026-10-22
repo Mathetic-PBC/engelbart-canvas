@@ -237,7 +237,7 @@ A citation is a link: the label, then the source's absolute path (or a web page'
 
 - find: 4 to 25 words copied verbatim from the source, percent-encoded. Encode each segment of a path too (a space is %20, ( is %28, ) is %29), so the link has no spaces or parentheses.
 - cite: \`you\` for the person's own words, \`other\` for anyone else's (a colleague, a meeting, an assistant), \`source\` for a paper or page. Add \`&counter=1\` to a passage that cuts against the answer.
-- The label says whose words and when ("You · Oct 12", "Meeting · Sep 24"), or a source's short title and page. Name a person only when the source attributes the passage to them; otherwise give the kind and the date.
+- The label: for a paper or page, its short title and page. For anyone's words, who said them ("You", "Chat", "Meeting"); the app replaces it with who and when as the source records them. Name a person only when the source attributes the passage to them; otherwise give the kind.
 
 What to cite:
 - Only claims that depend on the person's context or a source. Not common knowledge, not your own reasoning, and not something said in the current question or this conversation.

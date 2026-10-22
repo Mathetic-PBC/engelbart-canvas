@@ -974,8 +974,12 @@ export default class DocEditor extends React.Component {
   // A citation clicked (2026-10-21, model/cite-open.js): line `i` brought to the middle of the pane as showLine does, and
   // the words it quotes lit up from there, painted as a CSS Custom Highlight as ⌘F's are (DocFind: the DOM is never
   // written to), until the next press or key. Words not found as drawn (a card draws its lines its own way) light the
-  // line instead. → whether the line is drawn
+  // line instead. An answer collapsed to its question is expanded first, as its Expand does (toggleFold), and a collapsed
+  // conversation by showLine: the caller asks again once it is drawn. → whether the line is drawn
   showPassage(i, find) {
+    const ls = this.lines();
+    const turn = threads(ls, this.parsedOf(ls)).flatMap((thread) => thread.turns).find((t) => i > t.q && i <= t.to);
+    if (turn && turn.folded && turn.answered && !turn.pending && !this.props.readOnly) { this.toggleFold(turn.q); return false; }
     if (!this.showLine(i, { flash: false })) return false;
     const ed = this.editorEl(), h = typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null;
     const nodes = [];

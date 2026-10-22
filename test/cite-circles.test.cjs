@@ -95,10 +95,11 @@ test('inlineHtml draws circles: numbered, flagged, folded; the markdown keeps th
   assert.match(inlineHtml('[You · Oct 1](/p/Agents/workspace.md#find=a%20b%20c&cite=you)'), /data-source="Agents"/, 'a workspace\'s document by the workspace');
 });
 
-test('the card a circle shows says whose words, the quote and the source', async () => {
-  const { citationCard, libraryName } = await citeModel();
+test('the card a chip shows is its label, the quote and where it is; "Cuts against this" above one that does', async () => {
+  const { citationCard, libraryName, CITE_CSS } = await citeModel();
+  assert.match(CITE_CSS, /a\[data-cite\]::after\{content:attr\(data-label\)/, 'the chip shows its label, not its number');
   const el = { dataset: { cite: 'you', label: 'You · Oct 12', find: 'reading is slow', source: 'My note' } };
-  assert.deepEqual(citationCard(el), { kindLabel: 'Your words', title: 'You · Oct 12', summary: '“reading is slow”', facts: 'My note' });
+  assert.deepEqual(citationCard(el), { kindLabel: '', title: 'You · Oct 12', summary: '“reading is slow”', facts: 'My note' });
   assert.equal(citationCard({ dataset: { ...el.dataset, cite: 'other', counter: '1' } }).kindLabel, 'Cuts against this');
   const rows = [{ name: 'A paper', path: '/lib/a.pdf' }, { name: 'The page', url: 'https://www.example.org/x/' }, { name: 'Interviews', type: 'folder', path: '/lib/Interviews' }];
   assert.equal(libraryName(rows, '/lib/a.pdf'), 'A paper');
