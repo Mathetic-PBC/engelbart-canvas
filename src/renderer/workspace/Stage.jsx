@@ -410,7 +410,7 @@ const clearRanges = () => { const h = highlights(); if (h) { h.delete(FIND); h.d
 // The pdf an answer is for, as the workspace keeps it ({ rowId } or { url }), and whether a tab's pdf is it.
 const pdfWhere = (p) => (p.rowId ? { rowId: p.rowId } : { url: p.url });
 const samePdf = (p, where) => !!p && !!where && (where.rowId ? p.rowId === where.rowId : !p.rowId && !!where.url && p.url === where.url);
-const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText, onTabs, keysToDoc }, ref) {
+const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull, onShow, onPage, onFront, save, library, inRail, onError, onOpenItem, mentionItems, onMentionOpen, listFolder, fileState, onOpenFile, pendingAsks, onAsk, onStopAsk, onDismissAsk, onContinueAsk, onCopyText, onOpenCited, onTabs, keysToDoc }, ref) {
   const [tabs, setTabs] = React.useState(() => [blankTab()]);
   const [activeId, setActiveId] = React.useState(() => null);
   const [draft, setDraft] = React.useState('');
@@ -1540,7 +1540,8 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               onDismissAsk={onDismissAsk}
               onContinueAsk={onContinueAsk ? (asked) => onContinueAsk({ ...asked, paper: { name: pdf.name || '', rowId: pdf.rowId || null, url: pdf.url || null } }) : undefined}
               onCopyText={onCopyText}
-              onOpenLink={(href) => openInput(href, { newTab: true })}
+              // a citation of the person's own workspace or note opens beside the document (Workspace openIfCited)
+              onOpenLink={(href) => { if (!(onOpenCited && onOpenCited(href))) openInput(href, { newTab: true }); }}
               onMarksChange={(marks) => {
                 const { seq, url, rowId } = pdf, where = pdfWhere(pdf);
                 // Every other tab holding this pdf takes the ink as it is now: brought forward, it must not save what it read before.

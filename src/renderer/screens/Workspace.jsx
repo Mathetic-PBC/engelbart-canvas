@@ -32,6 +32,7 @@ import { fallbackAgent } from '../model/route.js';
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 import { findAskLine, findBuildLine } from '../model/askLine.js';
 import { openBeside, closePane } from '../model/panes.js';
+import { citedDoc, passageLine } from '../model/cite-open.js';
 import { createSideTracker, docClose, docHasKeys } from '../model/key-side.js';
 import DocFind from '../workspace/DocFind.jsx';
 import { addDropped } from '../model/drop.js';
@@ -1215,7 +1216,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     }
   }, [folderFiles.recheck, showRight, onError]); // eslint-disable-line react-hooks/exhaustive-deps
   // A link in a document goes to the Stage too, never to the default browser; `{ newTab: true }` (⌘-click), in a tab of its own.
+  // A citation of a workspace's document or a note goes beside the document instead (openCited, below).
+  // → whether it was one: a highlight's answer in the Stage asks too (Stage onOpenCited).
+  const citedRef = React.useRef(null);
+  const openIfCited = React.useCallback((href) => {
+    const cited = citedRef.current && citedDoc(href, citedRef.current.where);
+    if (cited) citedRef.current.open(cited);
+    return !!cited;
+  }, []);
   const openLink = React.useCallback((href, options) => {
+    if (openIfCited(href)) return;
     if (!stageRef.current) return;
     showRight('stage');
     stageRef.current.openInput(href, options);
@@ -1395,6 +1405,25 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     reveal.current = at;
     setBeside(next);
   };
+  // A citation of the person's own thinking (2026-10-21, model/cite-open.js): its workspace or note opened beside the
+  // document in front, or the one in front scrolled when it is that, to the passage it quotes, lit up (DocEditor
+  // showPassage). A passage no longer in the document opens the document alone.
+  const openCited = (cited) => {
+    openDocBeside({ kind: cited.kind, id: cited.id, name: cited.name }, '');
+    const key = cited.kind === 'workspace' ? `ws:${cited.id}` : `note:${cited.id}`;
+    let tries = 0;
+    const attempt = () => {
+      const editor = editorRefs.current.map((held) => held && held.current).find((held) => held && held.props && held.props.docKey === key);
+      if (!editor || typeof docsRef.current[key] !== 'string') { tries += 1; if (tries < 60) setTimeout(attempt, 100); return; }
+      const at = passageLine(editor.lines(), cited.find, cited.cite);
+      if (at < 0) return;
+      let drawn = 0;
+      const show = () => { if (!editor.showPassage(at, cited.find) && (drawn += 1) < 20) setTimeout(show, 100); };
+      setTimeout(show, 50);
+    };
+    setTimeout(attempt, 0);
+  };
+  citedRef.current = { open: openCited, where: { projectDir: project.dir, index, notes: [...notesById.values()] } };
   React.useEffect(() => {
     if (reveal.current == null) return;
     const at = reveal.current;
@@ -2565,6 +2594,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onDismissAsk={dropPaperAsk}
           onContinueAsk={topic ? continueAsk : undefined}
           onCopyText={(value) => api.copyText(value).catch((error) => onError(error))}
+          onOpenCited={openIfCited}
           onTabs={setStagePlaces}
           keysToDoc={keysToDoc}
           save={madeSave || (topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null)}

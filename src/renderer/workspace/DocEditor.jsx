@@ -79,6 +79,7 @@ import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
 import { mentionToken, isWebRow, menuItem, rowMention, carriesLibRows, readLibDrag } from '../model/mention.js';
 import { isNote, kindKey } from '../model/kind.js';
+import { matchPassage } from '../../shared/passage-text.cjs';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
 import { waveText, keepWaves } from '../ui/wave.js';
 
@@ -101,6 +102,11 @@ export const BRAINSTORM_ITEM = { id: 'brainstorm', type: 'chat', name: 'brainsto
 // and pinch zoom of 2026-10-14).
 const DOC_COLUMN = { maxWidth: '65ch', paddingInline: 'clamp(0px, 3%, 24px)' };
 const UNDER_BART = ['pending', 'reply'];
+// A citation's passage lit up (showPassage): the highlight's name (styles.css), how many lines past its first it may run
+// over, and what on those lines is the editor's own and not the document's (a card's Copy, a code block's language).
+const PASSAGE_HIGHLIGHT = 'cite-passage';
+const PASSAGE_LINES = 8;
+const PASSAGE_SKIP = 'button, svg, style, script, [aria-hidden="true"]';
 // The agents that run on one model of their own (no model chip, no selector on Regenerate) and may be asked with nothing
 // after them: every one but @bart and @create (which runs on @bart's models, 2026-10-13). An @discover line's chip picks
 // its level instead (2026-10-03). What their follow-up field says, and whether it may be sent empty.
@@ -963,6 +969,38 @@ export default class DocEditor extends React.Component {
       d.removeAttribute('data-ask-flash'); void d.offsetWidth; d.setAttribute('data-ask-flash', '');
       setTimeout(() => { if (d.isConnected) d.removeAttribute('data-ask-flash'); }, 2400);
     }
+    return true;
+  }
+  // A citation clicked (2026-10-21, model/cite-open.js): line `i` brought to the middle of the pane as showLine does, and
+  // the words it quotes lit up from there, painted as a CSS Custom Highlight as ⌘F's are (DocFind: the DOM is never
+  // written to), until the next press or key. Words not found as drawn (a card draws its lines its own way) light the
+  // line instead. → whether the line is drawn
+  showPassage(i, find) {
+    if (!this.showLine(i, { flash: false })) return false;
+    const ed = this.editorEl(), h = typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null;
+    const nodes = [];
+    for (const row of ed ? ed.querySelectorAll('[data-line]') : []) {
+      const n = Number(row.dataset.line);
+      if (n < i || n > i + PASSAGE_LINES) continue;
+      const walker = document.createTreeWalker(row, NodeFilter.SHOW_TEXT);
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.data && !(node.parentElement && node.parentElement.closest(PASSAGE_SKIP))) nodes.push(node);
+    }
+    let joined = '';
+    const starts = nodes.map((node) => { const at = joined.length; joined += `${node.data}\n`; return at; });
+    const hit = matchPassage(joined, find, { prefixes: true })[0];
+    if (!h || !hit) return this.showLine(i);
+    const at = (offset, end) => {
+      let k = starts.length - 1;
+      while (k > 0 && (end ? starts[k] >= offset : starts[k] > offset)) k -= 1;
+      return { node: nodes[k], offset: Math.min(offset - starts[k], nodes[k].data.length) };
+    };
+    const a = at(hit.start, false), b = at(hit.end, true), range = document.createRange();
+    range.setStart(a.node, a.offset);
+    range.setEnd(b.node, b.offset);
+    h.set(PASSAGE_HIGHLIGHT, new Highlight(range));
+    const clear = () => { h.delete(PASSAGE_HIGHLIGHT); window.removeEventListener('pointerdown', clear, true); window.removeEventListener('keydown', clear, true); };
+    window.addEventListener('pointerdown', clear, true);
+    window.addEventListener('keydown', clear, true);
     return true;
   }
   caretRect() {

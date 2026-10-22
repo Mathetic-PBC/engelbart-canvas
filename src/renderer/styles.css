@@ -97,6 +97,8 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 /* The middle canvas's ⌘F (2026-10-16, workspace/DocFind.jsx) paints as the Stage's does, under names of its own. */
 ::highlight(doc-find){background-color:rgba(0,112,243,.16);color:inherit}
 ::highlight(doc-find-cur){background-color:rgba(0,112,243,.4);color:inherit}
+/* A citation's passage, in the workspace or note it opened beside the document (DocEditor showPassage, 2026-10-21). */
+::highlight(cite-passage){background-color:rgba(0,112,243,.4);color:inherit}
 /* A project card's Delete (2026-10-03): only while the pointer is on the card; red-free, it darkens on its own hover. */
 .rail-minus{opacity:0;transition:opacity 120ms,color 120ms}
 [data-project-card]:hover .rail-minus,.rail-minus:focus-visible{opacity:1}
