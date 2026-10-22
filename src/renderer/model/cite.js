@@ -128,13 +128,32 @@ export function openCitationRun(target) {
   return true;
 }
 
-/** A citation's card, as the document's hover card (Popover) draws it: its label ("You · Oct 12"), where, the quote. */
-export const citationCard = (el) => ({
-  label: el.dataset.label || '',
-  where: el.dataset.source || '',
-  quote: el.dataset.find || '',
-  counter: !!el.dataset.counter,
-});
+// The agents whose words a citation can quote, said by name on its card.
+const AGENTS = new Set(['Chat', 'ChatGPT', 'Claude', 'Codex', 'Cursor']);
+/**
+ * A citation's card (2026-10-21, David's mock): the quote, then who wrote it, where and when: "You wrote this in flow ·
+ * Oct 10", "Chat said this in flow · Oct 10", "From Building the computer of the future · Oct 15", "From TutorTrace p. 6".
+ * → { quote, lead, where, when, counter }, from the chip's label ("You · Oct 10") and source.
+ */
+export function citationCard(el) {
+  const label = el.dataset.label || '', cite = el.dataset.cite || '';
+  const [who, ...rest] = label.split(' · ');
+  const source = cite === 'source';
+  return {
+    quote: el.dataset.find || '',
+    lead: cite === 'you' ? 'You wrote this in' : !source && AGENTS.has(who) ? `${who} said this in` : 'From',
+    where: source ? label || el.dataset.source || '' : el.dataset.source || '',
+    when: source ? '' : rest.join(' · '),
+    counter: !!el.dataset.counter,
+  };
+}
+const DOC_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>';
+/** The card's inside, as the document's hover card (workspace/Popover.jsx) and an answer box's (citationTip) draw it. */
+export const citationCardHtml = (card) => `<div style="font:13.5px/1.55 var(--font-sans);color:#171717;text-wrap:pretty">“${esc(card.quote)}”</div>`
+  + `<div style="margin-top:10px;padding-top:9px;border-top:1px solid #eaeaea;display:flex;align-items:center;gap:6px;font:11.5px/1.4 var(--font-sans);color:#8f8f8f">`
+  + `<span style="flex:none;display:inline-flex">${DOC_ICON}</span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(card.lead)} <span style="font-weight:600;color:#4d4d4d">${esc(card.where)}</span>${card.when ? ` · ${esc(card.when)}` : ''}${card.counter ? ' · cuts against this' : ''}</span></div>`;
+/** The card's box. */
+export const CITE_CARD_STYLE = 'width:280px;box-sizing:border-box;padding:12px 14px 10px;background:#fff;border:1px solid #e3e3e3;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.08);pointer-events:none;text-align:left';
 
 // The chip: 18px high, the grey of a chip, its label dark grey, on the text's baseline and never underlined. The person's
 // own words have a darker ring; a passage that cuts against the answer is hollow. A folded run's rest is hidden until the
@@ -157,7 +176,7 @@ a[data-cite][data-counter]:hover{background:#f2f2f2}
 // over the page by itself, under the circle or above it where there is no room under, as a box clips what overflows it.
 // `over` and `out` take the box's pointer and focus events (mouseover/focusin, mouseout/focusout), so a circle reached by
 // Tab shows its card too.
-const TIP = 'position:fixed;z-index:1000;width:300px;box-sizing:border-box;padding:11px 14px 12px;background:#fff;border:1px solid #c9c9c9;border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,.06);pointer-events:none;text-align:left';
+const TIP = `position:fixed;z-index:1000;${CITE_CARD_STYLE}`;
 export function citationTip(doc = typeof document === 'undefined' ? null : document) {
   let tip = null;
   const hide = () => { if (tip) { tip.remove(); tip = null; } };
@@ -169,10 +188,7 @@ export function citationTip(doc = typeof document === 'undefined' ? null : docum
     tip.setAttribute('data-cite-tip', '1');
     tip.setAttribute('role', 'tooltip');
     tip.style.cssText = TIP;
-    // drawn as the document's card is (workspace/Popover.jsx)
-    tip.innerHTML = `<div style="display:flex;align-items:baseline;gap:10px;font:500 12px/1.4 var(--font-sans);color:#4d4d4d"><span style="flex:none">${esc(card.label)}${card.counter ? '<span style="color:#8f8f8f;font-weight:400"> · cuts against this</span>' : ''}</span>`
-      + `<span style="margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:400;color:#8f8f8f">${esc(card.where)}</span></div>`
-      + `<div style="margin-top:8px;padding:1px 0 1px 10px;border-left:2px solid #d6d6d6;font:13px/1.6 var(--font-sans);color:#171717">${esc(card.quote)}</div>`;
+    tip.innerHTML = citationCardHtml(card); // as the document's card is (workspace/Popover.jsx)
     doc.body.appendChild(tip);
     const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
     const vw = doc.documentElement.clientWidth || 800, vh = doc.documentElement.clientHeight || 600;

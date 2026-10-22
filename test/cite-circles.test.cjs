@@ -95,12 +95,18 @@ test('inlineHtml draws circles: numbered, flagged, folded; the markdown keeps th
   assert.match(inlineHtml('[You · Oct 1](/p/Agents/workspace.md#find=a%20b%20c&cite=you)'), /data-source="Agents"/, 'a workspace\'s document by the workspace');
 });
 
-test('the card a chip shows is its label, where it is and the quote; one that cuts against the answer says so', async () => {
+test('the card a chip shows is the quote, then who wrote it, where and when', async () => {
   const { citationCard, libraryName, CITE_CSS } = await citeModel();
   assert.match(CITE_CSS, /a\[data-cite\]::after\{content:attr\(data-label\)/, 'the chip shows its label, not its number');
-  const el = { dataset: { cite: 'you', label: 'You · Oct 12', find: 'reading is slow', source: 'My note' } };
-  assert.deepEqual(citationCard(el), { label: 'You · Oct 12', where: 'My note', quote: 'reading is slow', counter: false });
-  assert.equal(citationCard({ dataset: { ...el.dataset, cite: 'other', counter: '1' } }).counter, true);
+  const el = { dataset: { cite: 'you', label: 'You · Oct 12', find: 'reading is slow', source: 'flow' } };
+  assert.deepEqual(citationCard(el), { quote: 'reading is slow', lead: 'You wrote this in', where: 'flow', when: 'Oct 12', counter: false });
+  assert.deepEqual(citationCard({ dataset: { ...el.dataset, cite: 'other', label: 'Chat · Oct 12', counter: '1' } }), { quote: 'reading is slow', lead: 'Chat said this in', where: 'flow', when: 'Oct 12', counter: true });
+  assert.equal(citationCard({ dataset: { ...el.dataset, cite: 'other', label: 'Meeting · Oct 15', source: 'Standup' } }).lead, 'From', 'a meeting, a colleague: where it is from');
+  assert.deepEqual(citationCard({ dataset: { cite: 'source', label: 'TutorTrace p. 6', find: 'x', source: 'TutorTrace' } }), { quote: 'x', lead: 'From', where: 'TutorTrace p. 6', when: '', counter: false });
+  const { citationCardHtml } = await citeModel();
+  const html = citationCardHtml(citationCard(el));
+  assert.match(html, /“reading is slow”/);
+  assert.match(html, /You wrote this in <span[^>]*>flow<\/span> · Oct 12/);
   const rows = [{ name: 'A paper', path: '/lib/a.pdf' }, { name: 'The page', url: 'https://www.example.org/x/' }, { name: 'Interviews', type: 'folder', path: '/lib/Interviews' }];
   assert.equal(libraryName(rows, '/lib/a.pdf'), 'A paper');
   assert.equal(libraryName(rows, 'https://example.org/x'), 'The page');
