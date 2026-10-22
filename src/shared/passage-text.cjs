@@ -30,13 +30,15 @@ const MD_LINE_RE = /^(?:#{1,6}\s+|[-*+]\s+(?:\[[ xX]\]\s+)?|\d+[.)]\s+)/;
  */
 function foldPassage(input, { prefixes = false, markdown = false } = {}) {
   const src = String(input == null ? '' : input);
-  let out = '';
+  // Built as a list of characters: asking a string being added to for its last character copies it whole each time,
+  // which took a second over a long workspace's document (2026-10-21).
+  const out = [];
   const map = [];
   let lineStart = true;
   const push = (chars, at) => {
-    for (const c of chars) { out += c; map.push(at); }
+    for (const c of chars) { out.push(c); map.push(at); }
   };
-  const space = (at) => { if (out && out[out.length - 1] !== ' ') push(' ', at); };
+  const space = (at) => { if (out.length && out[out.length - 1] !== ' ') push(' ', at); };
   for (let i = 0; i < src.length; i += 1) {
     const c = src[i];
     if (c === '\n') { space(i); lineStart = true; continue; }
@@ -76,8 +78,8 @@ function foldPassage(input, { prefixes = false, markdown = false } = {}) {
     if (LIGATURES[c]) { push(LIGATURES[c], i); continue; }
     push(c.toLowerCase(), i);
   }
-  while (out.endsWith(' ')) { out = out.slice(0, -1); map.pop(); }
-  return { text: out, map };
+  while (out[out.length - 1] === ' ') { out.pop(); map.pop(); }
+  return { text: out.join(''), map };
 }
 
 /** `text` folded, as foldPassage does: for comparing, when where it came from does not matter. */
