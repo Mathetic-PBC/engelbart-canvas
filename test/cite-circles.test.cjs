@@ -236,3 +236,19 @@ test('a whole source (2026-10-22): its own number beside its passages, a card wi
   assert.doesNotMatch(card, /border-top/, 'no divider under a quote that is not there');
   assert.match(citationCardHtml({ quote: 'a map', lead: '', where: 'Welcome', when: '', counter: false }), /border-top/);
 });
+
+test('a note on a highlight (2026-10-23): its own number, a card with the note\'s words as "Your note"', async () => {
+  const { citationNumbers, citationOf, citationPassage, citationHtml, citationCard, citationCardHtml } = await citeModel();
+  const NOTE_ON = '[You · Sep 14](/Users/me/TutorTrace.pdf#find=Learners%20who%20waited&note=the%20wait%20is%20what%20matters&cite=you)';
+  const PASSAGE = '[TutorTrace p. 1](/Users/me/TutorTrace.pdf#find=Learners%20who%20waited&cite=source)';
+  const c = citationOf(NOTE_ON);
+  assert.equal(c.note, 'the wait is what matters');
+  const n = citationNumbers(`A ${NOTE_ON} and ${PASSAGE}.`);
+  assert.deepEqual([NOTE_ON, PASSAGE].map((l) => n.get(citationPassage(citationOf(l)))), [1, 2], 'the note and the passage it is on are two');
+  const html = citationHtml(c, { cites: n });
+  assert.match(html, /data-note="the wait is what matters"/);
+  const el = { dataset: { label: c.label, cite: c.cite, find: c.find, note: c.note, source: 'TutorTrace' } };
+  const card = citationCard(el);
+  assert.deepEqual([card.quote, card.lead, card.where, card.when], ['the wait is what matters', 'Your note', 'TutorTrace', 'Sep 14']);
+  assert.match(citationCardHtml(card), /Your note · <span[^>]*>TutorTrace<\/span> · Sep 14/);
+});

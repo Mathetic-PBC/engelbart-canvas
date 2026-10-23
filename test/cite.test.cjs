@@ -378,6 +378,40 @@ test('checkCitations: a passage of the person\'s context linked with no cite= is
   assert.equal(out.body.split('\n')[4], body.split('\n')[4], 'a passage outside their context, and an unknown path, stay links');
 });
 
+test('checkCitations: the person\'s note on a highlight is theirs, dated by the note, opening the paper at its passage', async () => {
+  const { inkNotes } = require('../src/main/bart/cite.cjs');
+  const paper = library.find((r) => r.name === 'TutorTrace'), page = library.find((r) => r.name === 'Productive struggle');
+  const made = Date.parse('2026-09-14T15:00:00Z');
+  const ink = {
+    [paper.id]: { 1: [{ id: `m${made}ab`, rects: [{}], text: 'Learners who waited for hints retained more of the material a week later.', note: 'So the wait (not the hint) is what matters for my study.' }, { id: 'm1', text: 'x', note: '' }], 2: [{ id: 'nope', note: 'A free note about transfer tasks.' }] },
+    [page.id]: { web: [{ id: `m${made}cd`, quote: { exact: 'letting students wrestle' }, note: 'Same idea as the wait.' }] },
+  };
+  const readInk = (row) => ink[row.id] || null;
+  const body = [
+    `The wait matters ${link('You', files.pdf, 'the wait (not the hint) is what matters', 'you')}.`,
+    `Said as the paper's ${link('TutorTrace p. 1', files.pdf, 'the wait (not the hint) is what matters', 'source')}.`,
+    `Free ${link('You', files.pdf, 'a free note about transfer', 'you')}.`,
+    `On the page ${link('You', 'https://example.org/struggle', 'Same idea as the wait', 'you')}.`,
+    `Not a note ${link('You', files.pdf, 'words in no note and not in the paper', 'you')}.`,
+    `The paper itself ${link('TutorTrace p. 1', files.pdf, 'Learners who waited for hints retained more', 'source')}.`,
+  ].join('\n');
+  const out = await check(body, { readInk });
+  const day = new Date(made).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.note || '', k.page ?? null]), [
+    [`You · ${day}`, 'you', 'the wait (not the hint) is what matters', 1],
+    [`You · ${day}`, 'you', 'the wait (not the hint) is what matters', 1],
+    [`You · ${TODAY}`, 'you', 'a free note about transfer', 2],
+    [`You · ${day}`, 'you', 'Same idea as the wait', null],
+    ['TutorTrace p. 1', 'source', '', null],
+  ]);
+  assert.deepEqual(out.dropped.map((d) => d.reason), ['not-found']);
+  const first = splitTarget(out.body.split('\n')[0].match(/\]\(([^)]+)\)/)[1]);
+  assert.deepEqual([first.find.slice(0, 40), first.note, first.cite], ['Learners who waited for hints retained m', 'the wait (not the hint) is what matters', 'you'], 'opens at the highlight, quotes the note');
+  assert.equal(splitTarget(out.body.split('\n')[2].match(/\]\(([^)]+)\)/)[1]).find, '', 'a free note: the paper at its top');
+  assert.equal(out.kept[1].relabeled, true, 'cited as the paper\'s, it is the person\'s');
+  assert.deepEqual(inkNotes({ 3: [{ id: 'm1', box: true, text: 'under the box', note: 'boxed' }], web: 'x', bad: [{ note: 'y' }] }).map((n) => [n.note, n.text, n.page]), [['boxed', '', 3]]);
+});
+
 test('the prompt asks for sentences that say their point without the citation, which shows only as a number', () => {
   const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
   assert.match(BART_SYSTEM_PROMPT, /makes sense with the citation taken out/);

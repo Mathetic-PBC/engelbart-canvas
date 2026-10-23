@@ -139,6 +139,34 @@ function sourceDate(found, source) {
   if (found.kind === 'row' && found.row.created) return valid(found.row.created);
   try { const stat = fs.statSync(found.file); return valid(stat.birthtimeMs > 0 ? stat.birthtime : stat.mtime); } catch { return null; }
 }
+// A highlight's first words, where the paper opens for a note on it: enough to find the passage, not the whole selection.
+const NOTE_FIND_WORDS = 30;
+const firstWords = (value, n) => String(value || '').split(/\s+/).filter(Boolean).slice(0, n).join(' ');
+// A mark's id is `m` and the time it was made (src/renderer/pdf/marks.js).
+const markDate = (id) => { const m = /^m(\d{12,13})/.exec(String(id || '')); const date = m ? new Date(Number(m[1])) : null; return date && !Number.isNaN(date.getTime()) ? date : null; };
+
+/**
+ * The notes on a paper's or page's highlights, from its ink ({ "<page>": [mark] }, a web page's { web: [mark] }): [{ note,
+ * text: the passage it is on ('' for a free note), page (null on a web page), at: when it was made }].
+ */
+function inkNotes(ink) {
+  const out = [];
+  if (!ink || typeof ink !== 'object' || Array.isArray(ink)) return out;
+  const add = (m, page, text) => { if (m && typeof m === 'object' && typeof m.note === 'string' && m.note.trim()) out.push({ note: m.note, text: String(text || ''), page, at: markDate(m.id) }); };
+  for (const [key, list] of Object.entries(ink)) {
+    if (!Array.isArray(list)) continue;
+    if (key === 'web') for (const m of list) add(m, null, m && m.quote && typeof m.quote === 'object' ? m.quote.exact : m && m.quote);
+    else if (/^\d+$/.test(key)) for (const m of list) add(m, Number(key), m && !m.box ? m.text : '');
+  }
+  return out;
+}
+
+/** A library item's ink as its own file keeps it (<data root>/annotations/<id>.json), or null. */
+function defaultReadInk(dataRoot, row) {
+  if (!dataRoot || !row || !/^[\w-]+$/.test(String(row.id || ''))) return null;
+  try { return JSON.parse(fs.readFileSync(path.join(dataRoot, 'annotations', `${row.id}.json`), 'utf8')); } catch { return null; }
+}
+
 /** "Oct 12", or "Oct 12, 2025" in another year than `today`'s. */
 const dayLabel = (date, today = new Date()) => (date ? date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(date.getFullYear() !== today.getFullYear() ? { year: 'numeric' } : {}) }) : '');
 // Who said words cited as someone else's, where the source says: an answer line is Chat's, an imported chat's turn its
@@ -175,10 +203,13 @@ const threadText = (thread) => (thread || []).map((turn) => [turn && turn.questi
  * included. `readText(file)`: a source file's text (defaultReadText). `readRowText(row)`: the text kept for a library
  * item that has no file (a page saved by its address, ./source-text.cjs), or null. `opened`: what Chat read while it
  * answered, as openedKey spells each (./source-text.cjs openedBy): a citation of a whole source (no `find`, 2026-10-22)
- * is kept only when its source is among them, as a summary is no reading. `today`: for the labels' dates, whose year is
+ * is kept only when its source is among them, as a summary is no reading. `readInk(row)`: a paper's or page's ink (the
+ * person's highlights and notes on it, ../store/library.cjs readAnnotations): a citation of words in one of their notes
+ * (2026-10-23) is theirs, dated by the note, and written with the note's words as `note` and the highlighted passage as
+ * `find`, where the paper opens. `today`: for the labels' dates, whose year is
  * left off in this one.
  */
-async function checkCitations(body, { library = [], dataRoot = null, projectId = null, workspaceId = null, projectDir = null, workspaces = null, currentThread = [], readText = defaultReadText, readRowText = () => null, opened = null, today = new Date() } = {}) {
+async function checkCitations(body, { library = [], dataRoot = null, projectId = null, workspaceId = null, projectDir = null, workspaces = null, currentThread = [], readText = defaultReadText, readRowText = () => null, readInk = (row) => defaultReadInk(dataRoot, row), opened = null, today = new Date() } = {}) {
   const text = String(body == null ? '' : body);
   const kept = [], dropped = [];
   if (!/[#&]cite=|#find=/.test(text)) return { body: text, kept, dropped };
@@ -203,6 +234,22 @@ async function checkCitations(body, { library = [], dataRoot = null, projectId =
     return reads.get(key);
   };
 
+  // The person's notes on a library item's highlights, as its ink keeps them (`readInk`), read once each.
+  const notes = new Map();
+  const notesOf = (row) => {
+    if (!notes.has(row.id)) notes.set(row.id, Promise.resolve().then(() => readInk(row)).then(inkNotes).catch(() => []));
+    return notes.get(row.id);
+  };
+  const noteHolding = async (row, words) => (words ? (await notesOf(row)).find((n) => matchPassage(n.note, words, { markdown: true }).length) || null : null);
+  // A note cited: the person's words, dated by when the note was made, opening the paper at the passage it is on.
+  const noteCite = (target, found, n) => {
+    const quote = target.note || target.find, find = firstWords(n.text, NOTE_FIND_WORDS);
+    const shown = ['You', dayLabel(n.at || sourceDate(found, null), today)].filter(Boolean).join(' · ');
+    const address = found.row.url && /^https?:\/\//i.test(target.address) ? found.row.url : found.file || target.address;
+    kept.push({ label: shown, address, source: found.name, find, note: quote, page: n.page, cite: 'you', counter: !!target.counter, relabeled: target.cite !== 'you' });
+    return `[${shown}](${citeHref({ address: target.address, find, note: quote, cite: 'you', counter: target.counter })})`;
+  };
+
   // A whole source: a library item (not a workspace's document, whose passages are what it holds), read while answering.
   // Whose it is goes by what was said, its label by when the source is from, as a passage's.
   const whole = async (label, target, found, cut) => {
@@ -223,12 +270,17 @@ async function checkCitations(body, { library = [], dataRoot = null, projectId =
     if (!target.cite) return cut('malformed');
     const found = resolveSource(target.address, { library, projectDir: dir, workspaces: spaces, dataRoot });
     if (found.reason) return cut(found.reason);
-    if (!target.find) return whole(label, target, found, cut);
+    if (!target.find && !target.note) return whole(label, target, found, cut);
     const source = found.file ? await read(found.file) : found.row ? await rowText(found.row) : null;
-    if (typeof source !== 'string' || !source.trim()) return cut('no-text');
     const workspaceDoc = found.kind === 'workspace';
     const markdown = found.file ? /\.(?:md|markdown|txt|html?)$/i.test(found.file) : true; // a saved page's text has its links as markdown
-    const hits = matchPassage(source, target.find, { prefixes: workspaceDoc, markdown });
+    const hits = typeof source === 'string' && target.find && !target.note ? matchPassage(source, target.find, { prefixes: workspaceDoc, markdown }) : [];
+    // The person's note on a highlight of a paper or page (2026-10-23): their words, wherever the model said they were.
+    if (found.kind === 'row' && (target.note || target.cite === 'you' || !hits.length)) {
+      const noted = await noteHolding(found.row, target.note || target.find);
+      if (noted) return noteCite(target, found, noted);
+    }
+    if (typeof source !== 'string' || !source.trim()) return cut('no-text');
     if (!hits.length) return cut('not-found');
     if (workspaceDoc && current && found.workspace.id === current.id && thread && thread.includes(foldPassage(target.find, { markdown: true }).text)) return cut('current-thread');
     // The same words can be in more than one place (the person's question repeating Chat's suggestion): they are
@@ -293,4 +345,4 @@ async function checkCitations(body, { library = [], dataRoot = null, projectId =
   return { body: out.join('\n'), kept, dropped };
 }
 
-module.exports = { checkCitations, resolveSource, notCitable, defaultReadText, speakerAt, tidyAround };
+module.exports = { checkCitations, resolveSource, notCitable, defaultReadText, speakerAt, tidyAround, inkNotes };
