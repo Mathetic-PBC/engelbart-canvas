@@ -296,6 +296,7 @@ export const TAB_MAX_W = 220;
 export const TAB_MIN_W = 36;
 export const TAB_NARROW_W = 90; // below it the title goes
 export const TAB_ICON_X_W = 56; // the tab in front keeps its icon beside the × from here up
+export const TAB_ICON_SIDE_W = 50; // a tab not in front keeps its icon beside its × under the pointer from here up
 
 /** How wide each tab is, given the room the strip has for tabs (px) and how many there are. */
 export function tabWidth(room, count) {

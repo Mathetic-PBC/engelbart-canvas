@@ -9,7 +9,7 @@ import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
 import { previewLibraryId } from '../model/sandbox-notifications.js';
 import { KindGlyph, SEARCH, FOLDER, Expand, Collapse } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, SAVE_LABEL, tabLook, tabWidth, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
+import { MAX_TABS, SAVE_LABEL, TAB_ICON_SIDE_W, tabLook, tabWidth, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 import { withAsk } from '../pdf/canvas.js';
@@ -1387,13 +1387,12 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
                     {glyph}{titleSpan}{close}
                   </div>
                 ) : (
-                  // The icon alone; under the pointer the × takes its spot. The × is always there (only unseen), so a
-                  // click on that spot closes the tab even before the hover shows.
-                  <div className="hov-tab stage-tab-icon" onMouseDown={(event) => pressTab(event, t)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', margin: '0 2px 4px', padding: 0, borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
-                    <span style={{ position: 'relative', flex: 'none', width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <span className="stage-tab-glyph" style={{ display: 'flex' }}>{glyph}</span>
-                      <button {...closeProps} className="hov-x stage-tab-x" style={{ ...closeStyle, position: 'absolute', inset: 0 }}>×</button>
-                    </span>
+                  // The icon alone; under the pointer the × shows at the tab's right edge and the icon moves left to make
+                  // room (2026-10-23: a × where the icon was took the click meant to open the tab). Unseen, it takes no
+                  // click. A tab too narrow for both hides its icon under the pointer.
+                  <div className="hov-tab stage-tab-icon" onMouseDown={(event) => pressTab(event, t)} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', margin: '0 2px 4px', padding: 0, borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
+                    <span className="stage-tab-glyph" data-crowded={tabW < TAB_ICON_SIDE_W ? '1' : undefined} style={{ display: 'flex', '--tab-glyph-shift': `${Math.min(0, 14 - (tabW - 4) / 2)}px` }}>{glyph}</span>
+                    <button {...closeProps} className="hov-x stage-tab-x" style={{ ...closeStyle, position: 'absolute', right: 3, top: '50%', marginTop: -10 }}>×</button>
                   </div>
                 )}
                 {sep && <span aria-hidden="true" style={{ position: 'absolute', right: 0, top: 9, width: 1, height: 16, background: '#c9c9c9' }} />}
