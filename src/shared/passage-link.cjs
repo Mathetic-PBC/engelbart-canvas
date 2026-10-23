@@ -7,11 +7,12 @@
 // `&counter=1`. Those two may come before or after `find` and `to`, in any order. A citation without `find` (`#cite=source`,
 // 2026-10-22) cites the source as a whole: what a document is about, said by no one sentence of it. A citation of the
 // person's note on a highlight (2026-10-23) carries the note's words in `&note=`, before `cite`, and in `find` the
-// highlighted passage it is on, where the paper opens ('' for a note on no passage).
+// highlighted passage it is on, where the paper opens ('' for a note on no passage). A note's page goes in `&page=`
+// (before `note`): the paper opens there at once, not once every page's text is known.
 
 const CITES = new Set(['you', 'other', 'source']);
-const TAIL_RE = /&(to|note|cite|counter)=([^&]*)$/;
-const HEAD_RE = /^(to|note|cite|counter)=([^&]*)&/;
+const TAIL_RE = /&(to|page|note|cite|counter)=([^&]*)$/;
+const HEAD_RE = /^(to|page|note|cite|counter)=([^&]*)&/;
 
 const words = (value) => {
   let out;
@@ -48,11 +49,11 @@ function fragmentParts(fragment) {
   return { find: rest.slice('find='.length), ...keys };
 }
 
-// A whole source's fragment: `cite=` and perhaps `note=` and `counter=`, each once, and nothing else → { find: '', cite, … }, or null.
+// A whole source's fragment: `cite=` and perhaps `page=`, `note=` and `counter=`, each once, and nothing else → { find: '', cite, … }, or null.
 function wholeParts(fragment) {
   const keys = {};
   for (const pair of fragment.split('&')) {
-    const m = pair.match(/^(note|cite|counter)=([^&]*)$/);
+    const m = pair.match(/^(page|note|cite|counter)=([^&]*)$/);
     if (!m || m[1] in keys) return null;
     keys[m[1]] = m[2];
   }
@@ -79,6 +80,7 @@ function splitTarget(href) {
     out.cite = CITES.has(cite) ? cite : '';
     out.counter = words(parts.counter) === '1';
     if (parts.note) out.note = words(parts.note);
+    if (/^[1-9]\d{0,5}$/.test(String(parts.page || ''))) out.page = Number(parts.page);
   }
   return out;
 }
@@ -91,11 +93,12 @@ const encode = (value) => encodeURIComponent(value).replace(/[()]/g, (c) => (c =
 const linkAddress = (where) => (String(where || '').startsWith('/') ? String(where).split('/').map(encode).join('/') : String(where || '').replace(/[()\s]/g, (c) => (c === '(' ? '%28' : c === ')' ? '%29' : '%20')));
 
 /**
- * A citation's href: `address#find=…[&to=…][&note=…]&cite=…[&counter=1]`, or a whole source's `address#[note=…&]cite=…[&counter=1]`,
- * with no space or parenthesis in it.
+ * A citation's href: `address#find=…[&to=…][&page=N][&note=…]&cite=…[&counter=1]`, or a whole source's
+ * `address#[page=N&][note=…&]cite=…[&counter=1]`, with no space or parenthesis in it.
  */
-function citeHref({ address, find, to = '', note = '', cite, counter = false }) {
-  const tail = `${note ? `note=${encode(note)}&` : ''}cite=${cite}${counter ? '&counter=1' : ''}`;
+function citeHref({ address, find, to = '', page = 0, note = '', cite, counter = false }) {
+  const at = Number.isInteger(page) && page > 0 ? `page=${page}&` : '';
+  const tail = `${at}${note ? `note=${encode(note)}&` : ''}cite=${cite}${counter ? '&counter=1' : ''}`;
   if (!find) return `${linkAddress(address)}#${tail}`;
   return `${linkAddress(address)}#find=${encode(find)}${to ? `&to=${encode(to)}` : ''}&${tail}`;
 }

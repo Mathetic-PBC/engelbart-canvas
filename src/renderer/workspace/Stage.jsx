@@ -78,7 +78,7 @@ const STAGE_SAVE_MS = 150; // the tabs are kept this long after they last change
 const REMOVED_MS = 5000; // how long "Box removed · Undo" stays (as a pdf's "Highlight removed")
 const HOVER_MS = 650; // a tab's card, the first time; then quickly while moving along the strip
 const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
-const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, sections: null, activeSection: -1 });
+const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, pendingPage: null, sections: null, activeSection: -1 });
 const noSections = (t) => (t.sections && t.sections.length ? { ...t, sections: null, activeSection: -1 } : t);
 const isPage = (k) => k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';
 const hasScheme = (input) => /^https?:\/\//i.test(input);
@@ -575,7 +575,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // `find`: a passage to find there once it is ready, given to the new tab or to the one that comes forward; `to`, where its section ends.
   // `newTab` (a ⌘-click on a link): a tab of its own, even when one shows it already. `sections`: an @discover guide's for
   // the paper, which come with the passage and replace the tab's (model/stage.js withPassage).
-  const claim = (key, find = '', to = '', { newTab = false, sections = null, also = '' } = {}) => {
+  const claim = (key, find = '', to = '', { newTab = false, sections = null, also = '', page = null } = {}) => {
     const current = tabsRef.current;
     const front = Math.max(0, current.findIndex((t) => t.id === (frontRef.current || current[0].id)));
     const place = placeTab(current, front, key, { newTab, also });
@@ -583,10 +583,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const id = current[place.focus].id;
       frontRef.current = id;
       setActiveId(id);
-      if (find) update(id, (t) => withPassage(t, find, to, sections));
+      if (find) update(id, (t) => withPassage(t, find, to, sections, page));
       return null;
     }
-    const fresh = withPassage({ ...blankTab(), claimed: true }, find, to, sections);
+    const fresh = withPassage({ ...blankTab(), claimed: true }, find, to, sections, page);
     if (place.replace != null) {
       const old = current[place.replace];
       quiet(api.browserClose(old.id));
@@ -694,10 +694,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // `{ newTab: true }`: a ⌘-click, in a tab of its own.
   const openInput = (input, options = {}) => {
     const plan = linkPlan(input, library);
-    if (plan.row) { openRow(plan.row, plan.find, plan.to, options); return; }
+    if (plan.row) { openRow(plan.row, plan.find, plan.to, { ...options, page: plan.page }); return; }
     const k0 = kindOf(plan.address);
     if (isGithubSignIn(k0.url)) { quiet(api.openExternal(k0.url)); return; }
-    const id = claim(plan.key, plan.find, plan.to, options);
+    const id = claim(plan.key, plan.find, plan.to, { ...options, page: plan.page });
     if (id) void navigate(id, plan.address);
   };
   // A file inside a library folder, mentioned (MATH-22): its tab, as a file from the computer has, unless one is open already.
@@ -1123,7 +1123,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // time it says so: the find card opens with the words, and the passage waits no longer. In a pdf with an @discover
   // guide's sections (2026-10-03) the find card stays as it was: the Sections menu says which one is shown. A page or a
   // drawn file is searched as ⌘F would, with no card (land, below).
-  const clearPending = (id, text) => update(id, (t) => (t.pendingFind === text ? { ...t, pendingFind: null, pendingTo: null } : t));
+  const clearPending = (id, text) => update(id, (t) => (t.pendingFind === text ? { ...t, pendingFind: null, pendingTo: null, pendingPage: null } : t));
   const landed = (id, text, result) => {
     const t = tabsRef.current.find((x) => x.id === id);
     update(id, (x) => landTab(x, text));
@@ -1522,6 +1522,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               marks={pdf.marks}
               target={tab.pendingFind || null}
               targetTo={tab.pendingTo || null}
+              targetPage={tab.pendingPage || null}
               initialSection={sectionsOn ? tab.sections[tab.activeSection] || null : null}
               view={pdf.view || null}
               onView={(view) => { const { seq } = pdf; update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, view } } : t)); }}

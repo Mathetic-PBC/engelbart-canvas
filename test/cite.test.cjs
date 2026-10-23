@@ -325,7 +325,7 @@ test('splitTarget and citeHref: a citation with no find is the whole source; any
   assert.deepEqual(splitTarget('/a/My%20Paper.pdf#cite=source'), { address: '/a/My Paper.pdf', find: '', to: '', cite: 'source', counter: false });
   assert.deepEqual(splitTarget('/a/b.md#counter=1&cite=you'), { address: '/a/b.md', find: '', to: '', cite: 'you', counter: true });
   assert.deepEqual(splitTarget('/a/b.pdf#page=3'), { address: '/a/b.pdf#page=3', find: '', to: '' });
-  assert.deepEqual(splitTarget('/a/b.md#cite=you&page=3'), { address: '/a/b.md#cite=you&page=3', find: '', to: '' }, 'an unknown key: no citation');
+  assert.deepEqual(splitTarget('/a/b.md#cite=you&size=3'), { address: '/a/b.md#cite=you&size=3', find: '', to: '' }, 'an unknown key: no citation');
   assert.equal(citeHref({ address: '/a/My Paper (v2).pdf', find: '', cite: 'source', counter: true }), '/a/My%20Paper%20%28v2%29.pdf#cite=source&counter=1');
 });
 
@@ -406,7 +406,8 @@ test('checkCitations: the person\'s note on a highlight is theirs, dated by the 
   ]);
   assert.deepEqual(out.dropped.map((d) => d.reason), ['not-found']);
   const first = splitTarget(out.body.split('\n')[0].match(/\]\(([^)]+)\)/)[1]);
-  assert.deepEqual([first.find.slice(0, 40), first.note, first.cite], ['Learners who waited for hints retained m', 'the wait (not the hint) is what matters', 'you'], 'opens at the highlight, quotes the note');
+  assert.deepEqual([first.find.slice(0, 40), first.note, first.cite, first.page], ['Learners who waited for hints retained m', 'the wait (not the hint) is what matters', 'you', 1], 'opens at the highlight, on its page, quotes the note');
+  assert.equal(splitTarget(out.body.split('\n')[3].match(/\]\(([^)]+)\)/)[1]).page, undefined, 'a web page\'s note: no page');
   assert.equal(splitTarget(out.body.split('\n')[2].match(/\]\(([^)]+)\)/)[1]).find, '', 'a free note: the paper at its top');
   assert.equal(out.kept[1].relabeled, true, 'cited as the paper\'s, it is the person\'s');
   assert.deepEqual(inkNotes({ 3: [{ id: 'm1', box: true, text: 'under the box', note: 'boxed' }], web: 'x', bad: [{ note: 'y' }] }).map((n) => [n.note, n.text, n.page]), [['boxed', '', 3]]);

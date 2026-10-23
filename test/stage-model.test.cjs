@@ -272,14 +272,14 @@ test('a guide\'s sections on the tab: given with the passage, the clicked one in
 
 test('linkPlan: a passage to a library paper opens its row; other links open their address in the tab that has it, or a new one', async () => {
   const { linkPlan, placeTab, tabKey } = await load('stage');
-  assert.deepEqual(linkPlan('/Users/h/ColBERT.pdf#find=late%20interaction', library), { address: '/Users/h/ColBERT.pdf', find: 'late interaction', to: '', row: library[2], key: 'i:p1' }, 'by its path');
+  assert.deepEqual(linkPlan('/Users/h/ColBERT.pdf#find=late%20interaction', library), { address: '/Users/h/ColBERT.pdf', find: 'late interaction', to: '', page: null, row: library[2], key: 'i:p1' }, 'by its path');
   assert.equal(linkPlan('file:///Users/h/ColBERT.pdf#find=x', library).row, library[2], 'by its file: address');
   assert.equal(linkPlan('https://anthropic.com/engineering/contextual-retrieval#find=x', library).row, library[3], 'by its url, however spelled');
   assert.equal(linkPlan('/Users/h/.engelbart/p/Saving.md#find=x', library).row, null, 'never a note: notes open in the middle');
   assert.equal(linkPlan('/Users/h/ColBERT.pdf', library).row, null, 'no passage: the link opens as it always did');
-  assert.deepEqual(linkPlan('/Users/h/ColBERT.pdf#cite=source', library), { address: '/Users/h/ColBERT.pdf', find: '', to: '', row: library[2], key: 'i:p1' }, 'a whole source cited: its row, at its top');
+  assert.deepEqual(linkPlan('/Users/h/ColBERT.pdf#cite=source', library), { address: '/Users/h/ColBERT.pdf', find: '', to: '', page: null, row: library[2], key: 'i:p1' }, 'a whole source cited: its row, at its top');
   assert.equal(linkPlan('https://anthropic.com/engineering/contextual-retrieval#cite=source', library).row, library[3]);
-  assert.deepEqual(linkPlan('https://arxiv.org/pdf/2312.10893#find=We%20argue', library), { address: 'https://arxiv.org/pdf/2312.10893', find: 'We argue', to: '', row: null, key: 'l:arxiv.org/pdf/2312.10893' });
+  assert.deepEqual(linkPlan('https://arxiv.org/pdf/2312.10893#find=We%20argue', library), { address: 'https://arxiv.org/pdf/2312.10893', find: 'We argue', to: '', page: null, row: null, key: 'l:arxiv.org/pdf/2312.10893' });
   assert.equal(linkPlan('/Users/h/ColBERT.pdf#find=late%20interaction&to=Next%20we', library).to, 'Next we', 'the section\'s end goes with the passage');
   assert.equal(linkPlan('/Users/h/elsewhere.pdf', library).key, '', 'a path without a passage: a tab of its own, as before');
   assert.equal(linkPlan('/Users/h/My Paper.pdf#find=x', library).key, tabKey({ url: 'about:blank', pdf: { url: 'file:///Users/h/My%20Paper.pdf' } }), 'with one, the tab that has the file (as main spells it) comes forward');
@@ -322,6 +322,32 @@ test('the target gate: a passage is found once, after drawing; a re-layout does 
   assert.equal(gate.set('Mid-draw words'), null, 'given while drawing: waits for the end');
   assert.equal(gate.drawn(), 'Mid-draw words');
   assert.equal(createTargetGate().drawn(), null, 'no target: nothing to find');
+  // A link that names its page (2026-10-23): shown once that page has its text, and not again when every page has
+  const early = createTargetGate();
+  early.set('Thus far we seem');
+  early.drawing();
+  assert.equal(early.peek(), 'Thus far we seem', 'waiting, yet there to look for on its page');
+  early.claim();
+  assert.equal(early.peek(), null);
+  assert.equal(early.drawn(), null, 'every page drawn: not shown again');
+});
+
+test('a citation names the page of the note it quotes, and the Stage opens there', async () => {
+  const { citeHref, splitTarget } = require('../src/shared/passage-link.cjs');
+  const { linkPlan, withPassage, landTab } = await load('stage');
+  const href = citeHref({ address: '/Users/h/ColBERT.pdf', find: 'late interaction', page: 58, note: 'my words', cite: 'you' });
+  assert.equal(href, '/Users/h/ColBERT.pdf#find=late%20interaction&page=58&note=my%20words&cite=you');
+  assert.deepEqual(splitTarget(href), { address: '/Users/h/ColBERT.pdf', find: 'late interaction', to: '', cite: 'you', counter: false, note: 'my words', page: 58 });
+  assert.equal(splitTarget('/x.pdf#page=3').address, '/x.pdf#page=3', 'a plain page fragment stays the address\'s');
+  assert.equal(splitTarget('/x.pdf#find=a&page=0&cite=you').page, undefined, 'no page 0');
+  assert.equal(splitTarget(citeHref({ address: '/x.pdf', find: '', page: 4, cite: 'you' })).page, 4, 'a note on no passage keeps its page');
+  const plan = linkPlan(href, library);
+  assert.equal(plan.page, 58);
+  assert.equal(plan.row, library[2]);
+  const tab = withPassage({ id: 't' }, plan.find, plan.to, null, plan.page);
+  assert.equal(tab.pendingPage, 58);
+  assert.equal(landTab(tab, plan.find).pendingPage, null, 'landed: it waits no longer');
+  assert.equal(linkPlan('/Users/h/ColBERT.pdf#find=late%20interaction', library).page, null, 'no page named: none');
 });
 
 test('sectionSpans: a link\'s section, one stretch a page, from the start words to just before the next section (@discover round 2)', async () => {

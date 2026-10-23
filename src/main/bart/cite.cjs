@@ -247,7 +247,7 @@ async function checkCitations(body, { library = [], dataRoot = null, projectId =
     const shown = ['You', dayLabel(n.at || sourceDate(found, null), today)].filter(Boolean).join(' · ');
     const address = found.row.url && /^https?:\/\//i.test(target.address) ? found.row.url : found.file || target.address;
     kept.push({ label: shown, address, source: found.name, find, note: quote, page: n.page, cite: 'you', counter: !!target.counter, relabeled: target.cite !== 'you' });
-    return `[${shown}](${citeHref({ address: target.address, find, note: quote, cite: 'you', counter: target.counter })})`;
+    return `[${shown}](${citeHref({ address: target.address, find, page: n.page || 0, note: quote, cite: 'you', counter: target.counter })})`;
   };
 
   // A whole source: a library item (not a workspace's document, whose passages are what it holds), read while answering.

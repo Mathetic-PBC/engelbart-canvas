@@ -57,17 +57,17 @@ export function sectionAt(sections, find, to) {
  * ready. The sections an @discover guide gave with it (guideSections, 2026-10-03) replace the tab's, the clicked one in
  * front (`activeSection`); a passage from anywhere else leaves the tab none. No passage: the tab as it was.
  */
-export function withPassage(tab, find, to, sections) {
+export function withPassage(tab, find, to, sections, page = null) {
   if (!find) return tab;
   const list = Array.isArray(sections) ? sections : [];
-  return { ...tab, pendingFind: find, pendingTo: to || null, sections: list, activeSection: sectionAt(list, find, to) };
+  return { ...tab, pendingFind: find, pendingTo: to || null, pendingPage: page || null, sections: list, activeSection: sectionAt(list, find, to) };
 }
 
 /** A tab whose passage was found (Stage landed): it waits no longer, and the section it starts is the one in front. */
 export function landTab(tab, find) {
   if (!tab || tab.pendingFind !== find) return tab;
   const sections = tab.sections || [];
-  return { ...tab, pendingFind: null, pendingTo: null, activeSection: sections.length ? sectionAt(sections, find, tab.pendingTo) : -1 };
+  return { ...tab, pendingFind: null, pendingTo: null, pendingPage: null, activeSection: sections.length ? sectionAt(sections, find, tab.pendingTo) : -1 };
 }
 
 /**
@@ -130,17 +130,17 @@ const fileAddress = (file) => `file://${String(file).split('/').map(encodeURICom
  * guide reads offline); while the row is still its abstract page, the pdf's address opens, as before.
  */
 export function linkPlan(href, library) {
-  const { address, find, to, cite } = splitTarget(href);
+  const { address, find, to, cite, page: at = null } = splitTarget(href);
   // a citation of a whole source (no passage, 2026-10-22) opens its row too
   const passage = !!(find || cite);
   const kept = passage ? paperRow(library, address) : null;
   const row = passage ? rowForAddress(library, address) || (kept && kept.type === 'pdf' && kept.path ? kept : null) : null;
-  if (row) return { address, find, to, row, key: `i:${row.id}` };
+  if (row) return { address, find, to, page: at, row, key: `i:${row.id}` };
   const k = kindOf(address);
   const page = k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';
   let key = page && !/^file:/i.test(address) ? `l:${addressKey(k.url)}` : '';
   if (!key && find && address.startsWith('/')) key = `l:${addressKey(fileAddress(address))}`;
-  return { address, find, to, row: null, key };
+  return { address, find, to, page: at, row: null, key };
 }
 
 /** A kept tab's key (stageSnapshot's `{ item }` or `{ address }`): a path is spelled as a file: address, as a file's tab is. */

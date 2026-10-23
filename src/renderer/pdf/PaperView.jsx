@@ -469,6 +469,12 @@ export default class PaperView extends React.Component {
     if (prev.target !== this.props.target || prev.targetTo !== this.props.targetTo) {
       const text = this.gate.set(targetKey(this.props.target, this.props.targetTo));
       if (text) this.applyTarget(text);
+      else if (this.props.target && this.props.targetPage) {
+        this.toPage(this.props.targetPage);
+        const s = this.sheets[this.props.targetPage];
+        if (s && s.texted) this.targetOn(this.props.targetPage);
+        this.drawSoon();
+      }
     }
     if (prev.bytes !== this.props.bytes) {
       this.flushSave(prev.onMarksChange);
@@ -583,6 +589,7 @@ export default class PaperView extends React.Component {
       if (!(await this.layout())) return;
       const h = this.host.current;
       if (view && h && gen === this.gen) { h.scrollTop = view.at * h.scrollHeight; h.scrollLeft = view.left || 0; this.syncBar(); }
+      if (this.props.target && this.props.targetPage && gen === this.gen) this.toPage(this.props.targetPage);
       this.drawSoon();
     } catch (err) {
       if (gen !== this.gen) return;
@@ -996,7 +1003,27 @@ export default class PaperView extends React.Component {
     s.texted = true;
     // The page's notes go by its printed text (its column, the room beside it), which only now is known.
     if ((this.marks[n] || []).length) s.marksW = null;
+    this.targetOn(n);
     this.textsDone();
+  }
+
+  // A link's passage on the page it names (`targetPage`, a note's: 2026-10-23), shown once that page has its text, not
+  // once every page has (a long scanned paper takes most of a minute). Not there: it is looked for over all of them then.
+  targetOn(n) {
+    if (!this.props.targetPage || n !== this.props.targetPage) return;
+    const key = this.gate.peek();
+    if (!key || !this.sectionStart(key.split('\n')[0]).spot) return;
+    this.gate.claim();
+    this.applyTarget(key);
+  }
+
+  // The view scrolled to the top of page n, so it is drawn first.
+  toPage(n) {
+    const host = this.host.current;
+    if (!host || !this.tops.length) return;
+    const i = Math.min(Math.max(1, Math.round(n)), this.tops.length) - 1;
+    host.scrollTop = this.tops[i] * this.css;
+    this.syncBar();
   }
 
   // The first time every page of a document has its text: a search and a passage are found again, over all of it.

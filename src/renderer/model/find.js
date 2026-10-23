@@ -29,6 +29,9 @@ export function createTargetGate() {
     set(next) { target = String(next || ''); if (!target) done = ''; return take(); },
     drawing() { ready = false; },
     drawn() { ready = true; return take(); },
+    // The target not yet shown, every page drawn or not; and it taken as shown (a link that names its page, 2026-10-23).
+    peek() { return target && target !== done ? target : null; },
+    claim() { if (target) done = target; },
   };
 }
 
