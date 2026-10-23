@@ -9,7 +9,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { createHash } = require('node:crypto');
-const { sourceTexts, noteTexts, openedBy, openedKey, keepPageTexts, textDir, notesDir } = require('../src/main/bart/source-text.cjs');
+const { sourceTexts, noteTexts, inkFiles, readInkOf, openedBy, openedKey, keepPageTexts, textDir, notesDir } = require('../src/main/bart/source-text.cjs');
 const { addressKey } = require('../src/shared/address-key.cjs');
 
 // A library db with only what the text pass keeps: id → { text, mtime }.
@@ -155,4 +155,35 @@ test('catalogEntries: an item with notes names its notes file; the others have n
   assert.equal(entries[0].notes, '/d/assets/notes/a-2.txt');
   assert.equal('notes' in entries[1], false);
   assert.equal('notes' in catalogEntries(project, rows, new Set(), { agent: 'bart', madeIn: new Map() })[0], false);
+});
+
+test('a paper added twice: the copy without ink has the other copy\'s notes, under its own path, and the checker reads them', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-twin-'));
+  const files = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-twin-files-'));
+  fs.mkdirSync(path.join(dataRoot, 'annotations'));
+  const write = (name, bytes) => { const file = path.join(files, name); fs.writeFileSync(file, bytes); return file; };
+  const drawn = { id: '55555555-5555-4555-8555-555555555555', type: 'pdf', name: 'Augmenting', path: write('a-augment.pdf', '%PDF the paper') };
+  const copy = { id: '66666666-6666-4666-8666-666666666666', type: 'pdf', name: 'Augmenting', path: write('b-augment.pdf', '%PDF the paper') };
+  const other = { id: '77777777-7777-4777-8777-777777777777', type: 'pdf', name: 'Other', path: write('other.pdf', '%PDF the pape!') };
+  fs.writeFileSync(path.join(dataRoot, 'annotations', `${drawn.id}.json`), JSON.stringify({ 58: [{ id: 'm1791055851103x', y: 0.5, text: 'Thus far we seem to be worse off', note: 'retrieval is NOT a solved problem' }] }));
+  const ctx = { dataRoot };
+  const rows = [drawn, copy, other];
+
+  const inks = inkFiles(ctx, rows);
+  assert.equal(inks.get(copy.id).file, inks.get(drawn.id).file);
+  assert.equal(inks.get(copy.id).row, drawn, 'drawn on the other copy');
+  assert.equal(inks.has(other.id), false, 'the same size, other bytes: not the same paper');
+  const notes = await noteTexts(ctx, rows);
+  assert.ok(fs.readFileSync(notes.get(copy.id), 'utf8').startsWith(`<paper name="Augmenting" path="${drawn.path}">`), 'naming the copy the highlights are drawn on');
+
+  const { checkCitations } = require('../src/main/bart/cite.cjs');
+  const { citeHref } = require('../src/shared/passage-link.cjs');
+  const out = await checkCitations(`You said so [You](${citeHref({ address: copy.path, find: 'retrieval is NOT a solved problem', cite: 'you' })}).`,
+    { library: rows, dataRoot, readInk: (row) => readInkOf(inks, row), readText: () => 'Thus far we seem to be worse off than before' });
+  assert.equal(out.kept.length, 1, JSON.stringify(out.dropped));
+  assert.equal(out.kept[0].note, 'retrieval is NOT a solved problem');
+  assert.equal(out.kept[0].page, 58);
+  const byDrawn = await checkCitations(`You said so [You](${citeHref({ address: drawn.path, find: 'retrieval is NOT a solved problem', cite: 'you' })}).`,
+    { library: rows, dataRoot, readInk: (row) => readInkOf(inks, row), readText: () => '' });
+  assert.equal(byDrawn.kept.length, 1, 'cited by the copy the notes file names');
 });

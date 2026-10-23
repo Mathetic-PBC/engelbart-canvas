@@ -12,6 +12,7 @@
 
 const fs = require('node:fs');
 const path = require('node:path');
+const { createHash } = require('node:crypto');
 const { addressKey } = require('../../shared/address-key.cjs');
 const { toolCallsOf } = require('./runlog.cjs');
 const { attrOf, marksOf, webMarksOf, highlightXml } = require('./highlights.cjs');
@@ -75,25 +76,74 @@ function inkText(row, ink, inkRoot = '') {
   return `${head}\n${list.map(highlightXml).join('')}${head.startsWith('<paper') ? '</paper>' : '</page>'}\n`;
 }
 
+// A file's contents as a hash, by its path, size and time: a pdf added twice is found once per change.
+const hashes = new Map();
+function contentHash(file) {
+  const stat = fs.statSync(file);
+  const key = `${file}\0${stat.size}\0${stat.mtimeMs}`;
+  if (!hashes.has(key)) hashes.set(key, createHash('sha256').update(fs.readFileSync(file)).digest('hex'));
+  return hashes.get(key);
+}
+
 /**
- * The notes files of `rows` that have ink → Map row id → absolute path. A file is written when the ink is newer than
- * the one there (its name carries the ink file's time), and older ones of the row go, as sourceTexts does. Best effort:
+ * Where each of `rows` has its ink → Map row id → { file, row }, `row` the one the ink was drawn on: its own
+ * (store/library.cjs inkFileOf), else, for a pdf, that of another of `rows` that is the same file at another path (a
+ * paper added twice, 2026-10-23): the person's highlights are on the paper, whichever copy they drew them on. A row with
+ * neither is not in it.
+ */
+function inkFiles(ctx, rows) {
+  const out = new Map();
+  if (!ctx || !ctx.dataRoot) return out;
+  const pdfs = [];
+  for (const row of rows || []) {
+    let file = null;
+    try { file = inkFileOf(ctx, row); } catch { /* none */ }
+    if (file) out.set(row.id, { file, row });
+    if (row && row.type === 'pdf' && row.path) pdfs.push(row);
+  }
+  const sizeOf = (row) => { try { return fs.statSync(row.path).size; } catch { return -1; } };
+  const inked = pdfs.filter((row) => out.has(row.id)).map((row) => ({ row, size: sizeOf(row) })).filter((one) => one.size > 0);
+  if (!inked.length) return out;
+  for (const row of pdfs) {
+    if (out.has(row.id)) continue;
+    const size = sizeOf(row);
+    if (size <= 0) continue;
+    try {
+      const twin = inked.find((one) => one.size === size && path.resolve(one.row.path) !== path.resolve(row.path) && contentHash(one.row.path) === contentHash(row.path));
+      if (twin) out.set(row.id, out.get(twin.row.id));
+    } catch { /* unreadable: none */ }
+  }
+  return out;
+}
+
+/** `row`'s ink as inkFiles finds it (`files`, its map), or null. */
+function readInkOf(files, row) {
+  const held = row && files.get(row.id);
+  if (!held) return null;
+  try { return JSON.parse(fs.readFileSync(held.file, 'utf8')); } catch { return null; }
+}
+
+/**
+ * The notes files of `rows` that have ink (inkFiles: a paper added twice has its copy's) → Map row id → absolute path,
+ * each naming the copy the highlights are on, the one a note is cited by: there they are drawn when it is opened. A file is written when the ink is newer than the one there (its name carries the ink file's time), and older ones of the row go, as sourceTexts does. Best effort:
  * a row whose ink cannot be read goes without its `notes`.
  */
 async function noteTexts(ctx, rows) {
   const out = new Map();
   if (!ctx || !ctx.dataRoot) return out;
   const dir = notesDir(ctx.dataRoot), inkRoot = path.join(ctx.dataRoot, 'annotations');
+  const files = inkFiles(ctx, rows);
   let present = null;
   for (const row of rows || []) {
     try {
-      const file = inkFileOf(ctx, row);
-      if (!file) continue;
+      const held = files.get(row && row.id);
+      if (!held) continue;
+      const { file } = held;
       const name = `${row.id}-${Math.round(fs.statSync(file).mtimeMs)}.txt`;
       if (!present) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); present = new Set(fs.readdirSync(dir)); }
       if (!present.has(name)) {
         for (const old of present) if (old.startsWith(`${row.id}-`)) { fs.rmSync(path.join(dir, old), { force: true }); present.delete(old); }
-        const text = inkText(row, JSON.parse(fs.readFileSync(file, 'utf8')), inkRoot);
+        const text = inkText(held.row, JSON.parse(fs.readFileSync(file, 'utf8')), inkRoot);
         if (!text) continue; // ink with no highlight left
         fs.writeFileSync(path.join(dir, name), text, { mode: 0o600 });
         present.add(name);
@@ -166,4 +216,4 @@ async function keepPageTexts(ctx, rows, opened, { fetch = globalThis.fetch } = {
   return kept;
 }
 
-module.exports = { sourceTexts, noteTexts, inkText, openedBy, openedKey, keepsText, keepPageTexts, fetchPageText, textDir, notesDir, MAX_TEXT_CHARS };
+module.exports = { sourceTexts, noteTexts, inkText, inkFiles, readInkOf, openedBy, openedKey, keepsText, keepPageTexts, fetchPageText, textDir, notesDir, MAX_TEXT_CHARS };

@@ -96,8 +96,7 @@ const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
 const { checkCitations } = require('./cite.cjs');
-const { readAnnotations } = require('../store/library.cjs');
-const { openedBy, keepPageTexts, MAX_TEXT_CHARS } = require('./source-text.cjs');
+const { openedBy, keepPageTexts, inkFiles, readInkOf, MAX_TEXT_CHARS } = require('./source-text.cjs');
 const { toolCallsOf } = require('./runlog.cjs');
 const { citeHref } = require('../../shared/passage-link.cjs');
 const { clipMiddle } = require('./clip.cjs');
@@ -517,7 +516,9 @@ async function citedBody(ctx, { agent, routed, body, projectId, workspaceId, pri
     const opened = context ? readWhileAnswering(context, events) : null;
     if (opened) await keepPageTexts(ctx, library, opened);
     const readRowText = (row) => ctx.libraryDb.textsFor([row.id], MAX_TEXT_CHARS).then((texts) => texts.get(row.id) || null);
-    const readInk = (row) => readAnnotations(ctx, row.id); // a note on a highlight is citable (2026-10-23)
+    // A note on a highlight is citable (2026-10-23), on whichever copy of a paper added twice it was drawn
+    let inks = null;
+    const readInk = (row) => readInkOf(inks || (inks = inkFiles(ctx, library)), row);
     checked = await checkCitations(body, { ...thread, library, opened, readRowText, readInk });
   } catch {
     checked = await checkCitations(body, { ...thread, library: [], readText: () => null });
