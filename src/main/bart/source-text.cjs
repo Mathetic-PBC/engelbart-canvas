@@ -6,17 +6,23 @@
 // address alone: its text once Chat has read it (keepPageTexts), kept the same way, so the next answer reads and quotes
 // the page as the app checks it, and a citation of it can be checked (./cite.cjs readRowText). And what Chat read while
 // it answered (openedBy), which a citation of a whole source must be among.
+// An item's highlights and the person's notes on them (noteTexts, 2026-10-23): the ink of every paper and page that has
+// any, written to <data root>/assets/notes/<id>-<mtime>.txt as <highlights> shows a mentioned one (./highlights.cjs) and
+// named as the item's `notes`, so Chat finds what the person marked on any item, not only the ones in front or mentioned.
 
 const fs = require('node:fs');
 const path = require('node:path');
 const { addressKey } = require('../../shared/address-key.cjs');
 const { toolCallsOf } = require('./runlog.cjs');
+const { attrOf, marksOf, webMarksOf, highlightXml } = require('./highlights.cjs');
+const { inkFileOf } = require('../store/library.cjs');
 
 const MAX_TEXT_CHARS = 4_000_000;
 const PAGE_TIMEOUT_MS = 8000;
 const MAX_PAGE_BYTES = 4 * 1024 * 1024;
 
 const textDir = (dataRoot) => path.join(dataRoot, 'assets', 'text');
+const notesDir = (dataRoot) => path.join(dataRoot, 'assets', 'notes');
 /** Whether a library row is read from its kept text: a pdf on disk, or a page known by its address alone. */
 const keepsText = (row) => !!row && ((row.type === 'pdf' && !!row.path) || (row.type === 'website' && !row.path && !!row.url));
 /** How what was read is matched with what is cited: a web address as addressKey spells it, a path resolved. */
@@ -52,6 +58,49 @@ async function sourceTexts(ctx, rows) {
       out.set(row.id, path.join(dir, name));
     }
   } catch { /* the rows go without their text */ }
+  return out;
+}
+
+/**
+ * An item's ink as its notes file holds it: a <paper> (or a web <page>) with each highlight as <highlights> shows one
+ * (./highlights.cjs highlightXml), in page order, the person's notes word for word; '' when it has none. `inkRoot`, the
+ * annotations folder, is where a box's picture is found from.
+ */
+function inkText(row, ink, inkRoot = '') {
+  const list = [...marksOf(ink, inkRoot), ...webMarksOf(ink, inkRoot)];
+  if (!list.length) return '';
+  const head = row.type === 'pdf' || !row.url
+    ? `<paper name="${attrOf(row.name, 200)}" path="${attrOf(row.path, 4096)}">`
+    : `<page source="web" title="${attrOf(row.name, 200)}" address="${attrOf(row.url, 4096)}"${row.path ? ` path="${attrOf(row.path, 4096)}"` : ''}>`;
+  return `${head}\n${list.map(highlightXml).join('')}${head.startsWith('<paper') ? '</paper>' : '</page>'}\n`;
+}
+
+/**
+ * The notes files of `rows` that have ink → Map row id → absolute path. A file is written when the ink is newer than
+ * the one there (its name carries the ink file's time), and older ones of the row go, as sourceTexts does. Best effort:
+ * a row whose ink cannot be read goes without its `notes`.
+ */
+async function noteTexts(ctx, rows) {
+  const out = new Map();
+  if (!ctx || !ctx.dataRoot) return out;
+  const dir = notesDir(ctx.dataRoot), inkRoot = path.join(ctx.dataRoot, 'annotations');
+  let present = null;
+  for (const row of rows || []) {
+    try {
+      const file = inkFileOf(ctx, row);
+      if (!file) continue;
+      const name = `${row.id}-${Math.round(fs.statSync(file).mtimeMs)}.txt`;
+      if (!present) { fs.mkdirSync(dir, { recursive: true, mode: 0o700 }); present = new Set(fs.readdirSync(dir)); }
+      if (!present.has(name)) {
+        for (const old of present) if (old.startsWith(`${row.id}-`)) { fs.rmSync(path.join(dir, old), { force: true }); present.delete(old); }
+        const text = inkText(row, JSON.parse(fs.readFileSync(file, 'utf8')), inkRoot);
+        if (!text) continue; // ink with no highlight left
+        fs.writeFileSync(path.join(dir, name), text, { mode: 0o600 });
+        present.add(name);
+      }
+      out.set(row.id, path.join(dir, name));
+    } catch { /* this row goes without its notes */ }
+  }
   return out;
 }
 
@@ -117,4 +166,4 @@ async function keepPageTexts(ctx, rows, opened, { fetch = globalThis.fetch } = {
   return kept;
 }
 
-module.exports = { sourceTexts, openedBy, openedKey, keepsText, keepPageTexts, fetchPageText, textDir, MAX_TEXT_CHARS };
+module.exports = { sourceTexts, noteTexts, inkText, openedBy, openedKey, keepsText, keepPageTexts, fetchPageText, textDir, notesDir, MAX_TEXT_CHARS };

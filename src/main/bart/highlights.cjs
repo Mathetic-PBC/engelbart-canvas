@@ -225,4 +225,4 @@ function mentionedBlock(papers, budget = MENTIONED_BUDGET) {
   return `${open}${body.join('')}${close}`;
 }
 
-module.exports = { attrOf, cropPath, marksOf, webMarksOf, stageBlock, webStageBlock, liveXml, mentionedBlock, STAGE_BUDGET, MENTIONED_BUDGET, QUOTE_MAX, ANSWER_MAX };
+module.exports = { attrOf, cropPath, marksOf, webMarksOf, highlightXml, stageBlock, webStageBlock, liveXml, mentionedBlock, STAGE_BUDGET, MENTIONED_BUDGET, QUOTE_MAX, ANSWER_MAX };

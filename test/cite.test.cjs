@@ -424,4 +424,6 @@ test('the prompt: a summary is not evidence; a PDF is read from its text; a whol
   assert.match(BART_SYSTEM_PROMPT, /read it rather than the PDF, which your Read tool cannot open/);
   assert.match(BART_SYSTEM_PROMPT, /#cite=source\)/);
   assert.match(BART_SYSTEM_PROMPT, /No find: the source as a whole/);
+  assert.match(BART_SYSTEM_PROMPT, /An item with `notes` has the person's highlights on it/);
+  assert.match(BART_SYSTEM_PROMPT, /or in an item's `notes` file\) is their own words: cite it by the paper's path or the page's url, never the notes file/);
 });

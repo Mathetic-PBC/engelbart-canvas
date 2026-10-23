@@ -8,7 +8,9 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { sourceTexts, openedBy, openedKey, keepPageTexts, textDir } = require('../src/main/bart/source-text.cjs');
+const { createHash } = require('node:crypto');
+const { sourceTexts, noteTexts, openedBy, openedKey, keepPageTexts, textDir, notesDir } = require('../src/main/bart/source-text.cjs');
+const { addressKey } = require('../src/shared/address-key.cjs');
 
 // A library db with only what the text pass keeps: id → { text, mtime }.
 function fakeDb(kept = {}) {
@@ -94,4 +96,63 @@ test('keepPageTexts: an address-only page Chat read is fetched and kept once; on
   const db2 = fakeDb();
   assert.equal(await keepPageTexts({ libraryDb: db2 }, rows, opened, { fetch: failing }), 0);
   assert.equal(db2.texts.size, 0, 'a page that cannot be had keeps nothing');
+});
+
+test('noteTexts: every item with ink gets its highlights and notes as a file, word for word, rewritten when the ink changes', async () => {
+  const dataRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-note-text-'));
+  const inkDir = path.join(dataRoot, 'annotations');
+  fs.mkdirSync(path.join(inkDir, 'pages'), { recursive: true });
+  const paper = { id: '11111111-1111-4111-8111-111111111111', type: 'pdf', name: 'Augmenting "Human" Intellect', path: '/x/augment.pdf' };
+  const page = { id: '22222222-2222-4222-8222-222222222222', type: 'website', name: 'Cocoa', url: 'https://github.com/kjfeng/cocoa-canvas', path: null };
+  const bare = { id: '33333333-3333-4333-8333-333333333333', type: 'pdf', name: 'Unmarked', path: '/x/unmarked.pdf' };
+  const emptied = { id: '44444444-4444-4444-8444-444444444444', type: 'pdf', name: 'Wiped', path: '/x/wiped.pdf' };
+  const note = 'What does operating by association\nmean in practice?';
+  fs.writeFileSync(path.join(inkDir, `${paper.id}.json`), JSON.stringify({
+    15: [{ id: 'm2', y: 0.1, text: 'all his books, records', note: null }],
+    14: [{ id: 'm1', y: 0.7, text: 't operates by association', note }, { id: 'm0', y: 0.2, text: '', note: null }],
+  }));
+  // A page's ink from before the library held it, kept by its address
+  const pageInk = path.join(inkDir, 'pages', `${createHash('sha256').update(addressKey(page.url)).digest('hex')}.json`);
+  fs.writeFileSync(pageInk, JSON.stringify({ web: [{ id: 'm3', quote: { exact: 'a canvas for co-planning' }, note: 'like our Stage' }] }));
+  fs.writeFileSync(path.join(inkDir, `${emptied.id}.json`), JSON.stringify({ 1: [{ id: 'm4', y: 0, text: 'gone soon', note: 'x' }] }));
+  const ctx = { dataRoot };
+  const rows = [paper, page, bare, emptied, { id: 'not-a-row', type: 'pdf' }];
+
+  const first = await noteTexts(ctx, rows);
+  assert.deepEqual([...first.keys()].sort(), [paper.id, page.id, emptied.id].sort());
+  assert.equal(path.dirname(first.get(paper.id)), notesDir(dataRoot));
+  const paperText = fs.readFileSync(first.get(paper.id), 'utf8');
+  assert.ok(paperText.startsWith('<paper name="Augmenting  Human  Intellect" path="/x/augment.pdf">\n'), paperText);
+  assert.ok(paperText.includes(`<note>\n${note}\n</note>`), 'the note word for word');
+  assert.ok(paperText.indexOf('page="14"') < paperText.indexOf('page="15"'), 'in page order');
+  assert.ok(!paperText.includes('m0'), 'a mark with nothing in it is left out');
+  assert.match(fs.readFileSync(first.get(page.id), 'utf8'), /^<page source="web" title="Cocoa" address="https:\/\/github.com\/kjfeng\/cocoa-canvas">\n<highlight>\n<quote>\na canvas for co-planning\n<\/quote>\n<note>\nlike our Stage\n<\/note>\n<\/highlight>\n<\/page>\n$/);
+
+  const written = fs.statSync(first.get(paper.id)).mtimeMs;
+  assert.deepEqual(await noteTexts(ctx, rows), first, 'the same files, not written again');
+  assert.equal(fs.statSync(first.get(paper.id)).mtimeMs, written);
+
+  const later = new Date(Date.now() + 5000);
+  fs.writeFileSync(path.join(inkDir, `${paper.id}.json`), JSON.stringify({ 2: [{ id: 'm5', y: 0, text: 'new words', note: 'a new note' }] }));
+  fs.utimesSync(path.join(inkDir, `${paper.id}.json`), later, later);
+  fs.writeFileSync(path.join(inkDir, `${emptied.id}.json`), JSON.stringify({ 1: [] }));
+  fs.utimesSync(path.join(inkDir, `${emptied.id}.json`), later, later);
+  const again = await noteTexts(ctx, rows);
+  assert.notEqual(again.get(paper.id), first.get(paper.id));
+  assert.match(fs.readFileSync(again.get(paper.id), 'utf8'), /a new note/);
+  assert.equal(fs.existsSync(first.get(paper.id)), false, 'the old file goes');
+  assert.equal(again.has(emptied.id), false, 'ink with no highlight left: no notes');
+  assert.equal(fs.existsSync(first.get(emptied.id)), false);
+  assert.deepEqual(await noteTexts({}, rows), new Map(), 'no data root: none');
+});
+
+test('catalogEntries: an item with notes names its notes file; the others have no notes', () => {
+  const { catalogEntries } = require('../src/main/bart/context.cjs');
+  const project = { dir: '/p' };
+  const rows = [{ id: 'a', name: 'A', type: 'pdf', path: '/x/a.pdf' }, { id: 'b', name: 'B', type: 'pdf', path: '/x/b.pdf' }];
+  const entries = catalogEntries(project, rows, new Set(), { agent: 'bart', madeIn: new Map() }, new Map([['a', '/d/assets/text/a-1.txt']]), new Map([['a', '/d/assets/notes/a-2.txt']]));
+  assert.equal(entries[0].text, '/d/assets/text/a-1.txt');
+  assert.equal(entries[0].notes, '/d/assets/notes/a-2.txt');
+  assert.equal('notes' in entries[1], false);
+  assert.equal('notes' in catalogEntries(project, rows, new Set(), { agent: 'bart', madeIn: new Map() })[0], false);
 });
