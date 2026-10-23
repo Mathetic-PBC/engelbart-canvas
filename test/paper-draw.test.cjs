@@ -154,13 +154,15 @@ test('a page drawn for the first time goes under its highlights, its text and it
   assert.equal(s.thumb.width, 180, 'the small drawing is made from it, THUMB_W wide');
 });
 
-test('only the pages near the view are drawn; every page gets its text', async () => {
+test('only the pages near the view are drawn and get a text layer; every page gets its text read', async () => {
   const fake = pdf();
   const { view } = viewer(fake);
   await open(view);
   assert.deepEqual(drawnPages(view), [1, 2, 3]);
   assert.deepEqual(fake.calls, [1, 2, 3]);
-  for (let n = 1; n <= N; n += 1) assert.equal(view.sheets[n].texted, true, `page ${n} has its text`);
+  for (let n = 1; n <= N; n += 1) assert.equal(view.sheets[n].read, true, `page ${n} has its text read`);
+  for (let n = 1; n <= N; n += 1) assert.equal(!!view.sheets[n].texted, n <= 3, `page ${n}: a text layer only near the view`);
+  assert.equal(view.strs.length, N + 1, 'every page\'s text, as find searches it');
   // The pages within THUMB_AHEAD (12) of the view get a small drawing of their own, nearest first; none further.
   assert.deepEqual(fake.thumbs, [4, 5, 6, 7, 8, 9, 10, 11, 12, 13]);
   for (let n = 1; n <= N; n += 1) assert.equal(!!view.sheets[n].thumb, n <= 13, `page ${n}`);
@@ -230,7 +232,7 @@ test('a zoom sizes the same sheets again, carries the drawings over stretched, d
   const { view } = viewer(fake);
   textLayers.length = 0;
   await open(view);
-  assert.equal(textLayers.length, N, 'a text layer a page');
+  assert.equal(textLayers.length, 3, 'a text layer a page near the view');
   const sheets = view.sheets.slice(), old = view.sheets[1].canvas;
   view.zoomTo(150);
   assert.deepEqual(view.sheets, sheets, 'the very same sheets');
@@ -242,5 +244,20 @@ test('a zoom sizes the same sheets again, carries the drawings over stretched, d
   assert.notEqual(s.canvas, old, 'drawn again at the new zoom');
   assert.equal(old.width, 0, 'the stretched drawing let go once replaced');
   assert.equal(s.wrap.children.indexOf(s.canvas), 1, 'over its small drawing');
-  assert.equal(textLayers.length, N, 'no text layer made again');
+  assert.equal(textLayers.length, 3, 'no text layer made again');
+});
+
+test('a scroll gives the pages it brings near their text layers; a far page gets one when a find or a passage needs it', async () => {
+  const fake = pdf();
+  const { view, host } = viewer(fake);
+  await open(view);
+  assert.equal(!!view.sheets[18].texted, false, 'far from the view: none');
+  let shown = false;
+  await view.layersFor([18], () => { shown = true; });
+  assert.equal(view.sheets[18].texted, true, 'a far page a find landed on');
+  assert.equal(shown, true, 'and then what needed it');
+  scrollTo(view, host, 9);
+  await settle(view);
+  for (const n of [7, 8, 9, 10, 11]) assert.equal(view.sheets[n].texted, true, `page ${n}, near the view now`);
+  assert.equal(!!view.sheets[14].texted, false);
 });
