@@ -1377,7 +1377,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
                 style={{ position: 'relative', flex: 'none', width: tabW, height: 34, display: 'flex', alignItems: 'stretch' }}
               >
                 {on ? (
-                  <div onMouseDown={(event) => pressTab(event, t)} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: narrow ? 'center' : 'flex-start', gap: narrow ? 4 : 8, boxSizing: 'border-box', padding: narrow ? 0 : '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0', cursor: 'default' }}>
+                  <div onMouseDown={(event) => pressTab(event, t)} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: look === 'x' ? 'flex-end' : narrow ? 'center' : 'flex-start', gap: narrow ? 4 : 8, boxSizing: 'border-box', padding: look === 'x' ? '0 6px 0 0' : narrow ? 0 : '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0', cursor: 'default' }}>
                     <span aria-hidden="true" style={{ position: 'absolute', left: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 0 0, transparent 9.5px, #fff 10px)' }} />
                     <span aria-hidden="true" style={{ position: 'absolute', right: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 100% 0, transparent 9.5px, #fff 10px)' }} />
                     {look === 'full' ? <>{glyph}{titleSpan}{close}</> : look === 'icon-x' ? <>{glyph}{close}</> : close}
