@@ -153,3 +153,20 @@ test('the plan keeps a background run to what the person specified too, not only
   assert.match(plan, /For this source, only these of the projects: Memex\./);
   assert.match(plan, /In their words, what to bring in from it: Only the pages about the Memex/);
 });
+
+test('Recommended tops the picker: Claude, ChatGPT, Obsidian, Notion, Zotero, each still in its own category, one pick for both rows (2026-10-23)', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname, '../src/renderer/import/ImportFlow.jsx'), 'utf8');
+  const ids = ['Claude', 'ChatGPT', 'Obsidian', 'Notion', 'Zotero'];
+  assert.ok(source.includes(`const RECOMMENDED = Object.freeze(${JSON.stringify(ids).replace(/"/g, "'").replace(/,/g, ', ')}`), 'in this order');
+  for (const id of ids) {
+    assert.ok(flow.CATALOG_IDS.includes(id), `${id} is a source`);
+    assert.ok(flow.GROUPS.some((group) => group.apps.includes(id)), `${id} stays in its own category`);
+  }
+  // First, before the categories; spelled "Recommended".
+  assert.ok(source.indexOf("pickerSection('recommended', 'Recommended', RECOMMENDED, 'recommended')") < source.indexOf("GROUPS.filter((group) => keysOf(group).length > 0).map((group) => pickerSection("));
+  // Both rows tick the one pick, and the copy is not a second data-app row (what finds a source by data-app finds one).
+  assert.match(source, /onClick=\{\(\) => pickSource\(id\)\}/);
+  assert.match(source, /where === 'recommended' \? \{ 'data-recommended': id \} : \{ 'data-app': id \}/);
+});
