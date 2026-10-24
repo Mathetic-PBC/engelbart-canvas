@@ -1,9 +1,10 @@
 'use strict';
 
 // The app icon, drawn by Chromium and saved as build/icon.png (1024 px) and build/icon.icns, which
-// electron-builder.config.cjs uses. Since 2026-09-29 it is Hudson's artwork (a serif E lit green and blue on black,
-// square and full bleed), kept as design/assets/app-icon.png and set in macOS's icon shape; before, a placeholder E with a
-// blue caret. Given a path, that image (any square picture) becomes the artwork first:
+// electron-builder.config.cjs uses. Since 2026-10-23 it is the Mathetic mark (design/assets/mathetic-mark.svg, from the
+// first slide of the Mathetic Early Funding deck in Figma), lime on the deck's teal, square and full bleed, kept as
+// design/assets/app-icon.png and set in macOS's icon shape; before, Hudson's wave on black. Given a path, that image (any
+// square picture) becomes the artwork first:
 //
 //   npx electron scripts/make-icon.cjs [path/to/artwork.png]
 

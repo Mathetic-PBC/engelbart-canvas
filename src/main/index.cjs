@@ -612,6 +612,8 @@ if (!hasSingleInstanceLock) {
   app.on('activate', showWindow);
   app.whenReady().then(() => {
     registerProtocol();
+    // A checkout run with `electron .` shows Electron's icon in the Dock; it shows Engelbart's (build/icon.png), as a package does.
+    if (!app.isPackaged && process.platform === 'darwin' && app.dock) { try { app.dock.setIcon(path.join(__dirname, '..', '..', 'build', 'icon.png')); } catch {} }
     // Flow control follows each session's window: on while that window's terminal is attached (./windows.cjs).
     // Its sandbox sessions are shells in repositories' E2B sandboxes (sandbox/pty.cjs, opened by sandbox/terminals.cjs).
     manager = new SessionManager({ environment: environmentForSessions(process.env, app.getPath('userData')), extraEnvironment: () => (tools ? tools.environment() : {}), attached: (id) => (windows ? windows.attached(id) : false), sandboxPty: createSandboxPty() });
