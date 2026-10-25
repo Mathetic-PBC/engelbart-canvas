@@ -789,3 +789,47 @@ test.describe('the Stage\'s tab strip with many tabs', () => {
     assert.equal(named(again, 'setStage').pop()[2].active, 0, 'C in front');
   });
 });
+
+/* ------------------------------------------------------------------------------------------------ Stage: + Save */
+
+// + Save (2026-10-24): one click puts the page in the library and this workspace under its own name, no card; a click
+// while that save is in flight makes no second row, and a save that fails says so through onError.
+test.describe('the Stage: + Save', () => {
+  test.afterEach(() => { delete globalThis.window; delete globalThis.requestAnimationFrame; globalThis.document = { baseURI: 'file:///app/index.html' }; });
+
+  const saveButton = (s) => findAll(s.tree, (p) => p['data-page-save'] != null)[0];
+  const label = (s) => String(saveButton(s).props.children).replace(/\s+/g, ' '); // SAVE_LABEL's space is a no-break one
+
+  test('one click saves at once, as (the page\'s name, true); a double click saves once', async () => {
+    const saved = [];
+    let finish;
+    const onSave = (...args) => { saved.push(args); return new Promise((resolve) => { finish = resolve; }); };
+    const s = stage({ props: { save: { state: 'none', onSave } } });
+    s.open(PAPER);
+    await s.settle();
+    const button = saveButton(s);
+    assert.ok(button, 'the address shows + Save');
+    assert.equal(label(s), '+ Save');
+    button.props.onClick();
+    button.props.onClick();
+    await s.settle();
+    assert.deepEqual(saved, [['Scim.pdf', true]], 'saved once, into the library and this workspace');
+    assert.equal(label(s), 'Saving…');
+    assert.equal(saveButton(s).props.disabled, true);
+    assert.equal(findAll(s.tree, (p) => p['data-save-card'] != null).length, 0, 'no card');
+    finish();
+    await s.settle();
+    assert.equal(label(s), '+ Save', 'free again once it is done');
+  });
+
+  test('a save that fails reaches onError', async () => {
+    const errors = [];
+    const s = stage({ props: { save: { state: 'none', onSave: async () => { throw new Error('no room'); } }, onError: (error) => errors.push(error.message) } });
+    s.open(PAPER);
+    await s.settle();
+    saveButton(s).props.onClick();
+    await s.settle();
+    assert.deepEqual(errors, ['no room']);
+    assert.equal(label(s), '+ Save');
+  });
+});
