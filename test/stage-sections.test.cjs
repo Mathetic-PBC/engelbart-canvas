@@ -832,4 +832,38 @@ test.describe('the Stage: + Save', () => {
     assert.deepEqual(errors, ['no room']);
     assert.equal(label(s), '+ Save');
   });
+
+  // ✓ (2026-10-24): clicking it takes the page out of this workspace; a double click unlinks once, and stays ✓ meanwhile.
+  test('✓ unlinks the page from this workspace; a double click unlinks once', async () => {
+    let calls = 0;
+    let finish;
+    const onUnlink = () => { calls += 1; return new Promise((resolve) => { finish = resolve; }); };
+    const s = stage({ props: { save: { state: 'here', onUnlink } } });
+    s.open(PAPER);
+    await s.settle();
+    const button = saveButton(s);
+    assert.equal(label(s), '✓');
+    assert.equal(button.props.title, 'Remove from this workspace');
+    assert.equal(button.props.className, 'hov-ink');
+    assert.equal(button.props.style.cursor, 'pointer');
+    button.props.onClick();
+    button.props.onClick();
+    await s.settle();
+    assert.equal(calls, 1, 'unlinked once');
+    assert.equal(label(s), '✓', 'still ✓ while it runs');
+    assert.equal(saveButton(s).props.disabled, true);
+    finish();
+    await s.settle();
+    assert.equal(saveButton(s).props.disabled, false, 'free again once it is done');
+  });
+
+  test('an unlink that fails reaches onError', async () => {
+    const errors = [];
+    const s = stage({ props: { save: { state: 'here', onUnlink: async () => { throw new Error('gone'); } }, onError: (error) => errors.push(error.message) } });
+    s.open(PAPER);
+    await s.settle();
+    saveButton(s).props.onClick();
+    await s.settle();
+    assert.deepEqual(errors, ['gone']);
+  });
 });

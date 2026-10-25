@@ -469,6 +469,17 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         .finally(() => { savingRef.current = false; setSaving(false); });
     }
     else if (saveState === 'lib') save.onLink().catch(() => {});
+    else if (saveState === 'here' && save.onUnlink) {
+      // ✓ clicked (2026-10-24): the page leaves this workspace and stays in the library, so it reads + Workspace again.
+      // The same busy ref as + Save: a double click unlinks once.
+      if (savingRef.current) return;
+      savingRef.current = true;
+      setSaving(true);
+      Promise.resolve()
+        .then(() => save.onUnlink())
+        .catch((error) => { if (onError) onError(error); })
+        .finally(() => { savingRef.current = false; setSaving(false); });
+    }
   };
 
   React.useEffect(() => {
@@ -1374,10 +1385,11 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
             <button
               type="button"
               data-page-save={saveState}
-              className={saveState === 'here' || saveState === 'made-saved' ? undefined : 'hov-ink'}
+              className={saveState === 'made-saved' ? undefined : 'hov-ink'}
+              title={saveState === 'here' ? 'Remove from this workspace' : undefined}
               onClick={onSaveClick}
-              disabled={saveState === 'made-saved' || (made && !!save.busy) || (saveState === 'none' && saving)}
-              style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', cursor: saveState === 'here' || saveState === 'made-saved' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'here' || saveState === 'made-saved' ? '#8f8f8f' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
+              disabled={saveState === 'made-saved' || (made && !!save.busy) || ((saveState === 'none' || saveState === 'here') && saving)}
+              style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', cursor: saveState === 'made-saved' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'made-saved' ? '#8f8f8f' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
             >{saveState === 'made' ? <><FolderPlus />{save.busy ? 'Saving…' : 'Save'}</> : saveState === 'made-saved' ? '✓ Saved' : saveState === 'none' && saving ? 'Saving…' : SAVE_LABEL[saveState]}</button>
           )}
         </div>

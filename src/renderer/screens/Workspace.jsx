@@ -1991,6 +1991,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (tabs.some((tab) => tab.id === row.id)) closeTab(row.id);
     await reload();
   };
+  // The Stage's ✓ clicked (2026-10-24): the page in front leaves this workspace and stays in the library, as the rail's
+  // trash does; its tab stays open (the person is looking at it) and its button then reads + Workspace.
+  const unlinkPage = async () => {
+    if (!topic || !pageKnown || !pageKnown.row) return;
+    await api.unlinkFromWorkspace(project.id, topic.id, pageKnown.row.id);
+    await reload();
+  };
   // The Browser's Save: the page as a new row, named in the card, into the library alone or also into this workspace.
   const savePage = async (name, here) => {
     if (!openPage) return;
@@ -2598,7 +2605,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onOpenCited={openIfCited}
           onTabs={setStagePlaces}
           keysToDoc={keysToDoc}
-          save={madeSave || (topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]) } : null)}
+          save={madeSave || (topic && pageState ? { state: pageState, onSave: savePage, onLink: () => linkIds([pageKnown.row.id]), onUnlink: unlinkPage } : null)}
           style={{ flex: 'none', width: paneWidth, minWidth: 0, minHeight: 0, display: docFull ? 'none' : 'flex', flexDirection: 'column', padding: 0, overflow: 'hidden' }}
         />
         </div>
