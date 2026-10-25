@@ -46,10 +46,11 @@
 // any field, the page offers it to main (`engelbart-page:selection-card`): a token, its quote and the page's text around it
 // (as `selection` gives them), and where its last line and all of it are in the viewport. As the page scrolls or reflows
 // the same token comes again with only where it is (once a frame), and a press anywhere in the page, another selection
-// or none takes it back ({ token: null }). Main shows its card for it and, on Save, keeps the quote as a highlight and
+// or none takes it back ({ token: null }). Main shows the chat icon at its end for it (2026-10-24), the card once that is
+// clicked, and, on Save, keeps the quote as a highlight and
 // tints it as the right-click menu's Highlight does (`add`, with the token for its nonce); Cancel keeps nothing
 // (`card-gone`). A selection wholly inside a highlight is that highlight: its own card opens (with its markId), and no
-// second mark is made for one passage. A plain click on a highlight's text or on its note's symbol opens its card too; a
+// second mark is made for one passage (its icon first: `icon`). A plain click on a highlight's text or on its note's symbol opens its card too; a
 // highlight with a note or an answer has its symbol (`noted`), drawn in the boxes' html::after rule over the top right of
 // its first line, following it as the page scrolls or reflows; Remove in its card takes it off (`unmark`).
 //
@@ -1033,8 +1034,9 @@ function runInPage() {
     const map = textMap(textNodes()), at = anchor(map.text, quote);
     return at ? textAround(map.text, at.start, at.end) : '';
   }
-  /** Highlight `id`'s card, under the highlight, its note in it (main reads it from the page's ink). */
-  function openMark(id) {
+  /** Highlight `id`'s card, under the highlight, its note in it (main reads it from the page's ink); `icon`, for a selection
+   *  inside it (2026-10-24): the chat icon at the selection's end first, as a new selection has. */
+  function openMark(id, icon = false) {
     const range = painted.get(id);
     if (!range) return;
     clearTimeout(settleTimer); settleTimer = 0;
@@ -1042,7 +1044,7 @@ function runInPage() {
     offered = { token: `s${(offerSeq += 1)}`, range, text: selection && !selection.isCollapsed ? selection.toString() : '', markId: id };
     let pageText = '';
     try { pageText = pageTextOf(id); } catch { pageText = ''; }
-    ipcRenderer.send(CHANNELS.selectionCard, { ...offerView(), markId: id, pageText });
+    ipcRenderer.send(CHANNELS.selectionCard, { ...offerView(), markId: id, pageText, ...(icon ? { icon: true } : {}) });
   }
   function offer() {
     clearTimeout(settleTimer); settleTimer = 0;
@@ -1056,7 +1058,7 @@ function runInPage() {
     if (same) { followSoon(); return; }
     // inside a highlight already kept: that highlight's card, never a second mark for it
     const held = holdingHighlight(painted, got.range);
-    if (held) { if (offered && offered.markId === held) followSoon(); else openMark(held); return; }
+    if (held) { if (offered && offered.markId === held) followSoon(); else openMark(held, true); return; }
     offered = { token: `s${(offerSeq += 1)}`, range: got.range, text: selection.toString() };
     const view = offerView();
     ipcRenderer.send(CHANNELS.selectionCard, { ...view, quote: got.quote, pageText: got.pageText });

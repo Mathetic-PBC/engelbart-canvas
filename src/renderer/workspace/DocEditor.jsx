@@ -82,6 +82,7 @@ import { isNote, kindKey } from '../model/kind.js';
 import { matchPassage } from '../../shared/passage-text.cjs';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
 import { waveText, keepWaves } from '../ui/wave.js';
+import { SEND_PATHS, SEND_HOVER_CSS, boxSend } from '../ui/send-button.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -217,7 +218,7 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   // the link's blue, underlined once hovered; a click expands it, an ⌥-click renames it.
   + '.bart-thread{cursor:pointer}.bart-thread:hover>.bart-thread-name{text-decoration:underline}'
   + '.bart-link{cursor:pointer;color:#0070f3}.bart-link:hover .bart-thread-name{text-decoration:underline;text-underline-offset:3px}.bart-thread:hover+.bart-tip,.bart-thread:focus-visible+.bart-tip{opacity:1;visibility:visible}.bart-ic:disabled{cursor:default;opacity:.4}.bart-ic:disabled:hover{background:none;color:#4d4d4d}'
-  + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}.bart-send{transition:background 120ms}.bart-send:hover{opacity:.86}'
+  + '.bart-chip{transition:border-color 120ms}.bart-chip:hover{border-color:#c9c9c9!important}' + SEND_HOVER_CSS
   + '.bart-fold{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;color:#8f8f8f;cursor:pointer}.bart-fold:hover{background:#f2f2f2;color:#171717}.bart-fold:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}.bart-fold:disabled{cursor:default;opacity:.4}.bart-fold:disabled:hover{background:none;color:#8f8f8f}'
   + '.bart-text{padding:4px 2px;border:0;background:transparent;color:#8f8f8f;font:500 12px/1.4 var(--font-sans);cursor:pointer}.bart-text:hover{color:#171717}'
   + '[data-follow-input]::placeholder,[data-discover-input]::placeholder{color:#8f8f8f;font-style:italic;font-size:14.5px}'
@@ -322,8 +323,8 @@ const ICON = {
   pointer: icon(`<path d="${AGENTS_PATH}"></path>`, 15, 1.75),
   trash: icon('<path d="M3 6h18"></path><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"></path><path d="M19 6v13a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"></path><path d="M10 11v6"></path><path d="M14 11v6"></path>'),
   chevron: `<span style="display:inline-flex;color:#8f8f8f">${icon('<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span>`,
-  send: icon('<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>', 13, 2.2),
-  sendBox: icon('<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>', 14, 2.2),
+  send: icon(SEND_PATHS, 13, 2.2),
+  sendBox: icon(SEND_PATHS, 14, 2.2),
   // A research box's head (2026-10-13): Lucide's search.
   search: icon('<circle cx="11" cy="11" r="8"></circle><path d="m21 21-4.3-4.3"></path>', 14, 2),
   discoverOut: icon('<path d="M7 17 17 7"></path><path d="M8 7h9v9"></path>', 12, 2),
@@ -545,8 +546,8 @@ const chatKind = (raw) => {
 // An answer's line drawn read-only (2026-10-16, David: an answer is not edited): selectable, never typed in.
 const readOnlyLine = (html) => (html.includes('data-readonly="1"') ? html : html.replace('<div ', '<div contenteditable="false" data-readonly="1" ').replace(/style="/, 'style="user-select:text;-webkit-user-select:text;').replace(/cursor:text/g, 'cursor:default'));
 const chatCode = (html, at) => html.replace(/padding:(\d+)px 16px/, 'padding:$1px 18px').replace(/padding:([^;]*?) 14px;border-left:2px solid #d6d6d6/, 'padding:$1 12px;border-left:1.5px solid #e6e6e6').replace('<div ', at.older ? `<div data-chat-older="${at.turn.q}" ` : '<div ');
-// The round send of a message box (2026-10-13): blue with a white arrow once there is something to send, grey until then.
-const boxSend = (ready) => `background:${ready ? '#0070f3' : '#ececec'};color:${ready ? '#fff' : '#a3a3a3'}`;
+// The round send of a message box (2026-10-13): blue with a white arrow once there is something to send, grey until then
+// (boxSend, ../ui/send-button.js, which the Stage's highlight cards share since 2026-10-24).
 // A message box (2026-10-13): one line on the cards' grey, no outline (David: the plain look, as before), growing as its
 // text wraps with its controls kept bottom-right.
 const MESSAGE_BOX = 'display:flex;align-items:flex-end;gap:8px;padding:9px 10px 9px 16px;border-radius:10px;background:#fafafa';
