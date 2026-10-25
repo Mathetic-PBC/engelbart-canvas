@@ -13,7 +13,7 @@ const Module = require('node:module');
 const { EventEmitter } = require('node:events');
 const { buildSync } = require('esbuild');
 
-const { CARD_GAP, SEL_CARD_W, CARD_SHADE, CHAT_ICON, ICON_GAP, ICON_SHADE, selectionCardPlace, shadedCardPlace } = require('../src/shared/selection-card.cjs');
+const { CARD_GAP, SEL_CARD_W, CARD_SHADE, CHAT_ICON, ICON_GAP, ICON_SHADE, selectionCardPlace, shadedCardPlace, chatIconPlace, shadedIconPlace } = require('../src/shared/selection-card.cjs');
 const PAGE = require('../src/main/browser/page-preload.cjs');
 const CARD = require('../src/main/browser/box-card-preload.cjs');
 const VIEWS = require('../src/main/browser/views.cjs');
@@ -60,6 +60,91 @@ test('a page\'s preload measures the selection: its last line (the boxes level w
   ]);
   assert.deepEqual(at, { line: { x: 40, y: 118, w: 150, h: 16 }, rect: { x: 40, y: 100, w: 300, h: 34 } });
   assert.equal(PAGE.selectionBoxes([{ left: 1, top: 1, width: 0, height: 0 }]), null);
+});
+
+/* -------------------------------------------------------------------------------------------- the chat icon */
+
+/** An ES module of the renderer's, bundled to CommonJS to read here. */
+function loadRenderer(rel) {
+  const filename = path.join(__dirname, `__${path.basename(rel)}-selection-card-unit.cjs`);
+  const bundled = buildSync({ entryPoints: [path.join(__dirname, '..', rel)], bundle: true, platform: 'node', format: 'cjs', write: false });
+  const compiled = new Module(filename, module);
+  compiled.paths = module.paths;
+  compiled._compile(bundled.outputFiles[0].text, filename);
+  return compiled.exports;
+}
+const ICON = loadRenderer('src/renderer/ui/chat-icon.js');
+const SEND = loadRenderer('src/renderer/ui/send-button.js');
+
+test('the chat icon (2026-10-24 later): 22 to 24px, a hairline edge on its own white, a shadow inside ICON_SHADE, fading in 120ms; one look for the web and the pdf', () => {
+  assert.ok(CHAT_ICON >= 22 && CHAT_ICON <= 24, `${CHAT_ICON}px`);
+  const look = ICON.chatIconLook();
+  assert.match(look, new RegExp(`width:${CHAT_ICON}px;height:${CHAT_ICON}px`));
+  assert.match(look, /border:\.5px solid rgba\(0,0,0,[.\d]+\)/, 'a hairline edge');
+  assert.match(look, /background:#fff/, 'its own ground, on a dark page too');
+  assert.match(look, /animation:chat-icon-in 120ms/);
+  assert.match(ICON.CHAT_ICON_CSS, /@keyframes chat-icon-in\{from\{opacity:0\}to\{opacity:1\}\}/);
+  // every layer of its shadow (x, y, blur) reaches no further than the room the web page's icon view has about it
+  const layers = [...ICON.ICON_SHADOW.matchAll(/(-?[\d.]+)(?:px)?\s+(-?[\d.]+)(?:px)?\s+([\d.]+)px/g)];
+  assert.ok(layers.length > 0);
+  for (const [, x, y, blur] of layers) assert.ok(Math.max(Math.abs(+x), Math.abs(+y)) + +blur <= ICON_SHADE, ICON.ICON_SHADOW);
+  assert.match(look, new RegExp(`box-shadow:${ICON.ICON_SHADOW.replace(/[().]/g, '\\$&')}`));
+  assert.match(ICON.CHAT_SVG, /stroke-width="1\.5"/, 'a thinner bubble');
+  assert.equal(ICON.CHAT_TIP, 'Ask or add a note');
+});
+
+test('the chat icon under the pointer: a little darker, its bubble the send\'s blue (send-button.js SEND_BLUE, not a copy)', () => {
+  assert.equal(SEND.SEND_BLUE, '#0070f3');
+  assert.match(SEND.boxSend(true), new RegExp(`background:${SEND.SEND_BLUE}`));
+  const hover = ICON.CHAT_ICON_CSS.match(/\[data-chat-icon\]:hover\{([^}]*)\}/);
+  assert.ok(hover);
+  assert.match(hover[1], new RegExp(`color:${SEND.SEND_BLUE}!important`));
+  assert.match(hover[1], /background:#f3f3f3!important/);
+});
+
+test('chatIconPlace: CHAT_ICON square, ICON_GAP right of the last line\'s end, level with its middle; under the end with no room right, above with none under; none once the end is out', () => {
+  const box = { width: CHAT_ICON, height: CHAT_ICON };
+  assert.deepEqual(chatIconPlace({ x: 100, y: 200, width: 300, height: 20 }, pane), { x: 400 + ICON_GAP, y: 210 - CHAT_ICON / 2, ...box });
+  assert.deepEqual(chatIconPlace({ x: 500, y: 200, width: 290, height: 20 }, pane), { x: 790 - CHAT_ICON, y: 220 + ICON_GAP, ...box }, 'no room right: under its end');
+  assert.deepEqual(chatIconPlace({ x: 500, y: 580, width: 290, height: 16 }, pane), { x: 790 - CHAT_ICON, y: 580 - ICON_GAP - CHAT_ICON, ...box }, 'nor under: above');
+  assert.equal(chatIconPlace({ x: 100, y: 620, width: 300, height: 20 }, pane), null, 'scrolled out');
+  // a web page's view: the icon in the pane less ICON_SHADE, the view that much bigger on every side
+  assert.deepEqual(shadedIconPlace({ x: 100, y: 200, width: 300, height: 20 }, pane), { x: 400 + ICON_GAP - ICON_SHADE, y: 210 - CHAT_ICON / 2 - ICON_SHADE, width: CHAT_ICON + 2 * ICON_SHADE, height: CHAT_ICON + 2 * ICON_SHADE });
+});
+
+/* ------------------------------------------------------------------------------- the offered selection's tint */
+
+test('the page\'s tint of the offered selection (tintOffer): on when it is offered, moved with a new selection, off when withdrawn or its card closed', () => {
+  const h = new Map();
+  const make = (range) => ({ range });
+  const r1 = { id: 'r1' }, r2 = { id: 'r2' };
+  // offered: its selection tinted, over the highlights
+  assert.equal(PAGE.tintOffer(h, { token: 's1', sel: r1 }, make), true);
+  assert.equal(h.get(PAGE.OFFER).range, r1);
+  assert.equal(h.get(PAGE.OFFER).priority, 1);
+  // the selection changed and offered again: the new one tinted, the old not
+  PAGE.tintOffer(h, { token: 's2', sel: r2 }, make);
+  assert.equal(h.get(PAGE.OFFER).range, r2);
+  // withdrawn (a click elsewhere, the selection changed by keys, the page left) or its card closed (Esc, Cancel, Save)
+  assert.equal(PAGE.tintOffer(h, null, make), false);
+  assert.equal(h.has(PAGE.OFFER), false);
+  // a highlight's card opened by a click: no selection, no tint; the highlights' own name untouched
+  h.set(PAGE.HIGHLIGHT, 'marks');
+  assert.equal(PAGE.tintOffer(h, { token: 'm1', sel: null, markId: 'h-1' }, make), false);
+  assert.equal(h.has(PAGE.OFFER), false);
+  assert.equal(h.get(PAGE.HIGHLIGHT), 'marks');
+  assert.equal(PAGE.tintOffer(null, { token: 's3', sel: r1 }, make), false, 'no registry: nothing');
+  assert.notEqual(PAGE.OFFER, PAGE.HIGHLIGHT);
+  assert.notEqual(PAGE.OFFER, PAGE.SECTION);
+});
+
+test('main styles the tint as the active selection, !important, beside the highlights\' and sections\'', () => {
+  assert.ok(VIEWS.MARK_CSS.includes(`::highlight(${PAGE.OFFER}){`));
+  const rule = VIEWS.MARK_CSS.slice(VIEWS.MARK_CSS.indexOf(`::highlight(${PAGE.OFFER}){`));
+  assert.match(rule, /background-color:[^;]*Highlight[^;]*!important/, 'the system\'s selection colour');
+  assert.match(rule, /background-color:rgba\(128,188,255,\.6\) !important/, 'and the default blue where that cannot be read');
+  assert.ok(VIEWS.MARK_CSS.includes(`::highlight(${PAGE.HIGHLIGHT}){`) && VIEWS.MARK_CSS.includes(`::highlight(${PAGE.SECTION}){`));
+  assert.equal(VIEWS.OFFER_SELECTION_CSS, '::selection{background-color:transparent !important}');
 });
 
 /* ------------------------------------------------------------------------------------------------- the pdf's */
@@ -498,6 +583,56 @@ test('web: Esc, a click in the page (the offer taken back), the selection out of
   await settle();
   assert.deepEqual(saved, []);
   assert.equal(page.sent.filter(([c]) => c === PAGE.CHANNELS.add).length, 0, 'nothing tinted');
+});
+
+test('web: while a selection is offered (its icon, then its card) the page\'s own selection is hidden for its tint; Esc, Cancel, Save, the offer taken back or another tab bring it back; a highlight clicked hides nothing', async () => {
+  const { views, page, offer, cardView, onCard, fromCard } = setup();
+  const removed = [];
+  page.removeInsertedCSS = (k) => { removed.push(k); return Promise.resolve(); };
+  // whether the rule that hides the page's selection is in now
+  const hidden = () => page.css.map((css, i) => (css === VIEWS.OFFER_SELECTION_CSS ? `key-${i + 1}` : null)).filter((k) => k && !removed.includes(k)).length;
+  const select = (token) => offer({ ...at(token, { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE });
+  select('s1');
+  await settle();
+  assert.equal(hidden(), 1, 'the icon shows: hidden');
+  const card = cardView();
+  card.webContents.emit('did-finish-load');
+  onCard('open')(fromCard());
+  offer(at('s1', { x: 100, y: 60, w: 300, h: 20 })); // scrolled
+  await settle();
+  assert.equal(hidden(), 1, 'its card open (the keyboard the card\'s): still hidden, the tint showing');
+  card.webContents.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: 'Escape' });
+  await settle();
+  assert.equal(hidden(), 0, 'Esc: back');
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.cardGone), ['s1'], 'the page told, so its tint goes and the selection with it');
+  select('s2');
+  select('s3'); // the selection changed and offered again
+  await settle();
+  assert.equal(hidden(), 1, 'one rule for whichever selection is offered');
+  offer({ token: null });
+  await settle();
+  assert.equal(hidden(), 0, 'taken back (a click elsewhere): back');
+  select('s4');
+  onCard('open')(fromCard());
+  onCard('cancel')(fromCard());
+  await settle();
+  assert.equal(hidden(), 0, 'Cancel: back');
+  select('s5');
+  onCard('open')(fromCard());
+  onCard('save')(fromCard(), 'A note');
+  await settle();
+  assert.equal(hidden(), 0, 'Save: back');
+  assert.equal(added(page).at(-1)[1].clear, true, 'and the page lets go of the selection');
+  select('s6');
+  await settle();
+  views.open('b', 'https://github.com/');
+  views.show('b', { x: 0, y: 40, width: 800, height: 600 });
+  await settle();
+  assert.equal(hidden(), 0, 'another tab in front: back');
+  views.show('a', { x: 0, y: 40, width: 800, height: 600 });
+  offer({ ...at('m1', { x: 100, y: 50, w: 300, h: 20 }), markId: 'h-1', pageText: '' });
+  await settle();
+  assert.equal(hidden(), 0, 'a highlight\'s card opened by a click: no selection to hide');
 });
 
 const added = (page) => page.sent.filter(([c]) => c === PAGE.CHANNELS.add);

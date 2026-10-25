@@ -77,6 +77,10 @@ const CHANNELS = Object.freeze({
 });
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
 const SECTION = 'engelbart-web-section'; // a guide's section, styled by main's insertCSS as a pdf's (PaperView pdf-section)
+// The selection offered, while its chat icon or card shows (2026-10-24 later, David): painted as the active selection is,
+// since the card takes the keyboard and the page's own selection goes grey. Styled by main's insertCSS (views.cjs MARK_CSS),
+// which hides the page's own selection meanwhile (OFFER_SELECTION_CSS), so this tint is what shows, focused or not.
+const OFFER = 'engelbart-web-offer';
 const SECTION_MAX = 30000; // characters a section runs to at most before it is taken to be its paragraph alone
 const SECTION_WAIT = 3000; // ms a section's words not in the page yet are watched for (text a script draws after load)
 const BLOCKS = 'p,li,blockquote,dd,dt,td,th,figcaption,pre,h1,h2,h3,h4,h5,h6';
@@ -437,6 +441,20 @@ function highlightAt(list, x, y) {
   for (const one of list || []) if (one && inRects(one.rects, x, y)) hit = one.id;
   return hit;
 }
+/**
+ * The offered selection's tint (OFFER) in the page's registry `h` as `offered` is now: its selection's Range (`sel`) tinted,
+ * over the highlights (priority 1); none for nothing offered (withdrawn, its card closed, the selection changed) or for a
+ * highlight's card opened by a click, with no selection. `make`: Range → Highlight. → whether it is tinted.
+ */
+function tintOffer(h, offered, make) {
+  if (!h) return false;
+  const range = offered && offered.sel;
+  if (!range) { h.delete(OFFER); return false; }
+  const tint = make(range);
+  tint.priority = 1;
+  h.set(OFFER, tint);
+  return true;
+}
 /** The highlight `range` lies wholly inside, of `painted` (Map id → Range): its id, the smallest such if several, or null.
  *  A range that reaches past every highlight is a new passage. */
 function holdingHighlight(painted, range) {
@@ -679,7 +697,7 @@ function runInPage() {
     // saved and its card closed: the selection let go of, so the passage shows as a highlight (its card's offer gone first,
     // so letting go of it closes nothing)
     if (mine && value.clear) {
-      offered = null;
+      setOffered(null);
       const selection = document.getSelection();
       if (selection && !selection.isCollapsed) selection.removeAllRanges();
     }
@@ -693,7 +711,7 @@ function runInPage() {
   ipcRenderer.on(CHANNELS.unmark, (_event, id) => {
     if (typeof id !== 'string') return;
     painted.delete(id); quotes.delete(id); noted.delete(id);
-    if (offered && offered.markId === id) offered = null;
+    if (offered && offered.markId === id) setOffered(null);
     paint();
     schedule();
   });
@@ -1010,13 +1028,19 @@ function runInPage() {
 
   // A selection's card (2026-10-18): the settled selection offered to main, followed as the page moves, taken back. A
   // highlight's own card is offered the same way, with its id (markId): for a selection wholly inside it, a click on its
-  // text (not a link's), or on its note's symbol. `offered.range` is where the card goes: the highlight's, for its card.
+  // text (not a link's), or on its note's symbol. `offered.range` is where the card goes: the highlight's, for its card;
+  // `offered.sel`, the selection's own Range when there is one, tinted while it is offered (tintOffer).
   let offered = null, offerSeq = 0, settleTimer = 0, offerFrame = 0, pointerDown = false, down = null;
   const fieldNode = (node) => { const el = node && (node.nodeType === 1 ? node : node.parentElement); return !!(el && el.closest && el.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])')); };
+  function setOffered(value) {
+    offered = value;
+    try { tintOffer(registry(), offered, (range) => new Highlight(range)); } catch { /* the page's own tints stay */ }
+  }
+  const selectionRange = (selection) => (selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null);
   function withdraw() {
     clearTimeout(settleTimer); settleTimer = 0;
     if (!offered) return;
-    offered = null;
+    setOffered(null);
     ipcRenderer.send(CHANNELS.selectionCard, { token: null });
   }
   function offerView() {
@@ -1041,7 +1065,7 @@ function runInPage() {
     if (!range) return;
     clearTimeout(settleTimer); settleTimer = 0;
     const selection = document.getSelection();
-    offered = { token: `s${(offerSeq += 1)}`, range, text: selection && !selection.isCollapsed ? selection.toString() : '', markId: id };
+    setOffered({ token: `s${(offerSeq += 1)}`, range, text: selection && !selection.isCollapsed ? selection.toString() : '', markId: id, sel: icon ? selectionRange(selection) : null });
     let pageText = '';
     try { pageText = pageTextOf(id); } catch { pageText = ''; }
     ipcRenderer.send(CHANNELS.selectionCard, { ...offerView(), markId: id, pageText, ...(icon ? { icon: true } : {}) });
@@ -1059,7 +1083,7 @@ function runInPage() {
     // inside a highlight already kept: that highlight's card, never a second mark for it
     const held = holdingHighlight(painted, got.range);
     if (held) { if (offered && offered.markId === held) followSoon(); else openMark(held, true); return; }
-    offered = { token: `s${(offerSeq += 1)}`, range: got.range, text: selection.toString() };
+    setOffered({ token: `s${(offerSeq += 1)}`, range: got.range, text: selection.toString(), sel: selectionRange(selection) });
     const view = offerView();
     ipcRenderer.send(CHANNELS.selectionCard, { ...view, quote: got.quote, pageText: got.pageText });
   }
@@ -1112,8 +1136,16 @@ function runInPage() {
     clearTimeout(settleTimer);
     settleTimer = setTimeout(offer, SELECTION_SETTLE_MS);
   });
-  // main closed the card (Cancel, Esc, Save): the passage is not offered any more, so selecting it again opens one again
-  ipcRenderer.on(CHANNELS.cardGone, (_event, token) => { if (offered && offered.token === token) offered = null; });
+  // main closed the card (Cancel, Esc, Save): the passage is not offered any more, so selecting it again opens one again.
+  // The selection it was for goes with it (2026-10-24 later, David: closing it ends the selection's look; Save let go of it
+  // already, add's `clear`).
+  ipcRenderer.on(CHANNELS.cardGone, (_event, token) => {
+    if (!offered || offered.token !== token) return;
+    const had = !!offered.sel;
+    setOffered(null);
+    const selection = document.getSelection();
+    if (had && selection && !selection.isCollapsed) selection.removeAllRanges();
+  });
   document.addEventListener('scroll', followSoon, { capture: true, passive: true });
   window.addEventListener('resize', followSoon);
   window.addEventListener('blur', () => { pointerDown = false; });
@@ -1132,4 +1164,4 @@ function runInPage() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, CHIP, CHIP_SLOP, MAX_CHIPS, CLICK_SLOP, inRects, highlightAt, holdingHighlight, symbolPlace, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, OFFER, tintOffer, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, CHIP, CHIP_SLOP, MAX_CHIPS, CLICK_SLOP, inRects, highlightAt, holdingHighlight, symbolPlace, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };

@@ -107,7 +107,16 @@ const PAGE_PRELOAD_ID = 'engelbart-page';
 // the PDF's blue). An author sheet: Chromium leaves ::highlight() out of a user one (cssOrigin 'user' paints nothing,
 // checked 2026-10-06 on Electron 44). !important, so a page's own rule for the name wins only with !important of its own.
 const MARK_LOOK = 'background-color:rgba(255,214,0,.22);text-decoration-line:underline;text-decoration-style:solid;text-decoration-color:rgba(240,190,0,.9);text-decoration-thickness:2px;text-underline-offset:3px';
-const MARK_CSS = `::highlight(${PAGE.HIGHLIGHT}){${MARK_LOOK.split(';').map((p) => `${p} !important`).join(';')}}::highlight(${PAGE.SECTION}){background-color:rgba(255,196,0,.13) !important}`; // a guide's section as a pdf's (PaperView)
+// The selection offered while its chat icon or card shows (2026-10-24 later, David: "the normal selection blue"; the card
+// takes the keyboard and Chromium greys the page's selection): the active selection's colour (the system's Highlight) as
+// Chromium paints it, a see-through tint that is that colour over white (rgba(128,188,255,.6) for the default blue).
+const OFFER_LOOK = 'background-color:rgba(128,188,255,.6);background-color:rgb(from Highlight calc((r - 102) / .6) calc((g - 102) / .6) calc((b - 102) / .6) / .6)';
+const MARK_CSS = `::highlight(${PAGE.HIGHLIGHT}){${MARK_LOOK.split(';').map((p) => `${p} !important`).join(';')}}::highlight(${PAGE.SECTION}){background-color:rgba(255,196,0,.13) !important}` // a guide's section as a pdf's (PaperView)
+  + `::highlight(${PAGE.OFFER}){${OFFER_LOOK.split(';').map((p) => `${p} !important`).join(';')}}`;
+// Meanwhile the page's own selection is not painted (its grey, unfocused, is drawn over every custom highlight): the tint is
+// what shows. Inserted while a selection is offered (setOfferTint), taken out once it is not; the selection itself stays
+// the page's (⌘C copies it).
+const OFFER_SELECTION_CSS = '::selection{background-color:transparent !important}';
 const QUOTE_TIMEOUT_MS = 2000;
 const SELECTION_TIMEOUT_MS = 300; // an @bart turn does not wait on a page that does not answer
 const MAX_PAGE_TEXT = 2 * PAGE.PAGE_TEXT + 2 * PAGE.MAX_EXACT; // the most page text main takes with a selection
@@ -770,6 +779,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
         entry.offer = { ...got, icon: !!got.quote || got.icon === true };
       } else if (entry.offer && entry.offer.token === got.token) entry.offer = { ...entry.offer, line: got.line, rect: got.rect, viewport: got.viewport };
       else return;
+      setOfferTint(entry, contents);
       if (entry.view.getVisible()) placeCard(id);
     });
     // the page's tints are styled anew with each document (insertCSS lasts until the page goes)
@@ -780,6 +790,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     contents.on('did-navigate', () => {
       entry.boxes = null; entry.boxCss = null; entry.editing = false; entry.boxView = { id: null }; entry.boxHide = null; entry.offer = null;
       setCursor(entry, contents, '');
+      setOfferTint(entry, contents);
       if (layer.tab === id) endBox(false);
       if (card.tab === id) hideCard();
     });
@@ -1000,6 +1011,19 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       if (old) await contents.removeInsertedCSS(old).catch(() => {});
     });
   }
+  /** The page's own selection hidden (OFFER_SELECTION_CSS) while a selection is offered (its icon or its card, `icon`: one
+   *  made by the person, not a highlight's card opened by a click), so the page's tint of it is what shows; back once not. */
+  function setOfferTint(entry, contents) {
+    const on = !!(entry.offer && entry.offer.icon);
+    if (entry.offerTint === on) return;
+    entry.offerTint = on;
+    entry.offerDraw = entry.offerDraw.then(async () => {
+      if (contents.isDestroyed() || entry.offerTint !== on) return;
+      const old = entry.offerKey;
+      entry.offerKey = on ? await contents.insertCSS(OFFER_SELECTION_CSS).catch(() => null) : null;
+      if (old) await contents.removeInsertedCSS(old).catch(() => {});
+    });
+  }
 
   /* --------------------------------------------------------------------------------- the selected box's card */
 
@@ -1190,6 +1214,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     entry.offer = null;
     if (card.tab === id && card.mode === 'selection') hideCard();
     const contents = entry.view.webContents;
+    setOfferTint(entry, contents);
     if (token && !contents.isDestroyed()) contents.send(PAGE.CHANNELS.cardGone, token);
   }
   /** Tab `id`'s selection taken back: its card, typed in or not, goes, nothing saved. */
@@ -1494,7 +1519,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     view.setVisible(false);
     win.contentView.addChildView(view);
     onLayerChange();
-    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map(), sectionWaits: new Map(), editing: false, boxWait: null, boxes: null, boxCss: '', boxKey: null, boxDraw: Promise.resolve(), removed: null, boxView: { id: null }, boxHide: null, frameWaits: new Map(), cursor: '', cursorKey: null, cursorDraw: Promise.resolve(), offer: null };
+    const entry = { view, error: null, requested: '', pending: '', seq: 0, found: '', drawn: false, download: '', retrying: false, quoteWait: null, selectionWaits: new Map(), sectionWaits: new Map(), editing: false, boxWait: null, boxes: null, boxCss: '', boxKey: null, boxDraw: Promise.resolve(), removed: null, boxView: { id: null }, boxHide: null, frameWaits: new Map(), cursor: '', cursorKey: null, cursorDraw: Promise.resolve(), offer: null, offerTint: false, offerKey: null, offerDraw: Promise.resolve() };
     entries.set(id, entry);
 
     const contents = view.webContents;
@@ -1658,7 +1683,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const win = getWindow();
     const bounds = boundsFrom(rect, win && !win.isDestroyed() ? win.webContents.getZoomFactor() : 1);
     for (const [other, item] of entries) {
-      if (other !== id) { item.seq += 1; item.view.setVisible(false); item.offer = null; } // a tab left: its selection's card is not kept
+      if (other !== id) { item.seq += 1; item.view.setVisible(false); item.offer = null; setOfferTint(item, item.view.webContents); } // a tab left: its selection's card is not kept
     }
     entry.seq += 1;
     entry.view.setBounds(bounds);
@@ -1839,4 +1864,4 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   }
 }
 
-module.exports = { PAGE_PRELOAD, BOX_LAYER_PRELOAD, BOX_CARD_PRELOAD, BOX_CARD_URL, CARD_W, CARD_HIDE_WHILE_SCROLLING, boxViewInput, selectionCardInput, boxResizeInput, boxAsksInput, cardAsks, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PAGE_PRELOAD, BOX_LAYER_PRELOAD, BOX_CARD_PRELOAD, BOX_CARD_URL, CARD_W, CARD_HIDE_WHILE_SCROLLING, boxViewInput, selectionCardInput, boxResizeInput, boxAsksInput, cardAsks, MARK_CSS, OFFER_SELECTION_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

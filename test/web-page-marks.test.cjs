@@ -169,7 +169,10 @@ test('the preload is registered once on the browsing session, and tabs a page op
 });
 
 test('the tint is a soft yellow with a 2px underline (2026-10-18), a guide\'s section the pdf section\'s yellow, and the preload and main agree on names and limits', () => {
-  assert.equal(MARK_CSS, '::highlight(engelbart-web-mark){background-color:rgba(255,214,0,.22) !important;text-decoration-line:underline !important;text-decoration-style:solid !important;text-decoration-color:rgba(240,190,0,.9) !important;text-decoration-thickness:2px !important;text-underline-offset:3px !important}::highlight(engelbart-web-section){background-color:rgba(255,196,0,.13) !important}');
+  assert.equal(MARK_CSS, '::highlight(engelbart-web-mark){background-color:rgba(255,214,0,.22) !important;text-decoration-line:underline !important;text-decoration-style:solid !important;text-decoration-color:rgba(240,190,0,.9) !important;text-decoration-thickness:2px !important;text-underline-offset:3px !important}::highlight(engelbart-web-section){background-color:rgba(255,196,0,.13) !important}'
+    // the selection offered while its icon or card shows (2026-10-24 later): the active selection's blue, see-through
+    + '::highlight(engelbart-web-offer){background-color:rgba(128,188,255,.6) !important;background-color:rgb(from Highlight calc((r - 102) / .6) calc((g - 102) / .6) calc((b - 102) / .6) / .6) !important}');
+  assert.equal(PAGE.OFFER, 'engelbart-web-offer');
   assert.equal(PAGE.HIGHLIGHT, 'engelbart-web-mark');
   const preload = fs.readFileSync(PAGE_PRELOAD, 'utf8').replace(/^\s*\/\/.*$/gm, ''); // its code, not its comments
   assert.doesNotMatch(preload, /contextBridge|exposeInMainWorld/); // the page is given nothing

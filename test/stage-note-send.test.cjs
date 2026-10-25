@@ -136,11 +136,11 @@ test('shadedIconPlace: the icon placed in the pane less its shadow\'s room, the 
   assert.ok(edge.x >= 0 && edge.x + edge.width <= 800 && edge.y >= 40 && edge.y + edge.height <= 640, JSON.stringify(edge));
 });
 
-test('the chat icon\'s look: 28px round, white, a shade darker under the pointer, its tooltip', async () => {
+test('the chat icon\'s look: 24px round (28 before 2026-10-24 later), white, a shade darker under the pointer, its tooltip', async () => {
   const { CHAT_TIP, CHAT_SVG, CHAT_ICON_CSS, chatIconLook } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/ui/chat-icon.js')).href);
   assert.equal(CHAT_TIP, 'Ask or add a note');
-  assert.match(chatIconLook(), /width:28px;height:28px;.*border-radius:50%;background:#fff/);
-  assert.match(CHAT_ICON_CSS, /\[data-chat-icon\]:hover\{background:#f2f2f2/);
+  assert.match(chatIconLook(), /width:24px;height:24px;.*border-radius:50%;background:#fff/);
+  assert.match(CHAT_ICON_CSS, /\[data-chat-icon\]:hover\{background:#f3f3f3/);
   assert.match(CHAT_SVG, /^<svg/);
 });
 

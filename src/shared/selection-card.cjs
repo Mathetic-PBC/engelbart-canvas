@@ -59,8 +59,9 @@ function shadedCardPlace(line, all, pane, size, shade = CARD_SHADE, gap = CARD_G
 // icon opens (renderer/ui/chat-icon.js). CHAT_ICON square, ICON_GAP right of the selection's last line's end, its middle
 // level with that line's; with no room there, under the line's end (above it with no room under), its right edge with it;
 // always inside the pane, and none once the end of the selection is out of it (scrolled past). On a web page it is the card
-// view's, with ICON_SHADE about it for its shadow.
-const CHAT_ICON = 28;
+// view's, with ICON_SHADE about it for its shadow (its shadow reaches no further: chat-icon.js ICON_SHADOW).
+// 24 since 2026-10-24 later (David: smaller, a hairline edge, a softer shadow; 28 before).
+const CHAT_ICON = 24;
 const ICON_GAP = 6;
 const ICON_SHADE = 6;
 

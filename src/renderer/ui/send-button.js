@@ -5,12 +5,14 @@
 
 export const SEND_PATHS = '<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>';
 export const SEND_SIZE = 28;
+/** The app's blue: the send's when it can be pressed (the chat icon's glyph under the pointer is it too, ./chat-icon.js). */
+export const SEND_BLUE = '#0070f3';
 export const SEND_ARROW = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SEND_PATHS}</svg>`;
 
 /** Whether there is something to send: any text but spaces. */
 export const sendReady = (text) => String(text ?? '').trim() !== '';
 /** Its colors, ready or not. */
-export const boxSend = (ready) => `background:${ready ? '#0070f3' : '#ececec'};color:${ready ? '#fff' : '#a3a3a3'}`;
+export const boxSend = (ready) => `background:${ready ? SEND_BLUE : '#ececec'};color:${ready ? '#fff' : '#a3a3a3'}`;
 /** The button's whole look, ready or not (not ready, it is disabled and takes no click). */
 export const sendLook = (ready) => `flex:none;display:inline-flex;align-items:center;justify-content:center;width:${SEND_SIZE}px;height:${SEND_SIZE}px;padding:0;border:0;border-radius:50%;${boxSend(ready)};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms`;
 /** Under the pointer (.bart-send): a little lighter, when it can be pressed. */
