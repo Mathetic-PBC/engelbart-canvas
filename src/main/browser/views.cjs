@@ -1480,6 +1480,18 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     };
   }
 
+  // Every page a tab arrives at goes to the renderer as `browser:visit` { id, url, title }, which keeps it in the project's
+  // history (MATH-127, store/history.cjs); a title that comes later as { ..., update: true }. A popup's pages go under
+  // the tab that opened it. The title is the page's own (getTitle), as it stands.
+  function watchVisits(contents, tab) {
+    const visit = (url, update) => {
+      try { send('browser:visit', { id: tab, url: String(url || contents.getURL() || ''), title: String(contents.getTitle() || ''), ...(update ? { update: true } : {}) }); } catch { /* the history is best effort */ }
+    };
+    contents.on('did-navigate', (_event, url) => visit(url, false));
+    contents.on('did-navigate-in-page', (_event, url, isMainFrame) => { if (isMainFrame) visit(url, false); });
+    contents.on('page-title-updated', () => visit(contents.getURL(), true));
+  }
+
   // A popup has no address bar, so its title carries the host: the person can see who is asking.
   function watchPopup(popup, from) {
     popups.add(popup);
@@ -1494,6 +1506,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     };
     contents.on('page-title-updated', (event) => { event.preventDefault(); title(); });
     contents.on('did-navigate', title);
+    watchVisits(contents, from);
     contents.on('context-menu', (_event, params) => contextMenu(contents, params, null));
     popup.on('closed', () => popups.delete(popup));
   }
@@ -1527,6 +1540,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     listenToPage(contents, id, entry);
     contents.setWindowOpenHandler(windowOpenHandler(id, contents));
     contents.on('did-create-window', (popup) => watchPopup(popup, id));
+    watchVisits(contents, id);
     // The page took the keyboard (a click in it, mostly): the renderer never sees a click in a native view, and ⌘T, ⌘W
     // and ⌘F go to the place clicked last (2026-10-16, renderer's model/key-side.js).
     contents.on('focus', () => send('browser:focused', { id }));

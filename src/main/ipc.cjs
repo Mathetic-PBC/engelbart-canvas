@@ -26,6 +26,7 @@ const { TOOL_NAMES } = require('./tools/requirements.cjs');
 const archive = require('./store/archive.cjs');
 const onboarding = require('./store/onboarding.cjs');
 const gettingStarted = require('./store/getting-started.cjs');
+const history = require('./store/history.cjs');
 const { buildChoices } = require('./bart/models.cjs');
 const { providerOf, namingStep, fallbackTitle } = require('./bart/name-chat.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
@@ -394,6 +395,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // A project's Stage tabs (MATH-10): read once when its Stage opens, written as they change.
   handle('stage', withCtx((ctx, projectId) => projects.readStage(ctx, projectId)));
   handle('set-stage', withCtx((ctx, projectId, value) => projects.writeStage(ctx, projectId, value)));
+  // A page a Stage tab arrived at (MATH-127), kept in the project's .context/history.json. Never refuses: the write is
+  // queued, and a failure is logged rather than told to the page.
+  handle('record-visit', withCtx((ctx, projectId, visit) => { void history.record(ctx, projectId, visit); return true; }));
   // Where to go next (the sidebar's next row, ⌘J): the workspaces written in last and the agents running or waiting.
   // Every change is announced on `engelbart:nav`; the renderer reads `nav` again.
   const navChanged = () => notify('engelbart:nav', {});

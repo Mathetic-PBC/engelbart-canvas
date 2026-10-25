@@ -870,6 +870,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     return () => { offState(); offPdf(); offFound(); offShortcut(); offOpen(); offClosed(); offLogin(); offFocus(); window.removeEventListener(OPEN_IN_BROWSER, onAsk); quiet(api.browserCloseAll()); };
   }, [adoptTab, dropTab, receivePdf]);
 
+  // Every page a tab arrives at goes into this project's history (MATH-127): main says where, this says which project.
+  React.useEffect(() => api.onBrowserVisit((visit) => { if (projectId) quiet(api.recordVisit(projectId, visit)); }), [projectId]);
+
   // The address follows the tab unless it is being typed in.
   React.useEffect(() => {
     if (document.activeElement !== addressRef.current) setDraft(shownDraft);
