@@ -9,7 +9,7 @@ import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
 import { previewLibraryId } from '../model/sandbox-notifications.js';
 import { KindGlyph, SEARCH, FOLDER, Expand, Collapse } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, SAVE_LABEL, TAB_ICON_SIDE_W, tabLook, tabWidth, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
+import { MAX_TABS, SAVE_LABEL, TAB_ICON_SIDE_W, tabLook, tabWidth, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, snapshotStyle, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, viewBounds, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 import { withAsk } from '../pdf/canvas.js';
@@ -357,6 +357,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const [customW, setCustomW] = React.useState('390');
   const [occluded, setOccluded] = React.useState(false);
   const [snapshot, setSnapshot] = React.useState(null);
+  const shownRef = React.useRef(null); // the size last given to browserShow: { tabId, width, height }, for the snapshot
   const [logins, setLogins] = React.useState([]); // HTTP authentication a page (or a popup) is waiting on
   const [typing, setTyping] = React.useState(false); // the address has the keyboard: its list is open, Save steps aside
   const [pick, setPick] = React.useState(0); // the row of the address list Enter takes
@@ -910,8 +911,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const r = slot.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) { quiet(api.browserHide()); return; }
       // The page stops short of the window's right and bottom edges, where the resize strips are (WindowEdges.jsx).
-      const width = Math.min(r.width, window.innerWidth - WINDOW_EDGE - r.left), height = Math.min(r.height, window.innerHeight - WINDOW_EDGE - r.top);
-      quiet(api.browserShow(tab.id, { x: r.left, y: r.top, width, height }).then(() => { if (!cancelled) setSnapshot(null); }));
+      const bounds = viewBounds(r, window.innerWidth, window.innerHeight, WINDOW_EDGE);
+      shownRef.current = { tabId: tab.id, width: bounds.width, height: bounds.height };
+      quiet(api.browserShow(tab.id, bounds).then(() => { if (!cancelled) setSnapshot(null); }));
     };
     const observer = new ResizeObserver(place);
     observer.observe(slot);
@@ -1540,7 +1542,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
                   </Plain>
                 </div>
               ) : snapshot && !showing ? (
-                <img src={snapshot} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'left top', userSelect: 'none' }} />
+                <img src={snapshot} alt="" draggable={false} style={snapshotStyle(shownRef.current, tab.id)} />
               ) : null}
             </div>
           </div>
