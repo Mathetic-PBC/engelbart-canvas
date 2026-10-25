@@ -9,7 +9,7 @@ import { citationNumbers, citationSources, citationSourcesHtml, openCitationRun,
 import { noteQuestion, askedByNote, runningLabel } from '../pdf/canvas.js';
 import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, ERROR_INK, ANSWER_GAP, CARD_GROUND, cardCss, styleOf } from '../pdf/card-look.js';
 import { WAVE_SPAN, keepWaves } from '../ui/wave.js';
-import { SEL_CARD_W, CARD_SHADE, ICON_SHADE } from '../../shared/selection-card.cjs';
+import { SEL_CARD_W, SEL_CARD_H, CARD_SHADE, ICON_SHADE } from '../../shared/selection-card.cjs';
 import { SEND_ARROW, SEND_HOVER_CSS, sendLook, sendReady } from '../ui/send-button.js';
 import { CHAT_SVG, CHAT_TIP, CHAT_ICON_CSS, chatIconLook } from '../ui/chat-icon.js';
 
@@ -95,8 +95,8 @@ function fitField(ta) {
 }
 
 /** The round send (../ui/send-button.js): ready once there is something to send; a press keeps the field's keyboard. */
-function SendButton({ ready, onSend }) {
-  return <button type="button" className="bart-send" data-send="1" aria-label="Send" disabled={!ready} onMouseDown={(event) => event.preventDefault()} onClick={() => { if (ready) onSend(); }} style={styleOf(sendLook(ready))} dangerouslySetInnerHTML={{ __html: SEND_ARROW }} />;
+function SendButton({ ready, onSend, size }) {
+  return <button type="button" className="bart-send" data-send="1" aria-label="Send" disabled={!ready} onMouseDown={(event) => event.preventDefault()} onClick={() => { if (ready) onSend(); }} style={styleOf(sendLook(ready, size))} dangerouslySetInnerHTML={{ __html: SEND_ARROW }} />;
 }
 
 /** The note: a field in the note's ink, each agent's token drawn as the document's blue label under its transparent text.
@@ -265,13 +265,20 @@ function BoxCard({ msg }) {
 // it in the answers' type while Bart's work waves. Cancel or Esc closes the card unsaved (a new selection leaves no
 // highlight). A highlight's own card (its text or its symbol clicked, or a selection inside it) has its note in the field
 // and Remove at the bottom left; Enter in it emptied clears its note (canSave), the send being for text to send.
+// Smaller since 2026-10-24 later (David): SEL_CARD_W 260, its note 14px, and Cancel and a 26px send on the note's own row
+// while the note is one line (empty, its placeholder) and the card has no answers and no Remove; once it wraps, they go to
+// a row of their own under it, on the right (selInline). The placeholder is shorter than a box's to fit beside them.
 const SEL_INK = '#1f2633';
-const SEL_FIELD = { display: 'block', width: '100%', margin: 0, padding: 0, border: 0, background: 'transparent', resize: 'none', overflow: 'hidden', outline: 'none', font: '15px/1.5 var(--font-sans)', color: SEL_INK };
+const SEL_PAD = { top: 10, side: 12, bottom: 8 };
+const SEL_SEND = 26;
+const SEL_GAP = 8; // px between the note and its buttons on one row
+const SEL_PLACEHOLDER = 'Note or ask @bart';
+const SEL_FIELD = { display: 'block', width: '100%', margin: 0, padding: 0, border: 0, background: 'transparent', resize: 'none', overflow: 'hidden', outline: 'none', font: '14px/1.45 var(--font-sans)', color: SEL_INK };
 const SEL_CSS = `
 @keyframes sel-caret{50%{opacity:0}}
 [data-sel-card] textarea::placeholder{color:#9a9a9a;opacity:1}
-[data-sel-card] [data-sel-cancel],[data-sel-card] [data-sel-remove]{border:0;background:transparent;padding:6px 8px;border-radius:999px;font:14px/1.2 var(--font-sans);color:#6b6b6b;cursor:pointer}
-[data-sel-card] [data-sel-remove]{font-size:13px;color:#8f8f8f;margin-left:-8px}
+[data-sel-card] [data-sel-cancel],[data-sel-card] [data-sel-remove]{border:0;background:transparent;padding:5px 6px;border-radius:999px;font:13px/1.2 var(--font-sans);color:#6b6b6b;cursor:pointer}
+[data-sel-card] [data-sel-remove]{color:#8f8f8f;margin-left:-6px}
 [data-sel-card] [data-sel-cancel]:hover,[data-sel-card] [data-sel-remove]:hover{background:#f2f2f2;color:#171717}
 ${cardCss('[data-sel-answers]')}
 `;
@@ -279,6 +286,28 @@ ${cardCss('[data-sel-answers]')}
 /** Whether the note can be sent (kept): a note to keep, or (a highlight's) one to clear. */
 function canSave(note, saved, kept) {
   return String(note || '').trim() !== '' || (!!kept && String(saved || '').trim() !== '');
+}
+
+let inkMeter = null;
+/** The note's width on one line in the field's type (`ta`), px; Infinity once it has a line break. */
+function noteInkWidth(text, ta) {
+  const s = String(text ?? '');
+  if (s.includes('\n')) return Infinity;
+  if (inkMeter === null) {
+    try { inkMeter = document.createElement('canvas').getContext('2d') || false; } catch { inkMeter = false; }
+  }
+  if (!inkMeter || !ta || typeof inkMeter.measureText !== 'function') return s.length * 7.5; // no canvas (a test's DOM): about 14px sans
+  const cs = getComputedStyle(ta);
+  inkMeter.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  return inkMeter.measureText(s).width;
+}
+/** Whether the note (or, empty, the placeholder) fits on one line beside the buttons `row` (Cancel and the send): the card's
+ *  inside less the row and SEL_GAP, and a pixel or two for the caret. Measured as one line at that width, not at the field's
+ *  width now, so the card does not swing between its two layouts at a line's end. */
+function selInline(note, ta, row) {
+  if (!row) return true;
+  const room = SEL_CARD_W - 2 * SEL_PAD.side - 2 - row.offsetWidth - SEL_GAP;
+  return noteInkWidth(note || SEL_PLACEHOLDER, ta) + 2 <= room;
 }
 
 function SelectionCard({ msg }) {
@@ -329,7 +358,9 @@ function SelectionCard({ msg }) {
     const n = el.value.length;
     try { el.setSelectionRange(n, n); } catch { /* not a field that has one */ }
   }, [take]);
-  React.useLayoutEffect(() => fitField(field.current), [note]);
+  const [inline, setInline] = React.useState(true);
+  const buttons = React.useRef(null);
+  React.useLayoutEffect(() => fitField(field.current), [note, inline]);
 
   const kept = !!(view && view.mark);
   const save = () => { if (!canSave(note, saved.current, kept)) return; saved.current = note; api.save(note); };
@@ -339,27 +370,45 @@ function SelectionCard({ msg }) {
   const asks = kept ? view.mark.asks || [] : [];
   const running = view ? view.running : [];
   const inked = agentTokens(note).length > 0;
-  if (view && view.icon) return <ChatIcon />;
+  const answered = asks.length > 0 || running.length > 0;
+  const icon = !!(view && view.icon);
+  // one row while the note is a line and nothing else is in the card; measured after each render, set before it is painted
+  React.useLayoutEffect(() => {
+    if (icon) return;
+    const next = !kept && !answered && selInline(note, field.current, buttons.current);
+    if (next !== inline) setInline(next);
+  });
+  if (icon) return <ChatIcon />;
+  const row = (
+    <div ref={buttons} data-sel-buttons="1" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
+      <button type="button" data-sel-cancel="1" onMouseDown={(event) => event.preventDefault()} onClick={() => api.cancel()}>Cancel</button>
+      <SendButton ready={sendReady(note)} onSend={save} size={SEL_SEND} />
+    </div>
+  );
   return (
     <div style={{ padding: `${CARD_SHADE.top}px ${CARD_SHADE.side}px ${CARD_SHADE.bottom}px` }}>
-      <div data-sel-card="1" style={{ width: SEL_CARD_W, display: 'flex', flexDirection: 'column', background: CARD_GROUND, borderRadius: 12, border: '1px solid #ececec', boxShadow: '0 6px 24px rgba(0,0,0,.12)', padding: '16px 18px 14px' }}>
-        <div style={{ position: 'relative' }}>
+      <div data-sel-card="1" data-sel-inline={inline ? '1' : undefined} style={{ width: SEL_CARD_W, minHeight: SEL_CARD_H, boxSizing: 'border-box', display: 'flex', flexDirection: 'column', justifyContent: 'center', background: CARD_GROUND, borderRadius: 10, border: '1px solid #ececec', boxShadow: '0 4px 16px rgba(0,0,0,.10)', padding: `${SEL_PAD.top}px ${SEL_PAD.side}px ${SEL_PAD.bottom}px` }}>
+        <div style={inline ? { display: 'flex', alignItems: 'center', gap: SEL_GAP } : undefined}>
+        <div style={{ position: 'relative', flex: inline ? 1 : undefined, minWidth: 0 }}>
           {!focused && !note && <div aria-hidden="true" data-sel-caret="1" style={{ ...SEL_FIELD, position: 'absolute', inset: 0, pointerEvents: 'none', color: 'transparent' }}><span style={{ display: 'inline-block', width: 1.5, height: '1.2em', verticalAlign: 'text-bottom', background: SEL_INK, animation: 'sel-caret 1.06s steps(1) infinite' }} /></div>}
           {inked && <div aria-hidden="true" data-sel-ink="1" style={{ ...SEL_FIELD, position: 'absolute', inset: 0, whiteSpace: 'pre-wrap', overflowWrap: 'break-word', overflow: 'hidden', pointerEvents: 'none' }} dangerouslySetInnerHTML={{ __html: agentInkHtml(note) }} />}
-          <textarea ref={field} rows={1} value={note} placeholder={PLACEHOLDER} spellCheck={false} onChange={(event) => set(event.target.value)} onKeyDown={key} style={inked ? { ...SEL_FIELD, position: 'relative', color: 'transparent', caretColor: SEL_INK } : SEL_FIELD} />
+          <textarea ref={field} rows={1} value={note} placeholder={SEL_PLACEHOLDER} spellCheck={false} onChange={(event) => set(event.target.value)} onKeyDown={key} style={inked ? { ...SEL_FIELD, position: 'relative', color: 'transparent', caretColor: SEL_INK } : SEL_FIELD} />
         </div>
-        {(asks.length > 0 || running.length > 0) && (
+        {inline && row}
+        </div>
+        {answered && (
           <div data-sel-answers="1" style={{ display: 'flex', flexDirection: 'column', margin: '0 -6px' }}>
             {asks.map((ask, i) => <Answer key={ask.id || `ask-${i}`} ask={ask} note={note} divided />)}
             {running.map((run) => <Running key={run.askId} run={run} note={note} divided />)}
           </div>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginTop: 14 }}>
-          {kept && <button type="button" data-sel-remove="1" onMouseDown={(event) => event.preventDefault()} onClick={() => api.remove()}>Remove</button>}
-          <span style={{ flex: 1 }} />
-          <button type="button" data-sel-cancel="1" onMouseDown={(event) => event.preventDefault()} onClick={() => api.cancel()}>Cancel</button>
-          <SendButton ready={sendReady(note)} onSend={save} />
-        </div>
+        {!inline && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 6 }}>
+            {kept && <button type="button" data-sel-remove="1" onMouseDown={(event) => event.preventDefault()} onClick={() => api.remove()}>Remove</button>}
+            <span style={{ flex: 1 }} />
+            {row}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -402,6 +451,6 @@ function CardPage() {
   );
 }
 
-export { answerHtml, noteWidth, fitField, canSave, sendBox, Running, SelectionCard, SendButton, ChatIcon, PLACEHOLDER, ASK_W, MIN_W, SEL_CSS }; // for test/math.test.cjs and test/box-card.test.cjs
+export { answerHtml, noteWidth, fitField, canSave, sendBox, Running, SelectionCard, SendButton, ChatIcon, PLACEHOLDER, SEL_PLACEHOLDER, ASK_W, MIN_W, SEL_CSS }; // for test/math.test.cjs and test/box-card.test.cjs
 
 createRoot(document.getElementById('root')).render(<CardPage />);

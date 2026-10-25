@@ -13,7 +13,7 @@ const Module = require('node:module');
 const { EventEmitter } = require('node:events');
 const { buildSync } = require('esbuild');
 
-const { CARD_GAP, SEL_CARD_W, CARD_SHADE, CHAT_ICON, ICON_GAP, ICON_SHADE, selectionCardPlace, shadedCardPlace, chatIconPlace, shadedIconPlace } = require('../src/shared/selection-card.cjs');
+const { CARD_GAP, SEL_CARD_W, SEL_CARD_H, CARD_SHADE, CHAT_ICON, ICON_GAP, ICON_SHADE, selectionCardPlace, shadedCardPlace, chatIconPlace, shadedIconPlace } = require('../src/shared/selection-card.cjs');
 const PAGE = require('../src/main/browser/page-preload.cjs');
 const CARD = require('../src/main/browser/box-card-preload.cjs');
 const VIEWS = require('../src/main/browser/views.cjs');
@@ -541,21 +541,22 @@ test('web: a settled selection gets the chat icon at its end; the icon clicked, 
   // the page is at y 40: the line's bottom is at 110 in the window, the card itself CARD_GAP under it, its view the
   // shadow's room bigger on every side
   const { side, top, bottom } = CARD_SHADE;
-  assert.deepEqual(card.bounds, { x: 100 - side, y: 110 + CARD_GAP - top, width: SEL_CARD_W + 2 * side, height: 96 + top + bottom });
+  assert.deepEqual(card.bounds, { x: 100 - side, y: 110 + CARD_GAP - top, width: SEL_CARD_W + 2 * side, height: SEL_CARD_H + top + bottom });
   // the page scrolled: it follows; near the bottom it goes above; near the right edge it is pushed in, its shadow too
   offer(at('s1', { x: 700, y: 560, w: 60, h: 20 }, { x: 100, y: 540, w: 660, h: 40 }));
-  assert.deepEqual(card.bounds, { x: 800 - SEL_CARD_W - 2 * side, y: 40 + 540 - CARD_GAP - 96 - top, width: SEL_CARD_W + 2 * side, height: 96 + top + bottom });
+  assert.deepEqual(card.bounds, { x: 800 - SEL_CARD_W - 2 * side, y: 40 + 540 - CARD_GAP - SEL_CARD_H - top, width: SEL_CARD_W + 2 * side, height: SEL_CARD_H + top + bottom });
   // another token's whereabouts (an old selection's) move nothing
   offer(at('s0', { x: 10, y: 10, w: 60, h: 20 }));
-  assert.equal(card.bounds.y, 40 + 540 - CARD_GAP - 96 - top);
+  assert.equal(card.bounds.y, 40 + 540 - CARD_GAP - SEL_CARD_H - top);
 });
 
 test('shadedCardPlace: the card where selectionCardPlace puts it in the pane less the shadow\'s room, the view that room bigger', () => {
   const page = { x: 0, y: 40, width: 800, height: 600 }, line = { x: 100, y: 90, width: 300, height: 20 };
-  assert.deepEqual(shadedCardPlace(line, line, page, { width: 340, height: 96 }), { x: 76, y: 100, width: 388, height: 144 });
-  assert.equal(shadedCardPlace({ x: 100, y: 900, width: 30, height: 20 }, null, page, { width: 340, height: 96 }), null, 'out of the pane');
+  assert.deepEqual(shadedCardPlace(line, line, page, { width: SEL_CARD_W, height: SEL_CARD_H }), { x: 84, y: 106, width: 292, height: 78 });
+  assert.deepEqual({ SEL_CARD_W, SEL_CARD_H, CARD_SHADE }, { SEL_CARD_W: 260, SEL_CARD_H: 46, CARD_SHADE: { top: 12, side: 16, bottom: 20 } }, 'the card 260 wide, 46 tall empty, in 0 4px 16px of shadow');
+  assert.equal(shadedCardPlace({ x: 100, y: 900, width: 30, height: 20 }, null, page, { width: SEL_CARD_W, height: SEL_CARD_H }), null, 'out of the pane');
   // a selection in the pane's rim only: the card as near it as the room lets it be, still all in the pane
-  const rim = shadedCardPlace({ x: 790, y: 41, width: 8, height: 10 }, null, page, { width: 340, height: 96 });
+  const rim = shadedCardPlace({ x: 790, y: 41, width: 8, height: 10 }, null, page, { width: SEL_CARD_W, height: SEL_CARD_H });
   assert.ok(rim.x >= 0 && rim.x + rim.width <= 800 && rim.y >= 40 && rim.y + rim.height <= 640, JSON.stringify(rim));
 });
 

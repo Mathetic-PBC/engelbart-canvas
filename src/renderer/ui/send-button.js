@@ -13,7 +13,8 @@ export const SEND_ARROW = `<svg width="14" height="14" viewBox="0 0 24 24" fill=
 export const sendReady = (text) => String(text ?? '').trim() !== '';
 /** Its colors, ready or not. */
 export const boxSend = (ready) => `background:${ready ? SEND_BLUE : '#ececec'};color:${ready ? '#fff' : '#a3a3a3'}`;
-/** The button's whole look, ready or not (not ready, it is disabled and takes no click). */
-export const sendLook = (ready) => `flex:none;display:inline-flex;align-items:center;justify-content:center;width:${SEND_SIZE}px;height:${SEND_SIZE}px;padding:0;border:0;border-radius:50%;${boxSend(ready)};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms`;
+/** The button's whole look, ready or not (not ready, it is disabled and takes no click), `size` px round (a web page's
+ *  selection card's is 26, box-card/BoxCard.jsx SEL_SEND). */
+export const sendLook = (ready, size = SEND_SIZE) => `flex:none;display:inline-flex;align-items:center;justify-content:center;width:${size}px;height:${size}px;padding:0;border:0;border-radius:50%;${boxSend(ready)};cursor:${ready ? 'pointer' : 'default'};transition:background 160ms`;
 /** Under the pointer (.bart-send): a little lighter, when it can be pressed. */
 export const SEND_HOVER_CSS = '.bart-send{transition:background 120ms}.bart-send:hover:not(:disabled){opacity:.86}';

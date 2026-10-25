@@ -135,7 +135,7 @@ const CARD_MIN_H = 64; // its height until it says how tall it is
 // A selection's or a highlight's card (2026-10-18): SEL_CARD_W wide and its shadow's room each side (selection-card.cjs),
 // and about as tall as an empty one until it says how tall it is
 const SEL_VIEW_W = SEL.SEL_CARD_W + 2 * SEL.CARD_SHADE.side;
-const SEL_VIEW_H = 96 + SEL.CARD_SHADE.top + SEL.CARD_SHADE.bottom;
+const SEL_VIEW_H = SEL.SEL_CARD_H + SEL.CARD_SHADE.top + SEL.CARD_SHADE.bottom;
 // The chat icon a selection shows first (2026-10-24), in the same view: the icon and its shadow's room each side
 const ICON_VIEW = SEL.CHAT_ICON + 2 * SEL.ICON_SHADE;
 /** What a note asks Bart: the words after a leading @bart, or null for a note that asks nothing (pdf/canvas.js noteQuestion). */
