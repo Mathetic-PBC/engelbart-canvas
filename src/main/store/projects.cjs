@@ -1039,9 +1039,12 @@ async function writeDoc(ctx, projectId, ref, text) {
 // workspaces' documents, `kind: 'workspace'`), and where each document was scrolled to, keyed as the editor
 // keys documents (`ws:<id>`, `note:<id>`). Positions belong to the workspace, so one note can be halfway down in one
 // workspace and at the top in another. Scrolling writes here and nowhere else: a document's edit time never moves.
+// `panes` (MATH-103, 2026-10-25), only when a tab has any: by tab ('ws' or one of `tabs`), the documents open
+// beside it, left to right (renderer/model/panes.js: { kind, id, title, link, from }).
 const STATE_FILE = 'state.json';
 const MAX_TABS = 40;
 const MAX_POSITIONS = 200;
+const MAX_PANES = 16; // beside one tab: more than any window fits
 const idOrNull = (value) => (typeof value === 'string' && UUID_RE.test(value) ? value : null);
 const plainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
 
@@ -1133,7 +1136,27 @@ function cleanView(value) {
     if (clean) positions[`${m[1]}:${m[2]}`] = clean;
   }
   const active = input.active !== 'ws' && seen.has(idOrNull(input.active)) ? input.active : 'ws';
-  return { active, tabs, positions };
+  const panes = cleanPanes(input.panes, seen);
+  return panes ? { active, tabs, positions, panes } : { active, tabs, positions };
+}
+
+/** A view's panes beside its tabs, only for the tabs it has ('ws' always): null when none has any. */
+function cleanPanes(value, tabIds) {
+  const out = {};
+  for (const [tabId, list] of Object.entries(plainObject(value) || {})) {
+    if (tabId !== 'ws' && !(idOrNull(tabId) && tabIds.has(tabId))) continue; // a tab not kept (the project page's, an archived version's) keeps none
+    const panes = [];
+    for (const pane of Array.isArray(list) ? list : []) {
+      const id = idOrNull(pane && pane.id); if (!id) continue;
+      const kind = pane.kind === 'workspace' ? 'workspace' : 'note';
+      if (panes.some((held) => held.id === id && held.kind === kind)) continue;
+      const text = (field, max) => (typeof pane[field] === 'string' ? pane[field].slice(0, max) : '');
+      panes.push({ kind, id, title: text('title', 200), link: text('link', 200), from: text('from', 120) });
+      if (panes.length >= MAX_PANES) break;
+    }
+    if (panes.length) out[tabId] = panes;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /** What each workspace of a project had open → { [workspaceId]: { active, tabs, positions } }. */

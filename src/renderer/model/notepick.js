@@ -5,6 +5,7 @@
 import { isNote } from './kind.js';
 
 export const NOTE_PICK_RECENT = 8; // notes shown before anything is typed
+export const SPACE_PICK_RECENT = 4; // workspaces shown before anything is typed, when there are any (the split icon's)
 
 const when = (row) => Date.parse(row.last_edited || row.created || '') || 0;
 
@@ -13,8 +14,10 @@ const when = (row) => Date.parse(row.last_edited || row.created || '') || 0;
  * key, row, name, tag } opens one. Empty, New note comes first and then the notes written in last. Typed, every note of
  * the whole library whose name holds all the words, the ones that start with what was typed first, then New note named
  * what was typed. `tag` is 'open' for a note already in a tab, 'here' for one in this workspace, else ''.
+ * `workspaces` ({ id, name }, written in last first), given only by the split icon (MATH-84, Workspace.jsx): { kind:
+ * 'workspace', key, row, name, tag } rows after the notes, the last few when nothing is typed, every match when it is.
  */
-export function notePickRows({ query, library, openIds = [], inRail = () => false }) {
+export function notePickRows({ query, library, openIds = [], inRail = () => false, workspaces = [] }) {
   const typed = String(query || '').trim();
   const needle = typed.toLowerCase();
   const words = needle.split(/\s+/).filter(Boolean);
@@ -25,6 +28,9 @@ export function notePickRows({ query, library, openIds = [], inRail = () => fals
   const open = new Set(openIds);
   const found = (words.length ? sorted : sorted.slice(0, NOTE_PICK_RECENT))
     .map((row) => ({ kind: 'note', key: row.id, row, name: row.name, tag: open.has(row.id) ? 'open' : inRail(row.id) ? 'here' : '' }));
+  const spaceHits = (workspaces || []).filter((space) => space && space.id && words.every((word) => String(space.name).toLowerCase().includes(word)));
+  const spaces = (words.length ? spaceHits : spaceHits.slice(0, SPACE_PICK_RECENT))
+    .map((space) => ({ kind: 'workspace', key: `ws:${space.id}`, row: { id: space.id, name: space.name }, name: space.name, tag: open.has(space.id) ? 'open' : '' }));
   const make = { kind: 'new', key: 'new', name: typed };
-  return words.length ? [...found, make] : [make, ...found];
+  return words.length ? [...found, ...spaces, make] : [make, ...found, ...spaces];
 }

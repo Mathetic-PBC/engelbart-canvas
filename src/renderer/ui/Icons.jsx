@@ -125,6 +125,8 @@ export const TASK = () => (
 /** Kind → glyph (React node or Unicode string) and the kind's name, keyed by `kindKey(row)`. */
 // Full screen: arrows out to take the middle, arrows in to give it back (Hudson's two pictures). The Stage's, and the
 // document's (MATH-23).
+// The split icon at the end of the document's tabs (MATH-84): a page halved, for another pane beside the document.
+export const SplitPane = ({ color = '#171717' }) => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: color, strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><rect x="2" y="2.75" width="12" height="10.5" rx="2" /><path d="M8 2.75v10.5" /></svg>;
 export const Expand = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M9.3 2.5h4.2v4.2M13.5 2.5L9 7M6.7 13.5H2.5V9.3M2.5 13.5L7 9" /></svg>;
 export const Collapse = () => <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', fill: 'none', stroke: '#171717', strokeWidth: 1.7, strokeLinecap: 'round', strokeLinejoin: 'round' }}><path d="M13.5 2.5L9.5 6.5M9.5 3.3v3.2h3.2M2.5 13.5l4-4M6.5 12.7V9.5H3.3" /></svg>;
 

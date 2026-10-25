@@ -8,7 +8,7 @@ import DocPane from '../workspace/DocPane.jsx';
 import GettingStarted from '../workspace/GettingStarted.jsx';
 import { EMPTY_HINT, discoverPapers, stepsHere } from '../model/getting-started.js';
 import RightPane, { RIGHT_MODES } from '../workspace/RightPane.jsx';
-import { kindOf, Expand, Collapse } from '../ui/Icons.jsx';
+import { kindOf, Expand, Collapse, SplitPane } from '../ui/Icons.jsx';
 import { PanelCloseIcon, PanelOpenIcon } from '../ui/SidebarIcons.jsx';
 import { hasTag, isNote } from '../model/kind.js';
 import { nextUntitled } from '../model/names.js';
@@ -31,7 +31,7 @@ import { fallbackAgent } from '../model/route.js';
 // An ask's id, as the editor makes them (DocEditor newAskId): a research box this window puts in (askBart) takes one.
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 import { findAskLine, findBuildLine } from '../model/askLine.js';
-import { openBeside, closePane } from '../model/panes.js';
+import { openBeside, closePane, restorePanes, paneRoom, besideShown, roomForAnother } from '../model/panes.js';
 import { citedDoc, passageLine } from '../model/cite-open.js';
 import { createSideTracker, docClose, docHasKeys } from '../model/key-side.js';
 import DocFind from '../workspace/DocFind.jsx';
@@ -72,8 +72,10 @@ let tourTaken = 0;
 // Post-its (2026-09-22) float over all of it (post-its/ProjectPostIts.jsx).
 // The middle column (MATH-23) can take the whole window: the document's full screen hides the sidebar and the right pane,
 // the reverse of the Stage's. A note's or a workspace's mention clicked in a document opens its document in a pane to the
-// right, Andy Matuschak's working notes style (model/panes.js, workspace/DocPane.jsx): two panes at most, side by side,
-// each half the column; a mention clicked in the right one replaces it. Switching tab or workspace closes it.
+// right, Andy Matuschak's working notes style (model/panes.js, workspace/DocPane.jsx), and the split icon opens a picked
+// one there (MATH-84): as many panes as the column fits, side by side, equal widths, none narrower than PANE_MIN; with no
+// room left a mention clicked replaces the rightmost one. A narrower window hides the rightmost panes until it widens
+// again. Each tab keeps its own panes, and its workspace's view keeps them across launches (MATH-103).
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 const IMAGE_REF_RE = /\]\(img:([\w-]+)\)/g;
@@ -134,7 +136,6 @@ const readVisits = (projectId) => { try { const all = JSON.parse(window.localSto
 const AGENT_RANK = { failed: 4, needs: 3, unseen: 2 };
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 const VIEW_SAVE_DELAY = 400;
-const PANE_MIN = 240; // px: a column too narrow for two of these side by side scrolls sideways instead (MATH-23)
 const NO_PANES = [];
 const noView = () => null; // a document beside the one in front keeps no scroll position: it opens at its top
 const BESIDE_FIND = { right: 52 }; // ⌘F's card over the pane beside stops short of its × (DocPane)
@@ -310,14 +311,30 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const rightBox = React.useRef(null);
 
   const topic = topics.find((candidate) => candidate.id === topicId) || null;
-  // The document open beside the one in front (model/panes.js): closed whenever the workspace or the tab in front changes.
-  const [beside, setBeside] = React.useState(NO_PANES);
+  // The documents open beside the one in front (model/panes.js, MATH-103): each tab has its own, kept in its workspace's
+  // view (`panes`, by tab) when the tab or the workspace changes and across launches, and given back when it is in front
+  // again, less the documents that are gone since.
+  const panesOf = (workspaceId, tabId) => {
+    const held = views.current[workspaceId] && views.current[workspaceId].panes;
+    return restorePanes(held && held[tabId], (pane) => {
+      if (pane.kind === 'workspace') { const ws = index.get(pane.id); return ws ? ws.node.name : null; }
+      const row = notesById.get(pane.id);
+      return row ? row.name : null;
+    });
+  };
+  const [beside, setBeside] = React.useState(() => (topicId ? panesOf(topicId, opening.active) : NO_PANES));
   const besideFor = `${topicId || ''}\n${activeTab}`;
   const [besideHeldFor, setBesideHeldFor] = React.useState(besideFor);
-  if (besideHeldFor !== besideFor) { setBesideHeldFor(besideFor); setBeside(NO_PANES); }
+  if (besideHeldFor !== besideFor) { setBesideHeldFor(besideFor); setBeside(topicId ? panesOf(topicId, activeTab) : NO_PANES); }
+  // How many panes the middle column fits side by side (MATH-103): its width as laid out (`columnWidth`, measured below),
+  // which the window, the sidebar's and the right pane's widths, the Stage's full screen and the document's set.
+  const [columnWidth, setColumnWidth] = React.useState(0);
+  const room = paneRoom(columnWidth);
+  // The panes in sight: as many as fit, from the left; the rest wait at the right, kept, until the column widens.
+  const shownBeside = React.useMemo(() => beside.slice(0, besideShown(room, beside.length)), [beside, room]);
   // Every pane's document. Pane 0 is the one in front: this workspace's (the Workspace tab), an archived version of it
-  // (read-only), or a note's. Pane 1, beside it, is a note's, as that note's tab would be, or another workspace's.
-  const paneDocs = React.useMemo(() => [docOf(activeTab, topic), ...beside.map((pane) => (pane.kind === 'workspace' ? workspaceDoc(pane.id) : docOf(pane.id, topic)))], [activeTab, topic && topic.id, beside]); // eslint-disable-line react-hooks/exhaustive-deps
+  // (read-only), or a note's. Panes 1… beside it are notes', as those notes' tabs would be, or other workspaces'.
+  const paneDocs = React.useMemo(() => [docOf(activeTab, topic), ...shownBeside.map((pane) => (pane.kind === 'workspace' ? workspaceDoc(pane.id) : docOf(pane.id, topic)))], [activeTab, topic && topic.id, shownBeside]); // eslint-disable-line react-hooks/exhaustive-deps
   const { key: docKey, ref: docRef, workspaceId: docWorkspaceId, archive: docArchive } = paneDocs[0];
 
   // Remember where we are, so the app reopens here.
@@ -343,9 +360,23 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const held = views.current[topicId] || { positions: {} };
     const open = tabs.filter((tab) => tab.id !== 'ws').map((tab) => ({ id: tab.id, title: tab.title }));
     if (held.active === activeTab && JSON.stringify(held.tabs) === JSON.stringify(open)) return;
-    views.current[topicId] = { ...held, active: activeTab, tabs: open };
+    // A tab closed takes its panes with it.
+    const panes = held.panes ? Object.fromEntries(Object.entries(held.panes).filter(([tabId]) => tabs.some((tab) => tab.id === tabId))) : undefined;
+    views.current[topicId] = { ...held, active: activeTab, tabs: open, ...(panes ? { panes } : {}) };
     saveView(topicId);
   }, [topicId, tabs, activeTab, saveView]);
+  // The panes beside the tab in front, whenever they change (MATH-103): all of them, those out of sight too.
+  React.useEffect(() => {
+    if (!topicId) return;
+    const held = views.current[topicId] || { active: activeTab, tabs: [], positions: {} };
+    const list = beside.map(({ kind, id, title, link, from }) => ({ kind, id, title, link, from }));
+    const was = (held.panes && held.panes[activeTab]) || [];
+    if (JSON.stringify(was) === JSON.stringify(list)) return;
+    const panes = { ...(held.panes || {}) };
+    if (list.length) panes[activeTab] = list; else delete panes[activeTab];
+    views.current[topicId] = { ...held, panes };
+    saveView(topicId);
+  }, [beside]); // eslint-disable-line react-hooks/exhaustive-deps
   // Where a document was scrolled to, in the workspace it was read in (the editor says which).
   const recordPosition = React.useCallback(({ scope, key, position, now }) => {
     const held = views.current[scope] || { active: 'ws', tabs: [], positions: {} };
@@ -1385,21 +1416,21 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
   /* ------------------------------------------------------- the pane beside */
 
-  // A note's or a workspace's mention clicked in either pane opens its document in the pane beside the one in front
-  // (model/panes.js), in place of what was there. One already in front is not opened again: the strip shows the pane in
-  // front, as it does the pane beside once it is drawn (they move only when the column is too narrow for both). ⌘-click
-  // still opens a note's tab and goes to a workspace (DocEditor).
+  // A note's or a workspace's mention clicked in any pane opens its document in a new pane at the right while the column
+  // has room, else in place of the rightmost pane in sight (model/panes.js). One already open is not opened again: its
+  // pane is brought into view. ⌘-click still opens a note's tab and goes to a workspace (DocEditor).
   const besideFront = activeTab === 'ws' ? (topic ? { kind: 'workspace', id: topic.id } : null) : activeTab.startsWith(ARCHIVE_TAB) || activeTab === PROJECT_TAB ? null : { kind: 'note', id: activeTab };
   const reveal = React.useRef(null); // the pane to scroll to after the next draw
   const revealPane = (i) => {
-    const main = mainRef.current;
-    if (main && main.scrollTo && main.scrollWidth > main.clientWidth) main.scrollTo({ left: i ? main.scrollWidth : 0, behavior: 'smooth' });
+    const pane = mainRef.current && mainRef.current.querySelector(`[data-doc-pane="${i}"]`);
+    if (pane && pane.scrollIntoView) pane.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'smooth' });
   };
-  const openDocBeside = (item, link) => {
+  // `from` is the document key of the pane the mention was clicked in, whose mention stays marked.
+  const openDocBeside = (item, link, from = '') => {
     if (!item || !item.id) return;
     const workspace = item.kind === 'workspace' ? index.get(item.id) : null;
     if (item.kind === 'workspace' && !workspace) return; // a workspace that is gone
-    const { panes: next, at } = openBeside(beside, besideFront, { kind: item.kind, id: item.id, title: workspace ? workspace.node.name : item.name }, link);
+    const { panes: next, at } = openBeside(beside, besideFront, { kind: item.kind, id: item.id, title: workspace ? workspace.node.name : item.name }, link, room, from);
     if (at == null) return;
     if (next === beside) { revealPane(at); return; }
     reveal.current = at;
@@ -1431,11 +1462,30 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     reveal.current = null;
     revealPane(at);
   }, [beside]);
-  // Its ×: the pane beside closes; what was typed in it is saved now.
+  // Its ×: that pane closes, and only that one, the panes after it moving left; what was typed in it is saved now.
   const closeBeside = (at) => {
-    for (const doc of paneDocs.slice(at)) if (doc.key) flush(doc.key);
+    const doc = paneDocs[at];
+    if (doc && doc.key) flush(doc.key);
     setBeside((current) => closePane(current, at));
   };
+  // The split icon at the strip's end (MATH-84): the + menu's notes and workspaces, the pick opened in a new pane at the
+  // right. With no room for another it is greyed out and does nothing.
+  const [splitPick, setSplitPick] = React.useState(null); // the icon's rect while its menu is open
+  const splitRoom = roomForAnother(room, beside.length);
+  const pickBeside = (row, kind) => {
+    if (!row || !row.id) return;
+    openDocBeside({ kind: kind === 'workspace' ? 'workspace' : 'note', id: row.id, name: row.name }, '', '');
+  };
+  // Its New note: made here, as the +'s is, and opened beside instead of in a tab.
+  const makeNoteBeside = async (name) => {
+    const given = String(name || '').trim();
+    const note = await api.createNote(project.id, { name: given || nextUntitled('Note', (tree.notes || []).map((candidate) => candidate.name)), workspaceId: topic.id });
+    await linkIds([note.id]);
+    openDocBeside({ kind: 'note', id: note.id, name: note.name }, '', '');
+    return note;
+  };
+  const closeSplitPick = React.useCallback(() => setSplitPick(null), []);
+  React.useEffect(() => { if (!splitRoom) setSplitPick(null); }, [splitRoom]);
   // A note renamed from its title, in front or beside: its tab, if it has one, and its pane take the new name.
   const renameNoteDoc = async (id, name) => {
     try {
@@ -2095,7 +2145,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       setNotePlus({ left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width });
     },
     closeTab: () => {
-      const what = docClose({ tabs, active: activeTab, pane: sides.current.pane(), beside: beside.length });
+      const what = docClose({ tabs, active: activeTab, pane: sides.current.pane(), beside: shownBeside.length });
       if (what && what.pane) closeBeside(what.pane);
       else if (what) closeTab(what.tab);
     },
@@ -2292,11 +2342,23 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return () => { if (observer) observer.disconnect(); window.removeEventListener('resize', measure); };
   }, [docFull]);
 
-  // The middle column's panes (MATH-23): with a document beside the one in front, the two share the column side by side,
-  // half each, neither covering the other, so the mention marked in the left one stays in sight. A column too narrow for
-  // two PANE_MIN panes scrolls sideways instead. With the document alone it fills the column.
+  // The middle column's panes (MATH-23, MATH-103): with documents beside the one in front, they share the column side by
+  // side, equal widths, none covering another, so the mention marked in one stays in sight. Only as many show as fit at
+  // PANE_MIN each (model/panes.js paneRoom), so nothing scrolls sideways: the column's width is measured as it is laid
+  // out, and again whenever the window, the sidebar or the right pane resizes it. Hidden under the Stage's full screen,
+  // it keeps the width it had. With the document alone it fills the column.
+  React.useLayoutEffect(() => {
+    const main = mainRef.current;
+    if (!main) return undefined;
+    const measure = () => { const w = Math.floor(main.getBoundingClientRect().width); if (w > 0) setColumnWidth((now) => (now === w ? now : w)); };
+    measure();
+    const observer = typeof ResizeObserver === 'function' ? new ResizeObserver(measure) : null;
+    if (observer) observer.observe(main);
+    window.addEventListener('resize', measure);
+    return () => { if (observer) observer.disconnect(); window.removeEventListener('resize', measure); };
+  }, [topicId]);
   const paneCount = paneDocs.length;
-  const paneStyle = (i) => (paneCount > 1 ? { flex: '1 1 0', minWidth: PANE_MIN, borderLeft: i ? '1px solid #eaeaea' : 0 } : { flex: '1 1 0' });
+  const paneStyle = (i) => (paneCount > 1 ? { flex: '1 1 0', borderLeft: i ? '1px solid #eaeaea' : 0 } : { flex: '1 1 0' });
 
   // What every pane's editor is given; each pane adds its own document, its @bart and its notes beside.
   const editorProps = {
@@ -2444,9 +2506,25 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
               onError={onError}
             />
           )}
+          {splitPick && topic && (
+            <NotePicker
+              anchor={splitPick}
+              library={library}
+              openIds={[...tabs.map((tab) => tab.id), ...beside.map((pane) => pane.id)]}
+              inRail={inRail}
+              workspaces={mentionSpaces.filter((space) => space.id !== topic.id).map((space) => ({ id: space.id, name: space.name }))}
+              onPick={pickBeside}
+              onNew={makeNoteBeside}
+              onClose={closeSplitPick}
+              onError={onError}
+            />
+          )}
           {topic && <button ref={notePlusRef} type="button" className="hov-tab-plus" data-note-plus="1" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setNotePlus(notePlus ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }); }} aria-label="Open or make a note" aria-expanded={!!notePlus} title="Open a note or make one" style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px 6px', padding: 0, border: 0, borderRadius: '50%', background: 'transparent', cursor: 'pointer', font: '18px/1 var(--font-sans)', color: '#4d4d4d', transition: 'background 120ms' }}>+</button>}
+          {/* The split icon (MATH-84): a picked note or workspace in a new pane at the right; greyed out, and doing nothing,
+              while the column has no room for another (model/panes.js roomForAnother). */}
+          {topic && <button type="button" className={splitRoom ? 'hov-wash2' : undefined} onClick={(event) => { if (!splitRoom) return; const r = event.currentTarget.getBoundingClientRect(); setSplitPick(splitPick ? null : { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }); }} aria-label="Open a note or workspace in a pane beside" aria-disabled={splitRoom ? undefined : 'true'} aria-expanded={!!splitPick} title={splitRoom ? 'Open beside' : 'No room for another pane. Close one or widen the window.'} data-split-pane={splitRoom ? '1' : '0'} style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: splitRoom ? 'pointer' : 'default', opacity: splitRoom ? 1 : 0.35, display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms, opacity 120ms' }}><SplitPane /></button>}
           {/* The document's full screen (MATH-23), at the strip's end as the Stage's is at its own. */}
-          {topic && <button type="button" className="hov-wash2" onClick={toggleDocFull} aria-label={docFull ? 'Exit full screen' : 'Full screen'} title={docFull ? 'Exit full screen (Esc)' : 'Full screen'} data-doc-full={docFull ? '1' : '0'} style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px auto', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{docFull ? <Collapse /> : <Expand />}</button>}
+          {topic && <button type="button" className="hov-wash2" onClick={toggleDocFull} aria-label={docFull ? 'Exit full screen' : 'Full screen'} title={docFull ? 'Exit full screen (Esc)' : 'Full screen'} data-doc-full={docFull ? '1' : '0'} style={{ flex: 'none', alignSelf: 'flex-end', width: 28, height: 28, margin: '0 0 3px 2px', padding: 0, border: 0, borderRadius: 6, background: 'transparent', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'background 120ms' }}>{docFull ? <Collapse /> : <Expand />}</button>}
         </div>
         <div style={{ flex: 'none', width: 1, display: full || docFull ? 'none' : undefined }} />
         <div style={{ flex: 'none', width: paneWidth, minWidth: 0, boxSizing: 'border-box', display: docFull ? 'none' : 'flex', alignItems: 'flex-start', gap: 16, padding: `${TITLE_LINE - 10.5}px 20px 0`, overflow: 'hidden' }}>
@@ -2525,15 +2603,18 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
 
         <div data-page-card="1" style={{ flex: '1 1 0', minWidth: 0, minHeight: 0, display: 'flex', overflow: 'hidden', background: '#fff', borderRadius: railShown ? '12px 0 0 12px' : 0, boxShadow: railShown ? '0 0 0 1px rgba(0,0,0,.045)' : 'none' }}>
 
-        {/* The document, and the one opened beside it (MATH-23): side by side, each pane scrolling down on its own. */}
-        <main ref={mainRef} data-doc-column="1" style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', overflowX: 'auto', overflowY: 'hidden', position: 'relative', isolation: 'isolate' }}>
+        {/* The document, and those opened beside it (MATH-23): side by side, each pane scrolling down on its own. */}
+        <main ref={mainRef} data-doc-column="1" style={{ flex: '1 1 0', minWidth: DOC_MIN, minHeight: 0, display: full ? 'none' : 'flex', overflow: 'hidden', position: 'relative', isolation: 'isolate' }}>
           {paneDocs.map((doc, i) => {
-            const pane = i ? beside[i - 1] : null, next = beside[i] || null;
+            const pane = i ? shownBeside[i - 1] : null;
+            // The mentions marked in this pane: those whose documents it opened, still in sight (the last of each kind).
+            const opened = shownBeside.filter((held) => doc.key && held.from === doc.key);
+            const note = opened.filter((held) => held.kind !== 'workspace').pop(), space = opened.filter((held) => held.kind === 'workspace').pop();
             const ws = pane && pane.kind === 'workspace' ? index.get(pane.id) : null;
             const title = !pane ? docTitle : ws ? ws.node.name : pane.kind === 'workspace' ? pane.title : ((notesById.get(pane.id) || {}).name || pane.title);
             return (
               <DocPane
-                key={i}
+                key={pane ? `beside:${doc.key}` : 0} // a pane beside is its document's: closing one to its left moves it, not its editor's contents
                 index={i}
                 kind={pane ? pane.kind : null}
                 editorRef={editorRefAt(i)}
@@ -2559,9 +2640,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   onRoute: (input) => routeLine(doc.key, input, doc.ref),
                   onRouteGone: routeGone,
                   onBuild: doc.ref && (doc.ref.kind === 'workspace' || topic) && doc.ref.kind !== 'archive' ? (input) => buildFromEditor(doc.key, doc.ref, input) : undefined,
-                  onOpenBeside: openDocBeside,
-                  besideLink: next && next.kind !== 'workspace' ? next.link : null,
-                  besideWorkspace: next && next.kind === 'workspace' ? next.id : null,
+                  onOpenBeside: (item, link) => openDocBeside(item, link, doc.key),
+                  besideLink: note ? note.link : null,
+                  besideWorkspace: space ? space.id : null,
                   // Where the document was scrolled to is kept for the document in front; one beside opens at its top.
                   viewScope: pane ? null : (topic ? topic.id : null),
                   viewOf: pane ? noView : viewOf,
