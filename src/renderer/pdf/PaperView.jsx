@@ -286,6 +286,10 @@ function textRects(range) {
   return out.length ? out : [...range.getClientRects()];
 }
 const SVG = 'http://www.w3.org/2000/svg';
+// The part of a line's band a highlight covers (2026-10-16, the marker's look): from 12% down, 76% of its height. A
+// selection being made and one pending its note are drawn the same height (2026-10-24, David: "it should look the same"),
+// so the passage keeps one size from the drag to the kept highlight.
+const BAND_TOP = 0.12, BAND_H = 0.76;
 // A note's handwriting, the same in its field and shown as text (./card-look.js NOTE_TYPE, a web box's card's too).
 const NOTE_LOOK = `pointer-events:auto;${NOTE_TYPE};transition:opacity 120ms,background 120ms`;
 
@@ -1613,7 +1617,7 @@ export default class PaperView extends React.Component {
       g.dataset[tag] = '1';
       for (const r of part.rects) {
         const el = document.createElementNS(SVG, 'rect');
-        el.setAttribute('x', r.x * f); el.setAttribute('y', r.y * f); el.setAttribute('width', r.w * f); el.setAttribute('height', r.h * f); el.setAttribute('fill', 'rgba(0,112,243,.22)');
+        el.setAttribute('x', r.x * f); el.setAttribute('y', (r.y + r.h * BAND_TOP) * f); el.setAttribute('width', r.w * f); el.setAttribute('height', r.h * BAND_H * f); el.setAttribute('fill', 'rgba(0,112,243,.22)');
         g.appendChild(el);
       }
       hl.appendChild(g);
@@ -1899,8 +1903,8 @@ export default class PaperView extends React.Component {
     const list = (this.marks || {})[page] || [];
     for (const b of mergeLineRects(list.flatMap((m) => bandRects(m.rects || [])))) {
       const r = { x: b.x * P, y: b.y * P, w: b.w * P, h: b.h * P };
-      if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * 0.12, r.w, r.h * 0.76, { fill: 'rgba(0,112,243,.16)', fillStyle: 'zigzag', fillWeight: 1.3, hachureGap: 2.4, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: boxSeed(page, b) }));
-      else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y); d.setAttribute('width', r.w); d.setAttribute('height', r.h); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
+      if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * BAND_TOP, r.w, r.h * BAND_H, { fill: 'rgba(0,112,243,.16)', fillStyle: 'zigzag', fillWeight: 1.3, hachureGap: 2.4, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: boxSeed(page, b) }));
+      else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y + r.h * BAND_TOP); d.setAttribute('width', r.w); d.setAttribute('height', r.h * BAND_H); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
     }
     const boxes = [], units = [], running = this.pendingOn(page);
     for (const m of list) {
@@ -2500,7 +2504,7 @@ export default class PaperView extends React.Component {
       for (const b of bandRects(m.rects)) {
         const d = document.createElementNS(SVG, 'rect');
         d.dataset.focus = '1';
-        d.setAttribute('x', b.x * u); d.setAttribute('y', b.y * u + b.h * u * 0.12); d.setAttribute('width', b.w * u); d.setAttribute('height', b.h * u * 0.76);
+        d.setAttribute('x', b.x * u); d.setAttribute('y', b.y * u + b.h * u * BAND_TOP); d.setAttribute('width', b.w * u); d.setAttribute('height', b.h * u * BAND_H);
         d.setAttribute('rx', 2); d.setAttribute('fill', 'rgba(0,112,243,.14)');
         hl.appendChild(d);
       }

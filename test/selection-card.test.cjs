@@ -9,6 +9,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
 const Module = require('node:module');
 const { EventEmitter } = require('node:events');
 const { buildSync } = require('esbuild');
@@ -114,37 +115,50 @@ test('chatIconPlace: CHAT_ICON square, ICON_GAP right of the last line\'s end, l
 
 /* ------------------------------------------------------------------------------- the offered selection's tint */
 
-test('the page\'s tint of the offered selection (tintOffer): on when it is offered, moved with a new selection, off when withdrawn or its card closed', () => {
+test('the selection offered is the page\'s own (selectionRange): a copy of its first Range, its boundaries as dragged; none with nothing selected', () => {
+  const made = [];
+  const range = { startContainer: 't1', startOffset: 3, endContainer: 't2', endOffset: 7, cloneRange() { const copy = { ...this, copy: true }; made.push(copy); return copy; } };
+  const selection = { isCollapsed: false, rangeCount: 1, getRangeAt: (i) => (i === 0 ? range : null) };
+  const got = PAGE.selectionRange(selection);
+  assert.equal(made.length, 1);
+  assert.equal(got, made[0], 'a copy, so the page moving its selection later changes nothing offered');
+  assert.notEqual(got, range);
+  assert.deepEqual([got.startContainer, got.startOffset, got.endContainer, got.endOffset], ['t1', 3, 't2', 7], 'the same passage, not snapped to whole words');
+  assert.equal(PAGE.selectionRange({ ...selection, isCollapsed: true }), null, 'a caret');
+  assert.equal(PAGE.selectionRange({ ...selection, rangeCount: 0 }), null);
+  assert.equal(PAGE.selectionRange(null), null);
+});
+
+test('every selection is tinted by the page (tintSelection) from the first frame of its drag: its own Range, over the highlights, none once it is gone', () => {
   const h = new Map();
   const make = (range) => ({ range });
   const r1 = { id: 'r1' }, r2 = { id: 'r2' };
-  // offered: its selection tinted, over the highlights
-  assert.equal(PAGE.tintOffer(h, { token: 's1', sel: r1 }, make), true);
-  assert.equal(h.get(PAGE.OFFER).range, r1);
-  assert.equal(h.get(PAGE.OFFER).priority, 1);
-  // the selection changed and offered again: the new one tinted, the old not
-  PAGE.tintOffer(h, { token: 's2', sel: r2 }, make);
-  assert.equal(h.get(PAGE.OFFER).range, r2);
-  // withdrawn (a click elsewhere, the selection changed by keys, the page left) or its card closed (Esc, Cancel, Save)
-  assert.equal(PAGE.tintOffer(h, null, make), false);
-  assert.equal(h.has(PAGE.OFFER), false);
-  // a highlight's card opened by a click: no selection, no tint; the highlights' own name untouched
+  assert.equal(PAGE.tintSelection(h, r1, make), true);
+  assert.equal(h.get(PAGE.SELECTION).range, r1);
+  assert.equal(h.get(PAGE.SELECTION).priority, 1, 'a passage selected inside a highlight shows over it');
+  PAGE.tintSelection(h, r2, make); // dragged further, or a new selection
+  assert.equal(h.get(PAGE.SELECTION).range, r2);
   h.set(PAGE.HIGHLIGHT, 'marks');
-  assert.equal(PAGE.tintOffer(h, { token: 'm1', sel: null, markId: 'h-1' }, make), false);
-  assert.equal(h.has(PAGE.OFFER), false);
-  assert.equal(h.get(PAGE.HIGHLIGHT), 'marks');
-  assert.equal(PAGE.tintOffer(null, { token: 's3', sel: r1 }, make), false, 'no registry: nothing');
-  assert.notEqual(PAGE.OFFER, PAGE.HIGHLIGHT);
-  assert.notEqual(PAGE.OFFER, PAGE.SECTION);
+  assert.equal(PAGE.tintSelection(h, null, make), false, 'nothing selected (a click, Esc, Save, the card closed)');
+  assert.equal(h.has(PAGE.SELECTION), false);
+  assert.equal(h.get(PAGE.HIGHLIGHT), 'marks', 'the highlights\' own name untouched');
+  assert.equal(PAGE.tintSelection(null, r1, make), false, 'no registry: nothing');
+  assert.notEqual(PAGE.SELECTION, PAGE.HIGHLIGHT);
+  assert.notEqual(PAGE.SELECTION, PAGE.SECTION);
+  const preload = fs.readFileSync(path.join(__dirname, '../src/main/browser/page-preload.cjs'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  const changed = preload.slice(preload.indexOf("addEventListener('selectionchange'"));
+  assert.ok(changed.indexOf('tintSelection(registry(), selectionRange(selection)') < changed.indexOf('if (pointerDown) return;'), 'tinted while the pointer is still down');
 });
 
-test('main styles the tint as the active selection, !important, beside the highlights\' and sections\'', () => {
-  assert.ok(VIEWS.MARK_CSS.includes(`::highlight(${PAGE.OFFER}){`));
-  const rule = VIEWS.MARK_CSS.slice(VIEWS.MARK_CSS.indexOf(`::highlight(${PAGE.OFFER}){`));
-  assert.match(rule, /background-color:[^;]*Highlight[^;]*!important/, 'the system\'s selection colour');
-  assert.match(rule, /background-color:rgba\(128,188,255,\.6\) !important/, 'and the default blue where that cannot be read');
+test('a selection on a page is drawn as a highlight is (glyph boxes, not line boxes): the page\'s own paint hidden for the tint, in the active selection\'s colour, text and fields left alone', () => {
+  assert.equal(VIEWS.OFFER_SELECTION_CSS, undefined, 'one rule all along, not one while offered');
+  assert.ok(VIEWS.MARK_CSS.includes('::selection{background-color:transparent !important;color:currentcolor !important}'));
+  assert.ok(VIEWS.MARK_CSS.includes(`::highlight(${PAGE.SELECTION}){background-color:Highlight !important}`), 'the system\'s selection colour, which does not go grey with the card focused');
+  assert.ok(VIEWS.MARK_CSS.includes(':is(input,textarea)::selection{background-color:Highlight !important}'), 'a field\'s selection is the page\'s, blue');
   assert.ok(VIEWS.MARK_CSS.includes(`::highlight(${PAGE.HIGHLIGHT}){`) && VIEWS.MARK_CSS.includes(`::highlight(${PAGE.SECTION}){`));
-  assert.equal(VIEWS.OFFER_SELECTION_CSS, '::selection{background-color:transparent !important}');
+  const preload = fs.readFileSync(path.join(__dirname, '../src/main/browser/page-preload.cjs'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  assert.match(preload, /sel: selectionRange\(selection\)/, 'a new selection offered with its own Range');
+  assert.match(preload, /sel: icon \? selectionRange\(selection\) : null/, 'a selection inside a highlight too; a highlight clicked, none');
 });
 
 /* ------------------------------------------------------------------------------------------------- the pdf's */
@@ -270,6 +284,19 @@ const press = (view, key, more = {}) => {
   return { taken: view.pendingSelKey(e), e };
 };
 const kept = (view) => (view.marks[1] || []).filter((m) => (m.rects || []).length);
+
+test('pdf: a selection pending its note is drawn the height its highlight will be (2026-10-24, David: "it should look the same"), not the line\'s full band', async () => {
+  const { view, s: sheet } = await viewer();
+  select(view, [{ x: 50, y: 100, w: 300, h: 12 }]);
+  const hl = sheet.wrap.querySelector('[data-hl="1"]') || view.host.current.querySelector('[data-hl="1"]');
+  const pending = hl.querySelector('[data-pending]').children[0].attrs;
+  const box = (a) => ({ y: Number(a.y) / Number(a.width), h: Number(a.height) / Number(a.width) }); // in the band's width: the two layers' scales apart
+  assert.deepEqual(box(pending), { y: (100 + 12 * 0.12) / 300, h: (12 * 0.76) / 300 });
+  press(view, 'Enter');
+  const keptRect = hl.children.find((c) => !c.dataset.pending && c.tagName === 'RECT').attrs;
+  const a = box(pending), b = box(keptRect);
+  assert.ok(Math.abs(a.y - b.y) < 1e-9 && Math.abs(a.h - b.h) < 1e-9, `kept ${JSON.stringify(b)} as pending ${JSON.stringify(a)}`);
+});
 
 test('pdf: a selection opens an empty card under its last line, left with it, the placeholder after a caret; nothing is kept', async () => {
   const { view, frame, g, saves } = await viewer();
@@ -586,54 +613,20 @@ test('web: Esc, a click in the page (the offer taken back), the selection out of
   assert.equal(page.sent.filter(([c]) => c === PAGE.CHANNELS.add).length, 0, 'nothing tinted');
 });
 
-test('web: while a selection is offered (its icon, then its card) the page\'s own selection is hidden for its tint; Esc, Cancel, Save, the offer taken back or another tab bring it back; a highlight clicked hides nothing', async () => {
-  const { views, page, offer, cardView, onCard, fromCard } = setup();
-  const removed = [];
-  page.removeInsertedCSS = (k) => { removed.push(k); return Promise.resolve(); };
-  // whether the rule that hides the page's selection is in now
-  const hidden = () => page.css.map((css, i) => (css === VIEWS.OFFER_SELECTION_CSS ? `key-${i + 1}` : null)).filter((k) => k && !removed.includes(k)).length;
-  const select = (token) => offer({ ...at(token, { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE });
-  select('s1');
+test('web: a selection offered (its icon, then its card) adds no rule to the page; Esc tells the page, which lets go of the selection and so of its tint', async () => {
+  const { page, offer, cardView, onCard, fromCard } = setup();
+  const before = page.css.length;
+  offer({ ...at('s1', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE });
   await settle();
-  assert.equal(hidden(), 1, 'the icon shows: hidden');
   const card = cardView();
   card.webContents.emit('did-finish-load');
   onCard('open')(fromCard());
-  offer(at('s1', { x: 100, y: 60, w: 300, h: 20 })); // scrolled
   await settle();
-  assert.equal(hidden(), 1, 'its card open (the keyboard the card\'s): still hidden, the tint showing');
+  assert.equal(page.css.length, before, 'the tint is the page\'s, the same before and after');
   card.webContents.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: 'Escape' });
   await settle();
-  assert.equal(hidden(), 0, 'Esc: back');
-  assert.deepEqual(sentOn(page, PAGE.CHANNELS.cardGone), ['s1'], 'the page told, so its tint goes and the selection with it');
-  select('s2');
-  select('s3'); // the selection changed and offered again
-  await settle();
-  assert.equal(hidden(), 1, 'one rule for whichever selection is offered');
-  offer({ token: null });
-  await settle();
-  assert.equal(hidden(), 0, 'taken back (a click elsewhere): back');
-  select('s4');
-  onCard('open')(fromCard());
-  onCard('cancel')(fromCard());
-  await settle();
-  assert.equal(hidden(), 0, 'Cancel: back');
-  select('s5');
-  onCard('open')(fromCard());
-  onCard('save')(fromCard(), 'A note');
-  await settle();
-  assert.equal(hidden(), 0, 'Save: back');
-  assert.equal(added(page).at(-1)[1].clear, true, 'and the page lets go of the selection');
-  select('s6');
-  await settle();
-  views.open('b', 'https://github.com/');
-  views.show('b', { x: 0, y: 40, width: 800, height: 600 });
-  await settle();
-  assert.equal(hidden(), 0, 'another tab in front: back');
-  views.show('a', { x: 0, y: 40, width: 800, height: 600 });
-  offer({ ...at('m1', { x: 100, y: 50, w: 300, h: 20 }), markId: 'h-1', pageText: '' });
-  await settle();
-  assert.equal(hidden(), 0, 'a highlight\'s card opened by a click: no selection to hide');
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.cardGone), ['s1']);
+  assert.equal(page.css.length, before);
 });
 
 const added = (page) => page.sent.filter(([c]) => c === PAGE.CHANNELS.add);

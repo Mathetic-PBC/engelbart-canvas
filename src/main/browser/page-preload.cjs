@@ -77,10 +77,10 @@ const CHANNELS = Object.freeze({
 });
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
 const SECTION = 'engelbart-web-section'; // a guide's section, styled by main's insertCSS as a pdf's (PaperView pdf-section)
-// The selection offered, while its chat icon or card shows (2026-10-24 later, David): painted as the active selection is,
-// since the card takes the keyboard and the page's own selection goes grey. Styled by main's insertCSS (views.cjs MARK_CSS),
-// which hides the page's own selection meanwhile (OFFER_SELECTION_CSS), so this tint is what shows, focused or not.
-const OFFER = 'engelbart-web-offer';
+// The page's selection, as it is dragged and after (2026-10-24, David: "it should look the same"): its Range tinted here,
+// the page's own paint of it hidden by main's insertCSS (views.cjs MARK_CSS), so that it is drawn the way a kept highlight
+// is, over each line's glyph box, from the first frame of the drag to the highlight it becomes.
+const SELECTION = 'engelbart-web-selection';
 const SECTION_MAX = 30000; // characters a section runs to at most before it is taken to be its paragraph alone
 const SECTION_WAIT = 3000; // ms a section's words not in the page yet are watched for (text a script draws after load)
 const BLOCKS = 'p,li,blockquote,dd,dt,td,th,figcaption,pre,h1,h2,h3,h4,h5,h6';
@@ -441,18 +441,20 @@ function highlightAt(list, x, y) {
   for (const one of list || []) if (one && inRects(one.rects, x, y)) hit = one.id;
   return hit;
 }
-/**
- * The offered selection's tint (OFFER) in the page's registry `h` as `offered` is now: its selection's Range (`sel`) tinted,
- * over the highlights (priority 1); none for nothing offered (withdrawn, its card closed, the selection changed) or for a
- * highlight's card opened by a click, with no selection. `make`: Range → Highlight. → whether it is tinted.
- */
-function tintOffer(h, offered, make) {
+/** The selection being offered (its chat icon, its card): a copy of its own first Range, the very passage the person
+ *  dragged (not the quote's, which is rebuilt from the page's text and snapped to whole words), or null with none. */
+function selectionRange(selection) {
+  return selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+}
+/** The selection's tint (SELECTION) in the page's registry `h` for `range` (selectionRange, null with nothing selected):
+ *  over the highlights (priority 1), so a passage selected inside one shows; none for none. `make`: Range → Highlight.
+ *  → whether it is tinted. */
+function tintSelection(h, range, make) {
   if (!h) return false;
-  const range = offered && offered.sel;
-  if (!range) { h.delete(OFFER); return false; }
+  if (!range) { h.delete(SELECTION); return false; }
   const tint = make(range);
   tint.priority = 1;
-  h.set(OFFER, tint);
+  h.set(SELECTION, tint);
   return true;
 }
 /** The highlight `range` lies wholly inside, of `painted` (Map id → Range): its id, the smallest such if several, or null.
@@ -1029,14 +1031,10 @@ function runInPage() {
   // A selection's card (2026-10-18): the settled selection offered to main, followed as the page moves, taken back. A
   // highlight's own card is offered the same way, with its id (markId): for a selection wholly inside it, a click on its
   // text (not a link's), or on its note's symbol. `offered.range` is where the card goes: the highlight's, for its card;
-  // `offered.sel`, the selection's own Range when there is one, tinted while it is offered (tintOffer).
+  // `offered.sel`, the selection's own Range when there is one (it is tinted as every selection is, tintSelection).
   let offered = null, offerSeq = 0, settleTimer = 0, offerFrame = 0, pointerDown = false, down = null;
   const fieldNode = (node) => { const el = node && (node.nodeType === 1 ? node : node.parentElement); return !!(el && el.closest && el.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])')); };
-  function setOffered(value) {
-    offered = value;
-    try { tintOffer(registry(), offered, (range) => new Highlight(range)); } catch { /* the page's own tints stay */ }
-  }
-  const selectionRange = (selection) => (selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null);
+  function setOffered(value) { offered = value; }
   function withdraw() {
     clearTimeout(settleTimer); settleTimer = 0;
     if (!offered) return;
@@ -1127,8 +1125,9 @@ function runInPage() {
     setTimeout(() => clicked(event, from), 0); // the selection as the press left it (a double or triple click's too)
   }, true);
   document.addEventListener('selectionchange', () => {
-    if (pointerDown) return;
     const selection = document.getSelection();
+    try { tintSelection(registry(), selectionRange(selection), (range) => new Highlight(range)); } catch { /* the page's own tints stay */ }
+    if (pointerDown) return;
     // nothing selected: a selection's card goes (a highlight's opened by a click has no selection to lose)
     if (!selection || selection.isCollapsed) { if (!offered || offered.text) withdraw(); return; }
     // changed by keys (⇧ and an arrow, ⌘A): the card for what it was goes now, the new one once it settles
@@ -1164,4 +1163,4 @@ function runInPage() {
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, OFFER, tintOffer, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, CHIP, CHIP_SLOP, MAX_CHIPS, CLICK_SLOP, inRects, highlightAt, holdingHighlight, symbolPlace, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SELECTION, selectionRange, tintSelection, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, CHIP, CHIP_SLOP, MAX_CHIPS, CLICK_SLOP, inRects, highlightAt, holdingHighlight, symbolPlace, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
