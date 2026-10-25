@@ -1292,7 +1292,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   const dev = DEVICES.find((d) => d.id === device);
   const width = device === 'custom' ? (Number(customW) || 390) : (dev ? dev.w : 0);
-  const slotStyle = width ? { flex: 'none', width, height: '100%', background: '#fff', margin: '0 auto' } : { flex: 1, width: '100%', background: '#fff' };
+  // The page stops short of the window's edges (WINDOW_EDGE): the strip it leaves is painted the page's own background
+  // (2026-10-25, the page's preload says it), so a dark page has no white edge. None known, or no page: white.
+  const paint = page && !failed && !wait && web && web.background ? web.background : '#fff';
+  const slotStyle = width ? { flex: 'none', width, height: '100%', background: paint, margin: '0 auto' } : { flex: 1, width: '100%', background: paint };
   const menuW = Math.min(240, (window.innerWidth || 1200) - 16);
   const tabsFull = tabs.length >= MAX_TABS;
   const listOpen = typing && rows.length > 0;

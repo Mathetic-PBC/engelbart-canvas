@@ -323,6 +323,12 @@ function selectionCardInput(value) {
   return { ...out, quote, pageText: typeof value.pageText === 'string' ? value.pageText.slice(0, MAX_PAGE_TEXT) : '' };
 }
 
+/** A page's background as its preload says it (2026-10-25, canvasColor): 'rgb(r, g, b)', else null. */
+function backgroundInput(value) {
+  const m = typeof value === 'string' ? /^rgb\((\d{1,3}), (\d{1,3}), (\d{1,3})\)$/.exec(value) : null;
+  return m && [m[1], m[2], m[3]].every((n) => Number(n) <= 255) ? value : null;
+}
+
 /**
  * A page's web marks as its preload is given them: [{ id, quote }] for a highlight (noted: true with a note or an answer,
  * for its symbol), [{ id, box }] for a box (MATH-70), only the well-formed, at most MAX_PAGE_MARKS.
@@ -584,6 +590,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       canGoForward: contents.navigationHistory.canGoForward(),
       error: entry.error,
       drawn: entry.drawn, // a page has arrived in this tab at least once (the Stage's "Waking…" waits for the first)
+      background: entry.background || null, // the page's background colour, for the strip the Stage leaves beside it
     });
   }
 
@@ -753,6 +760,12 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       if (got) drawBoxes(entry, contents, got);
     });
     contents.ipc.on(PAGE.CHANNELS.editing, (event, value) => { if (fromTab(event, id, entry)) entry.editing = value === true; });
+    // the page's background (2026-10-25): the Stage paints the strip beside the page with it
+    contents.ipc.on(PAGE.CHANNELS.background, (event, value) => {
+      if (!fromTab(event, id, entry)) return;
+      const background = backgroundInput(value);
+      if (background !== (entry.background || null)) { entry.background = background; emit(id); }
+    });
     // build 2: a box resized, where the selected one is in the viewport, a frame painted, the cursor over a handle
     contents.ipc.handle(PAGE.CHANNELS.boxResize, async (event, value) => {
       if (!fromTab(event, id, entry)) throw new Error('Not a page in the Stage');
@@ -1526,7 +1539,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       entry.pending = '';
       emit(id);
     });
-    contents.on('did-navigate', () => { entry.error = null; entry.pending = ''; entry.found = ''; entry.drawn = true; emit(id); });
+    contents.on('did-navigate', () => { entry.error = null; entry.pending = ''; entry.found = ''; entry.drawn = true; entry.background = null; emit(id); }); // the new page says its own background
     contents.on('did-stop-loading', () => {
       // The tab's first load stopped with no page and nothing else on the way (2026-10-04): cancelled (a 204, a sandbox
       // waking), it would leave the tab blank for good, with Chromium saying nothing. A pdf turned into a download is the
@@ -1851,4 +1864,4 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   }
 }
 
-module.exports = { PAGE_PRELOAD, BOX_LAYER_PRELOAD, BOX_CARD_PRELOAD, BOX_CARD_URL, CARD_W, CARD_HIDE_WHILE_SCROLLING, boxViewInput, selectionCardInput, boxResizeInput, boxAsksInput, cardAsks, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PAGE_PRELOAD, backgroundInput, BOX_LAYER_PRELOAD, BOX_CARD_PRELOAD, BOX_CARD_URL, CARD_W, CARD_HIDE_WHILE_SCROLLING, boxViewInput, selectionCardInput, boxResizeInput, boxAsksInput, cardAsks, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

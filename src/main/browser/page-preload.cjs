@@ -54,6 +54,12 @@
 // highlight with a note or an answer has its symbol (`noted`), drawn in the boxes' html::after rule over the top right of
 // its first line, following it as the page scrolls or reflows; Remove in its card takes it off (`unmark`).
 //
+// The page's background (2026-10-25, David: the white strip beside a dark page): the colour its canvas is painted
+// (canvasColor: the root's background, else the body's, which the canvas takes when the root has none) goes to main as it
+// is on load and whenever it changes (a theme switched by a class or a style on <html> or <body>, the Mac's light or dark,
+// a page shown again from the back/forward cache), for the Stage to paint the strip it leaves beside the page that colour.
+// Only an opaque colour is one: a picture, a gradient or a see-through colour says none (null), and the strip stays white.
+//
 // Sandboxed, this can require only 'electron'. The finding is plain functions over text, exported below for the tests
 // when Node loads this file; in a page, `module` is no CommonJS module and the page part runs instead.
 
@@ -74,6 +80,8 @@ const CHANNELS = Object.freeze({
   // is now, or taken back; main says when it closed the card (cardGone, the offer's token), whether a highlight has a
   // note (noted: { id, on }, for its symbol) and that one was removed (unmark: its id)
   selectionCard: 'engelbart-page:selection-card', cardGone: 'engelbart-page:card-gone', noted: 'engelbart-page:noted', unmark: 'engelbart-page:unmark',
+  // the page's background colour (2026-10-25): canvasColor's answer, sent when it changes
+  background: 'engelbart-page:background',
 });
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
 const SECTION = 'engelbart-web-section'; // a guide's section, styled by main's insertCSS as a pdf's (PaperView pdf-section)
@@ -503,6 +511,26 @@ function shows(rect, box, viewport, probe, { part = false } = {}) {
   if (!inRect(cx, cy, box) || !inRect(cx, cy, screen)) return false;
   if (!probe.visible()) return false;
   return !!probe.hits(cx, cy);
+}
+
+/**
+ * The colour a page's canvas is painted, from the computed background of its root and of its body ({ color, image }, as
+ * getComputedStyle gives them; null for one that is not there): the root's, else the body's when the root has none (as
+ * CSS gives the body's to the canvas). → 'rgb(r, g, b)', or null: no colour, a picture or gradient, or a see-through one.
+ */
+function canvasColor(root, body) {
+  for (const layer of [root, body]) {
+    if (!layer) continue;
+    if (layer.image && layer.image !== 'none') return null;
+    const m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(String(layer.color || '').trim());
+    if (!m) return null;
+    const alpha = m[4] === undefined ? 1 : Number(m[4]);
+    if (alpha === 0) continue;
+    if (alpha !== 1) return null;
+    const [r, g, b] = [m[1], m[2], m[3]].map(Number);
+    return r <= 255 && g <= 255 && b <= 255 ? `rgb(${r}, ${g}, ${b})` : null;
+  }
+  return null;
 }
 
 // ------------------------------------------------------------------------------------------------- in the page
@@ -1150,6 +1178,27 @@ function runInPage() {
   window.addEventListener('blur', () => { pointerDown = false; });
   window.addEventListener('pagehide', withdraw);
 
+  // The page's background (2026-10-25): read again shortly after anything that may change it, sent only when it did. A
+  // timer, not a frame: frames stop while the page is not shown.
+  let background, backgroundTimer = 0;
+  const readBackground = () => {
+    backgroundTimer = 0;
+    const layer = (el) => { if (!el) return null; const style = getComputedStyle(el); return { color: style.backgroundColor, image: style.backgroundImage }; };
+    const now = canvasColor(layer(document.documentElement), layer(document.body));
+    if (now !== background) { background = now; ipcRenderer.send(CHANNELS.background, now); }
+  };
+  const backgroundSoon = () => { if (!backgroundTimer) backgroundTimer = setTimeout(readBackground, 100); };
+  const themes = new MutationObserver(backgroundSoon);
+  const watchBackground = () => {
+    themes.disconnect();
+    themes.observe(document.documentElement, { attributes: true });
+    if (document.body) themes.observe(document.body, { attributes: true });
+    readBackground();
+  };
+  if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', backgroundSoon);
+  // main forgets it with each page it goes to: one shown again from the back/forward cache says it again
+  window.addEventListener('pageshow', (event) => { if (event.persisted) { background = undefined; readBackground(); } });
+
   const load = () => ipcRenderer.invoke(CHANNELS.marks).then((marks) => {
     const list = Array.isArray(marks) ? marks : [];
     waiting = place(list);
@@ -1158,9 +1207,11 @@ function runInPage() {
     focusChanged();
   }, () => {});
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load, { once: true }); else void load();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchBackground, { once: true }); else watchBackground();
   // text a page writes after its document has loaded: what was not found is looked for once more
   window.addEventListener('load', () => { setTimeout(() => { if (waiting.length) waiting = place(waiting); for (const held of boxes.values()) if (!held.el) held.how = 'none'; schedule(); }, 0); }, { once: true });
+  window.addEventListener('load', backgroundSoon, { once: true }); // stylesheets that came after the document
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SELECTION, selectionRange, tintSelection, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, CHIP, CHIP_SLOP, MAX_CHIPS, CLICK_SLOP, inRects, highlightAt, holdingHighlight, symbolPlace, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, canvasColor, HIGHLIGHT, SECTION, SELECTION, selectionRange, tintSelection, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, CHIP, CHIP_SLOP, MAX_CHIPS, CLICK_SLOP, inRects, highlightAt, holdingHighlight, symbolPlace, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
