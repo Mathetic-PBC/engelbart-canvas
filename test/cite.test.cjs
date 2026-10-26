@@ -341,7 +341,7 @@ test('checkCitations: a whole source is kept only when it was read while answeri
   const both = await check(body, { opened: new Set([openedKey(files.pdf), openedKey(files.note)]) });
   assert.equal(both.dropped.length, 0);
   assert.equal(both.kept[1].label, `You · ${TODAY}`, 'whose and when, as a passage\'s');
-  assert.match(both.body, /\(\/.*Hints%20note\.md#cite=you\)/);
+  assert.match(both.body, /\((?:\/|[A-Z]:\\).*Hints%20note\.md#cite=you\)/); // a POSIX path, or Windows' C:\
   const here = path.join(projects.findWorkspace(ctx, project.id, other.id).workspace.dir, 'workspace.md');
   const space = await check(`X ${link('You', here, '', 'you')}.`, { opened: new Set([openedKey(here)]) });
   assert.deepEqual(space.dropped.map((d) => d.reason), ['malformed'], 'a workspace is cited by its passages');
