@@ -290,7 +290,6 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   // (.eb-wave, no ring): the words are the button's one flex item, so the band crosses them and not the row's empty end.
   + '.task-build{flex:none;display:inline-flex;align-items:center;gap:6px;max-width:45%;margin:5px 0 0;padding:1px 6px;border:0;border-radius:6px;background:none;font:400 12.5px/1.6 var(--font-sans);color:#a3a3a3;cursor:pointer;white-space:nowrap;user-select:none;transition:opacity 120ms,background 120ms,color 120ms}'
   + '.task-build:hover{background:#f2f2f2;color:#171717}.task-build[hidden]{display:none}.task-build-words{min-width:0;overflow:hidden;text-overflow:ellipsis}'
-  + '.task-build-made{min-width:0;overflow:hidden;text-overflow:ellipsis;color:#4d4d4d}.task-build-made:hover{color:#0070f3;text-decoration:underline}'
   + '.task-build[data-task-state="idle"]{opacity:0}[data-line]:hover>.task-build[data-task-state="idle"],.task-build[data-task-state="idle"][data-on]{opacity:1}'
   // The middle panel's threads (2026-10-13, Hudson's screenshot): an answer's inline code, the button row's Run again, a long
   // answer's fade and its Show more, and an earlier exchange folded to one line.
@@ -615,7 +614,7 @@ export default class DocEditor extends React.Component {
   // A task's Build (MATH-106): the task rows being started (by raw line), each row end as last drawn, the Builds whose
   // card is open under their task, the HTML each part of those cards was last drawn with (`${id}:${part}`), the cards
   // whose diff and whose conversation are open, and a tick whose Accept was refused: its reason, by Build.
-  taskStarting = new Set(); taskDrawn = new WeakMap(); taskOpen = new Set(); taskCardDrawn = new Map(); taskDiffOpen = new Set(); taskConvo = new Set(); tickRefused = new Map();
+  taskStarting = new Set(); taskDrawn = new WeakMap(); taskOpen = new Set(); taskCardDrawn = new Map(); taskDiffOpen = new Set(); taskConvo = new Set(); taskSummaryOpen = new Set(); tickRefused = new Map();
   // A question just asked (2026-10-16, from 2026-10-13's follow-up hold): its row kept where it was on screen, or where its
   // reply field was, through the redraws that follow (keepAsked), { key, askId, top, until }. `wheelAt`: when the person
   // last scrolled the pane with the wheel (caretLineBelow, submitTop).
@@ -1815,16 +1814,10 @@ export default class DocEditor extends React.Component {
     if (task && this.props.onBuildDiffWanted && !['setting-up', 'discarded'].includes(task.status)) { const want = this.props.onBuildDiffWanted; Promise.resolve().then(() => want(id)); }
     return null;
   }
-  /** "1 page", "2 files": what a Build made, counted. */
-  madeCount(made) {
-    const word = (item) => ({ md: 'page', pdf: 'PDF', image: 'picture' }[item.type] || 'file');
-    const words = new Set(made.map(word)), one = words.size === 1 ? [...words][0] : 'item';
-    return `${made.length} ${one}${made.length === 1 ? '' : 's'}`;
-  }
   /** What a task's row ends with: "Build", or its Build's state. Always drawn (hidden when it says nothing) so patchBuilds can replace it. */
   taskBuildHtml(i, line, p, active) {
     const task = this.taskBuildOf(p);
-    const look = (state, words, { color = '', strong = false, wave = false, act = 'taskcard', title = '', after = '' } = {}) => `<button type="button" contenteditable="false" class="task-build" data-act="${act}" data-row="${i}" data-task-row="${i}" data-task-state="${state}"${task ? ` data-task-build="${esc(task.id)}"` : ''}${task && this.taskOpen.has(task.id) ? ' aria-expanded="true"' : ''}${active ? ' data-on="1"' : ''}${title ? ` title="${esc(title)}"` : ''} style="${color ? `color:${color};` : ''}${strong ? 'font-weight:500;' : ''}"><span class="task-build-words${wave ? ' eb-wave' : ''}">${esc(words)}</span>${after}</button>`;
+    const look = (state, words, { color = '', strong = false, wave = false, act = 'taskcard', title = '' } = {}) => `<button type="button" contenteditable="false" class="task-build" data-act="${act}" data-row="${i}" data-task-row="${i}" data-task-state="${state}"${task ? ` data-task-build="${esc(task.id)}"` : ''}${task && this.taskOpen.has(task.id) ? ' aria-expanded="true"' : ''}${active ? ' data-on="1"' : ''}${title ? ` title="${esc(title)}"` : ''} style="${color ? `color:${color};` : ''}${strong ? 'font-weight:500;' : ''}"><span class="task-build-words${wave ? ' eb-wave' : ''}">${esc(words)}</span></button>`;
     const none = `<button type="button" contenteditable="false" class="task-build" data-task-row="${i}" data-task-state="none" hidden></button>`;
     if (!task) {
       if (this.taskStarting.has(line)) return look('starting', 'Starting…', { wave: true, act: 'taskwait' });
@@ -1843,19 +1836,12 @@ export default class DocEditor extends React.Component {
     // A tick whose Accept was refused (toggleTodo): the box unticked, the reason in red, until the Build moves on.
     const refused = this.tickRefused.get(task.id);
     if (refused && (status === 'review' || status === 'conflict')) return look(status, refused, { color: '#e70022', strong: true, title: refused });
-    if (status === 'review') {
-      const made = this.madeOf(task), totals = this.taskDiffOf(task.id, task);
-      if (totals && !totals.files && made.length) return look(status, `Ready · made ${this.madeCount(made)}`, { color: '#0070f3', strong: true });
-      return look(status, totals && totals.files ? `Ready to review · +${totals.adds} −${totals.dels}` : BUILD_STATUS.review, { color: '#0070f3', strong: true });
-    }
+    // The row says what there is to do (2026-10-26, David): Review while it waits for the person, View result once it is
+    // done. What it made and what it changed are in the card, not on the row.
+    if (status === 'review') return look(status, 'Review', { color: '#0070f3', strong: true });
     if (status === 'needs-you') return look(status, BUILD_STATUS[status], { color: '#0070f3', strong: true });
     if (status === 'failed') return look(status, BUILD_STATUS[status], { color: '#e70022', strong: true });
-    if (status === 'accepted') {
-      // What it made, by name: the name opens it, the rest of the row opens the card.
-      const made = this.madeOf(task)[0];
-      if (!made) return look(status, 'Built');
-      return look(status, 'Built ·', { after: `<span class="task-build-made" data-act="taskmade" data-item-id="${esc(made.id)}" data-item-name="${esc(made.name || '')}" title="Open ${esc(made.name || 'it')}">${esc(made.name || 'it')} ↗</span>` });
-    }
+    if (status === 'accepted') return look(status, 'View result');
     return look(status, BUILD_STATUS[status] || status); // stopped, interrupted, conflict, too big: the card's words, quiet
   }
   // Pressed "Build": the parent starts it (Workspace buildTask) and writes the Build's id into the task's line.
@@ -1920,12 +1906,18 @@ export default class DocEditor extends React.Component {
     const status = task.status, final = !!task.final, asking = status === 'needs-you';
     const label = (words) => `<span style="flex:none;width:72px;color:#8f8f8f">${words}</span>`;
     const row = (words, html) => `<div style="display:flex;align-items:baseline;gap:10px;margin-top:8px;font:13px/1.55 var(--font-sans)">${label(words)}<div style="flex:1;min-width:0">${html}</div></div>`;
-    // What it said last: its first paragraph, cut to about two lines.
+    // What it said last: its first paragraph in up to four lines, and Show more for the whole message, opened in place
+    // (2026-10-26, David: a Build asked for a summary answers with it, so its last message is the result).
     const said = [...(task.messages || [])].reverse().find((m) => m.role === 'agent');
-    const para = said ? firstParagraph(said.text) : '';
-    const summary = para ? `<div data-task-summary="${esc(id)}" title="${esc(para)}" style="margin-top:8px;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font:13.5px/1.55 var(--font-sans);color:#4d4d4d">${inlineHtml(para.length > 320 ? `${para.slice(0, 319)}…` : para, this.mentionOpts)}</div>` : '';
+    const para = said ? firstParagraph(said.text) : '', whole = said ? String(said.text || '').trim() : '';
+    const longer = !!para && (whole !== para || para.length > 300), full = longer && this.taskSummaryOpen.has(id);
+    const toggle = longer ? `<button class="bart-text" data-act="tasksummary" data-build-id="${esc(id)}" aria-expanded="${full}" style="user-select:none;padding:0;margin-top:2px;font-weight:400">${full ? 'Show less' : 'Show more'}</button>` : '';
+    const summary = !para ? ''
+      : full ? `<div data-task-summary="${esc(id)}" style="margin-top:4px">${this.buildMessageHtml({ role: 'agent', text: whole })}</div>${toggle}`
+        : `<div data-task-summary="${esc(id)}" style="margin-top:8px;display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden;font:13.5px/1.55 var(--font-sans);color:#4d4d4d">${inlineHtml(para, this.mentionOpts)}</div>${toggle}`;
+    // What it made: each its own line, a box that opens it.
     const madeItems = this.madeOf(task);
-    const made = !madeItems.length ? '' : row('Made', madeItems.map((item) => `<button class="bart-text" data-act="taskmade" data-build-id="${esc(id)}" data-item-id="${esc(item.id)}" data-item-name="${esc(item.name || '')}" style="user-select:none;padding:0;margin-right:12px;color:#0070f3;font-weight:400">${esc(item.name || item.id)} ↗</button>`).join('')
+    const made = !madeItems.length ? '' : row('Made', madeItems.map((item) => `<button class="hov-ink-wash" data-act="taskmade" data-build-id="${esc(id)}" data-item-id="${esc(item.id)}" data-item-name="${esc(item.name || '')}" title="Open ${esc(item.name || 'it')}" style="user-select:none;display:flex;align-items:center;gap:10px;width:100%;box-sizing:border-box;margin-bottom:6px;padding:7px 12px;border:1px solid #e5e5e5;border-radius:8px;background:#fff;font:13.5px/1.4 var(--font-sans);color:#171717;text-align:left;cursor:pointer"><span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(item.name || item.id)}</span><span style="flex:none;color:#0070f3">Open ↗</span></button>`).join('')
       + (status === 'discarded' ? '<span style="color:#8f8f8f">Kept in your library</span>' : ''));
     // What it changed: the count, which opens the diff (buildDiffHtml), or that it changed none.
     let changed = '';
@@ -1951,6 +1943,7 @@ export default class DocEditor extends React.Component {
   taskCardAct(k, act) {
     const id = act.dataset.buildId;
     if (k === 'taskdiff') { if (this.taskDiffOpen.has(id)) this.taskDiffOpen.delete(id); else this.taskDiffOpen.add(id); this.patchBuilds(); return; }
+    if (k === 'tasksummary') { if (this.taskSummaryOpen.has(id)) this.taskSummaryOpen.delete(id); else this.taskSummaryOpen.add(id); this.patchBuilds(); return; }
     if (k === 'taskconvo') { if (this.taskConvo.has(id)) this.taskConvo.delete(id); else this.taskConvo.add(id); this.patchBuilds(); return; }
     if (k === 'buildremove') { this.untieTask(id); return; }
     this.buildAct(k, id, act.dataset.runName);

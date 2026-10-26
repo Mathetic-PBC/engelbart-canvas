@@ -193,10 +193,10 @@ test('the row shows its Build\'s state, in the card\'s words and colours', () =>
   const states = [
     [{ status: 'running' }, { [ID]: { activity: 'Editing src/export.js' } }, /^Building · Editing src\/export\.js$/, /<span class=\"task-build-words eb-wave\">[^<]+<\/span><\/button>$/],
     [{ status: 'queued' }, {}, /^Building · Waiting for a slot$/, /<span class=\"task-build-words eb-wave\">[^<]+<\/span><\/button>$/],
-    [{ status: 'review' }, {}, /^Ready to review$/, /color:#0070f3/],
+    [{ status: 'review' }, {}, /^Review$/, /color:#0070f3/],
     [{ status: 'needs-you' }, {}, /^Needs you$/, /color:#0070f3/],
     [{ status: 'failed' }, {}, /^Failed$/, /color:#e70022/],
-    [{ status: 'accepted' }, {}, /^Built$/, /data-act="taskcard"/],
+    [{ status: 'accepted' }, {}, /^View result$/, /data-act="taskcard"/],
     [{ status: 'stopped' }, {}, /^Stopped$/, /data-task-state="stopped"/],
     [{ status: 'interrupted' }, {}, /^Interrupted$/, /data-task-state="interrupted"/],
     [{ status: 'conflict' }, {}, /^Conflict$/, /data-task-state="conflict"/],
@@ -213,7 +213,7 @@ test('the row shows its Build\'s state, in the card\'s words and colours', () =>
   const discarded = mounted([MARKED], { builds: { [ID]: { id: ID, status: 'discarded' } } });
   assert.equal(discarded.words(0), 'Build', 'discarded: built again');
   assert.equal(mounted([MARKED]).words(0), 'Build', 'a Build this window does not know: built again');
-  assert.equal(mounted([`- [x] ${taskMark(ID, true)}Add the export`], { builds: { [ID]: { id: ID, status: 'accepted' } } }).words(0), 'Built', 'ticked, still opens its card');
+  assert.equal(mounted([`- [x] ${taskMark(ID, true)}Add the export`], { builds: { [ID]: { id: ID, status: 'accepted' } } }).words(0), 'View result', 'ticked, still opens its card');
 });
 
 test('pressing Build hands the parent the task\'s line and its request, and shows it starting', async () => {
@@ -247,7 +247,7 @@ test('a working row redrawn as its step changes keeps its words waving, on the p
   assert.equal(anims[0].startTime, 0, 'so it goes on where the last one was');
   props.builds = { [ID]: { id: ID, status: 'review' } };
   editor.patchTaskRows();
-  assert.match(row.html, /color:#0070f3[^>]*><span class="task-build-words">Ready to review<\/span>/, 'done: blue, no wave');
+  assert.match(row.html, /color:#0070f3[^>]*><span class="task-build-words">Review<\/span>/, 'done: blue, no wave');
 });
 
 test('ticking by hand, Enter at its start and an edit keep the task\'s Build', () => {
@@ -315,19 +315,16 @@ const MADE = [{ id: 'item-1', name: 'Workspace overview', type: 'md' }];
 const record = (extra) => ({ id: ID, kind: 'build', title: 'Write the overview', model: 'opus', modelName: 'Opus', effort: 'high', messages: [{ role: 'you', text: 'Write the overview' }, { role: 'agent', text: '## Done\nI wrote the overview of the workspace,\nlinked from the plan.\n\nMore detail that is not the summary.' }], made: [], ...extra });
 const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 
-test('the row\'s words: review with its counts, a Build that only made something, Built with what it made opening it', () => {
+test('the row\'s words say what there is to do: Review while it waits, View result once done; what it made is in the card', () => {
   const review = mounted([MARKED], { builds: { [ID]: record({ status: 'review' }) }, buildDiffs: { [ID]: CODE_DIFF } });
-  assert.equal(review.words(0), 'Ready to review · +120 −8');
-  const madeOnly = mounted([MARKED], { builds: { [ID]: record({ status: 'review', made: MADE }) }, buildDiffs: { [ID]: NO_DIFF } });
-  assert.equal(madeOnly.words(0), 'Ready · made 1 page');
-  assert.match(madeOnly.end(0), /color:#0070f3/);
-  assert.equal(mounted([MARKED], { builds: { [ID]: record({ status: 'review', made: [...MADE, { id: 'item-2', name: 'Data', type: 'csv' }] }) }, buildDiffs: { [ID]: NO_DIFF } }).words(0), 'Ready · made 2 items');
-  assert.equal(mounted([MARKED], { builds: { [ID]: record({ status: 'review' }) } }).words(0), 'Ready to review', 'its diff not here yet');
+  assert.equal(review.words(0), 'Review');
+  assert.match(review.end(0), /color:#0070f3/);
+  assert.equal(mounted([MARKED], { builds: { [ID]: record({ status: 'review', made: MADE }) }, buildDiffs: { [ID]: NO_DIFF } }).words(0), 'Review');
   const built = mounted([MARKED], { builds: { [ID]: record({ status: 'accepted', made: MADE }) } });
-  assert.equal(text(built.end(0)), 'Built · Workspace overview ↗');
-  assert.match(built.end(0), /^<button[^>]*data-act="taskcard"/, 'the rest of the row opens the card');
-  assert.match(built.end(0), /<span class="task-build-made" data-act="taskmade" data-item-id="item-1"[^>]*>Workspace overview ↗<\/span>/, 'the name opens the item');
-  assert.equal(mounted([MARKED], { builds: { [ID]: record({ status: 'accepted' }) } }).words(0), 'Built', 'nothing made');
+  assert.equal(text(built.end(0)), 'View result', 'no name on the row');
+  assert.match(built.end(0), /^<button[^>]*data-act="taskcard"/, 'it opens the card');
+  assert.doesNotMatch(built.end(0), /taskmade|task-build-made/);
+  assert.equal(mounted([MARKED], { builds: { [ID]: record({ status: 'accepted' }) } }).words(0), 'View result', 'nothing made');
   assert.match(mounted([MARKED], { builds: { [ID]: record({ status: 'running' }) }, buildProgress: { [ID]: { activity: 'Writing' } } }).words(0), /^Building · Writing$/);
 });
 
@@ -340,8 +337,14 @@ test('the task card: its parts in order for each state, the `build>` card left a
   const review = record({ status: 'review' });
   assert.deepEqual(names(review), ORDER);
   assert.match(text(part(review, 'head')), /^Build Write the overview Opus · High Ready to review$/);
-  assert.equal(text(part(review, 'summary')), 'I wrote the overview of the workspace, linked from the plan.', 'the first paragraph, its heading passed over');
-  assert.match(part(review, 'summary'), /-webkit-line-clamp:2/, 'two lines');
+  assert.equal(text(part(review, 'summary')), 'I wrote the overview of the workspace, linked from the plan. Show more', 'the first paragraph, its heading passed over');
+  assert.match(part(review, 'summary'), /-webkit-line-clamp:4/, 'up to four lines');
+  assert.match(part(review, 'summary'), /data-act="tasksummary"[^>]*>Show more</, 'the message has more: Show more');
+  editor.taskSummaryOpen.add(ID);
+  assert.match(text(part(review, 'summary')), /I wrote the overview.*More detail that is not the summary.*Show less$/, 'opened: the whole message');
+  editor.taskSummaryOpen.clear();
+  const short = record({ status: 'review', messages: [{ role: 'agent', text: 'Done: the overview.' }] });
+  assert.doesNotMatch(part(short, 'summary'), /tasksummary/, 'nothing more to show');
   assert.equal(part(review, 'made'), '');
   assert.equal(text(part(review, 'changed')), 'Changed 4 files · +120 −8');
   assert.doesNotMatch(part(review, 'changed'), /data-build-diff/, 'the diff closed');
@@ -357,7 +360,7 @@ test('the task card: its parts in order for each state, the `build>` card left a
   // review, only made something
   const { editor: madeEd } = mounted([MARKED], { buildDiffs: { [ID]: NO_DIFF } });
   const made = new Map(madeEd.taskParts(ID, record({ status: 'review', made: MADE })));
-  assert.equal(text(made.get('made')), 'Made Workspace overview ↗');
+  assert.equal(text(made.get('made')), 'Made Workspace overview Open ↗');
   assert.match(made.get('made'), /data-act="taskmade"[^>]*data-item-id="item-1"/);
   assert.equal(text(made.get('changed')), 'Changed No code changed');
   // working
@@ -375,7 +378,7 @@ test('the task card: its parts in order for each state, the `build>` card left a
   assert.equal(part(record({ status: 'review' }), 'needs'), '', 'only while it asks');
   // discarded: what it made stays in the library
   const gone = new Map(madeEd.taskParts(ID, record({ status: 'discarded', final: true, made: MADE })));
-  assert.equal(text(gone.get('made')), 'Made Workspace overview ↗ Kept in your library');
+  assert.equal(text(gone.get('made')), 'Made Workspace overview Open ↗ Kept in your library');
   assert.equal(gone.get('changed'), '');
   // the `build>` card: as before, the question in its conversation
   const card = editor.buildParts(ID, asking).map(([name]) => name);
@@ -438,7 +441,7 @@ test('ticking a task whose Build waits for review accepts it; a refused Accept u
   no.props.builds = { [ID]: record({ status: 'running' }) };
   no.editor.componentDidUpdate({ ...no.props, builds }, no.editor.state);
   no.props.builds = { [ID]: record({ status: 'review' }) };
-  assert.equal(no.words(0), 'Ready to review', 'gone once the Build moved on');
+  assert.equal(no.words(0), 'Review', 'gone once the Build moved on');
   // the call itself failed
   const threw = mounted([MARKED], { builds: { [ID]: record({ status: 'review' }) }, onBuildAction: () => Promise.reject(new Error('Your code folder is not on a branch.')) });
   threw.editor.toggleTodo(0);
