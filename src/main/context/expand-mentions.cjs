@@ -20,6 +20,7 @@ const projects = require('../store/projects.cjs');
 const buildStore = require('../build/store.cjs');
 const { fileInRow } = require('../store/folder-files.cjs');
 const zoteroMirror = require('../zotero/mirror.cjs');
+const { stripTaskMarkers } = require('../../shared/task-marker.cjs');
 
 // A Build's line (`build> <id>`, 2026-09-25) is a card drawn from its record: outside the app it reads as what the card says.
 const BUILD_LINE_RE = /^build> ([0-9a-f]{10})$/;
@@ -254,7 +255,7 @@ function projectSource(ctx, projectId, rows) {
       const file = path.join(found.workspace.dir, 'workspace.md');
       let text = '';
       try { text = fs.readFileSync(file, 'utf8'); } catch { text = ''; } // a workspace with nothing written yet
-      return { name: found.workspace.name, path: file, text };
+      return { name: found.workspace.name, path: file, text: stripTaskMarkers(text) }; // a task's Build marker is no word of it (MATH-106)
     },
   };
 }
@@ -274,7 +275,7 @@ async function expandDoc(ctx, projectId, ref, { seen = new Set() } = {}) {
   if (ref.kind === 'workspace') seen.add(`ws:${ref.workspaceId}`); // mentioned back from inside, it is already here
   let project = null;
   try { project = projects.findProject(ctx, projectId); } catch { project = null; }
-  const { lines, files, missing } = await expandMentions(buildLines(body, project), source, seen);
+  const { lines, files, missing } = await expandMentions(buildLines(stripTaskMarkers(body), project), source, seen);
   const text = [...(title ? [`# ${title}`, ''] : []), ...lines].join('\n').trimEnd();
   return { title, body: lines.join('\n').trimEnd(), text, chars: text.length, files, missing };
 }

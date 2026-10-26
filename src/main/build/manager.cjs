@@ -560,6 +560,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     // in as an archived version of the workspace, the workspace is not one of ⌘J's recent ones for it, and it is given
     // as <request> without the workspace's history (./context.cjs).
     const fromLine = kind === 'build' && postIt !== null && !!input.fromLine;
+    // A task built from its own line (MATH-106): such a request, with the workspace document given beside it.
+    const withDocument = fromLine && !!input.withDocument;
     let pre = await preflight(ctx, projectId, wanted);
     // A library repository that is not on this Mac (a sandbox's, from GitHub) is cloned into repos/<name> first, before
     // anything else: its row keeps the clone (cloneRepository), and the Build works there.
@@ -589,7 +591,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     const inside = path.relative(pre.top, pre.directory);
     const attach = [...new Set((Array.isArray(input.attach) ? input.attach : []).filter((value) => typeof value === 'string' && UUID_RE.test(value)))].slice(0, MAX_ATTACH);
     const task = {
-      id, kind, projectId, workspaceId, postItId: postIt && typeof input.postItId === 'string' ? input.postItId : null, postIt, ...(fromLine ? { fromLine } : {}),
+      id, kind, projectId, workspaceId, postItId: postIt && typeof input.postItId === 'string' ? input.postItId : null, postIt, ...(fromLine ? { fromLine } : {}), ...(withDocument ? { withDocument } : {}),
       // Bart, the router (2026-10-12, ../bart/route.cjs), handed an `@bart` line to this Build: its record's id.
       ...(typeof input.routedFrom === 'string' && /^route-[\w-]{1,72}$/.test(input.routedFrom) ? { routedFrom: input.routedFrom } : {}), version: null, title,
       ...choice, sessionId: null,
@@ -602,7 +604,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     };
     // Where it came from (2026-10-12, the Agent Viewer): the line a Build from a line was typed on, else its workspace.
     task.place = placeOfTask(projectId, workspaceId, fromLine ? input.place : null);
-    const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt, fromLine });
+    const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt, fromLine, withDocument });
     task.archive = frozen.archive;
     // A post-it added to a workspace is put in as an archived version of it, after the one it is given as history.
     if (workspaceId && postIt && !fromLine) task.version = await archive.importTask(ctx, projectId, workspaceId, { text: postIt, buildId: id, now });

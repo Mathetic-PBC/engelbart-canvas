@@ -25,7 +25,7 @@ import { connectInbox, dockLine } from '../model/connect.js';
 import RecentPages from '../workspace/RecentPages.jsx';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper } from '../model/guide.js';
-import { buildLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, madeMentionOf, researchLine, REPLY_RE } from '../model/doc.js';
+import { buildLine, parseLine, todoLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, madeMentionOf, researchLine, REPLY_RE } from '../model/doc.js';
 import { cardOfAnswer, questionOf } from '../../main/bart/card.cjs';
 import { fallbackAgent } from '../model/route.js';
 // An ask's id, as the editor makes them (DocEditor newAskId): a research box this window puts in (askBart) takes one.
@@ -645,12 +645,13 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // A Build started from a line (2026-10-12; was askBart's alone): `@chat --build …` and `@bart --build …`, an `@bart`
   // line Bart, the router, handed to Build, and an answer's footer Build. Everything open is saved first; the Build is
   // given `text` as a request typed on a line of the workspace. `routedFrom`: the router's record, told where the line went.
-  // `place`: the line it was typed on ({ line, text }), kept on its record for the Agent Viewer's click.
-  const buildFrom = React.useCallback(async (ref, text, routedFrom = null, place = null) => {
+  // `place`: the line it was typed on ({ line, text }), kept on its record for the Agent Viewer's click. `extra`: more of
+  // what buildStart is given (a task's Build: `withDocument`).
+  const buildFrom = React.useCallback(async (ref, text, routedFrom = null, place = null, extra = null) => {
     const workspaceId = ref.kind === 'workspace' ? ref.workspaceId : topic.id;
     await new Promise((resolve) => { setTimeout(resolve, 0); }); // the pending line (or the edit) reaches `pending` first
     await Promise.all([...pending.current.keys()].map((held) => flush(held)));
-    const task = await api.buildStart(project.id, { workspaceId, text, fromLine: true, ...(routedFrom ? { routedFrom } : {}), ...(place ? { place: { ...place, ref } } : {}) });
+    const task = await api.buildStart(project.id, { workspaceId, text, fromLine: true, ...(extra || {}), ...(routedFrom ? { routedFrom } : {}), ...(place ? { place: { ...place, ref } } : {}) });
     setBuilds((current) => ({ ...current, [task.id]: task }));
     if (routedFrom && api.routeHanded) api.routeHanded(routedFrom, `build:${task.id}`).catch(() => {});
     return task;
@@ -841,6 +842,25 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       if (askId) setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
   }, [topic, buildFrom, changeDoc, onError]);
+
+  // A task built from its own line (MATH-106, DocEditor buildTask): a Build of the workspace whose request is the task
+  // (and the tasks under it) and whose context is the whole document beside it, on the model last picked. No `build>`
+  // card: the task's line takes the Build's id (shared/task-marker.cjs), found again by its words if the document moved.
+  const buildTaskFromEditor = React.useCallback(async (key, ref, { line, raw, text }) => {
+    if (!key || !ref || ref.kind !== 'workspace') return;
+    try {
+      const task = await buildFrom(ref, text, null, { line, text: raw }, { withDocument: true });
+      const held = docsRef.current[key];
+      if (typeof held !== 'string') return;
+      const ls = held.split('\n');
+      let at = ls[line] === raw ? line : -1;
+      if (at < 0) ls.forEach((l, k) => { if (l === raw && (at < 0 || Math.abs(k - line) < Math.abs(at - line))) at = k; });
+      const p = at >= 0 ? parseLine(ls[at]) : null;
+      if (!p || p.type !== 'todo' || p.build) return; // gone or changed meanwhile: the Build runs, its row does not show it
+      ls[at] = todoLine(p.depth, p.done, p.text, { build: task.id, ticked: false });
+      changeDoc(key, ref, ls.join('\n'));
+    } catch (error) { onError(error); }
+  }, [buildFrom, changeDoc, onError]);
 
   /* ----------------------------------------------------------------- Build */
 
@@ -2640,6 +2660,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                   onRoute: (input) => routeLine(doc.key, input, doc.ref),
                   onRouteGone: routeGone,
                   onBuild: doc.ref && (doc.ref.kind === 'workspace' || topic) && doc.ref.kind !== 'archive' ? (input) => buildFromEditor(doc.key, doc.ref, input) : undefined,
+                  onBuildTask: doc.ref && doc.ref.kind === 'workspace' && topic ? (input) => buildTaskFromEditor(doc.key, doc.ref, input) : undefined,
                   onOpenBeside: (item, link) => openDocBeside(item, link, doc.key),
                   besideLink: note ? note.link : null,
                   besideWorkspace: space ? space.id : null,

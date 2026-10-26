@@ -3,8 +3,10 @@ import katex from 'katex';
 import { hammerSvg } from './hammer.js';
 import { isAddress, webLabel } from './web-name.js';
 import { citationOf, citationRuns, citationNumbers, citationHtml, citationMoreHtml } from './cite.js';
+import { readTaskMark, taskMark, stripTaskMarkers } from '../../shared/task-marker.cjs';
 
 export { isAddress, sameAddress, webLabel, webName } from './web-name.js'; // a web page's mention (2026-10-17)
+export { stripTaskMarkers } from '../../shared/task-marker.cjs';
 // Ported verbatim from design/goal-canvas/Goal Canvas.dc.html (lines 403–404, 439–456, 692–730, 801–812).
 // One markdown string per document; the caret's line shows its source, every other line renders.
 
@@ -379,7 +381,11 @@ export const parseLine = (l) => {
   if ((m = l.match(REPLY_RE))) return { type: 'reply', text: m[2], folded: m[1] === '+' };
   if ((m = l.match(QUOTE_RE))) return { type: 'quote', text: m[1] };
   if ((m = l.match(IMG_RE))) return { type: 'img', text: m[1], src: m[2] };
-  if ((m = l.match(TODO_RE))) return { type: 'todo', depth: depthOf(m[1]), done: !!m[2] && m[2] !== ' ', text: m[3] || '' };
+  if ((m = l.match(TODO_RE))) {
+    // A task built from its line (MATH-106) holds its Build's id in a marker the text never shows (shared/task-marker.cjs).
+    const mark = readTaskMark(m[3] || '');
+    return { type: 'todo', depth: depthOf(m[1]), done: !!m[2] && m[2] !== ' ', text: mark.text, ...(mark.build ? { build: mark.build, ticked: mark.ticked } : {}) };
+  }
   if ((m = l.match(LIST_RE))) return m[2] ? { type: 'list', depth: depthOf(m[1]), text: m[4], num: Number(m[2]), delim: m[3] } : { type: 'list', depth: depthOf(m[1]), text: m[4] };
   if ((m = l.match(HEAD_RE))) return { type: 'h', level: m[1].length, text: m[2] };
   return { type: 'p', text: l };
@@ -469,7 +475,8 @@ export function highlight(text, lang) {
 /** Lines that stand under an @bart question: what it is working on, what it said, and the legacy `> ` replies of the prototype. */
 export const isAnswer = (type) => type === 'quote' || type === 'reply' || type === 'pending';
 
-export const todoLine = (depth, done, text) => `${'  '.repeat(depth)}- [${done ? 'x' : ' '}] ${text}`;
+/** A task row; `mark` ({ build, ticked }, a parsed task) keeps the marker of the Build made from it, before its text. */
+export const todoLine = (depth, done, text, mark = null) => `${'  '.repeat(depth)}- [${done ? 'x' : ' '}] ${mark && mark.build ? taskMark(mark.build, mark.ticked) : ''}${text}`;
 /** A bullet, or with `num` (and `delim`, '.' or ')') a numbered row. */
 export const listLine = (depth, text, num, delim = '.') => `${'  '.repeat(depth)}${num != null ? `${num}${delim}` : '-'} ${text}`;
 /** What a list row draws in front of its text: `•`, or its number as typed (`1.`, `2)`). */
@@ -484,9 +491,28 @@ export const isDrawn = (type) => isMarked(type) || type === 'reply';
 /** The text the caret moves through on a line: a drawn line's own text, any other line's whole source. */
 export const lineText = (p, line) => (isDrawn(p.type) ? p.text : line);
 /** That line again with different text, keeping its kind. */
-export const sameLine = (p, text) => (p.type === 'todo' ? todoLine(p.depth, p.done, text) : p.type === 'list' ? listLine(p.depth, text, p.num, p.delim) : p.type === 'reply' ? replyLine(text, p.folded) : text);
+export const sameLine = (p, text) => (p.type === 'todo' ? todoLine(p.depth, p.done, text, p) : p.type === 'list' ? listLine(p.depth, text, p.num, p.delim) : p.type === 'reply' ? replyLine(text, p.folded) : text);
 /** How a line the person just typed is stored: `- []` and `* x` become the line they make (`1) x` stays as typed). */
 export const canonicalLine = (l) => { const p = parseLine(l); return isMarked(p.type) ? sameLine(p, p.text) : l; };
+
+/**
+ * What a task built from its own line asks (MATH-106): its text, then the rows nested under it (the tasks and bullets
+ * indented deeper, directly below it, up to the first row that is not) as its steps, indented as they are under it.
+ * `ps`: the lines parsed (parseLines). → { text, steps: [lines] }, '' text for a line that is no task.
+ */
+export function taskRequest(lines, i, ps = parseLines(lines)) {
+  const p = ps[i];
+  if (!p || p.type !== 'todo') return { text: '', steps: [] };
+  const steps = [];
+  for (let j = i + 1; j < lines.length; j++) {
+    const q = ps[j];
+    if (!q || !isMarked(q.type) || q.depth <= p.depth) break;
+    const depth = q.depth - p.depth - 1;
+    steps.push(q.type === 'todo' ? todoLine(depth, q.done, q.text) : listLine(depth, q.text, q.num, q.delim));
+  }
+  const head = p.text.trim();
+  return { text: head && steps.length ? `${head}\n\nSteps:\n${steps.join('\n')}` : head, steps };
+}
 
 /**
  * A marker typed into a row that already draws one (an empty bullet or task): the row takes that marker instead of
@@ -495,7 +521,7 @@ export const canonicalLine = (l) => { const p = parseLine(l); return isMarked(p.
  */
 export function retypedRow(p, txt) {
   const task = txt.match(/^- \[([ xX]?)\](?: |$)/);
-  if (task) return { line: todoLine(p.depth, (task[1] || ' ') !== ' ', txt.slice(task[0].length)), ate: task[0].length };
+  if (task) return { line: todoLine(p.depth, (task[1] || ' ') !== ' ', txt.slice(task[0].length), p.type === 'todo' ? p : null), ate: task[0].length };
   const bullet = txt.match(/^[-*] /);
   if (bullet) return { line: listLine(p.depth, txt.slice(bullet[0].length)), ate: bullet[0].length };
   const numbered = txt.match(/^(\d{1,9})([.)]) /);
@@ -976,9 +1002,10 @@ function sliceInline(text, a, b, alone) {
  * line, the text selected. Across lines, the first and last lines cut where the selection is and the lines between whole
  * with their marks (`- `, `# `, `- [ ] `), so a list stays a list; a line selected from its start keeps its mark too. An
  * answer comes without its `bart> ` and without its closing line, as the answer's Copy gives it (turnText). A line a run
- * is working on and a Build's line hold an id, not text, and are left out.
+ * is working on and a Build's line hold an id, not text, and are left out. So is a built task's marker (MATH-106), unless
+ * `marks`: the copy this editor pastes back keeps it, so a task cut and pasted is still the one its Build was made from.
  */
-export function selectionMarkdown(lines, start, end) {
+export function selectionMarkdown(lines, start, end, { marks = false } = {}) {
   if (!start || !end) return '';
   if (end.line < start.line || (end.line === start.line && end.offset < start.offset)) [start, end] = [end, start];
   const ps = parseLines(lines), feet = new Set();
@@ -998,7 +1025,7 @@ export function selectionMarkdown(lines, start, end) {
     const part = code ? text.slice(a, b) : sliceInline(text, a, b, false);
     out.push(a === 0 && isMarked(p.type) ? line.slice(0, line.length - p.text.length) + part : part);
   }
-  return out.join('\n');
+  return marks ? out.join('\n') : stripTaskMarkers(out.join('\n'));
 }
 
 const SAFE_HREF = /^(https?:|mailto:)/i;

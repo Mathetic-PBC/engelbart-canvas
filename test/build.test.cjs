@@ -978,6 +978,32 @@ test('`@bart --build <request>`: a Build of only the request, with the notes it 
   assert.equal(JSON.stringify(projects.readNav(ctx).recent), recentBefore, 'no edit recorded');
 });
 
+test('a task built from its own line (MATH-106): the task as <request>, the whole workspace beside it as <workspace>, no history', async () => {
+  const { project, workspace } = await scene({ doc: 'Old plan.' });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  await archive.clearWorkspace(ctx, project.id, workspace.id, { keep: () => false });
+  await projects.createNote(ctx, project.id, { name: 'Format', text: 'Comma separated.' });
+  const doc = 'Export plan, see @[Format].\n- [ ] <!--build:abcdef0123--> Ship the export\n  - [ ] Write the CSV\n@bart --build other\nbuild> 0123456789';
+  await projects.writeDoc(ctx, project.id, ref, doc);
+  const archivesBefore = projects.findWorkspace(ctx, project.id, workspace.id).workspace.archives.length;
+  const agent = scripted(['Done.', 'Done.']);
+  const { builds } = manager(agent);
+  const place = { ref, line: 1, text: '- [ ] <!--build:abcdef0123--> Ship the export' };
+  const task = await builds.start(ctx, project.id, { kind: 'build', workspaceId: workspace.id, text: 'Ship the export\n\nSteps:\n- [ ] Write the CSV', fromLine: true, withDocument: true, place });
+  assert.deepEqual([task.kind, task.workspaceId], ['build', workspace.id]);
+  assert.equal(task.version, null, 'not put in as an archived version');
+  await settled(project, task.id);
+  const context = agent.calls[0].message;
+  assert.match(context, /<request>\nShip the export\n\nSteps:\n- \[ \] Write the CSV\n<\/request>\n\n<workspace name="Feature">\nExport plan, see @\[Format\]\.\n\n<file name="Format"[^>]*>\nComma separated\.\n<\/file>\n\n- \[ \] Ship the export\n  - \[ \] Write the CSV\n@bart --build other\n<\/workspace>/, 'the task, then the document with its mentions in place');
+  assert.match(context, /built from: a task on a line of the workspace "Feature"/);
+  assert.match(context, /<task>\nDo the task in the request below\.[^\n]*The workspace document after it is background/);
+  for (const absent of [/<history /, /<post-it>/, /Old plan/, /build> 0123456789/, /build:abcdef0123/]) assert.doesNotMatch(context, absent);
+  assert.equal(projects.findWorkspace(ctx, project.id, workspace.id).workspace.archives.length, archivesBefore, 'no new archived version');
+  const plain = await builds.start(ctx, project.id, { kind: 'build', workspaceId: workspace.id, withDocument: true });
+  await settled(project, plain.id);
+  assert.match(agent.calls[1].message, /<task>\nDo what the workspace document below asks/, 'withDocument without fromLine: a workspace\'s Build, as before');
+});
+
 /* --------------------------------------------------------------------- the runner */
 
 test('while Engelbart\'s own Git stands in, a Build\'s agent, setup and checks find it first on PATH (2026-09-28)', async () => {

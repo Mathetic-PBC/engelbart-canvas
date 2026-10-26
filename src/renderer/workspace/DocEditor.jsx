@@ -53,7 +53,7 @@
 import React from 'react';
 import { createPortal } from 'react-dom';
 import { HAMMER_PATHS } from '../model/hammer.js';
-import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, ATTACH_RE, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchText, isRefine, refineLine, isAddress, sameAddress, madeMentionOf, madeKey, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, flattenPaste, selectionMarkdown, selectionHtml, withLinks, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf, topicOfThread, whenShown } from '../model/doc.js';
+import { parseLine, parseLines, codeBlocks, todoLine, esc, tokShown, ATTACH_RE, mathBlockHtml, textMathHtml, tokensOf, rawOffset, replyRawOffset, inlineHtml, highlight, fenceShown, isFence, isCode, isAnswer, isMarked, lineText, sameLine, replyLine, titleLine, canonicalLine, retypedRow, listMark, threads, turnText, holdsLink, isResearch, researchText, isRefine, refineLine, isAddress, sameAddress, madeMentionOf, madeKey, chatMention, mentionAt, folderPath, folderMentionAt, agentOf, answeredBy, askedNow, flattenPaste, selectionMarkdown, selectionHtml, withLinks, taskRequest, INLINE, AGENT_TOKEN, ATTRIBUTION_RE, BART_RE, FENCE_RE, BUILD_TOKEN, tokenOf, topicOfThread, whenShown } from '../model/doc.js';
 import { fieldRows, isVerbRow, isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
 import { readFlags, readQuestion, readDiscover, withChoice, withMode, discoverSpans, modelOf, effortOf, buildRequestOf, EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { SKIPPED, MAP_GROUPS, isResultOffer, cardOfAnswer, questionOf, isChoice, answerLine, withWrap, readAnswer, recapLine, resultParts } from '../../main/bart/card.cjs';
@@ -70,6 +70,7 @@ import { fieldCaret } from './caret.js';
 import Popover from './Popover.jsx';
 import { citationNumbers, citationCard, citationSources, citationSourcesHtml, openCitationRun, libraryName, streamingText, CITE_CSS, CITE_CIRCLES, CARD_GRACE } from '../model/cite.js';
 import MadePeek from './MadePeek.jsx';
+import TaskBuildCard from './TaskBuildCard.jsx';
 import WorkspacePeek from './WorkspacePeek.jsx';
 import ImageViewer from './ImageViewer.jsx';
 import { diffRows, diffTotals, nextAttachment } from '../model/build-diff.js';
@@ -272,6 +273,12 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '[data-zotero][data-waiting]{position:relative}'
   + '[data-zotero][data-waiting]::after{content:"Download the PDF in your browser to open it in the Stage";position:absolute;left:0;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#4d4d4d;font:12px/1.2 var(--font-sans);font-style:normal;white-space:nowrap;pointer-events:none}'
   + '[data-zotero][data-drop]{background:#e8f0fe;border-radius:3px;box-shadow:0 0 0 1px #9bb6e8}'
+  // A task's Build (MATH-106, taskBuildHtml): "Build" at the end of its row, faint, shown while the row is hovered or holds
+  // the caret; once it has one, the Build's state there instead, a click away from its card.
+  + '.task-build{flex:none;display:inline-flex;align-items:center;gap:6px;max-width:45%;margin:5px 0 0;padding:1px 6px;border:0;border-radius:6px;background:none;font:400 12.5px/1.6 var(--font-sans);color:#a3a3a3;cursor:pointer;white-space:nowrap;user-select:none;transition:opacity 120ms,background 120ms,color 120ms}'
+  + '.task-build:hover{background:#f2f2f2;color:#171717}.task-build[hidden]{display:none}.task-build-words{min-width:0;overflow:hidden;text-overflow:ellipsis}'
+  + '.task-build[data-task-state="idle"]{opacity:0}[data-line]:hover>.task-build[data-task-state="idle"],.task-build[data-task-state="idle"][data-on]{opacity:1}'
+  + '.task-build-spin{flex:none;width:9px;height:9px;box-sizing:border-box;border:1.5px solid #dcdcdc;border-top-color:#8f8f8f;border-radius:50%;animation:task-spin 800ms linear infinite}@keyframes task-spin{to{transform:rotate(360deg)}}'
   // The middle panel's threads (2026-10-13, Hudson's screenshot): an answer's inline code, the button row's Run again, a long
   // answer's fade and its Show more, and an earlier exchange folded to one line.
   + '[data-answer-of] code{font:13.5px/1.5 var(--font-mono)!important;background:#efefef!important;padding:1px 4px!important;border-radius:4px!important}'
@@ -559,7 +566,7 @@ const MARK_DRAWN = `flex:none;min-width:${MARK_COL};padding-right:0.25em;box-siz
 const MARK_EDITED = `display:inline-block;min-width:${MARK_COL};margin-left:-${MARK_COL};box-sizing:border-box;white-space:pre`;
 
 export default class DocEditor extends React.Component {
-  state = { lightbox: null, activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null, topicMenu: null };
+  state = { lightbox: null, activeLine: null, mention: null, mentionIdx: 0, pop: null, picker: null, browse: null, topicMenu: null, taskCard: null };
   edRef = React.createRef();
   history = []; future = []; caret = null; lastHtml = ''; lastKey = null; selRaw = null; openKey = ''; copied = null; copiedT = null;
   syncing = false; wantFocus = false; wantAnchor = false; composing = false; mounted = false; timers = new Set(); held = false; downOnRoot = false; downOnPage = false;
@@ -592,6 +599,9 @@ export default class DocEditor extends React.Component {
   // earlier messages, their steps and their prompt, where each card's diff is scrolled to, and the HTML each part of each card was last
   // drawn with (patchBuilds compares these).
   buildText = new Map(); buildImages = new Map(); buildOpen = new Set(); buildSteps = new Set(); buildPrompt = new Set(); buildScroll = new Map(); buildDrawn = new Map();
+  // A task's Build (MATH-106): the task rows being started (by raw line), each row end as last drawn, the open card's
+  // body and the HTML each of its parts was last drawn with.
+  taskStarting = new Set(); taskDrawn = new WeakMap(); taskCardEl = null; cardDrawn = new Map();
   // A question just asked (2026-10-16, from 2026-10-13's follow-up hold): its row kept where it was on screen, or where its
   // reply field was, through the redraws that follow (keepAsked), { key, askId, top, until }. `wheelAt`: when the person
   // last scrolled the pane with the wheel (caretLineBelow, submitTop).
@@ -612,6 +622,7 @@ export default class DocEditor extends React.Component {
   /* ---------------------------------------------------------------- lifecycle */
   componentDidMount() {
     this.mounted = true;
+    Promise.resolve().then(() => this.tickBuilt()); // a Build accepted while the document was not open (MATH-106)
     if (this.scrollRef.current && this.scrollRef.current.addEventListener) this.scrollRef.current.addEventListener('wheel', this.noZoom, { passive: false });
     this.autoCollapse();
     const inEd = (e) => e.target && e.target.closest && e.target.closest('[data-editor]') === this.editorEl();
@@ -736,6 +747,9 @@ export default class DocEditor extends React.Component {
 
   componentDidUpdate(prevProps, prevState) {
     this.autoCollapse();
+    if (prevProps.builds !== this.props.builds || prevProps.text !== this.props.text) Promise.resolve().then(() => this.tickBuilt());
+    if (this.state.taskCard && (prevProps.docKey !== this.props.docKey || (this.props.builds !== prevProps.builds && !(this.props.builds || {})[this.state.taskCard.id]))) this.setState({ taskCard: null });
+    else if (this.state.taskCard && (prevState.taskCard !== this.state.taskCard || prevProps.builds !== this.props.builds || prevProps.buildProgress !== this.props.buildProgress || prevProps.buildDiffs !== this.props.buildDiffs)) this.patchTaskCard();
     Promise.resolve().then(() => this.runClock()); // once this update has drawn (or patched) the rows
     if (prevProps.text !== this.props.text || prevProps.madeFiles !== this.props.madeFiles || prevProps.docKey !== this.props.docKey) this.needMade();
     // The @ menu opening and closing (a line's or a follow-up field's): the workspace asks for what things say then (MATH-29).
@@ -1293,9 +1307,10 @@ export default class DocEditor extends React.Component {
       const done = p.done;
       const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
       // Each checkbox is its own row (2026-10-12): a square box that fills blue when checked, no card around the run.
-      const box = `<span contenteditable="false" data-act="toggle" data-row="${i}" role="checkbox" aria-checked="${!!done}" style="user-select:none;flex:none;box-sizing:border-box;width:16px;height:16px;margin-top:10px;border:1.5px solid ${done ? '#0070f3' : '#c9c9c9'};border-radius:4px;background:${done ? '#0070f3' : '#fff'};color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer">${done ? '<svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.4 5 8.8l4.5-5.4"/></svg>' : ''}</span>`;
+      // Notion's (MATH-106): a thin grey rounded square, blue and ticked once done.
+      const box = `<span contenteditable="false" data-act="toggle" data-row="${i}" role="checkbox" aria-checked="${!!done}" style="user-select:none;flex:none;box-sizing:border-box;width:16px;height:16px;margin-top:10px;border:1.25px solid ${done ? '#0070f3' : '#a8a8a8'};border-radius:3px;background:${done ? '#0070f3' : '#fff'};color:#fff;display:flex;align-items:center;justify-content:center;cursor:pointer">${done ? '<svg viewBox="0 0 12 12" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.4 5 8.8l4.5-5.4"/></svg>' : ''}</span>`;
       return `<div ${raw} style="display:flex;align-items:flex-start;gap:10px;padding:0 0 0 ${p.depth * 24}px;min-height:35px">${box}`
-        + `<span class="t" style="flex:1;min-width:0;padding:4px 0;color:${done ? '#8f8f8f' : '#171717'};text-decoration:${done ? 'line-through' : 'none'}">${content || '<br>'}</span></div>`;
+        + `<span class="t" style="flex:1;min-width:0;padding:4px 0;color:${done ? '#8f8f8f' : '#171717'};text-decoration:${done ? 'line-through' : 'none'}">${content || '<br>'}</span>${this.taskBuildHtml(i, line, p, active)}</div>`;
     }
     if (p.type === 'list') {
       const content = active ? this.activeHtml(tokensOf(p, line)) : inlineHtml(p.text, this.mentionOpts);
@@ -1766,6 +1781,122 @@ export default class DocEditor extends React.Component {
     return `<div contenteditable="false" data-readonly="1" data-cite-sources="${where.turn.q}" style="position:relative;user-select:none;cursor:default;padding:0 ${chat ? 18 : 16}px;background:#fafafa">`
       + `<div style="padding:12px 0 2px ${chat ? 12 : 14}px;border-left:${chat ? '1.5px solid #e6e6e6' : '2px solid #d6d6d6'};font:12.5px/1.5 var(--font-sans)">${citationSourcesHtml(sources)}</div></div>`;
   }
+  /* ---------------------------------------------------------------- A task's Build (MATH-106, 2026-10-25) */
+  // A task is built from its own line: "Build" at the end of its row starts a Build of the workspace whose request is the
+  // task (and the tasks under it), on the model last picked; the row then holds the Build's id (shared/task-marker.cjs)
+  // and shows where it stands, and a click there opens its card beside the task (TaskBuildCard). No `build>` card goes
+  // into the document. Accepted, the task is ticked, once.
+  /** The Build a task's row stands for: its record, or null when it has none (none yet, or one discarded: built again). */
+  taskBuildOf(p) {
+    const task = p && p.type === 'todo' && p.build ? (this.props.builds || {})[p.build] : null;
+    return task && task.status !== 'discarded' ? task : null;
+  }
+  /** What a task's row ends with: "Build", or its Build's state. Always drawn (hidden when it says nothing) so patchBuilds can replace it. */
+  taskBuildHtml(i, line, p, active) {
+    const task = this.taskBuildOf(p);
+    const look = (state, words, { color = '', strong = false, spin = false, act = 'taskcard', title = '' } = {}) => `<button type="button" contenteditable="false" class="task-build" data-act="${act}" data-row="${i}" data-task-row="${i}" data-task-state="${state}"${task ? ` data-task-build="${esc(task.id)}"` : ''}${active ? ' data-on="1"' : ''}${title ? ` title="${esc(title)}"` : ''} style="${color ? `color:${color};` : ''}${strong ? 'font-weight:500;' : ''}">${spin ? '<span class="task-build-spin" aria-hidden="true"></span>' : ''}<span class="task-build-words">${esc(words)}</span></button>`;
+    const none = `<button type="button" contenteditable="false" class="task-build" data-task-row="${i}" data-task-state="none" hidden></button>`;
+    if (!task) {
+      if (this.taskStarting.has(line)) return look('starting', 'Starting…', { spin: true, act: 'taskwait' });
+      if (p.done || !p.text.trim() || this.props.readOnly || !this.props.onBuildTask) return none;
+      return look('idle', 'Build', { act: 'taskbuild', title: 'Build this task' });
+    }
+    const status = task.status;
+    if (BUILD_WORKING.has(status) || task.working) {
+      const progress = (this.props.buildProgress || {})[task.id] || {}, log = progress.log || [];
+      const step = status === 'running' ? (progress.activity || log[log.length - 1] || 'Thinking') : BUILD_STATUS[status] || status;
+      const words = `Building · ${String(step).split('\n')[0]}`;
+      return look('working', words.length > 80 ? `${words.slice(0, 79)}…` : words, { spin: true, title: words });
+    }
+    const stepping = status === 'review' && !!task.runStep && task.runStep.status === 'running';
+    if (stepping) return look('stepping', 'Getting it running…', { spin: true });
+    if (status === 'review' || status === 'needs-you') return look(status, BUILD_STATUS[status], { color: '#0070f3', strong: true });
+    if (status === 'failed') return look(status, BUILD_STATUS[status], { color: '#e70022', strong: true });
+    if (status === 'accepted') return look(status, 'Built');
+    return look(status, BUILD_STATUS[status] || status); // stopped, interrupted, conflict, too big: the card's words, quiet
+  }
+  // Pressed "Build": the parent starts it (Workspace buildTask) and writes the Build's id into the task's line.
+  buildTask(i) {
+    const ls = this.lines(), ps = this.parsedOf(ls), p = ps[i], line = ls[i];
+    if (!p || p.type !== 'todo' || p.done || this.taskBuildOf(p) || !this.props.onBuildTask || this.props.readOnly || this.taskStarting.has(line)) return;
+    const { text } = taskRequest(ls, i, ps); if (!text) return;
+    this.taskStarting.add(line); this.patchTaskRows();
+    Promise.resolve(this.props.onBuildTask({ line: i, raw: line, text })).catch(() => {}).then(() => {
+      this.taskStarting.delete(line); if (this.mounted) this.patchTaskRows();
+    });
+  }
+  // Each task row's end redrawn where it stands (a Build's progress, a start), the rest of the editor untouched.
+  patchTaskRows() {
+    const ed = this.editorEl(); if (!ed || this.lastKey !== this.key()) { this.lastHtml = null; this.forceUpdate(); return; }
+    const ls = this.lines(), ps = this.parsedOf(ls), active = this.state.activeLine;
+    for (const el of ed.querySelectorAll('[data-task-row]')) {
+      const i = Number(el.dataset.taskRow), p = ps[i]; if (!p || p.type !== 'todo') continue;
+      const html = this.taskBuildHtml(i, ls[i], p, active === i);
+      if (html === this.taskDrawn.get(el)) continue;
+      const next = document.createElement('template'); next.innerHTML = html; const made = next.content.firstElementChild; if (!made) continue;
+      el.replaceWith(made); this.taskDrawn.set(made, html);
+    }
+    this.lastHtml = this.editorHtml();
+  }
+  // A task whose Build was accepted is ticked, once: the marker remembers it was, so a task unticked afterwards stays so.
+  // On a document opened after the app was closed too. It is an edit like any other: saved, and undone with ⌘Z.
+  tickBuilt() {
+    if (!this.mounted || this.props.readOnly || !this.props.onChange || this.props.text == null || !String(this.props.text).includes('<!--build:')) return;
+    const builds = this.props.builds || {};
+    const due = (p) => p && p.type === 'todo' && p.build && !p.ticked && builds[p.build] && builds[p.build].status === 'accepted';
+    const ls = this.lines(), ps = this.parsedOf(ls); if (!ps.some(due)) return;
+    this.setDoc(ls.map((l, j) => (due(ps[j]) ? todoLine(ps[j].depth, true, ps[j].text, { build: ps[j].build, ticked: true }) : l)).join('\n'));
+  }
+  // Its card (TaskBuildCard): the Build's card in parts, as a `build>` line draws it, patched as it changes.
+  openTaskCard(id) {
+    if (!id) return;
+    this.setState((s) => ({ taskCard: s.taskCard && s.taskCard.id === id ? null : { id } }));
+  }
+  closeTaskCard = () => { if (this.state.taskCard) this.setState({ taskCard: null }); };
+  taskCardAnchor = () => {
+    const open = this.state.taskCard, ed = this.editorEl(); if (!open || !ed) return null;
+    const el = ed.querySelector(`[data-task-build="${open.id}"]`); if (!el) return null;
+    const r = el.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+  };
+  taskCardBody = (el) => { this.taskCardEl = el; this.cardDrawn = new Map(); if (el) this.patchTaskCard(); };
+  patchTaskCard() {
+    const el = this.taskCardEl, open = this.state.taskCard; if (!el || !open) return;
+    for (const [name, html] of this.buildParts(open.id, (this.props.builds || {})[open.id])) {
+      if (this.cardDrawn.get(name) === html) continue;
+      let part = el.querySelector(`:scope > [data-build-part="${name}"]`);
+      if (!part) { part = document.createElement('div'); part.dataset.buildPart = name; el.appendChild(part); }
+      const field = document.activeElement, had = field && part.contains(field) && field.matches('[data-build-input]') ? { a: field.selectionStart, b: field.selectionEnd } : null;
+      part.innerHTML = html; this.cardDrawn.set(name, html); keepWaves(part);
+      this.restoreBuilds(part, had ? { key: open.id, ...had } : null);
+    }
+  }
+  // What happens in the card is what happens in a `build>` line's card (buildAct and the reply field's handlers), but
+  // Remove takes the Build off the task (its marker), not a line away.
+  taskCardEvent = (kind, e) => {
+    const t = e.target;
+    if (kind === 'mousedown') { if (t.closest && t.closest('button[data-act]')) e.preventDefault(); return; }
+    if (kind === 'click') {
+      const act = t.closest && t.closest('[data-act]'); if (!act || !act.dataset.buildId) return;
+      e.preventDefault();
+      if (act.dataset.act === 'buildremove') { this.untieTask(act.dataset.buildId); return; }
+      this.buildAct(act.dataset.act, act.dataset.buildId, act.dataset.runName);
+      return;
+    }
+    if (!(t.matches && t.matches('[data-build-input]'))) return;
+    if (kind === 'input') this.buildInput(t);
+    else if (kind === 'keydown') { if (e.key !== 'Escape') this.buildKey(e); }
+    else if (kind === 'paste') this.buildPaste(e);
+  };
+  untieTask(id) {
+    this.setState({ taskCard: null });
+    this.setLines((ls) => { const ps = this.parsedOf(ls); return ls.map((l, j) => (ps[j].type === 'todo' && ps[j].build === id ? todoLine(ps[j].depth, ps[j].done, ps[j].text) : l)); });
+  }
+  /** A Build's reply field: in the task card when it is open there, else in the document. */
+  buildField(id) {
+    const sel = `[data-build-input="${id}"]`;
+    return (this.taskCardEl && this.taskCardEl.querySelector(sel)) || (this.editorEl() && this.editorEl().querySelector(sel)) || null;
+  }
+
   /* ---------------------------------------------------------------- Build cards (2026-09-25) */
   // A `build> <id>` line is drawn as its Build's card, from props.builds (the record main sends), props.buildProgress
   // (what a running turn is doing) and props.buildDiffs (what it has changed). The card is in parts — head, body, live,
@@ -1930,6 +2061,7 @@ export default class DocEditor extends React.Component {
   }
   // Only the parts that changed are replaced; a reply field that was replaced gets its text and the keyboard back.
   patchBuilds() {
+    this.patchTaskCard();
     const ed = this.editorEl(); if (!ed || this.lastKey !== this.key()) return false;
     const ls = this.lines();
     for (const d of ed.querySelectorAll('[data-build]')) {
@@ -1942,6 +2074,7 @@ export default class DocEditor extends React.Component {
         this.restoreBuilds(part, had ? { key: p.id, ...had } : null);
       }
     }
+    if (ed.querySelector('[data-task-build]')) { this.patchTaskRows(); return true; }
     this.lastHtml = this.editorHtml(); return true;
   }
   restoreBuilds(root, had) {
@@ -1983,7 +2116,7 @@ export default class DocEditor extends React.Component {
         const held = (this.buildImages.get(id) || []).filter((image) => image.n !== n);
         if (!saved || !saved.id || !this.mounted) { this.buildImages.set(id, held); continue; }
         this.buildImages.set(id, [...held, { n, id: saved.id }]);
-        const field = this.editorEl() && this.editorEl().querySelector(`[data-build-input="${id}"]`);
+        const field = this.buildField(id);
         const token = `[Attachment ${n}]`;
         if (field) {
           const a = field.selectionStart ?? field.value.length, b = field.selectionEnd ?? a, before = field.value.slice(0, a);
@@ -2003,7 +2136,7 @@ export default class DocEditor extends React.Component {
     Promise.resolve(this.props.onBuildAction(id, 'reply', { text, interrupt: true, images })).then((ok) => {
       if (ok === false) return;
       this.buildText.delete(id); this.buildImages.delete(id);
-      const input = this.editorEl() && this.editorEl().querySelector(`[data-build-input="${id}"]`);
+      const input = this.buildField(id);
       if (input) { input.value = ''; this.paintBuildSend(input); this.fitFollow(input); }
     }).catch(() => {});
   }
@@ -3500,7 +3633,9 @@ export default class DocEditor extends React.Component {
         if (p.depth > 0) { this.indent(i, -1); this.caret = { line: i, offset: 0 }; } else this.setLines((x) => x.map((l, j) => (j === i ? '' : l)), { line: i, offset: 0 });
         return;
       }
-      const head = cur.slice(0, a), tail = cur.slice(b), l1 = sameLine(p, head), l2 = p.type === 'todo' ? todoLine(p.depth, false, tail) : p.num != null ? sameLine({ ...p, num: p.num + 1 }, tail) : sameLine(p, tail);
+      // Enter at the start of a built task (MATH-106) makes a task above it: the task and its Build move down together.
+      const head = cur.slice(0, a), tail = cur.slice(b), moves = p.type === 'todo' && !!p.build && !head.trim() && !!tail.trim();
+      const l1 = moves ? todoLine(p.depth, false, head) : sameLine(p, head), l2 = moves ? sameLine(p, tail) : p.type === 'todo' ? todoLine(p.depth, false, tail) : p.num != null ? sameLine({ ...p, num: p.num + 1 }, tail) : sameLine(p, tail);
       this.setLines((x) => { const out = [...x]; out[i] = l1; out.splice(i + 1, 0, l2); return out; }, { line: i + 1, offset: 0 });
       this.setState({ activeLine: i + 1, mention: null }); return;
     }
@@ -3765,6 +3900,7 @@ export default class DocEditor extends React.Component {
     e.clipboardData.setData('text/plain', text);
     e.clipboardData.setData('text/html', selectionHtml(text));
     const over = this.across(); if (over) e.clipboardData.setData(OWN_LINES, this.acrossSource(over));
+    else { const marked = selectionMarkdown(ls, ends.start, ends.end, { marks: true }); if (marked !== text) e.clipboardData.setData(OWN_LINES, marked); } // a built task pasted here keeps its Build (MATH-106)
     if (cut && !this.props.readOnly && !this.deleteAcross()) { this.bulkDelete = true; document.execCommand('delete'); this.bulkDelete = false; }
   }
   // Dragging an image's corner (2026-10-12; any of its four since 2026-10-15) sizes it live; letting go writes the width
@@ -3997,6 +4133,9 @@ export default class DocEditor extends React.Component {
       }
       if (k === 'asklog') { const id = act.dataset.ask; if (this.openLogs.has(id)) this.openLogs.delete(id); else this.openLogs.add(id); this.patchPending(); return; }
       if (k.startsWith('build') && act.dataset.buildId) { this.buildAct(k, act.dataset.buildId, act.dataset.runName); return; }
+      if (k === 'taskbuild') { this.buildTask(i); return; }
+      if (k === 'taskcard') { this.openTaskCard(act.dataset.taskBuild); return; }
+      if (k === 'taskwait') return;
       if (k === 'cancelwait') { this.cancelWait(act.dataset.ask); return; }
       if (k === 'stopask') { if (this.props.onStopAsk) this.props.onStopAsk(act.dataset.ask); return; }
       if (k === 'madeopen' || k === 'madestage' || k === 'madesave' || k === 'madeexpand') { this.madeAct(k, act); return; }
@@ -5040,7 +5179,7 @@ export default class DocEditor extends React.Component {
   }
   removeLine(i) { this.setLines((ls) => (ls.length > 1 ? ls.filter((_, j) => j !== i) : [''])); this.setState({ mention: null }); }
   toggleTodo(i) {
-    this.setLines((ls) => ls.map((l, j) => { if (j !== i) return l; const p = parseLine(l); return todoLine(p.depth, !p.done, p.text); }));
+    this.setLines((ls) => ls.map((l, j) => { if (j !== i) return l; const p = parseLine(l); return sameLine({ ...p, done: !p.done }, p.text); })); // a built task keeps its Build
   }
   // What a mention names (MATH-60): a library mention's item by its id, whatever it is called now; Bart for `@[bart]`;
   // otherwise the item that goes by the name. Null when nothing does: the mention is drawn grey, with no card to show.
@@ -5174,6 +5313,7 @@ export default class DocEditor extends React.Component {
             {this.topicView()}
           </>,
         )}
+        {s.taskCard && !this.props.compact && <TaskBuildCard key={s.taskCard.id} id={s.taskCard.id} anchorOf={this.taskCardAnchor} onBody={this.taskCardBody} onEvent={this.taskCardEvent} onClose={this.closeTaskCard} />}
       </>
     );
   }

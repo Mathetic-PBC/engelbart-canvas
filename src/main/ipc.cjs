@@ -1038,6 +1038,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
         postItId: optStr(value.postItId, 'post-it id', 64),
         text: optStr(value.text, 'text', 200000),
         fromLine: !!value.fromLine, // `@bart --build <request>` (Workspace.jsx askBart)
+        withDocument: !!value.withDocument, // a task built from its own line (MATH-106): the workspace is given beside it
         routedFrom: optStr(value.routedFrom, 'route id', 80), // the router's record, when Bart handed the line to Build (bart/route.cjs)
         place: value.place && typeof value.place === 'object' ? placeOf(value.place, null, refOrNull(value.place.ref)) : null, // the line it came from (the Agent Viewer)
         provider: optStr(value.provider, 'provider', 24),

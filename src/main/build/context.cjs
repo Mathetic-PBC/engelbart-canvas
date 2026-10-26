@@ -7,7 +7,8 @@
 // short messages in the same session; a session that will not resume starts again from context.md and the conversation.
 // A post-it added to a workspace (2026-09-27) is a Build of that workspace whose task is the post-it, not the document.
 // A request typed on an @bart line after --build (2026-10-02) is the same, given as <request> with the notes it mentions,
-// and without the workspace's history.
+// and without the workspace's history. A task built from its own line (MATH-106, 2026-10-25) is such a request with the
+// whole workspace beside it (`withDocument`): the task is what to do, the document is background.
 
 const projects = require('../store/projects.cjs');
 const archive = require('../store/archive.cjs');
@@ -15,13 +16,14 @@ const { expandMentions, expandRows, projectSource } = require('../context/expand
 const { catalogEntries } = require('../bart/context.cjs');
 const { instructionsBlock } = require('../store/onboarding.cjs');
 const { memoryBlock } = require('../connect/memory.cjs');
+const { stripTaskMarkers } = require('../../shared/task-marker.cjs');
 
 const BUILD_LINE_RE = /^build> [a-z0-9]{6,32}$/;
 const attr = (value) => String(value).replace(/[<>"\n\r]/g, ' ').slice(0, 200);
 
-/** A document's text with its mentions in place and its Build lines (drawn cards, not words) left out. */
+/** A document's text with its mentions in place and its Build lines (drawn cards, not words) and tasks' Build markers left out. */
 async function expandText(text, source, seen) {
-  const plain = String(text || '').split('\n').filter((line) => !BUILD_LINE_RE.test(line.trim())).join('\n');
+  const plain = stripTaskMarkers(String(text || '')).split('\n').filter((line) => !BUILD_LINE_RE.test(line.trim())).join('\n');
   const { lines } = await expandMentions(plain, source, seen);
   return lines.join('\n').trimEnd();
 }
@@ -29,10 +31,11 @@ async function expandText(text, source, seen) {
 /**
  * The frozen first message. `task` carries where the Build works (worktree, branch, baseBranch, baseSha, repo);
  * `attach` library ids; `postIt` the post-it's text: a quick task's (no `workspaceId`), or one added to the workspace;
- * with `fromLine`, the request typed on a line of the workspace.
+ * with `fromLine`, the request typed on a line of the workspace; with `withDocument` too, a task built from its own line,
+ * given as <request> with the workspace document after it as <workspace>.
  * → { text, archive: file | null }
  */
-async function freezeContext(ctx, projectId, { task, workspaceId = null, attach = [], postIt = null, fromLine = false }) {
+async function freezeContext(ctx, projectId, { task, workspaceId = null, attach = [], postIt = null, fromLine = false, withDocument = false }) {
   const project = projects.findProject(ctx, projectId);
   const rows = await ctx.libraryDb.list();
   const source = projectSource(ctx, projectId, rows);
@@ -43,19 +46,24 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
   const blocks = [];
   const fromPostIt = postIt != null;
   const request = fromPostIt && fromLine && !!workspaceId;
+  const ofTask = request && !!withDocument;
   if (fromPostIt && !request) blocks.push(`<post-it>\n${String(postIt || '').trim()}\n</post-it>`);
   if (workspaceId) {
     const { workspace } = projects.findWorkspace(ctx, projectId, workspaceId);
     seen.add(`ws:${workspaceId}`);
-    if (request) {
-      blocks.push(`<request>\n${await expandText(String(postIt || '').trim(), source, seen)}\n</request>`);
-      from = `a request typed on a line of the workspace "${workspace.name}"`;
-    } else if (fromPostIt) {
-      from = `a post-it added to the workspace "${workspace.name}"`;
-    } else {
+    const document = async () => {
       let text = '';
       try { text = await projects.readDoc(ctx, projectId, { kind: 'workspace', workspaceId }); } catch { text = ''; }
       blocks.push(`<workspace name="${attr(workspace.name)}">\n${await expandText(text, source, seen)}\n</workspace>`);
+    };
+    if (request) {
+      blocks.push(`<request>\n${await expandText(String(postIt || '').trim(), source, seen)}\n</request>`);
+      if (ofTask) await document();
+      from = ofTask ? `a task on a line of the workspace "${workspace.name}"` : `a request typed on a line of the workspace "${workspace.name}"`;
+    } else if (fromPostIt) {
+      from = `a post-it added to the workspace "${workspace.name}"`;
+    } else {
+      await document();
       from = `the workspace "${workspace.name}"`;
     }
     if (!request) history = archive.latestArchive(ctx, projectId, workspaceId);
@@ -82,7 +90,9 @@ async function freezeContext(ctx, projectId, { task, workspaceId = null, attach 
   if (page) parts.push(page);
   const remembered = memoryBlock(ctx.dataRoot); // MEMORY.md, when Connect your library wrote one (2026-10-07)
   if (remembered) parts.push(remembered);
-  parts.push(request
+  parts.push(ofTask
+    ? '<task>\nDo the task in the request below. The person built it from a task on a line of their workspace: larger changes are fine, and you may ask with NEEDS YOU when a choice is theirs. The request is the task, with the tasks nested under it as its steps. The workspace document after it is background: what the task is part of, not more to build.\n</task>'
+    : request
     ? '<task>\nDo what the request below asks. The person typed it on a line of a workspace as a full Build: larger changes are fine, and you may ask with NEEDS YOU when a choice is theirs. Notes it mentions are included under it; the rest of the workspace is not.\n</task>'
     : !fromPostIt
       ? '<task>\nDo what the workspace document below asks: it is the person\'s plan for this Build, usually ending with what to build now. Where it discusses options, follow what it settles on; where something it asks for is still undecided, choose sensibly and say what you chose, or ask with NEEDS YOU when the choice is theirs.\n</task>'

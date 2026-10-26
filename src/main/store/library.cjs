@@ -21,6 +21,7 @@ const { readHtmlMeta } = require('./page-meta.cjs');
 const { WEB, withAsk } = require('../../shared/mark-answers.cjs');
 const { CROP_RE, cropNumber, cropsOf, nextCropName, isBox } = require('../browser/boxes.cjs');
 const { addressKey, isPreviewAddress } = require('../../shared/address-key.cjs');
+const { stripTaskMarkers } = require('../../shared/task-marker.cjs');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PDF_BYTES = 200 * 1024 * 1024;
@@ -449,7 +450,7 @@ async function bodiesForProject(ctx, projectId) {
   const items = await bodiesOfRows(ctx, rows);
   const workspaces = {};
   for (const workspace of projects.flattenWorkspaces(project.dir)) {
-    const text = readBody(path.join(project.dir, workspace.path, 'workspace.md'));
+    const text = stripTaskMarkers(readBody(path.join(project.dir, workspace.path, 'workspace.md'))); // no task's Build marker (MATH-106)
     if (text) workspaces[workspace.id] = text;
   }
   return { items, workspaces };

@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const projects = require('./projects.cjs');
 const { INLINE } = require('../context/expand-mentions.cjs');
+const { stripTaskMarkers } = require('../../shared/task-marker.cjs');
 
 const ARCHIVE_DIR = '.archive';
 const IMPORTED = 'Imported from Task:';
@@ -29,7 +30,7 @@ function stampOf(date) {
 
 /** What a version is called in the sidebar: its first line with words in it, without its markdown. */
 function titleOf(text) {
-  for (const raw of String(text || '').split('\n')) {
+  for (const raw of stripTaskMarkers(String(text || '')).split('\n')) {
     const line = raw.replace(/^\s*(#{1,3} |- \[[ xX]?\] |[-*] |> ?)/, '').replace(/@\[([^\]\n]+)\](\((?:ws|lib|zotero):[^)\s]*\))?/g, '$1').replace(/!\[[^\]\n]*\]\([^)]*\)/g, '').replace(/[*`]/g, '').trim();
     if (line && !/^(bart[~+?]?>|build>)/.test(raw.trim())) return line.slice(0, 120);
   }

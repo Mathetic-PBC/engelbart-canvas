@@ -35,6 +35,7 @@ const buildStore = require('../build/store.cjs');
 const { addressKey } = require('../../shared/address-key.cjs');
 const { holder } = require('../../shared/project-holds.cjs');
 const { mentionedIds } = require('../../shared/mentions.cjs');
+const { stripTaskMarkers } = require('../../shared/task-marker.cjs');
 
 // A workspace's meta.json `status` is no longer shown or changed (2026-09-25: the todo / in progress / done marks were
 // deleted). It stays on disk only as the mark that a folder is a workspace and not an older layout's goal (migrate.cjs).
@@ -261,7 +262,7 @@ function recentWorkspaces(projectDir, workspaces, limit = RECENT_WORKSPACES) {
     .slice(0, limit)
     .map(({ workspace, file, edited }) => {
       let text = '';
-      try { text = fs.readFileSync(file, 'utf8').slice(0, RECENT_TEXT_CHARS); } catch { text = ''; }
+      try { text = stripTaskMarkers(fs.readFileSync(file, 'utf8')).slice(0, RECENT_TEXT_CHARS); } catch { text = ''; }
       return { id: workspace.id, name: workspace.name, path: workspace.path, chars: workspace.chars, edited: edited ? new Date(edited).toISOString() : null, text };
     });
 }

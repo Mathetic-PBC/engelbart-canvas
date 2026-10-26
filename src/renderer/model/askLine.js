@@ -1,9 +1,10 @@
 // Where an ask's line is now (2026-10-12, the Agent Viewer's click; src/main/agent-map/asks.cjs). The run log keeps the
 // line as typed and its number when it was asked; the document has moved on since. The line is the one equal to what was
 // typed, or to it with `@bart` written as the agent Bart handed it to (DocEditor handOff rewrites the line), the nearest
-// to where it was. A Build with no line of its own is found by its card's line.
+// to where it was. A Build with no line of its own is found by its card's line, or by the task that names it (MATH-106).
 
 import { buildLine } from './doc.js';
+import { readTaskMark } from '../../shared/task-marker.cjs';
 
 // The token a line Bart routed is rewritten to: Chat's line is `@chat`, as is a build request with no spec above it.
 const REWRITTEN = { chat: ['chat'], brainstorm: ['brainstorm'], discover: ['discover'], create: ['create'], build: ['chat'] };
@@ -32,8 +33,8 @@ export function findAskLine(lines, { text, line = null, routedTo = null } = {}) 
   return best;
 }
 
-/** A Build's card line (`build> <id>`), or -1. */
+/** A Build's card line (`build> <id>`), or the task built from its own line that holds its id; -1 when neither is there. */
 export function findBuildLine(lines, buildId) {
   if (!buildId || !Array.isArray(lines)) return -1;
-  return lines.findIndex((held) => String(held).trim() === buildLine(buildId));
+  return lines.findIndex((held) => String(held).trim() === buildLine(buildId) || (/^\s*- \[[ xX]\] /.test(held) && readTaskMark(held).build === buildId));
 }
