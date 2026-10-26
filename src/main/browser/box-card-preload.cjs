@@ -5,16 +5,15 @@
 //   in:  state { mark: { id, note, asks }, running }: the box's note and answers as kept, and what is being asked from it;
 //        a selection's card (2026-10-18) has { mode: 'selection', offer } too, and no mark until it is saved; a
 //        highlight's own card the same, with its mark. `typed`: a key typed in the page, for the note (the card has the
-//        keyboard now); `icon: true` (2026-10-24): a selection's card shown as the chat icon at its end alone, until opened
+//        keyboard now)
 //   out: ready(), note(text) (a box's, saved as typed), ask(question), stop(askId), remove(), size({ height, width }),
 //        save(text): a selection's or a highlight's note saved (2026-10-18: nothing is kept before), cancel(): its card
-//        closed with nothing saved, open(): the chat icon clicked, its card wanted
+//        closed with nothing saved
 // Sandboxed and isolated: the card's page gets `window.boxCardAPI` and nothing else.
 
 const CHANNELS = Object.freeze({
   state: 'box-card:state', ready: 'box-card:ready', note: 'box-card:note', ask: 'box-card:ask',
   stop: 'box-card:stop', remove: 'box-card:remove', size: 'box-card:size', save: 'box-card:save', cancel: 'box-card:cancel',
-  open: 'box-card:open',
 });
 
 function runInCard() {
@@ -32,7 +31,6 @@ function runInCard() {
     remove: () => ipcRenderer.send(CHANNELS.remove),
     save: (text) => ipcRenderer.send(CHANNELS.save, String(text)),
     cancel: () => ipcRenderer.send(CHANNELS.cancel),
-    open: () => ipcRenderer.send(CHANNELS.open),
     size: ({ height, width } = {}) => ipcRenderer.send(CHANNELS.size, { height: Number(height), width: Number(width) }),
   }));
 }

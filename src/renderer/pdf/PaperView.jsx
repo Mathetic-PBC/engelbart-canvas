@@ -108,10 +108,9 @@
 // with that character as its note (addMark) and its card is drawn where the empty one was, its field with the keyboard,
 // on the paper's white (CARD_GROUND, as a web page's card is) until the note is left, when it goes beside its highlight as
 // any card does (selCard). Enter keeps a highlight with no note; Escape, a click elsewhere, another selection or the
-// selection scrolled out of the pane puts the empty card away and keeps nothing.
-// Since 2026-10-24 (David) a selection first shows only the chat icon at its end (openSelIcon, ../ui/chat-icon.js;
-// chatIconPlace), not the empty card: a click on it keeps the highlight and opens its note's field there, with the
-// keyboard (keepPending); it goes as the empty card went. A highlight's note sends as the workspace's fields do: Enter, or
+// selection scrolled out of the pane puts the empty card away and keeps nothing. A click into the empty card keeps the
+// highlight and gives its note's field the keyboard there (keepPending). (From 2026-10-24 a chat icon at the selection's
+// end came first, to be clicked; since 2026-10-26, David, the card comes straight away again.) A highlight's note sends as the workspace's fields do: Enter, or
 // the round send under it (../ui/send-button.js), asks a note that starts with @bart and leaves any other (Shift+Enter is
 // a new line); every agent's token in it is tinted as the workspace tints it (model/doc.js noteInkHtml).
 import React from 'react';
@@ -126,9 +125,8 @@ import { isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js'
 import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, LABEL_INK, ERROR_INK, ANSWER_GAP, SPINNER, CARD_GROUND, cardCss } from './card-look.js';
 import { sideSpace, deskGeom, placeOf, posOf, spaceBoxes, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, runningLabel, textColumn, fitWidth, freeNoteWidth, noteScale, NOTE_FLOOR, HIDE_ROOM, FREE_MIN, FREE_FIT, EDGE_PAD, NOTE_W, NOTE_MIN, BOX_GAP, SIDE_GAP, POS_DY, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
-import { selectionCardPlace, chatIconPlace } from '../../shared/selection-card.cjs';
+import { selectionCardPlace } from '../../shared/selection-card.cjs';
 import { SEND_ARROW, SEND_HOVER_CSS, sendLook, sendReady } from '../ui/send-button.js';
-import { CHAT_SVG, CHAT_TIP, CHAT_ICON_CSS, chatIconLook } from '../ui/chat-icon.js';
 import { matchPassage } from '../../shared/passage-text.cjs';
 import { citationNumbers, citationSources, citationSourcesHtml, citationTip, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
@@ -209,7 +207,6 @@ const LAYER_CSS = `
 ${cardCss('[data-pdf] [data-box]')}
 @keyframes sel-caret{50%{opacity:0}}
 ${SEND_HOVER_CSS}
-${CHAT_ICON_CSS}
 ::highlight(pdf-section){background-color:rgba(255,196,0,.13)}
 ::highlight(pdf-find){background-color:rgba(255,196,0,.35)}
 ::highlight(pdf-find-active){background-color:rgba(255,140,0,.6)}
@@ -366,7 +363,6 @@ export default class PaperView extends React.Component {
     this.resetGeometry();
     this.pendingSel = null;
     this.selEl = null; // the empty card under the pending selection (openSelCard)
-    this.selIcon = null; // the chat icon at the pending selection's end (openSelIcon, 2026-10-24)
     this.selCard = null; // { markId }: the mark typed from that card, drawn where it was until its note is left
     this.pdfDown = null;
     this.dirty = false;
@@ -1394,7 +1390,7 @@ export default class PaperView extends React.Component {
       if (!parts.length) return;
       this.pendingSel = { parts, text };
       this.showPending(); sel.removeAllRanges();
-      this.openSelIcon();
+      this.openSelCard();
       return;
     }
     const down = this.pdfDown, still = !!down && Math.hypot(e.clientX - down.x, e.clientY - down.y) < PRESS_MOVE;
@@ -1580,12 +1576,12 @@ export default class PaperView extends React.Component {
     }
     return false;
   }
-  // The pending selection kept as a highlight with `note` for its note (a key typed, or '' for the chat icon's click), its
-  // field with the keyboard. Begun from the empty card or the icon, its card is drawn where they were until the note is
+  // The pending selection kept as a highlight with `note` for its note (a key typed, or '' for a click into the empty
+  // card), its field with the keyboard. Begun from the empty card, its card is drawn where that was until the note is
   // left (selCard). → the mark.
   keepPending(note) {
     const p = this.pendingSel; if (!p) return null;
-    const card = !!(this.selEl || this.selIcon);
+    const card = !!this.selEl;
     const m = this.addMark(p, note); this.clearPending();
     if (!m) return null;
     if (note === '' && m.note == null) { m.note = ''; this.editing = m.id; } // a highlight there already, with no note yet: its field
@@ -1624,7 +1620,7 @@ export default class PaperView extends React.Component {
     }
   }
   hidePending() { const host = this.host.current; if (host) host.querySelectorAll('[data-pending]').forEach((n) => n.remove()); }
-  clearPending() { this.pendingSel = null; this.hidePending(); this.closeSelCard(); this.closeSelIcon(); }
+  clearPending() { this.pendingSel = null; this.hidePending(); this.closeSelCard(); }
 
   /* ---------------------------------------------------------------- the selection's card (2026-10-18) */
   // Where a selection is, in the pane's scrolled content (host px, scrollLeft and scrollTop counted in): its last line
@@ -1663,7 +1659,8 @@ export default class PaperView extends React.Component {
   }
   // The empty card, over the pane (the pane's frame, not the paper: it is placed again as the paper scrolls), drawn as a
   // card's note is (cardBox, noteSection) at the size of the last part's page's handwriting (boxScale), on the paper's
-  // white, its words the placeholder's after a caret. A press on it keeps the selection and the keyboard where they are.
+  // white, its words the placeholder's after a caret. A press on it keeps the selection where it is; the click keeps it as
+  // a highlight and gives its note's field the keyboard (keepPending).
   openSelCard() {
     this.closeSelCard();
     const host = this.host.current, frame = host && host.parentElement, p = this.pendingSel;
@@ -1674,46 +1671,16 @@ export default class PaperView extends React.Component {
     line.append(makeEl('span', `display:inline-block;width:1.5px;height:1.05em;margin-right:1px;vertical-align:-0.18em;background:${NOTE_INK};animation:sel-caret 1.06s steps(1) infinite`, { selCaret: '1' }), makeEl('span', 'color:#b5b5b5', { selPlaceholder: '1' }, SEL_PLACEHOLDER));
     el.appendChild(line);
     el.onmousedown = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+    el.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.keepPending(''); };
     el.dataset.page = String(page);
     frame.appendChild(el);
     this.selEl = el;
     this.placeSelCard();
   }
   closeSelCard() { if (this.selEl) { this.selEl.remove(); this.selEl = null; } }
-  // The chat icon (2026-10-24) at the pending selection's end, over the pane as the empty card is, at its own size at any
-  // zoom: a press on it keeps the pending selection, a click keeps it as a highlight and opens its note (keepPending).
-  openSelIcon() {
-    this.closeSelIcon();
-    const host = this.host.current, frame = host && host.parentElement, p = this.pendingSel;
-    if (!frame || !p || !p.parts.length) return;
-    const el = makeEl('button', `position:absolute;left:0;top:0;z-index:4;${chatIconLook()};visibility:hidden`, { chatIcon: '1' });
-    el.title = CHAT_TIP;
-    el.setAttribute('aria-label', CHAT_TIP);
-    el.innerHTML = CHAT_SVG;
-    el.onmousedown = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
-    el.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.keepPending(''); };
-    frame.appendChild(el);
-    this.selIcon = el;
-    this.placeSelIcon();
-  }
-  closeSelIcon() { if (this.selIcon) { this.selIcon.remove(); this.selIcon = null; } }
-  // The icon where the pending selection's end is now (chatIconPlace); put away with the selection once that end is out of
-  // the pane.
-  placeSelIcon() {
-    const host = this.host.current, el = this.selIcon, p = this.pendingSel;
-    if (!el || !host) return;
-    if (!p) { this.closeSelIcon(); return; }
-    const geom = this.selectionGeom(p.parts);
-    const at = geom && chatIconPlace(geom.line, this.selectionPane());
-    if (!at) { if (geom) this.clearPending(); return; }
-    el.style.left = `${at.x - host.scrollLeft + host.offsetLeft + (host.clientLeft || 0)}px`;
-    el.style.top = `${at.y - host.scrollTop + host.offsetTop + (host.clientTop || 0)}px`;
-    el.style.visibility = '';
-  }
   // The empty card where the pending selection is now (selectionCardPlace); put away with the selection once that shows
   // nowhere in the pane.
   placeSelCard() {
-    this.placeSelIcon();
     const host = this.host.current, el = this.selEl, p = this.pendingSel;
     if (!el || !host) return;
     if (!p) { this.closeSelCard(); return; }

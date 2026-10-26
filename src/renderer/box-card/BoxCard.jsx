@@ -9,9 +9,8 @@ import { citationNumbers, citationSources, citationSourcesHtml, openCitationRun,
 import { noteQuestion, askedByNote, runningLabel } from '../pdf/canvas.js';
 import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, ERROR_INK, ANSWER_GAP, CARD_GROUND, cardCss, styleOf } from '../pdf/card-look.js';
 import { WAVE_SPAN, keepWaves } from '../ui/wave.js';
-import { SEL_CARD_W, SEL_CARD_H, CARD_SHADE, ICON_SHADE } from '../../shared/selection-card.cjs';
+import { SEL_CARD_W, SEL_CARD_H, CARD_SHADE } from '../../shared/selection-card.cjs';
 import { SEND_ARROW, SEND_HOVER_CSS, sendLook, sendReady } from '../ui/send-button.js';
-import { CHAT_SVG, CHAT_TIP, CHAT_ICON_CSS, chatIconLook } from '../ui/chat-icon.js';
 
 // The card beside a selected box on a web page (MATH-70 build 2, 2026-10-07): its own small view, one per window, which
 // main places beside the box and moves with it (src/main/browser/views.cjs `card`). The one component Hudson will replace:
@@ -30,8 +29,8 @@ import { CHAT_SVG, CHAT_TIP, CHAT_ICON_CSS, chatIconLook } from '../ui/chat-icon
 // type into"), and a highlight's own: this view too, mode 'selection', drawn by SelectionCard below in its own look (David's
 // picture, 2026-10-18). Its field is the document's focused element from the start, and while the page keeps the keyboard
 // (⌘C there copies the selection) a caret is drawn where typing goes; a key typed in the page comes here (`typed`).
-// Since 2026-10-24 (David) a selection first shows only the chat icon at its end (`icon` in main's state, ChatIcon below):
-// the card opens when it is clicked (api.open), focused.
+// From 2026-10-24 a selection first showed only a chat icon at its end, to be clicked; since 2026-10-26 (David) the card
+// comes straight away again.
 
 const api = window.boxCardAPI;
 
@@ -54,7 +53,6 @@ const CSS = `
 html,body,#root{margin:0;background:transparent;color:${ANSWER_INK};${ANSWER_FONT};overflow:hidden}
 ${cardCss('[data-card]')}
 ${SEND_HOVER_CSS}
-${CHAT_ICON_CSS}
 [data-card] [data-trash]:hover{background:#f2f2f2;color:#171717}
 [data-card] textarea::placeholder{color:#b5b5b5}
 `;
@@ -316,7 +314,6 @@ function SelectionCard({ msg }) {
   const field = React.useRef(null), offer = React.useRef(null), markId = React.useRef(null), saved = React.useRef(''), typedNote = React.useRef('');
   const [take, setTake] = React.useState(0);
   const [focused, setFocused] = React.useState(() => document.hasFocus());
-  const wasIcon = React.useRef(false);
   const set = (value) => { typedNote.current = value; setNote(value); };
   // whether this card has the keyboard: without it, an empty card draws its caret where typing goes
   React.useEffect(() => {
@@ -345,11 +342,7 @@ function SelectionCard({ msg }) {
     }
     // a key typed in the page: the note's, and the field has the keyboard
     if (typeof next.typed === 'string') { set(typedNote.current + next.typed); setTake((n) => n + 1); return; }
-    // the chat icon clicked: the card, its field with the keyboard
-    const icon = next.icon === true;
-    if (wasIcon.current && !icon) setTake((n) => n + 1);
-    wasIcon.current = icon;
-    setView({ mark, running: Array.isArray(next.running) ? next.running : [], icon });
+    setView({ mark, running: Array.isArray(next.running) ? next.running : [] });
   }, [msg]);
   React.useEffect(() => {
     const el = field.current;
@@ -371,14 +364,11 @@ function SelectionCard({ msg }) {
   const running = view ? view.running : [];
   const inked = agentTokens(note).length > 0;
   const answered = asks.length > 0 || running.length > 0;
-  const icon = !!(view && view.icon);
   // one row while the note is a line and nothing else is in the card; measured after each render, set before it is painted
   React.useLayoutEffect(() => {
-    if (icon) return;
     const next = !kept && !answered && selInline(note, field.current, buttons.current);
     if (next !== inline) setInline(next);
   });
-  if (icon) return <ChatIcon />;
   const row = (
     <div ref={buttons} data-sel-buttons="1" style={{ flex: 'none', display: 'flex', alignItems: 'center', gap: 4 }}>
       <button type="button" data-sel-cancel="1" onMouseDown={(event) => event.preventDefault()} onClick={() => api.cancel()}>Cancel</button>
@@ -414,15 +404,6 @@ function SelectionCard({ msg }) {
   );
 }
 
-/** The chat icon at a selection's end (../ui/chat-icon.js), in ICON_SHADE of room for its shadow: a click opens the card. */
-function ChatIcon() {
-  return (
-    <div style={{ padding: ICON_SHADE }}>
-      <button type="button" data-chat-icon="1" title={CHAT_TIP} aria-label={CHAT_TIP} onMouseDown={(event) => event.preventDefault()} onClick={() => api.open()} style={styleOf(chatIconLook())} dangerouslySetInnerHTML={{ __html: CHAT_SVG }} />
-    </div>
-  );
-}
-
 /** The card's page: main's state to whichever card it is for, and the card's size back for main to size the view. */
 function CardPage() {
   const [msg, setMsg] = React.useState(null);
@@ -451,6 +432,6 @@ function CardPage() {
   );
 }
 
-export { answerHtml, noteWidth, fitField, canSave, sendBox, Running, SelectionCard, SendButton, ChatIcon, PLACEHOLDER, SEL_PLACEHOLDER, ASK_W, MIN_W, SEL_CSS }; // for test/math.test.cjs and test/box-card.test.cjs
+export { answerHtml, noteWidth, fitField, canSave, sendBox, Running, SelectionCard, SendButton, PLACEHOLDER, SEL_PLACEHOLDER, ASK_W, MIN_W, SEL_CSS }; // for test/math.test.cjs and test/box-card.test.cjs
 
 createRoot(document.getElementById('root')).render(<CardPage />);

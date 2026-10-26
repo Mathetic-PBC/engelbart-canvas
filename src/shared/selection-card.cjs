@@ -58,39 +58,4 @@ function shadedCardPlace(line, all, pane, size, shade = CARD_SHADE, gap = CARD_G
   return { x: Math.round(at.x - shade.side), y: Math.round(at.y - shade.top), width: Math.round(at.width + 2 * shade.side), height: Math.round(at.height + shade.top + shade.bottom) };
 }
 
-// The chat icon at a selection's end (2026-10-24, David): what a settled selection shows instead of its card, which the
-// icon opens (renderer/ui/chat-icon.js). CHAT_ICON square, ICON_GAP right of the selection's last line's end, its middle
-// level with that line's; with no room there, under the line's end (above it with no room under), its right edge with it;
-// always inside the pane, and none once the end of the selection is out of it (scrolled past). On a web page it is the card
-// view's, with ICON_SHADE about it for its shadow (its shadow reaches no further: chat-icon.js ICON_SHADOW).
-// 24 since 2026-10-24 later (David: smaller, a hairline edge, a softer shadow; 28 before).
-const CHAT_ICON = 24;
-const ICON_GAP = 6;
-const ICON_SHADE = 6;
-
-/** The icon's place for a selection whose last line is `line`, in `pane` (as selectionCardPlace's) → { x, y, width, height }, or null. */
-function chatIconPlace(line, pane, size = { width: CHAT_ICON, height: CHAT_ICON }, gap = ICON_GAP) {
-  if (!isRect(line) || !isRect(pane) || !size || !finite(size.width) || !finite(size.height)) return null;
-  const right = pane.x + pane.width, bottom = pane.y + pane.height, end = line.x + line.width;
-  if (end <= pane.x || line.x >= right || line.y + line.height <= pane.y || line.y >= bottom) return null;
-  const width = Math.min(size.width, pane.width), height = Math.min(size.height, pane.height);
-  let x = end + gap, y = line.y + (line.height - height) / 2;
-  if (x + width > right) {
-    x = end - width;
-    y = line.y + line.height + gap;
-    if (y + height > bottom) y = line.y - gap - height;
-  }
-  x = Math.max(pane.x, Math.min(x, right - width));
-  y = Math.max(pane.y, Math.min(y, bottom - height));
-  return { x: Math.round(x), y: Math.round(y), width: Math.round(width), height: Math.round(height) };
-}
-
-/** The icon's view on a web page: the icon placed in the pane less `shade`, the view `shade` bigger on every side; or null. */
-function shadedIconPlace(line, pane, size = { width: CHAT_ICON, height: CHAT_ICON }, shade = ICON_SHADE, gap = ICON_GAP) {
-  if (!isRect(pane)) return null;
-  const inner = { x: pane.x + shade, y: pane.y + shade, width: Math.max(0, pane.width - 2 * shade), height: Math.max(0, pane.height - 2 * shade) };
-  const at = chatIconPlace(line, inner, size, gap);
-  return at && { x: Math.round(at.x - shade), y: Math.round(at.y - shade), width: Math.round(at.width + 2 * shade), height: Math.round(at.height + 2 * shade) };
-}
-
-module.exports = { CARD_GAP, SEL_CARD_W, SEL_CARD_H, CARD_SHADE, CHAT_ICON, ICON_GAP, ICON_SHADE, selectionCardPlace, shadedCardPlace, chatIconPlace, shadedIconPlace };
+module.exports = { CARD_GAP, SEL_CARD_W, SEL_CARD_H, CARD_SHADE, selectionCardPlace, shadedCardPlace };

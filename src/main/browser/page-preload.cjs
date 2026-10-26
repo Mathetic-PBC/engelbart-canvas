@@ -46,11 +46,11 @@
 // any field, the page offers it to main (`engelbart-page:selection-card`): a token, its quote and the page's text around it
 // (as `selection` gives them), and where its last line and all of it are in the viewport. As the page scrolls or reflows
 // the same token comes again with only where it is (once a frame), and a press anywhere in the page, another selection
-// or none takes it back ({ token: null }). Main shows the chat icon at its end for it (2026-10-24), the card once that is
-// clicked, and, on Save, keeps the quote as a highlight and
+// or none takes it back ({ token: null }). Main shows its card under it (on 2026-10-24 to 10-26 a chat icon came
+// first, to be clicked), and, on Save, keeps the quote as a highlight and
 // tints it as the right-click menu's Highlight does (`add`, with the token for its nonce); Cancel keeps nothing
 // (`card-gone`). A selection wholly inside a highlight is that highlight: its own card opens (with its markId), and no
-// second mark is made for one passage (its icon first: `icon`). A plain click on a highlight's text or on its note's symbol opens its card too; a
+// second mark is made for one passage. A plain click on a highlight's text or on its note's symbol opens its card too; a
 // highlight with a note or an answer has its symbol (`noted`), drawn in the boxes' html::after rule over the top right of
 // its first line, following it as the page scrolls or reflows; Remove in its card takes it off (`unmark`).
 //
@@ -449,7 +449,7 @@ function highlightAt(list, x, y) {
   for (const one of list || []) if (one && inRects(one.rects, x, y)) hit = one.id;
   return hit;
 }
-/** The selection being offered (its chat icon, its card): a copy of its own first Range, the very passage the person
+/** The selection being offered (with its card): a copy of its own first Range, the very passage the person
  *  dragged (not the quote's, which is rebuilt from the page's text and snapped to whole words), or null with none. */
 function selectionRange(selection) {
   return selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
@@ -1084,17 +1084,17 @@ function runInPage() {
     const map = textMap(textNodes()), at = anchor(map.text, quote);
     return at ? textAround(map.text, at.start, at.end) : '';
   }
-  /** Highlight `id`'s card, under the highlight, its note in it (main reads it from the page's ink); `icon`, for a selection
-   *  inside it (2026-10-24): the chat icon at the selection's end first, as a new selection has. */
-  function openMark(id, icon = false) {
+  /** Highlight `id`'s card, under the highlight, its note in it (main reads it from the page's ink); `inside`, for a
+   *  selection inside it: that passage stays tinted as selected while the card shows. */
+  function openMark(id, inside = false) {
     const range = painted.get(id);
     if (!range) return;
     clearTimeout(settleTimer); settleTimer = 0;
     const selection = document.getSelection();
-    setOffered({ token: `s${(offerSeq += 1)}`, range, text: selection && !selection.isCollapsed ? selection.toString() : '', markId: id, sel: icon ? selectionRange(selection) : null });
+    setOffered({ token: `s${(offerSeq += 1)}`, range, text: selection && !selection.isCollapsed ? selection.toString() : '', markId: id, sel: inside ? selectionRange(selection) : null });
     let pageText = '';
     try { pageText = pageTextOf(id); } catch { pageText = ''; }
-    ipcRenderer.send(CHANNELS.selectionCard, { ...offerView(), markId: id, pageText, ...(icon ? { icon: true } : {}) });
+    ipcRenderer.send(CHANNELS.selectionCard, { ...offerView(), markId: id, pageText });
   }
   function offer() {
     clearTimeout(settleTimer); settleTimer = 0;

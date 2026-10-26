@@ -5,7 +5,7 @@
 
 export const SEND_PATHS = '<path d="M12 19V5"></path><path d="m5 12 7-7 7 7"></path>';
 export const SEND_SIZE = 28;
-/** The app's blue: the send's when it can be pressed (the chat icon's glyph under the pointer is it too, ./chat-icon.js). */
+/** The app's blue: the send's when it can be pressed. */
 export const SEND_BLUE = '#0070f3';
 export const SEND_ARROW = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${SEND_PATHS}</svg>`;
 

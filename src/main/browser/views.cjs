@@ -114,7 +114,7 @@ const MARK_LOOK = 'background-color:rgba(255,214,0,.22);text-decoration-line:und
 // own paint of it is hidden and the preload tints its Range instead (page-preload.cjs SELECTION) in the active selection's
 // colour, the system's Highlight (already see-through in Electron 44). A selection fills its line boxes, a ::highlight()
 // only the glyph box of each line, and a kept highlight can only be the second: drawn the same way all along, the passage
-// is the same size dragged, let go, with its chat icon or card, and kept, and the tint does not go grey when the card
+// is the same size dragged, let go, with its card, and kept, and the tint does not go grey when the card
 // takes the keyboard. Its text keeps its colour (currentcolor: a page's own ::selection{color:#fff} would leave white
 // text on the page's white). A field's text is the page's still (a ::highlight() cannot reach into an input), the
 // active blue too.
@@ -140,8 +140,6 @@ const CARD_MIN_H = 64; // its height until it says how tall it is
 // and about as tall as an empty one until it says how tall it is
 const SEL_VIEW_W = SEL.SEL_CARD_W + 2 * SEL.CARD_SHADE.side;
 const SEL_VIEW_H = SEL.SEL_CARD_H + SEL.CARD_SHADE.top + SEL.CARD_SHADE.bottom;
-// The chat icon a selection shows first (2026-10-24), in the same view: the icon and its shadow's room each side
-const ICON_VIEW = SEL.CHAT_ICON + 2 * SEL.ICON_SHADE;
 /** What a note asks Bart: the words after a leading @bart, or null for a note that asks nothing (pdf/canvas.js noteQuestion). */
 function bartQuestion(note) {
   const m = String(note == null ? '' : note).match(/^\s*@bart(?=\s|$)([\s\S]*)$/i);
@@ -314,8 +312,7 @@ function selectionCardInput(value) {
   // a highlight's own card (2026-10-18): its id, and the page's text around it for @bart
   if (value.markId !== undefined) {
     if (typeof value.markId !== 'string' || !value.markId || value.markId.length > 64) return null;
-    // a selection inside it (2026-10-24): the chat icon first, as for a new selection
-    return { ...out, markId: value.markId, pageText: typeof value.pageText === 'string' ? value.pageText.slice(0, MAX_PAGE_TEXT) : '', ...(value.icon === true ? { icon: true } : {}) };
+    return { ...out, markId: value.markId, pageText: typeof value.pageText === 'string' ? value.pageText.slice(0, MAX_PAGE_TEXT) : '' };
   }
   if (value.quote === undefined) return out;
   const quote = quoteInput(value.quote);
@@ -792,8 +789,8 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
         // a page whose ink is not kept, a field with the keyboard, a box being drawn or selected: no card
         if (!pageMarks || entry.editing || !fileablePage(contents.getURL()) || layer.tab === id || selectedBox(entry)) { dropOffer(id, entry); return; }
         if (card.tab === id && card.mode === 'selection') hideCard(); // the last selection's card, typed in or not
-        // a selection (a new one, or one inside a highlight) shows the chat icon first (2026-10-24); a highlight clicked, its card
-        entry.offer = { ...got, icon: !!got.quote || got.icon === true };
+        // a selection (a new one, or one inside a highlight: 2026-10-26, its empty card at once again), or a highlight clicked
+        entry.offer = got;
       } else if (entry.offer && entry.offer.token === got.token) entry.offer = { ...entry.offer, line: got.line, rect: got.rect, viewport: got.viewport };
       else return;
       if (entry.view.getVisible()) placeCard(id);
@@ -1032,9 +1029,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   // A selection's card (2026-10-18) is this view too, in mode 'selection' (else 'box'): `offer`, the selection's token,
   // `markId` null until it is saved (a highlight's own card: its mark's from the start); `last`, the mark it was for
   // before, whose note may still come; `shown`, the last state sent to it.
-  // `icon` (2026-10-24): a selection's card shown as the chat icon alone, until it is clicked (box-card:open).
-  const card = { view: null, ready: false, tab: null, markId: null, mode: null, offer: null, icon: false, pageText: '', last: null, height: 0, width: 0, sizes: new Map(), running: [], note: null, saving: Promise.resolve(), queued: null, shown: null };
-  const iconState = () => (card.icon ? { icon: true } : {});
+  const card = { view: null, ready: false, tab: null, markId: null, mode: null, offer: null, pageText: '', last: null, height: 0, width: 0, sizes: new Map(), running: [], note: null, saving: Promise.resolve(), queued: null, shown: null };
   /** Messages from the card's own page alone (box-card.html, its main frame). */
   function fromCard(event) {
     try { assertTrustedRenderer(event, BOX_CARD_URL); } catch { return false; }
@@ -1066,17 +1061,8 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       // a selection's or a highlight's card (2026-10-18): Save keeps the note (and asks one that starts with @bart), Cancel
       // closes it with nothing saved
       contents.ipc.on(CARD.CHANNELS.save, (event, text) => {
-        if (!fromCard(event) || typeof text !== 'string' || text.length > 20000 || card.mode !== 'selection' || card.icon) return;
+        if (!fromCard(event) || typeof text !== 'string' || text.length > 20000 || card.mode !== 'selection') return;
         void saveSelectionCard(text);
-      });
-      // the chat icon clicked (2026-10-24): its card, in its place under the selection, with the keyboard
-      contents.ipc.on(CARD.CHANNELS.open, (event) => {
-        if (!fromCard(event) || card.mode !== 'selection' || !card.icon) return;
-        card.icon = false; card.height = 0; card.width = 0;
-        const { icon, ...shown } = card.shown || { mode: 'selection', offer: card.offer, mark: null, running: [] };
-        sendCard(shown);
-        if (card.tab) placeCard(card.tab);
-        if (!view.webContents.isDestroyed()) view.webContents.focus();
       });
       contents.ipc.on(CARD.CHANNELS.cancel, (event) => {
         if (!fromCard(event) || card.mode !== 'selection') return;
@@ -1093,7 +1079,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
         const height = value && typeof value === 'object' ? Number(value.height) : NaN;
         const width = value && typeof value === 'object' ? Number(value.width) : NaN;
         if (!fromCard(event) || !Number.isFinite(height)) return;
-        card.height = Math.max(card.icon ? 1 : CARD_MIN_H, Math.min(CARD_MAX_H, Math.ceil(height)));
+        card.height = Math.max(CARD_MIN_H, Math.min(CARD_MAX_H, Math.ceil(height)));
         card.width = Number.isFinite(width) && width > 0 ? Math.min(card.mode === 'selection' ? SEL_VIEW_W : CARD_W, Math.ceil(width)) : 0;
         // kept a box (the last 200), so the card is placed at its own size the next time that box is selected, not first
         // at the widest and then moved (2026-10-07)
@@ -1120,7 +1106,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     try { list = await pageMarks.list(entry.view.webContents.getURL()); } catch { list = []; }
     if (card.tab !== tab || card.markId !== markId) return;
     const m = (Array.isArray(list) ? list : []).find((x) => x && x.id === markId);
-    sendCard({ mode: card.mode, offer: card.offer, mark: m ? { id: m.id, note: typeof m.note === 'string' ? m.note : '', asks: cardAsks(m.asks) } : { id: markId, note: '', asks: [] }, running: card.running.filter((p) => p.markId === markId), ...iconState() });
+    sendCard({ mode: card.mode, offer: card.offer, mark: m ? { id: m.id, note: typeof m.note === 'string' ? m.note : '', asks: cardAsks(m.asks) } : { id: markId, note: '', asks: [] }, running: card.running.filter((p) => p.markId === markId) });
     // a highlight's symbol shows once it has a note or an answer (an answer comes in while its card is open)
     const contents = entry.view.webContents;
     if (m && card.mode === 'selection' && !BOX.isBox(m) && !contents.isDestroyed()) contents.send(PAGE.CHANNELS.noted, { id: m.id, on: isNoted(m) });
@@ -1242,7 +1228,6 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
   function selectionKey(id, entry, event, input) {
     if (input.type !== 'keyDown' || !entry.offer || card.tab !== id || card.mode !== 'selection' || card.offer !== entry.offer.token || !card.view || !card.view.getVisible()) return false;
     if (input.key === 'Escape' && !input.meta && !input.control && !input.alt) { event.preventDefault(); closeOffer(id, entry); return true; }
-    if (card.icon) return false; // the chat icon alone (2026-10-24): every key but Esc is the page's
     if (input.meta || input.control || input.alt || input.isComposing) return false;
     if ([...String(input.key)].length !== 1) return false;
     event.preventDefault();
@@ -1289,7 +1274,6 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     card.note = null;
     card.mode = null;
     card.offer = null;
-    card.icon = false;
   }
   /**
    * The card beside the box selected on tab `id`, when that tab is in front and the box in view (BOX.cardPlace), at the
@@ -1303,7 +1287,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     if (!sel || !entry.view.getVisible() || !pageMarks || !win || win.isDestroyed()) { if (card.tab === id) hideCard(); return; }
     if (layer.tab === id) { hideCardView(); return; }
     const view = cardView();
-    if (card.tab !== id || card.markId !== sel.id || card.mode !== 'box') { rememberCard(); hideCardView(); card.tab = id; card.markId = sel.id; card.mode = 'box'; card.offer = null; card.icon = false; card.note = null; const kept = card.sizes.get(sel.id); card.height = kept ? kept.height : 0; card.width = kept ? kept.width : 0; void refreshCard(); }
+    if (card.tab !== id || card.markId !== sel.id || card.mode !== 'box') { rememberCard(); hideCardView(); card.tab = id; card.markId = sel.id; card.mode = 'box'; card.offer = null; card.note = null; const kept = card.sizes.get(sel.id); card.height = kept ? kept.height : 0; card.width = kept ? kept.width : 0; void refreshCard(); }
     if (CARD_HIDE_WHILE_SCROLLING && sel.scrolling) { hideCardView(); return; }
     const zoom = entry.view.webContents.getZoomFactor() || 1, page = entry.view.getBounds();
     const box = { x: page.x + sel.rect.x * zoom, y: page.y + sel.rect.y * zoom, width: sel.rect.w * zoom, height: sel.rect.h * zoom };
@@ -1332,23 +1316,14 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const view = cardView();
     if (card.tab !== id || card.mode !== 'selection' || card.offer !== offer.token) {
       rememberCard(); hideCardView();
-      card.tab = id; card.mode = 'selection'; card.offer = offer.token; card.markId = offer.markId || null; card.icon = !!offer.icon; card.note = null; card.pageText = offer.pageText || ''; card.height = 0; card.width = 0;
-      sendCard({ mode: 'selection', offer: offer.token, mark: null, running: [], ...iconState() });
+      card.tab = id; card.mode = 'selection'; card.offer = offer.token; card.markId = offer.markId || null; card.note = null; card.pageText = offer.pageText || ''; card.height = 0; card.width = 0;
+      sendCard({ mode: 'selection', offer: offer.token, mark: null, running: [] });
       if (card.markId) void refreshCard();
     }
     const zoom = entry.view.webContents.getZoomFactor() || 1, page = entry.view.getBounds();
     const appZoom = (win.webContents && win.webContents.getZoomFactor && win.webContents.getZoomFactor()) || 1;
     const inWindow = (r) => (r ? { x: page.x + r.x * zoom, y: page.y + r.y * zoom, width: r.w * zoom, height: r.h * zoom } : null);
     const line = inWindow(offer.line), all = inWindow(offer.rect);
-    if (card.icon) {
-      // the chat icon at the selection's end (SEL.shadedIconPlace), gone once that end is out of the page
-      const side = (card.width || ICON_VIEW) * appZoom, room = SEL.ICON_SHADE * appZoom;
-      const icon = { width: Math.max(1, side - 2 * room), height: Math.max(1, (card.height || ICON_VIEW) * appZoom - 2 * room) };
-      const spot = line && SEL.shadedIconPlace(line, page, icon, room, SEL.ICON_GAP * appZoom);
-      if (!spot) { dropOffer(id, entry); return; }
-      showCardAt(view, win, spot, appZoom);
-      return;
-    }
     const shade = { top: SEL.CARD_SHADE.top * appZoom, side: SEL.CARD_SHADE.side * appZoom, bottom: SEL.CARD_SHADE.bottom * appZoom };
     const full = { width: (card.width || SEL_VIEW_W) * appZoom, height: (card.height || SEL_VIEW_H) * appZoom };
     const size = { width: Math.max(1, full.width - 2 * shade.side), height: Math.max(1, full.height - shade.top - shade.bottom) };

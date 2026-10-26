@@ -3,7 +3,7 @@
 // The Stage's highlight notes look and send as the workspace's fields do (2026-10-24): every agent's token tinted exactly
 // where the workspace tints it (model/doc.js agentTokens, the one rule both read), the round send's ready state
 // (ui/send-button.js, shared with workspace/DocEditor.jsx), what Enter or the send does with a box's note (BoxCard.jsx
-// sendBox), and where the chat icon at a selection's end shows and when it does not (shared/selection-card.cjs).
+// sendBox), and that a selection's card comes with no chat icon before it (2026-10-26).
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -106,55 +106,11 @@ test('a box\'s card: Enter or the send asks a leading @bart, keeps any other not
   assert.equal(pressed, true, 'a press keeps the field\'s keyboard');
 });
 
-test('chatIconPlace: right of the selection\'s end, level with its line; under its end with no room right, above with none under', () => {
-  const pane = { x: 0, y: 0, width: 800, height: 600 }, line = { x: 100, y: 200, width: 300, height: 20 };
-  assert.deepEqual(SEL.chatIconPlace(line, pane), { x: 400 + SEL.ICON_GAP, y: 210 - SEL.CHAT_ICON / 2, width: SEL.CHAT_ICON, height: SEL.CHAT_ICON });
-  const right = { x: 500, y: 200, width: 290, height: 20 };
-  assert.deepEqual(SEL.chatIconPlace(right, pane), { x: 790 - SEL.CHAT_ICON, y: 220 + SEL.ICON_GAP, width: SEL.CHAT_ICON, height: SEL.CHAT_ICON }, 'under its end');
-  const corner = { x: 500, y: 575, width: 290, height: 20 };
-  assert.equal(SEL.chatIconPlace(corner, pane).y, 575 - SEL.ICON_GAP - SEL.CHAT_ICON, 'above it');
-  const at = SEL.chatIconPlace({ x: 790, y: 2, width: 8, height: 8 }, pane);
-  assert.ok(at.x >= 0 && at.x + at.width <= 800 && at.y >= 0 && at.y + at.height <= 600, 'always inside the pane');
-});
-
-test('chatIconPlace: none once the selection\'s line is scrolled out of the pane, or there is no selection', () => {
-  const pane = { x: 0, y: 40, width: 800, height: 600 };
-  assert.equal(SEL.chatIconPlace({ x: 100, y: 900, width: 300, height: 20 }, pane), null, 'below');
-  assert.equal(SEL.chatIconPlace({ x: 100, y: 0, width: 300, height: 20 }, pane), null, 'scrolled past, above');
-  assert.equal(SEL.chatIconPlace({ x: -400, y: 100, width: 300, height: 20 }, pane), null, 'its end left of the pane');
-  assert.equal(SEL.chatIconPlace(null, pane), null, 'cleared');
-  assert.equal(SEL.chatIconPlace({ x: 1, y: 1, width: NaN, height: 1 }, pane), null);
-  assert.ok(SEL.chatIconPlace({ x: 100, y: 30, width: 300, height: 20 }, pane), 'partly in it');
-});
-
-test('shadedIconPlace: the icon placed in the pane less its shadow\'s room, the view that room bigger; none when the icon is', () => {
-  const pane = { x: 0, y: 40, width: 800, height: 600 }, line = { x: 100, y: 90, width: 300, height: 20 };
-  const s = SEL.ICON_SHADE, at = SEL.shadedIconPlace(line, pane);
-  assert.deepEqual(at, { x: 400 + SEL.ICON_GAP - s, y: 100 - SEL.CHAT_ICON / 2 - s, width: SEL.CHAT_ICON + 2 * s, height: SEL.CHAT_ICON + 2 * s });
-  assert.equal(SEL.shadedIconPlace({ x: 100, y: 900, width: 300, height: 20 }, pane), null);
-  const edge = SEL.shadedIconPlace({ x: 700, y: 620, width: 99, height: 18 }, pane);
-  assert.ok(edge.x >= 0 && edge.x + edge.width <= 800 && edge.y >= 40 && edge.y + edge.height <= 640, JSON.stringify(edge));
-});
-
-test('the chat icon\'s look: 24px round (28 before 2026-10-24 later), white, a shade darker under the pointer, its tooltip', async () => {
-  const { CHAT_TIP, CHAT_SVG, CHAT_ICON_CSS, chatIconLook } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/ui/chat-icon.js')).href);
-  assert.equal(CHAT_TIP, 'Ask or add a note');
-  assert.match(chatIconLook(), /width:24px;height:24px;.*border-radius:50%;background:#fff/);
-  assert.match(CHAT_ICON_CSS, /\[data-chat-icon\]:hover\{background:#f3f3f3/);
-  assert.match(CHAT_SVG, /^<svg/);
-});
-
-test('a web page\'s chat icon, in the card\'s own view: its tooltip, a press keeping the page\'s selection, a click asking for the card', () => {
-  let opened = 0, pressed = false;
-  const { ChatIcon } = loadCard({ open: () => { opened += 1; } });
-  const shell = ChatIcon();
-  assert.equal(shell.props.style.padding, SEL.ICON_SHADE, 'room for its shadow');
-  const button = shell.props.children;
-  assert.equal(button.props.title, 'Ask or add a note');
-  assert.equal(button.props['data-chat-icon'], '1');
-  button.props.onMouseDown({ preventDefault: () => { pressed = true; } });
-  assert.equal(pressed, true);
-  assert.equal(opened, 0, 'nothing until clicked');
-  button.props.onClick();
-  assert.equal(opened, 1, 'main asked for its card');
+test('a selection\'s card has no chat icon before it (2026-10-26): none to place, none to draw, none to open', () => {
+  for (const name of ['CHAT_ICON', 'ICON_GAP', 'ICON_SHADE', 'chatIconPlace', 'shadedIconPlace']) assert.equal(SEL[name], undefined, name);
+  assert.equal(typeof SEL.shadedCardPlace, 'function', 'the card\'s place is still the shared one');
+  const card = loadCard({});
+  assert.equal(card.ChatIcon, undefined);
+  assert.equal(typeof card.SelectionCard, 'function');
+  assert.equal(fs.existsSync(path.join(__dirname, '../src/renderer/ui/chat-icon.js')), false);
 });
