@@ -80,6 +80,7 @@ import { carriesDrop, isPastable, readDrop } from '../model/drop.js';
 import { mentionToken, isWebRow, menuItem, rowMention, carriesLibRows, readLibDrag } from '../model/mention.js';
 import { isNote, kindKey } from '../model/kind.js';
 import { matchPassage } from '../../shared/passage-text.cjs';
+import { goalShown } from '../../shared/build-goal.cjs';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
 import { waveText, keepWaves } from '../ui/wave.js';
 import { SEND_PATHS, SEND_HOVER_CSS, boxSend } from '../ui/send-button.js';
@@ -155,6 +156,8 @@ const FOLLOW = {
 };
 // A Build's state as its card names it (main/build/store.cjs STATUSES).
 const BUILD_STATUS = { 'setting-up': 'Setting up', queued: 'Waiting for a slot', running: 'Working', 'needs-you': 'Needs you', review: 'Ready to review', stopped: 'Stopped', failed: 'Failed', escalated: 'Too big for a quick task', interrupted: 'Interrupted', accepting: 'Accepting', conflict: 'Conflict', accepted: 'Accepted', discarded: 'Discarded' };
+// A text on one line (a goal's condition or reason, MATH-88): its line breaks as spaces.
+const oneLine = (text) => String(text || '').replace(/\s*\n\s*/g, ' ').trim();
 const BUILD_WORKING = new Set(['setting-up', 'queued', 'running', 'accepting']);
 // `@Note` (the @ menu's Note) and the name after it, to the end of the line.
 const NOTE_VERB_RE = /(^|\s)@Note(?:\s+(.*))?$/;
@@ -1825,11 +1828,15 @@ export default class DocEditor extends React.Component {
       return look('idle', 'Build', { act: 'taskbuild', title: 'Build this task' });
     }
     const status = task.status;
+    // A goal Build's (MATH-88): its status goes on with where the goal stands, the goal in full on hover.
+    const goal = goalShown(task), goalTitle = goal ? `Goal: ${goal.condition}${goal.line ? `\n${goal.line}` : ''}` : '';
+    const withGoal = (words) => (goal ? `${words} · ${oneLine(goal.line || `Goal: ${goal.condition}`)}` : words);
+    const cut = (words) => (words.length > 80 ? `${words.slice(0, 79)}…` : words);
     if (BUILD_WORKING.has(status) || task.working) {
       const progress = (this.props.buildProgress || {})[task.id] || {}, log = progress.log || [];
       const step = status === 'running' ? (progress.activity || log[log.length - 1] || 'Thinking') : BUILD_STATUS[status] || status;
-      const words = `Building · ${String(step).split('\n')[0]}`;
-      return look('working', words.length > 80 ? `${words.slice(0, 79)}…` : words, { wave: true, title: words });
+      const words = `Building · ${goal && goal.line && task.goal.supported ? oneLine(goal.line) : String(step).split('\n')[0]}`;
+      return look('working', cut(words), { wave: true, title: goal ? `${words}\n${goalTitle}` : words });
     }
     const stepping = status === 'review' && !!task.runStep && task.runStep.status === 'running';
     if (stepping) return look('stepping', 'Getting it running…', { wave: true });
@@ -1838,11 +1845,11 @@ export default class DocEditor extends React.Component {
     if (refused && (status === 'review' || status === 'conflict')) return look(status, refused, { color: '#e70022', strong: true, title: refused });
     // The row says what there is to do (2026-10-26, David): Review while it waits for the person, View result once it is
     // done. What it made and what it changed are in the card, not on the row.
-    if (status === 'review') return look(status, 'Review', { color: '#0070f3', strong: true });
-    if (status === 'needs-you') return look(status, BUILD_STATUS[status], { color: '#0070f3', strong: true });
-    if (status === 'failed') return look(status, BUILD_STATUS[status], { color: '#e70022', strong: true });
-    if (status === 'accepted') return look(status, 'View result');
-    return look(status, BUILD_STATUS[status] || status); // stopped, interrupted, conflict, too big: the card's words, quiet
+    if (status === 'review') return look(status, cut(withGoal('Review')), { color: '#0070f3', strong: true, title: goalTitle });
+    if (status === 'needs-you') return look(status, cut(withGoal(BUILD_STATUS[status])), { color: '#0070f3', strong: true, title: goalTitle });
+    if (status === 'failed') return look(status, cut(withGoal(BUILD_STATUS[status])), { color: '#e70022', strong: true, title: goalTitle });
+    if (status === 'accepted') return look(status, cut(withGoal('View result')), { title: goalTitle });
+    return look(status, cut(withGoal(BUILD_STATUS[status] || status)), { title: goalTitle }); // stopped, interrupted, conflict, too big: the card's words, quiet
   }
   // Pressed "Build": the parent starts it (Workspace buildTask) and writes the Build's id into the task's line.
   buildTask(i) {
@@ -1900,7 +1907,7 @@ export default class DocEditor extends React.Component {
    * conversation as a `build>` card shows it. The same names every time, so patchBuilds replaces only what changed.
    */
   taskParts(id, task) {
-    const names = ['head', 'summary', 'made', 'changed', 'needs', 'run', 'live', 'actions', 'convo'];
+    const names = ['head', 'goal', 'summary', 'made', 'changed', 'needs', 'run', 'live', 'actions', 'convo'];
     if (!task) { const [[, head]] = this.buildParts(id, null); return names.map((name) => [name, name === 'head' ? head : '']); }
     const parts = new Map(this.buildParts(id, task, { question: false }));
     const status = task.status, final = !!task.final, asking = status === 'needs-you';
@@ -1935,7 +1942,7 @@ export default class DocEditor extends React.Component {
     const acts = parts.get('actions');
     const actions = acts ? acts.replace(/(<div style="display:flex;align-items:center;gap:8px;margin-top:12px">)/, `$1${more}`) : `<div style="display:flex;align-items:center;gap:8px;margin-top:12px">${more}</div>`;
     const convo = shows ? `<div data-task-convo="${esc(id)}" style="margin-top:10px;padding-top:6px;border-top:1px solid #ededed">${parts.get('prompt')}${parts.get('body')}${asking || final ? '' : parts.get('reply')}</div>` : '';
-    return [['head', parts.get('head')], ['summary', summary], ['made', made], ['changed', changed], ['needs', needs], ['run', parts.get('run')], ['live', parts.get('live')], ['actions', actions], ['convo', convo]];
+    return [['head', parts.get('head')], ['goal', parts.get('goal')], ['summary', summary], ['made', made], ['changed', changed], ['needs', needs], ['run', parts.get('run')], ['live', parts.get('live')], ['actions', actions], ['convo', convo]];
   }
   // What happens in the card is what happens in a `build>` line's card (buildAct and the reply field's handlers), but
   // Remove takes the Build off the task (its marker), not a line away; and the card's own: the diff, the conversation,
@@ -2038,6 +2045,13 @@ export default class DocEditor extends React.Component {
       + `<span style="flex:none;font-size:12.5px;color:#8f8f8f">${esc(task.modelName || task.model)} · ${esc(EFFORT_LABELS[task.effort] || task.effort)}</span>`
       + `<span data-build-status="${esc(stepping ? 'getting-it-running' : status)}" style="flex:none;font-size:12.5px;font-weight:500;color:${statusColor}">${esc(stepping ? 'Getting it running…' : BUILD_STATUS[status] || status)}</span>`
       + '</div>';
+    // A goal Build's goal (MATH-88), under the title: the condition on one line (in full on hover), then where it stands
+    // (Not yet, met, stopped), or why it ran as a normal Build.
+    const aim = goalShown(task);
+    const goal = !aim ? '' : `<div data-build-goal="${esc(id)}" style="margin-top:6px;font:13px/1.5 var(--font-sans)">`
+      + `<div title="${esc(aim.condition)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#171717">Goal: ${esc(oneLine(aim.condition))}</div>`
+      + (aim.line ? `<div data-build-goal-line="1" title="${esc(aim.line)}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#8f8f8f">${esc(oneLine(aim.line))}</div>` : '')
+      + '</div>';
     // What it was given (2026-10-13, task.postIt): a line's request, a post-it's text, the panel's. Closed, one dim row;
     // open, the prompt in full, drawn as the agent's messages are, in a box that scrolls.
     const asked = typeof task.postIt === 'string' && task.postIt.trim() ? task.postIt : '', shows = !!asked && this.buildPrompt.has(id);
@@ -2093,7 +2107,7 @@ export default class DocEditor extends React.Component {
     const lastNote = messages.length ? messages[messages.length - 1].text : '';
     const errorLine = task.error && !final && !lastNote.includes(task.error) ? `<div style="margin-top:8px;font:12.5px/1.5 var(--font-sans);color:#e70022">${esc(task.error)}</div>` : '';
     const actions = acts.length || errorLine ? `${errorLine}<div style="display:flex;align-items:center;gap:8px;margin-top:12px">${acts.join('')}</div>` : '';
-    return [['head', head], ['prompt', prompt], ['body', body], ['run', this.buildRunHtml(id, task)], ['live', live], ['diff', this.buildDiffHtml(id, task)], ['reply', reply], ['actions', actions]];
+    return [['head', head], ['goal', goal], ['prompt', prompt], ['body', body], ['run', this.buildRunHtml(id, task)], ['live', live], ['diff', this.buildDiffHtml(id, task)], ['reply', reply], ['actions', actions]];
   }
   // Its run step (main/build/run-step.cjs): while the Build is open, what the repository runs and where each stands (Review
   // opens them, 2026-09-29); while it gets them running, "Getting it running…" with its phase. An accepted Build whose copy

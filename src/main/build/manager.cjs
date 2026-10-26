@@ -74,6 +74,7 @@ const { openToolBridge } = require('../sandbox/local-tools.cjs');
 const { githubRepo } = require('../sandbox/runs.cjs');
 const { worktreePath } = require('./run-tools.cjs');
 const { runnableStore } = require('./runnables.cjs');
+const { parseGoal, goalRequest, goalMessage, stopFeedback, goalOutcome } = require('../../shared/build-goal.cjs');
 
 const CLONES = 'repos';
 const LIMITS = Object.freeze({ build: 3, quick: 1 });
@@ -87,6 +88,10 @@ const CARD_PATCH = 400_000; // the most of a patch the card is sent
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const fromEngelbart = (text) => `<from_engelbart>\n${text}\n</from_engelbart>`;
+// A goal's step 2 (MATH-88) gets what is left of its turn's time, but never less than this.
+const GOAL_MIN_MS = 60_000;
+/** Step 2 of a goal Build whose session would not resume: it never falls back to everything again (freshMessage). */
+const goalCouldNotStart = (error) => Object.assign(new Error(`The goal could not start: the Build's session could not be resumed${error && error.message ? ` (${String(error.message).replace(/\.$/, '')})` : ''}.`), { kind: 'failed' });
 const tail = (text, n = 4000) => { const value = String(text || ''); return value.length > n ? `…${value.slice(-n)}` : value; };
 // A failed test's line, in what the common runners print: node's TAP and spec, Jest, pytest.
 const FAILED_LINE = /^\s*(not ok \d+ - |✖ |FAIL |FAILED |● )/;
@@ -600,6 +605,9 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       title = postItTitle(postIt);
     }
     const choice = resolveBuildChoice(readModels(), input);
+    // A goal Build (MATH-88): a request that starts with `/goal <condition>`, from any of the ways a request gets here. Only a
+    // full Build on Claude Code runs the goal; Codex and a quick task run as a normal Build, and the card says why.
+    const condition = parseGoal(postIt);
     const at = await git.head(pre.top);
     if (!at.branch) throw new Error('The code folder is not on a branch.');
     const id = await store.freeId(project, (candidate) => git.branchExists(pre.top, `engelbart/${candidate}`));
@@ -617,10 +625,12 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       status: 'setting-up', question: null, error: null, queued: null, turn: 0, checkpoints: [],
       messages: [say('engelbart', `Started on ${choice.modelName} ${choice.effort} in ${pre.target.name}, from ${at.branch} at ${at.sha.slice(0, 7)}${pre.dirty ? `; ${pre.dirty} uncommitted ${pre.dirty === 1 ? 'file' : 'files'} left out` : ''}.`)],
       attach, archive: null, checks: null, conflict: null, accepted: null, created: now().toISOString(), finished: null,
+      ...(condition ? { goal: { condition, supported: kind === 'build' && choice.provider === 'anthropic', state: 'pending', rounds: 0, last: null } } : {}),
     };
     // Where it came from (2026-10-12, the Agent Viewer): the line a Build from a line was typed on, else its workspace.
     task.place = placeOfTask(projectId, workspaceId, fromLine ? input.place : null);
-    const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt, fromLine, withDocument });
+    // Step 1 is given the request with its leading `/goal <condition>` read as "The goal: <condition>".
+    const frozen = await freezeContext(ctx, projectId, { task, workspaceId, attach, postIt: condition ? goalRequest(condition) : postIt, fromLine, withDocument });
     task.archive = frozen.archive;
     // A post-it added to a workspace is put in as an archived version of it, after the one it is given as history.
     if (workspaceId && postIt && !fromLine) task.version = await archive.importTask(ctx, projectId, workspaceId, { text: postIt, buildId: id, now });
@@ -692,7 +702,11 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     try { return task.workspaceId ? projects.findWorkspace(ctx, projectId, task.workspaceId).workspace.name : null; } catch { return null; }
   }
 
-  async function runTurn(ctx, projectId, id, { message, fresh = false }) {
+  /**
+   * One turn of the agent. `goal`: step 2 of a goal Build (MATH-88), `message` its /goal, sent in the same session and
+   * given `timeoutMs`, what is left of the turn before it.
+   */
+  async function runTurn(ctx, projectId, id, { message, fresh = false, goal = false, timeoutMs = null }) {
     if (halted.has(id)) return;
     const project = projectOf(ctx, projectId);
     let task = store.readTask(project, id);
@@ -706,6 +720,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     let bridge = null; // Engelbart's tools for this turn (closed when it ends, or here when something threw before)
     let keeping = null; // the library kept aside for this turn (put back when it ends, or here)
     let record = null; // this turn's id in the Agent map's run log, until it is finished
+    let goalNext = false; // a goal Build's turn that ended done with its goal still to run: step 2 next, not review
+    const began = Date.now();
     try {
       await haltRunStep(id); // a run step still working ends (its changes a checkpoint) before the worktree is the agent's again
       if (active[pool] >= limits[pool]) save(ctx, projectId, id, { status: 'queued' });
@@ -742,30 +758,52 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
           context: fresh ? contextParts(message) : { reply: message },
         });
       }
+      // A goal's rounds (MATH-88): each one not yet met streams the goal's stop-hook feedback, its reason the card's "Not
+      // yet" and its count kept on the record. Read beside the Agent map's log; nothing read here can touch the turn.
+      const watching = !!(task.goal && task.goal.supported && (goal || task.goal.state === 'running'));
+      let goalStarted = false;
+      const readGoal = (event) => {
+        try {
+          if (event && event.type === 'assistant') goalStarted = true;
+          const reason = stopFeedback(event, task.goal.condition);
+          if (!reason) return;
+          goalStarted = true;
+          save(ctx, projectId, id, (held) => (held.goal ? { goal: { ...held.goal, rounds: (held.goal.rounds || 0) + 1, last: reason } } : {}));
+        } catch { /* the card's problem, never the Build's */ }
+      };
       const once = (session, text) => {
         feed.reset();
         // Each step, and whatever the model starts after one (a tool's result is in by then), reads the diff again.
         const onUpdate = (update) => { feed.take(update); if (update && (update.log || update.activity || update.textStart)) diffs.poke(); };
-        const onEvent = record ? (event) => logged('event', record, event) : undefined;
+        const onEvent = record || watching ? (event) => { if (record) logged('event', record, event); if (watching) readGoal(event); } : undefined;
         if (record) logged('step', record, { model: task.modelId || task.modelName || '', name: task.modelName || '', effort: task.effort || '', input: text });
         // Stopped (or cut short for a reply) before the agent started, while the turn was being made ready or its CLI was
         // busy: the agent never starts, and the turn ends as a stopped one does.
         const call = () => (controller.signal.aborted
           ? Promise.reject(Object.assign(new Error('Stopped.'), { kind: 'stopped', session }))
-          : runner.turn({ task: { ...task, worktree: task.cwd }, message: text, session, system, policy, engelbart: bridge ? bridge.connection : null, signal: controller.signal, timeoutMs: turnMs[pool], onUpdate, onEvent }));
+          : runner.turn({ task: { ...task, worktree: task.cwd }, message: text, session, system, policy, engelbart: bridge ? bridge.connection : null, signal: controller.signal, timeoutMs: timeoutMs || turnMs[pool], onUpdate, onEvent }));
         return tools ? tools.use(agent, call) : call();
       };
       let out = null;
       let failure = null;
       try {
         if (tools) await tools.ensure(agent);
-        try {
-          // No session to go on with (the first turn was cut short before one was named): everything again, and what was said.
-          out = !fresh && !task.sessionId ? await once(null, freshMessage(store.readContext(project, id), task.messages, message)) : await once(fresh ? null : task.sessionId, message);
-        } catch (error) {
-          if (error.kind === 'stopped' || fresh || !task.sessionId) throw error;
-          // A session that will not resume (its file is gone, the CLI changed): everything again, and what was said.
-          out = await once(null, freshMessage(store.readContext(project, id), task.messages, message));
+        if (goal) {
+          // Step 2 goes on in the session of step 1 or not at all: /goal has to be the first thing it is sent.
+          if (!task.sessionId) throw goalCouldNotStart(null);
+          try { out = await once(task.sessionId, message); } catch (error) {
+            if (error.kind === 'stopped' || goalStarted) throw error;
+            throw goalCouldNotStart(error);
+          }
+        } else {
+          try {
+            // No session to go on with (the first turn was cut short before one was named): everything again, and what was said.
+            out = !fresh && !task.sessionId ? await once(null, freshMessage(store.readContext(project, id), task.messages, message)) : await once(fresh ? null : task.sessionId, message);
+          } catch (error) {
+            if (error.kind === 'stopped' || fresh || !task.sessionId) throw error;
+            // A session that will not resume (its file is gone, the CLI changed): everything again, and what was said.
+            out = await once(null, freshMessage(store.readContext(project, id), task.messages, message));
+          }
         }
       } catch (error) {
         failure = error;
@@ -809,6 +847,18 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
           next.status = end.ending === 'needs-you' ? 'needs-you' : end.ending === 'escalated' ? 'escalated' : 'review';
           next.question = end.ending === 'needs-you' ? end.question : null;
           next.escalation = end.ending === 'escalated' ? end.why || end.question || null : null;
+          // A goal Build (MATH-88). Step 2 that stopped without asking: the goal met, or ended short of it. Any other turn
+          // that ended done while its goal is still to run (step 1, a reply's, a resumed one's): step 2 next, at once.
+          // Claude Code keeps no goal across a resumed session (checked 2026-10-26 on 2.1.310), so it is sent again each time.
+          const aim = held.goal;
+          if (aim && aim.supported && end.ending === 'done') {
+            if (goal) next.goal = { ...aim, state: goalOutcome(out.text, aim.last, aim.rounds) };
+            else if (aim.state === 'pending' || aim.state === 'running') {
+              next.status = 'running';
+              next.goal = { ...aim, state: 'running' };
+              goalNext = true;
+            }
+          }
         }
         return next;
       });
@@ -844,6 +894,11 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     if (after.landing) {
       if (after.status === 'review') void accept(ctx, projectId, id, { attempt: after.landing.attempt }).catch(() => {});
       else save(ctx, projectId, id, { landing: null });
+      return;
+    }
+    // A goal's step 2 (MATH-88): no review and no run step in between; it has what is left of this turn's time.
+    if (goalNext && after.goal) {
+      void runTurn(ctx, projectId, id, { message: goalMessage(after.goal.condition), goal: true, timeoutMs: Math.max(GOAL_MIN_MS, turnMs[pool] - (Date.now() - began)) });
       return;
     }
     // A quick task that finished cleanly lands by itself (B23); anything else waits for the person. A Build that finished

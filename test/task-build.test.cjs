@@ -332,7 +332,7 @@ test('the task card: its parts in order for each state, the `build>` card left a
   const { editor } = mounted([MARKED], { buildDiffs: { [ID]: CODE_DIFF } });
   const names = (task) => editor.taskParts(ID, task).map(([name]) => name);
   const part = (task, name) => new Map(editor.taskParts(ID, task)).get(name);
-  const ORDER = ['head', 'summary', 'made', 'changed', 'needs', 'run', 'live', 'actions', 'convo'];
+  const ORDER = ['head', 'goal', 'summary', 'made', 'changed', 'needs', 'run', 'live', 'actions', 'convo']; // goal: a goal Build's (MATH-88)
   // review, with code
   const review = record({ status: 'review' });
   assert.deepEqual(names(review), ORDER);
@@ -382,7 +382,7 @@ test('the task card: its parts in order for each state, the `build>` card left a
   assert.equal(gone.get('changed'), '');
   // the `build>` card: as before, the question in its conversation
   const card = editor.buildParts(ID, asking).map(([name]) => name);
-  assert.deepEqual(card, ['head', 'prompt', 'body', 'run', 'live', 'diff', 'reply', 'actions']);
+  assert.deepEqual(card, ['head', 'goal', 'prompt', 'body', 'run', 'live', 'diff', 'reply', 'actions']);
   assert.match(new Map(editor.buildParts(ID, asking)).get('body'), /Which file should it go in/);
 });
 

@@ -175,7 +175,8 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
 /**
  * Scripted runs (ENGELBART_BUILD_FAKE=1; design B24): no model. The fake agent writes BUILD-FAKE.md in the worktree (one
  * line per turn), reports two things it did, and answers. A first message containing "question" asks one (NEEDS YOU); a
- * quick task containing "escalate" escalates; "fail" fails the turn.
+ * quick task containing "escalate" escalates; "fail" fails the turn; a message starting with /goal (a goal's step 2) runs
+ * three rounds of stop-hook feedback and finishes.
  */
 function createFakeRunner({ delayMs = 900 } = {}) {
   const waits = new Map();
@@ -190,6 +191,16 @@ function createFakeRunner({ delayMs = 900 } = {}) {
       const said = String(message || '');
       onUpdate({ activity: 'Reading the workspace', log: true });
       await pause(delayMs / 3);
+      // A goal's step 2 (MATH-88): three rounds not yet met, each its stop-hook feedback as Claude Code streams it, then met.
+      const goal = /^\/goal /.test(said) ? said.slice(6).split('. Also stop when')[0] : null;
+      if (goal) {
+        for (let round = 1; round <= 3; round += 1) {
+          onUpdate({ activity: `Working toward the goal, round ${round}`, log: true });
+          raw({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: `Stop hook feedback:\n[${goal}]: the fake goal is on round ${round} of 3.` }] } });
+          await pause(delayMs / 3);
+        }
+        return { text: 'FAKE BUILD: the goal is met after three rounds.', session: session || 'fake-session' };
+      }
       if (/\bfail\b/i.test(said) && !session) throw new TurnError('failed', 'The fake agent was asked to fail.');
       if (task.kind === 'quick' && /escalate/i.test(said) && !session) return { text: 'ESCALATE: the fake agent was asked to escalate.', session: 'fake-session' };
       onUpdate({ activity: 'Editing BUILD-FAKE.md', log: true });

@@ -139,7 +139,8 @@ test('the card\'s Prompt row (2026-10-13): closed under the head when the Build 
   const shut = parts();
   assert.match(shut.prompt, /<button class="bart-text" data-act="buildprompt" data-build-id="b9" aria-expanded="false"[^>]*>Prompt<svg/, 'a text button with the steps chevron');
   assert.ok(!shut.prompt.includes('Add Haiku 5.5') && !shut.prompt.includes('data-build-prompt'), 'closed by default');
-  assert.deepEqual(Object.keys(shut).slice(0, 3), ['head', 'prompt', 'body'], 'under the head');
+  assert.deepEqual(Object.keys(shut).slice(0, 4), ['head', 'goal', 'prompt', 'body'], 'under the head (and a goal Build\'s goal, MATH-88: none here)');
+  assert.equal(shut.goal, '');
   // A click, as the editor's click listener sends it (buildAct; no onBuildAction needed to read it).
   editor.buildAct('buildprompt', 'b9');
   const open = parts();
