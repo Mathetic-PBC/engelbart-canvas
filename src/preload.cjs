@@ -211,6 +211,10 @@ const engelbartAPI = Object.freeze({
   renameWorkspace: invoke('rename-workspace'),
   trashWorkspace: invoke('trash-workspace'),
   restoreWorkspace: invoke('restore-workspace'),
+  // Another project's workspaces (MATH-148): every project's ({ id, name, path, projectId, projectName }), and one copied
+  // to the top of this project: (projectId, fromProjectId, workspaceId) → the new workspace.
+  workspacesEverywhere: invoke('workspaces-everywhere'),
+  copyWorkspaceHere: invoke('copy-workspace-here'),
   setWorkspaceContext: invoke('set-workspace-context'),
   saveImage: invoke('save-image'),
   readImage: invoke('read-image'),
@@ -317,6 +321,7 @@ const engelbartAPI = Object.freeze({
   projectsForLibraryItem: invoke('projects-for-library-item'),
   libraryForProject: invoke('library-for-project'),
   libraryBodies: invoke('library-bodies'),
+  searchElsewhere: invoke('search-elsewhere'), // (projectId, query, limit) → the other projects' matches (MATH-148)
   addLibraryItem: invoke('add-library-item'),
   addLibraryPdf: invoke('add-library-pdf'),
   // The Stage's Save of a web page (MATH-17): the tab's page kept as a copy with its address. (tabId, address, { name })

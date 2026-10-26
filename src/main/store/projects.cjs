@@ -596,6 +596,59 @@ function findWorkspace(ctx, projectId, workspaceId) {
   return { project, ...found };
 }
 
+/**
+ * A workspace by id in whichever project holds it (MATH-148, 2026-10-26): { project, workspace, parentDir }, or null.
+ * Only for reading one for a mention (context/expand-mentions.cjs): findWorkspace stays the one every write and Build
+ * goes through, scoped to its project.
+ */
+function findWorkspaceAnywhere(ctx, workspaceId) {
+  const id = assertId(workspaceId, 'workspace');
+  for (const project of projectRecords(ctx)) {
+    const found = findWorkspaceIn(project.dir, id);
+    if (found) return { project, ...found };
+  }
+  return null;
+}
+
+/** Every project's workspaces, nested ones too, flat (MATH-148): { id, name, path, projectId, projectName }. */
+function workspacesEverywhere(ctx) {
+  const out = [];
+  for (const project of projectRecords(ctx)) {
+    for (const workspace of flattenWorkspaces(project.dir)) out.push({ id: workspace.id, name: workspace.name, path: workspace.path, projectId: project.id, projectName: project.name });
+  }
+  return out;
+}
+
+// A Build's card line, which belongs to the project whose Build it is (build/context.cjs BUILD_LINE_RE).
+const COPIED_BUILD_LINE_RE = /^build> [a-z0-9]{6,32}$/;
+
+/** A workspace's document as it is copied into another project: no task Build markers, no `build>` lines. */
+function copiedText(text) {
+  return stripTaskMarkers(String(text || '')).split('\n').filter((line) => !COPIED_BUILD_LINE_RE.test(line.trim())).join('\n');
+}
+
+/**
+ * "Copy to this project" (MATH-148): another project's workspace `workspaceId` (in `fromProjectId`) made again at the top
+ * of `projectId`'s workspaces, the first of them, under its name, holding its document less what belongs to its own
+ * project's Builds. The original is read, never written. → the new workspace.
+ */
+async function copyWorkspaceInto(ctx, projectId, fromProjectId, workspaceId) {
+  const project = findProject(ctx, projectId);
+  const { workspace: source } = findWorkspace(ctx, fromProjectId, workspaceId);
+  let text = '';
+  try { text = fs.readFileSync(path.join(source.dir, 'workspace.md'), 'utf8'); } catch { text = ''; }
+  text = copiedText(text);
+  // The first at the top: a moment before the earliest there, since workspaces are listed as they were made.
+  const first = workspaceRecords(project.dir)[0];
+  const firstAt = first && Date.parse(first.created || '');
+  const created = Number.isFinite(firstAt) ? new Date(firstAt - 1000).toISOString() : nowIso();
+  const dir = path.join(project.dir, workspaceDirName(project.dir, source.name, 'Untitled Workspace 1'));
+  fs.mkdirSync(dir, { mode: DIR_MODE });
+  writeJson(path.join(dir, 'meta.json'), { id: randomUUID(), status: 'open', context: [], created, chars: text.length });
+  writeTextAtomic(path.join(dir, 'workspace.md'), text);
+  return publicWorkspace(workspaceRecord(dir));
+}
+
 function publicWorkspace(workspace) {
   return { id: workspace.id, name: workspace.name, context: workspace.context, removed: workspace.removed, picked: workspace.picked || [], chars: workspace.chars, builds: workspace.builds || [], archives: workspace.archives || [], created: workspace.created };
 }
@@ -1128,6 +1181,11 @@ function cleanView(value) {
     seen.add(id);
     const clean = { id, title: typeof tab.title === 'string' ? tab.title.slice(0, 200) : '' };
     if (tab.kind === 'workspace') clean.kind = 'workspace'; // another workspace's document open here as a tab (2026-09-23)
+    // Another project's workspace, open here read-only (MATH-148): the project it is in, and that project's name.
+    if (tab.kind === 'foreign') {
+      const projectId = idOrNull(tab.projectId); if (!projectId) continue;
+      Object.assign(clean, { kind: 'foreign', projectId, from: typeof tab.from === 'string' ? tab.from.slice(0, 200) : '' });
+    }
     tabs.push(clean);
     if (tabs.length >= MAX_TABS) break;
   }
@@ -1588,6 +1646,10 @@ module.exports = {
   restoreProject,
   loadProject,
   createWorkspace,
+  findWorkspaceAnywhere,
+  workspacesEverywhere,
+  copyWorkspaceInto,
+  copiedText,
   renameWorkspace,
   trashWorkspace,
   trashedWorkspaces,

@@ -515,6 +515,21 @@ async function openLibraryDb(testRoot) {
       );
       return true;
     },
+    // The pdfs among `ids` whose kept text holds `needle` (any case), at most `limit` (MATH-148): [{ id, snippet }], the
+    // snippet `around` characters either side of the first place it is. Matched in the database; no text is loaded whole.
+    async searchText(needle, ids, limit, around = 60) {
+      if (!Array.isArray(ids)) throw new TypeError('ids must be an array');
+      const word = requireText(String(needle || ''), 'needle', { max: 200 });
+      if (!ids.length || !word) return [];
+      const result = await db.query(
+        `select library_id, substr(text, greatest(1, at - $4), length($1) + 2 * $4) as snippet
+           from (select library_id, text, strpos(lower(text), lower($1)) as at from library_text
+                  where library_id = any($2::uuid[]) and text <> '') found
+          where at > 0 limit $3`,
+        [word, ids.map((id) => requireText(id, 'id', { max: 64 })), requireCount(limit), requireCount(around)],
+      );
+      return result.rows.map((row) => ({ id: row.library_id, snippet: row.snippet }));
+    },
     // The kept text of the pdfs among `ids`, each cut at `max` characters: library id → text. One that held none is left out.
     async textsFor(ids, max) {
       if (!Array.isArray(ids)) throw new TypeError('ids must be an array');

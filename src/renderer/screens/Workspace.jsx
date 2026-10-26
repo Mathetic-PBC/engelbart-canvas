@@ -125,6 +125,11 @@ const WS_TAB = { id: 'ws', title: 'Project' };
 const ARCHIVE_TAB = 'archive:'; // an archived version's tab (2026-09-27: it opens in the middle, read-only, not on the Stage)
 // The top-level project's page (2026-10-13): its own tab, opened from the project menu's Project page or the clock.
 const PROJECT_TAB = 'project';
+// Another project's workspace, opened here from its mention (MATH-148): a tab of this workspace's strip, read-only, its id
+// `from:<workspace id>`, the tab carrying the project it is in. state.json keeps it as { id, kind: 'foreign', projectId,
+// from: the project's name }.
+const FROM_TAB = 'from:';
+const isFromTab = (id) => typeof id === 'string' && id.startsWith(FROM_TAB);
 const VISITS_KEY = 'engelbart.recentPages'; // top-level project id → the pages opened there, for the clock (RecentPages.jsx)
 // This machine's marks on the rows of Agents ({ [entry id]: { clicked, dismissed } }, model/sidebar.js keptAgents) and
 // when each source was last opened ({ [library id]: ISO }, byOpened: a project's folder lists the newest first).
@@ -168,15 +173,36 @@ function docOf(tabId, topic) {
 function restoredTabs(view, notesById, extra) {
   const tabs = [WS_TAB];
   for (const tab of (view && view.tabs) || []) {
+    if (tab.kind === 'foreign' && tab.projectId) { // read-only, closed when it turns out to be gone (Workspace: foreignGone)
+      const id = `${FROM_TAB}${tab.id}`;
+      if (!tabs.some((held) => held.id === id)) tabs.push({ id, title: tab.title, kind: 'foreign', projectId: tab.projectId, projectName: tab.from || '' });
+      continue;
+    }
     if (tabs.some((held) => held.id === tab.id) || tab.kind === 'workspace') continue;
     if (tab.id === PROJECT_TAB) { tabs.push({ id: PROJECT_TAB, title: tab.title || 'Project page' }); continue; }
     const row = notesById.get(tab.id);
     if (row) tabs.push({ id: tab.id, title: row.name });
   }
   if (extra && !tabs.some((held) => held.id === extra.id)) tabs.push(extra);
-  const active = extra ? extra.id : view && tabs.some((tab) => tab.id === view.active) ? view.active : 'ws';
+  const was = view && (tabs.some((tab) => tab.id === view.active) ? view.active : tabs.some((tab) => tab.id === `${FROM_TAB}${view.active}`) ? `${FROM_TAB}${view.active}` : null);
+  const active = extra ? extra.id : was || 'ws';
   return { tabs, active };
 }
+
+/** A tab as state.json keeps it: another project's workspace's with what it needs to be opened again (MATH-148). */
+const keptTab = (tab) => (tab.kind === 'foreign'
+  ? { id: tab.id.slice(FROM_TAB.length), title: tab.title, kind: 'foreign', projectId: tab.projectId, from: tab.projectName || '' }
+  : { id: tab.id, title: tab.title });
+const keptActive = (id) => (isFromTab(id) ? id.slice(FROM_TAB.length) : id);
+
+/** The document of another project's workspace's tab: read from its own project, never written (ref kind 'foreign'). */
+const foreignDoc = (tab) => ({
+  key: `from:${tab.projectId}:${tab.id.slice(FROM_TAB.length)}`,
+  ref: { kind: 'foreign', projectId: tab.projectId, workspaceId: tab.id.slice(FROM_TAB.length) },
+  workspaceId: null,
+  archive: null,
+  foreign: { projectId: tab.projectId, projectName: tab.projectName || '', workspaceId: tab.id.slice(FROM_TAB.length), name: tab.title },
+});
 
 /** Every workspace of the tree by id, with its parent. */
 function indexWorkspaces(roots) {
@@ -219,6 +245,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const [opening] = React.useState(() => restoredTabs(topicId ? views.current[topicId] : null, notesById, initialTab || null));
   const [tabs, setTabs] = React.useState(opening.tabs);
   const [activeTab, setActiveTab] = React.useState(opening.active);
+  // Another project's workspace (MATH-148): opened from its mention by id, and its tab closed once it is gone (defined below).
+  const openForeignRef = React.useRef(() => false);
+  const foreignGoneRef = React.useRef(() => {});
   const [docs, setDocs] = React.useState({});
   const [rightMode, setRightMode] = React.useState('stage');
   const stageRef = React.useRef(null);
@@ -334,8 +363,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   const shownBeside = React.useMemo(() => beside.slice(0, besideShown(room, beside.length)), [beside, room]);
   // Every pane's document. Pane 0 is the one in front: this workspace's (the Workspace tab), an archived version of it
   // (read-only), or a note's. Panes 1… beside it are notes', as those notes' tabs would be, or other workspaces'.
-  const paneDocs = React.useMemo(() => [docOf(activeTab, topic), ...shownBeside.map((pane) => (pane.kind === 'workspace' ? workspaceDoc(pane.id) : docOf(pane.id, topic)))], [activeTab, topic && topic.id, shownBeside]); // eslint-disable-line react-hooks/exhaustive-deps
-  const { key: docKey, ref: docRef, workspaceId: docWorkspaceId, archive: docArchive } = paneDocs[0];
+  const fromTab = isFromTab(activeTab) ? tabs.find((tab) => tab.id === activeTab) || null : null;
+  const paneDocs = React.useMemo(() => [fromTab ? foreignDoc(fromTab) : docOf(isFromTab(activeTab) ? 'ws' : activeTab, topic), ...shownBeside.map((pane) => (pane.kind === 'workspace' ? workspaceDoc(pane.id) : docOf(pane.id, topic)))], [activeTab, topic && topic.id, shownBeside, fromTab && fromTab.projectId, fromTab && fromTab.projectName, fromTab && fromTab.title]); // eslint-disable-line react-hooks/exhaustive-deps
+  const { key: docKey, ref: docRef, workspaceId: docWorkspaceId, archive: docArchive, foreign: docForeign } = paneDocs[0];
 
   // Remember where we are, so the app reopens here.
   React.useEffect(() => { if (topic && onVisit) onVisit(topic.id); }, [topic && topic.id]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -358,11 +388,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   React.useEffect(() => {
     if (!topicId) return;
     const held = views.current[topicId] || { positions: {} };
-    const open = tabs.filter((tab) => tab.id !== 'ws').map((tab) => ({ id: tab.id, title: tab.title }));
-    if (held.active === activeTab && JSON.stringify(held.tabs) === JSON.stringify(open)) return;
+    const open = tabs.filter((tab) => tab.id !== 'ws').map(keptTab);
+    const active = keptActive(activeTab);
+    if (held.active === active && JSON.stringify(held.tabs) === JSON.stringify(open)) return;
     // A tab closed takes its panes with it.
     const panes = held.panes ? Object.fromEntries(Object.entries(held.panes).filter(([tabId]) => tabs.some((tab) => tab.id === tabId))) : undefined;
-    views.current[topicId] = { ...held, active: activeTab, tabs: open, ...(panes ? { panes } : {}) };
+    views.current[topicId] = { ...held, active, tabs: open, ...(panes ? { panes } : {}) };
     saveView(topicId);
   }, [topicId, tabs, activeTab, saveView]);
   // The panes beside the tab in front, whenever they change (MATH-103): all of them, those out of sight too.
@@ -397,14 +428,16 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     for (const { key, ref } of paneDocs) {
       if (!key || !ref || docs[key] !== undefined || reading.current.has(key)) continue;
       reading.current.add(key);
-      const read = ref.kind === 'archive' ? api.readArchive(project.id, ref.workspaceId, ref.file).then((got) => got.text) : api.readDoc(project.id, ref);
+      // Another project's workspace (MATH-148) is read from its own project; one that is gone closes its tab.
+      const read = ref.kind === 'archive' ? api.readArchive(project.id, ref.workspaceId, ref.file).then((got) => got.text)
+        : ref.kind === 'foreign' ? api.readDoc(ref.projectId, { kind: 'workspace', workspaceId: ref.workspaceId }) : api.readDoc(project.id, ref);
       read.then((text) => {
         // A document from before the router (2026-10-12, doc.js migrateChatLines): its answered `@bart` lines become
-        // `@chat`, saved as an ordinary edit. An archived version is read as it was.
-        const moved = ref.kind === 'archive' ? { text, count: 0 } : migrateChatLines(text);
+        // `@chat`, saved as an ordinary edit. An archived version, and another project's workspace, are read as they are.
+        const moved = ref.kind === 'archive' || ref.kind === 'foreign' ? { text, count: 0 } : migrateChatLines(text);
         setDocs((current) => (current[key] === undefined ? { ...current, [key]: moved.text } : current));
         if (moved.count) changeDocRef.current(key, ref, moved.text);
-      }).catch((error) => onError(error)).finally(() => { reading.current.delete(key); });
+      }).catch((error) => { if (ref.kind === 'foreign') foreignGoneRef.current(ref.workspaceId); else onError(error); }).finally(() => { reading.current.delete(key); });
     }
   }, [paneDocs, docs, project.id, onError]);
 
@@ -430,6 +463,11 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }
   React.useEffect(() => api.onDocChanged((change) => {
     if (change && change.projectId === project.id && typeof change.key === 'string') docSync.current.announced(change.key, change);
+    // Another project's workspace open here read-only (MATH-148) shows what its own project saved.
+    else if (change && typeof change.key === 'string' && change.key.startsWith('ws:') && typeof change.text === 'string') {
+      const key = `from:${change.projectId}:${change.key.slice(3)}`;
+      setDocs((current) => (current[key] === undefined || current[key] === change.text ? current : { ...current, [key]: change.text }));
+    }
   }), [project.id]);
 
   const flush = React.useCallback((key) => {
@@ -1137,14 +1175,14 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     return library.filter((row) => (row.type === 'image' ? shown.has(row.id) || ids.has(row.id) : names.has(row.name.toLowerCase()) || ids.has(row.id)));
   }, [docs, topic, library]);
 
-  const activeRowId = activeTab !== 'ws' ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
+  const activeRowId = activeTab !== 'ws' && !isFromTab(activeTab) ? activeTab : (rightMode === 'stage' && stageFront ? stageFront : 'ws');
 
   // When each source was opened last (2026-10-16): a note put in front in the middle, a row the Stage shows in front, a
   // sidebar row clicked. The project's folder lists the newest first (railRows).
   const [opened, setOpened] = React.useState(() => readStored(OPENED_KEY));
   const noteOpen = React.useCallback((id) => { if (id) setOpened((now) => noteOpened(now, id)); }, []);
   React.useEffect(() => { writeStored(OPENED_KEY, opened); }, [opened]);
-  React.useEffect(() => { if (activeTab && activeTab !== 'ws' && !activeTab.startsWith(ARCHIVE_TAB) && activeTab !== PROJECT_TAB) noteOpen(activeTab); }, [activeTab, noteOpen]);
+  React.useEffect(() => { if (activeTab && activeTab !== 'ws' && !activeTab.startsWith(ARCHIVE_TAB) && activeTab !== PROJECT_TAB && !isFromTab(activeTab)) noteOpen(activeTab); }, [activeTab, noteOpen]);
   React.useEffect(() => { if (stageFront) noteOpen(stageFront); }, [stageFront, noteOpen]);
 
   // This workspace's sources (the sidebar's Your sources): its context, the notes made in it and what its document
@@ -1216,7 +1254,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // Any note's tab closes; Workspace is always there (2026-09-25; from 2026-09-23 it closed too while another tab was left).
   const closeTab = (id) => {
     if (id === 'ws') return;
-    flush(id === PROJECT_TAB ? 'project' : `note:${id}`);
+    if (!isFromTab(id)) flush(id === PROJECT_TAB ? 'project' : `note:${id}`); // another project's workspace is never written
     setTabs((current) => {
       if (current.length < 2 && current.some((tab) => tab.id === id)) return current;
       const next = current.filter((tab) => tab.id !== id);
@@ -1444,7 +1482,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // A note's or a workspace's mention clicked in any pane opens its document in a new pane at the right while the column
   // has room, else in place of the rightmost pane in sight (model/panes.js). One already open is not opened again: its
   // pane is brought into view. ⌘-click still opens a note's tab and goes to a workspace (DocEditor).
-  const besideFront = activeTab === 'ws' ? (topic ? { kind: 'workspace', id: topic.id } : null) : activeTab.startsWith(ARCHIVE_TAB) || activeTab === PROJECT_TAB ? null : { kind: 'note', id: activeTab };
+  const besideFront = activeTab === 'ws' ? (topic ? { kind: 'workspace', id: topic.id } : null) : activeTab.startsWith(ARCHIVE_TAB) || activeTab === PROJECT_TAB || isFromTab(activeTab) ? null : { kind: 'note', id: activeTab };
   const reveal = React.useRef(null); // the pane to scroll to after the next draw
   const revealPane = (i) => {
     const pane = mainRef.current && mainRef.current.querySelector(`[data-doc-pane="${i}"]`);
@@ -1453,6 +1491,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // `from` is the document key of the pane the mention was clicked in, whose mention stays marked.
   const openDocBeside = (item, link, from = '') => {
     if (!item || !item.id) return;
+    if (item.kind === 'workspace' && !index.has(item.id) && openForeignRef.current(item.id)) return; // another project's (MATH-148)
     const workspace = item.kind === 'workspace' ? index.get(item.id) : null;
     if (item.kind === 'workspace' && !workspace) return; // a workspace that is gone
     const { panes: next, at } = openBeside(beside, besideFront, { kind: item.kind, id: item.id, title: workspace ? workspace.node.name : item.name }, link, room, from);
@@ -1626,6 +1665,81 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     const held = place && index.get(place.workspaceId);
     return held ? { ...place, name: held.node.name } : null; // the names are the tree's, current after a rename
   }, [navHere, topic, project.id, index]);
+  const [mentionOpen, setMentionOpen] = React.useState(false);
+  // Every project's workspaces (MATH-148): what a mention of another project's leads to, read again whenever state.json's
+  // places change (a workspace or a project deleted, renamed or made in any window). A tab of one that is no longer there,
+  // or no longer in that project, closes.
+  const [everywhere, setEverywhere] = React.useState(null); // [{ id, name, path, projectId, projectName }] | null until read
+  React.useEffect(() => {
+    if (!api.workspacesEverywhere) return undefined;
+    let live = true;
+    const load = () => api.workspacesEverywhere().then((list) => { if (live && Array.isArray(list)) setEverywhere(list); }).catch(() => {});
+    load();
+    const off = api.onNav(load);
+    return () => { live = false; off(); };
+  }, []);
+  const everywhereById = React.useMemo(() => new Map((everywhere || []).map((entry) => [entry.id, entry])), [everywhere]);
+  const foreignGone = (workspaceId) => {
+    const id = `${FROM_TAB}${workspaceId}`;
+    setTabs((current) => {
+      if (!current.some((tab) => tab.id === id)) return current;
+      const next = current.filter((tab) => tab.id !== id);
+      setActiveTab((now) => (now === id ? next[next.length - 1].id : now));
+      return next;
+    });
+  };
+  foreignGoneRef.current = foreignGone;
+  React.useEffect(() => {
+    if (!everywhere) return;
+    const gone = tabs.filter((tab) => tab.kind === 'foreign' && (!everywhereById.has(tab.id.slice(FROM_TAB.length)) || everywhereById.get(tab.id.slice(FROM_TAB.length)).projectId !== tab.projectId));
+    for (const tab of gone) foreignGone(tab.id.slice(FROM_TAB.length));
+    // The names as they are now, the workspace's and its project's.
+    const renamed = tabs.some((tab) => { const at = tab.kind === 'foreign' && everywhereById.get(tab.id.slice(FROM_TAB.length)); return at && (at.name !== tab.title || at.projectName !== tab.projectName); });
+    if (renamed) setTabs((current) => current.map((tab) => { const at = tab.kind === 'foreign' && everywhereById.get(tab.id.slice(FROM_TAB.length)); return at ? { ...tab, title: at.name, projectName: at.projectName } : tab; }));
+  }, [everywhere, tabs]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A mention of another project's workspace: its document in a tab here, read-only, kept with this workspace's tabs.
+  // → whether it was one.
+  const openForeign = (workspaceId) => {
+    const entry = everywhereById.get(workspaceId);
+    if (!entry || entry.projectId === project.id) return false;
+    const id = `${FROM_TAB}${entry.id}`;
+    setTabs((current) => (current.some((tab) => tab.id === id) ? current : [...current, { id, title: entry.name, kind: 'foreign', projectId: entry.projectId, projectName: entry.projectName }]));
+    setActiveTab(id);
+    return true;
+  };
+  openForeignRef.current = openForeign;
+  // Its two ways out: "Open in <project>" goes there and opens it, editable; "Copy to this project" makes it again at the
+  // top of this project (main's copy-workspace-here, no Build of its own project's) and opens the copy.
+  const openForeignThere = (foreign) => { onOpenProject(foreign.projectId, foreign.workspaceId); };
+  const copyForeignHere = async (foreign) => {
+    try {
+      const created = await api.copyWorkspaceHere(project.id, foreign.projectId, foreign.workspaceId);
+      await reload();
+      selectTopic(created.id);
+    } catch (error) { onError(error); }
+  };
+  // Another project's workspace or Source from the Search panel: its project, opened there (a note in its tab, any
+  // other Source on the Stage).
+  const openElsewhere = (hit) => {
+    if (!hit || !hit.projectId) return;
+    if (hit.kind === 'workspace') { onOpenProject(hit.projectId, hit.id); return; }
+    const row = library.find((candidate) => candidate.id === hit.id);
+    if (!row) { onOpenProject(hit.projectId, null); return; }
+    onOpenProject(hit.projectId, null, isNote(row) ? { tab: { id: row.id, title: row.name } } : { stage: row });
+  };
+  // What the other projects hold that the @ menu's words name or say (MATH-148, main's search-elsewhere): asked for a
+  // moment after the words change, while the menu is open, and given to mentionRows only for the words it was asked for.
+  const [elsewhereQuery, setElsewhereQuery] = React.useState('');
+  const [elsewhereHits, setElsewhereHits] = React.useState({ query: '', hits: [] });
+  React.useEffect(() => {
+    const words = elsewhereQuery.trim();
+    if (!mentionOpen || !words || !api.searchElsewhere) return undefined;
+    let live = true;
+    const timer = setTimeout(() => {
+      api.searchElsewhere(project.id, words, 20).then((hits) => { if (live) setElsewhereHits({ query: words, hits: Array.isArray(hits) ? hits : [] }); }).catch(() => {});
+    }, 120);
+    return () => { live = false; clearTimeout(timer); };
+  }, [elsewhereQuery, mentionOpen, project.id]);
   // The @ menu: Bart, Task, Note, the open page, the project's other workspaces (written in last first), then the library,
   // all of it, what this workspace holds first (model/rail.js).
   const mentionSpaces = React.useMemo(() => {
@@ -1636,11 +1750,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }, [allWorkspaces, nav.recent, project.id]);
   // What the project's things say, asked for while the menu is open (MATH-29): a pdf, a note or a workspace is found by a
   // phrase inside it too.
-  const [mentionOpen, setMentionOpen] = React.useState(false);
   const mentionBodies = useBodies(project.id, mentionOpen);
   const mentionItems = React.useCallback(
-    (query) => mentionRows({ query, library: findable, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies, zotero: zoteroOn, here: railIds }),
-    [findable, openPage, pageKnown, mentionSpaces, topic, mentionBodies, zoteroOn, railIds],
+    (query) => {
+      const words = String(query || '').trim();
+      if (words !== elsewhereQuery.trim()) setTimeout(() => setElsewhereQuery(words), 0); // asked of main for these words
+      const elsewhere = words && elsewhereHits.query === words ? elsewhereHits.hits : null;
+      return mentionRows({ query, library: findable, page: pageKnown ? openPage : null, pageRow: pageKnown ? pageKnown.row : null, workspaces: mentionSpaces, hereId: topic ? topic.id : null, bodies: mentionBodies, zotero: zoteroOn, here: railIds, elsewhere });
+    },
+    [findable, openPage, pageKnown, mentionSpaces, topic, mentionBodies, zoteroOn, railIds, elsewhereQuery, elsewhereHits],
   );
   // A mentioned workspace's peek (workspace/WorkspacePeek.jsx): the tree, state.json's agents and recent edits, and its
   // document as open here (unsaved words included) or as saved.
@@ -1665,7 +1783,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   }), [project.id]);
   // A ⌘-click on a workspace's mention goes there (the one workspace in the strip changes); a click opens its document
   // beside this one (openDocBeside).
-  const openMentionedWorkspace = (id) => { if (index.has(id)) selectTopic(id); };
+  const openMentionedWorkspace = (id) => { if (index.has(id)) selectTopic(id); else openForeign(id); };
   const goTo = (place) => { if (place) selectTopic(place.workspaceId); };
   // ⌘J, wherever the keyboard is: the app's pages see it in the capture phase, before the editor or a terminal can; a
   // Browser page has the main process send it (src/main/browser/views.cjs).
@@ -2490,6 +2608,39 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     </span>
     )
   );
+  // Another project's workspace in front (MATH-148): read, never written here. No @bart, Build, task or Copy (each would
+  // act in this project); where it is from and its two ways out sit under its title. Its mentions still open.
+  const foreignEditor = (foreign) => ({
+    ...editorProps,
+    onChange: undefined,
+    onAsk: undefined,
+    onRoute: undefined,
+    onRouteGone: undefined,
+    onBuild: undefined,
+    onBuildTask: undefined,
+    onBuildAction: undefined,
+    onPasteImage: undefined,
+    onMentionPicked: undefined,
+    onDropItems: undefined,
+    onNoteVerb: undefined,
+    onSavePaper: undefined,
+    onUnsavePaper: undefined,
+    onSaveMade: undefined,
+    onOpenBeside: (item, link) => openDocBeside(item, link, ''),
+    autoCollapse: false,
+    viewScope: null,
+    viewOf: noView,
+    onView: null,
+    footer: null,
+    above: (
+      <div data-from-project={foreign.projectId} style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: 4, marginTop: 6, font: '13px/1.4 var(--font-sans)', color: '#8f8f8f' }}>
+        <span data-from-label="1" style={{ marginRight: 6 }}>From {foreign.projectName}</span>
+        <button type="button" className="hov-ink" data-from-open="1" onClick={() => openForeignThere(foreign)} title={`Go to ${foreign.projectName} and open it there`} style={{ ...FOOT_BUTTON, font: '500 13px/1.4 var(--font-sans)', color: '#171717' }}>Open in {foreign.projectName}</button>
+        <button type="button" className="hov-ink" data-from-copy="1" onClick={() => { void copyForeignHere(foreign); }} title="Make a copy of it at the top of this project, to edit here" style={{ ...FOOT_BUTTON, font: '13px/1.4 var(--font-sans)' }}>Copy to this project</button>
+      </div>
+    ),
+    emptyHint: null,
+  });
   const noWorkspace = topics.length === 0 ? (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
       <span style={{ font: '13px/1.6 var(--font-sans)', color: '#8f8f8f', textAlign: 'center' }}>Nothing in {project.name} yet. A project holds a document, its sources, and any projects nested inside it.</span>
@@ -2601,6 +2752,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
           onRemoveRow={trashRow}
           onLinkRow={(row) => linkIds([row.id])}
           onOpenHeld={(projectId, workspaceId) => { if (projectId === project.id && workspaceId && index.has(workspaceId)) selectTopic(workspaceId); }}
+          onOpenElsewhere={openElsewhere}
           onDropItems={addDroppedHere}
           onAddInput={(input, folderId) => addInputTo(input, folderId)}
           onPickDisk={pickFromDiskTo}
@@ -2645,9 +2797,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                 editorRef={editorRefAt(i)}
                 docKey={doc.key}
                 text={doc.key ? docs[doc.key] : undefined}
-                readOnly={!!doc.archive}
+                readOnly={!!doc.archive || !!doc.foreign}
                 title={title}
-                onRename={!pane ? renameDoc : pane.kind === 'workspace' ? (name) => renameWorkspaceBeside(pane.id, name) : (name) => renameNoteDoc(pane.id, name)}
+                onRename={doc.foreign ? null : !pane ? renameDoc : pane.kind === 'workspace' ? (name) => renameWorkspaceBeside(pane.id, name) : (name) => renameNoteDoc(pane.id, name)}
                 titleFocus={pane ? null : wantTitleFocus}
                 conflict={!!(doc.key && conflicts[doc.key])}
                 onKeepMine={() => keepMine(doc.key)}
@@ -2656,7 +2808,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
                 find={docFind && docFind.pane === i ? <DocFind editorRef={editorRefAt(i)} text={docFindText} onText={setDocFindText} onClose={closeDocFind} focusKey={docFind.focus} back={docFind.back} stepRef={docFindStep} place={pane ? BESIDE_FIND : null} /> : null}
                 empty={pane ? null : noWorkspace}
                 style={paneStyle(i)}
-                editor={{
+                editor={doc.foreign ? foreignEditor(doc.foreign) : {
                   ...editorProps,
                   onChange: (value) => onDocChange(doc.key, doc.ref, value),
                   // Conversations left open collapse when the document is shown again (DocEditor autoCollapse, 2026-10-13).

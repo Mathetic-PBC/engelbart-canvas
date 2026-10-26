@@ -182,7 +182,11 @@ const FIRST_WORKSPACES = 3; // before anything is typed
  * summary, and last (with `bodies`) only what they say. The whole library is offered, pictures included, whatever project holds a row;
  * with `here`, what this workspace holds first (2026-10-16).
  */
-export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null, bodies = null, zotero = false, here = null }) {
+/** How a thing of another project is named in the @ menu and Search (MATH-148): "User studies · Fellowship". */
+export const elsewhereLabel = (name, projectName) => `${name} · ${projectName}`;
+const MAX_ELSEWHERE_ITEMS = 4; // other projects' Sources found only by what they say, after the library's own rows
+
+export function mentionRows({ query, library, page, pageRow, workspaces = [], hereId = null, bodies = null, zotero = false, here = null, elsewhere = null }) {
   const needle = String(query || '').trim().toLowerCase();
   const verbs = [BART_VERB, CHAT_VERB, BRAINSTORM_VERB, DISCOVER_VERB, CREATE_VERB, NOTE_VERB].filter((verb) => !needle || verb.name.toLowerCase().startsWith(needle));
   // A picture is offered too (2026-10-17), but before anything is typed it comes after every other row, so the
@@ -208,7 +212,24 @@ export function mentionRows({ query, library, page, pageRow, workspaces = [], he
     .map((workspace) => ({ kind: 'workspace', key: `ws:${workspace.id}`, id: workspace.id, name: workspace.name, above: workspace.above || [] }));
   // The connected Zotero library (MATH-65 build 2): one row, opened like a library folder, before the library's own.
   const zoteroRow = zotero && (!needle || ZOTERO_ROW.name.toLowerCase().startsWith(needle)) ? [{ kind: 'item', key: ZOTERO_ROW.id, row: ZOTERO_ROW, name: ZOTERO_ROW.name }] : [];
-  return [...out, ...spaces, ...zoteroRow, ...hits.slice(0, MAX_MENTIONS)];
+  // Other projects' (MATH-148), only once something is typed, found by main (store/elsewhere.cjs) and named with their
+  // project: their workspaces after this project's, their Sources after the rows this project holds.
+  const theirs = needle && Array.isArray(elsewhere) ? elsewhere : [];
+  const ownIds = new Set(workspaces.map((workspace) => workspace.id));
+  const theirSpaces = theirs.filter((hit) => hit.kind === 'workspace' && hit.id !== hereId && !ownIds.has(hit.id)).slice(0, MAX_WORKSPACES)
+    .map((hit) => ({ kind: 'workspace', key: `ws:${hit.id}`, id: hit.id, name: hit.name, above: [], from: hit.projectName, projectId: hit.projectId }));
+  const fromOf = new Map(theirs.filter((hit) => hit.kind === 'item').map((hit) => [hit.id, hit]));
+  let shown = hits.slice(0, MAX_MENTIONS);
+  if (fromOf.size) {
+    const label = (hit) => (fromOf.has(hit.key) ? { ...hit, from: fromOf.get(hit.key).projectName, projectId: fromOf.get(hit.key).projectId } : hit);
+    shown = [...shown.filter((hit) => !fromOf.has(hit.key)), ...shown.filter((hit) => fromOf.has(hit.key)).map(label)];
+    const listed = new Set(hits.map((hit) => hit.key));
+    const byId = new Map(library.map((row) => [row.id, row]));
+    const extra = [...fromOf.values()].filter((hit) => !listed.has(hit.id) && byId.has(hit.id)).slice(0, MAX_ELSEWHERE_ITEMS)
+      .map((hit) => ({ kind: 'item', key: hit.id, row: byId.get(hit.id), name: byId.get(hit.id).name, from: hit.projectName, projectId: hit.projectId }));
+    shown = [...shown, ...extra];
+  }
+  return [...out, ...spaces, ...theirSpaces, ...zoteroRow, ...shown];
 }
 
 /* ------------------------------------------------------------ files in a folder (MATH-22) */
