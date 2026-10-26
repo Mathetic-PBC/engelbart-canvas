@@ -274,11 +274,11 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '[data-zotero][data-waiting]::after{content:"Download the PDF in your browser to open it in the Stage";position:absolute;left:0;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#4d4d4d;font:12px/1.2 var(--font-sans);font-style:normal;white-space:nowrap;pointer-events:none}'
   + '[data-zotero][data-drop]{background:#e8f0fe;border-radius:3px;box-shadow:0 0 0 1px #9bb6e8}'
   // A task's Build (MATH-106, taskBuildHtml): "Build" at the end of its row, faint, shown while the row is hovered or holds
-  // the caret; once it has one, the Build's state there instead, a click away from its card.
+  // the caret; once it has one, the Build's state there instead, a click away from its card. While it works its words wave
+  // (.eb-wave, no ring): the words are the button's one flex item, so the band crosses them and not the row's empty end.
   + '.task-build{flex:none;display:inline-flex;align-items:center;gap:6px;max-width:45%;margin:5px 0 0;padding:1px 6px;border:0;border-radius:6px;background:none;font:400 12.5px/1.6 var(--font-sans);color:#a3a3a3;cursor:pointer;white-space:nowrap;user-select:none;transition:opacity 120ms,background 120ms,color 120ms}'
   + '.task-build:hover{background:#f2f2f2;color:#171717}.task-build[hidden]{display:none}.task-build-words{min-width:0;overflow:hidden;text-overflow:ellipsis}'
   + '.task-build[data-task-state="idle"]{opacity:0}[data-line]:hover>.task-build[data-task-state="idle"],.task-build[data-task-state="idle"][data-on]{opacity:1}'
-  + '.task-build-spin{flex:none;width:9px;height:9px;box-sizing:border-box;border:1.5px solid #dcdcdc;border-top-color:#8f8f8f;border-radius:50%;animation:task-spin 800ms linear infinite}@keyframes task-spin{to{transform:rotate(360deg)}}'
   // The middle panel's threads (2026-10-13, Hudson's screenshot): an answer's inline code, the button row's Run again, a long
   // answer's fade and its Show more, and an earlier exchange folded to one line.
   + '[data-answer-of] code{font:13.5px/1.5 var(--font-mono)!important;background:#efefef!important;padding:1px 4px!important;border-radius:4px!important}'
@@ -1794,10 +1794,10 @@ export default class DocEditor extends React.Component {
   /** What a task's row ends with: "Build", or its Build's state. Always drawn (hidden when it says nothing) so patchBuilds can replace it. */
   taskBuildHtml(i, line, p, active) {
     const task = this.taskBuildOf(p);
-    const look = (state, words, { color = '', strong = false, spin = false, act = 'taskcard', title = '' } = {}) => `<button type="button" contenteditable="false" class="task-build" data-act="${act}" data-row="${i}" data-task-row="${i}" data-task-state="${state}"${task ? ` data-task-build="${esc(task.id)}"` : ''}${active ? ' data-on="1"' : ''}${title ? ` title="${esc(title)}"` : ''} style="${color ? `color:${color};` : ''}${strong ? 'font-weight:500;' : ''}">${spin ? '<span class="task-build-spin" aria-hidden="true"></span>' : ''}<span class="task-build-words">${esc(words)}</span></button>`;
+    const look = (state, words, { color = '', strong = false, wave = false, act = 'taskcard', title = '' } = {}) => `<button type="button" contenteditable="false" class="task-build" data-act="${act}" data-row="${i}" data-task-row="${i}" data-task-state="${state}"${task ? ` data-task-build="${esc(task.id)}"` : ''}${active ? ' data-on="1"' : ''}${title ? ` title="${esc(title)}"` : ''} style="${color ? `color:${color};` : ''}${strong ? 'font-weight:500;' : ''}"><span class="task-build-words${wave ? ' eb-wave' : ''}">${esc(words)}</span></button>`;
     const none = `<button type="button" contenteditable="false" class="task-build" data-task-row="${i}" data-task-state="none" hidden></button>`;
     if (!task) {
-      if (this.taskStarting.has(line)) return look('starting', 'Starting…', { spin: true, act: 'taskwait' });
+      if (this.taskStarting.has(line)) return look('starting', 'Starting…', { wave: true, act: 'taskwait' });
       if (p.done || !p.text.trim() || this.props.readOnly || !this.props.onBuildTask) return none;
       return look('idle', 'Build', { act: 'taskbuild', title: 'Build this task' });
     }
@@ -1806,10 +1806,10 @@ export default class DocEditor extends React.Component {
       const progress = (this.props.buildProgress || {})[task.id] || {}, log = progress.log || [];
       const step = status === 'running' ? (progress.activity || log[log.length - 1] || 'Thinking') : BUILD_STATUS[status] || status;
       const words = `Building · ${String(step).split('\n')[0]}`;
-      return look('working', words.length > 80 ? `${words.slice(0, 79)}…` : words, { spin: true, title: words });
+      return look('working', words.length > 80 ? `${words.slice(0, 79)}…` : words, { wave: true, title: words });
     }
     const stepping = status === 'review' && !!task.runStep && task.runStep.status === 'running';
-    if (stepping) return look('stepping', 'Getting it running…', { spin: true });
+    if (stepping) return look('stepping', 'Getting it running…', { wave: true });
     if (status === 'review' || status === 'needs-you') return look(status, BUILD_STATUS[status], { color: '#0070f3', strong: true });
     if (status === 'failed') return look(status, BUILD_STATUS[status], { color: '#e70022', strong: true });
     if (status === 'accepted') return look(status, 'Built');
@@ -1834,7 +1834,7 @@ export default class DocEditor extends React.Component {
       const html = this.taskBuildHtml(i, ls[i], p, active === i);
       if (html === this.taskDrawn.get(el)) continue;
       const next = document.createElement('template'); next.innerHTML = html; const made = next.content.firstElementChild; if (!made) continue;
-      el.replaceWith(made); this.taskDrawn.set(made, html);
+      el.replaceWith(made); this.taskDrawn.set(made, html); keepWaves(made);
     }
     this.lastHtml = this.editorHtml();
   }

@@ -191,8 +191,8 @@ test('the row ends with a faint "Build" on an open task with words; not on an em
 
 test('the row shows its Build\'s state, in the card\'s words and colours', () => {
   const states = [
-    [{ status: 'running' }, { [ID]: { activity: 'Editing src/export.js' } }, /^Building · Editing src\/export\.js$/, /task-build-spin/],
-    [{ status: 'queued' }, {}, /^Building · Waiting for a slot$/, /task-build-spin/],
+    [{ status: 'running' }, { [ID]: { activity: 'Editing src/export.js' } }, /^Building · Editing src\/export\.js$/, /<span class=\"task-build-words eb-wave\">[^<]+<\/span><\/button>$/],
+    [{ status: 'queued' }, {}, /^Building · Waiting for a slot$/, /<span class=\"task-build-words eb-wave\">[^<]+<\/span><\/button>$/],
     [{ status: 'review' }, {}, /^Ready to review$/, /color:#0070f3/],
     [{ status: 'needs-you' }, {}, /^Needs you$/, /color:#0070f3/],
     [{ status: 'failed' }, {}, /^Failed$/, /color:#e70022/],
@@ -200,13 +200,15 @@ test('the row shows its Build\'s state, in the card\'s words and colours', () =>
     [{ status: 'stopped' }, {}, /^Stopped$/, /data-task-state="stopped"/],
     [{ status: 'interrupted' }, {}, /^Interrupted$/, /data-task-state="interrupted"/],
     [{ status: 'conflict' }, {}, /^Conflict$/, /data-task-state="conflict"/],
-    [{ status: 'review', runStep: { status: 'running' } }, {}, /^Getting it running…$/, /task-build-spin/],
+    [{ status: 'review', runStep: { status: 'running' } }, {}, /^Getting it running…$/, /<span class=\"task-build-words eb-wave\">[^<]+<\/span><\/button>$/],
   ];
   for (const [record, progress, said, look] of states) {
     const { end, words } = mounted([MARKED], { builds: { [ID]: { id: ID, ...record } }, buildProgress: progress });
     assert.match(words(0), said, record.status);
     assert.match(end(0), look, record.status);
     assert.match(end(0), new RegExp(`data-task-build="${ID}"`), `${record.status}: opens its card`);
+    assert.doesNotMatch(end(0), /task-build-spin/, `${record.status}: no ring`);
+    if (!['running', 'queued'].includes(record.status) && !record.runStep) assert.doesNotMatch(end(0), /eb-wave/, `${record.status}: not at work, no wave`);
   }
   const discarded = mounted([MARKED], { builds: { [ID]: { id: ID, status: 'discarded' } } });
   assert.equal(discarded.words(0), 'Build', 'discarded: built again');
@@ -216,14 +218,36 @@ test('the row shows its Build\'s state, in the card\'s words and colours', () =>
 
 test('pressing Build hands the parent the task\'s line and its request, and shows it starting', async () => {
   let finish;
-  const { editor, started, words } = mounted(['- [ ] Ship it', '  - [ ] Step one', '- [ ] Other'], { onBuildTask: () => new Promise((resolve) => { finish = resolve; }) });
+  const { editor, started, words, end } = mounted(['- [ ] Ship it', '  - [ ] Step one', '- [ ] Other'], { onBuildTask: () => new Promise((resolve) => { finish = resolve; }) });
   editor.buildTask(0);
   assert.deepEqual(started, [{ line: 0, raw: '- [ ] Ship it', text: 'Ship it\n\nSteps:\n- [ ] Step one' }]);
   assert.equal(words(0), 'Starting…');
+  assert.match(end(0), /<span class="task-build-words eb-wave">Starting…<\/span><\/button>$/, 'starting: its words wave, no ring');
   editor.buildTask(0);
   assert.equal(started.length, 1, 'once');
   finish(); await settle();
   assert.equal(words(0), 'Build');
+});
+
+test('a working row redrawn as its step changes keeps its words waving, on the page\'s clock', () => {
+  const builds = { [ID]: { id: ID, status: 'running' } };
+  const { editor, props } = mounted([MARKED], { builds, buildProgress: { [ID]: { activity: 'Reading the code' } } });
+  // A page of one task row: patchTaskRows replaces it with what a template makes of its HTML.
+  const anims = [];
+  const make = (html) => ({ html, dataset: { taskRow: '0' }, replaceWith(next) { row = next; }, querySelectorAll: (sel) => (sel === '.eb-wave' && html.includes('eb-wave') ? [{ getAnimations: () => { const a = { startTime: 1234 }; anims.push(a); return [a]; } }] : []) });
+  let row = make(editor.taskBuildHtml(0, MARKED, doc.parseLine(MARKED), false));
+  editor.edRef.current.querySelectorAll = (sel) => (sel === '[data-task-row]' ? [row] : []);
+  editor.lastKey = editor.key();
+  globalThis.document.createElement = () => { const t = { content: {} }; Object.defineProperty(t, 'innerHTML', { set(html) { t.content.firstElementChild = make(html); } }); return t; };
+  props.buildProgress = { [ID]: { activity: 'Editing src/export.js' } };
+  editor.patchTaskRows();
+  assert.match(row.html, /<span class="task-build-words eb-wave">Building · Editing src\/export\.js<\/span><\/button>$/, 'the new step, waving');
+  assert.doesNotMatch(row.html, /task-build-spin/, 'no ring');
+  assert.equal(anims.length, 1, 'the new row\'s wave was put on the clock');
+  assert.equal(anims[0].startTime, 0, 'so it goes on where the last one was');
+  props.builds = { [ID]: { id: ID, status: 'review' } };
+  editor.patchTaskRows();
+  assert.match(row.html, /color:#0070f3[^>]*><span class="task-build-words">Ready to review<\/span>/, 'done: blue, no wave');
 });
 
 test('ticking by hand, Enter at its start and an edit keep the task\'s Build', () => {
