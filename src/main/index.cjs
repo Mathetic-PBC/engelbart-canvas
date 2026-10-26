@@ -30,6 +30,8 @@ const { createNameChat, createFakeNameChat } = require('./bart/name-chat.cjs');
 const { rememberChoice } = require('./bart/choices.cjs');
 const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
+const { createStageBridges } = require('./terminal/stage-bridges.cjs');
+const { stageToolFor } = require('./terminal/stage-tools.cjs');
 const home = require('./store/home.cjs');
 const library = require('./store/library.cjs');
 const { createRunner } = require('./tools/run.cjs');
@@ -131,6 +133,7 @@ const MIME = {
 
 let windows = null; // every window's context (./windows.cjs): its Stage tabs, post-its, terminal attachment, place
 let manager = null;
+let stageBridges = null; // each Claude Code or Codex session's Stage tool (./terminal/stage-bridges.cjs, MATH-79)
 let settings = null;
 let scanner = null;
 // A relaunch asked for while a quit was already under way (macOS's Quit & Reopen racing Engelbart's own): kept, not dropped.
@@ -217,6 +220,7 @@ async function closeSession(id) {
   if (!current) return false;
   const closed = await manager.close(id);
   if (closed) windows.forget(id);
+  if (closed && stageBridges) await stageBridges.close(id);
   return closed;
 }
 
@@ -273,6 +277,7 @@ async function requestQuit({ update = false, relaunch = false } = {}) {
     }
     if (tools) await tools.stopSignIns(); // a Claude Code or Codex sign-in still in the browser (Connect): its own terminal
     if (manager) await manager.shutdown();
+    if (stageBridges) await stageBridges.closeAll();
     if (store) await store.close();
   } catch (error) {
     quitPending = false;
@@ -313,14 +318,25 @@ function registerTerminalIpc() {
     };
   }));
   ipcMain.handle('terminal:providers', trustedHandler(() => tools.providers(resolveShell(process.env))));
-  // A session belongs to the window it was opened from.
-  ipcMain.handle('terminal:create', windowHandler((ctx, request) => {
-    const session = manager.create({
-      provider: request && request.provider,
-      cwd: request && request.cwd,
-      cols: request && request.cols,
-      rows: request && request.rows,
-    });
+  // A session belongs to the window it was opened from. Claude Code and Codex get the Stage tool (open_on_stage, MATH-79):
+  // its bridge opens first and is bound to the session once it has started; one that does not open starts the agent
+  // without it, and one whose session does not start is closed again.
+  ipcMain.handle('terminal:create', windowHandler(async (ctx, request) => {
+    const provider = request && request.provider;
+    const stage = stageBridges ? await stageBridges.prepare(provider) : null;
+    let session;
+    try {
+      session = manager.create({
+        provider,
+        cwd: request && request.cwd,
+        cols: request && request.cols,
+        rows: request && request.rows,
+      }, { stage: stage ? stage.stage : null });
+    } catch (error) {
+      if (stage) await stage.discard();
+      throw error;
+    }
+    if (stage) stage.bind(session);
     windows.own(session.id, ctx);
     return session;
   }));
@@ -758,7 +774,22 @@ if (!hasSingleInstanceLock) {
     store.context().then((ctx) => builds.reconcile(ctx)).catch(() => {});
     // A terminal's output goes to the window that holds its session; that it ended, to every window.
     manager.on('data', (payload) => windows.terminalData(payload));
-    manager.on('exit', (payload) => sendToRenderer('terminal:exit', payload));
+    manager.on('exit', (payload) => {
+      sendToRenderer('terminal:exit', payload);
+      if (stageBridges && payload) void stageBridges.close(payload.id);
+    });
+    // open_on_stage (MATH-79): the window that holds the session shows it on its Stage; resolved here (./terminal/stage-tools.cjs).
+    stageBridges = createStageBridges({
+      directory: path.join(app.getPath('userData'), 'terminal-stage'),
+      codexHome: () => process.env.CODEX_HOME || path.join(app.getPath('home'), '.codex'),
+      toolFor: (session) => stageToolFor({
+        session,
+        owner: (id) => (windows ? windows.ownerOf(id) : null),
+        context: () => store.context(),
+        projectItems: (ctx, projectId) => library.libraryForProject(ctx, projectId),
+        deliver: (ctx, payload) => windows.deliver(ctx, 'engelbart:stage-open', payload),
+      }),
+    });
     // Each window's own Stage tabs and post-its (./windows.cjs), sending to that window alone. The post-its of windows on
     // the same project hear each other's saves (createPostItPeers).
     const postItPeers = createPostItPeers();

@@ -302,6 +302,9 @@ const engelbartAPI = Object.freeze({
   // A runnable its run step got running ({ projectId, id, kind: 'ui' | 'app' | 'terminal', name, url?, session? }):
   // a UI opens in the Stage, a terminal program's session in the terminal.
   onBuildRun: (callback) => subscribe('engelbart:build-run', callback),
+  // What a Claude Code or Codex session in this window's terminal asked to show with open_on_stage (MATH-79):
+  // { projectId, kind: 'item' | 'file' | 'address', row | path | address }, resolved by main (main/terminal/stage-tools.cjs).
+  onStageOpen: (callback) => subscribe('engelbart:stage-open', callback),
   buildRunShow: invoke('build-run-show'),
   buildRunStop: invoke('build-run-stop'),
   buildRunStopRunnable: invoke('build-run-stop-runnable'), // (projectId, id, name | null): an accepted Build's runnable, or all

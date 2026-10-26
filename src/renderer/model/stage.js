@@ -346,6 +346,19 @@ export function tabPlace(value) {
   return host || v;
 }
 
+/**
+ * What a terminal agent's open_on_stage asked this window to show (MATH-79, main/terminal/stage-tools.cjs, resolved
+ * there): { item: row } (the window's own row when it has it), { file: path } (a file from the computer, not added to the
+ * library), or { address }. Null for another project's window or anything malformed.
+ */
+export function stageOpenRequest(event, projectId, library = []) {
+  if (!event || !projectId || event.projectId !== projectId) return null;
+  if (event.kind === 'item' && event.row && typeof event.row.id === 'string') return { item: (library || []).find((row) => row.id === event.row.id) || event.row };
+  if (event.kind === 'file' && typeof event.path === 'string' && event.path.startsWith('/')) return { file: event.path };
+  if (event.kind === 'address' && typeof event.address === 'string' && event.address) return { address: event.address };
+  return null;
+}
+
 /** A library row the Stage can show: anything but a note (notes open in the middle) or a pasted image. */
 export function onStage(row) {
   if (!row || isNote(row) || row.type === 'workspace' || row.type === 'child') return false;

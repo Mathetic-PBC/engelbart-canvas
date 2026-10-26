@@ -23,7 +23,7 @@ import { flatWorkspaces, nextPlace } from '../model/nav.js';
 import { READY_STATES, agentEntries, byOpened, indexTree, keptAgents, markAgent, noteOpened, repoEntries, rollUp, shortcutProjects, summarize, visited } from '../model/sidebar.js';
 import { connectInbox, dockLine } from '../model/connect.js';
 import RecentPages from '../workspace/RecentPages.jsx';
-import { onStage, savesPageCopy } from '../model/stage.js';
+import { onStage, savesPageCopy, stageOpenRequest } from '../model/stage.js';
 import { paperState, savePaper } from '../model/guide.js';
 import { buildLine, withTaskBuild, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, madeMentionOf, researchLine, REPLY_RE } from '../model/doc.js';
 import { cardOfAnswer, questionOf } from '../../main/bart/card.cjs';
@@ -1290,6 +1290,20 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     showRight('stage');
     stageRef.current.openRow(row, '', '', { newTab: !!options.newTab });
   }, [openTab, showWs, showRight]);
+  // What a Claude Code or Codex session in this window's terminal asked to show with open_on_stage (MATH-79; main resolved
+  // it and sent it to the window that holds the session): a library row as the sidebar opens it, a file from the computer
+  // in a tab of its own and not added to the library, an address as one typed in. A tab showing it already comes forward
+  // (Stage claim), and the right pane turns to the Stage, out of the document's full screen (showRight).
+  const libraryNow = React.useRef(library);
+  libraryNow.current = library;
+  React.useEffect(() => api.onStageOpen((event) => {
+    const asked = stageOpenRequest(event, project.id, libraryNow.current);
+    if (!asked || !stageRef.current) return;
+    if (asked.item) { openItem(asked.item); return; }
+    showRight('stage');
+    if (asked.file) stageRef.current.openFile(asked.file);
+    else stageRef.current.openInput(asked.address);
+  }), [project.id, openItem, showRight]);
   // A file inside a library folder, mentioned (MATH-22): found on disk now and opened in the Stage (a pdf in the paper
   // viewer, its ink kept by its address as for any pdf opened from disk); one that is gone says so, and its chips
   // turn grey.

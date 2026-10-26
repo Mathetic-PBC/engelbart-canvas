@@ -176,6 +176,86 @@ test('Claude Code and Codex installed where the login shell\'s PATH misses them 
   assert.deepEqual(loginShellArgs('/bin/zsh', 'codex', { HOME: cwd }), ['-ilc', 'codex'], 'on PATH already: left as it is');
 });
 
+// MATH-79: the Stage tool's variables (src/main/terminal/stage-bridges.cjs) reach the agent the provider script starts.
+const STAGE = {
+  ENGELBART_TERMINAL_MCP: '/data/terminal-stage/a.mcp.json',
+  ENGELBART_TERMINAL_NOTE: 'You are running inside Engelbart.',
+  ENGELBART_TERMINAL_CODEX_COMMAND: 'mcp_servers.engelbart-stage.command="/App/Engelbart"',
+  ENGELBART_TERMINAL_CODEX_ARGS: 'mcp_servers.engelbart-stage.args=["/App/stage-mcp.cjs","/data/terminal-stage/a.connection.json"]',
+  ENGELBART_TERMINAL_CODEX_ENV: 'mcp_servers.engelbart-stage.env={ ELECTRON_RUN_AS_NODE = "1" }',
+  ENGELBART_TERMINAL_CODEX_NOTE: 'developer_instructions="You are running inside Engelbart."',
+};
+const CLAUDE_FLAGS = ' --mcp-config "$ENGELBART_TERMINAL_MCP" --append-system-prompt "$ENGELBART_TERMINAL_NOTE"';
+const CODEX_FLAGS = ' -c "$ENGELBART_TERMINAL_CODEX_COMMAND" -c "$ENGELBART_TERMINAL_CODEX_ARGS" -c "$ENGELBART_TERMINAL_CODEX_ENV" -c "$ENGELBART_TERMINAL_CODEX_NOTE"';
+
+function fakeFish(t) {
+  const dir = temporaryDirectory(t);
+  const fish = path.join(dir, 'fish');
+  fs.writeFileSync(fish, '#!/bin/sh\n', { mode: 0o755 });
+  return fish;
+}
+
+test('Claude Code and Codex started with the Stage tool get its MCP server and line, by $ENGELBART_*_BIN and by name, in zsh and bash (MATH-79)', (t) => {
+  const cwd = temporaryDirectory(t);
+  for (const shell of ['/bin/zsh', '/bin/bash']) {
+    const environment = { HOME: cwd, SHELL: shell, PATH: '/usr/bin:/bin' };
+    const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment, { stage: STAGE });
+    assert.equal(claude.args[0], '-ilc');
+    assert.ok(claude.args[1].includes(`then "$ENGELBART_CLAUDE_BIN"${CLAUDE_FLAGS}; else claude${CLAUDE_FLAGS}; fi;`), claude.args[1]);
+    assert.equal(claude.env.ENGELBART_TERMINAL_MCP, STAGE.ENGELBART_TERMINAL_MCP);
+    assert.equal(claude.env.ENGELBART_TERMINAL_NOTE, STAGE.ENGELBART_TERMINAL_NOTE);
+    assert.equal(claude.env.ENGELBART_TERMINAL_CODEX_COMMAND, undefined, 'only its own provider\'s variables');
+    assert.doesNotMatch(claude.args[1], /strict-mcp-config|setting-sources|--restricted/);
+
+    const codex = createLaunchSpec({ provider: 'codex', cwd, cols: 80, rows: 24 }, environment, { stage: STAGE });
+    assert.ok(codex.args[1].includes(`then "$ENGELBART_CODEX_BIN"${CODEX_FLAGS}; else codex${CODEX_FLAGS}; fi;`), codex.args[1]);
+    for (const key of ['ENGELBART_TERMINAL_CODEX_COMMAND', 'ENGELBART_TERMINAL_CODEX_ARGS', 'ENGELBART_TERMINAL_CODEX_ENV', 'ENGELBART_TERMINAL_CODEX_NOTE']) assert.equal(codex.env[key], STAGE[key]);
+    assert.match(codex.env.ENGELBART_TERMINAL_CODEX_COMMAND, /^mcp_servers\.engelbart-stage\./);
+    assert.equal(codex.env.ENGELBART_TERMINAL_MCP, undefined);
+  }
+});
+
+test('in fish the same flags follow both $ENGELBART_*_BIN and the name (MATH-79)', (t) => {
+  const cwd = temporaryDirectory(t);
+  const environment = { HOME: cwd, SHELL: fakeFish(t), PATH: '/usr/bin:/bin' };
+  const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment, { stage: STAGE });
+  assert.deepEqual(claude.args.slice(0, 3), ['--login', '--interactive', '--command']);
+  assert.ok(claude.args[3].includes(`if set -q ENGELBART_CLAUDE_BIN; $ENGELBART_CLAUDE_BIN${CLAUDE_FLAGS}; else; claude${CLAUDE_FLAGS}; end;`), claude.args[3]);
+  const codex = createLaunchSpec({ provider: 'codex', cwd, cols: 80, rows: 24 }, environment, { stage: STAGE });
+  assert.ok(codex.args[3].includes(`if set -q ENGELBART_CODEX_BIN; $ENGELBART_CODEX_BIN${CODEX_FLAGS}; else; codex${CODEX_FLAGS}; end;`), codex.args[3]);
+});
+
+test('without the Stage variables, and for a shell, the command is today\'s exactly; inherited ones are never used (MATH-79)', (t) => {
+  const cwd = temporaryDirectory(t);
+  const fish = fakeFish(t);
+  const today = {
+    zsh: {
+      claude: 'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; if [ -n "${ENGELBART_CLAUDE_BIN:-}" ]; then "$ENGELBART_CLAUDE_BIN"; else claude; fi; provider_status=$?; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il',
+      codex: 'unset CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; if [ -n "${ENGELBART_CODEX_BIN:-}" ]; then "$ENGELBART_CODEX_BIN"; else codex; fi; provider_status=$?; printf "\\r\\n[Codex exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il',
+    },
+    fish: {
+      claude: 'set -e CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; if set -q ENGELBART_CLAUDE_BIN; $ENGELBART_CLAUDE_BIN; else; claude; end; set provider_status $status; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive',
+      codex: 'set -e CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE_SESSION_ID CLAUDE_AGENT_ID CLAUDE_PARENT_SESSION_ID CODEX_SESSION_ID CODEX_THREAD_ID CODEX_CI CODEX_VERSION NO_COLOR; if set -q ENGELBART_CODEX_BIN; $ENGELBART_CODEX_BIN; else; codex; end; set provider_status $status; printf "\\r\\n[Codex exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive',
+    },
+  };
+  // inherited from the app's own environment (Engelbart started from an Engelbart terminal): dropped
+  const inherited = { HOME: cwd, PATH: '/usr/bin:/bin', ...STAGE };
+  for (const provider of ['claude', 'codex']) {
+    assert.equal(createLaunchSpec({ provider, cwd, cols: 80, rows: 24 }, { ...inherited, SHELL: '/bin/zsh' }).args[1], today.zsh[provider]);
+    assert.equal(createLaunchSpec({ provider, cwd, cols: 80, rows: 24 }, { ...inherited, SHELL: fish }).args[3], today.fish[provider]);
+    assert.equal(createLaunchSpec({ provider, cwd, cols: 80, rows: 24 }, { HOME: cwd, SHELL: '/bin/zsh' }, { stage: null }).args[1], today.zsh[provider]);
+    const partial = createLaunchSpec({ provider, cwd, cols: 80, rows: 24 }, { HOME: cwd, SHELL: '/bin/zsh' }, { stage: { ENGELBART_TERMINAL_MCP: '/x.json' } });
+    assert.equal(partial.args[1], today.zsh[provider], 'not all of its variables: nothing');
+    assert.ok(!Object.keys(partial.env).some((key) => key.startsWith('ENGELBART_TERMINAL_')));
+    const spec = createLaunchSpec({ provider, cwd, cols: 80, rows: 24 }, { ...inherited, SHELL: '/bin/zsh' });
+    assert.ok(!Object.keys(spec.env).some((key) => key.startsWith('ENGELBART_TERMINAL_')), 'inherited Stage variables are not passed on');
+  }
+  const shell = createLaunchSpec({ provider: 'shell', cwd, cols: 80, rows: 24 }, { HOME: cwd, SHELL: '/bin/zsh' }, { stage: STAGE });
+  assert.deepEqual(shell.args, ['-il']);
+  assert.ok(!Object.keys(shell.env).some((key) => key.startsWith('ENGELBART_TERMINAL_')), 'a shell session gets none of them');
+  assert.equal(sanitizeEnvironment({ ENGELBART_TERMINAL_MCP: '/x', ENGELBART_GIT_BIN: '/g' }).ENGELBART_TERMINAL_MCP, undefined);
+});
+
 test('normalizeSettings clamps corrupt persisted values to app-owned defaults', (t) => {
   const home = temporaryDirectory(t);
   assert.deepEqual(
