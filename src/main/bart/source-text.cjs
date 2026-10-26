@@ -162,10 +162,11 @@ async function noteTexts(ctx, rows) {
  */
 function openedBy(events, { known = [], texts = new Map(), full = [] } = {}) {
   const out = new Set(full.filter(Boolean).map(openedKey));
+  const sourceOf = new Map([...texts].map(([text, source]) => [path.resolve(text), source])); // as `resolved` is, C:\ on Windows
   const add = (where) => {
     if (!where) return;
     const resolved = /^https?:\/\//i.test(where) ? where : path.resolve(String(where));
-    out.add(openedKey(texts.get(resolved) || resolved));
+    out.add(openedKey(sourceOf.get(resolved) || resolved));
   };
   for (const event of events || []) {
     for (const call of toolCallsOf(event)) {
