@@ -270,3 +270,14 @@ test('a task whose Build was accepted while its document was closed is ticked wh
   assert.equal(lines()[1], `- [x] ${taskMark(ID, true)}Add the export`);
   assert.equal(changes.length, 1, 'once');
 });
+
+test('a started Build is written into its task\'s line; a discarded Build\'s marker is replaced, a live one\'s kept', () => {
+  const at = { line: 0, raw: '- [ ] Ship it' };
+  assert.equal(doc.withTaskBuild('- [ ] Ship it\nAfter', at, ID), `- [ ] ${taskMark(ID)}Ship it\nAfter`);
+  assert.equal(doc.withTaskBuild('Before\n- [ ] Ship it', at, ID), `Before\n- [ ] ${taskMark(ID)}Ship it`, 'found again where it moved');
+  assert.equal(doc.withTaskBuild('- [ ] Ship it now', at, ID), null, 'changed meanwhile');
+  const again = { line: 0, raw: `- [ ] ${taskMark(OTHER)}Ship it` };
+  assert.equal(doc.withTaskBuild(again.raw, again, ID, { [OTHER]: { id: OTHER, status: 'discarded' } }), `- [ ] ${taskMark(ID)}Ship it`);
+  assert.equal(doc.withTaskBuild(again.raw, again, ID, {}), `- [ ] ${taskMark(ID)}Ship it`, 'its Build is gone');
+  assert.equal(doc.withTaskBuild(again.raw, again, ID, { [OTHER]: { id: OTHER, status: 'running' } }), null);
+});

@@ -515,6 +515,22 @@ export function taskRequest(lines, i, ps = parseLines(lines)) {
 }
 
 /**
+ * The document with a task's new Build written into its line (MATH-106): the line it was started from (`raw`, at `line`,
+ * else the nearest line still reading so), unless it is gone, no longer a task, or names a Build that is still there (by
+ * id in `builds`, not discarded). A Build discarded and built again takes the new one. → the text, or null to leave it.
+ */
+export function withTaskBuild(text, { line, raw }, id, builds = {}) {
+  const ls = String(text).split('\n');
+  let at = ls[line] === raw ? line : -1;
+  if (at < 0) ls.forEach((l, k) => { if (l === raw && (at < 0 || Math.abs(k - line) < Math.abs(at - line))) at = k; });
+  const p = at >= 0 ? parseLine(ls[at]) : null;
+  const held = p && p.build ? builds[p.build] : null;
+  if (!p || p.type !== 'todo' || (held && held.status !== 'discarded')) return null;
+  ls[at] = todoLine(p.depth, p.done, p.text, { build: id, ticked: false });
+  return ls.join('\n');
+}
+
+/**
  * A marker typed into a row that already draws one (an empty bullet or task): the row takes that marker instead of
  * holding it as literal text — `- [ ] ` and `- []` make it a checkbox, `- ` makes it a bullet.
  * Returns the row's new source and how many characters the marker ate, or null when nothing was typed but text.

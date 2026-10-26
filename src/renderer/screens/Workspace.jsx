@@ -25,7 +25,7 @@ import { connectInbox, dockLine } from '../model/connect.js';
 import RecentPages from '../workspace/RecentPages.jsx';
 import { onStage, savesPageCopy } from '../model/stage.js';
 import { paperState, savePaper } from '../model/guide.js';
-import { buildLine, parseLine, todoLine, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, madeMentionOf, researchLine, REPLY_RE } from '../model/doc.js';
+import { buildLine, withTaskBuild, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, madeMentionOf, researchLine, REPLY_RE } from '../model/doc.js';
 import { cardOfAnswer, questionOf } from '../../main/bart/card.cjs';
 import { fallbackAgent } from '../model/route.js';
 // An ask's id, as the editor makes them (DocEditor newAskId): a research box this window puts in (askBart) takes one.
@@ -852,13 +852,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const task = await buildFrom(ref, text, null, { line, text: raw }, { withDocument: true });
       const held = docsRef.current[key];
       if (typeof held !== 'string') return;
-      const ls = held.split('\n');
-      let at = ls[line] === raw ? line : -1;
-      if (at < 0) ls.forEach((l, k) => { if (l === raw && (at < 0 || Math.abs(k - line) < Math.abs(at - line))) at = k; });
-      const p = at >= 0 ? parseLine(ls[at]) : null;
-      if (!p || p.type !== 'todo' || p.build) return; // gone or changed meanwhile: the Build runs, its row does not show it
-      ls[at] = todoLine(p.depth, p.done, p.text, { build: task.id, ticked: false });
-      changeDoc(key, ref, ls.join('\n'));
+      // Gone or changed meanwhile: the Build runs, its row does not show it. A discarded Build's marker is replaced.
+      const next = withTaskBuild(held, { line, raw }, task.id, buildsRef.current);
+      if (next != null) changeDoc(key, ref, next);
     } catch (error) { onError(error); }
   }, [buildFrom, changeDoc, onError]);
 
