@@ -989,6 +989,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       else if (action === 'fix') await api.buildFix(project.id, id);
       else if (action === 'discard') await api.buildDiscard(project.id, id);
       else if (action === 'accept') await api.buildAccept(project.id, id).catch(() => {}); // refused: the card says why
+      else if (action === 'tickaccept') {
+        // A task ticked while its Build waits for review (MATH-106): the same Accept, its outcome handed back so the editor
+        // can untick the box and say why on the row.
+        try {
+          const task = await api.buildAccept(project.id, id);
+          if (task && task.id) setBuilds((current) => ({ ...current, [task.id]: task }));
+          return task && task.status === 'accepted' ? { accepted: true } : { accepted: false, status: task ? task.status : null, error: (task && task.error) || 'It was not accepted.' };
+        } catch (error) { return { accepted: false, error: errorMessage(error) }; }
+      }
       else if (action === 'reject') setRejecting({ id, title: (builds[id] && builds[id].title) || '' });
       else if (action === 'runshow') await api.buildRunShow(project.id, id, payload.name); // its Stage tab or its terminal, again
       else if (action === 'runstop') await api.buildRunStop(project.id, id);

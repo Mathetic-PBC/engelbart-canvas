@@ -188,6 +188,16 @@ function guardNotes(putBack = [], holding = null) {
   return out;
 }
 
+// A Build started from a task's row (MATH-106, the editor's "Build" on a `- [ ]` line): from a line, with the document.
+// A `build>` line's has no document; the Build panel's comes from no line.
+const isTaskBuild = (task) => !!(task && task.kind === 'build' && task.fromLine && task.withDocument);
+
+/** What a Build that changed no code says when it lands: what it made in the library, by name. */
+function madeNote(task) {
+  const made = (task && Array.isArray(task.made) ? task.made : []).map((item) => item.name || item.id).filter(Boolean);
+  return made.length ? `Made ${made.join(', ')}. No code changed.` : 'Nothing made, no code changed.';
+}
+
 // `githubToken`: the GitHub sign-in (github/connection.cjs token), for cloning a private library repository on a Mac
 // whose Git has no GitHub credentials of its own (git.cjs clone). `libraryChanged()`: a library row was made or given a
 // folder here (the sidebar reads the library again). `runStep`: ./run-step.cjs's, or null for no run step. `inspectPdf`:
@@ -270,6 +280,12 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
 
   function track(change) { try { change(); navChanged(); } catch { /* bookkeeping never stands in a Build's way */ } }
 
+  /** Whether a Build's worktree is as it started (no file changed). False when that cannot be read: it waits for the person. */
+  async function changedNothing(task) {
+    if (!git.workingDiff || !task.worktree || !task.baseSha) return false;
+    try { const d = await git.workingDiff(task.worktree, task.baseSha, { maxPatch: 1 }); return !!d && Array.isArray(d.files) && d.files.length === 0; }
+    catch { return false; }
+  }
   /** The Build's diff as its worktree stands, sent to its card. Never fails a turn. */
   async function sendDiff(projectId, task, running) {
     if (!git.workingDiff) return;
@@ -706,7 +722,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
         keepLibrary(ctx, { dir: path.join(keepDir, id), kept: buildPolicy({ project, dataRoot: ctx.dataRoot }).kept }).catch(() => null),
         git.head(task.worktree).catch(() => null),
         git.merging(task.worktree).catch(() => false),
-        openToolBridge(createEngelbartTools({ ctx, projectId, task, inspectPdf, onAdded: () => libraryChanged() })).catch(() => null),
+        openToolBridge(createEngelbartTools({ ctx, projectId, task, inspectPdf, onAdded: () => libraryChanged(), onMade: (item) => save(ctx, projectId, id, (held) => ({ made: [...(held.made || []).filter((m) => m.id !== item.id), item] })) })).catch(() => null),
       ]);
       const policy = buildPolicy({ project, dataRoot: ctx.dataRoot, gitDir: gitCommonDir(task.worktree), papers: keeping ? keeping.papers : [] });
       task = save(ctx, projectId, id, (held) => ({ status: 'running', error: null, question: null, turn: (held.turn || 0) + 1 }));
@@ -832,8 +848,12 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
     }
     // A quick task that finished cleanly lands by itself (B23); anything else waits for the person. A Build that finished
     // a turn gets its run step (never a quick task: Accept would remove its worktree under what it started).
+    // A task's Build (MATH-106) that changed no code finishes by itself too, with no run step: there is nothing to review.
     if (after.kind === 'quick' && after.status === 'review') void accept(ctx, projectId, id, { auto: true }).catch(() => {});
-    else if (after.kind === 'build' && after.status === 'review') startRunStep(ctx, projectId, id);
+    else if (after.kind === 'build' && after.status === 'review') {
+      if (isTaskBuild(after) && await changedNothing(after)) void accept(ctx, projectId, id, { auto: true }).catch(() => {});
+      else startRunStep(ctx, projectId, id);
+    }
   }
 
   /* ------------------------------------------------------------------- run step */
@@ -1193,7 +1213,7 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
           ...(keep ? { keptCopy: true } : stoppedRunStep(held)),
           status: 'accepted', finished: now().toISOString(), checks, queued: null, landing: null,
           accepted: sha ? { sha, branch: target.branch, at: now().toISOString() } : null,
-          messages: [...held.messages, say('engelbart', `${sha ? `Accepted onto ${target.branch} as ${sha.slice(0, 7)}${auto ? ' (a quick task that finished cleanly lands by itself)' : ''}.` : 'Nothing had changed, so there was nothing to accept.'}${keep ? ` ${up.join(', ')} ${up.length === 1 ? 'keeps' : 'keep'} running on it until you stop ${up.length === 1 ? 'it' : 'them'}.` : ''}${unkept ? ` What its run step found could not be kept: ${unkept}` : ''}`)],
+          messages: [...held.messages, say('engelbart', `${sha ? `Accepted onto ${target.branch} as ${sha.slice(0, 7)}${auto ? ' (a quick task that finished cleanly lands by itself)' : ''}.` : isTaskBuild(held) || (held.made || []).length ? madeNote(held) : 'Nothing had changed, so there was nothing to accept.'}${keep ? ` ${up.join(', ')} ${up.length === 1 ? 'keeps' : 'keep'} running on it until you stop ${up.length === 1 ? 'it' : 'them'}.` : ''}${unkept ? ` What its run step found could not be kept: ${unkept}` : ''}`)],
         }));
         track(() => projects.agentStopped(ctx, id));
         return store.publicTask(done);

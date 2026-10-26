@@ -113,6 +113,10 @@ function publicTask(task) {
     // its last run step (manager.cjs, run-step.cjs): { status, phase, runnables: [{ name, folder, type, status, passed,
     // install_command, run_command, url, error, sessionId, pid }], error }
     runStep: task.runStep || null,
+    // what it put in the library (MATH-106, engelbart-tools.cjs): [{ id, name, type }]; none on a record from before
+    made: Array.isArray(task.made) ? task.made : [],
+    // started from a task's row (MATH-106): its card is the task card, and it lands by itself when it changed no code
+    fromTask: !!(task.kind === 'build' && task.fromLine && task.withDocument),
     keptCopy: !!task.keptCopy, // accepted while something ran: its copy stays, detached at what landed, until it is stopped
     created: task.created,
     updated: task.updated,

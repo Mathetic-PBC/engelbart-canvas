@@ -1004,6 +1004,82 @@ test('a task built from its own line (MATH-106): the task as <request>, the whol
   assert.match(agent.calls[1].message, /<task>\nDo what the workspace document below asks/, 'withDocument without fromLine: a workspace\'s Build, as before');
 });
 
+/** The agent's save_file over Engelbart's bridge, as a turn of a scripted agent calls it. → the item it made */
+async function saveOverBridge(engelbart, name, content) {
+  const response = await fetch(engelbart.url, { method: 'POST', headers: { authorization: `Bearer ${engelbart.token}`, 'content-type': 'application/json' }, body: JSON.stringify({ name: 'save_file', args: { name, content } }) });
+  return JSON.parse((await response.json()).content[0].text);
+}
+/** Until the record's run step was started (or `ms` passed): what it says then. */
+async function afterRunStep(project, id, ms = 600) {
+  for (let i = 0; i < ms / 20; i += 1) {
+    const task = store.readTask(projects.findProject(ctx, project.id), id);
+    if (task && task.runStep) return task;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  return store.readTask(projects.findProject(ctx, project.id), id);
+}
+const TASK_INPUT = (workspace) => ({ kind: 'build', workspaceId: workspace.id, text: 'Write the overview', fromLine: true, withDocument: true, place: { ref: { kind: 'workspace', workspaceId: workspace.id }, line: 0, text: '- [ ] Write the overview' } });
+
+test('what a Build made in the library is kept on its record (MATH-106): task.made, sent to the renderer; a record from before has none', async () => {
+  const { project, workspace } = await scene({ doc: '- [ ] Write the overview' });
+  const agent = scripted([async ({ engelbart, task }) => {
+    await saveOverBridge(engelbart, 'Workspace overview', '# Overview');
+    write(path.join(task.worktree, 'b.txt'), 'bee\n'); // and code, so it waits in review
+    return 'Wrote the overview.';
+  }]);
+  const { builds, events } = manager(agent);
+  const { id } = await builds.start(ctx, project.id, { workspaceId: workspace.id });
+  const task = await settled(project, id);
+  assert.equal(task.status, 'review');
+  assert.equal(task.made.length, 1);
+  assert.deepEqual(Object.keys(task.made[0]).sort(), ['id', 'name', 'type']);
+  assert.deepEqual([task.made[0].name, task.made[0].type], ['Workspace overview', 'md']);
+  assert.ok(await ctx.libraryDb.get(task.made[0].id), 'the item it names is the library\'s');
+  assert.deepEqual(store.publicTask(task).made, task.made, 'sent with the record');
+  assert.ok(events.some((e) => e.channel === 'engelbart:build' && e.payload.id === id && e.payload.made.length === 1), 'and as it is made');
+  const old = { ...task }; delete old.made;
+  assert.deepEqual(store.publicTask(old).made, [], 'a record from before: none');
+  assert.equal(store.publicTask(old).fromTask, false, 'a workspace Build is not a task\'s');
+});
+
+test('a task\'s Build that changed no code lands by itself with what it made, and no run step; one that changed code waits for the person (MATH-106)', async () => {
+  const { project, workspace } = await scene({ doc: '- [ ] Write the overview' });
+  const stops = [];
+  const runStep = { stop: async (id) => { stops.push(id); }, holds: () => false, run: async () => { throw new Error('no run step here'); } };
+  const made = scripted([async ({ engelbart }) => { await saveOverBridge(engelbart, 'MATH-106 — Workspace overview', '# Overview'); return 'Wrote it.'; }]);
+  const first = manager(made, { runStep });
+  const one = await first.builds.start(ctx, project.id, TASK_INPUT(workspace));
+  let task = await settled(project, one.id, ['setting-up', 'queued', 'running', 'accepting', 'review']);
+  assert.equal(task.status, 'accepted', 'it accepted itself');
+  assert.equal(task.messages[task.messages.length - 1].text, 'Made MATH-106 — Workspace overview. No code changed.');
+  assert.equal(task.accepted, null, 'no commit');
+  assert.equal(task.runStep || null, null, 'no run step was started for it');
+  assert.equal(store.publicTask(task).fromTask, true);
+  const nothing = manager(scripted(['Looked; nothing to do.']), { runStep });
+  const two = await nothing.builds.start(ctx, project.id, TASK_INPUT(workspace));
+  task = await settled(project, two.id, ['setting-up', 'queued', 'running', 'accepting', 'review']);
+  assert.equal(task.status, 'accepted');
+  assert.equal(task.messages[task.messages.length - 1].text, 'Nothing made, no code changed.');
+  const coded = manager(scripted([({ task: t }) => { write(path.join(t.worktree, 'b.txt'), 'bee\n'); return 'Added b.txt.'; }]), { runStep });
+  const three = await coded.builds.start(ctx, project.id, TASK_INPUT(workspace));
+  task = await settled(project, three.id);
+  assert.equal(task.status, 'review', 'code changed: it waits');
+  assert.ok((await afterRunStep(project, three.id)).runStep, 'with its run step');
+  assert.ok(!fs.existsSync(path.join(project.dir, 'b.txt')), 'nothing landed');
+});
+
+test('a workspace\'s Build and a `build>` line\'s that changed no code still wait for the person (MATH-106)', async () => {
+  const { project, workspace } = await scene({ doc: 'Plan.' });
+  for (const input of [{ workspaceId: workspace.id }, { kind: 'build', workspaceId: workspace.id, text: 'look around', fromLine: true }]) {
+    const { builds } = manager(scripted(['Nothing to change.']));
+    const { id } = await builds.start(ctx, project.id, input);
+    const task = await settled(project, id);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    assert.equal(store.readTask(projects.findProject(ctx, project.id), id).status, 'review', JSON.stringify(input));
+    assert.equal(store.publicTask(task).fromTask, false);
+  }
+});
+
 /* --------------------------------------------------------------------- the runner */
 
 test('while Engelbart\'s own Git stands in, a Build\'s agent, setup and checks find it first on PATH (2026-09-28)', async () => {

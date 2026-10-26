@@ -158,9 +158,9 @@ test.before(() => { DocEditor = load('DocEditor.jsx').default; });
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; elements.length = 0; });
 
 /** An editor on `lines` with no page: props.text follows what it writes, as the parent hands it back. */
-function mounted(lines, { builds = {}, buildProgress = {}, onBuildTask = () => {}, readOnly = false } = {}) {
+function mounted(lines, { builds = {}, buildProgress = {}, buildDiffs = {}, onBuildTask = () => {}, onBuildAction = null, readOnly = false, extra = {} } = {}) {
   const changes = [], started = [];
-  const props = { docKey: 'k', text: lines.join('\n'), builds, buildProgress, readOnly, onChange: (next) => { changes.push(next); props.text = next; }, onBuildTask: onBuildTask && ((input) => { started.push(input); return onBuildTask(input); }) };
+  const props = { docKey: 'k', text: lines.join('\n'), builds, buildProgress, buildDiffs, readOnly, onBuildAction, ...extra, onChange: (next) => { changes.push(next); props.text = next; }, onBuildTask: onBuildTask && ((input) => { started.push(input); return onBuildTask(input); }) };
   const editor = new DocEditor(props);
   editor.props = props;
   editor.edRef = { current: { closest: () => null, querySelector: () => null, querySelectorAll: () => [], contains: () => false } };
@@ -304,4 +304,151 @@ test('a started Build is written into its task\'s line; a discarded Build\'s mar
   assert.equal(doc.withTaskBuild(again.raw, again, ID, { [OTHER]: { id: OTHER, status: 'discarded' } }), `- [ ] ${taskMark(ID)}Ship it`);
   assert.equal(doc.withTaskBuild(again.raw, again, ID, {}), `- [ ] ${taskMark(ID)}Ship it`, 'its Build is gone');
   assert.equal(doc.withTaskBuild(again.raw, again, ID, { [OTHER]: { id: OTHER, status: 'running' } }), null);
+});
+
+/* --------------------------------------------------------------------- the row's words, the card under it, ticking (MATH-106 rework) */
+
+const FILES = [{ path: 'a.js', adds: 100, dels: 5 }, { path: 'b.js', adds: 10, dels: 1 }, { path: 'c.js', adds: 6, dels: 2 }, { path: 'd.js', adds: 4, dels: 0 }];
+const CODE_DIFF = { files: FILES, patch: 'diff --git a/a.js b/a.js\n@@ -1 +1 @@\n-old\n+new\n', truncated: false };
+const NO_DIFF = { files: [], patch: '', truncated: false };
+const MADE = [{ id: 'item-1', name: 'Workspace overview', type: 'md' }];
+const record = (extra) => ({ id: ID, kind: 'build', title: 'Write the overview', model: 'opus', modelName: 'Opus', effort: 'high', messages: [{ role: 'you', text: 'Write the overview' }, { role: 'agent', text: '## Done\nI wrote the overview of the workspace,\nlinked from the plan.\n\nMore detail that is not the summary.' }], made: [], ...extra });
+const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+
+test('the row\'s words: review with its counts, a Build that only made something, Built with what it made opening it', () => {
+  const review = mounted([MARKED], { builds: { [ID]: record({ status: 'review' }) }, buildDiffs: { [ID]: CODE_DIFF } });
+  assert.equal(review.words(0), 'Ready to review · +120 −8');
+  const madeOnly = mounted([MARKED], { builds: { [ID]: record({ status: 'review', made: MADE }) }, buildDiffs: { [ID]: NO_DIFF } });
+  assert.equal(madeOnly.words(0), 'Ready · made 1 page');
+  assert.match(madeOnly.end(0), /color:#0070f3/);
+  assert.equal(mounted([MARKED], { builds: { [ID]: record({ status: 'review', made: [...MADE, { id: 'item-2', name: 'Data', type: 'csv' }] }) }, buildDiffs: { [ID]: NO_DIFF } }).words(0), 'Ready · made 2 items');
+  assert.equal(mounted([MARKED], { builds: { [ID]: record({ status: 'review' }) } }).words(0), 'Ready to review', 'its diff not here yet');
+  const built = mounted([MARKED], { builds: { [ID]: record({ status: 'accepted', made: MADE }) } });
+  assert.equal(text(built.end(0)), 'Built · Workspace overview ↗');
+  assert.match(built.end(0), /^<button[^>]*data-act="taskcard"/, 'the rest of the row opens the card');
+  assert.match(built.end(0), /<span class="task-build-made" data-act="taskmade" data-item-id="item-1"[^>]*>Workspace overview ↗<\/span>/, 'the name opens the item');
+  assert.equal(mounted([MARKED], { builds: { [ID]: record({ status: 'accepted' }) } }).words(0), 'Built', 'nothing made');
+  assert.match(mounted([MARKED], { builds: { [ID]: record({ status: 'running' }) }, buildProgress: { [ID]: { activity: 'Writing' } } }).words(0), /^Building · Writing$/);
+});
+
+test('the task card: its parts in order for each state, the `build>` card left as it was', () => {
+  const { editor } = mounted([MARKED], { buildDiffs: { [ID]: CODE_DIFF } });
+  const names = (task) => editor.taskParts(ID, task).map(([name]) => name);
+  const part = (task, name) => new Map(editor.taskParts(ID, task)).get(name);
+  const ORDER = ['head', 'summary', 'made', 'changed', 'needs', 'run', 'live', 'actions', 'convo'];
+  // review, with code
+  const review = record({ status: 'review' });
+  assert.deepEqual(names(review), ORDER);
+  assert.match(text(part(review, 'head')), /^Build Write the overview Opus · High Ready to review$/);
+  assert.equal(text(part(review, 'summary')), 'I wrote the overview of the workspace, linked from the plan.', 'the first paragraph, its heading passed over');
+  assert.match(part(review, 'summary'), /-webkit-line-clamp:2/, 'two lines');
+  assert.equal(part(review, 'made'), '');
+  assert.equal(text(part(review, 'changed')), 'Changed 4 files · +120 −8');
+  assert.doesNotMatch(part(review, 'changed'), /data-build-diff/, 'the diff closed');
+  assert.equal(part(review, 'needs'), '');
+  assert.match(text(part(review, 'actions')), /^Full conversation › Preview Reject Accept$/);
+  assert.equal(part(review, 'convo'), '');
+  editor.taskDiffOpen.add(ID); editor.taskConvo.add(ID);
+  assert.match(part(review, 'changed'), /data-build-diff="0123456789"/, 'opened: the diff view');
+  assert.match(part(review, 'convo'), /data-build-input="0123456789"/, 'the conversation, with its reply field');
+  assert.match(text(part(review, 'convo')), /More detail that is not the summary/);
+  assert.match(text(part(review, 'actions')), /^Full conversation ‹/);
+  editor.taskDiffOpen.clear(); editor.taskConvo.clear();
+  // review, only made something
+  const { editor: madeEd } = mounted([MARKED], { buildDiffs: { [ID]: NO_DIFF } });
+  const made = new Map(madeEd.taskParts(ID, record({ status: 'review', made: MADE })));
+  assert.equal(text(made.get('made')), 'Made Workspace overview ↗');
+  assert.match(made.get('made'), /data-act="taskmade"[^>]*data-item-id="item-1"/);
+  assert.equal(text(made.get('changed')), 'Changed No code changed');
+  // working
+  const working = new Map(madeEd.taskParts(ID, record({ status: 'running', messages: [] })));
+  assert.equal(working.get('summary'), '');
+  assert.match(working.get('live'), /eb-wave/);
+  assert.match(text(working.get('actions')), /^Full conversation ›$/);
+  // needs you: the question and the reply field, not repeated in the conversation
+  const asking = record({ status: 'needs-you', question: 'Which file should it go in?' });
+  editor.taskConvo.add(ID);
+  assert.match(text(part(asking, 'needs')), /^Needs you: Which file should it go in\?/);
+  assert.match(part(asking, 'needs'), /data-build-input="0123456789"[^>]*placeholder="Answer…"/);
+  assert.doesNotMatch(part(asking, 'convo'), /Which file should it go in|data-build-input/);
+  editor.taskConvo.clear();
+  assert.equal(part(record({ status: 'review' }), 'needs'), '', 'only while it asks');
+  // discarded: what it made stays in the library
+  const gone = new Map(madeEd.taskParts(ID, record({ status: 'discarded', final: true, made: MADE })));
+  assert.equal(text(gone.get('made')), 'Made Workspace overview ↗ Kept in your library');
+  assert.equal(gone.get('changed'), '');
+  // the `build>` card: as before, the question in its conversation
+  const card = editor.buildParts(ID, asking).map(([name]) => name);
+  assert.deepEqual(card, ['head', 'prompt', 'body', 'run', 'live', 'diff', 'reply', 'actions']);
+  assert.match(new Map(editor.buildParts(ID, asking)).get('body'), /Which file should it go in/);
+});
+
+test('the card unfolds under its task and folds again; it is drawn, never a line: the text, the line numbering, copy and the caret pass it by', () => {
+  const lines = ['Before', MARKED, 'After'];
+  const { editor, html, lines: now } = mounted(lines, { builds: { [ID]: record({ status: 'review' }) }, buildDiffs: { [ID]: CODE_DIFF } });
+  assert.doesNotMatch(html(), /data-task-card/, 'folded');
+  editor.openTaskCard(ID);
+  const page = html();
+  const card = page.match(/<div contenteditable="false" data-readonly="1" data-task-card="0123456789"[^>]*>/);
+  assert.ok(card, 'unfolded');
+  assert.doesNotMatch(card[0], /data-line|data-raw/, 'not a line');
+  const rowAt = page.indexOf('data-line="1"'), cardAt = page.indexOf('data-task-card='), nextAt = page.indexOf('data-line="2"');
+  assert.ok(rowAt < cardAt && cardAt < nextAt, 'right under the task, above the line after it');
+  assert.deepEqual([...page.matchAll(/ data-line="(\d+)"/g)].map((m) => Number(m[1])), [0, 1, 2], 'the lines are numbered as before');
+  assert.deepEqual(now(), lines, 'the text is untouched');
+  assert.equal(doc.selectionMarkdown(now(), { line: 0, offset: 0 }, { line: 2, offset: 5 }), 'Before\n- [ ] Add the export\nAfter', 'copy is the text alone');
+  // what the caret reads a point of the page as: nothing inside the card
+  const ed = { contains: () => true };
+  editor.edRef.current = ed;
+  const inCard = { nodeType: 1, closest: (sel) => (sel === '[data-line]' ? null : null) };
+  assert.equal(editor.caretAt(inCard, 0), null, 'a point in the card is no place in the text');
+  editor.openTaskCard(ID);
+  assert.doesNotMatch(html(), /data-task-card/, 'folded again');
+  // a discarded Build's card stays open, showing what it kept
+  editor.openTaskCard(ID);
+  editor.props.builds = { [ID]: record({ status: 'discarded', final: true, made: MADE }) };
+  assert.match(html(), /data-task-card="0123456789"[\s\S]*Kept in your library/);
+});
+
+test('ticking a task whose Build waits for review accepts it; a refused Accept unticks the box and says why in red; a working one only ticks', async () => {
+  // accepted
+  const asked = [];
+  let builds = { [ID]: record({ status: 'review' }) };
+  const ok = mounted([MARKED], { builds, onBuildAction: (id, action) => { asked.push([id, action]); return Promise.resolve({ accepted: true }); } });
+  ok.editor.toggleTodo(0);
+  assert.equal(ok.lines()[0], `- [x] ${taskMark(ID, true)}Add the export`, 'ticked at once, the marker saying so');
+  assert.deepEqual(asked, [[ID, 'tickaccept']]);
+  await settle();
+  ok.props.builds = { [ID]: record({ status: 'accepted' }) };
+  const before = ok.changes.length;
+  ok.editor.componentDidUpdate({ ...ok.props, builds }, ok.editor.state);
+  await settle();
+  assert.equal(ok.changes.length, before, 'landed: not ticked a second time');
+  assert.equal(ok.lines()[0], `- [x] ${taskMark(ID, true)}Add the export`);
+  // refused
+  const why = 'main and this Build changed the same lines in a.txt.';
+  builds = { [ID]: record({ status: 'review' }) };
+  const no = mounted([MARKED], { builds, onBuildAction: () => Promise.resolve({ accepted: false, status: 'conflict', error: why }) });
+  no.editor.toggleTodo(0);
+  await settle(); await settle();
+  assert.equal(no.lines()[0], MARKED, 'unticked, marker and all');
+  no.props.builds = { [ID]: record({ status: 'conflict', error: why }) };
+  assert.equal(no.words(0), why);
+  assert.match(no.end(0), /color:#e70022/);
+  no.props.builds = { [ID]: record({ status: 'running' }) };
+  no.editor.componentDidUpdate({ ...no.props, builds }, no.editor.state);
+  no.props.builds = { [ID]: record({ status: 'review' }) };
+  assert.equal(no.words(0), 'Ready to review', 'gone once the Build moved on');
+  // the call itself failed
+  const threw = mounted([MARKED], { builds: { [ID]: record({ status: 'review' }) }, onBuildAction: () => Promise.reject(new Error('Your code folder is not on a branch.')) });
+  threw.editor.toggleTodo(0);
+  await settle(); await settle();
+  assert.equal(threw.lines()[0], MARKED);
+  assert.equal(threw.words(0), 'Your code folder is not on a branch.');
+  // working: only ticked
+  const calls = [];
+  const busy = mounted([MARKED], { builds: { [ID]: record({ status: 'running' }) }, onBuildAction: (...a) => { calls.push(a); return Promise.resolve(true); } });
+  busy.editor.toggleTodo(0);
+  assert.equal(busy.lines()[0], `- [x] ${taskMark(ID)}Add the export`);
+  assert.deepEqual(calls, []);
 });
