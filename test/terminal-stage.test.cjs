@@ -11,7 +11,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 
-const { STAGE_TOOLS, STAGE_NOTE, validateStageTool, resolveTarget, stageToolFor } = require('../src/main/terminal/stage-tools.cjs');
+const { STAGE_TOOLS, STAGE_NOTE, validateStageTool, resolveTarget, searchLibrary, stageToolFor } = require('../src/main/terminal/stage-tools.cjs');
 const { createStageBridges, codexInstructions, codexNote, SERVER_NAME } = require('../src/main/terminal/stage-bridges.cjs');
 const { SessionManager } = require('../src/main/terminal/session-manager.cjs');
 const { openToolBridge } = require('../src/main/sandbox/local-tools.cjs');
@@ -29,9 +29,13 @@ const row = (n, name, extra = {}) => ({ id: id(n), name, type: 'html', url: `htt
 
 /* ------------------------------------------------------------------ the tool and its arguments */
 
-test('one tool, open_on_stage { target }, said for the agent; the line names Engelbart and the tool', () => {
-  assert.deepEqual(STAGE_TOOLS.map((tool) => tool.name), ['open_on_stage']);
-  const [tool] = STAGE_TOOLS;
+test('two tools, open_on_stage { target } and search_library { query }, said for the agent; the line names Engelbart and both', () => {
+  assert.deepEqual(STAGE_TOOLS.map((tool) => tool.name), ['open_on_stage', 'search_library']);
+  const [tool, search] = STAGE_TOOLS;
+  assert.deepEqual(search.inputSchema.required, ['query']);
+  assert.equal(search.inputSchema.additionalProperties, false);
+  assert.match(search.description, /part of their name or file name/);
+  assert.match(STAGE_NOTE, /search_library/);
   assert.deepEqual(tool.inputSchema.required, ['target']);
   assert.equal(tool.inputSchema.additionalProperties, false);
   assert.match(tool.description, /Stage/);
@@ -52,6 +56,59 @@ test('arguments: a target string and nothing else', () => {
   assert.throws(() => validateStageTool('open_on_stage', { target: 'a\0b' }), /not a valid/);
   assert.throws(() => validateStageTool('open_on_stage', { target: 'x'.repeat(4097) }), /not a valid/);
   assert.throws(() => validateStageTool('open_on_stage', { target: 'x', newTab: true }), /does not take newTab/);
+  assert.deepEqual(validateStageTool('search_library', { query: ' tutor trace ' }), { query: 'tutor trace' });
+  assert.throws(() => validateStageTool('search_library', { target: 'x' }), /does not take target/);
+  assert.throws(() => validateStageTool('search_library', { query: ' ' }), /query must be/);
+  assert.throws(() => validateStageTool('search_library', { query: 'x'.repeat(513) }), /too long/);
+});
+
+/* ------------------------------------------------------------------ search_library */
+
+test('search: every word, in any case and order, in the name or file name; this project first, an exact name first, the newest first', () => {
+  const at = (day) => `2026-08-${String(day).padStart(2, '0')}T12:00:00Z`;
+  const a = row(1, 'TutorTrace: Tracing Student Thinking', { type: 'pdf', url: null, path: '/d/uist26-238.pdf', created: at(24) });
+  const b = row(2, 'TutorTrace: Tracing Student Thinking', { type: 'pdf', url: null, path: '/d/Copy_.pdf', created: at(6) });
+  const c = row(3, 'Tutor trace', { created: at(1) });
+  const d = row(4, 'Trace of a tutor', { created: at(2) });
+  const e = row(5, 'Attention', { type: 'pdf', url: null, path: '/d/tutor-trace-notes.pdf', created: at(3) });
+  const all = [b, c, d, a, e, row(6, 'Tutoring')];
+  const found = searchLibrary('tutor trace', { all, here: [b, a] });
+  assert.deepEqual(found.rows.map((r) => r.id), [a.id, b.id, c.id, e.id, d.id]);
+  assert.equal(found.total, 5);
+  assert.deepEqual(searchLibrary('tutor  TRACE', { all, here: [] }).rows.map((r) => r.id), [c.id, a.id, b.id, e.id, d.id], 'with no project: an exact name, then the newest');
+  assert.deepEqual(searchLibrary('uist26', { all, here: [] }).rows.map((r) => r.id), [a.id], 'by file name');
+  assert.equal(searchLibrary('...', { all, here: [] }).total, 0);
+  const many = Array.from({ length: 30 }, (_, i) => row(100 + i, `Paper ${i}`));
+  const capped = searchLibrary('paper', { all: many, here: [] });
+  assert.equal(capped.rows.length, 20);
+  assert.equal(capped.total, 30);
+});
+
+test('search answers each one\'s name, kind, project, day added, id, and file or address; none says so; the open error points to it', async () => {
+  const pdf = row(1, 'TutorTrace', { type: 'pdf', url: null, path: '/d/uist26-238.pdf', created: '2026-08-24T12:00:00Z', project_id: 'P2' });
+  const page = row(2, 'TutorTrace site', { url: 'https://tutortrace.org', project_id: 'P2' });
+  const note = row(3, 'TutorTrace ideas', { type: 'md', url: null, path: '/n/ideas.md', tags: ['note'] });
+  const sent = [];
+  const call = stageToolFor({
+    session: () => ({ id: 'S1', cwd: '/tmp' }),
+    owner: () => ({ id: 1, place: { projectId: PROJECT }, stageListeners: 1 }),
+    context: async () => ({ homeDir: os.tmpdir(), libraryDb: { list: async () => [pdf, page, note] } }),
+    projectItems: async () => [page],
+    projectName: (ctx, projectId) => (projectId === 'P2' ? 'Thesis' : null),
+    deliver: (win, payload) => { sent.push(payload); return true; },
+  });
+  const answer = textOf(await call('search_library', { query: 'tutortrace' }));
+  assert.deepEqual(answer.split('\n'), [
+    '3 in the library match "tutortrace":',
+    `- "TutorTrace site" (html, this project) id ${page.id}; address https://tutortrace.org`,
+    `- "TutorTrace" (pdf, project "Thesis", added 2026-08-24) id ${pdf.id}; file /d/uist26-238.pdf`,
+    `- "TutorTrace ideas" (note, the library, in no project of this window) id ${note.id}; file /n/ideas.md`,
+  ]);
+  assert.equal(sent.length, 0, 'search opens nothing');
+  assert.equal(textOf(await call('search_library', { query: 'zebra' })), 'Nothing in the library has "zebra" in its name or file name.');
+  await assert.rejects(call('open_on_stage', { target: 'tutor trace' }), /use search_library/);
+  await call('open_on_stage', { target: pdf.id });
+  assert.equal(sent[0].row.id, pdf.id, 'then opened by its id');
 });
 
 /* ------------------------------------------------------------------ what a target is */
@@ -177,6 +234,18 @@ test('it goes to the window that owns the session, with what opened said back', 
   assert.deepEqual(sent[1].payload, { projectId: PROJECT, kind: 'address', address: 'http://localhost:3000' });
 });
 
+test('a relative path is from where the agent\'s server runs, when it says; else from the session\'s directory', async (t) => {
+  const home = temporaryDirectory(t);
+  fs.mkdirSync(path.join(home, 'sub'));
+  fs.writeFileSync(path.join(home, 'sub', 'page.html'), '<p>x');
+  const win = { id: 2, place: { projectId: PROJECT }, stageListeners: 1 };
+  const { call, sent } = harness({ owner: win, homeDir: home, session: { id: 'S1', cwd: home } });
+  await call('open_on_stage', { target: './page.html' }, { cwd: path.join(home, 'sub') }); // a shell tab cd'd into sub, then claude
+  assert.equal(sent[0].payload.path, path.join(home, 'sub', 'page.html'));
+  await assert.rejects(call('open_on_stage', { target: './page.html' }), /Nothing is at/, 'from the tab\'s own directory');
+  await assert.rejects(call('open_on_stage', { target: './page.html' }, { cwd: 'sub' }), /Nothing is at/, 'a relative one is not taken');
+});
+
 test('a file opens as one from the computer, not added to the library', async (t) => {
   const home = temporaryDirectory(t);
   fs.writeFileSync(path.join(home, 'page.html'), '<p>x');
@@ -280,11 +349,15 @@ test('Codex: -c overrides for mcp_servers.engelbart-stage and developer_instruct
   assert.equal(stage.ENGELBART_TERMINAL_CODEX_NOTE, `developer_instructions=${JSON.stringify(STAGE_NOTE)}`);
 });
 
-test('a shell session gets no bridge', async (t) => {
+test('a shell session gets one bridge with both sets, for the claude or codex typed in it; another kind gets none', async (t) => {
   const { bridges, opened } = fakeBridges(t);
-  assert.equal(await bridges.prepare('shell'), null);
+  const { stage } = await bridges.prepare('shell');
+  assert.equal(opened.length, 1);
+  assert.deepEqual(Object.keys(stage).sort(), ['ENGELBART_TERMINAL_CODEX_ARGS', 'ENGELBART_TERMINAL_CODEX_COMMAND', 'ENGELBART_TERMINAL_CODEX_ENV', 'ENGELBART_TERMINAL_CODEX_NOTE', 'ENGELBART_TERMINAL_MCP', 'ENGELBART_TERMINAL_NOTE']);
+  const claudeConnection = JSON.parse(fs.readFileSync(stage.ENGELBART_TERMINAL_MCP, 'utf8')).mcpServers['engelbart-stage'].args[1];
+  assert.equal(JSON.parse(stage.ENGELBART_TERMINAL_CODEX_ARGS.replace(/^mcp_servers\.engelbart-stage\.args=/, ''))[1], claudeConnection, 'the same bridge');
   assert.equal(await bridges.prepare('sandbox'), null);
-  assert.equal(opened.length, 0);
+  assert.equal(opened.length, 1);
 });
 
 test('closed, with its files removed, when the session exits or is closed, and at shutdown; twice is harmless', async (t) => {
@@ -336,8 +409,11 @@ test('the session manager passes a session\'s Stage variables to its launch', as
   manager.create({ provider: 'claude', cwd, cols: 80, rows: 24 }, { stage: prepared.stage });
   assert.equal(pty.made[0].options.env.ENGELBART_TERMINAL_MCP, prepared.stage.ENGELBART_TERMINAL_MCP);
   assert.match(pty.made[0].args[1], /claude --mcp-config "\$ENGELBART_TERMINAL_MCP"/);
-  manager.create({ provider: 'shell', cwd, cols: 80, rows: 24 }, { stage: prepared.stage });
-  assert.equal(pty.made[1].options.env.ENGELBART_TERMINAL_MCP, undefined);
+  const shell = await bridges.prepare('shell');
+  manager.create({ provider: 'shell', cwd, cols: 80, rows: 24 }, { stage: shell.stage });
+  assert.deepEqual(pty.made[1].args, ['-il']);
+  assert.equal(pty.made[1].options.env.ENGELBART_TERMINAL_MCP, shell.stage.ENGELBART_TERMINAL_MCP, 'a shell gets them for the claude typed in it');
+  assert.equal(pty.made[1].options.env.ENGELBART_TERMINAL_CODEX_NOTE, shell.stage.ENGELBART_TERMINAL_CODEX_NOTE);
   assert.throws(() => manager.create({ provider: 'nope', cwd, cols: 80, rows: 24 }), /Unknown provider/, 'validation as before');
 });
 
@@ -377,7 +453,8 @@ test('main opens a bridge for terminal:create before the session starts and clos
 
 test('the MCP server is served as engelbart-stage and says something sensible when Engelbart is gone', () => {
   const server = src('main/terminal/stage-mcp.cjs');
-  assert.match(server, /main\(STAGE_TOOLS, 'engelbart-stage', \{ unavailable: UNAVAILABLE \}\)/);
+  assert.match(server, /main\(STAGE_TOOLS, 'engelbart-stage', \{ unavailable: UNAVAILABLE, cwd: true \}\)/);
+  assert.match(src('main/sandbox/local-mcp.cjs'), /\.\.\.\(cwd \? \{ cwd: process\.cwd\(\) \} : \{\}\)/, 'each call says where the server runs');
   const { UNAVAILABLE } = require('../src/main/terminal/stage-mcp.cjs');
   assert.match(UNAVAILABLE, /^Engelbart could not be reached/);
   const local = src('main/sandbox/local-mcp.cjs');

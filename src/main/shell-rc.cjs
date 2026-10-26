@@ -14,7 +14,8 @@
 //     the shell (installers that edit ${ZDOTDIR:-$HOME}/.zshrc, nested shells) sees your setup;
 //   * put Engelbart's own Git first on PATH while it stands in for a missing one (ENGELBART_GIT_BIN,
 //     src/main/tools/bundled-git.cjs), after your .zshrc, which may have rebuilt PATH, and Claude Code's and Codex's
-//     folders last when your PATH misses them (ENGELBART_AGENT_PATH, src/main/tools/manager.cjs environment).
+//     folders last when your PATH misses them (ENGELBART_AGENT_PATH, src/main/tools/manager.cjs environment);
+//   * give `claude` and `codex` the tab's Stage tool (STAGE_FUNCTIONS, MATH-79).
 // Because the launcher is also $TERMINAL_USER_SHELL, the shell that replaces Claude Code or
 // Codex when they exit gets the same treatment.
 //
@@ -28,6 +29,38 @@ const path = require('node:path');
 const { resolveShell } = require('./terminal/launch.cjs');
 
 const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+
+// The Stage tool (MATH-79, ./terminal/stage-bridges.cjs), in zsh and bash alike: `claude` and `codex` run in a terminal
+// start with its tab's open_on_stage server and the line saying what it is for, from the variables main started the tab
+// with (./terminal/launch.cjs createLaunchSpec). Their subcommands (`claude mcp …`, `codex login`, …), a run without
+// those variables, and a claude or codex function of your own are left as they were; the subcommand is the first
+// word that is not an option, so an alias of yours that adds one (claude='claude --x') does not hide it. `function name`, so an alias of
+// yours by that name is not expanded in the definition (and still works: it ends up here).
+const STAGE_FUNCTIONS = `if ! typeset -f claude >/dev/null 2>&1; then
+function claude {
+  local engelbart_word=
+  for engelbart_word in "$@"; do case "$engelbart_word" in -*) engelbart_word= ;; *) break ;; esac; done
+  case "$engelbart_word" in
+    agents|attach|auth|auto-mode|config|doctor|gateway|import|install|kill|login|logout|logs|mcp|migrate-installer|plugin|plugins|purge|respawn|rm|setup-token|stop|ultrareview|update|upgrade) ;;
+    *) if [ -n "\${ENGELBART_TERMINAL_MCP-}" ] && [ -n "\${ENGELBART_TERMINAL_NOTE-}" ]; then
+         command claude --mcp-config "$ENGELBART_TERMINAL_MCP" --append-system-prompt "$ENGELBART_TERMINAL_NOTE" "$@"; return; fi ;;
+  esac
+  command claude "$@"
+}
+fi
+if ! typeset -f codex >/dev/null 2>&1; then
+function codex {
+  local engelbart_word=
+  for engelbart_word in "$@"; do case "$engelbart_word" in -*) engelbart_word= ;; *) break ;; esac; done
+  case "$engelbart_word" in
+    a|agents|app|app-server|apply|archive|cloud|completion|debug|delete|doctor|exec-server|features|help|login|logout|mcp|mcp-server|migrate-rollouts|plugin|queue|remote-control|sandbox|unarchive|update) ;;
+    *) if [ -n "\${ENGELBART_TERMINAL_CODEX_COMMAND-}" ] && [ -n "\${ENGELBART_TERMINAL_CODEX_ARGS-}" ] && [ -n "\${ENGELBART_TERMINAL_CODEX_ENV-}" ] && [ -n "\${ENGELBART_TERMINAL_CODEX_NOTE-}" ]; then
+         command codex -c "$ENGELBART_TERMINAL_CODEX_COMMAND" -c "$ENGELBART_TERMINAL_CODEX_ARGS" -c "$ENGELBART_TERMINAL_CODEX_ENV" -c "$ENGELBART_TERMINAL_CODEX_NOTE" "$@"; return; fi ;;
+  esac
+  command codex "$@"
+}
+fi
+`;
 
 const FILES = {
   '.zshenv': (dir) => `# Engelbart wrapper: your own .zshenv, then keep reading this directory.
@@ -49,7 +82,7 @@ ZDOTDIR="\${ENGELBART_USER_ZDOTDIR:-$HOME}"
 [[ -r "$ZDOTDIR/.zshrc" ]] && source "$ZDOTDIR/.zshrc"
 [[ -n "\${ENGELBART_GIT_BIN:-}" ]] && path=("$ENGELBART_GIT_BIN" $path)
 [[ -n "\${ENGELBART_AGENT_PATH:-}" ]] && path=($path \${(s.:.)ENGELBART_AGENT_PATH})
-engelbart_hide_prompt() { PROMPT='' PS1='' RPROMPT='' RPS1='' PROMPT_EOL_MARK='' }
+${STAGE_FUNCTIONS}engelbart_hide_prompt() { PROMPT='' PS1='' RPROMPT='' RPS1='' PROMPT_EOL_MARK='' }
 engelbart_precmd() { engelbart_hide_prompt; printf '\\e]633;P;Cwd=%s\\a\\e]633;A\\a' "$PWD" }
 engelbart_preexec() { local line="\${1//[[:cntrl:]]/ }"; printf '\\e]633;E;%s\\a\\e]633;C\\a' "\${line[1,400]}" }
 engelbart_hide_prompt
@@ -77,7 +110,7 @@ fi
 [ -n "\${ENGELBART_GIT_BIN:-}" ] && PATH="$ENGELBART_GIT_BIN:$PATH"
 [ -n "\${ENGELBART_AGENT_PATH:-}" ] && PATH="$PATH:$ENGELBART_AGENT_PATH"
 export PATH
-`;
+${STAGE_FUNCTIONS}`;
 
 /** Writes the wrapper startup files under <userData>/zsh and returns that directory. */
 function prepareZshDir(userDataDir) {

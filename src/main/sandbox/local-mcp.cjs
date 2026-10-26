@@ -10,8 +10,9 @@ const { ListToolsRequestSchema, CallToolRequestSchema } = require('@modelcontext
 const { TOOL_DEFINITIONS } = require('./local-tools.cjs');
 
 // `unavailable`: what a tool call answers, as the tool's own error, when the app behind the bridge cannot be reached (a
-// terminal agent's Stage tool, ../terminal/stage-mcp.cjs); without it such a call fails as it always did.
-async function main(definitions = TOOL_DEFINITIONS, name = 'canvas-sandbox', { unavailable = null } = {}) {
+// terminal agent's Stage tool, ../terminal/stage-mcp.cjs); without it such a call fails as it always did. `cwd`: each call
+// also says where this server runs, the agent's own directory, for a tool that resolves paths from it.
+async function main(definitions = TOOL_DEFINITIONS, name = 'canvas-sandbox', { unavailable = null, cwd = false } = {}) {
   const { url, token } = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
   const target = new URL(url);
   if (target.protocol !== 'http:' || target.hostname !== '127.0.0.1' || target.pathname !== '/tools' || !/^[a-f0-9]{64}$/.test(token)) throw new Error('Invalid local tool connection');
@@ -23,7 +24,7 @@ async function main(definitions = TOOL_DEFINITIONS, name = 'canvas-sandbox', { u
     let response;
     try {
       response = await fetch(url, { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
-        body: JSON.stringify({ name: params.name, args: params.arguments || {} }), signal: AbortSignal.timeout(230_000) });
+        body: JSON.stringify({ name: params.name, args: params.arguments || {}, ...(cwd ? { cwd: process.cwd() } : {}) }), signal: AbortSignal.timeout(230_000) });
     } catch (error) {
       if (unavailable) return away();
       throw error;

@@ -120,11 +120,63 @@ test('an agent whose folder the person\'s PATH misses is found by name in the te
   const hidden = spawnSync('/bin/zsh', loginShellArgs('/bin/zsh', 'command -v claude', env), { detached: true, env, encoding: 'utf8', timeout: 10000 });
   assert.equal(hidden.stdout.trim().split('\n').pop(), path.join(bin, 'claude'), hidden.stderr);
   const launcher = prepareLauncher(userData, '/bin/zsh');
-  const terminal = spawnSync(launcher, ['-il'], { detached: true, env, input: 'command -v claude\nexit\n', encoding: 'utf8', timeout: 10000 });
+  const terminal = spawnSync(launcher, ['-il'], { detached: true, env, input: 'whence -p claude\nexit\n', encoding: 'utf8', timeout: 10000 });
   assert.equal(terminal.status, 0, terminal.stderr);
   assert.ok(terminal.stdout.includes(path.join(bin, 'claude')), `the terminal: ${terminal.stdout}`);
   const without = spawnSync(launcher, ['-il'], { detached: true, env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, input: 'command -v claude || echo none\nexit\n', encoding: 'utf8', timeout: 10000 });
   assert.ok(!without.stdout.includes(path.join(bin, 'claude')), without.stdout);
+});
+
+// MATH-79: `claude` and `codex` typed in a terminal get its tab's Stage tool (src/main/terminal/stage-bridges.cjs).
+const STAGE_VARIABLES = {
+  ENGELBART_TERMINAL_MCP: '/data/a.mcp.json', ENGELBART_TERMINAL_NOTE: 'the line',
+  ENGELBART_TERMINAL_CODEX_COMMAND: 'C', ENGELBART_TERMINAL_CODEX_ARGS: 'A', ENGELBART_TERMINAL_CODEX_ENV: 'E', ENGELBART_TERMINAL_CODEX_NOTE: 'N',
+};
+const TYPED = ['claude', 'claude -r', 'claude "fix the bug"', 'claude mcp list', 'claude login', 'codex', 'codex resume --last', 'codex login'];
+
+function fakeAgents(home) {
+  const bin = path.join(home, 'bin');
+  fs.mkdirSync(bin);
+  for (const name of ['claude', 'codex']) fs.writeFileSync(path.join(bin, name), '#!/bin/sh\nprintf RAN:; for a in "$@"; do printf \'[%s]\' "$a"; done; echo\n', { mode: 0o755 });
+  return bin;
+}
+// What each run of the fake agents was given.
+const ran = (stdout) => stdout.split('\n').filter((line) => line.includes('RAN:')).map((line) => line.slice(line.indexOf('RAN:') + 4));
+
+test('claude and codex typed in a terminal get the tab\'s Stage tool in zsh and bash, past an alias of yours; their subcommands do not (MATH-79)', { skip: !fs.existsSync('/bin/zsh') || !fs.existsSync('/bin/bash') }, (t) => {
+  const userData = temporaryDirectory(t);
+  const home = temporaryDirectory(t);
+  const bin = fakeAgents(home);
+  fs.writeFileSync(path.join(home, '.zshrc'), `path=(${bin} $path)\nalias claude='claude --mine'\n`);
+  fs.writeFileSync(path.join(home, '.bash_profile'), `PATH=${bin}:$PATH\nalias claude='claude --mine'\n`);
+  const claude = '[--mcp-config][/data/a.mcp.json][--append-system-prompt][the line]';
+  const codex = '[-c][C][-c][A][-c][E][-c][N]';
+  const expected = [`${claude}[--mine]`, `${claude}[--mine][-r]`, `${claude}[--mine][fix the bug]`, '[--mine][mcp][list]', '[--mine][login]', codex, `${codex}[resume][--last]`, '[login]'];
+  const env = { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb', ...STAGE_VARIABLES };
+  for (const shell of ['/bin/zsh', '/bin/bash']) {
+    const launcher = prepareLauncher(userData, shell);
+    const result = spawnSync(launcher, ['-il'], { detached: true, env, input: `${TYPED.join('\n')}\nexit\n`, encoding: 'utf8', timeout: 10000 });
+    assert.deepEqual(ran(result.stdout), expected, `${shell}: ${result.stdout}${result.stderr}`);
+    const plain = spawnSync(launcher, ['-il'], { detached: true, env: { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb' }, input: `${TYPED.join('\n')}\nexit\n`, encoding: 'utf8', timeout: 10000 });
+    assert.deepEqual(ran(plain.stdout), ['[--mine]', '[--mine][-r]', '[--mine][fix the bug]', '[--mine][mcp][list]', '[--mine][login]', '', '[resume][--last]', '[login]'], `${shell} without the variables: as it was`);
+  }
+});
+
+test('a claude function of your own is left as it is; an agent session the app starts gets the flags once (MATH-79)', { skip: !fs.existsSync('/bin/zsh') }, (t) => {
+  const userData = temporaryDirectory(t);
+  const home = temporaryDirectory(t);
+  const bin = fakeAgents(home);
+  fs.writeFileSync(path.join(home, '.zshrc'), `path=(${bin} $path)\nclaude() { echo "mine-ran" }\n`);
+  const env = { HOME: home, PATH: '/usr/bin:/bin', TERM: 'dumb', ...STAGE_VARIABLES };
+  const launcher = prepareLauncher(userData, '/bin/zsh');
+  const own = spawnSync(launcher, ['-il'], { detached: true, env, input: 'claude -r\ncodex\nexit\n', encoding: 'utf8', timeout: 10000 });
+  assert.ok(own.stdout.includes('mine-ran'), own.stdout);
+  assert.deepEqual(ran(own.stdout), ['[-c][C][-c][A][-c][E][-c][N]'], 'codex, which you did not define, still gets it');
+
+  fs.writeFileSync(path.join(home, '.zshrc'), `path=(${bin} $path)\n`);
+  const spec = createLaunchSpec({ provider: 'claude', cwd: home, cols: 80, rows: 24 }, { ...env, SHELL: launcher }, { stage: STAGE_VARIABLES });
+  const agent = spawnSync(spec.file, spec.args.map((arg) => arg.replace(/exec "\$TERMINAL_USER_SHELL" -il$/, 'true')), { detached: true, env: spec.env, encoding: 'utf8', timeout: 10000 });
+  assert.deepEqual(ran(agent.stdout), ['[--mcp-config][/data/a.mcp.json][--append-system-prompt][the line]'], `${agent.stdout}${agent.stderr}`);
 });
 
 test('shell history: extended-format prefixes, continuation lines, metafied bytes, latest-use order', (t) => {

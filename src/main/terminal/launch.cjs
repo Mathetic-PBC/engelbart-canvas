@@ -46,8 +46,11 @@ const PROVIDER_SCRIPT = Object.freeze({
   codex: { bin: 'ENGELBART_CODEX_BIN', name: 'codex', label: 'Codex' },
 });
 
-const zshProviderScript = ({ bin, name, label }, flags) => `${POSIX_STARTUP_UNSET}if [ -n "\${${bin}:-}" ]; then "$${bin}"${flags}; else ${name}${flags}; fi; provider_status=$?; printf "\\r\\n[${label} exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il`;
-const fishProviderScript = ({ bin, name, label }, flags) => `${FISH_STARTUP_UNSET}if set -q ${bin}; $${bin}${flags}; else; ${name}${flags}; end; set provider_status $status; printf "\\r\\n[${label} exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`;
+// With the flags, the agent by name is `command …`: the `claude` and `codex` functions ../shell-rc.cjs gives a terminal's zsh
+// and bash, which add the same flags, are not to add them again.
+const byName = (name, flags) => (flags ? `command ${name}${flags}` : name);
+const zshProviderScript = ({ bin, name, label }, flags) => `${POSIX_STARTUP_UNSET}if [ -n "\${${bin}:-}" ]; then "$${bin}"${flags}; else ${byName(name, flags)}; fi; provider_status=$?; printf "\\r\\n[${label} exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il`;
+const fishProviderScript = ({ bin, name, label }, flags) => `${FISH_STARTUP_UNSET}if set -q ${bin}; $${bin}${flags}; else; ${byName(name, flags)}; end; set provider_status $status; printf "\\r\\n[${label} exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`;
 
 /** Whether the session's environment carries everything the provider's Stage flags read. */
 const hasStage = (provider, environment) => !!STAGE_ENVIRONMENT[provider] && STAGE_ENVIRONMENT[provider].every((key) => !!(environment && environment[key]));
@@ -171,8 +174,9 @@ function shellArguments(shell, provider, environment = {}) {
 }
 
 /**
- * `stage`: the Stage tool's variables for a Claude Code or Codex session (STAGE_ENVIRONMENT, from ./stage-bridges.cjs);
- * a shell session, or a provider whose variables are not all there, gets none of them.
+ * `stage`: the Stage tool's variables for a Claude Code or Codex session (STAGE_ENVIRONMENT, from ./stage-bridges.cjs),
+ * and both sets for a shell session, read by the `claude` / `codex` functions ../shell-rc.cjs defines; a set whose
+ * variables are not all there is left out.
  */
 function createLaunchSpec(request, sourceEnvironment = process.env, { stage = null } = {}) {
   const validated = validateCreateRequest(request);
@@ -180,9 +184,11 @@ function createLaunchSpec(request, sourceEnvironment = process.env, { stage = nu
   const environment = sanitizeEnvironment(sourceEnvironment);
   environment.SHELL = shell;
   environment.TERMINAL_USER_SHELL = shell;
-  const keys = STAGE_ENVIRONMENT[validated.provider];
-  if (keys && stage && keys.every((key) => typeof stage[key] === 'string' && stage[key] && !stage[key].includes('\0'))) {
-    for (const key of keys) environment[key] = stage[key];
+  const sets = validated.provider === 'shell' ? Object.values(STAGE_ENVIRONMENT) : [STAGE_ENVIRONMENT[validated.provider]];
+  for (const keys of sets) {
+    if (keys && stage && keys.every((key) => typeof stage[key] === 'string' && stage[key] && !stage[key].includes('\0'))) {
+      for (const key of keys) environment[key] = stage[key];
+    }
   }
   return {
     file: shell,

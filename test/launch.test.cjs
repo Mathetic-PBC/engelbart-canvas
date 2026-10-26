@@ -201,14 +201,14 @@ test('Claude Code and Codex started with the Stage tool get its MCP server and l
     const environment = { HOME: cwd, SHELL: shell, PATH: '/usr/bin:/bin' };
     const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment, { stage: STAGE });
     assert.equal(claude.args[0], '-ilc');
-    assert.ok(claude.args[1].includes(`then "$ENGELBART_CLAUDE_BIN"${CLAUDE_FLAGS}; else claude${CLAUDE_FLAGS}; fi;`), claude.args[1]);
+    assert.ok(claude.args[1].includes(`then "$ENGELBART_CLAUDE_BIN"${CLAUDE_FLAGS}; else command claude${CLAUDE_FLAGS}; fi;`), claude.args[1]);
     assert.equal(claude.env.ENGELBART_TERMINAL_MCP, STAGE.ENGELBART_TERMINAL_MCP);
     assert.equal(claude.env.ENGELBART_TERMINAL_NOTE, STAGE.ENGELBART_TERMINAL_NOTE);
     assert.equal(claude.env.ENGELBART_TERMINAL_CODEX_COMMAND, undefined, 'only its own provider\'s variables');
     assert.doesNotMatch(claude.args[1], /strict-mcp-config|setting-sources|--restricted/);
 
     const codex = createLaunchSpec({ provider: 'codex', cwd, cols: 80, rows: 24 }, environment, { stage: STAGE });
-    assert.ok(codex.args[1].includes(`then "$ENGELBART_CODEX_BIN"${CODEX_FLAGS}; else codex${CODEX_FLAGS}; fi;`), codex.args[1]);
+    assert.ok(codex.args[1].includes(`then "$ENGELBART_CODEX_BIN"${CODEX_FLAGS}; else command codex${CODEX_FLAGS}; fi;`), codex.args[1]);
     for (const key of ['ENGELBART_TERMINAL_CODEX_COMMAND', 'ENGELBART_TERMINAL_CODEX_ARGS', 'ENGELBART_TERMINAL_CODEX_ENV', 'ENGELBART_TERMINAL_CODEX_NOTE']) assert.equal(codex.env[key], STAGE[key]);
     assert.match(codex.env.ENGELBART_TERMINAL_CODEX_COMMAND, /^mcp_servers\.engelbart-stage\./);
     assert.equal(codex.env.ENGELBART_TERMINAL_MCP, undefined);
@@ -220,12 +220,12 @@ test('in fish the same flags follow both $ENGELBART_*_BIN and the name (MATH-79)
   const environment = { HOME: cwd, SHELL: fakeFish(t), PATH: '/usr/bin:/bin' };
   const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment, { stage: STAGE });
   assert.deepEqual(claude.args.slice(0, 3), ['--login', '--interactive', '--command']);
-  assert.ok(claude.args[3].includes(`if set -q ENGELBART_CLAUDE_BIN; $ENGELBART_CLAUDE_BIN${CLAUDE_FLAGS}; else; claude${CLAUDE_FLAGS}; end;`), claude.args[3]);
+  assert.ok(claude.args[3].includes(`if set -q ENGELBART_CLAUDE_BIN; $ENGELBART_CLAUDE_BIN${CLAUDE_FLAGS}; else; command claude${CLAUDE_FLAGS}; end;`), claude.args[3]);
   const codex = createLaunchSpec({ provider: 'codex', cwd, cols: 80, rows: 24 }, environment, { stage: STAGE });
-  assert.ok(codex.args[3].includes(`if set -q ENGELBART_CODEX_BIN; $ENGELBART_CODEX_BIN${CODEX_FLAGS}; else; codex${CODEX_FLAGS}; end;`), codex.args[3]);
+  assert.ok(codex.args[3].includes(`if set -q ENGELBART_CODEX_BIN; $ENGELBART_CODEX_BIN${CODEX_FLAGS}; else; command codex${CODEX_FLAGS}; end;`), codex.args[3]);
 });
 
-test('without the Stage variables, and for a shell, the command is today\'s exactly; inherited ones are never used (MATH-79)', (t) => {
+test('without the Stage variables the command is today\'s exactly; inherited ones are never used; a shell gets both sets (MATH-79)', (t) => {
   const cwd = temporaryDirectory(t);
   const fish = fakeFish(t);
   const today = {
@@ -251,8 +251,11 @@ test('without the Stage variables, and for a shell, the command is today\'s exac
     assert.ok(!Object.keys(spec.env).some((key) => key.startsWith('ENGELBART_TERMINAL_')), 'inherited Stage variables are not passed on');
   }
   const shell = createLaunchSpec({ provider: 'shell', cwd, cols: 80, rows: 24 }, { HOME: cwd, SHELL: '/bin/zsh' }, { stage: STAGE });
-  assert.deepEqual(shell.args, ['-il']);
-  assert.ok(!Object.keys(shell.env).some((key) => key.startsWith('ENGELBART_TERMINAL_')), 'a shell session gets none of them');
+  assert.deepEqual(shell.args, ['-il'], 'a shell is started as it was');
+  for (const key of Object.keys(STAGE)) assert.equal(shell.env[key], STAGE[key], `a shell session gets both sets, for the claude or codex typed in it: ${key}`);
+  const half = createLaunchSpec({ provider: 'shell', cwd, cols: 80, rows: 24 }, { HOME: cwd, SHELL: '/bin/zsh' }, { stage: { ...STAGE, ENGELBART_TERMINAL_NOTE: '' } });
+  assert.equal(half.env.ENGELBART_TERMINAL_MCP, undefined, 'a set not all there is left out');
+  assert.equal(half.env.ENGELBART_TERMINAL_CODEX_NOTE, STAGE.ENGELBART_TERMINAL_CODEX_NOTE, 'the other is kept');
   assert.equal(sanitizeEnvironment({ ENGELBART_TERMINAL_MCP: '/x', ENGELBART_GIT_BIN: '/g' }).ENGELBART_TERMINAL_MCP, undefined);
 });
 

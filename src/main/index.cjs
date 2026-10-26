@@ -318,9 +318,9 @@ function registerTerminalIpc() {
     };
   }));
   ipcMain.handle('terminal:providers', trustedHandler(() => tools.providers(resolveShell(process.env))));
-  // A session belongs to the window it was opened from. Claude Code and Codex get the Stage tool (open_on_stage, MATH-79):
-  // its bridge opens first and is bound to the session once it has started; one that does not open starts the agent
-  // without it, and one whose session does not start is closed again.
+  // A session belongs to the window it was opened from. Claude Code, Codex and shell sessions (for the
+  // claude or codex typed in them) get the Stage tool (open_on_stage, MATH-79): its bridge opens first and is bound to the session once it has started; one that does not open starts
+  // the agent without it, and one whose session does not start is closed again.
   ipcMain.handle('terminal:create', windowHandler(async (ctx, request) => {
     const provider = request && request.provider;
     const stage = stageBridges ? await stageBridges.prepare(provider) : null;
@@ -787,6 +787,7 @@ if (!hasSingleInstanceLock) {
         owner: (id) => (windows ? windows.ownerOf(id) : null),
         context: () => store.context(),
         projectItems: (ctx, projectId) => library.libraryForProject(ctx, projectId),
+        projectName: (ctx, projectId) => { try { return projects.findProject(ctx, projectId).name; } catch { return null; } },
         deliver: (ctx, payload) => windows.deliver(ctx, 'engelbart:stage-open', payload),
       }),
     });

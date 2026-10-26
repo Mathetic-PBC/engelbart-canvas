@@ -1,11 +1,14 @@
 'use strict';
 
-// One Stage tool bridge for each Claude Code or Codex session started from Engelbart's terminal (MATH-79, 2026-10-26).
+// One Stage tool bridge for each Claude Code, Codex or shell session started from Engelbart's terminal (MATH-79, 2026-10-26).
 // `prepare(provider)` opens a loopback bridge (../sandbox/local-tools.cjs openToolBridge) before the session starts,
 // writes its connection file (0600, under userData, as a Build's is) and answers the variables the provider script reads
 // (./launch.cjs STAGE_ENVIRONMENT); `bind(session)` ties it to the session once it has an id. It is closed, and its files
-// removed, when the session exits or is closed and when the app quits. A shell session gets none, and a bridge that does
-// not open leaves the agent to start without the tool.
+// removed, when the session exits or is closed and when the app quits. A bridge that does not open leaves the agent to
+// start without the tool.
+//
+// A shell session gets both providers' variables from its one bridge: `claude` or `codex` typed in it, which is also
+// how the terminal's agent menu starts them in an idle tab, add them through the functions ../shell-rc.cjs defines.
 //
 // Claude Code gets the `engelbart-stage` server from an --mcp-config file and the line from --append-system-prompt, its
 // own settings and MCP servers still loaded. Codex has no flag for extra instructions in its interactive TUI, so the line
@@ -21,7 +24,7 @@ const { STAGE_NOTE } = require('./stage-tools.cjs');
 
 const SERVER = path.join(__dirname, 'stage-mcp.cjs');
 const SERVER_NAME = 'engelbart-stage';
-const PROVIDERS = new Set(['claude', 'codex']);
+const PROVIDERS = new Set(['claude', 'codex', 'shell']);
 const toml = (value) => JSON.stringify(value); // a JSON string or array of strings is TOML too
 
 const ESCAPES = { b: '\b', t: '\t', n: '\n', f: '\f', r: '\r', e: '\x1b', '"': '"', '\\': '\\' };
@@ -83,7 +86,7 @@ function createStageBridges({ directory, toolFor, codexHome = () => process.env.
     await Promise.resolve(entry.bridge.close()).catch(report);
   }
 
-  /** → { stage, bind(session), discard() } for a Claude Code or Codex session; null for a shell, or when it cannot open. */
+  /** → { stage, bind(session), discard() } for a Claude Code, Codex or shell session; null for another, or when it cannot open. */
   async function prepare(provider) {
     if (!PROVIDERS.has(provider)) return null;
     let current = null;
@@ -103,18 +106,20 @@ function createStageBridges({ directory, toolFor, codexHome = () => process.env.
       fs.writeFileSync(connection, JSON.stringify({ url: bridge.connection.url, token: bridge.connection.token }), { mode: 0o600 });
       entry.files.push(connection);
       const server = { command: execPath, args: [SERVER, connection] };
-      if (provider === 'claude') {
+      stage = {};
+      if (provider !== 'codex') {
         const config = `${stem}.mcp.json`;
         fs.writeFileSync(config, JSON.stringify({ mcpServers: { [SERVER_NAME]: { ...server, env: { ELECTRON_RUN_AS_NODE: '1' } } } }), { mode: 0o600 });
         entry.files.push(config);
-        stage = { ENGELBART_TERMINAL_MCP: config, ENGELBART_TERMINAL_NOTE: STAGE_NOTE };
-      } else {
-        stage = {
+        Object.assign(stage, { ENGELBART_TERMINAL_MCP: config, ENGELBART_TERMINAL_NOTE: STAGE_NOTE });
+      }
+      if (provider !== 'claude') {
+        Object.assign(stage, {
           ENGELBART_TERMINAL_CODEX_COMMAND: `mcp_servers.${SERVER_NAME}.command=${toml(server.command)}`,
           ENGELBART_TERMINAL_CODEX_ARGS: `mcp_servers.${SERVER_NAME}.args=${toml(server.args)}`,
           ENGELBART_TERMINAL_CODEX_ENV: `mcp_servers.${SERVER_NAME}.env={ ELECTRON_RUN_AS_NODE = "1" }`,
           ENGELBART_TERMINAL_CODEX_NOTE: `developer_instructions=${toml(codexNote(codexHome()))}`,
-        };
+        });
       }
     } catch (error) {
       report(error);
