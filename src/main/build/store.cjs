@@ -91,6 +91,8 @@ function publicTask(task) {
     provider: task.provider,
     model: task.model,
     modelName: task.modelName,
+    // the model its last Codex turn ran on when the account's Codex lists another of the pick's family (MATH-159), else null
+    ranModel: task.ran && task.ran.picked === task.modelId && typeof task.ran.model === 'string' && task.ran.model !== task.modelId ? task.ran.model : null,
     effort: task.effort,
     status: task.status,
     question: task.question || null,

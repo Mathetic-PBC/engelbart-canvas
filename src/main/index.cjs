@@ -29,6 +29,7 @@ const { createSnapshotter } = require('./bart/created-preview.cjs');
 const { createNameChat, createFakeNameChat } = require('./bart/name-chat.cjs');
 const { rememberChoice } = require('./bart/choices.cjs');
 const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
+const { personalCodexHome, listedIn, runningCodexVersion, codexMenu } = require('./tools/codex-models.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
 const { createStageBridges } = require('./terminal/stage-bridges.cjs');
 const { stageToolFor } = require('./terminal/stage-tools.cjs');
@@ -695,6 +696,14 @@ if (!hasSingleInstanceLock) {
     // (bart/settings.cjs) writes the defaults into the same file and forgets the picks it overrules.
     // ENGELBART_BART_FAKE=1 answers without a model, for scripted runs only.
     const readModels = (place = 'bart') => modelsInForce(store.layout.root, place, { only: store.config().providers, usable: tools.usableAgents() });
+    // What the model menus show (MATH-159, tools/codex-models.cjs codexMenu): each Codex model as the member of its family
+    // the account's Codex lists, by the cache of the home that place's runs use (@bart's own, else the person's; a Build's,
+    // the person's), a family it lists none of hidden. As readModels with no cache, or one another Codex version wrote.
+    // Runs read readModels unchanged, and say when they ran on another id.
+    const menuModels = (place = 'bart') => {
+      const homes = place === 'bart' ? [path.join(app.getPath('userData'), 'codex-home-bart'), personalCodexHome()] : [personalCodexHome()];
+      return codexMenu(readModels(place), listedIn(homes, { version: runningCodexVersion(tools) }));
+    };
     const rememberModelChoice = (place, choice) => rememberChoice(store.layout.root, place, choice);
     const modelSettings = createModelSettings({ homeRoot: () => store.layout.root, only: () => store.config().providers, tools });
     const bartModels = () => readModels('bart');
@@ -1316,6 +1325,7 @@ if (!hasSingleInstanceLock) {
       builds,
       sandbox,
       readModels,
+      menuModels,
       nameChat,
       rememberModelChoice,
       modelSettings,

@@ -159,3 +159,8 @@ test('the card\'s Prompt row (2026-10-13): closed under the head when the Build 
   for (const postIt of [undefined, null, '', '  ']) assert.equal(Object.fromEntries(editor.buildParts('b9', { ...task, postIt })).prompt, '', String(postIt));
   assert.equal(card({ id: 'b2', status: 'review' }).text.prompt, '');
 });
+
+test('the card\'s head says which model a Codex Build ran on when it is not the one picked (MATH-159)', () => {
+  assert.match(card({ id: 'b9', status: 'review', modelName: 'Sol', ranModel: 'gpt-6-sol' }).text.head, /Sol \(ran as gpt-6-sol\) · High/);
+  assert.match(card({ id: 'b9', status: 'review', modelName: 'Sol', ranModel: null }).text.head, /Add a page Sol · High/);
+});

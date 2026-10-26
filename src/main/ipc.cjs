@@ -277,7 +277,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
 // `snapshotHtml(file, out)`: a picture of a page @create made (bart/created-preview.cjs); null in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null, scanner = null, agentMap = null, snapshotHtml = null, afterTestReset = async () => {} }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, menuModels = readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null, scanner = null, agentMap = null, snapshotHtml = null, afterTestReset = async () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -993,7 +993,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // A provider's `start` is where a question without flags starts: the last model and effort picked by hand (bart/choices.cjs).
   // `discover`: @discover's { quick, standard, deep } per provider, which its line's level chip lists (2026-10-03).
   handle('bart-models', () => {
-    const { provider, providers, discover } = readModels('bart'), levels = (discover && discover.providers) || {};
+    const { provider, providers, discover } = menuModels('bart'), levels = (discover && discover.providers) || {};
     return { provider, providers, discover: { providers: Object.fromEntries(Object.keys(providers).filter((key) => levels[key]).map((key) => [key, levels[key]])) } };
   });
   // The model and effort just picked in a Build panel ('build') or a post-it's Build ('quick'), kept as where the next one
@@ -1034,7 +1034,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       return value.kind === 'library' ? { kind: 'library', id: str(value.id, 'library id', 64) } : { kind: value.kind };
     };
     // What a Build panel ('build', the default) or a post-it's Build ('quick') offers, starting on what was last picked there.
-    handle('build-models', (place) => buildChoices(readModels(place === 'quick' ? 'quick' : 'build')));
+    handle('build-models', (place) => buildChoices(menuModels(place === 'quick' ? 'quick' : 'build')));
     handle('build-targets', withCtx((ctx, pid) => b().targets(ctx, pidOf(pid))));
     // The project's default repo (Make default in the picker): the code directory or a library row, never a path.
     handle('build-set-default', withCtx((ctx, pid, target) => b().setDefault(ctx, pidOf(pid), targetOf(target))));

@@ -1442,3 +1442,19 @@ test('the Agent map: a failed turn is recorded failed, and a manager without a r
   assert.deepEqual(seen.map((event) => event.type), ['assistant', 'user'], 'its Write, and its result');
   await fake.turn({ task: { kind: 'build', worktree, modelName: 'Opus', effort: 'high' }, message: 'go' });
 });
+
+test('a Codex turn that ran on another model of the pick\'s family is recorded with the pick, and the card is told after a restart (MATH-159)', async () => {
+  const { project, workspace } = await scene();
+  // as the real runner answers when the account's Codex lists gpt-6-sol and not gpt-6.1-sol
+  const agent = scripted(['Did it.', 'Again.']);
+  const runner = { turn: async (input) => ({ ...(await agent.turn(input)), model: input.task.modelId === 'gpt-6.1-sol' ? 'gpt-6-sol' : input.task.modelId }) };
+  const { builds } = manager(runner);
+  const started = await builds.start(ctx, project.id, { workspaceId: workspace.id, provider: 'openai', model: 'sol', effort: 'high' });
+  const task = await settled(project, started.id);
+  assert.deepEqual([task.modelId, task.ran], ['gpt-6.1-sol', { picked: 'gpt-6.1-sol', model: 'gpt-6-sol' }]);
+  const reread = store.publicTask(store.readTask(projects.findProject(ctx, project.id), started.id));
+  assert.deepEqual([reread.modelName, reread.ranModel], ['Sol', 'gpt-6-sol'], 'read from the record on disk, as after a restart');
+  assert.equal(store.publicTask({ ...task, ran: { picked: 'gpt-6.1-sol', model: 'gpt-6.1-sol' } }).ranModel, null, 'the pick itself: nothing to say');
+  assert.equal(store.publicTask({ ...task, modelId: 'gpt-6-astra' }).ranModel, null, 'picked again since: the old note does not carry over');
+  assert.equal(store.publicTask({ ...task, ran: undefined }).ranModel, null, 'a record from before');
+});

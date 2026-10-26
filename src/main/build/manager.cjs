@@ -827,6 +827,8 @@ function createBuilds({ git, runner, readModels, notify = () => {}, tools = null
       const stopping = entry.stopping;
       task = save(ctx, projectId, id, (held) => {
         const next = { sessionId: (out && out.session) || (failure && failure.session) || held.sessionId, checkpoints: sha ? [...held.checkpoints, { sha, turn: held.turn, at: now().toISOString() }] : held.checkpoints };
+        // The model a Codex turn ran on, kept with the pick it stood for (MATH-159): the card says so when they differ.
+        if (out && typeof out.model === 'string') next.ran = { picked: held.modelId, model: out.model };
         const notes = [...guarded, ...(kept ? [say('engelbart', `The turn's work could not be saved as a checkpoint: ${kept}`)] : [])];
         if (unresolved) {
           next.status = stopping === 'quit' ? 'interrupted' : 'conflict';

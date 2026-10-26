@@ -2042,7 +2042,7 @@ export default class DocEditor extends React.Component {
     const head = '<div style="display:flex;align-items:baseline;gap:10px">'
       + '<span style="flex:none;font-weight:600;color:#171717">Build</span>'
       + `<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#171717">${esc(task.title)}</span>`
-      + `<span style="flex:none;font-size:12.5px;color:#8f8f8f">${esc(task.modelName || task.model)} · ${esc(EFFORT_LABELS[task.effort] || task.effort)}</span>`
+      + `<span style="flex:none;font-size:12.5px;color:#8f8f8f">${esc(task.modelName || task.model)}${task.ranModel ? ` (ran as ${esc(task.ranModel)})` : ''} · ${esc(EFFORT_LABELS[task.effort] || task.effort)}</span>`
       + `<span data-build-status="${esc(stepping ? 'getting-it-running' : status)}" style="flex:none;font-size:12.5px;font-weight:500;color:${statusColor}">${esc(stepping ? 'Getting it running…' : BUILD_STATUS[status] || status)}</span>`
       + '</div>';
     // A goal Build's goal (MATH-88), under the title: the condition on one line (in full on hover), then where it stands
