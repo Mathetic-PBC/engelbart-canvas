@@ -131,6 +131,17 @@ function pageAnnotationFile(ctx, address) {
 }
 
 /**
+ * The file a library row's ink is in: its own, else the one its pdf or page got on the Stage before the library held it
+ * (as readAnnotations finds it); null when it has none. For Chat's notes files (bart/source-text.cjs noteTexts).
+ */
+function inkFileOf(ctx, row) {
+  if (!row || typeof row.id !== 'string' || !UUID_RE.test(row.id)) return null;
+  const own = annotationFile(ctx, row.id);
+  if (fs.existsSync(own)) return own;
+  return inkAddresses(row).map((address) => pageAnnotationFile(ctx, address)).find((file) => fs.existsSync(file)) || null;
+}
+
+/**
  * Where the ink of `input` (an address or a path) is: { id }, the library's row; else { file, older }, the file it is
  * written to and the ones it may have been filed in before, first first; { file: null, older: [] } for a preview.
  */
@@ -1345,4 +1356,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, addMarkdownCopy, markdownStem, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, describeRows, headAbout, dayOf, TITLE_RULES, aboutRow, previewItem, FILE_TYPES, PEEK_SKIP };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, inkFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, addMarkdownCopy, markdownStem, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, describeRows, headAbout, dayOf, TITLE_RULES, aboutRow, previewItem, FILE_TYPES, PEEK_SKIP };

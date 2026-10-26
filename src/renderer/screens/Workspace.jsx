@@ -1411,6 +1411,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // showPassage). A passage no longer in the document opens the document alone.
   const openCited = (cited) => {
     openDocBeside({ kind: cited.kind, id: cited.id, name: cited.name }, '');
+    if (!cited.find) return; // the whole document: nothing to light
     const key = cited.kind === 'workspace' ? `ws:${cited.id}` : `note:${cited.id}`;
     let tries = 0;
     const attempt = () => {

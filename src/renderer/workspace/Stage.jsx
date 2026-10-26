@@ -10,7 +10,7 @@ import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
 import { previewLibraryId } from '../model/sandbox-notifications.js';
 import { KindGlyph, SEARCH, FOLDER, Expand, Collapse } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, SAVE_LABEL, tabLook, tabWidth, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
+import { MAX_TABS, SAVE_LABEL, TAB_ICON_SIDE_W, tabLook, tabWidth, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 import { withAsk } from '../pdf/canvas.js';
@@ -79,7 +79,7 @@ const STAGE_SAVE_MS = 150; // the tabs are kept this long after they last change
 const REMOVED_MS = 5000; // how long "Box removed · Undo" stays (as a pdf's "Highlight removed")
 const HOVER_MS = 650; // a tab's card, the first time; then quickly while moving along the strip
 const newId = () => (window.crypto && window.crypto.randomUUID ? window.crypto.randomUUID() : String(Date.now() + Math.random()));
-const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, sections: null, activeSection: -1 });
+const blankTab = () => ({ id: newId(), url: 'about:blank', web: null, item: null, file: null, pdf: null, pendingFind: null, pendingTo: null, pendingPage: null, sections: null, activeSection: -1 });
 const noSections = (t) => (t.sections && t.sections.length ? { ...t, sections: null, activeSection: -1 } : t);
 const isPage = (k) => k.kind === 'web' || k.kind === 'local' || k.kind === 'disk';
 const hasScheme = (input) => /^https?:\/\//i.test(input);
@@ -576,7 +576,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // `find`: a passage to find there once it is ready, given to the new tab or to the one that comes forward; `to`, where its section ends.
   // `newTab` (a ⌘-click on a link): a tab of its own, even when one shows it already. `sections`: an @discover guide's for
   // the paper, which come with the passage and replace the tab's (model/stage.js withPassage).
-  const claim = (key, find = '', to = '', { newTab = false, sections = null, also = '' } = {}) => {
+  const claim = (key, find = '', to = '', { newTab = false, sections = null, also = '', page = null } = {}) => {
     const current = tabsRef.current;
     const front = Math.max(0, current.findIndex((t) => t.id === (frontRef.current || current[0].id)));
     const place = placeTab(current, front, key, { newTab, also });
@@ -584,10 +584,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const id = current[place.focus].id;
       frontRef.current = id;
       setActiveId(id);
-      if (find) update(id, (t) => withPassage(t, find, to, sections));
+      if (find) update(id, (t) => withPassage(t, find, to, sections, page));
       return null;
     }
-    const fresh = withPassage({ ...blankTab(), claimed: true }, find, to, sections);
+    const fresh = withPassage({ ...blankTab(), claimed: true }, find, to, sections, page);
     if (place.replace != null) {
       const old = current[place.replace];
       quiet(api.browserClose(old.id));
@@ -695,10 +695,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // `{ newTab: true }`: a ⌘-click, in a tab of its own.
   const openInput = (input, options = {}) => {
     const plan = linkPlan(input, library);
-    if (plan.row) { openRow(plan.row, plan.find, plan.to, options); return; }
+    if (plan.row) { openRow(plan.row, plan.find, plan.to, { ...options, page: plan.page }); return; }
     const k0 = kindOf(plan.address);
     if (isGithubSignIn(k0.url)) { quiet(api.openExternal(k0.url)); return; }
-    const id = claim(plan.key, plan.find, plan.to, options);
+    const id = claim(plan.key, plan.find, plan.to, { ...options, page: plan.page });
     if (id) void navigate(id, plan.address);
   };
   // A file inside a library folder, mentioned (MATH-22): its tab, as a file from the computer has, unless one is open already.
@@ -1124,7 +1124,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // time it says so: the find card opens with the words, and the passage waits no longer. In a pdf with an @discover
   // guide's sections (2026-10-03) the find card stays as it was: the Sections menu says which one is shown. A page or a
   // drawn file is searched as ⌘F would, with no card (land, below).
-  const clearPending = (id, text) => update(id, (t) => (t.pendingFind === text ? { ...t, pendingFind: null, pendingTo: null } : t));
+  const clearPending = (id, text) => update(id, (t) => (t.pendingFind === text ? { ...t, pendingFind: null, pendingTo: null, pendingPage: null } : t));
   const landed = (id, text, result) => {
     const t = tabsRef.current.find((x) => x.id === id);
     update(id, (x) => landTab(x, text));
@@ -1378,7 +1378,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
                 style={{ position: 'relative', flex: 'none', width: tabW, height: 34, display: 'flex', alignItems: 'stretch' }}
               >
                 {on ? (
-                  <div onMouseDown={(event) => pressTab(event, t)} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: narrow ? 'center' : 'flex-start', gap: narrow ? 4 : 8, boxSizing: 'border-box', padding: narrow ? 0 : '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0', cursor: 'default' }}>
+                  <div onMouseDown={(event) => pressTab(event, t)} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: look === 'x' ? 'flex-end' : narrow ? 'center' : 'flex-start', gap: narrow ? 4 : 8, boxSizing: 'border-box', padding: look === 'x' ? '0 6px 0 0' : narrow ? 0 : '0 6px 0 12px', background: '#fff', borderRadius: '10px 10px 0 0', cursor: 'default' }}>
                     <span aria-hidden="true" style={{ position: 'absolute', left: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 0 0, transparent 9.5px, #fff 10px)' }} />
                     <span aria-hidden="true" style={{ position: 'absolute', right: -10, bottom: 0, width: 10, height: 10, background: 'radial-gradient(circle at 100% 0, transparent 9.5px, #fff 10px)' }} />
                     {look === 'full' ? <>{glyph}{titleSpan}{close}</> : look === 'icon-x' ? <>{glyph}{close}</> : close}
@@ -1388,13 +1388,12 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
                     {glyph}{titleSpan}{close}
                   </div>
                 ) : (
-                  // The icon alone; under the pointer the × takes its spot. The × is always there (only unseen), so a
-                  // click on that spot closes the tab even before the hover shows.
-                  <div className="hov-tab stage-tab-icon" onMouseDown={(event) => pressTab(event, t)} style={{ flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', margin: '0 2px 4px', padding: 0, borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
-                    <span style={{ position: 'relative', flex: 'none', width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <span className="stage-tab-glyph" style={{ display: 'flex' }}>{glyph}</span>
-                      <button {...closeProps} className="hov-x stage-tab-x" style={{ ...closeStyle, position: 'absolute', inset: 0 }}>×</button>
-                    </span>
+                  // The icon alone; under the pointer the × shows at the tab's right edge and the icon moves left to make
+                  // room (2026-10-23: a × where the icon was took the click meant to open the tab). Unseen, it takes no
+                  // click. A tab too narrow for both hides its icon under the pointer.
+                  <div className="hov-tab stage-tab-icon" onMouseDown={(event) => pressTab(event, t)} style={{ position: 'relative', flex: 1, minWidth: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box', margin: '0 2px 4px', padding: 0, borderRadius: 8, background: 'transparent', cursor: 'default', transition: 'background 120ms' }}>
+                    <span className="stage-tab-glyph" data-crowded={tabW < TAB_ICON_SIDE_W ? '1' : undefined} style={{ display: 'flex', '--tab-glyph-shift': `${Math.min(0, 14 - (tabW - 4) / 2)}px` }}>{glyph}</span>
+                    <button {...closeProps} className="hov-x stage-tab-x" style={{ ...closeStyle, position: 'absolute', right: 3, top: '50%', marginTop: -10 }}>×</button>
                   </div>
                 )}
                 {sep && <span aria-hidden="true" style={{ position: 'absolute', right: 0, top: 9, width: 1, height: 16, background: '#c9c9c9' }} />}
@@ -1523,6 +1522,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
               marks={pdf.marks}
               target={tab.pendingFind || null}
               targetTo={tab.pendingTo || null}
+              targetPage={tab.pendingPage || null}
               initialSection={sectionsOn ? tab.sections[tab.activeSection] || null : null}
               view={pdf.view || null}
               onView={(view) => { const { seq } = pdf; update(tab.id, (t) => (t.pdf && t.pdf.seq === seq ? { ...t, pdf: { ...t.pdf, view } } : t)); }}

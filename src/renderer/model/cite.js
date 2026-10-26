@@ -27,18 +27,20 @@ export const citationKey = (address) => (/^https?:\/\//i.test(address) ? address
 
 /**
  * A citation's parts from an inline token (`[label](href)`), or null for any other token, a link without `cite=` or
- * one whose cite is no known kind: { label, href, address, key, find, cite, counter }.
+ * one whose cite is no known kind: { label, href, address, key, find, cite, counter }. `find` is '' for a whole source
+ * (2026-10-22: what a document is about, no one sentence of it), which opens at its top. A note on a highlight's
+ * (2026-10-23) has `note`, the words quoted, and `find`, the passage it is on.
  */
 export function citationOf(tok) {
   const m = String(tok ?? '').match(LINK_RE);
   if (!m || !/[#&]cite=/.test(m[2])) return null;
   const t = splitTarget(m[2]);
-  if (!t.cite || !CITES.has(t.cite) || !t.find) return null;
-  return { label: m[1], href: m[2], address: t.address, key: citationKey(t.address), find: t.find, cite: t.cite, counter: !!t.counter };
+  if (!t.cite || !CITES.has(t.cite)) return null;
+  return { label: m[1], href: m[2], address: t.address, key: citationKey(t.address), find: t.find, cite: t.cite, counter: !!t.counter, ...(t.note ? { note: t.note } : {}) };
 }
 
-/** Which passage a citation is, for numbering: its source and the words it quotes. */
-export const citationPassage = (c) => `${c.key}\n${c.find}`;
+/** Which passage a citation is, for numbering: its source and the words it quotes (none: the whole source). */
+export const citationPassage = (c) => `${c.key}\n${c.find}${c.note ? `\n${c.note}` : ''}`;
 
 /**
  * An answer's citation numbers: passage (citationPassage) → 1, 2, … in the order the answer's `texts` (its lines, or the
@@ -117,7 +119,8 @@ export function citationHtml(c, opts, fallback) {
   const n = (cites && cites.get && cites.get(citationPassage(c))) || fallback || 1;
   const source = citationSource(c, opts && opts.citeSource);
   const said = c.counter ? 'Against this' : c.cite === 'you' ? 'Your words' : c.cite === 'other' ? 'Someone else’s words' : 'A source';
-  return `<a href="${esc(c.href)}" data-link="1" data-cite="${esc(c.cite)}" data-n="${n}" data-key="${esc(c.key)}" data-label="${esc(c.label)}" data-find="${esc(c.find)}" data-source="${esc(source)}"${c.cite === 'you' ? ' data-you="1"' : ''}${c.counter ? ' data-counter="1"' : ''} contenteditable="false"${opts && opts.citeFocus ? ' tabindex="0"' : ''}${opts && opts.citeTitle ? ` title="${esc(`${c.label}\n“${c.find}”\n${source}`)}"` : ''} aria-label="${esc(`${n}: ${c.label}, ${said}. “${c.find}” — ${source}`)}"></a>`;
+  const quoted = c.note ? `Your note: “${c.note}”` : c.find ? `“${c.find}”` : 'The whole source';
+  return `<a href="${esc(c.href)}" data-link="1" data-cite="${esc(c.cite)}" data-n="${n}" data-key="${esc(c.key)}" data-label="${esc(c.label)}" data-find="${esc(c.find)}"${c.note ? ` data-note="${esc(c.note)}"` : ''} data-source="${esc(source)}"${c.cite === 'you' ? ' data-you="1"' : ''}${c.counter ? ' data-counter="1"' : ''} contenteditable="false"${opts && opts.citeFocus ? ' tabindex="0"' : ''}${opts && opts.citeTitle ? ` title="${esc(`${c.label}\n${quoted}\n${source}`)}"` : ''} aria-label="${esc(`${n}: ${c.label}, ${said}. ${quoted} — ${source}`)}"></a>`;
 }
 
 /**
@@ -134,7 +137,7 @@ export function citationSources(text, opts = {}) {
     const n = cites.get(citationPassage(c)) || cites.size + 1;
     if (!seen.has(c.key)) seen.set(c.key, { n, name: citationSource(c, opts && opts.citeSource), href: c.href, passages: [] });
     const source = seen.get(c.key);
-    if (!source.passages.some((p) => p.n === n)) source.passages.push({ n, href: c.href, label: c.label, find: c.find, cite: c.cite, counter: c.counter });
+    if (!source.passages.some((p) => p.n === n)) source.passages.push({ n, href: c.href, label: c.label, find: c.find, note: c.note || '', cite: c.cite, counter: c.counter });
   }
   return [...seen.values()].sort((a, b) => a.n - b.n);
 }
@@ -144,7 +147,7 @@ export function citationSources(text, opts = {}) {
  * name, a link to the first.
  */
 export const citationSourcesHtml = (sources) => (sources.length ? `<div style="font:500 11px/1.4 var(--font-sans);letter-spacing:.2px;color:#8f8f8f;margin-bottom:4px">Sources</div>`
-  + sources.map((s) => `<div data-cite-row="${s.n}">${s.passages.map((p) => `<a href="${esc(p.href)}" data-link="1" data-cite-source="${p.n}" data-n="${p.n}" data-kind="${esc(p.cite)}" data-label="${esc(p.label)}" data-find="${esc(p.find)}" data-source="${esc(s.name)}"${p.counter ? ' data-counter="1"' : ''} contenteditable="false" aria-label="${p.n}: ${esc(s.name)}. “${esc(p.find)}”"></a>`).join('')}`
+  + sources.map((s) => `<div data-cite-row="${s.n}">${s.passages.map((p) => `<a href="${esc(p.href)}" data-link="1" data-cite-source="${p.n}" data-n="${p.n}" data-kind="${esc(p.cite)}" data-label="${esc(p.label)}" data-find="${esc(p.find)}"${p.note ? ` data-note="${esc(p.note)}"` : ''} data-source="${esc(s.name)}"${p.counter ? ' data-counter="1"' : ''} contenteditable="false" aria-label="${p.n}: ${esc(s.name)}. ${p.note ? `Your note: “${esc(p.note)}”` : p.find ? `“${esc(p.find)}”` : 'The whole source'}"></a>`).join('')}`
     + `<a href="${esc(s.href)}" data-link="1" data-cite-name="1" contenteditable="false" title="${esc(s.name)}">${esc(s.name)}</a></div>`).join('') : '');
 
 /** The "…" circle of a folded run: `more` citations, opened by a click (openCitationRun) or the pointer. */
@@ -165,25 +168,26 @@ const AGENTS = new Set(['Chat', 'ChatGPT', 'Claude', 'Codex', 'Cursor']);
 /**
  * A citation's card (2026-10-21, David's mock): the quote, then where and when it is from: "flow · Oct 10", "Building the
  * computer of the future · Oct 15", "TutorTrace p. 6". An agent's own words say whose they are ("Chat · flow · Oct 10"),
- * so an answer quoting an earlier one is not taken for the person's (2026-10-21, David: no "You wrote this in").
+ * so an answer quoting an earlier one is not taken for the person's (2026-10-21, David: no "You wrote this in"). A note on
+ * a highlight is the note's words, "Your note · TutorTrace · Oct 14" (2026-10-23).
  * → { quote, lead, where, when, counter }, from the chip's label ("You · Oct 10") and source.
  */
 export function citationCard(el) {
   const label = el.dataset.label || '', cite = el.dataset.cite || el.dataset.kind || '';
   const [who, ...rest] = label.split(' · ');
-  const source = cite === 'source';
+  const source = cite === 'source', note = el.dataset.note || '';
   return {
-    quote: el.dataset.find || '',
-    lead: cite === 'other' && AGENTS.has(who) ? who : '',
+    quote: note || el.dataset.find || '',
+    lead: note ? 'Your note' : cite === 'other' && AGENTS.has(who) ? who : '',
     where: source ? label || el.dataset.source || '' : el.dataset.source || '',
     when: source ? '' : rest.join(' · '),
     counter: !!el.dataset.counter,
   };
 }
 const DOC_ICON = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>';
-/** The card's inside, as the document's hover card (workspace/Popover.jsx) and an answer box's (citationTip) draw it. */
-export const citationCardHtml = (card) => `<div style="font:13.5px/1.55 var(--font-sans);color:#171717;text-wrap:pretty">“${esc(card.quote)}”</div>`
-  + `<div style="margin-top:10px;padding-top:9px;border-top:1px solid #eaeaea;display:flex;align-items:center;gap:6px;font:11.5px/1.4 var(--font-sans);color:#8f8f8f">`
+/** The card's inside, as the document's hover card (workspace/Popover.jsx) and an answer box's (citationTip) draw it. A whole source's has no quote: where and when alone. */
+export const citationCardHtml = (card) => (card.quote ? `<div style="font:13.5px/1.55 var(--font-sans);color:#171717;text-wrap:pretty">“${esc(card.quote)}”</div>` : '')
+  + `<div style="${card.quote ? 'margin-top:10px;padding-top:9px;border-top:1px solid #eaeaea;' : ''}display:flex;align-items:center;gap:6px;font:11.5px/1.4 var(--font-sans);color:#8f8f8f">`
   + `<span style="flex:none;display:inline-flex">${DOC_ICON}</span><span style="min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${card.lead ? `${esc(card.lead)} · ` : ''}<span style="font-weight:600;color:#4d4d4d">${esc(card.where)}</span>${card.when ? ` · ${esc(card.when)}` : ''}${card.counter ? ' · cuts against this' : ''}</span></div>`;
 /** The card's box. */
 export const CITE_CARD_STYLE = 'width:280px;box-sizing:border-box;padding:12px 14px 10px;background:#fff;border:1px solid #e3e3e3;border-radius:10px;box-shadow:0 8px 24px rgba(0,0,0,.08);text-align:left';

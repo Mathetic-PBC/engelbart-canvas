@@ -96,6 +96,8 @@ const { buildContext, conversationBlock } = require('./context.cjs');
 const { projectSource, imagePaths } = require('../context/expand-mentions.cjs');
 const { replyLines, answerText } = require('./reply.cjs');
 const { checkCitations } = require('./cite.cjs');
+const { openedBy, keepPageTexts, inkFiles, readInkOf, MAX_TEXT_CHARS } = require('./source-text.cjs');
+const { toolCallsOf } = require('./runlog.cjs');
 const { citeHref } = require('../../shared/passage-link.cjs');
 const { clipMiddle } = require('./clip.cjs');
 const { pathLabeller, claudeReader, codexUpdate, eventReader, createFeed } = require('./activity.cjs');
@@ -503,17 +505,39 @@ function withoutCopiedFoot(text) {
 /** Whether a reply's citations are checked: Chat's own answers, a highlight's included; not a Build's, Brainstorm's, Discover's or Create's. */
 const citesChecked = (agent, routed) => agent === 'bart' && !(routed && routed.build);
 
-async function citedBody(ctx, { agent, routed, body, projectId, workspaceId, prior, question, log, logId }) {
+async function citedBody(ctx, { agent, routed, body, projectId, workspaceId, prior, question, log, logId, context = null, events = [] }) {
   if (!citesChecked(agent, routed)) return body;
   const thread = { dataRoot: ctx.dataRoot, projectId, workspaceId, currentThread: [...(prior || []), { question }] };
   let checked;
   try {
-    checked = await checkCitations(body, { ...thread, library: await ctx.libraryDb.list() });
+    const library = await ctx.libraryDb.list();
+    // What it read (2026-10-22, ./source-text.cjs): a whole source it cites must be among it; a page it read by its address
+    // alone is kept first, so its quotes can be checked.
+    const opened = context ? readWhileAnswering(context, events) : null;
+    if (opened) await keepPageTexts(ctx, library, opened);
+    const readRowText = (row) => ctx.libraryDb.textsFor([row.id], MAX_TEXT_CHARS).then((texts) => texts.get(row.id) || null);
+    // A note on a highlight is citable (2026-10-23), on whichever copy of a paper added twice it was drawn
+    let inks = null;
+    const readInk = (row) => readInkOf(inks || (inks = inkFiles(ctx, library)), row);
+    checked = await checkCitations(body, { ...thread, library, opened, readRowText, readInk });
   } catch {
     checked = await checkCitations(body, { ...thread, library: [], readText: () => null });
   }
   if (checked.kept.length || checked.dropped.length) log((runs) => runs.amend(logId, { citations: { kept: checked.kept, dropped: checked.dropped } }));
   return checked.body;
+}
+
+/**
+ * What Chat read while it answered (./source-text.cjs openedBy), from its run's raw `events`: the files and pages its tools
+ * opened, a kept text as its source, and the notes the documents mention, which its context held whole.
+ */
+function readWhileAnswering(context, events) {
+  const entries = context.entries || [];
+  return openedBy(events, {
+    known: entries.map((entry) => entry.path).filter(Boolean),
+    texts: new Map(entries.filter((entry) => entry.text).map((entry) => [entry.text, entry.path || entry.url])),
+    full: entries.filter((entry) => entry.mentioned && entry.type === 'md').map((entry) => entry.path),
+  });
 }
 
 /**
@@ -850,7 +874,10 @@ function createBart({ readModels, environment = process.env, runDirectory = path
       const trace = agent === 'discover' ? createTrace({ entries: context.entries }) : null;
       // The session a search runs in, as its events name it, kept if it is stopped (pausedFor).
       const live = { session: held ? held.session : null };
+      // Chat's tool calls, for what it read (citedBody).
+      const events = [];
       const traced = (event) => {
+        if (bart && toolCallsOf(event).length) events.push(event);
         const named = event && (event.session_id || (event.type === 'thread.started' ? event.thread_id : null));
         if (typeof named === 'string' && UUID_RE.test(named)) live.session = named;
         if (!trace) return; const story = trace.take(event); if (story && onProgress) onProgress({ trace: story });
@@ -904,7 +931,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         // The Welcome walkthrough's cards always read the same (welcomeReply).
         const named = taken(agent, plan, out.text);
         // With nothing kept (a Build's request, refused), the line on what it was making is not said.
-        const body = made ? createdBody(createdSentence(made.files.length ? createdLine((await line) || requestSentence(question)) : '', out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : await citedBody(ctx, { agent, routed, body: replyBody(agent, named.text), projectId, workspaceId, prior, question: text, log, logId });
+        const body = made ? createdBody(createdSentence(made.files.length ? createdLine((await line) || requestSentence(question)) : '', out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : await citedBody(ctx, { agent, routed, body: replyBody(agent, named.text), projectId, workspaceId, prior, question: text, log, logId, context, events });
         // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
         if (out.session && store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
         return { lines: replyLines(body, meta, { model: !QUIET.has(agent), agent }), meta, ...handedBack(named) };

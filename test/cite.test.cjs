@@ -319,8 +319,113 @@ test('only Chat\'s own answers are checked: not a Build\'s, Brainstorm\'s, Disco
   for (const agent of ['brainstorm', 'discover', 'create', 'orient']) assert.equal(citesChecked(agent, null), false, agent);
 });
 
+/* ------------------------------------------------------------------ a whole source (2026-10-22) */
+
+test('splitTarget and citeHref: a citation with no find is the whole source; any other fragment stays on the address', () => {
+  assert.deepEqual(splitTarget('/a/My%20Paper.pdf#cite=source'), { address: '/a/My Paper.pdf', find: '', to: '', cite: 'source', counter: false });
+  assert.deepEqual(splitTarget('/a/b.md#counter=1&cite=you'), { address: '/a/b.md', find: '', to: '', cite: 'you', counter: true });
+  assert.deepEqual(splitTarget('/a/b.pdf#page=3'), { address: '/a/b.pdf#page=3', find: '', to: '' });
+  assert.deepEqual(splitTarget('/a/b.md#cite=you&size=3'), { address: '/a/b.md#cite=you&size=3', find: '', to: '' }, 'an unknown key: no citation');
+  assert.equal(citeHref({ address: '/a/My Paper (v2).pdf', find: '', cite: 'source', counter: true }), '/a/My%20Paper%20%28v2%29.pdf#cite=source&counter=1');
+});
+
+test('checkCitations: a whole source is kept only when it was read while answering, never from a summary', async () => {
+  const { openedKey } = require('../src/main/bart/source-text.cjs');
+  const body = `The paper studies waiting ${link('TutorTrace', files.pdf, '', 'source')}. My note argues for struggle ${link('You', files.note, '', 'you')}.`;
+  const none = await check(body);
+  assert.equal(none.body, 'The paper studies waiting. My note argues for struggle.');
+  assert.deepEqual(none.dropped.map((d) => d.reason), ['not-read', 'not-read'], 'nothing said what was read');
+  const one = await check(body, { opened: new Set([openedKey(files.pdf)]) });
+  assert.deepEqual(one.kept.map((k) => [k.source, k.find, k.cite]), [['TutorTrace', '', 'source']]);
+  assert.deepEqual(one.dropped.map((d) => d.reason), ['not-read']);
+  const both = await check(body, { opened: new Set([openedKey(files.pdf), openedKey(files.note)]) });
+  assert.equal(both.dropped.length, 0);
+  assert.equal(both.kept[1].label, `You · ${TODAY}`, 'whose and when, as a passage\'s');
+  assert.match(both.body, /\(\/.*Hints%20note\.md#cite=you\)/);
+  const here = path.join(projects.findWorkspace(ctx, project.id, other.id).workspace.dir, 'workspace.md');
+  const space = await check(`X ${link('You', here, '', 'you')}.`, { opened: new Set([openedKey(here)]) });
+  assert.deepEqual(space.dropped.map((d) => d.reason), ['malformed'], 'a workspace is cited by its passages');
+});
+
+test('checkCitations: a page in the library by its address alone is checked against the text kept for it', async () => {
+  const { openedKey } = require('../src/main/bart/source-text.cjs');
+  const row = await ctx.libraryDb.insert({ id: randomUUID(), project_id: project.id, tags: [], name: 'Cocoa', type: 'website', url: 'https://example.org/cocoa' });
+  const rows = await ctx.libraryDb.list();
+  const body = `Co-planning ${link('Cocoa', 'https://example.org/cocoa', 'plans and executes alongside the person', 'source')}. As a whole ${link('Cocoa', 'https://example.org/cocoa', '', 'source')}.`;
+  const unread = await check(body, { library: rows });
+  assert.deepEqual(unread.dropped.map((d) => d.reason), ['no-text', 'not-read']);
+  const readRowText = (r) => (r.id === row.id ? 'Cocoa is an agent that plans and executes alongside the person, in a document.' : null);
+  const out = await check(body, { library: rows, readRowText, opened: new Set([openedKey('https://www.example.org/cocoa/')]) });
+  assert.deepEqual(out.dropped, []);
+  assert.deepEqual(out.kept.map((k) => [k.address, k.find === '']), [['https://example.org/cocoa', false], ['https://example.org/cocoa', true]]);
+  assert.deepEqual((await check(body.split('. As')[0], { library: rows, readRowText: () => 'something else' })).dropped.map((d) => d.reason), ['not-found']);
+});
+
+test('checkCitations: a passage of the person\'s context linked with no cite= is checked as a citation of the kind its label or source says', async () => {
+  const href = (address, find) => citeHref({ address, find, cite: 'you' }).replace(/&cite=you$/, '');
+  const body = [
+    `Struggle [You · Oct 22](${href(files.note, 'learners need to struggle a little')}).`,
+    `Waiting helps [TutorTrace p. 1](${href(files.pdf, 'Learners who waited for hints retained more')}).`,
+    `Asked [Chat · Oct 3](${href(path.join(projects.findWorkspace(ctx, project.id, other.id).workspace.dir, 'workspace.md'), 'waiting ten seconds before a hint')}).`,
+    `Wrong [You · Oct 22](${href(files.note, 'words the note never says')}).`,
+    `A paper on the web [Section 2](https://arxiv.org/pdf/2312.10893#find=We%20argue). A [plain](/x/y.md#find=z).`,
+  ].join('\n');
+  const out = await check(body);
+  assert.deepEqual(out.kept.map((k) => [k.source, k.cite, k.label]), [['Hints note', 'you', `You · ${TODAY}`], ['TutorTrace', 'source', 'TutorTrace p. 1'], ['Planning', 'other', `Chat · ${TODAY}`]]);
+  assert.deepEqual(out.dropped.map((d) => d.reason), ['not-found']);
+  assert.match(out.body.split('\n')[0], /#find=.*&cite=you\)/, 'written as a citation');
+  assert.equal(out.body.split('\n')[3], 'Wrong.');
+  assert.equal(out.body.split('\n')[4], body.split('\n')[4], 'a passage outside their context, and an unknown path, stay links');
+});
+
+test('checkCitations: the person\'s note on a highlight is theirs, dated by the note, opening the paper at its passage', async () => {
+  const { inkNotes } = require('../src/main/bart/cite.cjs');
+  const paper = library.find((r) => r.name === 'TutorTrace'), page = library.find((r) => r.name === 'Productive struggle');
+  const made = Date.parse('2026-09-14T15:00:00Z');
+  const ink = {
+    [paper.id]: { 1: [{ id: `m${made}ab`, rects: [{}], text: 'Learners who waited for hints retained more of the material a week later.', note: 'So the wait (not the hint) is what matters for my study.' }, { id: 'm1', text: 'x', note: '' }], 2: [{ id: 'nope', note: 'A free note about transfer tasks.' }] },
+    [page.id]: { web: [{ id: `m${made}cd`, quote: { exact: 'letting students wrestle' }, note: 'Same idea as the wait.' }] },
+  };
+  const readInk = (row) => ink[row.id] || null;
+  const body = [
+    `The wait matters ${link('You', files.pdf, 'the wait (not the hint) is what matters', 'you')}.`,
+    `Said as the paper's ${link('TutorTrace p. 1', files.pdf, 'the wait (not the hint) is what matters', 'source')}.`,
+    `Free ${link('You', files.pdf, 'a free note about transfer', 'you')}.`,
+    `On the page ${link('You', 'https://example.org/struggle', 'Same idea as the wait', 'you')}.`,
+    `Not a note ${link('You', files.pdf, 'words in no note and not in the paper', 'you')}.`,
+    `The paper itself ${link('TutorTrace p. 1', files.pdf, 'Learners who waited for hints retained more', 'source')}.`,
+  ].join('\n');
+  const out = await check(body, { readInk });
+  const day = new Date(made).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  assert.deepEqual(out.kept.map((k) => [k.label, k.cite, k.note || '', k.page ?? null]), [
+    [`You · ${day}`, 'you', 'the wait (not the hint) is what matters', 1],
+    [`You · ${day}`, 'you', 'the wait (not the hint) is what matters', 1],
+    [`You · ${TODAY}`, 'you', 'a free note about transfer', 2],
+    [`You · ${day}`, 'you', 'Same idea as the wait', null],
+    ['TutorTrace p. 1', 'source', '', null],
+  ]);
+  assert.deepEqual(out.dropped.map((d) => d.reason), ['not-found']);
+  const first = splitTarget(out.body.split('\n')[0].match(/\]\(([^)]+)\)/)[1]);
+  assert.deepEqual([first.find.slice(0, 40), first.note, first.cite, first.page], ['Learners who waited for hints retained m', 'the wait (not the hint) is what matters', 'you', 1], 'opens at the highlight, on its page, quotes the note');
+  assert.equal(splitTarget(out.body.split('\n')[3].match(/\]\(([^)]+)\)/)[1]).page, undefined, 'a web page\'s note: no page');
+  assert.equal(splitTarget(out.body.split('\n')[2].match(/\]\(([^)]+)\)/)[1]).find, '', 'a free note: the paper at its top');
+  assert.equal(out.kept[1].relabeled, true, 'cited as the paper\'s, it is the person\'s');
+  assert.deepEqual(inkNotes({ 3: [{ id: 'm1', box: true, text: 'under the box', note: 'boxed' }], web: 'x', bad: [{ note: 'y' }] }).map((n) => [n.note, n.text, n.page]), [['boxed', '', 3]]);
+});
+
 test('the prompt asks for sentences that say their point without the citation, which shows only as a number', () => {
   const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
   assert.match(BART_SYSTEM_PROMPT, /makes sense with the citation taken out/);
   assert.match(BART_SYSTEM_PROMPT, /Never let a citation stand in for words/);
+});
+
+test('the prompt: a summary is not evidence; a PDF is read from its text; a whole source only for a point that sums it up', () => {
+  const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
+  assert.match(BART_SYSTEM_PROMPT, /summary tells you which item to open; it is not evidence/);
+  assert.match(BART_SYSTEM_PROMPT, /read it rather than the PDF, which your Read tool cannot open/);
+  assert.match(BART_SYSTEM_PROMPT, /#cite=source\)/);
+  assert.match(BART_SYSTEM_PROMPT, /No find: the source as a whole/);
+  assert.match(BART_SYSTEM_PROMPT, /An item with `notes` has the person's highlights on it/);
+  assert.match(BART_SYSTEM_PROMPT, /or in an item's `notes` file\) is their own words: cite it by the paper's path or the page's url \(from a notes file, the <paper> path it gives\), never the notes file/);
+  assert.match(BART_SYSTEM_PROMPT, /A notes file's <paper> path is the copy the highlights are drawn on/);
 });

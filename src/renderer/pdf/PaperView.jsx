@@ -234,6 +234,9 @@ const escapeChar = (c) => c.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 const findPattern = (query) => new RegExp(query.trim().split(/\s+/).map((word) => [...word].map(escapeChar).join('(?:-\\n)?')).join('\\s*'), 'gi');
 // A link's target as the gate holds it: the passage, and the start of the section after it when there is one.
 const targetKey = (find, to) => (find ? (to ? `${find}\n${to}` : find) : '');
+// A page's text as its text layer holds it (pdf.js TextLayer: each run's words, a run that ends a line a <br>; layerText),
+// so a place found in one is the same place in the other.
+const contentText = (content) => (content && Array.isArray(content.items) ? content.items : []).map((it) => (typeof it.str === 'string' ? it.str + (it.hasEOL ? '\n' : '') : '')).join('');
 const highlights = () => (typeof CSS !== 'undefined' && CSS.highlights && typeof Highlight === 'function' ? CSS.highlights : null);
 
 const clone = (v) => JSON.parse(JSON.stringify(v));
@@ -445,6 +448,8 @@ export default class PaperView extends React.Component {
     this.inner = null;
     const pages = this.pages;
     this.texts = createPageCache((n) => pages[n].getTextContent()); // each page's text, asked for once a document
+    this.strs = []; // [n] page n's text as its text layer will hold it (contentText), once read
+    this.wantLayer = new Set(); // pages a find or a link's passage needs a text layer on, far from the view or not
   }
 
   componentDidMount() {
@@ -469,6 +474,12 @@ export default class PaperView extends React.Component {
     if (prev.target !== this.props.target || prev.targetTo !== this.props.targetTo) {
       const text = this.gate.set(targetKey(this.props.target, this.props.targetTo));
       if (text) this.applyTarget(text);
+      else if (this.props.target && this.props.targetPage) {
+        this.toPage(this.props.targetPage);
+        const s = this.sheets[this.props.targetPage];
+        if (s && s.texted) this.targetOn(this.props.targetPage);
+        this.drawSoon();
+      }
     }
     if (prev.bytes !== this.props.bytes) {
       this.flushSave(prev.onMarksChange);
@@ -583,6 +594,7 @@ export default class PaperView extends React.Component {
       if (!(await this.layout())) return;
       const h = this.host.current;
       if (view && h && gen === this.gen) { h.scrollTop = view.at * h.scrollHeight; h.scrollLeft = view.left || 0; this.syncBar(); }
+      if (this.props.target && this.props.targetPage && gen === this.gen) this.toPage(this.props.targetPage);
       this.drawSoon();
     } catch (err) {
       if (gen !== this.gen) return;
@@ -835,8 +847,9 @@ export default class PaperView extends React.Component {
 
   /* Pages drawn as the view needs them (MATH-71, ../model/paper-draw.js): one at a time, the next chosen again before
      each, so a scroll while drawing moves what comes next. The pages in view and DRAW_AHEAD each side get a drawing, their
-     text and their marks; then every other page gets its text and its marks alone (find and a link's passage search every
-     page). A turn of the event loop goes between two pages (2026-10-16): a long paper's text layers were built one after
+     text layer and their marks; then every other page gets its text read and its marks alone (find and a link's passage
+     search every page's text; 2026-10-23: a text layer only near the view, and on the pages a find or a passage lands on,
+     layersFor: a 144-page scan's 80,000 runs as layers took most of a minute and slowed the whole app after). A turn of the event loop goes between two pages (2026-10-16): a long paper's text layers were built one after
      another in one go, and the whole app stopped while they were. A page more than KEEP_DRAWN from the view gives its
      drawing back, and is drawn again when a scroll brings it near (drawSoon). */
   async drawPages(gen) {
@@ -871,7 +884,12 @@ export default class PaperView extends React.Component {
 
   // What page n still needs: its drawing, its text, its marks laid out for the pane as it is, or its cards for the zoom
   // and sideways scroll as they are (cardKey).
-  due(s, near) { return (near && !s.drawn && !s.failed) || (!s.texted && !s.texting) || s.marksW !== this.pdfW || (!!s.cards && s.cardsAt !== this.cardKey()); }
+  due(s, near, n, r) { return (near && !s.drawn && !s.failed) || (!s.read && !s.reading) || this.layerDue(n, r) || s.marksW !== this.pdfW || (!!s.cards && s.cardsAt !== this.cardKey()); }
+  // Page n wants its text layer: near the view (`r`, viewRange), or a find's or a passage's (layersFor), and has none.
+  layerDue(n, r) {
+    const s = this.sheets[n];
+    return !!s && !s.texted && !s.texting && (this.wantLayer.has(n) || (!!r && !tooFar(n, r.first, r.last, DRAW_AHEAD)));
+  }
   // The zoom, pane and sideways scroll a page's cards were laid out for (arrangePages).
   cardKey() { return `${this.renderedZoom}|${this.pdfW}|${Math.round(this.viewX || 0)}`; }
   // Page n wants its small drawing (keepThumb): it has none, and is near enough the view that a zoom out would show it.
@@ -882,8 +900,8 @@ export default class PaperView extends React.Component {
     const r = this.viewRange(), N = this.tops.length;
     if (!r) return null;
     for (let n = 1; n <= N; n += 1) { const s = this.sheets[n]; if (s && s.canvas && tooFar(n, r.first, r.last)) this.dropDrawing(s); }
-    for (const n of nearOrder(r.first, r.last, r.current, N)) { const s = this.sheets[n]; if (s && this.due(s, true)) return n; }
-    for (const n of allOrder(r.first, r.last, r.current, N)) { const s = this.sheets[n]; if (s && (this.due(s, false) || this.thumbDue(s, n, r))) return n; }
+    for (const n of nearOrder(r.first, r.last, r.current, N)) { const s = this.sheets[n]; if (s && this.due(s, true, n, r)) return n; }
+    for (const n of allOrder(r.first, r.last, r.current, N)) { const s = this.sheets[n]; if (s && (this.due(s, false, n, r) || this.thumbDue(s, n, r))) return n; }
     return null;
   }
 
@@ -928,7 +946,9 @@ export default class PaperView extends React.Component {
     }
     else if (r && this.thumbDue(s, n, r)) await this.drawThumb(n, gen);
     if (gen !== this.layoutGen) return;
-    if (!s.texted && !s.texting) await this.drawText(n);
+    if (!s.read && !s.reading) await this.readText(n);
+    if (gen !== this.layoutGen) return;
+    if (this.layerDue(n, this.viewRange())) await this.drawText(n);
     if (this.sheets[n] !== s) return;
     if (s.marksW !== this.pdfW) this.renderMarks(n);
     else if (s.cards && s.cardsAt !== this.cardKey()) this.arrange(n);
@@ -974,13 +994,14 @@ export default class PaperView extends React.Component {
   // measured in the page: its column and the room a note typed beside its text has come from them.
   async drawText(n) {
     const s = this.sheets[n], page = this.pages[n], g = this.geo[n], doc = this.gen;
-    if (!s || !page || !g) return;
+    if (!s || !page || !g || s.texted || s.texting) return;
+    if (!s.read) await this.readText(n);
+    if (doc !== this.gen || s.texted || s.texting) return;
     s.texting = true;
     let layer = null;
     try {
       const content = await this.texts.get(n);
       if (doc !== this.gen) return;
-      this.textBoxes(n, content);
       layer = new pdfjsLib.TextLayer({ textContentSource: content, container: s.tl, viewport: page.getViewport({ scale: g.scale }) });
       this.textLayer = layer;
       await layer.render();
@@ -994,14 +1015,67 @@ export default class PaperView extends React.Component {
     }
     if (doc !== this.gen) return;
     s.texted = true;
+    this.targetOn(n);
+  }
+
+  // Page n's text read, as find and a link's passage search it (`strs`), and its runs' boxes and column (textBoxes), with
+  // no text layer made (drawText makes one near the view).
+  async readText(n) {
+    const s = this.sheets[n], doc = this.gen;
+    if (!s || s.read || s.reading || !this.pages[n]) return;
+    s.reading = true;
+    let content = null;
+    try { content = await this.texts.get(n); } catch (err) { /* a page without text is still readable */ } finally { s.reading = false; }
+    if (doc !== this.gen || this.sheets[n] !== s) return;
+    this.textBoxes(n, content);
+    this.strs[n] = contentText(content);
+    s.read = true;
     // The page's notes go by its printed text (its column, the room beside it), which only now is known.
     if ((this.marks[n] || []).length) s.marksW = null;
     this.textsDone();
   }
 
+  // The text layers of pages `ns` made, those not made yet, nearest first, a turn between two; then `then`, unless
+  // another document opened meanwhile.
+  async layersFor(ns, then) {
+    const doc = this.gen;
+    for (const n of ns) this.wantLayer.add(n);
+    for (const n of ns) {
+      const s = this.sheets[n];
+      if (!s) continue;
+      while (s.texting && doc === this.gen) await nextTick();
+      if (doc !== this.gen) return;
+      if (!s.texted) { await this.drawText(n); await nextTick(); }
+      if (doc !== this.gen) return;
+    }
+    then();
+  }
+
+  // Every page's text as read (strs), as pageTexts gives the layers': [{ page, joined }].
+  readTexts() { return this.strs.map((joined, page) => ({ page, joined: joined || '' })).filter((p) => p.page > 0); }
+
+  // A link's passage on the page it names (`targetPage`, a note's: 2026-10-23), shown once that page has its text, not
+  // once every page has (a long scanned paper takes most of a minute). Not there: it is looked for over all of them then.
+  targetOn(n) {
+    if (!this.props.targetPage || n !== this.props.targetPage) return;
+    const key = this.gate.peek();
+    if (!key || !this.sectionStart(key.split('\n')[0]).spot) return;
+    this.gate.claim();
+    this.applyTarget(key);
+  }
+
+  // The view scrolled to the top of page n, so it is drawn first.
+  toPage(n) {
+    const host = this.host.current;
+    if (!host || !this.tops.length) return;
+    const i = Math.min(Math.max(1, Math.round(n)), this.tops.length) - 1;
+    host.scrollTop = this.tops[i] * this.css;
+    this.syncBar();
+  }
+
   // The first time every page of a document has its text: a search and a passage are found again, over all of it.
   textsDone() {
-    if (this.textsAt === this.gen || this.sheets.some((s) => s && !s.texted)) return;
+    if (this.textsAt === this.gen || this.sheets.some((s) => s && !s.read)) return;
     this.textsAt = this.gen;
     if (this.findQuery) this.report(this.find(this.findQuery, 0, { scroll: false }));
     if (this.section) { this.section.spot = this.sectionStart(this.section.text).spot; this.paintSection(); }
@@ -1068,15 +1142,41 @@ export default class PaperView extends React.Component {
     const plan = nextFind({ fresh, step, count: this.findRanges.length, at: this.findAt, fromStart, firstInView: () => this.firstInView() });
     this.findAt = plan.at;
     this.paintFind(scroll && plan.scroll);
+    // Matches on pages with no text layer yet: those made, and found again, landing where a fresh find would when none
+    // could be shown before.
+    const bare = [...new Set(this.matchSpots(text, this.readTexts()).map((spot) => spot.page))].filter((n) => this.sheets[n] && !this.sheets[n].texted);
+    if (bare.length) {
+      const none = !this.findRanges.length;
+      this.layersFor(this.nearestFirst(bare), () => {
+        if (this.findQuery !== text) return;
+        if (none) this.findQuery = '';
+        this.report(this.find(text, 0, { scroll: none && scroll, fromStart }));
+      });
+    }
     return { matches: this.findRanges.length, active: this.findAt + 1 };
+  }
+
+  // Pages in the order of their distance from the page in view.
+  nearestFirst(ns) {
+    const at = this.currentPage() || 1;
+    return [...ns].sort((a, b) => Math.abs(a - at) - Math.abs(b - at) || a - b);
   }
 
   // A link's passage, every page drawn: shown as a section from page 1 (`target`, `targetTo`). Told through onTarget alone:
   // find has not been asked anything.
   applyTarget(key) {
     const [text, to = ''] = String(key).split('\n');
-    const result = this.showSection(text, to);
-    if (typeof this.props.onTarget === 'function') this.props.onTarget(text, result);
+    const show = () => {
+      const result = this.showSection(text, to);
+      if (typeof this.props.onTarget === 'function') this.props.onTarget(text, result);
+    };
+    // The pages its section is on given their text layers first: its start words' page as read, to where `to` ends it.
+    const read = this.readTexts(), start = this.matchSpots(text, read)[0];
+    if (!start) { show(); return; }
+    const spans = (to && sectionSpans(start, this.matchSpots(to, read))) || [start];
+    const pages = [...new Set(spans.map((span) => span.page))].filter((n) => this.sheets[n] && !this.sheets[n].texted);
+    if (!pages.length) show();
+    else this.layersFor(pages, () => { if (this.gate.peek() === null || this.gate.peek() === key) show(); });
   }
 
   // Where a section starts: its words' first match from page 1, as find counts them (one with a range) → { spot, range,

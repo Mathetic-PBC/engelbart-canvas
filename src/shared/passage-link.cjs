@@ -4,11 +4,15 @@
 // and where its section ends, from `&to=` (round 2: the first words of the section after it). Shared since 2026-10-21, as
 // main checks Chat's citations by it (../main/bart/cite.cjs): a citation is the same link with `&cite=you|other|source`
 // (whose words they are: the person's, someone else's, a paper's or page's) and, for one that cuts against the answer,
-// `&counter=1`. Those two may come before or after `find` and `to`, in any order.
+// `&counter=1`. Those two may come before or after `find` and `to`, in any order. A citation without `find` (`#cite=source`,
+// 2026-10-22) cites the source as a whole: what a document is about, said by no one sentence of it. A citation of the
+// person's note on a highlight (2026-10-23) carries the note's words in `&note=`, before `cite`, and in `find` the
+// highlighted passage it is on, where the paper opens ('' for a note on no passage). A note's page goes in `&page=`
+// (before `note`): the paper opens there at once, not once every page's text is known.
 
 const CITES = new Set(['you', 'other', 'source']);
-const TAIL_RE = /&(to|cite|counter)=([^&]*)$/;
-const HEAD_RE = /^(to|cite|counter)=([^&]*)&/;
+const TAIL_RE = /&(to|page|note|cite|counter)=([^&]*)$/;
+const HEAD_RE = /^(to|page|note|cite|counter)=([^&]*)&/;
 
 const words = (value) => {
   let out;
@@ -18,6 +22,7 @@ const words = (value) => {
 
 // The fragment's keys around `find=`, each once: { find, to, cite, counter } with their raw values, or null.
 function fragmentParts(fragment) {
+  if (!/(?:^|&)find=/.test(fragment)) return wholeParts(fragment);
   let rest = fragment;
   const keys = {};
   let lead = false;
@@ -44,10 +49,21 @@ function fragmentParts(fragment) {
   return { find: rest.slice('find='.length), ...keys };
 }
 
+// A whole source's fragment: `cite=` and perhaps `page=`, `note=` and `counter=`, each once, and nothing else → { find: '', cite, … }, or null.
+function wholeParts(fragment) {
+  const keys = {};
+  for (const pair of fragment.split('&')) {
+    const m = pair.match(/^(page|note|cite|counter)=([^&]*)$/);
+    if (!m || m[1] in keys) return null;
+    keys[m[1]] = m[2];
+  }
+  return 'cite' in keys ? { find: '', ...keys } : null;
+}
+
 /**
  * → { address, find, to }, and `cite` ('you' | 'other' | 'source') and `counter` (true) when the link is a citation.
  * `find` and `to` are '' when there is none, and without `find` the address is the link as it came: any other fragment
- * (#page=3, #section) stays on it. Each value is decoded after the split, so an `&` in the words is `%26`. A path keeps
+ * (#page=3, #section) stays on it. A citation of a whole source has `cite` and `find` ''. Each value is decoded after the split, so an `&` in the words is `%26`. A path keeps
  * its percent-encoding off (`/Users/me/My%20Paper.pdf` is the file with a space), so it matches the library.
  */
 function splitTarget(href) {
@@ -64,6 +80,8 @@ function splitTarget(href) {
     const cite = words(parts.cite).toLowerCase();
     out.cite = CITES.has(cite) ? cite : '';
     out.counter = words(parts.counter) === '1';
+    if (parts.note) out.note = words(parts.note);
+    if (/^[1-9]\d{0,5}$/.test(String(parts.page || ''))) out.page = Number(parts.page);
   }
   return out;
 }
@@ -75,9 +93,15 @@ const encode = (value) => encodeURIComponent(value).replace(/[()]/g, (c) => (c =
 /** A path as a citation's address spells it (fakeDiscover's): each segment percent-encoded. A web address as it is, but for its spaces and parentheses. */
 const linkAddress = (where) => (String(where || '').startsWith('/') ? String(where).split('/').map(encode).join('/') : String(where || '').replace(/[()\s]/g, (c) => (c === '(' ? '%28' : c === ')' ? '%29' : '%20')));
 
-/** A citation's href: `address#find=…[&to=…]&cite=…[&counter=1]`, with no space or parenthesis in it. */
-function citeHref({ address, find, to = '', cite, counter = false }) {
-  return `${linkAddress(address)}#find=${encode(find)}${to ? `&to=${encode(to)}` : ''}&cite=${cite}${counter ? '&counter=1' : ''}`;
+/**
+ * A citation's href: `address#find=…[&to=…][&page=N][&note=…]&cite=…[&counter=1]`, or a whole source's
+ * `address#[page=N&][note=…&]cite=…[&counter=1]`, with no space or parenthesis in it.
+ */
+function citeHref({ address, find, to = '', page = 0, note = '', cite, counter = false }) {
+  const at = Number.isInteger(page) && page > 0 ? `page=${page}&` : '';
+  const tail = `${at}${note ? `note=${encode(note)}&` : ''}cite=${cite}${counter ? '&counter=1' : ''}`;
+  if (!find) return `${linkAddress(address)}#${tail}`;
+  return `${linkAddress(address)}#find=${encode(find)}${to ? `&to=${encode(to)}` : ''}&${tail}`;
 }
 
 module.exports = { splitTarget, citeHref, linkAddress, CITES };

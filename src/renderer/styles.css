@@ -86,12 +86,15 @@ textarea::placeholder,input::placeholder{color:#8f8f8f;font-style:italic}
 .hov-tab:hover{background:#e6e6e6!important}
 .hov-tab-plus:not(:disabled):hover{background:#e6e6e6!important;color:#171717!important}
 .hov-x:hover{background:#e3e3e3!important;color:#171717!important}
-/* Many tabs (2026-10-18): the strip scrolls with no bar showing; a narrow tab shows its icon, and under the pointer its × in the same spot. */
+/* Many tabs (2026-10-18): the strip scrolls with no bar showing; a narrow tab shows its icon, and under the pointer its ×
+   at its right edge, the icon moved left beside it (2026-10-23), or gone where there is no room for both. */
 .stage-tabs{scrollbar-width:none}
 .stage-tabs::-webkit-scrollbar{display:none}
-.stage-tab-icon .stage-tab-x{opacity:0}
-.stage-tab-icon:hover .stage-tab-x{opacity:1}
-.stage-tab-icon:hover .stage-tab-glyph{opacity:0}
+.stage-tab-icon .stage-tab-x{opacity:0;pointer-events:none}
+.stage-tab-icon:hover .stage-tab-x{opacity:1;pointer-events:auto}
+.stage-tab-icon .stage-tab-glyph{transition:transform 120ms}
+.stage-tab-icon:hover .stage-tab-glyph{transform:translateX(var(--tab-glyph-shift,0))}
+.stage-tab-icon:hover .stage-tab-glyph[data-crowded]{opacity:0}
 ::highlight(stage-find){background-color:rgba(0,112,243,.16);color:inherit}
 ::highlight(stage-find-cur){background-color:rgba(0,112,243,.4);color:inherit}
 /* The middle canvas's ⌘F (2026-10-16, workspace/DocFind.jsx) paints as the Stage's does, under names of its own. */

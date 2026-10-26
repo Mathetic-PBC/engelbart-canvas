@@ -412,7 +412,14 @@ test('the gear opens the settings window at Models, then Connections and Import 
   assert.deepEqual(ids({ test: null }), ['model', 'connections', 'guided-setup']);
   assert.deepEqual(ids({ test: { testMode: false } }), ['model', 'connections', 'guided-setup']);
   assert.deepEqual(ids({ test: { testMode: true } }), ['model', 'connections', 'guided-setup', 'test-data']);
-  assert.deepEqual([PAGES[2].section, PAGES[2].title, PAGES[2].Body.name], ['Settings', 'Import context', 'GuidedSetupPage']);
+  // 2026-10-23 ("hitting Import context in the sidebar should behave how the current Start button is"): an action, no page.
+  assert.deepEqual([PAGES[2].section, PAGES[2].title, PAGES[2].Body, typeof PAGES[2].run], ['Settings', 'Import context', undefined, 'function']);
+  const events = [], previous = global.window;
+  let closed = 0;
+  global.window = { dispatchEvent: (event) => { events.push(event.type); return true; } };
+  try { PAGES[2].run({ close: () => { closed += 1; } }); } finally { if (previous === undefined) delete global.window; else global.window = previous; }
+  const started = events.filter((type) => type === 'engelbart:guided-setup').length;
+  assert.deepEqual([closed, started], [1, 1], 'it closes the window and starts Import your context');
   assert.equal(PAGES[0].title, 'Models', '2026-10-13: "change Model to Models"');
   assert.deepEqual([PAGES[1].section, PAGES[1].title, PAGES[1].Body.name], ['Settings', 'Connections', 'ConnectionsPage']);
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/ui/Settings.jsx'), 'utf8');

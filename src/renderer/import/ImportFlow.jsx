@@ -60,6 +60,10 @@ const NOTES_APPS = (GROUPS.find((group) => group.id === 'notes') || { apps: [] }
 const groupOf = (id) => (isLinks(id) || id === SITES ? 'sites' : (GROUPS.find((group) => group.apps.includes(id)) || {}).id || null);
 const LINKS_NOTE = 'Also bring in the web links saved in these notes (essays, papers, articles and other pages): add each one to the library with add_to_library.';
 const DEFAULT_PICKS = [];
+// Recommended (2026-10-23, Hudson: "highlight these as the most important ones"): the picker's first section, seen without
+// scrolling. Each stays in its own category too; both rows are the one pick (F.picks), so ticking either ticks the other.
+// Its rows say data-recommended, not data-app, so what looks a source up by data-app finds its one row in its category.
+const RECOMMENDED = Object.freeze(['Claude', 'ChatGPT', 'Obsidian', 'Notion', 'Zotero'].filter((id) => CATALOG_IDS.includes(id)));
 export const COPY = {
   title: 'Import your context',
   subtitle: "Agents will import your notes, chats, and other project context into Engelbart. Everything remains local and isn't uploaded to the cloud.",
@@ -704,6 +708,8 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   }, []);
 
   /* -------- picks */
+  // Which row a source's open Specify context hangs under, { id, where }: a Recommended source has two rows.
+  const [specifyIn, setSpecifyIn] = React.useState(null);
   /** A tool from "+ Add a tool": ticked, as the person's own choice. */
   const pickTool = (id) => set((now) => ({ picks: [...new Set([...now.picks, id])], touched: [...new Set([...now.touched, id])], open: [groupOfId(id, now)], dialog: null }));
   /** The category a source is shown in: the catalog's, else (a tool the agents found or the person added) its own. */
@@ -935,40 +941,50 @@ export default function ImportFlow({ api, mode = 'new', into = null, workspaceId
   };
 
 
+  /** A source's row in a section of the picker: `where` is 'recommended' for Recommended's copy, else 'home'. Its Specify
+   *  context opens under the row it was opened from (one panel, so one textarea per source). */
+  const sourceRow = (id, where) => {
+    const selected = F.picks.includes(id);
+    const open = selected && F.scopeOpen === id && (specifyIn && specifyIn.id === id ? specifyIn.where : 'home') === where;
+    const tag = where === 'recommended' ? { 'data-recommended': id } : { 'data-app': id };
+    return <section key={id} className={`review-source ${selected ? 'selected' : ''}`}>
+      <div className="review-source-row">
+        <button type="button" className="app-row" {...tag} role="checkbox" aria-checked={selected} onClick={() => pickSource(id)}>
+          <ToolLogo id={id} /><span className="app-text">{nameOf(id)}</span><Check on={selected} />
+        </button>
+        {selected && <button type="button" className={`review-specify ${open ? 'is-open' : ''}`} {...(where === 'recommended' ? { 'data-recommended-specify': id } : { 'data-specify-context': id })} aria-expanded={open}
+          onClick={() => { if (open) set({ scopeOpen: null }); else { setSpecifyIn({ id, where }); set({ scopeOpen: id }); } }}>Specify context{DOWN}</button>}
+      </div>
+      {open && sourcePanel(id)}
+    </section>;
+  };
+  const pickerSection = (id, label, keys, where) => {
+    const nOn = keys.filter((key) => F.picks.includes(key)).length;
+    return <section key={id} data-group-section={id}>
+      <div className="group-head">
+        <span className="group-title" data-group={id}>{label}</span>
+        <span className="muted review-count">{nOn ? `${nOn} selected` : ''}</span>
+      </div>
+      <div className="apps">{keys.map((key) => sourceRow(key, where))}</div>
+    </section>;
+  };
+
   const picker = () => (
     <>
       <main className="page picker-page review-picker" data-import-screen="picker">
         <div className="col">
           <T k="pickerTitle" tag="h2" />
           {mode === 'new' && toolStatus === 'checking' && <div className="discovery-line picker-discovery" role="status" data-tools-status="checking"><span className="activity-dot" /><span>Finding the tools you use…</span></div>}
-          {/* 2026-10-16 (S6, "get rid of this dropdown, it should not be collapsable on a topic level"): every category is
-              open, with no chevron, and has no "Specify context for all {category}" of its own; each source keeps its own
-              Specify context, a category of one source too. */}
-          {GROUPS.filter((group) => keysOf(group).length > 0).map((group) => {
-            const keys = keysOf(group);
-            const nOn = keys.filter((id) => F.picks.includes(id)).length;
-            return <section key={group.id} data-group-section={group.id}>
-              <div className="group-head">
-                <span className="group-title" data-group={group.id}>{group.label}</span>
-                <span className="muted review-count">{nOn ? `${nOn} selected` : ''}</span>
-              </div>
-              <div className="apps">
-                {keys.map((id) => {
-                  const selected = F.picks.includes(id);
-                  return <section key={id} className={`review-source ${selected ? 'selected' : ''}`}>
-                    <div className="review-source-row">
-                      <button type="button" className="app-row" data-app={id} role="checkbox" aria-checked={selected} onClick={() => pickSource(id)}>
-                        <ToolLogo id={id} /><span className="app-text">{nameOf(id)}</span><Check on={selected} />
-                      </button>
-                      {selected && <button type="button" className={`review-specify ${F.scopeOpen === id ? 'is-open' : ''}`} data-specify-context={id} aria-expanded={F.scopeOpen === id} onClick={() => set({ scopeOpen: F.scopeOpen === id ? null : id })}>Specify context{DOWN}</button>}
-                    </div>
-                    {selected && F.scopeOpen === id && sourcePanel(id)}
-                  </section>;
-                })}
-              </div>
-            </section>;
-          })}
-          <div className="picker-add"><button type="button" className="link under" data-add-tool="1" onClick={() => { setCatalogQuery(''); setDraft({ title: '', description: '', tool: '', website: '' }); set({ dialog: 'work-add-tool' }); }}>+ Add a tool</button></div>
+          {/* 2026-10-23: the list scrolls in a box of its own under the title, with a scrollbar that is always drawn (macOS
+              hid its own until a scroll began, so nothing said there was more), just right of the circles. */}
+          <div className="picker-scroll" data-picker-scroll="1">
+            {RECOMMENDED.length > 0 && pickerSection('recommended', 'Recommended', RECOMMENDED, 'recommended')}
+            {/* 2026-10-16 (S6, "get rid of this dropdown, it should not be collapsable on a topic level"): every category is
+                open, with no chevron, and has no "Specify context for all {category}" of its own; each source keeps its own
+                Specify context, a category of one source too. */}
+            {GROUPS.filter((group) => keysOf(group).length > 0).map((group) => pickerSection(group.id, group.label, keysOf(group), 'home'))}
+            <div className="picker-add"><button type="button" className="link under" data-add-tool="1" onClick={() => { setCatalogQuery(''); setDraft({ title: '', description: '', tool: '', website: '' }); set({ dialog: 'work-add-tool' }); }}>+ Add a tool</button></div>
+          </div>
         </div>
       </main>
       <footer className="foot"><div className="foot-inner"><div className="back-skip"><button type="button" className="link" onClick={() => { if (mode === 'modal') { api.saveFlow(null).catch(() => {}); onClose({}); } else set({ screen: 'projects', dialog: null }); }}>{mode === 'modal' ? 'Cancel' : 'Back'}</button></div><span className="muted review-count">{F.picks.length} selected</span><div className="foot-right"><button type="button" className="btn" data-import-run="1" disabled={!F.picks.length || !F.picked.length || busy === 'run'} onClick={chooseMethod}>{busy === 'run' ? 'Starting…' : RUN_LABEL}{busy === 'run' ? null : CHEV}</button></div></div></footer>

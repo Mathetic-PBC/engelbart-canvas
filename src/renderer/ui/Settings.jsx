@@ -114,18 +114,11 @@ function TestData({ test, close }) {
 }
 
 // Import your context (2026-10-13; "Guided setup" from 2026-10-10 until the "Onboarding" workspace: "the redo of onboarding
-// shouldn't be called guided setup. It should be a popup modal in front of the workspace"). Start closes the window and
-// opens it over the workspace (App.jsx), its imports going to the project you're in; from All projects, over the last
-// project open. Its first question is how to import (2026-10-16), never the roles or projects.
-function GuidedSetupPage({ close }) {
-  return (
-    <Group title="Your context" data-guided-setup="1">
-      <Row label="Import your context">
-        <button type="button" className="hov-bd2" data-settings-item="guided-setup" onClick={() => { close(); startGuidedSetup(); }} style={BUTTON}>Start</button>
-      </Row>
-    </Group>
-  );
-}
+// shouldn't be called guided setup. It should be a popup modal in front of the workspace"). It closes the window and opens
+// the flow over the workspace (App.jsx), its imports going to the project you're in; from All projects, over the last
+// project open. Its first question is how to import (2026-10-16), never the roles or projects. 2026-10-23: a press on
+// Import context in the column does it, with no page of its own and its Start ("having this just adds unnecessary friction").
+const startImport = ({ close }) => { close(); startGuidedSetup(); };
 
 // Lucide's "cpu" (the model; its "sparkles" until 2026-10-07, too busy at this size: David) and "flask-conical", at the nav's
 // size. Lucide is ISC; its paths are pasted in.
@@ -140,13 +133,14 @@ const ADD_ICON = icon(<><circle cx="12" cy="12" r="10" /><path d="M8 12h8" /><pa
 const FLASK_ICON = icon(<><path d="M10 2v7.527a2 2 0 0 1-.211.896L4.72 20.55a1 1 0 0 0 .9 1.45h12.76a1 1 0 0 0 .9-1.45l-5.069-10.127A2 2 0 0 1 14 9.527V2" /><path d="M8.5 2h7" /><path d="M7 16h10" /></>);
 
 // The settings window's pages, in order, under their headings in the left column. `shown` (optional) decides from the
-// window's props whether a page is there. `keywords`: the names on the page a person would search the column for.
+// window's props whether a page is there. `keywords`: the names on the page a person would search the column for. A page
+// with `run` in place of a `Body` is an action: opening it runs it ({ close }), and the page open stays as it was.
 export const PAGES = Object.freeze([
   { id: 'model', section: 'Settings', title: 'Models', icon: MODEL_ICON, Body: () => <IntelligenceLevels />,
     keywords: [...LEVELS.flatMap((level) => [level.name, level.hint]), 'model', 'effort', 'intelligence', 'discover', 'Claude', 'Codex'] },
   { id: 'connections', section: 'Settings', title: 'Connections', icon: BLOCKS_ICON, Body: ConnectionsPage,
     keywords: ['GitHub', 'Zotero', 'accounts', 'sign in', 'sign out', ...TOOL_CONNECTIONS.map((id) => TOOL_NAME[id])] },
-  { id: 'guided-setup', section: 'Settings', title: 'Import context', icon: ADD_ICON, Body: GuidedSetupPage,
+  { id: 'guided-setup', section: 'Settings', title: 'Import context', icon: ADD_ICON, run: startImport,
     keywords: ['onboarding', 'setup', 'guided setup', 'import', 'context', 'walkthrough', 'getting started', 'welcome', 'library'] },
   { id: 'test-data', section: 'Developer', title: 'Test data', icon: FLASK_ICON, shown: ({ test }) => !!(test && test.testMode), Body: TestData,
     keywords: ['reveal', 'reset', 'start over', 'test library'] },
@@ -223,7 +217,11 @@ export function SettingsNav({ pages, open, query, onQuery, onOpen }) {
  */
 function SettingsDialog({ test, initialPage = null, onClose }) {
   const pages = PAGES.filter((page) => !page.shown || page.shown({ test }));
-  const [page, setPage] = React.useState(pages.some((candidate) => candidate.id === initialPage) ? initialPage : pages[0].id);
+  const [page, setPage] = React.useState(pages.some((candidate) => candidate.id === initialPage && !candidate.run) ? initialPage : pages[0].id);
+  const openPage = (id) => {
+    const target = pages.find((candidate) => candidate.id === id);
+    if (target && target.run) target.run({ close: onClose }); else setPage(id);
+  };
   const [query, setQuery] = React.useState('');
   React.useEffect(() => {
     // Taken before the workspace's own Escape (which leaves the workspace) can see it, as BuildReject does.
@@ -242,7 +240,7 @@ function SettingsDialog({ test, initialPage = null, onClose }) {
   return createPortal(
     <div data-overlay="1" data-levels-dialog="1" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }} style={{ position: 'fixed', inset: 0, zIndex: 300, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24, background: 'rgba(23,23,23,.18)' }}>
       <div role="dialog" aria-modal="true" aria-label="Settings" style={{ position: 'relative', display: 'flex', width: 'min(780px, calc(100vw - 32px))', height: 'min(540px, calc(100vh - 80px))', background: '#fcfcfc', border: '1px solid #d4d4d4', borderRadius: 12, boxShadow: '0 16px 48px #00000024', overflow: 'hidden', animation: `rise 160ms ${EASE}` }}>
-        <SettingsNav pages={pages} open={open.id} query={query} onQuery={setQuery} onOpen={setPage} />
+        <SettingsNav pages={pages} open={open.id} query={query} onQuery={setQuery} onOpen={openPage} />
         <div style={{ flex: 1, minWidth: 0, overflowY: 'auto', padding: '30px 40px 36px', boxSizing: 'border-box' }}>
           <div style={{ ...text(22, '#171717', 500), letterSpacing: '-0.01em' }}>{open.title}</div>
           <Body test={test} close={onClose} />

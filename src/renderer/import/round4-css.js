@@ -137,4 +137,16 @@ export const ROUND4_CSS = `
 .ix .keychain-looking{margin-top:16px;font-size:14px}
 /* the projects nobody knew of (DISCOVERY's 'no-context'): a plain ask, no failure */
 .ix .projects-empty{margin:4px 0 0;font-size:14px;line-height:1.5;color:var(--body)}
+/* 2026-10-23: the picker fills its box (the modal's, onboarding's page) and only its list scrolls, under the title, with a
+   scrollbar always drawn just right of the circles (the list's own box reaches 22px past the column: 12px of room, the
+   bar's 10px). Before, the whole page scrolled under macOS's overlay bar, which showed only once a scroll began. */
+.ix.ix.ix .picker-page{position:absolute;inset:0;min-height:0;overflow:hidden}
+.ix .picker-page .col{flex:1;min-height:0;display:flex;flex-direction:column}
+.ix .picker-page .col>h2,.ix .picker-page .picker-discovery{flex:none}
+.ix .picker-scroll{flex:1;min-height:0;overflow-y:auto;overscroll-behavior:contain;margin-right:-22px;padding-right:12px;scrollbar-gutter:stable}
+.ix .picker-scroll::-webkit-scrollbar{width:10px}
+.ix .picker-scroll::-webkit-scrollbar-track{background:#f2f2f2;border-radius:5px}
+.ix .picker-scroll::-webkit-scrollbar-thumb{background:#c2c2c2;border-radius:5px;border:2px solid #f2f2f2}
+.ix .picker-scroll::-webkit-scrollbar-thumb:hover{background:#999}
+@media(max-height:760px){.ix.ix .picker-page{padding-top:64px}.ix.ix .review-picker h2{margin-bottom:18px}}
 `;

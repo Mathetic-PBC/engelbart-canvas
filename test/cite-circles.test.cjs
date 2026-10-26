@@ -30,7 +30,7 @@ test('citationOf reads a cite= link, and nothing else', async () => {
   assert.equal(citationOf(AGAINST).cite, 'other');
   assert.equal(citationOf(PLAIN), null, 'a passage link without cite= is a link');
   assert.equal(citationOf('[x](/a.md#find=b&cite=maybe)'), null, 'an unknown kind is no citation');
-  assert.equal(citationOf('[x](/a.md#cite=you)'), null, 'nor one with no passage');
+  assert.deepEqual(citationOf('[x](/a.md#cite=you)'), { label: 'x', href: '/a.md#cite=you', address: '/a.md', key: '/a.md', find: '', cite: 'you', counter: false }, 'one with no passage is the whole source');
   assert.equal(citationOf('plain words'), null);
 });
 
@@ -214,4 +214,41 @@ test('a colon or dash right before a citation is left out where the circle is dr
   assert.equal(shown(`Times like 10:30 matter ${NOTE}.`), 'Times like 10:30 matter ①.', 'a colon inside the words stays');
   assert.equal(shown(`\`a:\` ${NOTE}`).includes('a:'), true, 'code keeps its colon');
   assert.equal(shown('No citation here: just words.'), 'No citation here: just words.');
+});
+
+test('a whole source (2026-10-22): its own number beside its passages, a card with no quote, a row in Sources', async () => {
+  const { citationNumbers, citationOf, citationPassage, citationHtml, citationSources, citationSourcesHtml, citationCardHtml } = await citeModel();
+  const WHOLE = '[Welcome](/Users/me/Downloads/Welcome%20map.pdf#cite=source)';
+  const PART = '[Welcome p. 2](/Users/me/Downloads/Welcome%20map.pdf#find=a%20map%20of%20beliefs&cite=source)';
+  const text = `The demo is your project ${WHOLE}. It maps beliefs ${PART}, as said ${WHOLE}.`;
+  const n = citationNumbers(text);
+  assert.deepEqual([WHOLE, PART].map((l) => n.get(citationPassage(citationOf(l)))), [1, 2]);
+  const html = citationHtml(citationOf(WHOLE), { cites: n });
+  assert.match(html, /data-n="1"/);
+  assert.match(html, /data-find=""/);
+  assert.match(html, /The whole source/);
+  const sources = citationSources(text, { cites: n });
+  assert.equal(sources.length, 1);
+  assert.deepEqual(sources[0].passages.map((p) => [p.n, p.find]), [[1, ''], [2, 'a map of beliefs']]);
+  assert.match(citationSourcesHtml(sources), /aria-label="1: Welcome map.pdf. The whole source"/);
+  const card = citationCardHtml({ quote: '', lead: '', where: 'Welcome', when: '', counter: false });
+  assert.doesNotMatch(card, /“/);
+  assert.doesNotMatch(card, /border-top/, 'no divider under a quote that is not there');
+  assert.match(citationCardHtml({ quote: 'a map', lead: '', where: 'Welcome', when: '', counter: false }), /border-top/);
+});
+
+test('a note on a highlight (2026-10-23): its own number, a card with the note\'s words as "Your note"', async () => {
+  const { citationNumbers, citationOf, citationPassage, citationHtml, citationCard, citationCardHtml } = await citeModel();
+  const NOTE_ON = '[You · Sep 14](/Users/me/TutorTrace.pdf#find=Learners%20who%20waited&note=the%20wait%20is%20what%20matters&cite=you)';
+  const PASSAGE = '[TutorTrace p. 1](/Users/me/TutorTrace.pdf#find=Learners%20who%20waited&cite=source)';
+  const c = citationOf(NOTE_ON);
+  assert.equal(c.note, 'the wait is what matters');
+  const n = citationNumbers(`A ${NOTE_ON} and ${PASSAGE}.`);
+  assert.deepEqual([NOTE_ON, PASSAGE].map((l) => n.get(citationPassage(citationOf(l)))), [1, 2], 'the note and the passage it is on are two');
+  const html = citationHtml(c, { cites: n });
+  assert.match(html, /data-note="the wait is what matters"/);
+  const el = { dataset: { label: c.label, cite: c.cite, find: c.find, note: c.note, source: 'TutorTrace' } };
+  const card = citationCard(el);
+  assert.deepEqual([card.quote, card.lead, card.where, card.when], ['the wait is what matters', 'Your note', 'TutorTrace', 'Sep 14']);
+  assert.match(citationCardHtml(card), /Your note · <span[^>]*>TutorTrace<\/span> · Sep 14/);
 });
