@@ -546,3 +546,28 @@ test('a quote reads the same with or without the space after its `>`, on the Sta
   assert.deepEqual(markdownBlocks('>tight\n> spaced'), [{ type: 'quote', text: 'tight spaced' }]);
   for (const line of ['>tight', '> tight']) assert.deepEqual(parseLine(line), { type: 'quote', text: 'tight' }, line);
 });
+
+test('viewBounds: the live page stops short of the window edge, and keeps its slot when that already fits', async () => {
+  const { viewBounds } = await load('stage');
+  // a slot that reaches past the window's right and bottom edges (a narrow window)
+  assert.deepEqual(viewBounds({ left: 300, top: 40, width: 800, height: 900 }, 900, 700, 6), { x: 300, y: 40, width: 594, height: 654 });
+  // a slot that already fits
+  assert.deepEqual(viewBounds({ left: 300, top: 40, width: 400, height: 500 }, 1400, 900, 6), { x: 300, y: 40, width: 400, height: 500 });
+  // the slot running exactly to the window's edge loses only the strip
+  assert.deepEqual(viewBounds({ left: 0, top: 0, width: 1000, height: 800 }, 1000, 800, 6), { x: 0, y: 0, width: 994, height: 794 });
+});
+
+test('snapshotStyle: the picture covers the pixels the live page covered, and fills the slot when that size is not known', async () => {
+  const { snapshotStyle } = await load('stage');
+  const exact = snapshotStyle({ tabId: 't1', width: 594, height: 654 }, 't1');
+  assert.equal(exact.left, 0);
+  assert.equal(exact.top, 0);
+  assert.equal(exact.width, '594px');
+  assert.equal(exact.height, '654px');
+  assert.equal(exact.objectFit, 'fill');
+  assert.equal(exact.inset, undefined);
+  const fallback = { position: 'absolute', userSelect: 'none', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'left top' };
+  assert.deepEqual(snapshotStyle(null, 't1'), fallback); // no browserShow yet
+  assert.deepEqual(snapshotStyle({ tabId: 't2', width: 594, height: 654 }, 't1'), fallback); // another tab's size
+  assert.deepEqual(snapshotStyle({ tabId: 't1', width: 0, height: 654 }, 't1'), fallback);
+});

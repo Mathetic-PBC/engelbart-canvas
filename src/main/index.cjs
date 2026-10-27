@@ -30,6 +30,9 @@ const { createNameChat, createFakeNameChat } = require('./bart/name-chat.cjs');
 const { rememberChoice } = require('./bart/choices.cjs');
 const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
 const { resolveShell, findGitBash, GIT_BASH_MISSING, GIT_FOR_WINDOWS_URL } = require('./terminal/launch.cjs');
+const { personalCodexHome, listedIn, runningCodexVersion, codexMenu } = require('./tools/codex-models.cjs');
+const { createStageBridges } = require('./terminal/stage-bridges.cjs');
+const { stageToolFor } = require('./terminal/stage-tools.cjs');
 const home = require('./store/home.cjs');
 const library = require('./store/library.cjs');
 const { createRunner } = require('./tools/run.cjs');
@@ -132,6 +135,7 @@ const MIME = {
 
 let windows = null; // every window's context (./windows.cjs): its Stage tabs, post-its, terminal attachment, place
 let manager = null;
+let stageBridges = null; // each Claude Code or Codex session's Stage tool (./terminal/stage-bridges.cjs, MATH-79)
 let settings = null;
 let scanner = null;
 // A relaunch asked for while a quit was already under way (macOS's Quit & Reopen racing Engelbart's own): kept, not dropped.
@@ -218,6 +222,7 @@ async function closeSession(id) {
   if (!current) return false;
   const closed = await manager.close(id);
   if (closed) windows.forget(id);
+  if (closed && stageBridges) await stageBridges.close(id);
   return closed;
 }
 
@@ -274,6 +279,7 @@ async function requestQuit({ update = false, relaunch = false } = {}) {
     }
     if (tools) await tools.stopSignIns(); // a Claude Code or Codex sign-in still in the browser (Connect): its own terminal
     if (manager) await manager.shutdown();
+    if (stageBridges) await stageBridges.closeAll();
     if (store) await store.close();
   } catch (error) {
     quitPending = false;
@@ -314,14 +320,25 @@ function registerTerminalIpc() {
     };
   }));
   ipcMain.handle('terminal:providers', trustedHandler(() => tools.providers(resolveShell(process.env))));
-  // A session belongs to the window it was opened from.
-  ipcMain.handle('terminal:create', windowHandler((ctx, request) => {
-    const session = manager.create({
-      provider: request && request.provider,
-      cwd: request && request.cwd,
-      cols: request && request.cols,
-      rows: request && request.rows,
-    });
+  // A session belongs to the window it was opened from. Claude Code, Codex and shell sessions (for the
+  // claude or codex typed in them) get the Stage tool (open_on_stage, MATH-79): its bridge opens first and is bound to the session once it has started; one that does not open starts
+  // the agent without it, and one whose session does not start is closed again.
+  ipcMain.handle('terminal:create', windowHandler(async (ctx, request) => {
+    const provider = request && request.provider;
+    const stage = stageBridges ? await stageBridges.prepare(provider) : null;
+    let session;
+    try {
+      session = manager.create({
+        provider,
+        cwd: request && request.cwd,
+        cols: request && request.cols,
+        rows: request && request.rows,
+      }, { stage: stage ? stage.stage : null });
+    } catch (error) {
+      if (stage) await stage.discard();
+      throw error;
+    }
+    if (stage) stage.bind(session);
     windows.own(session.id, ctx);
     return session;
   }));
@@ -682,6 +699,14 @@ if (!hasSingleInstanceLock) {
     // (bart/settings.cjs) writes the defaults into the same file and forgets the picks it overrules.
     // ENGELBART_BART_FAKE=1 answers without a model, for scripted runs only.
     const readModels = (place = 'bart') => modelsInForce(store.layout.root, place, { only: store.config().providers, usable: tools.usableAgents() });
+    // What the model menus show (MATH-159, tools/codex-models.cjs codexMenu): each Codex model as the member of its family
+    // the account's Codex lists, by the cache of the home that place's runs use (@bart's own, else the person's; a Build's,
+    // the person's), a family it lists none of hidden. As readModels with no cache, or one another Codex version wrote.
+    // Runs read readModels unchanged, and say when they ran on another id.
+    const menuModels = (place = 'bart') => {
+      const homes = place === 'bart' ? [path.join(app.getPath('userData'), 'codex-home-bart'), personalCodexHome()] : [personalCodexHome()];
+      return codexMenu(readModels(place), listedIn(homes, { version: runningCodexVersion(tools) }));
+    };
     const rememberModelChoice = (place, choice) => rememberChoice(store.layout.root, place, choice);
     const modelSettings = createModelSettings({ homeRoot: () => store.layout.root, only: () => store.config().providers, tools });
     const bartModels = () => readModels('bart');
@@ -761,7 +786,23 @@ if (!hasSingleInstanceLock) {
     store.context().then((ctx) => builds.reconcile(ctx)).catch(() => {});
     // A terminal's output goes to the window that holds its session; that it ended, to every window.
     manager.on('data', (payload) => windows.terminalData(payload));
-    manager.on('exit', (payload) => sendToRenderer('terminal:exit', payload));
+    manager.on('exit', (payload) => {
+      sendToRenderer('terminal:exit', payload);
+      if (stageBridges && payload) void stageBridges.close(payload.id);
+    });
+    // open_on_stage (MATH-79): the window that holds the session shows it on its Stage; resolved here (./terminal/stage-tools.cjs).
+    stageBridges = createStageBridges({
+      directory: path.join(app.getPath('userData'), 'terminal-stage'),
+      codexHome: () => process.env.CODEX_HOME || path.join(app.getPath('home'), '.codex'),
+      toolFor: (session) => stageToolFor({
+        session,
+        owner: (id) => (windows ? windows.ownerOf(id) : null),
+        context: () => store.context(),
+        projectItems: (ctx, projectId) => library.libraryForProject(ctx, projectId),
+        projectName: (ctx, projectId) => { try { return projects.findProject(ctx, projectId).name; } catch { return null; } },
+        deliver: (ctx, payload) => windows.deliver(ctx, 'engelbart:stage-open', payload),
+      }),
+    });
     // Each window's own Stage tabs and post-its (./windows.cjs), sending to that window alone. The post-its of windows on
     // the same project hear each other's saves (createPostItPeers).
     const postItPeers = createPostItPeers();
@@ -1290,6 +1331,7 @@ if (!hasSingleInstanceLock) {
       builds,
       sandbox,
       readModels,
+      menuModels,
       nameChat,
       rememberModelChoice,
       modelSettings,

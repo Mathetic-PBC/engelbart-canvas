@@ -91,6 +91,8 @@ function publicTask(task) {
     provider: task.provider,
     model: task.model,
     modelName: task.modelName,
+    // the model its last Codex turn ran on when the account's Codex lists another of the pick's family (MATH-159), else null
+    ranModel: task.ran && task.ran.picked === task.modelId && typeof task.ran.model === 'string' && task.ran.model !== task.modelId ? task.ran.model : null,
     effort: task.effort,
     status: task.status,
     question: task.question || null,
@@ -113,6 +115,12 @@ function publicTask(task) {
     // its last run step (manager.cjs, run-step.cjs): { status, phase, runnables: [{ name, folder, type, status, passed,
     // install_command, run_command, url, error, sessionId, pid }], error }
     runStep: task.runStep || null,
+    // what it put in the library (MATH-106, engelbart-tools.cjs): [{ id, name, type }]; none on a record from before
+    made: Array.isArray(task.made) ? task.made : [],
+    // started from a task's row (MATH-106): its card is the task card, and it lands by itself when it changed no code
+    fromTask: !!(task.kind === 'build' && task.fromLine && task.withDocument),
+    // a goal Build's goal (MATH-88, ../../shared/build-goal.cjs): { condition, supported, state, rounds, last }
+    goal: task.goal && typeof task.goal.condition === 'string' ? { condition: task.goal.condition, supported: !!task.goal.supported, state: task.goal.state || 'pending', rounds: task.goal.rounds || 0, last: task.goal.last || null } : null,
     keptCopy: !!task.keptCopy, // accepted while something ran: its copy stays, detached at what landed, until it is stopped
     created: task.created,
     updated: task.updated,

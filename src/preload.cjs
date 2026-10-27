@@ -56,6 +56,7 @@ const engelbartAPI = Object.freeze({
   setView: invoke('set-view'),
   stage: invoke('stage'),
   setStage: invoke('set-stage'),
+  recordVisit: invoke('record-visit'),
   nav: invoke('nav'),
   recordEdit: invoke('record-edit'),
   seenAgents: invoke('seen-agents'),
@@ -210,6 +211,10 @@ const engelbartAPI = Object.freeze({
   renameWorkspace: invoke('rename-workspace'),
   trashWorkspace: invoke('trash-workspace'),
   restoreWorkspace: invoke('restore-workspace'),
+  // Another project's workspaces (MATH-148): every project's ({ id, name, path, projectId, projectName }), and one copied
+  // to the top of this project: (projectId, fromProjectId, workspaceId) → the new workspace.
+  workspacesEverywhere: invoke('workspaces-everywhere'),
+  copyWorkspaceHere: invoke('copy-workspace-here'),
   setWorkspaceContext: invoke('set-workspace-context'),
   saveImage: invoke('save-image'),
   readImage: invoke('read-image'),
@@ -297,6 +302,9 @@ const engelbartAPI = Object.freeze({
   // A runnable its run step got running ({ projectId, id, kind: 'ui' | 'app' | 'terminal', name, url?, session? }):
   // a UI opens in the Stage, a terminal program's session in the terminal.
   onBuildRun: (callback) => subscribe('engelbart:build-run', callback),
+  // What a Claude Code or Codex session in this window's terminal asked to show with open_on_stage (MATH-79):
+  // { projectId, kind: 'item' | 'file' | 'address', row | path | address }, resolved by main (main/terminal/stage-tools.cjs).
+  onStageOpen: (callback) => subscribe('engelbart:stage-open', callback),
   buildRunShow: invoke('build-run-show'),
   buildRunStop: invoke('build-run-stop'),
   buildRunStopRunnable: invoke('build-run-stop-runnable'), // (projectId, id, name | null): an accepted Build's runnable, or all
@@ -316,6 +324,7 @@ const engelbartAPI = Object.freeze({
   projectsForLibraryItem: invoke('projects-for-library-item'),
   libraryForProject: invoke('library-for-project'),
   libraryBodies: invoke('library-bodies'),
+  searchElsewhere: invoke('search-elsewhere'), // (projectId, query, limit) → the other projects' matches (MATH-148)
   addLibraryItem: invoke('add-library-item'),
   addLibraryPdf: invoke('add-library-pdf'),
   // The Stage's Save of a web page (MATH-17): the tab's page kept as a copy with its address. (tabId, address, { name })
@@ -408,6 +417,7 @@ const engelbartAPI = Object.freeze({
   browserBoxAsks: (list) => ipcRenderer.invoke('browser:box-asks', list),
   onBrowserState: (callback) => subscribe('browser:state', callback),
   onBrowserClosed: (callback) => subscribe('browser:closed', callback),
+  onBrowserVisit: (callback) => subscribe('browser:visit', callback),
   onBrowserLogin: (callback) => subscribe('browser:login', callback),
   onBrowserOpenTab: (callback) => subscribe('browser:open-tab', callback),
   onBrowserFocusAddress: (callback) => subscribe('browser:focus-address', callback),

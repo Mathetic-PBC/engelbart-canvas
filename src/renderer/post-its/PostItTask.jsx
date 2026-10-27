@@ -14,6 +14,7 @@ import { findWorkspaces } from '../model/nav.js';
 import { usePlaced } from '../ui/usePlaced.js';
 import ModelGrid, { EASE, Caret, choiceLabel, useBeside } from './ModelGrid.jsx';
 import { SEND_ARROW, sendStyle } from './PostItBuild.jsx';
+import { goalShown } from '../../shared/build-goal.cjs';
 
 const WIDTH = 420;
 const WORKING = new Set(['setting-up', 'queued', 'running', 'accepting']);
@@ -120,6 +121,8 @@ export default function PostItTask({ task, progress, anchor, workspaces, hereId,
   const word = working ? 'Building' : ['stopped', 'interrupted'].includes(task.status) ? 'Stopped' : 'Needs you';
   const activity = (progress && progress.activity) || (task.status === 'setting-up' ? 'Setting up its copy of the code' : task.status === 'queued' ? 'Waiting for a slot' : 'Working');
   const target = workspaces.find((held) => held.id === workspaceId);
+  const goal = goalShown(task); // a post-it that starts with /goal (MATH-88): a quick task runs it as a normal one, and says so
+  const line = { overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' };
   const ready = !!(target && choice && !busy);
   const promote = async () => {
     if (!ready) return;
@@ -140,6 +143,12 @@ export default function PostItTask({ task, progress, anchor, workspaces, hereId,
             <span data-post-it-task-word="1" style={{ flex: 1, minWidth: 0, display: 'inline-flex', alignItems: 'center', gap: 6, font: '500 13px/1.4 var(--font-sans)', color: '#171717' }}><span>{word}</span>{working && <Dots />}</span>
             <button type="button" className="hov-ink" onClick={onClose} aria-label="Close" style={{ flex: 'none', padding: '0 4px', border: 0, background: 'transparent', cursor: 'pointer', font: '16px/1 var(--font-sans)', color: '#8f8f8f' }}>×</button>
           </div>
+          {goal && (
+            <div data-post-it-goal="1" style={{ font: '13px/1.5 var(--font-sans)' }}>
+              <div title={goal.condition} style={{ ...line, color: '#171717' }}>Goal: {goal.condition.replace(/\s*\n\s*/g, ' ')}</div>
+              {goal.line && <div data-post-it-goal-line="1" title={goal.line} style={{ ...line, color: '#8f8f8f' }}>{goal.line}</div>}
+            </div>
+          )}
           {working && <div data-post-it-activity="1" style={{ font: '13px/1.5 var(--font-sans)', color: '#4d4d4d', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{activity}</div>}
           {done && <div style={{ font: '13.5px/1.6 var(--font-sans)', color: '#171717', textWrap: 'pretty' }}>{messageFor(task)}</div>}
           {error && <div style={{ font: '12.5px/1.5 var(--font-sans)', color: '#e70022' }}>{error}</div>}

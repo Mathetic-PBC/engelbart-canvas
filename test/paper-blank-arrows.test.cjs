@@ -302,7 +302,9 @@ test('noteHtml: with agents, a note\'s leading @bart is the document\'s label; l
   const shown = noteHtml('@bart why @[P](lib:x)?', { agents: true, libName: () => 'Paper' });
   assert.match(shown, /^<span data-agent="bart" [^>]*>@bart<span aria-hidden="true" style="[^"]*color:#0070f3;font:500 [^"]*var\(--font-sans\)[^"]*">@bart<\/span><\/span> why <span data-mention="Paper" data-lib="x"/);
   assert.equal(noteHtml('@bart why', {}), '@bart why', 'without agents it reads as typed');
-  assert.equal(noteHtml('why @bart', { agents: true }), 'why @bart', 'only at the start');
+  // every agent's token tinted, as the workspace tints it (2026-10-24), not only a leading one; asking is still a leading @bart's
+  assert.match(noteHtml('why @bart', { agents: true }), /^why <span data-agent="bart" [^>]*>@bart<span aria-hidden="true"/, 'anywhere in the note');
+  assert.equal(/data-agent/.test(noteHtml('a@bart', { agents: true })), /color:#0070f3;font-weight:500/.test(inlineHtml('a@bart')), 'where the workspace tints one, as it does');
   assert.equal(noteHtml('@barty', { agents: true }), '@barty');
   assert.doesNotMatch(noteHtml('@[bart](lib:x)', { agents: true }), /data-agent/, 'a library mention stays one');
   assert.deepEqual(noteParts(' @Bart q', { agents: true }), [' ', '@Bart', ' q'], 'a piece of its own, as the shown note\'s nodes are');

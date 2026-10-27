@@ -26,6 +26,7 @@ const { NOT_THE_SUBSCRIPTION, lastResultLine } = require('../context/summarizer.
 const { pathLabeller, claudeUpdate, codexUpdate, eventReader } = require('../bart/activity.cjs');
 const { claudeSettings, COMPUTER_USE } = require('./policy.cjs');
 const { prepareGitGuard, guardEnvironment, guardPath } = require('./git-guard.cjs');
+const { codexRun, runningCodexVersion } = require('../tools/codex-models.cjs');
 
 const CLAUDE_TOOLS = 'Read,Grep,Glob,Edit,Write,Bash,WebSearch,WebFetch,Agent';
 const SETTING_SOURCES = 'user,project,local';
@@ -97,7 +98,8 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
   /**
    * One turn. `task` gives provider, modelId, effort, worktree; `session` is the session to go on with (null: a new one).
    * `system` is Build's prompt, `policy` ./policy.cjs's; `engelbart`, the turn's bridge to Engelbart's tools ({ url,
-   * token }; none: no `engelbart` server). → { text, session }; throws TurnError (a stopped one carries the session when
+   * token }; none: no `engelbart` server). → { text, session, model? } (`model`: the id a Codex turn ran on, which is not
+   * task.modelId when the account's Codex lists another of its family, MATH-159); throws TurnError (a stopped one carries the session when
    * it had one: Claude Code's is named before it starts, Codex's is read from what it printed so far).
    */
   async function turn({ task, message, session = null, system, policy, engelbart = null, signal, timeoutMs, onUpdate = () => {}, onEvent = () => {} }) {
@@ -144,23 +146,29 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
       const settings = overrides.map((_, n) => `-c "$ENGELBART_BUILD_C${n}"`).join(' ');
       const shared = `-m "$ENGELBART_BUILD_MODEL" -c 'model_reasoning_effort="${task.effort}"' -c 'sandbox_mode="workspace-write"' -c 'approval_policy="on-request"' -c 'approvals_reviewer="auto_review"' -c 'tools.web_search=true' ${settings} --json -o "$ENGELBART_BUILD_OUTPUT" - < "$ENGELBART_BUILD_INPUT"`;
       const command = `${guardFirst}${session ? `exec ${program('codex')} exec resume "$ENGELBART_BUILD_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${shared}`}`;
-      const env = childEnvironment({ ...programEnv('codex'), ...guarded, ...(codexHome ? { CODEX_HOME: codexHome } : {}), ENGELBART_BUILD_SESSION: session || '', ENGELBART_BUILD_MODEL: task.modelId, ENGELBART_BUILD_OUTPUT: outFile, ENGELBART_BUILD_INPUT: input, ...Object.fromEntries(overrides.map((value, n) => [`ENGELBART_BUILD_C${n}`, value])) });
+      const envFor = (model) => childEnvironment({ ...programEnv('codex'), ...guarded, ...(codexHome ? { CODEX_HOME: codexHome } : {}), ENGELBART_BUILD_SESSION: session || '', ENGELBART_BUILD_MODEL: model, ENGELBART_BUILD_OUTPUT: outFile, ENGELBART_BUILD_INPUT: input, ...Object.fromEntries(overrides.map((value, n) => [`ENGELBART_BUILD_C${n}`, value])) });
+      // The model as the account's Codex lists it, and once more on the listed one when Codex refuses it (MATH-159).
+      const attempt = async (model) => {
+        try { fs.unlinkSync(outFile); } catch { /* none yet */ }
+        const { stdout, failure } = await execute(command, task.worktree, envFor(model), { signal, timeoutMs, onEvent: (event) => { raw(event); onUpdate(codexUpdate(event, short)); } });
+        let text = '';
+        try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
+        return { stdout, failure, text };
+      };
       try {
-        const { stdout, failure } = await execute(command, task.worktree, env, { signal, timeoutMs, onEvent: (event) => { raw(event); onUpdate(codexUpdate(event, short)); } });
+        const { stdout, failure, text, ran } = await codexRun({ model: task.modelId, home, version: runningCodexVersion(tools), attempt, ok: (out) => !!out.text.trim() || !!(signal && signal.aborted) });
         let thread = session;
         for (const line of String(stdout || '').split(/\r?\n/)) {
           if (thread || !line.startsWith('{')) continue;
           try { const event = JSON.parse(line); if (event.type === 'thread.started' && UUID_RE.test(event.thread_id)) thread = event.thread_id; } catch { /* not an event */ }
         }
         if (signal && signal.aborted) throw new TurnError('stopped', 'Stopped.', thread);
-        let text = '';
-        try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
         if (!text.trim()) {
           if (notFound(failure)) throw new TurnError('unavailable', 'Codex was not found on the login shell PATH.');
           const reason = String(stdout || '').split(/\r?\n/).reverse().find((line) => /"type":"(error|turn\.failed)"|^ERROR/.test(line) && !/resuming with/.test(line)) || (timedOut(failure) ? 'The turn ran past its time limit and was stopped.' : failure ? failure.message.split('\n')[0] : 'Codex returned no message.');
           throw new TurnError('failed', reason.slice(0, 500));
         }
-        return { text, session: thread };
+        return { text, session: thread, model: ran };
       } finally {
         try { fs.unlinkSync(outFile); } catch { /* none */ }
       }
@@ -175,7 +183,8 @@ function createRunner({ environment = process.env, runDirectory = path.join(os.t
 /**
  * Scripted runs (ENGELBART_BUILD_FAKE=1; design B24): no model. The fake agent writes BUILD-FAKE.md in the worktree (one
  * line per turn), reports two things it did, and answers. A first message containing "question" asks one (NEEDS YOU); a
- * quick task containing "escalate" escalates; "fail" fails the turn.
+ * quick task containing "escalate" escalates; "fail" fails the turn; a message starting with /goal (a goal's step 2) runs
+ * three rounds of stop-hook feedback and finishes.
  */
 function createFakeRunner({ delayMs = 900 } = {}) {
   const waits = new Map();
@@ -190,6 +199,16 @@ function createFakeRunner({ delayMs = 900 } = {}) {
       const said = String(message || '');
       onUpdate({ activity: 'Reading the workspace', log: true });
       await pause(delayMs / 3);
+      // A goal's step 2 (MATH-88): three rounds not yet met, each its stop-hook feedback as Claude Code streams it, then met.
+      const goal = /^\/goal /.test(said) ? said.slice(6).split('. Also stop when')[0] : null;
+      if (goal) {
+        for (let round = 1; round <= 3; round += 1) {
+          onUpdate({ activity: `Working toward the goal, round ${round}`, log: true });
+          raw({ type: 'user', message: { role: 'user', content: [{ type: 'text', text: `Stop hook feedback:\n[${goal}]: the fake goal is on round ${round} of 3.` }] } });
+          await pause(delayMs / 3);
+        }
+        return { text: 'FAKE BUILD: the goal is met after three rounds.', session: session || 'fake-session' };
+      }
       if (/\bfail\b/i.test(said) && !session) throw new TurnError('failed', 'The fake agent was asked to fail.');
       if (task.kind === 'quick' && /escalate/i.test(said) && !session) return { text: 'ESCALATE: the fake agent was asked to escalate.', session: 'fake-session' };
       onUpdate({ activity: 'Editing BUILD-FAKE.md', log: true });

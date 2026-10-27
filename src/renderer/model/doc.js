@@ -3,8 +3,10 @@ import katex from 'katex';
 import { hammerSvg } from './hammer.js';
 import { isAddress, webLabel } from './web-name.js';
 import { citationOf, citationRuns, citationNumbers, citationHtml, citationMoreHtml } from './cite.js';
+import { readTaskMark, taskMark, stripTaskMarkers } from '../../shared/task-marker.cjs';
 
 export { isAddress, sameAddress, webLabel, webName } from './web-name.js'; // a web page's mention (2026-10-17)
+export { stripTaskMarkers } from '../../shared/task-marker.cjs';
 // Ported verbatim from design/goal-canvas/Goal Canvas.dc.html (lines 403–404, 439–456, 692–730, 801–812).
 // One markdown string per document; the caret's line shows its source, every other line renders.
 
@@ -343,6 +345,23 @@ export const agentOf = (p) => (p && p.agent === 'orient' ? 'brainstorm' : p && (
 export const tokenOf = (agent) => (agent === 'bart' || !agent ? 'chat' : agent === 'router' ? 'bart' : agent);
 /** The token that starts a question line, as INLINE splits it out. */
 export const AGENT_TOKEN = /^@(bart|chat|brainstorm|orient|discover|create)$/i;
+// How the document draws an agent's token (inlineHtml): the link's blue, weight 500. The Stage's note fields tint theirs
+// with it too (2026-10-24, agentTokens, noteInkHtml, agentInkHtml).
+export const AGENT_INK = '#0070f3';
+export const AGENT_LOOK = `color:${AGENT_INK};font-weight:500`;
+/**
+ * The agents' tokens in `text`, as the document finds them (INLINE splits the text, AGENT_TOKEN names a piece an agent's):
+ * [{ start, end, token }] in order. A token inside code, math or a link is none, as it is none in the document.
+ */
+export function agentTokens(text, from = 0) {
+  const out = [];
+  for (const m of String(text ?? '').matchAll(INLINE)) {
+    const p = m[0], at = from + m.index;
+    if (AGENT_TOKEN.test(p)) out.push({ start: at, end: at + p.length, token: p });
+    else if (p.startsWith('**') && p.endsWith('**') && p.length > 4) out.push(...agentTokens(p.slice(2, -2), at + 2)); // bold holds them, as inlineHtml draws it
+  }
+  return out;
+}
 /**
  * Text pasted into a question line, as one line (2026-10-02): a question is one line of the document, and a paste split
  * over several put all but its first line under the question, where it was never asked. Each line break, with the
@@ -362,7 +381,11 @@ export const parseLine = (l) => {
   if ((m = l.match(REPLY_RE))) return { type: 'reply', text: m[2], folded: m[1] === '+' };
   if ((m = l.match(QUOTE_RE))) return { type: 'quote', text: m[1] };
   if ((m = l.match(IMG_RE))) return { type: 'img', text: m[1], src: m[2] };
-  if ((m = l.match(TODO_RE))) return { type: 'todo', depth: depthOf(m[1]), done: !!m[2] && m[2] !== ' ', text: m[3] || '' };
+  if ((m = l.match(TODO_RE))) {
+    // A task built from its line (MATH-106) holds its Build's id in a marker the text never shows (shared/task-marker.cjs).
+    const mark = readTaskMark(m[3] || '');
+    return { type: 'todo', depth: depthOf(m[1]), done: !!m[2] && m[2] !== ' ', text: mark.text, ...(mark.build ? { build: mark.build, ticked: mark.ticked } : {}) };
+  }
   if ((m = l.match(LIST_RE))) return m[2] ? { type: 'list', depth: depthOf(m[1]), text: m[4], num: Number(m[2]), delim: m[3] } : { type: 'list', depth: depthOf(m[1]), text: m[4] };
   if ((m = l.match(HEAD_RE))) return { type: 'h', level: m[1].length, text: m[2] };
   return { type: 'p', text: l };
@@ -452,7 +475,8 @@ export function highlight(text, lang) {
 /** Lines that stand under an @bart question: what it is working on, what it said, and the legacy `> ` replies of the prototype. */
 export const isAnswer = (type) => type === 'quote' || type === 'reply' || type === 'pending';
 
-export const todoLine = (depth, done, text) => `${'  '.repeat(depth)}- [${done ? 'x' : ' '}] ${text}`;
+/** A task row; `mark` ({ build, ticked }, a parsed task) keeps the marker of the Build made from it, before its text. */
+export const todoLine = (depth, done, text, mark = null) => `${'  '.repeat(depth)}- [${done ? 'x' : ' '}] ${mark && mark.build ? taskMark(mark.build, mark.ticked) : ''}${text}`;
 /** A bullet, or with `num` (and `delim`, '.' or ')') a numbered row. */
 export const listLine = (depth, text, num, delim = '.') => `${'  '.repeat(depth)}${num != null ? `${num}${delim}` : '-'} ${text}`;
 /** What a list row draws in front of its text: `•`, or its number as typed (`1.`, `2)`). */
@@ -467,9 +491,44 @@ export const isDrawn = (type) => isMarked(type) || type === 'reply';
 /** The text the caret moves through on a line: a drawn line's own text, any other line's whole source. */
 export const lineText = (p, line) => (isDrawn(p.type) ? p.text : line);
 /** That line again with different text, keeping its kind. */
-export const sameLine = (p, text) => (p.type === 'todo' ? todoLine(p.depth, p.done, text) : p.type === 'list' ? listLine(p.depth, text, p.num, p.delim) : p.type === 'reply' ? replyLine(text, p.folded) : text);
+export const sameLine = (p, text) => (p.type === 'todo' ? todoLine(p.depth, p.done, text, p) : p.type === 'list' ? listLine(p.depth, text, p.num, p.delim) : p.type === 'reply' ? replyLine(text, p.folded) : text);
 /** How a line the person just typed is stored: `- []` and `* x` become the line they make (`1) x` stays as typed). */
 export const canonicalLine = (l) => { const p = parseLine(l); return isMarked(p.type) ? sameLine(p, p.text) : l; };
+
+/**
+ * What a task built from its own line asks (MATH-106): its text, then the rows nested under it (the tasks and bullets
+ * indented deeper, directly below it, up to the first row that is not) as its steps, indented as they are under it.
+ * `ps`: the lines parsed (parseLines). → { text, steps: [lines] }, '' text for a line that is no task.
+ */
+export function taskRequest(lines, i, ps = parseLines(lines)) {
+  const p = ps[i];
+  if (!p || p.type !== 'todo') return { text: '', steps: [] };
+  const steps = [];
+  for (let j = i + 1; j < lines.length; j++) {
+    const q = ps[j];
+    if (!q || !isMarked(q.type) || q.depth <= p.depth) break;
+    const depth = q.depth - p.depth - 1;
+    steps.push(q.type === 'todo' ? todoLine(depth, q.done, q.text) : listLine(depth, q.text, q.num, q.delim));
+  }
+  const head = p.text.trim();
+  return { text: head && steps.length ? `${head}\n\nSteps:\n${steps.join('\n')}` : head, steps };
+}
+
+/**
+ * The document with a task's new Build written into its line (MATH-106): the line it was started from (`raw`, at `line`,
+ * else the nearest line still reading so), unless it is gone, no longer a task, or names a Build that is still there (by
+ * id in `builds`, not discarded). A Build discarded and built again takes the new one. → the text, or null to leave it.
+ */
+export function withTaskBuild(text, { line, raw }, id, builds = {}) {
+  const ls = String(text).split('\n');
+  let at = ls[line] === raw ? line : -1;
+  if (at < 0) ls.forEach((l, k) => { if (l === raw && (at < 0 || Math.abs(k - line) < Math.abs(at - line))) at = k; });
+  const p = at >= 0 ? parseLine(ls[at]) : null;
+  const held = p && p.build ? builds[p.build] : null;
+  if (!p || p.type !== 'todo' || (held && held.status !== 'discarded')) return null;
+  ls[at] = todoLine(p.depth, p.done, p.text, { build: id, ticked: false });
+  return ls.join('\n');
+}
 
 /**
  * A marker typed into a row that already draws one (an empty bullet or task): the row takes that marker instead of
@@ -478,7 +537,7 @@ export const canonicalLine = (l) => { const p = parseLine(l); return isMarked(p.
  */
 export function retypedRow(p, txt) {
   const task = txt.match(/^- \[([ xX]?)\](?: |$)/);
-  if (task) return { line: todoLine(p.depth, (task[1] || ' ') !== ' ', txt.slice(task[0].length)), ate: task[0].length };
+  if (task) return { line: todoLine(p.depth, (task[1] || ' ') !== ' ', txt.slice(task[0].length), p.type === 'todo' ? p : null), ate: task[0].length };
   const bullet = txt.match(/^[-*] /);
   if (bullet) return { line: listLine(p.depth, txt.slice(bullet[0].length)), ate: bullet[0].length };
   const numbered = txt.match(/^(\d{1,9})([.)]) /);
@@ -812,7 +871,7 @@ export function inlineHtml(text, opts) {
     if (p.startsWith('**') && p.endsWith('**') && p.length > 4) return `<strong style="font-weight:600">${inlineHtml(p.slice(2, -2), opts)}</strong>`;
     if (p.startsWith('`') && p.endsWith('`') && p.length > 2) return `<code style="padding:1px 4px;border-radius:4px;background:#f2f2f2;font:.92em/1.6 var(--font-mono)">${esc(p.slice(1, -1))}</code>`;
     if (p.startsWith('*') && p.endsWith('*') && p.length > 2) return `<em>${esc(p.slice(1, -1))}</em>`;
-    if (AGENT_TOKEN.test(p)) return `<span style="color:#0070f3;font-weight:500">${esc(p)}</span>`;
+    if (AGENT_TOKEN.test(p)) return `<span style="${AGENT_LOOK}">${esc(p)}</span>`;
     const ws = p.match(WS_MENTION_RE);
     if (ws) return `<span data-mention="${esc(ws[1])}" data-ws="${esc(ws[2])}" style="color:#0070f3;font-weight:500;cursor:pointer;border-bottom:1px dotted #c9c9c9;white-space:nowrap">@${WS_ICON}${esc(ws[1])}</span>`;
     const lib = p.match(LIB_MENTION_RE);
@@ -846,26 +905,31 @@ export function inlineHtml(text, opts) {
 // the document's font. With `opts.agents` it is a piece of its own (any space before it another), so the pieces still
 // match the shown note's child nodes. The only agent a note asks is Bart (PaperView mentionList).
 const LIB_SPLIT = /(@\[[^\]\n]+\]\(lib:[\w-]+(?::[\w.~%/-]+)?\))/;
-export const NOTE_AGENT_RE = /^(\s*)(@bart)(?=\s|$)/i;
-export const noteParts = (text, opts) => {
-  const s = String(text ?? ''), lead = opts && opts.agents ? s.match(NOTE_AGENT_RE) : null;
-  if (!lead) return s.split(LIB_SPLIT).filter(Boolean);
-  return [lead[1], lead[2], ...s.slice(lead[0].length).split(LIB_SPLIT)].filter(Boolean);
-};
+// Since 2026-10-24 every agent's token is drawn so, where the document would draw it (agentTokens), not only a leading
+// @bart: the field and the shown note alike. What a note asks is still a leading @bart's alone (pdf/canvas.js noteQuestion).
+/** A note's pieces, each { text, agent }: an agent's token (with `opts.agents`) or a stretch of text and mentions. */
+function noteSplit(text, opts) {
+  const s = String(text ?? ''), out = [];
+  const plain = (piece) => { for (const p of piece.split(LIB_SPLIT)) if (p) out.push({ text: p, agent: false }); };
+  let at = 0;
+  if (opts && opts.agents) for (const t of agentTokens(s)) { plain(s.slice(at, t.start)); out.push({ text: t.token, agent: true }); at = t.end; }
+  plain(s.slice(at));
+  return out;
+}
+export const noteParts = (text, opts) => noteSplit(text, opts).map((p) => p.text);
 /**
  * An agent's name in a note, as the document's label (inlineHtml's AGENT_TOKEN): blue, weight 500, the document's font. The
  * note is in Caveat, and its field's caret goes by Caveat's widths, so the name keeps the width it has in Caveat (its own
  * text, transparent) and the label is drawn over it (aria-hidden, not selectable): the field and its backdrop wrap alike.
  */
-export const agentLabelHtml = (token) => `<span data-agent="${esc(token.slice(1).toLowerCase())}" style="position:relative;color:transparent">${esc(token)}<span aria-hidden="true" style="position:absolute;left:0;top:50%;transform:translateY(-50%);color:#0070f3;font:500 .75em/1 var(--font-sans);letter-spacing:normal;white-space:nowrap;user-select:none;pointer-events:none">${esc(token)}</span></span>`;
+export const agentLabelHtml = (token, size = '.75em') => `<span data-agent="${esc(token.slice(1).toLowerCase())}" style="position:relative;color:transparent">${esc(token)}<span aria-hidden="true" style="position:absolute;left:0;top:50%;transform:translateY(-50%);color:${AGENT_INK};font:500 ${size}/1 var(--font-sans);letter-spacing:normal;white-space:nowrap;user-select:none;pointer-events:none">${esc(token)}</span></span>`;
 /**
  * A margin note as shown while it is not being edited: its text escaped, each library mention a chip (libHtml), and with
- * `opts.agents` its leading @bart a label (agentLabelHtml).
+ * `opts.agents` each agent's token a label (agentLabelHtml).
  */
 export function noteHtml(text, opts) {
-  const lead = opts && opts.agents ? String(text ?? '').match(NOTE_AGENT_RE) : null, at = lead ? (lead[1] ? 1 : 0) : -1;
-  return noteParts(text, opts).map((p, i) => {
-    if (i === at) return agentLabelHtml(p);
+  return noteSplit(text, opts).map(({ text: p, agent }) => {
+    if (agent) return agentLabelHtml(p);
     const lib = p.match(LIB_MENTION_RE);
     if (FILE_MENTION_RE.test(p)) return fileHtml(p, opts);
     return lib ? libHtml(lib[1], lib[2], opts && opts.libName, undefined, opts) : esc(p);
@@ -873,12 +937,17 @@ export function noteHtml(text, opts) {
 }
 /**
  * A note's field's backdrop (2026-10-06): the field's text exactly as typed, library mentions included, in the note's own
- * ink, with its leading @bart a label. The field's own text is transparent over it.
+ * ink, with each agent's token (agentTokens, as the document finds them: 2026-10-24, every agent's, not only a leading
+ * @bart) a label `size` big. The field's own text is transparent over it, so the two wrap alike.
  */
-export function noteInkHtml(text) {
-  const s = String(text ?? ''), lead = s.match(NOTE_AGENT_RE);
-  return lead ? esc(lead[1]) + agentLabelHtml(lead[2]) + esc(s.slice(lead[0].length)) : esc(s);
+export function agentInkHtml(text, size = '1em') {
+  const s = String(text ?? '');
+  let html = '', at = 0;
+  for (const t of agentTokens(s)) { html += esc(s.slice(at, t.start)) + agentLabelHtml(t.token, size); at = t.end; }
+  return html + esc(s.slice(at));
 }
+/** The pdf's (and a box's) Caveat note: its tokens labels in the document's font, .75em of Caveat's (agentLabelHtml). */
+export const noteInkHtml = (text) => agentInkHtml(text, '.75em');
 /** Where in a note's text a click lands: `offset` characters into its `part`-th piece; a mention's piece is passed whole. */
 export function noteOffset(text, part, offset, opts) {
   const parts = noteParts(text, opts);
@@ -949,9 +1018,10 @@ function sliceInline(text, a, b, alone) {
  * line, the text selected. Across lines, the first and last lines cut where the selection is and the lines between whole
  * with their marks (`- `, `# `, `- [ ] `), so a list stays a list; a line selected from its start keeps its mark too. An
  * answer comes without its `bart> ` and without its closing line, as the answer's Copy gives it (turnText). A line a run
- * is working on and a Build's line hold an id, not text, and are left out.
+ * is working on and a Build's line hold an id, not text, and are left out. So is a built task's marker (MATH-106), unless
+ * `marks`: the copy this editor pastes back keeps it, so a task cut and pasted is still the one its Build was made from.
  */
-export function selectionMarkdown(lines, start, end) {
+export function selectionMarkdown(lines, start, end, { marks = false } = {}) {
   if (!start || !end) return '';
   if (end.line < start.line || (end.line === start.line && end.offset < start.offset)) [start, end] = [end, start];
   const ps = parseLines(lines), feet = new Set();
@@ -971,7 +1041,7 @@ export function selectionMarkdown(lines, start, end) {
     const part = code ? text.slice(a, b) : sliceInline(text, a, b, false);
     out.push(a === 0 && isMarked(p.type) ? line.slice(0, line.length - p.text.length) + part : part);
   }
-  return out.join('\n');
+  return marks ? out.join('\n') : stripTaskMarkers(out.join('\n'));
 }
 
 const SAFE_HREF = /^(https?:|mailto:)/i;

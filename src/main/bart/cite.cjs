@@ -20,6 +20,7 @@ const { splitTarget, citeHref } = require('../../shared/passage-link.cjs');
 const { matchPassage, foldPassage } = require('../../shared/passage-text.cjs');
 const { addressKey } = require('../../shared/address-key.cjs');
 const { openedKey } = require('./source-text.cjs');
+const { stripTaskMarkers } = require('../../shared/task-marker.cjs');
 
 const LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)/g;
 // A citation whose words were left with a space or a parenthesis in them, which LINK_RE stops at: the link runs to the
@@ -103,7 +104,8 @@ async function defaultReadText(file) {
     if (stat.size > MAX_TEXT_BYTES) return null;
     const raw = fs.readFileSync(file, 'utf8');
     if (/\.html?$/i.test(file)) return require('../connect/gmail.cjs').htmlText(raw);
-    return raw.includes('\u0000') ? null : raw;
+    // A workspace's task holds its Build's id in a marker (MATH-106): no word of it, so nothing a quote is checked against.
+    return raw.includes('\u0000') ? null : path.basename(file) === 'workspace.md' ? stripTaskMarkers(raw) : raw;
   } catch {
     return null;
   }

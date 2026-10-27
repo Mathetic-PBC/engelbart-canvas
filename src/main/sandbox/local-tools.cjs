@@ -232,8 +232,9 @@ async function openToolBridge(callTool, { secrets = [], signal, maxBody = 128_00
         if (Buffer.byteLength(body) > maxBody) { reply(413, { error: 'Request too large' }); return; }
       }
       signal?.throwIfAborted();
-      const { name, args } = JSON.parse(body);
-      const value = await callTool(name, args);
+      const { name, args, cwd } = JSON.parse(body);
+      // `cwd`: where the server that asked runs, when it says (the terminal's Stage tool, ../terminal/stage-mcp.cjs).
+      const value = await callTool(name, args, typeof cwd === 'string' ? { cwd } : {});
       if (value && Array.isArray(value[MCP_CONTENT])) { reply(200, { content: value[MCP_CONTENT] }); return; }
       reply(200, { content: [{ type: 'text', text: JSON.stringify(redact(value, secrets)) }] });
     } catch (error) {

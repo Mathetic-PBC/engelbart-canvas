@@ -10,7 +10,7 @@ import { usePreviewTouch, useSandboxes } from '../ui/SandboxProgress.jsx';
 import { previewLibraryId } from '../model/sandbox-notifications.js';
 import { KindGlyph, SEARCH, FOLDER, Expand, Collapse } from '../ui/Icons.jsx';
 import { kindOf, stripScheme, OPEN_IN_BROWSER } from '../model/address.js';
-import { MAX_TABS, SAVE_LABEL, TAB_ICON_SIDE_W, tabLook, tabWidth, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, withPassage } from '../model/stage.js';
+import { MAX_TABS, SAVE_LABEL, TAB_ICON_SIDE_W, tabLook, tabWidth, WAKE_RETRY_MS, addressKey, afterClose, landTab, landingFinds, linkPlan, looksLikePlace, onStage, placeTab, previewName, previewWait, restoreTabs, snapshotStyle, stageRows, stageSnapshot, tabKey, tabPlace, parseTable, viewBounds, withPassage } from '../model/stage.js';
 import { markdownBlocks, inlineRuns } from '../model/markdown.js';
 import PaperView from '../pdf/PaperView.jsx';
 import { withAsk } from '../pdf/canvas.js';
@@ -126,17 +126,9 @@ function glyphItem(tab, rowOf) {
 
 /* ------------------------------------------------------------------------------------------------- small views */
 
-// Three books on a shelf, one of them banded (Hudson's reference, Add - Mention.dc.html).
 // Lucide's folder-plus, a Create file's Save (2026-10-14).
 const FolderPlus = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M12 10v6" /><path d="M9 13h6" /><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z" /></svg>
-);
-const Shelf = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'currentColor', stroke: 'none' }}>
-    <rect x="1.5" y="3" width="3.2" height="11" rx="1" />
-    <path fillRule="evenodd" d="M6 5a1 1 0 0 1 1-1h1.4a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1H7a1 1 0 0 1-1-1zM6.85 6.4a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5zm0 5.2a.5.5 0 0 1 .5-.5h.7a.5.5 0 0 1 0 1h-.7a.5.5 0 0 1-.5-.5z" />
-    <rect x="10.8" y="2" width="3.2" height="12" rx="1" />
-  </svg>
 );
 // A dashed square with a pointer in its corner: the Box tool (MATH-70). Lucide's square-dashed-mouse-pointer, the icon of
 // engelbart-web's Annotate control (components/annotate/control.tsx), which David liked (2026-10-07).
@@ -145,61 +137,6 @@ const BoxGlyph = () => (
     <path d="M12.034 12.681a.498.498 0 0 1 .647-.647l9 3.5a.5.5 0 0 1-.033.943l-3.444 1.068a1 1 0 0 0-.66.66l-1.067 3.443a.5.5 0 0 1-.943.033z M5 3a2 2 0 0 0-2 2 M19 3a2 2 0 0 1 2 2 M5 21a2 2 0 0 1-2-2 M9 3h1 M9 21h2 M14 3h1 M3 9v1 M21 9v2 M3 14v1" />
   </svg>
 );
-const Grid = () => (
-  <svg width="15" height="15" viewBox="0 0 16 16" aria-hidden="true" style={{ display: 'block', flex: 'none', fill: 'none', stroke: 'currentColor', strokeWidth: 1.5, strokeLinejoin: 'round', strokeLinecap: 'round' }}>
-    <path d="M2.5 1.5h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M9 1.5h4.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z M2.5 8h4.5a1 1 0 0 1 1 1v4.5a1 1 0 0 1-1 1h-4.5a1 1 0 0 1-1-1v-4.5a1 1 0 0 1 1-1z M11 8h2.5a1 1 0 0 1 1 1v2.5a1 1 0 0 1-1 1h-2.5a1 1 0 0 1-1-1v-2.5a1 1 0 0 1 1-1z" />
-  </svg>
-);
-
-function SaveTip({ text }) {
-  return <div role="tooltip" style={{ position: 'absolute', right: 0, top: 'calc(100% + 6px)', zIndex: 50, padding: '6px 9px', border: '1px solid #eaeaea', borderRadius: 6, background: '#fff', color: '#4d4d4d', font: '400 11.5px/1.3 var(--font-sans)', whiteSpace: 'nowrap', pointerEvents: 'none', animation: `rise 120ms ${EASE}` }}>{text}</div>;
-}
-
-// "+ Save": the thing's name in the library, then where it goes — the library alone, or the library and this workspace
-// (the heavier button, and what Enter does).
-function SaveCard({ title, onSave, onClose, cardRef }) {
-  const [name, setName] = React.useState(title);
-  const [tip, setTip] = React.useState(null);
-  const [busy, setBusy] = React.useState(false);
-  const [error, setError] = React.useState('');
-  const commit = async (here) => {
-    if (busy) return;
-    setBusy(true);
-    setError('');
-    try { await onSave(name.trim() || title, here); onClose(); } catch (failure) { setError(errorMessage(failure)); } finally { setBusy(false); }
-  };
-  const button = { display: 'flex', alignItems: 'center', gap: 7, height: 28, padding: '0 9px 0 7px', borderRadius: 6, cursor: 'pointer', font: '500 12.5px/1 var(--font-sans)' };
-  return (
-    <div ref={cardRef} data-overlay="1" data-save-card="1" style={{ position: 'absolute', right: 10, top: 44, zIndex: 40, width: 360, maxWidth: 'calc(100% - 20px)', boxSizing: 'border-box', padding: '14px 16px 14px', background: '#fff', border: '1px solid #c9c9c9', borderRadius: 8, boxShadow: '0 12px 32px rgba(0,0,0,.06)', textAlign: 'left', animation: `rise 160ms ${EASE}` }}>
-      <input
-        ref={(element) => { if (element && !element.dataset.focused) { element.dataset.focused = '1'; element.focus({ preventScroll: true }); element.select(); } }}
-        value={name}
-        readOnly={busy}
-        onChange={(event) => { setName(event.target.value); setError(''); }}
-        onKeyDown={(event) => { if (event.key === 'Enter') { event.preventDefault(); void commit(true); } else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); onClose(); } }}
-        aria-label="Name in the library"
-        spellCheck={false}
-        className="save-name"
-        style={{ display: 'block', width: '100%', boxSizing: 'border-box', marginTop: 9, padding: '0 0 4px', border: 0, borderBottom: '1px solid #eaeaea', background: 'transparent', font: '500 14.5px/1.4 var(--font-sans)', color: '#171717', transition: 'border-color 120ms' }}
-      />
-      {error && <div style={{ paddingTop: 6, font: '12px/1.5 var(--font-sans)', color: '#e70022', overflowWrap: 'anywhere' }}>{error}</div>}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginTop: 14 }}>
-        <div style={{ position: 'relative', display: 'flex' }}>
-          <button type="button" className="hov-outline" disabled={busy} onClick={() => commit(false)} onMouseEnter={() => setTip('lib')} onMouseLeave={() => setTip(null)} aria-label="Add to library only" style={{ ...button, border: '1px solid transparent', background: 'transparent', color: '#4d4d4d', transition: 'color 120ms, border-color 120ms' }}>
-            <Shelf /><span>Library only</span>
-          </button>
-          {tip === 'lib' && <SaveTip text="Add to library only" />}
-        </div>
-        <div style={{ position: 'relative', display: 'flex' }}>
-          <button type="button" className="hov-save" disabled={busy} onClick={() => commit(true)} onMouseEnter={() => setTip('ws')} onMouseLeave={() => setTip(null)} aria-label="Add to library and this workspace" style={{ ...button, border: '1px solid #eaeaea', background: '#f2f2f2', color: '#171717', transition: 'border-color 120ms, background 120ms' }}>
-            <Grid /><span style={{ fontWeight: 600 }}>Workspace</span>
-          </button>
-          {tip === 'ws' && <SaveTip text="Add to library and this workspace" />}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ⌘F's card is ui/FindCard.jsx (shared with the middle canvas's find since 2026-10-16).
 
@@ -421,11 +358,12 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const [customW, setCustomW] = React.useState('390');
   const [occluded, setOccluded] = React.useState(false);
   const [snapshot, setSnapshot] = React.useState(null);
+  const shownRef = React.useRef(null); // the size last given to browserShow: { tabId, width, height }, for the snapshot
   const [logins, setLogins] = React.useState([]); // HTTP authentication a page (or a popup) is waiting on
   const [typing, setTyping] = React.useState(false); // the address has the keyboard: its list is open, Save steps aside
   const [pick, setPick] = React.useState(0); // the row of the address list Enter takes
   const [found, setFound] = React.useState(null); // the library's answer for a typed place: { input, row }
-  const [saving, setSaving] = React.useState(false); // the Save card is open
+  const [saving, setSaving] = React.useState(false); // + Save's save is in flight: a second click makes no second row
   const [finding, setFinding] = React.useState(false); // the find card is open
   const [findText, setFindText] = React.useState('');
   const [matches, setMatches] = React.useState(null); // { matches, active } in the tab in front
@@ -448,8 +386,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   const pdfSeq = React.useRef(0);
   const keys = React.useRef(null); // the handlers the key listeners call, current every render
   const jumped = React.useRef(null); // { tabId, text }: a link's passage just found, which the find card's next run keeps
-  const saveCard = React.useRef(null);
-  const saveButton = React.useRef(null);
+  const savingRef = React.useRef(false); // the same, read at once (a double click lands before a render)
   const addressRef = React.useRef(null);
   const menuRef = React.useRef(null);
   const slotRef = React.useRef(null); // where the page goes
@@ -517,22 +454,34 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
   // Where every tab is, a file by its path (2026-10-14): the editor greys a Create row while its file is open here.
   const tabPlaces = tabs.map((t) => (t.file && t.file.path) || (t.pdf && t.pdf.input) || (/^file:/i.test(t.url || '') ? t.url : '') || '').join('\n');
   React.useEffect(() => { if (onTabs) onTabs(tabPlaces ? tabPlaces.split('\n').filter(Boolean) : []); }, [tabPlaces, onTabs]);
-  React.useEffect(() => { setSaving(false); }, [tab.id, pageInput]);
-  // The card closes on a press anywhere else.
-  React.useEffect(() => {
-    if (!saving) return undefined;
-    const away = (event) => { if (![saveCard, saveButton].some((r) => r.current && r.current.contains(event.target))) setSaving(false); };
-    document.addEventListener('mousedown', away, true);
-    return () => document.removeEventListener('mousedown', away, true);
-  }, [saving]);
   const saveState = save && savable ? save.state : null;
   // A file @create made (2026-10-14): Save puts it in the library at once (no card); once there it is "✓ Saved", and the
   // address reads where the library keeps it ("Library / Assets / <name>", save.crumb) until the address is typed in.
   const made = saveState === 'made' || saveState === 'made-saved';
   const onSaveClick = () => {
     if (saveState === 'made') { save.onSave(); return; }
-    if (saveState === 'none') setSaving((open) => !open);
+    if (saveState === 'none') {
+      // + Save (2026-10-24): into the library and this workspace at once, under the page's own name — no card.
+      if (savingRef.current) return;
+      savingRef.current = true;
+      setSaving(true);
+      Promise.resolve()
+        .then(() => save.onSave(pageTitle || stripScheme(pageInput), true))
+        .catch((error) => { if (onError) onError(error); })
+        .finally(() => { savingRef.current = false; setSaving(false); });
+    }
     else if (saveState === 'lib') save.onLink().catch(() => {});
+    else if (saveState === 'here' && save.onUnlink) {
+      // ✓ clicked (2026-10-24): the page leaves this workspace and stays in the library, so it reads + Workspace again.
+      // The same busy ref as + Save: a double click unlinks once.
+      if (savingRef.current) return;
+      savingRef.current = true;
+      setSaving(true);
+      Promise.resolve()
+        .then(() => save.onUnlink())
+        .catch((error) => { if (onError) onError(error); })
+        .finally(() => { savingRef.current = false; setSaving(false); });
+    }
   };
 
   React.useEffect(() => {
@@ -922,6 +871,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
     return () => { offState(); offPdf(); offFound(); offShortcut(); offOpen(); offClosed(); offLogin(); offFocus(); window.removeEventListener(OPEN_IN_BROWSER, onAsk); quiet(api.browserCloseAll()); };
   }, [adoptTab, dropTab, receivePdf]);
 
+  // Every page a tab arrives at goes into this project's history (MATH-127): main says where, this says which project.
+  React.useEffect(() => api.onBrowserVisit((visit) => { if (projectId) quiet(api.recordVisit(projectId, visit)); }), [projectId]);
+
   // The address follows the tab unless it is being typed in.
   React.useEffect(() => {
     if (document.activeElement !== addressRef.current) setDraft(shownDraft);
@@ -963,8 +915,9 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
       const r = slot.getBoundingClientRect();
       if (r.width < 1 || r.height < 1) { quiet(api.browserHide()); return; }
       // The page stops short of the window's right and bottom edges, where the resize strips are (WindowEdges.jsx).
-      const width = Math.min(r.width, window.innerWidth - WINDOW_EDGE - r.left), height = Math.min(r.height, window.innerHeight - WINDOW_EDGE - r.top);
-      quiet(api.browserShow(tab.id, { x: r.left, y: r.top, width, height }).then(() => { if (!cancelled) setSnapshot(null); }));
+      const bounds = viewBounds(r, window.innerWidth, window.innerHeight, WINDOW_EDGE);
+      shownRef.current = { tabId: tab.id, width: bounds.width, height: bounds.height };
+      quiet(api.browserShow(tab.id, bounds).then(() => { if (!cancelled) setSnapshot(null); }));
     };
     const observer = new ResizeObserver(place);
     observer.observe(slot);
@@ -1343,7 +1296,10 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
 
   const dev = DEVICES.find((d) => d.id === device);
   const width = device === 'custom' ? (Number(customW) || 390) : (dev ? dev.w : 0);
-  const slotStyle = width ? { flex: 'none', width, height: '100%', background: '#fff', margin: '0 auto' } : { flex: 1, width: '100%', background: '#fff' };
+  // The page stops short of the window's edges (WINDOW_EDGE): the strip it leaves is painted the page's own background
+  // (2026-10-25, the page's preload says it), so a dark page has no white edge. None known, or no page: white.
+  const paint = page && !failed && !wait && web && web.background ? web.background : '#fff';
+  const slotStyle = width ? { flex: 'none', width, height: '100%', background: paint, margin: '0 auto' } : { flex: 1, width: '100%', background: paint };
   const menuW = Math.min(240, (window.innerWidth || 1200) - 16);
   const tabsFull = tabs.length >= MAX_TABS;
   const listOpen = typing && rows.length > 0;
@@ -1436,15 +1392,14 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
           />
           {saveState && !typing && (
             <button
-              ref={saveButton}
               type="button"
               data-page-save={saveState}
-              className={saveState === 'here' || saveState === 'made-saved' ? undefined : 'hov-ink'}
+              className={saveState === 'made-saved' ? undefined : 'hov-ink'}
+              title={saveState === 'here' ? 'Remove from this workspace' : undefined}
               onClick={onSaveClick}
-              disabled={saveState === 'made-saved' || (made && !!save.busy)}
-              aria-expanded={made ? undefined : saving}
-              style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: saving ? '#eaeaea' : 'transparent', cursor: saveState === 'here' || saveState === 'made-saved' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'here' || saveState === 'made-saved' ? '#8f8f8f' : saving ? '#171717' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
-            >{saveState === 'made' ? <><FolderPlus />{save.busy ? 'Saving…' : 'Save'}</> : saveState === 'made-saved' ? '✓ Saved' : SAVE_LABEL[saveState]}</button>
+              disabled={saveState === 'made-saved' || (made && !!save.busy) || ((saveState === 'none' || saveState === 'here') && saving)}
+              style={{ flex: 'none', display: 'inline-flex', alignItems: 'center', gap: 5, height: 24, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', cursor: saveState === 'made-saved' ? 'default' : 'pointer', font: '500 12px/1 var(--font-sans)', color: saveState === 'made-saved' ? '#8f8f8f' : '#4d4d4d', whiteSpace: 'nowrap', transition: 'background 120ms, color 120ms' }}
+            >{saveState === 'made' ? <><FolderPlus />{save.busy ? 'Saving…' : 'Save'}</> : saveState === 'made-saved' ? '✓ Saved' : saveState === 'none' && saving ? 'Saving…' : SAVE_LABEL[saveState]}</button>
           )}
         </div>
         {boxRemoved && boxRemoved.id === tab.id && (
@@ -1457,7 +1412,6 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
         {boxable && (
           <button type="button" className="hov-wash" data-stage-box={boxing === tab.id ? 'on' : 'off'} aria-pressed={boxing === tab.id} onClick={() => quiet(api.browserBox(tab.id))} aria-label="Box part of the page" title="Box part of the page (or hold ⌥ and drag)" style={{ ...ICON_BUTTON, display: 'flex', alignItems: 'center', justifyContent: 'center', background: boxing === tab.id ? '#f2f2f2' : 'transparent', color: boxing === tab.id ? '#0070f3' : '#4d4d4d' }}><BoxGlyph /></button>
         )}
-        {saving && saveState === 'none' && <SaveCard key={pageInput} title={pageTitle || stripScheme(pageInput)} onSave={save.onSave} onClose={() => setSaving(false)} cardRef={saveCard} />}
         <div style={{ position: 'relative' }} ref={menuRef}>
           <button type="button" className="hov-wash" onClick={(event) => { const r = event.currentTarget.getBoundingClientRect(); setMenu(menu ? null : { x: r.right, y: r.bottom }); }} aria-label="More" style={{ ...ICON_BUTTON, background: menu ? '#f2f2f2' : 'transparent', font: '600 16px/1 var(--font-sans)', color: '#4d4d4d' }}>⋮</button>
           {menu && (
@@ -1595,7 +1549,7 @@ const Stage = React.forwardRef(function Stage({ projectId, visible, full, onFull
                   </Plain>
                 </div>
               ) : snapshot && !showing ? (
-                <img src={snapshot} alt="" draggable={false} style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'left top', userSelect: 'none' }} />
+                <img src={snapshot} alt="" draggable={false} style={snapshotStyle(shownRef.current, tab.id)} />
               ) : null}
             </div>
           </div>

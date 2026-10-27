@@ -45,6 +45,7 @@ const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../c
 const { pathLabeller, claudeUpdate, codexUpdate, eventReader } = require('../bart/activity.cjs');
 const { writeCodexConfig } = require('../bart/ask.cjs');
 const { APPS } = require('../../shared/connect-sources.cjs');
+const { codexModel: sharedCodexModel } = require('../tools/codex-models.cjs');
 
 const READ_TOOLS = 'Read,Grep,Glob';
 const WEB_TOOLS = 'WebSearch,WebFetch';
@@ -159,17 +160,10 @@ function writeImportConfig(home, server, connectors = [], kind = 'import') {
  * The model an agent's Codex runs (2026-10-15: on an account whose ChatGPT plan has no Sol, every Codex agent was turned
  * away, recent projects and imports alike): the pinned `model` when the person's Codex lists it (its models_cache.json in
  * `home`), else the first it lists of the same family (-sol, -luna…), else the first it lists. Nothing listed: `model`.
+ * Shared with every Codex run since MATH-159 (../tools/codex-models.cjs); onboarding's calls read the cache whatever
+ * Codex wrote it, as they always did.
  */
-function codexModel(model, home) {
-  let listed = [];
-  try {
-    const cache = JSON.parse(fs.readFileSync(path.join(home, 'models_cache.json'), 'utf8'));
-    listed = (Array.isArray(cache && cache.models) ? cache.models : []).filter((one) => one && one.visibility === 'list' && typeof one.slug === 'string' && /^[\w.-]{1,80}$/.test(one.slug)).map((one) => one.slug);
-  } catch { return model; }
-  if (!listed.length || listed.includes(model)) return model;
-  const family = (/-([a-z]+)$/.exec(String(model)) || [])[1];
-  return (family && listed.find((slug) => slug.endsWith(`-${family}`))) || listed[0];
-}
+const codexModel = (model, home) => sharedCodexModel(model, home, { anyVersion: true });
 
 /** Claude Code's --mcp-config for a bridged turn: Engelbart's tools and the connectors, each token in its header. */
 function claudeServers({ node, server, connection, connectors = [], kind = 'import' }) {

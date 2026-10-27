@@ -337,3 +337,23 @@ test('the @ menu offers the whole library, what this workspace holds first, then
   assert.deepEqual(items(mentionRows({ query: 'zeb', library: lib, here, bodies })), ['c', 'a', 'b', 'd'], 'found only by what it says: after every name, even here');
   assert.deepEqual(items(mentionRows({ query: 'zebra outside', library: lib, here })), ['b'], 'words with a space between them');
 });
+
+test('@ menu: other projects\' workspaces only once typed, after this project\'s, named with their project (MATH-148)', async () => {
+  const { mentionRows, elsewhereLabel } = await load();
+  const workspaces = [{ id: 'a', name: 'Survey plan' }, { id: 'b', name: 'Other' }];
+  const theirs = [
+    { id: 'x', kind: 'workspace', name: 'Survey draft', projectId: 'P2', projectName: 'Thesis', snippet: '' },
+    { id: 'p1', kind: 'item', name: 'ColBERT', projectId: 'P2', projectName: 'Thesis', snippet: '…survey…' },
+  ];
+  const rows = mentionRows({ query: 'survey', library, page: null, pageRow: null, workspaces, hereId: 'b', elsewhere: theirs });
+  const spaces = rows.filter((r) => r.kind === 'workspace');
+  assert.deepEqual(spaces.map((r) => [r.key, r.from || null]), [['ws:a', null], ['ws:x', 'Thesis']], 'this project\'s first, the other one labeled');
+  const colbert = rows.find((r) => r.key === 'p1');
+  assert.equal(colbert.from, 'Thesis', 'a Source main found in another project is labeled');
+  assert.ok(rows.indexOf(colbert) > rows.indexOf(spaces[1]));
+  assert.equal(elsewhereLabel('Survey draft', 'Thesis'), 'Survey draft · Thesis');
+  const untyped = mentionRows({ query: '', library, page: null, pageRow: null, workspaces, hereId: 'b', elsewhere: theirs });
+  assert.ok(!untyped.some((r) => r.from), 'nothing from other projects before anything is typed');
+  const own = mentionRows({ query: 'survey', library, page: null, pageRow: null, workspaces, hereId: 'b', elsewhere: [{ ...theirs[0], id: 'a' }] });
+  assert.equal(own.filter((r) => r.key === 'ws:a').length, 1, 'one of this project\'s is not listed twice');
+});

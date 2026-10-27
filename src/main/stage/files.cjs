@@ -105,4 +105,30 @@ async function readStageFile(file, { cacheDir, runTool = run } = {}) {
   return { kind: 'text', path: file, name: base, ext: ext.slice(1), ...text };
 }
 
-module.exports = { readStageFile, cacheKey, readFailure, reading, BLOCKED };
+// What the Stage shows, in the words a terminal agent is told when it asks for something else (../terminal/stage-tools.cjs).
+const SHOWN = 'PDFs, web pages (.html), pictures (.png, .jpg, .gif, .webp, .svg, .heic), documents (.docx, .doc, .rtf, .odt), Markdown, CSV and TSV tables, other text files, and folders';
+
+/**
+ * The kind readStageFile would give `file` (already resolved), without reading it whole: by its name, else by its first
+ * 8 KB as readText decides; 'unsupported' for what the Stage cannot draw. Throws readFailure's reasons.
+ */
+function shownKind(file) {
+  const stat = reading(() => fs.statSync(file));
+  if (stat.isDirectory()) return 'folder';
+  if (!stat.isFile()) return 'unsupported';
+  const ext = path.extname(file).toLowerCase();
+  if (ext === '.pdf') return 'pdf';
+  if (ext === '.html' || ext === '.htm') return 'page';
+  if (IMAGE_TYPES[ext] || HEIC.has(ext)) return 'image';
+  if (DOCUMENTS.has(ext)) return 'doc';
+  if (stat.size > MAX_TEXT_BYTES) return 'unsupported';
+  const head = Buffer.alloc(Math.min(stat.size, 8192));
+  const fd = reading(() => fs.openSync(file, 'r'));
+  try { reading(() => fs.readSync(fd, head, 0, head.length, 0)); } finally { fs.closeSync(fd); }
+  if (head.includes(0)) return 'unsupported';
+  if (ext === '.md' || ext === '.markdown') return 'md';
+  if (ext === '.csv' || ext === '.tsv') return 'table';
+  return 'text';
+}
+
+module.exports = { readStageFile, shownKind, SHOWN, cacheKey, readFailure, reading, BLOCKED };

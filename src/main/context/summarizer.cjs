@@ -27,6 +27,7 @@ const { scrubAgentSession } = require('../shell-rc.cjs');
 const { normalizeSummarizer } = require('../store/home.cjs');
 const { SUMMARY_SYSTEM_PROMPT } = require('./summary-prompt.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
+const { codexRun, runningCodexVersion } = require('../tools/codex-models.cjs');
 
 const MAX_SUMMARY_CHARS = 999; // "less than 1000 characters"
 const MAX_INPUT_CHARS = 1_500_000; // beyond this a note does not fit a request; it is reported, never truncated
@@ -158,15 +159,21 @@ function createCliSummarizer({ readSettings, environment = process.env, runDirec
     const outFile = `${stem}.out.txt`;
     try {
       const command = `exec ${program('codex')} exec --skip-git-repo-check --ephemeral -s read-only -m "$ENGELBART_SUMMARY_MODEL" -c 'model_reasoning_effort="${effort}"' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_SUMMARY_OUTPUT" - < "$ENGELBART_SUMMARY_INPUT"`;
-      const { stdout, failure } = await execute(command, childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_SUMMARY_MODEL: model, ENGELBART_SUMMARY_OUTPUT: outFile, ENGELBART_SUMMARY_INPUT: `${stem}.input.txt` }), signal);
-      let text = '';
-      try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
+      // The model as this home's Codex lists it, and once more on the listed one when Codex refuses it (MATH-159).
+      const attempt = async (id) => {
+        try { fs.unlinkSync(outFile); } catch { /* none yet */ }
+        const { stdout, failure } = await execute(command, childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_SUMMARY_MODEL: id, ENGELBART_SUMMARY_OUTPUT: outFile, ENGELBART_SUMMARY_INPUT: `${stem}.input.txt` }), signal);
+        let text = '';
+        try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
+        return { stdout, failure, text };
+      };
+      const { stdout, failure, text, ran } = await codexRun({ model, home: codexHome, version: runningCodexVersion(tools), attempt, ok: (out) => !!out.text.trim() || !!(signal && signal.aborted) });
       if (!text.trim()) {
         if (notFound(failure)) throw new SummaryError('unavailable', 'Codex was not found on the login shell PATH');
         const reason = String(stdout || '').split(/\r?\n/).reverse().find((line) => /"type":"error"|^ERROR/.test(line)) || (failure ? failure.message.split('\n')[0] : 'Codex returned no message');
         throw new SummaryError('failed', reason.slice(0, 300));
       }
-      return { text, model, usage: lastUsage(stdout), costUsd: null };
+      return { text, model: ran, usage: lastUsage(stdout), costUsd: null };
     } finally {
       try { fs.unlinkSync(outFile); } catch { /* none */ }
     }

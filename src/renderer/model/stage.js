@@ -290,6 +290,26 @@ export function afterClose(count, activeIndex, closedIndex) {
   return Math.min(activeIndex, left - 1);
 }
 
+// Where the live page goes in its slot: it stops `edge` short of the window's right and bottom edges, where the resize
+// strips are (WindowEdges.jsx).
+export function viewBounds(rect, innerWidth, innerHeight, edge) {
+  return {
+    x: rect.left, y: rect.top,
+    width: Math.min(rect.width, innerWidth - edge - rect.left),
+    height: Math.min(rect.height, innerHeight - edge - rect.top),
+  };
+}
+
+// The picture that stands in for the page under an overlay: drawn at the size the page last had, from the slot's
+// top-left, so it covers the same pixels. A picture of a tab whose size is not known fills the slot.
+export function snapshotStyle(shown, tabId) {
+  const base = { position: 'absolute', userSelect: 'none' };
+  if (shown && shown.tabId === tabId && shown.width > 0 && shown.height > 0) {
+    return { ...base, left: 0, top: 0, width: `${shown.width}px`, height: `${shown.height}px`, objectFit: 'fill' };
+  }
+  return { ...base, inset: 0, width: '100%', height: '100%', objectFit: 'cover', objectPosition: 'left top' };
+}
+
 // The tab strip's widths, as Chrome's (2026-10-18): a tab is 220px while there is room, shares the room when there is
 // not, and stops at 36px (a 20px × with 8px each side); past that the strip scrolls.
 export const TAB_MAX_W = 220;
@@ -324,6 +344,19 @@ export function tabPlace(value) {
   if (/^file:\/\//i.test(v)) { try { return decodeURIComponent(new URL(v).pathname); } catch { return v; } }
   const host = v.replace(/^https?:\/\/(www\.)?/i, '').split(/[/?#]/)[0];
   return host || v;
+}
+
+/**
+ * What a terminal agent's open_on_stage asked this window to show (MATH-79, main/terminal/stage-tools.cjs, resolved
+ * there): { item: row } (the window's own row when it has it), { file: path } (a file from the computer, not added to the
+ * library), or { address }. Null for another project's window or anything malformed.
+ */
+export function stageOpenRequest(event, projectId, library = []) {
+  if (!event || !projectId || event.projectId !== projectId) return null;
+  if (event.kind === 'item' && event.row && typeof event.row.id === 'string') return { item: (library || []).find((row) => row.id === event.row.id) || event.row };
+  if (event.kind === 'file' && typeof event.path === 'string' && event.path.startsWith('/')) return { file: event.path };
+  if (event.kind === 'address' && typeof event.address === 'string' && event.address) return { address: event.address };
+  return null;
 }
 
 /** A library row the Stage can show: anything but a note (notes open in the middle) or a pasted image. */

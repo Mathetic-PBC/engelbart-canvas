@@ -422,6 +422,34 @@ test('views: each workspace keeps its tabs, the document in front and its scroll
   assert.equal(withWs.active, ws2);
 });
 
+test('views: each tab\'s panes beside it are kept across launches, only for its tabs, each document once (MATH-103)', async () => {
+  const project = await projects.createProject(ctx, 'Panes kept');
+  const ws = '77777777-7777-4777-8777-777777777777', ws2 = '88888888-8888-4888-8888-888888888888';
+  const note = '99999999-9999-4999-8999-999999999999', other = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', closed = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+  const pane = (id, kind = 'note', extra = {}) => ({ kind, id, title: id.slice(0, 4), link: 'L', from: `ws:${ws}`, ...extra });
+  const saved = projects.writeView(ctx, project.id, ws, {
+    active: note,
+    tabs: [{ id: note, title: 'Note' }],
+    positions: {},
+    panes: {
+      ws: [pane(note), pane(ws2, 'workspace'), pane(note), pane('nope'), pane(other, 'note?', { title: 7, link: null })],
+      [note]: [pane(other)],
+      [closed]: [pane(other)], // a tab not open any more
+      project: [pane(other)], archive: [pane(other)], [`archive:${ws}`]: [pane(other)],
+      [other]: 'not a list',
+    },
+  });
+  assert.deepEqual(saved.panes, {
+    ws: [pane(note), pane(ws2, 'workspace'), { kind: 'note', id: other, title: '', link: '', from: `ws:${ws}` }],
+    [note]: [pane(other)],
+  });
+  assert.deepEqual(projects.readViews(ctx, project.id)[ws].panes, saved.panes, 'read back as written');
+  const none = projects.writeView(ctx, project.id, ws, { active: 'ws', tabs: [], positions: {}, panes: { ws: [] } });
+  assert.equal('panes' in none, false, 'no panes: no field (a view as before)');
+  const many = projects.writeView(ctx, project.id, ws, { active: 'ws', tabs: [], positions: {}, panes: { ws: Array.from({ length: 30 }, (_, i) => pane(`${String(i).padStart(8, '0')}-cccc-4ccc-8ccc-cccccccccccc`)) } });
+  assert.equal(many.panes.ws.length, 16, 'at most 16 beside a tab');
+});
+
 test('cleanStage: a library row or a place, once each, at most 15, a title of 200 characters; active follows what was kept (MATH-10)', () => {
   const row = '55555555-5555-4555-8555-555555555555', other = '66666666-6666-4666-8666-666666666666';
   assert.equal(projects.cleanStage(null), null);

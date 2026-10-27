@@ -21,6 +21,7 @@ const { readHtmlMeta } = require('./page-meta.cjs');
 const { WEB, withAsk } = require('../../shared/mark-answers.cjs');
 const { CROP_RE, cropNumber, cropsOf, nextCropName, isBox } = require('../browser/boxes.cjs');
 const { addressKey, isPreviewAddress } = require('../../shared/address-key.cjs');
+const { stripTaskMarkers } = require('../../shared/task-marker.cjs');
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const MAX_PDF_BYTES = 200 * 1024 * 1024;
@@ -449,7 +450,7 @@ async function bodiesForProject(ctx, projectId) {
   const items = await bodiesOfRows(ctx, rows);
   const workspaces = {};
   for (const workspace of projects.flattenWorkspaces(project.dir)) {
-    const text = readBody(path.join(project.dir, workspace.path, 'workspace.md'));
+    const text = stripTaskMarkers(readBody(path.join(project.dir, workspace.path, 'workspace.md'))); // no task's Build marker (MATH-106)
     if (text) workspaces[workspace.id] = text;
   }
   return { items, workspaces };
@@ -462,17 +463,26 @@ async function bodiesForLibrary(ctx) {
 
 async function bodiesOfRows(ctx, rows) {
   const items = Object.fromEntries(await ctx.libraryDb.textsFor(rows.filter((row) => row.type === 'pdf').map((row) => row.id), MAX_BODY_CHARS));
-  // A file the library links to is read where it is, as the peek reads it: inside the home directory (or the data root).
-  const roots = [ctx.homeDir, ctx.dataRoot].map((dir) => { try { return fs.realpathSync(dir); } catch { return null; } }).filter(Boolean);
+  const read = mdReader(ctx);
   for (const row of rows) {
-    if (row.type !== 'md' || !row.path) continue;
-    let real;
-    try { real = fs.realpathSync(row.path); } catch { continue; }
-    if (!roots.some((dir) => inside(real, dir))) continue;
-    const text = readBody(real);
+    const text = read(row);
     if (text) items[row.id] = text;
   }
   return items;
+}
+
+/**
+ * row → what an md row (a note, or one added from disk) says, '' for any other row or a file that is gone: a file the
+ * library links to is read where it is, as the peek reads it, inside the home directory (or the data root).
+ */
+function mdReader(ctx) {
+  const roots = [ctx.homeDir, ctx.dataRoot].map((dir) => { try { return fs.realpathSync(dir); } catch { return null; } }).filter(Boolean);
+  return (row) => {
+    if (!row || row.type !== 'md' || !row.path) return '';
+    let real;
+    try { real = fs.realpathSync(row.path); } catch { return ''; }
+    return roots.some((dir) => inside(real, dir)) ? readBody(real) : '';
+  };
 }
 
 /* ------------------------------------------------------------- repositories */
@@ -1356,4 +1366,4 @@ async function previewItem(ctx, id, { listRemoteFiles } = {}) {
   return out;
 }
 
-module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, inkFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, addMarkdownCopy, markdownStem, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, describeRows, headAbout, dayOf, TITLE_RULES, aboutRow, previewItem, FILE_TYPES, PEEK_SKIP };
+module.exports = { seedIfEmpty, listLibrary, readLibraryFile, readAnnotations, writeAnnotations, readPageAnnotations, annotationsFileOf, inkFileOf, writePageAnnotations, addMarkAnswer, addWebMark, updateWebMark, readWebMark, removeWebMark, restoreWebMark, cropFile, projectsForLibraryItem, libraryForProject, bodiesForProject, bodiesForLibrary, mdReader, readBody, MAX_BODY_CHARS, canonicalRemote, readCloneRemote, resolveAddition, addressTags, addItem, addPdfCopy, addPageCopy, addMarkdownCopy, markdownStem, isPdfBytes, writePdfCopy, MAX_PDF_BYTES, addFileCopy, addFromUrl, imageMimeOf, MAX_IMAGE_BYTES, lookupItem, recategorize, CATEGORY_RULES, describeRows, headAbout, dayOf, TITLE_RULES, aboutRow, previewItem, FILE_TYPES, PEEK_SKIP };

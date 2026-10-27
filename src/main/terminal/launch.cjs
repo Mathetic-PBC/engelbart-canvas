@@ -29,15 +29,31 @@ const FISH_STARTUP_UNSET = 'set -e CLAUDECODE CLAUDE_CODE_ENTRYPOINT CLAUDE_CODE
 
 // By its full path when its name runs another copy (ENGELBART_CLAUDE_BIN, ../tools/manager.cjs environment: an old one
 // first on PATH, 2026-09-30); else by its name, which also runs an alias of it.
-const ZSH_PROVIDER_SCRIPTS = Object.freeze({
-  claude: `${POSIX_STARTUP_UNSET}if [ -n "\${ENGELBART_CLAUDE_BIN:-}" ]; then "$ENGELBART_CLAUDE_BIN"; else claude; fi; provider_status=$?; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il`,
-  codex: `${POSIX_STARTUP_UNSET}if [ -n "\${ENGELBART_CODEX_BIN:-}" ]; then "$ENGELBART_CODEX_BIN"; else codex; fi; provider_status=$?; printf "\\r\\n[Codex exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il`,
+// Engelbart's Stage tool (MATH-79, ./stage-bridges.cjs): the agent the script starts, by either route, is given the
+// `engelbart-stage` MCP server and a line saying what it is for, read from the environment main started the session
+// with (STAGE_ENVIRONMENT), so nothing in them is quoted here. Without those variables the command is as it was.
+const STAGE_ENVIRONMENT = Object.freeze({
+  claude: Object.freeze(['ENGELBART_TERMINAL_MCP', 'ENGELBART_TERMINAL_NOTE']),
+  codex: Object.freeze(['ENGELBART_TERMINAL_CODEX_COMMAND', 'ENGELBART_TERMINAL_CODEX_ARGS', 'ENGELBART_TERMINAL_CODEX_ENV', 'ENGELBART_TERMINAL_CODEX_NOTE']),
+});
+// The same words in zsh, bash and fish: each "$NAME" is one argument.
+const STAGE_FLAGS = Object.freeze({
+  claude: ' --mcp-config "$ENGELBART_TERMINAL_MCP" --append-system-prompt "$ENGELBART_TERMINAL_NOTE"',
+  codex: ' -c "$ENGELBART_TERMINAL_CODEX_COMMAND" -c "$ENGELBART_TERMINAL_CODEX_ARGS" -c "$ENGELBART_TERMINAL_CODEX_ENV" -c "$ENGELBART_TERMINAL_CODEX_NOTE"',
+});
+const PROVIDER_SCRIPT = Object.freeze({
+  claude: { bin: 'ENGELBART_CLAUDE_BIN', name: 'claude', label: 'Claude Code' },
+  codex: { bin: 'ENGELBART_CODEX_BIN', name: 'codex', label: 'Codex' },
 });
 
-const FISH_PROVIDER_SCRIPTS = Object.freeze({
-  claude: `${FISH_STARTUP_UNSET}if set -q ENGELBART_CLAUDE_BIN; $ENGELBART_CLAUDE_BIN; else; claude; end; set provider_status $status; printf "\\r\\n[Claude Code exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`,
-  codex: `${FISH_STARTUP_UNSET}if set -q ENGELBART_CODEX_BIN; $ENGELBART_CODEX_BIN; else; codex; end; set provider_status $status; printf "\\r\\n[Codex exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`,
-});
+// With the flags, the agent by name is `command …`: the `claude` and `codex` functions ../shell-rc.cjs gives a terminal's zsh
+// and bash, which add the same flags, are not to add them again.
+const byName = (name, flags) => (flags ? `command ${name}${flags}` : name);
+const zshProviderScript = ({ bin, name, label }, flags) => `${POSIX_STARTUP_UNSET}if [ -n "\${${bin}:-}" ]; then "$${bin}"${flags}; else ${byName(name, flags)}; fi; provider_status=$?; printf "\\r\\n[${label} exited with status %d]\\r\\n" "$provider_status"; exec "$TERMINAL_USER_SHELL" -il`;
+const fishProviderScript = ({ bin, name, label }, flags) => `${FISH_STARTUP_UNSET}if set -q ${bin}; $${bin}${flags}; else; ${byName(name, flags)}; end; set provider_status $status; printf "\\r\\n[${label} exited with status %d]\\r\\n" $provider_status; exec "$TERMINAL_USER_SHELL" --login --interactive`;
+
+/** Whether the session's environment carries everything the provider's Stage flags read. */
+const hasStage = (provider, environment) => !!STAGE_ENVIRONMENT[provider] && STAGE_ENVIRONMENT[provider].every((key) => !!(environment && environment[key]));
 
 // Engelbart's own Git, while it stands in for a missing one (../tools/bundled-git.cjs), goes first on PATH for what a
 // login shell runs. It has to be put there by the command, after the person's startup files: those rebuild PATH
@@ -81,6 +97,7 @@ function isTransientEnvironmentKey(key, value) {
   return TRANSIENT_KEYS.has(key)
     || key.startsWith('ELECTRON_')
     || key.startsWith('WARP_')
+    || key.startsWith('ENGELBART_TERMINAL_') // a session's own Stage tool, never another's (createLaunchSpec `stage`)
     || key.startsWith('INSPECT')
     || key.includes('INSPECTOR')
     || (key.startsWith('NODE_') && key.includes('INSPECT'))
@@ -225,10 +242,16 @@ function shellArguments(shell, provider, environment = {}) {
   if (provider === 'shell') {
     return isFish(shell) ? ['--login', '--interactive'] : ['-il']; // zsh's own startup files put Engelbart's Git first and the agents last (../shell-rc.cjs)
   }
-  return loginShellArgs(shell, (isFish(shell) ? FISH_PROVIDER_SCRIPTS : ZSH_PROVIDER_SCRIPTS)[provider], environment);
+  const flags = hasStage(provider, environment) ? STAGE_FLAGS[provider] : '';
+  return loginShellArgs(shell, (isFish(shell) ? fishProviderScript : zshProviderScript)(PROVIDER_SCRIPT[provider], flags), environment);
 }
 
-function createLaunchSpec(request, sourceEnvironment = process.env, platform = process.platform) {
+/**
+ * `stage`: the Stage tool's variables for a Claude Code or Codex session (STAGE_ENVIRONMENT, from ./stage-bridges.cjs),
+ * and both sets for a shell session, read by the `claude` / `codex` functions ../shell-rc.cjs defines; a set whose
+ * variables are not all there is left out. `platform` 'win32': a PowerShell session, without the Stage tool's variables.
+ */
+function createLaunchSpec(request, sourceEnvironment = process.env, { stage = null, platform = process.platform } = {}) {
   const validated = validateCreateRequest(request);
   if (platform === 'win32') {
     const environment = sanitizeEnvironment(sourceEnvironment);
@@ -245,6 +268,12 @@ function createLaunchSpec(request, sourceEnvironment = process.env, platform = p
   const environment = sanitizeEnvironment(sourceEnvironment);
   environment.SHELL = shell;
   environment.TERMINAL_USER_SHELL = shell;
+  const sets = validated.provider === 'shell' ? Object.values(STAGE_ENVIRONMENT) : [STAGE_ENVIRONMENT[validated.provider]];
+  for (const keys of sets) {
+    if (keys && stage && keys.every((key) => typeof stage[key] === 'string' && stage[key] && !stage[key].includes('\0'))) {
+      for (const key of keys) environment[key] = stage[key];
+    }
+  }
   return {
     file: shell,
     args: shellArguments(shell, validated.provider, environment),
@@ -260,6 +289,7 @@ module.exports = {
   PROVIDERS,
   GIT_BASH_MISSING,
   GIT_FOR_WINDOWS_URL,
+  STAGE_ENVIRONMENT,
   createLaunchSpec,
   findGitBash,
   loginShellArgs,

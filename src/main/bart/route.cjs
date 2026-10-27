@@ -30,6 +30,7 @@ const { resolveShell, sanitizeEnvironment, loginShellArgs, OWN_SESSION } = requi
 const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
+const { codexRun, runningCodexVersion } = require('../tools/codex-models.cjs');
 const { stripAgentReplies } = require('./strip.cjs');
 const { ROUTE_SYSTEM_PROMPT } = require('./route-system-prompt.cjs');
 const { readFlags } = require('./question.cjs');
@@ -179,9 +180,15 @@ function createRouter({ readModels, environment = process.env, runDirectory = pa
     const outFile = `${stem}.out.txt`;
     try {
       const command = `exec ${program('codex')} exec --skip-git-repo-check --ephemeral -s read-only -m "$ENGELBART_ROUTE_MODEL" -c 'model_reasoning_effort="${step.effort}"' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_ROUTE_OUTPUT" - < "$ENGELBART_ROUTE_INPUT"`;
-      const { failure } = await execute(command, childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_ROUTE_MODEL: step.id, ENGELBART_ROUTE_OUTPUT: outFile, ENGELBART_ROUTE_INPUT: `${stem}.input.txt` }));
-      let text = '';
-      try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
+      // The model as this home's Codex lists it, and once more on the listed one when Codex refuses it (MATH-159).
+      const attempt = async (model) => {
+        try { fs.unlinkSync(outFile); } catch { /* none yet */ }
+        const { stdout, failure } = await execute(command, childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_ROUTE_MODEL: model, ENGELBART_ROUTE_OUTPUT: outFile, ENGELBART_ROUTE_INPUT: `${stem}.input.txt` }));
+        let text = '';
+        try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
+        return { stdout, failure, text };
+      };
+      const { failure, text } = await codexRun({ model: step.id, home: codexHome, version: runningCodexVersion(tools), attempt, ok: (out) => !!out.text.trim() });
       if (!text.trim()) throw new Error(failure ? failure.message.split('\n')[0] : 'Codex returned no message');
       return text;
     } finally {

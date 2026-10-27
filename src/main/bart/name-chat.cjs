@@ -17,6 +17,7 @@ const { scrubAgentSession } = require('../shell-rc.cjs');
 const { NOT_THE_SUBSCRIPTION, prepareCodexHome, lastResultLine } = require('../context/summarizer.cjs');
 const { readQuestion, readDiscover } = require('./question.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
+const { codexRun, runningCodexVersion } = require('../tools/codex-models.cjs');
 
 const NAME_PROMPT = 'Name this conversation in 2–6 words, sentence case, no quotes or final period.';
 const NAME_TIMEOUT_MS = 15_000;
@@ -112,8 +113,15 @@ function createQuickRun({ environment = process.env, runDirectory, codexHome, co
     const source = codexAuthFile || path.join(environment.CODEX_HOME || path.join(os.homedir(), '.codex'), 'auth.json');
     if (!prepareCodexHome({ codexHome, source, instructions: system })) return '';
     const command = `exec ${program('codex')} exec --skip-git-repo-check --ephemeral -s read-only -m "$ENGELBART_NAME_MODEL" -c 'model_reasoning_effort="${step.effort}"' -c 'tools.web_search=false' -c project_doc_max_bytes=0 --color never --json -o "$ENGELBART_NAME_OUTPUT" - < "$ENGELBART_NAME_INPUT"`;
-    await execute(command, childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_NAME_MODEL: step.model, ENGELBART_NAME_OUTPUT: `${stem}.out.txt`, ENGELBART_NAME_INPUT: `${stem}.input.txt` }));
-    try { return fs.readFileSync(`${stem}.out.txt`, 'utf8'); } catch { return ''; }
+    // The model as this home's Codex lists it, and once more on the listed one when Codex refuses it (MATH-159).
+    const attempt = async (model) => {
+      try { fs.unlinkSync(`${stem}.out.txt`); } catch { /* none yet */ }
+      const { stdout } = await execute(command, childEnvironment({ ...programEnv('codex'), CODEX_HOME: codexHome, ENGELBART_NAME_MODEL: model, ENGELBART_NAME_OUTPUT: `${stem}.out.txt`, ENGELBART_NAME_INPUT: `${stem}.input.txt` }));
+      let text = '';
+      try { text = fs.readFileSync(`${stem}.out.txt`, 'utf8'); } catch { text = ''; }
+      return { stdout, text };
+    };
+    return (await codexRun({ model: step.model, home: codexHome, version: runningCodexVersion(tools), attempt, ok: (out) => !!out.text.trim() })).text;
   }
 
   return async function quickRun(step, system, input) {

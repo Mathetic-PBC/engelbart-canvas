@@ -41,15 +41,15 @@ test('a terminal on Windows opens PowerShell: pwsh when it is on PATH, else Wind
   assert.equal(resolvePowerShell({ SystemRoot: 'C:\\WINDOWS' }, { exists: () => false }), 'C:\\WINDOWS\\System32\\WindowsPowerShell\\v1.0\\powershell.exe');
   const cwd = temp();
   const environment = { SystemRoot: 'C:\\Windows', Path: 'C:\\Windows', ENGELBART_AGENT_PATH: 'C:\\Users\\h\\.local\\bin', CLAUDECODE: '1' };
-  const shell = createLaunchSpec({ provider: 'shell', cwd, cols: 80, rows: 24 }, environment, 'win32');
+  const shell = createLaunchSpec({ provider: 'shell', cwd, cols: 80, rows: 24 }, environment, { platform: 'win32' });
   assert.match(shell.file, /(pwsh|powershell)\.exe$/i);
   assert.deepEqual(shell.args, ['-NoLogo']);
   assert.equal(shell.env.Path, 'C:\\Windows;C:\\Users\\h\\.local\\bin', 'the agents\' folder last on PATH');
   assert.equal(shell.env.CLAUDECODE, undefined, 'an outer agent\'s variables are left out');
-  const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment, 'win32');
+  const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment, { platform: 'win32' });
   assert.deepEqual(claude.args.slice(0, 3), ['-NoLogo', '-NoExit', '-Command']);
   assert.match(claude.args[3], /^if \(\$env:ENGELBART_CLAUDE_BIN\) \{ & \$env:ENGELBART_CLAUDE_BIN \} else \{ claude \}; Write-Host "`r`n\[Claude Code exited with status \$LASTEXITCODE\]"$/);
-  assert.match(createLaunchSpec({ provider: 'codex', cwd, cols: 80, rows: 24 }, environment, 'win32').args[3], /\{ codex \}/);
+  assert.match(createLaunchSpec({ provider: 'codex', cwd, cols: 80, rows: 24 }, environment, { platform: 'win32' }).args[3], /\{ codex \}/);
 });
 
 test('a login shell\'s command on Windows: the folders added to PATH are turned into bash\'s own with cygpath', () => {

@@ -86,11 +86,12 @@ class SessionManager extends EventEmitter {
     this.attached = typeof options.attached === 'function' ? options.attached : null;
   }
 
-  create(request) {
+  // `stage`: the Stage tool's variables for a Claude Code or Codex session (./launch.cjs createLaunchSpec, main's alone).
+  create(request, { stage = null } = {}) {
     if (this.sessions.size >= this.maxSessions) {
       throw new Error(`At most ${this.maxSessions} sessions may be open`);
     }
-    const launch = createLaunchSpec(request, { ...this.environment, ...this.extraEnvironment() });
+    const launch = createLaunchSpec(request, { ...this.environment, ...this.extraEnvironment() }, { stage });
     const processHandle = this.pty.spawn(launch.file, launch.args, {
       name: 'xterm-256color',
       cols: launch.cols,
