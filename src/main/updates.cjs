@@ -64,9 +64,9 @@ const bundleOf = (execPath) => path.posix.resolve(path.posix.dirname(execPath), 
 
 /** Linux: the folder the install command put this app in (<folder>/app/engelbart, beside <folder>/version), or null. */
 function linuxHome(execPath) {
-  const app = path.posix.dirname(execPath);
-  const home = path.posix.dirname(app);
-  return path.posix.basename(execPath) === 'engelbart' && path.posix.basename(app) === 'app' && fs.existsSync(path.posix.join(home, 'version')) ? home : null;
+  const app = path.dirname(execPath);
+  const home = path.dirname(app);
+  return path.basename(execPath) === 'engelbart' && path.basename(app) === 'app' && fs.existsSync(path.join(home, 'version')) ? home : null;
 }
 
 /** Linux: the newest version in latest-linux.yml, checked as electron-updater checks (the subset updates use). */
