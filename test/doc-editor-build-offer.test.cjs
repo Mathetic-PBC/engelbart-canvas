@@ -55,7 +55,7 @@ test.afterEach(() => { delete globalThis.getSelection; delete globalThis.documen
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));
 const click = (m, dataset, disabled = false) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset, disabled, closest: () => null } : null) }, preventDefault() {} });
-const BUTTON_RE = /<button type="button" class="bart-text" data-act="footbuild" data-turn="(\d+)">([^<]*)<\/button>/g;
+const BUTTON_RE = /<button type="button" class="bart-go" data-act="footbuild" data-turn="(\d+)" style="[^"]*">([^<]*)<\/button>/g;
 const buttons = (html) => [...html.matchAll(BUTTON_RE)].map((m) => ({ turn: Number(m[1]), label: m[2] }));
 const offerRows = (html) => (html.match(/data-build-offer=/g) || []).length;
 
@@ -73,8 +73,7 @@ test('a finished fenced answer ending with a build offer: one Build text button,
   assert.ok(!/<svg|data-build-icon/.test(row), 'no icon');
   assert.ok(html.indexOf('data-line="6"') < at, 'under the offer line');
   assert.ok(at < html.indexOf('data-line="7"'), 'above the foot');
-  const css = require('node:fs').readFileSync(path.join(__dirname, '../src/renderer/workspace/DocEditor.jsx'), 'utf8');
-  assert.match(css, /\.bart-text\{[^}]*color:#8f8f8f[^}]*\}\.bart-text:hover\{color:#171717\}/, 'grey, ink on hover');
+  assert.match(row, /class="bart-go"[^>]*style="[^"]*background:#0070f3;color:#fff/, 'blue, as Start research is');
 });
 
 test('the offers it reads: "Want me to build it?", "Should I build this?", "Want me to build that now?" and the like', async () => {

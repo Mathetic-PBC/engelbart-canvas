@@ -319,6 +319,8 @@ test('Chat opens with the shared personality, then its role: the answer first, a
 test('Chat writes a Build prompt only when asked, or when Bart routed a build to it (2026-10-13)', () => {
   assert.match(BART_SYSTEM_PROMPT, /You cannot directly make a change to code or documents\. When they ask for one:\n- answer any product or design question first\n- explain implementation only if they asked how\n/);
   assert.match(BART_SYSTEM_PROMPT, /- write a Build prompt only if they asked for a Build prompt or spec[^\n]*When the message carries <routed>, do what it says\./);
+  // MATH-160: a Build prompt asked for directly ends with the offer too, so its answer gets the Build button.
+  assert.match(BART_SYSTEM_PROMPT, /then the prompt in one fenced block, then one short line asking whether they want you to build it, such as `Want me to build it\?`/);
   assert.match(BART_SYSTEM_PROMPT, /- if they explicitly asked you to implement something you cannot execute, say so briefly and give the minimum useful next step/);
 });
 

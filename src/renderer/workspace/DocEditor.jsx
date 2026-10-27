@@ -552,6 +552,9 @@ export function moveLineTo(ls, i, j) {
 const CLIP_OLD = 6;
 // How long after a Build started from an answer settles its question is held (footBuild, MATH-160).
 const BUILD_SETTLE_MS = 1500;
+// The small blue button an answer's one next step is (2026-10-27): a research box's Start research and Restart
+// (researchHtml), and the Build under a build offer (buildOfferHtml).
+const GO_LOOK = 'user-select:none;flex:none;display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border:0;border-radius:6px;background:#0070f3;color:#fff;font:500 12.5px/1 var(--font-sans);cursor:pointer';
 // A Brainstorm conversation's "Topic: …" chip under its first question (topicChipHtml), hidden since 2026-10-16.
 const TOPIC_CHIP_SHOWN = false;
 // An @bart answer's line height (2026-10-15: 15px/1.55), and how many lines its fold must hide to be drawn.
@@ -2709,7 +2712,7 @@ export default class DocEditor extends React.Component {
       ? `<span style="flex:none;display:inline-flex;color:#8f8f8f">${icon('<path d="M20 6 9 17l-5-5"></path>', 13, 2)}</span>`
       : state === 'interrupted' || state === 'failed' ? ''
       : `<span style="flex:none;width:6px;height:6px;border-radius:50%;background:#d4d4d4"></span>`;
-    const blue = 'user-select:none;flex:none;display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border:0;border-radius:6px;background:#0070f3;color:#fff;font:500 12.5px/1 var(--font-sans);cursor:pointer';
+    const blue = GO_LOOK;
     const action = !can ? ''
       : state === 'ready' ? `<button type="button" class="bart-go" data-act="startresearch" data-row="${i}" style="${blue}">${icon('<path d="M7 4.5v15l12-7.5z" fill="currentColor"></path>', 10, 1.5)}Start research</button>`
       : state === 'finished' ? `<button type="button" class="bart-reply" data-act="restartresearch" data-row="${i}" style="user-select:none;flex:none">Run again</button>`
@@ -2818,13 +2821,14 @@ export default class DocEditor extends React.Component {
     return `<div contenteditable="false" data-readonly="1" data-more="${turn.q}" data-chat-more="1" data-key="${key}" data-split="${body[k].j}" data-open="${open ? 1 : 0}"${at.older ? ` data-chat-older="${turn.q}"` : ''} style="display:none;position:relative;user-select:none;cursor:default;padding:0 18px;background:#fafafa">`
       + `<span style="display:flex;padding:8px 0 0 12px;border-left:1.5px solid #e6e6e6"><button type="button" class="chat-more" data-act="more" data-key="${key}" data-open="${open ? 1 : 0}" aria-expanded="${open}">${open ? 'Show less' : label}${chevron}</button></span></div>`;
   }
-  // The Build under an answer that offers to build its fenced prompt (MATH-160): a text button on the answer's grey, inside
-  // its rule, under its last line and above its foot. It builds as the footer's Build does (footBuild): the last fenced
-  // block, on the Build's own model and effort.
+  // The Build under an answer that offers to build its fenced prompt (MATH-160): on the answer's grey, inside its rule,
+  // under its last line and above its foot. It builds as the footer's Build does (footBuild): the last fenced block, on the
+  // Build's own model and effort. Blue as Start research is (2026-10-27, David: the grey text read as a caption), the word
+  // alone.
   buildOfferHtml(at) {
-    const rule = at.chat ? 'padding:6px 0 0 10px;border-left:1.5px solid #e6e6e6' : 'padding:4px 0 2px 12px;border-left:2px solid #d6d6d6';
+    const rule = at.chat ? 'padding:12px 0 2px 10px;border-left:1.5px solid #e6e6e6' : 'padding:10px 0 4px 12px;border-left:2px solid #d6d6d6';
     return `<div contenteditable="false" data-readonly="1" data-build-offer="${at.turn.q}" style="position:relative;user-select:none;cursor:default;padding:0 ${at.chat ? 18 : 16}px;background:#fafafa">`
-      + `<span style="display:block;${rule}"><button type="button" class="bart-text" data-act="footbuild" data-turn="${at.turn.q}">Build</button></span></div>`;
+      + `<span style="display:block;${rule}"><button type="button" class="bart-go" data-act="footbuild" data-turn="${at.turn.q}" style="${GO_LOOK}">Build</button></span></div>`;
   }
   // What a follow-up starts on: the pick made on this card's chip, or else the flags of the question before it, so an
   // exchange pinned to a model stays on it. → { flags, step }
