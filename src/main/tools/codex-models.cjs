@@ -20,7 +20,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { parseVersion, isVersion } = require('./version.cjs');
+const { parseVersion, isVersion, compareVersions } = require('./version.cjs');
 
 const SLUG = /^[\w.-]{1,80}$/;
 const CACHE_FILE = 'models_cache.json';
@@ -117,13 +117,49 @@ function ranAs(name, picked, ran) {
   return ran && picked && ran !== picked ? `${name} (ran as ${ran})` : name;
 }
 
+// Why a model is missing (2026-10-26): Codex's list is the account's for that Codex version, and says nothing of which
+// left a model out. When the Codex that runs is the newest on npm (newestCodex), it can only be the ChatGPT plan; when
+// it is older, updating may add it, and the plan is said as the other reason; with no newest known, both are said.
+const NEWEST_URL = 'https://registry.npmjs.org/@openai/codex/latest';
+const NEWEST_MS = 6 * 60 * 60 * 1000;
+
+/** Why `name` is not offered, from the running Codex's `version` and the `newest` on npm (either may be null). */
+function missingWhy(name, version = null, newest = null) {
+  if (version && newest && compareVersions(version, newest) >= 0) return `Your ChatGPT plan doesn't include ${name}. Codex ${version} is the newest, and it doesn't offer ${name} to this account.`;
+  if (version && newest) return `Not offered by Codex ${version}. Updating Codex to ${newest} may add ${name}; if it doesn't, your ChatGPT plan doesn't include it.`;
+  return `Your ChatGPT plan or this Codex version${version ? ` (${version})` : ''} doesn't offer ${name}.`;
+}
+
+/**
+ * The newest Codex on npm, asked for at most every six hours. `get()` answers at once with what was last heard (null
+ * before the first answer, or when npm cannot be reached) and asks again in the background when that is stale.
+ */
+function newestCodex({ fetch = globalThis.fetch, now = Date.now, url = NEWEST_URL } = {}) {
+  let known = null, askedAt = -Infinity, asking = null;
+  const ask = () => {
+    askedAt = now();
+    asking = Promise.resolve()
+      .then(() => fetch(url, { signal: AbortSignal.timeout(5000) }))
+      .then((response) => (response && response.ok ? response.json() : null))
+      .then((body) => { if (body && isVersion(body.version)) known = body.version; })
+      .catch(() => {})
+      .finally(() => { asking = null; });
+    return asking;
+  };
+  return {
+    get() { if (!asking && now() - askedAt >= NEWEST_MS && typeof fetch === 'function') ask(); return known; },
+    refresh: () => (typeof fetch === 'function' ? ask() : Promise.resolve()),
+  };
+}
+
 /**
  * `models` (the list in force, ../bart/settings.cjs modelsInForce) as the pickers show it, by `listed` (listedModels):
  * each Codex model as the listed member of its family, a family the list has none of left out, and a step that named a
  * model left out moved to the nearest one kept below it (else the first kept). Unchanged when `listed` is null or would
- * leave nothing to pick. A new object; `models` is not touched.
+ * leave nothing to pick. A new object; `models` is not touched. Each narrowed entry carries `unavailable`, the models
+ * left out as [{ key, name, why }] (missingWhy, from `version` and `newest`), which the pickers show greyed.
  */
-function codexMenu(models, listed, provider = 'openai') {
+function codexMenu(models, listed, provider = 'openai', { version = null, newest = null } = {}) {
   if (!listed || !models || !models.providers || !models.providers[provider]) return models;
   const narrow = (entry) => {
     if (!entry || !entry.models) return null;
@@ -133,12 +169,13 @@ function codexMenu(models, listed, provider = 'openai') {
       if (id) kept[key] = { ...entry.models[key], id };
     }
     if (!Object.keys(kept).length) return null;
+    const unavailable = keys.filter((key) => !kept[key]).map((key) => ({ key, name: entry.models[key].name, why: missingWhy(entry.models[key].name, version, newest) }));
     const keep = (step) => {
       if (!step || typeof step !== 'object' || kept[step.model]) return step;
       const below = keys.slice(0, Math.max(0, keys.indexOf(step.model))).reverse().find((key) => kept[key]);
       return { ...step, model: below || Object.keys(kept)[0] };
     };
-    const out = { ...entry, models: kept };
+    const out = { ...entry, models: kept, ...(unavailable.length ? { unavailable } : {}) };
     for (const field of ['ladder']) if (Array.isArray(entry[field])) out[field] = entry[field].map(keep);
     for (const field of ['start', 'default']) if (entry[field]) out[field] = keep(entry[field]);
     return { out, keep };
@@ -158,4 +195,4 @@ function codexMenu(models, listed, provider = 'openai') {
   return next;
 }
 
-module.exports = { CACHE_FILE, personalCodexHome, versionOf, runningCodexVersion, readCache, listedModels, listedIn, familyOf, codexModel, modelNotFound, codexRun, ranAs, codexMenu };
+module.exports = { CACHE_FILE, personalCodexHome, versionOf, runningCodexVersion, readCache, listedModels, listedIn, familyOf, codexModel, modelNotFound, codexRun, ranAs, missingWhy, newestCodex, codexMenu };

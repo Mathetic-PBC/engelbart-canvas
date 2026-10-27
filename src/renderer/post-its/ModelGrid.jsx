@@ -40,13 +40,15 @@ function Radio({ on }) {
   return <span style={{ flex: 'none', width: 14, height: 14, boxSizing: 'border-box', borderRadius: '50%', border: `1.5px solid ${on ? '#171717' : '#c9c9c9'}`, background: on ? '#171717' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', font: '600 9px/1 var(--font-sans)', color: '#fff' }}>{on ? '✓' : ''}</span>;
 }
 
-function Row({ on, lit, onPick, onEnter, children, trailing, hoverWash = true }) {
+// `off`: a model the account's Codex does not offer (MATH-159, main's codexMenu `unavailable`), greyed and not picked,
+// `title` saying why.
+function Row({ on, lit, onPick, onEnter, children, trailing, hoverWash = true, off = false, title }) {
   const [over, setOver] = React.useState(false);
   return (
-    <div role="option" aria-selected={on} onMouseEnter={() => { setOver(true); if (onEnter) onEnter(); }} onMouseLeave={() => setOver(false)} onMouseDown={(event) => event.preventDefault()} onClick={onPick}
-      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 6, cursor: 'pointer', background: lit || (hoverWash && over) ? (lit === 'white' ? '#fff' : '#f2f2f2') : 'transparent', transition: 'background 120ms' }}>
+    <div role="option" aria-selected={on} aria-disabled={off || undefined} data-model-unavailable={off ? '1' : undefined} title={title || undefined} onMouseEnter={() => { setOver(true); if (onEnter) onEnter(); }} onMouseLeave={() => setOver(false)} onMouseDown={(event) => event.preventDefault()} onClick={off ? undefined : onPick}
+      style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 10px', borderRadius: 6, cursor: off ? 'default' : 'pointer', background: !off && (lit || (hoverWash && over)) ? (lit === 'white' ? '#fff' : '#f2f2f2') : 'transparent', transition: 'background 120ms' }}>
       <Radio on={on} />
-      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${on ? 500 : 400} 13px/1.4 var(--font-sans)`, color: '#171717' }}>{children}</span>
+      <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: `${on ? 500 : 400} 13px/1.4 var(--font-sans)`, color: off ? '#b5b5b5' : '#171717' }}>{children}</span>
       {trailing}
     </div>
   );
@@ -89,6 +91,7 @@ export default function ModelGrid({ models, choice, efforts = {}, onChoose }) {
               {entry.models[key].name}
             </Row>
           ))}
+          {(entry.unavailable || []).map((model) => <Row key={model.key} off title={model.why} on={false}>{model.name}</Row>)}
         </div>
       </div>
       <div style={{ background: '#eaeaea' }} />
