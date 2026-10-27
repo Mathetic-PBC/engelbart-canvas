@@ -46,12 +46,19 @@
 // any field, the page offers it to main (`engelbart-page:selection-card`): a token, its quote and the page's text around it
 // (as `selection` gives them), and where its last line and all of it are in the viewport. As the page scrolls or reflows
 // the same token comes again with only where it is (once a frame), and a press anywhere in the page, another selection
-// or none takes it back ({ token: null }). Main shows its card for it and, on Save, keeps the quote as a highlight and
+// or none takes it back ({ token: null }). Main shows its card under it (on 2026-10-24 to 10-26 a chat icon came
+// first, to be clicked), and, on Save, keeps the quote as a highlight and
 // tints it as the right-click menu's Highlight does (`add`, with the token for its nonce); Cancel keeps nothing
 // (`card-gone`). A selection wholly inside a highlight is that highlight: its own card opens (with its markId), and no
 // second mark is made for one passage. A plain click on a highlight's text or on its note's symbol opens its card too; a
 // highlight with a note or an answer has its symbol (`noted`), drawn in the boxes' html::after rule over the top right of
 // its first line, following it as the page scrolls or reflows; Remove in its card takes it off (`unmark`).
+//
+// The page's background (2026-10-25, David: the white strip beside a dark page): the colour its canvas is painted
+// (canvasColor: the root's background, else the body's, which the canvas takes when the root has none) goes to main as it
+// is on load and whenever it changes (a theme switched by a class or a style on <html> or <body>, the Mac's light or dark,
+// a page shown again from the back/forward cache), for the Stage to paint the strip it leaves beside the page that colour.
+// Only an opaque colour is one: a picture, a gradient or a see-through colour says none (null), and the strip stays white.
 //
 // Sandboxed, this can require only 'electron'. The finding is plain functions over text, exported below for the tests
 // when Node loads this file; in a page, `module` is no CommonJS module and the page part runs instead.
@@ -73,9 +80,15 @@ const CHANNELS = Object.freeze({
   // is now, or taken back; main says when it closed the card (cardGone, the offer's token), whether a highlight has a
   // note (noted: { id, on }, for its symbol) and that one was removed (unmark: its id)
   selectionCard: 'engelbart-page:selection-card', cardGone: 'engelbart-page:card-gone', noted: 'engelbart-page:noted', unmark: 'engelbart-page:unmark',
+  // the page's background colour (2026-10-25): canvasColor's answer, sent when it changes
+  background: 'engelbart-page:background',
 });
 const HIGHLIGHT = 'engelbart-web-mark'; // the ::highlight() name main's insertCSS styles
 const SECTION = 'engelbart-web-section'; // a guide's section, styled by main's insertCSS as a pdf's (PaperView pdf-section)
+// The page's selection, as it is dragged and after (2026-10-24, David: "it should look the same"): its Range tinted here,
+// the page's own paint of it hidden by main's insertCSS (views.cjs MARK_CSS), so that it is drawn the way a kept highlight
+// is, over each line's glyph box, from the first frame of the drag to the highlight it becomes.
+const SELECTION = 'engelbart-web-selection';
 const SECTION_MAX = 30000; // characters a section runs to at most before it is taken to be its paragraph alone
 const SECTION_WAIT = 3000; // ms a section's words not in the page yet are watched for (text a script draws after load)
 const BLOCKS = 'p,li,blockquote,dd,dt,td,th,figcaption,pre,h1,h2,h3,h4,h5,h6';
@@ -436,6 +449,22 @@ function highlightAt(list, x, y) {
   for (const one of list || []) if (one && inRects(one.rects, x, y)) hit = one.id;
   return hit;
 }
+/** The selection being offered (with its card): a copy of its own first Range, the very passage the person
+ *  dragged (not the quote's, which is rebuilt from the page's text and snapped to whole words), or null with none. */
+function selectionRange(selection) {
+  return selection && !selection.isCollapsed && selection.rangeCount ? selection.getRangeAt(0).cloneRange() : null;
+}
+/** The selection's tint (SELECTION) in the page's registry `h` for `range` (selectionRange, null with nothing selected):
+ *  over the highlights (priority 1), so a passage selected inside one shows; none for none. `make`: Range → Highlight.
+ *  → whether it is tinted. */
+function tintSelection(h, range, make) {
+  if (!h) return false;
+  if (!range) { h.delete(SELECTION); return false; }
+  const tint = make(range);
+  tint.priority = 1;
+  h.set(SELECTION, tint);
+  return true;
+}
 /** The highlight `range` lies wholly inside, of `painted` (Map id → Range): its id, the smallest such if several, or null.
  *  A range that reaches past every highlight is a new passage. */
 function holdingHighlight(painted, range) {
@@ -482,6 +511,26 @@ function shows(rect, box, viewport, probe, { part = false } = {}) {
   if (!inRect(cx, cy, box) || !inRect(cx, cy, screen)) return false;
   if (!probe.visible()) return false;
   return !!probe.hits(cx, cy);
+}
+
+/**
+ * The colour a page's canvas is painted, from the computed background of its root and of its body ({ color, image }, as
+ * getComputedStyle gives them; null for one that is not there): the root's, else the body's when the root has none (as
+ * CSS gives the body's to the canvas). → 'rgb(r, g, b)', or null: no colour, a picture or gradient, or a see-through one.
+ */
+function canvasColor(root, body) {
+  for (const layer of [root, body]) {
+    if (!layer) continue;
+    if (layer.image && layer.image !== 'none') return null;
+    const m = /^rgba?\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})\s*(?:,\s*([\d.]+)\s*)?\)$/.exec(String(layer.color || '').trim());
+    if (!m) return null;
+    const alpha = m[4] === undefined ? 1 : Number(m[4]);
+    if (alpha === 0) continue;
+    if (alpha !== 1) return null;
+    const [r, g, b] = [m[1], m[2], m[3]].map(Number);
+    return r <= 255 && g <= 255 && b <= 255 ? `rgb(${r}, ${g}, ${b})` : null;
+  }
+  return null;
 }
 
 // ------------------------------------------------------------------------------------------------- in the page
@@ -678,7 +727,7 @@ function runInPage() {
     // saved and its card closed: the selection let go of, so the passage shows as a highlight (its card's offer gone first,
     // so letting go of it closes nothing)
     if (mine && value.clear) {
-      offered = null;
+      setOffered(null);
       const selection = document.getSelection();
       if (selection && !selection.isCollapsed) selection.removeAllRanges();
     }
@@ -692,7 +741,7 @@ function runInPage() {
   ipcRenderer.on(CHANNELS.unmark, (_event, id) => {
     if (typeof id !== 'string') return;
     painted.delete(id); quotes.delete(id); noted.delete(id);
-    if (offered && offered.markId === id) offered = null;
+    if (offered && offered.markId === id) setOffered(null);
     paint();
     schedule();
   });
@@ -1009,13 +1058,15 @@ function runInPage() {
 
   // A selection's card (2026-10-18): the settled selection offered to main, followed as the page moves, taken back. A
   // highlight's own card is offered the same way, with its id (markId): for a selection wholly inside it, a click on its
-  // text (not a link's), or on its note's symbol. `offered.range` is where the card goes: the highlight's, for its card.
+  // text (not a link's), or on its note's symbol. `offered.range` is where the card goes: the highlight's, for its card;
+  // `offered.sel`, the selection's own Range when there is one (it is tinted as every selection is, tintSelection).
   let offered = null, offerSeq = 0, settleTimer = 0, offerFrame = 0, pointerDown = false, down = null;
   const fieldNode = (node) => { const el = node && (node.nodeType === 1 ? node : node.parentElement); return !!(el && el.closest && el.closest('input,textarea,select,[contenteditable]:not([contenteditable="false"])')); };
+  function setOffered(value) { offered = value; }
   function withdraw() {
     clearTimeout(settleTimer); settleTimer = 0;
     if (!offered) return;
-    offered = null;
+    setOffered(null);
     ipcRenderer.send(CHANNELS.selectionCard, { token: null });
   }
   function offerView() {
@@ -1033,13 +1084,14 @@ function runInPage() {
     const map = textMap(textNodes()), at = anchor(map.text, quote);
     return at ? textAround(map.text, at.start, at.end) : '';
   }
-  /** Highlight `id`'s card, under the highlight, its note in it (main reads it from the page's ink). */
-  function openMark(id) {
+  /** Highlight `id`'s card, under the highlight, its note in it (main reads it from the page's ink); `inside`, for a
+   *  selection inside it: that passage stays tinted as selected while the card shows. */
+  function openMark(id, inside = false) {
     const range = painted.get(id);
     if (!range) return;
     clearTimeout(settleTimer); settleTimer = 0;
     const selection = document.getSelection();
-    offered = { token: `s${(offerSeq += 1)}`, range, text: selection && !selection.isCollapsed ? selection.toString() : '', markId: id };
+    setOffered({ token: `s${(offerSeq += 1)}`, range, text: selection && !selection.isCollapsed ? selection.toString() : '', markId: id, sel: inside ? selectionRange(selection) : null });
     let pageText = '';
     try { pageText = pageTextOf(id); } catch { pageText = ''; }
     ipcRenderer.send(CHANNELS.selectionCard, { ...offerView(), markId: id, pageText });
@@ -1056,8 +1108,8 @@ function runInPage() {
     if (same) { followSoon(); return; }
     // inside a highlight already kept: that highlight's card, never a second mark for it
     const held = holdingHighlight(painted, got.range);
-    if (held) { if (offered && offered.markId === held) followSoon(); else openMark(held); return; }
-    offered = { token: `s${(offerSeq += 1)}`, range: got.range, text: selection.toString() };
+    if (held) { if (offered && offered.markId === held) followSoon(); else openMark(held, true); return; }
+    setOffered({ token: `s${(offerSeq += 1)}`, range: got.range, text: selection.toString(), sel: selectionRange(selection) });
     const view = offerView();
     ipcRenderer.send(CHANNELS.selectionCard, { ...view, quote: got.quote, pageText: got.pageText });
   }
@@ -1101,8 +1153,9 @@ function runInPage() {
     setTimeout(() => clicked(event, from), 0); // the selection as the press left it (a double or triple click's too)
   }, true);
   document.addEventListener('selectionchange', () => {
-    if (pointerDown) return;
     const selection = document.getSelection();
+    try { tintSelection(registry(), selectionRange(selection), (range) => new Highlight(range)); } catch { /* the page's own tints stay */ }
+    if (pointerDown) return;
     // nothing selected: a selection's card goes (a highlight's opened by a click has no selection to lose)
     if (!selection || selection.isCollapsed) { if (!offered || offered.text) withdraw(); return; }
     // changed by keys (⇧ and an arrow, ⌘A): the card for what it was goes now, the new one once it settles
@@ -1110,12 +1163,41 @@ function runInPage() {
     clearTimeout(settleTimer);
     settleTimer = setTimeout(offer, SELECTION_SETTLE_MS);
   });
-  // main closed the card (Cancel, Esc, Save): the passage is not offered any more, so selecting it again opens one again
-  ipcRenderer.on(CHANNELS.cardGone, (_event, token) => { if (offered && offered.token === token) offered = null; });
+  // main closed the card (Cancel, Esc, Save): the passage is not offered any more, so selecting it again opens one again.
+  // The selection it was for goes with it (2026-10-24 later, David: closing it ends the selection's look; Save let go of it
+  // already, add's `clear`).
+  ipcRenderer.on(CHANNELS.cardGone, (_event, token) => {
+    if (!offered || offered.token !== token) return;
+    const had = !!offered.sel;
+    setOffered(null);
+    const selection = document.getSelection();
+    if (had && selection && !selection.isCollapsed) selection.removeAllRanges();
+  });
   document.addEventListener('scroll', followSoon, { capture: true, passive: true });
   window.addEventListener('resize', followSoon);
   window.addEventListener('blur', () => { pointerDown = false; });
   window.addEventListener('pagehide', withdraw);
+
+  // The page's background (2026-10-25): read again shortly after anything that may change it, sent only when it did. A
+  // timer, not a frame: frames stop while the page is not shown.
+  let background, backgroundTimer = 0;
+  const readBackground = () => {
+    backgroundTimer = 0;
+    const layer = (el) => { if (!el) return null; const style = getComputedStyle(el); return { color: style.backgroundColor, image: style.backgroundImage }; };
+    const now = canvasColor(layer(document.documentElement), layer(document.body));
+    if (now !== background) { background = now; ipcRenderer.send(CHANNELS.background, now); }
+  };
+  const backgroundSoon = () => { if (!backgroundTimer) backgroundTimer = setTimeout(readBackground, 100); };
+  const themes = new MutationObserver(backgroundSoon);
+  const watchBackground = () => {
+    themes.disconnect();
+    themes.observe(document.documentElement, { attributes: true });
+    if (document.body) themes.observe(document.body, { attributes: true });
+    readBackground();
+  };
+  if (window.matchMedia) window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', backgroundSoon);
+  // main forgets it with each page it goes to: one shown again from the back/forward cache says it again
+  window.addEventListener('pageshow', (event) => { if (event.persisted) { background = undefined; readBackground(); } });
 
   const load = () => ipcRenderer.invoke(CHANNELS.marks).then((marks) => {
     const list = Array.isArray(marks) ? marks : [];
@@ -1125,9 +1207,11 @@ function runInPage() {
     focusChanged();
   }, () => {});
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load, { once: true }); else void load();
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchBackground, { once: true }); else watchBackground();
   // text a page writes after its document has loaded: what was not found is looked for once more
   window.addEventListener('load', () => { setTimeout(() => { if (waiting.length) waiting = place(waiting); for (const held of boxes.values()) if (!held.el) held.how = 'none'; schedule(); }, 0); }, { once: true });
+  window.addEventListener('load', backgroundSoon, { once: true }); // stylesheets that came after the document
 }
 
 if (typeof window !== 'undefined' && typeof document !== 'undefined' && typeof require === 'function') runInPage();
-else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, HIGHLIGHT, SECTION, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, CHIP, CHIP_SLOP, MAX_CHIPS, CLICK_SLOP, inRects, highlightAt, holdingHighlight, symbolPlace, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };
+else if (typeof module === 'object' && module && module.exports) module.exports = { CHANNELS, canvasColor, HIGHLIGHT, SECTION, SELECTION, selectionRange, tintSelection, SECTION_MAX, SECTION_WAIT, findWords, matchWords, sectionEnd, CONTEXT, MAX_EXACT, MAX_AFFIX, PAGE_TEXT, BOX_TEXT, EDGE, HANDLES, HANDLE_HIT, MIN_BOX, CURSORS, EDGE_CURSOR, LIVE_RESIZE, VISIBILITY, SELECTION_SETTLE_MS, selectionBoxes, CHIP, CHIP_SLOP, MAX_CHIPS, CLICK_SLOP, inRects, highlightAt, holdingHighlight, symbolPlace, textMap, rangeOf, snapWords, quoteOf, textAround, anchor, alike, chooseAnchor, fractionsOf, placeIn, sameElement, refind, boxAt, handleAt, cursorFor, resizeRect, shows };

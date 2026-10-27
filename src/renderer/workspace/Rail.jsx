@@ -440,7 +440,7 @@ export default function Rail({
   onSelectWorkspace, onCreateWorkspace, onRenameWorkspace, onDeleteWorkspace, onOpenVersion,
   onGoAgent = () => {}, onDismissAgent = null, onNextAgent = () => {}, onSeenAll = () => {}, onToggleRail = () => {}, railHidden = false,
   rows = [], activeRowId = null, flashId = null,
-  library = [], inRail = () => false, onOpenRow, onRenameRow, onRemoveRow, onLinkRow, onOpenHeld, onDropItems,
+  library = [], inRail = () => false, onOpenRow, onRenameRow, onRemoveRow, onLinkRow, onOpenHeld, onOpenElsewhere = null, onDropItems,
   onAddInput, onPickDisk, onNewNote, onPickRepo,
   folders = [], onCreateFolder = async () => {}, onRenameFolder = () => {}, onDeleteFolder = () => {}, onAddToFolder = async () => {}, onRemoveFromFolder = () => {},
   postItsHidden = false, onTogglePostIts, postItTrash = null, workspaceTrash = null, trashFull = false, postItDrag = null, trashRef,
@@ -901,7 +901,7 @@ export default function Rail({
       })()}
       {panel && panel.kind === 'trash' && (postItTrash || workspaceTrash) && <TrashPanel anchor={panel.anchor} trash={postItTrash} workspaces={workspaceTrash} onClose={close} />}
 
-      {searching && <SearchDialog projectId={project.id} workspaces={flatWorkspaces(roots)} rows={rows} library={library} inRail={inRail} onGoWorkspace={go} onOpen={(row) => onOpenRow(row)} onLink={(row) => Promise.resolve(onLinkRow(row)).catch(() => {})} onAddInput={(input) => onAddInput(input, null)} onClose={() => setSearching(false)} />}
+      {searching && <SearchDialog projectId={project.id} workspaces={flatWorkspaces(roots)} rows={rows} library={library} inRail={inRail} onGoWorkspace={go} onOpen={(row) => onOpenRow(row)} onOpenElsewhere={onOpenElsewhere} onLink={(row) => Promise.resolve(onLinkRow(row)).catch(() => {})} onAddInput={(input) => onAddInput(input, null)} onClose={() => setSearching(false)} />}
       {shortcuts && <ShortcutsDialog roots={roots} railHidden={railHidden} onNext={onNextAgent} onGo={go} onToggleRail={onToggleRail} onClose={() => setShortcuts(false)} />}
       {creating && <CreateProjectDialog parent={creating.parent} onCreate={(name) => onCreateWorkspace({ name, parentId: creating.parent.id })} onClose={() => setCreating(null)} />}
       {makingFolder && <FolderDialog onCreate={(name) => onCreateFolder(name)} onClose={() => setMakingFolder(false)} />}

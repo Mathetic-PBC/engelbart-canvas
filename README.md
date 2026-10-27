@@ -60,7 +60,7 @@ Built from the Sidebar workspace's plan (2026-10-07: its requirements, hand-draw
 
 Sections never run past their share of the sidebar: what does not fit is behind **More**. The sidebar folds away from the toggle in the title bar, or ⌘\. Its edge resizes only the document; the edge between document and right pane moves those two (double-click either for its default).
 
-The Browser's address ends in the page's place in the library: **+ Save** (a card names it; *Library only* or *Workspace*), **+ Workspace** (in the library, not here: one click), or **✓**. The `@` menu lists **Bart**, **Task**, **Note** (`@Note name` + Enter makes that note here and mentions it), the page open in the Browser (a **+** when the library does not hold it yet: picking it adds it), then the library. Whatever an `@` mention names comes into the workspace.
+The Browser's address ends in the page's place in the library: **+ Save** (into the library and this workspace: one click), **+ Workspace** (in the library, not here: one click), or **✓**. The `@` menu lists **Bart**, **Task**, **Note** (`@Note name` + Enter makes that note here and mentions it), the page open in the Browser (a **+** when the library does not hold it yet: picking it adds it), then the library. Whatever an `@` mention names comes into the workspace.
 
 ## Copy and @bart
 

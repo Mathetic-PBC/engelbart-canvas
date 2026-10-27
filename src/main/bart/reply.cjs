@@ -28,7 +28,9 @@ const AGENT_NAMES = { bart: 'Chat', brainstorm: 'Brainstorm', discover: 'Discove
  */
 function attribution({ level, trail, ms, routed = null }, { model = true, agent = null } = {}) {
   const name = routed && routed.build ? 'Build' : AGENT_NAMES[agent] || null;
-  const parts = [...(name ? [name] : []), ...(model ? [level.name, level.effort, seconds(ms)] : [seconds(ms)])];
+  // "Sol (ran as gpt-6-sol)": the account's Codex lists another model of the picked one's family (MATH-159, level.ran).
+  const said = level.ran && level.ran !== level.model ? `${level.name} (ran as ${level.ran})` : level.name;
+  const parts = [...(name ? [name] : []), ...(model ? [said, level.effort, seconds(ms)] : [seconds(ms)])];
   if (model && trail.length) parts.push(`moved up from ${trail.map((step) => `${step.name} ${step.effort}`).join(', then ')}`);
   return `*${parts.join(' · ')}*`;
 }

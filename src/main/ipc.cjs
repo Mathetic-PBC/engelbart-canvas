@@ -12,6 +12,7 @@ const home = require('./store/home.cjs');
 const db = require('./store/db.cjs');
 const projects = require('./store/projects.cjs');
 const library = require('./store/library.cjs');
+const elsewhere = require('./store/elsewhere.cjs');
 const folderFiles = require('./store/folder-files.cjs');
 const zoteroMirror = require('./zotero/mirror.cjs');
 const { expandDoc } = require('./context/expand-mentions.cjs');
@@ -26,6 +27,7 @@ const { TOOL_NAMES } = require('./tools/requirements.cjs');
 const archive = require('./store/archive.cjs');
 const onboarding = require('./store/onboarding.cjs');
 const gettingStarted = require('./store/getting-started.cjs');
+const history = require('./store/history.cjs');
 const { buildChoices } = require('./bart/models.cjs');
 const { providerOf, namingStep, fallbackTitle } = require('./bart/name-chat.cjs');
 const { githubRepo } = require('./sandbox/runs.cjs');
@@ -275,7 +277,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
 // `snapshotHtml(file, out)`: a picture of a page @create made (bart/created-preview.cjs); null in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null, scanner = null, agentMap = null, snapshotHtml = null, afterTestReset = async () => {} }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, writeImage = () => {}, bart, readModels, menuModels = readModels, rememberModelChoice = () => null, nameChat = null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [], warmBrowsers = () => {}, onboarding: importFlow = null, scanner = null, agentMap = null, snapshotHtml = null, afterTestReset = async () => {} }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -394,6 +396,9 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // A project's Stage tabs (MATH-10): read once when its Stage opens, written as they change.
   handle('stage', withCtx((ctx, projectId) => projects.readStage(ctx, projectId)));
   handle('set-stage', withCtx((ctx, projectId, value) => projects.writeStage(ctx, projectId, value)));
+  // A page a Stage tab arrived at (MATH-127), kept in the project's .context/history.json. Never refuses: the write is
+  // queued, and a failure is logged rather than told to the page.
+  handle('record-visit', withCtx((ctx, projectId, visit) => { void history.record(ctx, projectId, visit); return true; }));
   // Where to go next (the sidebar's next row, ⌘J): the workspaces written in last and the agents running or waiting.
   // Every change is announced on `engelbart:nav`; the renderer reads `nav` again.
   const navChanged = () => notify('engelbart:nav', {});
@@ -758,6 +763,16 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     navChanged();
     return created;
   }), { project: first });
+  // Another project's workspaces (MATH-148): every project's listed for the @ menu and a mention's tab; "Copy to this
+  // project" makes one of them again at the top of this one, its original only read.
+  handle('workspaces-everywhere', withCtx((ctx) => projects.workspacesEverywhere(ctx)));
+  saving('copy-workspace-here', withCtx(async (ctx, pid, fromPid, wid) => {
+    const projectId = str(pid, 'project id', 64);
+    const created = await projects.copyWorkspaceInto(ctx, projectId, str(fromPid, 'project id', 64), str(wid, 'workspace id', 64));
+    projects.recordEdit(ctx, projectId, created.id);
+    navChanged();
+    return created;
+  }), { project: first });
   saving('rename-workspace', withCtx((ctx, pid, wid, name) => projects.renameWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64), str(name, 'name'))), { project: first });
   // Delete in the switcher: the workspace, and all nested in it, into the sidebar's trash for a week; Restore there.
   saving('trash-workspace', withCtx((ctx, pid, wid) => { const out = projects.trashWorkspace(ctx, str(pid, 'project id', 64), str(wid, 'workspace id', 64)); navChanged(); return out; }), { project: first });
@@ -978,7 +993,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   // A provider's `start` is where a question without flags starts: the last model and effort picked by hand (bart/choices.cjs).
   // `discover`: @discover's { quick, standard, deep } per provider, which its line's level chip lists (2026-10-03).
   handle('bart-models', () => {
-    const { provider, providers, discover } = readModels('bart'), levels = (discover && discover.providers) || {};
+    const { provider, providers, discover } = menuModels('bart'), levels = (discover && discover.providers) || {};
     return { provider, providers, discover: { providers: Object.fromEntries(Object.keys(providers).filter((key) => levels[key]).map((key) => [key, levels[key]])) } };
   });
   // The model and effort just picked in a Build panel ('build') or a post-it's Build ('quick'), kept as where the next one
@@ -1019,7 +1034,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       return value.kind === 'library' ? { kind: 'library', id: str(value.id, 'library id', 64) } : { kind: value.kind };
     };
     // What a Build panel ('build', the default) or a post-it's Build ('quick') offers, starting on what was last picked there.
-    handle('build-models', (place) => buildChoices(readModels(place === 'quick' ? 'quick' : 'build')));
+    handle('build-models', (place) => buildChoices(menuModels(place === 'quick' ? 'quick' : 'build')));
     handle('build-targets', withCtx((ctx, pid) => b().targets(ctx, pidOf(pid))));
     // The project's default repo (Make default in the picker): the code directory or a library row, never a path.
     handle('build-set-default', withCtx((ctx, pid, target) => b().setDefault(ctx, pidOf(pid), targetOf(target))));
@@ -1034,6 +1049,7 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
         postItId: optStr(value.postItId, 'post-it id', 64),
         text: optStr(value.text, 'text', 200000),
         fromLine: !!value.fromLine, // `@bart --build <request>` (Workspace.jsx askBart)
+        withDocument: !!value.withDocument, // a task built from its own line (MATH-106): the workspace is given beside it
         routedFrom: optStr(value.routedFrom, 'route id', 80), // the router's record, when Bart handed the line to Build (bart/route.cjs)
         place: value.place && typeof value.place === 'object' ? placeOf(value.place, null, refOrNull(value.place.ref)) : null, // the line it came from (the Agent Viewer)
         provider: optStr(value.provider, 'provider', 24),
@@ -1096,6 +1112,8 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
   handle('projects-for-library-item', withCtx((ctx, id) => library.projectsForLibraryItem(ctx, str(id, 'library id', 64))));
   handle('library-for-project', withCtx((ctx, pid) => library.libraryForProject(ctx, str(pid, 'project id', 64))));
   // What the project's pdfs, notes and workspaces say, for the search and the @ menu to match (MATH-29); asked when one opens.
+  // What the other projects hold that a query names or says (MATH-148, store/elsewhere.cjs): only the matches.
+  handle('search-elsewhere', withCtx((ctx, pid, query, limit) => elsewhere.searchElsewhere(ctx, str(pid, 'project id', 64), str(query, 'query', 400), Number.isInteger(limit) ? limit : 20)));
   handle('library-bodies', withCtx((ctx, pid) => (pid == null ? library.bodiesForLibrary(ctx) : library.bodiesForProject(ctx, str(pid, 'project id', 64)))));
   // Adding makes a new row or throws "Already in the library as …" (library.addItem). `options.name` names it (the Browser's Save card).
   // A GitHub repository's sandbox starts once the row is saved; a failure to start it leaves the row saved and says why.

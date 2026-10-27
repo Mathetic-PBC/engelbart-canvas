@@ -3,9 +3,9 @@ import DocEditor from './DocEditor.jsx';
 import { isUntitled } from '../model/names.js';
 
 // One document of the middle column (MATH-23): its title, the notice when another window saved over edits here, and its
-// editor. Pane 0 is the document in front (the tab), with the footer's Copy, Build and Clear; pane 1 is a note or a
-// workspace's document opened beside it from a mention (model/panes.js), Andy Matuschak's working notes style, with a ×
-// in its header instead. The two sit side by side, each half the column (Workspace.jsx): neither covers the other.
+// editor. Pane 0 is the document in front (the tab), with the footer's Copy, Build and Clear; panes 1… are notes' or
+// workspaces' documents opened beside it from a mention or the split icon (model/panes.js), Andy Matuschak's working notes
+// style, each with a × in its header instead. They sit side by side, equal widths (Workspace.jsx): none covers another.
 
 const FOOT_BUTTON = { padding: '3px 6px', border: 0, borderRadius: 5, background: '#fff', cursor: 'pointer', font: '400 15px/1.4 var(--font-sans)', color: '#8f8f8f', transition: 'color 120ms' };
 

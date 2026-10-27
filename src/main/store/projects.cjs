@@ -35,6 +35,7 @@ const buildStore = require('../build/store.cjs');
 const { addressKey } = require('../../shared/address-key.cjs');
 const { holder } = require('../../shared/project-holds.cjs');
 const { mentionedIds } = require('../../shared/mentions.cjs');
+const { stripTaskMarkers } = require('../../shared/task-marker.cjs');
 
 // A workspace's meta.json `status` is no longer shown or changed (2026-09-25: the todo / in progress / done marks were
 // deleted). It stays on disk only as the mark that a folder is a workspace and not an older layout's goal (migrate.cjs).
@@ -261,7 +262,7 @@ function recentWorkspaces(projectDir, workspaces, limit = RECENT_WORKSPACES) {
     .slice(0, limit)
     .map(({ workspace, file, edited }) => {
       let text = '';
-      try { text = fs.readFileSync(file, 'utf8').slice(0, RECENT_TEXT_CHARS); } catch { text = ''; }
+      try { text = stripTaskMarkers(fs.readFileSync(file, 'utf8')).slice(0, RECENT_TEXT_CHARS); } catch { text = ''; }
       return { id: workspace.id, name: workspace.name, path: workspace.path, chars: workspace.chars, edited: edited ? new Date(edited).toISOString() : null, text };
     });
 }
@@ -593,6 +594,59 @@ function findWorkspace(ctx, projectId, workspaceId) {
   const found = findWorkspaceIn(project.dir, assertId(workspaceId, 'workspace'));
   if (!found) throw new Error('Unknown workspace');
   return { project, ...found };
+}
+
+/**
+ * A workspace by id in whichever project holds it (MATH-148, 2026-10-26): { project, workspace, parentDir }, or null.
+ * Only for reading one for a mention (context/expand-mentions.cjs): findWorkspace stays the one every write and Build
+ * goes through, scoped to its project.
+ */
+function findWorkspaceAnywhere(ctx, workspaceId) {
+  const id = assertId(workspaceId, 'workspace');
+  for (const project of projectRecords(ctx)) {
+    const found = findWorkspaceIn(project.dir, id);
+    if (found) return { project, ...found };
+  }
+  return null;
+}
+
+/** Every project's workspaces, nested ones too, flat (MATH-148): { id, name, path, projectId, projectName }. */
+function workspacesEverywhere(ctx) {
+  const out = [];
+  for (const project of projectRecords(ctx)) {
+    for (const workspace of flattenWorkspaces(project.dir)) out.push({ id: workspace.id, name: workspace.name, path: workspace.path, projectId: project.id, projectName: project.name });
+  }
+  return out;
+}
+
+// A Build's card line, which belongs to the project whose Build it is (build/context.cjs BUILD_LINE_RE).
+const COPIED_BUILD_LINE_RE = /^build> [a-z0-9]{6,32}$/;
+
+/** A workspace's document as it is copied into another project: no task Build markers, no `build>` lines. */
+function copiedText(text) {
+  return stripTaskMarkers(String(text || '')).split('\n').filter((line) => !COPIED_BUILD_LINE_RE.test(line.trim())).join('\n');
+}
+
+/**
+ * "Copy to this project" (MATH-148): another project's workspace `workspaceId` (in `fromProjectId`) made again at the top
+ * of `projectId`'s workspaces, the first of them, under its name, holding its document less what belongs to its own
+ * project's Builds. The original is read, never written. → the new workspace.
+ */
+async function copyWorkspaceInto(ctx, projectId, fromProjectId, workspaceId) {
+  const project = findProject(ctx, projectId);
+  const { workspace: source } = findWorkspace(ctx, fromProjectId, workspaceId);
+  let text = '';
+  try { text = fs.readFileSync(path.join(source.dir, 'workspace.md'), 'utf8'); } catch { text = ''; }
+  text = copiedText(text);
+  // The first at the top: a moment before the earliest there, since workspaces are listed as they were made.
+  const first = workspaceRecords(project.dir)[0];
+  const firstAt = first && Date.parse(first.created || '');
+  const created = Number.isFinite(firstAt) ? new Date(firstAt - 1000).toISOString() : nowIso();
+  const dir = path.join(project.dir, workspaceDirName(project.dir, source.name, 'Untitled Workspace 1'));
+  fs.mkdirSync(dir, { mode: DIR_MODE });
+  writeJson(path.join(dir, 'meta.json'), { id: randomUUID(), status: 'open', context: [], created, chars: text.length });
+  writeTextAtomic(path.join(dir, 'workspace.md'), text);
+  return publicWorkspace(workspaceRecord(dir));
 }
 
 function publicWorkspace(workspace) {
@@ -1039,9 +1093,12 @@ async function writeDoc(ctx, projectId, ref, text) {
 // workspaces' documents, `kind: 'workspace'`), and where each document was scrolled to, keyed as the editor
 // keys documents (`ws:<id>`, `note:<id>`). Positions belong to the workspace, so one note can be halfway down in one
 // workspace and at the top in another. Scrolling writes here and nowhere else: a document's edit time never moves.
+// `panes` (MATH-103, 2026-10-25), only when a tab has any: by tab ('ws' or one of `tabs`), the documents open
+// beside it, left to right (renderer/model/panes.js: { kind, id, title, link, from }).
 const STATE_FILE = 'state.json';
 const MAX_TABS = 40;
 const MAX_POSITIONS = 200;
+const MAX_PANES = 16; // beside one tab: more than any window fits
 const idOrNull = (value) => (typeof value === 'string' && UUID_RE.test(value) ? value : null);
 const plainObject = (value) => (value && typeof value === 'object' && !Array.isArray(value) ? value : null);
 
@@ -1124,6 +1181,11 @@ function cleanView(value) {
     seen.add(id);
     const clean = { id, title: typeof tab.title === 'string' ? tab.title.slice(0, 200) : '' };
     if (tab.kind === 'workspace') clean.kind = 'workspace'; // another workspace's document open here as a tab (2026-09-23)
+    // Another project's workspace, open here read-only (MATH-148): the project it is in, and that project's name.
+    if (tab.kind === 'foreign') {
+      const projectId = idOrNull(tab.projectId); if (!projectId) continue;
+      Object.assign(clean, { kind: 'foreign', projectId, from: typeof tab.from === 'string' ? tab.from.slice(0, 200) : '' });
+    }
     tabs.push(clean);
     if (tabs.length >= MAX_TABS) break;
   }
@@ -1133,7 +1195,27 @@ function cleanView(value) {
     if (clean) positions[`${m[1]}:${m[2]}`] = clean;
   }
   const active = input.active !== 'ws' && seen.has(idOrNull(input.active)) ? input.active : 'ws';
-  return { active, tabs, positions };
+  const panes = cleanPanes(input.panes, seen);
+  return panes ? { active, tabs, positions, panes } : { active, tabs, positions };
+}
+
+/** A view's panes beside its tabs, only for the tabs it has ('ws' always): null when none has any. */
+function cleanPanes(value, tabIds) {
+  const out = {};
+  for (const [tabId, list] of Object.entries(plainObject(value) || {})) {
+    if (tabId !== 'ws' && !(idOrNull(tabId) && tabIds.has(tabId))) continue; // a tab not kept (the project page's, an archived version's) keeps none
+    const panes = [];
+    for (const pane of Array.isArray(list) ? list : []) {
+      const id = idOrNull(pane && pane.id); if (!id) continue;
+      const kind = pane.kind === 'workspace' ? 'workspace' : 'note';
+      if (panes.some((held) => held.id === id && held.kind === kind)) continue;
+      const text = (field, max) => (typeof pane[field] === 'string' ? pane[field].slice(0, max) : '');
+      panes.push({ kind, id, title: text('title', 200), link: text('link', 200), from: text('from', 120) });
+      if (panes.length >= MAX_PANES) break;
+    }
+    if (panes.length) out[tabId] = panes;
+  }
+  return Object.keys(out).length ? out : null;
 }
 
 /** What each workspace of a project had open → { [workspaceId]: { active, tabs, positions } }. */
@@ -1564,6 +1646,10 @@ module.exports = {
   restoreProject,
   loadProject,
   createWorkspace,
+  findWorkspaceAnywhere,
+  workspacesEverywhere,
+  copyWorkspaceInto,
+  copiedText,
   renameWorkspace,
   trashWorkspace,
   trashedWorkspaces,

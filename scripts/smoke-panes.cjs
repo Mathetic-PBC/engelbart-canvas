@@ -2,13 +2,16 @@
 
 // npm run build && npx electron scripts/smoke-panes.cjs
 // Runs the real app, hidden, against disposable project/user data and the fake @bart, and drives the middle column's
-// full screen and the pane opened beside the document (MATH-23: src/renderer/screens/Workspace.jsx, workspace/DocPane.jsx,
-// model/panes.js) with real (synthetic) input: a note's mention opens its note to the right and stays marked and in sight,
-// the two panes side by side at half the column each; another replaces it; a mention in the right pane replaces that pane
-// (two panes at most); a note already on the left is not opened again, and ⌘Z in one pane leaves the other's typing; a
-// workspace's mention opens its document beside; × closes, ⌘-click still opens a tab, @bart in a pane is answered there,
-// a tab switch closes the pane; and Escape leaves the full screen only once the line, the @ menu, the title field or the
-// + menu has had its own.
+// full screen and the panes opened beside the document (MATH-23, MATH-103: src/renderer/screens/Workspace.jsx,
+// workspace/DocPane.jsx, model/panes.js) with real (synthetic) input: a note's mention opens its note to the right and
+// stays marked and in sight, the two panes side by side at half the column each; with the Stage open at 1440px the column
+// is full with one beside, so another mention, in either pane, replaces the rightmost; the split icon is greyed out then,
+// and the full screen's wider column takes new panes, a mention's and the split icon's, side by side at equal widths, and
+// hides the ones that do not fit when the Stage comes back, showing them again when it goes; × closes one pane only; a
+// note already on the left is not opened again, and ⌘Z in one pane leaves the other's typing; a workspace's mention opens
+// its document beside; ⌘-click still opens a tab, @bart in a pane is answered there, each tab keeps its own panes when
+// another is in front and across a reload; and Escape leaves the full screen only once the line, the @ menu, the title
+// field or the + menu has had its own.
 // ENGELBART_PANES_SHOTS=<dir> saves pictures of the window at the moments worth seeing.
 const { app, BrowserWindow } = require('electron');
 const assert = require('node:assert/strict');
@@ -35,6 +38,7 @@ async function until(fn, label, tries = 300) {
 const js = (wc, expression) => wc.executeJavaScript(expression, true);
 const PANE = (i) => `main [data-doc-pane="${i}"]`;
 const WS = 'Getting started'; // the welcome workspace's name: the document's title
+const VIEW_SAVED = 900; // ms: past Workspace.jsx's VIEW_SAVE_DELAY, the view is with main
 const click = async (wc, { x, y }, modifiers = []) => {
   wc.focus();
   await pause();
@@ -95,8 +99,10 @@ app.whenReady().then(async () => {
     await js(wc, `(()=>{const row=[...document.querySelectorAll('aside[aria-label="Sidebar"] *')].find((el)=>el.children.length===0&&el.textContent.trim()===${JSON.stringify(WS)});if(row)row.click()})()`);
     await until(() => js(wc, `!!document.querySelector(${JSON.stringify(`${PANE(0)} [data-editor] [data-mention="Alpha"]`)})`).catch(() => false), 'the workspace document');
     await pause(400);
-    const half = (s) => Math.abs(s.panes[0].width - s.width / 2) <= 2 && Math.abs(s.panes[1].width - s.width / 2) <= 2;
-    const sideBySide = (s) => s.panes.length === 2 && s.panes[0].left === 0 && s.panes[1].left === s.panes[0].width && s.scrollWidth === s.width && s.left === 0;
+    // Equal shares of the column (half each for two), and side by side from its left edge, nothing scrolled sideways.
+    const half = (s) => s.panes.every((p) => Math.abs(p.width - s.width / s.panes.length) <= 2);
+    const sideBySide = (s, n = 2) => s.panes.length === n && s.panes[0].left === 0 && s.panes.every((p, i) => !i || Math.abs(p.left - (s.panes[i - 1].left + s.panes[i - 1].width)) <= 1) && s.scrollWidth === s.width && s.left === 0;
+    const splitIcon = () => js(wc, `(()=>{const b=document.querySelector('[data-split-pane]');return b?{on:b.dataset.splitPane,title:b.title}:null})()`);
     // The marked mention in the left pane is on screen: inside its pane and the column, not under the pane beside.
     const markedInSight = () => js(wc, `(()=>{const m=document.querySelector('${PANE(0)} [data-mention][data-beside]');if(!m)return false;const r=m.getBoundingClientRect(),main=document.querySelector('main').getBoundingClientRect(),right=document.querySelector('${PANE(1)}').getBoundingClientRect();const at=document.elementFromPoint(r.left+2,r.top+r.height/2);return r.width>0&&r.left>=main.left&&r.right<=right.left&&r.right<=main.right&&!!at&&!!at.closest('${PANE(0)}')})()`);
 
@@ -135,19 +141,68 @@ app.whenReady().then(async () => {
     assert.deepEqual(now.panes[0].marked, ['Beta'], 'the new mention is the marked one');
     console.log('PASS another mention in the document replaces the pane beside it');
 
-    /* ------------------------------------------------ (1) a mention in the right pane replaces that pane: two panes at most */
+    /* ------------------------------------------------ (1) the column full: a mention in the right pane replaces that pane */
+    // At 1440px with the Stage open the column fits two panes (model/panes.js paneRoom): the document and one beside it.
     await press(wc, `${PANE(0)} [data-editor] [data-mention="Alpha"]`);
     await settledStrip(wc);
     await press(wc, `${PANE(1)} [data-editor] [data-mention="Gamma"]`);
     now = await settledStrip(wc);
-    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Gamma'], 'Gamma took Alpha\'s place; no third pane');
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Gamma'], 'Gamma took Alpha\'s place; no room for a third pane');
     assert.ok(sideBySide(now) && half(now), 'still two halves, nothing scrolled');
     await press(wc, `${PANE(1)} [data-editor] [data-mention="Delta"]`);
     now = await settledStrip(wc);
     assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta']);
     assert.equal(await js(wc, `document.querySelectorAll('main [data-doc-pane]').length`), 2);
     await shot(wc, '2-replaced');
-    console.log('PASS a mention in the right pane replaces it: never more than the document and one pane');
+    console.log(`PASS the column full (${now.width}px fits two), a mention in the right pane replaces it`);
+
+    /* ------------------------------------------------ (MATH-103, MATH-84) as many panes as fit; the split icon */
+    assert.deepEqual(await splitIcon(), { on: '0', title: 'No room for another pane. Close one or widen the window.' }, 'the column full: the split icon greyed out, saying why');
+    await press(wc, '[data-split-pane]');
+    assert.equal(await js(wc, `!!document.querySelector('[data-note-picker]')`), false, 'greyed out, it opens nothing');
+    await press(wc, '[data-doc-full]'); // the Stage away: the column has the window but the sidebar
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta']);
+    assert.equal((await splitIcon()).on, '1', 'room again: the split icon is on');
+    await press(wc, `${PANE(0)} [data-editor] [data-mention="Alpha"]`);
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta', 'Alpha'], 'room: a mention opens a new pane at the right');
+    assert.ok(sideBySide(now, 3) && half(now), `three side by side, equal widths (${now.panes.map((p) => `${p.width}px`).join(' + ')} of ${now.width}px)`);
+    assert.deepEqual(now.panes[0].marked, ['Alpha'], 'its mention marked');
+    await press(wc, '[data-split-pane]');
+    await until(() => js(wc, `!!document.querySelector('[data-note-picker]')`), 'the split icon\'s menu');
+    await until(() => js(wc, `document.activeElement && document.activeElement.matches('[data-note-search]')`), 'its search field focused');
+    await typeKeys(wc, 'Beta');
+    await key(wc, 'Enter', { ch: '\r' });
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta', 'Alpha', 'Beta'], 'the note picked from the split icon in a new pane at the right');
+    assert.ok(sideBySide(now, 4) && half(now), `four side by side, equal widths (${now.panes.map((p) => `${p.width}px`).join(' + ')})`);
+    assert.ok(now.panes.every((p) => p.width >= 280), 'none narrower than PANE_MIN');
+    assert.equal((await splitIcon()).on, '0', 'four fill the column: greyed out again');
+    await shot(wc, '2b-four');
+    await press(wc, '[data-doc-full]'); // the Stage back: room for two
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta'], 'the panes that do not fit are hidden');
+    assert.ok(sideBySide(now) && half(now), 'and nothing scrolls sideways');
+    await press(wc, '[data-doc-full]');
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta', 'Alpha', 'Beta'], 'room again: they come back as they were');
+    win.setBounds({ x: 0, y: 0, width: 1000, height: 900 }); // a narrower window: 699px of column, room for two
+    now = await until(async () => { const seen = await settledStrip(wc); return seen.panes.length === 2 ? seen : null; }, 'the window narrowed');
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta'], 'a narrower window hides the rightmost panes');
+    assert.ok(sideBySide(now) && half(now));
+    win.setBounds({ x: 0, y: 0, width: 1440, height: 900 });
+    now = await until(async () => { const seen = await settledStrip(wc); return seen.panes.length === 4 ? seen : null; }, 'the window widened');
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta', 'Alpha', 'Beta'], 'widened again, they are back');
+    await press(wc, '[data-pane-close="2"]');
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta', 'Beta'], '× on the middle pane closes that one only');
+    assert.ok(sideBySide(now, 3) && half(now));
+    await press(wc, '[data-pane-close="2"]');
+    await press(wc, '[data-doc-full]');
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), [WS, 'Delta']);
+    console.log('PASS the full screen fits four panes: a mention and the split icon open new ones at the right; the Stage back, or a narrower window, hides those that do not fit, and they come back with the room; × closes one pane only');
 
     /* ------------------------------------------------ × closes the pane beside */
     await press(wc, '[data-pane-close="1"]');
@@ -187,12 +242,23 @@ app.whenReady().then(async () => {
     await shot(wc, '3-two-notes');
     console.log('PASS ⌘Z in one pane undoes that pane\'s typing only');
 
-    /* ------------------------------------------------ another tab closes the pane */
+    /* ------------------------------------------------ each tab keeps its own panes */
     await press(wc, '[data-doc-tab="ws"]');
     now = await settledStrip(wc);
-    assert.equal(now.panes.length, 1, 'the pane closed with the tab change');
+    assert.equal(now.panes.length, 1, 'the Workspace tab has none of its own');
     assert.ok(now.panes[0].rows[0] === 'Plan', 'the workspace document is in front');
-    console.log('PASS switching tab closes the pane beside');
+    await press(wc, `[data-doc-tab="${notes.Alpha.id}"]`);
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), ['Alpha', 'Gamma'], 'back on Alpha\'s tab: its pane is kept and shown again');
+    await pause(VIEW_SAVED);
+    wc.reload(); // as a relaunch reads them: the view main kept (state.json `views`)
+    await until(() => js(wc, `!!document.querySelector(${JSON.stringify(`${PANE(1)} [data-editor] [data-line]`)})`).catch(() => false), 'the panes after the reload');
+    now = await settledStrip(wc);
+    assert.deepEqual(now.panes.map((p) => p.title), ['Alpha', 'Gamma'], 'and after a reload');
+    await press(wc, '[data-doc-tab="ws"]');
+    now = await settledStrip(wc);
+    assert.equal(now.panes.length, 1);
+    console.log('PASS switching tab keeps each tab\'s panes: they are shown again on its return, and after a reload');
 
     /* ------------------------------------------------ (5) a workspace's mention opens its document beside */
     await press(wc, `${PANE(0)} [data-editor] [data-mention="Second"]`);

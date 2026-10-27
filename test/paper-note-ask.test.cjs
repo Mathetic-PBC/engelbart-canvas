@@ -125,9 +125,18 @@ test('a page whose text pdf.js cannot give still asks, with no page text', async
 });
 
 test('Shift+Enter is a new line; a note without @bart, a free note, an empty question or a key still being composed do not ask', async () => {
+  // a highlight's note without a leading @bart: Enter sends it as the workspace's fields do (2026-10-24), leaving it as
+  // typed, and asks nothing
+  const plain = viewer('why @bart');
+  const sent = key('Enter');
+  plain.view.noteKey(sent, plain.ta, plain.m, 2);
+  assert.ok(sent.prevented, 'why @bart: sent, no line break');
+  assert.equal(plain.ta.blurred, 1, 'the note left');
+  await settle();
+  assert.deepEqual(plain.asked, []);
+  assert.equal(plain.m.note, 'why @bart');
   const cases = [
     ['@bart why', key('Enter', { shiftKey: true }), {}],
-    ['why @bart', key('Enter'), {}],
     ['@bart why', key('Enter'), { free: true }],
     ['@bart why', key('Enter', { isComposing: true }), {}],
   ];

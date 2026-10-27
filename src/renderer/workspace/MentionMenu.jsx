@@ -4,6 +4,7 @@
 // A library folder (MATH-22) carries a › and opens in place when picked: a row back up, "Mention this folder", then what
 // it holds (model/rail.js folderRows); a row that only says something (loading, how many more) is grey and not picked.
 // Zotero (MATH-65 build 2) opens the same way; an item of it says its authors and year beside its title.
+// Another project's workspace or Source (MATH-148) says that project's name beside its own: "User studies · Fellowship".
 // A long name is cut in the middle, so its end and extension show (model/rail.js nameParts); the row's title is the whole.
 import React from 'react';
 import { KindGlyph } from '../ui/Icons.jsx';
@@ -48,7 +49,7 @@ export default function MentionMenu({ items, index, anchor, onPick, onHover }) {
           key={m.key || m.id || m.name}
           data-on={i === index ? 1 : 0}
           data-mention-row={m.key || m.id}
-          title={m.kind === 'note' ? undefined : m.name}
+          title={m.kind === 'note' ? undefined : m.from ? `${m.name} · ${m.from}` : m.name}
           onMouseDown={(e) => { e.preventDefault(); if (m.kind !== 'note') onPick(m); }}
           onMouseMove={() => { if (onHover && i !== index) onHover(i); }} // moved onto, not appeared under: the keyboard's row stays put
           style={{ display: 'flex', alignItems: 'center', gap: 10, minHeight: 32, boxSizing: 'border-box', padding: '0 10px', borderRadius: 6, cursor: m.kind === 'note' ? 'default' : 'pointer', background: i === index && m.kind !== 'note' ? '#f2f2f2' : 'transparent' }}
@@ -58,6 +59,7 @@ export default function MentionMenu({ items, index, anchor, onPick, onHover }) {
           {m.kind === 'back' && m.hint && <span style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '60%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', direction: 'rtl', textAlign: 'left', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{m.hint}</span>}
           {(isFolderRow(m) || (m.kind === 'entry' && m.dir)) && <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '15px/1 var(--font-sans)', color: '#8f8f8f' }}>›</span>}
           {m.kind === 'entry' && m.zotero && m.hint && <span style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '40%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{m.hint}</span>}
+          {m.from && <span data-mention-from="1" style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>· {m.from}</span>}
           {m.kind === 'workspace' && m.above.length > 0 && <span style={{ flex: '0 1 auto', minWidth: 0, maxWidth: '45%', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '12px/1.4 var(--font-sans)', color: '#8f8f8f' }}>{m.above.join(' / ')}</span>}
           {m.kind === 'fresh' && <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '15px/1 var(--font-sans)', color: '#8f8f8f' }}>+</span>}
         </div>

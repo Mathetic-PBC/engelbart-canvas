@@ -108,7 +108,11 @@
 // with that character as its note (addMark) and its card is drawn where the empty one was, its field with the keyboard,
 // on the paper's white (CARD_GROUND, as a web page's card is) until the note is left, when it goes beside its highlight as
 // any card does (selCard). Enter keeps a highlight with no note; Escape, a click elsewhere, another selection or the
-// selection scrolled out of the pane puts the empty card away and keeps nothing.
+// selection scrolled out of the pane puts the empty card away and keeps nothing. A click into the empty card keeps the
+// highlight and gives its note's field the keyboard there (keepPending). (From 2026-10-24 a chat icon at the selection's
+// end came first, to be clicked; since 2026-10-26, David, the card comes straight away again.) A highlight's note sends as the workspace's fields do: Enter, or
+// the round send under it (../ui/send-button.js), asks a note that starts with @bart and leaves any other (Shift+Enter is
+// a new line); every agent's token in it is tinted as the workspace tints it (model/doc.js noteInkHtml).
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
 import rough from 'roughjs';
@@ -122,6 +126,7 @@ import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, LABEL_INK, 
 import { sideSpace, deskGeom, placeOf, posOf, spaceBoxes, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, runningLabel, textColumn, fitWidth, freeNoteWidth, noteScale, NOTE_FLOOR, HIDE_ROOM, FREE_MIN, FREE_FIT, EDGE_PAD, NOTE_W, NOTE_MIN, BOX_GAP, SIDE_GAP, POS_DY, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
 import { selectionCardPlace } from '../../shared/selection-card.cjs';
+import { SEND_ARROW, SEND_HOVER_CSS, sendLook, sendReady } from '../ui/send-button.js';
 import { matchPassage } from '../../shared/passage-text.cjs';
 import { citationNumbers, citationSources, citationSourcesHtml, citationTip, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
 import MentionMenu from '../workspace/MentionMenu.jsx';
@@ -201,6 +206,7 @@ const LAYER_CSS = `
 [data-pdf] [data-box] [data-note-view]{cursor:text}
 ${cardCss('[data-pdf] [data-box]')}
 @keyframes sel-caret{50%{opacity:0}}
+${SEND_HOVER_CSS}
 ::highlight(pdf-section){background-color:rgba(255,196,0,.13)}
 ::highlight(pdf-find){background-color:rgba(255,196,0,.35)}
 ::highlight(pdf-find-active){background-color:rgba(255,140,0,.6)}
@@ -277,6 +283,10 @@ function textRects(range) {
   return out.length ? out : [...range.getClientRects()];
 }
 const SVG = 'http://www.w3.org/2000/svg';
+// The part of a line's band a highlight covers (2026-10-16, the marker's look): from 12% down, 76% of its height. A
+// selection being made and one pending its note are drawn the same height (2026-10-24, David: "it should look the same"),
+// so the passage keeps one size from the drag to the kept highlight.
+const BAND_TOP = 0.12, BAND_H = 0.76;
 // A note's handwriting, the same in its field and shown as text (./card-look.js NOTE_TYPE, a web box's card's too).
 const NOTE_LOOK = `pointer-events:auto;${NOTE_TYPE};transition:opacity 120ms,background 120ms`;
 
@@ -1561,18 +1571,29 @@ export default class PaperView extends React.Component {
     if (e.key === 'Enter') { e.preventDefault(); this.addMark(p, null); this.clearPending(); return true; }
     if (e.key.length === 1 && !e.metaKey && !e.ctrlKey && !e.altKey) {
       e.preventDefault();
-      const card = !!this.selEl;
-      const m = this.addMark(p, e.key); this.clearPending();
-      // typed from the card: its note is drawn where the card was until it is left (selCard)
-      if (card && m) { const found = this.findMark(m.id); this.selCard = { markId: m.id }; if (found) this.renderMarks(found.page); }
-      // The keyboard goes to the note now, not a frame later (2026-10-16): the next key, typed fast, was lost on the way.
-      // This key's own character is not typed twice: its default is prevented above.
-      const ta = m && this.find1(`textarea[data-mark="${m.id}"]`);
-      if (ta) { ta.focus({ preventScroll: true }); ta.setSelectionRange(ta.value.length, ta.value.length); }
-      requestAnimationFrame(() => { if (m) this.revealCard(m.id); });
+      this.keepPending(e.key);
       return true;
     }
     return false;
+  }
+  // The pending selection kept as a highlight with `note` for its note (a key typed, or '' for a click into the empty
+  // card), its field with the keyboard. Begun from the empty card, its card is drawn where that was until the note is
+  // left (selCard). → the mark.
+  keepPending(note) {
+    const p = this.pendingSel; if (!p) return null;
+    const card = !!this.selEl;
+    const m = this.addMark(p, note); this.clearPending();
+    if (!m) return null;
+    if (note === '' && m.note == null) { m.note = ''; this.editing = m.id; } // a highlight there already, with no note yet: its field
+    const found = this.findMark(m.id);
+    if (card) this.selCard = { markId: m.id };
+    if (found && (card || note === '')) this.renderMarks(found.page);
+    // The keyboard goes to the note now, not a frame later (2026-10-16): the next key, typed fast, was lost on the way.
+    // A key's own character is not typed twice: its default is prevented (pendingSelKey).
+    const ta = this.find1(`textarea[data-mark="${m.id}"]`);
+    if (ta) { ta.focus({ preventScroll: true }); ta.setSelectionRange(ta.value.length, ta.value.length); }
+    requestAnimationFrame(() => this.revealCard(m.id));
+    return m;
   }
 
   // The pending selection (bands, see pdfMouseUp), each part drawn into its page's highlight layer until a note is
@@ -1592,7 +1613,7 @@ export default class PaperView extends React.Component {
       g.dataset[tag] = '1';
       for (const r of part.rects) {
         const el = document.createElementNS(SVG, 'rect');
-        el.setAttribute('x', r.x * f); el.setAttribute('y', r.y * f); el.setAttribute('width', r.w * f); el.setAttribute('height', r.h * f); el.setAttribute('fill', 'rgba(0,112,243,.22)');
+        el.setAttribute('x', r.x * f); el.setAttribute('y', (r.y + r.h * BAND_TOP) * f); el.setAttribute('width', r.w * f); el.setAttribute('height', r.h * BAND_H * f); el.setAttribute('fill', 'rgba(0,112,243,.22)');
         g.appendChild(el);
       }
       hl.appendChild(g);
@@ -1638,7 +1659,8 @@ export default class PaperView extends React.Component {
   }
   // The empty card, over the pane (the pane's frame, not the paper: it is placed again as the paper scrolls), drawn as a
   // card's note is (cardBox, noteSection) at the size of the last part's page's handwriting (boxScale), on the paper's
-  // white, its words the placeholder's after a caret. A press on it keeps the selection and the keyboard where they are.
+  // white, its words the placeholder's after a caret. A press on it keeps the selection where it is; the click keeps it as
+  // a highlight and gives its note's field the keyboard (keepPending).
   openSelCard() {
     this.closeSelCard();
     const host = this.host.current, frame = host && host.parentElement, p = this.pendingSel;
@@ -1649,6 +1671,7 @@ export default class PaperView extends React.Component {
     line.append(makeEl('span', `display:inline-block;width:1.5px;height:1.05em;margin-right:1px;vertical-align:-0.18em;background:${NOTE_INK};animation:sel-caret 1.06s steps(1) infinite`, { selCaret: '1' }), makeEl('span', 'color:#b5b5b5', { selPlaceholder: '1' }, SEL_PLACEHOLDER));
     el.appendChild(line);
     el.onmousedown = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+    el.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.keepPending(''); };
     el.dataset.page = String(page);
     frame.appendChild(el);
     this.selEl = el;
@@ -1847,8 +1870,8 @@ export default class PaperView extends React.Component {
     const list = (this.marks || {})[page] || [];
     for (const b of mergeLineRects(list.flatMap((m) => bandRects(m.rects || [])))) {
       const r = { x: b.x * P, y: b.y * P, w: b.w * P, h: b.h * P };
-      if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * 0.12, r.w, r.h * 0.76, { fill: 'rgba(0,112,243,.16)', fillStyle: 'zigzag', fillWeight: 1.3, hachureGap: 2.4, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: boxSeed(page, b) }));
-      else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y); d.setAttribute('width', r.w); d.setAttribute('height', r.h); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
+      if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * BAND_TOP, r.w, r.h * BAND_H, { fill: 'rgba(0,112,243,.16)', fillStyle: 'zigzag', fillWeight: 1.3, hachureGap: 2.4, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: boxSeed(page, b) }));
+      else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y + r.h * BAND_TOP); d.setAttribute('width', r.w); d.setAttribute('height', r.h * BAND_H); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
     }
     const boxes = [], units = [], running = this.pendingOn(page);
     for (const m of list) {
@@ -2084,12 +2107,54 @@ export default class PaperView extends React.Component {
         sec.appendChild(both);
         this.inkNote(ta);
       } else sec.appendChild(ta);
+      // a highlight's note: the round send under it, bottom right (2026-10-24)
+      if (m.rects && m.rects.length) {
+        const row = makeEl('div', 'display:flex;justify-content:flex-end;padding:2px 2px 0');
+        row.appendChild(this.sendButton(ta, m, page));
+        sec.appendChild(row);
+      }
     } else {
       const view = this.noteView(m, page);
       view.style.cssText = `${NOTE_LOOK};white-space:pre-wrap;overflow-wrap:break-word;cursor:text`;
       sec.appendChild(view);
     }
     return sec;
+  }
+
+  // A highlight's note's send (../ui/send-button.js): ready once there is text; a press keeps the field's keyboard, a click
+  // sends as Enter does (sendNote).
+  sendButton(ta, m, page) {
+    const ready = sendReady(ta.value);
+    const btn = makeEl('button', sendLook(ready), { send: m.id });
+    btn.className = 'bart-send';
+    btn.setAttribute('aria-label', 'Send');
+    btn.disabled = !ready;
+    btn.innerHTML = SEND_ARROW;
+    btn.onmousedown = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
+    btn.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.sendNote(ta, m, page); };
+    return btn;
+  }
+  // The send of the field `ta` as its text is now: blue once there is something to send.
+  readySend(ta) {
+    const sec = ta.closest && ta.closest('[data-card-note]'), btn = sec && sec.querySelector('[data-send]');
+    if (!btn) return;
+    const ready = sendReady(ta.value);
+    if (btn.disabled === !ready) return;
+    btn.disabled = !ready;
+    btn.style.cssText = sendLook(ready);
+  }
+  // A highlight's note sent (Enter or its send): a leading @bart asks (an @bart with nothing after it does nothing); any
+  // other note is left, kept as typed. → whether it was sent.
+  sendNote(ta, m, page) {
+    if (!sendReady(ta.value)) return false;
+    const question = this.asksFrom(m) ? noteQuestion(ta.value) : null;
+    if (question != null) {
+      if (!question) return false;
+      this.askFrom(ta, m, page || this.pageOf(m), question);
+      return true;
+    }
+    ta.blur();
+    return true;
   }
 
   // An answer in its card: the question in grey when it is not what the note asks now (an earlier one of the thread,
@@ -2406,7 +2471,7 @@ export default class PaperView extends React.Component {
       for (const b of bandRects(m.rects)) {
         const d = document.createElementNS(SVG, 'rect');
         d.dataset.focus = '1';
-        d.setAttribute('x', b.x * u); d.setAttribute('y', b.y * u + b.h * u * 0.12); d.setAttribute('width', b.w * u); d.setAttribute('height', b.h * u * 0.76);
+        d.setAttribute('x', b.x * u); d.setAttribute('y', b.y * u + b.h * u * BAND_TOP); d.setAttribute('width', b.w * u); d.setAttribute('height', b.h * u * BAND_H);
         d.setAttribute('rx', 2); d.setAttribute('fill', 'rgba(0,112,243,.14)');
         hl.appendChild(d);
       }
@@ -2478,7 +2543,7 @@ export default class PaperView extends React.Component {
     ta.dataset.mark = m.id; ta.value = m.note; ta.rows = 1; ta.spellcheck = false;
     ta.oninput = () => {
       m.note = ta.value;
-      this.inkNote(ta); this.fitNote(ta); this.arrange(page); this.scheduleSave(); this.noteMention(ta, m, page);
+      this.inkNote(ta); this.readySend(ta); this.fitNote(ta); this.arrange(page); this.scheduleSave(); this.noteMention(ta, m, page);
     };
     ta.onfocus = () => { this.editing = m.id; if (m.rects && m.rects.length) this.focusMark(m.id); };
     ta.onblur = () => this.leaveNote(ta, m, page);
@@ -2611,7 +2676,8 @@ export default class PaperView extends React.Component {
     return (this.props.mentionItems(open.query.toLowerCase()) || []).filter((r) => r && ((r.kind === 'item' && r.row && r.row.id && !r.row.zotero) || (bart && r.kind === 'verb' && r.verb === 'bart')));
   }
   // Keys in a note's field: the menu's first while it is open (↑ ↓ move, Enter or Tab picks, Escape closes it alone),
-  // then Enter in a highlight's note that starts with @bart asks (Shift+Enter is a new line), then Escape leaves the note.
+  // then Enter in a highlight's note sends it (sendNote: @bart asks, any other is left; Shift+Enter is a new line), then
+  // Escape leaves the note. A free note's Enter is a new line.
   // None reaches the page or the Stage.
   noteKey(ev, ta, m, page) {
     ev.stopPropagation();
@@ -2625,13 +2691,11 @@ export default class PaperView extends React.Component {
       if ((ev.key === 'Enter' || ev.key === 'Tab') && !ev.isComposing) { ev.preventDefault(); this.pickMention(items[this.state.mentionIdx] || items[0]); return; }
       if (ev.key === 'Escape') { ev.preventDefault(); this.closeMention(); return; }
     }
-    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && this.asksFrom(m)) {
-      const question = noteQuestion(ta.value);
-      if (question != null) {
-        ev.preventDefault();
-        if (question) this.askFrom(ta, m, page || this.pageOf(m), question);
-        return;
-      }
+    // a highlight's note sends as the workspace's fields do (2026-10-24): Enter asks an @bart note and leaves any other
+    if (ev.key === 'Enter' && !ev.shiftKey && !ev.isComposing && m.rects && m.rects.length) {
+      ev.preventDefault();
+      this.sendNote(ta, m, page);
+      return;
     }
     if (ev.key === 'Escape') ta.blur();
   }

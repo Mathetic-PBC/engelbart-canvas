@@ -9,11 +9,13 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
+const fs = require('node:fs');
 const Module = require('node:module');
 const { EventEmitter } = require('node:events');
 const { buildSync } = require('esbuild');
 
-const { CARD_GAP, SEL_CARD_W, CARD_SHADE, selectionCardPlace, shadedCardPlace } = require('../src/shared/selection-card.cjs');
+const SEL = require('../src/shared/selection-card.cjs');
+const { CARD_GAP, SEL_CARD_W, SEL_CARD_H, CARD_SHADE, selectionCardPlace, shadedCardPlace } = require('../src/shared/selection-card.cjs');
 const PAGE = require('../src/main/browser/page-preload.cjs');
 const CARD = require('../src/main/browser/box-card-preload.cjs');
 const VIEWS = require('../src/main/browser/views.cjs');
@@ -60,6 +62,73 @@ test('a page\'s preload measures the selection: its last line (the boxes level w
   ]);
   assert.deepEqual(at, { line: { x: 40, y: 118, w: 150, h: 16 }, rect: { x: 40, y: 100, w: 300, h: 34 } });
   assert.equal(PAGE.selectionBoxes([{ left: 1, top: 1, width: 0, height: 0 }]), null);
+});
+
+/* ------------------------------------------------------------------------------------------- no chat icon */
+
+// From 2026-10-24 a settled selection showed a chat icon at its end, which opened the card; since 2026-10-26 (David) the
+// card comes straight away again, on a web page and in a pdf, and the icon is gone everywhere.
+test('no chat icon: its module, its place and its channel are gone; the pdf and the web card show the card at once', () => {
+  assert.equal(fs.existsSync(path.join(__dirname, '../src/renderer/ui/chat-icon.js')), false);
+  for (const name of ['CHAT_ICON', 'ICON_GAP', 'ICON_SHADE', 'chatIconPlace', 'shadedIconPlace']) assert.equal(SEL[name], undefined, name);
+  assert.equal(CARD.CHANNELS.open, undefined, 'no box-card:open');
+  const code = (rel) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8').replace(/^\s*\/\/.*$/gm, '').replace(/\/\*[\s\S]*?\*\//g, '');
+  for (const rel of ['src/renderer/pdf/PaperView.jsx', 'src/renderer/box-card/BoxCard.jsx', 'src/main/browser/views.cjs', 'src/main/browser/page-preload.cjs', 'src/main/browser/box-card-preload.cjs']) {
+    assert.doesNotMatch(code(rel), /chat-icon|chatIcon|ChatIcon|selIcon|SelIcon|iconState|card\.icon|icon: true/, rel);
+  }
+  // a selection inside a highlight: that highlight's card, with no icon asked for (a page's old icon flag is dropped)
+  const viewport = { width: 800, height: 600 };
+  assert.deepEqual(VIEWS.selectionCardInput({ token: 'm1', markId: 'h-9', icon: true, pageText: 'p', viewport }), { token: 'm1', line: null, rect: null, viewport, markId: 'h-9', pageText: 'p' });
+  // the pdf's pointer up on a selection: pending, and its empty card
+  assert.match(code('src/renderer/pdf/PaperView.jsx'), /this\.pendingSel = \{ parts, text \};\s*this\.showPending\(\); sel\.removeAllRanges\(\);\s*this\.openSelCard\(\);/);
+});
+
+/* ------------------------------------------------------------------------------- the offered selection's tint */
+
+test('the selection offered is the page\'s own (selectionRange): a copy of its first Range, its boundaries as dragged; none with nothing selected', () => {
+  const made = [];
+  const range = { startContainer: 't1', startOffset: 3, endContainer: 't2', endOffset: 7, cloneRange() { const copy = { ...this, copy: true }; made.push(copy); return copy; } };
+  const selection = { isCollapsed: false, rangeCount: 1, getRangeAt: (i) => (i === 0 ? range : null) };
+  const got = PAGE.selectionRange(selection);
+  assert.equal(made.length, 1);
+  assert.equal(got, made[0], 'a copy, so the page moving its selection later changes nothing offered');
+  assert.notEqual(got, range);
+  assert.deepEqual([got.startContainer, got.startOffset, got.endContainer, got.endOffset], ['t1', 3, 't2', 7], 'the same passage, not snapped to whole words');
+  assert.equal(PAGE.selectionRange({ ...selection, isCollapsed: true }), null, 'a caret');
+  assert.equal(PAGE.selectionRange({ ...selection, rangeCount: 0 }), null);
+  assert.equal(PAGE.selectionRange(null), null);
+});
+
+test('every selection is tinted by the page (tintSelection) from the first frame of its drag: its own Range, over the highlights, none once it is gone', () => {
+  const h = new Map();
+  const make = (range) => ({ range });
+  const r1 = { id: 'r1' }, r2 = { id: 'r2' };
+  assert.equal(PAGE.tintSelection(h, r1, make), true);
+  assert.equal(h.get(PAGE.SELECTION).range, r1);
+  assert.equal(h.get(PAGE.SELECTION).priority, 1, 'a passage selected inside a highlight shows over it');
+  PAGE.tintSelection(h, r2, make); // dragged further, or a new selection
+  assert.equal(h.get(PAGE.SELECTION).range, r2);
+  h.set(PAGE.HIGHLIGHT, 'marks');
+  assert.equal(PAGE.tintSelection(h, null, make), false, 'nothing selected (a click, Esc, Save, the card closed)');
+  assert.equal(h.has(PAGE.SELECTION), false);
+  assert.equal(h.get(PAGE.HIGHLIGHT), 'marks', 'the highlights\' own name untouched');
+  assert.equal(PAGE.tintSelection(null, r1, make), false, 'no registry: nothing');
+  assert.notEqual(PAGE.SELECTION, PAGE.HIGHLIGHT);
+  assert.notEqual(PAGE.SELECTION, PAGE.SECTION);
+  const preload = fs.readFileSync(path.join(__dirname, '../src/main/browser/page-preload.cjs'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  const changed = preload.slice(preload.indexOf("addEventListener('selectionchange'"));
+  assert.ok(changed.indexOf('tintSelection(registry(), selectionRange(selection)') < changed.indexOf('if (pointerDown) return;'), 'tinted while the pointer is still down');
+});
+
+test('a selection on a page is drawn as a highlight is (glyph boxes, not line boxes): the page\'s own paint hidden for the tint, in the active selection\'s colour, text and fields left alone', () => {
+  assert.equal(VIEWS.OFFER_SELECTION_CSS, undefined, 'one rule all along, not one while offered');
+  assert.ok(VIEWS.MARK_CSS.includes('::selection{background-color:transparent !important;color:currentcolor !important}'));
+  assert.ok(VIEWS.MARK_CSS.includes(`::highlight(${PAGE.SELECTION}){background-color:Highlight !important}`), 'the system\'s selection colour, which does not go grey with the card focused');
+  assert.ok(VIEWS.MARK_CSS.includes(':is(input,textarea)::selection{background-color:Highlight !important}'), 'a field\'s selection is the page\'s, blue');
+  assert.ok(VIEWS.MARK_CSS.includes(`::highlight(${PAGE.HIGHLIGHT}){`) && VIEWS.MARK_CSS.includes(`::highlight(${PAGE.SECTION}){`));
+  const preload = fs.readFileSync(path.join(__dirname, '../src/main/browser/page-preload.cjs'), 'utf8').replace(/^\s*\/\/.*$/gm, '');
+  assert.match(preload, /sel: selectionRange\(selection\)/, 'a new selection offered with its own Range');
+  assert.match(preload, /sel: inside \? selectionRange\(selection\) : null/, 'a selection inside a highlight too; a highlight clicked, none');
 });
 
 /* ------------------------------------------------------------------------------------------------- the pdf's */
@@ -186,6 +255,19 @@ const press = (view, key, more = {}) => {
 };
 const kept = (view) => (view.marks[1] || []).filter((m) => (m.rects || []).length);
 
+test('pdf: a selection pending its note is drawn the height its highlight will be (2026-10-24, David: "it should look the same"), not the line\'s full band', async () => {
+  const { view, s: sheet } = await viewer();
+  select(view, [{ x: 50, y: 100, w: 300, h: 12 }]);
+  const hl = sheet.wrap.querySelector('[data-hl="1"]') || view.host.current.querySelector('[data-hl="1"]');
+  const pending = hl.querySelector('[data-pending]').children[0].attrs;
+  const box = (a) => ({ y: Number(a.y) / Number(a.width), h: Number(a.height) / Number(a.width) }); // in the band's width: the two layers' scales apart
+  assert.deepEqual(box(pending), { y: (100 + 12 * 0.12) / 300, h: (12 * 0.76) / 300 });
+  press(view, 'Enter');
+  const keptRect = hl.children.find((c) => !c.dataset.pending && c.tagName === 'RECT').attrs;
+  const a = box(pending), b = box(keptRect);
+  assert.ok(Math.abs(a.y - b.y) < 1e-9 && Math.abs(a.h - b.h) < 1e-9, `kept ${JSON.stringify(b)} as pending ${JSON.stringify(a)}`);
+});
+
 test('pdf: a selection opens an empty card under its last line, left with it, the placeholder after a caret; nothing is kept', async () => {
   const { view, frame, g, saves } = await viewer();
   select(view, [{ x: 50, y: 100, w: 300, h: 12 }, { x: 50, y: 116, w: 120, h: 12 }]);
@@ -262,6 +344,92 @@ test('pdf: the first key keeps the highlight with that note, its own card where 
 
 /* --------------------------------------------------------------------------------------------- a web page's */
 
+const click = () => ({ preventDefault() {}, stopPropagation() {} });
+
+test('pdf: a click into the empty card keeps the highlight with an empty note, its field focused where the card was; a press keeps the selection', async () => {
+  const { view, s, saves } = await viewer();
+  select(view, [{ x: 50, y: 100, w: 300, h: 12 }]);
+  const card = view.selEl;
+  // a press on it keeps the selection (its default prevented, so nothing is let go before the click)
+  let prevented = false;
+  card.onmousedown({ preventDefault() { prevented = true; }, stopPropagation() {} });
+  assert.equal(prevented, true);
+  assert.ok(view.pendingSel, 'still pending');
+  assert.equal(kept(view).length, 0);
+  assert.equal(saves(), 0);
+  card.onclick(click());
+  const [m] = kept(view);
+  assert.ok(m, 'a highlight');
+  assert.equal(m.note, '');
+  assert.equal(view.selEl, null, 'the empty card gone');
+  assert.equal(card.parentNode, null);
+  assert.deepEqual(view.selCard, { markId: m.id }, 'its card drawn where the empty one was');
+  const ta = s.notes.querySelector(`textarea[data-mark="${m.id}"]`);
+  assert.ok(ta, 'its note\'s field');
+  assert.equal(document.activeElement, ta, 'with the keyboard');
+  // its round send, under it: disabled with nothing typed, blue once there is
+  const send = s.notes.querySelector(`[data-send="${m.id}"]`);
+  assert.ok(send, 'the send');
+  assert.equal(send.disabled, true);
+  assert.equal(send.style.background, '#ececec');
+  ta.value = 'a note';
+  ta.oninput();
+  assert.equal(send.disabled, false);
+  assert.equal(send.style.background, '#0070f3');
+  assert.equal(send.style.color, '#fff');
+});
+
+test('pdf: ⌘C copies the pending selection\'s text while its empty card shows, and leaves the card up and nothing kept', async () => {
+  const { view, saves } = await viewer();
+  const copied = [];
+  view.props = { ...view.props, onCopyText: (t) => copied.push(t) };
+  select(view, [{ x: 50, y: 100, w: 300, h: 12 }], 'words to copy');
+  const e = { key: 'c', metaKey: true, ctrlKey: false, shiftKey: false, altKey: false, target: document.body, prevented: false, preventDefault() { this.prevented = true; } };
+  assert.equal(view.copyKey(e), true);
+  assert.equal(e.prevented, true);
+  await tick();
+  assert.deepEqual(copied, ['words to copy']);
+  assert.ok(view.selEl, 'the card still up');
+  assert.equal(view.pendingSelKey(e), false, '⌘C is not the card\'s');
+  assert.equal(kept(view).length, 0);
+  assert.equal(saves(), 0);
+});
+
+test('pdf: a highlight\'s note sends as the workspace\'s do: Enter or its send leaves a plain note as typed, asks a leading @bart; Shift+Enter is a line', async () => {
+  const { view, s } = await viewer();
+  select(view, [{ x: 50, y: 100, w: 300, h: 12 }]);
+  view.selEl.onclick(click());
+  const [m] = kept(view);
+  const ta = s.notes.querySelector(`textarea[data-mark="${m.id}"]`);
+  const asked = [];
+  view.props = { ...view.props, onAsk: () => {} }; // a Stage that can ask
+  view.askFrom = (_ta, mark, page, question) => asked.push([mark.id, page, question]);
+  const enter = (more = {}) => ({ key: 'Enter', shiftKey: false, isComposing: false, prevented: false, preventDefault() { this.prevented = true; }, stopPropagation() {}, ...more });
+  ta.value = 'line one';
+  ta.oninput();
+  const shift = enter({ shiftKey: true });
+  view.noteKey(shift, ta, m, 1);
+  assert.equal(shift.prevented, false, 'Shift+Enter: a new line');
+  assert.equal(document.activeElement, ta);
+  const plain = enter();
+  view.noteKey(plain, ta, m, 1);
+  assert.equal(plain.prevented, true, 'Enter sends');
+  assert.notEqual(document.activeElement, ta, 'the note left');
+  assert.deepEqual(asked, []);
+  assert.equal(m.note, 'line one', 'kept as typed');
+  // again, in its field, asking: the send asks as Enter does
+  view.editing = m.id;
+  view.renderMarks(1);
+  const again = s.notes.querySelector(`textarea[data-mark="${m.id}"]`);
+  again.focus();
+  again.value = '@bart what is this?';
+  again.oninput();
+  s.notes.querySelector(`[data-send="${m.id}"]`).onclick(click()); // the send asks as Enter does
+  assert.deepEqual(asked, [[m.id, 1, 'what is this?']]);
+  again.value = '   ';
+  assert.equal(view.sendNote(again, m, 1), false, 'nothing to send');
+});
+
 function fakeElectron() {
   const made = [];
   let frames = 0;
@@ -331,32 +499,34 @@ const settle = () => new Promise((r) => setTimeout(r, 10));
 const QUOTE = { exact: 'the oNLine System', prefix: 'demonstrated ', suffix: ' in 1968' };
 const at = (token, line, rect) => ({ token, line, rect: rect || line, viewport: { width: 800, height: 600 } });
 
-test('web: a settled selection gets the card view under its last line (its shadow\'s room about it), above it with no room, kept in the page', () => {
+test('web: a settled selection gets the empty card view at once under its last line (its shadow\'s room about it), no icon, the page keeping the keyboard; above it with no room, kept in the page', () => {
   const { offer, cardView, lastState } = setup();
   offer({ ...at('s1', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE, pageText: 'Engelbart demonstrated the oNLine System in 1968' });
   const card = cardView();
   assert.ok(card, 'the card view, the one boxes have');
   card.webContents.emit('did-finish-load');
-  assert.deepEqual(lastState(), { mode: 'selection', offer: 's1', mark: null, running: [] }, 'empty');
+  assert.deepEqual(lastState(), { mode: 'selection', offer: 's1', mark: null, running: [] }, 'the empty card, no icon');
   assert.equal(card.visible, true);
+  assert.equal(card.webContents.focused, 0, 'the page keeps the keyboard');
   // the page is at y 40: the line's bottom is at 110 in the window, the card itself CARD_GAP under it, its view the
   // shadow's room bigger on every side
   const { side, top, bottom } = CARD_SHADE;
-  assert.deepEqual(card.bounds, { x: 100 - side, y: 110 + CARD_GAP - top, width: SEL_CARD_W + 2 * side, height: 96 + top + bottom });
+  assert.deepEqual(card.bounds, { x: 100 - side, y: 110 + CARD_GAP - top, width: SEL_CARD_W + 2 * side, height: SEL_CARD_H + top + bottom });
   // the page scrolled: it follows; near the bottom it goes above; near the right edge it is pushed in, its shadow too
   offer(at('s1', { x: 700, y: 560, w: 60, h: 20 }, { x: 100, y: 540, w: 660, h: 40 }));
-  assert.deepEqual(card.bounds, { x: 800 - SEL_CARD_W - 2 * side, y: 40 + 540 - CARD_GAP - 96 - top, width: SEL_CARD_W + 2 * side, height: 96 + top + bottom });
+  assert.deepEqual(card.bounds, { x: 800 - SEL_CARD_W - 2 * side, y: 40 + 540 - CARD_GAP - SEL_CARD_H - top, width: SEL_CARD_W + 2 * side, height: SEL_CARD_H + top + bottom });
   // another token's whereabouts (an old selection's) move nothing
   offer(at('s0', { x: 10, y: 10, w: 60, h: 20 }));
-  assert.equal(card.bounds.y, 40 + 540 - CARD_GAP - 96 - top);
+  assert.equal(card.bounds.y, 40 + 540 - CARD_GAP - SEL_CARD_H - top);
 });
 
 test('shadedCardPlace: the card where selectionCardPlace puts it in the pane less the shadow\'s room, the view that room bigger', () => {
   const page = { x: 0, y: 40, width: 800, height: 600 }, line = { x: 100, y: 90, width: 300, height: 20 };
-  assert.deepEqual(shadedCardPlace(line, line, page, { width: 340, height: 96 }), { x: 76, y: 100, width: 388, height: 144 });
-  assert.equal(shadedCardPlace({ x: 100, y: 900, width: 30, height: 20 }, null, page, { width: 340, height: 96 }), null, 'out of the pane');
+  assert.deepEqual(shadedCardPlace(line, line, page, { width: SEL_CARD_W, height: SEL_CARD_H }), { x: 84, y: 106, width: 292, height: 78 });
+  assert.deepEqual({ SEL_CARD_W, SEL_CARD_H, CARD_SHADE }, { SEL_CARD_W: 260, SEL_CARD_H: 46, CARD_SHADE: { top: 12, side: 16, bottom: 20 } }, 'the card 260 wide, 46 tall empty, in 0 4px 16px of shadow');
+  assert.equal(shadedCardPlace({ x: 100, y: 900, width: 30, height: 20 }, null, page, { width: SEL_CARD_W, height: SEL_CARD_H }), null, 'out of the pane');
   // a selection in the pane's rim only: the card as near it as the room lets it be, still all in the pane
-  const rim = shadedCardPlace({ x: 790, y: 41, width: 8, height: 10 }, null, page, { width: 340, height: 96 });
+  const rim = shadedCardPlace({ x: 790, y: 41, width: 8, height: 10 }, null, page, { width: SEL_CARD_W, height: SEL_CARD_H });
   assert.ok(rim.x >= 0 && rim.x + rim.width <= 800 && rim.y >= 40 && rim.y + rim.height <= 640, JSON.stringify(rim));
 });
 
@@ -386,15 +556,32 @@ test('web: Esc, a click in the page (the offer taken back), the selection out of
   assert.equal(page.sent.filter(([c]) => c === PAGE.CHANNELS.add).length, 0, 'nothing tinted');
 });
 
+test('web: a selection offered (its card) adds no rule to the page; Esc tells the page, which lets go of the selection and so of its tint', async () => {
+  const { page, offer, cardView } = setup();
+  const before = page.css.length;
+  offer({ ...at('s1', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE });
+  await settle();
+  const card = cardView();
+  card.webContents.emit('did-finish-load');
+  await settle();
+  assert.equal(page.css.length, before, 'the tint is the page\'s, the same before and after');
+  card.webContents.emit('before-input-event', { preventDefault() {} }, { type: 'keyDown', key: 'Escape' });
+  await settle();
+  assert.deepEqual(sentOn(page, PAGE.CHANNELS.cardGone), ['s1']);
+  assert.equal(page.css.length, before);
+});
+
 const added = (page) => page.sent.filter(([c]) => c === PAGE.CHANNELS.add);
 const sentOn = (page, channel) => page.sent.filter(([c]) => c === channel).map(([, v]) => v);
 
-test('web: a key in the page goes into the card, which takes the keyboard; nothing is kept until Save; ⌘C, Enter and the arrows stay the page\'s', async () => {
+test('web: a key in the page goes into the card at once, which takes the keyboard; nothing is kept until Save; ⌘C, Enter and the arrows stay the page\'s', async () => {
   const { page, offer, cardView, lastState, saved, updated } = setup();
   offer({ ...at('s1', { x: 100, y: 50, w: 300, h: 20 }), quote: QUOTE, pageText: 'Engelbart demonstrated the oNLine System in 1968' });
   const card = cardView();
   card.webContents.emit('did-finish-load');
+  assert.equal(card.visible, true);
   assert.equal(key(page, { key: 'c', meta: true }), false, '⌘C copies the selection');
+  assert.equal(card.webContents.focused, 0, 'the page has the keyboard until a character is typed');
   assert.equal(key(page, { key: 'a', meta: true }), false);
   assert.equal(key(page, { key: 'ArrowDown' }), false);
   assert.equal(key(page, { key: 'Enter' }), false, 'Enter keeps nothing now');

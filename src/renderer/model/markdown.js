@@ -2,6 +2,8 @@
 // is ever parsed as html. Enough of CommonMark for notes and READMEs: headings, paragraphs, bullets and numbers (nested
 // by indentation, with task boxes), quotes, fenced code, rules, tables as text; **bold**, *italic*, `code`, [links](…).
 
+import { stripTaskMarkers } from '../../shared/task-marker.cjs';
+
 const FENCE = /^\s{0,3}(`{3,}|~{3,})\s*([\w+-]*)/;
 const HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
 const ITEM = /^(\s*)([-*+]|\d{1,9}[.)])\s+(\[[ xX]\]\s+)?(.*)$/;
@@ -10,7 +12,7 @@ const RULE = /^\s{0,3}([-*_])(\s*\1){2,}\s*$/;
 
 /** The file as blocks: { type: 'h', level, text } | { type: 'p', text } | { type: 'li', ordered, marker, depth, checked, text } | { type: 'quote', text } | { type: 'code', lang, text } | { type: 'hr' }. */
 export function markdownBlocks(source) {
-  const lines = String(source || '').replace(/\r\n?/g, '\n').split('\n');
+  const lines = stripTaskMarkers(String(source || '')).replace(/\r\n?/g, '\n').split('\n'); // a workspace's task markers (MATH-106)
   const blocks = [];
   let para = null;
   const endPara = () => { if (para) { blocks.push({ type: 'p', text: para.join(' ') }); para = null; } };

@@ -102,6 +102,7 @@ const { citeHref } = require('../../shared/passage-link.cjs');
 const { clipMiddle } = require('./clip.cjs');
 const { pathLabeller, claudeReader, codexUpdate, eventReader, createFeed } = require('./activity.cjs');
 const { TOOL_OF } = require('../tools/requirements.cjs');
+const { codexRun, runningCodexVersion } = require('../tools/codex-models.cjs');
 const { readGettingStarted } = require('../store/getting-started.cjs');
 const { createRouter, createFakeRouter, markCorrected } = require('./route.cjs');
 
@@ -436,7 +437,7 @@ function welcomeHere(ctx, projectId, agent, ref, workspaceId) {
 
 /**
  * The escalation loop, apart from any CLI. `turn({ level, message, session })` sends one message
- * and resolves to { text, session }. → { text, level, trail, ms }
+ * and resolves to { text, session, model? } (`model`: the id it ran on, when not level.model). → { text, level, trail, ms, ran }
  */
 async function climb({ steps, pinned, first, turn, session: resumed = null, onProgress = () => {}, now = Date.now }) {
   const started = now();
@@ -450,9 +451,11 @@ async function climb({ steps, pinned, first, turn, session: resumed = null, onPr
     onProgress({ step: at + 1, of: steps.length, name: level.name, effort: level.effort, movedUp: trail.length });
     const out = await turn({ level, message, session });
     session = out.session;
+    // The id the step ran on, when its CLI says (a Codex turn, MATH-159): not level.model when the account lists another.
+    const ran = typeof out.model === 'string' ? out.model : null;
     const text = String(out.text || '').trim();
     const wants = text.length < 500 ? text.match(ESCALATE_RE) : null;
-    if (!wants) return { text, level, trail, session, ms: now() - started };
+    if (!wants) return { text, level, trail, session, ms: now() - started, ran };
     if (at < steps.length - 1) {
       trail.push({ ...level, why: wants[1].trim() });
       at += 1;
@@ -461,7 +464,7 @@ async function climb({ steps, pinned, first, turn, session: resumed = null, onPr
       insisted = true;
       message = `${levelBlock(steps, at, pinned)}\n\nNo higher step exists. Answer the question now, as well as you can, and say what you are unsure of.`;
     } else {
-      return { text: `I could not answer this at the highest step available. ${wants[1].trim()}`, level, trail, session, ms: now() - started };
+      return { text: `I could not answer this at the highest step available. ${wants[1].trim()}`, level, trail, session, ms: now() - started, ran };
     }
   }
 }
@@ -785,11 +788,17 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const sandbox = write ? CREATE_CODEX.map((setting) => `-c '${setting}'`).join(' ') : `-c 'sandbox_mode="read-only"'`, at = write ? '-C "$ENGELBART_BART_CWD" ' : '';
         const shared = `--skip-git-repo-check -m "$ENGELBART_BART_MODEL" -c 'model_reasoning_effort="${level.effort}"' ${sandbox} -c 'tools.web_search=${web}' -c project_doc_max_bytes=0 --json -o "$ENGELBART_BART_OUTPUT" - < "$ENGELBART_BART_INPUT"`;
         const command = session ? `exec ${program('codex')} exec ${at}resume "$ENGELBART_BART_SESSION" ${shared}` : `exec ${program('codex')} exec --color never ${at}${shared}`;
-        const env = childEnvironment({ ...programEnv('codex'), CODEX_HOME: home, ENGELBART_BART_SESSION: session || '', ENGELBART_BART_MODEL: level.model, ENGELBART_BART_OUTPUT: outFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...(write ? { ENGELBART_BART_CWD: cwd } : {}) });
-        const { stdout, failure } = await execute(command, cwd, env, signal, (event) => { log((runs) => runs.event(logId, event)); if (onRaw) onRaw(event); onUpdate(codexUpdate(event, short)); }, timeout);
+        const envFor = (model) => childEnvironment({ ...programEnv('codex'), CODEX_HOME: home, ENGELBART_BART_SESSION: session || '', ENGELBART_BART_MODEL: model, ENGELBART_BART_OUTPUT: outFile, ENGELBART_BART_INPUT: `${stem}.input.txt`, ...(write ? { ENGELBART_BART_CWD: cwd } : {}) });
+        // The model as this home's Codex lists it, and once more on the listed one when Codex refuses it (MATH-159).
+        const attempt = async (model) => {
+          try { fs.unlinkSync(outFile); } catch { /* none yet */ }
+          const { stdout, failure } = await execute(command, cwd, envFor(model), signal, (event) => { log((runs) => runs.event(logId, event)); if (onRaw) onRaw(event); onUpdate(codexUpdate(event, short)); }, timeout);
+          let text = '';
+          try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
+          return { stdout, failure, text };
+        };
+        const { stdout, failure, text, ran } = await codexRun({ model: level.model, home, version: runningCodexVersion(tools), attempt, ok: (out) => !!out.text.trim() || stopped(signal) });
         if (stopped(signal)) throw new BartError('stopped', 'Stopped.');
-        let text = '';
-        try { text = fs.readFileSync(outFile, 'utf8'); } catch { text = ''; }
         let thread = session;
         for (const line of String(stdout || '').split(/\r?\n/)) {
           if (thread || !line.startsWith('{')) continue;
@@ -800,7 +809,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
           const reason = String(stdout || '').split(/\r?\n/).reverse().find((line) => /"type":"(error|turn\.failed)"|^ERROR/.test(line) && !/resuming with/.test(line)) || (failure ? failure.message.split('\n')[0] : 'Codex returned no message.');
           throw new BartError('failed', reason.slice(0, 300));
         }
-        return { text, session: thread };
+        return { text, session: thread, model: ran };
       },
     };
   }
@@ -915,7 +924,7 @@ function createBart({ readModels, environment = process.env, runDirectory = path
           if (error.kind === 'stopped' && plan.search && live.session) pause(askId, { provider, session: live.session });
           if (!held || error.kind === 'stopped') throw error; out = await guarded(null);
         }
-        const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned, ...(routed ? { routed } : {}) };
+        const meta = { provider, level: { name: out.level.name, effort: out.level.effort, model: out.level.model, ...(out.ran && out.ran !== out.level.model ? { ran: out.ran } : {}) }, trail: out.trail.map((step) => ({ name: step.name, effort: step.effort, why: step.why })), ms: out.ms, pinned, ...(routed ? { routed } : {}) };
         // @create's files kept in the library, each answered with a mention of its row (./create.cjs); stopped, it keeps none.
         if (create && stopped(controller.signal)) throw new BartError('stopped', 'Stopped.');
         // (2026-10-14: kept with the project, <project>/.created/<id>/, each answered with a line the editor draws as its row.)

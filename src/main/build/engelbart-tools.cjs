@@ -93,9 +93,10 @@ async function linkMade(ctx, projectId, workspaceId, row, onAdded = () => {}) {
 
 /**
  * The tools for one turn of one Build. `task`: its record (workspaceId, cwd, worktree, repo, source); `inspectPdf`: what
- * tags a pdf (a paper or not); `onAdded(row)`: a row was made (the sidebar reads the library again). → call(name, args)
+ * tags a pdf (a paper or not); `onAdded(row)`: a row was made (the sidebar reads the library again); `onMade({ id, name,
+ * type })`: the same, kept on the Build's record (task.made, the task card's Made). → call(name, args)
  */
-function createEngelbartTools({ ctx, projectId, task, inspectPdf = null, onAdded = () => {} }) {
+function createEngelbartTools({ ctx, projectId, task, inspectPdf = null, onAdded = () => {}, onMade = null }) {
   const projects = require('../store/projects.cjs');
   const library = require('../store/library.cjs');
   const home = ctx.homeDir || os.homedir();
@@ -109,7 +110,11 @@ function createEngelbartTools({ ctx, projectId, task, inspectPdf = null, onAdded
   }
 
   /** The row made: linked to the workspace, announced. */
-  const made = (row) => linkMade(ctx, projectId, task.workspaceId, row, onAdded);
+  const made = async (row) => {
+    const out = await linkMade(ctx, projectId, task.workspaceId, row, onAdded);
+    if (onMade && row && row.id) { try { await onMade({ id: row.id, name: row.name || '', type: row.type || '' }); } catch { /* the record went meanwhile */ } }
+    return out;
+  };
 
   async function note(name, body) {
     const created = await projects.createNote(ctx, projectId, { name, workspaceId: task.workspaceId || null, text: body });

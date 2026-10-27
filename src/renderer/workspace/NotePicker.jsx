@@ -10,15 +10,18 @@ const NOTE_GLYPH = { type: 'md', tags: ['note'] };
 /**
  * The +'s menu beside the document's tabs (2026-09-25): a search over every note in the library, the caret in it from the
  * start, and New note. Nothing is made until New note is picked. ↑/↓ move, Enter picks, Esc closes (clears first).
- * `onPick(row)` opens a note, `onNew(name)` makes one; either may be async and the menu closes once it is done.
+ * `onPick(row, kind)` opens a note (or, `kind` 'workspace', a workspace's document), `onNew(name)` makes one; either may
+ * be async and the menu closes once it is done. The split icon's menu (MATH-84) lists the workspaces written in last too
+ * (`workspaces`); the +'s does not.
  */
-export default function NotePicker({ anchor, library, openIds, inRail, onPick, onNew, onClose, onError }) {
+export default function NotePicker({ anchor, library, openIds, inRail, onPick, onNew, onClose, onError, workspaces = null }) {
   const [ref, placed] = usePlaced(anchor, { gap: 6, cap: 420 });
   const [q, setQ] = React.useState('');
   const [idx, setIdx] = React.useState(0);
   const [busy, setBusy] = React.useState(false);
   const fieldRef = React.useRef(null);
-  const rows = notePickRows({ query: q, library, openIds, inRail });
+  const rows = notePickRows({ query: q, library, openIds, inRail, workspaces: workspaces || [] });
+  const label = workspaces ? 'Search notes and workspaces' : 'Search notes';
   const at = rows.length ? Math.min(idx, rows.length - 1) : -1;
 
   // The panel is invisible for the frame in which it measures itself (ui/usePlaced.js), and an invisible field takes no focus.
@@ -28,7 +31,7 @@ export default function NotePicker({ anchor, library, openIds, inRail, onPick, o
   }, [placed.visibility]);
 
   React.useEffect(() => {
-    const away = (event) => { if (ref.current && !ref.current.contains(event.target) && !(event.target.closest && event.target.closest('[data-note-plus]'))) onClose(); };
+    const away = (event) => { if (ref.current && !ref.current.contains(event.target) && !(event.target.closest && event.target.closest('[data-note-plus], [data-split-pane]'))) onClose(); };
     document.addEventListener('mousedown', away, true);
     return () => document.removeEventListener('mousedown', away, true);
   }, [onClose, ref]);
@@ -38,7 +41,7 @@ export default function NotePicker({ anchor, library, openIds, inRail, onPick, o
     setBusy(true);
     try {
       if (row.kind === 'new') await onNew(row.name);
-      else await onPick(row.row);
+      else await onPick(row.row, row.kind);
       onClose();
     } catch (error) {
       setBusy(false);
@@ -65,8 +68,8 @@ export default function NotePicker({ anchor, library, openIds, inRail, onPick, o
           readOnly={busy}
           onChange={(event) => { setQ(event.target.value); setIdx(0); }}
           onKeyDown={onKey}
-          placeholder="Search notes"
-          aria-label="Search notes"
+          placeholder={label}
+          aria-label={label}
           spellCheck={false}
           style={{ flex: 1, minWidth: 0, padding: '6px 0', border: 0, background: 'transparent', font: '13px/1.5 var(--font-sans)', color: '#171717', opacity: busy ? 0.5 : 1 }}
         />
@@ -75,7 +78,7 @@ export default function NotePicker({ anchor, library, openIds, inRail, onPick, o
         <button key={item.key} type="button" data-note-pick={item.key} disabled={busy} onMouseDown={(event) => event.preventDefault()} onClick={() => void pick(item)} onMouseMove={() => { if (idx !== i) setIdx(i); }} style={{ ...row, background: i === at ? '#f2f2f2' : 'transparent' }}>
           {item.kind === 'new'
             ? <span style={{ flex: 'none', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '16px/1 var(--font-sans)', color: '#4d4d4d' }}>+</span>
-            : <KindGlyph item={NOTE_GLYPH} box={16} color="#8f8f8f" />}
+            : item.kind === 'workspace' ? <KindGlyph kind="workspace" box={16} color="#8f8f8f" /> : <KindGlyph item={NOTE_GLYPH} box={16} color="#8f8f8f" />}
           <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', font: '13px/1.5 var(--font-sans)', color: item.kind === 'note' && isUntitled(item.name) ? '#8f8f8f' : '#171717' }}>
             {item.kind === 'new' ? (item.name ? <>New note <span style={{ color: '#4d4d4d' }}>“{item.name}”</span></> : 'New note') : item.name}
           </span>

@@ -11,7 +11,7 @@ import { createPortal } from 'react-dom';
 import { api, errorMessage } from '../api.js';
 import { KIND, KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { isUntitled } from '../model/names.js';
-import { libraryPanelRows, looksAddable, parseSources, searchRows } from '../model/rail.js';
+import { elsewhereLabel, libraryPanelRows, looksAddable, parseSources, searchRows } from '../model/rail.js';
 import { LIBRARY_CHIPS, libraryCounts } from '../model/kind.js';
 import { findWorkspaces } from '../model/nav.js';
 import { countLabel, sinceWords, sourceIcon, shortcutProjects, versionsOf, buildInProgress } from '../model/sidebar.js';
@@ -1015,11 +1015,12 @@ export function ShortcutsDialog({ roots, railHidden = false, onNext, onGo, onTog
 const MAX_EACH = 6;
 
 /**
- * Search (the fixed row under Library): the projects here, this project's sources, and the library, as words are typed;
- * an address or a path can be added. ↑↓ and Enter, or a press: a project goes there, a source opens; a library row's +
- * brings it into this project.
+ * Search (the fixed row under Library): the projects here, this project's sources, the other projects' workspaces and
+ * Sources (MATH-148: found by main by their names and what they say, each named with its project), and the library, as
+ * words are typed; an address or a path can be added. ↑↓ and Enter, or a press: a project goes there, a source opens;
+ * another project's goes to that project and opens there; a library row's + brings it into this project.
  */
-export function SearchDialog({ projectId, workspaces, rows, library, inRail, onGoWorkspace, onOpen, onLink, onAddInput, onClose }) {
+export function SearchDialog({ projectId, workspaces, rows, library, inRail, onGoWorkspace, onOpen, onOpenElsewhere = null, onLink, onAddInput, onClose }) {
   const [q, setQ] = React.useState('');
   const [idx, setIdx] = React.useState(0);
   const [found, setFound] = React.useState(null);
@@ -1038,6 +1039,15 @@ export function SearchDialog({ projectId, workspaces, rows, library, inRail, onG
   }, [addable, typed]);
   const answer = addable && found && found.query === typed ? found.result : undefined;
   const bodies = useBodies(projectId, true);
+  const [elsewhere, setElsewhere] = React.useState({ query: '', hits: [] });
+  React.useEffect(() => {
+    if (!typed || !onOpenElsewhere || !api.searchElsewhere) return undefined;
+    let live = true;
+    const timer = setTimeout(() => {
+      api.searchElsewhere(projectId, typed, MAX_EACH * 2).then((hits) => { if (live) setElsewhere({ query: typed, hits: Array.isArray(hits) ? hits : [] }); }).catch(() => {});
+    }, 120);
+    return () => { live = false; clearTimeout(timer); };
+  }, [typed, projectId, onOpenElsewhere]);
   const sections = React.useMemo(() => {
     if (!typed) return [];
     const out = [];
@@ -1045,17 +1055,20 @@ export function SearchDialog({ projectId, workspaces, rows, library, inRail, onG
     if (spaces.length) out.push({ title: 'Projects', items: spaces });
     const here = searchRows({ query: typed, library: rows, inRail: () => true, bodies }).slice(0, MAX_EACH).map((result) => ({ kind: 'source', key: `here:${result.key}`, result }));
     if (here.length) out.push({ title: 'In this project', items: here });
-    const held = new Set(rows.map((row) => row.id));
+    const theirs = elsewhere.query === typed ? elsewhere.hits : [];
+    if (theirs.length) out.push({ title: 'Other projects', items: theirs.map((hit) => ({ kind: 'elsewhere', key: `from:${hit.kind}:${hit.id}`, hit })) });
+    const held = new Set([...rows.map((row) => row.id), ...theirs.filter((hit) => hit.kind === 'item').map((hit) => hit.id)]); // another project's is listed there, with its name
     const lib = searchRows({ query: typed, library: library.filter((row) => !held.has(row.id)), inRail, found: answer, bodies }).slice(0, MAX_EACH).map((result) => ({ kind: result.kind === 'fresh' ? 'fresh' : 'library', key: `lib:${result.key}`, result }));
     if (lib.length) out.push({ title: 'Library', items: lib });
     return out;
-  }, [typed, workspaces, rows, library, inRail, answer, bodies]);
+  }, [typed, workspaces, rows, library, inRail, answer, bodies, elsewhere]);
   const flat = sections.flatMap((section) => section.items);
   const at = flat.length ? Math.min(idx, flat.length - 1) : -1;
   const activate = async (item) => {
     if (!item) return;
     try {
       if (item.kind === 'workspace') { onClose(); onGoWorkspace(item.workspace.id); }
+      else if (item.kind === 'elsewhere') { onClose(); onOpenElsewhere(item.hit); }
       else if (item.kind === 'fresh') { await onAddInput(typed); onClose(); }
       else { onClose(); onOpen(item.result.row); }
     } catch (error) { setProblem(errorMessage(error)); }
@@ -1081,6 +1094,11 @@ export function SearchDialog({ projectId, workspaces, rows, library, inRail, onG
               const i = n;
               if (item.kind === 'workspace') {
                 return <PanelRow key={item.key} data-search-result={item.key} icon={<I.WorkspaceIcon size={15} />} title={item.workspace.name} meta={item.workspace.above.length ? item.workspace.above.join(' / ') : null} active={i === at} onEnter={() => setIdx(i)} onClick={() => activate(item)} />;
+              }
+              if (item.kind === 'elsewhere') {
+                const { hit } = item;
+                const row = hit.kind === 'item' ? library.find((candidate) => candidate.id === hit.id) || { type: hit.type || 'md', tags: [] } : null;
+                return <PanelRow key={item.key} data-search-result={item.key} data-search-project={hit.projectId} icon={row ? <Glyph item={row} box={16} color="#4d4d4d" /> : <I.WorkspaceIcon size={15} />} title={elsewhereLabel(hit.name, hit.projectName)} meta={hit.snippet || null} active={i === at} onEnter={() => setIdx(i)} onClick={() => activate(item)} />;
               }
               const result = item.result;
               const row = result.kind === 'item' ? result.row : null;

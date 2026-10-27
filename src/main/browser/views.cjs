@@ -106,8 +106,21 @@ const PAGE_PRELOAD_ID = 'engelbart-page';
 // A web highlight (2026-10-18, David's picture): a soft yellow with a thin yellow line under each of its lines (until then
 // the PDF's blue). An author sheet: Chromium leaves ::highlight() out of a user one (cssOrigin 'user' paints nothing,
 // checked 2026-10-06 on Electron 44). !important, so a page's own rule for the name wins only with !important of its own.
-const MARK_LOOK = 'background-color:rgba(255,214,0,.22);text-decoration-line:underline;text-decoration-style:solid;text-decoration-color:rgba(240,190,0,.9);text-decoration-thickness:2px;text-underline-offset:3px';
-const MARK_CSS = `::highlight(${PAGE.HIGHLIGHT}){${MARK_LOOK.split(';').map((p) => `${p} !important`).join(';')}}::highlight(${PAGE.SECTION}){background-color:rgba(255,196,0,.13) !important}`; // a guide's section as a pdf's (PaperView)
+// The line sits 1px under the baseline (2026-10-24, was 3px): a ::highlight() is painted over the text's glyph box only
+// (font ascent to descent), and at 3px the 2px line hung about 1.5px below that box, so the kept passage looked taller
+// than the same passage offered; at 1px it is inside the box (measured on Electron 44 at 16px).
+const MARK_LOOK = 'background-color:rgba(255,214,0,.22);text-decoration-line:underline;text-decoration-style:solid;text-decoration-color:rgba(240,190,0,.9);text-decoration-thickness:2px;text-underline-offset:1px';
+// A selection on a page (2026-10-24, David: "it should look the same" from the drag to the kept highlight): the page's
+// own paint of it is hidden and the preload tints its Range instead (page-preload.cjs SELECTION) in the active selection's
+// colour, the system's Highlight (already see-through in Electron 44). A selection fills its line boxes, a ::highlight()
+// only the glyph box of each line, and a kept highlight can only be the second: drawn the same way all along, the passage
+// is the same size dragged, let go, with its card, and kept, and the tint does not go grey when the card
+// takes the keyboard. Its text keeps its colour (currentcolor: a page's own ::selection{color:#fff} would leave white
+// text on the page's white). A field's text is the page's still (a ::highlight() cannot reach into an input), the
+// active blue too.
+const MARK_CSS = `::highlight(${PAGE.HIGHLIGHT}){${MARK_LOOK.split(';').map((p) => `${p} !important`).join(';')}}::highlight(${PAGE.SECTION}){background-color:rgba(255,196,0,.13) !important}` // a guide's section as a pdf's (PaperView)
+  + `::selection{background-color:transparent !important;color:currentcolor !important}::highlight(${PAGE.SELECTION}){background-color:Highlight !important}`
+  + ':is(input,textarea)::selection{background-color:Highlight !important}';
 const QUOTE_TIMEOUT_MS = 2000;
 const SELECTION_TIMEOUT_MS = 300; // an @bart turn does not wait on a page that does not answer
 const MAX_PAGE_TEXT = 2 * PAGE.PAGE_TEXT + 2 * PAGE.MAX_EXACT; // the most page text main takes with a selection
@@ -126,7 +139,7 @@ const CARD_MIN_H = 64; // its height until it says how tall it is
 // A selection's or a highlight's card (2026-10-18): SEL_CARD_W wide and its shadow's room each side (selection-card.cjs),
 // and about as tall as an empty one until it says how tall it is
 const SEL_VIEW_W = SEL.SEL_CARD_W + 2 * SEL.CARD_SHADE.side;
-const SEL_VIEW_H = 96 + SEL.CARD_SHADE.top + SEL.CARD_SHADE.bottom;
+const SEL_VIEW_H = SEL.SEL_CARD_H + SEL.CARD_SHADE.top + SEL.CARD_SHADE.bottom;
 /** What a note asks Bart: the words after a leading @bart, or null for a note that asks nothing (pdf/canvas.js noteQuestion). */
 function bartQuestion(note) {
   const m = String(note == null ? '' : note).match(/^\s*@bart(?=\s|$)([\s\S]*)$/i);
@@ -305,6 +318,12 @@ function selectionCardInput(value) {
   const quote = quoteInput(value.quote);
   if (!quote) return null;
   return { ...out, quote, pageText: typeof value.pageText === 'string' ? value.pageText.slice(0, MAX_PAGE_TEXT) : '' };
+}
+
+/** A page's background as its preload says it (2026-10-25, canvasColor): 'rgb(r, g, b)', else null. */
+function backgroundInput(value) {
+  const m = typeof value === 'string' ? /^rgb\((\d{1,3}), (\d{1,3}), (\d{1,3})\)$/.exec(value) : null;
+  return m && [m[1], m[2], m[3]].every((n) => Number(n) <= 255) ? value : null;
 }
 
 /**
@@ -568,6 +587,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       canGoForward: contents.navigationHistory.canGoForward(),
       error: entry.error,
       drawn: entry.drawn, // a page has arrived in this tab at least once (the Stage's "Waking…" waits for the first)
+      background: entry.background || null, // the page's background colour, for the strip the Stage leaves beside it
     });
   }
 
@@ -737,6 +757,12 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       if (got) drawBoxes(entry, contents, got);
     });
     contents.ipc.on(PAGE.CHANNELS.editing, (event, value) => { if (fromTab(event, id, entry)) entry.editing = value === true; });
+    // the page's background (2026-10-25): the Stage paints the strip beside the page with it
+    contents.ipc.on(PAGE.CHANNELS.background, (event, value) => {
+      if (!fromTab(event, id, entry)) return;
+      const background = backgroundInput(value);
+      if (background !== (entry.background || null)) { entry.background = background; emit(id); }
+    });
     // build 2: a box resized, where the selected one is in the viewport, a frame painted, the cursor over a handle
     contents.ipc.handle(PAGE.CHANNELS.boxResize, async (event, value) => {
       if (!fromTab(event, id, entry)) throw new Error('Not a page in the Stage');
@@ -763,6 +789,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
         // a page whose ink is not kept, a field with the keyboard, a box being drawn or selected: no card
         if (!pageMarks || entry.editing || !fileablePage(contents.getURL()) || layer.tab === id || selectedBox(entry)) { dropOffer(id, entry); return; }
         if (card.tab === id && card.mode === 'selection') hideCard(); // the last selection's card, typed in or not
+        // a selection (a new one, or one inside a highlight: 2026-10-26, its empty card at once again), or a highlight clicked
         entry.offer = got;
       } else if (entry.offer && entry.offer.token === got.token) entry.offer = { ...entry.offer, line: got.line, rect: got.rect, viewport: got.viewport };
       else return;
@@ -996,7 +1023,6 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       if (old) await contents.removeInsertedCSS(old).catch(() => {});
     });
   }
-
   /* --------------------------------------------------------------------------------- the selected box's card */
 
   // One per window, made the first time a box is selected: { view, ready, tab, markId, height, running, note }.
@@ -1303,6 +1329,10 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     const size = { width: Math.max(1, full.width - 2 * shade.side), height: Math.max(1, full.height - shade.top - shade.bottom) };
     const at = line && SEL.shadedCardPlace(line, all, page, size, shade, SEL.CARD_GAP * appZoom);
     if (!at) { if (card.markId) hideCardView(); else dropOffer(id, entry); return; }
+    showCardAt(view, win, at, appZoom);
+  }
+  /** The card view at `at` in the window, at the app's zoom, over the page. */
+  function showCardAt(view, win, at, appZoom) {
     if (view.webContents.getZoomFactor && view.webContents.getZoomFactor() !== appZoom) view.webContents.setZoomFactor(appZoom);
     view.setBounds(at);
     if (!view.getVisible()) {
@@ -1425,6 +1455,18 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     };
   }
 
+  // Every page a tab arrives at goes to the renderer as `browser:visit` { id, url, title }, which keeps it in the project's
+  // history (MATH-127, store/history.cjs); a title that comes later as { ..., update: true }. A popup's pages go under
+  // the tab that opened it. The title is the page's own (getTitle), as it stands.
+  function watchVisits(contents, tab) {
+    const visit = (url, update) => {
+      try { send('browser:visit', { id: tab, url: String(url || contents.getURL() || ''), title: String(contents.getTitle() || ''), ...(update ? { update: true } : {}) }); } catch { /* the history is best effort */ }
+    };
+    contents.on('did-navigate', (_event, url) => visit(url, false));
+    contents.on('did-navigate-in-page', (_event, url, isMainFrame) => { if (isMainFrame) visit(url, false); });
+    contents.on('page-title-updated', () => visit(contents.getURL(), true));
+  }
+
   // A popup has no address bar, so its title carries the host: the person can see who is asking.
   function watchPopup(popup, from) {
     popups.add(popup);
@@ -1439,6 +1481,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     };
     contents.on('page-title-updated', (event) => { event.preventDefault(); title(); });
     contents.on('did-navigate', title);
+    watchVisits(contents, from);
     contents.on('context-menu', (_event, params) => contextMenu(contents, params, null));
     popup.on('closed', () => popups.delete(popup));
   }
@@ -1472,6 +1515,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
     listenToPage(contents, id, entry);
     contents.setWindowOpenHandler(windowOpenHandler(id, contents));
     contents.on('did-create-window', (popup) => watchPopup(popup, id));
+    watchVisits(contents, id);
     // The page took the keyboard (a click in it, mostly): the renderer never sees a click in a native view, and ⌘T, ⌘W
     // and ⌘F go to the place clicked last (2026-10-16, renderer's model/key-side.js).
     contents.on('focus', () => send('browser:focused', { id }));
@@ -1484,7 +1528,7 @@ function createBrowserViews({ electron, getWindow, send, appName, fileRoot, onLa
       entry.pending = '';
       emit(id);
     });
-    contents.on('did-navigate', () => { entry.error = null; entry.pending = ''; entry.found = ''; entry.drawn = true; emit(id); });
+    contents.on('did-navigate', () => { entry.error = null; entry.pending = ''; entry.found = ''; entry.drawn = true; entry.background = null; emit(id); }); // the new page says its own background
     contents.on('did-stop-loading', () => {
       // The tab's first load stopped with no page and nothing else on the way (2026-10-04): cancelled (a 204, a sandbox
       // waking), it would leave the tab blank for good, with Chromium saying nothing. A pdf turned into a download is the
@@ -1809,4 +1853,4 @@ function registerBrowserIpc({ ipcMain, trustedHandler, viewsFor = null, views = 
   }
 }
 
-module.exports = { PAGE_PRELOAD, BOX_LAYER_PRELOAD, BOX_CARD_PRELOAD, BOX_CARD_URL, CARD_W, CARD_HIDE_WHILE_SCROLLING, boxViewInput, selectionCardInput, boxResizeInput, boxAsksInput, cardAsks, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };
+module.exports = { PAGE_PRELOAD, backgroundInput, BOX_LAYER_PRELOAD, BOX_CARD_PRELOAD, BOX_CARD_URL, CARD_W, CARD_HIDE_WHILE_SCROLLING, boxViewInput, selectionCardInput, boxResizeInput, boxAsksInput, cardAsks, MARK_CSS, SELECTION_TIMEOUT_MS, SHOT_MAX_EDGE, fileablePage, quoteInput, selectionInput, marksForPage, boxReplyInput, boxReportInput, PARTITION, DEV_PARTITION, stagePartition, parseBrowserUrl, parseFileUrl, externalScheme, isLoopback, cleanUserAgent, boundsFrom, pdfAddress, pdfAsDownload, pdfName, createBrowserViews, registerBrowserIpc };

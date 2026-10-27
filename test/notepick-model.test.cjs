@@ -41,3 +41,16 @@ test('tags: open in a tab, else in this workspace', async () => {
   const rows = notePickRows({ query: 'canvas', library, openIds: ['a'], inRail: (id) => id === 'c' });
   assert.deepEqual(rows.filter((row) => row.kind === 'note').map((row) => row.tag), ['here', 'open']);
 });
+
+test('the split icon\'s menu (MATH-84): the workspaces written in last after the notes, four of them; typed, every match', async () => {
+  const { notePickRows, NOTE_PICK_RECENT, SPACE_PICK_RECENT } = await load();
+  const workspaces = Array.from({ length: 6 }, (_, i) => ({ id: `w${i}`, name: i === 5 ? 'Canvas plans' : `Space ${i}` }));
+  const rows = notePickRows({ query: '', library, workspaces, openIds: ['w1'] });
+  assert.equal(rows.length, 1 + NOTE_PICK_RECENT + SPACE_PICK_RECENT);
+  assert.deepEqual(rows.slice(-SPACE_PICK_RECENT).map((row) => [row.kind, row.key, row.tag]), [['workspace', 'ws:w0', ''], ['workspace', 'ws:w1', 'open'], ['workspace', 'ws:w2', ''], ['workspace', 'ws:w3', '']]);
+  assert.deepEqual(rows[rows.length - 1].row, { id: 'w3', name: 'Space 3' });
+  const typed = notePickRows({ query: 'canvas', library, workspaces });
+  assert.deepEqual(typed.map((row) => row.kind), ['note', 'note', 'workspace', 'new'], 'notes, then workspaces, then New note');
+  assert.equal(typed[2].name, 'Canvas plans');
+  assert.equal(notePickRows({ query: '', library }).some((row) => row.kind === 'workspace'), false, 'the +\'s menu: notes only, as before');
+});

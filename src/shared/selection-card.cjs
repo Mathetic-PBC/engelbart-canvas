@@ -34,8 +34,11 @@ function selectionCardPlace(line, all, pane, size, gap = CARD_GAP) {
 // view (views.cjs, renderer/box-card/BoxCard.jsx). The view has CARD_SHADE about the card for the shadow to fade out in,
 // so it is placed by the card's own size in the pane less that room: the card CARD_GAP from the text, below or above it,
 // and the whole view, shadow and all, inside the pane.
-const SEL_CARD_W = 340;
-const CARD_SHADE = Object.freeze({ top: 18, side: 24, bottom: 30 }); // 0 6px 24px: its blur out from the card, less its drop
+// Smaller since 2026-10-24 later (David: "with only @bart typed it is mostly empty space"): 260 wide (340 before), the
+// shadow 0 4px 16px (0 6px 24px before), and empty only a line tall, SEL_CARD_H: its note, Cancel and the send on one row.
+const SEL_CARD_W = 260;
+const SEL_CARD_H = 46; // the empty card: the send's 26 between 10 and 8 of padding, and its hairline edge above and below
+const CARD_SHADE = Object.freeze({ top: 12, side: 16, bottom: 20 }); // 0 4px 16px: its blur out from the card, less its drop
 
 /**
  * The view's place for a card `size` ({ width, height }, the card alone) with `shade` about it, for a selection (`line`,
@@ -55,4 +58,4 @@ function shadedCardPlace(line, all, pane, size, shade = CARD_SHADE, gap = CARD_G
   return { x: Math.round(at.x - shade.side), y: Math.round(at.y - shade.top), width: Math.round(at.width + 2 * shade.side), height: Math.round(at.height + shade.top + shade.bottom) };
 }
 
-module.exports = { CARD_GAP, SEL_CARD_W, CARD_SHADE, selectionCardPlace, shadedCardPlace };
+module.exports = { CARD_GAP, SEL_CARD_W, SEL_CARD_H, CARD_SHADE, selectionCardPlace, shadedCardPlace };

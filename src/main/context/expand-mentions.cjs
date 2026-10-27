@@ -20,6 +20,7 @@ const projects = require('../store/projects.cjs');
 const buildStore = require('../build/store.cjs');
 const { fileInRow } = require('../store/folder-files.cjs');
 const zoteroMirror = require('../zotero/mirror.cjs');
+const { stripTaskMarkers } = require('../../shared/task-marker.cjs');
 
 // A Build's line (`build> <id>`, 2026-09-25) is a card drawn from its record: outside the app it reads as what the card says.
 const BUILD_LINE_RE = /^build> ([0-9a-f]{10})$/;
@@ -105,8 +106,11 @@ async function workspaceBlock(name, id, source, seen, tally) {
   try { held = source.workspace ? await source.workspace(id) : null; } catch { held = null; }
   if (!held) { tally.missing += 1; return [`<file name="${attr(name)}" type="workspace" missing="true" />`]; }
   tally.files += 1;
-  const open = `<file name="${attr(held.name)}" type="workspace"${held.path ? ` path="${attr(held.path)}"` : ''}>`;
-  return [open, ...(await expandLines(held.text, source, seen, tally)), '</file>'];
+  // Another project's (MATH-148): said so, and what it mentions by name is looked for in its own project first.
+  const other = held.projectId && source.projectId && held.projectId !== source.projectId;
+  const open = `<file name="${attr(held.name)}" type="workspace"${other && held.projectName ? ` project="${attr(held.projectName)}"` : ''}${held.path ? ` path="${attr(held.path)}"` : ''}>`;
+  const inside = other && source.withProject ? source.withProject(held.projectId) : source;
+  return [open, ...(await expandLines(held.text, inside, seen, tally)), '</file>'];
 }
 
 async function expandLines(text, source, seen, tally) {
@@ -231,8 +235,17 @@ function projectSource(ctx, projectId, rows) {
   }
   const images = new Map(rows.filter((row) => row.type === 'image' && row.path).map((row) => [row.id, row.path]));
   const byId = new Map(rows.map((row) => [row.id, row]));
-  return {
-    find: (name) => byName.get(name.toLowerCase()) || null,
+  const find = (name) => byName.get(name.toLowerCase()) || null;
+  // Inside another project's workspace (MATH-148): a name is that project's file first, then this one's.
+  const withProject = (otherId) => {
+    const theirs = new Map();
+    for (const row of rows) if (row.type !== 'image' && row.project_id === otherId && !theirs.has(row.name.toLowerCase())) theirs.set(row.name.toLowerCase(), row);
+    return { ...source, projectId: otherId, find: (name) => theirs.get(name.toLowerCase()) || find(name) };
+  };
+  const source = {
+    projectId,
+    withProject,
+    find,
     // By id, a picture too (2026-10-17: `@[Name](lib:<id>)`, its path under the line); by name, never one (find).
     get: (id) => byId.get(id) || null,
     // A file inside a library folder (MATH-22) → store/folder-files.cjs fileInRow's answer, or null without the folder.
@@ -248,15 +261,21 @@ function projectSource(ctx, projectId, rows) {
     // Not readDoc: that reads a file that is gone as an empty document, and here it is a missing one.
     read: async (row) => fs.readFileSync((await projects.resolveDoc(ctx, row.project_id, { kind: 'note', id: row.id })).file, 'utf8'),
     image: (id) => images.get(id) || null,
+    // This project's workspace; else, read only, another project's (MATH-148, projects.findWorkspaceAnywhere).
     workspace: async (id) => {
       let found;
-      try { found = projects.findWorkspace(ctx, projectId, id); } catch { return null; }
+      try { found = projects.findWorkspace(ctx, projectId, id); } catch { found = null; }
+      if (!found) {
+        try { found = projects.findWorkspaceAnywhere(ctx, id); } catch { found = null; }
+        if (!found) return null;
+      }
       const file = path.join(found.workspace.dir, 'workspace.md');
       let text = '';
       try { text = fs.readFileSync(file, 'utf8'); } catch { text = ''; } // a workspace with nothing written yet
-      return { name: found.workspace.name, path: file, text };
+      return { name: found.workspace.name, path: file, text: stripTaskMarkers(text), projectId: found.project.id, projectName: found.project.name }; // a task's Build marker is no word of it (MATH-106)
     },
   };
+  return source;
 }
 
 /**
@@ -274,7 +293,7 @@ async function expandDoc(ctx, projectId, ref, { seen = new Set() } = {}) {
   if (ref.kind === 'workspace') seen.add(`ws:${ref.workspaceId}`); // mentioned back from inside, it is already here
   let project = null;
   try { project = projects.findProject(ctx, projectId); } catch { project = null; }
-  const { lines, files, missing } = await expandMentions(buildLines(body, project), source, seen);
+  const { lines, files, missing } = await expandMentions(buildLines(stripTaskMarkers(body), project), source, seen);
   const text = [...(title ? [`# ${title}`, ''] : []), ...lines].join('\n').trimEnd();
   return { title, body: lines.join('\n').trimEnd(), text, chars: text.length, files, missing };
 }
