@@ -368,13 +368,17 @@ const UNSAVE_WORDS = 'Remove from this project (it stays in the library)';
 // discarded, failed or stopped); one whose record is not loaded (`builds`, props.builds) counts as at work.
 const BUILD_DONE = new Set(['accepted', 'discarded', 'failed', 'stopped']);
 const buildDone = (task) => !!task && (!!task.final || BUILD_DONE.has(task.status));
-const isRunning = (thread, builds) => thread.turns.some((turn) => turn.pending || (turn.build && !buildDone(builds && builds[turn.build])));
+// The Builds in a conversation (MATH-161): those that answer its turns, and the one joined to its end (doc.js thread.joined).
+const buildIdsOf = (thread) => [...thread.turns.filter((turn) => turn.build).map((turn) => turn.build), ...(thread.joined ? [thread.joined.id] : [])];
+// The conversation's card's last line: its joined Build's, else its last turn's.
+const cardLast = (thread) => (thread.joined ? thread.joined.line : thread.to);
+const isRunning = (thread, builds) => thread.turns.some((turn) => turn.pending) || buildIdsOf(thread).some((id) => !buildDone(builds && builds[id]));
 // Whether an exchange's Collapse is in its question's corner (2026-10-15): answered, at rest, and not a research box (whose
 // question is its own row, with its own Collapse on its foot).
 const cornered = (turn, box) => !!turn && turn.answered && !turn.pending && !turn.folded && !box;
 // A Build still at work in a conversation (its card is its answer): such a conversation stays open. A conversation whose
 // question is still being answered otherwise collapses as any does (2026-10-15, David: a Create run could not be).
-const isBuilding = (thread, builds) => thread.turns.some((turn) => turn.build && !buildDone(builds && builds[turn.build]));
+const isBuilding = (thread, builds) => buildIdsOf(thread).some((id) => !buildDone(builds && builds[id]));
 const isCollapsed = (thread, builds) => thread.titleLine >= 0 && thread.folded && !isBuilding(thread, builds);
 // `ls` with the answers of `turns` collapsed or expanded (`to`), as a turn's own Collapse does it: on each of its reply
 // lines (`bart+>`). Turns not answered, or at work, are left as they are.
@@ -532,7 +536,7 @@ const IMG_CORNERS = [['nw', 'left:0;top:0', 'nwse-resize'], ['ne', 'right:0;top:
 // title or question and its last line) or inside a fenced code block. → Set of j.
 export function imgDropGaps(ls, ps = parseLines(ls)) {
   const shut = new Set();
-  for (const t of threads(ls, ps)) for (let j = (t.titleLine >= 0 ? t.titleLine : t.from) + 1; j <= t.to; j++) shut.add(j);
+  for (const t of threads(ls, ps)) for (let j = (t.titleLine >= 0 ? t.titleLine : t.from) + 1; j <= cardLast(t); j++) shut.add(j);
   for (const b of codeBlocks(ls)) for (let j = b.open + 1; j <= b.close; j++) shut.add(j);
   const out = new Set();
   for (let j = 0; j <= ls.length; j++) if (!shut.has(j)) out.add(j);
@@ -992,9 +996,9 @@ export default class DocEditor extends React.Component {
     // on by autoCollapse, which would fold it again when its Build's record arrives.
     const ls = this.lines();
     if (this.collapsedOf(ls).has(i)) {
-      const thread = threads(ls, this.parsedOf(ls)).find((t) => t.titleLine >= 0 && t.folded && i >= t.from && i <= t.to);
+      const thread = threads(ls, this.parsedOf(ls)).find((t) => t.titleLine >= 0 && t.folded && i >= t.from && i <= cardLast(t));
       if (thread && !this.props.readOnly) {
-        if (this.autoWait) thread.turns.forEach((turn) => turn.build && this.autoWait.ids.delete(turn.build));
+        if (this.autoWait) buildIdsOf(thread).forEach((id) => this.autoWait.ids.delete(id));
         this.toggleThread(thread.titleLine);
       }
       return false;
@@ -1115,14 +1119,14 @@ export default class DocEditor extends React.Component {
   collapsedOf(ls) {
     const builds = this.props.builds, kept = this.collapseCache.get(ls); if (kept && kept.builds === builds) return kept.held;
     const held = new Set();
-    for (const thread of threads(ls, this.parsedOf(ls))) if (isCollapsed(thread, builds)) for (let i = thread.from; i <= thread.to; i++) held.add(i);
+    for (const thread of threads(ls, this.parsedOf(ls))) if (isCollapsed(thread, builds)) for (let i = thread.from; i <= cardLast(thread); i++) held.add(i);
     this.collapseCache.set(ls, { builds, held }); return held;
   }
   // Which Builds that answer a turn are finished, as `builds` has them: a change here changes what is collapsed and what
   // may collapse, so the editor is drawn again rather than its cards patched.
   buildsDone(builds) {
     const ls = this.lines();
-    return threads(ls, this.parsedOf(ls)).flatMap((thread) => thread.turns.filter((turn) => turn.build).map((turn) => (buildDone(builds && builds[turn.build]) ? 1 : 0))).join('');
+    return threads(ls, this.parsedOf(ls)).flatMap((thread) => buildIdsOf(thread).map((id) => (buildDone(builds && builds[id]) ? 1 : 0))).join('');
   }
   cardsOf(ls) {
     let held = this.cardCache.get(ls); if (held) return held;
@@ -1153,7 +1157,7 @@ export default class DocEditor extends React.Component {
       else if ((p.type === 'code' || p.type === 'fence') && p.block) end[j] = p.block.close;
       else if (p.type === 'todo') { let k = j; while (k + 1 < ls.length && ps[k + 1].type === 'todo') k++; end.fill(k, j, k + 1); j = k; }
     }
-    for (const t of threads(ls, ps)) if (t.to > t.from) end.fill(t.to, t.titleLine >= 0 ? t.titleLine : t.from, t.to + 1);
+    for (const t of threads(ls, ps)) if (t.to > t.from) end.fill(cardLast(t), t.titleLine >= 0 ? t.titleLine : t.from, cardLast(t) + 1);
     this.endsCache = { text, end, ls, ps }; return end;
   }
   // The rows drawn just above and just below a height on the page (a click's clientY) → { above, below, level }: their
@@ -1322,7 +1326,7 @@ export default class DocEditor extends React.Component {
     // A collapsed conversation's lines are in the document, not on the page: its title's row stands for them.
     if (at && at.hidden) return `<div ${raw} contenteditable="false" data-readonly="1" style="display:none"></div>`;
     if (p.type === 'title' && at) return this.titleHtml(i, raw, p, at);
-    if (p.type === 'build') return this.buildHtml(i, line, p);
+    if (p.type === 'build') return this.buildHtml(i, line, p, at);
     if (p.type === 'code' || p.type === 'fence') return this.codeHtml(i, line, p, active);
     if (p.type === 'todo') {
       const done = p.done;
@@ -1377,8 +1381,9 @@ export default class DocEditor extends React.Component {
       // The chip (2026-10-13): the model and effort as plain words with a chevron, no border, then the round send.
       const chip = label ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:10px"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:4px;height:28px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;color:#8f8f8f">${icon(open ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span></span>${send}</span>` : `<span contenteditable="false" style="user-select:none;flex:none;display:inline-flex">${send}</span>`;
       // An answered question's Collapse is in its top right corner (2026-10-15, David: it was on the button row under the
-      // answer, far from the row the exchange folds to). A titled conversation's `--build` line (2026-10-13) keeps its chip,
-      // and its corner collapses the conversation.
+      // answer, far from the row the exchange folds to). A titled conversation's `--build` line (2026-10-13) has its corner,
+      // which collapses the conversation; a Build's question has no chip since its Build joined its card (MATH-161): the
+      // Build's head says its model.
       const buildTurn = !!at && !!at.turn.build, whole = buildTurn && top && at.thread.titleLine >= 0;
       // An untitled Build's card is its answer, and folds no other way (no corner). Every answered exchange's Collapse is
       // collapseTurn's (2026-10-16, David): the first exchange of a titled conversation collapses the conversation, every
@@ -1979,11 +1984,16 @@ export default class DocEditor extends React.Component {
   // (what a running turn is doing) and props.buildDiffs (what it has changed). The card is in parts — head, body, live,
   // diff, reply, actions — so an update replaces only the parts it changes (patchBuilds) and a reply being typed keeps
   // its field.
-  buildHtml(i, line, p) {
+  buildHtml(i, line, p, at = null) {
     const task = (this.props.builds || {})[p.id];
     const raw = `data-line="${i}" data-raw="${esc(line)}" data-build="${esc(p.id)}"`;
     const parts = this.buildParts(p.id, task);
     for (const [name, html] of parts) this.buildDrawn.set(`${p.id}:${name}`, html);
+    // At a conversation's end (MATH-161, layout's role 'build'), the conversation's last row: no card of its own, its parts
+    // 16px in as the rows above it are, and the conversation's card closing under it.
+    if (at && at.joined) return `<div ${raw} contenteditable="false" data-readonly="1" data-build-joined="${at.thread.from}" style="user-select:text;cursor:default;padding:10px 16px 14px;background:#fafafa;border-radius:${radius(false, true)};margin-bottom:8px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
+      + parts.map(([name, html]) => `<div data-build-part="${name}">${html}</div>`).join('')
+      + '</div>';
     return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;margin:6px 0 14px;padding:12px 16px 14px;background:#fafafa;border-radius:10px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
       + parts.map(([name, html]) => `<div data-build-part="${name}">${html}</div>`).join('')
       + '</div>';
@@ -2268,14 +2278,18 @@ export default class DocEditor extends React.Component {
       const titled = thread.titleLine >= 0, collapsed = isCollapsed(thread, this.props.builds);
       if (titled) at.set(thread.titleLine, { thread, agent: thread.agent, role: 'title', collapsed, running: isRunning(thread, this.props.builds), ruled: collapsed && shut === thread.titleLine - 1 });
       if (collapsed) {
-        shut = thread.to;
-        for (let i = thread.from; i <= thread.to; i++) at.set(i, { thread, turn: thread.turns.find((turn) => i >= turn.q && i <= turn.to), agent: thread.agent, role: 'hidden', hidden: true });
+        shut = cardLast(thread);
+        for (let i = thread.from; i <= cardLast(thread); i++) at.set(i, { thread, turn: thread.turns.find((turn) => i >= turn.q && i <= turn.to), agent: thread.agent, role: 'hidden', hidden: true });
         continue;
       }
       const end = thread.turns[thread.turns.length - 1];
       // A Build's card right under the conversation (2026-10-13: the one a reply was written over, or one built from it) is
       // where it goes on: the conversation has no follow-up field above it.
       const built = (ps[thread.to + 1] || {}).type === 'build';
+      // A Build's card at the conversation's end is its last part (MATH-161, 2026-10-27), drawn inside its card, which it
+      // closes (buildHtml): the card of an `@bart --build` line or an "@bart yes" (its turn's answer, turn.build), or one
+      // started from the last answer (doc.js thread.joined). Its Reply is the conversation's one reply field.
+      const joinedAt = thread.joined ? thread.joined.line : end.build ? end.to : -1;
       const follow = end.answered && !end.pending && !end.folded && !!this.props.onAsk && !built && !end.build;
       // Under the last turn: its reply field, always (2026-10-16, Hudson: Reply had to be clicked first), whatever answered
       // it, and a live card's answer is typed there too; after an @brainstorm recap, Send to Discover's row. Without either
@@ -2312,12 +2326,12 @@ export default class DocEditor extends React.Component {
         const bare = turn.answered && !turn.pending && turn.folded, box = isResearch(ps[turn.q]), next = thread.turns[n + 1], cut = !!next && !isResearch(ps[next.q]) && !next.answered;
         const nextBare = !!next && next.answered && !next.pending && next.folded && !isResearch(ps[next.q]);
         const answers = n > 0 ? cards.byQ.get(thread.turns[n - 1].q) || null : null;
-        const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end, shuts = (tail && !after) || (cut && !(refineHere && turn === intent));
+        const footless = turn.answered && !turn.pending && turn.foot < 0, tail = turn === end, shuts = (tail && !after && joinedAt < 0) || (cut && !(refineHere && turn === intent));
         // An @bart answer (2026-10-15, David's reference), and whether it is older than the latest one asked.
         const chat = this.isChat(agent, turn, card, box), older = chat && turn.q !== latest;
         const boxState = box ? this.boxState(ls, turn) : null, waitsHere = boxState === 'ready' && tail && field; // the reply line follows a box not started
         // A folded turn's row (lineHtml foldedHtml) closes the card when its foot would have: its foot is not drawn.
-        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || box || !turn.answered, afterBare, lastBare: !nextBare, closes: (!turn.answered && !waitsHere) || !!turn.build || (bare && !box && shuts), editable: editable && !box, bare, box, boxState, answers, chat, older, fieldAfter: waitsHere });
+        at.set(turn.q, { thread, turn, agent, role: 'question', top: turn.q === thread.from || box || !turn.answered, afterBare, lastBare: !nextBare, closes: (!turn.answered && !waitsHere) || (bare && !box && shuts), editable: editable && !box, bare, box, boxState, answers, chat, older, fieldAfter: waitsHere });
         afterBare = bare;
         if (turn.build) return; // its answer is the Build's card, drawn as a card is (buildHtml), not as an answer's rows
         const gap = turn.foot > turn.from && parseLine(ls[turn.foot - 1]).text === '' ? turn.foot - 1 : -1;
@@ -2325,9 +2339,10 @@ export default class DocEditor extends React.Component {
         for (let i = turn.from; i <= turn.to; i++) {
           const role = i === turn.foot ? 'foot' : parseLine(ls[i]).type === 'pending' ? 'pending' : 'answer', ends = i === turn.to;
           const drawn = card && i <= card.last ? { card: i === turn.from ? card : null, underCard: i !== turn.from } : {};
-          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, buildOffer: tail && offer && i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && after, refine: null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, boxState, editable: editable && !box, chat, older, ...drawn });
+          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, buildOffer: tail && offer && i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && (after || joinedAt >= 0), refine: null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, boxState, editable: editable && !box, chat, older, ...drawn });
         }
       });
+      if (joinedAt >= 0) at.set(joinedAt, { thread, turn: end, agent: this.turnAgent(thread, end), role: 'build', joined: true, closes: true });
     }
     return at;
   }
@@ -4963,7 +4978,7 @@ export default class DocEditor extends React.Component {
     const ls = text.split('\n'), ps = parseLines(ls), titles = new Map(), wait = this.autoWait.ids;
     for (const thread of threads(ls, ps)) {
       if (thread.titleLine < 0 || thread.folded || !thread.turns.some((turn) => turn.answered)) continue;
-      const ids = thread.turns.filter((turn) => turn.build).map((turn) => turn.build), unknown = ids.filter((id) => !(builds && builds[id]));
+      const ids = buildIdsOf(thread), unknown = ids.filter((id) => !(builds && builds[id]));
       if (unknown.length) { if (first) unknown.forEach((id) => wait.add(id)); continue; }
       if (!first) { if (!ids.some((id) => wait.has(id))) continue; ids.forEach((id) => wait.delete(id)); }
       if (!isRunning(thread, builds)) titles.set(thread.titleLine, thread.title);

@@ -453,14 +453,14 @@ test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec start
   assert.equal(noSpec.lines()[1], '@bart build a hello page');
 });
 
-test('an older document with Chat\'s reply over the Build\'s card (BUILD_INTRO, before 2026-10-13) parses and draws as it did', async () => {
+test('an older document with Chat\'s reply over the Build\'s card (BUILD_INTRO, before 2026-10-13) parses as it did; the card joins the conversation\'s (MATH-161)', async () => {
   const old = [...SPEC, '@bart ok build it', 'bart> Building the Haiku entry from the spec above; I expect it to change models.cjs.', 'bart> *Build · 3 s*', 'build> 0123456789'];
   const m = mounted(old);
   const drawn = m.editor.editorHtml();
   assert.ok(!drawn.includes('data-followup='), 'no follow-up field over the card');
   const foot = drawn.slice(drawn.indexOf(`data-foot="${SPEC.length}"`));
-  assert.match(foot.slice(0, foot.indexOf('>')), /border-radius:0 0 10px 10px;margin-bottom:8px/, 'the reply closes its card');
-  assert.ok(drawn.includes('data-build="0123456789"'), 'the card under it');
+  assert.match(foot.slice(0, foot.indexOf('>')), /border-radius:0 0 0 0;margin-bottom:0/, 'the reply goes on into the Build');
+  assert.match(drawn, /data-build="0123456789"[^>]*data-build-joined="0"[^>]*border-radius:0 0 10px 10px;margin-bottom:8px/, 'the card under it, closing the conversation\'s');
   const { threads } = await loadDoc();
   const all = threads(old);
   assert.deepEqual(all.map((t) => t.turns.length), [2], 'the reply is the next turn of the spec\'s conversation');
