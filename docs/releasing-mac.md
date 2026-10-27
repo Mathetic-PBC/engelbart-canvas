@@ -83,7 +83,7 @@ because people's data from this version has to open in the next.
 
 ## Updates
 
-An installed app checks the folder a minute after it opens, every six hours, and from **Engelbart ▸ Check for
+An installed app checks the folder ten seconds after it opens, every six hours, and from **Engelbart ▸ Check for
 Updates…**. A new version is offered once per launch:
 
 - **Signed ad hoc** (today): macOS installs an update only when it is signed like the app it replaces, which an ad hoc

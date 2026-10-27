@@ -12,7 +12,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { EventEmitter } = require('node:events');
-const { createUpdates, releaseInfo, bundleOf } = require('../src/main/updates.cjs');
+const { createUpdates, releaseInfo, bundleOf, linuxHome, linuxFeed } = require('../src/main/updates.cjs');
 
 const temp = () => fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-updates-'));
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -20,7 +20,7 @@ const DOWNLOADS = 'https://example.com/engelbart/';
 
 /** A packaged app whose package.json says `engelbart`, and everything around it. `quit`: what requestQuit says (whether
  * it goes on to quit), given what it was asked. */
-function harness({ engelbart = { downloads: DOWNLOADS, developerId: false }, packaged = true, answers = [], found = null, env = {}, runningSessions, quit = () => true } = {}) {
+function harness({ engelbart = { downloads: DOWNLOADS, developerId: false }, packaged = true, answers = [], found = null, env = {}, runningSessions, quit = () => true, platform = 'darwin', execPath } = {}) {
   const appPath = temp();
   fs.writeFileSync(path.join(appPath, 'package.json'), JSON.stringify({ name: 'engelbart', version: '0.1.0', ...(engelbart ? { engelbart } : {}) }));
   const logs = temp();
@@ -39,14 +39,15 @@ function harness({ engelbart = { downloads: DOWNLOADS, developerId: false }, pac
       if (found) this.emit(this.autoDownload ? 'update-downloaded' : 'update-available', { version: found });
       return { isUpdateAvailable: !!found, updateInfo: { version: found || '0.1.0' } };
     },
-    quitAndInstall() { this.installs += 1; },
+    quitAndInstall(...args) { this.installs += 1; this.installedWith = args; },
   });
   const updates = createUpdates({
     app: { isPackaged: packaged, getAppPath: () => appPath, getVersion: () => '0.1.0', getPath: () => logs },
     dialog: { showMessageBox: async (_win, options) => { const shown = options || _win; dialogs.push(shown); return { response: answers.length ? answers.shift() : 1 }; } },
     getWindow: () => win,
-    platform: 'darwin',
-    requestQuit: async (options) => { quits.push(options); return quit(options); },
+    platform,
+    ...(execPath ? { execPath } : {}),
+    requestQuit: async (options) => { quits.push(options); const going = quit(options); if (going && options && options.install) options.install(); return going; },
     onChange: (snapshot) => changes.push(snapshot),
     ...(runningSessions ? { runningSessions } : {}),
     env: { HOME: os.homedir(), ...env },
@@ -324,4 +325,73 @@ test('Developer ID: electron-updater downloads by itself and installs at quit; R
   assert.equal(dialogs[0].message, 'Engelbart 0.2.0 is ready');
   assert.equal(updater.installs, 1);
   assert.equal(spawned.length, 0, 'no install command');
+});
+
+// MATH-164 (2026-10-27): Linux, the ad hoc way, in the app the install command put in place.
+/** <home>/app/engelbart beside <home>/version, as install-linux.sh leaves them. */
+function linuxInstall() {
+  const home = temp();
+  fs.mkdirSync(path.join(home, 'app'));
+  fs.writeFileSync(path.join(home, 'app', 'engelbart'), '');
+  fs.writeFileSync(path.join(home, 'version'), '0.1.0\n');
+  return { home, execPath: path.join(home, 'app', 'engelbart') };
+}
+
+test('Linux: only in the app the install command put in place, always the install command, told where it is and what reopening it needs', async () => {
+  const { home, execPath } = linuxInstall();
+  assert.equal(linuxHome(execPath), home);
+  fs.rmSync(path.join(home, 'version'));
+  assert.equal(linuxHome(execPath), null, 'no version file: not the install command\'s');
+  assert.equal(linuxHome('/tmp/.mount_EngelbXYZ/engelbart'), null, 'an AppImage run as it is');
+  assert.equal(harness({ platform: 'linux', execPath: '/tmp/.mount_EngelbXYZ/engelbart', found: '0.2.0' }).updates.enabled, false);
+
+  const installed = linuxInstall();
+  const env = { DISPLAY: ':0', WAYLAND_DISPLAY: 'wayland-0', DBUS_SESSION_BUS_ADDRESS: 'unix:path=/run/user/1000/bus', XDG_RUNTIME_DIR: '/run/user/1000', SECRET_TOKEN: 'x' };
+  const { updates, updater, dialogs, spawned } = await updating({ platform: 'linux', execPath: installed.execPath, env, engelbart: { downloads: DOWNLOADS, developerId: true } });
+  assert.equal(updates.enabled, true);
+  assert.equal(updater.autoDownload, false, 'no signature on Linux: never electron-updater\'s own download');
+  assert.equal(dialogs[0].message, 'Engelbart 0.2.0 is available');
+  const given = spawned[0].options.env;
+  assert.deepEqual([given.ENGELBART_INSTALL_DIR, given.ENGELBART_APPARMOR, given.ENGELBART_WAIT_PID], [installed.home, 'no', String(process.pid)]);
+  assert.deepEqual([given.DISPLAY, given.WAYLAND_DISPLAY, given.DBUS_SESSION_BUS_ADDRESS, given.XDG_RUNTIME_DIR], [':0', 'wayland-0', 'unix:path=/run/user/1000/bus', '/run/user/1000']);
+  assert.equal(given.ENGELBART_APP_PATH, undefined, 'a Mac\'s .app');
+  assert.equal(given.SECRET_TOKEN, undefined, 'nothing else of the app\'s environment');
+});
+
+test('Linux: latest-linux.yml says whether there is a newer version, as electron-updater would', async () => {
+  const asked = [];
+  const answer = (status, text) => async (url) => { asked.push(url); return { ok: status === 200, status, text: async () => text }; };
+  const feed = (text, current = '0.1.25', status = 200) => linuxFeed({ downloads: DOWNLOADS, current, fetchImpl: answer(status, text) });
+  const yml = "version: 0.1.26\nfiles:\n  - url: Engelbart-0.1.26-x86_64.AppImage\n    sha512: abc\npath: Engelbart-0.1.26-x86_64.AppImage\nreleaseDate: '2026-10-27T00:00:00.000Z'\n";
+  const newer = feed(yml);
+  const seen = [];
+  newer.on('update-available', (found) => seen.push(found.version));
+  assert.deepEqual(await newer.checkForUpdates(), { isUpdateAvailable: true, updateInfo: { version: '0.1.26' } });
+  assert.deepEqual(seen, ['0.1.26']);
+  assert.match(asked[0], /^https:\/\/example\.com\/engelbart\/latest-linux\.yml\?t=\d+$/, 'past any cache');
+  assert.equal((await feed(yml, '0.1.26').checkForUpdates()).isUpdateAvailable, false);
+  assert.equal((await feed(yml, '0.1.30').checkForUpdates()).isUpdateAvailable, false, 'an older feed is not offered');
+  await assert.rejects(feed('', '0.1.25', 404).checkForUpdates(), /latest-linux\.yml: 404/);
+  await assert.rejects(feed('files: []\n').checkForUpdates(), /names no version/);
+});
+
+test('Windows (MATH-164): electron-updater downloads the installer by itself; Restart Now quits as any quit does, then installs silently and opens it again', async () => {
+  const { updates, updater, dialogs, spawned, quits } = harness({ platform: 'win32', found: '0.2.0', answers: [0] });
+  assert.equal(updates.enabled, true);
+  await updates.check();
+  await tick();
+  assert.deepEqual([updater.autoDownload, updater.autoInstallOnAppQuit], [true, true], 'Later: installed at the next quit');
+  assert.equal(dialogs[0].message, 'Engelbart 0.2.0 is ready');
+  assert.equal(spawned.length, 0, 'no install command');
+  assert.equal(quits.length, 1, 'the app\'s own quit first: everything saved and stopped, terminal sessions asked about');
+  assert.equal(quits[0].update, false);
+  assert.equal(updater.installs, 1);
+  assert.deepEqual(updater.installedWith, [true, true], 'silently, and opened again');
+
+  const cancelled = harness({ platform: 'win32', found: '0.2.0', answers: [0], quit: () => false });
+  await cancelled.updates.check();
+  await tick();
+  assert.equal(cancelled.updater.installs, 0, 'a quit that does not go ahead installs nothing yet');
+  assert.equal(cancelled.updates.snapshot().state, 'ready');
+  assert.equal(cancelled.updates.menuItem().label, 'Restart to Update');
 });

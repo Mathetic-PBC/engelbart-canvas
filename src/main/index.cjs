@@ -234,8 +234,9 @@ function runningSessionCount() {
 // `update`: Restart to Update from the ready dialog (updates.cjs), which has said already that terminal sessions end; it
 // quits without asking again (from the menu or a banner it asks, as any quit does). True once it goes on to quit; false
 // when it does not: a quit already under way, Cancel, or a shutdown that failed.
-// `relaunch`: Engelbart opens again once it has quit; only when the quit goes on.
-async function requestQuit({ update = false, relaunch = false } = {}) {
+// `relaunch`: Engelbart opens again once it has quit; only when the quit goes on. `install`: called instead of quitting,
+// once everything is saved and stopped (updates.cjs: electron-updater starts the installer, then quits).
+async function requestQuit({ update = false, relaunch = false, install = null } = {}) {
   if (quitPending || quitReady) { if (relaunch) relaunchWanted = true; return false; }
   quitPending = true;
   const runningCount = update ? 0 : runningSessionCount();
@@ -287,6 +288,7 @@ async function requestQuit({ update = false, relaunch = false } = {}) {
     return false;
   }
   quitReady = true;
+  if (install) { install(); return true; }
   if (relaunch || relaunchWanted) app.relaunch();
   app.quit();
   return true;
@@ -497,6 +499,8 @@ function buildMenu() {
       ],
     },
     ...(isMac ? [{ role: 'windowMenu' }] : []),
+    // Off the Mac (Linux, MATH-164), where there is no app menu: Help ▸ Check for Updates….
+    ...(!isMac && updates && updates.enabled ? [{ label: 'Help', submenu: [updates.menuItem()] }] : []),
   ];
   Menu.setApplicationMenu(Menu.buildFromTemplate(template));
   // The Dock icon's menu: a new window on the projects screen.

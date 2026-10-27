@@ -2,7 +2,7 @@
 
 // New versions (2026-09-28; docs/releasing-mac.md). A release is uploaded to one folder on the web with the feed
 // electron-builder writes there (latest-mac.yml). The app was built knowing that folder (package.json → engelbart,
-// from electron-builder.config.cjs) and checks it a minute after launch, every six hours after, and from
+// from electron-builder.config.cjs) and checks it ten seconds after launch, every six hours after, and from
 // Engelbart ▸ Check for Updates…. How a new version goes in depends on how this one was signed:
 //
 //   Developer ID  electron-updater downloads it in the background; it is installed when the app quits, and a dialog
@@ -19,8 +19,20 @@
 //                 runs it again, and the app quits by itself once that one is ready. The command's output:
 //                 ~/Library/Logs/Engelbart/update.log.
 //
+// Linux (MATH-164, 2026-10-27) goes the ad hoc way too: the app installed by the install command (the AppImage unpacked
+// into ~/.local/share/engelbart/app, which electron-updater's AppImage updater cannot replace) reads latest-linux.yml
+// itself, Update runs the same install command (it hands Linux to scripts/install-linux.sh, which waits for the quit
+// as install-mac.sh does), and Check for Updates… is under Help. The command's output: ~/.config/Engelbart/logs/update.log.
+// Windows (MATH-164) goes the Developer ID way: electron-updater's NSIS updater downloads the installer latest.yml names
+// in the background (unsigned, so there is no publisher to check it against, as the install command does not either),
+// then asks to restart; Later installs it silently at the next quit. Check for Updates… is under Help there too.
+//
+// Restart to Update (Restart Now) quits as any quit does, so everything is saved and stopped first, and only then hands
+// over to electron-updater, which starts the installer (silently, opening the new version after) and quits.
+//
 // Each version is offered once per launch; Later leaves it until the next. Nothing runs in a checkout (`npm start`),
-// in a build made without a download folder, with ENGELBART_UPDATES=off, or off the Mac (a Windows build is not set up). For scripted runs only: a folder on this
+// in a build made without a download folder, with ENGELBART_UPDATES=off, on Linux in an app the install command did not
+// put in place (an AppImage run as it is). For scripted runs only: a folder on this
 // Mac (http://127.0.0.1:<port>/) is accepted, ENGELBART_CONFIRM_ALL=1 answers the dialogs with their first button,
 // and ENGELBART_NO_OPEN=1 reaches the install command.
 
@@ -28,8 +40,9 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { spawn } = require('node:child_process');
+const { EventEmitter } = require('node:events');
 
-const FIRST_CHECK_MS = 60_000;
+const FIRST_CHECK_MS = 10_000; // 2026-10-26, was a minute: a question asked before work has started interrupts least, and a short session still gets it
 const EVERY_MS = 6 * 60 * 60_000;
 const READY_POLL_MS = 500;
 const LOG_TAIL = 4096; // bytes of the log read for curl's progress bar
@@ -47,7 +60,32 @@ function releaseInfo(appPath) {
 }
 
 /** The .app this process runs from (…/Engelbart.app/Contents/MacOS/Engelbart). */
-const bundleOf = (execPath) => path.posix.resolve(path.posix.dirname(execPath), '..', '..'); // a Mac's .app (updates are Mac only)
+const bundleOf = (execPath) => path.posix.resolve(path.posix.dirname(execPath), '..', '..'); // a Mac's .app
+
+/** Linux: the folder the install command put this app in (<folder>/app/engelbart, beside <folder>/version), or null. */
+function linuxHome(execPath) {
+  const app = path.posix.dirname(execPath);
+  const home = path.posix.dirname(app);
+  return path.posix.basename(execPath) === 'engelbart' && path.posix.basename(app) === 'app' && fs.existsSync(path.posix.join(home, 'version')) ? home : null;
+}
+
+/** Linux: the newest version in latest-linux.yml, checked as electron-updater checks (the subset updates use). */
+function linuxFeed({ downloads, current, fetchImpl = fetch }) {
+  const { compareVersions } = require('./tools/version.cjs');
+  return Object.assign(new EventEmitter(), {
+    async checkForUpdates() {
+      const response = await fetchImpl(`${downloads}latest-linux.yml?t=${Date.now()}`, { signal: AbortSignal.timeout(20_000) });
+      if (!response.ok) throw new Error(`${downloads}latest-linux.yml: ${response.status}`);
+      const found = /^version:\s*['"]?(\d+\.\d+\.\d+)['"]?\s*$/m.exec(await response.text());
+      if (!found) throw new Error(`${downloads}latest-linux.yml names no version`);
+      const version = found[1];
+      const newer = compareVersions(version, current) > 0;
+      if (newer) this.emit('update-available', { version });
+      return { isUpdateAvailable: newer, updateInfo: { version } };
+    },
+    quitAndInstall() {},
+  });
+}
 
 const unlink = (file) => { try { fs.unlinkSync(file); } catch { /* gone */ } };
 
@@ -81,8 +119,12 @@ function lastPercent(file) {
 }
 
 // `runningSessions()`: how many terminal sessions are running, which a restart ends (the ready dialog says so).
-function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {}, runningSessions = () => 0, env = process.env, platform = process.platform, loadUpdater = () => require('electron-updater').autoUpdater, spawnImpl = spawn, setTimer = setTimeout, setRepeat = setInterval, clearRepeat = clearInterval }) {
-  const info = app.isPackaged && platform === 'darwin' && env.ENGELBART_UPDATES !== 'off' ? releaseInfo(app.getAppPath()) : null;
+function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {}, runningSessions = () => 0, env = process.env, platform = process.platform, execPath = process.execPath, loadUpdater = null, spawnImpl = spawn, setTimer = setTimeout, setRepeat = setInterval, clearRepeat = clearInterval }) {
+  const linux = platform === 'linux' ? linuxHome(execPath) : null;
+  const built = app.isPackaged && (platform === 'darwin' || platform === 'win32' || linux) && env.ENGELBART_UPDATES !== 'off' ? releaseInfo(app.getAppPath()) : null;
+  // Linux: always the install command; Windows: always electron-updater's own (`developerId` is the way, not a signature).
+  const info = built && (linux || platform === 'win32') ? { ...built, developerId: platform === 'win32' } : built;
+  if (!loadUpdater) loadUpdater = linux ? () => linuxFeed({ downloads: info.downloads, current: app.getVersion() }) : () => require('electron-updater').autoUpdater;
   const offered = new Set();
   let updater = null;
   let state = 'idle'; // idle | checking | installing | ready (downloaded, or the install command waits for the quit)
@@ -101,6 +143,12 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
   const progress = (value) => { const win = parent(); if (win) win.setProgressBar(value); };
   const notify = () => { try { onChange(snapshot()); } catch { /* a closed window */ } };
   const set = (next) => { if (next !== state) dismissed = false; state = next; notify(); };
+  // Linux: where the install command put the app, no AppArmor question (no terminal to ask on; a profile added before
+  // stays, for the same path), and what reopening it on this desktop needs.
+  const linuxEnv = () => {
+    const kept = ['DISPLAY', 'WAYLAND_DISPLAY', 'XAUTHORITY', 'XDG_RUNTIME_DIR', 'XDG_DATA_HOME', 'XDG_CURRENT_DESKTOP', 'XDG_SESSION_TYPE', 'DBUS_SESSION_BUS_ADDRESS', 'ENGELBART_SANDBOX'];
+    return { ENGELBART_INSTALL_DIR: linux, ENGELBART_APPARMOR: 'no', ...Object.fromEntries(kept.filter((name) => env[name]).map((name) => [name, env[name]])) };
+  };
   // `version`: the one being installed (else the newer one seen); `percent`: while installing, once curl says.
   const snapshot = () => ({ enabled: !!info, state, available, version: (run && run.version) || available, percent: state === 'installing' ? percent : null, dismissed });
 
@@ -122,7 +170,7 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
       child = spawnImpl('/bin/bash', ['-c', 'script=$(mktemp "${TMPDIR:-/tmp}/engelbart-install.XXXXXX") && curl -fsSL --retry 2 --connect-timeout 20 -o "$script" "${ENGELBART_DOWNLOADS}install.sh" && exec /bin/bash "$script"'], {
         detached: true, // it outlives the app, which it replaces
         stdio: ['ignore', out, out],
-        env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: env.HOME || os.homedir(), TMPDIR: env.TMPDIR || os.tmpdir(), LANG: 'en_US.UTF-8', ENGELBART_DOWNLOADS: info.downloads, ENGELBART_WAIT_PID: String(process.pid), ENGELBART_APP_PATH: bundleOf(process.execPath), ENGELBART_READY_FILE: ready, ENGELBART_REOPEN_FILE: reopen, ...(env.ENGELBART_NO_OPEN === '1' ? { ENGELBART_NO_OPEN: '1' } : {}) },
+        env: { PATH: '/usr/bin:/bin:/usr/sbin:/sbin', HOME: env.HOME || os.homedir(), TMPDIR: env.TMPDIR || os.tmpdir(), LANG: 'en_US.UTF-8', ENGELBART_DOWNLOADS: info.downloads, ENGELBART_WAIT_PID: String(process.pid), ENGELBART_READY_FILE: ready, ENGELBART_REOPEN_FILE: reopen, ...(linux ? linuxEnv() : { ENGELBART_APP_PATH: bundleOf(execPath) }), ...(env.ENGELBART_NO_OPEN === '1' ? { ENGELBART_NO_OPEN: '1' } : {}) },
       });
     } finally {
       fs.closeSync(out);
@@ -207,7 +255,7 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
    * idle, as any does. Either way the command is told to open the new version once it is installed. */
   function restart({ warned = false } = {}) {
     if (!info || state !== 'ready') return false;
-    if (info.developerId) { updater.quitAndInstall(); return true; }
+    if (info.developerId) { void requestQuit({ update: warned, install: () => updater.quitAndInstall(true, true) }).catch(() => {}); return true; }
     const waiting = run && run.alive;
     if (!waiting) runInstaller((run && run.version) || available, { quitWhenReady: true, warned });
     try { fs.writeFileSync(run.reopen, ''); } catch { /* it installs, and opens nothing */ }
@@ -237,7 +285,7 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
       noLink: true,
     });
     if (response !== 0) return;
-    if (developerId) { set('ready'); updater.quitAndInstall(); } else runInstaller(version);
+    if (developerId) { set('ready'); restart(); } else runInstaller(version);
   }
 
   function ensureUpdater() {
@@ -294,4 +342,4 @@ function createUpdates({ app, dialog, getWindow, requestQuit, onChange = () => {
   return { start, check, snapshot, menuItem, restart, later, enabled: !!info };
 }
 
-module.exports = { createUpdates, releaseInfo, bundleOf, lastPercent };
+module.exports = { createUpdates, releaseInfo, bundleOf, lastPercent, linuxHome, linuxFeed };

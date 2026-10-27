@@ -19,6 +19,12 @@
 # Engelbart starts without the sandbox (its launcher, build/linux/engelbart-launch, decides each time it starts). What
 # happened is the last thing this prints.
 #
+# Set by Engelbart when it updates itself (src/main/updates.cjs, MATH-164), as for install-mac.sh: ENGELBART_WAIT_PID
+# (the running app, which this waits for once the new version is ready, for as long as it stays open: Later in the app
+# means the next quit), ENGELBART_READY_FILE (created at that moment, so the app can ask to restart) and
+# ENGELBART_REOPEN_FILE (the app creates it for Restart to Update: the new version is opened only if it is there once
+# installed, and this removes it; a plain quit after Later installs it and opens nothing).
+#
 # ENGELBART_DOWNLOADS reads from another folder; ENGELBART_INSTALL_DIR installs into another folder;
 # ENGELBART_NO_OPEN=1 leaves Engelbart closed afterwards.
 set -euo pipefail
@@ -29,15 +35,43 @@ DEST="${ENGELBART_INSTALL_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/engelbart}"
 BIN_DIR="$HOME/.local/bin"
 APPS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 ICONS_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/icons/hicolor"
+WAIT_PID="${ENGELBART_WAIT_PID:-}"
 
 work=""
-cleanup() { if [ -n "$work" ]; then rm -rf "$work"; fi; }
+ready=""
+installed=""
+cleanup() {
+  if [ -n "$work" ]; then rm -rf "$work"; fi
+  if [ -n "$WAIT_PID" ] && [ -n "${ENGELBART_REOPEN_FILE:-}" ]; then rm -f "$ENGELBART_REOPEN_FILE"; fi
+}
 trap cleanup EXIT
 
 say() { printf '%s\n' "$*"; }
 fail() {
   printf '\nEngelbart was not installed: %s\n' "$*" >&2
+  # An update started from the app, which had been told to quit: the copy that was there opens again. (Before that,
+  # the app is still open and reports the failure itself.)
+  if [ -n "$WAIT_PID" ] && [ -n "$ready" ] && [ -z "$installed" ] && [ -x "$DEST/app/engelbart-launch" ] && should_open; then open_app; fi
   exit 1
+}
+
+# Whether to open Engelbart now it is done. Run by the app (ENGELBART_WAIT_PID): only if it quit for Restart to Update,
+# which leaves ENGELBART_REOPEN_FILE (taken here); by hand: always. ENGELBART_NO_OPEN=1: never.
+should_open() {
+  local asked=1
+  if [ -n "$WAIT_PID" ]; then
+    asked=""
+    if [ -n "${ENGELBART_REOPEN_FILE:-}" ] && [ -f "$ENGELBART_REOPEN_FILE" ]; then asked=1; rm -f "$ENGELBART_REOPEN_FILE"; fi
+  fi
+  [ -n "$asked" ] && [ "${ENGELBART_NO_OPEN:-}" != 1 ]
+}
+
+open_app() {
+  if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    (cd "$HOME" && setsid "$DEST/app/engelbart-launch" >/dev/null 2>&1 < /dev/null &) || true
+  else
+    say "No display here to open it on."
+  fi
 }
 
 # How to install Git here, from /etc/os-release.
@@ -119,8 +153,9 @@ image="Engelbart-${version}-x86_64.AppImage"
 sha512=$(printf '%s\n' "$feed" | awk -v f="$image" '$0 ~ "url: "f"$" {getline; sub(/.*sha512: */, ""); print; exit}' | tr -d "'\"")
 [ -n "$version" ] && [ -n "$sha512" ] || fail "${DOWNLOADS}latest-linux.yml does not list $image."
 
-# Already the newest: nothing to download (and Engelbart need not quit). ENGELBART_FORCE=1 installs again anyway.
-if [ "${ENGELBART_FORCE:-}" != 1 ] && [ -x "$DEST/app/engelbart" ] && [ "$(cat "$DEST/version" 2>/dev/null)" = "$version" ]; then
+# Already the newest: nothing to download (and Engelbart need not quit). The app's own updater (ENGELBART_WAIT_PID) runs
+# this only when there is a newer version, so it is never skipped; ENGELBART_FORCE=1 installs again anyway.
+if [ -z "$WAIT_PID" ] && [ "${ENGELBART_FORCE:-}" != 1 ] && [ -x "$DEST/app/engelbart" ] && [ "$(cat "$DEST/version" 2>/dev/null)" = "$version" ]; then
   say "Engelbart $version is already installed in $DEST and up to date."
   say "Chromium's sandbox: $(sandbox_state)."
   exit 0
@@ -139,6 +174,14 @@ chmod +x "$work/$image"
 [ -x "$work/squashfs-root/engelbart" ] && [ -f "$work/squashfs-root/engelbart-launch" ] || fail "the AppImage does not hold Engelbart as expected."
 chmod 755 "$work/squashfs-root/engelbart-launch"
 
+# Run by the app: it is told the new version is ready, and this waits for it to quit, however long that is.
+if [ -n "$WAIT_PID" ]; then
+  ready=1
+  if [ -n "${ENGELBART_READY_FILE:-}" ]; then : > "$ENGELBART_READY_FILE"; fi
+  say "Ready; Engelbart $version is installed when Engelbart quits."
+  while kill -0 "$WAIT_PID" 2>/dev/null; do sleep 1; done
+fi
+
 if pgrep -u "$(id -u)" -f "$DEST/app/engelbart" >/dev/null 2>&1; then
   say "Engelbart is open. Quit it and the install will go on."
   waited=0
@@ -153,6 +196,7 @@ rm -rf "$DEST/app.new" "$DEST/app.old"
 mv "$work/squashfs-root" "$DEST/app.new"
 if [ -d "$DEST/app" ]; then mv "$DEST/app" "$DEST/app.old"; fi
 mv "$DEST/app.new" "$DEST/app"
+installed=1
 rm -rf "$DEST/app.old"
 printf '%s\n' "$version" > "$DEST/version"
 ln -sfn "$DEST/app/engelbart-launch" "$BIN_DIR/engelbart"
@@ -177,10 +221,4 @@ state=$(sandbox_state)
 if [ "${state%%:*}" = off ] && [ "${state#*AppArmor}" != "$state" ] && apparmor_profile; then state=$(sandbox_state); fi
 say "Chromium's sandbox: $state."
 
-if [ "${ENGELBART_NO_OPEN:-}" != 1 ]; then
-  if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
-    (cd "$HOME" && setsid "$DEST/app/engelbart-launch" >/dev/null 2>&1 < /dev/null &) || true
-  else
-    say "No display here to open it on."
-  fi
-fi
+if should_open; then open_app; fi

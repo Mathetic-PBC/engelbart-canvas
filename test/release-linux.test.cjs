@@ -280,3 +280,48 @@ test('install-linux.sh: no Git, an ARM computer, a bad checksum and an unreachab
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test('install-linux.sh run by the app (MATH-164): ready once downloaded, installed when the app quits, opened again only for Restart to Update', { skip: onLinux }, async () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'engelbart-linux-update-'));
+  const home = path.join(dir, 'home');
+  fs.mkdirSync(home);
+  const app = standInApp(path.join(dir, 'app'));
+  const { writeLinuxSite } = await site();
+  writeLinuxSite({ root: ROOT, from: ciFolder(path.join(dir, 'site'), { app }), version: VERSION, downloads: DOWNLOADS, out: path.join(dir, 'served') });
+  const server = await serve(path.join(dir, 'served'));
+  const dest = path.join(home, '.local', 'share', 'engelbart');
+  // The app, as a process to wait for; no display here, so "opened" shows as the line saying there is none to open on.
+  const update = async ({ reopen }) => {
+    const running = require('node:child_process').spawn('sleep', ['60']);
+    const ready = path.join(dir, `ready-${running.pid}`);
+    const reopenFile = path.join(dir, `reopen-${running.pid}`);
+    if (reopen) fs.writeFileSync(reopenFile, '');
+    const env = { PATH: process.env.PATH, HOME: home, LANG: 'C.UTF-8', ENGELBART_DOWNLOADS: server.url, ENGELBART_APPARMOR: 'no', ENGELBART_INSTALL_DIR: dest, ENGELBART_WAIT_PID: String(running.pid), ENGELBART_READY_FILE: ready, ENGELBART_REOPEN_FILE: reopenFile };
+    const done = curlBash(server.url, env);
+    for (let waited = 0; !fs.existsSync(ready) && waited < 300; waited += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(fs.existsSync(ready), 'ready once downloaded and checked');
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    const before = fs.existsSync(path.join(dest, 'version')) ? fs.readFileSync(path.join(dest, 'version'), 'utf8') : null;
+    running.kill();
+    const result = await done;
+    return { ...result, before, reopenLeft: fs.existsSync(reopenFile) };
+  };
+  try {
+    const first = await update({ reopen: true });
+    assert.equal(first.code, 0, first.out);
+    assert.equal(first.before, null, 'nothing installed while the app was open');
+    assert.match(first.out, /Ready; Engelbart 9\.9\.9 is installed when Engelbart quits\./);
+    assert.equal(fs.readFileSync(path.join(dest, 'version'), 'utf8'), '9.9.9\n');
+    assert.match(first.out, /No display here to open it on\./, 'Restart to Update: opened again');
+    assert.equal(first.reopenLeft, false, 'the reopen file is taken');
+
+    const second = await update({ reopen: false });
+    assert.equal(second.code, 0, second.out);
+    assert.doesNotMatch(second.out, /already installed/, 'run by the app: never skipped');
+    assert.match(second.out, /Engelbart 9\.9\.9 is installed in /);
+    assert.doesNotMatch(second.out, /No display here/, 'a plain quit after Later opens nothing');
+  } finally {
+    server.close();
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

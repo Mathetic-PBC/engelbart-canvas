@@ -140,7 +140,8 @@ module.exports = {
     },
   },
   // Windows (2026-10-05, docs/windows-port.md): an installer and a zip for x64, unsigned. No Git inside: Engelbart runs
-  // with Git for Windows, whose bash runs its scripts (src/main/terminal/launch.cjs). No updates either (src/main/updates.cjs).
+  // with Git for Windows, whose bash runs its scripts (src/main/terminal/launch.cjs). electron-updater updates it from
+  // latest.yml (MATH-164, src/main/updates.cjs).
   win: {
     files: ['!node_modules/node-pty/prebuilds/{darwin-*,win32-arm64}{,/**}', '!node_modules/node-pty/prebuilds/**/*.pdb'],
     target: [
@@ -150,7 +151,8 @@ module.exports = {
     icon: 'build/icon.ico',
   },
   // Linux (2026-10-07, docs/windows-port-log.md "Linux"): an AppImage for x64, which the install command unpacks (so no
-  // FUSE is needed) and starts through engelbart-launch. Like Windows, no Git inside: the system's, and no updates.
+  // FUSE is needed) and starts through engelbart-launch. Updates come through the install command too (MATH-164,
+  // src/main/updates.cjs).
   linux: {
     files: ['!node_modules/node-pty/prebuilds/{darwin-*,win32-*}{,/**}'],
     target: [{ target: 'AppImage', arch: ['x64'] }],
