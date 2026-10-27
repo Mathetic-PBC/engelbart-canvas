@@ -19,11 +19,12 @@ const Caret = ({ up }) => (
   <span style={{ flex: 'none', width: 10, height: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', font: '12px/1 var(--font-sans)', color: '#8f8f8f' }}><span style={{ position: 'relative', top: up ? 3 : -3 }}>{up ? '⌃' : '⌄'}</span></span>
 );
 
-// Also the rows of @discover's level menu (./DiscoverLevels.jsx).
-export function Row({ label, on, title, onPick }) {
+// Also the rows of @discover's level menu (./DiscoverLevels.jsx). `off`: a model the account's Codex does not offer
+// (MATH-159, main's codexMenu `unavailable`), greyed and not picked, `title` saying why.
+export function Row({ label, on, title, onPick, off = false }) {
   const [over, setOver] = React.useState(false);
   return (
-    <div role="option" aria-selected={on} title={title || undefined} onMouseEnter={() => setOver(true)} onMouseLeave={() => setOver(false)} onMouseDown={(e) => { e.preventDefault(); onPick(); }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 32, padding: '0 8px 0 10px', borderRadius: 6, cursor: 'pointer', background: over ? '#f2f2f2' : 'transparent', font: `${on ? 500 : 400} 13px/1 var(--font-sans)`, color: '#171717' }}>
+    <div role="option" aria-selected={on} aria-disabled={off || undefined} data-model-unavailable={off ? '1' : undefined} title={title || undefined} onMouseEnter={() => setOver(true)} onMouseLeave={() => setOver(false)} onMouseDown={(e) => { e.preventDefault(); if (!off) onPick(); }} style={{ display: 'flex', alignItems: 'center', gap: 10, height: 32, padding: '0 8px 0 10px', borderRadius: 6, cursor: off ? 'default' : 'pointer', background: over && !off ? '#f2f2f2' : 'transparent', font: `${on ? 500 : 400} 13px/1 var(--font-sans)`, color: off ? '#b5b5b5' : '#171717' }}>
       <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
       <Mark on={on} />
     </div>
@@ -73,6 +74,7 @@ export default function BartPicker({ models, current, anchor, onPick, onSend, on
         <ProviderField models={models} provider={provider} onView={setViewed} />
         <div role="listbox" aria-label="Model">
           {Object.entries(entry.models).map(([key, model]) => <Row key={key} label={model.name} title={model.use} on={here && key === current.model} onPick={() => pickModel(key)} />)}
+          {(entry.unavailable || []).map((model) => <Row key={model.key} off label={model.name} title={model.why} on={false} onPick={() => {}} />)}
         </div>
       </div>
       <div style={{ flex: 'none', width: 1, margin: '4px 0', background: '#eaeaea' }} />

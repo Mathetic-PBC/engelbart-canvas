@@ -340,7 +340,7 @@ function buildChoices(models) {
   for (const key of Object.keys(models.providers)) {
     const entry = build.providers[key];
     if (!entry) continue;
-    providers[key] = { name: models.providers[key].name, models: entry.models, efforts: entry.efforts, ladder: [entry.default] };
+    providers[key] = { name: models.providers[key].name, models: entry.models, efforts: entry.efforts, ladder: [entry.default], ...(entry.unavailable ? { unavailable: entry.unavailable } : {}) };
   }
   const provider = [build.provider, models.provider].find((key) => providers[key]) || Object.keys(providers)[0];
   return { provider, providers };

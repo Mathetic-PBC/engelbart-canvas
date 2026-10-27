@@ -29,7 +29,7 @@ const { createSnapshotter } = require('./bart/created-preview.cjs');
 const { createNameChat, createFakeNameChat } = require('./bart/name-chat.cjs');
 const { rememberChoice } = require('./bart/choices.cjs');
 const { modelsInForce, createModelSettings } = require('./bart/settings.cjs');
-const { personalCodexHome, listedIn, runningCodexVersion, codexMenu } = require('./tools/codex-models.cjs');
+const { personalCodexHome, listedIn, runningCodexVersion, newestCodex, codexMenu } = require('./tools/codex-models.cjs');
 const { resolveShell } = require('./terminal/launch.cjs');
 const { createStageBridges } = require('./terminal/stage-bridges.cjs');
 const { stageToolFor } = require('./terminal/stage-tools.cjs');
@@ -699,10 +699,14 @@ if (!hasSingleInstanceLock) {
     // What the model menus show (MATH-159, tools/codex-models.cjs codexMenu): each Codex model as the member of its family
     // the account's Codex lists, by the cache of the home that place's runs use (@bart's own, else the person's; a Build's,
     // the person's), a family it lists none of hidden. As readModels with no cache, or one another Codex version wrote.
-    // Runs read readModels unchanged, and say when they ran on another id.
+    // Runs read readModels unchanged, and say when they ran on another id. A model hidden this way is shown greyed with
+    // why: the plan, or a Codex older than the newest on npm (newestCodex).
+    const newestCodexVersion = newestCodex();
+    newestCodexVersion.get(); // asked now, so the first menu opened already knows it
     const menuModels = (place = 'bart') => {
       const homes = place === 'bart' ? [path.join(app.getPath('userData'), 'codex-home-bart'), personalCodexHome()] : [personalCodexHome()];
-      return codexMenu(readModels(place), listedIn(homes, { version: runningCodexVersion(tools) }));
+      const version = runningCodexVersion(tools);
+      return codexMenu(readModels(place), listedIn(homes, { version }), 'openai', { version, newest: newestCodexVersion.get() });
     };
     const rememberModelChoice = (place, choice) => rememberChoice(store.layout.root, place, choice);
     const modelSettings = createModelSettings({ homeRoot: () => store.layout.root, only: () => store.config().providers, tools });

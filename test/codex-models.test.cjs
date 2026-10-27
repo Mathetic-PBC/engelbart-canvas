@@ -297,3 +297,48 @@ test('the pickers: each Codex model as its family\'s listed member, a family wit
   assert.deepEqual(cm.codexMenu(inForce('bart'), ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra']), inForce('bart'));
   assert.equal(fs.readFileSync(file, 'utf8'), before, 'the models file is never written');
 });
+
+test('a model the account\'s Codex does not offer is shown greyed with why: the plan when Codex is the newest, an update when it is older, both when the newest is not known', () => {
+  const root = fs.mkdtempSync(path.join(homeDir, 'models-'));
+  const inForce = (place) => modelsInForce(root, place, {});
+  loadModels(root);
+  const listed = ['gpt-6-sol', 'gpt-6.2-astra'];
+
+  const newest = cm.codexMenu(inForce('bart'), listed, 'openai', { version: '0.164.0', newest: '0.164.0' }).providers.openai;
+  assert.deepEqual(newest.unavailable.map((model) => [model.key, model.name]), [['luna', 'Luna']], 'Luna, hidden from the models, is listed as unavailable');
+  assert.match(newest.unavailable[0].why, /^Your ChatGPT plan doesn't include Luna\. Codex 0\.164\.0 is the newest/);
+  const older = cm.codexMenu(inForce('bart'), listed, 'openai', { version: '0.158.0', newest: '0.164.0' }).providers.openai;
+  assert.match(older.unavailable[0].why, /^Not offered by Codex 0\.158\.0\. Updating Codex to 0\.164\.0 may add Luna; if it doesn't, your ChatGPT plan doesn't include it\.$/);
+  assert.equal(cm.codexMenu(inForce('bart'), listed, 'openai', { version: '0.158.0' }).providers.openai.unavailable[0].why, 'Your ChatGPT plan or this Codex version (0.158.0) doesn\'t offer Luna.');
+  assert.equal(cm.missingWhy('Astra'), 'Your ChatGPT plan or this Codex version doesn\'t offer Astra.');
+  assert.match(cm.missingWhy('Astra', '0.165.0', '0.164.0'), /^Your ChatGPT plan doesn't include Astra/, 'newer than npm\'s: still the plan');
+
+  const build = buildChoices(cm.codexMenu(inForce('build'), listed, 'openai', { version: '0.164.0', newest: '0.164.0' }));
+  assert.deepEqual(build.providers.openai.unavailable.map((model) => model.key), ['luna'], 'the Build\'s and a post-it\'s grid get them too');
+  assert.equal(buildChoices(inForce('build')).providers.openai.unavailable, undefined);
+  assert.equal(cm.codexMenu(inForce('bart'), ['gpt-6.1-sol', 'gpt-6-luna', 'gpt-6-astra']).providers.openai.unavailable, undefined, 'all offered: none');
+  assert.equal(cm.codexMenu(inForce('bart'), listed).providers.anthropic.unavailable, undefined);
+});
+
+test('the newest Codex on npm: asked once, answered from memory, asked again after six hours; nothing when npm cannot be reached', async () => {
+  let clock = 0, calls = 0, answer = { version: '0.164.0' };
+  const fetch = async (url) => { calls += 1; assert.equal(url, 'https://registry.npmjs.org/@openai/codex/latest'); if (!answer) throw new Error('offline'); return { ok: true, json: async () => answer }; };
+  const newest = cm.newestCodex({ fetch, now: () => clock });
+  assert.equal(newest.get(), null, 'nothing heard yet');
+  await newest.refresh();
+  assert.equal(newest.get(), '0.164.0');
+  assert.equal(calls, 2, 'get() asked, then refresh() asked again');
+  clock += 60 * 60 * 1000;
+  newest.get();
+  assert.equal(calls, 2, 'within six hours: not asked again');
+  answer = null;
+  clock += 6 * 60 * 60 * 1000;
+  assert.equal(newest.get(), '0.164.0', 'stale: the last answer while it asks again');
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(calls, 3);
+  assert.equal(newest.get(), '0.164.0', 'a failed ask keeps what was known');
+  answer = { version: 'not a version' };
+  await newest.refresh();
+  assert.equal(newest.get(), '0.164.0');
+  assert.equal(cm.newestCodex({ fetch: null }).get(), null, 'no fetch: never asked');
+});
