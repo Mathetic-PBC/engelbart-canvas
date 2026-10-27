@@ -5,7 +5,8 @@
 // while its session lasts. Since the annotations round (2026-10-16) there is no desk to scroll onto, no Fit page + notes
 // and nothing out of view to point at; a note's width is narrow and it grows down (fitWidth, freeNoteWidth), and the
 // column stays in the middle of the pane through every zoom (../src/renderer/model/paper-draw.js columnGeometry,
-// settleView).
+// settleView). Since 2026-10-27 a highlight's card is CARD_W wide whatever its margin, and the sheet is widened each side
+// for the whole of every card (columnGeometry's reach, cardReach, deskReach): a desk again, the page in its middle.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -41,6 +42,35 @@ test('columnGeometry: every page as wide as the zoom says, in the middle of a sh
   assert.deepEqual(columnGeometry(800, 0.5), { pageW: 400, S: 800, G: 200 }, '50%: the desk shows each side, the page in the middle');
   assert.deepEqual(columnGeometry(800, 2), { pageW: 1600, S: 1600, G: 0 }, '200%: the sheet is the page, nothing beyond it to scroll to');
   assert.deepEqual(columnGeometry(801, 0.15), { pageW: 120, S: 801, G: 340.5 });
+});
+
+test('columnGeometry with a reach: the sheet is the page and the reach each side, or the pane if wider; the page in its middle', async () => {
+  const { columnGeometry } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/model/paper-draw.js')).href);
+  assert.deepEqual(columnGeometry(800, 1, 120), { pageW: 800, S: 1040, G: 120 }, '100%: room for a card past each edge');
+  assert.deepEqual(columnGeometry(800, 0.5, 120), { pageW: 400, S: 800, G: 200 }, '50%: the pane is room enough');
+  assert.deepEqual(columnGeometry(800, 1, 120.2), { pageW: 800, S: 1042, G: 121 }, 'whole px');
+  assert.deepEqual(columnGeometry(800, 2, (pw) => pw / 8), { pageW: 1600, S: 2000, G: 200 }, 'a reach by the page\'s width');
+  assert.deepEqual(columnGeometry(800, 1, -50), columnGeometry(800, 1), 'no card past the page: no desk');
+});
+
+test('cardReach and deskReach: how far past its page\'s edge a card goes, all of it, at any zoom', async () => {
+  const { cardReach, deskReach, noteScale, CARD_W, SIDE_GAP, DESK_PAD } = await load();
+  const far = SIDE_GAP + CARD_W + DESK_PAD;
+  assert.deepEqual(cardReach({ side: 'right', col: { l: 0.1, r: 0.9 }, w: CARD_W }), [{ a: 0.9 - 1, b: far }], 'right of the text');
+  assert.deepEqual(cardReach({ side: 'left', col: { l: 0.25, r: 0.9 }, w: CARD_W }), [{ a: -0.25, b: far }], 'left of it');
+  // A margin of 61 px at 100% (a page 612 wide): the card goes 191 px past the page, the desk as far.
+  const ns = noteScale(612);
+  const r = deskReach(cardReach({ side: 'right', col: { l: 0.1, r: 0.9 }, w: CARD_W }), 612);
+  assert.ok(Math.abs(r - (-0.1 * 612 + far * ns)) < 1e-9, `${r}`);
+  assert.ok(r > 0.9 * 612 + SIDE_GAP * ns + CARD_W * ns - 612, 'the whole card, its far edge too');
+  // A moved one: its right edge past the page's, or its left edge before it.
+  assert.deepEqual(cardReach({ pos: { x: 1.25, y: 0.2 }, w: 200 }), [{ a: 0.25, b: 200 + DESK_PAD }]);
+  assert.deepEqual(cardReach({ pos: { x: -0.25, y: 0.2 }, w: 200 }), [{ a: -1.25, b: 200 + DESK_PAD }, { a: 0.25, b: DESK_PAD }]);
+  assert.equal(deskReach(cardReach({ pos: { x: 0.3, y: 0.2 }, w: 100 }), 612), 0, 'one well inside the page needs no desk');
+  assert.equal(deskReach([], 612), 0);
+  // The same terms at another zoom: the reach goes with the page above NOTE_FLOOR.
+  const t = cardReach({ side: 'right', col: { l: 0.1, r: 0.9 }, w: CARD_W });
+  assert.ok(Math.abs(deskReach(t, 1224) - 2 * deskReach(t, 612)) < 1e-9);
 });
 
 test('settleView: a zoom keeps the point it was centered on where it was; across, the view stays on the column\'s middle line', async () => {

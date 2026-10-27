@@ -1,5 +1,6 @@
 // PaperView — the "Paper" pane: a PDF drawn page by page with pdf.js, each page one white
-// sheet, rough.js zigzag highlights and Caveat handwritten notes. Port of
+// sheet, tinted highlights and notes on cards beside the page (./paper-look.js; rough.js zigzags and Caveat handwriting
+// until 2026-10-27). Port of
 // the design's syncPdf / pdfMouseUp / freeWidth / pendingSelKey / addMark / renderMarks
 // (design/goal-canvas/Goal Canvas.dc.html lines 516–602), with two changes: marks are stored in
 // page units (fractions of the page's drawn width) so they survive a re-layout at another zoom,
@@ -113,19 +114,28 @@
 // end came first, to be clicked; since 2026-10-26, David, the card comes straight away again.) A highlight's note sends as the workspace's fields do: Enter, or
 // the round send under it (../ui/send-button.js), asks a note that starts with @bart and leaves any other (Shift+Enter is
 // a new line); every agent's token in it is tinted as the workspace tints it (model/doc.js noteInkHtml).
+// Readable cards (2026-10-27, David, from screenshots of a short highlight in a large title: its card squeezed into the
+// margin and wrapping mid-word, the empty card over the title's next line, handwriting, a dense scribble): a highlight's
+// card and the empty one are CARD_W note px wide at every zoom and in every pane (./canvas.js), drawn at the page's
+// noteScale as before, so a card grows and shrinks with the page. Each goes beside the text's column at its passage's
+// top, outside the printed text, spaced BOX_GAP from the others, and the empty card is laid out as its highlight's card
+// will be, so keeping the highlight moves nothing. Nothing narrows a card to a margin or hides it: the sheet is widened
+// each side for the cards' full bounds (deskReach, ../model/paper-draw.js columnGeometry, fitDesk) and the pane is
+// panned sideways to one past its edge; a new selection's card is scrolled into view (revealEl). A card that was moved,
+// or typed somewhere, stays exactly where it was put. The look is ./paper-look.js: a card with a ground and an edge, the
+// app's type, answers under a hairline; flat translucent highlights. A web page's card (./card-look.js) is untouched.
 import React from 'react';
 import * as pdfjsLib from 'pdfjs-dist';
-import rough from 'roughjs';
-import { mergeLineRects, bandRects, placeHighlight, boxSeed, selectionParts, scalePart, partMarks, passageOf, stackNotes, wordBounds, pdfText, pageWindow } from './marks.js';
+import { mergeLineRects, bandRects, placeHighlight, selectionParts, NOTE_SLACK, scalePart, partMarks, passageOf, stackNotes, wordBounds, pdfText, pageWindow } from './marks.js';
 import { nextFind, createTargetGate, sectionSpans, paintSection, clearFind, FIND, FIND_ACTIVE } from '../model/find.js';
 import { wheelZooms, wheelZoom, createPageCache } from '../model/paper-zoom.js';
 import { nearOrder, allOrder, tooFar, DRAW_AHEAD, columnGeometry, settleView, nextTick } from '../model/paper-draw.js';
 import { mentionAt, libMention, fileMention, fileMentionOf, noteHtml, noteInkHtml, noteParts, noteOffset, inlineHtml, esc, LIB_MENTION_RE } from '../model/doc.js';
 import { isFolderRow, folderRows, firstPick, parentRel } from '../model/rail.js';
-import { NOTE_INK, NOTE_TYPE, ANSWER_FONT, ANSWER_INK, QUESTION_INK, LABEL_INK, ERROR_INK, ANSWER_GAP, SPINNER, CARD_GROUND, cardCss } from './card-look.js';
-import { sideSpace, deskGeom, placeOf, posOf, spaceBoxes, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, runningLabel, textColumn, fitWidth, freeNoteWidth, noteScale, NOTE_FLOOR, HIDE_ROOM, FREE_MIN, FREE_FIT, EDGE_PAD, NOTE_W, NOTE_MIN, BOX_GAP, SIDE_GAP, POS_DY, PRESS_MOVE } from './canvas.js';
+import { NOTE_INK, ANSWER_FONT, ANSWER_INK, QUESTION_INK, LABEL_INK, ERROR_INK, SPINNER, CARD_GROUND, cardCss } from './card-look.js';
+import { PDF_NOTE_TYPE, PDF_CARD_LOOK, PDF_ANSWER_GAP, PDF_WRAP, HL_SAVED, HL_PENDING, HL_FOCUS, HL_FOCUS_LINE, HL_RADIUS, pdfCardCss } from './paper-look.js';
+import { sideSpace, deskGeom, placeOf, posOf, spaceBoxes, noteQuestion, askedByNote, turnsOf, shownAsks, keptMarks, runningLabel, textColumn, freeNoteWidth, noteScale, besideLeft, cardReach, deskReach, NOTE_FLOOR, FREE_MIN, EDGE_PAD, CARD_W, BOX_GAP, SIDE_GAP, POS_DY, PRESS_MOVE } from './canvas.js';
 import { fieldCaret } from '../workspace/caret.js';
-import { selectionCardPlace } from '../../shared/selection-card.cjs';
 import { SEND_ARROW, SEND_HOVER_CSS, sendLook, sendReady } from '../ui/send-button.js';
 import { matchPassage } from '../../shared/passage-text.cjs';
 import { citationNumbers, citationSources, citationSourcesHtml, citationTip, openCitationRun, libraryName, streamingText, CITE_CSS } from '../model/cite.js';
@@ -205,6 +215,7 @@ const LAYER_CSS = `
 [data-pdf][data-dragging],[data-pdf][data-dragging] *{cursor:grabbing!important;user-select:none!important}
 [data-pdf] [data-box] [data-note-view]{cursor:text}
 ${cardCss('[data-pdf] [data-box]')}
+${pdfCardCss('[data-pdf] [data-box]')}
 @keyframes sel-caret{50%{opacity:0}}
 ${SEND_HOVER_CSS}
 ::highlight(pdf-section){background-color:rgba(255,196,0,.13)}
@@ -216,18 +227,21 @@ ${SEND_HOVER_CSS}
 const BAR = { position: 'absolute', left: '50%', bottom: 16, transform: 'translateX(-50%)', display: 'flex', alignItems: 'center', gap: 2, height: 34, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#fff', border: '1px solid #eaeaea', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', fontVariantNumeric: 'tabular-nums', color: '#4d4d4d', whiteSpace: 'nowrap', zIndex: 5 };
 const BAR_STEP = { flex: 'none', width: 26, height: 26, padding: 0, borderRadius: 6, border: 0, background: 'transparent', font: '400 14px/1 var(--font-sans)', color: '#4d4d4d', cursor: 'pointer' };
 const BAR_PCT = { flex: 'none', minWidth: 48, height: 26, padding: '0 6px', borderRadius: 6, border: 0, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', fontVariantNumeric: 'tabular-nums', color: '#171717', cursor: 'pointer' };
-// A card (MATH-27): a highlight's note and Bart's answers to it, or a note typed anywhere. Since 2026-10-16 there is nothing
-// of a card to see (Hudson: "Get rid of the ugly box around the annotations"): no edge, fill, grip or divider, only the
-// handwriting and the answers' text on the paper. It is moved by pressing on its note's words (startNoteDrag).
+// A card (MATH-27): a highlight's note and Bart's answers to it, or a note typed anywhere. From 2026-10-16 there was nothing
+// of a card to see (Hudson: "Get rid of the ugly box around the annotations"); since 2026-10-27 (David) it has a ground,
+// a faint edge and room inside (./paper-look.js PDF_CARD_LOOK), so it reads apart from the paper beside it. It is moved
+// by pressing on its note's words (startNoteDrag) or its handle.
 // A card is laid out in note px and drawn at --ns, the page's noteScale (./canvas.js), about its top-left (2026-10-16,
 // third round: notes the size of the paper's text). A pinch under way multiplies that by --inv (cardsInverse) only where
 // the pinch would take a note under NOTE_FLOOR.
-const BOX_LOOK = 'position:absolute;box-sizing:border-box;pointer-events:auto;transform-origin:0 0;transform:scale(calc(var(--ns,1) * var(--inv,1)))';
+const BOX_LOOK = `position:absolute;box-sizing:border-box;pointer-events:auto;transform-origin:0 0;transform:scale(calc(var(--ns,1) * var(--inv,1)));${PDF_CARD_LOOK}`;
 // The move handle at a card's lower right, shown while the pointer is on the card (Hudson's four arrows).
 const MOVE_ICON = '<svg viewBox="0 0 16 16" width="13" height="13" aria-hidden="true"><path fill="currentColor" d="M8 .5 10.6 3.4H8.9V7.1h3.7V5.4L15.5 8l-2.9 2.6V8.9H8.9v3.7h1.7L8 15.5l-2.6-2.9h1.7V8.9H3.4v1.7L.5 8l2.9-2.6v1.7h3.7V3.4H5.4z"/></svg>';
-const REVEAL_PAD = 16; // px a card is kept from the pane's edges: its widest (paneFit), and scrolled into view (revealCard)
+const REVEAL_PAD = 16; // px a card is kept from the pane's edges when it is scrolled into view (revealEl)
 const REMOVED_MS = 5000; // how long "Highlight removed · Undo" stays
 const SEL_PLACEHOLDER = 'Write a note or ask @bart'; // the empty card's, as a web page's card says it (BoxCard PLACEHOLDER)
+const SEL_ID = '·sel'; // the empty card's place among its page's cards (pendingBox): no mark's id
+const CARD_LIFT = 8; // note px a card beside its passage starts above the passage's top, so its first line is level with it
 const SEL_BAR_ROOM = 58; // px at the pane's foot the page-and-zoom bar takes (BAR: 16 from the foot, 34 high, 8 clear)
 const TOAST = { position: 'absolute', left: '50%', bottom: 60, transform: 'translateX(-50%)', zIndex: 6, display: 'flex', alignItems: 'center', gap: 4, height: 30, boxSizing: 'border-box', padding: '0 4px 0 12px', background: '#171717', borderRadius: 8, font: '400 12.5px/1 var(--font-sans)', color: '#fff', whiteSpace: 'nowrap', boxShadow: '0 2px 8px rgba(0,0,0,.12)' };
 const TOAST_UNDO = { flex: 'none', height: 22, padding: '0 8px', border: 0, borderRadius: 5, background: 'transparent', font: '500 12.5px/1 var(--font-sans)', color: '#fff', cursor: 'pointer' };
@@ -287,8 +301,9 @@ const SVG = 'http://www.w3.org/2000/svg';
 // selection being made and one pending its note are drawn the same height (2026-10-24, David: "it should look the same"),
 // so the passage keeps one size from the drag to the kept highlight.
 const BAND_TOP = 0.12, BAND_H = 0.76;
-// A note's handwriting, the same in its field and shown as text (./card-look.js NOTE_TYPE, a web box's card's too).
-const NOTE_LOOK = `pointer-events:auto;${NOTE_TYPE};transition:opacity 120ms,background 120ms`;
+// A note's type, the same in its field and shown as text: the app's own (./paper-look.js; Caveat handwriting, a web
+// box's card's still, until 2026-10-27).
+const NOTE_LOOK = `pointer-events:auto;${PDF_NOTE_TYPE};transition:opacity 120ms,background 120ms`;
 
 // An answer as its box draws it (MATH-27): a paragraph a line, with what Bart was told a box may hold (bold, italic,
 // code, links), and a list's or a heading's mark taken off should one come anyway. answerParas: each paragraph's inside.
@@ -362,7 +377,8 @@ export default class PaperView extends React.Component {
     this.pageW = null; // page 1's drawn width
     this.resetGeometry();
     this.pendingSel = null;
-    this.selEl = null; // the empty card under the pending selection (openSelCard)
+    this.selEl = null; // the empty card beside the pending selection (openSelCard)
+    this.selMark = null; // where it goes, as its highlight's mark will: { id, y, side, rects } (pendingBox)
     this.selCard = null; // { markId }: the mark typed from that card, drawn where it was until its note is left
     this.pdfDown = null;
     this.dirty = false;
@@ -375,7 +391,7 @@ export default class PaperView extends React.Component {
     this.redrawing = 0; // > 0 while notes are taken out to be drawn again: a field losing the keyboard then is not left
     this.libDrawn = ''; // the mentioned items' names the notes were drawn with (libKey)
     this.drawn = {}; // { [page]: { boxes, units } }: the cards as last drawn (sheet px), for spacing and fitting
-    this.viewX = 0; // the pane's scrollLeft as the cards were last kept in it (arrangePages)
+    this.viewX = 0; // the pane's scrollLeft as last laid out (rezoom, fitDesk)
     this.cols = new Map(); // page → its text's column, { l, r } page units, once measured (columnOf)
     this.drag = null; // a card being moved by its note (startNoteDrag)
     this.press = null; // a press on a note's words, until it moves (a drag) or is let go (a click: the caret goes there)
@@ -419,9 +435,9 @@ export default class PaperView extends React.Component {
       this.scrollRaf = requestAnimationFrame(() => {
         this.scrollRaf = 0;
         const host = this.host.current;
-        // Past 100% the page scrolls sideways: its cards are kept in the pane (arrangePages) as it goes.
-        if (host && host.scrollLeft !== this.viewX) { this.viewX = host.scrollLeft; this.arrangeNear(); }
-        this.placeSelCard(); this.placeTypedCard();
+        // A sideways scroll moves no card (2026-10-27): they lie on the desk beside the page, which the pane pans over.
+        if (host) this.viewX = host.scrollLeft;
+        this.placeSelCard();
         this.syncBar(); this.drawSoon();
       });
     };
@@ -752,7 +768,7 @@ export default class PaperView extends React.Component {
   // (../model/paper-draw.js columnGeometry), and the sheets meet with nothing between them.
   applyGeometry(z) {
     const host = this.host.current, W = host.clientWidth, N = this.v0.length - 1;
-    const { pageW, S, G } = columnGeometry(W, z);
+    const { pageW, S, G } = columnGeometry(W, z, (pw) => this.deskNeed(pw));
     const geo = [], tops = [];
     let top = 0;
     for (let n = 1; n <= N; n += 1) {
@@ -766,6 +782,32 @@ export default class PaperView extends React.Component {
     this.pdfW = W; this.pdfH = host.clientHeight; this.pdfG = G; this.pageW = pageW; this.sheetW = S;
     if (this.inner) { this.inner.style.width = `${S}px`; this.inner.style.transform = ''; this.inner.style.willChange = ''; }
     for (let n = 1; n <= N; n += 1) if (this.sheets[n]) this.place(n);
+  }
+
+  // The desk each side of a page pageW wide that every page's cards need (./canvas.js deskReach), from their reach as
+  // each was last laid out (arrangePages), the empty card's among them.
+  deskNeed(pageW) {
+    const terms = [];
+    for (const sh of this.sheets) if (sh && sh.cards && sh.reach) terms.push(...sh.reach);
+    return deskReach(terms, pageW);
+  }
+  // The sheet as wide as the cards need now, the page in its middle (2026-10-27): widened when a card comes that reaches
+  // past it, narrowed when one goes. Only across: every page is placed again at its new G and the view moved as much,
+  // so the page stays where it was in the pane. → whether it changed (the caller lays the cards out again).
+  fitDesk() {
+    const host = this.host.current, N = this.v0.length - 1;
+    // not under a card being dragged: it is laid out again, and the sheet fitted to it, once it is let go (endDrag)
+    if (!host || !this.inner || this.pinching || (this.drag && this.drag.moved) || !this.geo.length) return false;
+    const { S, G } = columnGeometry(this.pdfW || host.clientWidth, this.renderedZoom, (pw) => this.deskNeed(pw));
+    if (Math.abs(S - this.sheetW) < 0.5) return false;
+    const was = this.pdfG || 0;
+    for (let n = 1; n <= N; n += 1) if (this.geo[n]) { this.geo[n].G = G; this.geo[n].R = G; }
+    this.sheetW = S; this.pdfG = G;
+    this.inner.style.width = `${S}px`;
+    for (let n = 1; n <= N; n += 1) if (this.sheets[n]) this.place(n);
+    host.scrollLeft = Math.max(0, host.scrollLeft + (G - was));
+    this.viewX = host.scrollLeft;
+    return true;
   }
 
   // Everything about a sheet that depends on its geometry. The page's drawing, its small one, highlights and text sit G
@@ -793,8 +835,8 @@ export default class PaperView extends React.Component {
 
   /* paper — the document's sheets, made once (2026-10-16): one a page, each its drawing (a canvas, once drawn), highlights,
      text and notes, laid out at the zoom now (applyGeometry). A zoom or a resize lays the same sheets out again (rezoom);
-     nothing here runs twice for a document. The paper is as wide as its sheets and clips what lies past them, so the
-     pane never scrolls sideways onto the desk. → whether the sheets are there (not while the pane is too narrow). */
+     nothing here runs twice for a document. The paper is as wide as its sheets and clips what lies past them; the sheets
+     are widened for the cards beside them (fitDesk), and the pane scrolls sideways over that desk. → whether the sheets are there (not while the pane is too narrow). */
   async layout() {
     const host = this.host.current, doc = this.doc;
     if (!host || !doc || host.clientWidth < 40) return false;
@@ -900,8 +942,9 @@ export default class PaperView extends React.Component {
     const s = this.sheets[n];
     return !!s && !s.texted && !s.texting && (this.wantLayer.has(n) || (!!r && !tooFar(n, r.first, r.last, DRAW_AHEAD)));
   }
-  // The zoom, pane and sideways scroll a page's cards were laid out for (arrangePages).
-  cardKey() { return `${this.renderedZoom}|${this.pdfW}|${Math.round(this.viewX || 0)}`; }
+  // The zoom, pane and sheet a page's cards were laid out for (arrangePages): a sheet widened for another page's cards
+  // (fitDesk) moves the page, and its cards with it.
+  cardKey() { return `${this.renderedZoom}|${this.pdfW}|${this.sheetW}`; }
   // Page n wants its small drawing (keepThumb): it has none, and is near enough the view that a zoom out would show it.
   thumbDue(s, n, r) { return !s.thumb && !s.thumbFailed && !tooFar(n, r.first, r.last, THUMB_AHEAD); }
 
@@ -1613,7 +1656,7 @@ export default class PaperView extends React.Component {
       g.dataset[tag] = '1';
       for (const r of part.rects) {
         const el = document.createElementNS(SVG, 'rect');
-        el.setAttribute('x', r.x * f); el.setAttribute('y', (r.y + r.h * BAND_TOP) * f); el.setAttribute('width', r.w * f); el.setAttribute('height', r.h * BAND_H * f); el.setAttribute('fill', 'rgba(0,112,243,.22)');
+        el.setAttribute('x', r.x * f); el.setAttribute('y', (r.y + r.h * BAND_TOP) * f); el.setAttribute('width', r.w * f); el.setAttribute('height', r.h * BAND_H * f); el.setAttribute('rx', HL_RADIUS); el.setAttribute('fill', HL_PENDING);
         g.appendChild(el);
       }
       hl.appendChild(g);
@@ -1657,71 +1700,59 @@ export default class PaperView extends React.Component {
     const bar = this.state.pages > 0 && !this.state.note ? SEL_BAR_ROOM : EDGE_PAD;
     return { x: host.scrollLeft + EDGE_PAD, y: host.scrollTop + EDGE_PAD, width: Math.max(0, host.clientWidth - 2 * EDGE_PAD), height: Math.max(0, host.clientHeight - EDGE_PAD - bar) };
   }
-  // The empty card, over the pane (the pane's frame, not the paper: it is placed again as the paper scrolls), drawn as a
-  // card's note is (cardBox, noteSection) at the size of the last part's page's handwriting (boxScale), on the paper's
-  // white, its words the placeholder's after a caret. A press on it keeps the selection where it is; the click keeps it as
-  // a highlight and gives its note's field the keyboard (keepPending).
+  // The empty card (2026-10-27): a card of its own in the paper, in the notes layer of the passage's first page (where
+  // its highlight's note is kept, ./marks.js partMarks), CARD_W wide beside the text's column at the passage's top. It is
+  // laid out as that highlight's card will be (arrangePages, pendingBox), so keeping the highlight moves nothing, and it
+  // is scrolled into view, sideways too, by as little as will do (revealEl). Its words the placeholder's after a caret, in
+  // the note's type. A press on it keeps the selection where it is; the click keeps it as a highlight and gives its
+  // note's field the keyboard (keepPending). Until 2026-10-27 it lay over the pane under the selection's last line
+  // (../../shared/selection-card.cjs, a web page's card's still), which put it over a large title's next line.
   openSelCard() {
     this.closeSelCard();
-    const host = this.host.current, frame = host && host.parentElement, p = this.pendingSel;
-    if (!frame || !p || !p.parts.length) return;
-    const page = p.parts[p.parts.length - 1].page, ns = this.boxScale(page);
-    const el = makeEl('div', `position:absolute;left:0;top:0;z-index:4;box-sizing:border-box;width:${Math.min(NOTE_W, this.paneFit(page))}px;background:${CARD_GROUND};transform-origin:0 0;transform:scale(${ns});cursor:text;visibility:hidden`, { selCard: '1' });
-    const line = makeEl('div', `${NOTE_LOOK};position:relative;padding-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`);
+    const p = this.pendingSel, part = p && p.parts && p.parts[0], sheet = part && this.sheets[part.page];
+    if (!part || !sheet || !this.geo[part.page]) return;
+    const page = part.page;
+    const el = makeEl('div', `${BOX_LOOK};left:0;top:0;z-index:2;width:${CARD_W}px;cursor:text`, { selCard: '1', box: 'sel' });
+    const line = makeEl('div', `${NOTE_LOOK};position:relative;white-space:nowrap;overflow:hidden;text-overflow:ellipsis`);
     line.append(makeEl('span', `display:inline-block;width:1.5px;height:1.05em;margin-right:1px;vertical-align:-0.18em;background:${NOTE_INK};animation:sel-caret 1.06s steps(1) infinite`, { selCaret: '1' }), makeEl('span', 'color:#b5b5b5', { selPlaceholder: '1' }, SEL_PLACEHOLDER));
     el.appendChild(line);
     el.onmousedown = (ev) => { ev.preventDefault(); ev.stopPropagation(); };
     el.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); this.keepPending(''); };
     el.dataset.page = String(page);
-    frame.appendChild(el);
     this.selEl = el;
-    this.placeSelCard();
+    const u = part.u || this.geom(page).pageW || 1, top = Number.isFinite(part.y) ? part.y : Math.min(...part.rects.map((r) => r.y));
+    this.selMark = { id: SEL_ID, y: (Number.isFinite(top) ? top : 0) / u, side: part.side === 'left' ? 'left' : 'right', rects: part.rects };
+    this.renderMarks(page); // laid out among the page's cards (pendingBox), the desk widened for it (fitDesk)
+    requestAnimationFrame(() => { if (this.selEl === el) this.revealEl(el); });
   }
-  closeSelCard() { if (this.selEl) { this.selEl.remove(); this.selEl = null; } }
-  // The empty card where the pending selection is now (selectionCardPlace); put away with the selection once that shows
-  // nowhere in the pane.
+  closeSelCard() {
+    const el = this.selEl;
+    if (!el) return;
+    this.selEl = null; this.selMark = null;
+    el.remove();
+    const page = Number(el.dataset.page), model = this.drawn[page];
+    if (!model) return;
+    model.boxes = model.boxes.filter((b) => !b.pending);
+    model.units = model.units.filter((unit) => !unit.boxes.some((b) => b.pending));
+    if (this.sheets[page]) this.sheets[page].cards = model.boxes.length;
+    this.arrange(page);
+  }
+  // The empty card as a box of its page's layout (renderMarks), a unit beside the text as its highlight's card will be.
+  pendingBox(page) {
+    const el = this.selEl, m = this.selMark;
+    if (!el || !m || Number(el.dataset.page) !== page) return null;
+    return { el, m, page, pending: true, sel: false, fixed: false, pos: null, how: m.side, left: 0, top: 0, width: 0, height: 0, want: CARD_W, typing: true, w: null };
+  }
+  // The pending selection put away once none of it shows up or down the pane. The empty card is in the paper and goes
+  // with it as it scrolls; sideways the selection may leave the pane for its card to show (revealEl).
   placeSelCard() {
-    const host = this.host.current, el = this.selEl, p = this.pendingSel;
-    if (!el || !host) return;
+    const el = this.selEl, p = this.pendingSel;
+    if (!el) return;
     if (!p) { this.closeSelCard(); return; }
-    const geom = this.selectionGeom(p.parts), ns = this.boxScale(Number(el.dataset.page) || 1);
-    if (el.style.transform !== `scale(${ns})`) el.style.transform = `scale(${ns})`; // the page's handwriting at the zoom now
-    const at = geom && selectionCardPlace(geom.line, geom.all, this.selectionPane(), { width: el.offsetWidth * ns, height: el.offsetHeight * ns });
-    if (!at) { if (geom) this.clearPending(); return; }
-    el.style.left = `${at.x - host.scrollLeft + host.offsetLeft + (host.clientLeft || 0)}px`;
-    el.style.top = `${at.y - host.scrollTop + host.offsetTop + (host.clientTop || 0)}px`;
-    el.style.visibility = '';
+    const geom = this.selectionGeom(p.parts), pane = this.selectionPane();
+    if (geom && pane && (geom.all.y + geom.all.height <= pane.y || geom.all.y >= pane.y + pane.height)) this.clearPending();
   }
-  // The mark typed from the card (selCard): every part of its selection, a page each, for selectionGeom.
-  typedParts(id) {
-    const found = this.findMark(id);
-    if (!found) return [];
-    const parts = found.m.group ? Object.entries(this.marks || {}).flatMap(([n, list]) => (list || []).filter((x) => x && x.group === found.m.group).map((x) => ({ page: Number(n), m: x }))) : [{ page: found.page, m: found.m }];
-    return parts.sort((a, b) => a.page - b.page).map(({ page, m }) => ({ page, rects: m.rects || [], u: 1 }));
-  }
-  // That mark's card where the empty one was: in its page's notes layer at the place selectionCardPlace gives it now.
-  // → whether it was placed (its selection shows; else it is laid out as any card is).
-  placeTypedCard(b) {
-    const sc = this.selCard, host = this.host.current;
-    if (!sc || !host) return false;
-    if (!b) {
-      const found = this.findMark(sc.markId), model = found && this.drawn[found.page];
-      b = model && model.boxes.find((x) => x.sel);
-      if (!b) return false;
-    }
-    const notes = this.sheets[b.page] && this.sheets[b.page].notes;
-    const geom = this.selectionGeom(this.typedParts(sc.markId));
-    const at = notes && geom && selectionCardPlace(geom.line, geom.all, this.selectionPane(), { width: b.width, height: b.height });
-    if (!at) return false;
-    const nr = notes.getBoundingClientRect(), hr = host.getBoundingClientRect(), k = notes.offsetWidth > 0 ? nr.width / notes.offsetWidth : 1;
-    b.left = (at.x - host.scrollLeft + hr.left + (host.clientLeft || 0) - nr.left) / (k || 1);
-    b.top = (at.y - host.scrollTop + hr.top + (host.clientTop || 0) - nr.top) / (k || 1);
-    b.el.style.left = `${b.left}px`; b.el.style.top = `${b.top}px`;
-    if (b.el.style.visibility) b.el.style.visibility = '';
-    b.hidden = false;
-    return true;
-  }
-  // The note typed from the card was left: its card goes beside its highlight.
+  // The note typed from the card was left. Its card stays where it is: it was laid out beside its highlight all along.
   leaveSelCard(id) {
     if (!this.selCard || this.selCard.markId !== id) return false;
     this.selCard = null;
@@ -1846,8 +1877,8 @@ export default class PaperView extends React.Component {
   }
 
   // Highlights are drawn once a page: each mark's boxes joined into bands across its word gaps (./marks.js bandRects,
-  // 2026-10-16), every mark's bands merged (mergeLineRects), one zigzag a band, seeded by where it is so it keeps its
-  // shape between draws. Marks overlapping each other, or saved with doubled rects, draw no darker. A note being typed in
+  // 2026-10-16), every mark's bands merged (mergeLineRects), one flat tint a band (./paper-look.js HL_SAVED; a rough.js
+  // zigzag until 2026-10-27). Marks overlapping each other, or saved with doubled rects, draw no darker. A note being typed in
   // when its page is drawn again (a mark added beside it, a rename) has the keyboard back after.
   // Cards (MATH-27; one a mark since 2026-10-06): a mark with a note, an answer (`asks`) or an answer being written
   // (`pendingAsks`) is one card holding them all, in that order (cardBox). A card is where it was moved to (the mark's
@@ -1866,12 +1897,13 @@ export default class PaperView extends React.Component {
     this.redrawing += 1;
     try { hl.innerHTML = ''; notes.innerHTML = ''; } finally { this.redrawing -= 1; }
     if (P > 0 && H > 0) hl.setAttribute('viewBox', `0 0 ${P} ${H}`);
-    const rc = rough ? rough.svg(hl) : null;
     const list = (this.marks || {})[page] || [];
     for (const b of mergeLineRects(list.flatMap((m) => bandRects(m.rects || [])))) {
-      const r = { x: b.x * P, y: b.y * P, w: b.w * P, h: b.h * P };
-      if (rc) hl.appendChild(rc.rectangle(r.x, r.y + r.h * BAND_TOP, r.w, r.h * BAND_H, { fill: 'rgba(0,112,243,.16)', fillStyle: 'zigzag', fillWeight: 1.3, hachureGap: 2.4, hachureAngle: -4, stroke: 'none', roughness: 0.9, seed: boxSeed(page, b) }));
-      else { const d = document.createElementNS(SVG, 'rect'); d.setAttribute('x', r.x); d.setAttribute('y', r.y + r.h * BAND_TOP); d.setAttribute('width', r.w); d.setAttribute('height', r.h * BAND_H); d.setAttribute('fill', 'rgba(0,112,243,.12)'); hl.appendChild(d); }
+      const r = { x: b.x * P, y: b.y * P, w: b.w * P, h: b.h * P }, d = document.createElementNS(SVG, 'rect');
+      d.dataset.band = '1';
+      d.setAttribute('x', r.x); d.setAttribute('y', r.y + r.h * BAND_TOP); d.setAttribute('width', r.w); d.setAttribute('height', r.h * BAND_H);
+      d.setAttribute('rx', HL_RADIUS); d.setAttribute('fill', HL_SAVED);
+      hl.appendChild(d);
     }
     const boxes = [], units = [], running = this.pendingOn(page);
     for (const m of list) {
@@ -1881,11 +1913,15 @@ export default class PaperView extends React.Component {
       const el = this.cardBox(m, asks, runs, page);
       notes.appendChild(el);
       const sel = !!(this.selCard && this.selCard.markId === m.id);
-      const b = { el, m, page, sel, fixed: !!m.pos && !sel, pos: m.pos || null, how: 'pos', left: 0, top: 0, width: 0, height: 0, want: this.cardWidth(m, page), typing: this.typingIn(m, asks, runs), w: null };
-      if (sel) { b.how = side; el.style.background = CARD_GROUND; el.style.zIndex = '2'; }
-      else if (!m.pos) { b.how = side; units.push({ id: m.id, side, boxes: [b] }); }
+      // A highlight's card keeps its whole width (CARD_W) whatever it holds, so every card of one reads alike.
+      const b = { el, m, page, sel, fixed: !!m.pos, pos: m.pos || null, how: 'pos', left: 0, top: 0, width: 0, height: 0, want: this.cardWidth(m, page), typing: !!(m.rects || []).length || this.typingIn(m, asks, runs), w: null };
+      if (sel) el.style.zIndex = '2';
+      if (!m.pos) { b.how = side; units.push({ id: m.id, side, boxes: [b] }); }
       boxes.push(b);
     }
+    // The empty card a selection on this page opened (openSelCard): laid out as its highlight's card will be.
+    const pend = this.pendingBox(page);
+    if (pend) { notes.appendChild(pend.el); boxes.push(pend); units.push({ id: pend.m.id, side: pend.how, boxes: [pend] }); }
     this.drawn[page] = { boxes, units };
     if (sheet) sheet.cards = boxes.length;
     this.arrange(page);
@@ -1904,149 +1940,102 @@ export default class PaperView extends React.Component {
   }
 
   /* ---------------------------------------------------------------- cards (MATH-27) */
-  // Where the cards go (2026-10-16, later; Hudson: "i should be able to see all annotations if i can see any vertical
-  // position y at all times, irrespective of zoom and position it was left x"). A card is laid out in note px and drawn
-  // at its page's noteScale (third round: the size of the paper's text, never under NOTE_FLOOR); in the sheet's px:
-  // - a highlight's card goes against the text's column (a left one's right edge to it, SIDE_GAP off), at its highlight's
-  //   height, as wide as there is room for between the text and the pane's side (./canvas.js fitWidth, NOTE_MIN..NOTE_W).
-  //   Its highlight's margin, unless that one has less room than NOTE_MIN and the other has more, or that one is full
-  //   where it wants to be and the other would keep it nearer (./marks.js stackNotes). With less room than NOTE_MIN on
-  //   both sides it keeps NOTE_MIN and is moved in over the text. Then the cards are spaced, each as high as it wants with
-  //   BOX_GAP from any card it shares x with (./canvas.js spaceBoxes).
-  // - a card that was moved, or typed anywhere, starts where it was put (`pos`). In the left margin it is as wide as the
-  //   room to the text, down to FREE_FIT, then moved out toward the pane's side rather than over the text (third round:
-  //   "it overlaps and isn't in the margins"); one put against the text's right edge goes past it into the right margin;
-  //   elsewhere narrowed to FREE_FIT and then moved in when the pane's side is nearer than its width.
-  // A card whose margin shows less than HIDE_ROOM (zoomed in on the text alone) is hidden, not drawn over the text (round
-  // 4: "if i zoom in such that there are no margins and it is just text the annotations shouldn't still show"); a sideways
-  // scroll that brings its margin back shows it. This takes back round 2's "see all annotations … irrespective of zoom".
-  // Every page's cards are given their widths, then measured (one layout for them all), then placed. A card being dragged
-  // stays where the pointer has it.
+  // Where the cards go. A card is laid out in note px and drawn at its page's noteScale (2026-10-16, third round: the size
+  // of the paper's text, never under NOTE_FLOOR), so it grows and shrinks with the page; in the sheet's px:
+  // - a highlight's card, and the empty card a selection opens, is CARD_W wide (2026-10-27, David: never narrowed to the
+  //   margin it finds) and goes beside the text's column, SIDE_GAP from it on its highlight's side (./canvas.js
+  //   besideLeft), its top CARD_LIFT above its passage's. A full margin sends it to the other one when that keeps it
+  //   nearer its passage (./marks.js stackNotes). Then the cards are spaced, each as high as it wants with BOX_GAP (both
+  //   at the page's note scale) from any card it shares x with (./canvas.js spaceBoxes). None is ever moved in over the
+  //   text or hidden: where it lies past the pane the sheet is widened for it (fitDesk) and the pane is panned to it.
+  // - a card that was moved, or typed anywhere, is exactly where it was put (`pos`), as wide as it was written.
+  // Until 2026-10-27 a card was kept inside the pane: narrowed to its margin's room (fitWidth, down to NOTE_MIN), moved in
+  // over the text past that, and hidden where its margin was out of view (HIDE_ROOM).
+  // Every page's cards are given their widths, then measured (one layout for them all), then placed; each page keeps how
+  // far its cards reach past its edges (sh.reach, ./canvas.js cardReach), which the sheet's width follows. A card being
+  // dragged stays where the pointer has it.
   arrange(page) { this.arrangePages([page]); }
-  // The cards of the pages near the view laid out now (a zoom, a sideways scroll); the others as drawPages comes to them.
-  arrangeNear() {
-    const r = this.viewRange();
-    if (!r) return;
-    const pages = [];
+  // The pages near the view that have cards laid out for the pane as it is.
+  nearPages() {
+    const r = this.viewRange(), pages = [];
+    if (!r) return pages;
     for (let n = Math.max(1, r.first - DRAW_AHEAD); n <= Math.min(this.sheets.length - 1, r.last + DRAW_AHEAD); n += 1) {
       const sh = this.sheets[n];
       if (sh && sh.cards && sh.marksW === this.pdfW) pages.push(n);
     }
+    return pages;
+  }
+  // The cards of the pages near the view laid out now (a zoom); the others as drawPages comes to them.
+  arrangeNear() {
+    const pages = this.nearPages();
     if (pages.length) this.arrangePages(pages);
   }
-  arrangePages(pages) {
+  arrangePages(pages, again = false) {
     const host = this.host.current;
     if (!host) return;
-    const key = this.cardKey(), x0 = this.viewX || 0, W = this.pdfW || host.clientWidth;
-    const vL = x0 + EDGE_PAD, vR = x0 + W - EDGE_PAD;
-    const work = [];
+    const key = this.cardKey(), work = [];
+    const dragged = this.drag && this.drag.moved ? this.drag.b : null;
     for (const page of pages) {
       const model = this.drawn[page], g = this.geo[page], sh = this.sheets[page];
       if (!model || !g) continue;
-      if (sh) sh.cardsAt = key;
+      if (sh) { sh.cardsAt = key; sh.reach = []; }
       if (!model.boxes.length) continue;
-      // Widths in note px (cardBox), rooms in the sheet's px over ns.
-      const ns = this.boxScale(page), span = (vR - vL) / ns;
+      const ns = this.boxScale(page);
       if (sh) sh.notes.style.setProperty('--ns', String(ns));
       const col = this.columnOf(page), L = g.G + (col ? col.l : 0) * g.pageW, R = g.G + (col ? col.r : 1) * g.pageW;
-      const roomL = (L - SIDE_GAP - vL) / ns, roomR = (vR - R - SIDE_GAP) / ns;
-      const dragged = this.drag && this.drag.moved ? this.drag.b : null;
       for (const b of model.boxes) {
         if (b === dragged) continue;
-        let w;
-        if (b.sel) w = Math.min(b.want, span);
-        else if (b.fixed) {
-          const at = placeOf(b.pos, g.G, g.pageW);
-          b.ax = at.left; b.top = at.top;
-          // The text it keeps clear of is the page it lies over: a note's `pos` can be past its own page's foot.
-          const q = this.pageOver(page, b.top + POS_DY), cq = q === page ? col : this.columnOf(q), gq = this.geo[q] || g;
-          const L = cq ? gq.G + cq.l * gq.pageW : col ? g.G + col.l * g.pageW : g.G, R = cq ? gq.G + cq.r * gq.pageW : col ? g.G + col.r * g.pageW : g.G + g.pageW;
-          b.L = L;
-          // One put in the left margin keeps to it: as wide as the room to the text, else moved out (placed below). One
-          // put so near the text's right edge that not even FREE_MIN fits before it goes to the right margin, when that
-          // has FREE_MIN of room (round 2 began a note near the pane's edge that far in).
-          b.inLeft = b.ax < L - SIDE_GAP;
-          if (!b.inLeft && b.ax < R + SIDE_GAP && b.ax + FREE_MIN * ns > R && (vR - R - SIDE_GAP) / ns >= FREE_MIN) b.ax = R + SIDE_GAP;
-          const from = Math.max(b.ax, vL), room = ((b.inLeft ? L - SIDE_GAP : vR) - from) / ns; // from where it can show
-          // In a margin it narrows to that margin's room (down to FREE_MIN) before it is moved over the text.
-          const inRight = b.ax >= R + SIDE_GAP - 0.5, rL = (L - SIDE_GAP - vL) / ns, rR = (vR - R - SIDE_GAP) / ns;
-          const least = b.inLeft ? Math.min(b.want, FREE_FIT, Math.max(FREE_MIN, rL)) : inRight ? Math.min(b.want, FREE_FIT, Math.max(FREE_MIN, rR)) : Math.min(b.want, FREE_FIT);
-          w = fitWidth(b.want, room, least, span);
-          // Hidden when its margin is out of view, or, put in the text's column, when its place is.
-          b.hide = b.inLeft ? rL < HIDE_ROOM : inRight ? rR < HIDE_ROOM : b.ax < vL - 0.5 || b.ax > vR - FREE_MIN * ns;
-        } else {
-          // Its highlight's margin, unless that one is too narrow for NOTE_MIN and the other is not.
-          const mine = b.how === 'left' ? roomL : roomR, other = b.how === 'left' ? roomR : roomL;
-          b.side = mine < NOTE_MIN && other >= NOTE_MIN ? (b.how === 'left' ? 'right' : 'left') : b.how;
-          w = fitWidth(b.want, b.side === 'left' ? roomL : roomR, NOTE_MIN, span);
-        }
+        if (b.fixed && b.pos) { const at = placeOf(b.pos, g.G, g.pageW); b.left = at.left; b.top = at.top; }
+        const w = b.want;
         if (b.w !== w) {
           b.w = w;
           if (b.typing) { b.el.style.width = `${w}px`; b.el.style.maxWidth = ''; } else { b.el.style.width = 'max-content'; b.el.style.maxWidth = `${w}px`; }
           for (const ta of b.el.querySelectorAll('textarea')) this.fitNote(ta);
         }
       }
-      work.push({ page, model, g, L, R, dragged, ns, narrow: Math.min(roomL, roomR) < NOTE_MIN });
+      work.push({ model, g, col, L, R, ns, reach: sh ? sh.reach : [] });
     }
     // Measured once for every page (one layout), then on screen: note px times ns.
     for (const { model, ns } of work) for (const b of model.boxes) { b.width = b.el.offsetWidth * ns; b.height = b.el.offsetHeight * ns; }
-    // A card is hidden rather than drawn over the text (round 4): its margin shows less than HIDE_ROOM. Never the one
-    // being typed in or dragged.
-    const show = (b, hide) => {
-      const off = !!hide && b.m.id !== this.editing && !(b.el.contains && b.el.contains(document.activeElement));
-      b.hidden = off;
-      const v = off ? 'hidden' : '';
-      if (b.el.style.visibility !== v) b.el.style.visibility = v;
-    };
-    for (const { model, g, L, R, dragged, narrow, ns } of work) {
-      // the card typed from a selection's card, where that card was (placeTypedCard); its selection out of the pane, beside it
-      for (const b of model.boxes) {
-        if (!b.sel || this.placeTypedCard(b)) continue;
-        const side = b.how === 'left' ? 'left' : 'right';
-        b.left = Math.max(vL, Math.min(side === 'left' ? L - SIDE_GAP - b.width : R + SIDE_GAP, vR - b.width));
-        b.top = Math.max(0, b.m.y * g.pageW - 6);
-        b.el.style.left = `${b.left}px`; b.el.style.top = `${b.top}px`;
-      }
+    for (const { model, g, col, L, R, ns, reach } of work) {
+      const gap = BOX_GAP * ns, side = SIDE_GAP * ns;
       const fixed = model.boxes.filter((b) => b.fixed);
       for (const b of fixed) {
-        if (b !== dragged) b.left = Math.max(vL, Math.min(b.inLeft ? Math.min(b.ax, b.L - SIDE_GAP - b.width) : b.ax, vR - b.width));
         b.el.style.left = `${b.left}px`; b.el.style.top = `${b.top}px`;
-        show(b, b !== dragged && b.hide);
+        reach.push(...cardReach({ pos: b === dragged || !b.pos ? posOf(b.left, b.top, g.G, g.pageW || 1) : b.pos, w: b.width / ns }));
       }
       const beside = model.units.filter((unit) => unit.boxes.length);
-      // A full margin sends a note to the other one (./marks.js stackNotes), unless that one is too narrow to hold it.
-      for (const unit of beside) { unit.want = Math.max(0, unit.boxes[0].m.y * g.pageW - 6); unit.at = unit.boxes[0].side || unit.side; }
-      const sides = new Map([...stackNotes(beside.map((unit) => ({ id: unit.id, ideal: unit.want, h: unit.boxes.reduce((h, b, i) => h + b.height + (i ? BOX_GAP : 0), 0), side: unit.at })), { gap: BOX_GAP, ...(narrow ? { slack: Infinity } : {}) })].map(([id, at]) => [id, at.side]));
+      for (const unit of beside) unit.want = Math.max(0, unit.boxes[0].m.y * g.pageW - CARD_LIFT * ns);
+      const sides = new Map([...stackNotes(beside.map((unit) => ({ id: unit.id, ideal: unit.want, h: unit.boxes.reduce((h, b, i) => h + b.height + (i ? gap : 0), 0), side: unit.side })), { gap, slack: NOTE_SLACK * ns })].map(([id, at]) => [id, at.side]));
       for (const unit of beside) {
-        const side = sides.get(unit.id) || unit.at;
-        const room = side === 'left' ? (L - SIDE_GAP - vL) / ns : (vR - R - SIDE_GAP) / ns;
+        const at = sides.get(unit.id) || unit.side;
         for (const b of unit.boxes) {
-          const want = side === 'left' ? L - SIDE_GAP - b.width : R + SIDE_GAP;
-          b.left = Math.max(vL, Math.min(want, vR - b.width));
-          show(b, room < HIDE_ROOM);
+          b.side = at;
+          b.left = besideLeft(at, L, R, b.width, side);
+          reach.push(...cardReach({ side: at, col, w: b.width / ns }));
         }
       }
-      // Hidden cards take no room from the others.
-      const tops = spaceBoxes(beside.filter((unit) => !unit.boxes.every((b) => b.hidden)).map((unit) => ({ id: unit.id, want: unit.want, boxes: unit.boxes.map((b) => ({ left: b.left, width: b.width, height: b.height })) })), fixed.filter((b) => !b.hidden));
+      const tops = spaceBoxes(beside.map((unit) => ({ id: unit.id, want: unit.want, boxes: unit.boxes.map((b) => ({ left: b.left, width: b.width, height: b.height })) })), fixed, gap);
       for (const unit of beside) {
         let t = tops.has(unit.id) ? tops.get(unit.id) : unit.want;
-        for (const b of unit.boxes) { b.top = t; b.el.style.left = `${b.left}px`; b.el.style.top = `${t}px`; t += b.height + BOX_GAP; }
+        for (const b of unit.boxes) { b.top = t; b.el.style.left = `${b.left}px`; b.el.style.top = `${t}px`; t += b.height + gap; }
       }
     }
-    this.placeSelCard();
+    // The sheet widened (or narrowed) for what the cards reach now: every page moved, so their cards are laid out again.
+    if (!again && this.fitDesk()) this.arrangePages([...new Set([...pages, ...this.nearPages()])], true);
   }
 
-  // The width a card would be, note px (cardBox), before the pane's sides narrow it (arrangePages): a note typed anywhere keeps
-  // the width it was written with (`w`, writeAt; one from before is measured against the text beside it at the zoom now),
-  // a highlight's note NOTE_W, as narrow as its margin then makes it (2026-10-16, Hudson: "slightly less horizontal text
-  // … take up the vertical space").
+  // The width a card is, note px (cardBox): a highlight's CARD_W, moved or not, whatever width it was kept with before
+  // (2026-10-27; NOTE_W narrowed to its margin until then); a note typed anywhere the width it was written with (`w`,
+  // writeAt; one from before is measured against the text beside it at the zoom now).
   cardWidth(m, page) {
+    if ((m.rects || []).length) return CARD_W;
     if (Number(m.w) > 0) return Number(m.w);
-    if (m.pos && !(m.rects || []).length) {
+    if (m.pos) {
       const g = this.geom(page), at = placeOf(m.pos, g.G, g.pageW || 1);
       return freeNoteWidth(at.left, this.textAfter(page, at.left, at.top + POS_DY, 29), Infinity, this.boxScale(page));
     }
-    return NOTE_W;
+    return CARD_W;
   }
   // A card that keeps its whole width to type into: its note is being typed in (or is empty, or has nowhere for a
   // mention to go), or it holds answers. Others are as wide as what they hold, up to their width (cardBox).
@@ -2055,14 +2044,14 @@ export default class PaperView extends React.Component {
   }
 
   // A mark's card (2026-10-06): its note (being typed in, empty, or with nowhere for a mention to go: its field; else its
-  // text), then each answer (askSection) and each answer being written (runBox), with room, not a rule, between them
-  // (2026-10-16). Nothing of the card itself shows but the move handle while the pointer is on it. Shown, it is only as
-  // wide as what it holds, up to its width (arrangePages), and wraps there, growing down; a note being typed in keeps the
-  // whole width to type into. Pointing at a card marks it and its
+  // text), then each answer (askSection) and each answer being written (runBox), each under a hairline (2026-10-27; room
+  // and no rule from 2026-10-16). The card has a ground and an edge (BOX_LOOK); its move handle shows while the pointer
+  // is on it. A highlight's card is its whole width (CARD_W); a note typed anywhere is only as wide as what it holds, up
+  // to its width, unless it is being typed in, and wraps there, growing down. Pointing at a card marks it and its
   // highlight (MATH-15), while the pointer is there.
   cardBox(m, asks, runs, page) {
-    const width = Math.min(this.cardWidth(m, page), this.paneFit(page));
-    const size = this.typingIn(m, asks, runs) ? `width:${width}px` : `width:max-content;max-width:${width}px`;
+    const width = this.cardWidth(m, page);
+    const size = (m.rects || []).length || this.typingIn(m, asks, runs) ? `width:${width}px` : `width:max-content;max-width:${width}px`;
     const box = document.createElement('div');
     box.dataset.box = 'card'; box.dataset.boxMark = m.id; box.dataset.noteFor = m.id;
     box.style.cssText = `${BOX_LOOK};left:0;top:0;${size};display:flex;flex-direction:column;transition:opacity 120ms`;
@@ -2099,7 +2088,7 @@ export default class PaperView extends React.Component {
       const ta = this.noteField(m, page), inked = this.asksFrom(m);
       ta.style.cssText = `${NOTE_LOOK};display:block;width:100%;box-sizing:border-box;margin:0;border:0;background:transparent;resize:none;overflow:hidden;outline:none${inked ? `;position:relative;color:transparent;caret-color:${NOTE_INK}` : ''}`;
       if (inked) {
-        const ink = makeEl('div', `${NOTE_LOOK};position:absolute;left:0;top:0;right:0;bottom:0;box-sizing:border-box;margin:0;border:0;white-space:pre-wrap;overflow-wrap:break-word;overflow:hidden;pointer-events:none`, { noteInk: m.id });
+        const ink = makeEl('div', `${NOTE_LOOK};position:absolute;left:0;top:0;right:0;bottom:0;box-sizing:border-box;margin:0;border:0;white-space:pre-wrap;${PDF_WRAP};overflow:hidden;pointer-events:none`, { noteInk: m.id });
         ink.setAttribute('aria-hidden', 'true');
         ta.onscroll = () => { ink.scrollTop = ta.scrollTop; };
         const both = makeEl('div', 'position:relative');
@@ -2115,7 +2104,7 @@ export default class PaperView extends React.Component {
       }
     } else {
       const view = this.noteView(m, page);
-      view.style.cssText = `${NOTE_LOOK};white-space:pre-wrap;overflow-wrap:break-word;cursor:text`;
+      view.style.cssText = `${NOTE_LOOK};white-space:pre-wrap;${PDF_WRAP};cursor:text`;
       sec.appendChild(view);
     }
     return sec;
@@ -2165,7 +2154,7 @@ export default class PaperView extends React.Component {
     const sec = document.createElement('div');
     sec.dataset.ask = String(a.id || '');
     sec.onclick = (ev) => this.askClick(ev, m, a, page);
-    const line = divided ? `${ANSWER_GAP};` : '';
+    const line = divided ? `${PDF_ANSWER_GAP};` : '';
     if (a.collapsed) {
       sec.style.cssText = `${line}flex:none;padding:2px 6px`;
       sec.innerHTML = `<button type="button" data-act="expand" title="${esc(a.question || '')}" style="font-weight:500;color:#171717">Bart ›</button>`;
@@ -2175,7 +2164,7 @@ export default class PaperView extends React.Component {
     const lib = { libName: (id) => this.libName(id), citeSource: (address) => libraryName(this.props.library, address) }, asked = askedByNote(a.question, m.note) ? '' : String(a.question || '');
     sec.style.cssText = `${line}flex:none;display:flex;flex-direction:column;${ANSWER_FONT};color:${ANSWER_INK}`;
     sec.innerHTML = (asked ? `<div title="${esc(asked)}" style="flex:none;padding:0 6px 6px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:${QUESTION_INK}">${esc(asked)}</div>` : '')
-      + `<div data-ask-body="1" style="flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 6px 2px;overflow-wrap:anywhere">${answerHtml(a.answer, lib)}</div>`
+      + `<div data-ask-body="1" style="flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 6px 2px;${PDF_WRAP}">${answerHtml(a.answer, lib)}</div>`
       + '<div style="flex:none;display:flex;flex-wrap:wrap;gap:2px;padding:2px 0 4px">'
       + (this.props.onContinueAsk ? '<button type="button" data-act="continue">Continue in project</button>' : '')
       + (this.props.onCopyText ? '<button type="button" data-act="copy">Copy</button>' : '')
@@ -2185,17 +2174,13 @@ export default class PaperView extends React.Component {
   // 40% of the pane's height (2026-10-08; screen px since 2026-10-16, later). The pane's size as last laid out (pdfW,
   // pdfH): asking the page for it here laid the page out once a card.
   boxMaxHeight(page) { return Math.round(Math.max(140, (this.pdfH || 600) * 0.4) / this.boxScale(page)); }
-  // The widest a card may be, to be seen whole in the pane (2026-10-08, Hudson: "the annotation text should fit to the
-  // window of the stager"): the pane's width less REVEAL_PAD each side.
-  paneFit(page) {
-    return this.pdfW ? Math.max(140, this.pdfW - 2 * REVEAL_PAD) / this.boxScale(page) : Infinity;
-  }
   // Mark id's card scrolled into the pane, by as little as will do (2026-10-08): a new note, an ask sent from it, an answer
   // landing in it. One bigger than the pane shows its top-left. `seen`: only when some of it is in view already, so an
   // answer landing while the paper is read elsewhere does not take the view there.
-  revealCard(id, seen = false) {
-    const host = this.host.current, el = id && this.find1(`[data-box-mark="${id}"]`);
-    if (!host || !el) return;
+  revealCard(id, seen = false) { this.revealEl(id && this.find1(`[data-box-mark="${id}"]`), seen); }
+  revealEl(el, seen = false) {
+    const host = this.host.current;
+    if (!host || !el || !el.getBoundingClientRect) return;
     const view = this.viewRect(), r = el.getBoundingClientRect();
     if (seen && (r.right <= view.left || r.left >= view.right || r.bottom <= view.top || r.top >= view.bottom)) return;
     const along = (lo, hi, vLo, vHi) => (hi - lo > vHi - vLo - 2 * REVEAL_PAD || lo < vLo + REVEAL_PAD ? lo - vLo - REVEAL_PAD : hi > vHi - REVEAL_PAD ? hi - vHi + REVEAL_PAD : 0);
@@ -2238,7 +2223,7 @@ export default class PaperView extends React.Component {
   // Bart is doing, with a spinner, and Stop; ▸ shows its steps; the answer comes in once it is writing. A failure says
   // why, with × to close it. Made once; each change of what Bart is doing fills it in place (fillRun).
   runBox(p, page, divided = false) {
-    const box = makeEl('div', `${divided ? `${ANSWER_GAP};` : ''}flex:none;display:flex;flex-direction:column;${ANSWER_FONT};color:${ANSWER_INK}`, { askRun: p.askId });
+    const box = makeEl('div', `${divided ? `${PDF_ANSWER_GAP};` : ''}flex:none;display:flex;flex-direction:column;${ANSWER_FONT};color:${ANSWER_INK}`, { askRun: p.askId });
     box.onmousedown = (ev) => ev.stopPropagation();
     box.onclick = (ev) => this.runClick(ev, p.askId, page);
     const steps = makeEl('div', 'display:none;flex:none;padding:0 0 4px', { runSteps: '1' });
@@ -2246,10 +2231,10 @@ export default class PaperView extends React.Component {
     box.append(
       makeEl('div', 'flex:none;display:flex;align-items:center;gap:8px;padding:0 0 4px 6px', { runHead: '1' }),
       makeEl('div', `flex:none;padding:0 6px 6px;color:${QUESTION_INK};overflow:hidden;text-overflow:ellipsis;white-space:nowrap`, { runQuestion: '1' }),
-      makeEl('div', `display:none;flex:none;padding:0 6px 8px;color:${ERROR_INK};overflow-wrap:anywhere`, { runError: '1' }),
+      makeEl('div', `display:none;flex:none;padding:0 6px 8px;color:${ERROR_INK};${PDF_WRAP}`, { runError: '1' }),
       steps,
       makeEl('div', 'display:none;flex:none;padding:0 6px 6px;font-size:13px;line-height:1.7;color:#8f8f8f', { runLog: '1' }),
-      makeEl('div', `display:none;flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 6px 8px;color:${QUESTION_INK};overflow-wrap:anywhere`, { runBody: '1' }),
+      makeEl('div', `display:none;flex:none;max-height:${this.boxMaxHeight(page)}px;overflow:auto;padding:0 6px 8px;color:${QUESTION_INK};${PDF_WRAP}`, { runBody: '1' }),
     );
     this.fillRun(box, p);
     return box;
@@ -2399,7 +2384,7 @@ export default class PaperView extends React.Component {
     if (model) for (const unit of model.units) unit.boxes = unit.boxes.filter((x) => x !== b);
   }
   // The card under the pointer, in its sheet's px (the cards' layer), kept on the paper: not above the first page, not
-  // past the sheet's sides (2026-10-16: no desk beyond them to reach).
+  // past the sheet's sides (the desk beside the page is as wide as the cards need, fitDesk, and widens once it is let go).
   dragTo() {
     const d = this.drag, host = this.host.current, s = d && this.sheets[d.page], g = d && this.geo[d.page];
     if (!d || !host || !s || !g) return;
@@ -2472,8 +2457,14 @@ export default class PaperView extends React.Component {
         const d = document.createElementNS(SVG, 'rect');
         d.dataset.focus = '1';
         d.setAttribute('x', b.x * u); d.setAttribute('y', b.y * u + b.h * u * BAND_TOP); d.setAttribute('width', b.w * u); d.setAttribute('height', b.h * u * BAND_H);
-        d.setAttribute('rx', 2); d.setAttribute('fill', 'rgba(0,112,243,.14)');
+        d.setAttribute('rx', HL_RADIUS); d.setAttribute('fill', HL_FOCUS);
         hl.appendChild(d);
+        // and a line under it: the one in focus reads apart from a pending selection's stronger tint
+        const line = document.createElementNS(SVG, 'rect');
+        line.dataset.focus = '1';
+        line.setAttribute('x', b.x * u); line.setAttribute('y', b.y * u + b.h * u * (BAND_TOP + BAND_H) - 1.5); line.setAttribute('width', b.w * u); line.setAttribute('height', 1.5);
+        line.setAttribute('fill', HL_FOCUS_LINE);
+        hl.appendChild(line);
       }
     }
   }

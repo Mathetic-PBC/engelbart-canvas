@@ -38,12 +38,19 @@ export const tooFar = (n, first, last, keep = KEEP_DRAWN) => n < first - keep ||
 /* ------------------------------------------------------------------------- the column and its zoom (2026-10-16) */
 // Hudson: "I should not be able to pan left and right … All zooming should be uniform straight down the center." The
 // pages are one column in the middle of the pane, every page as wide as the others; the desk beside them shows only as
-// the page gets narrower than the pane.
+// the page gets narrower than the pane. Since 2026-10-27 (David) a card beside the page is never narrowed to its margin:
+// the sheet is widened each side for it (columnGeometry's `reach`), the column still down its middle, and the pane can
+// be panned sideways onto the desk where a card lies past its edge.
 
 /** The column at zoom `z` (1 = the page as wide as the pane) in a pane `W` wide: every page `pageW` wide, on a sheet `S`
- *  wide (the pane, or the page once it is wider), the page starting `G` from the sheet's left. → { pageW, S, G } */
-export function columnGeometry(W, z) {
-  const pageW = Math.max(1, Math.round(W * z)), S = Math.max(W, pageW);
+ *  wide (the pane, or the page once it is wider), the page starting `G` from the sheet's left. → { pageW, S, G }
+ *  `reach` (2026-10-27): px of desk each side of the page its cards need (../pdf/canvas.js deskReach, a function of the
+ *  page's width, or a number), so a card beside the page is never narrowed to its margin: the sheet is widened for it,
+ *  the page still in its middle, and the pane scrolls sideways onto it. */
+export function columnGeometry(W, z, reach = 0) {
+  const pageW = Math.max(1, Math.round(W * z));
+  const need = typeof reach === 'function' ? reach(pageW) : reach;
+  const S = Math.max(W, pageW + 2 * Math.max(0, Math.ceil(Number(need) || 0)));
   return { pageW, S, G: (S - pageW) / 2 };
 }
 
