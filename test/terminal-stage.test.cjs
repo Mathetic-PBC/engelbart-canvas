@@ -29,6 +29,10 @@ const row = (n, name, extra = {}) => ({ id: id(n), name, type: 'html', url: `htt
 
 /* ------------------------------------------------------------------ the tool and its arguments */
 
+// The Stage tool reaches an agent through a POSIX terminal only (MATH-79): a Windows terminal opens PowerShell,
+// which has no `claude` / `codex` functions, so these are not run there.
+const STAGE_POSIX = process.platform === 'win32' && 'POSIX terminals only: the Stage tool is not offered in a Windows terminal yet';
+
 test('two tools, open_on_stage { target } and search_library { query }, said for the agent; the line names Engelbart and both', () => {
   assert.deepEqual(STAGE_TOOLS.map((tool) => tool.name), ['open_on_stage', 'search_library']);
   const [tool, search] = STAGE_TOOLS;
@@ -150,7 +154,7 @@ test('names: several in this project is ambiguous; one here beats any elsewhere;
   assert.throws(() => resolveTarget('Report', { cwd: home, homeDir: home, all, here: [a] }), /Several library items in the library are named "Report"/);
 });
 
-test('paths: relative from the session\'s working directory, ~/, file://, absolute; one that is not there says so', (t) => {
+test('paths: relative from the session\'s working directory, ~/, file://, absolute; one that is not there says so', { skip: STAGE_POSIX }, (t) => {
   const home = temporaryDirectory(t);
   const cwd = path.join(home, 'work', 'app');
   fs.mkdirSync(path.join(cwd, 'out'), { recursive: true });
@@ -168,7 +172,7 @@ test('paths: relative from the session\'s working directory, ~/, file://, absolu
   assert.throws(() => resolveTarget('/nowhere/at/all.pdf', options), /Nothing is at \/nowhere\/at\/all\.pdf\./);
 });
 
-test('a file the Stage cannot draw says what it does show; one outside the home directory is refused', (t) => {
+test('a file the Stage cannot draw says what it does show; one outside the home directory is refused', { skip: STAGE_POSIX }, (t) => {
   const home = temporaryDirectory(t);
   fs.writeFileSync(path.join(home, 'blob.bin'), Buffer.from([1, 0, 2]));
   fs.writeFileSync(path.join(home, 'paper.pdf'), '%PDF-1.4');
@@ -316,7 +320,7 @@ function fakeBridges(t, { fail = false } = {}) {
 
 const mode = (file) => fs.statSync(file).mode & 0o777;
 
-test('Claude Code: a bridge, its 0600 connection file and an --mcp-config naming engelbart-stage; bound to the session once it has an id', async (t) => {
+test('Claude Code: a bridge, its 0600 connection file and an --mcp-config naming engelbart-stage; bound to the session once it has an id', { skip: STAGE_POSIX }, async (t) => {
   const { bridges, opened } = fakeBridges(t);
   const prepared = await bridges.prepare('claude');
   assert.equal(opened.length, 1);
@@ -338,7 +342,7 @@ test('Claude Code: a bridge, its 0600 connection file and an --mcp-config naming
   assert.ok(bridges.has('S1'));
 });
 
-test('Codex: -c overrides for mcp_servers.engelbart-stage and developer_instructions', async (t) => {
+test('Codex: -c overrides for mcp_servers.engelbart-stage and developer_instructions', { skip: STAGE_POSIX }, async (t) => {
   const { bridges } = fakeBridges(t);
   const { stage } = await bridges.prepare('codex');
   assert.match(stage.ENGELBART_TERMINAL_CODEX_COMMAND, /^mcp_servers\.engelbart-stage\.command="\/Applications\/Engelbart\.app\/Contents\/MacOS\/Engelbart"$/);
@@ -388,7 +392,7 @@ test('a session that did not start lets its bridge go; files a crashed run left 
   assert.deepEqual(fs.readdirSync(directory), []);
 });
 
-test('a bridge that does not open starts the agent without the tool', async (t) => {
+test('a bridge that does not open starts the agent without the tool', { skip: STAGE_POSIX }, async (t) => {
   const { bridges, reported } = fakeBridges(t, { fail: true });
   assert.equal(await bridges.prepare('claude'), null);
   assert.deepEqual(reported, ['no port']);
@@ -400,7 +404,7 @@ test('a bridge that does not open starts the agent without the tool', async (t) 
   assert.match(pty.made[0].args[1], /else claude; fi;/, 'today\'s command');
 });
 
-test('the session manager passes a session\'s Stage variables to its launch', async (t) => {
+test('the session manager passes a session\'s Stage variables to its launch', { skip: STAGE_POSIX }, async (t) => {
   const { bridges } = fakeBridges(t);
   const prepared = await bridges.prepare('claude');
   const pty = { made: [], spawn(file, args, options) { const handle = { pid: 1, file, args, options, onData() { return { dispose() {} }; }, onExit() { return { dispose() {} }; }, kill() {} }; this.made.push(handle); return handle; } };

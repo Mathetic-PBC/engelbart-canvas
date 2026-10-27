@@ -18,6 +18,10 @@ function temporaryDirectory(t) {
   return directory;
 }
 
+// The Stage tool reaches an agent through a POSIX terminal only (MATH-79): a Windows terminal opens PowerShell,
+// which has no `claude` / `codex` functions, so these are not run there.
+const STAGE_POSIX = process.platform === 'win32' && 'POSIX terminals only: the Stage tool is not offered in a Windows terminal yet';
+
 test('sanitizeEnvironment removes host transients without changing its source', () => {
   const source = {
     HOME: '/Users/tester',
@@ -195,7 +199,7 @@ function fakeFish(t) {
   return fish;
 }
 
-test('Claude Code and Codex started with the Stage tool get its MCP server and line, by $ENGELBART_*_BIN and by name, in zsh and bash (MATH-79)', (t) => {
+test('Claude Code and Codex started with the Stage tool get its MCP server and line, by $ENGELBART_*_BIN and by name, in zsh and bash (MATH-79)', { skip: STAGE_POSIX }, (t) => {
   const cwd = temporaryDirectory(t);
   for (const shell of ['/bin/zsh', '/bin/bash']) {
     const environment = { HOME: cwd, SHELL: shell, PATH: '/usr/bin:/bin' };
@@ -215,7 +219,7 @@ test('Claude Code and Codex started with the Stage tool get its MCP server and l
   }
 });
 
-test('in fish the same flags follow both $ENGELBART_*_BIN and the name (MATH-79)', (t) => {
+test('in fish the same flags follow both $ENGELBART_*_BIN and the name (MATH-79)', { skip: STAGE_POSIX }, (t) => {
   const cwd = temporaryDirectory(t);
   const environment = { HOME: cwd, SHELL: fakeFish(t), PATH: '/usr/bin:/bin' };
   const claude = createLaunchSpec({ provider: 'claude', cwd, cols: 80, rows: 24 }, environment, { stage: STAGE });
@@ -225,7 +229,7 @@ test('in fish the same flags follow both $ENGELBART_*_BIN and the name (MATH-79)
   assert.ok(codex.args[3].includes(`if set -q ENGELBART_CODEX_BIN; $ENGELBART_CODEX_BIN${CODEX_FLAGS}; else; command codex${CODEX_FLAGS}; end;`), codex.args[3]);
 });
 
-test('without the Stage variables the command is today\'s exactly; inherited ones are never used; a shell gets both sets (MATH-79)', (t) => {
+test('without the Stage variables the command is today\'s exactly; inherited ones are never used; a shell gets both sets (MATH-79)', { skip: STAGE_POSIX }, (t) => {
   const cwd = temporaryDirectory(t);
   const fish = fakeFish(t);
   const today = {
