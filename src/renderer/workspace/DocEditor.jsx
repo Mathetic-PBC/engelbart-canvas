@@ -62,7 +62,7 @@ import SHAPES_SVG from '@phosphor-icons/core/assets/bold/shapes-bold.svg' with {
 import BartPicker from './BartPicker.jsx';
 import AgentChoice from './AgentChoice.jsx';
 import TopicMenu from './TopicMenu.jsx';
-import { routeByRule, routeInputs, fallbackAgent, buildTextOf, questionLine } from '../model/route.js';
+import { routeByRule, routeInputs, fallbackAgent, buildTextOf, offersBuild, questionLine } from '../model/route.js';
 import DiscoverLevels, { LEVEL_LABELS } from './DiscoverLevels.jsx';
 import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
@@ -546,6 +546,8 @@ export function moveLineTo(ls, i, j) {
   return out;
 }
 const CLIP_OLD = 6;
+// How long after a Build started from an answer settles its question is held (footBuild, MATH-160).
+const BUILD_SETTLE_MS = 1500;
 // A Brainstorm conversation's "Topic: …" chip under its first question (topicChipHtml), hidden since 2026-10-16.
 const TOPIC_CHIP_SHOWN = false;
 // An @bart answer's line height (2026-10-15: 15px/1.55), and how many lines its fold must hide to be drawn.
@@ -606,6 +608,9 @@ export default class DocEditor extends React.Component {
   repick = null; // another row of an answered @discover choice, waiting for its restart to be confirmed (askRepick): { q, n }
   // The conversation title being renamed in its header (2026-10-12): { line, value }.
   titleEdit = null;
+  // The question lines whose Build is starting (MATH-160): one is started once, however often its Build is pressed, until
+  // its card is in the document or it failed.
+  buildStarting = new Set();
   // The threads whose Refine field is open, by first line (a reply field is always open, 2026-10-16). The answers that were in the document
   // when it opened (answerKey), for the document they were read in (seenDoc), and the answers opened past their cut.
   refineOpen = new Set(); replyFocus = null; replyWait = null; keyedAt = 0; seenDoc = {}; seenAnswers = new Set(); moreOpen = new Set();
@@ -2290,6 +2295,11 @@ export default class DocEditor extends React.Component {
       const endBox = isResearch(ps[end.q]) ? this.boxState(ls, end) : null;
       const boxField = !!endBox && !end.folded && !built && !!this.props.onAsk && !this.props.readOnly;
       const field = boxField || (follow && !inCard && !refineHere && !this.props.readOnly), after = field || (follow && this.endsInRecap(ls, thread));
+      // A Build button under the conversation's last answer when it ends by offering to build its fenced prompt (MATH-160,
+      // 2026-10-27: Chat's "Want me to build it?", main's bart/ask.cjs ROUTED_BUILD). Not once its Build's card is under it,
+      // nor while that Build is starting, nor while anything in the conversation is at work.
+      const offer = end.answered && !end.pending && !end.folded && !end.build && !built && !isResearch(ps[end.q]) && !cards.byQ.has(end.q)
+        && !thread.turns.some((t) => t.pending) && !!this.props.onBuild && !this.props.readOnly && !this.buildStarting.has(ls[end.q]) && offersBuild(ls, end);
       // A collapsed turn (2026-10-13) is drawn bare, as one row (foldedHtml) with no foot, at the top of the card: the
       // question under it starts 18px below the last of them.
       // An @discover research box (2026-10-13, doc.js isResearch) is drawn inside the card of the reply that asked for it
@@ -2315,7 +2325,7 @@ export default class DocEditor extends React.Component {
         for (let i = turn.from; i <= turn.to; i++) {
           const role = i === turn.foot ? 'foot' : parseLine(ls[i]).type === 'pending' ? 'pending' : 'answer', ends = i === turn.to;
           const drawn = card && i <= card.last ? { card: i === turn.from ? card : null, underCard: i !== turn.from } : {};
-          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && after, refine: null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, boxState, editable: editable && !box, chat, older, ...drawn });
+          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, buildOffer: tail && offer && i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && after, refine: null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, boxState, editable: editable && !box, chat, older, ...drawn });
         }
       });
     }
@@ -2793,6 +2803,14 @@ export default class DocEditor extends React.Component {
     return `<div contenteditable="false" data-readonly="1" data-more="${turn.q}" data-chat-more="1" data-key="${key}" data-split="${body[k].j}" data-open="${open ? 1 : 0}"${at.older ? ` data-chat-older="${turn.q}"` : ''} style="display:none;position:relative;user-select:none;cursor:default;padding:0 18px;background:#fafafa">`
       + `<span style="display:flex;padding:8px 0 0 12px;border-left:1.5px solid #e6e6e6"><button type="button" class="chat-more" data-act="more" data-key="${key}" data-open="${open ? 1 : 0}" aria-expanded="${open}">${open ? 'Show less' : label}${chevron}</button></span></div>`;
   }
+  // The Build under an answer that offers to build its fenced prompt (MATH-160): a text button on the answer's grey, inside
+  // its rule, under its last line and above its foot. It builds as the footer's Build does (footBuild): the last fenced
+  // block, on the Build's own model and effort.
+  buildOfferHtml(at) {
+    const rule = at.chat ? 'padding:6px 0 0 10px;border-left:1.5px solid #e6e6e6' : 'padding:4px 0 2px 12px;border-left:2px solid #d6d6d6';
+    return `<div contenteditable="false" data-readonly="1" data-build-offer="${at.turn.q}" style="position:relative;user-select:none;cursor:default;padding:0 ${at.chat ? 18 : 16}px;background:#fafafa">`
+      + `<span style="display:block;${rule}"><button type="button" class="bart-text" data-act="footbuild" data-turn="${at.turn.q}">Build</button></span></div>`;
+  }
   // What a follow-up starts on: the pick made on this card's chip, or else the flags of the question before it, so an
   // exchange pinned to a model stays on it. → { flags, step }
   followStep(ls, thread) {
@@ -3069,6 +3087,7 @@ export default class DocEditor extends React.Component {
       if (p.type === 'todo' && p.build && this.taskOpen.has(p.build) && !this.props.compact) out += this.taskCardHtml(i, p, p.build);
       // Under an answer's last line, its Show more (2026-10-13), shown by applyClips once it is long enough to cut, then its sources.
       if (where && where.lastBody && where.role === 'answer' && !where.box && !where.turn.pending && !where.turn.folded && !where.turn.build && !cards.byQ.has(where.turn.q)) out += (where.chat ? this.chatMoreHtml(ls, where) : this.moreHtml(ls, where.turn, where.turn === where.thread.turns[0] || where.turn === [...where.thread.turns].reverse().find((t) => t.answered && !t.pending))) + dimmed(this.citeSourcesHtml(ls, where));
+      if (where && where.buildOffer) out += dimmed(this.buildOfferHtml(where));
       if (where && where.footAfter && where.chat && !where.turn.folded) out += dimmed(this.chatFootHtml({ at: where, closes: (where.tail && !where.drawnAfter) || where.cut }));
       else if (where && where.footAfter && !(where.turn.folded && !where.box) && !(where.box && ['stopped', 'failed'].includes(where.boxState))) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), box: where.box, guide: where.agent === 'discover' && (!where.box || where.boxState === 'finished') ? where.turn : null }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
@@ -4577,10 +4596,20 @@ export default class DocEditor extends React.Component {
   }
   // The footer's Build (2026-10-12): the turn's last fenced block as it reads now, else its question and answer, built;
   // the card goes on a line of its own after the thread (Workspace onBuild).
+  // A Build pressed again while it starts (MATH-160) starts no second one: its Build button is hidden meanwhile. Workspace's
+  // onBuild settles once the card is put in the document or the Build failed; the document reaches the editor a little
+  // after, so the question is let go BUILD_SETTLE_MS later: by then its card hides the button, or, failed, it shows again.
   footBuild(q) {
     const ls = this.lines(), found = this.findTurn(ls, q);
     if (!found || !found.turn.answered || found.turn.pending || found.thread.turns.some((t) => t.pending) || !this.props.onBuild) return false;
-    this.props.onBuild({ text: buildTextOf(ls, found.turn), after: found.thread.to, afterLine: ls[found.thread.to], place: { line: found.turn.q, text: ls[found.turn.q] } });
+    const key = ls[found.turn.q]; if (this.buildStarting.has(key)) return false;
+    this.buildStarting.add(key);
+    const done = () => this.timer(() => { this.buildStarting.delete(key); this.syncEditor(); }, BUILD_SETTLE_MS);
+    let started;
+    try { started = this.props.onBuild({ text: buildTextOf(ls, found.turn), after: found.thread.to, afterLine: ls[found.thread.to], place: { line: found.turn.q, text: ls[found.turn.q] } }); }
+    catch (error) { this.buildStarting.delete(key); throw error; }
+    Promise.resolve(started).then(done, done);
+    this.syncEditor();
     return true;
   }
   // Another agent for a line Bart routed: asked again of it in its place; the run says the person corrected Bart
