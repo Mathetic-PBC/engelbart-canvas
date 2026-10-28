@@ -11,7 +11,13 @@ let package = Package(
         .package(path: "../UI"),
     ],
     targets: [
-        .target(name: "EngelbartSandbox", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), ]),
+        .target(
+            name: "EngelbartSandbox",
+            dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI")],
+            // The Python helpers the sandbox runs (src/main/sandbox/*.py), byte-identical copies.
+            resources: [.copy("Resources")],
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
         .testTarget(name: "EngelbartSandboxTests", dependencies: ["EngelbartSandbox"]),
     ]
 )
