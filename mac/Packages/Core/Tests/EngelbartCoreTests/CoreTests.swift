@@ -40,3 +40,16 @@ final class CoreTests: XCTestCase {
         try? FileManager.default.removeItem(at: dir)
     }
 }
+
+final class MCPServerTests: XCTestCase {
+    func testListAndCall() async throws {
+        let pipe = Pipe()
+        let server = MCPServer(name: "t", tools: [.init(name: "echo", description: "e", inputSchema: ["type": "object"], call: { args in args["x"]?.string ?? "" })], output: pipe.fileHandleForWriting)
+        let list = await server.handle(["jsonrpc": "2.0", "id": 1, "method": "tools/list"])
+        XCTAssertEqual(list?["result"]?["tools"]?[0]?["name"]?.string, "echo")
+        let call = await server.handle(["jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": ["name": "echo", "arguments": ["x": "hi"]]])
+        XCTAssertEqual(call?["result"]?["content"]?[0]?["text"]?.string, "hi")
+        let note = await server.handle(["jsonrpc": "2.0", "method": "notifications/initialized"])
+        XCTAssertNil(note)
+    }
+}
