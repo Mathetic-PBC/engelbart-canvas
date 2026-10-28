@@ -127,6 +127,16 @@ test('(b) the Build button\'s card, right under the conversation: in its card, n
   assert.equal(count(html, /data-build-offer=/g), 0, 'no Build button once its card is there');
 });
 
+test('under a collapsed turn the joined Build has no hairline: the collapsed row is apart enough', () => {
+  const folded = BUTTON.map((l) => (l.startsWith('bart> ') ? l.replace('bart> ', 'bart+> ') : l));
+  const html = mounted(folded, { builds: running() }).html();
+  const build = rowTag(html, 8);
+  assert.match(build, /data-build-joined=/);
+  assert.match(build, /padding:10px 16px 14px/);
+  assert.match(html.slice(html.indexOf(build) + build.length), /^<div><div data-build-part="head">/, 'no hairline');
+  assert.equal(count(html, /data-build-rule=/g), 0);
+});
+
 test('(c) an `@bart --build` conversation: its question and its Build in one card, the question without a picker or send', () => {
   const m = mounted(DIRECT, { builds: running() });
   const html = m.html();

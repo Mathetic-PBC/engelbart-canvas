@@ -2003,9 +2003,10 @@ export default class DocEditor extends React.Component {
     for (const [name, html] of parts) this.buildDrawn.set(`${p.id}:${name}`, html);
     // At a conversation's end (MATH-161, layout's role 'build'), the conversation's last row: no card of its own, its parts
     // 16px in as the rows above it are, and the conversation's card closing under it. A hairline above it (2026-10-28,
-    // David) parts what was asked from the Build that answers it.
-    if (at && at.joined) return `<div ${raw} contenteditable="false" data-readonly="1" data-build-joined="${at.thread.from}" style="user-select:text;cursor:default;padding:6px 16px 14px;background:#fafafa;border-radius:${radius(false, true)};margin-bottom:8px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
-      + '<div data-build-rule="1" style="border-top:1px solid #eaeaea;padding-top:10px">'
+    // David) parts what was asked from the Build that answers it; not under a collapsed turn (David), whose one row is
+    // apart enough.
+    if (at && at.joined) return `<div ${raw} contenteditable="false" data-readonly="1" data-build-joined="${at.thread.from}" style="user-select:text;cursor:default;padding:${at.underFolded ? 10 : 6}px 16px 14px;background:#fafafa;border-radius:${radius(false, true)};margin-bottom:8px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
+      + (at.underFolded ? '<div>' : '<div data-build-rule="1" style="border-top:1px solid #eaeaea;padding-top:10px">')
       + parts.map(([name, html]) => `<div data-build-part="${name}">${html}</div>`).join('')
       + '</div></div>';
     return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;margin:6px 0 14px;padding:12px 16px 14px;background:#fafafa;border-radius:10px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
@@ -2360,7 +2361,7 @@ export default class DocEditor extends React.Component {
           at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, buildOffer: tail && offer && i === lastBody, offerSaid: tail && offered && i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && (after || joinedAt >= 0), refine: null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, boxState, editable: editable && !box, chat, older, ...drawn });
         }
       });
-      if (joinedAt >= 0) at.set(joinedAt, { thread, turn: end, agent: this.turnAgent(thread, end), role: 'build', joined: true, closes: true });
+      if (joinedAt >= 0) at.set(joinedAt, { thread, turn: end, agent: this.turnAgent(thread, end), role: 'build', joined: true, closes: true, underFolded: !!end.folded });
     }
     return at;
   }
