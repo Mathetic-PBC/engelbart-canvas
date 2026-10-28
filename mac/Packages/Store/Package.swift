@@ -10,7 +10,12 @@ let package = Package(
         .package(path: "../Core"),
     ],
     targets: [
-        .target(name: "EngelbartStore", dependencies: [.product(name: "EngelbartCore", package: "Core"), ]),
+        .target(
+            name: "EngelbartStore",
+            dependencies: [.product(name: "EngelbartCore", package: "Core")],
+            resources: [.copy("Resources")],
+            linkerSettings: [.linkedLibrary("sqlite3")]
+        ),
         .testTarget(name: "EngelbartStoreTests", dependencies: ["EngelbartStore"]),
     ]
 )
