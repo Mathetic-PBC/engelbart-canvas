@@ -955,6 +955,10 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
       projectId, text: cutStr(str(value.text, 'line', Infinity), 'line', 8000), place: placeOf(value.place, projectId, ref), section: tailStr(value.section, 'section', 200000) || '',
       workspaceName: cutStr(value.workspaceName, 'workspace name', 400) || '', threads, specAbove: !!value.specAbove, specTitle: value.specAbove ? cutStr(value.specTitle, 'spec title', 400) || '' : '', rule,
       current: ['chat', 'brainstorm', 'discover'].includes(value.current) ? value.current : null,
+      // MATH-165: Discover waiting on its question (and what it asked), and a line handed back, rerouted without the agents it may not go to.
+      asking: !!value.asking, discoverAsked: value.asking ? cutStr(value.discoverAsked, 'discover asked', 2000) || null : null,
+      exclude: (Array.isArray(value.exclude) ? value.exclude : []).filter((name) => ROUTE_PICKS.includes(name)),
+      handedBack: value.handedBack && typeof value.handedBack === 'object' && ROUTE_PICKS.includes(value.handedBack.from) ? { from: value.handedBack.from, reason: cutStr(value.handedBack.reason, 'hand-back reason', 400) || '' } : null,
     });
   });
   // Where a routed line went when it was not an ask: `build:<id>`, on the router's record.

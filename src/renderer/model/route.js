@@ -30,22 +30,21 @@ export function questionLine(text, max = QUESTION_CHARS) {
  * The agent an `@bart` line goes to by rule, or null when no rule settles it and the model is asked. `text`: the line
  * after `@bart`; `lines`, `at`: the document and the line's index (for the thread it is under); `models`: the models
  * file, when loaded; `current`: the agent the thread a follow-up goes on with is with (routeInputs). → { agent: 'chat' |
- * 'brainstorm' | 'discover' | 'build', rule } | null. `asking`: the line answers Discover while it settles what to
- * research (routeInputs). `models` and `current` are no longer read (2026-10-16), kept for the callers. In order:
- *   an empty line → brainstorm; --build → Build; --quick, --standard or --deep → discover; an answer to Discover's
- *   question → discover (2026-10-14: its conversation is not over until it searches, so its replies are not routed away
- *   to Chat). A model or effort flag settles nothing (2026-10-16, David: "@bart --sonnet --medium I want to find an
+ * 'brainstorm' | 'discover' | 'build', rule } | null. `models` and `current` are no longer read (2026-10-16), kept for
+ * the callers. In order:
+ *   an empty line → brainstorm; --build → Build; --quick, --standard or --deep → discover. (A line under Discover's open
+ *   question went to Discover by rule from 2026-10-14; since MATH-165, 2026-10-28, the model is asked, shown that
+ *   question: every other request asked there had been answered or refused by Discover.) A model or effort flag settles nothing (2026-10-16, David: "@bart --sonnet --medium I want to find an
  *   excerpt from a religious text" went to Chat by rule): it picks the model and effort of whichever agent answers, and
  *   the rest of the line is classified (main's bart/route.cjs reads it without the flags).
  * A line under a thread is no longer settled by its thread's agent (2026-10-13): the model is told which agent the
  * conversation is with (`current`) and stays with it unless the line clearly wants another.
  */
-export function routeByRule(text, { models = null, current = null, asking = false } = {}) {
+export function routeByRule(text, { models = null, current = null } = {}) {
   const said = String(text || '');
   if (!said.trim()) return { agent: 'brainstorm', rule: 'empty' };
   if (readBuildFlag(said).build) return { agent: 'build', rule: '--build' };
   if (LEVEL_RE.test(said)) return { agent: 'discover', rule: 'level' };
-  if (asking) return { agent: 'discover', rule: 'answering Discover' };
   return null;
 }
 
@@ -56,8 +55,29 @@ export function buildTextOf(lines, turn) {
   return fences.length ? fences[fences.length - 1] : [question, answer].filter(Boolean).join('\n\n');
 }
 
+// A Build started straight from an `@bart` line (MATH-168, 2026-10-28): the request, then the conversation it was asked in,
+// so a follow-up such as "now make it blue" says what "it" is. The latest turns, each answer cut, at most CONTEXT_CHARS.
+const CONTEXT_TURNS = 4;
+const ANSWER_CHARS = 4000;
+const CONTEXT_CHARS = 12000;
+
+/** The text a Build of `request` starts from, with `turns` ({ question, answer }, as DocEditor turnsBefore) above it. */
+export function buildWithContext(request, turns = []) {
+  const cut = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text);
+  const said = [];
+  let left = CONTEXT_CHARS;
+  for (const turn of turns.slice(-CONTEXT_TURNS).reverse()) {
+    const part = [`Asked: ${String(turn.question || '').trim()}`, turn.answer ? `Answered: ${cut(String(turn.answer).trim(), ANSWER_CHARS)}` : ''].filter(Boolean).join('\n');
+    if (part.length > left) break;
+    said.unshift(part);
+    left -= part.length;
+  }
+  return said.length ? `${request}\n\nThis was asked in a conversation. What was said before it, oldest first:\n\n${said.join('\n\n')}` : request;
+}
+
 /**
- * What the router reads around the `@bart` line at `at`: { section, threads, specAbove, spec, specTitle, current }.
+ * What the router reads around the `@bart` line at `at`: { section, threads, specAbove, spec, specTitle, current, asking,
+ * discoverAsked }.
  *   section: from the nearest heading above (it included) to the line;
  *   threads: every thread above, each { agent (its token), question (the first line of its first question, plain, at most
  *     QUESTION_CHARS characters: questionLine), up (lines above the line) };
@@ -67,7 +87,9 @@ export function buildTextOf(lines, turn) {
  *   current: when the line follows up a thread (a turn of it, or directly under its last answer), the token of the agent
  *     that answered it last ('chat', 'brainstorm' or 'discover'), else null (2026-10-13);
  *   asking: that agent is Discover and its last turn neither searched nor gave a guide: it is still settling what to
- *     research, so the line answers it (routeByRule; 2026-10-14).
+ *     research, and the line may answer it (2026-10-14);
+ *   discoverAsked: then, what Discover asked, plain, at most ASKED_CHARS characters (discoverAskedOf), else null. The
+ *     router is shown it (MATH-165): an answer to it stays with Discover, anything else goes where it is for.
  * The router (main) takes the last five threads and the section's last 4,000 characters once agent replies are left out
  * (bart/route.cjs sectionText), so the section is sent whole here: cut first, it would hold less than that.
  */
@@ -76,6 +98,28 @@ export function buildTextOf(lines, turn) {
  * conversation with Discover, whose reply would otherwise start a new search.
  */
 export const fallbackAgent = (current) => (current && current !== 'discover' ? current : 'chat');
+
+// What Discover asked, as the router is sent it, at most (main's bart/route.cjs cuts it to 300 too).
+export const ASKED_CHARS = 300;
+/**
+ * What a Discover answer still settling what to research asks, as the router reads it: an opening card's title and its
+ * options' labels; else the answer as plain text, its end kept (the question is its last paragraph), cut at a word.
+ */
+export function discoverAskedOf(answer, max = ASKED_CHARS) {
+  const said = String(answer == null ? '' : answer);
+  const fenced = said.match(/^\s*(?:```(?:json)?\s*)?(\{[\s\S]*\})\s*(?:```)?\s*$/);
+  if (fenced) {
+    try {
+      const focus = JSON.parse(fenced[1]).focus;
+      const labels = focus && Array.isArray(focus.options) ? focus.options.map((option) => (typeof option === 'string' ? option : option && option.label)).filter(Boolean) : [];
+      if (focus && focus.title) return `${focus.title}${labels.length ? ` (options: ${labels.join('; ')})` : ''}`.slice(0, max);
+    } catch { /* plain text */ }
+  }
+  const plain = said.replace(/!?\[([^\]\n]*)\]\([^)\s]*\)/g, '$1').replace(/(\*\*|__|\*|`)/g, '').replace(/\s+/g, ' ').trim();
+  if (plain.length <= max) return plain;
+  const cut = plain.slice(plain.length - max), space = cut.indexOf(' ');
+  return space > 0 ? cut.slice(space + 1) : cut;
+}
 
 export function routeInputs(lines, at) {
   const ps = parseLines(lines);
@@ -103,5 +147,6 @@ export function routeInputs(lines, at) {
   // Discover still settling what to research (2026-10-14): its last turn is not a research box and gave no guide.
   const last = into && agent === 'discover' ? said(into).pop() : null;
   const asking = !!last && !isResearch(ps[last.q]) && !/^## /m.test(turnText(lines, last).answer);
-  return { section: lines.slice(start, at + 1).join('\n'), threads: list, specAbove: spec != null, spec, specTitle, current, asking };
+  const discoverAsked = asking ? discoverAskedOf(turnText(lines, last).answer) || null : null;
+  return { section: lines.slice(start, at + 1).join('\n'), threads: list, specAbove: spec != null, spec, specTitle, current, asking, discoverAsked };
 }

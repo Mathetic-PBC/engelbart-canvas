@@ -40,7 +40,7 @@ const cases = fs.readFileSync(file, 'utf8').split('\n').filter((line) => line.tr
 const rows = [];
 for (const item of cases) {
   const rule = routeByRule(item.line, { models });
-  const got = await router.route({ text: item.line, section: `${item.section || ''}\n@bart ${item.line}`, threads: item.threads || [], specAbove: !!item.specAbove, specTitle: item.specTitle || '', current: item.current || null, rule });
+  const got = await router.route({ text: item.line, section: `${item.section || ''}\n@bart ${item.line}`, threads: item.threads || [], specAbove: !!item.specAbove, specTitle: item.specTitle || '', current: item.current || null, asking: !!item.asking, discoverAsked: item.discoverAsked || null, rule });
   const model = said.get(got.id) || got.agent;
   // As the editor hands it over: build with no spec above, less than 0.8 sure, or not meaning that spec (got.spec,
   // 2026-10-13), is Chat asked for the Build prompt.

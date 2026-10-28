@@ -12,6 +12,10 @@
 // scaled back from; and there is no desk to scroll onto. PaperView lays out a stand-in of a page here: a small fake DOM
 // (no pdf.js, no rough.js), whose boxes measure as wide as their style says and a fixed height a kind. A highlight's
 // note and its answers are one card: a card is as tall as what it holds.
+// Since 2026-10-27 (David: "Readable card width", the screenshots of a card squeezed into a 61 px margin) a highlight's
+// card is CARD_W note px wide whatever room its margin has, against the text and never over it, and the sheet is widened
+// each side for the whole of every card (a desk again, columnGeometry's reach), the page still in its middle; a card is
+// never hidden or moved in from the pane's sides, it is panned to. A moved or typed card stays at its `pos`.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -104,13 +108,13 @@ const MARKS = {
   ],
 };
 
-function viewer(marks = MARKS) {
+function viewer(marks = MARKS, width = W) {
   globalThis.document = fakeDocument();
   globalThis.requestAnimationFrame = () => 0;
   globalThis.cancelAnimationFrame = () => {};
   globalThis.window = { addEventListener() {}, removeEventListener() {} };
   const host = new El('div');
-  host.root = true; host.clientWidth = W; host.clientHeight = H; host.clientLeft = 0; host.clientTop = 0; host.scrollLeft = 0; host.scrollTop = 0;
+  host.root = true; host.clientWidth = width; host.clientHeight = H; host.clientLeft = 0; host.clientTop = 0; host.scrollLeft = 0; host.scrollTop = 0;
   const view = new PaperView({ marks });
   view.setState = (patch) => Object.assign(view.state, typeof patch === 'function' ? patch(view.state) : patch);
   view.host = { current: host };
@@ -128,92 +132,109 @@ async function open(view) {
   for (let i = 0; i < 200 && view.pumping; i += 1) await new Promise((r) => setTimeout(r, 1));
 }
 
+
 // Every card on page 1 in the sheet's px, as laid out (a pinch's transform not counted): { [markId]: { left, top, width,
-// height } }, and the pane's span the cards are kept in (EDGE_PAD in from its sides).
+// height } }, the sheet's width S and the pane's span now.
 function laidOut(view, host) {
   const s = view.sheets[1], g = view.geo[1];
   assert.equal(parseFloat(s.notes.style.left), 0, 'the cards\' layer is the sheet\'s');
   assert.equal(s.notes.style.transform, '', 'and never scaled with the page');
   // On screen a card is its laid-out size times its layer's --ns (BOX_LOOK).
   const boxes = {}, ns = Number(s.notes.style['--ns']) || 1;
-  for (const el of s.notes.querySelectorAll('[data-box]')) boxes[el.dataset.boxMark] = { left: parseFloat(el.style.left), top: parseFloat(el.style.top), width: el.offsetWidth * ns, height: el.offsetHeight * ns };
-  return { boxes, g, ns, vL: host.scrollLeft + 8, vR: host.scrollLeft + W - 8 };
+  for (const el of s.notes.querySelectorAll('[data-box]')) boxes[el.dataset.boxMark] = { left: parseFloat(el.style.left), top: parseFloat(el.style.top), width: el.offsetWidth * ns, height: el.offsetHeight * ns, hidden: el.style.visibility === 'hidden' };
+  return { boxes, g, ns, S: view.sheetW, vL: host.scrollLeft, vR: host.scrollLeft + host.clientWidth };
 }
 const near = (a, b, tol, what) => assert.ok(Math.abs(a - b) <= tol, `${what}: ${a} ≈ ${b}`);
-const inPane = (at, what) => { for (const [id, b] of Object.entries(at.boxes)) assert.ok(b.left >= at.vL - 1e-6 && b.left + b.width <= at.vR + 1e-6, `${what} ${id} in the pane: ${b.left}..${b.left + b.width} within ${at.vL}..${at.vR}`); };
+// Every card wholly on the sheet, DESK_PAD note px of it past the farthest: none cut off, each reachable by panning.
+const onSheet = (at, pad, what) => { for (const [id, b] of Object.entries(at.boxes)) assert.ok(b.left >= -1e-6 && b.left + b.width <= at.S + 1e-6, `${what} ${id} on the sheet: ${b.left}..${b.left + b.width} within 0..${at.S}`); };
+// The text from `l` to `r` of the page, its edges on the sheet.
+const textEdges = (at, l, r) => ({ L: at.g.G + l * at.g.pageW, R: at.g.G + r * at.g.pageW });
+// No card laid out by itself (not moved, not typed) over the text's span across.
+const offText = (at, ids, l, r, what) => { const { L, R } = textEdges(at, l, r); for (const id of ids) { const b = at.boxes[id]; assert.ok(b.left + b.width <= L + 1e-6 || b.left >= R - 1e-6, `${what} ${id} off the text: ${b.left}..${b.left + b.width}, the text ${L}..${R}`); } };
 // How many times page 1's marks were drawn from here on.
 function countDraws(view) { const out = { n: 0 }, was = view.renderMarks.bind(view); view.renderMarks = (page) => { out.n += 1; return was(page); }; return out; }
 
-test('at 50%, 100% and 200% every card is in the pane, at its highlight\'s height or its place on the page, and none is drawn again', async () => {
-  const { NOTE_MIN, POS_DY, noteScale } = await loadCanvas();
+test('at 50%, 100% and 200% a highlight\'s card is CARD_W at the page\'s note scale beside the text, a moved or typed one at its place, and none is drawn again', async () => {
+  const { CARD_W, SIDE_GAP, POS_DY, noteScale } = await loadCanvas();
   const { view, host } = viewer();
   view.zoom = 1;
   await open(view);
   const base = laidOut(view, host);
   near(base.ns, 612 / 1050, 1e-9, 'a page 612 px wide draws its notes at 612/NOTE_REF');
   assert.deepEqual(Object.keys(base.boxes).sort(), ['m1', 'm2', 'm3'], 'one card a mark: its note and its answers');
-  // Margins of 61 px (the text from 10% to 90%): narrower than a note's least width on both sides, so it keeps NOTE_MIN
-  // and is moved in over the text's edge rather than past the pane's.
-  near(base.boxes.m1.width, NOTE_MIN * base.ns, 1e-9, 'NOTE_MIN');
-  near(base.boxes.m1.left + base.boxes.m1.width, base.vR, 1e-9, 'against the pane\'s right side');
+  // Margins of 61 px (the text from 10% to 90%): far narrower than the card, which keeps its width all the same.
+  near(base.boxes.m1.width, CARD_W * base.ns, 1e-9, 'CARD_W, not narrowed to the margin');
   near(base.boxes.m1.height, (44 + 120) * base.ns, 1e-9, 'its note and its answer');
   near(base.boxes.m2.height, (44 + 2 * 120) * base.ns, 1e-9, 'the answer moved on its own before is in the card');
   near(base.boxes.m3.width, 150 * base.ns, 1e-9, 'a typed note keeps the width it was written with');
-  near(base.boxes.m3.left, 0.2 * 612, 1e-9, 'where it was typed');
-  inPane(base, '100%');
   const cards = view.sheets[1].notes.querySelectorAll('[data-box]'), draws = countDraws(view);
+  const share = {};
   for (const f of [0.5, 2, 1]) {
     view.zoomTo(f * 100);
-    const at = laidOut(view, host), { G, pageW } = at.g;
+    const at = laidOut(view, host), { G, pageW } = at.g, what = `${f * 100}%`;
     assert.equal(pageW, 612 * f);
-    inPane(at, `${f * 100}%`);
-    near(at.boxes.m3.top, 0.9 * pageW - POS_DY, 1e-9, `${f * 100}%: a typed note at its place's height`);
-    near(at.boxes.m2.top, 0.45 * pageW - POS_DY, 1e-9, `${f * 100}%: a moved one too`);
-    assert.ok(at.boxes.m1.top >= 0.2 * pageW - 6 - 1e-9, `${f * 100}%: a highlight's note no higher than its highlight`);
-    near(at.ns, noteScale(pageW), 1e-9, `${f * 100}%: drawn at the page's note scale`);
-    near(at.boxes.m1.height, (44 + 120) * at.ns, 1e-9, `${f * 100}%: its height at that scale`);
-    if (f === 0.5) {
-      assert.equal(at.ns, 10 / 24, '50%: a 306 px page would draw notes under NOTE_FLOOR: held there');
-      near(at.boxes.m3.left, G + 0.2 * pageW, 1e-9, '50%: where it was typed, the page narrower');
-      near(at.boxes.m3.width, 150 * at.ns, 1e-9, '50%: the width it was written with');
-      assert.ok(at.boxes.m1.width > NOTE_MIN * at.ns, '50%: the desk beside the page gives a highlight\'s note room');
-      near(at.boxes.m1.left, G + 0.9 * pageW + 12, 1, '50%: right of the text');
-    }
-    if (f === 2) {
-      near(at.boxes.m3.left, at.vL, 1e-9, '200%: its place is left of the view, so it is moved in to the pane\'s side');
-      near(at.boxes.m1.left + at.boxes.m1.width, at.vR, 1e-9, '200%: its margin is right of the view: moved in too');
-    }
+    near(at.ns, noteScale(pageW), 1e-9, `${what}: drawn at the page's note scale`);
+    near(at.boxes.m1.width, CARD_W * at.ns, 1e-9, `${what}: CARD_W`);
+    near(at.boxes.m1.left, G + 0.9 * pageW + SIDE_GAP * at.ns, 1e-9, `${what}: right of the text, SIDE_GAP off it`);
+    assert.ok(at.boxes.m1.top >= 0.2 * pageW - 8 * at.ns - 1e-9, `${what}: a highlight's note no higher than its highlight`);
+    near(at.boxes.m1.height, (44 + 120) * at.ns, 1e-9, `${what}: its height at that scale`);
+    near(at.boxes.m2.left, G + 0.7 * pageW, 1e-9, `${what}: a moved one where it was put`);
+    near(at.boxes.m2.top, 0.45 * pageW - POS_DY, 1e-9, `${what}: and at its height`);
+    near(at.boxes.m3.left, G + 0.2 * pageW, 1e-9, `${what}: a typed note where it was typed`);
+    near(at.boxes.m3.top, 0.9 * pageW - POS_DY, 1e-9, `${what}: at its place's height`);
+    onSheet(at, 16, what);
+    offText(at, ['m1'], 0.1, 0.9, what);
+    for (const b of Object.values(at.boxes)) assert.ok(!b.hidden, `${what}: none hidden`);
+    share[f] = { w: at.boxes.m1.width / pageW, x: (at.boxes.m1.left - G) / pageW, y: at.boxes.m1.top / pageW };
   }
+  // Above NOTE_FLOOR the card goes with the page: the same share of it across and down at 100% and 200%.
+  for (const k of ['w', 'x', 'y']) near(share[2][k], share[1][k], 1e-9, `200% as 100%: ${k}`);
   assert.equal(draws.n, 0, 'a zoom draws no card again');
   assert.deepEqual(view.sheets[1].notes.querySelectorAll('[data-box]'), cards, 'the very same cards');
 });
 
-test('past 100% a sideways scroll keeps the cards in the pane', async () => {
+test('a sideways scroll lays out no card again and moves none: they lie on the desk beside the page', async () => {
   const { view, host } = viewer();
   view.zoom = 1;
   await open(view);
   view.zoomTo(200);
-  for (const x of [0, 306, 612]) {
+  const before = laidOut(view, host).boxes, draws = countDraws(view);
+  for (const x of [0, 306, view.sheetW - W]) {
     host.scrollLeft = x;
-    view.viewX = x; view.arrangeNear(); // what a scroll's frame does (onScroll)
-    inPane(laidOut(view, host), `scrolled to ${x}`);
+    view.onScroll(); // what a scroll does
+    assert.deepEqual(laidOut(view, host).boxes, before, `scrolled to ${x}`);
   }
+  assert.equal(draws.n, 0);
 });
 
-test('no desk to scroll onto: at 100% the sheet is the pane, at 50% the page sits in its middle, at 200% the sheet is the page', async () => {
+test('the desk: as wide as the page and each side the farthest any card reaches, the page in its middle; with no card the sheet is the pane', async () => {
+  const { CARD_W, SIDE_GAP, DESK_PAD, noteScale } = await loadCanvas();
   const { view, host } = viewer();
   view.zoom = 1;
   await open(view);
   const sheet = () => ({ inner: parseFloat(view.inner.style.width), wrap: parseFloat(view.sheets[1].wrap.style.width), G: view.geo[1].G, pageW: view.geo[1].pageW, left: host.scrollLeft });
-  assert.deepEqual(sheet(), { inner: 612, wrap: 612, G: 0, pageW: 612, left: 0 });
+  // m1 beside the text's right edge (90%): CARD_W, SIDE_GAP before it and DESK_PAD after, past the page's edge.
+  const reach = (pageW) => Math.ceil(-0.1 * pageW + (SIDE_GAP + CARD_W + DESK_PAD) * noteScale(pageW));
+  const at = (pageW) => { const S = Math.max(612, pageW + 2 * reach(pageW)); return { inner: S, wrap: S, G: (S - pageW) / 2, pageW }; };
+  const one = sheet();
+  assert.deepEqual({ ...one, left: undefined }, { ...at(612), left: undefined }, '100%: the page and a desk each side for m1');
+  near(one.left, one.G, 1, '100%: the view on the page');
   view.zoomTo(50);
-  assert.deepEqual(sheet(), { inner: 612, wrap: 612, G: 153, pageW: 306, left: 0 }, 'the desk shows each side, the page in the middle');
+  assert.deepEqual({ ...sheet(), left: undefined }, { ...at(306), left: undefined }, '50%: the pane is room enough');
   view.zoomTo(200);
-  assert.deepEqual(sheet(), { inner: 1224, wrap: 1224, G: 0, pageW: 1224, left: 306 }, 'the page alone, the view on its middle');
+  const two = sheet();
+  assert.deepEqual({ ...two, left: undefined }, { ...at(1224), left: undefined }, '200%');
+  near(two.left, (two.inner - W) / 2, 1, '200%: the view on the page\'s middle');
+  const lone = viewer({});
+  lone.view.zoom = 1;
+  await open(lone.view);
+  assert.equal(parseFloat(lone.view.inner.style.width), 612, 'no card: no desk');
+  assert.equal(lone.view.geo[1].G, 0);
 });
 
 test('a pinch is one transform about the pane\'s middle line, the cards scaled back to their size; once it settles they are laid out at its zoom', async (t) => {
   t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { CARD_W } = await loadCanvas();
   const { view, host } = viewer();
   view.zoom = 1;
   view.layout().then(() => view.drawSoon());
@@ -222,12 +243,13 @@ test('a pinch is one transform about the pane\'s middle line, the cards scaled b
   const sheets = view.sheets.slice(), draws = countDraws(view), before = laidOut(view, host);
   host.getBoundingClientRect = () => ({ left: 0, top: 0, right: W, bottom: H, width: W, height: H });
   const wheel = { ctrlKey: true, deltaY: -25, deltaMode: 0, clientX: 100, clientY: 200, preventDefault() {} };
+  const middle = host.scrollLeft + W / 2;
   view.pinch(wheel);
   view.pinch(wheel);
   const live = view.live;
   assert.ok(live > 1.6 && live < 1.7);
   assert.equal(view.inner.style.transform, `scale(${live})`, 'the paper scaled whole, by the compositor');
-  assert.equal(view.inner.style.transformOrigin, `${W / 2}px 200px`, 'about the pane\'s middle across, wherever the pointer is, and its height');
+  assert.equal(view.inner.style.transformOrigin, `${middle}px 200px`, 'about the pane\'s middle across, wherever the pointer is, and its height');
   assert.equal(view.inner.style.willChange, 'transform');
   assert.equal(view.sheets[1].notes.style['--inv'], '', 'its cards scaled with the paper (above NOTE_FLOOR), as its text is');
   t.mock.timers.tick(180);
@@ -237,19 +259,20 @@ test('a pinch is one transform about the pane\'s middle line, the cards scaled b
   assert.equal(view.sheets[1].notes.style['--inv'], '', 'nor any scale on the cards');
   const after = laidOut(view, host);
   near(after.g.pageW, 612 * live, 1, 'laid out at the zoom the pinch ended on');
-  inPane(after, 'settled');
   near(after.boxes.m1.height, before.boxes.m1.height * after.g.pageW / before.g.pageW, 1e-6, 'grown with the page');
+  near(after.boxes.m1.width, CARD_W * after.ns, 1e-6, 'and as wide');
+  onSheet(after, 16, 'settled');
   assert.equal(draws.n, 0, 'no card drawn again');
   assert.deepEqual(view.sheets, sheets, 'nor any page made again');
-  near(host.scrollLeft, (view.geo[1].pageW - W) / 2, 1, 'centered');
+  near(host.scrollLeft, (view.sheetW - W) / 2, 1, 'centered');
 });
 
-test('a card dropped at 200% keeps its place on the page at 100% and 50%: `pos` keeps its meaning', async () => {
+test('a card dropped at 200% keeps its place on the page at 100% and 50%, and after the paper is opened again: `pos` keeps its meaning', async () => {
   const { view, host } = viewer({ 1: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.5, h: 0.015 }], side: 'right', y: 0.2, note: 'n', text: 'a' }] });
   view.zoom = 2;
   await open(view);
   // Pressed on its words and moved 100 px left and 40 down (no pinch); the cards' layer's top-left is the screen's here.
-  const b = view.drawn[1].boxes[0], startLeft = b.left, startTop = b.top, width = b.w;
+  const b = view.drawn[1].boxes[0], startLeft = b.left, startTop = b.top, width = b.w, G = view.geo[1].G;
   b.el.getBoundingClientRect = () => ({ left: startLeft, top: startTop });
   assert.equal(view.startDrag({ clientX: startLeft + 10, clientY: startTop + 5 }, b.el, 1), true);
   assert.equal(view.focusId, 'm1', 'its mark in focus: Delete would remove it');
@@ -257,49 +280,57 @@ test('a card dropped at 200% keeps its place on the page at 100% and 50%: `pos` 
   view.dragTo();
   view.endDrag();
   const m = view.marks[1][0];
-  near(m.pos.x, (startLeft - 100) / 1224, 1e-9, 'moved 100 px at 200%');
+  near(m.pos.x, (startLeft - 100 - G) / 1224, 1e-9, 'moved 100 px at 200%, from the page\'s left edge');
   near(m.pos.y, (startTop + 40 + 11) / 1224, 1e-9);
   assert.equal(m.w, width, 'it keeps the width it was moved at (note px)');
+  near(laidOut(view, host).boxes.m1.left - view.geo[1].G, startLeft - 100 - G, 1e-9, 'dropped where it was let go, on the page, whatever the desk did');
   for (const f of [1, 0.5]) {
     view.zoomTo(f * 100);
-    const at = laidOut(view, host), { G, pageW } = at.g;
-    near(at.boxes.m1.left, Math.max(at.vL, Math.min(G + m.pos.x * pageW, at.vR - at.boxes.m1.width)), 1e-9, `${f * 100}%: at its place across, or as near as the pane allows`);
+    const at = laidOut(view, host), { pageW } = at.g;
+    near(at.boxes.m1.left, at.g.G + m.pos.x * pageW, 1e-9, `${f * 100}%: at its place across`);
     near(at.boxes.m1.top, m.pos.y * pageW - 11, 1e-9, `${f * 100}%: at its place's height`);
   }
+  // Saved and read back: the same place.
+  const again = viewer(JSON.parse(JSON.stringify(view.marks)));
+  again.view.zoom = 0.5;
+  await open(again.view);
+  const at = laidOut(again.view, again.host);
+  near(at.boxes.m1.left, at.g.G + m.pos.x * at.g.pageW, 1e-9, 'opened again: at its place across');
+  near(at.boxes.m1.top, m.pos.y * at.g.pageW - 11, 1e-9, 'and down');
 });
 
-test('a card beside its page goes against the text, as wide as the room the pane shows there, and over the text when there is less than NOTE_MIN', async () => {
-  const { NOTE_MIN, NOTE_W, NOTE_FLOOR } = await loadCanvas();
+test('margins too narrow for a card: each keeps CARD_W against the text, off it, the desk widened for it; in a narrow pane too', async () => {
+  const { CARD_W, SIDE_GAP, NOTE_FLOOR } = await loadCanvas();
   const marks = { 1: [
     { id: 'r', rects: [{ x: 0.5, y: 0.2, w: 0.3, h: 0.015 }], side: 'right', y: 0.2, note: 'right margin', text: 'a' },
     { id: 'l', rects: [{ x: 0.1, y: 0.4, w: 0.3, h: 0.015 }], side: 'left', y: 0.4, note: 'left margin', text: 'b' },
   ] };
+  for (const pane of [612, 320]) {
+    const { view, host } = viewer(marks, pane);
+    view.zoom = 1;
+    await open(view);
+    for (const f of [0.5, 1, 2]) {
+      view.zoomTo(f * 100);
+      const at = laidOut(view, host), what = `pane ${pane}, ${f * 100}%`, { L, R } = textEdges(at, 0.1, 0.9);
+      for (const id of ['r', 'l']) near(at.boxes[id].width, CARD_W * at.ns, 1e-9, `${what} ${id}: CARD_W, never squeezed`);
+      near(at.boxes.r.left, R + SIDE_GAP * at.ns, 1e-9, `${what}: right of the text`);
+      near(at.boxes.l.left + at.boxes.l.width, L - SIDE_GAP * at.ns, 1e-9, `${what}: left of it`);
+      offText(at, ['r', 'l'], 0.1, 0.9, what);
+      onSheet(at, 16, what);
+    }
+  }
+  // Zoomed far out the card is held at NOTE_FLOOR, still CARD_W and still against the text.
   const { view, host } = viewer(marks);
   view.zoom = 1;
   await open(view);
-  let at = laidOut(view, host);
-  near(at.boxes.r.width, NOTE_MIN * at.ns, 1e-9, 'NOTE_MIN: neither margin has room for it');
-  near(at.boxes.r.left + at.boxes.r.width, at.vR, 1e-9, 'moved in from the pane\'s right side, over the text\'s edge');
-  near(at.boxes.l.width, NOTE_MIN * at.ns, 1e-9, 'NOTE_MIN');
-  near(at.boxes.l.left, at.vL, 1e-9, 'and from its left side');
-  // Margins of 153 px (the text from 25% to 75%): a note fits beside the text, SIDE_GAP from it, as wide as the room.
-  view.cols.set(1, { l: 0.25, r: 0.75 });
-  view.renderMarks(1);
-  at = laidOut(view, host);
-  near(at.boxes.r.left, 0.75 * 612 + 12, 1e-9, 'right of the text');
-  near(at.boxes.r.left + at.boxes.r.width, at.vR, 1, 'as wide as the room to the pane\'s side');
-  near(at.boxes.l.left + at.boxes.l.width, 0.25 * 612 - 12, 1, 'left of the text');
-  near(at.boxes.l.left, at.vL, 1, 'as wide as the room');
-  // Zoomed out, the desk beside the page is room too, up to NOTE_W.
   view.zoomTo(30);
-  at = laidOut(view, host);
+  const at = laidOut(view, host);
   assert.equal(at.ns, NOTE_FLOOR, 'at 30% held at NOTE_FLOOR');
-  near(at.boxes.r.width, NOTE_W * at.ns, 1e-9, 'NOTE_W');
-  near(at.boxes.r.left, at.g.G + 0.75 * at.g.pageW + 12, 1e-9, 'still against the text');
-  inPane(at, '30%');
+  near(at.boxes.r.width, CARD_W * at.ns, 1e-9, 'CARD_W');
+  near(at.boxes.r.left, at.g.G + 0.9 * at.g.pageW + SIDE_GAP * at.ns, 1e-9, 'still against the text');
 });
 
-test('one card a highlight: its note, then each answer and each answer being written, with room between and no rule; an answer\'s question shows only when the note does not ask it now', async () => {
+test('one card a highlight: its note, then each answer and each answer being written, each under a hairline; an answer\'s question shows only when the note does not ask it now', async () => {
   const { view } = viewer({
     1: [{ id: 'm1', rects: [{ x: 0.1, y: 0.2, w: 0.5, h: 0.015 }], side: 'right', y: 0.2, note: '@bart and then?', text: 'a', asks: [
       { id: 'a1', question: 'why?', answer: 'Because.', meta: { name: 'Sonnet', effort: 'high' }, pos: { x: -2, y: 0.9 } },
@@ -312,20 +343,53 @@ test('one card a highlight: its note, then each answer and each answer being wri
   const cards = view.sheets[1].notes.querySelectorAll('[data-box]');
   assert.equal(cards.length, 1, 'one card');
   const [card] = cards;
-  assert.equal(card.style.border, undefined, 'nothing of the card to see: no edge');
-  assert.equal(card.style.background, undefined, 'no fill');
+  // 2026-10-27: a card apart from the paper (it had no edge or fill from 2026-10-16).
+  assert.equal(card.style.background, '#fff', 'a solid ground');
+  assert.match(String(card.style.border), /^1px solid #/, 'a faint edge');
+  assert.ok(parseFloat(card.style.padding) > 0, 'room inside it');
   const [note, a1, a2, run] = card.children;
   assert.ok(note.dataset.cardNote, 'the note at the top, no grip over it');
   assert.equal(card.querySelectorAll('[data-grip]').length, 0);
   assert.deepEqual([a1.dataset.ask, a2.dataset.ask, run.dataset.askRun], ['a1', 'a2', 'h1'], 'the answers in order, then the one being written');
-  for (const sec of [a1, a2, run]) { assert.equal(sec.style.borderTop, undefined, 'no rule'); assert.equal(sec.style.marginTop, '10px', 'room instead'); }
+  for (const sec of [a1, a2, run]) assert.match(String(sec.style.borderTop), /^1px solid #/, 'under a hairline');
   assert.match(a1.innerHTML, />why\?</, 'an earlier question of the thread is shown');
   assert.doesNotMatch(a1.innerHTML, /Sonnet/, 'the model is kept (meta) but not shown (MATH-70 build 3)');
   assert.doesNotMatch(a2.innerHTML, />and then\?</, 'the note asks it now: not shown again');
   assert.equal(run.querySelector('[data-run-question]').style.display, 'none', 'nor over the answer being written');
-  // The card is where its mark would be beside the page: a1's own place from before cards is not read.
+  // The card is beside the page's text: a1's own place from before cards is not read.
   assert.equal(view.drawn[1].boxes.length, 1);
-  assert.ok(view.drawn[1].boxes[0].left >= 0.9 * 612 - 1e-9 || view.drawn[1].boxes[0].left + view.drawn[1].boxes[0].width <= 612);
+  assert.ok(view.drawn[1].boxes[0].left >= view.geo[1].G + 0.9 * 612);
+});
+
+test('the pdf card\'s type: the app\'s, not handwriting; words wrap between words and break only when longer than a line; a web page\'s card is as it was', async () => {
+  const look = await import(pathToFileURL(path.join(__dirname, '../src/renderer/pdf/paper-look.js')).href);
+  const web = await import(pathToFileURL(path.join(__dirname, '../src/renderer/pdf/card-look.js')).href);
+  assert.match(look.PDF_NOTE_TYPE, /var\(--font-sans\)/);
+  assert.doesNotMatch(look.PDF_NOTE_TYPE, /Caveat/);
+  assert.equal(look.PDF_WRAP, 'overflow-wrap:break-word;word-break:normal', 'not `anywhere`, which broke short words');
+  assert.match(web.NOTE_TYPE, /Caveat/, 'the web card keeps its own look (card-look.js unchanged)');
+  const { view } = viewer();
+  view.zoom = 1;
+  await open(view);
+  const card = view.sheets[1].notes.querySelector('[data-box-mark="m1"]');
+  const answer = card.querySelector('[data-ask]');
+  assert.doesNotMatch(String(answer.innerHTML), /overflow-wrap:anywhere/, 'an answer wraps between words');
+});
+
+test('highlights are flat tints, not scribbles: a kept one, the one in focus (a tint more and a line under it) and a selection pending its note, each apart', async () => {
+  const look = await import(pathToFileURL(path.join(__dirname, '../src/renderer/pdf/paper-look.js')).href);
+  const { view, host } = viewer();
+  view.zoom = 1;
+  await open(view);
+  const bands = host.querySelectorAll('[data-band]');
+  assert.ok(bands.length >= 2, 'a band a highlight\'s line');
+  for (const b of bands) { assert.equal(b.tagName, 'RECT', 'a rect, not a rough.js path'); assert.equal(b.attrs.fill, look.HL_SAVED); }
+  view.paintFocus('m1');
+  const focus = host.querySelectorAll('[data-focus]');
+  assert.ok(focus.some((r) => r.attrs.fill === look.HL_FOCUS), 'a tint over it');
+  assert.ok(focus.some((r) => r.attrs.fill === look.HL_FOCUS_LINE), 'and a line under it');
+  assert.notEqual(look.HL_PENDING, look.HL_SAVED, 'pending apart from kept');
+  assert.notEqual(look.HL_FOCUS_LINE, look.HL_SAVED);
 });
 
 test('a card has a move handle at its lower right; a press on it drags the card (2026-10-16, later)', async () => {
@@ -376,8 +440,8 @@ test('pointing at a card fades no other card (Hudson: "all the other highlights 
   for (const el of view.sheets[1].notes.querySelectorAll('[data-box]')) assert.ok(!el.style.opacity, `${el.dataset.boxMark} not faded`);
 });
 
-test('a highlight\'s note goes to the other margin when its own is too narrow for NOTE_MIN and the other is not', async () => {
-  const { NOTE_MIN } = await loadCanvas();
+test('a highlight\'s card keeps its own side when that margin is narrow: the desk widens there', async () => {
+  const { CARD_W, SIDE_GAP } = await loadCanvas();
   // Text from 10% to 60%: the left margin 61 px, the right 245.
   const { view, host } = viewer({ 1: [{ id: 'l', rects: [{ x: 0.1, y: 0.3, w: 0.3, h: 0.015 }], side: 'left', y: 0.3, note: 'wants the left', text: 'a' }] });
   view.zoom = 1;
@@ -386,22 +450,23 @@ test('a highlight\'s note goes to the other margin when its own is too narrow fo
   view.cols.set(1, { l: 0.1, r: 0.6 });
   view.renderMarks(1);
   const at = laidOut(view, host);
-  near(at.boxes.l.left, 0.6 * 612 + 12, 1e-9, 'right of the text, not over it on the left');
-  assert.ok(at.boxes.l.width >= NOTE_MIN * at.ns - 1e-9);
-  assert.ok(at.boxes.l.left + at.boxes.l.width <= at.vR + 1e-9);
+  near(at.boxes.l.left + at.boxes.l.width, at.g.G + 0.1 * 612 - SIDE_GAP * at.ns, 1e-9, 'left of the text, not over it');
+  near(at.boxes.l.width, CARD_W * at.ns, 1e-9);
+  onSheet(at, 16, 'left');
 });
 
-test('a note typed in the left margin keeps to it: narrowed to the room before the text, then moved out, never over the text', async () => {
-  // Text from 30% to 90%: a left margin of 184 px. A note typed 150 px in, 300 note px wide (175 on screen).
-  const { view, host } = viewer({ 1: [{ id: 'f', rects: [], side: null, y: 0.3, note: 'in the margin', text: '', pos: { x: 150 / 612, y: 0.3 }, w: 300 }] });
-  view.zoom = 1;
-  await open(view);
-  view.cols.set(1, { l: 0.3, r: 0.9 });
-  view.renderMarks(1);
-  const at = laidOut(view, host), L = 0.3 * 612;
-  assert.ok(at.boxes.f.left + at.boxes.f.width <= L - 12 + 1e-6, `its right edge (${at.boxes.f.left + at.boxes.f.width}) short of the text (${L - 12})`);
-  assert.ok(at.boxes.f.left >= at.vL - 1e-9, 'in the pane');
-  assert.ok(at.boxes.f.left < 150, 'moved out toward the pane\'s side');
+test('a note typed in a margin, or against the text\'s edge, stays where it was put, as wide as it was written', async () => {
+  for (const [x, w, col] of [[150 / 612, 300, { l: 0.3, r: 0.9 }], [0.66, 240, { l: 0.1, r: 0.7 }]]) {
+    const { view, host } = viewer({ 1: [{ id: 'f', rects: [], side: null, y: 0.3, note: 'put here', text: '', pos: { x, y: 0.3 }, w }] });
+    view.zoom = 1;
+    await open(view);
+    view.cols.set(1, col);
+    view.renderMarks(1);
+    const at = laidOut(view, host);
+    near(at.boxes.f.left, at.g.G + x * 612, 1e-9, `typed at ${x}: there`);
+    near(at.boxes.f.width, w * at.ns, 1e-9, 'its width');
+    onSheet(at, 16, 'typed');
+  }
 });
 
 test('a pinch out holds the cards at NOTE_FLOOR, and no further: above it they go with the paper', async () => {
@@ -418,32 +483,15 @@ test('a pinch out holds the cards at NOTE_FLOOR, and no further: above it they g
   assert.equal(view.sheets[1].notes.style['--inv'], '');
 });
 
-test('a note put against the text\'s right edge goes into the right margin when that has room for it', async () => {
-  const { FREE_MIN } = await loadCanvas();
-  // Text from 10% to 70%: a right margin of 184 px. A note typed at 66%, inside the text's right edge.
-  const { view, host } = viewer({ 1: [{ id: 'f', rects: [], side: null, y: 0.3, note: 'by the edge', text: '', pos: { x: 0.66, y: 0.3 }, w: 240 }] });
-  view.zoom = 1;
-  await open(view);
-  view.cols.set(1, { l: 0.1, r: 0.7 });
-  view.renderMarks(1);
-  const at = laidOut(view, host);
-  near(at.boxes.f.left, 0.7 * 612 + 12, 1e-9, 'past the text, SIDE_GAP off');
-  assert.ok(at.boxes.f.width >= FREE_MIN * at.ns - 1e-9 && at.boxes.f.left + at.boxes.f.width <= at.vR + 1e-9);
-});
-
-test('zoomed in on the text alone, a card whose margin is out of view is hidden, not drawn over the text; scrolling its margin into view shows it (round 4)', async () => {
+test('zoomed in on the text alone no card is hidden: those beside the page are off the pane, a pan away', async () => {
   const { view, host } = viewer();
   view.zoom = 1;
   await open(view);
-  const vis = (id) => view.sheets[1].notes.querySelector(`[data-box-mark="${id}"]`).style.visibility || 'visible';
-  assert.deepEqual(['m1', 'm2', 'm3'].map(vis), ['visible', 'visible', 'visible'], '100%: margins of 61 px still show their notes');
   view.zoomTo(200); // the view on the page's middle: neither margin shows
-  assert.equal(vis('m1'), 'hidden', 'its highlight\'s margin is off the pane');
-  assert.equal(vis('m3'), 'hidden', 'typed at 20% across: off the pane');
-  host.scrollLeft = 612; view.viewX = 612; view.arrangeNear(); // the right edge: the right margin shows
-  assert.equal(vis('m1'), 'visible', 'its margin back in view');
-  host.scrollLeft = 0; view.viewX = 0; view.arrangeNear();
-  assert.equal(vis('m3'), 'visible', 'its place back in view');
-  view.zoomTo(100);
-  assert.deepEqual(['m1', 'm2', 'm3'].map(vis), ['visible', 'visible', 'visible']);
+  let at = laidOut(view, host);
+  for (const [id, b] of Object.entries(at.boxes)) assert.ok(!b.hidden, `${id} not hidden`);
+  assert.ok(at.boxes.m1.left >= at.vR, 'm1 right of the pane');
+  host.scrollLeft = view.sheetW - W; view.onScroll(); // panned to the sheet's right edge
+  at = laidOut(view, host);
+  assert.ok(at.boxes.m1.left >= at.vL && at.boxes.m1.left + at.boxes.m1.width <= at.vR, 'm1 in the pane');
 });

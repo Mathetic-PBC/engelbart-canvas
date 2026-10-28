@@ -13,6 +13,7 @@ const fs = require('node:fs');
 const Module = require('node:module');
 const { EventEmitter } = require('node:events');
 const { buildSync } = require('esbuild');
+const { pathToFileURL } = require('node:url');
 
 const SEL = require('../src/shared/selection-card.cjs');
 const { CARD_GAP, SEL_CARD_W, SEL_CARD_H, CARD_SHADE, selectionCardPlace, shadedCardPlace } = require('../src/shared/selection-card.cjs');
@@ -245,7 +246,7 @@ test.afterEach(() => { for (const name of ['document', 'requestAnimationFrame', 
 
 /** A selection on page 1 (px of a page 612 wide), pending as pdfMouseUp leaves it, with its card open. */
 function select(view, rects, text = 'the selected words') {
-  view.pendingSel = { parts: [{ page: 1, rects, width: 612, text, u: 612 }], text };
+  view.pendingSel = { parts: [{ page: 1, rects, width: 612, text, u: 612, side: 'right', y: Math.min(...rects.map((r) => r.y)) }], text }; // as selectionParts gives it
   view.showPending();
   view.openSelCard();
 }
@@ -268,28 +269,37 @@ test('pdf: a selection pending its note is drawn the height its highlight will b
   assert.ok(Math.abs(a.y - b.y) < 1e-9 && Math.abs(a.h - b.h) < 1e-9, `kept ${JSON.stringify(b)} as pending ${JSON.stringify(a)}`);
 });
 
-test('pdf: a selection opens an empty card under its last line, left with it, the placeholder after a caret; nothing is kept', async () => {
-  const { view, frame, g, saves } = await viewer();
-  select(view, [{ x: 50, y: 100, w: 300, h: 12 }, { x: 50, y: 116, w: 120, h: 12 }]);
-  const card = view.selEl;
-  assert.ok(card, 'a card');
-  assert.equal(card.parentNode, frame, 'over the pane, not in the paper');
-  assert.equal(card.style.visibility, '', 'placed, so shown');
-  assert.equal(parseFloat(card.style.left), Math.round(g.G + 50 * g.k));
-  assert.equal(parseFloat(card.style.top), Math.round(128 * g.k + CARD_GAP), 'under the last line');
+// 2026-10-27 (David: the empty card was put over the title's next line, and narrowed to a margin when the highlight was
+// kept): the empty card is laid out in its page's cards as its highlight's card will be, CARD_W wide beside the text at the
+// selection's height, so keeping it moves nothing.
+test('pdf: a selection opens an empty card at once beside the page at its height, CARD_W wide, not over the text under it; the placeholder after a caret; nothing is kept', async () => {
+  const { CARD_W, SIDE_GAP, noteScale } = await import(pathToFileURL(path.join(__dirname, '../src/renderer/pdf/canvas.js')).href);
+  const { view, s, g, saves } = await viewer();
+  // A short highlight in a large title (the screenshots): one word of a line 40 px high, the text going on under it.
+  select(view, [{ x: 200, y: 60, w: 80, h: 40 }], 'Title');
+  const card = view.selEl, ns = noteScale(g.pageW);
+  assert.ok(card, 'a card, with no other click');
+  assert.equal(card.parentNode, s.notes, 'in the page\'s cards, not over the pane');
+  assert.equal(card.style.width, `${CARD_W}px`, 'CARD_W note px');
+  const left = parseFloat(card.style.left), top = parseFloat(card.style.top);
+  assert.ok(Math.abs(left - (g.G + g.pageW + SIDE_GAP * ns)) < 1e-6, `beside the page, past the text: ${left}`);
+  assert.ok(top < 60 + 1e-6 && top > 60 - 12, `at the selection's height, not under its line: ${top}`);
+  assert.ok(view.geo[1].G >= CARD_W * ns, 'the desk widened for the whole card');
   assert.ok(card.querySelector('[data-sel-caret]'), 'a caret');
   assert.equal(card.querySelector('[data-sel-placeholder]').textContent, 'Write a note or ask @bart');
   assert.equal(kept(view).length, 0);
   assert.equal(saves(), 0);
 });
 
-test('pdf: with no room under the selection the card goes above it', async () => {
-  const { view, g } = await viewer();
-  select(view, [{ x: 50, y: 660, w: 300, h: 12 }]);
-  const card = view.selEl, ns = parseFloat(String(card.style.transform).replace(/[^\d.]/g, ''));
-  card.height = 40;
-  view.placeSelCard();
-  assert.equal(parseFloat(card.style.top), Math.round(660 * g.k - CARD_GAP - 40 * ns));
+test('pdf: keeping the highlight leaves its card where the empty card was, as wide: no jump, no narrowing', async () => {
+  const { view, s } = await viewer();
+  select(view, [{ x: 200, y: 60, w: 80, h: 40 }], 'Title');
+  const was = view.selEl, at = { left: parseFloat(was.style.left), top: parseFloat(was.style.top), width: was.style.width };
+  was.onclick({ preventDefault() {}, stopPropagation() {} });
+  assert.equal(view.selEl, null, 'the empty card gone');
+  const [m] = kept(view), card = s.notes.querySelector(`[data-box-mark="${m.id}"]`);
+  assert.ok(card, 'its highlight\'s card');
+  assert.deepEqual({ left: parseFloat(card.style.left), top: parseFloat(card.style.top), width: card.style.width }, at);
 });
 
 test('pdf: Esc, a click elsewhere, or the selection out of view put the empty card away and keep no mark', async () => {

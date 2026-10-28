@@ -684,7 +684,8 @@ export const answeredBy = (thread) => {
  * closing line that says which model answered (-1 without one), `build` the id of the Build card that stands directly
  * under the question as its answer (an `@bart --build` line's; no turn follows it; absent otherwise), and `agent` the agent
  * that answered it: the one its closing line names, else the one its line asks, else (an `@bart` line opening a thread)
- * the title line's; null for an `@bart` turn none of them names (pending, or failed).
+ * the title line's; null for an `@bart` turn none of them names (pending, or failed). `joined` (MATH-161), when the line
+ * right under the last answer is a Build's card: { line, id }; absent otherwise.
  */
 export function threads(lines, ps = parseLines(lines)) {
   const out = [];
@@ -721,6 +722,11 @@ export function threads(lines, ps = parseLines(lines)) {
       if (!isResearch(ps[i + 1]) && !(ps[i + 2] && (ps[i + 2].type === 'pending' || ps[i + 2].type === 'reply' || ps[i + 2].type === 'build'))) break;
       i += 1;
     }
+    // A Build's card right under the conversation's last answer (MATH-161, 2026-10-27: one the answer's Build button
+    // started, MATH-160) is the conversation's last part, drawn in its card; it is no turn, and `to` stays the answer's
+    // last line, so a question under the card starts a conversation of its own. A research box keeps its own card.
+    const end = thread.turns[thread.turns.length - 1];
+    if (end.answered && !end.pending && !end.build && !isResearch(ps[end.q]) && ps[thread.to + 1] && ps[thread.to + 1].type === 'build') thread.joined = { line: thread.to + 1, id: ps[thread.to + 1].id };
     out.push(thread);
   }
   return out;

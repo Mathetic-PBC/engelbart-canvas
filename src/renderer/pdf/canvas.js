@@ -61,6 +61,48 @@ export const fitWidth = (want, room, min, span) => {
   return Math.round(Math.max(least, Math.min(most, room)));
 };
 
+/* ----------------------------------------------- readable cards and the desk beside the page (2026-10-27, David) */
+// Screenshots of a short highlight in a large title: its card squeezed into the margin it found (fitWidth, down to
+// NOTE_MIN) and wrapping mid-word, the empty card over the title's next line. Since then a highlight's card, and the empty
+// one a selection opens, is CARD_W note px wide at every zoom and in every pane, never narrowed to a margin: it goes
+// beside the text's column, outside the printed text, and the desk beside the page is made wide enough to hold it
+// (deskReach, ../model/paper-draw.js columnGeometry), panned to sideways. fitWidth stays for no card of a highlight.
+
+export const CARD_W = 300; // note px: a highlight's card, about 300 px where a note is drawn at its laid-out size (noteScale 1)
+export const DESK_PAD = 16; // note px of desk kept past a card's far edge
+
+/**
+ * Where a card beside the text's column goes across (the sheet's px): a right one `gap` past the column's right edge R,
+ * a left one its own width and `gap` before its left edge L, so neither is ever over the text. `width` is the card's on
+ * screen, `gap` already on screen too.
+ */
+export const besideLeft = (side, L, R, width, gap) => (side === 'left' ? L - gap - width : R + gap);
+
+/**
+ * How far one card reaches past its page's edges, as terms of deskReach: [{ a, b }], each a reach of a × pageW + b ×
+ * noteScale(pageW) sheet px, a in page units, b note px (DESK_PAD counted in). `side`/`col` for a card beside the text
+ * (col its column in page units, null for the page's edges); `pos` (page units, its left at pos.x) for one put somewhere;
+ * `w` its width in note px. Kept apart from any zoom, so the desk follows the page through a zoom without a jump.
+ */
+export function cardReach({ side, col, pos, w }) {
+  const width = Math.max(0, Number(w) || 0);
+  if (pos && Number.isFinite(pos.x)) {
+    const out = [{ a: pos.x - 1, b: width + DESK_PAD }];
+    if (pos.x < 0) out.push({ a: -pos.x, b: DESK_PAD });
+    return out;
+  }
+  const l = col ? col.l : 0, r = col ? col.r : 1;
+  return [side === 'left' ? { a: -l, b: SIDE_GAP + width + DESK_PAD } : { a: r - 1, b: SIDE_GAP + width + DESK_PAD }];
+}
+
+/** The desk each side of a page `pageW` wide that holds every card whose reach is `terms` (cardReach): sheet px, 0 or more. */
+export function deskReach(terms, pageW) {
+  const ns = noteScale(pageW);
+  let most = 0;
+  for (const t of terms || []) if (t && Number.isFinite(t.a) && Number.isFinite(t.b)) most = Math.max(most, t.a * pageW + t.b * ns);
+  return most;
+}
+
 /**
  * A note typed anywhere (2026-10-16): from where it starts (`x`) to the printed text after it on its line (`textAt`, its
  * left edge; Infinity with none) or the edge of what showed (`edge`), whichever is nearer, within FREE_MIN..NOTE_W.

@@ -649,7 +649,7 @@ test('Workspace askBart names a Build\'s conversation from its request, as Chat\
   assert.ok(src.includes('const later = name && !build && '), 'a Build is never one named later, from its answer');
   const named = src.indexOf('if (name && !later && !ownTopic) nameAs(text);');
   assert.ok(named > 0, 'named at once');
-  assert.ok(src.indexOf('const build = buildRequestOf({ agent, text }') < named && named < src.indexOf('const task = await buildFrom(ref, build.request'), 'before the Build branch returns');
+  assert.ok(src.indexOf('const build = buildRequestOf({ agent, text }') < named && named < src.indexOf('const task = await buildFrom(ref, request, routed && routed.id, typed'), 'before the Build branch returns');
 });
 
 test('Workspace askBart names a conversation an empty line started from its first answer, not "New conversation" (2026-10-14); a Brainstorm one names its own topic (test/brainstorm-topic.test.cjs)', () => {
@@ -663,16 +663,16 @@ test('Workspace askBart names a conversation an empty line started from its firs
   assert.ok(src.indexOf("if (later && !ownTopic) nameAs('');") > later, 'a failed run still gets its title line filled');
 });
 
-test('an open Build conversation draws its question and the Build\'s card as before; Collapse waits until the Build is finished', () => {
+test('an open Build conversation draws its question and the Build\'s card in one card (MATH-161); Collapse waits until the Build is finished', () => {
   for (const [builds, running] of [[{}, true], [{ [BUILT]: task('running') }, true], [{ [BUILT]: task('review') }, true], [{ [BUILT]: task('accepted') }, false], [{ [BUILT]: task('stopped') }, false], [{ [BUILT]: task('failed') }, false]]) {
     const m = mounted(BUILD_DOC, { builds });
     const html = m.html(), said = JSON.stringify(builds[BUILT] && builds[BUILT].status);
     assert.match(rowOf(html, 1), /style="display:none"/, `${said}: open, no title row`);
     const q = rowOf(html, 2);
-    assert.match(q, /data-act="ask" data-row="2"/, `${said}: the question keeps its send`);
-    assert.match(q, /margin-bottom:8px/, `${said}: the question closes its card, as before`);
+    assert.ok(!/data-act="ask"|data-act="pick"/.test(q), `${said}: no model picker or send (MATH-161: the Build's head says its model)`);
+    assert.match(q, /margin-bottom:0/, `${said}: the card goes on into the Build`);
     assert.ok(q.includes(`class="bart-fold" data-act="foldthread" data-row="1" aria-expanded="true" aria-label="Collapse"${running ? ' disabled title="Collapse once it answers"' : ' title="Collapse"'}><svg`), `${said}: the conversation's Collapse`);
-    assert.match(rowOf(html, 3), new RegExp(`^<div data-line="3" data-raw="build&gt; ${BUILT}" data-build="${BUILT}"`), `${said}: the card is drawn as a Build's card`);
+    assert.match(rowOf(html, 3), new RegExp(`^<div data-line="3" data-raw="build&gt; ${BUILT}" data-build="${BUILT}"[^>]*data-build-joined="2"`), `${said}: the Build's card, the conversation's last part`);
     assert.ok(!/data-foot|data-follow/.test(html), `${said}: no foot or reply field under it`);
     // toggleThread, Collapse all: only once the Build is finished.
     m.editor.toggleThread(1);
@@ -738,9 +738,9 @@ test('an older --build line with no title parses and draws as before: no title, 
   const t = threads(lines);
   assert.deepEqual([t.length, t[0].titleLine, t[0].turns[0].build], [1, -1, BUILT]);
   const html = m.html(), q = rowOf(html, 0);
-  assert.match(q, /data-act="ask" data-row="0"/);
+  assert.ok(!/data-act="ask"/.test(q), 'no send: its Build joins its card (MATH-161)');
   assert.ok(!/data-corner|foldthread|data-act="fold"/.test(html), 'no Collapse of any kind');
-  assert.match(rowOf(html, 1), /data-build=/);
+  assert.match(rowOf(html, 1), /data-build=[^>]*data-build-joined="0"/);
   assert.deepEqual(m.editor.foldable(m.lines()), []);
   m.editor.foldAll(true);
   assert.deepEqual(m.lines(), lines);

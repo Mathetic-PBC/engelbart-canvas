@@ -188,8 +188,15 @@ function eventReader(onEvent) {
   };
 }
 
-// "ESCALATE: <why>" is the agent talking to the harness (./ask.cjs), not an answer: it is never previewed.
-const toHarness = (text) => { const head = text.trimStart().slice(0, 9); return head.length > 0 && 'ESCALATE:'.startsWith(head); };
+// "ESCALATE: <why>" is the agent talking to the harness (./ask.cjs), not an answer: it is never previewed. Nor is
+// Discover's hand-back, `{"handoff": "<reason>"}` (MATH-165), held while what has come could still be one.
+const HANDOFF_HEAD = '{"handoff"';
+const toHarness = (text) => {
+  const head = text.trimStart();
+  if (head.length > 0 && 'ESCALATE:'.startsWith(head.slice(0, 9))) return true;
+  const bare = head.replace(/^```(?:json)?/, '').replace(/\s+/g, '').slice(0, HANDOFF_HEAD.length);
+  return /^```/.test(head) && !bare ? true : bare.length > 0 && HANDOFF_HEAD.startsWith(bare);
+};
 
 /**
  * Updates → progress messages, the text at most once per interval: { activity, log? } when what it

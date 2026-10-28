@@ -65,10 +65,18 @@ function threadsOf(threads) {
 /** The agent a follow-up's conversation is with ('chat', 'brainstorm' or 'discover'), or null. */
 const currentOf = (current) => { const agent = String(current || '').toLowerCase().replace(/^@/, ''); return PICKS.includes(agent) && agent !== 'build' && agent !== 'create' ? agent : null; };
 
+// What Discover asked and is waiting on, as the router is sent it, at most (MATH-165).
+const ASKED_CHARS = 300;
+const REASON_CHARS = 200;
+
 /** What the model is sent: the line, its section, the threads above, whether a spec is above (and its first line,
- * 2026-10-13) and, for a follow-up, the agent the conversation is with. Nothing else. */
-function routeInput({ text, section, workspaceName = '', threads = [], specAbove = false, specTitle = '', current = null }) {
+ * 2026-10-13) and, for a follow-up, the agent the conversation is with. Nothing else. MATH-165 (2026-10-28): with
+ * `discoverAsked`, the question Discover asked and is waiting on; with `handedBack` ({ from, reason }), the agent that
+ * handed the line back and why. */
+function routeInput({ text, section, workspaceName = '', threads = [], specAbove = false, specTitle = '', current = null, discoverAsked = null, handedBack = null }) {
   const list = threadsOf(threads), now = currentOf(current);
+  const asked = discoverAsked ? clean(discoverAsked, ASKED_CHARS) : '';
+  const from = handedBack ? currentOf(handedBack.from) : null;
   const threadLines = list.length ? list.map((thread) => `- @${thread.agent}, ${thread.up} line${thread.up === 1 ? '' : 's'} up: ${JSON.stringify(thread.question)}`).join('\n') : '(none)';
   return [
     workspaceName ? `<workspace>${clean(workspaceName, 200)}</workspace>` : '',
@@ -76,6 +84,8 @@ function routeInput({ text, section, workspaceName = '', threads = [], specAbove
     `<threads>\n${threadLines}\n</threads>`,
     `<spec_above>${specAbove ? (clean(specTitle, QUESTION_CHARS) ? `yes: ${JSON.stringify(clean(specTitle, QUESTION_CHARS))}` : 'yes') : 'no'}</spec_above>`,
     now ? `<current>${now}</current>` : '',
+    asked ? `<discover_asked>${asked}</discover_asked>` : '',
+    from ? `<handed_back from="${from}">${clean(handedBack.reason, REASON_CHARS).replace(/[<>]/g, '')}</handed_back>` : '',
     `<line>\n${String(text || '').trim()}\n</line>`,
   ].filter(Boolean).join('\n\n');
 }
@@ -100,10 +110,17 @@ function parseReply(raw) {
  * follow-up, 2026-10-13): that agent, unless the reply picks another and is at least 0.8 sure of it. A conversation with
  * discover (2026-10-13) has its search in a research box already: a reply is chat's, a new search only when the reply
  * picks discover at least 0.8 sure, and any other pick as a line with no conversation is.
+ * MATH-165 (2026-10-28): `asking`, Discover is waiting on its question: a reply that answers it stays with discover at
+ * SURE_ENOUGH. `exclude`: agents the line may not go to (a line handed back, never to the one that handed it back): one
+ * picked is chat.
  */
-function decide(parsed, current = null) {
+function decide(parsed, current = null, { asking = false, exclude = [] } = {}) {
+  const out = decided(parsed, current, asking);
+  return exclude.includes(out.agent) ? { agent: 'chat', sure: out.sure } : out;
+}
+function decided(parsed, current, asking) {
   const now = currentOf(current);
-  if (now === 'discover') return parsed && parsed.agent === 'discover' ? (parsed.sure >= SURE_TO_SWITCH ? parsed : { agent: 'chat', sure: parsed.sure }) : decide(parsed);
+  if (now === 'discover') return parsed && parsed.agent === 'discover' ? (parsed.sure >= (asking ? SURE_ENOUGH : SURE_TO_SWITCH) ? parsed : { agent: 'chat', sure: parsed.sure }) : decided(parsed, null, false);
   if (now) return parsed && parsed.agent !== now && parsed.sure >= SURE_TO_SWITCH ? parsed : { agent: now, sure: parsed ? parsed.sure : 0 };
   if (!parsed) return { agent: 'chat', sure: 0 };
   return parsed.sure < SURE_ENOUGH ? { agent: 'chat', sure: parsed.sure } : parsed;
@@ -242,7 +259,7 @@ function createFakeRouter({ runLog = null, now = Date.now } = {}) {
 
 /** What both routers share: the rule's or the model's pick, logged. `pick(input, text, current)` → { parsed, step, raw, error? }. */
 function routerOf({ log, now, pick, plain = (text) => text }) {
-  async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, specTitle = '', current = null, rule = null, place = null } = {}) {
+  async function route({ projectId = null, text = '', section = '', workspaceName = '', threads = [], specAbove = false, specTitle = '', current = null, asking = false, discoverAsked = null, exclude = [], handedBack = null, rule = null, place = null } = {}) {
     const id = `route-${randomUUID()}`, started = now();
     if (rule && RULE_PICKS.has(rule.agent)) {
       log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, by: 'rule', rule: rule.rule || null, place })));
@@ -250,11 +267,11 @@ function routerOf({ log, now, pick, plain = (text) => text }) {
       log((runs) => { runs.amend(id, { pick: out.agent, sure: 1 }); runs.finish(id, { status: 'done', written: [`@${out.agent}`], ms: out.ms }); });
       return out;
     }
-    const input = routeInput({ text: plain(text), section, workspaceName, threads, specAbove, specTitle, current });
+    const input = routeInput({ text: plain(text), section, workspaceName, threads, specAbove, specTitle, current, discoverAsked: asking ? discoverAsked : null, handedBack });
     log((runs) => runs.start(routerRecord({ id, projectId, workspaceName, text, section, threads, specAbove, current, input, by: 'model', place })));
     const { parsed, step, raw, error } = await pick(input, text, current);
     if (step) log((runs) => { runs.step(id, { model: step.id, name: step.name, effort: step.effort, input }); runs.output(id, { raw }); });
-    const { agent, sure, spec } = decide(parsed, current);
+    const { agent, sure, spec } = decide(parsed, current, { asking: !!asking, exclude: (Array.isArray(exclude) ? exclude : []).filter((name) => PICKS.includes(name)) });
     // Whether the line asks for the spec above to be built (2026-10-13): only a build the model picked says so.
     const means = agent === 'build' && spec === true;
     const out = { id, agent, sure, ...(agent === 'build' ? { spec: means } : {}), model: step ? { provider: step.provider, name: step.name, id: step.id, effort: step.effort } : null, ms: now() - started, by: 'model', ...(error ? { error } : {}) };
