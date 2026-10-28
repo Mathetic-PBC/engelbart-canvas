@@ -41,6 +41,19 @@ jobs:
           echo "filter=$filter" >> "$GITHUB_OUTPUT"
           sw_vers; xcodebuild -version; swift --version
 
+      # The Store's PGlite importer test needs Node + the same pglite the Electron app ships (package.json: 0.5.8).
+      - name: Node + pglite for the importer
+        if: steps.req.outputs.target == 'Store' || steps.req.outputs.target == 'all'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install pglite
+        if: steps.req.outputs.target == 'Store' || steps.req.outputs.target == 'all'
+        run: |
+          mkdir -p "$RUNNER_TEMP/pglite" && cd "$RUNNER_TEMP/pglite"
+          npm init -y >/dev/null && npm install --no-audit --no-fund @electric-sql/pglite@0.5.8 >/dev/null
+          echo "ENGELBART_NODE_MODULES=$RUNNER_TEMP/pglite/node_modules" >> "$GITHUB_ENV"
+
       - uses: actions/cache@v4
         with:
           path: |
