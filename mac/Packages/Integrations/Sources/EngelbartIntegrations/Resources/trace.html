@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; img-src file:">
+<title>Agent trace</title>
+<!-- The Agent trace (./trace-window.cjs): plain, as https://mathetic.com/bart is. -->
+<style id="trace-style">
+  body { max-width: 860px; margin: 0; padding: 48px 24px; line-height: 1.6; }
+  h1 { font-size: 1.6em; margin: 0 0 8px; }
+  p.lede { margin: 0 0 20px; }
+  .bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 0 0 28px; }
+  button { font: inherit; font-weight: 500; color: inherit; background: none; border: 1px solid currentColor; border-radius: 0; padding: 8px 14px; cursor: pointer; }
+  button:hover, button[aria-pressed="true"] { background: rgba(128,128,128,.15); }
+  input[type=search] { font: inherit; padding: 7px 10px; border: 1px solid currentColor; border-radius: 0; min-width: 220px; background: none; color: inherit; }
+  .entry { border-top: 1px solid rgba(128,128,128,.35); padding: 14px 0 12px; }
+  .entry h2 { font-size: 1.05em; margin: 0; }
+  .meta { color: rgba(0,0,0,.6); font-size: .92em; }
+  .event { padding: 6px 0; border-top: 1px dashed rgba(128,128,128,.3); font-size: .95em; }
+  .event .kind { font-variant: small-caps; letter-spacing: .04em; }
+  .status-running { color: #8a6d00; }
+  .status-failed { color: #b00020; }
+  details { margin: 6px 0 0; }
+  summary { cursor: pointer; }
+  pre { white-space: pre-wrap; word-break: break-word; background: rgba(128,128,128,.08); padding: 10px 12px; margin: 6px 0 10px; max-height: 520px; overflow: auto; font-size: 12.5px; line-height: 1.5; }
+  ol.activity { margin: 6px 0 10px; padding-left: 22px; font-size: .92em; }
+  .pictures { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; margin: 6px 0 10px; }
+  .pictures figure { margin: 0; }
+  .pictures img { width: 100%; border: 1px solid rgba(128,128,128,.35); display: block; }
+  .pictures figcaption { font-size: .85em; }
+  .empty { color: rgba(0,0,0,.55); }
+  @media (prefers-color-scheme: dark) { body { background: #111; color: #eee; } .meta, .empty { color: rgba(255,255,255,.6); } }
+</style>
+</head>
+<body>
+<h1>Agent trace</h1>
+<p class="lede" id="lede">Every agent onboarding runs, with its prompt, its input and context, and its output, and the dispatching around them: each job queued with its plan, each step handed to you. Kept on this Mac only.</p>
+<p class="bar" id="bar">
+  <button type="button" data-filter="all" aria-pressed="true">All</button>
+  <button type="button" data-filter="turn" aria-pressed="false">Agents</button>
+  <button type="button" data-filter="event" aria-pressed="false">Dispatching</button>
+  <input type="search" id="search" placeholder="Filter" aria-label="Filter">
+  <span style="flex:1"></span>
+  <button type="button" id="save">Save as HTML</button>
+  <button type="button" id="reveal">Show files</button>
+</p>
+<main id="list"><p class="empty">No agent has run yet. Start Import your context, and each turn shows up here as it happens.</p></main>
+<script id="trace-render">
+(function () {
+  var entries = [];
+  var filter = 'all';
+  var query = '';
+  var list = document.getElementById('list');
+  var live = !!window.traceApi && !window.TRACE_SAVED;
+
+  function el(tag, attrs, children) {
+    var node = document.createElement(tag);
+    if (attrs) for (var key in attrs) { if (key === 'text') node.textContent = attrs[key]; else if (attrs[key] != null) node.setAttribute(key, attrs[key]); }
+    (children || []).forEach(function (child) { if (child) node.appendChild(typeof child === 'string' ? document.createTextNode(child) : child); });
+    return node;
+  }
+  function time(at) { try { return new Date(at).toLocaleTimeString(); } catch (e) { return String(at || ''); } }
+  function took(entry) {
+    if (!entry.ended) return '';
+    var ms = new Date(entry.ended) - new Date(entry.at);
+    if (!(ms >= 0)) return '';
+    return ms < 60000 ? Math.round(ms / 1000) + ' s' : Math.floor(ms / 60000) + ' min ' + Math.round((ms % 60000) / 1000) + ' s';
+  }
+  var PROVIDERS = { anthropic: 'Claude Code', openai: 'Codex' };
+  function block(title, text, open) {
+    if (!text) return null;
+    var d = el('details', open ? { open: '' } : null, [el('summary', { text: title + ' (' + text.length.toLocaleString() + ' characters)' }), el('pre', { text: text })]);
+    return d;
+  }
+  // A browser agent's screenshots: the pictures its browser showed it, as files in the session's steps folder.
+  function pictures(entry) {
+    if (!entry.pictures || !entry.pictures.length) return null;
+    return el('details', null, [
+      el('summary', { text: 'What it saw (' + entry.pictures.length + ' screenshots)' }),
+      el('div', { class: 'pictures' }, entry.pictures.map(function (shot) {
+        var img = el('img', { alt: 'Screenshot at ' + time(shot.at), loading: 'lazy' });
+        img.src = 'file://' + encodeURI(shot.file);
+        return el('figure', null, [img, el('figcaption', { text: time(shot.at) })]);
+      })),
+    ]);
+  }
+  function turn(entry) {
+    var head = [time(entry.at), entry.kind, entry.label].filter(Boolean).join(' · ');
+    var who = [PROVIDERS[entry.provider] || entry.provider, entry.model, entry.effort].filter(Boolean).join(' ');
+    var status = entry.status === 'running' ? 'running…' : entry.status === 'failed' ? 'failed' + (took(entry) ? ' after ' + took(entry) : '') : 'done' + (took(entry) ? ' in ' + took(entry) : '');
+    var context = [
+      'Kind: ' + entry.kind,
+      'Provider: ' + (who || 'none'),
+      entry.modelId ? 'Model id: ' + entry.modelId : '',
+      'Folders it could read: ' + (entry.dirs && entry.dirs.length ? '\n  ' + entry.dirs.join('\n  ') : 'none'),
+      entry.agentSession ? 'Agent session: ' + entry.agentSession + (entry.resumed ? ' (resumed)' : '') : '',
+      entry.sessionId ? 'Connect session: ' + entry.sessionId : '',
+      entry.jobId ? 'Job: ' + entry.jobId : '',
+    ].filter(Boolean).join('\n');
+    var activity = entry.activity && entry.activity.length ? el('details', null, [el('summary', { text: 'What it did (' + entry.activity.length + ' steps)' }), el('ol', { class: 'activity' }, entry.activity.map(function (step) { return el('li', { text: time(step.at) + ' — ' + step.text }); }))]) : null;
+    return el('section', { class: 'entry', 'data-type': 'turn' }, [
+      el('h2', { text: head }),
+      el('div', { class: 'meta' }, [who + ' · ', el('span', { class: 'status-' + entry.status, text: status })]),
+      block('System prompt', entry.system, false),
+      block('Input (the message, with its context blocks)', entry.message, false),
+      block('Context', context, false),
+      block('Command (run in the Engelbart terminal)', entry.command, false),
+      activity,
+      pictures(entry),
+      block('Terminal transcript', entry.transcript, false),
+      block('Output', entry.output, entry.status !== 'running'),
+      block('Error', entry.error, true),
+    ]);
+  }
+  function event(entry) {
+    return el('div', { class: 'event', 'data-type': 'event' }, [
+      el('span', { class: 'meta', text: time(entry.at) + ' · ' }), el('span', { class: 'kind', text: entry.kind }), ' — ' + entry.text,
+      entry.detail ? el('details', null, [el('summary', { text: 'Details' }), el('pre', { text: entry.detail })]) : null,
+    ]);
+  }
+  function matches(entry) {
+    if (filter !== 'all' && entry.type !== filter) return false;
+    if (!query) return true;
+    var hay = [entry.kind, entry.label, entry.text, entry.provider, entry.model, entry.message, entry.output, entry.system, entry.detail, entry.command].join('\n').toLowerCase();
+    return hay.indexOf(query) >= 0;
+  }
+  function render() {
+    var shown = entries.filter(matches);
+    list.textContent = '';
+    if (!shown.length) { list.appendChild(el('p', { class: 'empty', text: entries.length ? 'Nothing matches.' : 'No agent has run yet. Start Import your context, and each turn shows up here as it happens.' })); return; }
+    shown.forEach(function (entry) { list.appendChild(entry.type === 'turn' ? turn(entry) : event(entry)); });
+  }
+  function keep(entry) {
+    for (var i = 0; i < entries.length; i += 1) if (entries[i].id === entry.id) { entries[i] = entry; return; }
+    entries.push(entry);
+  }
+  var pending = false;
+  function soon() { if (pending) return; pending = true; setTimeout(function () { pending = false; var atEnd = window.innerHeight + window.scrollY >= document.body.scrollHeight - 80; render(); if (atEnd) window.scrollTo(0, document.body.scrollHeight); }, 150); }
+
+  Array.prototype.forEach.call(document.querySelectorAll('[data-filter]'), function (button) {
+    button.addEventListener('click', function () {
+      filter = button.getAttribute('data-filter');
+      Array.prototype.forEach.call(document.querySelectorAll('[data-filter]'), function (other) { other.setAttribute('aria-pressed', other === button ? 'true' : 'false'); });
+      render();
+    });
+  });
+  document.getElementById('search').addEventListener('input', function (e) { query = String(e.target.value || '').trim().toLowerCase(); render(); });
+
+  function standalone() {
+    var json = JSON.stringify(entries).replace(/</g, '\\u003c');
+    var style = document.getElementById('trace-style').textContent;
+    var code = document.getElementById('trace-render').textContent;
+    return '<!doctype html>\n<html lang="en"><head><meta charset="utf-8"><title>Engelbart agent trace</title><style id="trace-style">' + style + '</style></head><body>'
+      + '<h1>Agent trace</h1><p class="lede">Saved from Engelbart on ' + new Date().toLocaleString() + ': ' + entries.length + ' entries.</p>'
+      + '<p class="bar"><button type="button" data-filter="all" aria-pressed="true">All</button> <button type="button" data-filter="turn" aria-pressed="false">Agents</button> <button type="button" data-filter="event" aria-pressed="false">Dispatching</button> <input type="search" id="search" placeholder="Filter" aria-label="Filter"></p>'
+      + '<main id="list"></main><script>window.TRACE_SAVED = ' + json + ';<\/script><script id="trace-render">' + code + '<\/script></body></html>';
+  }
+
+  if (window.TRACE_SAVED) { entries = window.TRACE_SAVED; render(); return; }
+  if (!live) return;
+  document.getElementById('save').addEventListener('click', function () { window.traceApi.save(standalone()).catch(function () {}); });
+  document.getElementById('reveal').addEventListener('click', function () { window.traceApi.reveal().catch(function () {}); });
+  window.traceApi.onEntry(function (entry) { keep(entry); soon(); });
+  window.traceApi.list().then(function (all) { (all || []).forEach(keep); render(); window.scrollTo(0, document.body.scrollHeight); }).catch(function () {});
+})();
+</script>
+</body>
+</html>

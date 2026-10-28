@@ -11,7 +11,8 @@ let package = Package(
         .package(path: "../UI"),
     ],
     targets: [
-        .target(name: "EngelbartIntegrations", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), ]),
+        .target(name: "EngelbartIntegrations", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI")],
+                resources: [.copy("Resources/trace.html")]),
         .testTarget(name: "EngelbartIntegrationsTests", dependencies: ["EngelbartIntegrations"]),
     ]
 )
