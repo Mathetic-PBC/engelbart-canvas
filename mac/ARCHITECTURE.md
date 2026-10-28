@@ -40,14 +40,14 @@ local `path:` packages):
 | Doc | EngelbartDoc | `renderer/model/doc.js` + the pure editor models, `shared/mentions`, `mark-answers`, `passage-*`, `selection-card`, `context/expand-mentions` | Core |
 | Editor | EngelbartEditor | `workspace/DocEditor.jsx`, `MentionMenu`, `BartPicker`, `caret.js`, `DocFind`, answer/build cards | Core, Doc, UI |
 | Bart | EngelbartBart | `main/bart/**`, `main/context/**` | Core, Doc |
-| Build | EngelbartBuild | `main/build/**`, `shared/build-history` | Core, Doc |
+| Build | EngelbartBuild | `main/build/**`, `shared/build-history`, the Build panels (BuildPanel, BuildReview, RunTimeline…) | Core, Doc, UI |
 | Terminal | EngelbartTerminal | `main/terminal/**`, `shell-rc`, `shell-history`, `renderer/terminal/**` (SwiftTerm) | Core, UI |
 | Tools | EngelbartTools | `main/tools/**`, `updates.cjs`, `ui/ToolSetup`, `ui/UpdateBanner`, `model/tools.js` | Core, UI |
 | Stage | EngelbartStage | `main/browser/**`, `main/stage/**`, `stage-links`, `workspace/Stage.jsx`, `RightPane`, `model/stage.js`, `address.js`, `kind.js` (WKWebView) | Core, UI, Doc |
 | PDF | EngelbartPDF | `renderer/pdf/**`, `model/paper-*`, annotations (PDFKit) | Core, UI |
 | Sandbox | EngelbartSandbox | `main/sandbox/**`, `shared/sandbox-sleep`, `shared/environment`, sandbox UI | Core, UI |
-| Connect | EngelbartConnect | `main/connect/**`, `main/onboarding/**` (backend), `shared/connect-sources`, `shared/import-flow` | Core |
-| Integrations | EngelbartIntegrations | `main/zotero/**`, `main/github/**`, `main/overleaf/**`, `main/agent-map/**` (backend) | Core |
+| Connect | EngelbartConnect | `main/connect/**`, `main/onboarding/**` (backend), `shared/connect-sources`, `shared/import-flow` (+ its sign-in windows) | Core, UI |
+| Integrations | EngelbartIntegrations | `main/zotero/**`, `main/github/**`, `main/overleaf/**`, `main/agent-map/**` (backend), GitHub/Zotero panes, Agent Map + Benchmark screens | Core, UI |
 | (wave 2) Workspace, Screens, ImportUI, PostIts, AgentMapUI | | the screens that tie the above together | many |
 
 **Dependency rule.** A wave-1 package never depends on Store or on another wave-1 feature package. When it needs data

@@ -8,9 +8,10 @@ let package = Package(
     products: [.library(name: "EngelbartIntegrations", targets: ["EngelbartIntegrations"])],
     dependencies: [
         .package(path: "../Core"),
+        .package(path: "../UI"),
     ],
     targets: [
-        .target(name: "EngelbartIntegrations", dependencies: [.product(name: "EngelbartCore", package: "Core"), ]),
+        .target(name: "EngelbartIntegrations", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), ]),
         .testTarget(name: "EngelbartIntegrationsTests", dependencies: ["EngelbartIntegrations"]),
     ]
 )
