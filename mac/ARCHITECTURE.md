@@ -133,4 +133,6 @@ what "everything" means; an unlisted behaviour is a lost behaviour. Commit messa
   Swift 5 language mode (tools-version 5.10), macOS 14 minimum.
 - Tests: XCTest, temporary directories, no network (fakes for CLIs and HTTP, as the Electron tests do).
 - Match the Electron code's names where they help someone read both side by side (file `ask.cjs` → `Ask.swift`).
+- Resources: never call `Bundle.module` directly — in the signed app it looks at the .app's root, which cannot hold
+  anything, and fails. Use `ResourceBundle.named("<Package>_<Module>", fallback: Bundle.module)` (EngelbartCore).
 - Comment like the Electron code does: say why, record decisions, cite the source file the behaviour came from.
