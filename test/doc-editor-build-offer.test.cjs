@@ -74,6 +74,10 @@ test('a finished fenced answer ending with a build offer: one Build text button,
   assert.ok(html.indexOf('data-line="6"') < at, 'under the offer line');
   assert.match(html, /<div data-offer-said="1" [^>]*data-line="6"/, 'the offer line kept in the text but not drawn: the button stands for it');
   assert.equal((html.match(/data-offer-said=/g) || []).length, 1, 'no other line hidden');
+  // A blank line between the closing fence and the offer goes too: no gap above the button.
+  const spaced = mounted(answer(['', 'Want me to build it?'])).html();
+  const hidden = [...spaced.matchAll(/<div data-offer-said="1" [^>]*data-line="(\d+)"/g)].map((m) => Number(m[1]));
+  assert.deepEqual(hidden, [6, 7], 'the blank line and the offer, not the closing fence');
   assert.ok(at < html.indexOf('data-line="7"'), 'above the foot');
   assert.match(row, /class="bart-go"[^>]*style="[^"]*background:#0070f3;color:#fff/, 'blue, as Start research is');
 });
@@ -117,6 +121,8 @@ test('no button with a Build card under the conversation, in a read-only documen
   const card = mounted(carded, { builds });
   card.editor.buildOpen = new Set(['0123456789']);
   assert.equal(offerRows(card.html()), 0, 'its Build\'s card is under it');
+  assert.match(card.html(), /<div data-offer-said="1" [^>]*data-line="6"/, 'the offer stays hidden under its card');
+  assert.ok(!/data-offer-said/.test(mounted(OFFER, { readOnly: true }).html()), 'no button, the offer shown');
   assert.equal(offerRows(mounted(OFFER, { readOnly: true }).html()), 0, 'read only');
   assert.equal(offerRows(mounted(OFFER, { onBuild: false }).html()), 0, 'no onBuild');
   // A Build's messages are drawn as the card's (buildMessageHtml), never as an answer with a button.
@@ -135,6 +141,7 @@ test('a click builds the answer\'s last fenced block, once; clicks while it star
   assert.deepEqual([m.started[0].model, m.started[0].effort, m.started[0].askId], [undefined, undefined, undefined], 'the Build\'s own model and effort: nothing picked is sent');
   assert.deepEqual(m.started[0].place, { line: 1, text: '@bart add Haiku 5.5 to the models' });
   assert.equal(offerRows(m.html()), 0, 'hidden while it starts');
+  assert.match(m.html(), /<div data-offer-said="1" [^>]*data-line="10"/, 'and so is the offer it stood for');
   click(m, { act: 'footbuild', turn: String(b.turn) });
   assert.equal(m.editor.footBuild(b.turn), false);
   assert.equal(m.started.length, 1, 'no second Build');
@@ -155,6 +162,7 @@ test('a Build that failed to start: its button comes back once it settles', asyn
   fail(new Error('no')); await settled(); await settled();
   assert.deepEqual(waits.length, 1);
   assert.equal(offerRows(m.html()), 1, 'shown again');
+  assert.equal((m.html().match(/data-offer-said=/g) || []).length, 1, 'the offer hidden under it again');
   click(m, { act: 'footbuild', turn: '1' });
   assert.equal(m.started.length, 2, 'and builds again');
 });

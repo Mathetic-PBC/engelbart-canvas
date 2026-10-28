@@ -2335,6 +2335,10 @@ export default class DocEditor extends React.Component {
       // nor while that Build is starting, nor while anything in the conversation is at work.
       const offer = end.answered && !end.pending && !end.folded && !end.build && !built && !isResearch(ps[end.q]) && !cards.byQ.has(end.q)
         && !thread.turns.some((t) => t.pending) && !!this.props.onBuild && !this.props.readOnly && !this.buildStarting.has(ls[end.q]) && offersBuild(ls, end);
+      // Its offer line is not drawn while the button stands for it, nor once the button was pressed: while its Build starts
+      // and with its card under the conversation (2026-10-28, David: the question came back after the click).
+      const offered = offer || (end.answered && !end.pending && !end.folded && !end.build && !isResearch(ps[end.q])
+        && (built || this.buildStarting.has(ls[end.q])) && offersBuild(ls, end));
       // A collapsed turn (2026-10-13) is drawn bare, as one row (foldedHtml) with no foot, at the top of the card: the
       // question under it starts 18px below the last of them.
       // An @discover research box (2026-10-13, doc.js isResearch) is drawn inside the card of the reply that asked for it
@@ -2360,7 +2364,7 @@ export default class DocEditor extends React.Component {
         for (let i = turn.from; i <= turn.to; i++) {
           const role = i === turn.foot ? 'foot' : parseLine(ls[i]).type === 'pending' ? 'pending' : 'answer', ends = i === turn.to;
           const drawn = card && i <= card.last ? { card: i === turn.from ? card : null, underCard: i !== turn.from } : {};
-          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, buildOffer: tail && offer && i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && (after || joinedAt >= 0), refine: null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, boxState, editable: editable && !box, chat, older, ...drawn });
+          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, buildOffer: tail && offer && i === lastBody, offerSaid: tail && offered && i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && (after || joinedAt >= 0), refine: null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, boxState, editable: editable && !box, chat, older, ...drawn });
         }
       });
       if (joinedAt >= 0) at.set(joinedAt, { thread, turn: end, agent: this.turnAgent(thread, end), role: 'build', joined: true, closes: true });
@@ -3116,8 +3120,15 @@ export default class DocEditor extends React.Component {
     this.noteAnswers(ls);
     const cards = this.cardsOf(ls);
     // A build offer's own line (MATH-160), the last line of its answer that says something: its Build button stands for it.
+    // The blank lines around it go too (2026-10-28, David: a gap was left above the button).
     const said = new Set();
-    at.forEach((w, i) => { if (!w.buildOffer) return; let j = i; while (j > w.turn.from && !ps[j].text.trim()) j--; said.add(j); });
+    at.forEach((w, i) => {
+      if (!w.offerSaid) return;
+      const blank = (k) => !ps[k].text.trim();
+      let j = i; while (j > w.turn.from && blank(j)) j--;
+      let k = j - 1; while (k > w.turn.from && blank(k)) k--;
+      for (let n = k + 1; n <= i; n++) said.add(n);
+    });
     ls.forEach((line, i) => {
       const p = ps[i], where = at.get(i);
       // Under a question being edited (2026-10-03), its answer and the answer's foot are dimmed.
