@@ -85,3 +85,11 @@ test('"@bart yes" under the offer and the [[build]] hammer still build the fence
   assert.deepEqual([hammer.started.length, hammer.started[0].text], [1, 'Add Haiku 5.5 to models.cjs.']);
   for (const id of [...m.editor.timers, ...hammer.editor.timers]) clearTimeout(id);
 });
+
+test('a blank line under a code block is 8px, not the 22px between paragraphs: no gap over "Want me to build it?"', () => {
+  const html = mounted(answer(['', 'Want me to build it?'])).html();
+  const row = (h, i) => { const at = h.indexOf(`<div data-line="${i}" `); return h.slice(at, h.indexOf('</div>', at)); };
+  assert.match(row(html, 6), /<span class="t" style="display:block;min-height:8px;height:8px;overflow:hidden;/, 'under the closing fence');
+  const prose = mounted([TITLE, '@bart why?', 'bart> First.', 'bart> ', 'bart> Second.', 'bart> *Chat · Sonnet · high · 3 s*', '']).html();
+  assert.match(row(prose, 3), /<span class="t" style="display:block;min-height:22px;border-radius/, 'between paragraphs, as before');
+});
