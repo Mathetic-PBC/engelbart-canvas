@@ -132,7 +132,7 @@ test('under a collapsed turn the joined Build has no hairline: the collapsed row
   const html = mounted(folded, { builds: running() }).html();
   const build = rowTag(html, 8);
   assert.match(build, /data-build-joined=/);
-  assert.match(build, /padding:10px 16px 14px/);
+  assert.match(build, /padding:0px 16px 14px/, 'no space of its own: the collapsed row\'s 18px below it, as a question has (pad 0 after a bare row)');
   assert.match(html.slice(html.indexOf(build) + build.length), /^<div><div data-build-part="head">/, 'no hairline');
   assert.equal(count(html, /data-build-rule=/g), 0);
 });

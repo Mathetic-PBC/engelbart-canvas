@@ -2005,7 +2005,7 @@ export default class DocEditor extends React.Component {
     // 16px in as the rows above it are, and the conversation's card closing under it. A hairline above it (2026-10-28,
     // David) parts what was asked from the Build that answers it; not under a collapsed turn (David), whose one row is
     // apart enough.
-    if (at && at.joined) return `<div ${raw} contenteditable="false" data-readonly="1" data-build-joined="${at.thread.from}" style="user-select:text;cursor:default;padding:${at.underFolded ? 10 : 6}px 16px 14px;background:#fafafa;border-radius:${radius(false, true)};margin-bottom:8px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
+    if (at && at.joined) return `<div ${raw} contenteditable="false" data-readonly="1" data-build-joined="${at.thread.from}" style="user-select:text;cursor:default;padding:${at.underFolded ? 0 : 6}px 16px 14px;background:#fafafa;border-radius:${radius(false, true)};margin-bottom:8px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
       + (at.underFolded ? '<div>' : '<div data-build-rule="1" style="border-top:1px solid #eaeaea;padding-top:10px">')
       + parts.map(([name, html]) => `<div data-build-part="${name}">${html}</div>`).join('')
       + '</div></div>';
