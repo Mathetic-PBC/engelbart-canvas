@@ -649,7 +649,7 @@ test('Workspace askBart names a Build\'s conversation from its request, as Chat\
   assert.ok(src.includes('const later = name && !build && '), 'a Build is never one named later, from its answer');
   const named = src.indexOf('if (name && !later && !ownTopic) nameAs(text);');
   assert.ok(named > 0, 'named at once');
-  assert.ok(src.indexOf('const build = buildRequestOf({ agent, text }') < named && named < src.indexOf('const task = await buildFrom(ref, build.request'), 'before the Build branch returns');
+  assert.ok(src.indexOf('const build = buildRequestOf({ agent, text }') < named && named < src.indexOf('const task = await buildFrom(ref, request, routed && routed.id, typed'), 'before the Build branch returns');
 });
 
 test('Workspace askBart names a conversation an empty line started from its first answer, not "New conversation" (2026-10-14); a Brainstorm one names its own topic (test/brainstorm-topic.test.cjs)', () => {

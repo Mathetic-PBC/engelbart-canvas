@@ -398,7 +398,7 @@ test('a line Bart handed to @discover: its follow-up, Regenerate, the session an
   assert.deepEqual([asking.routes[0].rule, asking.routes[0].current], [{ agent: 'discover', rule: 'answering Discover' }, 'discover']);
 });
 
-test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec starts a Build of the spec; otherwise Chat is asked to write the Build prompt', async () => {
+test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec starts a Build of the spec; any other sure build starts a Build of the line; less sure, Chat writes the Build prompt', async () => {
   // Asked from the spec's conversation's field (2026-10-13: a line typed under it starts a conversation of its own).
   const sure = mounted(SPEC, { route: async () => ({ id: 'route-b', agent: 'build', sure: 0.9, spec: true }) });
   sure.editor.followText.set(0, 'ok build it');
@@ -423,20 +423,34 @@ test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec start
   assert.deepEqual([threads(placed).length, turns.length, turns[1].q, turns[1].build], [1, 2, SPEC.length, '0123456789'], 'the card is the line\'s answer');
 
   // A request of its own under a spec (2026-10-13, the Agent Viewer line built as the spec above it): sure it is a build,
-  // but not of that spec, so Chat writes its Build prompt.
+  // but not of that spec. Since MATH-168 (2026-10-28) it is built at once, as `--build` builds a line, given the
+  // conversation above it and run on the line's model; no Build prompt of Chat's first.
   const own = mounted(SPEC, { route: async () => ({ id: 'route-o', agent: 'build', sure: 0.9, spec: false }) });
   own.editor.followText.set(0, 'also remove the filter tabs from the agent viewer');
   own.editor.sendFollow(0);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(own.builds.length, 0, 'the spec above is not built');
-  assert.deepEqual([own.asks[0].agent, own.asks[0].intro, own.asks[0].routed], ['bart', undefined, { id: 'route-o', build: true }]);
-  // Nor when the router does not say (an older pick, or a failed one).
+  assert.equal(own.asks.length, 1);
+  const [direct] = own.asks;
+  assert.deepEqual([direct.agent, direct.text, direct.routed], ['router', '--build also remove the filter tabs from the agent viewer', { id: 'route-o' }], 'a Build of the line, as --build makes');
+  assert.deepEqual(direct.build.choice, { provider: 'anthropic', model: 'sonnet', effort: 'high' }, 'on the line\'s model: @bart\'s default, the line naming none');
+  assert.equal(direct.build.context.length, 1, 'given the conversation above');
+  assert.match(direct.build.context[0].answer, /Add Haiku 5\.5 to models\.cjs\./);
+  assert.equal(own.lines()[SPEC.length], '@bart also remove the filter tabs from the agent viewer', 'the line stays as typed');
+  // A line naming its model: the Build runs on it.
+  const named = mounted(['@bart --opus --medium add a toolbar button'], { route: async () => ({ id: 'route-n', agent: 'build', sure: 0.9 }) });
+  named.editor.askInline(0);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([named.asks[0].text, named.asks[0].build.choice], ['--build add a toolbar button', { provider: 'anthropic', model: 'opus', effort: 'medium' }], 'the flags pick the model and are not part of the request');
+  // When the router does not say whether it means the spec (an older pick, or a failed one), the line is built, with the spec in its context.
   const silent = mounted(SPEC, { route: async () => ({ id: 'route-s', agent: 'build', sure: 0.9 }) });
   silent.editor.followText.set(0, 'ok build it');
   silent.editor.sendFollow(0);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(silent.builds.length, 0);
+  assert.deepEqual([silent.asks[0].text, silent.asks[0].build.context.length], ['--build ok build it', 1]);
 
+  // Less sure: Chat writes the Build prompt and offers to build it, as before.
   const unsure = mounted(SPEC, { route: async () => ({ id: 'route-c', agent: 'build', sure: 0.7, spec: true }) });
   unsure.editor.followText.set(0, 'ok build it');
   unsure.editor.sendFollow(0);
@@ -445,11 +459,13 @@ test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec start
   assert.equal(unsure.lines()[SPEC.length], '@bart ok build it', 'a follow-up (2026-10-13) stays as typed; its closing line names who answered');
   assert.deepEqual([unsure.asks[0].agent, unsure.asks[0].routed], ['bart', { id: 'route-c', build: true }]);
 
+  // A line starting a conversation: built at once, its title line marked a Build's, as a `--build` line's is.
   const noSpec = mounted(['@bart build a hello page'], { route: async () => ({ id: 'route-d', agent: 'build', sure: 0.95 }) });
   noSpec.editor.askInline(0);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual([noSpec.builds.length, noSpec.asks[0].routed.build], [0, true]);
-  assert.match(noSpec.lines()[0], /^bart# \[chat build [^\]]+\] $/, 'wanted built: kept on the title line');
+  assert.equal(noSpec.builds.length, 0);
+  assert.deepEqual([noSpec.asks[0].agent, noSpec.asks[0].text, noSpec.asks[0].name, noSpec.asks[0].build.context], ['router', '--build build a hello page', true, []]);
+  assert.match(noSpec.lines()[0], /^bart# \[chat build [^\]]+\] $/, 'a Build\'s title line, as a --build line\'s');
   assert.equal(noSpec.lines()[1], '@bart build a hello page');
 });
 
@@ -1333,4 +1349,23 @@ test('routeInputs: a Build card under its --build line, titled or not, is no ans
     const got = routeInputs(lines, lines.length - 1);
     assert.deepEqual([got.specAbove, got.spec, got.current], [true, 'Add Haiku 5.5 to models.cjs.', null], head.length ? 'titled' : 'untitled');
   }
+});
+
+test('a Build started straight from a line is given the conversation above it: the latest turns, oldest first, cut to fit (MATH-168)', async () => {
+  const { buildWithContext } = await loadRoute();
+  assert.equal(buildWithContext('add an export button', []), 'add an export button', 'nothing above: the request alone');
+  const turns = [
+    { question: 'what should the toolbar have?', answer: 'An export button and a share button.' },
+    { question: 'which is more useful?', answer: 'Export.' },
+  ];
+  assert.equal(buildWithContext('ok make it blue', turns), 'ok make it blue\n\nThis was asked in a conversation. What was said before it, oldest first:\n\n'
+    + 'Asked: what should the toolbar have?\nAnswered: An export button and a share button.\n\nAsked: which is more useful?\nAnswered: Export.');
+  // The latest four turns; a long answer cut; at most 12,000 characters, the oldest left out first.
+  const many = Array.from({ length: 6 }, (_, n) => ({ question: `q${n}`, answer: 'a'.repeat(5000) }));
+  const built = buildWithContext('go', many);
+  assert.ok(!built.includes('Asked: q0') && !built.includes('Asked: q1'), 'only the latest four');
+  assert.ok(built.includes('Asked: q5') && built.includes('Asked: q4'));
+  assert.ok(!built.includes('a'.repeat(4001)), 'an answer cut to 4,000');
+  assert.ok(built.length <= 'go'.length + 12000 + 200, 'about 12,000 at most');
+  assert.ok(!built.includes('Asked: q3') || built.indexOf('Asked: q3') < built.indexOf('Asked: q4'), 'oldest first');
 });

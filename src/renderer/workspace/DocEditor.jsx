@@ -4556,8 +4556,13 @@ export default class DocEditor extends React.Component {
   //   build, with a spec above, sure ≥ 0.8, and the router saying the line asks for that spec (pick.spec, 2026-10-13: a
   //     request of its own was built as the unrelated spec above it): a Build of that fenced block as it reads now, with no
   //     reply of Chat's; the line stays, its card in place of its pending line.
-  //   build otherwise: asked of Chat, told it is wanted built (routed.build, ` build` on the title line), so it writes the
-  //     Build prompt.
+  //   build otherwise, sure ≥ 0.8 (MATH-168, 2026-10-28, Hudson: no spec shown or asked first): a Build of the line at once,
+  //     as `--build` makes, given the conversation above it (route.js buildWithContext). It runs on the model the line
+  //     names, its flags or else @bart's default (David: "the model should just be what you had in the initial bart
+  //     query"); main's resolveBuildChoice keeps the Build default for one Build does not offer.
+  //   build, less sure: asked of Chat, told it is wanted built (routed.build, ` build` on the title line), so it writes the
+  //     Build prompt and offers to build it.
+  // A spec built above runs on the line's model too.
   //   `--build` on the line (a rule): a Build of the line, as `@chat --build` makes (Workspace askBart); one starting a
   //     conversation gets a title line marked a Build's (2026-10-13), and its card collapses with it.
   // A pick made because routing failed (`by: 'error'`, Workspace routeLine) says so in `routed`, for the run's record.
@@ -4567,6 +4572,8 @@ export default class DocEditor extends React.Component {
     if (!p || p.type !== 'bart' || agentOf(p) !== 'router') { if (props.onRouteGone) props.onRouteGone(askId); return null; }
     const id = pick.id || null, text = p.text.trim(), typed = { line: q, text: ls[q] }; // where it was (the Agent Viewer)
     const failed = pick.by === 'error' ? { by: 'error', ...(pick.error ? { error: String(pick.error).slice(0, 400) } : {}) } : {};
+    const models = props.models, step = models ? readQuestion(text, models).steps[0] : null;
+    const choice = step ? { provider: step.provider, model: step.key, effort: step.effort } : null; // the line's model
     // A `--build` line that starts a conversation gets its title line (2026-10-13), marked a Build's, named from what it asks to build.
     if (pick.agent === 'build' && pick.rule === '--build') {
       const name = this.startsTitled(ls, q, this.turnsBefore(ls, q));
@@ -4579,7 +4586,14 @@ export default class DocEditor extends React.Component {
       if (spec != null && pick.spec === true && pick.sure >= 0.8 && props.onBuild) {
         // No reply of Chat's (2026-10-13): the Build's card takes the line's own pending line, so it is that turn's answer
         // (doc.js turn.build) and collapses as other Builds do; the card's Prompt row shows what it was given.
-        props.onBuild({ text: spec, askId, routedFrom: id, place: typed });
+        props.onBuild({ text: spec, askId, routedFrom: id, place: typed, ...(choice ? { choice } : {}) });
+        return 'build';
+      }
+      // Not a go-ahead with no spec above to go ahead with ("yes" under an answer with no fenced block): that is Chat's.
+      if (pick.sure >= 0.8 && pick.spec !== true) {
+        const turns = this.turnsBefore(ls, q), name = this.startsTitled(ls, q, turns), request = models ? readFlags(text, models).rest : text;
+        if (name) write((x) => { const out = [...x], at = out.indexOf(`bart~> ${askId}`); if (at > 0) out.splice(at - 1, 0, titleLine('', false, { agent: 'bart', at: askedNow(), build: true })); return out; });
+        props.onAsk({ askId, text: `--build ${request}`, turns: [], agent: 'router', routed: { id, ...failed }, place: name ? { line: q + 1, text: typed.text } : typed, ...(name ? { name: true } : {}), build: { choice, context: turns } });
         return 'build';
       }
     }

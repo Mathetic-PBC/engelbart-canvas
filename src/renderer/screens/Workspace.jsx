@@ -27,7 +27,7 @@ import { onStage, savesPageCopy, stageOpenRequest } from '../model/stage.js';
 import { paperState, savePaper } from '../model/guide.js';
 import { buildLine, withTaskBuild, placeAnswer, placeTitle, retitle, askedAt, migrateChatLines, madeKey, madeMentionOf, researchLine, REPLY_RE } from '../model/doc.js';
 import { cardOfAnswer, questionOf } from '../../main/bart/card.cjs';
-import { fallbackAgent } from '../model/route.js';
+import { fallbackAgent, buildWithContext } from '../model/route.js';
 // An ask's id, as the editor makes them (DocEditor newAskId): a research box this window puts in (askBart) takes one.
 const newAskId = () => `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 import { findAskLine, findBuildLine } from '../model/askLine.js';
@@ -722,7 +722,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   hereRef.current = topic ? topic.id : null;
   React.useEffect(() => () => { hereRef.current = null; }, []);
   const madeOpened = React.useRef(new Set());
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false, steer = null }) => {
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false, steer = null, build: direct = null }) => {
     if (!key || !ref || !topic) return;
     const askedIn = topic.id;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
@@ -797,7 +797,9 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     if (build) {
       try {
         if (!build.request) { place(['bart> **No Build.** Write what to build after --build.']); return; }
-        const task = await buildFrom(ref, build.request, routed && routed.id, typed);
+        // Bart's own pick of Build (MATH-168, DocEditor handOff `build`): on the line's model, given the conversation above.
+        const request = direct && direct.context && direct.context.length ? buildWithContext(build.request, direct.context) : build.request;
+        const task = await buildFrom(ref, request, routed && routed.id, typed, direct && direct.choice ? direct.choice : null);
         place([buildLine(task.id)]);
       } catch (error) {
         place([`bart> **No Build.** ${errorMessage(error)}`]);
@@ -857,7 +859,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // A Build from the editor (2026-10-12): an `@bart` line Bart handed to Build, whose card takes its pending line's place
   // (`askId`), or an answer's footer Build, whose card goes on a line of its own after the thread: after line `after`,
   // found again by its words (`afterLine`) if the document moved meanwhile, else at the end.
-  const buildFromEditor = React.useCallback(async (key, ref, { text, askId = null, routedFrom = null, after = null, afterLine = null, place = null }) => {
+  const buildFromEditor = React.useCallback(async (key, ref, { text, askId = null, routedFrom = null, after = null, afterLine = null, place = null, choice = null }) => {
     if (!key || !ref || !topic) return;
     const put = (lines) => {
       const held = docsRef.current[key];
@@ -872,7 +874,7 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
     };
     if (askId) setAsks((current) => ({ ...current, [askId]: { docKey: key, agent: 'router', activity: 'Starting a Build' } }));
     try {
-      const task = await buildFrom(ref, text, routedFrom, place);
+      const task = await buildFrom(ref, text, routedFrom, place, choice); // a spec built from a line runs on its model (MATH-168)
       put([buildLine(task.id)]);
     } catch (error) {
       if (askId) put([`bart> **No Build.** ${errorMessage(error)}`]); else onError(error);

@@ -56,6 +56,26 @@ export function buildTextOf(lines, turn) {
   return fences.length ? fences[fences.length - 1] : [question, answer].filter(Boolean).join('\n\n');
 }
 
+// A Build started straight from an `@bart` line (MATH-168, 2026-10-28): the request, then the conversation it was asked in,
+// so a follow-up such as "now make it blue" says what "it" is. The latest turns, each answer cut, at most CONTEXT_CHARS.
+const CONTEXT_TURNS = 4;
+const ANSWER_CHARS = 4000;
+const CONTEXT_CHARS = 12000;
+
+/** The text a Build of `request` starts from, with `turns` ({ question, answer }, as DocEditor turnsBefore) above it. */
+export function buildWithContext(request, turns = []) {
+  const cut = (text, max) => (text.length > max ? `${text.slice(0, max)}…` : text);
+  const said = [];
+  let left = CONTEXT_CHARS;
+  for (const turn of turns.slice(-CONTEXT_TURNS).reverse()) {
+    const part = [`Asked: ${String(turn.question || '').trim()}`, turn.answer ? `Answered: ${cut(String(turn.answer).trim(), ANSWER_CHARS)}` : ''].filter(Boolean).join('\n');
+    if (part.length > left) break;
+    said.unshift(part);
+    left -= part.length;
+  }
+  return said.length ? `${request}\n\nThis was asked in a conversation. What was said before it, oldest first:\n\n${said.join('\n\n')}` : request;
+}
+
 // The line Chat ends a Build prompt with (main's bart/ask.cjs ROUTED_BUILD): "Want me to build it?", "Should I build
 // this?", "Want me to build that now?" and the like.
 const OFFER_RE = /^(?:so,?\s+)?(?:do you\s+)?(?:want|would you like|should|shall|ready for)\s+(?:me\s+)?(?:to\s+)?(?:I\s+)?(?:go ahead and\s+)?(?:build|start building|kick off (?:a |the )?build(?: of)?|start (?:a |the )?build(?: of)?)\b[^?]*\?$/i;
