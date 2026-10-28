@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import CoreGraphics
 import EngelbartCore
 
@@ -148,7 +149,7 @@ public enum BrowserRules {
     public static func fileablePage(_ url: String?) -> Bool {
         guard let u = JSURL(url ?? "") else { return false }
         if u.protocol == "file:" { return true }
-        return (u.protocol == "http:" || u.protocol == "https:") && !StageAddressKey.isPreviewAddress(u.href)
+        return (u.protocol == "http:" || u.protocol == "https:") && !AddressKey.isPreviewAddress(u.href)
     }
 
     // ---------------------------------------------------------------------------------- what a page may send

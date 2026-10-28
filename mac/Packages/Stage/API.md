@@ -3,8 +3,9 @@
 The Stage: the right pane that opens anything (browser tabs as WKWebViews, files, pictures, web and disk pdfs through the
 host's pdf viewer), its page script (highlights, boxes, selection cards, sections, find with counts), sign-ins (popups,
 HTTP auth, permissions, external apps, cookie import from Chrome-family browsers, Firefox and Safari). Ledger:
-`mac/parity/stage.md`. Depends on Core and UI only (Doc is not a dependency: the Stage keeps its own web-name,
-passage-link/-text and markdown ports so it builds while Doc changes).
+`mac/parity/stage.md`. Depends on Core, UI and Doc. One definition each, Doc's: `Kind`/`LibRow` (`StageRow` is a
+typealias of `LibRow`), `PassageLink`, `PassageText`, `AddressKey`, `MarkdownFile`, `SelectionCard`,
+`MarkAnswers.withAsk`, `WebName`. The Stage keeps only what Doc lacks: `GitHubPages` (shared/github.cjs).
 
 ## Entry points
 
@@ -35,9 +36,9 @@ passage-link/-text and markdown ports so it builds while Doc changes).
 - `InstalledApps` — `has`, `ask`, `settled`, `where_`; honours `ENGELBART_INSTALLED_BROWSERS`.
 - `StageLinks` — the main window's new-window links (`listen`, `windowOpen`, `parseExternalUrl`, `windowOpenRoute`).
 - Pure models: `StageModel` (placeTab, linkPlan, tabKey, stageSnapshot, restoreTabs, stageRows, tab widths…),
-  `StageAddress` (kindOf, stripScheme), `StageAddressKey` (addressKey, isPreviewAddress), `StageWebName`,
-  `StageKind` (kind.js), `PassageLink.splitTarget`, `PassageText.match`, `StageMarkdown`, `StageFiles.readStageFile`,
-  `BrowserRules` (address/pdf rules, page-message shapes), `Boxes` (boxesCss, cardPlace, crops), `SelectionCardPlace`.
+  `StageAddress` (kindOf, stripScheme), Doc's `AddressKey`, `WebName`,
+  Doc's `Kind`, `PassageLink`, `PassageText`, `MarkdownFile`, `SelectionCard`; `StageFiles.readStageFile`,
+  `BrowserRules` (address/pdf rules, page-message shapes), `Boxes` (boxesCss, cardPlace, crops).
 - `StageResources.pageScript` — Resources/page.js, generated from `src/main/browser/page-preload.cjs` by
   `Scripts/gen-page-js.py` (rerun after that file changes).
 

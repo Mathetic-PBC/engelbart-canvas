@@ -1,4 +1,5 @@
 import AppKit
+import EngelbartDoc
 import EngelbartCore
 import EngelbartUI
 
@@ -145,7 +146,7 @@ extension StageController: NSTextFieldDelegate {
             address.save.isEnabled = !(state == .madeSaved || (state == .made && save?.busy == true))
             address.save.wash = quiet ? nil : Palette.hov
         }
-        let boxable = isPageTab && failed == nil && wait == nil && tab.web != nil && (SRx("^https?:", "i").test(tab.web!.url) || BrowserRules.isFileUrl(tab.web!.url)) && !StageAddressKey.isPreviewAddress(tab.web!.url)
+        let boxable = isPageTab && failed == nil && wait == nil && tab.web != nil && (SRx("^https?:", "i").test(tab.web!.url) || BrowserRules.isFileUrl(tab.web!.url)) && !AddressKey.isPreviewAddress(tab.web!.url)
         address.showsBox = boxable
         address.setBoxing(boxing == tab.id)
         address.showsToast = boxRemoved?.id == tab.id
@@ -300,13 +301,13 @@ extension StageController: NSTextFieldDelegate {
     /// A tab's glyph: what the library would call it (Stage.jsx glyphItem).
     func glyphKey(for t: StageTab) -> String {
         if let r = t.restore {
-            if let item = r.item { return StageKind.kindKey(host?.library().first { $0.id == item } ?? StageRow(id: "", name: "", type: "website")) }
+            if let item = r.item { return Kind.kindKey(host?.library().first { $0.id == item } ?? StageRow(id: "", name: "", type: "website")) }
             let a = r.address ?? ""
             if SRx(#"\.pdf$"#, "i").test(a) { return "pdf" }
             var g = StageTab(); if a.hasPrefix("/") { g.file = StageFile(kind: .text, path: a, name: "") } else { g.url = a }
             return glyphKey(for: g)
         }
-        if let row = t.row { return StageKind.kindKey(row) }
+        if let row = t.row { return Kind.kindKey(row) }
         if t.pdf != nil { return "pdf" }
         if let path = t.file?.path, !path.isEmpty {
             if Self.imageExt.test(path) { return "image" }
@@ -323,7 +324,7 @@ extension StageController: NSTextFieldDelegate {
 
     func glyphKey(for row: StageModel.AddressRow) -> String {
         switch row {
-        case .item(let r, _): return StageKind.kindKey(r)
+        case .item(let r, _): return Kind.kindKey(r)
         case .search: return "search"
         case .disk: return "disk"
         case .place(let input):

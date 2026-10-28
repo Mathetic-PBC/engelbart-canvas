@@ -1,6 +1,7 @@
 import XCTest
 import EngelbartCore
 @testable import EngelbartStage
+import EngelbartDoc
 
 // test/web-boxes.test.cjs (main's half), test/selection-card.test.cjs, test/browser.test.cjs helpers, ported.
 
@@ -198,12 +199,12 @@ final class BoxesTests: XCTestCase {
     func testSelectionCardPlace() {
         let pane = CGRect(x: 0, y: 0, width: 800, height: 600), size = CGSize(width: 340, height: 120)
         let line = CGRect(x: 100, y: 200, width: 300, height: 20)
-        XCTAssertEqual(SelectionCardPlace.place(line: line, all: CGRect(x: 80, y: 160, width: 400, height: 60), pane: pane, size: size), CGRect(x: 100, y: 228, width: 340, height: 120))
+        XCTAssertEqual(SelectionCard.place(line: line, all: CGRect(x: 80, y: 160, width: 400, height: 60), pane: pane, size: size), CGRect(x: 100, y: 228, width: 340, height: 120))
         let low = CGRect(x: 100, y: 560, width: 300, height: 20)
-        XCTAssertEqual(SelectionCardPlace.place(line: low, all: CGRect(x: 100, y: 520, width: 300, height: 60), pane: pane, size: size), CGRect(x: 100, y: 392, width: 340, height: 120))
-        XCTAssertEqual(SelectionCardPlace.place(line: CGRect(x: 700, y: 200, width: 50, height: 20), all: nil, pane: pane, size: size)?.minX, 460)
-        XCTAssertNil(SelectionCardPlace.place(line: CGRect(x: 100, y: 700, width: 50, height: 20), all: nil, pane: pane, size: size))
-        let shaded = SelectionCardPlace.shaded(line: line, all: nil, pane: pane, size: size)
+        XCTAssertEqual(SelectionCard.place(line: low, all: CGRect(x: 100, y: 520, width: 300, height: 60), pane: pane, size: size), CGRect(x: 100, y: 392, width: 340, height: 120))
+        XCTAssertEqual(SelectionCard.place(line: CGRect(x: 700, y: 200, width: 50, height: 20), all: nil, pane: pane, size: size)?.minX, 460)
+        XCTAssertNil(SelectionCard.place(line: CGRect(x: 100, y: 700, width: 50, height: 20), all: nil, pane: pane, size: size))
+        let shaded = SelectionCard.shadedPlace(line: line, all: nil, pane: pane, size: size)
         XCTAssertEqual(shaded, CGRect(x: 76, y: 210, width: 388, height: 168))
     }
 }

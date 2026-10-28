@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import CoreGraphics
 import EngelbartCore
 
@@ -197,39 +198,5 @@ public enum BoxLayerLook {
         let left = x + gap + size.width <= view.width ? x + gap : x - gap - size.width
         let top = y + gap + size.height <= view.height ? y + gap : y - gap - size.height
         return CGPoint(x: Swift.max(0, left), y: Swift.max(0, top))
-    }
-}
-
-/// Where the card for a selection goes (src/shared/selection-card.cjs): under the selection's last line, left with it;
-/// with no room, above its first line; with room nowhere, as far down as it fits. Inside the pane; nil once out of it.
-public enum SelectionCardPlace {
-    public static let gap: CGFloat = 8
-    public static let cardWidth: CGFloat = 340
-    public static let shade = (top: CGFloat(18), side: CGFloat(24), bottom: CGFloat(30))
-
-    public static func place(line: CGRect?, all: CGRect?, pane: CGRect, size: CGSize, gap: CGFloat = gap) -> CGRect? {
-        guard let line else { return nil }
-        let sel = all ?? line
-        if sel.maxX <= pane.minX || sel.minX >= pane.maxX || sel.maxY <= pane.minY || sel.minY >= pane.maxY { return nil }
-        let width = max(0, min(size.width, pane.width)), height = max(0, min(size.height, pane.height))
-        let x = max(pane.minX, min(line.minX, pane.maxX - width))
-        let below = line.maxY + gap, above = min(sel.minY, line.minY) - gap - height
-        let y: CGFloat
-        if below >= pane.minY && below + height <= pane.maxY { y = below }
-        else if above >= pane.minY && above + height <= pane.maxY { y = above }
-        else { y = max(pane.minY, min(below, pane.maxY - height)) }
-        return CGRect(x: x.jsRounded, y: y.jsRounded, width: width.jsRounded, height: height.jsRounded)
-    }
-
-    /// The view's place for a card `size` with `shade` about it (the shadow's room).
-    public static func shaded(line: CGRect?, all: CGRect?, pane: CGRect, size: CGSize, shade: (top: CGFloat, side: CGFloat, bottom: CGFloat) = shade, gap: CGFloat = gap) -> CGRect? {
-        guard let line, place(line: line, all: all, pane: pane, size: size, gap: gap) != nil else { return nil }
-        let inner = CGRect(x: pane.minX + shade.side, y: pane.minY + shade.top, width: max(0, pane.width - 2 * shade.side), height: max(0, pane.height - shade.top - shade.bottom))
-        guard let at = place(line: line, all: all, pane: inner, size: size, gap: gap) else {
-            let x = max(inner.minX, min(line.minX, inner.maxX - size.width))
-            let y = max(inner.minY, min(line.maxY + gap, inner.maxY - size.height))
-            return CGRect(x: (x - shade.side).jsRounded, y: (y - shade.top).jsRounded, width: (min(size.width, inner.width) + 2 * shade.side).jsRounded, height: (min(size.height, inner.height) + shade.top + shade.bottom).jsRounded)
-        }
-        return CGRect(x: (at.minX - shade.side).jsRounded, y: (at.minY - shade.top).jsRounded, width: (at.width + 2 * shade.side).jsRounded, height: (at.height + shade.top + shade.bottom).jsRounded)
     }
 }

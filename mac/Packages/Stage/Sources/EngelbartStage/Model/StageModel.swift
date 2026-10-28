@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import CoreGraphics
 
 // The Stage (Claude Design "Add - Mention Stage.dc.html", 2026-09-23), pure (src/renderer/model/stage.js): which tab a
@@ -64,9 +65,9 @@ public enum StageModel {
         var path: String?
         if SRx(#"^file:\/\/"#, "i").test(where_) { path = JSURL(where_).flatMap { JSStr.decodeURIComponent($0.pathname) } }
         else if where_.hasPrefix("/") { path = where_ }
-        let key = SRx(#"^https?:\/\/"#, "i").test(where_) ? StageAddressKey.addressKey(where_) : ""
+        let key = SRx(#"^https?:\/\/"#, "i").test(where_) ? AddressKey.addressKey(where_) : ""
         return library.first { row in
-            onStage(row) && ((path != nil && row.path == path) || (!key.isEmpty && row.url != nil && StageAddressKey.addressKey(row.url) == key))
+            onStage(row) && ((path != nil && row.path == path) || (!key.isEmpty && row.url != nil && AddressKey.addressKey(row.url) == key))
         }
     }
 
@@ -118,8 +119,8 @@ public enum StageModel {
         if let row { return LinkPlan(address: target.address, find: target.find, to: target.to, page: target.page, row: row, key: "i:\(row.id)") }
         let k = StageAddress.kindOf(target.address)
         let page = k.kind == .web || k.kind == .local || k.kind == .disk
-        var key = page && !SRx("^file:", "i").test(target.address) ? "l:\(StageAddressKey.addressKey(k.url))" : ""
-        if key.isEmpty && !target.find.isEmpty && target.address.hasPrefix("/") { key = "l:\(StageAddressKey.addressKey(fileAddress(target.address)))" }
+        var key = page && !SRx("^file:", "i").test(target.address) ? "l:\(AddressKey.addressKey(k.url))" : ""
+        if key.isEmpty && !target.find.isEmpty && target.address.hasPrefix("/") { key = "l:\(AddressKey.addressKey(fileAddress(target.address)))" }
         return LinkPlan(address: target.address, find: target.find, to: target.to, page: target.page, row: nil, key: key)
     }
 
@@ -127,7 +128,7 @@ public enum StageModel {
         guard let entry else { return "" }
         if let item = entry.item { return "i:\(item)" }
         let where_ = entry.address ?? ""
-        let key = StageAddressKey.addressKey(where_.hasPrefix("/") ? "file://\(where_)" : where_)
+        let key = AddressKey.addressKey(where_.hasPrefix("/") ? "file://\(where_)" : where_)
         return key.isEmpty ? "" : "l:\(key)"
     }
 
@@ -138,7 +139,7 @@ public enum StageModel {
         if let item = tab.item { return "i:\(item)" }
         let where_: String
         if let path = tab.file?.path, !path.isEmpty { where_ = "file://\(path)" } else if let pdf = tab.pdf { where_ = pdf.url } else { where_ = tab.url }
-        let key = StageAddressKey.addressKey(where_)
+        let key = AddressKey.addressKey(where_)
         return key.isEmpty ? "" : "l:\(key)"
     }
 
@@ -275,7 +276,7 @@ public enum StageModel {
 
     /// A library row the Stage can show: anything but a note (notes open in the middle), a workspace or a child.
     public static func onStage(_ row: StageRow?) -> Bool {
-        guard let row, !StageKind.isNote(row), row.type != "workspace", row.type != "child" else { return false }
+        guard let row, !Kind.isNote(row), row.type != "workspace", row.type != "child" else { return false }
         if row.type == "folder" { return (row.url?.isEmpty == false) || (row.folderPath?.isEmpty == false) }
         return (row.url?.isEmpty == false) || (row.path?.isEmpty == false)
     }
@@ -333,7 +334,7 @@ public enum StageModel {
             if let found = found, let row = found, onStage(row) { rows.append(.item(row: row, here: inRail(row.id))) } else { rows.append(.place(typed)) }
         } else {
             let needle = typed.lowercased()
-            func hay(_ row: StageRow) -> String { [row.name, row.url ?? "", row.path ?? "", StageKind.kindLabel(row)].joined(separator: " ").lowercased() }
+            func hay(_ row: StageRow) -> String { [row.name, row.url ?? "", row.path ?? "", Kind.kindLabel(row)].joined(separator: " ").lowercased() }
             func hit(_ row: StageRow) -> Bool { onStage(row) && (needle.isEmpty || hay(row).contains(needle)) }
             let here = library.filter { inRail($0.id) && hit($0) }.prefix(shown)
             let rest = library.filter { !inRail($0.id) && hit($0) }.prefix(shown)

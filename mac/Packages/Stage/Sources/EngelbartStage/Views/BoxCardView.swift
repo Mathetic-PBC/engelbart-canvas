@@ -1,4 +1,5 @@
 import AppKit
+import EngelbartDoc
 import EngelbartCore
 import EngelbartUI
 
@@ -63,7 +64,7 @@ enum CardLook {
             var body = line, bold = false
             if let m = SRx(#"^[-*] (.*)$"#).match(line) { body = "• " + (m[1] ?? "") }
             else if let m = SRx(#"^#{1,6} (.*)$"#).match(line) { body = m[1] ?? ""; bold = true }
-            for run in StageMarkdown.runs(body) {
+            for run in MarkdownFile.runs(body) {
                 var font = answerFont()
                 if run.bold || bold { font = Fonts.sans(15, weight: 600) }
                 if run.italic { font = NSFontManager.shared.convert(font, toHaveTrait: .italicFontMask) }
@@ -289,7 +290,7 @@ final class BoxCardView: NSView, NSTextViewDelegate {
     }
 
     private func contentWidth() -> CGFloat {
-        mode == "selection" ? SelectionCardPlace.cardWidth - 36 : CardLook.noteWidth(noteWidthNow(), answered: !asks.isEmpty || !running.isEmpty) - 12
+        mode == "selection" ? CGFloat(SelectionCard.SEL_CARD_W) - 36 : CardLook.noteWidth(noteWidthNow(), answered: !asks.isEmpty || !running.isEmpty) - 12
     }
 
     private func noteWidthNow() -> CGFloat {
@@ -301,8 +302,8 @@ final class BoxCardView: NSView, NSTextViewDelegate {
     func layoutCard() {
         for v in stack.arrangedSubviews { stack.removeArrangedSubview(v); v.removeFromSuperview() }
         if mode == "selection" {
-            let shade = SelectionCardPlace.shade
-            let w = SelectionCardPlace.cardWidth
+            let shade = (top: CGFloat(SelectionCard.CARD_SHADE.top), side: CGFloat(SelectionCard.CARD_SHADE.side), bottom: CGFloat(SelectionCard.CARD_SHADE.bottom))
+            let w = CGFloat(SelectionCard.SEL_CARD_W)
             let inner = w - 36
             let fieldHeight = fit(width: inner)
             field.frame = NSRect(x: 0, y: 0, width: inner, height: fieldHeight)

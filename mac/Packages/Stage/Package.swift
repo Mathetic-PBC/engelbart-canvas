@@ -9,8 +9,9 @@ let package = Package(
     dependencies: [
         .package(path: "../Core"),
         .package(path: "../UI"),
-        // Doc is not a dependency (2026-10-28): the Stage needs only web-name, passage-link/-text and markdown from it,
-        // keeps its own copies (Model/AddressKey.swift, Model/Passage.swift), and so builds while Doc is being written.
+        // Doc (2026-10-28): one definition of kind.js, passage-link/-text, address-key, markdown, selection-card,
+        // mark-answers' withAsk and web-name, shared with the editor.
+        .package(path: "../Doc"),
     ],
     targets: [
         .target(
@@ -18,10 +19,11 @@ let package = Package(
             dependencies: [
                 .product(name: "EngelbartCore", package: "Core"),
                 .product(name: "EngelbartUI", package: "UI"),
+                .product(name: "EngelbartDoc", package: "Doc"),
             ],
             resources: [.copy("Resources")],
             linkerSettings: [.linkedLibrary("sqlite3"), .linkedFramework("WebKit"), .linkedFramework("Security")]
         ),
-        .testTarget(name: "EngelbartStageTests", dependencies: ["EngelbartStage"]),
+        .testTarget(name: "EngelbartStageTests", dependencies: ["EngelbartStage", .product(name: "EngelbartDoc", package: "Doc")]),
     ]
 )

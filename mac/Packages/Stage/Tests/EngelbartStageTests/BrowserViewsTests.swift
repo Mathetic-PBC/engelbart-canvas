@@ -70,7 +70,8 @@ final class BrowserViewsTests: XCTestCase {
         try views.open("t1", url.absoluteString)
         views.show("t1", NSRect(x: 0, y: 0, width: 800, height: 600))
         await until("the page arrives") { [self] in self.lastState("t1")?.drawn == true && self.lastState("t1")?.loading == false }
-        XCTAssertEqual(lastState("t1")?.title, "Hello page")
+        // WebKit may set the title after the load has finished; its title KVO reports the tab's state again then
+        await until("the title is reported") { [self] in self.lastState("t1")?.title == "Hello page" }
         XCTAssertEqual(lastState("t1")?.url, url.absoluteString)
         XCTAssertNil(lastState("t1")?.error)
         try? await Task.sleep(nanoseconds: 300_000_000) // the page script's DOMContentLoaded

@@ -1,10 +1,11 @@
 import XCTest
 @testable import EngelbartStage
+import EngelbartDoc
 
 // test/stage-model.test.cjs, test/browser.test.cjs (addresses), test/kind.test.cjs, ported.
 
 private func row(_ id: String, _ name: String, _ type: String, _ tags: [String] = [], url: String? = nil, path: String? = nil, folder: String? = nil) -> StageRow {
-    StageRow(id: id, name: name, type: type, tags: tags, url: url, path: path, folderPath: folder)
+    StageRow(id: id, name: name, type: type, tags: tags, path: path, folderPath: folder, url: url)
 }
 private let library = [
     row("n1", "Saving and importing", "md", ["note"], path: "/Users/h/.engelbart/p/Saving.md"),
@@ -62,16 +63,16 @@ final class AddressTests: XCTestCase {
     }
 
     func testAddressKeyAndPreview() {
-        XCTAssertEqual(StageAddressKey.addressKey("https://www.Example.org/a/#x"), StageAddressKey.addressKey("http://example.org/a"))
-        XCTAssertNotEqual(StageAddressKey.addressKey("https://example.org/a?id=1"), StageAddressKey.addressKey("https://example.org/a?id=2"))
-        XCTAssertEqual(StageAddressKey.addressKey("https://example.org/a?utm_source=x&id=2&fbclid=y"), "example.org/a?id=2")
-        XCTAssertEqual(StageAddressKey.addressKey("file:///Users/h/a.md#x"), "file:///Users/h/a.md")
-        XCTAssertEqual(StageAddressKey.addressKey("not a url"), "not a url")
-        XCTAssertTrue(StageAddressKey.isPreviewAddress("http://localhost:3000"))
-        XCTAssertTrue(StageAddressKey.isPreviewAddress("https://5173-abc.e2b.app/"))
-        XCTAssertTrue(StageAddressKey.isPreviewAddress("http://[::1]:8000"))
-        XCTAssertFalse(StageAddressKey.isPreviewAddress("https://example.org"))
-        XCTAssertFalse(StageAddressKey.isPreviewAddress("file:///Users/h/a.html"))
+        XCTAssertEqual(AddressKey.addressKey("https://www.Example.org/a/#x"), AddressKey.addressKey("http://example.org/a"))
+        XCTAssertNotEqual(AddressKey.addressKey("https://example.org/a?id=1"), AddressKey.addressKey("https://example.org/a?id=2"))
+        XCTAssertEqual(AddressKey.addressKey("https://example.org/a?utm_source=x&id=2&fbclid=y"), "example.org/a?id=2")
+        XCTAssertEqual(AddressKey.addressKey("file:///Users/h/a.md#x"), "file:///Users/h/a.md")
+        XCTAssertEqual(AddressKey.addressKey("not a url"), "not a url")
+        XCTAssertTrue(AddressKey.isPreviewAddress("http://localhost:3000"))
+        XCTAssertTrue(AddressKey.isPreviewAddress("https://5173-abc.e2b.app/"))
+        XCTAssertTrue(AddressKey.isPreviewAddress("http://[::1]:8000"))
+        XCTAssertFalse(AddressKey.isPreviewAddress("https://example.org"))
+        XCTAssertFalse(AddressKey.isPreviewAddress("file:///Users/h/a.html"))
     }
 
     func testGithubSignInPages() {
@@ -86,31 +87,31 @@ final class AddressTests: XCTestCase {
     }
 
     func testWebName() {
-        XCTAssertEqual(StageWebName.webName("Example", "https://example.org"), "Example")
-        XCTAssertEqual(StageWebName.webName("https://www.example.org/a/", "https://www.example.org/a/"), "example.org/a")
-        XCTAssertEqual(StageWebName.webName("", "https://example.org/path?x=1#y"), "example.org/path")
-        XCTAssertEqual(StageWebName.webLabel(""), "Untitled page")
-        XCTAssertEqual(StageWebName.webLabel("https://example.org/" + String(repeating: "a", count: 80)).count, 60)
+        XCTAssertEqual(WebName.webName("Example", "https://example.org"), "Example")
+        XCTAssertEqual(WebName.webName("https://www.example.org/a/", "https://www.example.org/a/"), "example.org/a")
+        XCTAssertEqual(WebName.webName("", "https://example.org/path?x=1#y"), "example.org/path")
+        XCTAssertEqual(WebName.webLabel(""), "Untitled page")
+        XCTAssertEqual(WebName.webLabel("https://example.org/" + String(repeating: "a", count: 80)).count, 60)
     }
 }
 
 final class KindTests: XCTestCase {
     func testTypeAndTags() {
-        XCTAssertEqual(StageKind.kindKey(row("a", "a", "md", ["note"])), "note")
-        XCTAssertEqual(StageKind.kindKey(row("a", "a", "md")), "md")
-        XCTAssertEqual(StageKind.kindKey(row("a", "a", "website", ["git"])), "git")
-        XCTAssertEqual(StageKind.kindKey(row("a", "a", "jsonl")), "data")
-        XCTAssertEqual(StageKind.kindLabel(row("a", "a", "website", ["paper"])), "link · paper")
-        XCTAssertEqual(StageKind.kindRank(row("a", "a", "image")), StageKind.kindOrder.count)
+        XCTAssertEqual(Kind.kindKey(row("a", "a", "md", ["note"])), "note")
+        XCTAssertEqual(Kind.kindKey(row("a", "a", "md")), "md")
+        XCTAssertEqual(Kind.kindKey(row("a", "a", "website", ["git"])), "git")
+        XCTAssertEqual(Kind.kindKey(row("a", "a", "jsonl")), "data")
+        XCTAssertEqual(Kind.kindLabel(row("a", "a", "website", ["paper"])), "link · paper")
+        XCTAssertEqual(Kind.kindRank(row("a", "a", "image")), Kind.KIND_ORDER.count)
     }
     func testChips() {
-        XCTAssertTrue(StageKind.libraryFilter(row("g", "g", "website", ["git"]), "repos"))
-        XCTAssertFalse(StageKind.libraryFilter(row("g", "g", "website", ["git"]), "web"))
-        XCTAssertFalse(StageKind.libraryFilter(row("i", "i", "image"), "all"))
+        XCTAssertTrue(Kind.libraryFilter(row("g", "g", "website", ["git"]), "repos"))
+        XCTAssertFalse(Kind.libraryFilter(row("g", "g", "website", ["git"]), "web"))
+        XCTAssertFalse(Kind.libraryFilter(row("i", "i", "image"), "all"))
         var made = row("c", "c", "image"); made.source = "create"
-        XCTAssertTrue(StageKind.libraryFilter(made, "assets"))
-        XCTAssertTrue(StageKind.libraryFilter(row("d", "d", "docx"), "files"))
-        XCTAssertEqual(StageKind.libraryCounts(library)["notes"], 1)
+        XCTAssertTrue(Kind.libraryFilter(made, "assets"))
+        XCTAssertTrue(Kind.libraryFilter(row("d", "d", "docx"), "files"))
+        XCTAssertEqual(Kind.libraryCounts(library)["notes"], 1)
     }
 }
 
@@ -202,16 +203,16 @@ final class StageModelTests: XCTestCase {
     }
 
     func testMarkdown() {
-        let blocks = StageMarkdown.blocks("# Title\n\nOne\ntwo\n\n- a\n  - [x] b\n1. c\n> q1\n> q2\n```js\nx # not a heading\n```\n---\n")
+        let blocks = MarkdownFile.blocks("# Title\n\nOne\ntwo\n\n- a\n  - [x] b\n1. c\n> q1\n> q2\n```js\nx # not a heading\n```\n---\n")
         XCTAssertEqual(blocks, [
-            .heading(level: 1, text: "Title"), .paragraph("One two"),
-            .item(ordered: false, marker: "-", depth: 0, checked: nil, text: "a"),
-            .item(ordered: false, marker: "-", depth: 1, checked: true, text: "b"),
-            .item(ordered: true, marker: "1.", depth: 0, checked: nil, text: "c"),
-            .quote("q1 q2"), .code(lang: "js", text: "x # not a heading"), .rule,
+            .h(level: 1, text: "Title"), .p("One two"),
+            .li(ordered: false, marker: "-", depth: 0, checked: nil, text: "a"),
+            .li(ordered: false, marker: "-", depth: 1, checked: true, text: "b"),
+            .li(ordered: true, marker: "1.", depth: 0, checked: nil, text: "c"),
+            .quote("q1 q2"), .code(lang: "js", text: "x # not a heading"), .hr,
         ])
-        XCTAssertEqual(StageMarkdown.blocks(">tight\n> spaced"), [.quote("tight spaced")])
-        let runs = StageMarkdown.runs("a **b** *c* `d` [e](https://e.org) https://f.org/x. <b>g</b>")
+        XCTAssertEqual(MarkdownFile.blocks(">tight\n> spaced"), [.quote("tight spaced")])
+        let runs = MarkdownFile.runs("a **b** *c* `d` [e](https://e.org) https://f.org/x. <b>g</b>")
         XCTAssertEqual(runs.map(\.text), ["a ", "b", " ", "c", " ", "d", " ", "e", " ", "https://f.org/x", ". <b>g</b>"])
         XCTAssertTrue(runs[1].bold); XCTAssertTrue(runs[3].italic); XCTAssertTrue(runs[5].code)
         XCTAssertEqual(runs[7].href, "https://e.org"); XCTAssertEqual(runs[9].href, "https://f.org/x")
@@ -356,10 +357,10 @@ final class StageModelTests: XCTestCase {
     }
 
     func testPassageText() {
-        let hits = PassageText.match("He said “construc-\ntion” — fine", "\"construction\" - fine")
+        let hits = PassageText.matchPassage("He said “construc-\ntion” — fine", "\"construction\" - fine")
         XCTAssertEqual(hits.count, 1)
-        XCTAssertEqual(PassageText.normalize("bart> The  ﬁrst\nline", prefixes: true), "the first line")
-        XCTAssertEqual(PassageText.match("a b c", "x").count, 0)
-        XCTAssertEqual(PassageText.match("cell1cell2", "cell1 cell2").count, 1)
+        XCTAssertEqual(PassageText.normalizePassage("bart> The  ﬁrst\nline", prefixes: true), "the first line")
+        XCTAssertEqual(PassageText.matchPassage("a b c", "x").count, 0)
+        XCTAssertEqual(PassageText.matchPassage("cell1cell2", "cell1 cell2").count, 1)
     }
 }

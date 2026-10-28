@@ -1,6 +1,7 @@
 import XCTest
 import EngelbartCore
 @testable import EngelbartStage
+import EngelbartDoc
 
 // test/stage-sections.test.cjs (the Stage's tabs, landing, kept tabs) against the native controller with a fake host.
 
@@ -175,9 +176,9 @@ final class StageControllerTests: XCTestCase {
     func testWithAsk() {
         let marks: JSONValue = ["3": [["id": "m1", "asks": []]]]
         let entry: JSONValue = ["id": "a1", "answer": "yes"]
-        let once = StageController.withAsk(marks, page: 3, markId: "m1", entry: entry)
+        let once = MarkAnswers.withAsk(marks, page: "3", markId: "m1", entry: entry)
         XCTAssertEqual(once["3"]?[0]?["asks"]?.array?.count, 1)
-        XCTAssertEqual(StageController.withAsk(once, page: 3, markId: "m1", entry: entry), once, "an answer already there is not added again")
-        XCTAssertEqual(StageController.withAsk(marks, page: 2, markId: "m1", entry: entry), marks)
+        XCTAssertEqual(MarkAnswers.withAsk(once, page: "3", markId: "m1", entry: entry), once, "an answer already there is not added again")
+        XCTAssertEqual(MarkAnswers.withAsk(marks, page: "2", markId: "m1", entry: entry), marks)
     }
 }

@@ -1,4 +1,5 @@
 import AppKit
+import EngelbartDoc
 import WebKit
 import EngelbartCore
 
@@ -297,7 +298,7 @@ extension BrowserViews: WKScriptMessageHandlerWithReply {
         view.onSize = { [weak self] size in
             guard let self else { return }
             self.card.height = max(BrowserRules.cardMinH, min(BrowserRules.cardMaxH, size.height.rounded(.up)))
-            let widest = self.card.mode == "selection" ? SelectionCardPlace.cardWidth + 2 * SelectionCardPlace.shade.side : BrowserRules.cardW
+            let widest = self.card.mode == "selection" ? CGFloat(SelectionCard.SEL_CARD_W + 2 * SelectionCard.CARD_SHADE.side) : BrowserRules.cardW
             self.card.width = size.width > 0 ? min(widest, size.width.rounded(.up)) : 0
             if let m = self.card.markId, self.card.mode == "box" {
                 self.card.sizes.removeAll { $0.0 == m }
@@ -534,10 +535,10 @@ extension BrowserViews: WKScriptMessageHandlerWithReply {
         }
         let zoom = tab.webView.pageZoom, page = tab.webView.frame
         func inWindow(_ r: BrowserRules.Rect?) -> CGRect? { r.map { CGRect(x: page.minX + CGFloat($0.x) * zoom, y: page.minY + CGFloat($0.y) * zoom, width: CGFloat($0.w) * zoom, height: CGFloat($0.h) * zoom) } }
-        let shade = SelectionCardPlace.shade
-        let full = CGSize(width: card.width > 0 ? card.width : SelectionCardPlace.cardWidth + 2 * shade.side, height: card.height > 0 ? card.height : 96 + shade.top + shade.bottom)
+        let shade = (top: CGFloat(SelectionCard.CARD_SHADE.top), side: CGFloat(SelectionCard.CARD_SHADE.side), bottom: CGFloat(SelectionCard.CARD_SHADE.bottom))
+        let full = CGSize(width: card.width > 0 ? card.width : CGFloat(SelectionCard.SEL_CARD_W) + 2 * shade.side, height: card.height > 0 ? card.height : 96 + shade.top + shade.bottom)
         let size = CGSize(width: max(1, full.width - 2 * shade.side), height: max(1, full.height - shade.top - shade.bottom))
-        guard let at = SelectionCardPlace.shaded(line: inWindow(offer.line), all: inWindow(offer.rect), pane: page, size: size) else {
+        guard let at = SelectionCard.shadedPlace(line: inWindow(offer.line), all: inWindow(offer.rect), pane: page, size: size) else {
             if card.markId != nil { hideCardView() } else { dropOffer(tab) }
             return
         }

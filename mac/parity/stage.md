@@ -25,9 +25,9 @@ Status: `done` = implemented and checked by a test or a run; `partial: …`; `to
 | A3 | kindOf: localhost, *.localhost, *.local, [::1], 0.0.0.0, 127/8, 10/8, 192.168/16, 169.254/16, 172.16–31, bare `name:port` → local with http:// unless scheme given; 0.0.0.0 rewritten localhost | address.js isLocalHost | Address.swift | done |
 | A4 | kindOf: a scheme → web as typed; words or a non-web host → `https://www.google.com/search?q=` + encoded; else `https://` + input | address.js | Address.swift | done |
 | A5 | stripScheme: '' for blank; file:// shown as decoded path; scheme hidden only when typing the rest leads back to the same place | address.js stripScheme | Address.swift | done |
-| A6 | webLabel/webName/isAddress/sameAddress (mention names: title unless it is the address; host+path, ≤60 chars with …, 'Untitled page') | web-name.js | WebName.swift | done |
-| A7 | addressKey: http/https, www., trailing slash, #fragment, tracking params (utm_*, fbclid, gclid, mc_cid, mc_eid, ref) ignored; other query kept; other schemes lose #fragment only; non-URLs as they came | address-key.cjs | AddressKey.swift | done |
-| A8 | isPreviewAddress: localhost, *.localhost, ::1, 0.0.0.0, 127.x, *.e2b.app/.dev (http/https only) | address-key.cjs | AddressKey.swift | done |
+| A6 | webLabel/webName/isAddress/sameAddress (mention names: title unless it is the address; host+path, ≤60 chars with …, 'Untitled page') | web-name.js | Doc (WebName.swift, one definition) | done |
+| A7 | addressKey: http/https, www., trailing slash, #fragment, tracking params (utm_*, fbclid, gclid, mc_cid, mc_eid, ref) ignored; other query kept; other schemes lose #fragment only; non-URLs as they came | address-key.cjs | Doc (AddressKey.swift, one definition) | done |
+| A8 | isPreviewAddress: localhost, *.localhost, ::1, 0.0.0.0, 127.x, *.e2b.app/.dev (http/https only) | address-key.cjs | Doc (AddressKey.swift, one definition) | done |
 | A9 | isGithubSignIn (github.com/www/gist; login, logout, session(s), signup, join, password_reset, login/oauth|device, auth, apps/*/installations, settings/installations|connections/applications|apps/authorizations; no userinfo) | shared/github.cjs | GitHubRules.swift | done |
 | A10 | endedGithubSession(from,to): a non-sign-in GitHub page redirected to github.com/login; GITHUB_SESSION_COOKIES = user_session, __Host-user_session_same_site | shared/github.cjs | GitHubRules.swift | done |
 | A11 | OPEN_IN_BROWSER ('engelbart:open-in-browser'): a terminal link asks for a page in a new tab → openInput | address.js, Stage.jsx | StageController (EventHub) | done — compiled, untested (EventHub engelbart:open-in-browser → openInput) |
@@ -36,17 +36,17 @@ Status: `done` = implemented and checked by a test or a run; `partial: …`; `to
 
 | # | Behaviour | Source | Swift | Status |
 |---|---|---|---|---|
-| B1 | hasTag/isNote; kindKey (git tag first; md → note/md; csv,tsv,json,jsonl,parquet,xlsx → data; else type) | kind.js | Kind.swift | done |
-| B2 | KIND_ORDER note, md, docx, pdf, git, folder, website, html, data; unknown last (kindRank) | kind.js | Kind.swift | done |
-| B3 | kindLabel: type ('link' for website) then tags, joined ' · ' | kind.js | Kind.swift | done |
-| B4 | LIBRARY_CHIPS all/notes/papers/repos/web/files/assets with nouns; libraryFilter (create source → all+assets only; images under none; files = no other chip); libraryCounts | kind.js | Kind.swift | done |
+| B1 | hasTag/isNote; kindKey (git tag first; md → note/md; csv,tsv,json,jsonl,parquet,xlsx → data; else type) | kind.js | Doc (Kind.swift, one definition) | done |
+| B2 | KIND_ORDER note, md, docx, pdf, git, folder, website, html, data; unknown last (kindRank) | kind.js | Doc (Kind.swift, one definition) | done |
+| B3 | kindLabel: type ('link' for website) then tags, joined ' · ' | kind.js | Doc (Kind.swift, one definition) | done |
+| B4 | LIBRARY_CHIPS all/notes/papers/repos/web/files/assets with nouns; libraryFilter (create source → all+assets only; images under none; files = no other chip); libraryCounts | kind.js | Doc (Kind.swift, one definition) | done |
 
 ## C. Stage model (model/stage.js, rail.js looksAddable, markdown.js, passage-link, passage-text)
 
 | # | Behaviour | Source | Swift | Status |
 |---|---|---|---|---|
 | C1 | MAX_TABS = 15 | stage.js | StageModel.swift | done |
-| C2 | splitTarget: `#find=` passage (decoded), `&to=`, cite/counter/note/page keys in any order; other fragments stay on the address; a path's %-encoding decoded | passage-link.cjs | PassageLink.swift | done |
+| C2 | splitTarget: `#find=` passage (decoded), `&to=`, cite/counter/note/page keys in any order; other fragments stay on the address; a path's %-encoding decoded | passage-link.cjs | Doc (PassageLink.swift, one definition) | done |
 | C3 | guideSections(replyLines, address): links with #find= to that address, in order, each (find,to) once, code spans ignored, label whitespace-collapsed | stage.js | StageModel.swift | done |
 | C4 | sectionAt, withPassage (pendingFind/To/Page, sections, activeSection), landTab, landingFinds (no find card in a pdf with sections) | stage.js | StageModel.swift | done |
 | C5 | rowForAddress (path, file: address or addressKey of url; only onStage rows), libraryAddress (arXiv pdf/version → abs, DOI → doi.org), paperRow | stage.js | StageModel.swift | done |
@@ -64,8 +64,8 @@ Status: `done` = implemented and checked by a test or a run; `partial: …`; `to
 | C17 | looksLikePlace (looksAddable, http(s), ports, localhost, bare host, path-like); looksAddable (rail.js) | stage.js, rail.js | StageModel.swift | done |
 | C18 | stageRows: a typed place is one row (library's row via lookup when onStage, else place); words: workspace rows then library (6 each, never notes), web search; 'disk' row last always | stage.js | StageModel.swift | done |
 | C19 | parseTable: quotes, doubled quotes, delimiter/newlines in quotes, CRLF, limit | stage.js | StageModel.swift | done |
-| C20 | markdownBlocks (h/p/li ordered marker depth checked/quote merged/code fence/hr) and inlineRuns (code, bold, italic, links, bare http(s)) | markdown.js | Markdown.swift | done |
-| C21 | matchPassage/foldPassage (case, spaces, quotes, dashes, ligatures, soft hyphen, line-end hyphen joins, prefixes, markdown) for find in a drawn file | passage-text.cjs | PassageText.swift | done |
+| C20 | markdownBlocks (h/p/li ordered marker depth checked/quote merged/code fence/hr) and inlineRuns (code, bold, italic, links, bare http(s)) | markdown.js | Doc (Markdown.swift, one definition) | done |
+| C21 | matchPassage/foldPassage (case, spaces, quotes, dashes, ligatures, soft hyphen, line-end hyphen joins, prefixes, markdown) for find in a drawn file | passage-text.cjs | Doc (PassageText.swift, one definition) | done |
 
 ## D. Tabs (Stage.jsx tab strip)
 
@@ -206,7 +206,7 @@ Status: `done` = implemented and checked by a test or a run; `partial: …`; `to
 | # | Behaviour | Source | Swift | Status |
 |---|---|---|---|---|
 | L1 | A settled selection (mouse up, or keys still 450 ms) outside fields is offered with token, quote, pageText, line and rect; follows scroll once a frame; withdrawn on press, none, or another | page-preload.cjs offer | page.js | done — compiled, untested (page.js is page-preload.cjs word for word) |
-| L2 | selectionCardPlace / shadedCardPlace (card 340 wide, shade 18/24/30, gap 8): under the last line, else above, else as far down as fits; inside the pane | selection-card.cjs | SelectionCardPlace.swift | done |
+| L2 | selectionCardPlace / shadedCardPlace (card 340 wide, shade 18/24/30, gap 8): under the last line, else above, else as far down as fits; inside the pane | selection-card.cjs | Doc (SelectionCardPlace.swift, one definition) | done |
 | L3 | No card on unfileable pages, with a field focused, while boxing or with a box selected | views.cjs | BrowserViews | done — compiled, untested |
 | L4 | A printable key in the page goes into the card (card takes keyboard); Esc closes; ⌘C/Enter/arrows stay the page's | views.cjs selectionKey | StageWebView.keyDown | done — compiled, untested |
 | L5 | Save keeps the highlight with its note (the same passage once: the twin's note updated), closes unless @bart (asked, card stays); empty Save keeps nothing; ⌘Enter saves | views.cjs saveSelectionCard, BoxCard SelectionCard | SelectionCardView | done — compiled, untested |

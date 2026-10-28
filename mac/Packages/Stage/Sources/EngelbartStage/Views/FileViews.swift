@@ -1,4 +1,5 @@
 import AppKit
+import EngelbartDoc
 import EngelbartCore
 import EngelbartUI
 
@@ -100,11 +101,7 @@ final class TextFileView: NSObject, StageFileView, NSTextViewDelegate {
             out.append(r); at = r.location + max(1, r.length)
         }
         if !out.isEmpty || JSStr.trim(query).components(separatedBy: .whitespacesAndNewlines).filter({ !$0.isEmpty }).count < 3 { return out }
-        let chars = Array(string)
-        var utf16: [Int] = []; var u = 0
-        for c in chars { utf16.append(u); u += c.utf16.count }
-        utf16.append(u)
-        return PassageText.match(string, query, prefixes: true).map { NSRange(location: utf16[$0.start], length: utf16[$0.end] - utf16[$0.start]) }
+        return PassageText.matchPassage(string, query, prefixes: true).map { NSRange(location: $0.start, length: $0.end - $0.start) }
     }
 
     // ------------------------------------------------------------------------------------- what the file is drawn as
@@ -113,7 +110,7 @@ final class TextFileView: NSObject, StageFileView, NSTextViewDelegate {
 
     static func runs(_ text: String, font: NSFont, color: NSColor, para: NSParagraphStyle) -> NSAttributedString {
         let out = NSMutableAttributedString()
-        for run in StageMarkdown.runs(text) {
+        for run in MarkdownFile.runs(text) {
             var f = font
             var attrs: [NSAttributedString.Key: Any] = [.foregroundColor: color, .paragraphStyle: para]
             if run.code { f = Fonts.mono(font.pointSize * 0.88); attrs[.backgroundColor] = Palette.hov }
@@ -131,19 +128,19 @@ final class TextFileView: NSObject, StageFileView, NSTextViewDelegate {
     static func markdown(_ source: String) -> NSAttributedString {
         let out = NSMutableAttributedString()
         let base = Fonts.sans(14.5)
-        for (i, block) in StageMarkdown.blocks(source).enumerated() {
+        for (i, block) in MarkdownFile.blocks(source).enumerated() {
             let para = NSMutableParagraphStyle()
             para.lineHeightMultiple = 1.7 / 1.2
             if i > 0 { out.append(NSAttributedString(string: "\n", attributes: [.font: base])) }
             switch block {
-            case .heading(let level, let text):
+            case .h(let level, let text):
                 para.paragraphSpacingBefore = i > 0 ? 22 : 0
                 para.lineHeightMultiple = 1.35 / 1.2
                 out.append(runs(text, font: Fonts.sans(hSize[level] ?? 14.5, weight: level <= 2 ? 500 : 600), color: Palette.ink, para: para))
-            case .paragraph(let text):
+            case .p(let text):
                 para.paragraphSpacingBefore = 10
                 out.append(runs(text, font: base, color: Palette.ink, para: para))
-            case .item(let ordered, let marker, let depth, let checked, let text):
+            case .li(let ordered, let marker, let depth, let checked, let text):
                 para.paragraphSpacingBefore = 4
                 para.firstLineHeadIndent = CGFloat(depth) * 22
                 para.headIndent = CGFloat(depth) * 22 + 22
@@ -159,7 +156,7 @@ final class TextFileView: NSObject, StageFileView, NSTextViewDelegate {
                 para.paragraphSpacingBefore = 12
                 para.lineHeightMultiple = 1.6 / 1.2
                 out.append(NSAttributedString(string: text, attributes: [.font: Fonts.mono(12.5), .foregroundColor: Palette.ink, .backgroundColor: Palette.panel2, .paragraphStyle: para]))
-            case .rule:
+            case .hr:
                 para.paragraphSpacingBefore = 18
                 out.append(NSAttributedString(string: "\u{00A0}\t", attributes: [.font: base, .strikethroughStyle: NSUnderlineStyle.single.rawValue, .strikethroughColor: Palette.bd, .paragraphStyle: para]))
             }

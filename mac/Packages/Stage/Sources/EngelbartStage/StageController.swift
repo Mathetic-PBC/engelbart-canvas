@@ -1,4 +1,5 @@
 import AppKit
+import EngelbartDoc
 import EngelbartCore
 import EngelbartUI
 
@@ -357,7 +358,7 @@ public final class StageController: NSViewController {
     public func openRow(_ row: StageRow, find: String = "", to: String = "", newTab: Bool = false, page: Int? = nil) {
         if GitHubPages.isSignIn(row.url) && row.path == nil { host?.openExternal(row.url ?? ""); return }
         let where_ = row.path.map(Self.fileUrl) ?? row.url ?? ""
-        let also = !where_.isEmpty && !StageAddressKey.addressKey(where_).isEmpty ? "l:\(StageAddressKey.addressKey(where_))" : ""
+        let also = !where_.isEmpty && !AddressKey.addressKey(where_).isEmpty ? "l:\(AddressKey.addressKey(where_))" : ""
         if let id = claim("i:\(row.id)", find: find, to: to, newTab: newTab, also: also, page: page) { showRow(id, row) }
     }
 
@@ -374,7 +375,7 @@ public final class StageController: NSViewController {
 
     /// A file inside a library folder, mentioned (MATH-22): its tab, unless one is open already.
     public func openFile(_ file: String, newTab: Bool = false) {
-        if let id = claim("l:\(StageAddressKey.addressKey(Self.fileUrl(file)))", newTab: newTab) { readPath(id, file, rowId: nil) }
+        if let id = claim("l:\(AddressKey.addressKey(Self.fileUrl(file)))", newTab: newTab) { readPath(id, file, rowId: nil) }
     }
 
     /// Files from the computer open as tabs of their own; past 15 the rest are left.
@@ -382,7 +383,7 @@ public final class StageController: NSViewController {
         var room = Self.maxTabs - tabs.filter { !StageModel.tabKey($0).isEmpty || $0.pdf != nil || $0.file != nil }.count
         for file in paths {
             if room <= 0 { break }
-            if let id = claim("l:\(StageAddressKey.addressKey(Self.fileUrl(file)))") { readPath(id, file, rowId: nil); room -= 1 }
+            if let id = claim("l:\(AddressKey.addressKey(Self.fileUrl(file)))") { readPath(id, file, rowId: nil); room -= 1 }
         }
     }
 
@@ -494,7 +495,7 @@ public final class StageController: NSViewController {
             func moved(_ under: String) -> Bool { !state.loading && (state.url.isEmpty ? "about:blank" : state.url) != (under.isEmpty ? "about:blank" : under) }
             if let pdf = t.pdf, !pdf.loading, pdf.under != "about:blank", moved(pdf.under) { t.pdf = nil }
             if let fwd = t.pdfForward, moved(fwd.under) { t.pdfForward = nil }
-            if let rowUrl = t.row?.url, !state.url.isEmpty, !state.loading, t.pdf == nil, StageAddressKey.addressKey(state.url) != StageAddressKey.addressKey(rowUrl), t.file?.kind != .doc { t.item = nil; t.row = nil }
+            if let rowUrl = t.row?.url, !state.url.isEmpty, !state.loading, t.pdf == nil, AddressKey.addressKey(state.url) != AddressKey.addressKey(rowUrl), t.file?.kind != .doc { t.item = nil; t.row = nil }
             if t.file?.kind == .doc, !state.url.isEmpty, !state.loading, !BrowserRules.isFileUrl(state.url) { t.file = nil }
         }
         render()
@@ -506,10 +507,10 @@ public final class StageController: NSViewController {
         let fresh = pdfSeq
         update(id) { t in
             let seq = (t.pdf?.loading == true && t.pdf?.url == url) ? t.pdf!.seq : fresh
-            let rowId = (t.row?.url).flatMap { StageAddressKey.addressKey($0) == StageAddressKey.addressKey(url) ? t.row?.id : nil }
+            let rowId = (t.row?.url).flatMap { AddressKey.addressKey($0) == AddressKey.addressKey(url) ? t.row?.id : nil }
             let next = StagePDF(url: url, input: url, name: rowId != nil ? (t.row?.name ?? name) : name, under: under.isEmpty ? "about:blank" : under, seq: seq, loading: loading, bytes: bytes, error: error ?? "", rowId: rowId)
             let was = t.pdf ?? t.pdfForward
-            let same = t.pendingFind != nil || (was.map { StageAddressKey.addressKey($0.url) == StageAddressKey.addressKey(url) } ?? false)
+            let same = t.pendingFind != nil || (was.map { AddressKey.addressKey($0.url) == AddressKey.addressKey(url) } ?? false)
             if !same && !(t.sections ?? []).isEmpty { t.sections = nil; t.activeSection = -1 }
             t.url = next.under; t.pdf = next; t.pdfForward = nil; t.file = nil
         }
@@ -546,21 +547,8 @@ public final class StageController: NSViewController {
         if same(tab.pdf) { pdfView?.viewer.addAsk(page: page, markId: markId, entry: entry) }
         for i in tabs.indices where same(tabs[i].pdf) && tabs[i].pdf?.marks != nil {
             let marks = tabs[i].pdf!.marks!
-            tabs[i].pdf?.marks = Self.withAsk(marks, page: page, markId: markId, entry: entry)
+            tabs[i].pdf?.marks = MarkAnswers.withAsk(marks, page: String(page), markId: markId, entry: entry)
         }
-    }
-
-    /// pdf/canvas.js withAsk: the answer added to mark `markId` on `page` (once).
-    static func withAsk(_ marks: JSONValue, page: Int, markId: String, entry: JSONValue) -> JSONValue {
-        guard case .object(var all) = marks, case .array(var list)? = all[String(page)] else { return marks }
-        guard let i = list.firstIndex(where: { $0["id"]?.string == markId }), case .object(var mark) = list[i] else { return marks }
-        var asks = mark["asks"]?.array ?? []
-        if asks.contains(where: { $0["id"] == entry["id"] }) { return marks }
-        asks.append(entry)
-        mark["asks"] = .array(asks)
-        list[i] = .object(mark)
-        all[String(page)] = .array(list)
-        return .object(all)
     }
 
     // --------------------------------------------------------------------------- kept across relaunches (MATH-10)
