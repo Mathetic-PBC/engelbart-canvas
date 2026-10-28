@@ -1,0 +1,71 @@
+# Cloud testing for the Swift app (mac/): Hudson, 2026-10-28 — "testing should happen in the cloud". Nothing is tested on
+# the developer's Mac. mac/scripts/cloud-test.sh pushes a snapshot of the working tree to a throwaway branch
+# ci/swift/<target>/<stamp> (it carries mac/.ci-request.json: {target, filter}); this job runs it on a macOS runner,
+# uploads the log and any snapshots, and deletes the branch.
+name: swift-cloud-test
+
+on:
+  push:
+    branches: ['ci/swift/**']
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'A package under mac/Packages, "app", or "all"'
+        required: true
+        default: all
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Request
+        id: req
+        run: |
+          target="${{ inputs.target }}"
+          filter=""
+          if [ -f mac/.ci-request.json ]; then
+            target=$(python3 -c 'import json;print(json.load(open("mac/.ci-request.json"))["target"])')
+            filter=$(python3 -c 'import json;print(json.load(open("mac/.ci-request.json")).get("filter",""))')
+          fi
+          echo "target=${target:-all}" >> "$GITHUB_OUTPUT"
+          echo "filter=$filter" >> "$GITHUB_OUTPUT"
+          sw_vers; xcodebuild -version; swift --version
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            mac/Packages/*/.build
+            mac/Engelbart/.build
+          key: swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.req.outputs.target }}-${{ hashFiles('mac/**/Package.swift', 'mac/**/Package.resolved') }}
+          restore-keys: |
+            swift-${{ runner.os }}-${{ runner.arch }}-${{ steps.req.outputs.target }}-
+
+      - name: Run
+        run: |
+          set -o pipefail
+          bash mac/scripts/ci-run.sh "${{ steps.req.outputs.target }}" "${{ steps.req.outputs.filter }}" 2>&1 | tee ci.log
+
+      - name: Upload log and snapshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ci-output
+          path: |
+            ci.log
+            ci-out/
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Delete the throwaway branch
+        if: always() && github.event_name == 'push'
+        run: git push origin --delete "$GITHUB_REF_NAME" || true
