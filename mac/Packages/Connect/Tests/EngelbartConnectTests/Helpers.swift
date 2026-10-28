@@ -52,7 +52,8 @@ final class FakeStore: ConnectStore, @unchecked Sendable {
     func projectDir(_ projectId: String) async -> String? { nil }
     func workspaceExists(projectId: String, workspaceId: String) async -> Bool { false }
     func saveImage(projectId: String, bytes: Data, mime: String, name: String) async throws -> String { IDs.new() }
-    func createNote(projectId: String, name: String, text: String) async throws -> (id: String, name: String) { (IDs.new(), name) }
+    var notes: [(name: String, text: String)] = []
+    func createNote(projectId: String, name: String, text: String) async throws -> (id: String, name: String) { lock.lock(); notes.append((name, text)); lock.unlock(); return (IDs.new(), name) }
     func keepInProject(projectId: String, rowIds: [String]) async throws -> (listed: [String], removed: [String]) { kept[projectId, default: []] += rowIds; return (rowIds, []) }
     func linkToWorkspace(projectId: String, workspaceId: String, rowIds: [String]) async throws -> [String] { rowIds }
     func projectNames() async -> [String] { [] }

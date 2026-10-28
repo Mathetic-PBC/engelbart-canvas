@@ -155,6 +155,12 @@ public final class ConnectEngine {
                     : FolderAccess.guardFor(homeDir: host.homeDir, dataRoot: URL(fileURLWithPath: root))
     }
 
+    /// ipc.cjs plainObject: an object, never an array or a scalar.
+    static func plain(_ value: JSONValue, _ what: String) throws -> JSONValue {
+        guard value.object != nil else { throw ConnectError("failed", "\(what) is invalid") }
+        return value
+    }
+
     static func check(_ value: String?, _ what: String, _ max: Int) throws -> String {
         guard let v = value, !v.isEmpty, v.count <= max else { throw ConnectError("failed", "\(what) is invalid") }
         return v
@@ -186,14 +192,14 @@ public final class ConnectEngine {
 
     public func providersList() -> [JSONValue] { connect.providers() }
     public func start(_ input: JSONValue) async throws -> JSONValue { _ = await refresh(); guard input.object != nil else { throw ConnectError("failed", "choices is invalid") }; return try await connect.start(input) }
-    public func answer(_ id: String, _ input: JSONValue) throws -> JSONValue { try connect.answer(try Self.check(id, "import id", 64), input) }
-    public func grant(_ id: String, _ input: JSONValue) throws -> JSONValue { try connect.grant(try Self.check(id, "import id", 64), input) }
+    public func answer(_ id: String, _ input: JSONValue) throws -> JSONValue { try connect.answer(try Self.check(id, "import id", 64), try Self.plain(input, "answer")) }
+    public func grant(_ id: String, _ input: JSONValue) throws -> JSONValue { try connect.grant(try Self.check(id, "import id", 64), try Self.plain(input, "grant")) }
     public func authorize(_ id: String, app: String, kind: String, path: String? = nil) async throws -> JSONValue {
         var o: [String: JSONValue] = ["app": .string(try Self.check(app, "app", 64)), "kind": .string(try Self.check(kind, "kind", 16))]
         if let path { o["path"] = .string(String(path.prefix(4096))) }
         return try await connect.authorize(try Self.check(id, "import id", 64), .object(o))
     }
-    public func cancelSignIn(_ id: String, _ app: String) throws -> Bool { try connect.cancelSignIn(id, app) }
+    public func cancelSignIn(_ id: String, _ app: String) throws -> Bool { try connect.cancelSignIn(try Self.check(id, "import id", 64), try Self.check(app, "app", 64)) }
     public func signInNote(_ app: String, route: String? = nil) async -> JSONValue { await connect.signInNote(app, route: route == "browser" ? "browser" : "") }
     public func signInPick(_ app: String, browser: String, profile: String) -> Bool { connect.signInPick(app, browser: browser, profile: profile) }
     public func signInBrowser(_ app: String) async -> JSONValue { await connect.signInBrowser(app) }
@@ -215,15 +221,15 @@ public final class ConnectEngine {
     }
 
     public func need(_ id: String, _ needId: String, _ action: String) async throws -> JSONValue { try await connect.need(try Self.check(id, "import id", 64), try Self.check(needId, "request id", 64), try Self.check(action, "action", 8)) }
-    public func importNow(_ id: String) throws -> JSONValue { try connect.importNow(id) }
-    public func stop(_ id: String) throws -> JSONValue { try connect.stop(id) }
-    public func unblock(_ id: String, provider: String? = nil) throws -> JSONValue { try connect.unblock(id, provider: provider == "anthropic" || provider == "openai" ? provider : nil) }
-    public func stopJob(_ id: String, _ jobId: String) throws -> JSONValue { try connect.stopJob(id, jobId) }
-    public func setProvider(_ id: String, _ provider: String) throws -> JSONValue { try connect.setProvider(id, provider) }
-    public func retryMemory(_ id: String) throws -> JSONValue { try connect.retryMemory(id) }
-    public func minimize(_ id: String, _ value: Bool) throws -> JSONValue { try connect.setMinimized(id, value) }
-    public func dismiss(_ id: String) throws -> Bool { try connect.dismiss(id) }
-    public func state(_ id: String) throws -> JSONValue { try connect.state(id) }
+    public func importNow(_ id: String) throws -> JSONValue { try connect.importNow(try Self.check(id, "import id", 64)) }
+    public func stop(_ id: String) throws -> JSONValue { try connect.stop(try Self.check(id, "import id", 64)) }
+    public func unblock(_ id: String, provider: String? = nil) throws -> JSONValue { try connect.unblock(try Self.check(id, "import id", 64), provider: provider == "anthropic" || provider == "openai" ? provider : nil) }
+    public func stopJob(_ id: String, _ jobId: String) throws -> JSONValue { try connect.stopJob(try Self.check(id, "import id", 64), try Self.check(jobId, "job id", 64)) }
+    public func setProvider(_ id: String, _ provider: String) throws -> JSONValue { try connect.setProvider(try Self.check(id, "import id", 64), try Self.check(provider, "provider", 16)) }
+    public func retryMemory(_ id: String) throws -> JSONValue { try connect.retryMemory(try Self.check(id, "import id", 64)) }
+    public func minimize(_ id: String, _ value: Bool) throws -> JSONValue { try connect.setMinimized(try Self.check(id, "import id", 64), value) }
+    public func dismiss(_ id: String) throws -> Bool { try connect.dismiss(try Self.check(id, "import id", 64)) }
+    public func state(_ id: String) throws -> JSONValue { try connect.state(try Self.check(id, "import id", 64)) }
     /// connect-list: a session that was still going when Engelbart closed goes on now (resume), before the list is read.
     public func list() async -> [JSONValue] { let root = await refresh(); await connect.resume(dataRoot: root); return connect.list(dataRoot: root) }
     public func notesPermission() async -> JSONValue { let p = await appleNotes.permission(); return ["allowed": .bool(p.allowed), "error": .string(p.error), "refused": .bool(p.refused)] }

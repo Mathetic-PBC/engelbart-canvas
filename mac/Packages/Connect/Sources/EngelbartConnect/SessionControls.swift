@@ -452,6 +452,7 @@ extension Connect {
         pump(s)
         if s.chat.isEmpty && s.jobs.isEmpty {
             s.thinking = true; s.activity = "Looking at what you picked…"
+            openingNow(s)
             Task { await opening(s) }
         } else if s.choices.direct != nil {
             if !s.finished { Task { await directOpening(s) } }

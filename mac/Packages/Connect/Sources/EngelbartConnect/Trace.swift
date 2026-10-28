@@ -185,7 +185,7 @@ public final class TraceWindow: NSObject, WKScriptMessageHandler, NSWindowDelega
         win.contentView = web
         win.isReleasedWhenClosed = false
         win.delegate = self
-        if let page = Bundle.module.url(forResource: "trace", withExtension: "html") { web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent()) }
+        if let page = ResourceBundle.named("Connect_EngelbartConnect", fallback: Bundle.module).url(forResource: "trace", withExtension: "html") { web.loadFileURL(page, allowingReadAccessTo: page.deletingLastPathComponent()) }
         win.center()
         win.makeKeyAndOrderFront(nil)
         window = win

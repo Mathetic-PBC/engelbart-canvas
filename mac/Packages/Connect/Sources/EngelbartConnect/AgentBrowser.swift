@@ -392,20 +392,30 @@ final class WKAgentPage: AgentPage, @unchecked Sendable {
         let info = AgentBrowser.Info(spot)
         let sending = await MainActor.run { () -> Bool in let e = entry(); return job.sendOnly != nil && e.typed && !e.sent && JS.test(info.name, #"^send\b"#, options: .caseInsensitive) }
         if !sending, let why = AgentBrowser.clickRefusal(info) { throw refuse(why) }
+        // Electron's sendInputEvent reaches a hidden window's page; a synthesized NSEvent to the off-screen web view may not
+        // (cloud run 40760767266: a link click never arrived). So: the mouse click first, and when no click reached the page
+        // and nothing navigated, the element is clicked from the page itself (same element, once).
+        let target = "document.querySelector('[data-eb-ref=' + \(JSONValue.string(JSONValue.string(ref).text()).text()) + ']')"
+        _ = try? await run("window.__ebClicked = false; const el = \(target); document.addEventListener('click', function (e) { if (el && el.contains(e.target)) window.__ebClicked = true; }, { capture: true }); return true")
+        let before = await here().url
         await MainActor.run {
             let e = entry()
             if sending { e.sent = true }
             sendMouse(e, x: info.x ?? 0, y: info.y ?? 0)
             windows.log(job.id, "Clicked \(info.name.isEmpty ? "a control" : "“\(AgentBrowser.quote(info.name, 40))”")")
         }
-        try? await Task.sleep(nanoseconds: 700_000_000)
+        try? await Task.sleep(nanoseconds: 250_000_000)
+        if await here().url == before, (try? await run("return window.__ebClicked === true")) != .bool(true) {
+            _ = try? await run("const el = \(target); if (el) el.click(); return !!el")
+        }
+        try? await Task.sleep(nanoseconds: 450_000_000)
         let at = await here()
         return ["url": .string(at.url), "title": .string(at.title)]
     }
 
     @MainActor func sendMouse(_ e: AgentBrowserWindows.Entry, x: Double, y: Double) {
         // Page coordinates (top-left origin) → the window's (bottom-left).
-        let point = CGPoint(x: x, y: e.webView.bounds.height - y)
+        let point = CGPoint(x: x, y: e.webView.isFlipped ? y : e.webView.bounds.height - y)
         let windowPoint = e.webView.convert(point, to: nil)
         for type in [NSEvent.EventType.leftMouseDown, .leftMouseUp] {
             if let event = NSEvent.mouseEvent(with: type, location: windowPoint, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime, windowNumber: e.window.windowNumber,

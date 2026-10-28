@@ -150,8 +150,31 @@ extension Connect {
         logAction(s, nil, "Started with \(ConnectModels.providerNames[s.choice.provider]!) (\(s.choice.modelName) · \(s.choice.effort))")
         traced(kind: "start", sessionId: id, text: "Connect session started\(choices.direct.map { " (Import your context, \($0.mode == "manual" ? "sources chosen by the person" : "tools found by agents"))" } ?? "") on \(ConnectModels.providerNames[s.choice.provider]!) (\(s.choice.modelName) · \(s.choice.effort))", detail: ["choices": choices.json])
         emit(s)
+        openingNow(s)
         Task { await opening(s) }
         return snapshot(s)
+    }
+
+    /// What Electron's un-awaited `opening(s)` did before its first await, done at once (before start answers): the opening
+    /// line, and for a librarian run the apps allowed before and the grant message; for a direct run, thinking. opening()
+    /// repeats these steps harmlessly (each is kept once).
+    func openingNow(_ s: ConnectSession) {
+        if let d = s.choices.direct {
+            if !s.chat.contains(where: { JS.truthy($0.value["opener"]) }) {
+                let titles = d.projects.map(\.title)
+                s.chat.append(ChatEntry(["role": "agent", "text": .string(titles.isEmpty ? "Bringing in what you picked…" : "Bringing in what pertains to \(SessionText.listed(titles))…"), "ask": .null, "authorize": .null, "opener": true, "at": .string(now())]))
+            }
+            s.thinking = true
+            s.activity = "Looking at what you picked…"
+            emit(s)
+            return
+        }
+        if !s.chat.contains(where: { JS.truthy($0.value["opener"]) }) {
+            s.chat.append(ChatEntry(["role": "agent", "text": "Looking at what you picked…", "ask": .null, "authorize": .null, "opener": true, "at": .string(now())]))
+        }
+        if deps.allowedAll { askedApps(s).forEach { s.allowed.insert($0) } }
+        _ = askGrant(s)
+        emit(s)
     }
 
     func opening(_ s: ConnectSession) async {

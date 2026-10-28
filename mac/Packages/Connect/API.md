@@ -35,6 +35,13 @@ Methods (one per IPC channel, same names): `detect`, `connectSignedIn`, `provide
 `importTraceOpen`, `importObsidianTree`, `attachProject(id:projectId:workspaceId:)`, `suspendAll()` (will-quit),
 `afterTestReset(dataRoot:)`. Errors are `ConnectError(kind, message)`; `message` is the text the renderer showed.
 
+Changes since the first pass (additive, source-compatible; ConnectEngine's API unchanged): `KeychainCrypt(service:account:keychain:)`
+takes an optional `SecKeychain` (nil = the login keychain, as before), and a key another process stored meanwhile is read
+back instead of an unsaved one being used. ConnectEngine's signatures are unchanged, but every session method now checks
+its arguments as ipc.cjs did (`import id is invalid`, `job id is invalid`, `answer is invalid` for a non-object, …).
+`start` now answers with the opening line (and a librarian run's grant message) already in the chat, as Electron did.
+trace.html is found through `ResourceBundle.named("Connect_EngelbartConnect", …)` (works in the signed app).
+
 Lower-level pieces, usable alone: `Connect` (session engine, `ConnectDeps`), `Discovery`, `Scanner`, `Providers`,
 `Browsers`, `BrowserAgents`, `DiskAccess`, `OnboardingPrefs`, `Digest`, `ObsidianTree`, `Connectors` (+ `KeychainCrypt`),
 `WebSignIn`, `SignInWindow`, `AgentBrowserWindows`, `TraceWindow`/`Trace`, `AppleNotes`, `Readers`, `Scan`, `Tools`,

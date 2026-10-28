@@ -25,22 +25,32 @@ public protocol ConnectorCrypt: Sendable {
 }
 
 /// A 256-bit key kept in the login Keychain (generic password, service "Engelbart connectors"), AES-GCM over it.
-public struct KeychainCrypt: ConnectorCrypt {
+public struct KeychainCrypt: ConnectorCrypt, @unchecked Sendable {
     public var service: String
     public var account: String
-    public init(service: String = "Engelbart connectors", account: String = "key") { self.service = service; self.account = account }
+    /// The keychain to use; nil = the login keychain (the app). Tests pass a temporary one.
+    public var keychain: SecKeychain?
+    public init(service: String = "Engelbart connectors", account: String = "key", keychain: SecKeychain? = nil) { self.service = service; self.account = account; self.keychain = keychain }
+
+    func stored() -> SymmetricKey? {
+        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account, kSecReturnData as String: true]
+        if let keychain { query[kSecMatchSearchList as String] = [keychain] }
+        var item: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data, data.count == 32 else { return nil }
+        return SymmetricKey(data: data)
+    }
 
     func key() throws -> SymmetricKey {
-        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account, kSecReturnData as String: true]
-        var item: CFTypeRef?
-        if SecItemCopyMatching(query as CFDictionary, &item) == errSecSuccess, let data = item as? Data, data.count == 32 { return SymmetricKey(data: data) }
+        if let key = stored() { return key }
         let fresh = SymmetricKey(size: .bits256)
-        let data = fresh.withUnsafeBytes { Data($0) }
-        query[kSecReturnData as String] = nil
-        query[kSecValueData as String] = data
+        var query: [String: Any] = [kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service, kSecAttrAccount as String: account,
+                                    kSecValueData as String: fresh.withUnsafeBytes { Data($0) }]
+        if let keychain { query[kSecUseKeychain as String] = keychain }
         let status = SecItemAdd(query as CFDictionary, nil)
-        guard status == errSecSuccess || status == errSecDuplicateItem else { throw ConnectError("failed", "The Keychain refused to keep the connectors' key") }
-        return fresh
+        if status == errSecSuccess { return fresh }
+        // Kept by someone else meanwhile: theirs is the key (it used to return the unsaved one).
+        if status == errSecDuplicateItem, let key = stored() { return key }
+        throw ConnectError("failed", "The Keychain refused to keep the connectors' key")
     }
     public func available() -> Bool { (try? key()) != nil }
     public func encrypt(_ text: String) throws -> String {
