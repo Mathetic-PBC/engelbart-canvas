@@ -1,7 +1,8 @@
 import Foundation
+import EngelbartDoc
 
-// Find in a pdf and a link's section (PaperView.jsx find/showSection; src/renderer/model/find.js; the typography fold of
-// src/shared/passage-text.cjs). Offsets are UTF-16, as in the JS strings they were made for.
+// Find in a pdf and a link's section (PaperView.jsx find/showSection; src/renderer/model/find.js; the typography fold is
+// EngelbartDoc.PassageText, the one port of src/shared/passage-text.cjs). Offsets are UTF-16, as in JS strings.
 
 public struct FindSpot: Equatable, Sendable {
     public var page: Int
@@ -87,92 +88,3 @@ public final class TargetGate {
     public func claim() { if !target.isEmpty { done = target } }
 }
 
-/// How a quoted passage is found in a text whatever its typography (src/shared/passage-text.cjs foldPassage/matchPassage,
-/// without the workspace-line options, which a pdf never needs).
-public enum PassageText {
-    static let ONE: [UInt16: UInt16] = [
-        0x2018: 0x27, 0x2019: 0x27, 0x201A: 0x27, 0x201B: 0x27, 0x2032: 0x27,
-        0x201C: 0x22, 0x201D: 0x22, 0x201E: 0x22, 0x201F: 0x22, 0x2033: 0x22,
-        0x2010: 0x2D, 0x2011: 0x2D, 0x2012: 0x2D, 0x2013: 0x2D, 0x2014: 0x2D, 0x2015: 0x2D, 0x2212: 0x2D,
-    ]
-    static let LIGATURES: [UInt16: String] = [0xFB00: "ff", 0xFB01: "fi", 0xFB02: "fl", 0xFB03: "ffi", 0xFB04: "ffl", 0xFB05: "st", 0xFB06: "st"]
-
-    static func isSpace(_ c: UInt16) -> Bool {
-        guard let s = Unicode.Scalar(c) else { return false }
-        return s.properties.isWhitespace || c == 0xFEFF
-    }
-    static func isHyphen(_ c: UInt16) -> Bool { c == 0x2D || (0x2010...0x2015).contains(c) || c == 0x2212 }
-    static func isLetter(_ c: UInt16?) -> Bool {
-        guard let c, let s = Unicode.Scalar(c) else { return false }
-        switch s.properties.generalCategory { case .uppercaseLetter, .lowercaseLetter, .titlecaseLetter, .modifierLetter, .otherLetter: return true; default: return false }
-    }
-    static func lower(_ c: UInt16) -> [UInt16] {
-        guard let s = Unicode.Scalar(c) else { return [c] }
-        return Array(String(s).lowercased().utf16)
-    }
-
-    /// `text` folded → (folded UTF-16, map: offset each folded unit came from).
-    public static func fold(_ input: String) -> (text: [UInt16], map: [Int]) {
-        let src = Array(input.utf16)
-        var out: [UInt16] = [], map: [Int] = []
-        func push(_ cs: [UInt16], _ at: Int) { for c in cs { out.append(c); map.append(at) } }
-        func space(_ at: Int) { if let last = out.last, last != 0x20 { push([0x20], at) } }
-        var i = 0
-        while i < src.count {
-            let c = src[i]
-            if c == 0x0A { space(i); i += 1; continue }
-            if isSpace(c) { space(i); i += 1; continue }
-            if c == 0xAD { i += 1; continue } // soft hyphen
-            if isHyphen(c), i > 0, isLetter(src[i - 1]) {
-                // "construc-\ntion": a hyphen at a line's end between letters joins the word (a lowercase letter after)
-                var j = i + 1
-                while j < src.count, src[j] == 0x20 || src[j] == 0x09 { j += 1 }
-                if j < src.count, src[j] == 0x0D { j += 1 }
-                if j < src.count, src[j] == 0x0A {
-                    j += 1
-                    while j < src.count, isSpace(src[j]) { j += 1 }
-                    if j < src.count, isLetter(src[j]), lower(src[j]) == [src[j]], j - i < 40 { i = j; continue }
-                }
-            }
-            if let one = ONE[c] { push([one], i); i += 1; continue }
-            if let lig = LIGATURES[c] { push(Array(lig.utf16), i); i += 1; continue }
-            push(lower(c), i)
-            i += 1
-        }
-        while out.last == 0x20 { out.removeLast(); map.removeLast() }
-        return (out, map)
-    }
-
-    static func without(_ folded: (text: [UInt16], map: [Int]), _ drop: Set<UInt16>) -> (text: [UInt16], map: [Int]) {
-        var t: [UInt16] = [], m: [Int] = []
-        for (i, c) in folded.text.enumerated() where !drop.contains(c) { t.append(c); m.append(folded.map[i]) }
-        return (t, m)
-    }
-
-    static func indices(of needle: [UInt16], in hay: [UInt16]) -> [Int] {
-        guard !needle.isEmpty, needle.count <= hay.count else { return [] }
-        var out: [Int] = []
-        var i = 0
-        while i <= hay.count - needle.count {
-            if hay[i] == needle[0] && Array(hay[i..<(i + needle.count)]) == needle { out.append(i) }
-            i += 1
-        }
-        return out
-    }
-
-    /// Every place `words` are in `text` → (start, end) offsets into `text`.
-    public static func matchPassage(_ text: String, _ words: String) -> [(start: Int, end: Int)] {
-        let hay = fold(text), want = fold(words).text
-        if want.isEmpty { return [] }
-        let tries: [((text: [UInt16], map: [Int]), [UInt16])] = [
-            (hay, want),
-            (without(hay, [0x2D]), want.filter { $0 != 0x2D }),
-            (without(hay, [0x2D, 0x20]), want.filter { $0 != 0x2D && $0 != 0x20 }),
-        ]
-        for (h, w) in tries where !w.isEmpty {
-            let hits = indices(of: w, in: h.text).map { (start: h.map[$0], end: h.map[$0 + w.count - 1] + 1) }
-            if !hits.isEmpty { return hits }
-        }
-        return []
-    }
-}

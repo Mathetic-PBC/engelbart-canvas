@@ -1,105 +1,37 @@
 import Foundation
+import EngelbartDoc
 
 // A margin note's text (src/renderer/model/doc.js: noteParts, noteOffset, mentionAt, libMention, fileMention,
 // encodeRel/decodeRel, NOTE_AGENT_RE) and the @ menu inside a library folder (src/renderer/model/rail.js folderRows).
 // A note is text as typed: only its library mentions are drawn (MATH-21), and a leading @bart on a highlight's note is
-// the document's blue label (MATH-27 follow-up). Copied here (the Doc package owns doc.js) because this package depends
-// on Core and UI only.
+// the document's blue label (MATH-27 follow-up). The definitions are the Doc package's (EngelbartDoc.Inline, one port
+// of doc.js); this is the paper's view of them.
 
 public enum NoteText {
-    /// `@[Name](lib:<id>)` — a library item.
-    public static let LIB_MENTION = "^@\\[([^\\]\\n]+)\\]\\(lib:([\\w-]+)\\)$"
-    /// `@[Name](lib:<folderId>:<rel>)` — a file in a library folder (MATH-22).
-    public static let FILE_MENTION = "^@\\[([^\\]\\n]+)\\]\\(lib:([\\w-]+):([\\w.~%/-]+)\\)$"
-    static let LIB_SPLIT = "(@\\[[^\\]\\n]+\\]\\(lib:[\\w-]+(?::[\\w.~%/-]+)?\\))"
-    static let NOTE_AGENT = "^(\\s*)(@bart)(?=\\s|$)"
-    static let MENTION_QUERY = "@([^\\s@\\[\\]]{0,30})$"
-
-    static func re(_ p: String, _ o: NSRegularExpression.Options = []) -> NSRegularExpression { try! NSRegularExpression(pattern: p, options: o) }
-    static let libRe = re(LIB_MENTION), fileRe = re(FILE_MENTION), splitRe = re(LIB_SPLIT), agentRe = re(NOTE_AGENT, [.caseInsensitive]), queryRe = re(MENTION_QUERY)
-
-    static func groups(_ r: NSRegularExpression, _ s: String) -> [String]? {
-        let ns = s as NSString
-        guard let m = r.firstMatch(in: s, range: NSRange(location: 0, length: ns.length)) else { return nil }
-        return (0..<m.numberOfRanges).map { m.range(at: $0).location == NSNotFound ? "" : ns.substring(with: m.range(at: $0)) }
-    }
-
     public struct LibMention: Equatable { public var name: String; public var id: String }
     public struct FileMention: Equatable { public var name: String; public var folderId: String; public var rel: String }
 
-    public static func libMentionOf(_ tok: String) -> LibMention? { groups(libRe, tok).map { LibMention(name: $0[1], id: $0[2]) } }
-    public static func fileMentionOf(_ tok: String) -> FileMention? { groups(fileRe, tok).map { FileMention(name: $0[1], folderId: $0[2], rel: decodeRel($0[3])) } }
-
-    static func cleanName(_ s: String) -> String { s.replacingOccurrences(of: "[\\[\\]\\n]", with: "", options: .regularExpression).trimmingCharacters(in: .whitespacesAndNewlines) }
-
-    public static func libMention(_ name: String, _ id: String) -> String {
-        let n = cleanName(name)
-        return "@[\(n.isEmpty ? "Untitled" : n)](lib:\(id))"
-    }
-
-    /// encodeURIComponent, with !'()* encoded too, part by part.
-    public static func encodeRel(_ rel: String) -> String {
-        var allowed = CharacterSet.alphanumerics.intersection(CharacterSet(charactersIn: Unicode.Scalar(0)...Unicode.Scalar(127)))
-        allowed.insert(charactersIn: "-_.~")
-        return rel.split(separator: "/", omittingEmptySubsequences: true).filter { $0 != "." }
-            .map { String($0).addingPercentEncoding(withAllowedCharacters: allowed) ?? String($0) }.joined(separator: "/")
-    }
-
-    public static func decodeRel(_ rel: String) -> String {
-        rel.split(separator: "/", omittingEmptySubsequences: true).map { String($0).removingPercentEncoding ?? String($0) }.joined(separator: "/")
-    }
-
-    public static func fileMention(_ name: String, folderId: String, rel: String) -> String {
-        var n = cleanName(name)
-        if n.isEmpty { n = (rel.split(separator: "/").last.map(String.init) ?? "").replacingOccurrences(of: "[\\[\\]\\n]", with: "", options: .regularExpression) }
-        if n.isEmpty { n = "Untitled" }
-        return "@[\(n)](lib:\(folderId):\(encodeRel(rel)))"
-    }
+    public static func libMentionOf(_ tok: String) -> LibMention? { Inline.LIB_MENTION.match(tok).map { LibMention(name: $0[1] ?? "", id: $0[2] ?? "") } }
+    public static func fileMentionOf(_ tok: String) -> FileMention? { Inline.fileMentionOf(tok).map { FileMention(name: $0.name, folderId: $0.folderId, rel: $0.rel) } }
+    public static func libMention(_ name: String, _ id: String) -> String { Inline.libMention(name, id) }
+    public static func encodeRel(_ rel: String) -> String { Inline.encodeRel(rel) }
+    public static func decodeRel(_ rel: String) -> String { Inline.decodeRel(rel) }
+    public static func fileMention(_ name: String, folderId: String, rel: String) -> String { Inline.fileMention(name, folderId, rel) }
 
     /// The @ menu's query before `caret` (UTF-16) → (query, start where its @ stands), or nil.
-    public static func mentionAt(_ text: String, caret: Int) -> (query: String, start: Int)? {
-        let ns = text as NSString
-        let before = ns.substring(to: max(0, min(caret, ns.length)))
-        guard let m = queryRe.firstMatch(in: before, range: NSRange(location: 0, length: (before as NSString).length)) else { return nil }
-        return ((before as NSString).substring(with: m.range(at: 1)), (before as NSString).length - m.range.length)
-    }
+    public static func mentionAt(_ text: String, caret: Int) -> (query: String, start: Int)? { Inline.mentionAt(text, caret) }
 
-    /// A note's pieces, text and mentions in turn; with `agents` a leading @bart is a piece of its own (any space before
-    /// it another).
-    public static func noteParts(_ text: String, agents: Bool = false) -> [String] {
-        let ns = text as NSString
-        func split(_ s: String) -> [String] {
-            let n = s as NSString
-            var out: [String] = [], at = 0
-            for m in splitRe.matches(in: s, range: NSRange(location: 0, length: n.length)) {
-                if m.range.location > at { out.append(n.substring(with: NSRange(location: at, length: m.range.location - at))) }
-                out.append(n.substring(with: m.range))
-                at = m.range.location + m.range.length
-            }
-            if at < n.length { out.append(n.substring(from: at)) }
-            return out
-        }
-        if agents, let lead = agentRe.firstMatch(in: text, range: NSRange(location: 0, length: ns.length)) {
-            let sp = ns.substring(with: lead.range(at: 1)), tok = ns.substring(with: lead.range(at: 2))
-            return ([sp, tok] + split(ns.substring(from: lead.range.location + lead.range.length))).filter { !$0.isEmpty }
-        }
-        return split(text).filter { !$0.isEmpty }
-    }
+    /// A note's pieces, text and mentions in turn; with `agents` a leading @bart is a piece of its own.
+    public static func noteParts(_ text: String, agents: Bool = false) -> [String] { Inline.noteParts(text, agents: agents) }
 
-    /// The leading @bart of a note, if any → (range of the token, UTF-16).
+    /// The leading @bart of a note, if any → its range (UTF-16).
     public static func agentToken(_ text: String) -> NSRange? {
-        agentRe.firstMatch(in: text, range: NSRange(location: 0, length: (text as NSString).length))?.range(at: 2)
+        guard let m = Inline.NOTE_AGENT.match(text) else { return nil }
+        return NSRange(location: ((m[1] ?? "") as NSString).length, length: ((m[2] ?? "") as NSString).length)
     }
 
     /// Where in a note's text a click lands: `offset` characters into its `part`-th piece; a mention is passed whole.
-    public static func noteOffset(_ text: String, part: Int, offset: Int, agents: Bool = false) -> Int {
-        let parts = noteParts(text, agents: agents)
-        var at = 0
-        for i in 0..<min(part, parts.count) { at += (parts[i] as NSString).length }
-        if part >= parts.count { return at }
-        let p = parts[part], len = (p as NSString).length
-        return at + (libMentionOf(p) != nil || fileMentionOf(p) != nil ? len : max(0, min(len, offset)))
-    }
+    public static func noteOffset(_ text: String, part: Int, offset: Int, agents: Bool = false) -> Int { Inline.noteOffset(text, part, offset, agents: agents) }
 }
 
 /* ------------------------------------------------------------------------------------------------ the note's @ menu */
@@ -133,8 +65,8 @@ public struct MentionRow: Equatable {
     }
 
     /// A library item the menu offers.
-    public static func item(id: String, name: String, browsable: Bool = false, zotero: Bool = false, hint: String = "") -> MentionRow {
-        MentionRow(kind: .item, key: "item:\(id)", name: name, hint: hint, rowId: id, rowName: name, browsable: browsable, zotero: zotero)
+    public static func item(id: String, name: String, browsable: Bool = false, zotero: Bool = false, hint: String = "", type: String? = nil) -> MentionRow {
+        MentionRow(kind: .item, key: "item:\(id)", name: name, hint: hint, rowId: id, rowName: name, browsable: browsable, zotero: zotero, type: type)
     }
     /// Bart, at the start of a highlight's note.
     public static let bart = MentionRow(kind: .verb, key: "verb:bart", name: "Bart", verb: "bart")

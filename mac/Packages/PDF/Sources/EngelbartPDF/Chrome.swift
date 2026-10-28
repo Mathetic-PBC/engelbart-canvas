@@ -1,4 +1,5 @@
 import AppKit
+import EngelbartDoc
 import EngelbartUI
 
 // What floats over the paper (PaperView render): the page-and-zoom bar, the "Highlight removed · Undo" toast, the empty
@@ -184,49 +185,124 @@ final class SelectionCardView: NSView {
     }
 }
 
-/// A note's @ menu (the workspace's MentionMenu, as a note opens it): library items, Bart at the start of a highlight's
-/// note, a library folder's levels; ↑ ↓ move, Enter or Tab picks, a click picks.
+/// A note's @ menu, the workspace's MentionMenu as a note opens it (src/renderer/workspace/MentionMenu.jsx): 400 px
+/// (the pane less 16 at most), padding 4, white, 1px #eaeaea, radius 8, no shadow; rows at least 32 high, padding 0 10,
+/// gap 10, radius 6, the keyboard's row #f2f2f2 (never a row that only says something); an 18 px glyph #4d4d4d; the name
+/// 14px/1.4 #171717 (a note row #8f8f8f), cut in the middle so its end shows (rail.js nameParts); a folder's ›; the back
+/// row's ← and its path (12px #8f8f8f, its start cut); at most 420 high, then it scrolls; it rises in over 160 ms.
 final class MentionMenuView: NSView {
-    var rows: [MentionRow] = [] { didSet { needsLayout = true; needsDisplay = true } }
-    var index = 0 { didSet { needsDisplay = true } }
+    var rows: [MentionRow] = [] { didSet { needsDisplay = true; if rows.map(\.key) != oldValue.map(\.key) { scrollTop = 0 } } }
+    var index = 0 { didSet { keepInView(); needsDisplay = true } }
     var onPick: ((MentionRow) -> Void)?
     var onHover: ((Int) -> Void)?
-    static let rowH: CGFloat = 30, width: CGFloat = 280, maxRows = 8
+    static let rowH: CGFloat = 32, width: CGFloat = 400, cap: CGFloat = 420, pad: CGFloat = 4
+    private var scrollTop: CGFloat = 0
+
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
         layer?.backgroundColor = NSColor.white.cgColor
-        layer?.cornerRadius = 10
+        layer?.cornerRadius = 8
         layer?.borderWidth = 1; layer?.borderColor = NSColor(hex: "#eaeaea").cgColor
-        layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.08; layer?.shadowRadius = 12; layer?.shadowOffset = CGSize(width: 0, height: -8)
+        layer?.masksToBounds = true
     }
     required init?(coder: NSCoder) { fatalError() }
     override var isFlipped: Bool { true }
     override var acceptsFirstResponder: Bool { false }
-    var preferredSize: NSSize { NSSize(width: Self.width, height: CGFloat(min(rows.count, Self.maxRows)) * Self.rowH + 8) }
-    private var scrollTop = 0
+
+    func preferredSize(maxWidth: CGFloat) -> NSSize {
+        NSSize(width: min(Self.width, maxWidth), height: min(Self.cap, CGFloat(rows.count) * Self.rowH + 2 * Self.pad))
+    }
+    var preferredSize: NSSize { preferredSize(maxWidth: Self.width) }
+
+    /// Shown: it rises 6 px and fades in (`rise 160ms`).
+    func rise() {
+        guard let layer else { return }
+        let fade = CABasicAnimation(keyPath: "opacity"); fade.fromValue = 0; fade.toValue = 1
+        let up = CABasicAnimation(keyPath: "transform.translation.y"); up.fromValue = -6; up.toValue = 0
+        let g = CAAnimationGroup(); g.animations = [fade, up]; g.duration = 0.16
+        g.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1)
+        layer.add(g, forKey: "rise")
+    }
+
+    private func keepInView() {
+        let top = CGFloat(index) * Self.rowH, h = bounds.height - 2 * Self.pad
+        if top < scrollTop { scrollTop = top }
+        if top + Self.rowH > scrollTop + h { scrollTop = top + Self.rowH - h }
+    }
+
+    /// A long name cut in two (rail.js nameParts): its start, cut with "…" when room runs out, and its end always shown.
+    static func nameParts(_ name: String) -> (head: String, tail: String) {
+        let s = name as NSString
+        if s.length <= 24 { return (name, "") }
+        let ext = name.range(of: #"\.[A-Za-z0-9]{1,8}$"#, options: .regularExpression).map { (name[$0] as NSString).length } ?? 0
+        let keep = min(ext + 10, s.length / 2)
+        return (s.substring(to: s.length - keep), s.substring(from: s.length - keep))
+    }
+
+    /// The row's frame in the menu.
+    func rowRect(_ i: Int) -> NSRect { NSRect(x: Self.pad, y: Self.pad + CGFloat(i) * Self.rowH - scrollTop, width: bounds.width - 2 * Self.pad, height: Self.rowH) }
+
     override func draw(_ dirtyRect: NSRect) {
-        if index < scrollTop { scrollTop = index }
-        if index >= scrollTop + Self.maxRows { scrollTop = index - Self.maxRows + 1 }
-        for (k, i) in (scrollTop..<min(rows.count, scrollTop + Self.maxRows)).enumerated() {
-            let r = NSRect(x: 4, y: 4 + CGFloat(k) * Self.rowH, width: bounds.width - 8, height: Self.rowH)
-            let row = rows[i]
+        NSGraphicsContext.current?.cgContext.clip(to: bounds.insetBy(dx: 0, dy: Self.pad - 0.5))
+        for (i, row) in rows.enumerated() {
+            let r = rowRect(i)
+            if r.maxY < 0 || r.minY > bounds.height { continue }
             if i == index && row.kind != .note { NSColor(hex: "#f2f2f2").setFill(); NSBezierPath(roundedRect: r, xRadius: 6, yRadius: 6).fill() }
-            let name = row.kind == .back ? "‹ \(row.name)" : row.kind == .item || row.kind == .verb ? "@\(row.name)" : row.name
-            let color = row.kind == .note ? NSColor(hex: "#8f8f8f") : row.kind == .verb ? NSColor(hex: "#0070f3") : NSColor(hex: "#171717")
-            let font = Fonts.sans(13, weight: row.kind == .verb ? 500 : 400)
-            let p = NSMutableParagraphStyle(); p.lineBreakMode = .byTruncatingMiddle
-            let hintW: CGFloat = row.hint.isEmpty ? 0 : min(110, ceil((row.hint as NSString).size(withAttributes: [.font: Fonts.sans(12)]).width))
-            (name as NSString).draw(in: NSRect(x: r.minX + 10, y: r.minY + 7, width: r.width - 20 - hintW - (hintW > 0 ? 8 : 0), height: 17), withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: p])
-            if hintW > 0 {
-                let hp = NSMutableParagraphStyle(); hp.lineBreakMode = .byTruncatingHead; hp.alignment = .right
-                (row.hint as NSString).draw(in: NSRect(x: r.maxX - 10 - hintW, y: r.minY + 8, width: hintW, height: 16), withAttributes: [.font: Fonts.sans(12), .foregroundColor: NSColor(hex: "#8f8f8f"), .paragraphStyle: hp])
+            var x = r.minX + 10
+            drawGlyph(row, in: NSRect(x: x, y: r.midY - 9, width: 18, height: 18))
+            x += 18 + 10
+            var right = r.maxX - 10
+            let grey = NSColor(hex: "#8f8f8f")
+            if (row.kind == .item && row.browsable) || (row.kind == .entry && row.dir) {
+                let a: [NSAttributedString.Key: Any] = [.font: Fonts.sans(15), .foregroundColor: grey]
+                ("›" as NSString).draw(in: NSRect(x: right - 16 + 4, y: r.midY - 10, width: 16, height: 20), withAttributes: a)
+                right -= 16 + 10
             }
+            if !row.hint.isEmpty && (row.kind == .back || row.zotero) {
+                let font = Fonts.sans(12)
+                let w = min(ceil((row.hint as NSString).size(withAttributes: [.font: font]).width), (right - x) * (row.kind == .back ? 0.6 : 0.4))
+                let p = NSMutableParagraphStyle(); p.lineBreakMode = row.kind == .back ? .byTruncatingHead : .byTruncatingTail
+                (row.hint as NSString).draw(in: NSRect(x: right - w, y: r.midY - 8.5, width: w, height: 17), withAttributes: [.font: font, .foregroundColor: grey, .paragraphStyle: p])
+                right -= w + 10
+            }
+            let font = Fonts.sans(14)
+            let color = row.kind == .note ? grey : NSColor(hex: "#171717")
+            let (head, tail) = row.kind == .note ? (row.name, "") : Self.nameParts(row.name)
+            let tailW = tail.isEmpty ? 0 : ceil((tail as NSString).size(withAttributes: [.font: font]).width)
+            let p = NSMutableParagraphStyle(); p.lineBreakMode = .byTruncatingTail
+            let headW = min(ceil((head as NSString).size(withAttributes: [.font: font]).width) + 1, max(0, right - x - tailW))
+            (head as NSString).draw(in: NSRect(x: x, y: r.midY - 10, width: headW, height: 20), withAttributes: [.font: font, .foregroundColor: color, .paragraphStyle: p])
+            if !tail.isEmpty { (tail as NSString).draw(at: NSPoint(x: x + headW, y: r.midY - 10), withAttributes: [.font: font, .foregroundColor: color]) }
         }
     }
+
+    /// The row's glyph (MentionMenu Glyph): ← back, nothing for a note, a folder, the file's kind, Bart's chat, the item's kind.
+    private func drawGlyph(_ row: MentionRow, in box: NSRect) {
+        let color = NSColor(hex: "#4d4d4d")
+        if row.kind == .back {
+            let a: [NSAttributedString.Key: Any] = [.font: Fonts.sans(14), .foregroundColor: color]
+            let s = ("←" as NSString).size(withAttributes: a)
+            ("←" as NSString).draw(at: NSPoint(x: box.midX - s.width / 2, y: box.midY - s.height / 2), withAttributes: a)
+            return
+        }
+        if row.kind == .note { return }
+        let key: String
+        if row.kind == .self || (row.kind == .entry && row.dir) || (row.kind == .item && row.browsable) { key = "folder" }
+        else if row.kind == .verb { key = "chat" }
+        else { key = row.type ?? (row.kind == .entry ? "pdf" : "file") }
+        let k = KindIcons.kind(key)
+        let side = KindIcons.glyphSize(key)
+        guard let ctx = NSGraphicsContext.current?.cgContext else { return }
+        ctx.saveGState()
+        ctx.translateBy(x: box.midX - side / 2, y: box.midY - side / 2)
+        k.icon.draw(in: ctx, side: side, color: color.cgColor)
+        ctx.restoreGState()
+    }
+
     private func rowAt(_ e: NSEvent) -> Int? {
         let p = convert(e.locationInWindow, from: nil)
-        let i = scrollTop + Int((p.y - 4) / Self.rowH)
+        let i = Int(((p.y - Self.pad + scrollTop) / Self.rowH).rounded(.down))
         return i >= 0 && i < rows.count ? i : nil
     }
     override func updateTrackingAreas() {
@@ -234,11 +310,95 @@ final class MentionMenuView: NSView {
         trackingAreas.forEach(removeTrackingArea)
         addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeInActiveApp, .inVisibleRect], owner: self))
     }
+    // moved onto, not appeared under: the keyboard's row stays put
     override func mouseMoved(with event: NSEvent) { if let i = rowAt(event), i != index { onHover?(i) } }
-    override func mouseDown(with event: NSEvent) { if let i = rowAt(event) { onPick?(rows[i]) } }
+    override func mouseDown(with event: NSEvent) { if let i = rowAt(event), rows[i].kind != .note { onPick?(rows[i]) } }
+    override func resetCursorRects() { for (i, r) in rows.enumerated() where r.kind != .note { addCursorRect(rowRect(i), cursor: .pointingHand) } }
     override func scrollWheel(with event: NSEvent) {
-        scrollTop = max(0, min(max(0, rows.count - Self.maxRows), scrollTop - Int(event.scrollingDeltaY / 10)))
+        let most = max(0, CGFloat(rows.count) * Self.rowH - (bounds.height - 2 * Self.pad))
+        scrollTop = max(0, min(most, scrollTop - event.scrollingDeltaY))
         needsDisplay = true
+    }
+}
+
+/// A citation's card (cite.js citationTip, CITE_CARD_STYLE and citationCardHtml): 280 wide, padding 12 14 10, white,
+/// 1px #e3e3e3, radius 10, shadow 0 8 24 rgba(0,0,0,.08); the quote 13.5px/1.55 #171717 in curly quotes, then a 1px
+/// #eaeaea rule (10 above, 9 under) and a line 11.5px #8f8f8f: a document glyph, "lead · ", where (600 #4d4d4d),
+/// " · when", " · cuts against this". The pointer may go from the circle onto it.
+final class CiteTipView: NSView {
+    var card: Cite.Card? { didSet { needsLayout = true; needsDisplay = true } }
+    var onHover: ((Bool) -> Void)?
+    static let width: CGFloat = 280
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        wantsLayer = true
+        layer?.backgroundColor = NSColor.white.cgColor
+        layer?.cornerRadius = 10
+        layer?.borderWidth = 1; layer?.borderColor = NSColor(hex: "#e3e3e3").cgColor
+        layer?.shadowColor = NSColor.black.cgColor; layer?.shadowOpacity = 0.08; layer?.shadowRadius = 12; layer?.shadowOffset = CGSize(width: 0, height: -8)
+        layer?.masksToBounds = false
+        setAccessibilityRole(.popover)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var isFlipped: Bool { true }
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) { onHover?(true) }
+    override func mouseExited(with event: NSEvent) { onHover?(false) }
+
+    var quoteText: NSAttributedString? {
+        guard let q = card?.quote, !q.isEmpty else { return nil }
+        let p = NSMutableParagraphStyle(); p.minimumLineHeight = 13.5 * 1.55; p.maximumLineHeight = 13.5 * 1.55
+        return NSAttributedString(string: "“\(q)”", attributes: [.font: Fonts.sans(13.5), .foregroundColor: NSColor(hex: "#171717"), .paragraphStyle: p])
+    }
+    var footText: NSAttributedString {
+        let grey = NSColor(hex: "#8f8f8f"), f = Fonts.sans(11.5)
+        let out = NSMutableAttributedString()
+        guard let c = card else { return out }
+        if !c.lead.isEmpty { out.append(NSAttributedString(string: "\(c.lead) · ", attributes: [.font: f, .foregroundColor: grey])) }
+        out.append(NSAttributedString(string: c.where_, attributes: [.font: Fonts.sans(11.5, weight: 600), .foregroundColor: NSColor(hex: "#4d4d4d")]))
+        if !c.when.isEmpty { out.append(NSAttributedString(string: " · \(c.when)", attributes: [.font: f, .foregroundColor: grey])) }
+        if c.counter { out.append(NSAttributedString(string: " · cuts against this", attributes: [.font: f, .foregroundColor: grey])) }
+        let p = NSMutableParagraphStyle(); p.lineBreakMode = .byTruncatingTail
+        out.addAttribute(.paragraphStyle, value: p, range: NSRange(location: 0, length: out.length))
+        return out
+    }
+    private var quoteHeight: CGFloat {
+        guard let q = quoteText else { return 0 }
+        return ceil(q.boundingRect(with: NSSize(width: Self.width - 28, height: 10_000), options: [.usesLineFragmentOrigin]).height)
+    }
+    var preferredSize: NSSize {
+        let foot: CGFloat = ceil(11.5 * 1.4)
+        let q = quoteHeight
+        return NSSize(width: Self.width, height: 12 + (q > 0 ? q + 10 + 1 + 9 : 0) + foot + 10)
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        var y: CGFloat = 12
+        let q = quoteHeight
+        if let quote = quoteText {
+            quote.draw(with: NSRect(x: 14, y: y, width: Self.width - 28, height: q), options: [.usesLineFragmentOrigin])
+            y += q + 10
+            NSColor(hex: "#eaeaea").setFill(); NSRect(x: 14, y: y, width: Self.width - 28, height: 1).fill()
+            y += 1 + 9
+        }
+        // DOC_ICON: a page with its corner folded and three lines, 12 px, stroke 2 on a 24 grid
+        if let ctx = NSGraphicsContext.current?.cgContext {
+            ctx.saveGState(); ctx.translateBy(x: 14, y: y + 2); ctx.scaleBy(x: 0.5, y: 0.5)
+            ctx.setStrokeColor(NSColor(hex: "#8f8f8f").cgColor); ctx.setLineWidth(2); ctx.setLineCap(.round); ctx.setLineJoin(.round)
+            let page = CGMutablePath()
+            page.move(to: CGPoint(x: 15, y: 2)); page.addLine(to: CGPoint(x: 6, y: 2)); page.addQuadCurve(to: CGPoint(x: 4, y: 4), control: CGPoint(x: 4, y: 2))
+            page.addLine(to: CGPoint(x: 4, y: 20)); page.addQuadCurve(to: CGPoint(x: 6, y: 22), control: CGPoint(x: 4, y: 22))
+            page.addLine(to: CGPoint(x: 18, y: 22)); page.addQuadCurve(to: CGPoint(x: 20, y: 20), control: CGPoint(x: 20, y: 22)); page.addLine(to: CGPoint(x: 20, y: 7)); page.closeSubpath()
+            for (a, b) in [((14.0, 2.0), (14.0, 6.0)), ((14.0, 6.0), (20.0, 6.0)), ((16.0, 13.0), (8.0, 13.0)), ((16.0, 17.0), (8.0, 17.0)), ((10.0, 9.0), (8.0, 9.0))] {
+                page.move(to: CGPoint(x: a.0, y: a.1)); page.addLine(to: CGPoint(x: b.0, y: b.1))
+            }
+            ctx.addPath(page); ctx.strokePath(); ctx.restoreGState()
+        }
+        footText.draw(with: NSRect(x: 14 + 12 + 6, y: y, width: Self.width - 28 - 18, height: ceil(11.5 * 1.4)), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
     }
 }
 

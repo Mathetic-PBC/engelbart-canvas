@@ -86,10 +86,10 @@ extension PaperViewController {
         let list = marks[n]
         var ink = s.inkLayer.ink
         ink.deskW = P
-        ink.zigzags = Marks.mergeLineRects(list.flatMap { Marks.bandRects($0.rects) }).map { b in
+        ink.zigzags = PaperTrace.measure("zigzags \(n)") { Marks.mergeLineRects(list.flatMap { Marks.bandRects($0.rects) }).map { b in
             let ops = Rough.zigzagRectangle(b.x * P, b.y * P + b.h * P * 0.12, b.w * P, b.h * P * 0.76, .highlight(seed: Marks.boxSeed(page: n, b)))
             return Rough.strokes(ops)
-        }
+        } }
         s.inkLayer.ink = ink
         // cards
         let running = pendingAsks.filter { $0.page == n && !$0.askId.isEmpty }
@@ -101,11 +101,11 @@ extension PaperViewController {
         for m in list {
             let asks = Canvas.shownAsks(m), runs = running.filter { $0.markId == m.id }
             if m.note == nil && asks.isEmpty && runs.isEmpty { continue }
-            let card = existing[m.id] ?? CardView(markId: m.id, page: n)
+            let card = existing[m.id] ?? PaperTrace.measure("new card \(n)") { CardView(markId: m.id, page: n) }
             card.owner = self; card.page = n
             if card.superview == nil { canvas.cardsLayer.addSubview(card, positioned: .below, relativeTo: handle) }
-            card.configure(CardView.Content(mark: m, asks: asks, runs: runs, editing: editing == m.id, showsNotes: showsNotes(), asksFrom: asksFrom(m),
-                                            names: names(), maxBody: boxMaxHeight(), canContinue: host?.paperCanContinue ?? false, canCopy: true, openLogs: openLogs))
+            PaperTrace.measure("configure \(n)") { card.configure(CardView.Content(mark: m, asks: asks, runs: runs, editing: editing == m.id, showsNotes: showsNotes(), asksFrom: asksFrom(m),
+                                            names: names(), maxBody: boxMaxHeight(), canContinue: host?.paperCanContinue ?? false, canCopy: true, openLogs: openLogs)) }
             let sel = selCard == m.id
             card.ground = sel ? .white : nil
             let side = m.side == "left" ? "left" : "right"
@@ -172,7 +172,7 @@ extension PaperViewController {
         let out = CardLayout.arrange(input, view: .init(x0: viewX, W: pdfW > 0 ? pdfW : Double(clip.bounds.width)), dragged: dragged, keepShown: keepShown,
             measure: { [weak self] id, w in
                 guard let self, let c = self.cardView(id) else { return (w, 0) }
-                let s = c.layoutCard(w: CGFloat(w))
+                let s = PaperTrace.measure("layoutCard \(c.page)") { c.layoutCard(w: CGFloat(w)) }
                 return (Double(s.width), Double(s.height))
             },
             pageOver: { [weak self] p, y in self?.pageOver(p, y) ?? p },
@@ -788,6 +788,7 @@ extension PaperViewController: CardOwner {
         case .lib(let id): host?.paperOpenMention(id)
         case .file(let folder, let rel, let name): host?.paperOpenFile(folderId: folder, rel: rel, name: name)
         case .href(let h): host?.paperOpenLink(h)
+        case .more: break // a folded run's "…" opens in its own text (AnswerText)
         }
     }
 
@@ -814,6 +815,8 @@ extension PaperViewController: CardOwner {
         renderMarks(page)
         scheduleSave()
     }
+
+    func cardResized(_ card: CardView) { arrange([card.page]) }
 
     func runAction(_ card: CardView, askId: String, action: String) {
         switch action {

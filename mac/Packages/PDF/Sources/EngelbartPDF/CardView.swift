@@ -1,4 +1,5 @@
 import AppKit
+import EngelbartDoc
 import EngelbartUI
 
 // A mark's card (PaperView cardBox, MATH-27; the look since 2026-10-16 and card-look.js): its note (a field being typed
@@ -20,6 +21,8 @@ import EngelbartUI
     func openLink(_ target: PaperLink.Target)
     func askAction(_ card: CardView, askId: String, action: String, button: TextButton)
     func runAction(_ card: CardView, askId: String, action: String)
+    /// A card's contents changed size by themselves (a folded run of citations opened): laid out again.
+    func cardResized(_ card: CardView)
 }
 
 /// The note's handwriting (card-look.js NOTE_TYPE): Caveat 500 24px/1.2, tracking .2, ink #1f2633, padding 0 6px.
@@ -117,7 +120,7 @@ final class TextButton: NSView {
     var font = Fonts.sans(13)
     var color = NSColor(hex: "#8f8f8f")
     var hoverColor = NSColor(hex: "#171717")
-    private var hovering = false { didSet { needsDisplay = true } }
+    private(set) var hovering = false { didSet { needsDisplay = true } }
 
     init(_ title: String, action: String, onPress: ((TextButton) -> Void)? = nil) {
         self.title = title; self.action = action; self.onPress = onPress
@@ -180,9 +183,96 @@ func makeLabel(_ text: String, font: NSFont, color: NSColor, lines: Int = 1) -> 
 /// A non-editable, selectable text: an answer, or the answer being written.
 final class AnswerText: NSTextView {
     weak var card: CardView?
-    override func clicked(onLink link: Any, at charIndex: Int) {
-        if let target = PaperLink.target(link) { card?.owner?.openLink(target) }
+    /// What it shows, with its folded citation runs open or not.
+    var render: ((Bool) -> NSAttributedString)? { didSet { refresh() } }
+    private(set) var expanded = false
+    private var tip: CiteTipView?
+    private var tipClose: DispatchWorkItem?
+
+    func refresh() { if let render { textStorage?.setAttributedString(render(expanded)) } }
+
+    /// A folded run's "…" opened (a click, or the pointer on it): every run of the answer shows its circles.
+    func expand() {
+        guard !expanded else { return }
+        expanded = true
+        refresh()
+        if let card { card.owner?.cardResized(card) }
     }
+
+    override func clicked(onLink link: Any, at charIndex: Int) {
+        guard let target = PaperLink.target(link) else { return }
+        if case .more = target { expand(); return }
+        hideTip()
+        card?.owner?.openLink(target)
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        for a in trackingAreas where a.owner === self && a.userInfo?["cite"] != nil { removeTrackingArea(a) }
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseMoved, .mouseEnteredAndExited, .activeInActiveApp, .inVisibleRect], owner: self, userInfo: ["cite": true]))
+    }
+
+    /// The character under a window point, when it is a citation circle or a "…": its index.
+    func circleIndex(at windowPoint: NSPoint) -> Int? {
+        guard let lm = layoutManager, let tc = textContainer, let storage = textStorage, storage.length > 0 else { return nil }
+        let p = convert(windowPoint, from: nil)
+        let q = NSPoint(x: p.x - textContainerOrigin.x, y: p.y - textContainerOrigin.y)
+        var fraction: CGFloat = 0
+        let g = lm.glyphIndex(for: q, in: tc, fractionOfDistanceThroughGlyph: &fraction)
+        guard lm.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: tc).contains(q) else { return nil }
+        let i = lm.characterIndexForGlyph(at: g)
+        guard i < storage.length, storage.attribute(.attachment, at: i, effectiveRange: nil) != nil else { return nil }
+        return i
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard let i = circleIndex(at: event.locationInWindow), let storage = textStorage else { leaveCircle(); return }
+        if let link = storage.attribute(.link, at: i, effectiveRange: nil), case .more? = PaperLink.target(link) { expand(); return }
+        if let info = storage.attribute(.citeCard, at: i, effectiveRange: nil) as? CiteCardInfo { showTip(info.card, at: i) }
+    }
+    override func mouseExited(with event: NSEvent) { super.mouseExited(with: event); leaveCircle() }
+    override func scrollWheel(with event: NSEvent) { hideTip(); super.scrollWheel(with: event) }
+    override func viewWillMove(toWindow newWindow: NSWindow?) { if newWindow == nil { hideTip() }; super.viewWillMove(toWindow: newWindow) }
+
+    /// The citation's card under its circle, or above it with no room under (cite.js citationTip), inside the window.
+    func showTip(_ card: Cite.Card, at i: Int) {
+        tipClose?.cancel(); tipClose = nil
+        guard let window, let content = window.contentView, let lm = layoutManager, let tc = textContainer else { return }
+        let glyphs = lm.glyphRange(forCharacterRange: NSRange(location: i, length: 1), actualCharacterRange: nil)
+        let r = lm.boundingRect(forGlyphRange: glyphs, in: tc).offsetBy(dx: textContainerOrigin.x, dy: textContainerOrigin.y)
+        let inContent = content.convert(convert(r, to: nil), from: nil)
+        let v = tip ?? CiteTipView()
+        v.onHover = { [weak self] inside in if inside { self?.tipClose?.cancel(); self?.tipClose = nil } else { self?.leaveCircle() } }
+        v.card = card
+        let size = v.preferredSize
+        let vw = content.bounds.width, vh = content.bounds.height
+        let x = max(8, min(inContent.midX - size.width / 2, vw - size.width - 8))
+        let flipped = content.isFlipped
+        let lowY = flipped ? inContent.maxY : inContent.minY, highY = flipped ? inContent.minY : inContent.maxY
+        // "under" the circle: further down the window
+        let under = flipped ? lowY + 6 : lowY - 6 - size.height
+        let over = flipped ? highY - 6 - size.height : highY + 6
+        let roomUnder = flipped ? under + size.height <= vh - 8 : under >= 8
+        let roomOver = flipped ? over >= 8 : over + size.height <= vh - 8
+        let y = !roomUnder && roomOver ? over : under
+        v.frame = NSRect(x: x, y: y, width: size.width, height: size.height)
+        if v.superview !== content { content.addSubview(v, positioned: .above, relativeTo: nil) }
+        tip = v
+    }
+
+    /// The pointer left the circle: the card goes after CARD_GRACE unless the pointer reaches it.
+    func leaveCircle() {
+        guard tip != nil, tipClose == nil else { return }
+        let w = DispatchWorkItem { [weak self] in self?.hideTip() }
+        tipClose = w
+        DispatchQueue.main.asyncAfter(deadline: .now() + Cite.CARD_GRACE, execute: w)
+    }
+
+    func hideTip() { tipClose?.cancel(); tipClose = nil; tip?.removeFromSuperview(); tip = nil }
+
+    /// The card shown now (tests).
+    var shownTip: CiteTipView? { tip }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)
         // the Sources' rule (cite.js: margin-top 8, padding-top 8, 1px #eaeaea)
@@ -241,8 +331,8 @@ final class CardView: NSView {
     weak var owner: CardOwner?
     private(set) var note: NoteField?
     private var noteHolder = NSView()
-    private var askViews: [(id: String, view: AskSectionView)] = []
-    private var runViews: [(id: String, view: RunBoxView)] = []
+    private(set) var askViews: [(id: String, view: AskSectionView)] = []
+    private(set) var runViews: [(id: String, view: RunBoxView)] = []
     /// It keeps its whole width (typingIn).
     var typing = false
     /// Its laid-out size, note px.
@@ -410,13 +500,9 @@ final class CardView: NSView {
     }
 
     private func naturalWidth(_ field: NoteField) -> CGFloat {
-        guard let tc = field.textContainer, let lm = field.layoutManager else { return 0 }
-        let was = tc.size
-        tc.size = NSSize(width: 100_000, height: CGFloat.greatestFiniteMagnitude)
-        lm.ensureLayout(for: tc)
-        let w = ceil(lm.usedRect(for: tc).width) + 12 + 1
-        tc.size = was
-        return w
+        // max-content: the note's longest line as set, its padding (0 6px) each side
+        guard let s = field.textStorage, s.length > 0 else { return 12 }
+        return ceil(s.boundingRect(with: NSSize(width: 100_000, height: 100_000), options: [.usesLineFragmentOrigin]).width) + 12 + 1
     }
 
     /// Placed on its sheet: `origin` in the canvas, drawn at `scale` (ns × inv).
@@ -442,10 +528,10 @@ extension CardView: NSTextViewDelegate {
 /// (scrolling inside past 40% of the pane), then Continue in project, Copy, Delete, Collapse; collapsed, "Bart ›".
 final class AskSectionView: NSView {
     let ask: AskEntry
-    private var buttons: [TextButton] = []
-    private var question: NSTextField?
-    private var body: AnswerText?
-    private var scroll: NSScrollView?
+    private(set) var buttons: [TextButton] = []
+    private(set) var question: NSTextField?
+    private(set) var body: AnswerText?
+    private(set) var scroll: NSScrollView?
     private let maxBody: CGFloat
 
     init(ask: AskEntry, card: CardView, asked: String, names: AnswerFormat.Names, maxBody: CGFloat, canContinue: Bool, canCopy: Bool) {
@@ -466,7 +552,7 @@ final class AskSectionView: NSView {
         }
         let tv = makeTextView(AnswerText.self, editable: false)
         tv.card = card
-        tv.textStorage?.setAttributedString(AnswerFormat.answer(ask.answer ?? "", names: names))
+        tv.render = { AnswerFormat.answer(ask.answer ?? "", names: names, expanded: $0) }
         let sv = NSScrollView()
         sv.drawsBackground = false; sv.hasVerticalScroller = true; sv.autohidesScrollers = true; sv.borderType = .noBorder
         sv.documentView = tv
@@ -517,19 +603,19 @@ final class AskSectionView: NSView {
 final class RunBoxView: NSView {
     let askId: String
     private weak var card: CardView?
-    private let spinner = Spinner()
-    private let label = makeLabel("", font: Fonts.sans(15), color: NSColor(hex: "#4d4d4d"))
-    private let failedLabel = makeLabel("Bart · No answer", font: Fonts.sans(15, weight: 500), color: NSColor(hex: "#171717"))
-    private lazy var stop = TextButton("Stop", action: "stop") { [weak self] _ in self?.press("stop") }
-    private lazy var close = TextButton("×", action: "dismiss") { [weak self] _ in self?.press("dismiss") }
-    private let question = makeLabel("", font: Fonts.sans(15), color: NSColor(hex: "#8f8f8f"))
-    private let error = makeLabel("", font: Fonts.sans(15), color: NSColor(hex: "#c4372d"), lines: 0)
-    private lazy var steps = TextButton("", action: "log") { [weak self] _ in self?.press("log") }
-    private let log = NSTextField(wrappingLabelWithString: "")
-    private let body = makeTextView(AnswerText.self, editable: false)
-    private let bodyScroll = NSScrollView()
-    private var failed = false
-    private var hasLog = false, open = false, hasBody = false
+    let spinner = Spinner()
+    let label = makeLabel("", font: Fonts.sans(15), color: NSColor(hex: "#4d4d4d"))
+    let failedLabel = makeLabel("Bart · No answer", font: Fonts.sans(15, weight: 500), color: NSColor(hex: "#171717"))
+    lazy var stop = TextButton("Stop", action: "stop") { [weak self] _ in self?.press("stop") }
+    lazy var close = TextButton("×", action: "dismiss") { [weak self] _ in self?.press("dismiss") }
+    let question = makeLabel("", font: Fonts.sans(15), color: NSColor(hex: "#8f8f8f"))
+    let error = makeLabel("", font: Fonts.sans(15), color: NSColor(hex: "#c4372d"), lines: 0)
+    lazy var steps = TextButton("", action: "log") { [weak self] _ in self?.press("log") }
+    let log = NSTextField(wrappingLabelWithString: "")
+    let body = makeTextView(AnswerText.self, editable: false)
+    let bodyScroll = NSScrollView()
+    private(set) var failed = false
+    private(set) var hasLog = false, open = false, hasBody = false
     private var maxBody: CGFloat = 200
 
     init(askId: String, card: CardView) {
@@ -615,7 +701,7 @@ final class RunBoxView: NSView {
 final class MoveHandle: NSView {
     weak var card: CardView?
     var onPress: ((NSEvent) -> Void)?
-    private var hovering = false { didSet { needsDisplay = true } }
+    private(set) var hovering = false { didSet { needsDisplay = true } }
     override var isFlipped: Bool { true }
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

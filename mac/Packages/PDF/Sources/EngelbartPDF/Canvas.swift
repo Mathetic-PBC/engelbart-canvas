@@ -1,5 +1,6 @@
 import Foundation
 import EngelbartCore
+import EngelbartDoc
 
 // The page as a canvas, its pure parts (src/renderer/pdf/canvas.js; the decisions are in its header and in
 // docs/superpowers/specs/2026-10-16-pdf-annotations-round.md): card widths and places, the spacing pass, and the answers a
@@ -198,73 +199,36 @@ public enum Canvas {
         return out
     }
 
-    /* ------------------------------------------------------------------------------------------- shared/mark-answers.cjs */
+    /* ------------------------------------------- shared/mark-answers.cjs and selection-card.cjs: EngelbartDoc's, typed here */
 
-    /// An answer's lines as main sends them → (answer, foot).
-    public static func answerOf(_ lines: [String]) -> (answer: String, foot: String) {
-        var body = lines.map { $0.replacingOccurrences(of: "^bart\\+?> ?", with: "", options: .regularExpression) }
-        var foot = ""
-        if let last = body.last, last.count > 2, last.hasPrefix("*"), last.hasSuffix("*"), !last.dropFirst().dropLast().contains("*") {
-            foot = String(last.dropFirst().dropLast()); body.removeLast()
-        }
-        return (body.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines), foot)
-    }
+    /// An answer's lines as main sends them → (answer, foot) (EngelbartDoc.MarkAnswers.answerOf).
+    public static func answerOf(_ lines: [String]) -> (answer: String, foot: String) { MarkAnswers.answerOf(lines) }
 
-    /// A finished answer as a mark keeps it (mark-answers.cjs askEntry).
+    /// A finished answer as a mark keeps it (MarkAnswers.askEntry): meta's values as `x || null` reads them.
     public static func askEntry(id: String, question: String, lines: [String], meta: JSONValue?, at: String, crop: String? = nil) -> AskEntry {
-        let (answer, foot) = answerOf(lines)
         let level = meta?.object?["level"]?.object ?? [:]
-        // `x || null`: any falsy value (0, '', false) is null, as JS has it
-        func truthy(_ v: JSONValue?) -> JSONValue {
-            switch v {
-            case .none, .some(.null): return .null
-            case .some(.bool(false)): return .null
-            case .some(.number(let n)) where n == 0 || n.isNaN: return .null
-            case .some(.string(let s)) where s.isEmpty: return .null
-            case .some(let v): return v
-            }
-        }
-        let m: JSONValue = .object([
-            "provider": truthy(meta?.object?["provider"]),
-            "name": truthy(level["name"]),
-            "effort": truthy(level["effort"]),
-            "ms": truthy(meta?.object?["ms"]),
-            "foot": .string(foot),
-        ])
-        var a = AskEntry(id: id, question: question.trimmingCharacters(in: .whitespacesAndNewlines), answer: answer, meta: m, at: at, pos: .null, collapsed: false)
-        if let crop, crop.range(of: "^crops/[\\w-]{1,64}\\.png$", options: .regularExpression) != nil { a.crop = crop }
-        return a
+        func text(_ v: JSONValue?) -> String? { if case .string(let s)? = v, !s.isEmpty { return s }; return nil }
+        func number(_ v: JSONValue?) -> Double? { if case .number(let n)? = v, n != 0, !n.isNaN { return n }; return nil }
+        let entry = MarkAnswers.askEntry(id: id, question: question, lines: lines, provider: text(meta?.object?["provider"]), name: text(level["name"]),
+                                         effort: text(level["effort"]), ms: number(meta?.object?["ms"]), at: at, crop: crop)
+        return AnnotationJSON.ask(entry) ?? AskEntry(id: id)
     }
 
-    /// The marks with `entry` added to mark `markId` on `page`, once; unchanged when the mark is gone or has it.
+    /// The marks with `entry` added to mark `markId` on `page`, once; unchanged when the mark is gone or has it
+    /// (MarkAnswers.withAsk over the ink as JSON).
     public static func withAsk(_ marks: PaperMarks, page: Int, markId: String, entry: AskEntry) -> PaperMarks {
-        guard let i = marks.pages[page]?.firstIndex(where: { $0.id == markId }) else { return marks }
-        if (marks.pages[page]![i].asks ?? []).contains(where: { $0.id == entry.id }) { return marks }
-        var out = marks
-        out.pages[page]![i].asks = (out.pages[page]![i].asks ?? []) + [entry]
-        return out
+        guard marks.pages[page]?.contains(where: { $0.id == markId }) == true else { return marks }
+        let entryJSON = (try? JSONValue.parse(AnnotationJSON.askJSON(entry).text)) ?? .null
+        let next = MarkAnswers.withAsk(AnnotationJSON.value(marks), page: String(page), markId: markId, entry: entryJSON)
+        let out = AnnotationJSON.decode(next)
+        return out[page].count == marks[page].count && out[page].map { $0.asks?.count ?? 0 } == marks[page].map { $0.asks?.count ?? 0 } ? marks : out
     }
 
-    /* ------------------------------------------------------------------------------------------- shared/selection-card.cjs */
+    public static let CARD_GAP = SelectionCard.CARD_GAP
 
-    public static let CARD_GAP = 8.0
-
-    /// The selection card's place: under the selection's last line, else above its first, inside the pane; nil when the
-    /// selection shows nowhere in it. All rects in one space; whole pixels.
+    /// The selection card's place (EngelbartDoc.SelectionCard.place).
     public static func selectionCardPlace(line: CGRect?, all: CGRect?, pane: CGRect?, size: CGSize?, gap: Double = CARD_GAP) -> CGRect? {
-        func ok(_ r: CGRect?) -> Bool { guard let r else { return false }; return [r.minX, r.minY, r.width, r.height].allSatisfy { $0.isFinite } }
-        guard ok(line), ok(pane), let size, size.width.isFinite, size.height.isFinite, let line, let pane else { return nil }
-        let sel = ok(all) ? all! : line
-        let right = pane.minX + pane.width, bottom = pane.minY + pane.height
-        if sel.minX + sel.width <= pane.minX || sel.minX >= right || sel.minY + sel.height <= pane.minY || sel.minY >= bottom { return nil }
-        let width = max(0, min(size.width, pane.width)), height = max(0, min(size.height, pane.height))
-        let x = max(pane.minX, min(line.minX, right - width))
-        let below = line.minY + line.height + gap, above = min(sel.minY, line.minY) - gap - height
-        let y: Double
-        if below >= pane.minY && below + height <= bottom { y = below }
-        else if above >= pane.minY && above + height <= bottom { y = above }
-        else { y = max(pane.minY, min(below, bottom - height)) }
-        return CGRect(x: jsRound(x), y: jsRound(y), width: jsRound(width), height: jsRound(height))
+        SelectionCard.place(line: line, all: all, pane: pane, size: size, gap: gap)
     }
 }
 

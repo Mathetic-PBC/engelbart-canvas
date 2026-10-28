@@ -35,14 +35,44 @@ final class FakePaperHost: PaperHost {
     var views: [PaperViewState] = []
     var canAsk = true
     var mentions: [MentionRow]? = nil
+    var dismissed: [String] = []
+    var continued: [PaperContinue] = []
+    var links: [String] = []
+    var openedMentions: [String] = []
+    var openedFiles: [String] = []
+    var opensMentions = false
+    var names: [String: String?] = [:]
+    var folders: [String: FolderListing] = [:]
+    var listed: [String] = []
+    var menuOpen: [Bool] = []
+    var targets: [(String, Int)] = []
+    var found: [(Int, Int)] = []
+    var readMarks: PaperMarks? = nil
     func paperMarksChanged(_ marks: PaperMarks, json: String) { saved.append((marks, json)) }
+    func paperReadAnnotations() -> PaperMarks? { readMarks }
     var paperCanAsk: Bool { canAsk }
     func paperAsk(_ ask: PaperAsk) { asked.append(ask) }
     func paperStopAsk(_ askId: String) { stopped.append(askId) }
+    func paperDismissAsk(_ askId: String) { dismissed.append(askId) }
+    var paperCanContinue: Bool { true }
+    func paperContinue(_ c: PaperContinue) { continued.append(c) }
     var paperCanCopy: Bool { true }
     func paperCopy(_ text: String) { copied.append(text) }
+    func paperOpenLink(_ href: String) { links.append(href) }
+    var paperOpensMentions: Bool { opensMentions }
+    func paperOpenMention(_ id: String) { openedMentions.append(id) }
+    func paperOpenFile(folderId: String, rel: String, name: String) { openedFiles.append("\(folderId)/\(rel)") }
+    func paperLibraryName(_ id: String) -> String?? { names[id] }
     func paperView(_ state: PaperViewState) { views.append(state) }
-    func paperMentionItems(_ query: String) -> [MentionRow]? { mentions }
+    func paperMentionItems(_ query: String) -> [MentionRow]? { mentions.map { $0.filter { query.isEmpty || $0.name.lowercased().contains(query) } } }
+    func paperListFolder(_ folderId: String, rel: String, done: @escaping (FolderListing) -> Void) -> Bool {
+        listed.append("\(folderId):\(rel)")
+        if let l = folders["\(folderId):\(rel)"] { DispatchQueue.main.async { done(l) } }
+        return true
+    }
+    func paperMentionMenu(open: Bool) { menuOpen.append(open) }
+    func paperTarget(_ text: String, matches: Int, active: Int) { targets.append((text, matches)) }
+    func paperFound(matches: Int, active: Int) { found.append((matches, active)) }
 }
 
 @MainActor

@@ -260,6 +260,7 @@ public final class PaperViewController: NSViewController {
         }
         self.reader = reader
         Self.warmNoteFace()
+        Self.warmTextSystem()
         geoms = (0..<doc.pageCount).map { PageGeometry(page: doc.page(at: $0)!) }
         note = ""
         if let v = restoreView, v.zoom > 0 { zoom = clamp(v.zoom, PaperZoom.ZOOM_MIN, PaperZoom.ZOOM_MAX) }
@@ -268,6 +269,24 @@ public final class PaperViewController: NSViewController {
 
     /// The note's handwriting decoded and its glyphs loaded on a background queue (CoreText is thread-safe), so the first
     /// card drawn does not pay for it on the main thread (the stall probe's slowest page held it ~70 ms).
+    private static var textSystemWarm = false
+    /// The first note field the process makes pays for the text system (NSTextView, its layout, the input context:
+    /// 50–120 ms on the cloud runners, measured by the stall probe). Paid once, while the paper opens, rather than in
+    /// the middle of reading it.
+    static func warmTextSystem() {
+        guard !textSystemWarm else { return }
+        textSystemWarm = true
+        PaperTrace.measure("warm text system") {
+            let field = makeTextView(NoteField.self, editable: true)
+            field.textContainerInset = NSSize(width: 6, height: 0)
+            field.textStorage?.setAttributedString(NSAttributedString(string: "warm @bart", attributes: NoteLook.attrs))
+            _ = textHeight(field, width: 228)
+            let answer = makeTextView(AnswerText.self, editable: false)
+            answer.textStorage?.setAttributedString(AnswerFormat.answer("A **warm** answer", names: AnswerFormat.Names()))
+            _ = textHeight(answer, width: 228)
+        }
+    }
+
     nonisolated static func warmNoteFace() {
         DispatchQueue.global(qos: .userInitiated).async {
             for name in ["Caveat-Medium", "Caveat-Regular"] {

@@ -66,6 +66,6 @@ None on `EventHub`; everything goes through `PaperHost`.
 - **Store**: `readAnnotations` / `writeAnnotations` / `readPageAnnotations` / `writePageAnnotations` (file layout
   `<root>/annotations/<id>.json`, `annotations/pages/<sha256(address)>.json`) and `addMarkAnswer`; this package only
   formats the JSON.
-- **Editor**: if a shared MentionMenu view exists, the note's menu could use it (here: a lookalike, `MentionMenuView`).
+- **Editor**: the note's @ menu is a lookalike of MentionMenu.jsx (`MentionMenuView`); a shared AppKit menu would replace it.
 - **UI**: `Fonts.caveat` must load (woff2 registration); Caveat 500 is the note face.
-- **Doc**: `selection-card`, `mark-answers`, `mentions` are duplicated here (dependency rule); keep them in step.
+- **Doc** (a dependency since the second pass): SelectionCard, MarkAnswers, Inline (mentions, noteParts), Cite and PassageText are its; this package wraps them in typed form.

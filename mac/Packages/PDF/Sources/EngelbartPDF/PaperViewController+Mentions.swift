@@ -40,7 +40,9 @@ extension PaperViewController {
         menuView.rows = rows
         if mentionIdx >= rows.count { mentionIdx = 0 }
         menuView.index = mentionIdx
+        let wasHidden = menuView.isHidden
         menuView.isHidden = rows.isEmpty
+        if wasHidden && !rows.isEmpty { menuView.rise() }
         placeMenu()
     }
 
@@ -51,7 +53,7 @@ extension PaperViewController {
         guard let window = view.window else { return }
         let inWindow = window.convertFromScreen(caret)
         let r = paperArea.convert(inWindow, from: nil)
-        let size = menuView.preferredSize, a = paperArea.bounds
+        let a = paperArea.bounds, size = menuView.preferredSize(maxWidth: a.width - 16)
         var y = r.minY - 4 - size.height
         if y < 8 { y = r.maxY + 4 }
         let x = max(8, min(r.minX, a.width - size.width - 8))
