@@ -15,6 +15,7 @@ import { api, errorMessage } from '../api.js';
 import BartPicker from './BartPicker.jsx';
 import { EFFORT_LABELS } from '../../main/bart/question.cjs';
 import { attachRows } from '../model/rail.js';
+import { pickBuildModel, providerOf, setBuildModels } from '../model/build-default.js';
 import { DEFAULT_TARGET, pickedTarget, rememberTarget, sameTarget, targetKey, targetTag } from '../model/build-target.js';
 import { KindGlyph as Glyph } from '../ui/Icons.jsx';
 import { usePlaced } from '../ui/usePlaced.js';
@@ -36,7 +37,6 @@ const SEARCH = <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24
 const GIT_FOLDER = { type: 'folder', tags: ['git'] }; // the glyph of a repository that is not a library row
 const TAG = { flex: 'none', font: '500 10px/1 var(--font-sans)', letterSpacing: '1.2px', textTransform: 'uppercase', color: '#8f8f8f' };
 
-const providerOf = (models, key) => Object.keys(models.providers).find((id) => models.providers[id].models[key]) || models.provider;
 const rectOf = (element) => { const r = element.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width }; };
 /** Nothing to hang from: the middle of the window, near its top, as the modal was. */
 const fallbackAnchor = () => { const x = Math.max(8, ((window.innerWidth || 1200) - WIDTH) / 2), y = Math.round((window.innerHeight || 800) * 0.12); return { left: x, right: x + WIDTH, top: y, bottom: y }; };
@@ -142,6 +142,7 @@ export default function BuildPanel({ projectId, workspaceId, title, anchor, libr
     api.buildModels('build').then((value) => {
       if (!live) return;
       setModels(value);
+      setBuildModels(value); // the freshest read: every Build card and --build line shows it too (model/build-default.js)
       const start = value.providers[value.provider].ladder[0];
       setChoice({ provider: value.provider, model: start.model, effort: start.effort });
     }).catch((e) => { if (live) setError(errorMessage(e)); });
@@ -324,7 +325,7 @@ export default function BuildPanel({ projectId, workspaceId, title, anchor, libr
           onPick={(pick) => {
             const next = { provider: providerOf(models, pick.model), model: pick.model, effort: pick.effort };
             setChoice(next);
-            api.rememberModelChoice('build', next).catch(() => {}); // the next Build panel starts here
+            pickBuildModel(next); // the next Build panel starts here, and every Build card and --build line shows it
           }}
           onEnter={() => {}}
           onLeave={() => {}}
