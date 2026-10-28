@@ -55,7 +55,7 @@ test.afterEach(() => { delete globalThis.getSelection; delete globalThis.documen
 
 const settled = () => new Promise((resolve) => setImmediate(resolve));
 const click = (m, dataset, disabled = false) => m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { dataset, disabled, closest: () => null } : null) }, preventDefault() {} });
-const BUTTON_RE = /<button type="button" class="bart-go" data-act="footbuild" data-turn="(\d+)" style="[^"]*">([^<]*)<\/button>/g;
+const BUTTON_RE = /<button type="button" class="bart-send" data-act="footbuild" data-turn="(\d+)" aria-label="([^"]*)"/g;
 const buttons = (html) => [...html.matchAll(BUTTON_RE)].map((m) => ({ turn: Number(m[1]), label: m[2] }));
 const offerRows = (html) => (html.match(/data-build-offer=/g) || []).length;
 
@@ -63,14 +63,16 @@ const TITLE = 'bart# [chat 2026-10-27T09:00:00Z] Haiku';
 const answer = (said, { foot = 'bart> *Chat · Sonnet · high · 3 s*' } = {}) => [TITLE, '@bart add Haiku 5.5 to the models', 'bart> Here is the Build prompt:', 'bart> ```', 'bart> Add Haiku 5.5 to models.cjs.', 'bart> ```', ...said.map((l) => `bart> ${l}`), foot, ''];
 const OFFER = answer(['Want me to build it?']);
 
-test('a finished fenced answer ending with a build offer: one Build text button, under its last line, above its foot', () => {
+test('a finished fenced answer ending with a build offer: one "Build this prompt?" bar, in the offer\'s place, above its foot', () => {
   const m = mounted(OFFER);
   const html = m.html();
-  assert.deepEqual(buttons(html), [{ turn: 1, label: 'Build this prompt' }], 'one button, the turn\'s question line, saying the whole offer');
+  assert.deepEqual(buttons(html), [{ turn: 1, label: 'Build' }], 'one send, the turn\'s question line');
   assert.equal(offerRows(html), 1);
   const at = html.indexOf('data-build-offer=');
   const row = html.slice(at, html.indexOf('</div>', at));
-  assert.ok(!/<svg|data-build-icon/.test(row), 'no icon');
+  assert.match(row, /<span data-offer-bar="1" style="display:inline-flex;[^"]*background:#fff;border:1px solid #eaeaea;border-radius:10px">/, 'a white bar as wide as what it holds');
+  assert.match(row, />Build this prompt\?<\/span>/, 'saying the offer');
+  assert.ok(!/data-act="offerpick"/.test(row), 'no chip while Build\'s list is not read (no bridge here): never @bart\'s model in its place');
   assert.ok(html.indexOf('data-line="6"') < at, 'under the offer line');
   assert.match(html, /<div data-offer-said="1" [^>]*data-line="6"/, 'the offer line kept in the text but not drawn: the button stands for it');
   assert.equal((html.match(/data-offer-said=/g) || []).length, 1, 'no other line hidden');
@@ -79,7 +81,7 @@ test('a finished fenced answer ending with a build offer: one Build text button,
   const hidden = [...spaced.matchAll(/<div data-offer-said="1" [^>]*data-line="(\d+)"/g)].map((m) => Number(m[1]));
   assert.deepEqual(hidden, [6, 7], 'the blank line and the offer, not the closing fence');
   assert.ok(at < html.indexOf('data-line="7"'), 'above the foot');
-  assert.match(row, /class="bart-go"[^>]*style="[^"]*background:#0070f3;color:#fff/, 'blue, as Start research is');
+  assert.match(row, /class="bart-send"[^>]*style="[^"]*width:26px;height:26px;[^"]*border-radius:50%;background:#0070f3;color:#fff/, 'the round blue send, as an @bart line\'s');
 });
 
 test('the offers it reads: "Want me to build it?", "Should I build this?", "Want me to build that now?" and the like', async () => {
@@ -112,7 +114,7 @@ test('no button while the turn is pending or streaming, nor on an earlier turn',
   assert.equal(offerRows(later.html()), 0, 'the offer is not the last answer');
   // The last answer offering again, after an earlier offer: one button, for it.
   const again = mounted([...OFFER.slice(0, -1), '@bart use Opus', 'bart> ```', 'bart> Add Opus.', 'bart> ```', 'bart> Should I build this?', 'bart> *Chat · Sonnet · high · 2 s*', '']);
-  assert.deepEqual(buttons(again.html()), [{ turn: 8, label: 'Build this prompt' }]);
+  assert.deepEqual(buttons(again.html()), [{ turn: 8, label: 'Build' }]);
 });
 
 test('no button with a Build card under the conversation, in a read-only document, without onBuild, nor in a Build\'s messages', () => {

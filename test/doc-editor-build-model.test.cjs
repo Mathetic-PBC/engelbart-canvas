@@ -1,9 +1,10 @@
 'use strict';
 
-// The Build default where a Build is made (MATH-162, 2026-10-27): a Build card's model is a chip opening Build's selector,
-// and an unsent `@bart --build` line's chip names the Build default and opens the same selector. A pick in either is the
-// default for the Builds started next (rememberModelChoice('build'), as the Build panel's), redrawn on every chip that
-// shows it; the card's own Build, its label and the line's text stay as they are.
+// The Build default where a Build is made (MATH-162, 2026-10-27; the offer's chip 2026-10-28): a build offer's
+// "Build this prompt?" bar has a chip opening Build's selector, and an unsent `@bart --build` line's chip names the Build
+// default and opens the same selector. A pick in either is the default (rememberModelChoice('build'), as the Build panel's),
+// which the Build started there runs on, redrawn on every chip that shows it. A Build card's model is plain words: what
+// that Build runs on, changed by nothing.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -72,63 +73,64 @@ const text = (html) => html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
 // What opened a selector: its data, and where it is.
 const at = (dataset) => { const el = { dataset, getBoundingClientRect: () => ({ left: 10, right: 120, top: 40, bottom: 68 }) }; el.closest = () => el; return el; };
 const lineChip = (html, i) => { const m = html.match(new RegExp(`<span data-act="pick" data-row="${i}"[^>]*>([^<]*)<`)); return m ? m[1] : null; };
-const cardChip = (html) => html.match(/<span data-act="buildmodel"[^>]*>[\s\S]*?<\/span><\/span>/);
+const offerChip = (html) => html.match(/<span data-act="offerpick"[^>]*>[\s\S]*?<\/span><\/span>/);
 const isBuildPicker = (view) => !!view && !!view.props.models && !view.props.models.build && Object.keys(view.props.models.providers).every((id) => view.props.models.providers[id].ladder.length === 1);
 
 const ID = '0123456789';
 const TITLE = 'bart# [chat 2026-10-27T09:00:00Z] Haiku';
 const task = (extra) => ({ id: ID, title: 'Add Haiku', status: 'running', messages: [], model: 'sol', modelName: 'Sol', effort: 'high', ...extra });
 
-test('a Build card\'s model is a chip opening Build\'s selector; its words stay what the Build runs or ran on', async () => {
+// An answer offering to build its fenced prompt (MATH-160): its bar's chip.
+const OFFER = [TITLE, '@bart write the Build prompt', 'bart> Here it is:', 'bart> ```', 'bart> Add Haiku 5.5 to models.cjs.', 'bart> ```', 'bart> Want me to build it?', 'bart> *Chat · Sonnet · high · 3 s*', ''];
+
+test('a Build card\'s model is plain words, what the Build runs or ran on: no chip, no selector', async () => {
   const m = mounted([TITLE, '@bart --build add Haiku 5.5 to the models', `build> ${ID}`, ''], { builds: { [ID]: task({ status: 'review', ranModel: 'gpt-6-sol' }) } });
   await settled();
-  const chip = cardChip(m.html());
-  assert.ok(chip, 'the joined Build\'s head has the chip');
-  assert.match(chip[0], new RegExp(`data-build-id="${ID}" role="button" aria-haspopup="dialog" aria-expanded="false"`));
-  assert.equal(text(chip[0]), 'Sol (ran as gpt-6-sol) · High', 'the card\'s own model and effort, "(ran as …)" kept');
-  assert.match(chip[0], /<svg[^>]*>[\s\S]*m6 9 6 6 6-6/, 'a chevron');
-  assert.doesNotMatch(chip[0], /border:/, 'no border');
-  // A standalone Build card and a task's card have it too.
   const head = (parts) => new Map(parts).get('head');
-  assert.match(head(m.editor.buildParts(ID, task())), /data-act="buildmodel"/);
-  assert.equal(text(cardChip(head(m.editor.buildParts(ID, task())))[0]), 'Sol · High');
-  assert.match(head(m.editor.taskParts(ID, task({ kind: 'build' }))), /data-act="buildmodel"[^>]*>Sol · High/);
-  // It opens Build's selector on the Build default, not on the card's model.
-  m.editor.openPicker(at({ act: 'buildmodel', buildId: ID }), 'build');
-  assert.deepEqual([m.editor.state.picker.kind, m.editor.state.picker.i], ['build', ID]);
+  for (const html of [m.html(), head(m.editor.buildParts(ID, task())), head(m.editor.taskParts(ID, task({ kind: 'build' })))]) {
+    assert.doesNotMatch(html, /data-act="(?:buildmodel|offerpick)"/);
+  }
+  assert.match(m.html(), /<span style="flex:none;font-size:12\.5px;color:#8f8f8f">Sol \(ran as gpt-6-sol\) · High<\/span>/);
+});
+
+test('a build offer\'s bar: "Build this prompt?", the Build default\'s chip, then the send; the chip opens Build\'s selector', async () => {
+  const m = mounted(OFFER);
+  await settled();
+  const chip = offerChip(m.html());
+  assert.ok(chip, 'the bar has the chip');
+  assert.match(chip[0], /data-turn="1" role="button" aria-haspopup="dialog" aria-expanded="false"/);
+  assert.equal(text(chip[0]), 'Opus High', 'the Build default, not @bart\'s Sonnet');
+  const bar = m.html().match(/<span data-offer-bar="1"[\s\S]*?<\/button>/)[0];
+  assert.ok(bar.indexOf('Build this prompt?') < bar.indexOf('data-act="offerpick"') && bar.indexOf('data-act="offerpick"') < bar.indexOf('data-act="footbuild"'), 'words, chip, send');
+  // Hovered or clicked, it opens Build's selector on the Build default.
+  m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { ...at({ act: 'offerpick', turn: '1' }), disabled: false } : null) }, preventDefault() {} });
+  assert.deepEqual([m.editor.state.picker.kind, m.editor.state.picker.i], ['offer', 1]);
   const view = m.editor.pickerView();
   assert.ok(isBuildPicker(view), 'Build\'s list, not @bart\'s');
   assert.deepEqual(view.props.current, { provider: 'anthropic', model: 'opus', effort: 'high' });
-  assert.match(cardChip(m.html())[0], /aria-expanded="true"/);
+  assert.match(offerChip(m.html())[0], /aria-expanded="true"/);
 });
 
-test('a click on the card\'s chip opens it, as hovering does', async () => {
-  const m = mounted([TITLE, '@bart --build add Haiku', `build> ${ID}`, ''], { builds: { [ID]: task() } });
-  await settled();
-  m.editor.editorClick({ target: { closest: (sel) => (sel === '[data-act]' ? { ...at({ act: 'buildmodel', buildId: ID }), disabled: false } : null) }, preventDefault() {} });
-  assert.equal(m.editor.state.picker.kind, 'build');
-});
-
-test('a pick on the card: saved as Build\'s default for the next Build; the card\'s Build and its label stay', async () => {
+test('a pick on the offer\'s chip: the Build default, which its send then builds on; nothing written, no Build changed', async () => {
   const b = bridge(), builds = { [ID]: task() }, before = JSON.stringify(builds);
-  const m = mounted([TITLE, '@bart --build add Haiku', `build> ${ID}`, '', '@bart --build add Luna too'], { builds, api: b.api });
+  const m = mounted([...OFFER.slice(0, -1), '', '@bart --build add Luna too', '', `build> ${ID}`, ''], { builds, api: b.api });
   await settled();
   const doc = m.props.text;
-  m.editor.openPicker(at({ act: 'buildmodel', buildId: ID }), 'build');
+  m.editor.openPicker(at({ act: 'offerpick', turn: '1' }), 'offer');
   m.editor.pickerView().props.onPick({ provider: 'anthropic', model: 'fable', effort: 'max' });
   await settled();
   assert.deepEqual(b.saved, [['build', { provider: 'anthropic', model: 'fable', effort: 'max' }]]);
-  assert.equal(JSON.stringify(builds), before, 'the Build is not changed');
+  assert.equal(JSON.stringify(builds), before, 'no Build is changed');
   assert.equal(m.props.text, doc, 'nothing written into the document');
-  assert.equal(text(cardChip(m.html())[0]), 'Sol · High', 'the card still says what its Build runs on');
-  assert.equal(lineChip(m.html(), 4), 'Fable Max', 'the --build line below shows the new default');
+  assert.equal(text(offerChip(m.html())[0]), 'Fable Max', 'the chip shows the pick');
+  assert.equal(lineChip(m.html(), 9), 'Fable Max', 'the --build line below shows the new default');
   assert.deepEqual(m.editor.pickerView().props.current, { provider: 'anthropic', model: 'fable', effort: 'max' }, 'the selector, open again, shows it');
   assert.ok(m.redrawn() > 0, 'drawn again');
   // A pick on the other provider: the provider comes with it.
   m.editor.pickerView().props.onPick({ model: 'luna', effort: 'medium' });
   await settled();
   assert.deepEqual(b.saved[1], ['build', { provider: 'openai', model: 'luna', effort: 'medium' }]);
-  assert.equal(lineChip(m.html(), 4), 'Luna Medium');
+  assert.equal(text(offerChip(m.html())[0]), 'Luna Medium');
 });
 
 test('an unsent --build line\'s chip names the Build default; a plain @bart line\'s names @bart\'s model', async () => {
