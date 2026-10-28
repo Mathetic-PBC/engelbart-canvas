@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // ask.cjs createBart — the @bart service: one turn of Chat (`bart`), Brainstorm, Discover or Create, run on the Claude
@@ -18,7 +19,7 @@ public struct AskRequest: Sendable {
     public var ref: DocRef
     public var workspaceId: String
     public var text: String
-    public var turns: [Turn]
+    public var turns: [AskTurn]
     /// Regenerate's selector: overrules the line's flags for this run without rewriting the line.
     public var choice: (model: String, effort: String)?
     public var agent: String
@@ -29,7 +30,7 @@ public struct AskRequest: Sendable {
     public var routed: Routed?
     public var place: OJ?
     public var steer: Steer?
-    public init(askId: String, ref: DocRef, workspaceId: String, text: String, turns: [Turn] = [], choice: (model: String, effort: String)? = nil, agent: String = "bart",
+    public init(askId: String, ref: DocRef, workspaceId: String, text: String, turns: [AskTurn] = [], choice: (model: String, effort: String)? = nil, agent: String = "bart",
                 highlight: HighlightInput? = nil, stage: StageInput? = nil, live: LivePage? = nil, overleaf: OverleafTabs? = nil, routed: Routed? = nil, place: OJ? = nil, steer: Steer? = nil) {
         self.askId = askId; self.ref = ref; self.workspaceId = workspaceId; self.text = text; self.turns = turns; self.choice = choice; self.agent = agent
         self.highlight = highlight; self.stage = stage; self.live = live; self.overleaf = overleaf; self.routed = routed; self.place = place; self.steer = steer
@@ -347,7 +348,7 @@ public final class Bart: @unchecked Sendable {
         let started = Time.ms()
         log?.start(AskPlan.runRecord(id: logId, agent: agent, provider: plan.provider, projectId: projectId, question: q.text, system: system, context: context,
                                      shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned: plan.pinned, routed: q.routed, place: q.place, reply: plan.prior.count))
-        if let corrected = q.routed?.corrected { Route.markCorrected(log, id: q.routed?.id, projectId: projectId, text: q.text, agent: corrected) }
+        if let corrected = q.routed?.corrected { RouteModel.markCorrected(log, id: q.routed?.id, projectId: projectId, text: q.text, agent: corrected) }
         do {
             let result = try await answer(store: store, projectId: projectId, q: q, plan: plan, context: context, held: held, steered: steered, threads: threads, system: system, logId: logId, models: models, onProgress: onProgress)
             log?.finish(logId, status: "done", written: result.lines, ms: Time.ms() - started)
@@ -464,7 +465,7 @@ public final class Bart: @unchecked Sendable {
             let line = await makingTask?.value ?? ""
             body = Create.createdBody(Create.createdSentence(made.files.isEmpty ? "" : Making.createdLine(line.isEmpty ? Create.requestSentence(plan.question) : line), out.text, plan.question), made, logId)
         } else if plan.welcome {
-            body = Card.cardBody(AskPlan.welcomeReply(out.text, stage: plan.stage)).body
+            body = CardBody.cardBody(AskPlan.welcomeReply(out.text, stage: plan.stage)).body
         } else {
             let events = seen.lock.withLock { seen.events }
             body = await citedBody(store: store, agent: agent, routed: q.routed, body: AskPlan.replyBody(agent, named.text), projectId: projectId, workspaceId: q.workspaceId,
@@ -472,7 +473,7 @@ public final class Bart: @unchecked Sendable {
         }
         // Kept under what the document will say once this answer is in it: the next follow-up is found by that.
         if let s = out.session, let threads {
-            threads.keep(AskPlan.threadKey(projectId, q.ref, plan.prior + [AskPlan.cleanTurn(Turn(question: q.text, answer: Reply.answerText(body)))]),
+            threads.keep(AskPlan.threadKey(projectId, q.ref, plan.prior + [AskPlan.cleanTurn(AskTurn(question: q.text, answer: Reply.answerText(body)))]),
                          provider: plan.provider, session: s, projectId: projectId, workspaceId: q.workspaceId)
         }
         return AskAnswer(lines: Reply.replyLines(body, meta, model: !AskPlan.quiet.contains(agent), agent: agent), meta: meta, topic: named.topic, research: named.research, welcome: nil)
@@ -480,10 +481,10 @@ public final class Bart: @unchecked Sendable {
 
     /// Chat's answer with its citations checked (2026-10-21, Cite): each against what it cites, before the answer is
     /// written and before its thread is kept. Should the library not be read, every citation is taken out.
-    func citedBody(store: BartStore, agent: String, routed: Routed?, body: String, projectId: String, workspaceId: String, prior: [Turn], question: String,
+    func citedBody(store: BartStore, agent: String, routed: Routed?, body: String, projectId: String, workspaceId: String, prior: [AskTurn], question: String,
                    logId: String, context: BartContext?, events: [JSONValue]) async -> String {
         guard AskPlan.citesChecked(agent, routed) else { return body }
-        var o = Cite.Options()
+        var o = CiteCheck.Options()
         o.dataRoot = store.dataRoot
         o.workspaceId = workspaceId
         o.currentThread = prior.map { ($0.question, $0.answer) } + [(question, "")]
@@ -503,10 +504,10 @@ public final class Bart: @unchecked Sendable {
             // A note on a highlight is citable (2026-10-23), on whichever copy of a paper added twice it was drawn.
             let files = SourceText.inkFiles(store: store, rows: library)
             o.readInk = { row in SourceText.readInk(files, row) }
-            checked = await Cite.checkCitations(body, o)
+            checked = await CiteCheck.checkCitations(body, o)
         } else {
             o.readText = { _ in nil }
-            checked = await Cite.checkCitations(body, o)
+            checked = await CiteCheck.checkCitations(body, o)
         }
         if !checked.kept.isEmpty || !checked.dropped.isEmpty {
             log?.amend(logId, [("citations", ["kept": .array(checked.kept.map { $0.json }), "dropped": .array(checked.dropped.map { $0.json })])])

@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // context.cjs — what one @bart question carries (2026-09-19): the workspace document, the note the question was asked
@@ -79,7 +80,7 @@ public enum Context {
 
     /// The earlier turns of the exchange, as the document holds them now; a conversation not all with `agent` has each
     /// turn labelled with the agent that answered it.
-    public static func conversationBlock(_ turns: [Turn], agent: String? = nil) -> String {
+    public static func conversationBlock(_ turns: [AskTurn], agent: String? = nil) -> String {
         if turns.isEmpty { return "" }
         let mixed = turns.contains { t in t.agent.map { turnAgents[$0] != nil && $0 != agent } ?? false }
         let said = turns.enumerated().map { n, t -> String in

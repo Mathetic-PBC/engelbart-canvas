@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 
 // renderer/model/intelligence.js — Settings › Intelligence (2026-10-06, MATH-53): what its rows show and what a pick in
 // them saves. Pure: ModelSettings.read's result in, rows and patches out. The provider a row runs on is found as a run

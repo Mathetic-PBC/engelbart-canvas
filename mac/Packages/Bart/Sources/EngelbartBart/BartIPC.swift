@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // ipc.cjs, @bart's handlers — what a window asks of @bart, its values checked as Electron's IPC checked them (the type
@@ -106,14 +107,14 @@ public enum AskInput {
     }
 
     /// The earlier turns of an exchange, the last 40, each cut in the middle past what a turn may hold.
-    public static func turns(_ value: JSONValue?) throws -> [Turn] {
+    public static func turns(_ value: JSONValue?) throws -> [AskTurn] {
         try (value?.array ?? []).suffix(40).map { t in
-            Turn(question: try clipped(t["question"], "earlier question", 8000), answer: try clipped(t["answer"], "earlier answer", 40000),
+            AskTurn(question: try clipped(t["question"], "earlier question", 8000), answer: try clipped(t["answer"], "earlier answer", 40000),
                  agent: t["agent"]?.string.flatMap { AskPlan.agents.contains($0) ? $0 : nil })
         }
     }
 
-    static let routePicks = Route.picks
+    static let routePicks = RouteModel.picks
 
     /// An ask's `routed`, or nil for a line Bart did not hand over.
     public static func routed(_ value: JSONValue?) throws -> Routed? {
@@ -169,7 +170,7 @@ public enum AskInput {
                                question: try cutStr(t["question"], "thread question", 400) ?? "", up: Int(max(0, min(1e6, (up.isFinite ? up : 0).rounded(.down)))))
         }
         var rule: (agent: String, rule: String?)? = nil
-        if let r = value["rule"], r.object != nil, let a = r["agent"]?.string, Route.picks.contains(a) { rule = (a, try cutStr(r["rule"], "rule", 40).flatMap { $0.isEmpty ? nil : $0 }) }
+        if let r = value["rule"], r.object != nil, let a = r["agent"]?.string, RouteModel.picks.contains(a) { rule = (a, try cutStr(r["rule"], "rule", 40).flatMap { $0.isEmpty ? nil : $0 }) }
         let projectId = try str(pid, "project id", 64)
         let ref = (try? docRef(value["ref"])) ?? nil
         guard let line = value["text"]?.string else { throw IPCError("line must be a string of at most Infinity characters") }
@@ -179,30 +180,6 @@ public enum AskInput {
                             workspaceName: try cutStr(value["workspaceName"], "workspace name", 400) ?? "", threads: threads, specAbove: specAbove,
                             specTitle: specAbove ? (try cutStr(value["specTitle"], "spec title", 400) ?? "") : "", current: current, rule: rule,
                             place: placeOf(value["place"], projectId: projectId, ref: ref))
-    }
-}
-
-/// mark-answers.cjs askEntry: a finished answer as a mark keeps it.
-public enum MarkAnswers {
-    static let attribution = JSRegex("^\\*([^*]+)\\*$")
-    static let cropRE = JSRegex("^crops/[A-Za-z0-9_-]{1,64}\\.png$")
-
-    public static func answerOf(_ lines: [String]) -> (answer: String, foot: String) {
-        var body = lines.map { JSRegex("^bart\\+?> ?").replace($0, with: "") }
-        var foot = ""
-        if let last = body.last, let m = attribution.match(last) { foot = m[1] ?? ""; body.removeLast() }
-        return (body.joined(separator: "\n").jsTrim, foot)
-    }
-
-    public static func askEntry(id: String, question: String, lines: [String], meta: ReplyMeta, at: String, crop: String? = nil) -> OJ {
-        let (answer, foot) = answerOf(lines)
-        func orNull(_ s: String) -> OJ { s.isEmpty ? .null : .string(s) }
-        var o: [(String, OJ)] = [("id", .string(id)), ("question", .string(question.jsTrim)), ("answer", .string(answer)),
-                                 ("meta", ["provider": orNull(meta.provider), "name": orNull(meta.level.name), "effort": orNull(meta.level.effort),
-                                           "ms": meta.ms != 0 ? .number(meta.ms) : .null, "foot": .string(foot)]),
-                                 ("at", .string(at)), ("pos", .null), ("collapsed", false)]
-        if let crop, cropRE.test(crop) { o.append(("crop", .string(crop))) }
-        return .object(o)
     }
 }
 
@@ -279,7 +256,9 @@ public final class BartIPC: @unchecked Sendable {
             if started { store.agentFinished(id: q.askId) }
             var answer = answerJSON(out)
             guard let m = mark else { return answer }
-            let entry = MarkAnswers.askEntry(id: q.askId, question: q.text, lines: out.lines, meta: out.meta, at: Time.iso(), crop: crop)
+            let level = out.meta.level
+            let entry = OJ(MarkAnswers.askEntry(id: q.askId, question: q.text, lines: out.lines, provider: out.meta.provider.nonEmpty, name: level.name.nonEmpty,
+                                                effort: level.effort.nonEmpty, ms: out.meta.ms == 0 ? nil : out.meta.ms, at: Time.iso(), crop: crop))
             try? await store.addMarkAnswer(rowId: m.rowId, url: m.url, page: m.page, markId: m.markId, entry: entry.jsonValue)
             paperDone(markPayload(m, [("entry", entry)]))
             answer = answer.setting("entry", entry)

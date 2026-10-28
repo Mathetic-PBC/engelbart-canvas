@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // create.cjs — @create's files (2026-10-13). Each run writes in a draft folder of its own, <dataRoot>/.create/<askId>/,

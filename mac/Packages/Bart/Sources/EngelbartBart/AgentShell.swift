@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // How Engelbart runs the claude and codex CLIs, hidden, on the person's subscription (ask.cjs, route.cjs, name-chat.cjs,

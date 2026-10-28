@@ -1,3 +1,4 @@
+import EngelbartDoc
 import XCTest
 import EngelbartCore
 @testable import EngelbartBart

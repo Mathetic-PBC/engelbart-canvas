@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // activity.cjs — what an @bart run is doing, while it does it (2026-09-20). Both CLIs print one JSON event per line as

@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // highlights.cjs — a pdf's ink as @bart is shown it (MATH-27, 2026-10-06): <stage>, the paper in front in the Stage

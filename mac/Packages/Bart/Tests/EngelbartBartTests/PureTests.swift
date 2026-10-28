@@ -1,3 +1,4 @@
+import EngelbartDoc
 import XCTest
 import EngelbartCore
 @testable import EngelbartBart
@@ -205,11 +206,11 @@ final class PureTests: XCTestCase {
         for broken in ["not json", "{\"say\": \"cut", #"{"card":"focus","focus":{"options":[{"label":"one"}]}}"#, #"{"card":"questions","questions":{"items":[{"type":"essay","title":"x"}]}}"#, #"{"card":"none","ready":true}"#, "[1, 2]"] {
             XCTAssertNil(Card.readCard(broken), broken)
         }
-        let kept = Card.cardBody(PureTests.FOCUS)
-        XCTAssertEqual(kept.body, "```json\n\(focus.stringify(indent: 2))\n```")
+        let kept = CardBody.cardBody(PureTests.FOCUS)
+        XCTAssertEqual(kept.body, "```json\n{\n  \"say\": \"\",\n  \"card\": \"focus\",\n  \"focus\": {\n    \"title\": \"Which?\",\n    \"options\": [\n      {\n        \"label\": \"Retries\",\n        \"why\": \"In notes.md.\"\n      },\n      {\n        \"label\": \"The 'slow' path\"\n      }\n    ]\n  },\n  \"ready\": false\n}\n```", "JSON.stringify(card, null, 2), keys as cleanCard builds them")
         XCTAssertTrue(kept.body.hasPrefix("```json\n{\n  \"say\": \"\",\n  \"card\": \"focus\",\n  \"focus\": {"))
         XCTAssertEqual(Card.cardOfAnswer(Reply.answerText(kept.body)), focus)
-        XCTAssertEqual(Card.cardBody("Sorry, I got confused.").body, "Sorry, I got confused.")
+        XCTAssertEqual(CardBody.cardBody("Sorry, I got confused.").body, "Sorry, I got confused.")
         XCTAssertNil(Card.cardOfAnswer("```json\n{\"say\": \"a\", \"card\": \"none\", \"ready\": true}\n```"))
         // More than one object: the last that is a card.
         let corrected = "{\"say\":\"\",\"card\":\"focus\",\"focus\":{\"options\":[{\"label\":\"only\"}]}}\nWait — corrected reply:\n\(PureTests.FOCUS)"
@@ -232,24 +233,24 @@ final class PureTests: XCTestCase {
         XCTAssertTrue(w.wrap); XCTAssertEqual(w.picks, ["Retries"])
         XCTAssertTrue(Card.readAnswer("(wrap up)", focus).skipped && Card.readAnswer("(wrap up)", focus).wrap)
         XCTAssertEqual(Card.withWrap(""), "(wrap up)"); XCTAssertEqual(Card.withWrap("picked \"a\""), "picked \"a\"; (wrap up)")
-        let body = Card.cardBody(PureTests.FOCUS).body
-        XCTAssertEqual(Card.answersSoFar([("", body), ("picked \"Retries\"", body)], "(skipped)"), 1)
-        XCTAssertEqual(Card.answersSoFar([("", body)], "--deep picked \"Retries\""), 1)
+        let body = CardBody.cardBody(PureTests.FOCUS).body
+        XCTAssertEqual(CardBody.answersSoFar([("", body), ("picked \"Retries\"", body)], "(skipped)"), 1)
+        XCTAssertEqual(CardBody.answersSoFar([("", body)], "--deep picked \"Retries\""), 1)
     }
 
     func testRecapAndResults() {
         let base = "Where you are: a\nWhat's unclear: b"
-        XCTAssertTrue(Card.recapParts(base) == (base.components(separatedBy: "\n"), []))
-        let r = Card.recapParts("\(base)\nLook for: @discover how people choose\nLook for: one\nLook for: two")
+        XCTAssertTrue(CardBody.recapParts(base) == (base.components(separatedBy: "\n"), []))
+        let r = CardBody.recapParts("\(base)\nLook for: @discover how people choose\nLook for: one\nLook for: two")
         XCTAssertEqual(r.lookFor, ["how people choose", "one"])
         XCTAssertTrue(Card.recapLine("What’s unclear: why")! == ("What's unclear", "why"))
         XCTAssertNil(Card.recapLine("Nothing: here"))
-        XCTAssertEqual(Card.nextLead("You keep coming back to retries. So what do you want to dig into next?"), "You keep coming back to retries.")
-        XCTAssertEqual(Card.nextLead("Retries again"), "Retries again.")
-        XCTAssertEqual(Card.nextLead("Why this?"), "")
-        XCTAssertEqual(Card.nextTitle("Lead."), "Lead. So what do you want to dig into next?")
-        XCTAssertTrue(Card.sameWords("Retries, again!", "retries again"))
-        XCTAssertFalse(Card.sameWords("", ""))
+        XCTAssertEqual(CardBody.nextLead("You keep coming back to retries. So what do you want to dig into next?"), "You keep coming back to retries.")
+        XCTAssertEqual(CardBody.nextLead("Retries again"), "Retries again.")
+        XCTAssertEqual(CardBody.nextLead("Why this?"), "")
+        XCTAssertEqual(CardBody.nextTitle("Lead."), "Lead. So what do you want to dig into next?")
+        XCTAssertTrue(CardBody.sameWords("Retries, again!", "retries again"))
+        XCTAssertFalse(CardBody.sameWords("", ""))
         XCTAssertEqual(Card.resultText("  measure  the loop "), "measure the loop\nFind papers on it with @discover, or ask about it with @chat.")
         XCTAssertEqual(Card.resultText(""), Card.leftOpen)
         XCTAssertEqual(Card.resultParts("measure it\nFind papers on it with @discover, or ask about it with @bart."), "measure it")
@@ -311,9 +312,11 @@ final class PureTests: XCTestCase {
     func testPassageLinks() {
         let t = PassageLink.splitTarget("/Users/me/My%20Paper.pdf#find=We%20argue&to=Next&cite=you&counter=1")
         XCTAssertEqual(t.address, "/Users/me/My Paper.pdf"); XCTAssertEqual(t.find, "We argue"); XCTAssertEqual(t.to, "Next")
-        XCTAssertEqual(t.cite, "you"); XCTAssertTrue(t.counter)
-        XCTAssertEqual(PassageLink.splitTarget("https://arxiv.org/pdf/2312.10893#find=We%20argue%20that"), LinkTarget(address: "https://arxiv.org/pdf/2312.10893", find: "We argue that", to: ""))
-        XCTAssertEqual(PassageLink.splitTarget("/a.pdf#page=3"), LinkTarget(address: "/a.pdf#page=3", find: "", to: ""))
+        XCTAssertEqual(t.cite, "you"); XCTAssertEqual(t.counter, true)
+        let plain = PassageLink.splitTarget("https://arxiv.org/pdf/2312.10893#find=We%20argue%20that")
+        XCTAssertEqual([plain.address, plain.find, plain.to], ["https://arxiv.org/pdf/2312.10893", "We argue that", ""]); XCTAssertNil(plain.cite)
+        let other = PassageLink.splitTarget("/a.pdf#page=3")
+        XCTAssertEqual([other.address, other.find, other.to], ["/a.pdf#page=3", "", ""]); XCTAssertNil(other.cite)
         let whole = PassageLink.splitTarget("/a.pdf#page=4&cite=source")
         XCTAssertEqual(whole.cite, "source"); XCTAssertEqual(whole.page, 4); XCTAssertEqual(whole.find, "")
         let note = PassageLink.splitTarget("/a.pdf#find=the%20passage&page=2&note=my%20words&cite=you")

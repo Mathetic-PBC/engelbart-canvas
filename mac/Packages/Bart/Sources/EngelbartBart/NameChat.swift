@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // name-chat.cjs — a conversation's title (2026-10-12): the `bart# <title>` line above the question that starts an @bart,

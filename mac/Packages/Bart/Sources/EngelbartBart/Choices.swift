@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 
 // choices.cjs — the model and effort last picked by hand, one for each place that picks (2026-09-29): @bart (a question
 // asked with flags, from the chip's selector or Regenerate), a workspace's Build panel, and a post-it's quick task. Each

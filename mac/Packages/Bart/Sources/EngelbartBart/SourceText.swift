@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import CryptoKit
 import EngelbartCore
 
@@ -46,36 +47,6 @@ public enum Shots {
         } catch { return nil }
         prune(dir, keep: keep, newest: "\(id).png")
         return file
-    }
-}
-
-// shared/address-key.cjs — how one address is spelled wherever a page is matched: http or https, www. or not, a trailing
-// slash, a #fragment, tracking parameters (utm_*, fbclid, gclid, mc_cid, mc_eid, ref): one address. Another scheme loses
-// its #fragment only; anything that is no URL is as it came. (Store owns the same rule; restated here for the citation
-// check and the source texts.)
-public enum AddressKey {
-    static let tracking = JSRegex("^(?:utm_.*|fbclid|gclid|mc_cid|mc_eid|ref)$", "i")
-
-    static func cleanSearch(_ search: String) -> String {
-        let kept = JSRegex("^\\?").replace(search, with: "").components(separatedBy: "&").filter { part in
-            if part.isEmpty { return false }
-            let raw = part.components(separatedBy: "=")[0]
-            let name = decodeURIComponent(raw.replacingOccurrences(of: "+", with: " ")) ?? raw
-            return !tracking.test(name)
-        }
-        return kept.isEmpty ? "" : "?\(kept.joined(separator: "&"))"
-    }
-
-    public static func key(_ value: String?) -> String {
-        let v = (value ?? "").jsTrim
-        if v.isEmpty || v == "about:blank" { return "" }
-        guard let c = URLComponents(string: v), let scheme = c.scheme?.lowercased(), !scheme.isEmpty else { return v }
-        if scheme != "http" && scheme != "https" { return JSRegex("#.*$").replace(v, with: "") }
-        var host = (c.percentEncodedHost ?? "").lowercased()
-        if let port = c.port, !((scheme == "http" && port == 80) || (scheme == "https" && port == 443)) { host += ":\(port)" }
-        host = JSRegex("^www\\.").replace(host, with: "")
-        let path = JSRegex("/+$").replace(c.percentEncodedPath.isEmpty ? "/" : c.percentEncodedPath, with: "")
-        return "\(host)\(path)\(cleanSearch(c.percentEncodedQuery.map { "?\($0)" } ?? ""))"
     }
 }
 
@@ -131,7 +102,7 @@ public enum SourceText {
     /// How what was read is matched with what is cited: a web address as AddressKey spells it, a path resolved.
     public static func openedKey(_ where_: String?) -> String {
         let w = where_ ?? ""
-        if JSRegex("^https?://", "i").test(w) { return "url:\(AddressKey.key(w))" }
+        if JSRegex("^https?://", "i").test(w) { return "url:\(AddressKey.addressKey(w))" }
         return "file:\(resolve(w))"
     }
 

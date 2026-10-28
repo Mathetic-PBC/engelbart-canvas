@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // ask.cjs createFakeBart and its fakes — scripted runs only (ENGELBART_BART_FAKE=1): no model. A question containing
@@ -21,16 +22,16 @@ enum Fakes {
         if JSRegex("malformed", "i").test(plan.question) { return "FAKE REPLY that is not a card: {\"say\": \"cut off" }
         if plan.stage == "first" { return cardJSON("", AskPlan.workingID, AskPlan.workingTitle, eyebrow: "to start") }
         let first = plan.prior.count > 1 ? plan.prior[1].question.jsTrim : ""
-        return cardJSON(first.isEmpty ? "" : "You started from “\(JSRegex("\\s+").split(first).prefix(6).joined(separator: " "))”.", Card.nextID, AskPlan.welcomeNextTitle, eyebrow: "what next")
+        return cardJSON(first.isEmpty ? "" : "You started from “\(JSRegex("\\s+").split(first).prefix(6).joined(separator: " "))”.", CardBody.nextID, AskPlan.welcomeNextTitle, eyebrow: "what next")
     }
 
     /// The fake @brainstorm (2026-10-14: a conversation, in prose; its first turn the card, 2026-10-16).
     static func think(_ plan: TurnPlan, _ sent: String) -> String {
-        let n = plan.prior.count, asked = plan.question.isEmpty ? Card.opening : plan.question
+        let n = plan.prior.count, asked = plan.question.isEmpty ? CardBody.opening : plan.question
         let given = n == 0 ? "no earlier turns" : sent.contains("<conversation>") ? "a new session, given \(n) earlier \(n == 1 ? "turn" : "turns")" : "the same session, given the question alone"
         if n == 0 && !wrapRE.test(asked) {
-            let title = asked == Card.opening ? "What would you like to talk about?" : "Where would you like to start with “\(asked.jsSlice(0, 80))”?"
-            let labels = asked == Card.opening ? ["Fake theme one", "Fake theme two", "Fake theme three"] : ["A fake first angle", "A fake second angle", "A fake third angle"]
+            let title = asked == CardBody.opening ? "What would you like to talk about?" : "Where would you like to start with “\(asked.jsSlice(0, 80))”?"
+            let labels = asked == CardBody.opening ? ["Fake theme one", "Fake theme two", "Fake theme three"] : ["A fake first angle", "A fake second angle", "A fake third angle"]
             return focusJSON(title, labels)
         }
         if wrapRE.test(asked) { return "FAKE BRAINSTORM wrap-up after \(n) \(n == 1 ? "turn" : "turns") (\(given)).\n\nWhat became clearer: what you said. Still open: the rest." }
@@ -181,7 +182,7 @@ extension Bart {
         let logId = q.askId.isEmpty ? IDs.new() : q.askId, started = Time.ms()
         log?.start(AskPlan.runRecord(id: logId, agent: agent, provider: plan.provider, projectId: projectId, question: q.text, system: AskPlan.loadSystemPrompt(store.dataRoot, agent: agent),
                                      context: context, shown: plan.shown, extra: plan.extra, mode: plan.mode, pinned: plan.pinned, routed: q.routed, place: q.place, reply: plan.prior.count))
-        if let corrected = q.routed?.corrected { Route.markCorrected(log, id: q.routed?.id, projectId: projectId, text: q.text, agent: corrected) }
+        if let corrected = q.routed?.corrected { RouteModel.markCorrected(log, id: q.routed?.id, projectId: projectId, text: q.text, agent: corrected) }
         func ended(_ status: String, _ result: AskAnswer?, _ error: Error?) {
             log?.finish(logId, status: status, written: result?.lines, error: error.map { ($0 as? BartError)?.message ?? $0.localizedDescription }, ms: Time.ms() - started)
         }
@@ -262,9 +263,9 @@ extension Bart {
             let named = AskPlan.taken(agent, plan, out.text)
             let body: String
             if let made { body = Create.createdBody(Create.createdSentence(made.files.isEmpty ? "" : Making.createdLine(line.isEmpty ? Create.requestSentence(question) : line), out.text, question), made, logId) }
-            else if plan.welcome { body = Card.cardBody(AskPlan.welcomeReply(out.text, stage: plan.stage)).body }
+            else if plan.welcome { body = CardBody.cardBody(AskPlan.welcomeReply(out.text, stage: plan.stage)).body }
             else { body = await citedBody(store: store, agent: agent, routed: q.routed, body: AskPlan.replyBody(agent, named.text), projectId: projectId, workspaceId: q.workspaceId, prior: plan.prior, question: q.text, logId: logId, context: nil, events: []) }
-            threads?.keep(AskPlan.threadKey(projectId, q.ref, plan.prior + [AskPlan.cleanTurn(Turn(question: q.text, answer: Reply.answerText(body)))]), provider: plan.provider, session: out.session ?? "fake", projectId: projectId, workspaceId: q.workspaceId)
+            threads?.keep(AskPlan.threadKey(projectId, q.ref, plan.prior + [AskPlan.cleanTurn(AskTurn(question: q.text, answer: Reply.answerText(body)))]), provider: plan.provider, session: out.session ?? "fake", projectId: projectId, workspaceId: q.workspaceId)
             let result = AskAnswer(lines: Reply.replyLines(body, meta, model: !AskPlan.quiet.contains(agent), agent: agent), meta: meta, topic: named.topic, research: named.research, welcome: nil)
             ended("done", result, nil)
             return result

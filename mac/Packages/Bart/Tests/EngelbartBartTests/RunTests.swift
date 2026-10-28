@@ -1,3 +1,4 @@
+import EngelbartDoc
 import XCTest
 import EngelbartCore
 @testable import EngelbartBart
@@ -51,20 +52,27 @@ final class TestStore: BartStore, @unchecked Sendable {
     func flattenWorkspaces(projectDir: String) -> [WorkspaceRecord] { [workspace] }
     func notesMadeIn(projectDir: String, workspaces: [WorkspaceRecord]?) async -> [String: String?] { [:] }
     func recountWorkspaces() {}
+    /// Other documents by ref kind ("note", "project"): (title, body, ids they mention).
+    var bodies: [String: (String, String, [String])] = [:]
+    /// Ink by row id or url; a web mark by id.
+    var ink: [String: JSONValue] = [:]
+    var webMarks: [String: JSONValue] = [:]
+    var workspaceMentions: [String] = []
     func expandDoc(projectId: String, ref: DocRef, seen: [String]) async throws -> (title: String, body: String, seen: [String]) {
+        if let (title, body, ids) = bodies[ref.kind] { return (title, body, seen + ids.filter { !seen.contains($0) }) }
         let body = try String(contentsOfFile: (project.dir as NSString).appendingPathComponent("W/workspace.md"), encoding: .utf8)
-        return ("W", body, seen)
+        return ("W", body, seen + workspaceMentions.filter { !seen.contains($0) })
     }
     func imagePaths(projectId: String, text: String) async -> String { text.replacingOccurrences(of: "](img:i1)", with: "](/images/i1.png)") }
     func instructionsBlock() -> String { "" }
     func memoryBlock() -> String { "" }
     func zoteroPointerLine() -> String { "" }
     func gettingStarted(projectId: String) -> (hidden: Bool, workspaceId: String?)? { nil }
-    func readAnnotations(rowId: String) async throws -> JSONValue? { nil }
-    func readPageAnnotations(url: String) async throws -> JSONValue? { nil }
-    func annotationsFile(rowId: String?, url: String?) async -> String { "" }
+    func readAnnotations(rowId: String) async throws -> JSONValue? { ink[rowId] }
+    func readPageAnnotations(url: String) async throws -> JSONValue? { ink[url] }
+    func annotationsFile(rowId: String?, url: String?) async -> String { "\(dataRoot)/annotations/\(rowId ?? "page").json" }
     func lookupItem(url: String) async -> LibraryRow? { nil }
-    func readWebMark(rowId: String?, url: String?, markId: String) async -> JSONValue? { nil }
+    func readWebMark(rowId: String?, url: String?, markId: String) async -> JSONValue? { webMarks[markId] }
     func inkFile(of row: LibraryRow) -> String? { nil }
     func fileInRow(_ row: LibraryRow, rel: String) -> (path: String, exists: Bool)? { row.folderPath.map { ($0 + "/" + rel, false) } }
     var markAnswers: [(String, JSONValue)] = []
@@ -147,14 +155,14 @@ final class RunTests: XCTestCase {
         XCTAssertNil(Threads(idle: 60, file: file).take("k3", provider: "openai"))
         // An exchange is known by what the document says was said.
         let ref = DocRef.workspace("w")
-        XCTAssertEqual(AskPlan.threadKey("p", ref, [Turn(question: "q", answer: "a")]), AskPlan.threadKey("p", ref, [Turn(question: "q", answer: "a", agent: "bart")]))
-        XCTAssertNotEqual(AskPlan.threadKey("p", ref, [Turn(question: "q", answer: "a")]), AskPlan.threadKey("p", ref, [Turn(question: "q", answer: "b")]))
+        XCTAssertEqual(AskPlan.threadKey("p", ref, [AskTurn(question: "q", answer: "a")]), AskPlan.threadKey("p", ref, [AskTurn(question: "q", answer: "a", agent: "bart")]))
+        XCTAssertNotEqual(AskPlan.threadKey("p", ref, [AskTurn(question: "q", answer: "a")]), AskPlan.threadKey("p", ref, [AskTurn(question: "q", answer: "b")]))
         // sha256 of JSON.stringify(["p","workspace","w",[["q","a"]]]), as Node computes it.
-        XCTAssertEqual(AskPlan.threadKey("p", ref, [Turn(question: "q", answer: "a")]), THREAD_KEY_P_W_QA)
+        XCTAssertEqual(AskPlan.threadKey("p", ref, [AskTurn(question: "q", answer: "a")]), THREAD_KEY_P_W_QA)
     }
 
     func testTurnPlanDiscoverAndBrainstorm() {
-        let refine = AskPlan.turnPlan(agent: "discover", text: "--refine not that, tutors", turns: [Turn(question: "--research how tutors help", answer: "## Start here")], choice: nil, welcome: false, models: DEFAULTS)
+        let refine = AskPlan.turnPlan(agent: "discover", text: "--refine not that, tutors", turns: [AskTurn(question: "--research how tutors help", answer: "## Start here")], choice: nil, welcome: false, models: DEFAULTS)
         XCTAssertTrue(refine.refining && refine.refine && !refine.search)
         XCTAssertEqual(refine.extra, "<refine>The person is refining the research direction. The direction last searched: how tutors help. Their latest words take precedence over anything said before.</refine>")
         let search = AskPlan.turnPlan(agent: "discover", text: "--research how tutors help --deep", turns: [], choice: nil, welcome: false, models: DEFAULTS)
@@ -164,18 +172,18 @@ final class RunTests: XCTestCase {
         let empty = AskPlan.turnPlan(agent: "discover", text: "", turns: [], choice: nil, welcome: false, models: DEFAULTS)
         XCTAssertEqual(empty.asked, AskPlan.discoverOpening)
         let b = AskPlan.turnPlan(agent: "brainstorm", text: "", turns: [], choice: ("opus", "max"), welcome: false, models: DEFAULTS)
-        XCTAssertEqual(b.asked, Card.opening)
+        XCTAssertEqual(b.asked, CardBody.opening)
         XCTAssertEqual(b.steps.map { "\($0.name) \($0.effort)" }, ["Opus max"], "Regenerate's selector picks for that run")
         // The Welcome walkthrough: first, then stage (written, no model), then next, then the result.
         let w1 = AskPlan.turnPlan(agent: "brainstorm", text: "", turns: [], choice: nil, welcome: true, models: DEFAULTS)
         XCTAssertEqual(w1.stage, "first"); XCTAssertNil(w1.written)
-        let first = Card.cardBody(AskPlan.welcomeReply("{}", stage: "first")).body
-        let w2 = AskPlan.turnPlan(agent: "brainstorm", text: "a tutor study", turns: [Turn(question: "", answer: first)], choice: nil, welcome: true, models: DEFAULTS)
+        let first = CardBody.cardBody(AskPlan.welcomeReply("{}", stage: "first")).body
+        let w2 = AskPlan.turnPlan(agent: "brainstorm", text: "a tutor study", turns: [AskTurn(question: "", answer: first)], choice: nil, welcome: true, models: DEFAULTS)
         XCTAssertEqual(w2.stage, "stage"); XCTAssertTrue(w2.written!.contains("Where are you in the process?"))
-        let w3 = AskPlan.turnPlan(agent: "brainstorm", text: "picked \"Just exploring\"", turns: [Turn(question: "", answer: first), Turn(question: "a tutor study", answer: w2.written!)], choice: nil, welcome: true, models: DEFAULTS)
+        let w3 = AskPlan.turnPlan(agent: "brainstorm", text: "picked \"Just exploring\"", turns: [AskTurn(question: "", answer: first), AskTurn(question: "a tutor study", answer: w2.written!)], choice: nil, welcome: true, models: DEFAULTS)
         XCTAssertEqual(w3.stage, "next")
-        let next = Card.cardBody(AskPlan.welcomeReply("{\"say\":\"Lead.\",\"card\":\"none\"}", stage: "next")).body
-        let w4 = AskPlan.turnPlan(agent: "brainstorm", text: "measure it", turns: [Turn(question: "", answer: first), Turn(question: "a tutor study", answer: w2.written!), Turn(question: "picked \"Just exploring\"", answer: next)], choice: nil, welcome: true, models: DEFAULTS)
+        let next = CardBody.cardBody(AskPlan.welcomeReply("{\"say\":\"Lead.\",\"card\":\"none\"}", stage: "next")).body
+        let w4 = AskPlan.turnPlan(agent: "brainstorm", text: "measure it", turns: [AskTurn(question: "", answer: first), AskTurn(question: "a tutor study", answer: w2.written!), AskTurn(question: "picked \"Just exploring\"", answer: next)], choice: nil, welcome: true, models: DEFAULTS)
         XCTAssertEqual(w4.stage, "result"); XCTAssertEqual(w4.written, "measure it\n\(Card.resultOffer)")
         XCTAssertEqual(Bart.resultReply(w4).welcome, "result")
     }
@@ -207,11 +215,11 @@ final class RunTests: XCTestCase {
         XCTAssertTrue(progress.all.contains(.activity("Reading notes.md", log: true)))
         XCTAssertEqual(log.list().first?["status"], "done")
         // A follow-up inside the window resumes the session: given the question alone.
-        let turn = Turn(question: "why is it hard?", answer: Reply.answerText(out.lines.map { $0.replacingOccurrences(of: "bart> ", with: "").replacingOccurrences(of: "bart>", with: "") }.dropLast(2).joined(separator: "\n")))
+        let turn = AskTurn(question: "why is it hard?", answer: Reply.answerText(out.lines.map { $0.replacingOccurrences(of: "bart> ", with: "").replacingOccurrences(of: "bart>", with: "") }.dropLast(2).joined(separator: "\n")))
         let again = try await bart.ask(store: store, projectId: "p1", AskRequest(askId: "k2", ref: .workspace("w1"), workspaceId: "w1", text: "and then?", turns: [turn])) { _ in }
         XCTAssertTrue(again.lines.joined().contains("the same session, given the question alone"), again.lines.joined(separator: "\n"))
         // Edited answer: a new session, given the earlier turn.
-        let edited = try await bart.ask(store: store, projectId: "p1", AskRequest(askId: "k3", ref: .workspace("w1"), workspaceId: "w1", text: "and then?", turns: [Turn(question: "why is it hard?", answer: "edited")])) { _ in }
+        let edited = try await bart.ask(store: store, projectId: "p1", AskRequest(askId: "k3", ref: .workspace("w1"), workspaceId: "w1", text: "and then?", turns: [AskTurn(question: "why is it hard?", answer: "edited")])) { _ in }
         XCTAssertTrue(edited.lines.joined().contains("a new session, given 1 earlier turn"))
     }
 
@@ -252,7 +260,7 @@ final class RunTests: XCTestCase {
         XCTAssertEqual(opening.lines[0], "bart> ```json")
         XCTAssertTrue(opening.lines.last!.hasPrefix("bart> *Brainstorm · "), "no model named")
         XCTAssertEqual(Card.cardOfAnswer(Reply.answerText(opening.lines.dropLast(2).map { String($0.dropFirst(6)) }.joined(separator: "\n")))?["card"], "focus")
-        let next = try await bart.ask(store: store, projectId: "p1", AskRequest(askId: "b2", ref: .workspace("w1"), workspaceId: "w1", text: "New topic: loops", turns: [Turn(question: "", answer: "a card")], agent: "brainstorm")) { _ in }
+        let next = try await bart.ask(store: store, projectId: "p1", AskRequest(askId: "b2", ref: .workspace("w1"), workspaceId: "w1", text: "New topic: loops", turns: [AskTurn(question: "", answer: "a card")], agent: "brainstorm")) { _ in }
         XCTAssertEqual(next.topic, "Loops")
     }
 
@@ -302,7 +310,7 @@ final class RunTests: XCTestCase {
         XCTAssertEqual(try String(contentsOfFile: root + "/ch/AGENTS.md", encoding: .utf8), Prompts.bart)
         XCTAssertEqual(call.cwd, root + "/runs/p1")
         // The follow-up resumes the thread the events named.
-        let turn = Turn(question: "why?", answer: "An answer.")
+        let turn = AskTurn(question: "why?", answer: "An answer.")
         _ = try await bart.ask(store: store, projectId: "p1", AskRequest(askId: "r2", ref: .workspace("w1"), workspaceId: "w1", text: "more?", turns: [turn])) { _ in }
         XCTAssertTrue(runner.calls[1].args[1].hasPrefix("exec codex exec resume \"$ENGELBART_BART_SESSION\" "))
         XCTAssertEqual(runner.calls[1].env["ENGELBART_BART_SESSION"], "0199aaaa-bbbb-cccc-dddd-eeeeffff0000")
@@ -324,20 +332,20 @@ final class RunTests: XCTestCase {
     }
 
     func testRouter() async {
-        XCTAssertEqual(Route.decide(nil), RoutePick(agent: "chat", sure: 0))
-        XCTAssertEqual(Route.decide(RoutePick(agent: "discover", sure: 0.5)).agent, "chat")
-        XCTAssertEqual(Route.decide(RoutePick(agent: "brainstorm", sure: 0.7), current: "chat").agent, "chat")
-        XCTAssertEqual(Route.decide(RoutePick(agent: "brainstorm", sure: 0.85), current: "chat").agent, "brainstorm")
-        XCTAssertEqual(Route.decide(RoutePick(agent: "discover", sure: 0.7), current: "discover").agent, "chat")
-        XCTAssertEqual(Route.decide(RoutePick(agent: "create", sure: 0.7), current: "discover").agent, "create")
-        XCTAssertEqual(Route.parseReply("Sure: {\"agent\": \"@Build\", \"sure\": 1.4, \"spec\": true}"), RoutePick(agent: "build", sure: 1, spec: true))
-        XCTAssertNil(Route.parseReply("{\"agent\": \"nobody\", \"sure\": 1}"))
-        XCTAssertEqual(Route.routeModel(DEFAULTS)?.name, "Haiku"); XCTAssertEqual(Route.routeModel(MODELS)?.name, "Luna")
-        let input = Route.routeInput(text: " q ", section: "# H\n@chat x\nbart> y", workspaceName: "W", threads: [RouteThread(agent: "", question: "a  b", up: 1)], specAbove: true, specTitle: "Spec", current: "@Discover")
+        XCTAssertEqual(RouteModel.decide(nil), RoutePick(agent: "chat", sure: 0))
+        XCTAssertEqual(RouteModel.decide(RoutePick(agent: "discover", sure: 0.5)).agent, "chat")
+        XCTAssertEqual(RouteModel.decide(RoutePick(agent: "brainstorm", sure: 0.7), current: "chat").agent, "chat")
+        XCTAssertEqual(RouteModel.decide(RoutePick(agent: "brainstorm", sure: 0.85), current: "chat").agent, "brainstorm")
+        XCTAssertEqual(RouteModel.decide(RoutePick(agent: "discover", sure: 0.7), current: "discover").agent, "chat")
+        XCTAssertEqual(RouteModel.decide(RoutePick(agent: "create", sure: 0.7), current: "discover").agent, "create")
+        XCTAssertEqual(RouteModel.parseReply("Sure: {\"agent\": \"@Build\", \"sure\": 1.4, \"spec\": true}"), RoutePick(agent: "build", sure: 1, spec: true))
+        XCTAssertNil(RouteModel.parseReply("{\"agent\": \"nobody\", \"sure\": 1}"))
+        XCTAssertEqual(RouteModel.routeModel(DEFAULTS)?.name, "Haiku"); XCTAssertEqual(RouteModel.routeModel(MODELS)?.name, "Luna")
+        let input = RouteModel.routeInput(text: " q ", section: "# H\n@chat x\nbart> y", workspaceName: "W", threads: [RouteThread(agent: "", question: "a  b", up: 1)], specAbove: true, specTitle: "Spec", current: "@Discover")
         XCTAssertEqual(input, "<workspace>W</workspace>\n\n<section>\n# H\n@chat x\n\(Strip.omitted)\n</section>\n\n<threads>\n- @chat, 1 line up: \"a b\"\n</threads>\n\n<spec_above>yes: \"Spec\"</spec_above>\n\n<current>discover</current>\n\n<line>\nq\n</line>")
-        XCTAssertEqual(RouteRules.routeByRule("")?.agent, "brainstorm"); XCTAssertEqual(RouteRules.routeByRule("--build x")?.agent, "build")
-        XCTAssertEqual(RouteRules.routeByRule("why --deep")?.agent, "discover"); XCTAssertNil(RouteRules.routeByRule("--sonnet why"))
-        XCTAssertEqual(RouteRules.questionLine("@chat --opus **Why** do [runs](x) loop again and again and again and again and again and again and again and more"), "Why do runs loop again and again and again and again and again and again and")
+        XCTAssertEqual(Route.routeByRule("")?.agent, "brainstorm"); XCTAssertEqual(Route.routeByRule("--build x")?.agent, "build")
+        XCTAssertEqual(Route.routeByRule("why --deep")?.agent, "discover"); XCTAssertNil(Route.routeByRule("--sonnet why"))
+        XCTAssertEqual(Route.questionLine("@chat --opus **Why** do [runs](x) loop again and again and again and again and again and again and again and more"), "Why do runs loop again and again and again and again and again and again and")
         let log = RunLog()
         let router = Router.fake(runLog: log)
         let picked = await router.route(RouteRequest(projectId: "p", text: "find papers on tutors"))
@@ -410,21 +418,21 @@ final class RunTests: XCTestCase {
         let dir = tempDir("cite").path
         let note = dir + "/note.md"
         try "I decided the retry loop should stop after three tries.\nbart> Chat said the loop is fine.".write(toFile: note, atomically: true, encoding: .utf8)
-        var o = Cite.Options()
+        var o = CiteCheck.Options()
         o.library = [LibraryRow(id: "n1", name: "Note", type: "md", path: note, created: "2026-10-12T10:00:00.000Z")]
         o.dataRoot = dir
         o.today = Time.parse("2026-10-28T00:00:00.000Z")!
         let good = PassageLink.citeHref(address: note, find: "the retry loop should stop", cite: "you")
         let wrong = PassageLink.citeHref(address: note, find: "words it never says", cite: "you")
         let theirs = PassageLink.citeHref(address: note, find: "the loop is fine", cite: "you")
-        let out = await Cite.checkCitations("You chose a limit [x](\(good)). Not this [y](\(wrong)). Chat said [z](\(theirs)).", o)
+        let out = await CiteCheck.checkCitations("You chose a limit [x](\(good)). Not this [y](\(wrong)). Chat said [z](\(theirs)).", o)
         // A library note: whose words is said by the cite, not by its lines (only a workspace's answer lines are Chat's).
         XCTAssertEqual(out.kept.map { $0.label }, ["You · Oct 12", "You · Oct 12"])
         XCTAssertEqual(out.dropped.map { $0.reason }, ["not-found"])
         XCTAssertTrue(out.body.contains("Not this."), out.body)
         XCTAssertTrue(out.body.hasPrefix("You chose a limit [You · Oct 12]("))
-        XCTAssertEqual(Cite.tidyAround("Here (x) it is.", 5, 8), "Here it is.")
-        XCTAssertEqual(Cite.notCitable("/a/MEMORY.md"), "memory"); XCTAssertEqual(Cite.notCitable("/p/.context/catalog.json"), "catalog")
+        XCTAssertEqual(CiteCheck.tidyAround("Here (x) it is.", 5, 8), "Here it is.")
+        XCTAssertEqual(CiteCheck.notCitable("/a/MEMORY.md"), "memory"); XCTAssertEqual(CiteCheck.notCitable("/p/.context/catalog.json"), "catalog")
         // A workspace document: words on its answer lines are Chat's; dated by the workspace's meta.json.
         let wdir = dir + "/P/W"
         try FileManager.default.createDirectory(atPath: wdir, withIntermediateDirectories: true)
@@ -432,9 +440,9 @@ final class RunTests: XCTestCase {
         try #"{"created":"2026-09-02T10:00:00.000Z"}"#.write(toFile: wdir + "/meta.json", atomically: true, encoding: .utf8)
         var w = o
         w.projectDir = dir + "/P"; w.workspaces = [(WorkspaceRecord(id: "w2", name: "W", path: "W"), wdir)]; w.workspaceId = "w1"
-        let chat = await Cite.checkCitations("It said so [x](\(PassageLink.citeHref(address: wdir + "/workspace.md", find: "the loop is fine", cite: "you"))).", w)
+        let chat = await CiteCheck.checkCitations("It said so [x](\(PassageLink.citeHref(address: wdir + "/workspace.md", find: "the loop is fine", cite: "you"))).", w)
         XCTAssertEqual(chat.kept.map { "\($0.label) \($0.cite) \($0.relabeled)" }, ["Chat · Sep 2 other true"])
-        let malformed = await Cite.checkCitations("[a](/x.md#find=q&cite=nobody)", o)
+        let malformed = await CiteCheck.checkCitations("[a](/x.md#find=q&cite=nobody)", o)
         XCTAssertEqual(malformed.dropped.first?.reason, "malformed")
     }
 
@@ -498,7 +506,7 @@ final class RunTests: XCTestCase {
         XCTAssertTrue(c.head.hasPrefix("<engelbart>\nproject: Proj\nproject description: A test project\ncode directory: none set\nnotes and workspaces: \(store.project.dir)\nasked from: the workspace \"W\"\nthis workspace's document: \(store.project.dir)/W/workspace.md"))
         XCTAssertTrue(c.contextJson.contains("\"name\": \"Paper\""))
         XCTAssertEqual(c.dirs, [store.dataRoot])
-        XCTAssertEqual(Context.conversationBlock([Turn(question: "q", answer: "a", agent: "discover")], agent: "bart"), "<conversation>\n<turn n=\"1\" agent=\"Discover\">\n<asked>\nq\n</asked>\n<answered>\na\n</answered>\n</turn>\n</conversation>")
+        XCTAssertEqual(Context.conversationBlock([AskTurn(question: "q", answer: "a", agent: "discover")], agent: "bart"), "<conversation>\n<turn n=\"1\" agent=\"Discover\">\n<asked>\nq\n</asked>\n<answered>\na\n</answered>\n</turn>\n</conversation>")
         XCTAssertEqual(Context.highlightBlock(InkedItem(name: "P", where_: "/p.pdf"), page: 3, quote: " q ", note: "n", pageText: ""), "<highlight paper=\"P\" path=\"/p.pdf\" page=\"3\">\n<quote>\nq\n</quote>\n<note>\nn\n</note>\n</highlight>")
     }
 

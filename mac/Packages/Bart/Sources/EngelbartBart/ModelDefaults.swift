@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 
 // models.cjs — the defaults of <home>/model-effort-inline-question.json and every earlier shipped version of them
 // (PAST_DEFAULT_MODELS), as ordered JSON: the file is written in this order, and the order of `models` is their rank.

@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // What Bart needs of the Store, the Doc package and the other packages, as protocols the app implements (ARCHITECTURE

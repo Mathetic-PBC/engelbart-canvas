@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 
 // store/defaults.cjs, over ordered JSON, for the one file this package owns (model-effort-inline-question.json): the
 // Store package owns the same rule for config.json, but a wave-1 package cannot depend on Store and the models file needs

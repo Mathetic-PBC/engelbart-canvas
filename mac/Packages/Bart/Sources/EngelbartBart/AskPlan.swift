@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import CryptoKit
 import EngelbartCore
 
@@ -12,7 +13,7 @@ import EngelbartCore
 // walkthrough's exchange is three cards. @discover settles the direction in conversation, then a research box searches
 // (<research>, <search>, <mode>, <refine>, steers). @create makes files in a draft folder (Create).
 
-public struct Turn: Equatable, Sendable {
+public struct AskTurn: Equatable, Sendable {
     public var question: String
     public var answer: String
     /// The agent that answered it, when the document says ('bart', 'brainstorm', 'discover', 'create').
@@ -44,9 +45,9 @@ public struct TurnPlan: Sendable {
     public var steps: [Step]
     public var pinned: Bool
     public var mode: String?
-    public var prior: [Turn]
+    public var prior: [AskTurn]
     public var asked: String
-    public var shown: [Turn]
+    public var shown: [AskTurn]
     public var extra: String
     // @discover
     public var search = false, refine = false, refining = false
@@ -144,26 +145,26 @@ public enum AskPlan {
 
     /// A turn as it is told and as its session is kept by: trimmed, a question past 8,000 characters or an answer past
     /// 20,000 cut in the middle.
-    public static func cleanTurn(_ t: Turn) -> Turn {
-        Turn(question: Clip.clipMiddle(refineShown(withoutResearch(steersShown(t.question))), 8000),
+    public static func cleanTurn(_ t: AskTurn) -> AskTurn {
+        AskTurn(question: Clip.clipMiddle(refineShown(withoutResearch(steersShown(t.question))), 8000),
              answer: Clip.clipMiddle(t.answer.jsTrim, 20000), agent: t.agent.flatMap { agents.contains($0) ? $0 : nil })
     }
 
     /// The earlier turns as the renderer read them, made safe: bounded, no empty questions (`keepEmpty`: @brainstorm's
     /// and @discover's, whose first line may say nothing and still be a turn).
-    public static func cleanTurns(_ turns: [Turn], keepEmpty: Bool = false) -> [Turn] {
+    public static func cleanTurns(_ turns: [AskTurn], keepEmpty: Bool = false) -> [AskTurn] {
         Array(turns.filter { keepEmpty || !$0.question.jsTrim.isEmpty }.suffix(maxTurns)).map(cleanTurn)
     }
 
     /// Whether a follow-up is asked of another agent than the one that answered the turn before it.
-    public static func switched(_ prior: [Turn], _ agent: String) -> Bool {
+    public static func switched(_ prior: [AskTurn], _ agent: String) -> Bool {
         guard let last = prior.last, let a = last.agent else { return false }
         return a != agent
     }
 
     /// Where an exchange stands: the document it is in and everything said in it so far. Two exchanges that read the same
     /// are the same. (`JSON.stringify([projectId, ref.kind, ref.id || ref.workspaceId, turns.map(q, a)])`, sha256 hex.)
-    public static func threadKey(_ projectId: String, _ ref: DocRef, _ turns: [Turn]) -> String {
+    public static func threadKey(_ projectId: String, _ ref: DocRef, _ turns: [AskTurn]) -> String {
         let id: OJ = ref.keyId.map { .string($0) } ?? .null
         let json: OJ = [.string(projectId), .string(ref.kind), id, .array(turns.map { [.string($0.question), .string($0.answer)] })]
         return SHA256.hash(data: Data(json.stringify().utf8)).map { String(format: "%02x", $0) }.joined()
@@ -175,7 +176,7 @@ public enum AskPlan {
 
     /// What a question is given: everything, for a new session; the question alone, for a session that already holds the
     /// rest (a resumed @bart turn also the Stage and highlights as they are now). `extra` goes in front of the level.
-    public static func firstMessage(context: BartContext, prior: [Turn], question: String, resumed: Bool, extra: String = "", routed: Routed? = nil, agent: String? = nil, topic: String? = nil) -> (String) -> String {
+    public static func firstMessage(context: BartContext, prior: [AskTurn], question: String, resumed: Bool, extra: String = "", routed: Routed? = nil, agent: String? = nil, topic: String? = nil) -> (String) -> String {
         let asked = [routedBlock(routed), topicBlock(topic), "<question>\n\(question)\n</question>"].filter { !$0.isEmpty }.joined(separator: "\n\n")
         if resumed { return { level in [extra, context.now, level, asked].filter { !$0.isEmpty }.joined(separator: "\n\n") } }
         return { level in
@@ -185,17 +186,17 @@ public enum AskPlan {
     }
 
     /// Where the cards at the end of `turns` begin: after the last recap, or the last reply that was not a card.
-    static func cardsFrom(_ turns: [Turn]) -> Int {
+    static func cardsFrom(_ turns: [AskTurn]) -> Int {
         var from = turns.count
         while from > 0 && Card.cardOfAnswer(turns[from - 1].answer) != nil { from -= 1 }
         return from
     }
 
     /// A card's id (a focus card is the first card's, "mind").
-    static func idOf(_ card: OJ) -> String { card["card"]?.string == "focus" ? "mind" : (Card.questionOf(card)?.id ?? "") }
+    static func idOf(_ card: JSONValue) -> String { card["card"]?.string == "focus" ? "mind" : (Card.questionOf(card)?.id ?? "") }
 
     /// One turn of any agent, read from the line before anything runs.
-    public static func turnPlan(agent: String, text: String, turns: [Turn], choice: (model: String, effort: String)?, welcome: Bool, models: ModelsList) -> TurnPlan {
+    public static func turnPlan(agent: String, text: String, turns: [AskTurn], choice: (model: String, effort: String)?, welcome: Bool, models: ModelsList) -> TurnPlan {
         let brainstorm = agent == "brainstorm", discover = agent == "discover"
         let prior = cleanTurns(turns, keepEmpty: brainstorm || discover)
         let named: QuestionRead
@@ -237,9 +238,9 @@ public enum AskPlan {
         let opening = from < prior.count ? Models.readBrainstorm(prior[from].question, models).question : read.question
         if !(welcome && opening.jsTrim.isEmpty) {
             var p = plan(agent)
-            p.asked = read.question.isEmpty ? Card.opening : read.question
+            p.asked = read.question.isEmpty ? CardBody.opening : read.question
             p.shown = prior.map { t in
-                var s = t; if s.question.isEmpty { s.question = Card.opening }
+                var s = t; if s.question.isEmpty { s.question = CardBody.opening }
                 if let card = Card.cardOfAnswer(t.answer) { s.answer = Card.cardAsText(card) }
                 return s
             }
@@ -250,20 +251,20 @@ public enum AskPlan {
         let last = cards.last.flatMap { Card.cardOfAnswer($0.answer) }
         let answer = last.map { Card.readAnswer(read.question, $0) }
         let lastId = last.map(idOf)
-        let stage = last == nil ? "first" : lastId == Card.nextID ? "result" : (answer!.wrap || cards.count >= welcomeCards - 1) ? "next" : stageID
+        let stage = last == nil ? "first" : lastId == CardBody.nextID ? "result" : (answer!.wrap || cards.count >= welcomeCards - 1) ? "next" : stageID
         let result = stage == "result" ? Card.resultText(answer!.skipped ? "" : [answer!.picks.joined(separator: ", "), answer!.text, answer!.note].filter { !$0.isEmpty }.joined(separator: "; ")) : nil
         var p = plan(agent)
         p.path = "welcome"; p.stage = stage; p.result = result; p.welcome = true
-        p.written = stage == stageID ? Card.cardBody(stageCard()).body : result
-        p.asked = read.question.isEmpty ? Card.opening : read.question
-        p.shown = prior.map { t in var s = t; if s.question.isEmpty { s.question = Card.opening }; return s }
+        p.written = stage == stageID ? CardBody.cardBody(stageCard()).body : result
+        p.asked = read.question.isEmpty ? CardBody.opening : read.question
+        p.shown = prior.map { t in var s = t; if s.question.isEmpty { s.question = CardBody.opening }; return s }
         p.extra = "<path>welcome</path>\n<stage>\(stage)</stage>\n<card>\(cards.count + 1) of \(welcomeCards)</card>"
         return p
     }
 
     /// The Welcome walkthrough's last card: the agent's lead-in said above its title, which code fixes.
     static func nextCard(_ lead: String = "", _ title: String = welcomeNextTitle) -> String {
-        (["say": .string(lead), "card": "questions", "questions": ["eyebrow": "what next", "items": [["id": .string(Card.nextID), "type": "open", "title": .string(title), "placeholder": .string(Card.nextPlaceholder)]]], "ready": false] as OJ).stringify()
+        (["say": .string(lead), "card": "questions", "questions": ["eyebrow": "what next", "items": [["id": .string(CardBody.nextID), "type": "open", "title": .string(title), "placeholder": .string(CardBody.nextPlaceholder)]]], "ready": false] as OJ).stringify()
     }
     /// The welcome path's second card, written by code: where they are in the process, one pick or their own words.
     static func stageCard() -> String {
@@ -279,7 +280,7 @@ public enum AskPlan {
             return (["say": .string(say), "card": "questions", "questions": ["eyebrow": "to start", "items": [["id": .string(workingID), "type": "open", "title": .string(workingTitle), "placeholder": "In your own words…"]]], "ready": false] as OJ).stringify()
         }
         if stage == "next" { return nextCard(say) }
-        return asked?.stringify() ?? text
+        return asked.map { CardBody.ordered($0).stringify() } ?? text
     }
 
     /// The escalation loop, apart from any CLI. `turn(level, message, session)` sends one message → (text, session).
@@ -346,10 +347,10 @@ public enum AskPlan {
     public static func replyBody(_ agent: String, _ text: String) -> String {
         let fencedOrJSON = JSRegex("^\\s*(\\{|```)").test(text)
         if agent == "brainstorm" && fencedOrJSON, let card = Card.readCard(text), card["card"]?.string != "none" {
-            return Card.cardBody(topicsOnly(text)).body
+            return CardBody.cardBody(topicsOnly(text)).body
         }
         if agent == "discover" {
-            if fencedOrJSON, let card = Card.readCard(text), card["card"]?.string != "none" { return Card.cardBody(text).body }
+            if fencedOrJSON, let card = Card.readCard(text), card["card"]?.string != "none" { return CardBody.cardBody(text).body }
             // A guide starts at its first "## " heading (round 2): a status line written before it is dropped.
             let lines = withoutCopiedFoot(text).components(separatedBy: "\n")
             if let at = lines.firstIndex(where: { $0.hasPrefix("## ") }), at > 0 { return lines[at...].joined(separator: "\n") }
@@ -391,7 +392,7 @@ public enum AskPlan {
         return text.contains(discoverQuestion) ? discoverQuestion : text
     }
     static func topicsOnly(_ said: String) -> String {
-        guard let card = Card.parseJson(said), let focus = card["focus"], focus.isObject, let options = focus["options"]?.array else { return said }
+        guard let card = CardBody.parseOrdered(said), let focus = card["focus"], focus.isObject, let options = focus["options"]?.array else { return said }
         let kept = options.compactMap { o -> OJ? in
             if let s = o.string { return s.isEmpty ? nil : ["label": .string(s)] }
             if o.isObject { let l = o["label"] ?? .null; if case .string(let s) = l, !s.isEmpty { return ["label": l] }; if case .number = l { return ["label": l] }; if case .bool(true) = l { return ["label": l] } }
@@ -413,7 +414,7 @@ public enum AskPlan {
 
     /// What the run log starts a run with (RunLog): what the agent is told, block by block, before its first step.
     public static func runRecord(id: String, agent: String, provider: String, projectId: String, question: String, system: String, context: BartContext,
-                                 shown: [Turn], extra: String, mode: String?, pinned: Bool, routed: Routed?, place: OJ?, reply: Int?) -> OJ {
+                                 shown: [AskTurn], extra: String, mode: String?, pinned: Bool, routed: Routed?, place: OJ?, reply: Int?) -> OJ {
         var o: [(String, OJ)] = [("id", .string(id)), ("agent", .string(agent)), ("provider", .string(provider)), ("projectId", .string(projectId)),
                                  ("projectName", .string(context.project.name)), ("workspaceName", .string(context.workspaceName)), ("question", .string(question)),
                                  ("at", .number(Time.ms())), ("status", "running"), ("system", .string(system)), ("mode", mode.map { .string($0) } ?? .null), ("pinned", .bool(pinned))]

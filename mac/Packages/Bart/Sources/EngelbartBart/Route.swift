@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // route.cjs — Bart, the router (2026-10-12). An `@bart` line is no longer a question for one agent: Bart picks @chat (the
@@ -61,7 +62,7 @@ public struct RouteResult: Sendable {
     }
 }
 
-public enum Route {
+public enum RouteModel {
     public static let timeout: TimeInterval = 20
     public static let sectionChars = 4000
     public static let maxThreads = 5
@@ -180,46 +181,6 @@ public enum Route {
     }
 }
 
-// renderer/model/route.js — Bart in the editor: an `@bart` line picks its agent by rule first; only a line no rule
-// settles is sent to the model. (routeInputs and buildTextOf read the document's threads, the Doc package's model: the
-// editor computes those and passes them in a RouteRequest.)
-public enum RouteRules {
-    static let levelRE = JSRegex("(^|\\s)--(quick|standard|deep)(?=\\s|$)", "i")
-    public static let questionChars = 80
-
-    /// A thread's question as the router reads it: its first line as plain text, cut at a word to at most 80 characters.
-    public static func questionLine(_ text: String?, max: Int = questionChars) -> String {
-        var s = JSRegex("\\r?\\n").split(text ?? "").map { $0.jsTrim }.first { !$0.isEmpty } ?? ""
-        s = JSRegex("@\\[([^\\]\\n]+)\\]\\([^)\\s]*\\)", "g").replace(s) { $0[1] ?? "" }
-        s = JSRegex("@\\[([^\\]\\n]+)\\]", "g").replace(s) { $0[1] ?? "" }
-        s = JSRegex("(^|\\s)@(?:bart|chat|brainstorm|orient|discover|create)\\b", "gi").replace(s) { $0[1] ?? "" }
-        s = JSRegex("(^|\\s)--\\S+", "g").replace(s) { $0[1] ?? "" }
-        s = JSRegex("!?\\[([^\\]\\n]*)\\]\\([^)\\s]*\\)", "g").replace(s) { $0[1] ?? "" }
-        s = JSRegex("^\\s*(?:#{1,6}\\s+|[-*+]\\s+|\\d+[.)]\\s+|>\\s*)").replace(s, with: "")
-        s = JSRegex("(\\*\\*|__|\\*|_|`)(\\S(?:.*?\\S)?)\\1", "g").replace(s) { $0[2] ?? "" }
-        s = JSRegex("[*`]", "g").replace(s, with: "").squashedSpaces
-        if s.jsLength <= max { return s }
-        let cut = s.jsSlice(0, max + 1)
-        let space = (cut as NSString).range(of: " ", options: .backwards).location
-        return JSRegex("[\\s,;:–—-]+$").replace(space != NSNotFound && space > 0 ? cut.jsSlice(0, space) : s.jsSlice(0, max), with: "")
-    }
-
-    /// The agent an `@bart` line goes to by rule, or nil when the model is asked: an empty line → brainstorm; --build →
-    /// build; --quick/--standard/--deep → discover; an answer to Discover's question (`asking`) → discover. A model or
-    /// effort flag settles nothing (2026-10-16).
-    public static func routeByRule(_ text: String?, asking: Bool = false) -> (agent: String, rule: String)? {
-        let said = text ?? ""
-        if said.jsTrim.isEmpty { return ("brainstorm", "empty") }
-        if Question.readBuildFlag(said).build { return ("build", "--build") }
-        if levelRE.test(said) { return ("discover", "level") }
-        if asking { return ("discover", "answering Discover") }
-        return nil
-    }
-
-    /// The agent a follow-up goes to when Bart could not pick: its conversation's, but Chat for one with Discover.
-    public static func fallbackAgent(_ current: String?) -> String { current.flatMap { $0.isEmpty || $0 == "discover" ? nil : $0 } ?? "chat" }
-}
-
 /// route.cjs createRouter / createFakeRouter / routerOf.
 public final class Router: @unchecked Sendable {
     public typealias Pick = (_ input: String, _ text: String, _ current: String?) async -> (parsed: RoutePick?, step: Step?, raw: String, error: String?)
@@ -231,7 +192,7 @@ public final class Router: @unchecked Sendable {
 
     /// The real router: the default provider's fastest model, through the CLI, with no tools and no session.
     public static func live(readModels: @escaping @Sendable () -> ModelsList?, environment: [String: String], runDirectory: String, codexHome: String,
-                            codexAuthFile: String? = nil, tools: BartTools? = nil, runLog: RunLog? = nil, timeout: TimeInterval = Route.timeout, runner: AgentRunner? = nil) -> Router {
+                            codexAuthFile: String? = nil, tools: BartTools? = nil, runLog: RunLog? = nil, timeout: TimeInterval = RouteModel.timeout, runner: AgentRunner? = nil) -> Router {
         let shell = AgentShell.resolveShell(environment)
         @Sendable func ask(_ step: Step, _ input: String) async throws -> String {
             try FileManager.default.createDirectory(atPath: runDirectory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -270,8 +231,8 @@ public final class Router: @unchecked Sendable {
         }
         // The line as the model reads it: its model and effort flags left out, once the models file is read (2026-10-16).
         return Router(runLog: runLog, plain: { text in readModels().map { Question.readFlags(text, $0).rest } ?? text }) { input, _, _ in
-            guard let step = Route.routeModel(readModels()) else { return (nil, nil, "", "no model to route on") }
-            do { let raw = try await ask(step, input); return (Route.parseReply(raw), step, raw, nil) }
+            guard let step = RouteModel.routeModel(readModels()) else { return (nil, nil, "", "no model to route on") }
+            do { let raw = try await ask(step, input); return (RouteModel.parseReply(raw), step, raw, nil) }
             catch { return (nil, step, "", (error as? BartError)?.message ?? error.localizedDescription) }
         }
     }
@@ -279,7 +240,7 @@ public final class Router: @unchecked Sendable {
     /// The router without a model (ENGELBART_BART_FAKE=1): by keyword.
     public static func fake(runLog: RunLog? = nil) -> Router {
         Router(runLog: runLog) { _, text, current in
-            let p = Route.fakePick(text, current: current)
+            let p = RouteModel.fakePick(text, current: current)
             var raw: OJ = ["agent": .string(p.agent), "sure": .number(p.sure)]
             if let spec = p.spec { raw = raw.setting("spec", .bool(spec)) }
             return (p, Step(provider: "fake", key: "fake", model: "fake", name: "Fake", effort: "low"), raw.stringify(), nil)
@@ -289,18 +250,18 @@ public final class Router: @unchecked Sendable {
     /// → { id, agent, sure, spec?, model, ms, by }: with `rule` (the editor's own pick) it is only logged.
     public func route(_ r: RouteRequest) async -> RouteResult {
         let id = "route-\(IDs.new())", started = Time.ms()
-        if let rule = r.rule, Route.picks.contains(rule.agent) {
-            runLog?.start(Route.routerRecord(id: id, provider: nil, request: r, input: "", by: "rule"))
+        if let rule = r.rule, RouteModel.picks.contains(rule.agent) {
+            runLog?.start(RouteModel.routerRecord(id: id, provider: nil, request: r, input: "", by: "rule"))
             let out = RouteResult(id: id, agent: rule.agent, sure: 1, spec: nil, model: nil, ms: Time.ms() - started, by: "rule", rule: rule.rule)
             runLog?.amend(id, [("pick", .string(out.agent)), ("sure", 1)])
             runLog?.finish(id, status: "done", written: ["@\(out.agent)"], ms: out.ms)
             return out
         }
-        let input = Route.routeInput(text: plain(r.text), section: r.section, workspaceName: r.workspaceName, threads: r.threads, specAbove: r.specAbove, specTitle: r.specTitle, current: r.current)
-        runLog?.start(Route.routerRecord(id: id, provider: nil, request: r, input: input, by: "model"))
+        let input = RouteModel.routeInput(text: plain(r.text), section: r.section, workspaceName: r.workspaceName, threads: r.threads, specAbove: r.specAbove, specTitle: r.specTitle, current: r.current)
+        runLog?.start(RouteModel.routerRecord(id: id, provider: nil, request: r, input: input, by: "model"))
         let (parsed, step, raw, error) = await pick(input, r.text, r.current)
         if let step { runLog?.step(id, model: step.model, name: step.name, effort: step.effort, input: input); runLog?.output(id, raw: raw) }
-        let d = Route.decide(parsed, current: r.current)
+        let d = RouteModel.decide(parsed, current: r.current)
         // Whether the line asks for the spec above to be built (2026-10-13): only a build the model picked says so.
         let means: Bool? = d.agent == "build" ? d.spec == true : nil
         let out = RouteResult(id: id, agent: d.agent, sure: d.sure, spec: means, model: step.map { ($0.provider, $0.name, $0.model, $0.effort) }, ms: Time.ms() - started, by: "model", rule: nil, error: error)
@@ -314,7 +275,7 @@ public final class Router: @unchecked Sendable {
     }
 
     /// The person picked `agent` instead of the router's pick.
-    public func corrected(id: String?, projectId: String?, text: String, agent: String) { Route.markCorrected(runLog, id: id, projectId: projectId, text: text, agent: agent) }
+    public func corrected(id: String?, projectId: String?, text: String, agent: String) { RouteModel.markCorrected(runLog, id: id, projectId: projectId, text: text, agent: agent) }
 
     /// Where the line went, when it was not an ask: a Build's id.
     public func handed(_ id: String, to: String) { if !id.isEmpty && !to.isEmpty { runLog?.amend(id, [("handedTo", .string(to))]) } }

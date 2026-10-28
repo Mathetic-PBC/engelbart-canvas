@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // models.cjs — which model answers an @bart question, and at what effort (2026-09-19). One file for every project,

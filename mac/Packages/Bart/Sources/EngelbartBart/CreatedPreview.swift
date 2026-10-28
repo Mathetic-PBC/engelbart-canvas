@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import WebKit
 
 // created-preview.cjs — a picture of a page @create made (2026-10-14; Create.readCreated): the editor draws an html file's
@@ -55,7 +56,15 @@ public enum CreatedPreview {
         conf.rect = CGRect(x: 0, y: 0, width: width, height: height)
         conf.snapshotWidth = NSNumber(value: width)
         let image = try await view.takeSnapshot(configuration: conf)
-        guard let tiff = image.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]), !png.isEmpty else { throw Failed() }
+        // Rasterized at 1 px a point, as Electron's capturePage of a 900-wide window gives 900 px (pngWidth checks it).
+        guard let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: width, pixelsHigh: height, bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true,
+                                         isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0) else { throw Failed() }
+        rep.size = NSSize(width: width, height: height)
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
+        image.draw(in: NSRect(x: 0, y: 0, width: width, height: height))
+        NSGraphicsContext.restoreGraphicsState()
+        guard let png = rep.representation(using: .png, properties: [:]), !png.isEmpty else { throw Failed() }
         try FileManager.default.createDirectory(atPath: (out as NSString).deletingLastPathComponent, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
         try png.write(to: URL(fileURLWithPath: out))
         chmod(out, 0o600)

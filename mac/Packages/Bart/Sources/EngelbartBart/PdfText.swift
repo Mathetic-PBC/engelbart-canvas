@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import PDFKit
 
 // context/pdf-text.cjs — text out of a PDF, for the catalog. A paper that prints an "Abstract" section already carries

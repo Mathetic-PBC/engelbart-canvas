@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 
 // clip.cjs — text too long for where it goes, cut in the middle (MATH-27 second pass, 2026-10-06): a passage
 // highlighted across many pages, or an earlier answer past what a turn may hold, is asked about with its start and its

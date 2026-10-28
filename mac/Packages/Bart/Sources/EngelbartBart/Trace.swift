@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // trace.cjs — what an @discover run is doing, told as its trace (2026-10-15, David's mockup): the steps grouped by the

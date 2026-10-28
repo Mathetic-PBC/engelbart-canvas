@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 
 // The built-in system prompts, copied verbatim from the Electron modules named beside each (generated from them, so
 // not a character differs; the comments that record why each says what it says are in those files and in

@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // papers.cjs — @discover's paper tools (2026-09-30): resolve, references, citations, author_works, related and search,
@@ -406,24 +407,27 @@ public enum PapersMCP {
     /// `--mcp papers`: serves until stdin closes. The app's entry point calls this.
     public static func run(environment: [String: String] = ProcessInfo.processInfo.environment) {
         let key = environment["OPENALEX_API_KEY"].flatMap { $0.isEmpty ? nil : $0 } // a free key: $1 a day, not $0.10
-        let output = FileHandle.standardOutput
-        let s = server(papers: Papers(apiKey: key), output: output)
         let done = DispatchSemaphore(value: 0)
         Task.detached {
-            var buffer = Data()
-            let input = FileHandle.standardInput
-            while true {
-                let chunk = input.availableData
-                if chunk.isEmpty { break }
-                buffer.append(chunk)
-                while let nl = buffer.firstIndex(of: 0x0A) {
-                    let line = buffer[buffer.startIndex..<nl]
-                    buffer.removeSubrange(buffer.startIndex...nl)
-                    if let message = try? JSONValue.parse(Data(line)) { await handle(message, server: s, output: output) }
-                }
-            }
+            await serve(papers: Papers(apiKey: key), input: .standardInput, output: .standardOutput)
             done.signal()
         }
         done.wait()
+    }
+
+    /// The server's loop: newline-delimited JSON-RPC from `input` until it closes, each answer a line on `output`.
+    public static func serve(papers: Papers, input: FileHandle, output: FileHandle) async {
+        let s = server(papers: papers, output: output)
+        var buffer = Data()
+        while true {
+            let chunk = input.availableData
+            if chunk.isEmpty { break }
+            buffer.append(chunk)
+            while let nl = buffer.firstIndex(of: 0x0A) {
+                let line = buffer[buffer.startIndex..<nl]
+                buffer.removeSubrange(buffer.startIndex...nl)
+                if let message = try? JSONValue.parse(Data(line)) { await handle(message, server: s, output: output) }
+            }
+        }
     }
 }

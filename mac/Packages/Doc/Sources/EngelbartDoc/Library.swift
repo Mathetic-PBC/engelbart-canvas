@@ -94,8 +94,15 @@ public struct MenuItem: Equatable {
     public var entryName: String? = nil
     public var zotero: String? = nil
     public var input: String? = nil
-    public init(kind: Kind, key: String, name: String, id: String = "", row: LibRow? = nil, rel: String? = nil, entryName: String? = nil, zotero: String? = nil, input: String? = nil) {
+    /// A folder's entry that is a folder itself (it opens when picked).
+    public var dir = false
+    /// What a row says beside its name (a back row's path, a Zotero item's authors and year).
+    public var hint: String? = nil
+    /// A folder entry's file type.
+    public var entryType: String? = nil
+    public init(kind: Kind, key: String, name: String, id: String = "", row: LibRow? = nil, rel: String? = nil, entryName: String? = nil, zotero: String? = nil, input: String? = nil, dir: Bool = false, hint: String? = nil, entryType: String? = nil) {
         self.kind = kind; self.key = key; self.name = name; self.id = id; self.row = row; self.rel = rel; self.entryName = entryName; self.zotero = zotero; self.input = input
+        self.dir = dir; self.hint = hint; self.entryType = entryType
     }
 }
 

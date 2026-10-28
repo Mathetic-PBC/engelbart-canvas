@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // context/catalog.cjs — <project>/.context/catalog.json: what the project holds, for anything that reads files rather

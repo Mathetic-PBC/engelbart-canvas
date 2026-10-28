@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 
 // JavaScript string and regular-expression semantics, so the ported code reads like the Electron code and behaves like
 // it: lengths and offsets are UTF-16 code units (JS `.length`, `.slice`, `match.index`), and patterns are ICU regular

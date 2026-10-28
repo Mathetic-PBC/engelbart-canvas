@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // context/summarizer.cjs — one bounded model invocation: a note's text (and its current summary, when it has one) in, a

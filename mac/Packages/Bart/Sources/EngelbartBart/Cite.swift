@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 import EngelbartCore
 
 // cite.cjs — Chat's citations (2026-10-21). Where an answer leans on something in the person's context, Chat cites the
@@ -34,7 +35,7 @@ public struct CiteDropped: Equatable, Sendable {
     public var json: OJ { ["label": .string(label), "address": .string(address), "reason": .string(reason)] }
 }
 
-public enum Cite {
+public enum CiteCheck {
     static let linkRE = JSRegex("\\[([^\\]\\n]+)\\]\\(([^)\\s]+)\\)", "g")
     static let looseCiteRE = JSRegex("\\[([^\\]\\n]+)\\]\\(((?:(?!\\]\\()[^\\n])*?[#&]cite=[A-Za-z]*(?:&(?:to|counter)=[^&)\\n]*)*)\\)", "g")
     static let nestedLinkRE = JSRegex("\\[([^\\]\\n]+)\\]\\(((?:[^()\\s]|\\([^()\\s]*\\))+)\\)", "g")
@@ -84,8 +85,8 @@ public enum Cite {
         let where_ = (address ?? "").jsTrim
         if where_.isEmpty { return .reason("unresolved") }
         if JSRegex("^https?://", "i").test(where_) {
-            let key = AddressKey.key(where_)
-            if let row = library.first(where: { !($0.url ?? "").isEmpty && AddressKey.key($0.url) == key }) { return .row(row: row, file: row.path, name: row.name) }
+            let key = AddressKey.addressKey(where_)
+            if let row = library.first(where: { !($0.url ?? "").isEmpty && AddressKey.addressKey($0.url) == key }) { return .row(row: row, file: row.path, name: row.name) }
             return .reason("unresolved")
         }
         var file = where_
@@ -250,7 +251,7 @@ public enum Cite {
         if !JSRegex("[#&]cite=|#find=").test(text) { return (text, kept, dropped) }
         let current = o.workspaces.first { $0.0.id == o.workspaceId }
         let threadText = o.currentThread.map { [$0.question, $0.answer].filter { !$0.isEmpty }.joined(separator: "\n") }.joined(separator: "\n")
-        let thread = PassageText.foldPassage(threadText, prefixes: true, markdown: true).text
+        let thread = PassageText.fold(threadText, prefixes: true, markdown: true).string
         var reads: [String: String?] = [:]
         func read(_ file: String) async -> String? { if let r = reads[file] { return r }; let r = await o.readText(file); reads[file] = r; return r }
         func rowText(_ row: LibraryRow) async -> String? { let k = "row:\(row.id)"; if let r = reads[k] { return r }; let r = await o.readRowText(row); reads[k] = r; return r }
@@ -277,8 +278,8 @@ public enum Cite {
                 let source = found.file != nil ? await read(found.file!) : nil
                 let by = cite == "you" ? "You" : cite == "other" ? otherOf("", 0, workspaceDoc: false, chat: false, label: label) : ""
                 let shown = by.isEmpty ? label : [by, dayLabel(sourceDate(found, source), today: o.today)].filter { !$0.isEmpty }.joined(separator: " · ")
-                kept.append(CiteKept(label: shown, address: address, source: found.name.isEmpty ? ((found.file ?? "") as NSString).lastPathComponent : found.name, find: "", note: nil, page: nil, cite: cite, counter: target.counter, relabeled: false))
-                return "[\(shown)](\(PassageLink.citeHref(address: target.address, find: "", cite: cite, counter: target.counter)))"
+                kept.append(CiteKept(label: shown, address: address, source: found.name.isEmpty ? ((found.file ?? "") as NSString).lastPathComponent : found.name, find: "", note: nil, page: nil, cite: cite, counter: (target.counter ?? false), relabeled: false))
+                return "[\(shown)](\(PassageLink.citeHref(address: target.address, find: "", cite: cite, counter: (target.counter ?? false))))"
             }
             let source: String? = found.file != nil ? await read(found.file!) : found.row != nil ? await rowText(found.row!) : nil
             let workspaceDoc = found.isWorkspace
@@ -291,14 +292,14 @@ public enum Cite {
                     let find = firstWords(n.text, noteFindWords)
                     let shown = ["You", dayLabel(n.at ?? sourceDate(found, nil), today: o.today)].filter { !$0.isEmpty }.joined(separator: " · ")
                     let address = !(row.url ?? "").isEmpty && isWeb(target.address) ? row.url! : found.file ?? target.address
-                    kept.append(CiteKept(label: shown, address: address, source: found.name, find: find, note: quote, page: n.page, cite: "you", counter: target.counter, relabeled: cite != "you"))
-                    return "[\(shown)](\(PassageLink.citeHref(address: target.address, find: find, page: n.page ?? 0, note: quote, cite: "you", counter: target.counter)))"
+                    kept.append(CiteKept(label: shown, address: address, source: found.name, find: find, note: quote, page: n.page, cite: "you", counter: (target.counter ?? false), relabeled: cite != "you"))
+                    return "[\(shown)](\(PassageLink.citeHref(address: target.address, find: find, page: n.page ?? 0, note: quote, cite: "you", counter: (target.counter ?? false))))"
                 }
             }
             guard let src = source, !src.jsTrim.isEmpty else { return cut("no-text") }
             if hits.isEmpty { return cut("not-found") }
             if workspaceDoc, let current, case .workspace(_, let w, _) = found, w.id == current.0.id, !thread.isEmpty,
-               PassageText.contains(thread, PassageText.foldPassage(target.find, markdown: true).text) { return cut("current-thread") }
+               (thread as NSString).range(of: PassageText.fold(target.find, markdown: true).string, options: .literal).location != NSNotFound { return cut("current-thread") }
             var c = cite, who = ""
             if c == "you" {
                 if workspaceDoc && hits.allSatisfy({ answerLineRE.test(lineAt(src, $0.start)) }) { who = "Chat" }
@@ -311,9 +312,9 @@ public enum Cite {
             let address = (found.row?.url).flatMap { !$0.isEmpty && isWeb(target.address) ? $0 : nil } ?? found.file ?? ""
             let by = c == "you" ? "You" : c == "other" ? (who.isEmpty ? otherOf(src, hits[0].start, workspaceDoc: workspaceDoc, chat: !workspaceDoc && markdown && isImportedChat(src), label: label) : who) : ""
             let shown = by.isEmpty ? label : [by, dayLabel(sourceDate(found, src), today: o.today)].filter { !$0.isEmpty }.joined(separator: " · ")
-            kept.append(CiteKept(label: shown, address: address, source: found.name.isEmpty ? ((found.file ?? "") as NSString).lastPathComponent : found.name, find: target.find, note: nil, page: nil, cite: c, counter: target.counter, relabeled: !who.isEmpty))
+            kept.append(CiteKept(label: shown, address: address, source: found.name.isEmpty ? ((found.file ?? "") as NSString).lastPathComponent : found.name, find: target.find, note: nil, page: nil, cite: c, counter: (target.counter ?? false), relabeled: !who.isEmpty))
             if !who.isEmpty || shown != label || JSRegex("[()\\s]").test(href) {
-                return "[\(shown)](\(PassageLink.citeHref(address: target.address, find: target.find, to: target.to, cite: c, counter: target.counter)))"
+                return "[\(shown)](\(PassageLink.citeHref(address: target.address, find: target.find, to: target.to, cite: c, counter: (target.counter ?? false))))"
             }
             return "[\(label)](\(href))"
         }

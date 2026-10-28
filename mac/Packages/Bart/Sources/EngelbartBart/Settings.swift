@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 
 // settings.cjs — Settings › Intelligence (2026-10-06, MATH-53): the default model and effort of each agent on each
 // provider, and the default provider of @bart (which @brainstorm and @discover follow) and of Build. No file of its own:

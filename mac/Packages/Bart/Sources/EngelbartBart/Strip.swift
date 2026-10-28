@@ -1,4 +1,5 @@
 import Foundation
+import EngelbartDoc
 
 // strip.cjs — what @brainstorm is not shown (2026-09-30, round 3): the answers other agents wrote in the document. An
 // @bart or @discover question is the person's words and stays; the reply lines under it (answer, folded answer, pending)
