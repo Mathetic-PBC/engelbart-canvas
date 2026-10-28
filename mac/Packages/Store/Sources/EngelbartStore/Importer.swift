@@ -87,11 +87,13 @@ public enum StoreImporter {
         for (index, db) in databases.enumerated() {
             // Read a COPY: the Electron app may have its database open.
             let copy = Paths.join(scratch, "db-\(index).pglite"), out = Paths.join(scratch, "db-\(index).json")
+            try JSONFiles.makeDir(scratch)
             try Files.cloneItem(at: URL(fileURLWithPath: db.pglite), to: URL(fileURLWithPath: copy))
             let result = try await ProcessRunner.run(runtime.executable, [script, copy, out], environment: runtime.environment, timeout: 600)
             guard result.exit.succeeded, let data = FileManager.default.contents(atPath: out) else {
                 throw StoreError("Could not read \(db.pglite): \(result.stderr.trimmingCharacters(in: .whitespacesAndNewlines))")
             }
+            try JSONFiles.makeDir(Paths.dirname(db.sqlite))
             report.databases[db.sqlite] = try insert(dump: try JSONValue.parse(data), into: db.sqlite, replace: replace)
         }
         return report
@@ -115,10 +117,17 @@ public enum StoreImporter {
             for row in library["rows"]?.array ?? [] { try insertRow(raw, "library", row, columns); n += 1 }
             raw.close()
             let db = try LibraryDB.open(root: Paths.dirname(file))
-            return n + (try insertTables(db.db, tables, order: libraryOrder.filter { $0 != "library" }))
+            let rest = try insertTables(db.db, tables, order: libraryOrder.filter { $0 != "library" })
+            try db.backfillMilestones()
+            return n + rest
         }
-        let db: SQLiteDatabase = isLibrary ? try LibraryDB.open(root: Paths.dirname(file)).db : try NotesDB.open(projectDir: Paths.dirname(file)).db
-        return try insertTables(db, tables, order: isLibrary ? libraryOrder : notesOrder)
+        if isLibrary {
+            let library = try LibraryDB.open(root: Paths.dirname(file))
+            let n = try insertTables(library.db, tables, order: libraryOrder)
+            try library.backfillMilestones()
+            return n
+        }
+        return try insertTables(try NotesDB.open(projectDir: Paths.dirname(file)).db, tables, order: notesOrder)
     }
 
     static func insertTables(_ db: SQLiteDatabase, _ tables: [String: JSONValue], order: [String]) throws -> Int {

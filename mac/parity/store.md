@@ -3,7 +3,7 @@
 Ports `src/main/store/*.cjs`, `src/main/developer.cjs`, `src/main/context/pdf-kind.cjs`, the persisted parts of
 `src/main/windows.cjs`, `src/shared/project-holds.cjs`, `address-key.cjs`, `github.cjs`, and the data handlers of
 `src/main/ipc.cjs` / `index.cjs`. Package: `mac/Packages/Store` (module `EngelbartStore`). Tests: `Tests/EngelbartStoreTests`.
-Format and statuses: `mac/ARCHITECTURE.md` §6. "done (cloud)": checked by `mac/scripts/cloud-test.sh Store` (84 XCTests, 1 skipped, PASS, 2026-10-28).
+Format and statuses: `mac/ARCHITECTURE.md` §6. "done (cloud)": checked by `mac/scripts/cloud-test.sh Store` (84 XCTests, PASS, 2026-10-28, run 40757446597).
 
 Mappings that hold everywhere (Electron mechanics → Swift):
 - PGlite directories `library.pglite`, `<project>/notes.pglite` → SQLite files `library.sqlite`, `<project>/notes.sqlite`
@@ -196,4 +196,4 @@ Mappings that hold everywhere (Electron mechanics → Swift):
 | 158 | stage-file (readStageFile) | projects.cjs:1482 | TextFiles.swift (resolveTypedPath public) | n/a: stage/files.cjs reading is the Stage package's; Store exposes `resolveTypedPath` for it |
 | 159 | copy-doc (expandDoc) | ipc.cjs:827 | — | n/a: context/expand-mentions.cjs is the Bart package's |
 | **Importer** |||||
-| 160 | importElectronRoot(from:to:): clone every file except `*.pglite` (APFS clonefile), then convert library.pglite and each project's notes.pglite from a COPY via a Node script (Electron runtime with ELECTRON_RUN_AS_NODE + app.asar.unpacked pglite, fallback node + repo node_modules) into SQLite | ARCHITECTURE §3 | Importer.swift, Resources/pglite-dump.cjs | partial: compiled; ImporterTests (scratch PGlite made with node) skips on the cloud runner (no node + pglite there) and was not run locally (testing is cloud-only); the Electron-runtime path was never launched |
+| 160 | importElectronRoot(from:to:): clone every file except `*.pglite` (APFS clonefile), then convert library.pglite and each project's notes.pglite from a COPY via a Node script (Electron runtime with ELECTRON_RUN_AS_NODE + app.asar.unpacked pglite, fallback node + repo node_modules) into SQLite | ARCHITECTURE §3 | Importer.swift, Resources/pglite-dump.cjs | done (cloud): end to end on the runner (Node 22 + pglite 0.5.8), run 40757446597; the Electron-runtime path (Engelbart.app as Node) was never launched |

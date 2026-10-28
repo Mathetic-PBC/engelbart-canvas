@@ -192,7 +192,11 @@ public final class LibraryDB: Closable, @unchecked Sendable {
             }
         }
         try db.execute(Self.otherTables)
-        // Null marks pre-upgrade runs for a one-time backfill from whatever history remains.
+        try backfillMilestones()
+    }
+
+    /// Null marks pre-upgrade runs for a one-time backfill from whatever history remains (on open, and after an import).
+    func backfillMilestones() throws {
         for run in try db.query("select id, build_log from sandbox_runs where build_milestones is null") {
             let log = (try? JSONValue.parse(run["build_log"]?.string ?? "[]"))?.array ?? []
             try db.run("update sandbox_runs set build_milestones = ? where id = ? and build_milestones is null",

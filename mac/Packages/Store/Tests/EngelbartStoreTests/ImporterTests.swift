@@ -9,9 +9,12 @@ final class ImporterTests: XCTestCase {
 
     static let makeScript = #"""
     'use strict';
+    const fs = require('node:fs');
+    const path = require('node:path');
     const { PGlite } = require('@electric-sql/pglite');
     (async () => {
       const [libraryDir, notesDir, oldDir] = process.argv.slice(2);
+      for (const dir of [libraryDir, notesDir, oldDir]) fs.mkdirSync(path.dirname(dir), { recursive: true }); // PGlite's own mkdir is not recursive
       const lib = new PGlite(libraryDir); await lib.waitReady;
       await lib.exec(`create table library (id uuid primary key, name text not null, type text not null, path text, url text, folder_path text, project_id uuid,
         created timestamptz not null default now(), last_edited timestamptz not null default now(), summary text, summary_edited timestamptz, char_count integer,
@@ -51,27 +54,31 @@ final class ImporterTests: XCTestCase {
         let made = try await ProcessRunner.run(runtime.executable, [script, Paths.join(electron, "library.pglite"), Paths.join(project, "notes.pglite"), Paths.join(scratch, "old", "library.pglite")], environment: runtime.environment, timeout: 300)
         XCTAssertTrue(made.exit.succeeded, made.stderr)
 
+        func listing(_ dir: String) -> [String] { (FileManager.default.enumerator(atPath: dir)?.allObjects as? [String] ?? []).sorted() }
+        let sourceBefore = listing(electron)
         let target = Paths.join(tempDir("engelbart-import-dst-"), ".engelbart-swift")
         let report = try await StoreImporter.importElectronRoot(from: URL(fileURLWithPath: electron), to: URL(fileURLWithPath: target), runtime: runtime)
         XCTAssertEqual(read(Paths.join(target, "thesis", "A note.md")), "hello\n")
         XCTAssertEqual(json(Paths.join(target, "state.json"))?["projectId"], "77777777-7777-4777-8777-777777777777")
         XCTAssertFalse(exists(Paths.join(target, "library.pglite")), "no PGlite directory is copied")
         XCTAssertEqual(report.databases.count, 2)
+        XCTAssertEqual(listing(electron), sourceBefore, "the Electron root is untouched")
+        XCTAssertFalse(listing(target).contains { $0.contains(".pglite") }, "no PGlite directory anywhere in the copy")
 
         let library = try LibraryDB.open(root: target)
-        let note = try library.get("11111111-1111-4111-8111-111111111111")!
+        let note = try XCTUnwrap(try library.get("11111111-1111-4111-8111-111111111111"))
         XCTAssertEqual([note.name, note.type, note.summary, note.created, note.lastEdited], ["A note", "md", "About it", "2026-09-01T00:00:00.000Z", "2026-09-02T00:00:00.000Z"])
         XCTAssertEqual(note.tags, ["note"]); XCTAssertEqual(note.categorized, 1)
         XCTAssertEqual(try library.textsFor([note.id], max: 100), [note.id: "body"])
         XCTAssertEqual(try library.textStamps()[note.id], 12.5)
-        let run = try library.query("select * from sandbox_runs")[0]
+        let run = try XCTUnwrap(try library.query("select * from sandbox_runs").first)
         XCTAssertEqual(run["port"]?.int, 3000)
-        XCTAssertEqual(try JSONValue.parse(run["build_log"]!.string!), [["message": "Creating sandbox"]], "jsonb as JSON text")
-        XCTAssertNotNil(try JSONValue.parse(run["build_milestones"]!.string!)["message:Creating sandbox"], "a run with no milestones is backfilled")
+        XCTAssertEqual(try JSONValue.parse(try XCTUnwrap(run["build_log"]?.string)), [["message": "Creating sandbox"]], "jsonb as JSON text")
+        XCTAssertNotNil(try JSONValue.parse(try XCTUnwrap(run["build_milestones"]?.string))["message:Creating sandbox"], "a run with no milestones is backfilled")
 
         let notes = try NotesDB.open(projectDir: Paths.join(target, "thesis"))
         XCTAssertEqual(try notes.list().map(\.topicId), ["44444444-4444-4444-8444-444444444444"])
-        let card = try notes.postIts.list()[0]
+        let card = try XCTUnwrap(try notes.postIts.list().first)
         XCTAssertEqual([card.nx, card.ny, card.width, card.z], [0.5, 0.25, 220, 2]); XCTAssertEqual(card.text, "stick")
 
         // the Swift app reads it as its own
@@ -84,7 +91,7 @@ final class ImporterTests: XCTestCase {
         // a library typed the old way is converted after its copy is set aside
         let oldTarget = tempDir("engelbart-import-old-")
         try await StoreImporter.importElectronRoot(from: URL(fileURLWithPath: Paths.join(scratch, "old")), to: URL(fileURLWithPath: oldTarget), runtime: runtime)
-        let converted = try LibraryDB.open(root: oldTarget).get("66666666-6666-4666-8666-666666666666")!
+        let converted = try XCTUnwrap(try LibraryDB.open(root: oldTarget).get("66666666-6666-4666-8666-666666666666"))
         XCTAssertEqual(converted.type, "website"); XCTAssertEqual(converted.tags, ["paper"])
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: Paths.join(oldTarget, ".backups")).filter { $0.hasPrefix("library-") }.count, 1)
     }
