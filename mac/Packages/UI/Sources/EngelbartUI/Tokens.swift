@@ -90,8 +90,8 @@ public enum Fonts {
     public static func register() {
         guard !registered else { return }
         registered = true
-        guard let dir = Bundle.module.url(forResource: "Fonts", withExtension: nil, subdirectory: "Resources")
-            ?? Bundle.module.resourceURL?.appendingPathComponent("Resources/Fonts") else { return }
+        guard let dir = ResourceBundle.ui.url(forResource: "Fonts", withExtension: nil, subdirectory: "Resources")
+            ?? ResourceBundle.ui.resourceURL?.appendingPathComponent("Resources/Fonts") else { return }
         let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
         for file in files where ["woff2", "woff", "ttf", "otf"].contains(file.pathExtension) {
             CTFontManagerRegisterFontsForURL(file as CFURL, .process, nil)
@@ -144,8 +144,8 @@ public enum Images {
         let base = (name as NSString).deletingPathExtension
         let ext = (name as NSString).pathExtension
         for e in ext.isEmpty ? ["png", "svg"] : [ext] {
-            if let url = Bundle.module.url(forResource: base, withExtension: e, subdirectory: "Resources/Images")
-                ?? Bundle.module.resourceURL?.appendingPathComponent("Resources/Images/\(base).\(e)"),
+            if let url = ResourceBundle.ui.url(forResource: base, withExtension: e, subdirectory: "Resources/Images")
+                ?? ResourceBundle.ui.resourceURL?.appendingPathComponent("Resources/Images/\(base).\(e)"),
                let image = NSImage(contentsOf: url) { return image }
         }
         return nil

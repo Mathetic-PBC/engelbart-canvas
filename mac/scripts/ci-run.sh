@@ -14,6 +14,7 @@ mkdir -p "$out"
 
 test_package() {
   local pkg=$1 dir="$root/mac/Packages/$1"
+  [ "$pkg" = Engelbart ] && dir="$root/mac/Engelbart" # the app package's own XCTests (App shell agent)
   [ -f "$dir/Package.swift" ] || { echo "CI: no package mac/Packages/$pkg"; return 2; }
   echo "::group::build $pkg"
   (cd "$dir" && swift build --build-tests 2>&1)

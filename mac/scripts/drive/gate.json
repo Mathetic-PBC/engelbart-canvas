@@ -1,0 +1,15 @@
+{
+  "about": "A project whose code directory went missing: the DirectoryGate over the blurred workspace; All projects leaves it. mac/scripts/cloud-test.sh app --filter mac/scripts/drive/gate.json",
+  "env": { "ENGELBART_SHELL_DEMO": "gate" },
+  "steps": [
+    { "waitFor": "directory-gate" },
+    { "expect": "directory-gate-choose" },
+    { "snapshot": "gate" },
+    { "click": "directory-gate-home" },
+    { "wait": 400 },
+    { "expectMissing": "directory-gate" },
+    { "expect": "screen=home" },
+    { "expectTitle": "Engelbart" },
+    { "snapshot": "home" }
+  ]
+}

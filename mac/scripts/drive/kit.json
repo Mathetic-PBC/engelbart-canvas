@@ -1,0 +1,22 @@
+{
+  "about": "Every UI-kit primitive on one screen (KitGallery.swift), then the inline field, a floating panel and the gate. mac/scripts/cloud-test.sh app --filter mac/scripts/drive/kit.json",
+  "env": { "ENGELBART_SHELL_DEMO": "kit" },
+  "steps": [
+    { "waitFor": "screen=kit" },
+    { "snapshot": "kit" },
+    { "click": "kit-option-0" },
+    { "click": "kit-inline-field" },
+    { "type": "  Reading  " },
+    { "key": "Enter" },
+    { "wait": 200 },
+    { "click": "kit-panel" },
+    { "waitFor": "kit-panel-list" },
+    { "snapshot": "kit-panel" },
+    { "key": "Escape" },
+    { "wait": 300 },
+    { "expectMissing": "kit-panel-list" },
+    { "click": "kit-settings-rows" },
+    { "wait": 300 },
+    { "snapshot": "kit-bottom" }
+  ]
+}
