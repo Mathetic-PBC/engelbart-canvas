@@ -9,10 +9,19 @@ let package = Package(
     dependencies: [
         .package(path: "../Core"),
         .package(path: "../UI"),
-        .package(path: "../Doc"),
+        // Doc is not a dependency (2026-10-28): the Stage needs only web-name, passage-link/-text and markdown from it,
+        // keeps its own copies (Model/AddressKey.swift, Model/Passage.swift), and so builds while Doc is being written.
     ],
     targets: [
-        .target(name: "EngelbartStage", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), .product(name: "EngelbartDoc", package: "Doc"), ]),
+        .target(
+            name: "EngelbartStage",
+            dependencies: [
+                .product(name: "EngelbartCore", package: "Core"),
+                .product(name: "EngelbartUI", package: "UI"),
+            ],
+            resources: [.copy("Resources")],
+            linkerSettings: [.linkedLibrary("sqlite3"), .linkedFramework("WebKit"), .linkedFramework("Security")]
+        ),
         .testTarget(name: "EngelbartStageTests", dependencies: ["EngelbartStage"]),
     ]
 )
