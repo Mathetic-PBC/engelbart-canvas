@@ -15,7 +15,7 @@ final class ExpandMentionsTests: XCTestCase {
                       read: { row in reads.names.append(row.name); return rows.first { $0.row.id == row.id }?.text },
                       image: { images[$0] }, file: file)
     }
-    func expand(_ text: String, _ s: MentionSource, seen: Set<String> = []) async -> (text: String, files: Int, missing: Int, seen: Set<String>) {
+    func expand(_ text: String, _ s: MentionSource, seen: SeenKeys = []) async -> (text: String, files: Int, missing: Int, seen: SeenKeys) {
         var seen = seen
         let r = await ExpandMentions.expandMentions(text, s, seen: &seen)
         return (r.lines.joined(separator: "\n"), r.files, r.missing, seen)
@@ -115,10 +115,67 @@ final class ExpandMentionsTests: XCTestCase {
         // image-mentions.test.cjs: a picture the text pastes is given once, where it is pasted; a mention of it adds nothing.
         let pic = LibRow(id: "img-1", name: "Diagram.png", type: "image", path: "/assets/img-1.png")
         let s = MentionSource.project("p", rows: [pic], read: { _ in nil })
-        var seen = Set<String>()
+        var seen = SeenKeys()
         let r = await ExpandMentions.expandMentions("![Attachment 1](img:img-1)\nsee @[Diagram.png](lib:img-1)", s, seen: &seen)
         XCTAssertEqual(r.lines, ["![Attachment 1](/assets/img-1.png)", "see @[Diagram.png](lib:img-1)"])
         let only = await ExpandMentions.expandMentions("see @[Diagram.png](lib:img-1)", s)
         XCTAssertEqual(only.lines, ["see @[Diagram.png](lib:img-1)", "", "<file name=\"Diagram.png\" type=\"image\" path=\"/assets/img-1.png\" />"])
+    }
+
+    func testSeenKeepsFirstSeenOrder() async {
+        // expand-mentions.cjs's `seen` is a JS Set: read back, its keys come in the order they were first added.
+        let s = source([note("A", "A says @[C]"), note("B", "b"), note("C", "c")])
+        let r = await expand("@[B] and @[A]\nagain @[b]", s, seen: ["zeta"])
+        XCTAssertEqual(r.seen.keys, ["zeta", "id-B", "id-A", "id-C"], "first seen first; nested after the note that holds it; a repeat adds nothing")
+        var keys = SeenKeys(["q", "a", "q", "m"])
+        XCTAssertFalse(keys.insert("a"))
+        XCTAssertTrue(keys.insert("b"))
+        XCTAssertEqual(Array(keys), ["q", "a", "m", "b"])
+    }
+
+    func testExpandRows() async {
+        let a = note("A", "a body"), b = note("B", "b @[A]")
+        let s = source([a, b])
+        var seen: SeenKeys = ["id-A"]
+        let r = await ExpandMentions.expandRows([b.row, a.row, b.row], s, seen: &seen)
+        XCTAssertEqual(r.lines, ["<file name=\"B\" type=\"md\" tags=\"note\" path=\"/p/B.md\">", "b @[A]", "</file>"], "a row already seen, and a repeat, are skipped; its mention of a seen note adds nothing")
+        XCTAssertEqual([r.files, r.missing], [1, 0])
+        XCTAssertEqual(seen.keys, ["id-A", "id-B"])
+        var none = SeenKeys()
+        let two = await ExpandMentions.expandRows([a.row, NoteRow(row: LibRow(id: "p-1", name: "Paper", type: "pdf", tags: ["paper"], path: "/p/x.pdf", summary: "About x"), text: nil).row], s, seen: &none)
+        XCTAssertEqual(two.lines, ["<file name=\"A\" type=\"md\" tags=\"note\" path=\"/p/A.md\">", "a body", "</file>", "", "<file name=\"Paper\" type=\"pdf\" tags=\"paper\" path=\"/p/x.pdf\" contains=\"summary\">", "About x", "</file>"], "a blank line between rows")
+    }
+
+    func testExpandDoc() async {
+        let s = source([note("Plan", "p")])
+        var seen = SeenKeys()
+        let d = await ExpandMentions.expandDoc(title: "My note", body: "see @[Plan]\nbuild> 0123456789\n\n", source: s, seen: &seen, task: { _ in (title: "Tests", status: "running") })
+        XCTAssertEqual(d.title, "My note")
+        XCTAssertEqual(d.body, ["see @[Plan]", "", "<file name=\"Plan\" type=\"md\" tags=\"note\" path=\"/p/Plan.md\">", "p", "</file>", "", "Build \"Tests\" (running)"].joined(separator: "\n"))
+        XCTAssertEqual(d.text, "# My note\n\n" + d.body, "under its name, a blank line, then the body; trailing blank lines trimmed")
+        XCTAssertEqual(d.chars, d.text.len)
+        XCTAssertEqual([d.files, d.missing], [1, 0])
+        XCTAssertEqual(seen.keys, ["id-Plan"])
+        var none = SeenKeys()
+        let untitled = await ExpandMentions.expandDoc(title: "", body: "x", source: s, seen: &none)
+        XCTAssertEqual(untitled.text, "x", "no title: no heading")
+    }
+
+    func testJavaScriptWhitespace() {
+        // JS \s and trim(): \t \n \v \f \r, space, NBSP, U+1680, U+2000–200A, U+2028/9, U+202F, U+205F, U+3000, U+FEFF; never U+0085 or U+180E.
+        XCTAssertEqual("\u{FEFF}\u{0B}\u{3000} a \u{2028}\u{A0}".trimmed, "a")
+        XCTAssertEqual("\u{85}a\u{85}".trimmed, "\u{85}a\u{85}", "NEL is not JavaScript whitespace")
+        XCTAssertEqual("\u{180E}a".trimStart, "\u{180E}a")
+        XCTAssertEqual("a\r\n".trimEnd, "a")
+        XCTAssertEqual(" \t".trimmed, "")
+        XCTAssertTrue(Rx(#"^\s$"#).test("\u{0B}"))
+        XCTAssertTrue(Rx(#"^\s$"#).test("\u{FEFF}"))
+        XCTAssertFalse(Rx(#"^\s$"#).test("\u{85}"))
+        XCTAssertTrue(Rx(#"^\S$"#).test("\u{85}"))
+        XCTAssertTrue(Rx(#"^[\s,]+$"#).test(", \u{FEFF}"))
+        XCTAssertFalse(Rx(#"^[\s,]+$"#).test(",\u{85}"))
+        XCTAssertTrue(PassageText.isSpace(0xFEFF) && PassageText.isSpace(0x0B) && PassageText.isSpace(0x202F))
+        XCTAssertFalse(PassageText.isSpace(0x85))
+        XCTAssertFalse(PassageText.isSpace(0x180E))
     }
 }

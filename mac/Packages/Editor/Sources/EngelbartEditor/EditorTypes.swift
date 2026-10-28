@@ -115,8 +115,13 @@ public struct AskProgress: Equatable, Sendable {
     public var lines: [String]
     /// The things done (at most 60).
     public var log: [String]
-    public init(agent: String? = nil, activity: String = "", name: String = "", effort: String = "", movedUp: Bool = false, lines: [String] = [], log: [String] = []) {
+    /// What a Create run said it is making (main/bart/making.cjs, ask.making).
+    public var making: String = ""
+    /// When it was asked (ask.at): a Create row's m:ss.
+    public var at: Date? = nil
+    public init(agent: String? = nil, activity: String = "", name: String = "", effort: String = "", movedUp: Bool = false, lines: [String] = [], log: [String] = [], making: String = "", at: Date? = nil) {
         self.agent = agent; self.activity = activity; self.name = name; self.effort = effort; self.movedUp = movedUp; self.lines = lines; self.log = log
+        self.making = making; self.at = at
     }
 
     /// A step beginning drops what the last step showed; a thing done is kept in `log` (60 at most).

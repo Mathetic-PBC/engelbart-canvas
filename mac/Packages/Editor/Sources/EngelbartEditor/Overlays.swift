@@ -117,10 +117,15 @@ final class FootView: FlippedView {
         copy.toolTip = "Copied"; copy.color = Look.grey; copy.needsDisplay = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in self?.copy.toolTip = "Copy"; self?.copy.color = Look.mid; self?.copy.needsDisplay = true }
     }
+    /// Words after Copy and Regenerate: a live card's Skip and Wrap up, a guide's Save all (n).
+    var extras: [TextButton] = []
+    func add(_ b: TextButton) { extras.append(b); addSubview(b) }
     override func layout() {
         super.layout()
         copy.frame.origin = NSPoint(x: 10, y: 12)
         regen.frame.origin = NSPoint(x: 40, y: 12)
+        var x: CGFloat = 70 + 6
+        for b in extras { b.frame.origin = NSPoint(x: x, y: 12 + (28 - b.frame.height) / 2); x += b.frame.width + 6 }
         delete.frame.origin = NSPoint(x: bounds.width - 38, y: 12)
     }
 }
@@ -170,6 +175,13 @@ final class PendingView: FlippedView {
     var steps: TextButton? = nil
     var logText: NSTextField? = nil
     var follow = true
+    var heldTop: CGFloat? = nil
+    /// The box scrolled: its top, and how far it is from its bottom.
+    var onScrolled: (CGFloat, CGFloat) -> Void = { _, _ in }
+    @objc func streamMoved() {
+        let top = stream.contentView.bounds.minY, h = stream.documentView?.frame.height ?? 0
+        onScrolled(top, h - stream.contentSize.height - top)
+    }
     init(progress: AskProgress?, waitLeft: Int?, logOpen: Bool) {
         let doing: String
         if let w = waitLeft { doing = "Searching in \(w) s" }
@@ -240,7 +252,11 @@ final class PendingView: FlippedView {
             let cap = bounds.height - 12 - 20 - 12 - (logText.map { $0.intrinsicContentSize.height + 8 } ?? 0) - 10
             stream.frame = NSRect(x: 16, y: y, width: bounds.width - 32, height: max(0, cap))
             streamText.frame.size.width = stream.contentSize.width
-            if follow { streamText.scrollToEndOfDocument(nil) }
+            if follow { streamText.scrollToEndOfDocument(nil) } else if let t = heldTop { stream.contentView.scroll(to: NSPoint(x: 0, y: t)) }
+            if stream.contentView.postsBoundsChangedNotifications == false {
+                stream.contentView.postsBoundsChangedNotifications = true
+                NotificationCenter.default.addObserver(self, selector: #selector(streamMoved), name: NSView.boundsDidChangeNotification, object: stream.contentView)
+            }
             y += max(0, cap) + 10
         }
         if let logText { logText.frame = NSRect(x: 32, y: y, width: bounds.width - 48, height: logText.intrinsicContentSize.height); y += logText.frame.height + 8 }
@@ -356,6 +372,7 @@ final class ResearchView: FlippedView {
 /// as it wraps, and the round send bottom-right. What is typed lives in the editor (followText), never in the document.
 final class ReplyFieldView: FlippedView, NSTextViewDelegate {
     let lead: String
+    var from = -1
     let field = ReplyTextView()
     let send = SendButton()
     var onSend: () -> Void = {}
@@ -412,4 +429,80 @@ final class ReplyTextView: NSTextView {
         super.draw(dirtyRect)
         if string.isEmpty { (placeholder as NSString).draw(at: .zero, withAttributes: [.font: Fonts.sans(14.5), .foregroundColor: Look.grey]) }
     }
+}
+
+/// An answer's Show more / Show less (moreHtml, applyClips): inside its rule, 13px/500 #4d4d4d with a chevron; cut, a
+/// 56px fade from the card's grey over the last rows shown.
+final class MoreView: FlippedView {
+    let open: Bool
+    let button: TextButton
+    init(open: Bool) {
+        self.open = open
+        button = TextButton(open ? "Show less ⌃" : "Show more ⌄", size: 13, weight: 500, color: Look.mid)
+        super.init(frame: .zero)
+        button.setAccessibilityLabel(open ? "Show less" : "Show more")
+        addSubview(button)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override func layout() { super.layout(); button.frame = NSRect(x: 30, y: 2, width: button.frame.width, height: 22) }
+    override func draw(_ dirtyRect: NSRect) { Look.rule.setFill(); NSRect(x: 16, y: 0, width: 2, height: bounds.height).fill() }
+}
+
+/// The fade over a cut answer's last rows shown (rgba(250,250,250,0) → #fafafa, 56px).
+final class FadeView: NSView {
+    override func draw(_ dirtyRect: NSRect) {
+        NSGradient(starting: Look.card.withAlphaComponent(0), ending: Look.card)?.draw(in: bounds, angle: isFlipped ? 90 : -90)
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+/// An answer's sources (citationSourcesHtml): "Sources" (11px/500 #8f8f8f), then a row a source: the circles of the
+/// numbers quoting it, each a link to its passage, and its name, a link to the first.
+final class SourcesView: FlippedView {
+    let sources: [Cite.Source]
+    var onOpen: (String) -> Void = { _ in }
+    init(sources: [Cite.Source]) { self.sources = sources; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError() }
+    static func height(count: Int) -> CGFloat { 12 + 20 + CGFloat(count) * 22 + 2 }
+    func rects() -> [(rect: NSRect, href: String)] {
+        var out: [(NSRect, String)] = []
+        for (k, s) in sources.enumerated() {
+            let y = 12 + 20 + CGFloat(k) * 22
+            var x: CGFloat = 32
+            for p in s.passages { let img = Glyphs.citeCircle(String(p.n), counter: p.counter); out.append((NSRect(x: x, y: y + 3, width: img.size.width, height: 16), p.href)); x += img.size.width + 1 }
+            let w = (s.name as NSString).size(withAttributes: [.font: Fonts.sans(12.5)]).width
+            out.append((NSRect(x: x + 5, y: y, width: min(w, bounds.width - x - 21), height: 22), s.href))
+        }
+        return out
+    }
+    override func draw(_ dirtyRect: NSRect) {
+        Look.rule.setFill(); NSRect(x: 16, y: 0, width: 2, height: bounds.height).fill()
+        ("Sources" as NSString).draw(at: NSPoint(x: 32, y: 12), withAttributes: [.font: Fonts.sans(11, weight: 500), .foregroundColor: Look.grey, .kern: 0.2])
+        var k = 0
+        let rs = rects()
+        for s in sources {
+            for p in s.passages { Glyphs.citeCircle(String(p.n), counter: p.counter).draw(in: rs[k].rect); k += 1 }
+            (s.name as NSString).draw(with: rs[k].rect.offsetBy(dx: 0, dy: 3), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: [.font: Fonts.sans(12.5), .foregroundColor: Look.mid])
+            k += 1
+        }
+    }
+    override func resetCursorRects() { for r in rects() { addCursorRect(r.rect, cursor: .pointingHand) } }
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if let hit = rects().first(where: { $0.rect.contains(p) }) { onOpen(hit.href) }
+    }
+}
+
+/// A label under a chip (CARD_CSS [data-waiting]::after): 12px #4d4d4d on white, 1px #eaeaea, radius 6.
+final class ChipNoteView: NSView {
+    let text: String
+    init(text: String) { self.text = text; super.init(frame: .zero) }
+    required init?(coder: NSCoder) { fatalError() }
+    var wanted: CGSize { let s = (text as NSString).size(withAttributes: [.font: Fonts.sans(12)]); return CGSize(width: s.width + 16, height: s.height + 10) }
+    override func draw(_ dirtyRect: NSRect) {
+        let p = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
+        NSColor.white.setFill(); p.fill(); NSColor(hex: "#eaeaea").setStroke(); p.lineWidth = 1; p.stroke()
+        (text as NSString).draw(at: NSPoint(x: 8, y: 5), withAttributes: [.font: Fonts.sans(12), .foregroundColor: Look.mid])
+    }
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
 }

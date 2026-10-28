@@ -40,13 +40,18 @@ public extension String {
     /// `s.split('\n')` and the like: a literal separator, every piece kept (empty ones too).
     func jsSplit(_ sep: String) -> [String] { components(separatedBy: sep) }
 
-    /// `s.trim()`: JavaScript's whitespace (\s), both ends.
-    var trimmed: String { trimmingCharacters(in: .whitespacesAndNewlines) }
-    var trimStart: String { String(drop(while: { $0.isWhitespace })) }
+    /// `s.trim()`: JavaScript's whitespace (\s, JSSpace), both ends; nothing wider (Foundation's set also holds U+0085
+    /// and the other controls JavaScript keeps).
+    var trimmed: String { trimStart.trimEnd }
+    var trimStart: String {
+        let u = unicodeScalars
+        guard let i = u.firstIndex(where: { !JSSpace.contains($0) }) else { return "" }
+        return String(u[i...])
+    }
     var trimEnd: String {
-        var s = Substring(self)
-        while let last = s.last, last.isWhitespace { s.removeLast() }
-        return String(s)
+        let u = unicodeScalars
+        guard let i = u.lastIndex(where: { !JSSpace.contains($0) }) else { return "" }
+        return String(u[...i])
     }
 
     /// `encodeURIComponent`.
@@ -132,6 +137,8 @@ public final class Rx: @unchecked Sendable {
         catch { fatalError("Rx: bad pattern \(pattern): \(error)") }
     }
 
+    /// JSSpace as the inside of an ICU class.
+    static let JS_SPACES = #"\t\n\x{0B}\f\r \x{A0}\x{1680}\x{2000}-\x{200A}\x{2028}\x{2029}\x{202F}\x{205F}\x{3000}\x{FEFF}"#
     static func translate(_ p: String, multiline: Bool) -> String {
         let cs = Array(p.unicodeScalars)
         var out = ""
@@ -147,6 +154,9 @@ public final class Rx: @unchecked Sendable {
                 case "d": out += inClass ? "0-9" : "[0-9]"
                 case "W": out += inClass ? "\\W" : "[^A-Za-z0-9_]"
                 case "D": out += inClass ? "\\D" : "[^0-9]"
+                // JavaScript's \s (JSSpace), not ICU's (which lacks \v and U+FEFF).
+                case "s": out += inClass ? Rx.JS_SPACES : "[\(Rx.JS_SPACES)]"
+                case "S": out += inClass ? "[^\(Rx.JS_SPACES)]" : "[^\(Rx.JS_SPACES)]"
                 default: out.unicodeScalars.append(c); out.unicodeScalars.append(n)
                 }
                 i += 2; classStart = false
@@ -265,3 +275,16 @@ public final class Rx: @unchecked Sendable {
 
 /// Number(...) of a decimal string, as an Int when it is one.
 func jsInt(_ s: String?) -> Int? { s.flatMap { Int($0) } }
+
+
+/// JavaScript's `\s` (and what trim() strips), exactly: \t \n \v \f \r, space, U+00A0, U+1680, U+2000–U+200A, U+2028,
+/// U+2029, U+202F, U+205F, U+3000 and U+FEFF. Foundation's whitespace sets differ (U+0085 and U+180E among others).
+public enum JSSpace {
+    public static func contains(_ s: Unicode.Scalar) -> Bool { contains(s.value) }
+    public static func contains(_ v: UInt32) -> Bool {
+        switch v {
+        case 0x09...0x0D, 0x20, 0xA0, 0x1680, 0x2000...0x200A, 0x2028, 0x2029, 0x202F, 0x205F, 0x3000, 0xFEFF: return true
+        default: return false
+        }
+    }
+}

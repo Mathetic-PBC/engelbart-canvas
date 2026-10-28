@@ -34,6 +34,8 @@ public enum EditorAction: Equatable {
     case attachment(String)
     case build(Int)
     case toggle(Int)
+    /// An @brainstorm result's offer: its sentence asked of @discover or @chat (MATH-40).
+    case resultAsk(line: Int, agent: String)
 }
 final class ActionBox: NSObject { let action: EditorAction; init(_ a: EditorAction) { action = a } }
 
@@ -94,6 +96,22 @@ public enum Deco: Equatable {
     case replyField(from: Int, lead: String)
     /// A research box's head and status.
     case research(state: String, label: String)
+    /// An answer's Show more / Show less (applyClips): `cut` while rows past its sixth line are hidden.
+    case more(key: String, open: Bool)
+    /// The sources under an answer that cites (citationSources): each by its numbers and its name.
+    case sources(q: Int)
+    /// A label under a chip (a Zotero item waited for in Downloads, MATH-65 build 4); `offset` is the chip's place in its line.
+    case chipNote(text: String, offset: Int)
+    /// A card @brainstorm or @discover answered with (cardHtml), drawn over its answer's lines; by its question's line.
+    case card(q: Int)
+    /// A file @create made: its row, or its frame opened inline (madeHtml).
+    case made(key: String, name: String)
+    /// A Create run at work (createPendingHtml): what it is making, what it is doing, m:ss, Stop.
+    case creating(id: String, q: Int)
+    /// An @discover guide's paper bookmark at the right of its title line (paperSaveHtml).
+    case paperMark(title: String, address: String)
+    /// Send to Discover's button, or its field once opened (sendDiscoverHtml), by the thread's first line.
+    case sendDiscover(from: Int)
 }
 
 public struct Decoration: Equatable {
@@ -102,6 +120,8 @@ public struct Decoration: Equatable {
     /// Whole: the overlay is the line's row; else it sits under the line's text, in its paragraph spacing.
     public var whole: Bool
     public var height: CGFloat
+    /// Under the line's text: how far below its text the control starts (the paragraph spacing above it).
+    public var below: CGFloat = 0
 }
 
 public struct Rendered {
@@ -127,8 +147,17 @@ public struct RenderContext {
     public var rowHeight: (Deco) -> CGFloat = { _ in 44 }
     /// The width the column has for text.
     public var columnWidth: CGFloat = 620
+    /// An answer cut at its sixth line (turn's question line → the first hidden line), and whether a turn's answer has a
+    /// Show more toggle and is open: (key, open), nil when it is short or never cut (the first and the latest answer).
+    public var clipFrom: [Int: Int] = [:]
+    /// Zotero items being found a free copy of, and waited for in the Downloads folder.
+    public var zoteroFinding = Set<String>()
+    public var zoteroWaiting = Set<String>()
+    public var more: (Int) -> (key: String, open: Bool)? = { _ in nil }
     /// Lines whose mention is open beside (MATH-23): marked blue-grey.
     public var beside: (MentionChip) -> Bool = { _ in false }
+    /// Where an @discover guide's paper is ('none', 'lib', 'here'; nil: no bookmark), props.paperState.
+    public var paperState: (String) -> String? = { _ in nil }
     public init() {}
 }
 
@@ -165,6 +194,7 @@ final class Renderer {
     let out = NSMutableAttributedString()
     var maps: [LineMap] = []
     var decos: [Decoration] = []
+    var currentLine = 0
 
     init(core: EditorCore, ctx: RenderContext) {
         self.core = core; self.ctx = ctx
@@ -226,18 +256,34 @@ final class Renderer {
 
     /// Room under line `i`'s text for a control drawn there (a reply field, a foot): its paragraph spacing grows, and with
     /// `closes` its card ends under the control.
-    func reserve(_ i: Int, _ height: CGFloat, closes: Bool) {
-        guard let map = maps.last, map.line == i else { return }
+    @discardableResult
+    func reserve(_ i: Int, _ height: CGFloat, closes: Bool) -> CGFloat {
+        guard let map = maps.last, map.line == i else { return 0 }
         let len = map.range.length + (NSMaxRange(map.range) < out.length ? 1 : 0)
-        guard len > 0 else { return }
+        guard len > 0 else { return 0 }
         let range = NSRange(location: map.range.location, length: len)
         let old = (out.attribute(.paragraphStyle, at: range.location, effectiveRange: nil) as? NSParagraphStyle) ?? NSParagraphStyle.default
         let p = old.mutableCopy() as! NSMutableParagraphStyle
         p.paragraphSpacing += height + (closes ? 8 : 0)
         out.addAttribute(.paragraphStyle, value: p, range: range)
-        if closes, let card = out.attribute(.edCard, at: range.location, effectiveRange: nil) as? CardPaint {
-            card.bottom = true; card.marginBottom = 8
+        defer { if closes, let card = out.attribute(.edCard, at: range.location, effectiveRange: nil) as? CardPaint { card.bottom = true; card.marginBottom = 8 } }
+        return old.paragraphSpacing
+    }
+
+    /// Under an answer's last row shown: its Show more toggle, then its sources (DocEditor moreHtml, citeSourcesHtml).
+    func answerExtras(_ i: Int, _ w: LineAt, cut: Bool, ls: [String]) {
+        if let m = ctx.more(w.turnQ) {
+            let below = reserve(i, 26, closes: false)
+            decos.append(Decoration(line: i, deco: .more(key: m.key, open: m.open), whole: false, height: 26, below: below))
         }
+        guard let found = core.findTurn(ls, w.turnQ) else { return }
+        let answer = Doc.turnText(ls, found.turn).answer
+        guard answer.contains("cite=") else { return }
+        let sources = Cite.citationSources(answer, cites: Cite.citationNumbers([answer]), citeSource: ctx.opts.citeSource)
+        guard !sources.isEmpty else { return }
+        let h = SourcesView.height(count: sources.count)
+        let below = reserve(i, h, closes: false)
+        decos.append(Decoration(line: i, deco: .sources(q: w.turnQ), whole: false, height: h, below: below))
     }
 
     func hidden(_ i: Int, last: Bool) {
@@ -260,6 +306,7 @@ final class Renderer {
         let ls = core.lines, ps = core.parsed(ls)
         let active = core.activeLine
         for (i, line) in ls.enumerated() {
+            currentLine = i
             let last = i == ls.count - 1
             let p = ps[i], where_ = at[i]
             let locked = core.lockedAt(ls, i)
@@ -275,6 +322,14 @@ final class Renderer {
                     continue
                 }
             }
+            if let w = where_, w.role == .answer, let from = ctx.clipFrom[w.turnQ], i >= from { hidden(i, last: last); continue }
+            // An answer that is a card is drawn on its first line; the rest of its lines (its JSON) are under it.
+            if let w = where_, w.underCard { hidden(i, last: last); continue }
+            if let w = where_, w.card {
+                let deco = Deco.card(q: w.turnQ)
+                widget(i, deco, height: ctx.rowHeight(deco), card: CardPaint(top: false, bottom: w.closes, ruleX: 16, ruleColor: Look.rule, ruleTop: 14, marginBottom: w.closes ? 8 : 0), last: last)
+                continue
+            }
             switch p.type {
             case .build: widget(i, .build(id: p.id), height: ctx.rowHeight(.build(id: p.id)), last: last)
             case .code, .fence:
@@ -289,17 +344,28 @@ final class Renderer {
             case .title: paragraph(i, line, p, isActive, last: last)
             case .p: paragraph(i, line, p, isActive, last: last)
             }
+            if let w = where_, w.role == .answer, !w.box, w.pending == nil, !w.foldedTurn, w.build == nil {
+                let from = ctx.clipFrom[w.turnQ]
+                if (from != nil && i == from! - 1) || (from == nil && w.lastBody) { answerExtras(i, w, cut: from != nil, ls: ls) }
+            }
+            if let w = where_, w.footAfter, !w.foldedTurn {
+                let deco = Deco.foot(q: w.turnQ, busy: w.running, plain: EditorCore.oneModel(w.agent))
+                let below = reserve(i, 50, closes: !w.fieldAfter && !w.recapAfter)
+                decos.append(Decoration(line: i, deco: deco, whole: false, height: 50, below: below))
+            }
             if let w = where_, w.fieldAfter, let thread = core.threads(ls).first(where: { $0.from == w.threadFrom }) {
                 let lead = ctx.hasRouter ? "@bart" : "@\(Doc.tokenOf(Doc.answeredBy(thread)))"
                 let deco = Deco.replyField(from: thread.from, lead: lead)
                 let h = ctx.rowHeight(deco)
-                decos.append(Decoration(line: i, deco: deco, whole: false, height: h))
-                reserve(i, h, closes: true)
+                let below = reserve(i, h, closes: !w.recapAfter)
+                decos.append(Decoration(line: i, deco: deco, whole: false, height: h, below: below))
             }
-            if let w = where_, w.footAfter, !w.foldedTurn {
-                let deco = Deco.foot(q: w.turnQ, busy: w.running, plain: EditorCore.oneModel(w.agent))
-                decos.append(Decoration(line: i, deco: deco, whole: false, height: 50))
-                reserve(i, 50, closes: !w.fieldAfter)
+            // After an @brainstorm recap: Send to Discover on a row of its own, closing the card (MATH-31).
+            if let w = where_, w.recapAfter {
+                let deco = Deco.sendDiscover(from: w.threadFrom)
+                let h = ctx.rowHeight(deco)
+                let below = reserve(i, h, closes: true)
+                decos.append(Decoration(line: i, deco: deco, whole: false, height: h, below: below))
             }
         }
     }
@@ -355,19 +421,37 @@ final class Renderer {
             if chip.missing { a[.strikethroughStyle] = NSUnderlineStyle.single.rawValue; a[.strikethroughColor] = NSColor(hex: "#c9c9c9") }
             if ctx.beside(chip) { a[.backgroundColor] = NSColor(hex: "#e8f0fe") }
             if let title = chip.title { a[.toolTip] = title }
+            var zoteroNote: String? = nil, waiting = false
+            if case .zotero(let ref) = chip.kind {
+                if ctx.zoteroFinding.contains(ref) { zoteroNote = " · Finding a free copy…" }
+                else if ctx.zoteroWaiting.contains(ref) { waiting = true; a[.toolTip] = "Opened in your browser. Download the PDF and it'll open here." }
+            }
             var at = a
             if let icon = chip.icon { at[.kern] = look.size * 1.1; at[.edIcon] = IconPaint(icon, size: look.size) }
+            if waiting { decos.append(Decoration(line: currentLine, deco: .chipNote(text: "Download the PDF in your browser to open it in the Stage", offset: s.length), whole: false, height: 0)) }
             add("@", at)
             add(chip.shown, a)
+            if let note = zoteroNote { add(note, [.font: font(look, italic: true), .foregroundColor: Look.grey, .edAction: a[.edAction]!]) }
         case .gone(let shown, let why, _):
             add("@" + shown, [.font: font(look), .foregroundColor: Look.grey, .toolTip: why])
         case .link(let title, let href, _):
             add(title, [.font: font(look), .foregroundColor: Look.blue, .underlineStyle: NSUnderlineStyle.single.rawValue, .edAction: ActionBox(.link(href)), .cursor: NSCursor.pointingHand])
-        case .math(_, let display, let shown, _):
-            var a: [NSAttributedString.Key: Any] = [.font: Look.math(look.size * (display ? 1.2 : 1.05)), .foregroundColor: look.color]
-            if display { let p = NSMutableParagraphStyle(); p.alignment = .center; a[.paragraphStyle] = p }
-            add(shown, a)
+        case .math(let tex, let display, let shown, _):
+            // Typeset (SwiftMath) as one attachment; MathText's Unicode only where SwiftMath cannot read it.
+            if let typeset = MathTypeset.attachment(tex, display: display, size: look.size * (display ? 1.15 : 1.0), color: look.color) {
+                s.append(typeset)
+            } else {
+                var a: [NSAttributedString.Key: Any] = [.font: Look.math(look.size * (display ? 1.2 : 1.05)), .foregroundColor: look.color]
+                if display { let p = NSMutableParagraphStyle(); p.alignment = .center; a[.paragraphStyle] = p }
+                add(shown, a)
+            }
         case .mathError(let src):
+            // Unicode text could not read it, SwiftMath may: a formula after all, one unit.
+            if let m = Inline.mathOf(src), let typeset = MathTypeset.attachment(m.tex, display: m.display, size: look.size * (m.display ? 1.15 : 1.0), color: look.color) {
+                s.append(typeset)
+                segs.append(Seg(dLen: s.length - start, src: src, open: false, unit: true, pre: 1))
+                return
+            }
             add(src, [.font: Fonts.mono(look.size * 0.92), .foregroundColor: look.color, .edPill: PillPaint(fill: Look.codeFill)])
         case .attachment(let label, let id, _):
             add("[\(label)]", [.font: Fonts.mono(look.size * 0.86), .foregroundColor: Look.mid, .edPill: PillPaint(fill: Look.codeFill, border: NSColor(hex: "#eaeaea")), .edAction: ActionBox(.attachment(id))])
@@ -528,9 +612,11 @@ final class Renderer {
         if let block = p.block, p.lang == "math", !(core.activeLine.map { $0 >= block.open && $0 <= block.close } ?? false) {
             let ls = core.lines
             let tex = ls[(block.open + 1)..<block.close].joined(separator: "\n")
-            if let drawn = MathText.render(tex, display: true), !tex.trimmed.isEmpty {
+            if !tex.trimmed.isEmpty, let drawn = MathText.render(tex, display: true) ?? (MathTypeset.parses(tex) ? tex : nil) {
                 if p.type == .fence && p.open {
-                    let s = NSMutableAttributedString(string: drawn, attributes: [.font: Look.math(20), .foregroundColor: Look.ink])
+                    let s = NSMutableAttributedString()
+                    if let typeset = MathTypeset.attachment(tex, display: true, size: 19) { s.append(typeset) }
+                    else { s.append(NSAttributedString(string: drawn, attributes: [.font: Look.math(20), .foregroundColor: Look.ink])) }
                     emit(i, s, segs: [Seg(dLen: s.length, src: p.text, open: false, unit: true)], para: Renderer.para(size: 20, height: 1.5, before: 4, after: 4, head: 16, tail: 40, align: .center), fenceEnd: p.text.len, last: last)
                     decos.append(Decoration(line: i, deco: .copyCode, whole: false, height: 0))
                 } else { hidden(i, last: last) }
@@ -596,7 +682,13 @@ final class Renderer {
         let s = NSMutableAttributedString()
         var segs: [Seg] = []
         if active || editing { activeTokens(tokens, look: look, flags: flags, into: s, segs: &segs) }
-        else if sent {
+        else if sent, let aq = w?.answersQ, let entry = core.cardsOf(core.lines).byQ[aq], let said = entry.answer {
+            // A question line that answers a card, as said: the picks, a note, the words, Skipped or Wrapped up.
+            let shown = core.answerShown(said)
+            if !shown.text.isEmpty { s.append(NSAttributedString(string: shown.text, attributes: [.font: Fonts.sans(16), .foregroundColor: Look.ink])) }
+            if let grey = shown.grey { s.append(NSAttributedString(string: grey, attributes: [.font: Fonts.sans(16), .foregroundColor: Look.grey])) }
+            segs = [Seg(dLen: s.length, src: line, open: false)]
+        } else if sent {
             // A question sent says `@bart`, its flags not drawn (2026-10-16, David); the line keeps them.
             var spaced = false
             for (k, tok) in tokens.enumerated() where !flags.contains(k) {
@@ -648,8 +740,13 @@ final class Renderer {
 
     func pending(_ i: Int, _ p: ParsedLine, _ w: LineAt?, last: Bool) {
         if let w, w.box, ["interrupted", "stopped", "failed"].contains(w.boxState ?? "") { hidden(i, last: last); return }
-        let deco = Deco.pending(id: p.id)
         let closes = w?.closes ?? true
+        if let w, w.agent == "create" {
+            let deco = Deco.creating(id: p.id, q: w.turnQ)
+            widget(i, deco, height: ctx.rowHeight(deco), card: CardPaint(top: false, bottom: closes, marginBottom: closes ? 8 : 0), last: last)
+            return
+        }
+        let deco = Deco.pending(id: p.id)
         widget(i, deco, height: ctx.rowHeight(deco), card: CardPaint(top: w == nil, bottom: closes, marginBottom: closes ? 8 : 0), last: last)
     }
 
@@ -662,6 +759,12 @@ final class Renderer {
             return
         }
         if p.folded || (w?.gap ?? false) { hidden(i, last: last); return }
+        // A file @create made (2026-10-14): its row, never edited in place.
+        if let w, w.role == .answer, !w.box, let made = Inline.madeMentionOf(p.text) {
+            let deco = Deco.made(key: made.key, name: made.name)
+            widget(i, deco, height: ctx.rowHeight(deco) + (w.first ? 12 : 2) + (w.closes ? 10 : 2), card: CardPaint(top: false, bottom: w.closes, marginBottom: w.closes ? 8 : 0), last: last)
+            return
+        }
         let first = w?.first ?? (i == 0 || Doc.parseLine(ls[i - 1]).type != .reply)
         let closes = w?.closes ?? (i + 1 >= ls.count || Doc.parseLine(ls[i + 1]).type != .reply)
         let lastBody = w?.lastBody ?? closes
@@ -679,9 +782,42 @@ final class Renderer {
         var base = 0
         var head: CGFloat = 32, before: CGFloat = first ? 14 : 0
         var size: CGFloat = 16
+        var tail: CGFloat = 16
         var extra: [NSAttributedString.Key: Any] = [:]
         let r = Renderer(core: core, ctx: { var c = ctx; c.opts = opts; return c }())
-        if q.type == .h {
+        let fixed = w.map { $0.agent == "brainstorm" } ?? false
+        let found = w.flatMap { core.findTurn(ls, $0.turnQ) }
+        // A brainstorm recap's lines as sections: the label in bold on a line of its own, the words under it.
+        let recap = fixed && found != nil && core.isRecap(ls, found!.turn) ? Card.recapLine(p.text) : nil
+        // A result's last line (MATH-40): small, with @discover and @chat to send their sentence on.
+        let offer = fixed && Card.isResultOffer(p.text)
+        // An @discover guide's title line: its paper's bookmark in a margin of its own on the right.
+        var paper: (title: String, address: String)? = nil
+        if let w, w.agent == "discover" {
+            let below = i + 1 <= (found?.turn.to ?? -1) ? Doc.parseLine(ls[i + 1]) : nil
+            if let g = EditorCore.guideTitle(p.text, next: below?.type == .reply ? below?.text : nil), let st = ctx.paperState(g.address), ["none", "lib", "here"].contains(st) { paper = g }
+        }
+        if let recap {
+            let label = NSMutableAttributedString(string: recap.label + "\u{2028}", attributes: [.font: Fonts.sans(16, weight: 600), .foregroundColor: Look.ink])
+            s.append(label)
+            if recap.text.isEmpty { s.append(NSAttributedString(string: "not said", attributes: [.font: font(look, italic: true), .foregroundColor: Look.grey])) }
+            else if Rx(#"^not (decided|said)\.?$"#, "i").test(recap.text) { s.append(NSAttributedString(string: recap.text, attributes: [.font: font(look, italic: true), .foregroundColor: Look.grey])) }
+            else { var inner: [Seg] = []; r.drawRuns(Inline.runs(recap.text, opts), look: look, into: s, segs: &inner) }
+            segs = [Seg(dLen: s.length, src: p.text, open: false)]
+            if !first { before += 14 }
+        } else if offer {
+            let small: [NSAttributedString.Key: Any] = [.font: Fonts.sans(13), .foregroundColor: Look.grey]
+            let chip = { (agent: String) -> NSAttributedString in
+                var a: [NSAttributedString.Key: Any] = [.font: Fonts.sans(13, weight: 500), .foregroundColor: self.ctx.canReply ? Look.blue : Look.grey]
+                if self.ctx.canReply { a[.edAction] = ActionBox(.resultAsk(line: i, agent: agent)); a[.cursor] = NSCursor.pointingHand }
+                return NSAttributedString(string: "@\(Doc.tokenOf(agent))", attributes: a)
+            }
+            s.append(NSAttributedString(string: "Find papers on it with ", attributes: small)); s.append(chip("discover"))
+            s.append(NSAttributedString(string: ", or ask about it with ", attributes: small)); s.append(chip("bart"))
+            s.append(NSAttributedString(string: ".", attributes: small))
+            segs = [Seg(dLen: s.length, src: p.text, open: false)]
+            size = 13
+        } else if q.type == .h {
             size = [18, 17, 16][max(0, min(2, q.level - 1))]
             look.size = size; look.weight = 600; look.color = Look.ink
             base = p.text.len - q.text.len
@@ -697,16 +833,18 @@ final class Renderer {
         } else {
             r.drawRuns(Inline.runs(p.text, opts), look: look, into: s, segs: &segs)
         }
-        apply(s, look)
+        apply(s, { var l = look; l.size = size; return l }())
+        if paper != nil { tail += 28 }
         // The answer under a question being edited (2026-10-03): its contents faded to .45.
         if let w, core.editing?.q == w.turnQ {
             s.enumerateAttribute(.foregroundColor, in: NSRange(location: 0, length: s.length)) { v, r, _ in
                 if let c = v as? NSColor { s.addAttribute(.foregroundColor, value: c.withAlphaComponent(0.45), range: r) }
             }
         }
-        let para = Renderer.para(size: size, height: 1.65, before: before, after: (closes ? 10 : 0) + (Doc.isMarked(q.type) ? 4 : 0), head: head, tail: 16, minHeight: p.text.isEmpty ? 22 : nil)
+        let para = Renderer.para(size: size, height: offer ? 1.6 : 1.65, before: before, after: (closes ? 10 : 0) + (Doc.isMarked(q.type) ? 4 : 0), head: head, tail: tail, minHeight: p.text.isEmpty ? 22 : nil)
         extra[.edCard] = CardPaint(top: w == nil && first, bottom: closes, ruleX: 16, ruleColor: Look.rule, ruleTop: first ? 12 : 0, ruleBottom: lastBody ? 0 : 0, marginBottom: closes ? 8 : 0)
         emit(i, s, segs: segs, base: base, para: para, extra: extra, last: last)
+        if let paper { decos.append(Decoration(line: i, deco: .paperMark(title: paper.title, address: paper.address), whole: false, height: 0)) }
     }
 
     func answerCode(_ i: Int, _ line: String, _ p: ParsedLine, _ w: LineAt?, last: Bool) {

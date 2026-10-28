@@ -65,6 +65,26 @@ public struct MentionSource {
     }
 }
 
+/// What is already placed (expand-mentions' `seen`, a JS Set): keys in the order they were first added, as a JS Set
+/// iterates, so a caller reading them back (Bart's context, which sends what it placed in order) gets that order.
+public struct SeenKeys: Equatable, Sequence, ExpressibleByArrayLiteral, Sendable {
+    public private(set) var keys: [String] = []
+    private var held = Set<String>()
+    public init() {}
+    public init<S: Sequence>(_ keys: S) where S.Element == String { for k in keys { insert(k) } }
+    public init(arrayLiteral elements: String...) { self.init(elements) }
+    public func contains(_ key: String) -> Bool { held.contains(key) }
+    /// Added at the end unless already held (a JS Set's add): → whether it was new.
+    @discardableResult public mutating func insert(_ key: String) -> Bool {
+        guard held.insert(key).inserted else { return false }
+        keys.append(key); return true
+    }
+    public var count: Int { keys.count }
+    public var isEmpty: Bool { keys.isEmpty }
+    public func makeIterator() -> IndexingIterator<[String]> { keys.makeIterator() }
+    public static func == (a: SeenKeys, b: SeenKeys) -> Bool { a.keys == b.keys }
+}
+
 public enum ExpandMentions {
     public static var INLINE: Rx { Inline.INLINE }
     static let IMAGE_TOKEN = Rx(#"^!\[([^\]\n]*)\]\(img:([\w-]+)\)$"#)
@@ -91,7 +111,7 @@ public enum ExpandMentions {
     public struct Tally: Equatable { public var files = 0; public var missing = 0 }
     public struct Result: Equatable { public var lines: [String]; public var files: Int; public var missing: Int }
 
-    static func fileBlock(_ row: LibRow, _ source: MentionSource, _ seen: inout Set<String>, _ tally: inout Tally) async -> [String] {
+    static func fileBlock(_ row: LibRow, _ source: MentionSource, _ seen: inout SeenKeys, _ tally: inout Tally) async -> [String] {
         if Kind.isNote(row) {
             guard let text = await source.read(row) else { tally.missing += 1; return ["\(openTag(row)) missing=\"true\" />"] }
             tally.files += 1
@@ -112,7 +132,7 @@ public enum ExpandMentions {
         return ["<file name=\"\(attr(name))\" type=\"\(attr(f.dir ? "folder" : (f.type ?? "file")))\" folder=\"\(attr(f.folder))\" path=\"\(attr(f.path))\" />"]
     }
 
-    static func zoteroBlock(_ name: String, _ key: String, _ source: MentionSource, _ seen: inout Set<String>, _ tally: inout Tally) async -> [String] {
+    static func zoteroBlock(_ name: String, _ key: String, _ source: MentionSource, _ seen: inout SeenKeys, _ tally: inout Tally) async -> [String] {
         let found = await source.zotero?(key, name)
         guard let z = found, !z.missing else {
             tally.missing += 1
@@ -123,14 +143,14 @@ public enum ExpandMentions {
         return z.lines
     }
 
-    static func workspaceBlock(_ name: String, _ id: String, _ source: MentionSource, _ seen: inout Set<String>, _ tally: inout Tally) async -> [String] {
+    static func workspaceBlock(_ name: String, _ id: String, _ source: MentionSource, _ seen: inout SeenKeys, _ tally: inout Tally) async -> [String] {
         guard let held = await source.workspace?(id) else { tally.missing += 1; return ["<file name=\"\(attr(name))\" type=\"workspace\" missing=\"true\" />"] }
         tally.files += 1
         let open = "<file name=\"\(attr(held.name))\" type=\"workspace\"\(held.path.map { " path=\"\(attr($0))\"" } ?? "")>"
         return [open] + (await expandLines(held.text, source, &seen, &tally)) + ["</file>"]
     }
 
-    static func expandLines(_ text: String, _ source: MentionSource, _ seen: inout Set<String>, _ tally: inout Tally) async -> [String] {
+    static func expandLines(_ text: String, _ source: MentionSource, _ seen: inout SeenKeys, _ tally: inout Tally) async -> [String] {
         let body = bare(text)
         var out: [String] = []
         var placed = false
@@ -193,19 +213,19 @@ public enum ExpandMentions {
     }
 
     /// `text` with its mentions in place. `seen` holds what is already included and comes back holding every key placed.
-    public static func expandMentions(_ text: String, _ source: MentionSource, seen: inout Set<String>) async -> Result {
+    public static func expandMentions(_ text: String, _ source: MentionSource, seen: inout SeenKeys) async -> Result {
         var tally = Tally()
         let lines = await expandLines(text, source, &seen, &tally)
         return Result(lines: lines, files: tally.files, missing: tally.missing)
     }
 
     public static func expandMentions(_ text: String, _ source: MentionSource) async -> Result {
-        var seen = Set<String>()
+        var seen = SeenKeys()
         return await expandMentions(text, source, seen: &seen)
     }
 
     /// Library rows placed as if each were mentioned on a line of its own (a Build's attached items).
-    public static func expandRows(_ rows: [LibRow], _ source: MentionSource, seen: inout Set<String>) async -> Result {
+    public static func expandRows(_ rows: [LibRow], _ source: MentionSource, seen: inout SeenKeys) async -> Result {
         var tally = Tally()
         var lines: [String] = []
         for row in rows {
@@ -235,7 +255,7 @@ public enum ExpandMentions {
 
     /// The document under its name, with its mentions in place (expandDoc's composition; the Store reads the document and
     /// names it). → (title, body, text, chars, files, missing).
-    public static func expandDoc(title: String, body: String, source: MentionSource, seen: inout Set<String>, task: (String) -> (title: String, status: String)? = { _ in nil }) async -> (title: String, body: String, text: String, chars: Int, files: Int, missing: Int) {
+    public static func expandDoc(title: String, body: String, source: MentionSource, seen: inout SeenKeys, task: (String) -> (title: String, status: String)? = { _ in nil }) async -> (title: String, body: String, text: String, chars: Int, files: Int, missing: Int) {
         let r = await expandMentions(buildLines(body, task: task), source, seen: &seen)
         let text = ((title.isEmpty ? [] : ["# \(title)", ""]) + r.lines).joined(separator: "\n").trimEnd
         return (title, r.lines.joined(separator: "\n").trimEnd, text, text.len, r.files, r.missing)

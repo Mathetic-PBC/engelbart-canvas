@@ -155,7 +155,7 @@ public enum Doc {
             var j = i + 1
             while j < lines.count {
                 if let c = DocRx.CLOSE.match(lines[j]), let cm = c[1], cm.first == mark.first, cm.len >= mark.len {
-                    let lang = (m[3] ?? "").trimmed.split(whereSeparator: { $0.isWhitespace }).first.map(String.init) ?? ""
+                    let lang = (m[3] ?? "").trimmed.unicodeScalars.split(whereSeparator: { JSSpace.contains($0) }).first.map { String(String.UnicodeScalarView($0)) } ?? ""
                     out.append(CodeBlock(open: i, close: j, lang: lang, fence: (m[1] ?? "") + mark))
                     i = j
                     break

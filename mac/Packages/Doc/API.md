@@ -4,9 +4,10 @@ Pure Swift (Foundation + EngelbartCore), no AppKit. The document model under the
 share. Every offset is UTF-16 (JavaScript's and NSTextView's). Ledger: `mac/parity/doc.md`.
 
 ## Strings and regexes (JS.swift)
-- `String.len`, `slice(_:_:)`, `charAt`, `indexOf`, `jsSplit`, `trimmed`, `encodeURIComponent`, `decodeURIComponent`.
+- `String.len`, `slice(_:_:)`, `charAt`, `indexOf`, `jsSplit`, `trimmed`/`trimStart`/`trimEnd` (JavaScript's whitespace
+  exactly: `JSSpace.contains`), `encodeURIComponent`, `decodeURIComponent`.
 - `Rx(pattern, flags)`: a JavaScript regex (`test`, `match`, `matchAll`, `split` with captures, `tokens` = split+filter,
-  `replace`). Write patterns as the JS source has them.
+  `replace`). Write patterns as the JS source has them; `\s`/`\S` mean JavaScript's whitespace, not ICU's.
 
 ## Lines (Line.swift) — `enum Doc`
 - `Doc.parseLine(_:) -> ParsedLine`, `Doc.parseLines(_:) -> [ParsedLine]` (code blocks, answer code, lone titles).
@@ -56,8 +57,18 @@ share. Every offset is UTF-16 (JavaScript's and NSTextView's). Ledger: `mac/pari
 ## Context (ExpandMentions.swift) — expand-mentions.cjs behind a resolver
 - `MentionSource` (closures: `find`, `get?`, `read` async, `image`, `workspace?` async, `file?`, `zotero?` async);
   `MentionSource.project(projectId, rows:, read:, workspace:, file:, zotero:)` = projectSource.
+- `SeenKeys`: expand-mentions' `seen` (a JS Set): `contains`, `insert` (→ new?), `keys` in first-added order, a Sequence,
+  array-literal; pass `inout`.
 - `ExpandMentions.expandMentions(text, source, seen: &seen) async -> Result{lines, files, missing}`, `expandRows`,
   `imagePaths`, `buildLines(text, task:)`, `expandDoc(title:body:source:seen:task:)`, `fileKey`, `zoteroFileKey`.
+
+## Cards (Card.swift) — main/bart/card.cjs's reading side, on `JSONValue`
+- `CardQuestion{id, type, title, subtitle, options: [JSONValue], placeholder, eyebrow, labels}`,
+  `CardAnswer{skipped, picks, text, note, wrap}`.
+- `Card.cardOfAnswer(answer) -> JSONValue?`, `readCard`, `cleanCard`, `questionOf`, `cardAsText`, `isChoice`,
+  `answerLine(card, picks:text:note:)`, `readWrap`/`withWrap`/`readAnswer`, `recapLine`, `resultParts`, `resultText`,
+  `isResultOffer`, constants `skipped`, `wrap`, `resultOffer`, `oldResultOffer`, `leftOpen`, `mapGroups`, `types`.
+  Bart links these (one definition for the editor and the agent).
 
 ## Smaller models (Models.swift)
 - `PdfPaste.pdfText/pdfChars`, `DocFind.segmentMatches/nextFind`, `DocSync`, `SideTracker`/`KeySide.docHasKeys/docClose`,

@@ -7,10 +7,11 @@ discover-levels.test.cjs; ExpandMentionsTests = expand-mentions.test.cjs + image
 cite-circles, cite-open, paste-model, doc-find, kind, key-side, selection-card, folder/website mentions, math).
 
 Offsets are UTF-16 code units everywhere (JavaScript's, and NSTextView's), via `String.len/slice` in JS.swift. Regexes are
-the JS source through `Rx`, which rewrites `\w`/`\d` to ASCII, `$` to end-of-input, and escapes `[` inside classes.
+the JS source through `Rx`, which rewrites `\w`/`\d` to ASCII, `\s`/`\S` to JavaScript's whitespace (JSSpace), `$` to end-of-input, and escapes `[` inside classes.
 
-Status `done` = covered by a test in DocPackageTests, which passed in the cloud (GitHub Actions run 40753437035,
-2026-10-28, 71 tests). Rows with "compiled, untested" have no test of their own yet.
+Status `done` = covered by a test in DocPackageTests, which passed in the cloud (GitHub Actions run 40757979494,
+2026-10-28, 83 tests: https://github.com/Mathetic-PBC/engelbart-canvas/actions/runs/40757979494). Rows with
+"compiled, untested" have no test of their own yet.
 
 | # | Behaviour (one line, concrete: inputs → result, values) | Source | Swift | Status |
 |---|---|---|---|---|
@@ -62,7 +63,7 @@ Status `done` = covered by a test in DocPackageTests, which passed in the cloud 
 | 46 | withLinks: plain text from a web page gets `[title](url)` back, in order, whole-word, `()` encoded, skipping self-links/brackets/non-http | withLinks | Copy.swift | done |
 | 47 | esc escapes & < > " | esc | Copy.swift | done |
 | 48 | Citations: citationOf (cite=you/other/source, counter, note, whole source), citationPassage, citationNumbers by passage, citationRuns (≥3 fold), citationSource (library name, workspace folder, host, file), libraryName, citationSources, citationCard (quote, lead "Your note"/agent name, where, when, counter), streamingText (no citations or half-written links while streaming), CARD_GRACE 200 ms | cite.js | Cite.swift | done |
-| 49 | citationHtml/citationMoreHtml/citationSourcesHtml/citationCardHtml/CITE_CSS (HTML only) | cite.js | Html.swift (circle, more); card/sources HTML not ported | partial: Sources list and card as HTML strings not ported; the native editor draws them from Cite.citationSources/citationCard |
+| 49 | citationHtml/citationMoreHtml/citationSourcesHtml/citationCardHtml/CITE_CSS (HTML only) | cite.js | Html.swift (circle, more); card/sources HTML not ported | n/a: HTML strings; the native editor draws the Sources list from Cite.citationSources (Editor row 101, cloud-tested) and the card from Cite data |
 | 50 | openCitationRun / citationTip (DOM) | cite.js | — | n/a: DOM mechanics; Editor opens folded runs natively |
 | 51 | splitTarget/citeHref/linkAddress (find/to/page/note/cite/counter, any order, `%26` decoding, paths decoded) | passage-link.cjs | Cite.swift PassageLink | done |
 | 52 | foldPassage/normalizePassage/matchPassage (case, whitespace, quotes, dashes, ligatures, soft hyphen, hyphen-broken words, prefixes, markdown; fallbacks without hyphens/spaces) | passage-text.cjs | Cite.swift PassageText | done |
@@ -76,7 +77,7 @@ Status `done` = covered by a test in DocPackageTests, which passed in the cloud 
 | 60 | isUntitled/nextUntitled/wsLabel (9 chars, 8+…) | names.js | Library.swift Names | done |
 | 61 | askLineTexts/findAskLine (nearest, `@bart` rewritten to routed agent)/findBuildLine | askLine.js | Library.swift AskLine | done |
 | 62 | expandMentions: note blocks whole and recursive, once (`seen`), circles end; other rows with summary; missing notes/mentions; workspace blocks; folder files (folder counted); Zotero blocks; pasted images → paths, mentioned picture once; blank-line rules | expand-mentions.cjs | ExpandMentions.swift | done |
-| 63 | expandRows, imagePaths, buildLines (`Build "title" (status)`), projectSource (this project's row wins a name; pictures by id only), expandDoc composition (`# Title`, blank) | expand-mentions.cjs | ExpandMentions.swift | done for imagePaths, buildLines, projectSource; expandRows and expandDoc compiled, untested (the Store-backed parts' tests belong to the Store) |
+| 63 | expandRows, imagePaths, buildLines (`Build "title" (status)`), projectSource (this project's row wins a name; pictures by id only), expandDoc composition (`# Title`, blank) | expand-mentions.cjs | ExpandMentions.swift | done (ExpandMentionsTests testExpandRows/testExpandDoc; reading the document and its name are the Store's) |
 | 64 | readFlags (from both ends, `--extra high`, spans), effortOf, modelOf (loose), above, ladderOf (start pick), readQuestion (nearest effort, pinned step) | question.cjs | Question.swift | done |
 | 65 | readMode/readProvider/readRefine/levelOf/readDiscover (carried mode/provider from earlier turns)/withMode (plain mode/provider)/discoverSpans/readBuildFlag/buildRequestOf/withChoice | question.cjs | Question.swift | done |
 | 66 | Models file order: JSON objects lose key order in Swift; providers/models ordered by the shipped defaults (openai, anthropic; luna sol astra haiku sonnet opus fable), others alphabetical | models.cjs normalizeModels | Question.swift QuestionModels(json:) | done (mapping recorded) |
@@ -93,3 +94,6 @@ Status `done` = covered by a test in DocPackageTests, which passed in the cloud 
 | 77 | markdownBlocks/inlineRuns for markdown read on the Stage | markdown.js | Models.swift MarkdownFile | done |
 | 78 | Thread type named `DocThread` (Foundation has `Thread`) | — | Threads.swift | done |
 | 79 | route.js: questionLine (plain, ≤80 at a word), routeByRule (empty→brainstorm, --build, level flags, answering Discover), buildTextOf, fallbackAgent, routeInputs (section, threads, spec, specTitle, current, asking) | model/route.js | Route.swift | done (RouteTests, cloud run 40754252113) |
+| 80 | card.cjs as the editor reads it: cardOfAnswer (```json fence, a card that asks), readCard/cleanCard (focus/questions, ≥2 rows, clips), questionOf/labels, cardAsText, isChoice, answerLine (picks of the card only, note, Skip), readWrap/withWrap/readAnswer (picked "…", a row named in words), recapLine (labels, ’ and ：), resultParts/resultText/isResultOffer (old @bart offer too); same shapes as Bart's, Bart links to these | main/bart/card.cjs | Card.swift | done (CardTests) |
+| 81 | expand-mentions' `seen` keeps JS Set order: keys read back in the order first added (nested after the note holding them, repeats add nothing) | expand-mentions.cjs | ExpandMentions.swift SeenKeys | done (testSeenKeepsFirstSeenOrder) |
+| 82 | JavaScript whitespace exactly (\s and trim(): \t \n \v \f \r, space, U+00A0, U+1680, U+2000–200A, U+2028/9, U+202F, U+205F, U+3000, U+FEFF; not U+0085 or U+180E) in trim/trimStart/trimEnd, Rx `\s`/`\S` (ICU's lacks \v and U+FEFF) and PassageText.isSpace | JS semantics | JS.swift JSSpace, Cite.swift | done (testJavaScriptWhitespace) |

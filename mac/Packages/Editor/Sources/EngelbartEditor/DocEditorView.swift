@@ -23,6 +23,8 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     /// The mention whose document is open beside this one (MATH-23): a note's name, a workspace's id.
     public var besideLink: String? { didSet { redraw() } }
     public var besideWorkspace: String? { didSet { redraw() } }
+    /// How tall the document is drawn (a post-it sizes its card to it).
+    public private(set) var contentHeight: CGFloat = 0
     /// ⌘F/⌘G are this editor's own (the Workspace may route them elsewhere: model/key-side.js).
     public var handlesFind = true
 
@@ -48,6 +50,30 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     var pop: HoverCardView?
     var findBar: FindBarView?
     var flashLine: (line: Int, until: Date)?
+    /// A library folder opened in the @ menu (FolderMenu).
+    var browse: Browse?
+    var browsingRedraw = false
+    /// Answers opened past their cut (Show more), by answerKey; what each answer measured (the line offset it is cut at, or
+    /// -1 short), for the column width it was measured at; the cuts applied now.
+    var moreOpen = Set<String>()
+    var measured: [String: Int] = [:]
+    var measuredWidth: CGFloat = 0
+    var clipFrom: [Int: Int] = [:]
+    var measuring = false
+    var askHold: AskHold?
+    var replyWait: ReplyWait?
+    /// When a key last reached the editor, and the pane was last scrolled with the wheel.
+    var keyedAt = Date.distantPast
+    var wheelAt = Date.distantPast
+    var pressing: Bool { textView.pressing }
+    /// A run's answer-so-far box the person scrolled up in: where they left it (follows the newest line otherwise).
+    var streamHeld: [String: CGFloat] = [:]
+    /// Cards, Send to Discover, bookmarks and made rows (CardsWiring).
+    let cards = CardsState()
+    var appActiveHook: (() -> Bool)?
+    /// Zotero items main is finding a free copy for, and waiting on the Downloads folder for (MATH-65 builds 3, 4).
+    public var zoteroFinding = Set<String>() { didSet { redraw(keepSelection: true) } }
+    public var zoteroWaiting = Set<String>() { didSet { redraw(keepSelection: true) } }
 
     struct MentionState { var line: Int?; var field: Int?; var query: String; var start: Int; var caret: Int; var index: Int; var items: [MenuItem] }
 
@@ -109,6 +135,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         core.hooks.stopAsk = { [weak self] id in guard let self else { return }; self.host?.docEditor(self, stop: id) }
         core.hooks.build = (host?.docEditorCanBuild(self) ?? false) ? { [weak self] req in guard let self else { return }; self.host?.docEditor(self, build: req) } : nil
         core.hooks.noteVerb = { [weak self] name, done in guard let self else { return }; self.host?.docEditor(self, makeNote: name, done: done) }
+        core.hooks.asked = { [weak self] id in self?.asked(id) }
         core.hooks.mentionPicked = { [weak self] row in guard let self else { return }; self.host?.docEditor(self, picked: row) }
         core.hooks.docTextOf = { [weak self] key in guard let self else { return nil }; return self.host?.docEditor(self, textOf: key) }
         core.hooks.changeDoc = { [weak self] key, text in guard let self else { return }; self.host?.docEditor(self, change: key, text: text) }
@@ -122,6 +149,8 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     public func setDocument(key: String, text: String) {
         if lastKey != nil { reportView(now: true); saver.flush() }
         closePopups()
+        moreOpen = []; measured = [:]; clipFrom = [:]; askHold = nil; replyWait = nil; streamHeld = [:]
+        cards.repick = nil; cards.discoverOpen = []; cards.discoverText = [:]; cards.asked = []; unpeekMade()
         core.setDocument(key: key, text: text)
         lastKey = key
         redraw()
@@ -132,6 +161,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         guard text != core.text else { return }
         core.receive(text: text)
         redraw()
+        replyArrived()
     }
     /// The runs at work (Workspace `asks`): their rows are drawn again, the caret untouched.
     public func setAsks(_ asks: [String: AskProgress]) { core.asks = asks; redraw(keepSelection: true) }
@@ -139,6 +169,9 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     public func setBuilds(_ builds: [String: BuildState]) { core.builds = builds; core.autoCollapse(); redraw(keepSelection: true) }
     /// The models file changed (props.models).
     public func setModels(_ models: QuestionModels?) { core.models = models; redraw(keepSelection: true) }
+    /// What the host answers for made files (madeFile) or a guide's papers (paperState) changed: drawn again, the caret
+    /// untouched (props.madeFiles / props.paperState changing).
+    public func rowsChanged() { redraw(keepSelection: true) }
     /// Write what is waiting to be saved now (the window closing, the document left).
     public func flush() { saver.flush(); reportView(now: true) }
     /// The caret at the start of the document (a freshly created note).
@@ -200,6 +233,11 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         ctx.columnWidth = textView.textContainer?.size.width ?? 620
         let width = ctx.columnWidth, paneH = scroll.contentSize.height
         ctx.rowHeight = { [weak self] deco in self?.measure(deco, width: width, pane: paneH) ?? 44 }
+        ctx.clipFrom = clipFrom
+        ctx.paperState = { [weak self] address in guard let self, let host = self.host else { return nil }; return self.cards.saving[address] ?? host.docEditor(self, paperState: address) }
+        ctx.zoteroFinding = zoteroFinding; ctx.zoteroWaiting = zoteroWaiting
+        let mores = moreKeys()
+        ctx.more = { q in mores[q] }
         ctx.beside = { [weak self] chip in
             guard let self else { return false }
             if case .workspace(let id) = chip.kind { return self.besideWorkspace == id }
@@ -211,6 +249,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     }
 
     func measure(_ deco: Deco, width: CGFloat, pane: CGFloat) -> CGFloat {
+        if let h = cardsMeasure(deco, width: width) { return h }
         switch deco {
         case .pending(let id):
             let v = PendingView(progress: core.asks[id], waitLeft: core.waits[id]?.left, logOpen: openLogs.contains(id))
@@ -228,6 +267,8 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     /// Draw the document again from the model; the caret goes where the model says (an edit) or stays where it was.
     func redraw(keepSelection: Bool = false) {
         guard !syncing else { return }
+        // Mid-composition the storage holds the IME's marked text: drawn again once it commits (typed → redraw).
+        if textView.hasMarkedText() { return }
         if core.normalize() { }
         syncing = true
         defer { syncing = false }
@@ -245,10 +286,16 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
             if hadFocus || window?.firstResponder == nil { window?.makeFirstResponder(textView) }
             textView.scrollRangeToVisible(textView.selectedRange())
         } else if let keep { setSelection(keep) }
+        if measureClips() { return }
+        sizeToContent()
         placeOverlays()
         applyFlash()
+        keepAsked()
+        // The pending line of the question just asked, noted while it is there: its answer landing is read against it.
+        if var w = replyWait, w.line < 0, let at = core.lines.firstIndex(of: "bart~> \(w.askId)") { w.line = at; replyWait = w }
         if let f = findBar { f.refind(keepAt: true) }
         updateMention()
+        needMade()
     }
 
     func layoutColumn() {
@@ -301,6 +348,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         return anchorAtEnd ? DocSelection(anchor: b, focus: a) : DocSelection(anchor: a, focus: b)
     }
     func setSelection(_ s: DocSelection) {
+        core.lastSelection = s
         let a = storageIndex(s.anchor), b = storageIndex(s.focus)
         textView.setSelectedRange(NSRange(location: min(a, b), length: abs(b - a)), affinity: b < a ? .upstream : .downstream, stillSelecting: false)
     }
@@ -308,7 +356,8 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     // MARK: the caret's line
 
     public func textViewDidChangeSelection(_ notification: Notification) {
-        guard !syncing else { return }
+        // A composition's marked text moves the selection: the IME's until it commits, never a redraw under it.
+        guard !syncing, !composing, !textView.hasMarkedText() else { return }
         guard let s = docSelection() else { return }
         core.lastSelection = s
         if let e = core.editing, !(s.sameLine && s.anchor.line == e.q), !textView.pressing { core.cancelEdit(); redraw(keepSelection: true); return }
@@ -350,10 +399,12 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         return "\(i):" + out.joined(separator: ",")
     }
 
+    /// Whether the app is the active one (focus going to another app is not leaving the line); a test stands in for it.
+    var appActive: () -> Bool { get { appActiveHook ?? { NSApp.isActive } } set { appActiveHook = newValue } }
     func focusLeft() {
         // Switching to another app is not leaving the line; the keyboard going elsewhere in the window is.
         DispatchQueue.main.async { [weak self] in
-            guard let self, NSApp.isActive, let w = self.window, w.firstResponder !== self.textView else { return }
+            guard let self, self.appActive(), let w = self.window, w.firstResponder !== self.textView else { return }
             if let fr = w.firstResponder as? NSView, fr.isDescendant(of: self.mentionMenu ?? NSView()) { return }
             self.core.cancelEdit()
             if self.core.activeLine != nil { self.core.activeLine = nil; self.redraw(keepSelection: true) }
@@ -376,9 +427,11 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     func command(_ key: String, shift: Bool = false, cmd: Bool = false, alt: Bool = false, word: Bool = false, line: Bool = false) -> Bool {
         guard var s = docSelection() else { return false }
         byMouse = false
+        if mention != nil, key == "Backspace", s.collapsed, upFromFolder(s.anchor.offset) { return true }
         if mention != nil, mentionKey(key, shift: shift) { return true }
         if key == "Escape" {
             if picker != nil || pop != nil { closePopups(); return true }
+            if cards.repick != nil { cards.repick = nil; redraw(keepSelection: true); return true }
             if core.editing != nil { core.cancelEdit(); redraw(); return true }
             core.activeLine = nil
             redraw(keepSelection: true)
@@ -422,6 +475,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     /// Keys before NSTextView sees them: the @ menu's arrows, the formatting and undo shortcuts, find, a character beside a
     /// picture. → whether the key was used.
     func handleKeyDown(_ event: NSEvent) -> Bool {
+        if !event.modifierFlags.intersection([.command, .control]).isEmpty || event.characters?.isEmpty == false { keyedAt = Date(); askHold = nil; settle = nil }
         let flags = event.modifierFlags, cmd = flags.contains(.command), shift = flags.contains(.shift)
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
         if picker != nil && event.keyCode != 53 { closePicker() }
@@ -499,6 +553,9 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     func click(at point: NSPoint, event: NSEvent) -> Bool {
         let container = textView.textContainer!
         let p = NSPoint(x: point.x - textView.textContainerOrigin.x, y: point.y - textView.textContainerOrigin.y)
+        askHold = nil; settle = nil
+        // The space under a card (gapAt): the caret on a line there, made first when it is not there.
+        if let g = gapAt(point) { core.openGap(at: g.at, add: g.add); redraw(); window?.makeFirstResponder(textView); return true }
         // Below the last line: the caret at the end, or a line after a card.
         let used = layoutManager.usedRect(for: container)
         if p.y > used.maxY + 4 && !readOnly { core.focusEnd(); redraw(); window?.makeFirstResponder(textView); return true }
@@ -531,6 +588,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
             let src = id.hasPrefix("img:") ? String(id.dropFirst(4)) : id
             if let img = host.docEditor(self, image: src) { ImageViewer.show(img, over: window) }
         case .build(let q): if core.footBuild(q) { redraw() }
+        case .resultAsk(let line, let agent): core.askResult(line, agent: agent); redraw()
         case .toggle(let i): core.toggleTodo(i); redraw(keepSelection: true)
         case .mention(let chip):
             switch chip.kind {
@@ -605,10 +663,18 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
                 f.copy.onClick = { [weak self, weak f] in guard let self else { return }; self.host?.docEditor(self, copy: self.core.copyText(q)); f?.copied() }
                 f.regen.onClick = { [weak self, weak f] in guard let self, let f else { return }; self.openPicker(line: q, from: f.regen, kind: .regen) }
                 f.delete.onClick = { [weak self] in self?.core.deleteTurn(q); self?.redraw() }
-                frame = d.whole ? rect : NSRect(x: rect.minX, y: rect.maxY - 50 - 8, width: rect.width, height: 50)
+                // A live card's Skip and @brainstorm's Wrap up; an @discover guide's Save all (n).
+                let x = footExtras(q)
+                if x.skip { let b = TextButton("Skip", size: 13); b.onClick = { [weak self] in self?.core.sendCard(q, how: "skip"); self?.redraw() }; f.add(b) }
+                if x.wrap { let b = TextButton("Wrap up", size: 13); b.onClick = { [weak self] in self?.core.sendCard(q, how: "wrap"); self?.redraw() }; f.add(b) }
+                if let label = x.saveAll { let b = TextButton(label, size: 13); b.isEnabled = label != "Saving…"; b.onClick = { [weak self] in self?.saveAllPapers(q) }; f.add(b) }
+                frame = d.whole ? rect : NSRect(x: rect.minX, y: rect.maxY - (paraStyle?.paragraphSpacing ?? 58) + d.below, width: rect.width, height: 50)
                 view = f
             case .pending(let id):
                 let v = PendingView(progress: core.asks[id], waitLeft: core.waits[id]?.left, logOpen: openLogs.contains(id))
+                v.follow = streamHeld[id] == nil
+                v.heldTop = streamHeld[id]
+                v.onScrolled = { [weak self] top, fromBottom in self?.streamHeld[id] = fromBottom > 40 ? top : nil }
                 v.stop.onClick = { [weak self] in
                     guard let self else { return }
                     if self.core.waits[id] != nil { self.core.cancelWait(id) }
@@ -646,12 +712,13 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
                 frame = NSRect(x: rect.maxX - 6 - 28 - 16, y: rect.minY + max(0, (rect.height - 28) / 2), width: 28, height: 28)
                 view = b
             case .replyField(let from, let lead):
-                let v = ReplyFieldView(lead: lead, text: core.followText[from] ?? "")
+                let v = ReplyFieldView(lead: lead, text: core.followText[from] ?? ""); v.from = from
                 v.onText = { [weak self] t in self?.core.followText[from] = t; self?.fieldMention(from: from, field: v.field) }
                 v.onSend = { [weak self] in self?.core.sendFollow(from); self?.redraw() }
                 v.onHeight = { [weak self] h in if abs(h - d.height) > 1 { self?.redraw(keepSelection: true) } }
                 v.onKey = { [weak self, weak v] e in
                     guard let self, let v else { return false }
+                    if self.mention?.field == from, e.keyCode == 51, v.field.selectedRange().length == 0, self.upFromFolder(v.field.selectedRange().location) { return true }
                     if self.mention?.field == from {
                         if e.keyCode == 125 { return self.mentionKey("ArrowDown", shift: false) }
                         if e.keyCode == 126 { return self.mentionKey("ArrowUp", shift: false) }
@@ -662,8 +729,41 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
                     if e.keyCode == 53 { self.window?.makeFirstResponder(nil); _ = v; return true }
                     return false
                 }
-                frame = NSRect(x: rect.minX, y: rect.maxY - 8 - d.height, width: rect.width, height: d.height)
+                frame = NSRect(x: rect.minX, y: rect.maxY - (paraStyle?.paragraphSpacing ?? (d.height + 8)) + d.below, width: rect.width, height: d.height)
                 view = v
+            case .more(let key, let open):
+                let v = MoreView(open: open)
+                v.button.onClick = { [weak self] in
+                    guard let self else { return }
+                    if open { self.moreOpen.remove(key) } else { self.moreOpen.insert(key) }
+                    self.applyCuts(); self.redraw(keepSelection: true)
+                }
+                frame = NSRect(x: rect.minX, y: rect.maxY - (paraStyle?.paragraphSpacing ?? 26) + d.below, width: rect.width, height: d.height)
+                if !open {
+                    let fade = FadeView(frame: NSRect(x: rect.minX + 18, y: frame.minY - 56, width: rect.width - 34, height: 56))
+                    textView.addSubview(fade); overlays.append(fade)
+                }
+                view = v
+            case .sources(let q):
+                let ls = core.lines
+                guard let found = core.findTurn(ls, q) else { continue }
+                let answer = Doc.turnText(ls, found.turn).answer
+                let rows = host?.docEditorMentionable(self).map { $0.row } ?? []
+                let v = SourcesView(sources: Cite.citationSources(answer, cites: Cite.citationNumbers([answer]), citeSource: { Cite.libraryName(rows, $0) }))
+                v.onOpen = { [weak self] href in guard let self else { return }; self.host?.docEditor(self, openLink: href, newTab: false, sections: nil) }
+                frame = NSRect(x: rect.minX, y: rect.maxY - (paraStyle?.paragraphSpacing ?? d.height) + d.below, width: rect.width, height: d.height)
+                view = v
+            case .chipNote(let text, let offset):
+                guard d.line < rendered.maps.count else { continue }
+                let at = rendered.maps[d.line].range.location + offset
+                let g = layoutManager.glyphRange(forCharacterRange: NSRange(location: at, length: 1), actualCharacterRange: nil)
+                let r = layoutManager.boundingRect(forGlyphRange: g, in: textView.textContainer!).offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
+                let label = ChipNoteView(text: text)
+                frame = NSRect(x: r.minX, y: r.maxY + 4, width: label.wanted.width, height: label.wanted.height)
+                view = label
+            case .card, .made, .creating, .paperMark, .sendDiscover:
+                guard let (v, f) = cardsOverlay(d, rect: rect, spacing: paraStyle?.paragraphSpacing) else { continue }
+                view = v; frame = f
             case .research(let state, let label):
                 let v = ResearchView(state: state, level: label, canAct: core.hooks.ask != nil && !readOnly)
                 v.action?.onClick = { [weak self] in
@@ -678,6 +778,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
             textView.addSubview(v)
             overlays.append(v)
         }
+        placePictureHandles()
         // The hint on the document's last line while it is empty (props.emptyHint): drawn, never in the text.
         if let hint = emptyHint, ls.last?.isEmpty == true, let rect = paragraphRect(ls.count - 1) {
             let label = NSTextField(labelWithString: hint)
@@ -695,6 +796,83 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
             b.frame = NSRect(x: bounds.width - 22 - b.frame.width - 12, y: 8, width: b.frame.width + 12, height: 22)
             addSubview(b, positioned: .above, relativeTo: scroll); overlays.append(b)
         }
+    }
+
+    // MARK: Show more (applyClips)
+
+    static let ANSWER_LINE_PX: CGFloat = 16 * 1.65
+    static let CLIP_OLD = 6
+
+    /// A turn's answer as one key: its question's and closing line's hashes, and which of the same question it is.
+    func answerKey(_ ls: [String], _ turn: Turn) -> String {
+        var nth = 0
+        for j in 0..<turn.q where ls[j] == ls[turn.q] { nth += 1 }
+        return "\(EditorText.hashLine(ls[turn.q])).\(EditorText.hashLine(ls[turn.foot >= 0 ? turn.foot : turn.to]))\(nth > 0 ? ".\(nth)" : "")"
+    }
+
+    /// The answers that may be cut: not a conversation's first, not its latest answered; never in a post-it.
+    func cuttable() -> [(turn: Turn, key: String)] {
+        guard !compact else { return [] }
+        let ls = core.lines
+        var out: [(Turn, String)] = []
+        for t in core.threads(ls) where !core.collapsedOf(ls).contains(t.from) {
+            let latest = t.turns.last { $0.answered && $0.pending == nil }?.q
+            for (n, turn) in t.turns.enumerated() where n > 0 && turn.q != latest && turn.answered && turn.pending == nil && !turn.folded && turn.build == nil && !Doc.isResearch(core.parsed(ls)[turn.q]) {
+                out.append((turn, answerKey(ls, turn)))
+            }
+        }
+        return out
+    }
+
+    /// Turn → (key, open) for answers long enough to have a toggle.
+    func moreKeys() -> [Int: (key: String, open: Bool)] {
+        var out: [Int: (key: String, open: Bool)] = [:]
+        for (turn, key) in cuttable() { if let m = measured[key], m >= 0 { out[turn.q] = (key, moreOpen.contains(key)) } }
+        return out
+    }
+
+    func applyCuts() {
+        clipFrom = [:]
+        for (turn, key) in cuttable() { if let m = measured[key], m >= 0, !moreOpen.contains(key) { clipFrom[turn.q] = turn.from + m } }
+    }
+
+    /// Each answer not yet measured is measured as drawn whole: over (6 + 2) answer lines + 16px it is cut where its rows
+    /// pass 14 + 6 lines. → whether the cuts changed (the editor is drawn again).
+    func measureClips() -> Bool {
+        guard !measuring else { return false }
+        let width = textView.textContainer?.size.width ?? 0
+        if width != measuredWidth {
+            // Another width: every answer is measured again as drawn whole (its cut put back first).
+            measured = [:]; measuredWidth = width
+            if !clipFrom.isEmpty { clipFrom = [:]; redrawMeasured() }
+        }
+        let ls = core.lines
+        var changed = false
+        for (turn, key) in cuttable() where measured[key] == nil && clipFrom[turn.q] == nil {
+            let last = (turn.foot >= 0 ? turn.foot : turn.to + 1) - 1
+            guard turn.from <= last else { measured[key] = -1; continue }
+            let rows = (turn.from...last).compactMap { j -> (Int, NSRect)? in paragraphRect(j).flatMap { $0.height > 0.5 ? (j, $0) : nil } }
+            guard let first = rows.first else { measured[key] = -1; continue }
+            let top = first.1.minY, bottom = rows.last!.1.maxY
+            if bottom - top <= CGFloat(DocEditorView.CLIP_OLD + 2) * DocEditorView.ANSWER_LINE_PX + 16 { measured[key] = -1; continue }
+            let cut = 14 + CGFloat(DocEditorView.CLIP_OLD) * DocEditorView.ANSWER_LINE_PX
+            measured[key] = (rows.first { $0.1.minY - top >= cut }?.0 ?? last + 1) - turn.from
+            changed = true
+        }
+        _ = ls
+        guard changed else { return false }
+        let was = clipFrom
+        applyCuts()
+        if was == clipFrom && !changed { return false }
+        redrawMeasured()
+        return true
+    }
+    /// Drawn again from inside a draw (measureClips runs in redraw, where `syncing` holds): the cuts in, no re-measuring.
+    func redrawMeasured() {
+        let was = syncing
+        syncing = false; measuring = true
+        redraw(keepSelection: true)
+        measuring = false; syncing = was
     }
 
     // MARK: scrolling and places
@@ -793,6 +971,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     // MARK: hover cards
 
     func hover(at point: NSPoint) {
+        hoverMade(point)
         let container = textView.textContainer!
         let p = NSPoint(x: point.x - textView.textContainerOrigin.x, y: point.y - textView.textContainerOrigin.y)
         var f: CGFloat = 0
@@ -875,6 +1054,19 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         if !images.isEmpty { pasteImages(images, at: at) }
         if !rest.isEmpty { host.docEditor(self, dropItems: rest) }
         return !items.isEmpty
+    }
+
+    /// A post-it's editor is as tall as its lines; a page's text has about half a window under its last line (2026-09-22).
+    func sizeToContent() {
+        guard let container = textView.textContainer else { return }
+        let used = layoutManager.usedRect(for: container).height + (layoutManager.extraLineFragmentRect.height)
+        textView.bottomExtra = compact ? 0 : max(120, scroll.contentSize.height / 2 - 40)
+        if compact { textView.bottomExtra = 2 }
+        contentHeight = used + textView.textContainerInset.height * (compact ? 0 : 1) + textView.bottomExtra
+        textView.setFrameSize(NSSize(width: textView.frame.width, height: max(compact ? 28 : scroll.contentSize.height, contentHeight)))
+        for a in rendered.maps.indices where core.asks.isEmpty && a < 0 { _ = a }
+        let alive = Set(core.asks.keys)
+        streamHeld = streamHeld.filter { alive.contains($0.key) }
     }
 
     public override func viewDidMoveToWindow() {

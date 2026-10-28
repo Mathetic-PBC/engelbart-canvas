@@ -58,6 +58,8 @@ public final class EditorCore {
     public var followImages: [Int: [(n: Int, id: String?)]] = [:]
     /// A model picked under a reply field's chip, by its thread's first line.
     public var followChoice: [Int: (model: String, effort: String)] = [:]
+    /// What is ticked on a live card, by its question's line.
+    public var cardPicks: [Int: [String]] = [:]
     /// Deep research searches counting down: askId → seconds left (waitResearch).
     public internal(set) var waits: [String: (ask: AskRequest, left: Int)] = [:]
     var autoFolded: String? = nil

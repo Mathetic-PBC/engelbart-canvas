@@ -40,6 +40,13 @@ public struct LineAt: Equatable {
     public var footAfter = false
     /// The turn may be edited in place.
     public var editable = false
+    /// An answer that is a card: drawn on its first line (`card`), the rest of its lines under it (`underCard`).
+    public var card = false
+    public var underCard = false
+    /// A question line that answers the card of the turn on this line: drawn as said (answerShown).
+    public var answersQ: Int? = nil
+    /// After this line, Send to Discover's row (an @brainstorm thread ending in a recap).
+    public var recapAfter = false
 }
 
 extension EditorCore {
@@ -47,6 +54,7 @@ extension EditorCore {
     public func layout(canReply: Bool) -> [Int: LineAt] {
         let ls = lines, ps = parsed(ls)
         var at: [Int: LineAt] = [:]
+        let cards = cardsOf(ls)
         for thread in threads(ls) {
             let collapsed = isCollapsed(thread), running = isRunning(thread)
             let titleLine = thread.titleLine
@@ -68,7 +76,10 @@ extension EditorCore {
             let follow = end.answered && end.pending == nil && !end.folded && canReply && !built && end.build == nil
             let endBox = Doc.isResearch(ps[end.q]) ? boxState(ls, end) : nil
             let boxField = endBox != nil && !end.folded && !built && canReply && !readOnly
-            let field = boxField || (follow && !readOnly)
+            // A live card drawn as David's mock has its field inside it: the conversation has none under it.
+            let endCard = cards.byQ[end.q], inCard = endCard.map { $0.live && boxedCard($0) } ?? false
+            let field = boxField || (follow && !inCard && !readOnly)
+            let recap = follow && endsInRecap(ls, thread)
             var afterBare = false
             for (n, turn) in thread.turns.enumerated() {
                 let agent = turnAgent(thread, turn)
@@ -79,7 +90,8 @@ extension EditorCore {
                 let nextBare = next != nil && next!.answered && next!.pending == nil && next!.folded && !Doc.isResearch(ps[next!.q])
                 let footless = turn.answered && turn.pending == nil && turn.foot < 0
                 let tail = n == thread.turns.count - 1
-                let shuts = (tail && !field) || cut
+                let shuts = (tail && !(field || recap)) || cut
+                let card = cards.byQ[turn.q]
                 let state = box ? boxState(ls, turn) : nil
                 var q = LineAt(threadFrom: thread.from, titleLine: titleLine, turnQ: turn.q, role: .question, agent: agent)
                 q.top = turn.q == thread.from || box || !turn.answered
@@ -87,7 +99,8 @@ extension EditorCore {
                 q.closes = !turn.answered || turn.build != nil || (bare && !box && shuts)
                 q.bare = bare; q.answered = turn.answered; q.pending = turn.pending; q.build = turn.build; q.foldedTurn = turn.folded
                 q.box = box; q.boxState = state; q.running = running
-                q.editable = canEdit(ps[turn.q], turn) && !box
+                q.editable = canEdit(ps[turn.q], turn) && card == nil && !box
+                if n > 0, cards.byQ[thread.turns[n - 1].q] != nil { q.answersQ = thread.turns[n - 1].q }
                 _ = nextBare
                 if tail && !turn.answered && field { q.fieldAfter = false }
                 at[turn.q] = q
@@ -104,6 +117,8 @@ extension EditorCore {
                         a.closes = ends && shuts && !footless
                         a.footAfter = ends && footless
                         a.fieldAfter = ends && tail && field
+                        a.recapAfter = ends && tail && recap
+                        if let card, i <= card.last { a.card = i == turn.from; a.underCard = i != turn.from }
                         a.answered = turn.answered; a.pending = turn.pending; a.foldedTurn = turn.folded; a.box = box; a.boxState = state; a.running = running
                         at[i] = a
                     }

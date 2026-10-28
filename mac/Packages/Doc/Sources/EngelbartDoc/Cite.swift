@@ -164,10 +164,8 @@ public enum PassageText {
 
     public struct Folded { public var text: [String]; public var map: [Int]; public var string: String { text.joined() } }
 
-    static func isSpace(_ u: UInt16) -> Bool {
-        guard let s = Unicode.Scalar(u) else { return false }
-        return CharacterSet.whitespacesAndNewlines.contains(s) || u == 0xFEFF
-    }
+    /// JavaScript's \s on one UTF-16 unit (every JS space is in the BMP).
+    static func isSpace(_ u: UInt16) -> Bool { JSSpace.contains(UInt32(u)) }
     static func isLetter(_ s: String) -> Bool { !s.isEmpty && Rx(#"^\p{L}$"#).test(s) }
     static func isHyphen(_ u: UInt16) -> Bool { u == 0x2D || (u >= 0x2010 && u <= 0x2015) || u == 0x2212 }
 

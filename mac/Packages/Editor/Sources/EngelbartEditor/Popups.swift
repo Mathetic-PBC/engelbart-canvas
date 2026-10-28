@@ -30,12 +30,29 @@ final class MentionMenuView: FlippedView {
             glyph(m).draw(in: NSRect(x: r.minX + 10, y: r.midY - 9, width: 18, height: 18))
             let name = NSAttributedString(string: m.name, attributes: [.font: Fonts.sans(14), .foregroundColor: m.kind == .note ? Look.grey : Look.ink])
             var right = r.maxX - 10
-            if m.kind == .fresh || m.kind == .folder || (m.row.map { $0.type == "folder" && $0.folderPath != nil } ?? false) {
+            if m.kind == .fresh || (m.kind == .entry && m.dir) || FolderMenu.isFolderRow(m) {
                 let mark = m.kind == .fresh ? "+" : "›"
                 (mark as NSString).draw(at: NSPoint(x: right - 12, y: r.midY - 9), withAttributes: [.font: Fonts.sans(15), .foregroundColor: Look.grey]); right -= 20
             }
-            // A long name is cut in its middle: its end and extension stay.
-            name.draw(with: NSRect(x: r.minX + 38, y: r.midY - 10, width: right - r.minX - 38, height: 20), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            // What a row says beside its name: a back row's path (its end kept), a Zotero item's authors and year.
+            if let hint = m.hint, !hint.isEmpty, m.kind == .back || m.zotero != nil {
+                let ha: [NSAttributedString.Key: Any] = [.font: Fonts.sans(12), .foregroundColor: Look.grey]
+                let w = min((hint as NSString).size(withAttributes: ha).width, (right - r.minX - 38) * (m.kind == .back ? 0.6 : 0.4))
+                let p = NSMutableParagraphStyle(); p.lineBreakMode = m.kind == .back ? .byTruncatingHead : .byTruncatingTail
+                (hint as NSString).draw(in: NSRect(x: right - w, y: r.midY - 8, width: w, height: 16), withAttributes: ha.merging([.paragraphStyle: p]) { a, _ in a })
+                right -= w + 8
+            }
+            // A long name is cut in its middle: its start gives way, its end and extension stay (rail.js nameParts).
+            let parts = m.kind == .note ? (head: m.name, tail: "") : FolderMenu.nameParts(m.name)
+            let na: [NSAttributedString.Key: Any] = [.font: Fonts.sans(14), .foregroundColor: m.kind == .note ? Look.grey : Look.ink]
+            let tailW = (parts.tail as NSString).size(withAttributes: na).width
+            let headR = NSRect(x: r.minX + 38, y: r.midY - 10, width: max(0, right - r.minX - 38 - tailW), height: 20)
+            NSAttributedString(string: parts.head, attributes: na).draw(with: headR, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            if !parts.tail.isEmpty {
+                let headW = min((parts.head as NSString).size(withAttributes: na).width, headR.width)
+                (parts.tail as NSString).draw(at: NSPoint(x: headR.minX + headW, y: r.midY - 10), withAttributes: na)
+            }
+            _ = name
         }
         NSGraphicsContext.restoreGraphicsState()
     }
@@ -45,6 +62,8 @@ final class MentionMenuView: FlippedView {
         case .back: return NSImage(size: NSSize(width: 18, height: 18), flipped: true) { _ in ("←" as NSString).draw(at: NSPoint(x: 3, y: 1), withAttributes: [.font: Fonts.sans(14), .foregroundColor: color]); return true }
         case .note: return NSImage(size: NSSize(width: 18, height: 18))
         case .workspace: return Glyphs.mentionIcon(.workspace, size: 22, color: color)
+        case .self: return Glyphs.mentionIcon(.file("folder"), size: 22, color: color)
+        case .entry: return Glyphs.mentionIcon(m.dir ? .file("folder") : .file(Inline.fileKindOf(m.name) == "file" ? "pdf" : Inline.fileKindOf(m.name)), size: 22, color: color)
         case .verb: return Glyphs.image([KindIcons.chat.name == "" ? "" : "M3 2.5h6.5a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2H6.5L4 11.5v-2H3a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2z"], size: 18, color: color, grid: 16)
         default:
             let key = m.row.map { Kind.kindKey($0) } ?? "note"
@@ -86,6 +105,8 @@ final class PickerView: FlippedView {
     var onLevel: (String) -> Void = { _ in }
     var onSend: (() -> Void)? = nil
     var onLeave: () -> Void = {}
+    /// The provider field opened to its list (BartPicker ProviderField).
+    var listing = false { didSet { needsDisplay = true } }
     init(models: QuestionModels, current: (provider: String, model: String, effort: String)?, levels: Bool = false, currentLevel: String? = nil) {
         self.models = models; self.current = current; self.levels = levels; self.currentLevel = currentLevel
         provider = current?.provider ?? models.provider
@@ -115,12 +136,19 @@ final class PickerView: FlippedView {
         let field = NSBezierPath(roundedRect: left.insetBy(dx: 0, dy: 0), xRadius: 8, yRadius: 8)
         NSColor(hex: "#eaeaea").setStroke(); field.lineWidth = 1; field.stroke()
         (entry.name as NSString).draw(at: NSPoint(x: left.minX + 10, y: left.midY - 8), withAttributes: [.font: Fonts.sans(13, weight: 500), .foregroundColor: Look.ink])
-        if models.providers.count > 1 { ("⌄" as NSString).draw(at: NSPoint(x: left.maxX - 18, y: left.minY + 4), withAttributes: [.font: Fonts.sans(12), .foregroundColor: Look.grey]) }
+        if models.providers.count > 1 { ((listing ? "⌃" : "⌄") as NSString).draw(at: NSPoint(x: left.maxX - 18, y: left.minY + 4), withAttributes: [.font: Fonts.sans(12), .foregroundColor: Look.grey]) }
         let here = provider == current?.provider
         for (k, m) in entry.models.enumerated() { row(m.name, on: here && m.key == current?.model, at: NSRect(x: 8, y: 44 + CGFloat(k) * 32, width: left.width, height: 32)) }
         NSColor(hex: "#eaeaea").setFill(); NSRect(x: left.maxX + 8, y: 8, width: 1, height: bounds.height - 16).fill()
         ("EFFORT" as NSString).draw(at: NSPoint(x: left.maxX + 18, y: 18), withAttributes: [.font: Fonts.sans(9, weight: 500), .foregroundColor: Look.grey, .kern: 1.6])
         for (k, e) in entry.efforts.enumerated() { row(Question.EFFORT_LABELS[e] ?? e, on: here && e == current?.effort, at: NSRect(x: left.maxX + 10, y: 44 + CGFloat(k) * 32, width: 126, height: 32)) }
+        if listing {
+            // The list of providers under the field, over the models, each a row with its mark.
+            let box = NSRect(x: left.minX, y: left.maxY + 4, width: left.width, height: CGFloat(models.providers.count) * 32 + 8)
+            let lp = NSBezierPath(roundedRect: box, xRadius: 8, yRadius: 8)
+            NSColor.white.setFill(); lp.fill(); NSColor(hex: "#eaeaea").setStroke(); lp.lineWidth = 1; lp.stroke()
+            for (k, pr) in models.providers.enumerated() { row(pr.name, on: pr.key == provider, at: NSRect(x: box.minX + 4, y: box.minY + 4 + CGFloat(k) * 32, width: box.width - 8, height: 32)) }
+        }
         if onSend != nil {
             let b = NSRect(x: bounds.width - 40, y: bounds.height - 40, width: 28, height: 28)
             Look.blue.setFill(); NSBezierPath(ovalIn: b).fill()
@@ -131,8 +159,11 @@ final class PickerView: FlippedView {
         let p = convert(event.locationInWindow, from: nil)
         if levels { let k = Int((p.y - 8) / 32); if k >= 0 && k < 3 { onLevel(Question.MODES[k]) }; return }
         let leftW = bounds.width - 136 - 17
-        if p.y < 40 && p.x < leftW + 8 {
-            if models.providers.count > 1, let at = models.providers.firstIndex(where: { $0.key == provider }) { provider = models.providers[(at + 1) % models.providers.count].key; needsDisplay = true }
+        if p.y < 40 && p.x < leftW + 8 { if models.providers.count > 1 { listing.toggle() }; return }
+        if listing {
+            let k = Int((p.y - 44 - 4) / 32)
+            if p.x < leftW + 8, k >= 0, k < models.providers.count { provider = models.providers[k].key }
+            listing = false
             return
         }
         if let onSend, p.y > bounds.height - 44 && p.x > bounds.width - 44 { onSend(); return }
@@ -361,6 +392,9 @@ extension DocEditorView {
         let ls = core.lines, p = core.parsed(ls)[line]
         if Doc.isCode(p) || Doc.isFence(p) || p.type == .img { closeMention(); return }
         let text = core.lineText(ls, line)
+        if readFolderMention(text, s.anchor.offset, line: line, field: nil) { return }
+        if browsingRedraw { return }
+        browse = nil
         guard let found = Inline.mentionAt(text, s.anchor.offset, holds: { [weak self] q in self?.namesHold(q) ?? false }) else { closeMention(); return }
         let items = menuRows(found.query, field: false)
         let was = mention
@@ -370,6 +404,9 @@ extension DocEditorView {
 
     func fieldMention(from: Int, field: NSTextView) {
         let caret = field.selectedRange().location
+        mentionField = field
+        if readFolderMention(field.string, caret, line: nil, field: from) { return }
+        browse = nil
         guard let found = Inline.mentionAt(field.string, caret, holds: { [weak self] q in self?.namesHold(q) ?? false }) else { if mention?.field == from { closeMention() }; return }
         mention = MentionState(line: nil, field: from, query: found.query, start: found.start, caret: caret, index: 0, items: menuRows(found.query, field: true))
         mentionField = field
@@ -401,7 +438,7 @@ extension DocEditorView {
     func closeMention(keepState: Bool = false) {
         if mentionMenu != nil { host?.docEditor(self, mentionMenuOpen: false) }
         mentionMenu?.removeFromSuperview(); mentionMenu = nil
-        if !keepState { mention = nil; mentionField = nil }
+        if !keepState { mention = nil; mentionField = nil; browse = nil }
     }
 
     /// The @ menu's keys: ↓/↑ wrap, Enter or Tab picks, Escape closes it alone. → whether it took the key.
@@ -419,8 +456,14 @@ extension DocEditorView {
         return true
     }
 
-    func pickMention(_ r: MenuItem) {
+    func pickMention(_ rIn: MenuItem) {
+        var r = rIn
         guard let m = mention, r.kind != .note else { return }
+        // A library folder opens in the menu, a subfolder of it too; the back row goes up (MATH-22).
+        if FolderMenu.isFolderRow(r), let row = r.row { openFolder(row, rel: ""); return }
+        if r.kind == .entry && r.dir, let row = r.row, let rel = r.rel { openFolder(row, rel: rel); return }
+        if r.kind == .back { leaveFolder(); return }
+        if r.kind == .self && (r.rel ?? "").isEmpty, let row = r.row { r = Mention.menuItem(row) }
         closeMention()
         if let from = m.field, let field = mentionField {
             if r.kind == .verb || ["bart", "chat", "brainstorm", "discover", "create"].contains(r.id) { return }

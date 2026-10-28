@@ -302,6 +302,8 @@ extension EditorCore {
             if state == "ready" || state == "interrupted" { sendRefine(from); return }
             if state == "running" { steerResearch(from); return }
         }
+        // The live card's answer is typed in this field: it goes as the card's answer (sendCard).
+        if let live = cardsOf(ls).byQ[end.q], live.live { sendCard(end.q); return }
         let typed = (followText[from] ?? "").trimmed
         var agent = Doc.answeredBy(thread)
         if !end.answered || end.pending != nil || typed.isEmpty { return }

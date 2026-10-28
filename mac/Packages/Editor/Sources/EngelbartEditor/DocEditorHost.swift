@@ -14,13 +14,40 @@ public struct EditorRow: Equatable {
     public init(row: LibRow, title: String? = nil, facts: String? = nil, trashed: Bool = false) { self.row = row; self.title = title; self.facts = facts; self.trashed = trashed }
 }
 
-/// What a library folder opened in the @ menu holds (listFolder's answer).
+/// What a library folder opened in the @ menu holds (listFolder's answer, store/folder-files.cjs listFolder).
 public struct FolderListing: Equatable {
-    public struct Entry: Equatable { public var name: String; public var rel: String; public var dir: Bool; public var type: String?
-        public init(name: String, rel: String, dir: Bool, type: String? = nil) { self.name = name; self.rel = rel; self.dir = dir; self.type = type } }
+    public struct Entry: Equatable {
+        public var name: String; public var rel: String; public var dir: Bool; public var type: String?
+        /// A Zotero item's key, its authors and year (`hint`), and what finds it besides its title (`find`).
+        public var zotero: String?; public var hint: String?; public var find: String?
+        public init(name: String, rel: String, dir: Bool, type: String? = nil, zotero: String? = nil, hint: String? = nil, find: String? = nil) {
+            self.name = name; self.rel = rel; self.dir = dir; self.type = type; self.zotero = zotero; self.hint = hint; self.find = find
+        }
+    }
     public var entries: [Entry]
     public var error: String?
-    public init(entries: [Entry], error: String? = nil) { self.entries = entries; self.error = error }
+    /// The folder is no longer there.
+    public var missing: Bool
+    /// How many the level holds when main listed only some of a very large folder.
+    public var total: Int
+    public init(entries: [Entry], error: String? = nil, missing: Bool = false, total: Int? = nil) { self.entries = entries; self.error = error; self.missing = missing; self.total = total ?? entries.count }
+}
+
+/// A file @create made, as the window has read it (props.madeFiles[key]).
+public struct MadeFile: Equatable {
+    public var name: String
+    /// 'svg', 'html', 'md', 'csv', …
+    public var type: String
+    public var saved: String?
+    public var saving: Bool
+    public var missing: Bool
+    public var error: String?
+    /// A picture of it (an image file, a page's preview).
+    public var image: NSImage?
+    public var text: String?
+    public init(name: String, type: String, saved: String? = nil, saving: Bool = false, missing: Bool = false, error: String? = nil, image: NSImage? = nil, text: String? = nil) {
+        self.name = name; self.type = type; self.saved = saved; self.saving = saving; self.missing = missing; self.error = error; self.image = image; self.text = text
+    }
 }
 
 /// The editor's one door to the outside (DocEditor.jsx's props). Every method has a default, so an embedder (a post-it's
@@ -62,6 +89,18 @@ public protocol DocEditorHost: AnyObject {
     func docEditor(_ editor: DocEditorView, build: BuildRequest)
     /// A Build's card for a `build> <id>` line (the Build package's view), or nil.
     func docEditor(_ editor: DocEditorView, buildView id: String) -> NSView?
+
+    // An @discover guide's papers (2026-10-02/03): where each is ('none' | 'lib' | 'here'), saving and unsaving one.
+    func docEditor(_ editor: DocEditorView, paperState address: String) -> String?
+    func docEditor(_ editor: DocEditorView, savePaper title: String, address: String, done: @escaping (Error?) -> Void)
+    /// nil when papers cannot be taken off a project here (the filled bookmark is then still).
+    func docEditorCanUnsavePaper(_ editor: DocEditorView) -> Bool
+    func docEditor(_ editor: DocEditorView, unsavePaper title: String, address: String, done: @escaping (Error?) -> Void)
+
+    // Files @create made (props.madeFiles, onSaveMade, onMadeNeeded)
+    func docEditor(_ editor: DocEditorView, madeFile key: String) -> MadeFile?
+    func docEditor(_ editor: DocEditorView, saveMade key: String, name: String)
+    func docEditor(_ editor: DocEditorView, madeNeeded keys: [String])
 
     // Opening things
     func docEditor(_ editor: DocEditorView, openLink href: String, newTab: Bool, sections: [String]?)
@@ -110,6 +149,13 @@ public extension DocEditorHost {
     func docEditorCanBuild(_ editor: DocEditorView) -> Bool { false }
     func docEditor(_ editor: DocEditorView, build: BuildRequest) {}
     func docEditor(_ editor: DocEditorView, buildView id: String) -> NSView? { nil }
+    func docEditor(_ editor: DocEditorView, paperState address: String) -> String? { nil }
+    func docEditor(_ editor: DocEditorView, savePaper title: String, address: String, done: @escaping (Error?) -> Void) { done(nil) }
+    func docEditorCanUnsavePaper(_ editor: DocEditorView) -> Bool { false }
+    func docEditor(_ editor: DocEditorView, unsavePaper title: String, address: String, done: @escaping (Error?) -> Void) { done(nil) }
+    func docEditor(_ editor: DocEditorView, madeFile key: String) -> MadeFile? { nil }
+    func docEditor(_ editor: DocEditorView, saveMade key: String, name: String) {}
+    func docEditor(_ editor: DocEditorView, madeNeeded keys: [String]) {}
     func docEditor(_ editor: DocEditorView, openLink href: String, newTab: Bool, sections: [String]?) { if let u = URL(string: href) { NSWorkspace.shared.open(u) } }
     func docEditor(_ editor: DocEditorView, open row: LibRow) {}
     func docEditor(_ editor: DocEditorView, openBeside kind: String, id: String, name: String) {}

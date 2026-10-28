@@ -58,10 +58,10 @@ final class RendererTests: XCTestCase {
         XCTAssertEqual(mention.maps[0].toRaw(16), 18, "the end of a mention is the end of its source")
         let line = "a $x^2$ b"
         let (_, math) = render([line])
-        let shownMath = MathText.render("x^2", display: false)!
-        XCTAssertEqual(math.maps[0].toRaw(3), 7, "within a drawn formula: after it")
+        XCTAssertEqual(math.maps[0].toRaw(3), 7, "after the typeset formula (one attachment): after its source")
         XCTAssertEqual(math.maps[0].toRaw(2), 2)
-        XCTAssertEqual(math.maps[0].toDisplay(7), 2 + shownMath.len)
+        XCTAssertEqual(math.maps[0].toDisplay(7), 2 + 1, "SwiftMath draws the formula as one character")
+        XCTAssertNotNil(math.text.attribute(.attachment, at: math.maps[0].range.location + 2, effectiveRange: nil))
         let (_, img) = render(["![x](img:i)"])
         XCTAssertEqual(img.maps[0].toRaw(1), 11, "a picture: before or after it")
     }
@@ -99,7 +99,10 @@ final class RendererTests: XCTestCase {
     func testMathBlockDrawnOutsideTheCaret() {
         let doc = ["Euler:", "```math", "e^{i\\pi} + 1 = 0", "```", "after"]
         let (_, r) = render(doc, active: 4)
-        XCTAssertEqual(shown(r, 1), MathText.render("e^{i\\pi} + 1 = 0", display: true))
+        XCTAssertEqual(shown(r, 1), "\u{FFFC}", "typeset by SwiftMath: one attachment")
+        let drawn = r.text.attribute(.attachment, at: r.maps[1].range.location, effectiveRange: nil) as? NSTextAttachment
+        XCTAssertNotNil(drawn?.image)
+        XCTAssertGreaterThan(drawn?.bounds.width ?? 0, 0)
         XCTAssertNotNil(r.text.attribute(.edHidden, at: r.maps[2].range.location, effectiveRange: nil), "its body hidden")
         let (_, inside) = render(doc, active: 2)
         XCTAssertEqual(shown(inside, 2), "e^{i\\pi} + 1 = 0", "the caret in it: code, as typed")

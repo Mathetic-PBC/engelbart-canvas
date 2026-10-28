@@ -9,18 +9,39 @@ final class DocTextView: NSTextView {
     weak var editor: DocEditorView?
     /// A mouse button is down: the selection is only noted, the line becomes the caret's once it comes up.
     var pressing = false
+    /// Room under the last line (half a window on a page), added to the height NSTextView sizes itself to.
+    var bottomExtra: CGFloat = 0
+
+    override var textContainerOrigin: NSPoint { NSPoint(x: textContainerInset.width, y: textContainerInset.height) }
+    override func setFrameSize(_ newSize: NSSize) {
+        var size = newSize
+        if let lm = layoutManager, let tc = textContainer {
+            let need = lm.usedRect(for: tc).maxY + lm.extraLineFragmentRect.height + textContainerInset.height + bottomExtra
+            size.height = max(size.height, need)
+        }
+        super.setFrameSize(size)
+    }
+    override func scrollWheel(with event: NSEvent) {
+        editor?.wheelAt = Date(); editor?.askHold = nil; editor?.settle = nil
+        super.scrollWheel(with: event)
+    }
 
     override func keyDown(with event: NSEvent) {
         if let editor, editor.handleKeyDown(event) { return }
         super.keyDown(with: event)
     }
 
+    /// Unmarking: NSTextView commits marked text by inserting it, which is not a commit of the person's.
+    private var unmarking = false
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        if unmarking { return }
         let text = (string as? NSAttributedString)?.string ?? (string as? String) ?? ""
         if hasMarkedText() {
             // The composition is the IME's until it commits: its marked text leaves the storage, the commit goes to the model.
             let marked = markedRange()
+            unmarking = true
             unmarkText()
+            unmarking = false
             if marked.location != NSNotFound, let storage = textStorage, NSMaxRange(marked) <= storage.length {
                 storage.replaceCharacters(in: marked, with: "")
                 setSelectedRange(NSRange(location: marked.location, length: 0))

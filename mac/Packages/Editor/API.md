@@ -31,8 +31,10 @@ line's rect; space for them is the paragraph's own height or its paragraph spaci
 text view's own text changes only for IME marked text.
 
 ### Math
-No KaTeX: LaTeX becomes Unicode math text (`EngelbartDoc.MathText`), drawn in STIX Two Math (Times italic fallback);
-display math (`$$…$$`, ```math blocks) centred at 1.2×. Undrawable LaTeX shows as code. A formula is one unit.
+SwiftMath (1.7.3, SwiftPM) typesets inline `$…$` (text style) and display `$$…$$` / ```math blocks as images
+(`MTMathImage`), each one attachment character sitting on the baseline by its descent (`MathTypeset`, 500-entry cache).
+What SwiftMath cannot parse falls back to `EngelbartDoc.MathText`'s Unicode; what neither reads shows as code. A
+formula is one unit for the caret.
 
 ## Public entry points (DocEditorView)
 - `host: DocEditorHost?`, `compact`, `readOnly`, `viewScope`, `autoCollapse`, `emptyHint`, `besideLink`,
@@ -43,7 +45,18 @@ display math (`$$…$$`, ```math blocks) centred at 1.2×. Undrawable LaTeX show
 - `focusStart()`, `focusEnd()`, `isActive`, `shutMenus()`, `caretNow()`, `placeCaret(line:a:b:)`, `showLine(_:flash:)`
   (#fff1b8, 2.4 s), `showPassage(_:find:)`, `startAgent(_:)`, `askBoxed(_:)`, `handOff(_:pick:key:)`, `foldAll(_:)`,
   `anyAnswerOpen`, `openFind()`, `findStep(_:)`, `captureView()`, `applyView(_:)`.
-- `AskProgress.progressed(step:name:effort:movedUp:activity:lines:log:)` = DocEditor askProgressed (60-entry log).
+- `AskProgress.progressed(step:name:effort:movedUp:activity:lines:log:)` = DocEditor askProgressed (60-entry log);
+  `making` (what a Create run said it makes) and `at` (when asked: the Create row's m:ss) for @create's running row.
+
+### Cards and agents' rows (EditorCards.swift, CardsView.swift, CardsWiring.swift)
+@brainstorm/@discover cards (`Doc.Card`) are drawn over their answer's lines: boxed rows (David's mock) with their own
+field and Submit, or a list; Skip and Wrap up on the foot; an answered boxed card repicks after a confirm
+(`EditorCore.cardsOf/pickCard/sendCard/repickCard/answerShown`). Recaps are sections; a result's offer line asks
+@discover/@chat (`askResult`); Send to Discover sits after a recap (`discoverLook`). An @discover guide's titles carry
+a bookmark (`EditorCore.guideTitle`, `unsavedPapers`, Save all on the foot). @create's files are rows (Save/Saved,
+inline frame, Open in Stage, a 350 ms peek); a running Create shows `CreateWords.makingLabel/creatingLine/createDoing`,
+m:ss and Stop; `CreateWords.madeToOpen` says which file a finished run opens. Every action goes through the core's
+`ask` hook or the host.
 
 ## What the host provides (`DocEditorHost`, every method defaulted)
 - Text: `changed` (every edit), `save` (400 ms after typing stops, flushed on switch/close), `textOf`/`change` for a run
@@ -57,6 +70,12 @@ display math (`$$…$$`, ```math blocks) centred at 1.2×. Undrawable LaTeX show
   `openFile`, `openZotero`, `openMade`.
 - Pictures/drops: `image(id) -> NSImage?`, `pasteImage(data, mime, label, done: id?)`, `dropItems([Drop.Item])`,
   `dropOnZotero`.
+- Papers in a guide: `paperState(address) -> 'none'|'lib'|'here'|nil`, `savePaper(title,address,done)`,
+  `docEditorCanUnsavePaper`, `unsavePaper(title,address,done)`.
+- Made files: `madeFile(key) -> MadeFile?` (`name, type, saved, saving, missing, error, image, text`), `saveMade(key,name)`,
+  `madeNeeded(keys)` (asked once per key). When made files or papers' states change, call `rowsChanged()`.
+- Folders in the @ menu: `listFolder(id, rel, done: FolderListing{entries[name, rel, dir, type, zotero, hint, find],
+  error, missing, total})`.
 - `copy(text)` (defaults to NSPasteboard), `viewOf(scope,key)`, `reportView(position, scope, key, now)`, `error`.
 
 ## Events posted
@@ -67,5 +86,4 @@ None on EventHub: the editor reports through its host only (the Electron compone
   (feed `setAsks`), `builds`, the router (`route`), name-chat titles (`Doc.placeTitle`), and place answers
   (`Doc.placeAnswer`) then call `setText`.
 - Build: a card view for `buildView(id)`.
-- Bart: main/bart/card.cjs (cardOfAnswer, questionOf, answerLine, readAnswer, recapLine, resultParts) for the older
-  @brainstorm/@discover cards; not ported here (see ledger).
+- Bart: nothing (the card data model is Doc's `Card`, which Bart links). SwiftMath from GitHub (SwiftPM).
