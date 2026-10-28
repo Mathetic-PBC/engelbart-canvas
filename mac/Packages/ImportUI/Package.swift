@@ -13,7 +13,7 @@ let package = Package(
         .package(path: "../Connect"),
     ],
     targets: [
-        .target(name: "EngelbartImportUI", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), .product(name: "EngelbartStore", package: "Store"), .product(name: "EngelbartConnect", package: "Connect")]),
+        .target(name: "EngelbartImportUI", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), .product(name: "EngelbartStore", package: "Store"), .product(name: "EngelbartConnect", package: "Connect")], resources: [.copy("Resources")]),
         .testTarget(name: "EngelbartImportUITests", dependencies: ["EngelbartImportUI"]),
     ]
 )

@@ -47,9 +47,35 @@ final class FakeHost: DocEditorHost {
         listed.append("\(id):\(rel)"); done(listings["\(id):\(rel)"] ?? FolderListing(entries: []))
     }
     func docEditor(_ editor: DocEditorView, mentionMenuOpen open: Bool) { menuOpen.append(open) }
+    // pictures, drops, opening, peeks, Builds
+    var images: [String: NSImage] = [:]
+    var pasted: [(mime: String, label: String)] = []
+    var pasteId: (Int) -> String? = { "p\($0)" }
+    var dropped: [[Drop.Item]] = []
+    var zoteroDrops: [(String, String)] = []
+    var opened: [String] = []
+    var peeks: [String: WorkspacePeekInfo] = [:]
+    var peekTexts: [String: String] = [:]
+    var peekReads: [String] = []
+    var buildViews: [String: NSView] = [:]
+    var buildAsks: [String] = []
+    var patched: [String] = []
+    func docEditor(_ editor: DocEditorView, image id: String) -> NSImage? { images[id] }
+    func docEditor(_ editor: DocEditorView, pasteImage data: Data, mime: String, label: String, done: @escaping (String?) -> Void) { pasted.append((mime, label)); done(pasteId(pasted.count)) }
+    func docEditor(_ editor: DocEditorView, dropItems: [Drop.Item]) { dropped.append(dropItems) }
+    func docEditor(_ editor: DocEditorView, dropOnZotero key: String, name: String, file: String) { zoteroDrops.append((key, file)) }
+    func docEditor(_ editor: DocEditorView, openZotero key: String, name: String, newTab: Bool) { opened.append("zotero:\(key)") }
+    func docEditor(_ editor: DocEditorView, openFile folderId: String, rel: String, name: String, newTab: Bool) { opened.append("file:\(folderId):\(rel)") }
+    func docEditor(_ editor: DocEditorView, openBeside kind: String, id: String, name: String) { opened.append("beside:\(kind):\(id)") }
+    func docEditor(_ editor: DocEditorView, openWorkspace id: String) { opened.append("workspace:\(id)") }
+    func docEditor(_ editor: DocEditorView, open row: LibRow) { opened.append("row:\(row.id)") }
+    func docEditor(_ editor: DocEditorView, workspacePeek id: String) -> WorkspacePeekInfo? { peeks[id] }
+    func docEditor(_ editor: DocEditorView, workspacePeekText id: String, done: @escaping (String?) -> Void) { peekReads.append(id); done(peekTexts[id]) }
+    func docEditor(_ editor: DocEditorView, buildView id: String) -> NSView? { buildAsks.append(id); return buildViews[id] }
+    func docEditor(_ editor: DocEditorView, patchBuild id: String, view: NSView) { patched.append(id) }
 }
 
-final class OffscreenTests: XCTestCase {
+class EditorWindowCase: XCTestCase {
     var window: NSWindow!
     var editor: DocEditorView!
     var host: FakeHost!
@@ -103,6 +129,9 @@ final class OffscreenTests: XCTestCase {
     func overlays<T: NSView>(_ type: T.Type) -> [T] { editor.overlays.compactMap { $0 as? T } }
     func caret(_ line: Int, _ offset: Int) { editor.placeCaret(line: line, a: offset, b: offset); window.makeFirstResponder(editor.textView) }
 
+}
+
+final class OffscreenTests: EditorWindowCase {
     // MARK: typing and keys
 
     func testTypingThroughKeyEventsGoesToTheModel() {

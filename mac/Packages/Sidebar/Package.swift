@@ -15,6 +15,8 @@ let package = Package(
     ],
     targets: [
         .target(name: "EngelbartSidebar", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), .product(name: "EngelbartStore", package: "Store"), .product(name: "EngelbartDoc", package: "Doc"), .product(name: "EngelbartIntegrations", package: "Integrations"), ]),
-        .testTarget(name: "EngelbartSidebarTests", dependencies: ["EngelbartSidebar"]),
+        // Fixtures/mockup-walk.json: model/sidebar.js and design/sidebar-mockup/Sidebar.html's own script, walked over the
+        // mockup's tree (test/sidebar-plan.test.cjs), as the JS answered; the Swift model must answer the same.
+        .testTarget(name: "EngelbartSidebarTests", dependencies: ["EngelbartSidebar", .product(name: "EngelbartUI", package: "UI"), .product(name: "EngelbartStore", package: "Store"), .product(name: "EngelbartCore", package: "Core")], resources: [.copy("Fixtures")]),
     ]
 )

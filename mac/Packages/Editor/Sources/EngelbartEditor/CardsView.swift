@@ -43,6 +43,25 @@ final class TextBlock: FlippedView {
     override func draw(_ dirtyRect: NSRect) { text.draw(with: bounds, options: [.usesLineFragmentOrigin, .usesFontLeading]) }
 }
 
+/// A card's words as text the person can select and copy (cardHtml's spans are `user-select:text`): read-only, no
+/// background, no inset, the line fragment padding off so it stands where the drawn text did.
+final class CardTextView: NSTextView {
+    var text: NSAttributedString { didSet { textStorage?.setAttributedString(text) } }
+    init(_ text: NSAttributedString) {
+        self.text = text
+        let storage = NSTextStorage(attributedString: text), lm = NSLayoutManager(), tc = NSTextContainer(size: NSSize(width: 100, height: CGFloat.greatestFiniteMagnitude))
+        tc.lineFragmentPadding = 0; tc.widthTracksTextView = true
+        lm.addTextContainer(tc); storage.addLayoutManager(lm)
+        super.init(frame: .zero, textContainer: tc)
+        isEditable = false; isSelectable = true; drawsBackground = false; isRichText = true
+        textContainerInset = .zero
+        selectedTextAttributes = [.backgroundColor: NSColor(srgbRed: 0, green: 112 / 255, blue: 243 / 255, alpha: 0.18)]
+        setAccessibilityRole(.staticText)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override init(frame frameRect: NSRect, textContainer container: NSTextContainer?) { text = NSAttributedString(); super.init(frame: frameRect, textContainer: container) }
+}
+
 /// One row of a card: David's boxed row (.dv-opt: white, bordered, a check that turns blue) or a list row (.bs-row: a
 /// bullet or ✓ in the mark's column, the label blue on hover or picked).
 final class CardOptionView: NSButton {
@@ -176,10 +195,12 @@ final class CardView: FlippedView, NSTextViewDelegate {
     var onSubmit: () -> Void = {}
     var onText: (String) -> Void = { _ in }
     var onKey: (NSEvent) -> Bool = { _ in false }
+    /// The thread whose answer it takes (the follow-up field's key).
+    var from = -1
     var field: ReplyTextView?
     var submit: BoxButton?
     private var options: [CardOptionView] = []
-    private var blocks: [TextBlock] = []
+    private(set) var blocks: [CardTextView] = []
     private var confirm: (text: TextBlock, cancel: BoxButton, go: BoxButton)?
 
     static let MAP_LABELS = ["settled": "What you've settled", "open": "What's still open", "untouched": "Not yet looked at"]
@@ -188,7 +209,7 @@ final class CardView: FlippedView, NSTextViewDelegate {
         model = m
         super.init(frame: .zero)
         let asked = Card.questionOf(m.card)
-        for text in CardView.texts(m) { let b = TextBlock(text); blocks.append(b); addSubview(b) }
+        for text in CardView.texts(m) { let b = CardTextView(text); blocks.append(b); addSubview(b) }
         if let asked, Card.isChoice(asked.type) {
             for (n, o) in asked.options.enumerated() {
                 let label = o["label"]?.string ?? "", why = o["why"]?.string

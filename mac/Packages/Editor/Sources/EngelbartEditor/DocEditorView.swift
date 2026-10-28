@@ -71,6 +71,15 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     /// Cards, Send to Discover, bookmarks and made rows (CardsWiring).
     let cards = CardsState()
     var appActiveHook: (() -> Bool)?
+    /// A mentioned workspace's peek, and the documents it read this hover.
+    var wsPeek: WorkspacePeekView?
+    /// The Builds' cards on the page, kept alive across redraws (patched in place: patchBuild), by id.
+    var buildViews: [String: NSView] = [:]
+    /// Which Builds were finished when last drawn (buildsDone): a change redraws, anything else patches.
+    var buildsDrawn = ""
+    /// The Zotero chip a file is dragged over (markDropChip): its characters, tinted #e8f0fe.
+    var dropChip: NSRange?
+    var wsPeekText: [String: String] = [:]
     /// Zotero items main is finding a free copy for, and waiting on the Downloads folder for (MATH-65 builds 3, 4).
     public var zoteroFinding = Set<String>() { didSet { redraw(keepSelection: true) } }
     public var zoteroWaiting = Set<String>() { didSet { redraw(keepSelection: true) } }
@@ -151,6 +160,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         closePopups()
         moreOpen = []; measured = [:]; clipFrom = [:]; askHold = nil; replyWait = nil; streamHeld = [:]
         cards.repick = nil; cards.discoverOpen = []; cards.discoverText = [:]; cards.asked = []; unpeekMade()
+        buildViews.values.forEach { $0.removeFromSuperview() }; buildViews = [:]; closeWorkspacePeek()
         core.setDocument(key: key, text: text)
         lastKey = key
         redraw()
@@ -166,7 +176,38 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     /// The runs at work (Workspace `asks`): their rows are drawn again, the caret untouched.
     public func setAsks(_ asks: [String: AskProgress]) { core.asks = asks; redraw(keepSelection: true) }
     /// What each Build's record says (props.builds).
-    public func setBuilds(_ builds: [String: BuildState]) { core.builds = builds; core.autoCollapse(); redraw(keepSelection: true) }
+    public func setBuilds(_ builds: [String: BuildState]) {
+        core.builds = builds; core.autoCollapse()
+        // Only progress (no Build finished or started, none collapsing): the cards are patched in place, the caret and the
+        // selection untouched (DocEditor componentDidUpdate's patchBuilds).
+        if buildsDone() == buildsDrawn, patchBuilds() { return }
+        redraw(keepSelection: true)
+    }
+    /// One Build's progress arrived (its activity, log, diff): its card patched in place, drawn again only when it grew.
+    public func buildProgressed(_ id: String) { if !patchBuilds(only: id) { redraw(keepSelection: true) } }
+    /// Which Builds that answer a turn are finished: a change here changes what is collapsed (buildsDone).
+    func buildsDone() -> String {
+        core.threads().flatMap { $0.turns }.compactMap { $0.build }.map { (core.builds[$0]?.done ?? false) ? "1" : "0" }.joined()
+    }
+    /// Every Build card on the page patched (or `only` one): → false when one is missing or its height changed (redraw).
+    func patchBuilds(only: String? = nil) -> Bool {
+        guard let host else { return false }
+        let ids = rendered.decos.compactMap { d -> String? in if case .build(let id) = d.deco { return id }; return nil }
+        for id in ids where only == nil || only == id {
+            guard let v = buildViews[id], v.superview != nil else { return false }
+            host.docEditor(self, patchBuild: id, view: v)
+            let h = buildHeight(v)
+            if let d = rendered.decos.first(where: { $0.deco == .build(id: id) }), abs(h - d.height) > 1 { return false }
+        }
+        return true
+    }
+    func buildHeight(_ v: NSView) -> CGFloat { max(44, v.fittingSize.height) + 20 }
+    func buildCard(_ id: String) -> NSView? {
+        if let v = buildViews[id] { return v }
+        guard let v = host?.docEditor(self, buildView: id) else { return nil }
+        buildViews[id] = v
+        return v
+    }
     /// The models file changed (props.models).
     public func setModels(_ models: QuestionModels?) { core.models = models; redraw(keepSelection: true) }
     /// What the host answers for made files (madeFile) or a guide's papers (paperState) changed: drawn again, the caret
@@ -255,11 +296,13 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
             let v = PendingView(progress: core.asks[id], waitLeft: core.waits[id]?.left, logOpen: openLogs.contains(id))
             return v.wantedHeight(width: width, cap: min(240, max(120, pane * 0.35)))
         case .build(let id):
-            if let v = host?.docEditor(self, buildView: id) { return max(44, v.fittingSize.height) + 20 }
+            if let v = buildCard(id) { return buildHeight(v) }
             return 44
         case .replyField(let from, _):
             return ReplyFieldView.height(for: core.followText[from] ?? "", width: width)
-        case .research(let state, _): return state == "running" ? 50 : 86
+        case .research(_, _, let line, let first, let closes):
+            guard let info = core.researchInfo(line) else { return 86 }
+            return ResearchView.height(info, width: width, first: first, closes: closes)
         default: return 44
         }
     }
@@ -475,6 +518,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     /// Keys before NSTextView sees them: the @ menu's arrows, the formatting and undo shortcuts, find, a character beside a
     /// picture. → whether the key was used.
     func handleKeyDown(_ event: NSEvent) -> Bool {
+        clearPassage()
         if !event.modifierFlags.intersection([.command, .control]).isEmpty || event.characters?.isEmpty == false { keyedAt = Date(); askHold = nil; settle = nil }
         let flags = event.modifierFlags, cmd = flags.contains(.command), shift = flags.contains(.shift)
         let chars = event.charactersIgnoringModifiers?.lowercased() ?? ""
@@ -571,22 +615,43 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
             if p.y >= frag.minY && p.y <= frag.maxY { core.toggleTodo(line); redraw(keepSelection: true); return true }
         }
         let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: container).insetBy(dx: -4, dy: -4)
-        guard rect.contains(p), let box = storage.attribute(.edAction, at: ci, effectiveRange: nil) as? ActionBox else { return false }
+        guard rect.contains(p), let box = storage.attribute(.edAction, at: ci, effectiveRange: nil) as? ActionBox else {
+            // Within 4px of an answer's link is a press on it (nearLink).
+            if let near = nearLink(p, ci) { perform(near, newTab: event.modifierFlags.contains(.command)); return true }
+            return false
+        }
         let newTab = event.modifierFlags.contains(.command)
         perform(box.action, newTab: newTab)
         return true
     }
 
+    static let NEAR_LINK: CGFloat = 4
+    /// The link of an answer's line nearest a press at `p` (container coordinates), within NEAR_LINK of its box.
+    func nearLink(_ p: NSPoint, _ ci: Int) -> EditorAction? {
+        guard let storage = textView.textStorage, let container = textView.textContainer, ci < storage.length, let line = storage.attribute(.edLine, at: ci, effectiveRange: nil) as? Int,
+              line < core.lines.count, core.parsed()[line].type == .reply, line < rendered.maps.count else { return nil }
+        var best: (EditorAction, CGFloat)? = nil
+        storage.enumerateAttribute(.edAction, in: rendered.maps[line].range) { v, r, _ in
+            guard let box = v as? ActionBox, case .link = box.action else { return }
+            let g = layoutManager.glyphRange(forCharacterRange: r, actualCharacterRange: nil)
+            layoutManager.enumerateEnclosingRects(forGlyphRange: g, withinSelectedGlyphRange: NSRange(location: NSNotFound, length: 0), in: container) { rr, _ in
+                let dx = max(rr.minX - p.x, 0, p.x - rr.maxX), dy = max(rr.minY - p.y, 0, p.y - rr.maxY), d = max(dx, dy)
+                if d <= DocEditorView.NEAR_LINK && d < (best?.1 ?? .infinity) { best = (box.action, d) }
+            }
+        }
+        return best?.0
+    }
+
     func perform(_ action: EditorAction, newTab: Bool) {
         guard let host else { return }
-        closePop()
+        closePop(); closeWorkspacePeek()
         switch action {
         case .link(let href): host.docEditor(self, openLink: href, newTab: newTab, sections: nil)
         case .citation(let c): host.docEditor(self, openLink: c.href, newTab: newTab, sections: nil)
         case .citeMore: break
         case .attachment(let id):
             let src = id.hasPrefix("img:") ? String(id.dropFirst(4)) : id
-            if let img = host.docEditor(self, image: src) { ImageViewer.show(img, over: window) }
+            if openPicture(src) == nil, let img = host.docEditor(self, image: src) { ImageViewer.show(img, over: window) }
         case .build(let q): if core.footBuild(q) { redraw() }
         case .resultAsk(let line, let agent): core.askResult(line, agent: agent); redraw()
         case .toggle(let i): core.toggleTodo(i); redraw(keepSelection: true)
@@ -630,8 +695,13 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
     }
 
     func placeOverlays() {
-        overlays.forEach { $0.removeFromSuperview() }
+        // A Build's card stays where it is (alive: its state, its reply text); everything else is placed again.
+        let kept = Set(buildViews.values.map { ObjectIdentifier($0) })
+        overlays.forEach { if !kept.contains(ObjectIdentifier($0)) { $0.removeFromSuperview() } }
         overlays.removeAll()
+        let shown = Set(rendered.decos.compactMap { d -> String? in if case .build(let id) = d.deco { return id }; return nil })
+        for (id, v) in buildViews where !shown.contains(id) { v.removeFromSuperview(); buildViews[id] = nil }
+        buildsDrawn = buildsDone()
         guard host != nil else { return }
         let ls = core.lines
         for d in rendered.decos {
@@ -695,7 +765,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
                 v.onExpand = { [weak self] in self?.core.toggleFold(q); self?.redraw() }
                 view = v
             case .build(let id):
-                guard let host, let v = host.docEditor(self, buildView: id) else { continue }
+                guard let v = buildCard(id) else { continue }
                 frame = rect.insetBy(dx: 0, dy: 6)
                 view = v
             case .copyCode:
@@ -713,6 +783,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
                 view = b
             case .replyField(let from, let lead):
                 let v = ReplyFieldView(lead: lead, text: core.followText[from] ?? ""); v.from = from
+                v.field.pasteHook = { [weak self, weak v] pb in guard let self, let v else { return false }; return self.fieldPaste(pb, field: v.field, from: from) }
                 v.onText = { [weak self] t in self?.core.followText[from] = t; self?.fieldMention(from: from, field: v.field) }
                 v.onSend = { [weak self] in self?.core.sendFollow(from); self?.redraw() }
                 v.onHeight = { [weak self] h in if abs(h - d.height) > 1 { self?.redraw(keepSelection: true) } }
@@ -764,13 +835,20 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
             case .card, .made, .creating, .paperMark, .sendDiscover:
                 guard let (v, f) = cardsOverlay(d, rect: rect, spacing: paraStyle?.paragraphSpacing) else { continue }
                 view = v; frame = f
-            case .research(let state, let label):
-                let v = ResearchView(state: state, level: label, canAct: core.hooks.ask != nil && !readOnly)
-                v.action?.onClick = { [weak self] in
+            case .research(_, _, let line, let first, let closes):
+                guard let info = core.researchInfo(line) else { continue }
+                let v = ResearchView(info, first: first, closes: closes)
+                v.onAction = { [weak self] in
                     guard let self else { return }
-                    if state == "ready" { self.core.startResearch(d.line) } else { self.core.restartResearch(d.line) }
+                    if info.state == "ready" { self.core.startResearch(line) } else { self.core.restartResearch(line) }
                     self.redraw()
                 }
+                v.fold?.onClick = { [weak self] in
+                    guard let self, let t = self.core.findTurn(self.core.lines, line) else { return }
+                    if t.turn.folded { self.core.toggleFold(line) } else { self.core.collapseTurn(line) }
+                    self.redraw()
+                }
+                v.onLevel = { [weak self, weak v] in guard let self, let v else { return }; self.openPicker(line: line, from: v.levelAnchor, kind: .line) }
                 view = v
             }
             guard let v = view else { continue }
@@ -962,11 +1040,19 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         let start = maps.first!.range.location, stop = NSMaxRange(maps.last!.range)
         let shown = (textView.string as NSString).substring(with: NSRange(location: start, length: stop - start))
         guard let hit = PassageText.matchPassage(shown, find, prefixes: true).first else { return showLine(i) }
-        layoutManager.addTemporaryAttribute(.backgroundColor, value: NSColor(srgbRed: 0, green: 112 / 255, blue: 243 / 255, alpha: 0.4), forCharacterRange: NSRange(location: start + hit.start, length: hit.end - hit.start))
-        passageLit = true
+        let r = NSRange(location: start + hit.start, length: hit.end - hit.start)
+        layoutManager.addTemporaryAttribute(.backgroundColor, value: NSColor(srgbRed: 0, green: 112 / 255, blue: 243 / 255, alpha: 0.4), forCharacterRange: r)
+        passageLit = r
         return true
     }
-    var passageLit = false
+    /// The quoted words lit by showPassage, until the next press or key.
+    var passageLit: NSRange?
+    func clearPassage() {
+        guard let r = passageLit else { return }
+        passageLit = nil
+        if NSMaxRange(r) <= (textView.textStorage?.length ?? 0) { layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: r) }
+        placeFindHighlights(); applyFlash()
+    }
 
     // MARK: hover cards
 
@@ -979,7 +1065,8 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         guard g < layoutManager.numberOfGlyphs, let storage = textView.textStorage else { return }
         let ci = layoutManager.characterIndexForGlyph(at: g)
         let rect = layoutManager.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: container)
-        guard ci < storage.length, rect.contains(p), let box = storage.attribute(.edAction, at: ci, effectiveRange: nil) as? ActionBox else { leaveHover(); return }
+        guard ci < storage.length, rect.contains(p), let box = storage.attribute(.edAction, at: ci, effectiveRange: nil) as? ActionBox else { closeWorkspacePeek(); leaveHover(); return }
+        if case .mention(let chip) = box.action, case .workspace = chip.kind {} else { closeWorkspacePeek() }
         let anchor = rect.offsetBy(dx: textView.textContainerOrigin.x, dy: textView.textContainerOrigin.y)
         switch box.action {
         case .mention(let chip):
@@ -989,7 +1076,7 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
             case .library(let id): found = rows.first { $0.row.id == id }
             case .name(let n): found = rows.first { $0.row.name.lowercased() == n.lowercased() }
             case .chat: found = rows.first { $0.row.id == "bart" } ?? EditorRow(row: LibRow(id: "bart", name: "bart", type: "chat", summary: "Ask anything. Bart picks Chat, Brainstorm, Discover, Create or Build, then steps aside."), title: "Bart", facts: "picks, never answers")
-            case .workspace: found = EditorRow(row: LibRow(id: "ws", name: chip.name, type: "workspace"), title: chip.name)
+            case .workspace(let id): peekWorkspace(id, name: chip.name, anchor: anchor); return
             default: found = nil
             }
             if let found { showPop(.item(found), anchor: anchor) }
@@ -1054,6 +1141,25 @@ public final class DocEditorView: NSView, NSTextViewDelegate {
         if !images.isEmpty { pasteImages(images, at: at) }
         if !rest.isEmpty { host.docEditor(self, dropItems: rest) }
         return !items.isEmpty
+    }
+
+    /// A file dragged over a Zotero item's chip marks it (`[data-zotero][data-drop]`: #e8f0fe); sidebar rows never do.
+    func markDropChip(at point: NSPoint?, carriesRows: Bool) {
+        var found: NSRange? = nil
+        if let point, !carriesRows, let storage = textView.textStorage, storage.length > 0 {
+            let p = NSPoint(x: point.x - textView.textContainerOrigin.x, y: point.y - textView.textContainerOrigin.y)
+            let ci = layoutManager.characterIndex(for: p, in: textView.textContainer!, fractionOfDistanceBetweenInsertionPoints: nil)
+            var r = NSRange()
+            if ci < storage.length, let box = storage.attribute(.edAction, at: ci, longestEffectiveRange: &r, in: NSRange(location: 0, length: storage.length)) as? ActionBox,
+               case .mention(let chip) = box.action, case .zotero = chip.kind {
+                let g = layoutManager.glyphRange(forCharacterRange: r, actualCharacterRange: nil)
+                if layoutManager.boundingRect(forGlyphRange: g, in: textView.textContainer!).insetBy(dx: -2, dy: -2).contains(p) { found = r }
+            }
+        }
+        if found == dropChip { return }
+        if let old = dropChip, NSMaxRange(old) <= (textView.textStorage?.length ?? 0) { layoutManager.removeTemporaryAttribute(.backgroundColor, forCharacterRange: old) }
+        if let r = found { layoutManager.addTemporaryAttribute(.backgroundColor, value: NSColor(hex: "#e8f0fe"), forCharacterRange: r) }
+        dropChip = found
     }
 
     /// A post-it's editor is as tall as its lines; a page's text has about half a window under its last line (2026-09-22).

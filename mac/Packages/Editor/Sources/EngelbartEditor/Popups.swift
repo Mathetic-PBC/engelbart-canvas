@@ -320,35 +320,6 @@ final class FindBarView: FlippedView, NSTextFieldDelegate {
     }
 }
 
-/// The picture viewer (ImageViewer.jsx): the picture large over the window; Escape or a click closes it, ⌘C copies it.
-enum ImageViewer {
-    static func show(_ image: NSImage, over window: NSWindow?) {
-        guard let window, let content = window.contentView else { return }
-        let v = ViewerView(image: image)
-        v.frame = content.bounds; v.autoresizingMask = [.width, .height]
-        content.addSubview(v)
-        window.makeFirstResponder(v)
-    }
-    final class ViewerView: NSView {
-        let image: NSImage
-        init(image: NSImage) { self.image = image; super.init(frame: .zero) }
-        required init?(coder: NSCoder) { fatalError() }
-        override var acceptsFirstResponder: Bool { true }
-        override func draw(_ dirtyRect: NSRect) {
-            NSColor(white: 0, alpha: 0.72).setFill(); bounds.fill()
-            let k = min(1, (bounds.width - 80) / max(1, image.size.width), (bounds.height - 80) / max(1, image.size.height))
-            let s = NSSize(width: image.size.width * k, height: image.size.height * k)
-            image.draw(in: NSRect(x: (bounds.width - s.width) / 2, y: (bounds.height - s.height) / 2, width: s.width, height: s.height))
-        }
-        override func mouseDown(with event: NSEvent) { removeFromSuperview() }
-        override func keyDown(with event: NSEvent) {
-            if event.keyCode == 53 { removeFromSuperview(); return }
-            if event.modifierFlags.contains(.command), event.charactersIgnoringModifiers == "c" { NSPasteboard.general.clearContents(); NSPasteboard.general.writeObjects([image]); return }
-            super.keyDown(with: event)
-        }
-    }
-}
-
 extension DocEditorView {
     // MARK: the @ menu
 
@@ -540,7 +511,7 @@ extension DocEditorView {
             if !NSMouseInRect(self.convert(w.mouseLocationOutsideOfEventStream, from: nil), p.frame, true) { self.closePop() }
         }
     }
-    func closePopups() { closeMention(); closePicker(); closePop() }
+    func closePopups() { closeMention(); closePicker(); closePop(); closeWorkspacePeek() }
 
     // MARK: find
 

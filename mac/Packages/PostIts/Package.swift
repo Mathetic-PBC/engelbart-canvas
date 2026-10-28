@@ -16,6 +16,6 @@ let package = Package(
     ],
     targets: [
         .target(name: "EngelbartPostIts", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), .product(name: "EngelbartStore", package: "Store"), .product(name: "EngelbartDoc", package: "Doc"), .product(name: "EngelbartEditor", package: "Editor"), .product(name: "EngelbartBuild", package: "Build"), ]),
-        .testTarget(name: "EngelbartPostItsTests", dependencies: ["EngelbartPostIts"]),
+        .testTarget(name: "EngelbartPostItsTests", dependencies: ["EngelbartPostIts", .product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), .product(name: "EngelbartStore", package: "Store"), .product(name: "EngelbartDoc", package: "Doc"), .product(name: "EngelbartEditor", package: "Editor"), .product(name: "EngelbartBuild", package: "Build")]),
     ]
 )

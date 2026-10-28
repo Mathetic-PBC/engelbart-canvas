@@ -68,6 +68,7 @@ final class DocLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
         guard let storage = textStorage, storage.length > 0 else { return }
+        if glyphsToShow.location == 0 { codeBoxes = [] }
         let paras = paragraphs(in: glyphsToShow)
         // Cards: consecutive carded paragraphs merge into one card until one closes it or the next opens another.
         var run: (rect: NSRect, top: Bool, card: CardPaint)? = nil
@@ -98,6 +99,19 @@ final class DocLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         flush(bottom: true)
         for (r, c) in pendingRules { c.setFill(); r.fill() }
         pendingRules.removeAll()
+        // An answer's code blocks: the white box, a paragraph's part at a time.
+        for p in paras where p.chars.location < storage.length {
+            let loc = p.chars.location
+            guard let box = storage.attribute(.edCodeBox, at: loc, effectiveRange: nil) as? CodeBoxPaint, storage.attribute(.edHidden, at: loc, effectiveRange: nil) == nil else { continue }
+            let style = storage.attribute(.paragraphStyle, at: loc, effectiveRange: nil) as? NSParagraphStyle
+            var r = p.rect.offsetBy(dx: origin.x, dy: origin.y)
+            r.origin.y += style?.paragraphSpacingBefore ?? 0
+            r.size.height -= (style?.paragraphSpacingBefore ?? 0) + (style?.paragraphSpacing ?? 0)
+            r.origin.x += box.left; r.size.width -= box.left + box.right
+            guard r.height > 0, r.width > 0 else { continue }
+            codeBoxes.append(r)
+            drawCodeBox(r, box: box)
+        }
         // Marks in a row's indent: a checkbox, a bullet, a number.
         for p in paras where p.chars.length > 0 || p.chars.location < storage.length {
             let loc = min(p.chars.location, storage.length - 1)
@@ -118,6 +132,32 @@ final class DocLayoutManager: NSLayoutManager, NSLayoutManagerDelegate {
         }
     }
     private var pendingRules: [(NSRect, NSColor)] = []
+    /// The code boxes last drawn (tests read them).
+    var codeBoxes: [NSRect] = []
+    func drawCodeBox(_ r: NSRect, box: CodeBoxPaint) {
+        let k: CGFloat = 8
+        let path = NSBezierPath()
+        let tl = box.top ? k : 0, bl = box.bottom ? k : 0
+        path.move(to: NSPoint(x: r.minX, y: r.maxY - bl))
+        path.line(to: NSPoint(x: r.minX, y: r.minY + tl))
+        if tl > 0 { path.appendArc(withCenter: NSPoint(x: r.minX + tl, y: r.minY + tl), radius: tl, startAngle: 180, endAngle: 270) }
+        path.line(to: NSPoint(x: r.maxX - tl, y: r.minY))
+        if tl > 0 { path.appendArc(withCenter: NSPoint(x: r.maxX - tl, y: r.minY + tl), radius: tl, startAngle: 270, endAngle: 0) }
+        path.line(to: NSPoint(x: r.maxX, y: r.maxY - bl))
+        if bl > 0 { path.appendArc(withCenter: NSPoint(x: r.maxX - bl, y: r.maxY - bl), radius: bl, startAngle: 0, endAngle: 90) }
+        path.line(to: NSPoint(x: r.minX + bl, y: r.maxY))
+        if bl > 0 { path.appendArc(withCenter: NSPoint(x: r.minX + bl, y: r.maxY - bl), radius: bl, startAngle: 90, endAngle: 180) }
+        NSColor.white.setFill(); path.fill()
+        // The hairline: the sides always, the top on the opening fence, the bottom on the closing one.
+        let edge = NSBezierPath()
+        edge.move(to: NSPoint(x: r.minX + 0.5, y: box.bottom ? r.maxY - bl : r.maxY))
+        edge.line(to: NSPoint(x: r.minX + 0.5, y: box.top ? r.minY + tl : r.minY))
+        if box.top { edge.appendArc(withCenter: NSPoint(x: r.minX + tl + 0.5, y: r.minY + tl + 0.5), radius: tl, startAngle: 180, endAngle: 270); edge.line(to: NSPoint(x: r.maxX - tl - 0.5, y: r.minY + 0.5)); edge.appendArc(withCenter: NSPoint(x: r.maxX - tl - 0.5, y: r.minY + tl + 0.5), radius: tl, startAngle: 270, endAngle: 0) }
+        else { edge.move(to: NSPoint(x: r.maxX - 0.5, y: r.minY)) }
+        edge.line(to: NSPoint(x: r.maxX - 0.5, y: box.bottom ? r.maxY - bl : r.maxY))
+        if box.bottom { edge.appendArc(withCenter: NSPoint(x: r.maxX - bl - 0.5, y: r.maxY - bl - 0.5), radius: bl, startAngle: 0, endAngle: 90); edge.line(to: NSPoint(x: r.minX + bl + 0.5, y: r.maxY - 0.5)); edge.appendArc(withCenter: NSPoint(x: r.minX + bl + 0.5, y: r.maxY - bl - 0.5), radius: bl, startAngle: 90, endAngle: 180) }
+        NSColor(hex: "#eaeaea").setStroke(); edge.lineWidth = 1; edge.stroke()
+    }
 
     func fillCard(_ rect: NSRect, top: Bool, bottom: Bool, card: CardPaint) {
         let r = card.radius

@@ -52,6 +52,16 @@ public struct MadeFile: Equatable {
 
 /// The editor's one door to the outside (DocEditor.jsx's props). Every method has a default, so an embedder (a post-it's
 /// small editor) implements only what it uses. All calls come on the main thread.
+/// A mentioned workspace as its peek shows it (WorkspacePeek.jsx `peek.info(id)`): its name, the workspaces above it,
+/// Bart 'waiting' or 'running' there (nil: neither), when it was last written in (ISO 8601).
+public struct WorkspacePeekInfo: Equatable {
+    public var name: String
+    public var above: [String]
+    public var bart: String?
+    public var editedAt: String?
+    public init(name: String, above: [String] = [], bart: String? = nil, editedAt: String? = nil) { self.name = name; self.above = above; self.bart = bart; self.editedAt = editedAt }
+}
+
 public protocol DocEditorHost: AnyObject {
     // The document
     /// Every edit, at once (props.onChange): the window's copy of the text.
@@ -89,6 +99,9 @@ public protocol DocEditorHost: AnyObject {
     func docEditor(_ editor: DocEditorView, build: BuildRequest)
     /// A Build's card for a `build> <id>` line (the Build package's view), or nil.
     func docEditor(_ editor: DocEditorView, buildView id: String) -> NSView?
+    /// A Build's card already on the page, patched in place with its record and progress (BuildCardView's model): the
+    /// editor keeps the view alive across redraws and asks for this instead of a new one; nothing else moves.
+    func docEditor(_ editor: DocEditorView, patchBuild id: String, view: NSView)
 
     // An @discover guide's papers (2026-10-02/03): where each is ('none' | 'lib' | 'here'), saving and unsaving one.
     func docEditor(_ editor: DocEditorView, paperState address: String) -> String?
@@ -101,6 +114,10 @@ public protocol DocEditorHost: AnyObject {
     func docEditor(_ editor: DocEditorView, madeFile key: String) -> MadeFile?
     func docEditor(_ editor: DocEditorView, saveMade key: String, name: String)
     func docEditor(_ editor: DocEditorView, madeNeeded keys: [String])
+
+    // A mentioned workspace's peek (WorkspacePeek.jsx): nil info = it is gone; its document as open or saved.
+    func docEditor(_ editor: DocEditorView, workspacePeek id: String) -> WorkspacePeekInfo?
+    func docEditor(_ editor: DocEditorView, workspacePeekText id: String, done: @escaping (String?) -> Void)
 
     // Opening things
     func docEditor(_ editor: DocEditorView, openLink href: String, newTab: Bool, sections: [String]?)
@@ -149,6 +166,7 @@ public extension DocEditorHost {
     func docEditorCanBuild(_ editor: DocEditorView) -> Bool { false }
     func docEditor(_ editor: DocEditorView, build: BuildRequest) {}
     func docEditor(_ editor: DocEditorView, buildView id: String) -> NSView? { nil }
+    func docEditor(_ editor: DocEditorView, patchBuild id: String, view: NSView) {}
     func docEditor(_ editor: DocEditorView, paperState address: String) -> String? { nil }
     func docEditor(_ editor: DocEditorView, savePaper title: String, address: String, done: @escaping (Error?) -> Void) { done(nil) }
     func docEditorCanUnsavePaper(_ editor: DocEditorView) -> Bool { false }
@@ -163,6 +181,8 @@ public extension DocEditorHost {
     func docEditor(_ editor: DocEditorView, openFile folderId: String, rel: String, name: String, newTab: Bool) {}
     func docEditor(_ editor: DocEditorView, openZotero key: String, name: String, newTab: Bool) {}
     func docEditor(_ editor: DocEditorView, openMade key: String) {}
+    func docEditor(_ editor: DocEditorView, workspacePeek id: String) -> WorkspacePeekInfo? { nil }
+    func docEditor(_ editor: DocEditorView, workspacePeekText id: String, done: @escaping (String?) -> Void) { done(nil) }
     func docEditor(_ editor: DocEditorView, image id: String) -> NSImage? { nil }
     func docEditor(_ editor: DocEditorView, pasteImage data: Data, mime: String, label: String, done: @escaping (String?) -> Void) { done(nil) }
     func docEditor(_ editor: DocEditorView, dropItems: [Drop.Item]) {}

@@ -78,6 +78,7 @@ final class DocTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        editor?.clearPassage()
         if let editor, editor.click(at: point, event: event) { return }
         editor?.byMouse = true
         pressing = true
@@ -92,10 +93,16 @@ final class DocTextView: NSTextView {
     }
 
     // Nothing dropped is the text view's to place (MATH-19): the editor reads the drop and puts it where it was let go.
-    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { editor?.readOnly == true ? [] : .copy }
-    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation { editor?.readOnly == true ? [] : .copy }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation { draggingUpdated(sender) }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        guard let editor, !editor.readOnly else { return [] }
+        editor.markDropChip(at: convert(sender.draggingLocation, from: nil), carriesRows: sender.draggingPasteboard.data(forType: NSPasteboard.PasteboardType(Mention.LIB_DRAG_TYPE)) != nil)
+        return .copy
+    }
+    override func draggingExited(_ sender: NSDraggingInfo?) { editor?.markDropChip(at: nil, carriesRows: false) }
     override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
         guard let editor else { return false }
+        editor.markDropChip(at: nil, carriesRows: false)
         return editor.drop(sender, at: convert(sender.draggingLocation, from: nil))
     }
 

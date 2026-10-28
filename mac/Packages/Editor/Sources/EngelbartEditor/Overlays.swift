@@ -182,13 +182,18 @@ final class PendingView: FlippedView {
         let top = stream.contentView.bounds.minY, h = stream.documentView?.frame.height ?? 0
         onScrolled(top, h - stream.contentSize.height - top)
     }
+    /// What the running row says: the wait's count, the activity (or Thinking / Thinking harder) and the model, or why it
+    /// stopped.
+    static func doingText(progress: AskProgress?, waitLeft: Int?) -> String {
+        if let w = waitLeft { return "Searching in \(w) s" }
+        guard let p = progress else { return "No answer came back: the run was interrupted." }
+        let act = p.agent == "create" ? Rx(#" · \d+ KB$"#).replace(p.activity, with: "") : p.activity
+        return (act.isEmpty ? (p.movedUp ? "Thinking harder" : "Thinking") : act) + (p.name.isEmpty ? "" : " · \(p.name) \(p.effort)")
+    }
+    let doing: String
     init(progress: AskProgress?, waitLeft: Int?, logOpen: Bool) {
-        let doing: String
-        if let w = waitLeft { doing = "Searching in \(w) s" }
-        else if let p = progress {
-            let act = p.agent == "create" ? Rx(#" · \d+ KB$"#).replace(p.activity, with: "") : p.activity
-            doing = (act.isEmpty ? (p.movedUp ? "Thinking harder" : "Thinking") : act) + (p.name.isEmpty ? "" : " · \(p.name) \(p.effort)")
-        } else { doing = "No answer came back: the run was interrupted." }
+        let doing = PendingView.doingText(progress: progress, waitLeft: waitLeft)
+        self.doing = doing
         label = NSHostingView(rootView: progress != nil || waitLeft != nil ? AnyView(WaveText(doing, font: Fonts.swiftUISans(13))) : AnyView(Text(doing).font(Fonts.swiftUISans(13)).foregroundColor(Color(Look.grey))))
         stop = TextButton(waitLeft != nil ? "Cancel" : progress != nil ? "Stop" : "Hide")
         super.init(frame: .zero)
@@ -341,30 +346,104 @@ final class FoldedRowView: FlippedView {
 }
 
 /// A research box's head and status (researchHtml, boxStatusHtml): "Research · <level>", the state in words and its one action.
+/// An @discover research box (researchHtml + boxStatusHtml): a white ruled card in its reply's card. The head: the search
+/// glyph, "Research", " · <level>" (a chevron that opens the levels menu while it is not running), " · <what it was
+/// asked>" when it refines an earlier box; "Added: …" for each reply that steered it; done, its Collapse at the top right.
+/// The status row: a dot (or a check, done), what state it is in with the model it runs on, and its one action: Start
+/// research or Restart (blue), Run again (quiet).
 final class ResearchView: FlippedView {
-    let state: String, level: String
-    let action: TextButton?
-    init(state: String, level: String, canAct: Bool) {
-        self.state = state; self.level = level
-        action = !canAct || state == "running" ? nil : TextButton(state == "ready" ? "Start research" : state == "finished" ? "Run again" : "Restart", size: 12.5, color: state == "finished" ? Look.mid : Look.blue)
+    let info: ResearchInfo
+    let first: Bool, closes: Bool
+    let action: NSButton?
+    let fold: IconButton?
+    var onLevel: () -> Void = {}
+    var onAction: () -> Void = {}
+    let levelAnchor = NSView()
+    var actionTap: (() -> Void)?
+    init(_ info: ResearchInfo, first: Bool, closes: Bool) {
+        self.info = info; self.first = first; self.closes = closes
+        if let a = info.action {
+            if a == "Run again" { action = TextButton(a, size: 12.5, color: Look.mid) }
+            else { let b = BoxButton(a, fill: Look.blue, ink: .white, icon: a == "Restart" ? ["M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8", "M3 3v5h5"] : nil, size: 12.5, weight: 500); action = b }
+        } else { action = nil }
+        fold = info.fold.map { IconButton(info.folded ? Glyphs.chevronRight : Glyphs.chevronDown, tip: $0, size: 16) }
         super.init(frame: .zero)
+        fold?.color = Look.grey
+        (action as? TextButton)?.onClick = { [weak self] in self?.onAction() }
+        (action as? BoxButton)?.onClick = { [weak self] in self?.onAction() }
         if let action { addSubview(action) }
+        if let fold { addSubview(fold) }
+        addSubview(levelAnchor)
     }
     required init?(coder: NSCoder) { fatalError() }
-    static func said(_ state: String) -> String {
-        ["ready": "Not started", "stopped": "Stopped", "interrupted": "Interrupted: the app closed before it finished", "failed": "Interrupted: the run failed", "finished": "Finished", "running": ""][state] ?? state
+    static let head: CGFloat = 21, steerRow: CGFloat = 19.5
+    var running: Bool { info.state == "running" }
+    static func height(_ info: ResearchInfo, width: CGFloat, first: Bool, closes: Bool) -> CGFloat {
+        let running = info.state == "running", status = !info.status.isEmpty
+        return (first ? 10 : 4) + 9 + head + CGFloat(info.steers.count) * (4 + steerRow) + (status ? 8 + 28 : 0) + (running ? 2 : status ? 9 : 7) + 2 + (running ? 0 : closes ? 10 : 12)
     }
-    override func layout() { super.layout(); if let a = action { a.frame = NSRect(x: bounds.width - 30 - a.frame.width, y: 44, width: a.frame.width, height: 26) } }
+    var box: NSRect {
+        let top: CGFloat = first ? 10 : 4
+        return NSRect(x: 16, y: top, width: bounds.width - 32, height: bounds.height - top - (running ? 0 : closes ? 10 : 12))
+    }
+    var actionTarget: NSButton? { action }
+    override func layout() {
+        super.layout()
+        let b = box
+        let statusY = b.minY + 1 + 9 + ResearchView.head + CGFloat(info.steers.count) * (4 + ResearchView.steerRow) + 8
+        if let a = action {
+            let w = (a as? BoxButton)?.wantedWidth ?? a.frame.width
+            a.frame = NSRect(x: b.maxX - 14 - w, y: statusY + 1, width: w, height: 26)
+        }
+        if let f = fold { f.frame.origin = NSPoint(x: b.maxX - 14 - 28 + 6, y: b.minY + 1 + 9 - 4) }
+        levelAnchor.frame = levelRect
+    }
+    var headText: NSAttributedString {
+        let s = NSMutableAttributedString(string: "Research", attributes: [.font: Fonts.sans(13, weight: 500), .foregroundColor: Look.mid])
+        let grey: [NSAttributedString.Key: Any] = [.font: Fonts.sans(13), .foregroundColor: Look.grey]
+        if !info.level.isEmpty { s.append(NSAttributedString(string: " · \(info.level)\(info.levelPicks ? " ⌄" : "")", attributes: grey)) }
+        if !info.asked.isEmpty { s.append(NSAttributedString(string: " · \(info.asked)", attributes: grey)) }
+        return s
+    }
+    /// The level's words in the head (a click there opens the levels menu).
+    var levelRect: NSRect {
+        let b = box
+        let x0 = b.minX + 14 + 14 + 8
+        let pre = ("Research · " as NSString).size(withAttributes: [.font: Fonts.sans(13, weight: 500)]).width
+        let w = ("\(info.level) ⌄" as NSString).size(withAttributes: [.font: Fonts.sans(13)]).width
+        return NSRect(x: x0 + pre - 6, y: b.minY + 1 + 9, width: w + 6, height: ResearchView.head)
+    }
+    override func mouseDown(with event: NSEvent) {
+        let p = convert(event.locationInWindow, from: nil)
+        if info.levelPicks, !info.level.isEmpty, levelRect.contains(p) { onLevel(); return }
+        super.mouseDown(with: event)
+    }
+    override func resetCursorRects() { if info.levelPicks && !info.level.isEmpty { addCursorRect(levelRect, cursor: .pointingHand) } }
     override func draw(_ dirtyRect: NSRect) {
-        let box = NSRect(x: 16, y: 10, width: bounds.width - 32, height: bounds.height - 20)
-        let path = NSBezierPath(roundedRect: box, xRadius: 10, yRadius: 10)
+        let b = box
+        let path = running ? NSBezierPath(roundedRect: NSRect(x: b.minX, y: b.minY, width: b.width, height: b.height + 10), xRadius: 10, yRadius: 10) : NSBezierPath(roundedRect: b, xRadius: 10, yRadius: 10)
+        NSGraphicsContext.saveGraphicsState(); NSBezierPath(rect: NSRect(x: 0, y: 0, width: bounds.width, height: b.maxY)).addClip()
         NSColor.white.setFill(); path.fill(); NSColor(hex: "#ebebeb").setStroke(); path.lineWidth = 1; path.stroke()
-        Glyphs.image(Glyphs.search, size: 14, color: Look.grey, width: 2).draw(in: NSRect(x: 30, y: 21, width: 14, height: 14))
-        let head = NSMutableAttributedString(string: "Research", attributes: [.font: Fonts.sans(13, weight: 500), .foregroundColor: Look.mid])
-        if !level.isEmpty { head.append(NSAttributedString(string: " · \(level)", attributes: [.font: Fonts.sans(13), .foregroundColor: Look.grey])) }
-        head.draw(at: NSPoint(x: 52, y: 18))
-        let status = ResearchView.said(state)
-        if !status.isEmpty { (status as NSString).draw(at: NSPoint(x: 30, y: 48), withAttributes: [.font: Fonts.sans(13), .foregroundColor: Look.grey]) }
+        NSGraphicsContext.restoreGraphicsState()
+        var y = b.minY + 1 + 9
+        Glyphs.image(Glyphs.search, size: 14, color: Look.grey, width: 2).draw(in: NSRect(x: b.minX + 14, y: y + 3.5, width: 14, height: 14))
+        let right = b.maxX - 14 - (fold == nil ? 0 : 32)
+        headText.draw(with: NSRect(x: b.minX + 14 + 14 + 8, y: y + 1, width: max(10, right - (b.minX + 36)), height: ResearchView.head), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+        y += ResearchView.head
+        for words in info.steers {
+            y += 4
+            let s = NSMutableAttributedString(string: "Added: ", attributes: [.font: Fonts.sans(13), .foregroundColor: Look.grey])
+            s.append(NSAttributedString(string: words, attributes: [.font: Fonts.sans(13), .foregroundColor: Look.mid]))
+            s.draw(with: NSRect(x: b.minX + 14 + 22, y: y, width: b.width - 50, height: ResearchView.steerRow), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+            y += ResearchView.steerRow
+        }
+        guard !info.status.isEmpty else { return }
+        y += 8
+        var x = b.minX + 14
+        if info.mark == "check" { Glyphs.image(Glyphs.check, size: 13, color: Look.grey, width: 2).draw(in: NSRect(x: x, y: y + 7.5, width: 13, height: 13)); x += 13 + 10 }
+        else if info.mark == "dot" { NSColor(hex: "#d4d4d4").setFill(); NSBezierPath(ovalIn: NSRect(x: x, y: y + 11, width: 6, height: 6)).fill(); x += 6 + 10 }
+        let limit = (action?.frame.minX ?? (b.maxX - 14)) - 10
+        (info.status as NSString).draw(with: NSRect(x: x, y: y + 5, width: max(10, limit - x), height: 20), options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine], attributes: [.font: Fonts.sans(13), .foregroundColor: Look.grey])
     }
 }
 
@@ -424,6 +503,10 @@ final class ReplyFieldView: FlippedView, NSTextViewDelegate {
 final class ReplyTextView: NSTextView {
     var placeholder = ""
     var keyHook: (NSEvent) -> Bool = { _ in false }
+    /// A paste the editor takes itself (pictures, a PDF's text): → whether it did.
+    var pasteHook: (NSPasteboard) -> Bool = { _ in false }
+    override func paste(_ sender: Any?) { if !pasteHook(.general) { super.paste(sender) } }
+    override func pasteAsPlainText(_ sender: Any?) { if !pasteHook(.general) { super.pasteAsPlainText(sender) } }
     override func keyDown(with event: NSEvent) { if keyHook(event) { return }; super.keyDown(with: event) }
     override func draw(_ dirtyRect: NSRect) {
         super.draw(dirtyRect)

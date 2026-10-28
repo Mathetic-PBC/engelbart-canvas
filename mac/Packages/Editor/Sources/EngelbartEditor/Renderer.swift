@@ -23,6 +23,8 @@ extension NSAttributedString.Key {
     public static let edAction = NSAttributedString.Key("engelbart.action")
     /// The source line a paragraph draws.
     public static let edLine = NSAttributedString.Key("engelbart.line")
+    /// CodeBoxPaint: an answer's code block's white box (answerCodeHtml), one paragraph's part of it.
+    public static let edCodeBox = NSAttributedString.Key("engelbart.codeBox")
 }
 
 /// What a click on drawn characters does.
@@ -36,6 +38,12 @@ public enum EditorAction: Equatable {
     case toggle(Int)
     /// An @brainstorm result's offer: its sentence asked of @discover or @chat (MATH-40).
     case resultAsk(line: Int, agent: String)
+}
+/// An answer's code block drawn as a white box with a #eaeaea hairline, radius 8, inside the answer's rule: `left` and
+/// `right` from the column's edges; its top edge on the opening fence's row, its bottom on the closing fence's.
+final class CodeBoxPaint: NSObject {
+    let left: CGFloat, right: CGFloat, top: Bool, bottom: Bool
+    init(left: CGFloat, right: CGFloat, top: Bool, bottom: Bool) { self.left = left; self.right = right; self.top = top; self.bottom = bottom }
 }
 final class ActionBox: NSObject { let action: EditorAction; init(_ a: EditorAction) { action = a } }
 
@@ -95,7 +103,7 @@ public enum Deco: Equatable {
     /// The conversation's reply field under its last turn.
     case replyField(from: Int, lead: String)
     /// A research box's head and status.
-    case research(state: String, label: String)
+    case research(state: String, label: String, line: Int, first: Bool, closes: Bool)
     /// An answer's Show more / Show less (applyClips): `cut` while rows past its sixth line are hidden.
     case more(key: String, open: Bool)
     /// The sources under an answer that cites (citationSources): each by its numbers and its name.
@@ -659,8 +667,8 @@ final class Renderer {
         }
         if let w, w.box {
             let label = core.discoverLabel(i)
-            widget(i, .research(state: w.boxState ?? "ready", label: label), height: ctx.rowHeight(.research(state: w.boxState ?? "ready", label: label)),
-                   card: CardPaint(top: i == w.threadFrom, bottom: w.closes, marginBottom: w.closes ? 8 : 0), last: last)
+            let deco = Deco.research(state: w.boxState ?? "ready", label: label, line: i, first: i == w.threadFrom, closes: w.closes)
+            widget(i, deco, height: ctx.rowHeight(deco), card: w.bare ? nil : CardPaint(top: i == w.threadFrom, bottom: w.closes, marginBottom: w.closes ? 8 : 0), last: last)
             return
         }
         let models = core.models
@@ -869,7 +877,8 @@ final class Renderer {
             fenceEnd = p.text.len
             para = Renderer.para(size: 8, height: 1, after: (closes ? 10 : 0) + 8, head: 32 + 12, tail: 28)
         }
-        emit(i, s, segs: segs, para: para, extra: [.edCard: CardPaint(top: false, bottom: closes, ruleX: 16, ruleColor: Look.rule, marginBottom: closes ? 8 : 0)], fenceEnd: fenceEnd, last: last)
+        let box = CodeBoxPaint(left: 32, right: 16, top: p.code == .open, bottom: p.code == .close)
+        emit(i, s, segs: segs, para: para, extra: [.edCard: CardPaint(top: false, bottom: closes, ruleX: 16, ruleColor: Look.rule, marginBottom: closes ? 8 : 0), .edCodeBox: box], fenceEnd: fenceEnd, last: last)
     }
 }
 

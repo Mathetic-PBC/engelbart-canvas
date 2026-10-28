@@ -68,6 +68,8 @@ extension DocEditorView {
             let closes = (layoutManager.textStorage?.attribute(.edCard, at: rendered.maps[d.line].range.location, effectiveRange: nil) as? CardPaint)?.bottom ?? false
             guard let m = cardModel(q, closes: closes), let e = core.cardsOf().byQ[q] else { return nil }
             let v = CardView(m)
+            v.from = e.thread.from
+            v.field?.pasteHook = { [weak self, weak v] pb in guard let self, let f = v?.field else { return false }; return self.fieldPaste(pb, field: f, from: e.thread.from) }
             v.onPick = { [weak self] n in self?.core.pickCard(q, n); self?.redraw(keepSelection: true) }
             v.onRepick = { [weak self] n in self?.cards.repick = (q, n); self?.redraw(keepSelection: true) }
             v.onRepickNo = { [weak self] in self?.cards.repick = nil; self?.redraw(keepSelection: true) }
@@ -125,6 +127,7 @@ extension DocEditorView {
         case .sendDiscover(let from):
             let target = "t\(from)", text = cards.discoverText[target] ?? ""
             let v = SendDiscoverView(open: cards.discoverOpen.contains(target) || !text.trimmed.isEmpty, text: text)
+            v.field?.pasteHook = { [weak self, weak v] pb in guard let self, let f = v?.field else { return false }; return self.fieldPaste(pb, field: f, from: nil) }
             v.onOpen = { [weak self] in
                 guard let self else { return }
                 self.cards.discoverOpen.insert(target); self.redraw(keepSelection: true)

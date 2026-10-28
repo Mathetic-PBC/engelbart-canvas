@@ -185,7 +185,7 @@ final class PictureHandles: NSView {
         }
         while let e = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp, .keyDown]) {
             if e.type == .keyDown { if e.keyCode == 53 { finish(false); return }; continue }
-            if e.type == .leftMouseUp { if moved { finish(true) } else if let image { ImageViewer.show(image, over: window) }; return }
+            if e.type == .leftMouseUp { if moved { finish(true) } else { editor.openPictureOnLine(line, fallback: image) }; return }
             let p = e.locationInWindow
             if !moved {
                 if abs(p.x - start.x) + abs(p.y - start.y) < 5 { continue }
@@ -239,4 +239,13 @@ final class DropBar: NSView {
         NSColor.white.setFill(); ring.fill(); ring.lineWidth = 2; c.setStroke(); ring.stroke()
     }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+}
+
+extension DocEditorView {
+    /// The picture of line `i` pressed and let go without moving: the viewer on it.
+    func openPictureOnLine(_ i: Int, fallback: NSImage?) {
+        let p = i < core.lines.count ? Doc.parseLine(core.lines[i]) : nil
+        if let src = p?.src, src.hasPrefix("img:"), openPicture(String(src.dropFirst(4))) != nil { return }
+        if let fallback { ImageViewer.show(fallback, over: window) }
+    }
 }

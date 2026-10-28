@@ -714,3 +714,62 @@ extension EditorCore {
         return true
     }
 }
+
+// MARK: a research box's head and status (researchHtml, boxStatusHtml)
+
+public struct ResearchInfo: Equatable {
+    public var state: String
+    /// "Standard", "Codex · Deep", or the pinned model; "" without models.
+    public var level: String
+    /// The level opens the levels menu (not while it runs).
+    public var levelPicks: Bool
+    /// A box that refines an earlier one: what it was asked.
+    public var asked: String
+    /// What replies added while it searched ("Added: …").
+    public var steers: [String]
+    /// The status row's words ("Finished in 2 min · Sol medium"); "" when the row is not drawn (running, or done and folded).
+    public var status: String
+    /// The status row's mark: "dot", "check" or "".
+    public var mark: String
+    /// Its one action: "Start research", "Restart", "Run again", or nil.
+    public var action: String?
+    /// Done: its Collapse at the top right ("Collapse", "Collapse conversation", "Expand"), else nil.
+    public var fold: String?
+    public var folded: Bool
+}
+
+extension EditorCore {
+    static let STEER_SPLIT = Rx(#"\s+--steer\s+"#, "i")
+    static let LEVEL_FLAGS = Rx(#"(^|\s)--(?:quick|standard|deep|claude|codex|chatgpt)(?=\s|$)"#, "i")
+
+    public func researchInfo(_ i: Int) -> ResearchInfo? {
+        let ls = lines, ps = parsed(ls)
+        guard let found = findTurn(ls, i), Doc.isResearch(ps[i]) else { return nil }
+        let (thread, turn) = found
+        let can = hooks.ask != nil && !readOnly
+        let refines = thread.turns.contains { $0.q < turn.q && Doc.isResearch(ps[$0.q]) }
+        let p = ps[i]
+        let asked = refines ? EditorCore.STEER_SPLIT.split(Doc.researchText(models != nil ? discoverRead(ls, i).question : p.text)).first ?? "" : ""
+        let steers = Array(EditorCore.STEER_SPLIT.split(p.text).dropFirst()).map { Rx(#"\s+"#).replace(EditorCore.LEVEL_FLAGS.replace($0, with: "$1"), with: " ").trimmed }.filter { !$0.isEmpty }
+        let state = boxState(ls, turn)
+        let level = models != nil ? discoverLabel(i) : ""
+        let done = state == "finished"
+        let fold: String? = done ? (turn.folded ? "Expand" : collapsesThread(thread, turn) ? "Collapse conversation" : "Collapse") : nil
+        // The model it runs on: the one that answered, once it has (its closing line), else the one its line asks for.
+        let step = models != nil ? discoverRead(ls, i).steps.first : nil
+        let closing = turn.foot >= 0 ? Rx(#"^\*|\*$"#).replace(Doc.parseLine(ls[turn.foot]).text, with: "").components(separatedBy: " · ") : []
+        let ran: (model: String, took: String)? = closing.count >= 4 ? ("\(closing[1]) \(closing[2])", closing[3]) : nil
+        let model = ran?.model ?? step.map { "\($0.name) \($0.effort)" } ?? ""
+        var took = ran?.took ?? ""
+        if let m = Rx(#"^(\d+) s$"#).match(took), let sec = Int(m[1]!) { took = sec < 60 ? "\(sec) s" : "\(Int((Double(sec) / 60).rounded())) min" }
+        let reason = state == "failed" ? Rx(#"^\*\*No answer\.\*\*\s*"#).replace(Doc.parseLine(ls[turn.from]).text, with: "").trimmed : ""
+        let m = model.isEmpty ? "" : " · \(model)"
+        let said = ["ready": "Not started\(m)", "stopped": "Stopped\(m)", "interrupted": "Interrupted: the app closed before it finished",
+                    "failed": "Interrupted: \(reason.isEmpty ? "the run failed" : reason)", "finished": "Finished\(took.isEmpty ? "" : " in \(took)")\(m)"][state] ?? ""
+        let shows = !(state == "running" || (done && turn.folded))
+        let action: String? = !can || !shows ? nil : state == "ready" ? "Start research" : done ? "Run again" : "Restart"
+        return ResearchInfo(state: state, level: level, levelPicks: can && models != nil && state != "running", asked: asked, steers: steers,
+                            status: shows ? said : "", mark: done ? "check" : (state == "interrupted" || state == "failed") ? "" : "dot",
+                            action: action, fold: fold, folded: turn.folded)
+    }
+}
