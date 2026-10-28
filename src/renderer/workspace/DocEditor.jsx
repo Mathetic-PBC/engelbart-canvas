@@ -230,6 +230,7 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.bart-ic:hover{background:#f2f2f2;color:#171717}.bart-ic[data-danger]:hover{color:#e70022}.bart-ic:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
   + '.bart-tip{position:absolute;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#171717;font:12px/1.2 var(--font-sans);white-space:nowrap;pointer-events:none;opacity:0;visibility:hidden;transition:opacity 120ms}'
   + '.bart-ic:hover+.bart-tip,.bart-ic:focus-visible+.bart-tip{opacity:1;visibility:visible}[data-picking]>.bart-tip{display:none}'
+  + '[data-offer-said]{display:none}'
   // A conversation's title (2026-10-12): collapsed, it is a link (2026-10-13, Hudson's): the Agents pointer and the title in
   // the link's blue, underlined once hovered; a click expands it, an ⌥-click renames it.
   + '.bart-thread{cursor:pointer}.bart-thread:hover>.bart-thread-name{text-decoration:underline}'
@@ -1993,10 +1994,12 @@ export default class DocEditor extends React.Component {
     const parts = this.buildParts(p.id, task);
     for (const [name, html] of parts) this.buildDrawn.set(`${p.id}:${name}`, html);
     // At a conversation's end (MATH-161, layout's role 'build'), the conversation's last row: no card of its own, its parts
-    // 16px in as the rows above it are, and the conversation's card closing under it.
-    if (at && at.joined) return `<div ${raw} contenteditable="false" data-readonly="1" data-build-joined="${at.thread.from}" style="user-select:text;cursor:default;padding:10px 16px 14px;background:#fafafa;border-radius:${radius(false, true)};margin-bottom:8px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
+    // 16px in as the rows above it are, and the conversation's card closing under it. A hairline above it (2026-10-28,
+    // David) parts what was asked from the Build that answers it.
+    if (at && at.joined) return `<div ${raw} contenteditable="false" data-readonly="1" data-build-joined="${at.thread.from}" style="user-select:text;cursor:default;padding:6px 16px 14px;background:#fafafa;border-radius:${radius(false, true)};margin-bottom:8px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
+      + '<div data-build-rule="1" style="border-top:1px solid #eaeaea;padding-top:10px">'
       + parts.map(([name, html]) => `<div data-build-part="${name}">${html}</div>`).join('')
-      + '</div>';
+      + '</div></div>';
     return `<div ${raw} contenteditable="false" data-readonly="1" style="user-select:text;cursor:default;margin:6px 0 14px;padding:12px 16px 14px;background:#fafafa;border-radius:10px;font:14px/1.6 var(--font-sans);color:#4d4d4d">`
       + parts.map(([name, html]) => `<div data-build-part="${name}">${html}</div>`).join('')
       + '</div>';
@@ -2823,12 +2826,13 @@ export default class DocEditor extends React.Component {
   }
   // The Build under an answer that offers to build its fenced prompt (MATH-160): on the answer's grey, inside its rule,
   // under its last line and above its foot. It builds as the footer's Build does (footBuild): the last fenced block, on the
-  // Build's own model and effort. Blue as Start research is (2026-10-27, David: the grey text read as a caption), the word
-  // alone.
+  // Build's own model and effort. Blue as Start research is (2026-10-27, David: the grey text read as a caption). It takes
+  // the offer's place (2026-10-28, David): "Want me to build it?" stays in the text but is not drawn (editorHtml), and the
+  // button says the whole of it.
   buildOfferHtml(at) {
     const rule = at.chat ? 'padding:12px 0 2px 10px;border-left:1.5px solid #e6e6e6' : 'padding:10px 0 4px 12px;border-left:2px solid #d6d6d6';
     return `<div contenteditable="false" data-readonly="1" data-build-offer="${at.turn.q}" style="position:relative;user-select:none;cursor:default;padding:0 ${at.chat ? 18 : 16}px;background:#fafafa">`
-      + `<span style="display:block;${rule}"><button type="button" class="bart-go" data-act="footbuild" data-turn="${at.turn.q}" style="${GO_LOOK}">Build</button></span></div>`;
+      + `<span style="display:block;${rule}"><button type="button" class="bart-go" data-act="footbuild" data-turn="${at.turn.q}" style="${GO_LOOK}">Build this prompt</button></span></div>`;
   }
   // What a follow-up starts on: the pick made on this card's chip, or else the flags of the question before it, so an
   // exchange pinned to a model stays on it. → { flags, step }
@@ -3096,12 +3100,16 @@ export default class DocEditor extends React.Component {
     const ls = this.lines(), ps = this.parsedOf(ls), active = this.state.activeLine, at = this.layout(ls), editing = this.editing; let out = '';
     this.noteAnswers(ls);
     const cards = this.cardsOf(ls);
+    // A build offer's own line (MATH-160), the last line of its answer that says something: its Build button stands for it.
+    const said = new Set();
+    at.forEach((w, i) => { if (!w.buildOffer) return; let j = i; while (j > w.turn.from && !ps[j].text.trim()) j--; said.add(j); });
     ls.forEach((line, i) => {
       const p = ps[i], where = at.get(i);
       // Under a question being edited (2026-10-03), its answer and the answer's foot are dimmed.
       const dim = !!editing && !!where && !!where.turn && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
       const locked = this.lockedAt(ls, i);
-      out += dimmed(p.type === 'reply' && locked ? unwritable(this.lineHtml(i, line, p, false, false, where, locked)) : this.lineHtml(i, line, p, active === i, false, where, locked));
+      const row = p.type === 'reply' && locked ? unwritable(this.lineHtml(i, line, p, false, false, where, locked)) : this.lineHtml(i, line, p, active === i, false, where, locked);
+      out += dimmed(said.has(i) ? row.replace('<div ', '<div data-offer-said="1" ') : row);
       // A task's Build card, unfolded under its row (MATH-106): drawn, not a line.
       if (p.type === 'todo' && p.build && this.taskOpen.has(p.build) && !this.props.compact) out += this.taskCardHtml(i, p, p.build);
       // Under an answer's last line, its Show more (2026-10-13), shown by applyClips once it is long enough to cut, then its sources.

@@ -66,12 +66,14 @@ const OFFER = answer(['Want me to build it?']);
 test('a finished fenced answer ending with a build offer: one Build text button, under its last line, above its foot', () => {
   const m = mounted(OFFER);
   const html = m.html();
-  assert.deepEqual(buttons(html), [{ turn: 1, label: 'Build' }], 'one button, the turn\'s question line, the word alone');
+  assert.deepEqual(buttons(html), [{ turn: 1, label: 'Build this prompt' }], 'one button, the turn\'s question line, saying the whole offer');
   assert.equal(offerRows(html), 1);
   const at = html.indexOf('data-build-offer=');
   const row = html.slice(at, html.indexOf('</div>', at));
   assert.ok(!/<svg|data-build-icon/.test(row), 'no icon');
   assert.ok(html.indexOf('data-line="6"') < at, 'under the offer line');
+  assert.match(html, /<div data-offer-said="1" [^>]*data-line="6"/, 'the offer line kept in the text but not drawn: the button stands for it');
+  assert.equal((html.match(/data-offer-said=/g) || []).length, 1, 'no other line hidden');
   assert.ok(at < html.indexOf('data-line="7"'), 'above the foot');
   assert.match(row, /class="bart-go"[^>]*style="[^"]*background:#0070f3;color:#fff/, 'blue, as Start research is');
 });
@@ -106,7 +108,7 @@ test('no button while the turn is pending or streaming, nor on an earlier turn',
   assert.equal(offerRows(later.html()), 0, 'the offer is not the last answer');
   // The last answer offering again, after an earlier offer: one button, for it.
   const again = mounted([...OFFER.slice(0, -1), '@bart use Opus', 'bart> ```', 'bart> Add Opus.', 'bart> ```', 'bart> Should I build this?', 'bart> *Chat · Sonnet · high · 2 s*', '']);
-  assert.deepEqual(buttons(again.html()), [{ turn: 8, label: 'Build' }]);
+  assert.deepEqual(buttons(again.html()), [{ turn: 8, label: 'Build this prompt' }]);
 });
 
 test('no button with a Build card under the conversation, in a read-only document, without onBuild, nor in a Build\'s messages', () => {

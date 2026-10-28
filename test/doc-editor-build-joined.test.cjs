@@ -72,9 +72,10 @@ function oneCard(html, from, to) {
   const build = rowTag(html, to);
   assert.match(build, new RegExp(`data-build="${ID}"`));
   assert.match(build, /data-build-joined=/);
+  assert.match(html.slice(html.indexOf(build) + build.length), /^<div data-build-rule="1" style="border-top:1px solid #eaeaea;padding-top:10px"><div data-build-part="head">/, 'a hairline parts the question from the Build');
   assert.match(build, /background:#fafafa;border-radius:0 0 10px 10px;margin-bottom:8px/, 'the Build\'s row closes the conversation\'s card');
   assert.ok(!/margin:6px 0 14px|border-radius:10px;/.test(build), 'no card of its own: no own margin or corners');
-  assert.match(build, /padding:10px 16px 14px/, '16px in, as the rows above it');
+  assert.match(build, /padding:6px 16px 14px/, '16px in, as the rows above it');
 }
 // Exactly one reply field, the Build's; no follow-up field.
 function oneReply(html) {
