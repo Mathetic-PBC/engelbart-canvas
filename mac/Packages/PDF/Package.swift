@@ -12,6 +12,7 @@ let package = Package(
     ],
     targets: [
         .target(name: "EngelbartPDF", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), ]),
-        .testTarget(name: "EngelbartPDFTests", dependencies: ["EngelbartPDF"]),
+        // Fixtures/rough-highlights.json is rough.js 4.6.6's own output for highlights (rough-highlights.gen.mjs beside it).
+        .testTarget(name: "EngelbartPDFTests", dependencies: ["EngelbartPDF"], resources: [.copy("Fixtures")]),
     ]
 )
