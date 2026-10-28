@@ -81,7 +81,13 @@ git update-index --add --cacheinfo "100644,$request,mac/.ci-request.json"
 tree=$(git write-tree)
 unset GIT_INDEX_FILE
 commit=$(git commit-tree "$tree" -p HEAD -m "cloud test: $target ${filter}")
-git push -q origin "$commit:refs/heads/$branch" || { echo "push failed"; exit 1; }
+# Concurrent pushes from several agents sometimes fail with "remote unpack failed"; a retry after a pause succeeds.
+pushed=0
+for attempt in 1 2 3 4; do
+  if git push -q origin "$commit:refs/heads/$branch" 2>/dev/null; then pushed=1; break; fi
+  sleep $((attempt * 7 + RANDOM % 9))
+done
+[ $pushed -eq 1 ] || { echo "push failed after 4 attempts"; exit 1; }
 
 id=""
 for _ in $(seq 1 45); do

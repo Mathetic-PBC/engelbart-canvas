@@ -42,7 +42,7 @@ public enum Library {
     }
 
     /// The app's own fixtures (package resources): hypocompass.pdf, problems.csv.
-    public static var bundledFixtures: String? { Bundle.module.url(forResource: "fixtures", withExtension: nil, subdirectory: "Resources")?.path }
+    public static var bundledFixtures: String? { StoreResources.bundle.url(forResource: "fixtures", withExtension: nil, subdirectory: "Resources")?.path }
 
     /// Test mode's sample library: the four rows, once, when the library is empty. → how many were made.
     @discardableResult

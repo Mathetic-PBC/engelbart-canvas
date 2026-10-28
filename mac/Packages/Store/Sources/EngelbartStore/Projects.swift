@@ -354,7 +354,7 @@ public enum Projects {
         ]).joined(separator: "\n")
     }
 
-    static var welcomeImage: URL? { Bundle.module.url(forResource: "welcome", withExtension: "png", subdirectory: "Resources") }
+    static var welcomeImage: URL? { StoreResources.bundle.url(forResource: "welcome", withExtension: "png", subdirectory: "Resources") }
 
     public static func createProjectWithWelcomePage(_ ctx: StoreContext, _ input: NewProject, context: [String] = []) throws -> Welcomed {
         let project = try createProject(ctx, input)

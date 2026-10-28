@@ -42,7 +42,7 @@ public enum StoreImporter {
         return NodeRuntime(executable: node.path, environment: env, name: "node")
     }
 
-    static var dumpScript: String? { Bundle.module.url(forResource: "pglite-dump", withExtension: "cjs", subdirectory: "Resources")?.path }
+    static var dumpScript: String? { StoreResources.bundle.url(forResource: "pglite-dump", withExtension: "cjs", subdirectory: "Resources")?.path }
 
     public struct Report: Sendable {
         /// Files cloned.

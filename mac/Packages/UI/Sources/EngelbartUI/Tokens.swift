@@ -1,4 +1,5 @@
 import AppKit
+import EngelbartCore
 import CoreText
 import SwiftUI
 

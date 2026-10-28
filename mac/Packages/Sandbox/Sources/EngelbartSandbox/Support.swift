@@ -259,8 +259,8 @@ public let systemClock: Clock = { Time.ms() }
 /// The bundled Python helpers (src/main/sandbox/*.py).
 public enum SandboxResources {
     public static func url(_ name: String) -> URL? {
-        Bundle.module.url(forResource: name, withExtension: nil, subdirectory: "Resources")
-            ?? Bundle.module.resourceURL?.appendingPathComponent("Resources/\(name)")
+        ResourceBundle.named("Sandbox_EngelbartSandbox", fallback: Bundle.module).url(forResource: name, withExtension: nil, subdirectory: "Resources")
+            ?? ResourceBundle.named("Sandbox_EngelbartSandbox", fallback: Bundle.module).resourceURL?.appendingPathComponent("Resources/\(name)")
     }
     public static func text(_ name: String) throws -> String {
         guard let url = url(name), let text = try? String(contentsOf: url, encoding: .utf8) else {
