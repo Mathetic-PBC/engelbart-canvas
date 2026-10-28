@@ -60,7 +60,6 @@ import { SKIPPED, MAP_GROUPS, isResultOffer, cardOfAnswer, questionOf, isChoice,
 // Phosphor's "shapes" (bold), MIT: its notice ships as dist/licenses/phosphor-icons.txt (scripts/build.mjs).
 import SHAPES_SVG from '@phosphor-icons/core/assets/bold/shapes-bold.svg' with { type: 'text' };
 import BartPicker from './BartPicker.jsx';
-import { buildDefaultOf, buildModelsNow, loadBuildModels, onBuildModels, pickBuildModel } from '../model/build-default.js';
 import AgentChoice from './AgentChoice.jsx';
 import TopicMenu from './TopicMenu.jsx';
 import { routeByRule, routeInputs, fallbackAgent, buildTextOf, questionLine } from '../model/route.js';
@@ -652,8 +651,6 @@ export default class DocEditor extends React.Component {
   /* ---------------------------------------------------------------- lifecycle */
   componentDidMount() {
     this.mounted = true;
-    this.offBuildModels = onBuildModels(() => this.redraw()); // a pick of the Build default anywhere redraws its chips here
-    loadBuildModels();
     Promise.resolve().then(() => this.tickBuilt()); // a Build accepted while the document was not open (MATH-106)
     if (this.scrollRef.current && this.scrollRef.current.addEventListener) this.scrollRef.current.addEventListener('wheel', this.noZoom, { passive: false });
     this.autoCollapse();
@@ -832,7 +829,6 @@ export default class DocEditor extends React.Component {
     if (this.state.mention && this.props.onMentionOpen) this.props.onMentionOpen(false);
     if (this.lastKey === this.key()) this.reportView(this.props, true);
     this.dropEdit(this.props);
-    if (this.offBuildModels) this.offBuildModels();
     this.mounted = false; clearTimeout(this.pickerT); clearTimeout(this.peekT); clearTimeout(this.viewT); clearInterval(this.clock);
     if (this.scrollRef.current && this.scrollRef.current.removeEventListener) this.scrollRef.current.removeEventListener('wheel', this.noZoom);
     if (this.resizeObs) this.resizeObs.disconnect();
@@ -1385,11 +1381,9 @@ export default class DocEditor extends React.Component {
       // An unanswered @discover line's chip (2026-10-03) names its level instead, the one it would run at now (carried from
       // an earlier turn of its exchange when the line names none), with its provider when that is not the default ("Codex ·
       // Deep"), or the model and effort a flag pins it to; its menu is DiscoverLevels. @brainstorm runs on one model: no chip.
-      // An unsent `@bart --build` line (MATH-162, 2026-10-27) starts a Build, which runs on the Build default whatever flags
-      // it has (Workspace askBart): its chip names that default and opens Build's selector (buildLineAt), and says nothing
-      // until Build's list is read, never @bart's model in its place. A line sent keeps @bart's chip, as before.
-      const buildLine = !sent && !!buildRequestOf({ agent, text: p.text });
-      const label = buildLine ? this.buildDefaultLabel() : read ? `${read.steps[0].name} ${EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort}` : models && agent === 'discover' && chipped ? this.discoverLabel(i) : null;
+      // An `@bart --build` line's chip is @bart's as any line's is (2026-10-28, David: a Build runs on the model the line
+      // is asked on, MATH-162 and MATH-168): its pick is written into the line and its Build runs on it (handOff).
+      const label = read ? `${read.steps[0].name} ${EFFORT_LABELS[read.steps[0].effort] || read.steps[0].effort}` : models && agent === 'discover' && chipped ? this.discoverLabel(i) : null;
       // The chip (2026-10-13): the model and effort as plain words with a chevron, no border, then the round send.
       const chip = label ? `<span contenteditable="false" data-chip="${i}" style="user-select:none;flex:none;display:inline-flex;align-items:center;gap:10px"><span data-act="pick" data-row="${i}" role="button" aria-haspopup="dialog" aria-expanded="${open}" style="display:inline-flex;align-items:center;gap:4px;height:28px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;color:#8f8f8f">${icon(open ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span></span>${send}</span>` : `<span contenteditable="false" style="user-select:none;flex:none;display:inline-flex">${send}</span>`;
       // An answered question's Collapse is in its top right corner (2026-10-15, David: it was on the button row under the
@@ -4529,7 +4523,8 @@ export default class DocEditor extends React.Component {
   //     Build prompt and offers to build it.
   // A spec built above runs on the line's model too.
   //   `--build` on the line (a rule): a Build of the line, as `@chat --build` makes (Workspace askBart); one starting a
-  //     conversation gets a title line marked a Build's (2026-10-13), and its card collapses with it.
+  //     conversation gets a title line marked a Build's (2026-10-13), and its card collapses with it. Since 2026-10-28 it
+  //     runs on the line's model and is given the conversation above it, as a Build Bart picks is.
   // A pick made because routing failed (`by: 'error'`, Workspace routeLine) says so in `routed`, for the run's record.
   handOff(askId, pick, from = { key: this.props.docKey, props: this.props }) {
     const { key, props } = from, write = (fn) => this.setLinesOf(key, props, fn);
@@ -4541,9 +4536,9 @@ export default class DocEditor extends React.Component {
     const choice = step ? { provider: step.provider, model: step.key, effort: step.effort } : null; // the line's model
     // A `--build` line that starts a conversation gets its title line (2026-10-13), marked a Build's, named from what it asks to build.
     if (pick.agent === 'build' && pick.rule === '--build') {
-      const name = this.startsTitled(ls, q, this.turnsBefore(ls, q));
+      const turns = this.turnsBefore(ls, q), name = this.startsTitled(ls, q, turns);
       if (name) write((x) => { const out = [...x], at = out.indexOf(`bart~> ${askId}`); if (at > 0) out.splice(at - 1, 0, titleLine('', false, { agent: 'bart', at: askedNow(), build: true })); return out; });
-      props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id, ...failed }, place: name ? { line: q + 1, text: typed.text } : typed, ...(name ? { name: true } : {}) });
+      props.onAsk({ askId, text, turns: [], agent: 'router', routed: { id, ...failed }, place: name ? { line: q + 1, text: typed.text } : typed, ...(name ? { name: true } : {}), build: { choice, context: turns } });
       return 'build';
     }
     if (pick.agent === 'build') {
@@ -5130,10 +5125,6 @@ export default class DocEditor extends React.Component {
   // it and taking the flags out gives the ladder back. Under a card's follow-up chip the choice waits for the follow-up;
   // under Regenerate it waits for the selector's own blue button. It opens on hover and stays while the pointer is on
   // what opened it or on the selector itself.
-  //
-  // An unsent `@bart --build` line's chip (MATH-162) opens Build's selector instead (kind 'line' on such a line,
-  // buildLineAt): a pick there is the Build default (model/build-default.js), which that line's Build runs on, as do the
-  // Builds after it. It is written nowhere in the document and changes no Build already made.
   openPicker(el, kind) {
     clearTimeout(this.pickerT); const i = Number(kind === 'line' ? el.dataset.row : kind === 'regen' ? el.dataset.turn : el.dataset.thread);
     if (this.state.picker && this.state.picker.i === i && this.state.picker.kind === kind) return;
@@ -5145,26 +5136,11 @@ export default class DocEditor extends React.Component {
   leavePicker = () => { clearTimeout(this.pickerT); this.pickerT = setTimeout(() => { if (this.mounted) this.closePicker(); }, 220); };
   stayPicker = () => clearTimeout(this.pickerT);
   closePicker() { clearTimeout(this.pickerT); if (this.picking) { this.picking.removeAttribute('data-picking'); this.picking = null; } if (this.state.picker) this.setState({ picker: null }); }
-  // Whether line `i` is an `@bart --build` line not sent yet: its chip is the Build default's (lineHtml's buildLine).
-  buildLineAt(i, ls = this.lines()) {
-    const p = parseLine(ls[i] || ''); if (p.type !== 'bart' || !buildRequestOf({ agent: agentOf(p), text: p.text })) return false;
-    const at = this.layout(ls).get(i), turn = at && at.turn;
-    return !(turn && (turn.answered || turn.pending));
-  }
-  // The Build default as a chip says it ("Opus High"), or null while Build's list is not read yet.
-  buildDefaultLabel() {
-    const value = buildModelsNow(), choice = buildDefaultOf(value); if (!choice) return null;
-    const model = value.providers[choice.provider].models[choice.model];
-    return `${model ? model.name : choice.model} ${EFFORT_LABELS[choice.effort] || choice.effort}`;
-  }
-  // A pick in Build's selector: the default from now on. Nothing in the document changes but the chips that show it.
-  pickBuild = (choice) => { pickBuildModel(choice); };
   pickModel = (choice) => {
     const pk = this.state.picker, models = this.props.models; if (!pk || !models) return;
     if (pk.kind === 'regen') { this.setState({ picker: { ...pk, choice } }); return; }
     if (pk.kind === 'follow') { this.followChoice.set(pk.i, choice); this.lastHtml = null; this.forceUpdate(); return; }
     const ls = this.lines(), p = parseLine(ls[pk.i] || ''); if (p.type !== 'bart' || this.lockedAt(ls, pk.i)) { this.closePicker(); return; }
-    if (this.buildLineAt(pk.i, ls)) { this.pickBuild(choice); return; } // no flags written into a --build line
     const lead = leadOf(ls[pk.i], agentOf(p));
     const text = withChoice(p.text, models, choice), line = `${lead} ${text}${readFlags(text, models).rest ? '' : ' '}`;
     this.setLines((x) => x.map((l, j) => (j === pk.i ? line : l)), this.state.activeLine === pk.i ? { line: pk.i, offset: line.length } : undefined);
@@ -5437,11 +5413,6 @@ export default class DocEditor extends React.Component {
   pickerView() {
     const pk = this.state.picker, models = this.props.models;
     if (pk && pk.kind === 'via') return <AgentChoice current={(() => { const ls = this.lines(), found = this.findTurn(ls, pk.i); return found ? this.turnAgent(found.thread, found.turn) : agentOf(parseLine(ls[pk.i] || '')); })()} anchor={pk} onPick={this.pickVia} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
-    // Build's selector (MATH-162): Build's models, on the Build default, whether or not @bart's are read.
-    if (pk && pk.kind === 'line' && this.buildLineAt(pk.i)) {
-      const value = buildModelsNow(), current = buildDefaultOf(value);
-      return current ? <BartPicker models={value} current={current} anchor={pk} onPick={this.pickBuild} onEnter={this.stayPicker} onLeave={this.leavePicker} /> : null;
-    }
     if (!pk || !models) return null;
     const ls = this.lines(), marked = (choice) => ({ provider: (modelOf(choice.model, models) || {}).provider, model: choice.model, effort: choice.effort });
     let current = null;

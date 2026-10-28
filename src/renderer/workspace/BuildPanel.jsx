@@ -142,7 +142,7 @@ export default function BuildPanel({ projectId, workspaceId, title, anchor, libr
     api.buildModels('build').then((value) => {
       if (!live) return;
       setModels(value);
-      setBuildModels(value); // the freshest read: every Build card and --build line shows it too (model/build-default.js)
+      setBuildModels(value); // the freshest read (model/build-default.js)
       const start = value.providers[value.provider].ladder[0];
       setChoice({ provider: value.provider, model: start.model, effort: start.effort });
     }).catch((e) => { if (live) setError(errorMessage(e)); });

@@ -1,8 +1,8 @@
 'use strict';
 
-// The Build default where a Build is made (MATH-162, 2026-10-27): an unsent `@bart --build` line's chip names the Build
-// default and opens Build's selector; a pick there is the default (rememberModelChoice('build'), as the Build panel's),
-// redrawn on every chip that shows it. A Build card's model is plain words (2026-10-28): what that Build runs on.
+// A Build's model (MATH-162, 2026-10-27; since 2026-10-28, MATH-168): a Build from an `@bart` line runs on that line's
+// model, `--build` or not, the chip being @bart's as on any line and a pick written into the line as flags. A Build card's
+// model is plain words: what that Build runs on. The Build default (model/build-default.js) is the Build panel's alone.
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
@@ -42,11 +42,11 @@ function bridge({ held = false } = {}) {
 }
 
 function mounted(lines, { builds = {}, api = bridge().api } = {}) { // api null: no bridge
-  const DocEditor = loadEditor();
+  const DocEditor = loadEditor(), asks = [];
   const props = {
     docKey: 'k', text: lines.join('\n'), models: normalizeModels(null), builds,
     onChange: (next) => { props.text = next; },
-    onAsk: () => {}, onRoute: () => null, onRouteGone: () => {}, onBuild: () => undefined,
+    onAsk: (ask) => asks.push(ask), onRoute: () => null, onRouteGone: () => {}, onBuild: () => undefined,
   };
   const editor = new DocEditor(props);
   const root = { closest: (sel) => (sel === '[data-editor]' ? root : null), matches: () => false, focus() {}, blur() {}, contains: () => false, querySelector: () => null, querySelectorAll: () => [] };
@@ -62,7 +62,7 @@ function mounted(lines, { builds = {}, api = bridge().api } = {}) { // api null:
   globalThis.document = { addEventListener() {}, removeEventListener() {}, hasFocus: () => true, activeElement: null };
   globalThis.window = { addEventListener() {}, removeEventListener() {}, engelbartAPI: api };
   editor.componentDidMount();
-  return { editor, props, lines: () => props.text.split('\n'), html: () => editor.editorHtml(), redrawn: () => redrawn };
+  return { editor, props, asks, lines: () => props.text.split('\n'), html: () => editor.editorHtml(), redrawn: () => redrawn };
 }
 test.afterEach(() => { delete globalThis.getSelection; delete globalThis.document; delete globalThis.window; });
 
@@ -87,73 +87,36 @@ test('a Build card\'s model is plain words, what the Build runs or ran on: no ch
   assert.match(m.html(), /<span style="flex:none;font-size:12\.5px;color:#8f8f8f">Sol \(ran as gpt-6-sol\) · High<\/span>/);
 });
 
-test('an unsent --build line\'s chip names the Build default; a plain @bart line\'s names @bart\'s model', async () => {
-  const m = mounted(['@bart --build add Haiku 5.5', '', '@bart why is this slow', '', '@bart --sonnet --medium --build add Luna']);
+test('a --build line\'s chip is @bart\'s, as any line\'s: its flags name the model', async () => {
+  const m = mounted(['@bart --build add Haiku 5.5', '', '@bart why is this slow', '', '@bart --opus --medium --build add Luna']);
   await settled();
   const html = m.html();
-  assert.equal(lineChip(html, 0), 'Opus High', 'Build\'s default');
-  assert.equal(lineChip(html, 2), 'Sonnet High', '@bart\'s model');
-  assert.equal(lineChip(html, 4), 'Opus High', 'its flags still do not choose a Build\'s model, as today');
-  assert.equal(m.editor.buildLineAt(0), true);
-  assert.equal(m.editor.buildLineAt(2), false);
-});
-
-test('while Build\'s list is read, a --build line\'s chip shows nothing rather than @bart\'s model', async () => {
-  const b = bridge({ held: true });
-  const m = mounted(['@bart --build add Haiku 5.5', '@bart why'], { api: b.api });
-  await settled();
-  assert.equal(lineChip(m.html(), 0), null, 'no label yet');
-  assert.doesNotMatch(m.html().split('data-line="1"')[0], /Sonnet/, 'never @bart\'s model');
-  assert.equal(lineChip(m.html(), 1), 'Sonnet High', 'a plain line is as before');
+  assert.equal(lineChip(html, 0), 'Sonnet High', '@bart\'s default, not the Build default');
+  assert.equal(lineChip(html, 2), 'Sonnet High');
+  assert.equal(lineChip(html, 4), 'Opus Medium', 'its flags');
   m.editor.openPicker(at({ act: 'pick', row: '0' }), 'line');
-  assert.equal(m.editor.pickerView(), null, 'no selector until the list is read');
-  b.release(); await settled();
-  assert.equal(lineChip(m.html(), 0), 'Opus High');
-  assert.ok(isBuildPicker(m.editor.pickerView()));
+  assert.equal(isBuildPicker(m.editor.pickerView()), false, '@bart\'s selector');
 });
 
-test('typing or taking out --build changes the chip and which selector it opens', async () => {
-  const m = mounted(['@bart add Haiku 5.5']);
-  await settled();
-  const open = () => { m.editor.state.picker = null; m.editor.openPicker(at({ act: 'pick', row: '0' }), 'line'); return m.editor.pickerView(); };
-  assert.equal(lineChip(m.html(), 0), 'Sonnet High');
-  assert.equal(isBuildPicker(open()), false, '@bart\'s selector');
-  m.props.text = '@bart --build add Haiku 5.5';
-  assert.equal(lineChip(m.html(), 0), 'Opus High');
-  assert.equal(isBuildPicker(open()), true, 'Build\'s selector');
-  // Open while --build is taken out: the same chip's menu becomes @bart's.
-  m.props.text = '@bart add Haiku 5.5';
-  assert.equal(isBuildPicker(m.editor.pickerView()), false);
-  assert.equal(lineChip(m.html(), 0), 'Sonnet High');
-});
-
-test('a pick on a --build line saves the Build default and writes no flags; on a plain line it writes them, as before', async () => {
+test('a pick on a --build line is written into it as flags, as on any line; the Build default is not touched', async () => {
   const b = bridge();
-  const m = mounted(['@bart --build add Haiku 5.5', '', '@bart why is this slow'], { api: b.api });
+  const m = mounted(['@bart --build add Haiku 5.5'], { api: b.api });
   await settled();
   m.editor.openPicker(at({ act: 'pick', row: '0' }), 'line');
-  m.editor.pickerView().props.onPick({ provider: 'anthropic', model: 'sonnet', effort: 'medium' });
-  await settled();
-  assert.deepEqual(b.saved, [['build', { provider: 'anthropic', model: 'sonnet', effort: 'medium' }]]);
-  assert.equal(m.lines()[0], '@bart --build add Haiku 5.5', 'the line as typed');
-  assert.equal(lineChip(m.html(), 0), 'Sonnet Medium');
-  // The same pick through pickModel (the line's own handler) is Build's too.
-  m.editor.pickModel({ provider: 'anthropic', model: 'fable', effort: 'high' });
-  await settled();
-  assert.equal(m.lines()[0], '@bart --build add Haiku 5.5');
-  assert.equal(b.saved.length, 2);
-  // A plain @bart line: flags in the line, the Build default untouched.
-  m.editor.state.picker = null;
-  m.editor.openPicker(at({ act: 'pick', row: '2' }), 'line');
   m.editor.pickerView().props.onPick({ provider: 'anthropic', model: 'opus', effort: 'max' });
-  assert.equal(m.lines()[2], '@bart --opus --max why is this slow');
-  assert.equal(b.saved.length, 2, 'nothing saved for Build');
-  assert.equal(lineChip(m.html(), 0), 'Fable High');
+  assert.equal(m.lines()[0], '@bart --opus --max --build add Haiku 5.5');
+  assert.deepEqual(b.saved, [], 'nothing saved for Build');
+  assert.equal(lineChip(m.html(), 0), 'Opus Max');
 });
 
-test('without the bridge (a post-it\'s window) nothing breaks: no Build default, @bart lines as before', async () => {
-  const m = mounted(['@bart --build add Haiku', '@bart why'], { api: null });
+test('a --build line\'s Build runs on the line\'s model and is given the conversation above it', async () => {
+  const m = mounted(['@bart --opus --medium --build add Haiku 5.5', 'bart~> a1', '']);
   await settled();
-  assert.equal(lineChip(m.html(), 0), null);
-  assert.equal(lineChip(m.html(), 1), 'Sonnet High');
+  assert.equal(m.editor.handOff('a1', { id: 'route-1', agent: 'build', rule: '--build', sure: 1 }), 'build');
+  assert.equal(m.asks.length, 1);
+  assert.deepEqual(m.asks[0].build, { choice: { provider: 'anthropic', model: 'opus', effort: 'medium' }, context: [] });
+  const plain = mounted(['@bart --build add Haiku 5.5', 'bart~> a2', '']);
+  await settled();
+  plain.editor.handOff('a2', { id: 'route-2', agent: 'build', rule: '--build', sure: 1 });
+  assert.deepEqual(plain.asks[0].build.choice, { provider: 'anthropic', model: 'sonnet', effort: 'high' }, 'no flags: @bart\'s default');
 });

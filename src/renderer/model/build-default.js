@@ -1,6 +1,5 @@
-// The Build default (MATH-162, 2026-10-27): the model and effort a Build starts on when nothing names one, which every
-// place that offers it shares, so a pick in one shows in all. BuildPanel's selector and the chip of an unanswered
-// `@bart --build` line read it here; a pick saves it as Build's last pick by hand (main
+// The Build default (MATH-162, 2026-10-27): the model and effort a Build starts on when nothing names one. BuildPanel's
+// selector reads it here (since 2026-10-28 a Build from an `@bart` line runs on that line's model instead, MATH-168); a pick saves it as Build's last pick by hand (main
 // rememberModelChoice('build')), the default the next Build starts on (main resolveBuildChoice), and is drawn at once.
 // It never changes a Build already made. Read from the bridge lazily, as the editor is also drawn where there is none.
 
