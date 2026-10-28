@@ -12,9 +12,19 @@ let package = Package(
         .package(path: "../Store"),
         .package(path: "../Doc"),
         .package(path: "../Integrations"),
+        .package(path: "../Tools"),
     ],
     targets: [
-        .target(name: "EngelbartScreens", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), .product(name: "EngelbartStore", package: "Store"), .product(name: "EngelbartDoc", package: "Doc"), .product(name: "EngelbartIntegrations", package: "Integrations"), ]),
-        .testTarget(name: "EngelbartScreensTests", dependencies: ["EngelbartScreens"]),
+        .target(name: "EngelbartScreens", dependencies: [
+            .product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"),
+            .product(name: "EngelbartStore", package: "Store"), .product(name: "EngelbartDoc", package: "Doc"),
+            .product(name: "EngelbartIntegrations", package: "Integrations"), .product(name: "EngelbartTools", package: "Tools"),
+        ]),
+        .testTarget(name: "EngelbartScreensTests", dependencies: [
+            "EngelbartScreens",
+            .product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"),
+            .product(name: "EngelbartStore", package: "Store"), .product(name: "EngelbartDoc", package: "Doc"),
+            .product(name: "EngelbartIntegrations", package: "Integrations"), .product(name: "EngelbartTools", package: "Tools"),
+        ]),
     ]
 )
