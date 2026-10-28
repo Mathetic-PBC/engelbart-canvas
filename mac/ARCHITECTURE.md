@@ -105,7 +105,7 @@ ledger current as you work. Format:
 | 12 | Enter on an empty nested todo outdents before leaving the list | DocEditor.jsx:1234, spec #24 | Editor/Keys.swift | done |
 ```
 
-Status is one of `done` (implemented and checked by a test or by running it), `partial: <what is missing>`, `todo`,
+Status is one of `done` (implemented and checked by a passing cloud test run, or by the app's cloud self-test), `partial: <what is missing>`, `todo`,
 `n/a: <why>` (Electron-only mechanics such as asar or IPC validation). The ledger is how Hudson and the next agent know
 what "everything" means; an unlisted behaviour is a lost behaviour. Commit messages and memory-note corrections count.
 
@@ -117,8 +117,16 @@ what "everything" means; an unlisted behaviour is a lost behaviour. Commit messa
 - Do not commit, push, switch branches, or touch other worktrees. The orchestrator commits.
 - Never read or write `~/.engelbart/` (except the Store importer, as described), never launch or drive the Electron
   Engelbart app, never kill a process you did not start, never upload releases.
-- Build and test your package on its own: `cd mac/Packages/<Name> && swift build && swift test`. Keep it compiling;
-  work in small steps. Swift 5 language mode (`swiftLanguageModes: [.v5]`), macOS 14 minimum.
+- **Testing happens in the cloud, never on this Mac** (Hudson, 2026-10-28). Locally you may only compile:
+  `cd mac/Packages/<Name> && swift build` and `swift build --build-tests`. Never run `swift test`, a test binary, the
+  app, a PTY session or a real CLI here, and never take local screenshots. Run tests with
+  `mac/scripts/cloud-test.sh <Package> [--filter <XCTest filter>]` (Bash timeout 600000): it snapshots `mac/` through a
+  temporary git index (nothing in the worktree changes), runs on a GitHub Actions macOS 26 runner
+  (`.github/workflows/swift-cloud-test.yml`, runner side `mac/scripts/ci-run.sh`) and prints
+  `CI RESULT <Package>: PASS|BUILD FAILED|TESTS FAILED` with the failures. `cloud-test.sh app` bundles and launches the
+  app there with `ENGELBART_SNAPSHOT` and returns window PNGs. Exit 3 = still running (`--result <run id>`). Runs take
+  3–6 min and share ~5 concurrent macOS jobs: run at milestones. Keep the package compiling; work in small steps.
+  Swift 5 language mode (tools-version 5.10), macOS 14 minimum.
 - Tests: XCTest, temporary directories, no network (fakes for CLIs and HTTP, as the Electron tests do).
 - Match the Electron code's names where they help someone read both side by side (file `ask.cjs` → `Ask.swift`).
 - Comment like the Electron code does: say why, record decisions, cite the source file the behaviour came from.
