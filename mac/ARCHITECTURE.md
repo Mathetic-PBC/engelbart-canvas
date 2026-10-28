@@ -48,7 +48,11 @@ local `path:` packages):
 | Sandbox | EngelbartSandbox | `main/sandbox/**`, `shared/sandbox-sleep`, `shared/environment`, sandbox UI | Core, UI |
 | Connect | EngelbartConnect | `main/connect/**`, `main/onboarding/**` (backend), `shared/connect-sources`, `shared/import-flow` (+ its sign-in windows) | Core, UI |
 | Integrations | EngelbartIntegrations | `main/zotero/**`, `main/github/**`, `main/overleaf/**`, `main/agent-map/**` (backend), GitHub/Zotero panes, Agent Map + Benchmark screens | Core, UI |
-| (wave 2) Workspace, Screens, ImportUI, PostIts, AgentMapUI | | the screens that tie the above together | many |
+| Sidebar (wave 2) | EngelbartSidebar | `workspace/Rail.jsx`, `SidebarPanels.jsx`, `WorkspacePeek`, `GettingStarted`, `SidebarTour`, `model/sidebar.js`, `rail.js`, `nav.js`, `add-or-find.js` | Core, UI, Store, Doc, Integrations |
+| Workspace (wave 2) | EngelbartWorkspace | `screens/Workspace.jsx`, `DocTabs`, `DocPane`, `NotePicker`, `model/notepick.js`; implements the Editor/Stage/Terminal/Paper hosts | most packages (not Sidebar: injected) |
+| Screens (wave 2) | EngelbartScreens | `screens/Home.jsx`, `Onboarding.jsx`, `ui/GuidedSetup.jsx`, `model/onboarding.js` | Core, UI, Store, Doc, Integrations |
+| PostIts (wave 2) | EngelbartPostIts | `renderer/post-its/**`, `main/post-its/**`, `post-it-preload.cjs` | Core, UI, Store, Doc, Editor, Build |
+| ImportUI (wave 2) | EngelbartImportUI | `renderer/import/**`, `screens/ConnectLibrary.jsx`, `ui/ConnectDock.jsx`, `model/connect.js` | Core, UI, Store, Connect |
 
 **Dependency rule.** A wave-1 package never depends on Store or on another wave-1 feature package. When it needs data
 that the Store owns (library rows, a project's directory, config values), it declares a small protocol or a struct of
