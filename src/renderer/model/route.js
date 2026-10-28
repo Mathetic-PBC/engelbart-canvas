@@ -1,7 +1,7 @@
 // Bart, the router, in the editor (2026-10-12). An `@bart` line picks its agent here first, by rule; only a line no
 // rule settles is sent to the model (src/main/bart/route.cjs), with what this module reads of the document around it:
 // its section, the threads above and the spec above, if any.
-import { parseLines, threads, turnText, answeredBy, tokenOf, answerFences, codeBlocks, isResearch } from './doc.js';
+import { parseLines, threads, turnText, answeredBy, tokenOf, answerFences, isResearch } from './doc.js';
 import { readBuildFlag } from '../../main/bart/question.cjs';
 
 const LEVEL_RE = /(^|\s)--(quick|standard|deep)(?=\s|$)/i;
@@ -74,25 +74,6 @@ export function buildWithContext(request, turns = []) {
     left -= part.length;
   }
   return said.length ? `${request}\n\nThis was asked in a conversation. What was said before it, oldest first:\n\n${said.join('\n\n')}` : request;
-}
-
-// The line Chat ends a Build prompt with (main's bart/ask.cjs ROUTED_BUILD): "Want me to build it?", "Should I build
-// this?", "Want me to build that now?" and the like.
-const OFFER_RE = /^(?:so,?\s+)?(?:do you\s+)?(?:want|would you like|should|shall|ready for)\s+(?:me\s+)?(?:to\s+)?(?:I\s+)?(?:go ahead and\s+)?(?:build|start building|kick off (?:a |the )?build(?: of)?|start (?:a |the )?build(?: of)?)\b[^?]*\?$/i;
-
-/**
- * Whether a turn's answer offers to build its Build prompt (MATH-160, 2026-10-27): it holds a fenced block and its last
- * line, after that block's closing fence, asks whether to build it. A Build button is drawn under such an answer.
- */
-export function offersBuild(lines, turn) {
-  const rows = turnText(lines, turn).answer.split('\n');
-  const blocks = codeBlocks(rows);
-  if (!blocks.length) return false;
-  let last = rows.length - 1;
-  while (last >= 0 && !rows[last].trim()) last--;
-  if (last <= blocks[blocks.length - 1].close) return false;
-  const said = rows[last].replace(/(\*\*|__|\*|_|`)(\S(?:.*?\S)?)\1/g, '$2').replace(/\s+/g, ' ').trim();
-  return OFFER_RE.test(said);
 }
 
 /**

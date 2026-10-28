@@ -63,7 +63,7 @@ import BartPicker from './BartPicker.jsx';
 import { buildDefaultOf, buildModelsNow, loadBuildModels, onBuildModels, pickBuildModel } from '../model/build-default.js';
 import AgentChoice from './AgentChoice.jsx';
 import TopicMenu from './TopicMenu.jsx';
-import { routeByRule, routeInputs, fallbackAgent, buildTextOf, offersBuild, questionLine } from '../model/route.js';
+import { routeByRule, routeInputs, fallbackAgent, buildTextOf, questionLine } from '../model/route.js';
 import DiscoverLevels, { LEVEL_LABELS } from './DiscoverLevels.jsx';
 import { pdfText } from '../model/paste.js';
 import MentionMenu from './MentionMenu.jsx';
@@ -84,7 +84,7 @@ import { matchPassage } from '../../shared/passage-text.cjs';
 import { goalShown } from '../../shared/build-goal.cjs';
 import { AGENTS_PATH } from '../ui/SidebarIcons.jsx';
 import { waveText, keepWaves } from '../ui/wave.js';
-import { SEND_PATHS, SEND_HOVER_CSS, boxSend, sendLook } from '../ui/send-button.js';
+import { SEND_PATHS, SEND_HOVER_CSS, boxSend } from '../ui/send-button.js';
 
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
 
@@ -231,7 +231,6 @@ const CARD_CSS = '.bart-ic{display:inline-flex;align-items:center;justify-conten
   + '.bart-ic:hover{background:#f2f2f2;color:#171717}.bart-ic[data-danger]:hover{color:#e70022}.bart-ic:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(0,112,243,.18)}'
   + '.bart-tip{position:absolute;top:100%;z-index:5;margin-top:4px;padding:4px 7px;border:1px solid #eaeaea;border-radius:6px;background:#fff;color:#171717;font:12px/1.2 var(--font-sans);white-space:nowrap;pointer-events:none;opacity:0;visibility:hidden;transition:opacity 120ms}'
   + '.bart-ic:hover+.bart-tip,.bart-ic:focus-visible+.bart-tip{opacity:1;visibility:visible}[data-picking]>.bart-tip{display:none}'
-  + '[data-offer-said]{display:none}'
   // A conversation's title (2026-10-12): collapsed, it is a link (2026-10-13, Hudson's): the Agents pointer and the title in
   // the link's blue, underlined once hovered; a click expands it, an ⌥-click renames it.
   + '.bart-thread{cursor:pointer}.bart-thread:hover>.bart-thread-name{text-decoration:underline}'
@@ -555,7 +554,8 @@ const CLIP_OLD = 6;
 // How long after a Build started from an answer settles its question is held (footBuild, MATH-160).
 const BUILD_SETTLE_MS = 1500;
 // The small blue button an answer's one next step is (2026-10-27): a research box's Start research and Restart
-// (researchHtml), and the Build under a build offer (buildOfferHtml).
+// (researchHtml). The build offer's Build was one until 2026-10-28 (David: "Want me to build it?" is plain text again,
+// answered in the reply field, whose model the Build runs on, MATH-168).
 const GO_LOOK = 'user-select:none;flex:none;display:inline-flex;align-items:center;gap:5px;height:26px;padding:0 10px;border:0;border-radius:6px;background:#0070f3;color:#fff;font:500 12.5px/1 var(--font-sans);cursor:pointer';
 // A Brainstorm conversation's "Topic: …" chip under its first question (topicChipHtml), hidden since 2026-10-16.
 const TOPIC_CHIP_SHOWN = false;
@@ -2324,15 +2324,6 @@ export default class DocEditor extends React.Component {
       const endBox = isResearch(ps[end.q]) ? this.boxState(ls, end) : null;
       const boxField = !!endBox && !end.folded && !built && !!this.props.onAsk && !this.props.readOnly;
       const field = boxField || (follow && !inCard && !refineHere && !this.props.readOnly), after = field || (follow && this.endsInRecap(ls, thread));
-      // A Build button under the conversation's last answer when it ends by offering to build its fenced prompt (MATH-160,
-      // 2026-10-27: Chat's "Want me to build it?", main's bart/ask.cjs ROUTED_BUILD). Not once its Build's card is under it,
-      // nor while that Build is starting, nor while anything in the conversation is at work.
-      const offer = end.answered && !end.pending && !end.folded && !end.build && !built && !isResearch(ps[end.q]) && !cards.byQ.has(end.q)
-        && !thread.turns.some((t) => t.pending) && !!this.props.onBuild && !this.props.readOnly && !this.buildStarting.has(ls[end.q]) && offersBuild(ls, end);
-      // Its offer line is not drawn while the button stands for it, nor once the button was pressed: while its Build starts
-      // and with its card under the conversation (2026-10-28, David: the question came back after the click).
-      const offered = offer || (end.answered && !end.pending && !end.folded && !end.build && !isResearch(ps[end.q])
-        && (built || this.buildStarting.has(ls[end.q])) && offersBuild(ls, end));
       // A collapsed turn (2026-10-13) is drawn bare, as one row (foldedHtml) with no foot, at the top of the card: the
       // question under it starts 18px below the last of them.
       // An @discover research box (2026-10-13, doc.js isResearch) is drawn inside the card of the reply that asked for it
@@ -2358,7 +2349,7 @@ export default class DocEditor extends React.Component {
         for (let i = turn.from; i <= turn.to; i++) {
           const role = i === turn.foot ? 'foot' : parseLine(ls[i]).type === 'pending' ? 'pending' : 'answer', ends = i === turn.to;
           const drawn = card && i <= card.last ? { card: i === turn.from ? card : null, underCard: i !== turn.from } : {};
-          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, buildOffer: tail && offer && i === lastBody, offerSaid: tail && offered && i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && (after || joinedAt >= 0), refine: null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, boxState, editable: editable && !box, chat, older, ...drawn });
+          at.set(i, { thread, turn, agent, role, gap: i === gap, first: i === turn.from, lastBody: i === lastBody, closes: ends && shuts && !footless, footAfter: ends && footless, followAfter: ends && tail && follow, fieldAfter: ends && tail && field, drawnAfter: tail && (after || joinedAt >= 0), refine: null, refineAfter: ends && refineHere && turn === intent, tail, cut, box, boxState, editable: editable && !box, chat, older, ...drawn });
         }
       });
       if (joinedAt >= 0) at.set(joinedAt, { thread, turn: end, agent: this.turnAgent(thread, end), role: 'build', joined: true, closes: true, underFolded: !!end.folded });
@@ -2837,22 +2828,6 @@ export default class DocEditor extends React.Component {
     return `<div contenteditable="false" data-readonly="1" data-more="${turn.q}" data-chat-more="1" data-key="${key}" data-split="${body[k].j}" data-open="${open ? 1 : 0}"${at.older ? ` data-chat-older="${turn.q}"` : ''} style="display:none;position:relative;user-select:none;cursor:default;padding:0 18px;background:#fafafa">`
       + `<span style="display:flex;padding:8px 0 0 12px;border-left:1.5px solid #e6e6e6"><button type="button" class="chat-more" data-act="more" data-key="${key}" data-open="${open ? 1 : 0}" aria-expanded="${open}">${open ? 'Show less' : label}${chevron}</button></span></div>`;
   }
-  // The Build under an answer that offers to build its fenced prompt (MATH-160): on the answer's grey, inside its rule,
-  // under its last line and above its foot. It builds as the footer's Build does (footBuild): the last fenced block, on the
-  // Build default. It takes the offer's place (2026-10-28, David): "Want me to build it?" stays in the text but is not
-  // drawn (editorHtml). Laid out as an @bart line is (2026-10-28, David's mockup): a white bar as wide as what it holds,
-  // "Build this prompt?", the Build default's chip (Build's selector, kind 'offer'), then the round send that builds. The
-  // chip waits for Build's list rather than show @bart's model.
-  buildOfferHtml(at) {
-    const rule = at.chat ? 'padding:10px 0 2px 10px;border-left:1.5px solid #e6e6e6' : 'padding:8px 0 4px 12px;border-left:2px solid #d6d6d6';
-    const q = at.turn.q, pk = this.state && this.state.picker, open = !!(pk && pk.kind === 'offer' && pk.i === q), label = this.buildDefaultLabel();
-    const chip = label ? `<span data-act="offerpick" data-turn="${q}" role="button" aria-haspopup="dialog" aria-expanded="${open}" aria-label="Model for this Build" style="display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 4px;border-radius:6px;font:13px/1 var(--font-sans);color:#4d4d4d;cursor:default;white-space:nowrap">${esc(label)}<span style="display:inline-flex;color:#8f8f8f">${icon(open ? '<path d="m18 15-6-6-6 6"></path>' : '<path d="m6 9 6 6 6-6"></path>', 12, 2)}</span></span>` : '';
-    const send = `<button type="button" class="bart-send" data-act="footbuild" data-turn="${q}" aria-label="Build" style="user-select:none;${sendLook(true, 26)}">${ICON.sendBox}</button>`;
-    return `<div contenteditable="false" data-readonly="1" data-build-offer="${q}" style="position:relative;user-select:none;cursor:default;padding:0 ${at.chat ? 18 : 16}px;background:#fafafa">`
-      + `<span style="display:block;${rule}"><span data-offer-bar="1" style="display:inline-flex;align-items:center;gap:8px;max-width:100%;box-sizing:border-box;padding:4px 4px 4px 12px;background:#fff;border:1px solid #eaeaea;border-radius:10px">`
-      + '<span style="font:500 14px/1 var(--font-sans);color:#171717;white-space:nowrap">Build this prompt?</span>'
-      + `<span style="flex:none;display:inline-flex;align-items:center;gap:4px">${chip}${send}</span></span></span></div>`;
-  }
   // What a follow-up starts on: the pick made on this card's chip, or else the flags of the question before it, so an
   // exchange pinned to a model stays on it. → { flags, step }
   followStep(ls, thread) {
@@ -3119,28 +3094,16 @@ export default class DocEditor extends React.Component {
     const ls = this.lines(), ps = this.parsedOf(ls), active = this.state.activeLine, at = this.layout(ls), editing = this.editing; let out = '';
     this.noteAnswers(ls);
     const cards = this.cardsOf(ls);
-    // A build offer's own line (MATH-160), the last line of its answer that says something: its Build button stands for it.
-    // The blank lines around it go too (2026-10-28, David: a gap was left above the button).
-    const said = new Set();
-    at.forEach((w, i) => {
-      if (!w.offerSaid) return;
-      const blank = (k) => !ps[k].text.trim();
-      let j = i; while (j > w.turn.from && blank(j)) j--;
-      let k = j - 1; while (k > w.turn.from && blank(k)) k--;
-      for (let n = k + 1; n <= i; n++) said.add(n);
-    });
     ls.forEach((line, i) => {
       const p = ps[i], where = at.get(i);
       // Under a question being edited (2026-10-03), its answer and the answer's foot are dimmed.
       const dim = !!editing && !!where && !!where.turn && where.turn.q === editing.q && i !== editing.q, dimmed = (html) => (dim ? html.replace('<div ', '<div data-dim="1" ') : html);
       const locked = this.lockedAt(ls, i);
-      const row = p.type === 'reply' && locked ? unwritable(this.lineHtml(i, line, p, false, false, where, locked)) : this.lineHtml(i, line, p, active === i, false, where, locked);
-      out += dimmed(said.has(i) ? row.replace('<div ', '<div data-offer-said="1" ') : row);
+      out += dimmed(p.type === 'reply' && locked ? unwritable(this.lineHtml(i, line, p, false, false, where, locked)) : this.lineHtml(i, line, p, active === i, false, where, locked));
       // A task's Build card, unfolded under its row (MATH-106): drawn, not a line.
       if (p.type === 'todo' && p.build && this.taskOpen.has(p.build) && !this.props.compact) out += this.taskCardHtml(i, p, p.build);
       // Under an answer's last line, its Show more (2026-10-13), shown by applyClips once it is long enough to cut, then its sources.
       if (where && where.lastBody && where.role === 'answer' && !where.box && !where.turn.pending && !where.turn.folded && !where.turn.build && !cards.byQ.has(where.turn.q)) out += (where.chat ? this.chatMoreHtml(ls, where) : this.moreHtml(ls, where.turn, where.turn === where.thread.turns[0] || where.turn === [...where.thread.turns].reverse().find((t) => t.answered && !t.pending))) + dimmed(this.citeSourcesHtml(ls, where));
-      if (where && where.buildOffer) out += dimmed(this.buildOfferHtml(where));
       if (where && where.footAfter && where.chat && !where.turn.folded) out += dimmed(this.chatFootHtml({ at: where, closes: (where.tail && !where.drawnAfter) || where.cut }));
       else if (where && where.footAfter && !(where.turn.folded && !where.box) && !(where.box && ['stopped', 'failed'].includes(where.boxState))) out += dimmed(this.footHtml({ q: where.turn.q, text: '', folded: where.turn.folded, closes: (where.tail && !where.drawnAfter) || where.cut, plain: oneModel(where.agent), busy: isRunning(where.thread, this.props.builds), box: where.box, guide: where.agent === 'discover' && (!where.box || where.boxState === 'finished') ? where.turn : null }));
       // After an @brainstorm recap, Send to Discover on a row of its own under the follow-up field, closing the
@@ -4237,7 +4200,6 @@ export default class DocEditor extends React.Component {
       }
       if (k === 'ask') { this.closePicker(); this.askInline(i); return; }
       if (k === 'pick') { this.openPicker(act, 'line'); return; }
-      if (k === 'offerpick') { this.openPicker(act, 'offer'); return; }
       if (k === 'topic') { this.closePicker(); this.openTopic(act); return; }
       if (k === 'pickfollow') { this.openPicker(act, 'follow'); return; }
       if (k === 'sendfollow') { this.closePicker(); this.sendFollow(Number(act.dataset.thread)); return; }
@@ -4360,7 +4322,7 @@ export default class DocEditor extends React.Component {
     // An icon's name goes under it, or above it when under would leave the pane.
     const ic = e.target.closest('.bart-ic'), box = this.scrollRef.current;
     if (ic && ic.parentElement && box) ic.parentElement.toggleAttribute('data-tip-up', ic.getBoundingClientRect().bottom + 32 > Math.min(box.getBoundingClientRect().bottom, window.innerHeight || 800));
-    const pick = e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="offerpick"],[data-act="regen"]:not([data-plain]):not([data-quiet])'); if (pick) this.openPicker(pick, { pick: 'line', pickfollow: 'follow', offerpick: 'offer', regen: 'regen' }[pick.dataset.act]);
+    const pick = e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]:not([data-plain]):not([data-quiet])'); if (pick) this.openPicker(pick, { pick: 'line', pickfollow: 'follow', regen: 'regen' }[pick.dataset.act]);
   };
   // Leaving what opened the selector starts its closing clock, unless the pointer went straight onto the selector: React has
   // by then already handled that same event (the selector's onMouseEnter stops the clock), and this would start it again.
@@ -4373,7 +4335,7 @@ export default class DocEditor extends React.Component {
     const peek = e.target.closest('[data-made-peek]');
     if (peek && !(e.relatedTarget && peek.contains(e.relatedTarget))) this.unpeekMade();
     const onto = e.relatedTarget && e.relatedTarget.closest && e.relatedTarget.closest('[data-bart-picker]');
-    if (!onto && e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="offerpick"],[data-act="regen"]')) this.leavePicker();
+    if (!onto && e.target.closest('[data-act="pick"],[data-act="pickfollow"],[data-act="regen"]')) this.leavePicker();
   };
   // The link of an answer's line within NEAR_LINK px of (x, y), measured from its boxes (one per line it wraps over), the
   // nearest when there are two; null on any other line, and on the answer's line being typed in (the caret put there by
@@ -5166,14 +5128,13 @@ export default class DocEditor extends React.Component {
   // under Regenerate it waits for the selector's own blue button. It opens on hover and stays while the pointer is on
   // what opened it or on the selector itself.
   //
-  // A build offer's chip (2026-10-28, David: chosen before a Build starts, not on its card) and an unsent `@bart --build`
-  // line's chip (MATH-162) open Build's selector instead (kind 'offer', `i` the offer's question line; or 'line' on such a
-  // line, buildLineAt): a pick there is the Build default (model/build-default.js), which the Build started from there runs
-  // on, as do the Builds after it. It is written nowhere in the document and changes no Build already made.
+  // An unsent `@bart --build` line's chip (MATH-162) opens Build's selector instead (kind 'line' on such a line,
+  // buildLineAt): a pick there is the Build default (model/build-default.js), which that line's Build runs on, as do the
+  // Builds after it. It is written nowhere in the document and changes no Build already made.
   openPicker(el, kind) {
-    clearTimeout(this.pickerT); const i = Number(kind === 'line' ? el.dataset.row : kind === 'regen' || kind === 'offer' ? el.dataset.turn : el.dataset.thread);
+    clearTimeout(this.pickerT); const i = Number(kind === 'line' ? el.dataset.row : kind === 'regen' ? el.dataset.turn : el.dataset.thread);
     if (this.state.picker && this.state.picker.i === i && this.state.picker.kind === kind) return;
-    const r = (kind === 'regen' || kind === 'offer' ? el : el.closest('[data-chip]') || el).getBoundingClientRect();
+    const r = (kind === 'regen' ? el : el.closest('[data-chip]') || el).getBoundingClientRect();
     this.setState({ picker: { kind, i, left: kind === 'regen' ? r.left : null, right: r.right, top: r.top, bottom: r.bottom, choice: null } });
     // Regenerate's name would show behind the selector it opened.
     if (kind === 'regen' && el.parentElement) { this.picking = el.parentElement; this.picking.setAttribute('data-picking', ''); }
@@ -5197,7 +5158,6 @@ export default class DocEditor extends React.Component {
   pickBuild = (choice) => { pickBuildModel(choice); };
   pickModel = (choice) => {
     const pk = this.state.picker, models = this.props.models; if (!pk || !models) return;
-    if (pk.kind === 'offer') { this.pickBuild(choice); return; }
     if (pk.kind === 'regen') { this.setState({ picker: { ...pk, choice } }); return; }
     if (pk.kind === 'follow') { this.followChoice.set(pk.i, choice); this.lastHtml = null; this.forceUpdate(); return; }
     const ls = this.lines(), p = parseLine(ls[pk.i] || ''); if (p.type !== 'bart' || this.lockedAt(ls, pk.i)) { this.closePicker(); return; }
@@ -5475,7 +5435,7 @@ export default class DocEditor extends React.Component {
     const pk = this.state.picker, models = this.props.models;
     if (pk && pk.kind === 'via') return <AgentChoice current={(() => { const ls = this.lines(), found = this.findTurn(ls, pk.i); return found ? this.turnAgent(found.thread, found.turn) : agentOf(parseLine(ls[pk.i] || '')); })()} anchor={pk} onPick={this.pickVia} onEnter={this.stayPicker} onLeave={this.leavePicker} />;
     // Build's selector (MATH-162): Build's models, on the Build default, whether or not @bart's are read.
-    if (pk && (pk.kind === 'offer' || (pk.kind === 'line' && this.buildLineAt(pk.i)))) {
+    if (pk && pk.kind === 'line' && this.buildLineAt(pk.i)) {
       const value = buildModelsNow(), current = buildDefaultOf(value);
       return current ? <BartPicker models={value} current={current} anchor={pk} onPick={this.pickBuild} onEnter={this.stayPicker} onLeave={this.leavePicker} /> : null;
     }
