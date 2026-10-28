@@ -1,5 +1,8 @@
+# SwiftPM's per-package build folders
 .build/
 .swiftpm/
 *.xcodeproj
-build/
-dist/
+# The bundled app (mac/build/Engelbart.app) and archives. Anchored: the repository has core.ignorecase=true, so an
+# unanchored `build/` also hid mac/Packages/Build/.
+/build/
+/dist/
