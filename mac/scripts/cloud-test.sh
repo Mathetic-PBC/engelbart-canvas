@@ -40,7 +40,9 @@ report() { # $1 = run id
     grep -E "^CI (RESULT|SUMMARY)" "$log"
     if [ "$conclusion" != "success" ]; then
       echo "--- failures ---"
-      grep -E "error:|failed \(|XCTAssert|✘|BUILD FAILED|TESTS FAILED|TIMED OUT" "$log" | grep -v "^::" | sort -u | head -120
+      local found
+      found=$(grep -E "error:|failed \(|XCTAssert|✘|Fatal error|unbound variable|BUILD FAILED|TIMED OUT" "$log" | grep -v "^::" | sort -u | head -120)
+      if [ -n "$found" ]; then echo "$found"; else tail -40 "$log"; fi
     fi
     echo "full log and artifacts: $dir"
   else

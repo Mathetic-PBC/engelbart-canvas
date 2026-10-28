@@ -3,7 +3,8 @@
 #   ci-run.sh <Package> [filter]   build + test one package under mac/Packages (filter = swift test --filter)
 #   ci-run.sh all                  every package, a summary at the end
 #   ci-run.sh app                  bundle Engelbart.app, launch it with ENGELBART_SNAPSHOT, collect the PNGs
-# Output lands in ./ci-out (uploaded as the run's artifact).
+# Output lands in ./ci-out (uploaded as the run's artifact). Runs under macOS bash 3.2: an empty array is "unbound" under
+# set -u, so arrays are expanded as ${a[@]+"${a[@]}"}.
 set -uo pipefail
 target=${1:-all}
 filter=${2:-}
@@ -25,7 +26,7 @@ test_package() {
   fi
   local args=()
   [ -n "$filter" ] && args=(--filter "$filter")
-  (cd "$dir" && swift test --skip-build "${args[@]}" 2>&1 | tee "$out/$pkg-test.log")
+  (cd "$dir" && swift test --skip-build ${args[@]+"${args[@]}"} 2>&1 | tee "$out/$pkg-test.log")
   local tested=${PIPESTATUS[0]}
   if [ $tested -eq 0 ]; then echo "CI RESULT $pkg: PASS"; else
     echo "CI RESULT $pkg: TESTS FAILED"
@@ -51,7 +52,7 @@ run_app() {
   local drive=()
   [ -n "$filter" ] && [ -f "$root/$filter" ] && drive=(ENGELBART_DRIVE="$root/$filter")
   env ENGELBART_ROOT_DIR="$data/root" ENGELBART_HOME_DIR="$data/home" ENGELBART_SNAPSHOT="$out/snapshots" \
-    ENGELBART_TOOLS=off "${drive[@]}" "$app/Contents/MacOS/Engelbart" > "$out/app.log" 2>&1 &
+    ENGELBART_TOOLS=off ${drive[@]+"${drive[@]}"} "$app/Contents/MacOS/Engelbart" > "$out/app.log" 2>&1 &
   local pid=$!
   local waited=0
   while kill -0 $pid 2>/dev/null && [ $waited -lt 180 ]; do sleep 2; waited=$((waited + 2)); done
