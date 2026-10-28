@@ -2431,6 +2431,40 @@ test('an empty @discover\'s plain reply is the question alone, whatever the mode
   assert.equal(body(await ask('o3', 'tutors', 'Tutors, then. What would you like to research?')), 'Tutors, then. What would you like to research?', 'only a bare opening');
 });
 
+test('Discover hands a line back (MATH-165): a whole reply of {"handoff": …} writes nothing and ends handed back, the reason on its record; any other reply is as before', async () => {
+  const replies = [], amended = [], finished = [];
+  const runLog = { start() {}, step() {}, output() {}, note() {}, amend: (id, patch) => amended.push([id, patch]), finish: (id, patch) => finished.push([id, patch]) };
+  const run = (shell, args, options, callback) => callback(null, `${JSON.stringify({ type: 'result', subtype: 'success', is_error: false, result: replies.shift() })}\n`);
+  const bart = createBart({ readModels: () => DEFAULTS, environment: { PATH: '/usr/bin', SHELL: '/bin/zsh', HOME: homeDir }, runDirectory: path.join(homeDir, 'runs-handoff'), run, runLog, discoverThreads: createThreads({ idleMs: DISCOVER_IDLE_MS }), node: '/Apps/Engelbart', papersServer: '/Apps/papers-mcp.cjs' });
+  const ref = { kind: 'workspace', workspaceId: workspace.id };
+  const progress = [];
+  const ask = (askId, text, reply) => { replies.push(reply); return bart.ask(ctx, project.id, { askId, ref, workspaceId: workspace.id, text, turns: [], agent: 'discover' }, { onProgress: (said) => progress.push(said) }); };
+  const back = await ask('hb1', "what's 2+2", '{"handoff": "a sum to work out"}');
+  assert.deepEqual([back.lines, back.handedBack], [[], { from: 'discover', reason: 'a sum to work out' }]);
+  assert.deepEqual(amended.filter(([id]) => id === 'hb1').map(([, patch]) => patch), [{ handedBack: 'a sum to work out' }], 'kept for the Agent Viewer');
+  const end = finished.find(([id]) => id === 'hb1')[1];
+  assert.deepEqual([end.status, end.ending, end.written], ['done', 'handed back', []]);
+  assert.ok(!progress.some((said) => said.lines && said.lines.length), 'nothing of it reached the page');
+  assert.equal((await ask('hb2', 'write me a build prompt', '```json\n{"handoff": "a prompt to write"}\n```')).handedBack.reason, 'a prompt to write', 'in a fence too');
+  // Anything else is a reply, as before: an answer to its question, the object inside prose, an object with more in it.
+  for (const [askId, reply] of [['hb3', 'Poems, then. What kind of grief?'], ['hb4', 'Sure: {"handoff": "x"}'], ['hb5', '{"handoff": "x", "say": "y"}']]) {
+    const out = await ask(askId, 'poems about grief', reply);
+    assert.equal(out.handedBack, undefined, reply);
+    assert.ok(out.lines.length > 0, reply);
+  }
+});
+
+test('the feed never previews a hand-back (MATH-165): {"handoff" … held as it streams, as ESCALATE: is; a card or a reply still shows', async () => {
+  const { createFeed } = activity;
+  const flush = () => new Promise((resolve) => setTimeout(resolve, 5));
+  const run = async (deltas) => { const sent = [], feed = createFeed({ onProgress: (said) => { if (said.lines) sent.push(said.lines); }, intervalMs: 0 }); feed.take({ textStart: true }); for (const delta of deltas) { feed.take({ delta }); await flush(); } feed.end(); return sent; };
+  assert.deepEqual(await run(['{"ha', 'ndoff": "a s', 'um"}']), []);
+  assert.deepEqual(await run(['```json\n', '{ "handoff":', ' "x"}\n```']), []);
+  assert.deepEqual(await run(['ESCAL', 'ATE: hard']), [], 'as before');
+  assert.ok((await run(['```json\n', '{"say": "", "card": "focus"}'])).length > 0, 'a card shows once it is one');
+  assert.ok((await run(['What would', ' you like?'])).length > 0);
+});
+
 test('a --codex @discover line runs Codex at its level when Claude Code is the default; a follow-up stays on Codex and resumes its session; --claude starts Claude Code afresh (P-07)', async () => {
   const authFile = path.join(homeDir, 'auth-discover-provider.json');
   fs.writeFileSync(authFile, JSON.stringify({ auth_mode: 'chatgpt', tokens: { access_token: 'x' } }));

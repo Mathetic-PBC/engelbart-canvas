@@ -722,8 +722,12 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   hereRef.current = topic ? topic.id : null;
   React.useEffect(() => () => { hereRef.current = null; }, []);
   const madeOpened = React.useRef(new Set());
-  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false, steer = null, build: direct = null }) => {
+  // `rerouted` (MATH-165): a line handed back once and routed again (DocEditor rerouteLine).
+  const askBartRef = React.useRef(null);
+  const askBart = React.useCallback(async (key, ref, { askId, text, turns, choice, agent, name, routed = null, place: typed = null, research = false, refine = false, steer = null, build: direct = null, rerouted = false }) => {
     if (!key || !ref || !topic) return;
+    // Handed back (MATH-165): the pending row stays as it is, its entry kept until the line's next ask takes it.
+    let handed = false;
     const askedIn = topic.id;
     // Where the question stood when its answer replaced the pending line, for a title that comes back after that.
     let answered = null;
@@ -814,6 +818,17 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       const asked = api.askBart(project.id, { askId, ref, workspaceId, text, turns: turns || [], choice: choice || null, agent: agent || 'bart', stage: stageNow(), ...(routed ? { routed } : {}), ...(typed ? { place: typed } : {}), ...(steer ? { steer } : {}) });
       loadBartModels(); // main has kept a pick by hand before this is read
       const out = await asked;
+      // Handed back (MATH-165, main's bart/ask.cjs handoffOf): nothing is written. The editor showing the document routes
+      // the line again in its place, Discover ruled out (DocEditor rerouteLine); a line already rerouted, or one no
+      // editor shows, is Chat's. The pending row says "Thinking" throughout.
+      if (out.handedBack && !out.stopped) {
+        handed = true;
+        const editor = editorRefs.current.map((held) => held && held.current).find((held) => held && held.props && held.props.docKey === key);
+        if (rerouted || !(editor && editor.rerouteLine && editor.rerouteLine(askId, out.handedBack))) {
+          askBartRef.current(key, ref, { askId, text, turns, agent: 'bart', ...(routed ? { routed: { id: routed.id } } : {}), place: typed, rerouted: true });
+        }
+        return;
+      }
       // Discover settled what to research (2026-10-14; main's bart/ask.cjs takeResearch, `out.research`): its research box
       // goes under the reply in the same change, the line keeping the direction, and the editor asks it (boxOff).
       const box = !out.stopped && out.research ? { askId: newAskId(), line: researchLine(out.research) } : null;
@@ -833,9 +848,10 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
       place([`bart> **No answer.** ${errorMessage(error)}`]);
       if (later && !ownTopic) nameAs('');
     } finally {
-      setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
+      if (!handed) setAsks((current) => { const next = { ...current }; delete next[askId]; return next; });
     }
   }, [topic, project.id, flush, changeDoc, loadBartModels, bartModels, stageNow, tickWalk, handOff, boxOff, buildFrom]);
+  askBartRef.current = askBart;
 
   // Bart, the router (2026-10-12; main/bart/route.cjs): which agent an `@bart` line is for. Its pending line says what
   // the editor's says for any run, "Thinking · <name> <effort>" with the level the line would start on if he could not
@@ -843,12 +859,15 @@ export default function Workspace({ tree, library, initialWorkspaceId, initialTa
   // asks under the same id and keeps that level until the run's first step (askStarted). A rule's pick (`rule`) is only logged. `current` is the agent a follow-up's conversation is
   // with (route.js routeInputs), which Bart stays with unless the line clearly wants another. Failing, the line goes to
   // that agent, else Chat (or to its rule's agent), the pick saying `by: 'error'` and why, so the run it is handed to
-  // shows the classifier failed rather than that it chose Chat (DocEditor handOff).
-  const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, specTitle = '', rule, current = null, place = null, level = null }, ref = null) => {
+  // shows the classifier failed rather than that it chose Chat (DocEditor handOff). MATH-165: `asking` and `discoverAsked`,
+  // Discover waiting on its question (route.js routeInputs); `exclude` and `handedBack`, a line an agent handed back
+  // (DocEditor rerouteLine), whose fallback is never an excluded agent.
+  const routeLine = React.useCallback(async (key, { askId, text, section, threads, specAbove, specTitle = '', rule, current = null, place = null, level = null, asking = false, discoverAsked = null, exclude = null, handedBack = null }, ref = null) => {
     setAsks((held) => ({ ...held, [askId]: { docKey: key, agent: 'router', ...(level ? { name: level.name, effort: level.effort } : {}) } }));
-    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: fallbackAgent(current), sure: 0, by: 'none' };
+    const fell = fallbackAgent(current);
+    const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: exclude && exclude.includes(fell) ? 'chat' : fell, sure: 0, by: 'none' };
     try {
-      return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, specTitle, rule, ...(current ? { current } : {}), ...(ref ? { ref } : {}), ...(place ? { place } : {}) })) || fallback;
+      return (await api.routeLine(project.id, { text, section, workspaceName: topic ? topic.name : '', threads, specAbove, specTitle, rule, ...(current ? { current } : {}), ...(asking ? { asking: true, discoverAsked } : {}), ...(exclude ? { exclude } : {}), ...(handedBack ? { handedBack } : {}), ...(ref ? { ref } : {}), ...(place ? { place } : {}) })) || fallback;
     } catch (error) {
       console.warn('Bart could not route the line:', error);
       return { ...fallback, by: 'error', error: errorMessage(error) };

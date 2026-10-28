@@ -84,8 +84,9 @@ test('routeByRule: empty → brainstorm, --build → Build, a level → discover
   assert.deepEqual(routeByRule('--build add a comment', {}), { agent: 'build', rule: '--build' });
   assert.deepEqual(routeByRule('tutors --deep', {}), { agent: 'discover', rule: 'level' });
   assert.deepEqual(routeByRule('--quick tutors', {}), { agent: 'discover', rule: 'level' });
-  // Answering Discover's question (2026-10-14): Discover's, after the flags that pick otherwise.
-  assert.deepEqual(routeByRule('how they notice', { current: 'discover', asking: true }), { agent: 'discover', rule: 'answering Discover' });
+  // Under Discover's open question no rule settles it since MATH-165 (2026-10-28): the model is asked, shown the question.
+  assert.equal(routeByRule('how they notice', { current: 'discover', asking: true }), null);
+  assert.equal(routeByRule("what's 2+2", { current: 'discover', asking: true }), null);
   assert.deepEqual(routeByRule('--build it', { current: 'discover', asking: true }), { agent: 'build', rule: '--build' });
   assert.equal(routeByRule('how they notice', { current: 'discover' }), null, 'after a guide, the model decides');
   // A model or effort flag picks how the agent runs, not which agent (2026-10-16): the rest of the line is classified.
@@ -127,6 +128,15 @@ test('routeInputs: the section from the heading, the threads above with their to
   assert.equal(asking(['@discover tutors', 'bart> ## Start here']), false, 'a guide');
   assert.equal(asking(['@discover tutors', 'bart> I will look.', '@discover --research tutors', 'bart> ## Start here', '@discover only after 2022', 'bart> Which years?']), true, 'asking again after a guide');
   assert.equal(asking(['@chat why', 'bart> because']), false, 'not Discover');
+  // What Discover asked (MATH-165), plain, its end kept; a card's title and labels; null when it is not asking.
+  const asked = (ls) => routeInputs([...ls, '@bart x'], ls.length).discoverAsked;
+  assert.equal(asked(['@discover attention', 'bart> Attention covers a lot.', 'bart> ', 'bart> What would you like to understand about **attention**?']), 'Attention covers a lot. What would you like to understand about attention?');
+  assert.equal(asked(['@discover', 'bart> ```json', 'bart> {"say": "", "card": "focus", "focus": {"title": "What would you like to research?", "options": [{"label": "Tutors"}, {"label": "Reading"}]}, "ready": false}', 'bart> ```']), 'What would you like to research? (options: Tutors; Reading)');
+  assert.equal(asked(['@discover tutors', 'bart> ## Start here']), null, 'a guide');
+  assert.equal(asked(['@chat why', 'bart> because']), null, 'not Discover');
+  const { discoverAskedOf, ASKED_CHARS } = await loadRoute();
+  const longAsked = discoverAskedOf(`${'word '.repeat(200)}What is it you want?`);
+  assert.ok(longAsked.length <= ASKED_CHARS && longAsked.endsWith('What is it you want?') && longAsked.startsWith('word'), 'the end kept, cut at a word');
   // A Refine (2026-10-15): Discover's question about it is answered to Discover; a line under the direction it settled,
   // waiting in its box to be started, goes on with Discover too.
   const refined = ['@discover tutors', 'bart> I will look.', '@discover --research tutors', 'bart> ## Start here', '@discover --refine something else'];
@@ -254,6 +264,49 @@ test('route.cjs: the model reads the line, its section without agent replies, fi
   assert.equal(listed.length, 5);
   assert.ok(listed[0].startsWith('- @chat, 4 lines up: "q3'), listed[0]);
   assert.ok(listed.every((line) => line.length < 120), 'each question cut to 80 characters');
+});
+
+test('route.cjs (MATH-165): under Discover\'s open question an answer to it stays with Discover at 0.6; anything else, no pick or an error is Chat\'s; an excluded agent is never the pick', async () => {
+  const { decide, SURE_ENOUGH } = route;
+  const asking = { asking: true };
+  assert.equal(SURE_ENOUGH, 0.6);
+  assert.deepEqual(decide({ agent: 'discover', sure: 0.65 }, 'discover', asking), { agent: 'discover', sure: 0.65 });
+  assert.deepEqual(decide({ agent: 'discover', sure: 0.5 }, 'discover', asking), { agent: 'chat', sure: 0.5 });
+  assert.deepEqual(decide({ agent: 'chat', sure: 0.9 }, 'discover', asking), { agent: 'chat', sure: 0.9 });
+  assert.deepEqual(decide(null, 'discover', asking), { agent: 'chat', sure: 0 });
+  assert.deepEqual(decide({ agent: 'discover', sure: 0.65 }, 'discover'), { agent: 'chat', sure: 0.65 }, 'not asking: 0.8 still, as before');
+  // Excluded (a line handed back): the agent it came from, a Build, a Create, are Chat's.
+  const exclude = ['discover', 'build', 'create'];
+  for (const agent of exclude) assert.equal(decide({ agent, sure: 0.95 }, null, { exclude }).agent, 'chat', agent);
+  assert.equal(decide({ agent: 'discover', sure: 0.95 }, 'discover', { asking: true, exclude }).agent, 'chat');
+  assert.equal(decide({ agent: 'brainstorm', sure: 0.9 }, null, { exclude }).agent, 'brainstorm');
+  // Through the router: what it is told, and what it decides.
+  const seen = {};
+  const asked = { ...LINE, text: 'poems, something about grief', current: 'discover', asking: true, discoverAsked: 'What would you like to understand about attention?' };
+  assert.equal((await router('{"agent":"discover","sure":0.65}', { seen }).route(asked)).agent, 'discover');
+  assert.match(seen.input, /<current>discover<\/current>\n\n<discover_asked>What would you like to understand about attention\?<\/discover_asked>\n\n<line>/);
+  assert.equal((await router('{"agent":"chat","sure":0.9}').route({ ...asked, text: "what's 2+2" })).agent, 'chat');
+  assert.equal((await router('nonsense').route(asked)).agent, 'chat', 'no pick');
+  const plain = {};
+  await router('{"agent":"chat","sure":0.9}', { seen: plain }).route({ ...asked, asking: false });
+  assert.ok(!plain.input.includes('<discover_asked>'), 'only while Discover is asking');
+  const handed = {};
+  const again = await router('{"agent":"discover","sure":0.99}', { seen: handed }).route({ ...asked, exclude: ['discover', 'build', 'create'], handedBack: { from: 'discover', reason: 'a <sum> to work out' } });
+  assert.equal(again.agent, 'chat');
+  assert.match(handed.input, /<handed_back from="discover">a sum to work out<\/handed_back>/);
+  assert.equal((await router('{"agent":"build","sure":0.95,"spec":false}').route({ ...LINE, exclude: ['discover', 'build', 'create'] })).agent, 'chat');
+  // The prompt explains both.
+  const { ROUTE_SYSTEM_PROMPT } = require('../src/main/bart/route-system-prompt.cjs');
+  assert.match(ROUTE_SYSTEM_PROMPT, /When <discover_asked> is present[\s\S]*?"what's 2\+2" → chat/);
+  assert.match(ROUTE_SYSTEM_PROMPT, /When <handed_back from="…"> is present[^\n]*Do not pick that agent/);
+});
+
+test('no agent talks about routing (MATH-165): Discover hands a line that is not for it back as {"handoff": …}; Discover, Chat and Brainstorm never mention agents handling it, routing or resending', () => {
+  const { DISCOVER_SYSTEM_PROMPT } = require('../src/main/bart/discover-system-prompt.cjs');
+  const { BART_SYSTEM_PROMPT } = require('../src/main/bart/system-prompt.cjs');
+  const { BRAINSTORM_SYSTEM_PROMPT } = require('../src/main/bart/brainstorm-system-prompt.cjs');
+  assert.match(DISCOVER_SYSTEM_PROMPT, /Reply with exactly \{"handoff": "<a few words on what it asks for>"\} and nothing else/);
+  for (const prompt of [DISCOVER_SYSTEM_PROMPT, BART_SYSTEM_PROMPT, BRAINSTORM_SYSTEM_PROMPT]) assert.match(prompt, /Never talk about how this message reached you or who should handle it: do not mention agents handling it, routing, handing it off, or sending it again\./);
 });
 
 test('route.cjs fake (ENGELBART_BART_FAKE=1): by keyword', () => {
@@ -391,11 +444,53 @@ test('a line Bart handed to @discover: its follow-up, Regenerate, the session an
   assert.deepEqual([n.asks[0].agent, n.asks[0].intro, n.asks[0].research, n.asks[0].turns.length, n.asks[0].name], ['discover', undefined, undefined, 1, undefined]);
   const { threads } = await loadDoc();
   assert.equal(threads(n.lines())[0].turns.length, 2);
-  // While Discover is still asking what to research (its last turn no box and no guide), a reply is its answer, by rule.
+  // While Discover is still asking what to research (its last turn no box and no guide), the model decides (MATH-165), told
+  // that Discover is waiting and what it asked.
   const asking = mounted([head, '@bart papers on tutors?', 'bart> What are you hoping the research will help you figure out?', 'bart> *Discover · Opus · high · 4 s*'], { route: async (input) => ({ id: 'route-q', agent: 'chat', sure: 0.9, by: input.rule ? 'rule' : 'model' }) });
   asking.editor.followText.set(1, 'how they notice a student is stuck');
   asking.editor.sendFollow(1);
-  assert.deepEqual([asking.routes[0].rule, asking.routes[0].current], [{ agent: 'discover', rule: 'answering Discover' }, 'discover']);
+  assert.deepEqual([asking.routes[0].rule, asking.routes[0].current, asking.routes[0].asking, asking.routes[0].discoverAsked], [null, 'discover', true, 'What are you hoping the research will help you figure out?']);
+});
+
+test('a line handed back (MATH-165) is routed again in its place, Discover, Build and Create ruled out, and asked of the pick under the same pending line; nothing of it is written', async () => {
+  const head = 'bart# [discover 2026-10-27T09:00:00Z] Attention';
+  const thread = [head, '@bart something on attention', 'bart> What would you like to understand about attention?', 'bart> *Discover · Opus · high · 4 s*'];
+  const picks = [];
+  const m = mounted(thread, { route: async (input) => picks.shift() || { id: 'route-x', agent: 'chat', sure: 0.9, by: 'model' } });
+  picks.push({ id: 'route-1', agent: 'discover', sure: 0.7, by: 'model' }, { id: 'route-2', agent: 'chat', sure: 0.9, by: 'model' });
+  m.editor.followText.set(1, "what's 2+2");
+  m.editor.sendFollow(1);
+  await new Promise((resolve) => setImmediate(resolve));
+  const askId = m.asks[0].askId;
+  assert.deepEqual([m.asks[0].agent, m.routes[0].asking, m.routes[0].discoverAsked], ['discover', true, 'What would you like to understand about attention?']);
+  const before = m.lines().join('\n');
+  assert.equal(m.editor.rerouteLine(askId, { from: 'discover', reason: 'a sum to work out' }), true);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([m.routes[1].askId, m.routes[1].text, m.routes[1].exclude, m.routes[1].handedBack, m.routes[1].rule], [askId, "what's 2+2", ['discover', 'build', 'create'], { from: 'discover', reason: 'a sum to work out' }, null]);
+  assert.deepEqual([m.asks[1].askId, m.asks[1].agent, m.asks[1].text, m.asks[1].rerouted, m.asks[1].routed], [askId, 'bart', "what's 2+2", true, { id: 'route-2' }]);
+  assert.equal(m.lines().join('\n'), before, 'the same line and pending line; the title keeps the first pick');
+  assert.ok(!/sum to work out|handoff|handed/i.test(m.lines().join('\n')), 'no reason on the page');
+  // A reroute to a Build, a Create or the agent that handed it back is Chat's; failing, Chat's too.
+  for (const pick of [{ agent: 'build', sure: 0.95, spec: false }, { agent: 'create', sure: 0.95 }, { agent: 'discover', sure: 0.99 }, null]) {
+    const r = mounted([...thread, '@bart make me a chart', 'bart~> a9', ''], { route: async () => { if (!pick) throw new Error('down'); return { id: 'route-r', by: 'model', ...pick }; } });
+    r.editor.rerouteLine('a9', { from: 'discover', reason: 'a chart to make' });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual([r.asks.length, r.asks[0].agent, r.builds.length], [1, 'bart', 0], JSON.stringify(pick));
+  }
+  // Brainstorm, when that is what it is for.
+  const b = mounted([...thread, '@bart help me work out what I think', 'bart~> a8', ''], { route: async () => ({ id: 'route-b', agent: 'brainstorm', sure: 0.9, by: 'model' }) });
+  b.editor.rerouteLine('a8', { from: 'discover', reason: 'their own thinking' });
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.deepEqual([b.asks[0].agent, b.asks[0].rerouted], ['brainstorm', true]);
+  // A line no longer there is not routed.
+  assert.equal(b.editor.rerouteLine('gone', { from: 'discover', reason: '' }), false);
+  // Workspace: a hand-back writes nothing and has the editor route the line again; one already rerouted, or with no
+  // editor showing it, is Chat's; the pending row's entry is kept meanwhile.
+  const workspace = fs.readFileSync(path.join(__dirname, '../src/renderer/screens/Workspace.jsx'), 'utf8');
+  const asking = workspace.slice(workspace.indexOf('const askBart = React.useCallback'), workspace.indexOf('askBartRef.current = askBart;'));
+  assert.match(asking, /if \(out\.handedBack && !out\.stopped\) \{\s*handed = true;[\s\S]*?if \(rerouted \|\| !\(editor && editor\.rerouteLine && editor\.rerouteLine\(askId, out\.handedBack\)\)\) \{\s*askBartRef\.current\(key, ref, \{ askId, text, turns, agent: 'bart',[^\n]*rerouted: true \}\);\s*\}\s*return;\s*\}/);
+  assert.match(asking, /finally \{\s*if \(!handed\) setAsks/);
+  assert.ok(asking.indexOf('out.handedBack') < asking.indexOf('place(out.stopped'), 'before anything is placed');
 });
 
 test('handoff: build with a spec above, sure ≥ 0.8 and meaning that spec starts a Build of the spec; any other sure build starts a Build of the line; less sure, Chat writes the Build prompt', async () => {
@@ -1308,10 +1403,10 @@ test('a line being routed names, from the start, the level it would start on; th
   const discover = mounted(['@discover tutors', 'bart> ## Start here', 'bart> *Discover · Opus · high · 9 s*', ''], { route: () => new Promise(() => {}) });
   discover.editor.followText.set(0, 'which is cheapest?'); discover.editor.sendFollow(0);
   assert.deepEqual([discover.routes[0].current, discover.routes[0].level], ['discover', { name: chatStep.name, effort: chatStep.effort }]);
-  // One answering Discover's question goes to Discover by rule (2026-10-14): its level.
+  // One under Discover's open question is the model's to route (MATH-165): it would fall back to Chat, so Chat's level.
   const asked = mounted(['@discover tutors', 'bart> What are you hoping to figure out?', 'bart> *Discover · Opus · high · 9 s*', ''], { route: () => new Promise(() => {}) });
   asked.editor.followText.set(0, 'how they notice'); asked.editor.sendFollow(0);
-  assert.deepEqual([asked.routes[0].rule.rule, asked.routes[0].level.name], ['answering Discover', readDiscover('tutors', DEFAULTS, []).steps[0].name]);
+  assert.deepEqual([asked.routes[0].rule, asked.routes[0].level], [null, { name: chatStep.name, effort: chatStep.effort }]);
   const brainstorm = mounted(['@brainstorm a plan', 'bart> Think about it.', 'bart> *Brainstorm · 9 s*', ''], { route: () => new Promise(() => {}) });
   brainstorm.editor.followText.set(0, 'more'); brainstorm.editor.sendFollow(0);
   assert.equal(brainstorm.routes[0].level, undefined);

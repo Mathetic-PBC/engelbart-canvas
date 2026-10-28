@@ -624,6 +624,22 @@ function topicsOnly(said) {
   const options = focus.options.map((option) => (typeof option === 'string' ? { label: option } : option && typeof option === 'object' ? { label: option.label } : null)).filter((option) => option && option.label).slice(0, OPENING_TOPICS);
   return JSON.stringify({ ...card, focus: { ...focus, options } });
 }
+// Discover handing a line back (MATH-165, 2026-10-28): a turn settling what to research that is given a line asking for
+// neither reading nor answering its question replies `{"handoff": "<reason>"}` alone (its prompt). Nothing is written:
+// the run ends handed back, the reason kept on its record, and the editor routes the line again without Discover.
+const HANDOFF_RE = /^\s*(?:```(?:json)?\s*)?(\{[\s\S]*\})\s*(?:```)?\s*$/;
+/** The reason a whole reply hands the line back with, or null when it is not a hand-back. */
+function handoffOf(text) {
+  const found = String(text == null ? '' : text).match(HANDOFF_RE);
+  if (!found) return null;
+  let value = null;
+  try { value = JSON.parse(found[1]); } catch { return null; }
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.keys(value).length !== 1 || typeof value.handoff !== 'string') return null;
+  return value.handoff.replace(/\s+/g, ' ').trim().slice(0, 200) || 'not a search';
+}
+/** Whether a Discover turn may hand its line back: one settling what to research, not a search or the Welcome walkthrough's. */
+const mayHandBack = (agent, plan) => agent === 'discover' && !plan.search && !plan.welcome;
+
 /** What an answer hands back beside its lines: { topic } and { research } when there are. */
 const handedBack = (named) => ({ ...(named.topic ? { topic: named.topic } : {}), ...(named.research ? { research: named.research } : {}) });
 
@@ -849,7 +865,8 @@ function createBart({ readModels, environment = process.env, runDirectory = path
     if (routed && routed.corrected) log((runs) => markCorrected(runs, { id: routed.id, projectId, text, agent: routed.corrected }));
     try {
       const result = await answer();
-      log((runs) => runs.finish(logId, { status: 'done', written: result.lines, ms: Date.now() - startedAt }));
+      if (result.handedBack) log((runs) => runs.amend(logId, { handedBack: result.handedBack.reason }));
+      log((runs) => runs.finish(logId, { status: 'done', ...(result.handedBack ? { ending: 'handed back' } : {}), written: result.lines, ms: Date.now() - startedAt }));
       return result;
     } catch (error) {
       log((runs) => runs.finish(logId, { status: error && error.kind === 'stopped' ? 'stopped' : 'failed', error: error && error.message, ms: Date.now() - startedAt }));
@@ -931,6 +948,9 @@ function createBart({ readModels, environment = process.env, runDirectory = path
         const made = create ? await keepCreated(ctx, projectId, logId, draft) : null;
         if (made) { meta.created = made.files.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
         if (made) await saveAllCreated(ctx, projectId, workspaceId, logId, made.files, { inspectPdf, onAdded }); // and saved (2026-10-15)
+        // Handed back (handoffOf): nothing written, and no session kept for the turn.
+        const back = mayHandBack(agent, plan) ? handoffOf(out.text) : null;
+        if (back) return { lines: [], meta, handedBack: { from: 'discover', reason: back } };
         // A card is written as its JSON in a fence; a reply that is not one, as it came (the editor draws it as an answer).
         // The Welcome walkthrough's cards always read the same (welcomeReply).
         const named = taken(agent, plan, out.text);
@@ -1034,6 +1054,8 @@ function fakeCitations(context) {
 }
 
 function fakeDiscover(context, plan) {
+  // A line that wants no reading (a sum, as "what's 2+2"), handed back (handoffOf, MATH-165).
+  if (!plan.search && /\d\s*\+\s*\d/.test(plan.question)) return '{"handoff": "a sum to work out, not reading to find"}';
   if (!plan.search) return fakeDirection(context, plan);
   const guided = plan.prior.some((turn) => /^## /.test(turn.answer));
   // Title, Read and Why; Read names a section by a link to its first words, or says the fake only had the abstract.
@@ -1213,6 +1235,12 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
         const made = create ? await keepCreated(ctx, projectId, logId, draft) : null;
         if (made) { meta.created = made.files.map(createdRow); log((runs) => runs.amend(logId, { created: meta.created, skipped: made.skipped })); }
         if (made) await saveAllCreated(ctx, projectId, workspaceId, logId, made.files, { inspectPdf, onAdded }); // and saved (2026-10-15)
+        const back = mayHandBack(agent, plan) ? handoffOf(out.text) : null;
+        if (back) {
+          const result = { lines: [], meta, handedBack: { from: 'discover', reason: back } };
+          log((runs) => { runs.amend(logId, { handedBack: back }); runs.finish(logId, { status: 'done', ending: 'handed back', written: [], ms: Date.now() - startedAt }); });
+          return result;
+        }
         const named = taken(agent, plan, out.text);
         const body = made ? createdBody(createdSentence(made.files.length ? createdLine(line || requestSentence(question)) : '', out.text, question), made, logId) : plan.welcome ? cardBody(welcomeReply(out.text, plan.stage)).body : await citedBody(ctx, { agent, routed, body: replyBody(agent, named.text), projectId, workspaceId, prior, question: text, log, logId });
         if (store) store.keep(threadKey(projectId, ref, [...prior, cleanTurn({ question: text, answer: answerText(body) })]), { provider, session: out.session, projectId, workspaceId });
@@ -1232,4 +1260,4 @@ function createFakeBart({ readModels, delayMs = 1200, threads = createThreads(),
   };
 }
 
-module.exports = { citesChecked, takeTopic, takeResearch, withoutResearch, steersShown, steerMessage, isSearch, createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, welcomeReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, WELCOME_CARDS };
+module.exports = { citesChecked, handoffOf, takeTopic, takeResearch, withoutResearch, steersShown, steerMessage, isSearch, createBart, createFakeBart, createThreads, logTo, runRecord, routedOf, CLAUDE_TOOLS, BRAINSTORM_TOOLS, CREATE_TOOLS, CREATE_CODEX, createRules, PAPER_TOOLS, STEP_TIMEOUT_MS, PROMPTS, threadKey, cleanTurns, turnPlan, firstMessage, welcomeReply, climb, levelBlock, loadSystemPrompt, replyBody, writeCodexConfig, BartError, ESCALATE_RE, THREAD_IDLE_MS, BRAINSTORM_IDLE_MS, DISCOVER_IDLE_MS, DISCOVER_TIMEOUT_MS, DEEP_DISCOVER_TIMEOUT_MS, MODE_LIMITS, AGENTS, WELCOME_CARDS };

@@ -20,6 +20,9 @@
 // Evening 2026-10-16 (David, the Classifier 2 note): the test is the endpoint. Chat when one reply reaches it, however hard
 // the question; Brainstorm when it is far, undefined or reached only through the person's own steps. A bare topic to learn,
 // with no question in it, leans Brainstorm ("i wanna learn about <topic>" went to Chat); a bounded question leans Chat.
+// MATH-165 (2026-10-28): a line under Discover's open question is routed here (no longer to Discover by rule), shown what
+// it asked (<discover_asked>): an answer to it is Discover, anything else as usual. A line Discover handed back comes
+// with <handed_back>, and goes elsewhere (route.cjs decide holds that too).
 // The eval (scripts/route-eval.mjs, fixtures/route-eval.jsonl) holds the hard cases; fixtures/route-eval-intent.jsonl
 // holds paraphrases kept out of this prompt.
 
@@ -91,6 +94,14 @@ Within a conversation, classify the kind of interaction the conversation is havi
 - In Brainstorm, stopping to ask what a term means or for a fact or quick explanation they need to keep going is part of working it through: Brainstorm answers it in passing and goes on, so it stays Brainstorm. So do an unsure reply, a guess or a view of their own. It changes only when they want to stop working it out and be given the result (Engelbart's recommendation, verdict or writing), or want a file, a search or a change.
 - In Chat, a further question, pushback or confusion about the answer stays Chat.
 - In Discover, a question about the sources it found is Chat; asking for more or other sources is Discover.
+
+When <discover_asked> is present, Discover asked the person that question to settle what to look for, and is waiting for the answer. A line that answers it, however short, is discover; a line asking for anything else is decided as any line is. For example, with <discover_asked>What would you like to understand about attention?</discover_asked>:
+- "poems, something about grief" → discover
+- "how it shapes what we remember" → discover
+- "what's 2+2" → chat
+- "write me a build prompt for adding a dark mode toggle" → chat
+
+When <handed_back from="…"> is present, that agent was given the line and said it is not for it, for the reason given. Do not pick that agent; pick the one the line is for.
 
 Important distinctions:
 
@@ -169,7 +180,7 @@ Contrasts across agents:
 
 For Build, also return "spec": true only when the person is clearly approving the existing spec above as-is. If they are describing a new or changed request, return "spec": false.
 
-You are given the line (<line>), the section of the document it is in (<section>, agent replies left out), the threads above it (<threads>: each one's agent, the start of its question and how many lines up it is), whether the nearest answer above holds a fenced block, a spec that could be built, and when it does the spec's first line (<spec_above>), and, when the line follows up a thread, the agent that conversation is with now (<current>).
+You are given the line (<line>), the section of the document it is in (<section>, agent replies left out), the threads above it (<threads>: each one's agent, the start of its question and how many lines up it is), whether the nearest answer above holds a fenced block, a spec that could be built, and when it does the spec's first line (<spec_above>), and, when the line follows up a thread, the agent that conversation is with now (<current>); also, when they apply, the question Discover is waiting on (<discover_asked>) and the agent that handed the line back (<handed_back>).
 
 "sure" is how sure you are that the agent gives the person the result they asked for. A clear request in casual or polite wording is still clear.
 

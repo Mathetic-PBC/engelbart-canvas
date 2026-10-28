@@ -4478,7 +4478,7 @@ export default class DocEditor extends React.Component {
     const ls = put == null ? now : [...now.slice(0, i), put, ...now.slice(i)], q = gap ? i + 1 : i, p = parseLine(ls[q] || '');
     const askId = newAskId(), add = [`bart~> ${askId}`]; if (q + 1 >= ls.length) add.push('');
     const from = { key: this.props.docKey, props: this.props }; // handed off in this document, wherever the editor is by then
-    const inputs = routeInputs(ls, q), current = inputs.current, rule = routeByRule(p.text, { models: this.props.models, current, asking: inputs.asking });
+    const inputs = routeInputs(ls, q), current = inputs.current, rule = routeByRule(p.text, { models: this.props.models, current });
     const ed = this.editorEl(); this.holdAsked(askId, top !== undefined ? top : this.rowTop(ed, i));
     this.setLines((x) => { const out = before ? before(x) : [...x]; if (put != null) out.splice(i, 0, put); out.splice(q + 1, 0, ...add); return out; });
     if (ed) ed.blur(); this.setState({ activeLine: null, mention: null });
@@ -4486,9 +4486,28 @@ export default class DocEditor extends React.Component {
     const fallback = rule ? { agent: rule.agent, sure: 1, by: 'rule', rule: rule.rule } : { agent: fallbackAgent(current), sure: 0, by: 'none' };
     const level = this.routingLevel(ls, q, p.text, fallback.agent);
     const asked = this.props.onRoute
-      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, specTitle: inputs.specTitle, rule, current, place: { line: q, text: ls[q] }, ...(level ? { level } : {}) }))
+      ? Promise.resolve(this.props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, specTitle: inputs.specTitle, rule, current, ...(inputs.asking ? { asking: true, discoverAsked: inputs.discoverAsked } : {}), place: { line: q, text: ls[q] }, ...(level ? { level } : {}) }))
       : Promise.resolve(fallback);
     return asked.catch(() => null).then((pick) => this.handOff(askId, pick || { agent: fallbackAgent(current), sure: 0 }, from));
+  }
+  // A line handed back (MATH-165, 2026-10-28; main's bart/ask.cjs handoffOf): Discover, given a line that was not for it,
+  // wrote nothing, and the line is routed again in its place, under the same pending row, still "Thinking" (Workspace
+  // askBart). The router is told who handed it back and why, and may not pick that agent, a Build or a Create (each is
+  // Chat's instead); what it picks answers, through handOff. Once: a second hand-back is Chat's (Workspace askBart).
+  // Nothing about it reaches the page. `back`: { from, reason }. → whether the line was there to route.
+  rerouteLine(askId, back, from = { key: this.props.docKey, props: this.props }) {
+    const { key, props } = from;
+    const ls = this.linesOf(key, props) || [], q = ls.indexOf(`bart~> ${askId}`) - 1, p = q >= 0 ? parseLine(ls[q]) : null;
+    if (!p || p.type !== 'bart' || !props.onRoute) return false;
+    const inputs = routeInputs(ls, q), current = inputs.current, exclude = [back.from, 'build', 'create'];
+    const fell = fallbackAgent(current), fallback = { agent: exclude.includes(fell) ? 'chat' : fell, sure: 0 };
+    const level = this.routingLevel(ls, q, p.text, fallback.agent);
+    const asked = Promise.resolve(props.onRoute({ askId, text: p.text.trim(), section: inputs.section, threads: inputs.threads, specAbove: inputs.specAbove, specTitle: inputs.specTitle, rule: null, current, ...(inputs.asking ? { asking: true, discoverAsked: inputs.discoverAsked } : {}), exclude, handedBack: { from: back.from, reason: back.reason || '' }, place: { line: q, text: ls[q] }, ...(level ? { level } : {}) }));
+    asked.catch(() => null).then((pick) => {
+      const got = pick || fallback;
+      this.handOff(askId, exclude.includes(got.agent) ? { ...got, agent: 'chat' } : got, from, { rerouted: true });
+    });
+    return true;
   }
   // What a line's pending row names while Bart routes it (2026-10-13): the first step of the agent it goes to if he cannot
   // pick (`agent`: its rule's, else fallbackAgent's, Chat for a new line), read as main reads it (bart/ask.cjs turnPlan)
@@ -4526,10 +4545,12 @@ export default class DocEditor extends React.Component {
   //     conversation gets a title line marked a Build's (2026-10-13), and its card collapses with it. Since 2026-10-28 it
   //     runs on the line's model and is given the conversation above it, as a Build Bart picks is.
   // A pick made because routing failed (`by: 'error'`, Workspace routeLine) says so in `routed`, for the run's record.
-  handOff(askId, pick, from = { key: this.props.docKey, props: this.props }) {
+  // `rerouted` (MATH-165): a line handed back and routed again (rerouteLine), which no longer reads `@bart` when the first
+  // pick wrote it as its agent's; its ask says so, so a second hand-back is Chat's.
+  handOff(askId, pick, from = { key: this.props.docKey, props: this.props }, { rerouted = false } = {}) {
     const { key, props } = from, write = (fn) => this.setLinesOf(key, props, fn);
     const ls = this.linesOf(key, props) || [], at = ls.indexOf(`bart~> ${askId}`), q = at - 1, p = q >= 0 ? parseLine(ls[q]) : null;
-    if (!p || p.type !== 'bart' || agentOf(p) !== 'router') { if (props.onRouteGone) props.onRouteGone(askId); return null; }
+    if (!p || p.type !== 'bart' || (!rerouted && agentOf(p) !== 'router')) { if (props.onRouteGone) props.onRouteGone(askId); return null; }
     const id = pick.id || null, text = p.text.trim(), typed = { line: q, text: ls[q] }; // where it was (the Agent Viewer)
     const failed = pick.by === 'error' ? { by: 'error', ...(pick.error ? { error: String(pick.error).slice(0, 400) } : {}) } : {};
     const models = props.models, step = models ? readQuestion(text, models).steps[0] : null;
@@ -4571,7 +4592,7 @@ export default class DocEditor extends React.Component {
     if (agent === 'discover') next = this.refining(next, at2);
     if (next !== ls) write(() => next);
     const refine = agent === 'discover' && this.refiningAt(next, at2);
-    const ask = { askId, text, turns, agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: at2, text: typed.text }, ...(name ? { name: true } : {}), ...(refine ? { refine: true } : {}) };
+    const ask = { askId, text, turns, agent, routed: { id, ...failed, ...(build ? { build: true } : {}) }, place: { line: at2, text: typed.text }, ...(name ? { name: true } : {}), ...(refine ? { refine: true } : {}), ...(rerouted ? { rerouted: true } : {}) };
     props.onAsk(ask);
     return agent;
   }
