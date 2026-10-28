@@ -8,10 +8,11 @@ let package = Package(
     products: [.library(name: "EngelbartConnect", targets: ["EngelbartConnect"])],
     dependencies: [
         .package(path: "../Core"),
-        .package(path: "../UI"),
+        // ../UI is left out on purpose: the sign-in windows are a web page in a plain window (white, as Electron's
+        // backgroundColor '#ffffff'), and building against another agent's in-progress UI package broke this one.
     ],
     targets: [
-        .target(name: "EngelbartConnect", dependencies: [.product(name: "EngelbartCore", package: "Core"), .product(name: "EngelbartUI", package: "UI"), ]),
+        .target(name: "EngelbartConnect", dependencies: [.product(name: "EngelbartCore", package: "Core")], resources: [.copy("Resources/trace.html")]),
         .testTarget(name: "EngelbartConnectTests", dependencies: ["EngelbartConnect"]),
     ]
 )
