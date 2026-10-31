@@ -34,6 +34,7 @@ const { Worker } = require('node:worker_threads');
 const { convertDocument, CONVERT_VERSION } = require('./convert.cjs');
 
 const VERSION = 1;
+const ROWS_FILE = 'rows.json'; // ./rows.cjs's: kept through a disconnect
 const EVERY_MS = 10 * 60_000;
 const STALE_MS = 2 * 60_000;
 const NAME_MAX = 120;
@@ -239,7 +240,7 @@ function createRemarkableSync({ root, bridge = null, findLibrary = null, source 
     if (running) await running.catch(() => {});
   }
 
-  /** Stops, and deletes the mirror (copies only: the reMarkable app's library is never touched). */
+  /** Stops, and deletes the copies (the reMarkable app's library is never touched; rows.json stays: clear). */
   async function disconnect() {
     await halt();
     clear();
@@ -253,7 +254,14 @@ function createRemarkableSync({ root, bridge = null, findLibrary = null, source 
     if (stopWatching) stopWatching();
     state = { state: 'idle', error: '', code: '', problems: [] };
     const at = rootNow();
-    const removeRoot = () => { if (at) { try { fs.rmSync(at, { recursive: true, force: true }); } catch { /* already gone */ } } };
+    // The copies go; rows.json (./rows.cjs, which library row each document was) stays, so connecting again brings the
+    // same rows back, and with them what was made of them in Engelbart (ink, notes, stars, mentions, workspaces).
+    const removeRoot = () => {
+      if (!at) return;
+      let names = [];
+      try { names = fs.readdirSync(at); } catch { return; }
+      for (const name of names) if (name !== ROWS_FILE) { try { fs.rmSync(path.join(at, name), { recursive: true, force: true }); } catch { /* already gone */ } }
+    };
     removeRoot();
     // A conversion under way writes its files when it ends: they go too.
     if (running) running.then(removeRoot, removeRoot);

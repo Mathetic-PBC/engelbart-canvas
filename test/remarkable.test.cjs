@@ -176,7 +176,7 @@ test('disconnecting deletes the mirror and never touches the app’s library', a
   await remarkable.connect();
   await settle(remarkable);
   await remarkable.disconnect();
-  assert.equal(fs.existsSync(mirrorDir(dataRoot)), false);
+  assert.deepEqual(walk(mirrorDir(dataRoot)), [], 'the copies are gone');
   assert.equal(remarkable.status().connected, false);
   assert.deepEqual(walk(dir), before);
 });
@@ -382,7 +382,7 @@ test('disconnecting while a sync converts: nothing is written after, no rows are
   release();
   await halting;
   await remarkable.disconnect();
-  assert.equal(fs.existsSync(root), false, 'the conversion under way finished before the mirror went');
+  assert.deepEqual(walk(root), [], 'the conversion under way finished before the copies went');
 });
 
 test('disconnecting as the app does (stop, then the rows, then the copies) leaves no row behind', async () => {
@@ -400,6 +400,30 @@ test('disconnecting as the app does (stop, then the rows, then the copies) leave
   await removeRows(ctx, root);
   await remarkable.disconnect();
   assert.equal(ctx.table.size, 0);
-  assert.equal(fs.existsSync(root), false);
+  assert.deepEqual(walk(root), [], 'nothing written after the halt');
+  remarkable.stop();
+});
+
+test('disconnecting and connecting again brings each document back as the same row', async () => {
+  const dir = appLibrary();
+  const { remarkable, dataRoot } = syncOver(dir);
+  const root = mirrorDir(dataRoot);
+  const ctx = memoryLibrary();
+  await remarkable.connect();
+  await settle(remarkable);
+  await reconcileRows(ctx, root);
+  const [before] = [...ctx.table.values()];
+  await ctx.libraryDb.rename(before.id, 'My name for it');
+  await remarkable.halt();
+  await removeRows(ctx, root);
+  await remarkable.disconnect();
+  assert.equal(ctx.table.size, 0);
+  assert.ok(fs.existsSync(path.join(root, 'rows.json')), 'which row each document was is kept');
+  await remarkable.connect();
+  await settle(remarkable);
+  await reconcileRows(ctx, root);
+  const [after] = [...ctx.table.values()];
+  assert.equal(after.id, before.id, 'the same id: ink, notes, stars and mentions kept by it come back');
+  assert.ok(fs.existsSync(after.path));
   remarkable.stop();
 });

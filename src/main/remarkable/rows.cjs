@@ -10,6 +10,8 @@
 // it at the new file (its ink, highlights, stars and links in Engelbart stay with it); a name changed in Engelbart is
 // kept until the tablet's name changes. A document gone from the tablet (deleted, or in its trash) takes its row with
 // it. A PDF row is left to be read for whether it is a paper (categorized null), as a PDF added by hand is.
+// Disconnecting takes the rows away but keeps rows.json, so connecting again brings each document back as the same row
+// (the same id): the ink, notes, stars, mentions and workspace links Engelbart keeps by it come back with it.
 
 const fs = require('node:fs');
 const path = require('node:path');
@@ -70,7 +72,14 @@ async function reconcileRows(ctx, root) {
     const name = String(item.name || item.base || 'Untitled').slice(0, 512);
     const was = map[docId];
     let row = was && rows.get(was.row);
-    if (!row) { // a row for this file already, nobody else's (adopted)
+    if (!row && was && was.row && !rows.has(was.row)) {
+      // Taken away on disconnecting, connected again: the same row (its id), so what Engelbart keeps by it comes back.
+      row = await ctx.libraryDb.insert({ id: was.row, name: was.name || name, type, tags: [], path: file, url: null, folder_path: null, project_id: null, github_id: null, categorized: type === 'pdf' ? null : CATEGORY_RULES });
+      rows.set(row.id, row);
+      claimed.add(row.id);
+      out.added += 1;
+    }
+    if (!row && !was) { // a row for this file already, nobody else's (adopted)
       row = [...rows.values()].find((r) => r.path === file && !claimed.has(r.id)) || null;
       if (row) claimed.add(row.id);
     }
