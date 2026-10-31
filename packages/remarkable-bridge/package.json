@@ -1,0 +1,37 @@
+{
+  "name": "remarkable-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Read reMarkable tablet documents without the cloud: the .rm format, page mapping, typed text and highlights, SVG and PDF output, and the reMarkable desktop app's library as a source.",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "bin": {
+    "remarkable": "./dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && chmod +x dist/cli.js",
+    "check": "tsc -p tsconfig.check.json",
+    "test": "bun test"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.6",
+    "typescript": "7.0.2"
+  },
+  "dependencies": {
+    "pdf-lib": "1.17.1"
+  }
+}
