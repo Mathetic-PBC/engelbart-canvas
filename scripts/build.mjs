@@ -1,5 +1,12 @@
 import { build } from 'esbuild';
-import { mkdir, copyFile, rm } from 'node:fs/promises';
+import { mkdir, copyFile, rm, chmod } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+
+// packages/remarkable-bridge (the reMarkable library, src/main/remarkable): TypeScript, so main requires its dist/,
+// compiled here first, for `npm start` and a release alike.
+execFileSync(process.execPath, ['node_modules/typescript/bin/tsc', '-p', 'packages/remarkable-bridge/tsconfig.json'], { stdio: 'inherit' });
+// Its `remarkable` command: tsc writes files without the execute bit, which a command on the PATH needs.
+await chmod('packages/remarkable-bridge/dist/cli.js', 0o755);
 
 const mode = process.env.NODE_ENV === 'production' ? 'production' : 'development';
 // A release (npm run dist:mac) ships the renderer minified and without source maps, which would carry the source.

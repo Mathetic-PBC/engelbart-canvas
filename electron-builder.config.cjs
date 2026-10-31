@@ -70,6 +70,9 @@ module.exports = {
     // …and never draws, so not @napi-rs/canvas, pdf.js's optional drawing module (npm installs it for one architecture).
     '!node_modules/@napi-rs{,/**}',
     '!node_modules/**/*.map',
+    // packages/remarkable-bridge (npm workspace, src/main/remarkable): main requires its dist/ only; its TypeScript
+    // sources and its test fixtures stay out.
+    '!node_modules/remarkable-bridge/{src,test,tsconfig*.json}{,/**}',
     // node-pty: its prebuilt modules (N-API, so Electron loads them as they are) for both Macs; no build folder, so
     // node-pty looks in prebuilds/, and no sources or Windows binaries.
     '!node_modules/node-pty/{build,deps,src,third_party,scripts,node-addon-api,binding.gyp}{,/**}',

@@ -5,11 +5,12 @@ import { Group, Row, BUTTON, text } from '../ui/SettingsRows.jsx';
 import { rowOf } from '../model/tools.js';
 import { useGithubStatus } from './useGithubStatus.js';
 import { useZoteroStatus } from './useZoteroStatus.js';
+import { useRemarkableStatus } from './useRemarkableStatus.js';
 import ConnectionActions, { ConnectionProgress } from './ConnectionActions.jsx';
 
 // Connections (restored 2026-10-02 from feat/canvas-workspace-updates-2026-09-28): the app's accounts. A page of the
 // Settings window, after Model (../ui/Settings.jsx; MATH-64, 2026-10-06: until then an icon in the top-right controls,
-// its panel hanging under it). GitHub, Zotero (MATH-65), then Claude Code and Codex (2026-10-03), each a row of the page's
+// its panel hanging under it). GitHub, Zotero (MATH-65), reMarkable (2026-10-31), then Claude Code and Codex (2026-10-03), each a row of the page's
 // one group, laid out as Model's are. GitHub's sign-in, its device page and its "Repository access" page all open in the
 // default browser (github-open, src/main/ipc.cjs → shell.openExternal), never in Stage or an Engelbart window; so do
 // Zotero's (main opens the broker's page itself) and Claude Code's and Codex's, which their own CLIs open.
@@ -116,6 +117,60 @@ export function zoteroAction(action) {
   return null;
 }
 
+// reMarkable (2026-10-31, src/main/remarkable/sync.cjs): the notebooks in the reMarkable app's library on this Mac,
+// each a row of the library (src/main/remarkable/rows.cjs). No sign-in: Connect finds the app's library and reads it, macOS asking once.
+// Laid out as Zotero's row. Not connected, the row says in one line what it does; when it cannot connect, what to do,
+// with a button for it (the reMarkable app's download page, or Privacy & Security). Connected, where the folder stands:
+// "Syncing…", "Synced · N notebooks in your library", or what went wrong, and the notebooks that could not be read; "Sync now" and
+// Disconnect (the copies deleted, the app's own library never touched) in the options menu.
+const RemarkableIcon = () => <svg viewBox="0 0 16 16" width={12} height={12} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><rect x="3.5" y="1.5" width="9" height="13" rx="1.5" /><path d="M6 5h4M6 7.5h4M6 10h2" /></svg>;
+const REMARKABLE_HELP = { unavailable: { action: 'get-app', label: 'Get the reMarkable app' }, permission: { action: 'privacy', label: 'Open Privacy & Security' } };
+
+export function RemarkableConnection({ status, busy, error, onAction }) {
+  const connected = !!status?.connected;
+  const problem = error || (!connected && status?.error) || '';
+  const help = !connected && status?.code ? REMARKABLE_HELP[status.code] : null;
+  const description = !status ? 'Checking…' : connected && busy === 'disconnect' ? 'Disconnecting…' : connected ? 'Connected · the reMarkable app on this Mac'
+    : busy === 'connect' ? 'Connecting…' : 'Not connected';
+  const folder = connected && busy !== 'disconnect' ? remarkableSyncLine(status) : null;
+  const spinning = busy === 'connect' || (connected && busy === 'disconnect');
+  const disabled = !!busy || !status;
+  return <Row data-connection="remarkable" icon={<RemarkableIcon />} label="reMarkable"
+    hint={<span role="status" style={{ display: 'flex', alignItems: 'center', gap: 6, overflowWrap: 'anywhere' }}>{spinning && <Spinner />}<span style={{ minWidth: 0 }}>{description}</span></span>}
+    detail={<>
+      {status && !connected && !problem && busy !== 'connect' && <p style={note()}>Brings in the notebooks the reMarkable app keeps on this Mac, and keeps them up to date.</p>}
+      {folder && <p data-remarkable-sync={status.state} role={folder.error ? 'alert' : 'status'} style={{ ...note(folder.error ? 'var(--red-600)' : undefined), display: 'flex', alignItems: 'center', gap: 6 }}>{folder.busy && <Spinner />}<span style={{ minWidth: 0 }}>{folder.text}</span></p>}
+      {folder && folder.problems && <p data-remarkable-problems role="alert" style={note('var(--red-600)')}>{folder.problems}</p>}
+      {problem && <p role="alert" style={note('var(--red-600)')}>{problem}</p>}
+      {help && <button type="button" className="hov-wash" data-connection-action={help.action} disabled={!!busy} onClick={() => onAction(help.action)} style={{ ...button, padding: '2px 0', marginTop: 2, color: '#0070f3' }}>{help.label}</button>}
+    </>}>
+    {connected ? <ConnectionActions provider="remarkable" label="reMarkable" busy={busy} onAction={onAction} items={[{ action: 'sync', label: 'Sync now' }, { action: 'disconnect', label: 'Disconnect', separator: true }]} />
+      : <button type="button" className="hov-bd2" data-connection-action="connect" disabled={disabled} onClick={() => onAction('connect')} style={bordered(disabled)}>{busy === 'connect' ? 'Connecting…' : problem ? 'Try again' : 'Connect'}</button>}
+  </Row>;
+}
+
+/** What the reMarkable row says of its folder (status { state, documents, error, problems }) → { text, busy, error, problems }, or null. */
+export function remarkableSyncLine(status) {
+  if (!status || !status.connected) return null;
+  const problems = Array.isArray(status.problems) ? status.problems.filter((p) => p && p.name) : [];
+  const failed = problems.length ? `${problems.length === 1 ? `“${problems[0].name}” could not be read` : `${problems.length} notebooks could not be read: ${problems.slice(0, 3).map((p) => `“${p.name}”`).join(', ')}${problems.length > 3 ? '…' : ''}`}. They’ll be tried again.` : '';
+  if (status.state === 'syncing') return { text: 'Syncing…', busy: true, error: false, problems: failed };
+  if (status.state === 'error') return { text: status.error || 'Your notebooks could not be synced.', busy: false, error: true, problems: failed };
+  const kept = Number(status.kept) || 0;
+  if (status.state === 'synced') return { text: `Synced · ${status.documents} ${status.documents === 1 ? 'notebook' : 'notebooks'} in your library${kept ? ` · ${kept} kept that the reMarkable app no longer has` : ''}`, busy: false, error: false, problems: failed };
+  return null;
+}
+
+/** What each reMarkable action calls. The answers are the status. */
+export function remarkableAction(action) {
+  if (action === 'connect') return api.remarkableConnect();
+  if (action === 'sync') return api.remarkableSync();
+  if (action === 'disconnect') return api.remarkableDisconnect();
+  if (action === 'get-app') { void api.remarkableHelp('app'); return null; }
+  if (action === 'privacy') { void api.remarkableHelp('privacy'); return null; }
+  return null;
+}
+
 // Claude Code and Codex (2026-10-03): the sign-ins the setup dialog runs (../ui/ToolSetup.jsx, src/main/tools/manager.cjs),
 // not a second way in. A row is the tool check's snapshot through rowOf; its one button does what the dialog's does. While
 // the CLI waits for the browser, Reopen page opens its page there again (open-external). Sign out runs the CLI's logout.
@@ -187,6 +242,9 @@ export function ConnectionsPage() {
   const [zotero, setZotero] = useZoteroStatus();
   const [zoteroBusy, setZoteroBusy] = React.useState(null);
   const [zoteroProblem, setZoteroProblem] = React.useState('');
+  const [remarkable, setRemarkable] = useRemarkableStatus();
+  const [remarkableBusy, setRemarkableBusy] = React.useState(null);
+  const [remarkableProblem, setRemarkableProblem] = React.useState('');
   const [tools, setTools] = React.useState(null);
   const [toolBusy, setToolBusy] = React.useState({});
   const [toolProblem, setToolProblem] = React.useState({});
@@ -209,6 +267,15 @@ export function ConnectionsPage() {
     } catch (error) { setZoteroProblem(errorMessage(error)); }
     finally { setZoteroBusy(null); }
   };
+  const actRemarkable = async action => {
+    if (remarkableBusy) return;
+    setRemarkableBusy(action); setRemarkableProblem('');
+    try {
+      const next = await remarkableAction(action);
+      if (next) setRemarkable(next);
+    } catch (error) { setRemarkableProblem(errorMessage(error)); }
+    finally { setRemarkableBusy(null); }
+  };
   const actTool = async (name, action) => {
     const tool = tools?.tools?.[name];
     if (!tool || toolBusy[name]) return;
@@ -222,6 +289,7 @@ export function ConnectionsPage() {
   return <Group title="Accounts" data-connections-page="1">
     <GithubConnection key="github" status={status} busy={busy} error={problem} onAction={act} />
     <ZoteroConnection key="zotero" status={zotero} busy={zoteroBusy} error={zoteroProblem} onAction={actZotero} />
+    <RemarkableConnection key="remarkable" status={remarkable} busy={remarkableBusy} error={remarkableProblem} onAction={actRemarkable} />
     {TOOL_CONNECTIONS.map(name => <ToolConnection key={name} id={name} tool={tools?.tools?.[name]} busy={toolBusy[name] || null} error={toolProblem[name] || ''} onAction={action => actTool(name, action)} />)}
   </Group>;
 }

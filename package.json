@@ -6,6 +6,9 @@
   "description": "Engelbart: plan research projects in documents, then hand the work to Claude Code and Codex.",
   "author": "Engelbart",
   "main": "src/main/index.cjs",
+  "workspaces": [
+    "packages/*"
+  ],
   "scripts": {
     "build": "node scripts/build.mjs",
     "start": "npm run build && electron .",
@@ -44,6 +47,7 @@
     "pdfjs-dist": "6.3.289",
     "react": "19.3.0",
     "react-dom": "19.3.0",
+    "remarkable-bridge": "0.1.0",
     "roughjs": "4.6.6"
   },
   "devDependencies": {

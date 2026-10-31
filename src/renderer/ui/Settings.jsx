@@ -126,7 +126,7 @@ export const PAGES = Object.freeze([
   { id: 'model', section: 'Settings', title: 'Model', icon: MODEL_ICON, Body: () => <IntelligenceLevels />,
     keywords: [...LEVELS.flatMap((level) => [level.name, level.hint]), 'model', 'effort', 'intelligence', 'discover', 'Claude', 'Codex'] },
   { id: 'connections', section: 'Settings', title: 'Connections', icon: PLUG_ICON, Body: ConnectionsPage,
-    keywords: ['GitHub', 'Zotero', 'accounts', 'sign in', 'sign out', ...TOOL_CONNECTIONS.map((id) => TOOL_NAME[id])] },
+    keywords: ['GitHub', 'Zotero', 'reMarkable', 'accounts', 'sign in', 'sign out', ...TOOL_CONNECTIONS.map((id) => TOOL_NAME[id])] },
   { id: 'test-data', section: 'Developer', title: 'Test data', icon: FLASK_ICON, shown: ({ test }) => !!(test && test.testMode), Body: TestData,
     keywords: ['reveal', 'reset', 'start over', 'test library'] },
 ]);

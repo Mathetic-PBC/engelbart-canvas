@@ -108,6 +108,15 @@ const engelbartAPI = Object.freeze({
   onZoteroWaiting: (callback) => subscribe('engelbart:zotero-waiting', callback),
   onZoteroDownloaded: (callback) => subscribe('engelbart:zotero-downloaded', callback),
   zoteroAttach: invoke('zotero-attach'),
+  // reMarkable (2026-10-31): the reMarkable app's notebooks as a library folder (src/main/remarkable/sync.cjs). Status
+  // { connected, state, documents, syncedAt, error, code, problems, library }; remarkableHelp('app' | 'privacy') opens
+  // the reMarkable app's download page or Privacy & Security.
+  remarkableStatus: invoke('remarkable-status'),
+  remarkableConnect: invoke('remarkable-connect'),
+  remarkableDisconnect: invoke('remarkable-disconnect'),
+  remarkableSync: invoke('remarkable-sync'),
+  remarkableHelp: invoke('remarkable-help'),
+  onRemarkable: (callback) => subscribe('engelbart:remarkable', callback),
   // ⌘J pressed while a Browser page has the keyboard (src/main/browser/views.cjs); the app's own pages see the key themselves.
   onNextWorkspace: (callback) => subscribe('engelbart:next-workspace', callback),
   listProjects: invoke('list-projects'),

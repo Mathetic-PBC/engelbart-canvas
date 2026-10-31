@@ -50,6 +50,8 @@ const { createZotero } = require('./zotero/connection.cjs');
 const { createBrowserAuth: createZoteroBrowserAuth } = require('./zotero/browser-auth.cjs');
 const { createZoteroSync, scheduleSyncs: scheduleZoteroSyncs } = require('./zotero/sync.cjs');
 const { mirrorDir: zoteroMirrorDir } = require('./zotero/mirror.cjs');
+const { createRemarkableSync, scheduleSyncs: scheduleRemarkableSyncs, mirrorDir: remarkableMirrorDir } = require('./remarkable/sync.cjs');
+const { reconcileRows: reconcileRemarkableRows, removeRows: removeRemarkableRows } = require('./remarkable/rows.cjs');
 const { createOverleafCopies } = require('./overleaf/copy.cjs');
 const { createOverleafStage } = require('./overleaf/stage.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
@@ -108,6 +110,7 @@ let settings = null;
 let store = null;
 let sweeper = null;
 let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
+let remarkable = null; // the reMarkable app's notebooks as a library folder (src/main/remarkable/sync.cjs)
 let bart = null;
 let builds = null;
 let sandbox = null;
@@ -856,6 +859,37 @@ if (!hasSingleInstanceLock) {
     setTimeout(() => { if (zoteroConnected()) void zoteroLibrary.autoSync().catch(() => {}); }, 4000);
     const zoteroSchedule = scheduleZoteroSyncs(zoteroLibrary, { connected: zoteroConnected });
     app.on('browser-window-focus', () => zoteroSchedule.focus());
+    // reMarkable (src/main/remarkable, 2026-10-31): the notebooks in the reMarkable app's library on this Mac, mirrored as
+    // files in <dataRoot>/.remarkable/library/, each document a row of the library of its own (remarkable/rows.cjs),
+    // brought up to date after every sync and taken away on disconnecting. Never reMarkable's cloud, never USB, never
+    // written back. Synced after connecting, a little after launch, whenever the app's library changes (watched while
+    // connected), on focus after 2 minutes and every 10. ENGELBART_REMARKABLE_LIBRARY names another copy of the tablet's
+    // files, for scripted runs only.
+    // One at a time: a disconnect's removal never runs in the middle of a sync's reconciliation.
+    let remarkableRowsTurn = Promise.resolve();
+    const inRowsTurn = (work) => { const run = remarkableRowsTurn.then(work); remarkableRowsTurn = run.catch(() => {}); return run; };
+    const remarkableRows = {
+      reconcile: () => inRowsTurn(async () => {
+        const ctx = await store.context();
+        const changed = await reconcileRemarkableRows(ctx, remarkableMirrorDir(ctx.dataRoot));
+        if (changed.added || changed.changed || changed.removed) { libraryChanged(); if (changed.added || changed.changed) pdfAdded(); }
+      }),
+      remove: () => inRowsTurn(async () => {
+        const ctx = await store.context();
+        if (await removeRemarkableRows(ctx, remarkableMirrorDir(ctx.dataRoot))) libraryChanged();
+      }),
+    };
+    remarkable = createRemarkableSync({
+      root: () => remarkableMirrorDir(store.config().dataRoot),
+      ...(process.env.ENGELBART_REMARKABLE_LIBRARY ? { findLibrary: async () => process.env.ENGELBART_REMARKABLE_LIBRARY } : {}),
+      onChange: (status) => sendToWindow('engelbart:remarkable', status),
+      onSynced: () => remarkableRows.reconcile(),
+    });
+    app.on('will-quit', () => remarkable.stop());
+    const remarkableConnected = () => { try { return remarkable.status().connected; } catch { return false; } };
+    setTimeout(() => { if (remarkableConnected()) { remarkable.watch(); void remarkable.autoSync().catch(() => {}); } }, 4000);
+    const remarkableSchedule = scheduleRemarkableSyncs(remarkable, { connected: remarkableConnected });
+    app.on('browser-window-focus', () => remarkableSchedule.focus());
     // The E2B API key for whoever is signed in (src/main/github/e2b-key.cjs), in memory only, and the only key the sandbox
     // worker gets (sandbox/manager.cjs). ENGELBART_E2B_KEY_HOST is for scripted runs only.
     const e2bKey = createE2bKey({
@@ -997,6 +1031,9 @@ if (!hasSingleInstanceLock) {
       openGithubPage,
       zotero,
       zoteroLibrary,
+      remarkable,
+      remarkableRows,
+      openPrivacySettings: () => electronShell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'),
       identifyRepo: createRepoIdentifier({ auth: github.authHeaders }),
       listRemoteFiles: createRemoteFileLister({ auth: github.authHeaders }),
       ipcMain,

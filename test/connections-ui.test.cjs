@@ -28,7 +28,7 @@ const bridge = {};
 global.window = { engelbartAPI: bridge };
 try { compiled._compile(built.outputFiles[0].text, filename); }
 finally { if (previousWindow === undefined) delete global.window; else global.window = previousWindow; }
-const { ConnectionsPage, GithubConnection, githubAction, ZoteroConnection, zoteroAction, ToolConnection, toolAction, watchTools, TOOL_CONNECTIONS } = compiled.exports;
+const { ConnectionsPage, GithubConnection, githubAction, ZoteroConnection, zoteroAction, RemarkableConnection, remarkableAction, remarkableSyncLine, ToolConnection, toolAction, watchTools, TOOL_CONNECTIONS } = compiled.exports;
 const signedOut = { configured: true, connected: false, pending: null, error: '', installUrl: '' };
 const zoteroSignedOut = { configured: true, connected: false, username: '', userID: '', persisted: true, pending: null, error: '' };
 const render = (status, extra = {}) => {
@@ -168,17 +168,17 @@ test('Connections is a page of the Settings window, not an icon in the top-right
   assert.doesNotMatch(source, /createPortal|usePlaced|export default/, 'no popover left: no portal, no placing, no trigger');
 });
 
-test('the page holds four rows in a group of Settings\' own: GitHub, Zotero, then Claude Code and Codex, with no popover header or ×', () => {
+test('the page holds five rows in a group of Settings\' own: GitHub, Zotero, reMarkable, then Claude Code and Codex, with no popover header or ×', () => {
   Object.assign(bridge, { githubStatus: async () => signedOut, onGithub: () => () => {}, zoteroStatus: async () => zoteroSignedOut, onZotero: () => () => {}, tools: async () => ({}), onTools: () => () => {} });
   try {
     elements.length = 0;
     const html = renderToStaticMarkup(React.createElement(ConnectionsPage));
-    assert.deepEqual([...html.matchAll(/data-connection="([^"]+)"/g)].map(match => match[1]), ['github', 'zotero', 'claude', 'codex']);
+    assert.deepEqual([...html.matchAll(/data-connection="([^"]+)"/g)].map(match => match[1]), ['github', 'zotero', 'remarkable', 'claude', 'codex']);
     assert.match(html, /^<section aria-label="Accounts" data-connections-page="1">/);
     assert.equal((html.match(/Checking connection…/g) || []).length, 2, 'GitHub and Zotero before their first status');
-    assert.equal((html.match(/Checking…/g) || []).length, 2, 'Claude Code and Codex before the first snapshot');
+    assert.equal((html.match(/Checking…/g) || []).length, 3, 'reMarkable before its status, Claude Code and Codex before the first snapshot');
     assert.doesNotMatch(html, /Close connections|role="dialog"|data-connections-panel|×/);
-    assert.equal((html.match(/aria-hidden="true" style="height:1px/g) || []).length, 3, 'hairlines between the four rows, as Model\'s groups have');
+    assert.equal((html.match(/aria-hidden="true" style="height:1px/g) || []).length, 4, 'hairlines between the five rows, as Model\'s groups have');
   } finally {
     for (const key of Object.keys(bridge)) delete bridge[key];
   }
@@ -356,10 +356,10 @@ test('the page reads the snapshot when it opens, follows every change, and lets 
   }
 });
 
-test('the page shows Zotero under GitHub, then Claude Code and Codex, and watches the tools while it is open', () => {
+test('the page shows Zotero under GitHub, then reMarkable, then Claude Code and Codex, and watches the tools while it is open', () => {
   assert.deepEqual([...TOOL_CONNECTIONS], ['claude', 'codex']);
   const source = fs.readFileSync(path.join(__dirname, '../src/renderer/workspace/Connections.jsx'), 'utf8');
-  assert.match(source, /<GithubConnection [^\n]*\/>\n\s*<ZoteroConnection [^\n]*\/>\n\s*\{TOOL_CONNECTIONS\.map\(name => <ToolConnection key=\{name\} id=\{name\} tool=\{tools\?\.tools\?\.\[name\]\}/);
+  assert.match(source, /<GithubConnection [^\n]*\/>\n\s*<ZoteroConnection [^\n]*\/>\n\s*<RemarkableConnection [^\n]*\/>\n\s*\{TOOL_CONNECTIONS\.map\(name => <ToolConnection key=\{name\} id=\{name\} tool=\{tools\?\.tools\?\.\[name\]\}/);
   assert.match(source, /React\.useEffect\(\(\) => watchTools\(setTools\), \[\]\)/, 'watched while the page is open');
 });
 
@@ -454,6 +454,82 @@ test('Zotero: each action calls its bridge method', async () => {
     await zoteroAction('disconnect');
     assert.equal(zoteroAction('reopen'), null);
     assert.deepEqual(calls, ['zoteroConnect', 'zoteroCancel', 'zoteroSync', 'zoteroDisconnect']);
+  } finally {
+    for (const key of Object.keys(bridge)) delete bridge[key];
+  }
+});
+
+// reMarkable (2026-10-31): the notebooks in the reMarkable app's library on this Mac, as a library folder; its status
+// comes from src/main/remarkable/sync.cjs.
+const remarkableOff = { connected: false, state: 'idle', documents: 0, syncedAt: '', error: '', code: '', problems: [], library: '' };
+const renderRemarkable = (status, extra = {}) => {
+  elements.length = 0;
+  return renderToStaticMarkup(React.createElement(RemarkableConnection, { status, onAction: () => {}, ...extra }));
+};
+
+test('reMarkable: Not connected, what it does in one line, and Connect; rendering starts nothing', () => {
+  const actions = [];
+  const html = renderRemarkable(remarkableOff, { onAction: name => actions.push(name) });
+  assert.match(html, /data-connection="remarkable"/);
+  assert.match(html, /Not connected/);
+  assert.match(html, /Brings in the notebooks the reMarkable app keeps on this Mac/);
+  assert.deepEqual(actions, []);
+  assert.equal(action('connect').props.children, 'Connect');
+  action('connect').props.onClick();
+  assert.deepEqual(actions, ['connect']);
+  assert.match(renderRemarkable(remarkableOff, { busy: 'connect' }), /Connecting…/);
+  assert.equal(action('connect').props.disabled, true);
+  assert.match(renderRemarkable(null), /Checking…/);
+});
+
+test('reMarkable: when it cannot connect, what to do, with a button for it', () => {
+  const actions = [];
+  const missing = renderRemarkable({ ...remarkableOff, code: 'unavailable', error: 'The reMarkable app isn’t on this Mac.' }, { onAction: name => actions.push(name) });
+  assert.match(missing, /role="alert"[^>]*>The reMarkable app isn’t on this Mac\./);
+  assert.equal(action('get-app').props.children, 'Get the reMarkable app');
+  assert.equal(action('connect').props.children, 'Try again');
+  action('get-app').props.onClick();
+  renderRemarkable({ ...remarkableOff, code: 'permission', error: 'macOS didn’t let Engelbart read the reMarkable app’s files.' }, { onAction: name => actions.push(name) });
+  assert.equal(action('privacy').props.children, 'Open Privacy & Security');
+  action('privacy').props.onClick();
+  assert.deepEqual(actions, ['get-app', 'privacy']);
+  assert.doesNotMatch(renderRemarkable(remarkableOff), /Brings in[^<]*<\/p><p role="alert"/);
+});
+
+test('reMarkable: connected, where the folder stands, Sync now and Disconnect behind the options menu', () => {
+  const actions = [];
+  const on = { ...remarkableOff, connected: true, state: 'synced', documents: 42, syncedAt: 'x', library: '/x' };
+  const html = renderRemarkable(on, { onAction: name => actions.push(name) });
+  assert.match(html, /Connected · the reMarkable app on this Mac/);
+  assert.match(html, /data-remarkable-sync="synced" role="status"[^>]*>.*Synced · 42 notebooks in your library/);
+  const menu = elements.find(element => element.props.provider === 'remarkable');
+  assert.deepEqual(menu.props.items, [{ action: 'sync', label: 'Sync now' }, { action: 'disconnect', label: 'Disconnect', separator: true }]);
+  menu.props.onAction('sync');
+  assert.deepEqual(actions, ['sync']);
+  assert.match(renderRemarkable({ ...on, state: 'syncing' }), /Syncing…/);
+  assert.match(renderRemarkable({ ...on, state: 'error', error: 'Your notebooks could not be read.' }), /data-remarkable-sync="error" role="alert"/);
+  assert.match(renderRemarkable({ ...on, problems: [{ name: 'Lab notes', error: 'damaged' }] }), /data-remarkable-problems="true" role="alert"[^>]*>“Lab notes” could not be read\. They’ll be tried again\./);
+  assert.match(renderRemarkable({ ...on, documents: 1 }), /Synced · 1 notebook in your library/);
+  assert.doesNotMatch(renderRemarkable(on, { busy: 'disconnect' }), /Synced/, 'not while disconnecting');
+  assert.equal(remarkableSyncLine(remarkableOff), null);
+});
+
+test('reMarkable: each action calls its bridge method', async () => {
+  const calls = [];
+  Object.assign(bridge, {
+    remarkableConnect: async () => { calls.push('connect'); return { ...remarkableOff, connected: true }; },
+    remarkableSync: async () => { calls.push('sync'); return { ...remarkableOff, connected: true, state: 'syncing' }; },
+    remarkableDisconnect: async () => { calls.push('disconnect'); return remarkableOff; },
+    remarkableHelp: async (page) => { calls.push(`help:${page}`); return true; },
+  });
+  try {
+    assert.equal((await remarkableAction('connect')).connected, true);
+    assert.equal((await remarkableAction('sync')).state, 'syncing');
+    await remarkableAction('disconnect');
+    assert.equal(remarkableAction('get-app'), null);
+    assert.equal(remarkableAction('privacy'), null);
+    assert.equal(remarkableAction('nothing'), null);
+    assert.deepEqual(calls, ['connect', 'sync', 'disconnect', 'help:app', 'help:privacy']);
   } finally {
     for (const key of Object.keys(bridge)) delete bridge[key];
   }
