@@ -17,7 +17,8 @@ import { usePlaced } from '../ui/usePlaced.js';
 import { useBodies } from './useBodies.js';
 import { useGithubStatus } from './useGithubStatus.js';
 import { useZoteroStatus } from './useZoteroStatus.js';
-import { zoteroSyncLine } from './Connections.jsx';
+import { useRemarkableStatus } from './useRemarkableStatus.js';
+import { zoteroSyncLine, remarkableSyncLine } from './Connections.jsx';
 import { ItemPeek } from '../screens/Home.jsx';
 import { openSettings } from '../ui/Settings.jsx';
 import * as I from '../ui/SidebarIcons.jsx';
@@ -332,22 +333,26 @@ export function AgentsPanel({ anchor, groups, nameOf, onGo, onClose, ignore }) {
 /* ------------------------------------------------------------ Connections */
 
 const ZoteroGlyph = () => <svg aria-hidden="true" viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M3.5 3h9l-9 10h9" /></svg>;
+const RemarkableGlyph = () => <svg aria-hidden="true" viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><rect x="3.5" y="1.5" width="9" height="13" rx="1.5" /><path d="M6 5h4M6 7.5h4M6 10h2" /></svg>;
 // Overleaf's leaf, plainly drawn.
 const OverleafGlyph = () => <svg aria-hidden="true" viewBox="0 0 16 16" width={14} height={14} fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 13c0-6 4-10 10-10 0 6-4 10-10 10z" /><path d="M3 13 9 7" /></svg>;
 export const OVERLEAF_URL = 'https://www.overleaf.com/project';
 
 /**
- * Connections (requirement 5: Zotero, Overleaf, GitHub): where each stands. GitHub and Zotero are signed in to in
+ * Connections (requirement 5: Zotero, Overleaf, GitHub; reMarkable, 2026-10-31): where each stands. GitHub and Zotero are signed in to in
  * Settings' Connections page, which a press opens; their libraries are reached from the + and the @ menu. Overleaf is
  * read from the Stage, where a press opens its projects.
  */
 export function ConnectionsPanel({ anchor, onOverleaf, onClose, ignore }) {
   const [github] = useGithubStatus();
   const [zotero] = useZoteroStatus();
+  const [remarkable] = useRemarkableStatus();
   const manage = () => { onClose(); openSettings('connections'); };
   const gh = !github ? 'Checking…' : github.connected ? `Connected${github.login ? ` · @${github.login}` : ''}` : github.pending ? 'Waiting for sign-in…' : 'Not connected';
   const sync = zotero && zotero.connected ? zoteroSyncLine(zotero.sync) : null;
   const zt = !zotero ? 'Checking…' : zotero.connected ? [`Connected${zotero.username ? ` · ${zotero.username}` : ''}`, sync && !sync.error ? sync.text.replace(/^Synced · /, '') : ''].filter(Boolean).join(' · ') : zotero.pending ? 'Finish signing in in your browser' : 'Not connected';
+  const rmSync = remarkableSyncLine(remarkable);
+  const rm = !remarkable ? 'Checking…' : remarkable.connected ? (rmSync && !rmSync.error ? rmSync.text.replace(/ in your library$/, '').replace(/^Synced · /, 'Connected · ') : 'Connected') : 'Not connected';
   const dot = (on) => <span aria-hidden="true" title={on ? 'Connected' : 'Not connected'} style={{ flex: 'none', width: 7, height: 7, borderRadius: '50%', background: on ? '#0070f3' : '#d4d4d4' }} />; // the one accent
   return (
     <Floating anchor={anchor} width={330} label="Connections" onClose={onClose} ignore={ignore} data-sb-panel="connections">
@@ -355,6 +360,7 @@ export function ConnectionsPanel({ anchor, onOverleaf, onClose, ignore }) {
       <Scroll>
         <PanelRow data-sb-connection="github" icon={<span className="glyph-fit" style={{ display: 'flex', width: 14, height: 14 }}><GH /></span>} title="GitHub" meta={gh} onClick={manage} actions={dot(!!(github && github.connected))} />
         <PanelRow data-sb-connection="zotero" icon={<ZoteroGlyph />} title="Zotero" meta={zt} onClick={manage} actions={dot(!!(zotero && zotero.connected))} />
+        <PanelRow data-sb-connection="remarkable" icon={<RemarkableGlyph />} title="reMarkable" meta={rm} onClick={manage} actions={dot(!!(remarkable && remarkable.connected))} />
         <PanelRow data-sb-connection="overleaf" icon={<OverleafGlyph />} title="Overleaf" meta="Open your projects on the Stage" onClick={() => { onClose(); onOverleaf(); }} actions={<I.ExternalIcon size={13} style={{ color: '#8f8f8f' }} />} />
       </Scroll>
       <PanelFoot><FootButton onClick={manage} data-sb-manage-connections="1"><I.GearIcon size={14} />Manage connections</FootButton></PanelFoot>
