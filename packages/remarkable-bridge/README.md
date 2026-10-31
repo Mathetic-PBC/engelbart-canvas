@@ -62,8 +62,11 @@ pageToSvg(page, { frame: { viewBox: map.viewBox } });  // an SVG to lay exactly 
 - Typed text (headings, lists, checkboxes, bold, italic) and highlights made on PDF and ebook text, with the text itself.
 - Approximate: where typed text wraps (the tablet's fonts are not in the file), and so where strokes written beside
   typed text sit. Within a line or so.
-- Not read: handwriting as text (the tablet converts it only when asked, and then it is typed text), images placed on a
-  page (firmware 3.28), ink on ebooks over their text (it follows the tablet's own reflow).
+- Handwriting as text, on a Mac: `readHandwriting(doc)` reads it with the Mac's own text recognition (Vision), about
+  half a second a page, kept by page in a cache you pass; `documentToPdf(doc, { handwriting })` lays it into the PDF as
+  invisible text and `documentMarkdown(doc, { handwriting })` writes it out, marked as read by machine. Elsewhere nothing
+  is read (`supported: false`).
+- Not read: images placed on a page (firmware 3.28), ink on ebooks over their text (it follows the tablet's own reflow).
 
 ## Speed
 

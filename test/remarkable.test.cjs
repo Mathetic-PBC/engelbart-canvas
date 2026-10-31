@@ -37,7 +37,7 @@ function syncOver(dir, { convert = convertDocument } = {}) {
   const dataRoot = tmp('data');
   const converted = [];
   const changes = [];
-  const remarkable = createRemarkableSync({
+  const remarkable = createRemarkableSync({ handwriting: false,
     root: () => mirrorDir(dataRoot),
     findLibrary: async () => dir,
     convert: async (job) => { converted.push(job.id); return convert(job); },
@@ -144,12 +144,12 @@ test('a failure is tried once more in a later run of the app', async () => {
   const dir = appLibrary();
   const dataRoot = tmp('data');
   const failing = (job) => Promise.reject(Object.assign(new Error('nope'), { code: 'format' }));
-  const first = createRemarkableSync({ root: () => mirrorDir(dataRoot), findLibrary: async () => dir, convert: failing });
+  const first = createRemarkableSync({ handwriting: false, root: () => mirrorDir(dataRoot), findLibrary: async () => dir, convert: failing });
   await first.connect();
   await first.sync();
   assert.equal(first.status().problems.length, 1);
   const ran = [];
-  const later = createRemarkableSync({ root: () => mirrorDir(dataRoot), findLibrary: async () => dir, convert: (job) => { ran.push(job.id); return convertDocument(job); } });
+  const later = createRemarkableSync({ handwriting: false, root: () => mirrorDir(dataRoot), findLibrary: async () => dir, convert: (job) => { ran.push(job.id); return convertDocument(job); } });
   await later.sync();
   assert.deepEqual(ran, [NOTEBOOK]);
   assert.deepEqual(later.status().problems, []);
@@ -157,7 +157,7 @@ test('a failure is tried once more in a later run of the app', async () => {
 
 test('without the reMarkable app, connecting says so and stays disconnected', async () => {
   const dataRoot = tmp('data');
-  const remarkable = createRemarkableSync({
+  const remarkable = createRemarkableSync({ handwriting: false,
     root: () => mirrorDir(dataRoot),
     findLibrary: async () => { throw Object.assign(new Error('not found'), { code: 'unavailable' }); },
   });
@@ -184,7 +184,7 @@ test('disconnecting deletes the mirror and never touches the app’s library', a
 test('the worker converts the same as the inline converter', async () => {
   const dir = appLibrary();
   const dataRoot = tmp('data');
-  const remarkable = createRemarkableSync({ root: () => mirrorDir(dataRoot), findLibrary: async () => dir });
+  const remarkable = createRemarkableSync({ handwriting: false, root: () => mirrorDir(dataRoot), findLibrary: async () => dir });
   await remarkable.connect();
   await remarkable.sync();
   assert.deepEqual(walk(libraryDir(mirrorDir(dataRoot))), ['Test.md', 'Test.pdf']);
@@ -392,7 +392,7 @@ test('disconnecting as the app does (stop, then the rows, then the copies) leave
   const ctx = memoryLibrary();
   let release;
   const gate = new Promise((r) => { release = r; });
-  const remarkable = createRemarkableSync({ root: () => root, findLibrary: async () => dir, convert: async (job) => { await gate; return convertDocument(job); }, onSynced: () => reconcileRows(ctx, root) });
+  const remarkable = createRemarkableSync({ handwriting: false, root: () => root, findLibrary: async () => dir, convert: async (job) => { await gate; return convertDocument(job); }, onSynced: () => reconcileRows(ctx, root) });
   await remarkable.connect(); // a sync starts, held in its conversion
   const halting = remarkable.halt();
   release();
@@ -426,4 +426,72 @@ test('disconnecting and connecting again brings each document back as the same r
   assert.equal(after.id, before.id, 'the same id: ink, notes, stars and mentions kept by it come back');
   assert.ok(fs.existsSync(after.path));
   remarkable.stop();
+});
+
+// Handwriting (2026-10-31): read in a second pass, newest first, kept by page, laid into the PDF and the Markdown.
+test('handwriting: documents come in at once, their handwriting read after, each page once', async () => {
+  const dir = appLibrary();
+  const dataRoot = tmp('data');
+  const root = mirrorDir(dataRoot);
+  const { PDFDocument } = require('pdf-lib');
+  let pagesRead = 0;
+  const recognize = async (pdf) => {
+    const pages = (await PDFDocument.load(pdf)).getPageCount();
+    pagesRead += pages;
+    return Array.from({ length: pages }, () => [{ text: 'Buy milk', confidence: 0.9, box: [0.1, 0.5, 0.4, 0.1] }]);
+  };
+  const seen = [];
+  let read = 0;
+  const remarkable = createRemarkableSync({ root: () => root, findLibrary: async () => dir, convert: (job) => convertDocument(job, { recognize }), onChange: (s) => seen.push(s.state), onRead: () => { read += 1; } });
+  await remarkable.connect();
+  await remarkable.sync();
+  const state = JSON.parse(fs.readFileSync(path.join(root, 'state.json'), 'utf8'));
+  assert.equal(state.items[NOTEBOOK].hw, 'read');
+  assert.ok(seen.includes('reading'), 'the row said it was reading');
+  assert.equal(read, 1);
+  const md = fs.readFileSync(path.join(libraryDir(root), 'Test.md'), 'utf8');
+  assert.match(md, /Handwriting, as read by machine/);
+  assert.match(md, /Buy milk/);
+  const once = pagesRead;
+  assert.ok(once > 0);
+  // Converted again (a page touched): the readings are kept by page, so only the touched page is read again.
+  const page = path.join(dir, NOTEBOOK, fs.readdirSync(path.join(dir, NOTEBOOK))[0]);
+  fs.appendFileSync(page, Buffer.alloc(0));
+  fs.utimesSync(page, new Date(), new Date(Date.now() + 5000));
+  await remarkable.sync();
+  assert.equal(pagesRead, once, 'nothing read again: no page changed its bytes');
+  remarkable.stop();
+});
+
+test('a PDF sent from Engelbart stays out of the library until it is written on; any other PDF comes in', async () => {
+  const { PDFDocument } = require('pdf-lib');
+  const pdf = await PDFDocument.create();
+  pdf.addPage([595, 842]);
+  const bytes = await pdf.save();
+  const dir = appLibrary();
+  const PAGE = '9a9e0000-0000-4000-8000-000000000003';
+  const addPdf = (id, name) => {
+    fs.writeFileSync(path.join(dir, `${id}.metadata`), JSON.stringify({ visibleName: name, type: 'DocumentType', parent: '', lastModified: String(Date.now() + 2000) }));
+    fs.writeFileSync(path.join(dir, `${id}.content`), JSON.stringify({ fileType: 'pdf', pages: [PAGE], redirectionPageMap: [0] }));
+    fs.writeFileSync(path.join(dir, `${id}.pdf`), bytes);
+  };
+  const { remarkable, dataRoot, library } = syncOver(dir);
+  await remarkable.connect();
+  await settle(remarkable);
+  remarkable.expectSent('Paper'); // as ./send.cjs does, before the app is given it
+  addPdf('5e17c0de-0000-4000-8000-000000000001', 'Paper');
+  addPdf('07e40000-0000-4000-8000-000000000002', 'Other');
+  await settle(remarkable);
+  assert.ok(!walk(library()).includes('Paper.pdf'), 'the copy of what was sent is not a second item');
+  assert.ok(walk(library()).includes('Other.pdf'), 'a PDF nobody sent from here is');
+  assert.equal(remarkable.status().documents, 2);
+  // Written on, on the tablet: the tablet's copy comes in.
+  const page = fs.readdirSync(path.join(dir, NOTEBOOK)).find((f) => f.endsWith('.rm'));
+  fs.mkdirSync(path.join(dir, '5e17c0de-0000-4000-8000-000000000001'));
+  fs.copyFileSync(path.join(dir, NOTEBOOK, page), path.join(dir, '5e17c0de-0000-4000-8000-000000000001', `${PAGE}.rm`));
+  await settle(remarkable);
+  assert.ok(walk(library()).includes('Paper.pdf'), 'once written on, it comes in');
+  // Disconnecting keeps which documents were sent from here.
+  await remarkable.disconnect();
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(path.join(mirrorDir(dataRoot), 'sent.json'), 'utf8')).ids), ['5e17c0de-0000-4000-8000-000000000001']);
 });

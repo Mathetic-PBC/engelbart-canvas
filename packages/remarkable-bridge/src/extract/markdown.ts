@@ -68,7 +68,7 @@ function paragraphMarkdown(p: Paragraph, body: string, number: number): string {
     case 'bullet': return `${indent}- ${body}`;
     case 'numbered': return `${indent}${number}. ${body}`;
     case 'checkbox': return `${indent}- [${p.checked ? 'x' : ' '}] ${body}`;
-    default: return body;
+    default: return escapeLineStart(body);
   }
 }
 
@@ -82,12 +82,23 @@ function spansMarkdown(spans: TextSpan[]): string {
   }).join('');
 }
 
-const escape = (text: string) => text.replace(/([\\`*_[\]])/g, '\\$1');
+/** Characters that make Markdown or HTML anywhere in a line: emphasis, code, links, tables, tags. */
+const escapeInline = (text: string): string => text.replace(/([\\`*_[\]<>|~])/g, '\\$1');
+/** What makes a line a heading, quote, list or setext underline, at its start only (so "12." stays "12\." not "\12."). */
+const escapeLineStart = (text: string): string => text.replace(/^(\s*)([#>+=-])/gm, '$1\\$2').replace(/^(\s*\d+)([.)])/gm, '$1\\$2');
+
+/**
+ * Text from the tablet as Markdown that says only that text: a line of handwriting read as "---", "# x", "| a | b |"
+ * or "<img …>" stays words. Ordinary punctuation mid-line is left alone, so the file reads as it was written.
+ */
+export const escapeMarkdown = (text: string): string => escapeLineStart(escapeInline(text));
+
+const escape = escapeInline;
 
 /** A page as Markdown: its typed text, then its highlights as quotes. */
 export function pageMarkdown(page: Page): string {
   const parts = [textMarkdown(page)];
   const highlights = highlightsOf(page);
-  if (highlights.length) parts.push(highlights.map((h) => `> ${h.text}`).join('\n>\n'));
+  if (highlights.length) parts.push(highlights.map((h) => `> ${escapeMarkdown(h.text)}`).join('\n>\n'));
   return parts.filter(Boolean).join('\n\n');
 }

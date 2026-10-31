@@ -21,3 +21,4 @@ export { pdfMapping, notebookFrame, UNITS_PER_POINT, type PdfBox, type PdfMappin
 export { pageMarkdown, textMarkdown, highlightsOf, type PassageHighlight } from './extract/markdown.ts';
 export { readDocument, documentMarkdown, type ReadDocument, type DocumentPage } from './document.ts';
 export { documentToPdf, type PdfOptions } from './export/pdf.ts';
+export { readHandwriting, hasHandwriting, handwritingPdf, recognizeOnMac, MACHINE_READ, type Handwriting, type HandwrittenLine, type HandwritingCache, type ReadHandwritingOptions, type ReadHandwritingResult, type RawLine, type Recognizer } from './ocr/handwriting.ts';

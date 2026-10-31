@@ -10,7 +10,7 @@
 // searchable text; characters Helvetica lacks are left out of the PDF (the text extraction keeps them).
 
 import {
-  closePath, concatTransformationMatrix, fill, LineCapStyle, LineJoinStyle, lineTo, moveTo, PDFDocument, PDFName,
+  closePath, concatTransformationMatrix, degrees, fill, LineCapStyle, LineJoinStyle, lineTo, moveTo, PDFDocument, PDFName,
   popGraphicsState, pushGraphicsState, setFillingRgbColor, setGraphicsState, setLineCap, setLineJoin, setLineWidth,
   setStrokingRgbColor, StandardFonts, stroke as strokePath, type PDFFont, type PDFOperator, type PDFPage,
 } from 'pdf-lib';
@@ -21,10 +21,16 @@ import { layoutText } from '../rm/layout.ts';
 import { RM2_PAGE, type Page } from '../rm/page.ts';
 import { lookOf } from '../render/pens.ts';
 import { strokeRuns } from '../render/runs.ts';
+import { MACHINE_READ, type Handwriting, type HandwrittenLine } from '../ocr/handwriting.ts';
 
 export interface PdfOptions {
   /** The document's PDF (bundle.source()). Without it, a PDF document's ink is drawn on blank pages. */
   source?: Uint8Array | null;
+  /**
+   * Handwriting as read (../ocr/handwriting.ts), laid over the ink as invisible text: the PDF can then be searched, and
+   * its text read by anything that reads PDFs, as a scanned page made searchable is.
+   */
+  handwriting?: Handwriting;
   /** The paper's colour, for eraser strokes on older pages. Default white. */
   paper?: Rgba;
 }
@@ -39,15 +45,15 @@ export async function documentToPdf(doc: ReadDocument, options: PdfOptions = {})
     const own = doc.pages.length === count && doc.pages.every(({ ref }, i) => ref.sourcePage === i);
     if (own) {
       const pages = source.getPages();
-      const font = await fontFor(source, doc.pages);
-      doc.pages.forEach(({ page }, i) => { if (page) drawOnPdfPage(source, pages[i]!, page, font, paper); });
+      const font = await fontFor(source, doc.pages, options.handwriting);
+      doc.pages.forEach(({ ref, page }, i) => { if (page) drawOnPdfPage(source, pages[i]!, page, font, paper, options.handwriting?.get(ref.id)); });
       return source.save();
     }
     const out = await PDFDocument.create();
     const onPdf = (n: number | null): n is number => n !== null && Number.isInteger(n) && n >= 0 && n < count;
     const wanted = doc.pages.map(({ ref }) => ref.sourcePage).filter(onPdf);
     const copied = await out.copyPages(source, wanted);
-    const font = await fontFor(out, doc.pages);
+    const font = await fontFor(out, doc.pages, options.handwriting);
     let next = 0;
     let lastSize: [number, number] = [RM2_PAGE.width / UNITS_PER_POINT, RM2_PAGE.height / UNITS_PER_POINT];
     for (const { ref, page } of doc.pages) {
@@ -59,15 +65,15 @@ export async function documentToPdf(doc: ReadDocument, options: PdfOptions = {})
       } else {
         pdfPage = out.addPage(lastSize); // inserted on the tablet: a blank page like the one before it
       }
-      if (page) drawOnPdfPage(out, pdfPage, page, font, paper);
+      if (page) drawOnPdfPage(out, pdfPage, page, font, paper, options.handwriting?.get(ref.id));
     }
     return out.save();
   }
 
   const out = await PDFDocument.create();
   out.setTitle(doc.bundle.metadata.name);
-  const font = await fontFor(out, doc.pages);
-  for (const { page } of doc.pages) {
+  const font = await fontFor(out, doc.pages, options.handwriting);
+  for (const { ref, page } of doc.pages) {
     if (!page) {
       out.addPage([RM2_PAGE.width / UNITS_PER_POINT, RM2_PAGE.height / UNITS_PER_POINT]);
       continue;
@@ -75,7 +81,7 @@ export async function documentToPdf(doc: ReadDocument, options: PdfOptions = {})
     const height = Math.max(page.height, contentBottom(page) + 40);
     const W = page.width / UNITS_PER_POINT, H = height / UNITS_PER_POINT;
     const pdfPage = out.addPage([W, H]);
-    draw(out, pdfPage, page, pdfMapping({ x0: 0, y0: 0, x1: W, y1: H }), font, paper);
+    draw(out, pdfPage, page, pdfMapping({ x0: 0, y0: 0, x1: W, y1: H }), font, paper, options.handwriting?.get(ref.id));
   }
   return out.save();
 }
@@ -91,20 +97,22 @@ async function loadOrNull(bytes: Uint8Array): Promise<PDFDocument | null> {
   }
 }
 
-/** Helvetica, embedded only when some page has typed text to set. */
-async function fontFor(pdf: PDFDocument, pages: ReadDocument['pages']): Promise<PDFFont | null> {
-  return pages.some(({ page }) => page?.text?.paragraphs.some((p) => p.text)) ? pdf.embedFont(StandardFonts.Helvetica) : null;
+/** Helvetica, embedded only when some page has typed text to set or handwriting read. */
+async function fontFor(pdf: PDFDocument, pages: ReadDocument['pages'], handwriting?: Handwriting): Promise<PDFFont | null> {
+  const text = pages.some(({ ref, page }) => page?.text?.paragraphs.some((p) => p.text) || (handwriting?.get(ref.id)?.length ?? 0) > 0);
+  return text ? pdf.embedFont(StandardFonts.Helvetica) : null;
 }
 
-function drawOnPdfPage(pdf: PDFDocument, pdfPage: PDFPage, page: Page, font: PDFFont | null, paper: Rgba): void {
+function drawOnPdfPage(pdf: PDFDocument, pdfPage: PDFPage, page: Page, font: PDFFont | null, paper: Rgba, written: HandwrittenLine[] = []): void {
   const box = pdfPage.getCropBox();
   const rotate = pdfPage.getRotation().angle;
-  // Typed text on a turned page would need turning too; ink and highlights are what such pages carry.
-  draw(pdf, pdfPage, page, pdfMapping({ x0: box.x, y0: box.y, x1: box.x + box.width, y1: box.y + box.height }, undefined, rotate), rotate % 360 === 0 ? font : null, paper);
+  draw(pdf, pdfPage, page, pdfMapping({ x0: box.x, y0: box.y, x1: box.x + box.width, y1: box.y + box.height }, undefined, rotate), font, paper, written, rotate);
 }
 
-/** The page's highlights, ink and typed text onto `pdfPage`, through `map`. */
-function draw(pdf: PDFDocument, pdfPage: PDFPage, page: Page, map: PdfMapping, font: PDFFont | null, paper: Rgba): void {
+/** The page's highlights, ink and typed text onto `pdfPage`, through `map`; its handwriting as read, invisible. */
+function draw(pdf: PDFDocument, pdfPage: PDFPage, page: Page, map: PdfMapping, font: PDFFont | null, paper: Rgba, written: HandwrittenLine[] = [], rotate = 0): void {
+  // Text on a page shown turned (/Rotate) is turned with it, so it reads upright as the page is shown.
+  const turned = rotate % 360 ? { rotate: degrees(rotate) } : {};
   const states = new Map<string, PDFName>();
   const state = (alpha: number, multiply: boolean): PDFName | null => {
     if (alpha >= 1 && !multiply) return null;
@@ -166,7 +174,21 @@ function draw(pdf: PDFDocument, pdfPage: PDFPage, page: Page, map: PdfMapping, f
       const safe = encodable(font, text);
       if (!safe.trim()) continue;
       const [X, Y] = map.toPdf(line.x - (line.marker ? 36 : 0), line.baseline);
-      pdfPage.drawText(safe, { x: X, y: Y, size: line.fontSize / k, font });
+      pdfPage.drawText(safe, { x: X, y: Y, size: line.fontSize / k, font, ...turned });
+    }
+  }
+  if (font && written.length) {
+    // First, where the page's handwriting begins: what reads the PDF's text (search, Bart) is told it was read by
+    // machine, as the Markdown says it.
+    const [LX, LY] = map.toPdf(Math.min(...written.map((l) => l.x)), Math.min(...written.map((l) => l.y)));
+    pdfPage.drawText(encodable(font, MACHINE_READ), { x: LX, y: LY, size: 4, font, opacity: 0, ...turned });
+    // Each line at the foot of its box, about as tall: a selection of it lands on the ink it was read from.
+    for (const line of written) {
+      const safe = encodable(font, line.text);
+      if (!safe.trim()) continue;
+      const size = Math.max(3, (line.h / UNITS_PER_POINT) * 0.75);
+      const [X, Y] = map.toPdf(line.x, line.y + line.h * 0.8); // the baseline, in the page's shown frame
+      pdfPage.drawText(safe, { x: X, y: Y, size, font, opacity: 0, ...turned });
     }
   }
 }

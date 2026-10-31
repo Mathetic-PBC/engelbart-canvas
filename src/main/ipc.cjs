@@ -220,7 +220,7 @@ function createStore({ homeDir, rootDir = null, fixturesDir, inspectPdf: readPdf
 // (MATH-54 build 3a): { selection(), screenshot() } (the app passes that window's browser views'), or null.
 // `overleafFor(win, stage)`: a window's Overleaf tabs for an @bart turn (MATH-65; overleaf/stage.cjs forTurn), or null.
 // `getUpdates()`: the updater (updates.cjs), made after this is registered; null until then, and in the tests.
-function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, remarkable = null, remarkableRows = { reconcile: async () => {}, remove: async () => {} }, openPrivacySettings = async () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [] }) {
+function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, revealItem, confirmReset, writeClipboard, bart, readModels, rememberModelChoice = () => null, modelSettings = null, notify, pickPaths = async () => [], beforeContextChange = async () => {}, describe = createDescriber(), identifyRepo = createRepoIdentifier(), listRemoteFiles = createRemoteFileLister(), github = null, openGithubPage = () => {}, zotero = null, zoteroLibrary = null, remarkable = null, remarkableRows = { reconcile: async () => {}, remove: async () => {} }, remarkableSend = null, openPrivacySettings = async () => {}, tools = null, builds = null, sandbox = null, windowHandler = null, reply = null, announce = () => {}, pdfAdded = () => {}, fetchUrl = globalThis.fetch, savePageFor = null, stagePageFor = null, overleafFor = null, getUpdates = () => null, connect = null, connectors = null, appleNotes = null, connectSignedIn = async () => [] }) {
   const handle = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, trustedHandler(handler));
   const fromWindow = windowHandler || ((fn) => trustedHandler((...args) => fn(null, ...args)));
   const handleFor = (channel, handler) => ipcMain.handle(`engelbart:${channel}`, fromWindow(handler));
@@ -396,6 +396,21 @@ function registerEngelbartIpc({ ipcMain, trustedHandler, store, openExternal, re
     void rm().sync().catch(() => {});
     return rm().status();
   });
+  // Send to reMarkable (remarkable/send.cjs): remarkable-send(name, bytes) hands a PDF to the reMarkable app → { state:
+  // 'sent' | 'drop' | 'given', name, file?, since? }, or { error } in words; after a 'drop', remarkable-await-drop({ name,
+  // since }) waits for it to come into the app's library → { state: 'sent' | 'waited' }.
+  const sender = () => { if (!remarkableSend) throw new Error('reMarkable is not available'); return remarkableSend; };
+  handle('remarkable-send', async (name, bytes) => {
+    if (!(bytes instanceof Uint8Array)) throw new TypeError('bytes must be a Uint8Array');
+    try { return await sender().send({ name: str(name, 'name', 512), bytes }); }
+    catch (error) { if (error && error.code && error.code !== 'send') return { error: error.message, code: error.code }; throw error; }
+  });
+  handle('remarkable-await-drop', async (input) => {
+    if (!input || typeof input !== 'object') throw new TypeError('input is invalid');
+    const since = Array.isArray(input.since) ? input.since.filter((id) => typeof id === 'string').slice(0, 100000) : [];
+    return sender().awaitDrop({ name: str(input.name, 'name', 512), since, file: typeof input.file === 'string' ? input.file : null });
+  });
+  handle('remarkable-cancel-drop', (name) => { sender().cancel(str(name, 'name', 512)); return true; });
   handle('remarkable-help', async (what) => {
     const page = str(what, 'page', 16);
     if (page === 'app') await openExternal(REMARKABLE_APP);

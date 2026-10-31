@@ -89,12 +89,27 @@ Used: rmscene (MIT; structure ported, fixtures), notable (Apache-2.0; a fixture 
 Read only: rmapi and rmfakecloud (AGPL), remarks, Scrybble and inkstone (GPL/AGPL). rmc's pen model (LGPL ancestry) was
 not used.
 
-### 8. Not done
+### 8. Handwriting and sending (added the same day)
 
-- Handwriting as text: the tablet converts handwriting only when asked (it then becomes typed text, which is read).
-  Bart sees a notebook's typed text and highlights, not its handwriting; a vision model on the rendered pages could.
-- Sending to the tablet: reMarkable's only supported way is dropping a file into its app.
+- **Handwriting as text:** the tablet converts handwriting only when asked. Engelbart reads it itself with the Mac's
+  Vision text recognition (VNRecognizeTextRequest, accurate, language correction, languages detected), through a short
+  JavaScript for Automation script: the handwriting is drawn ink-only into a PDF, PDFKit rasterises it at 144 dpi, Vision
+  reads it. On a real notebook: about 0.5 s a page (at 216 dpi it was 6 s a page and read no better), confidence ~0.93,
+  most lines right and some words wrong ("hor a shour" for "have a shower"), so it is always labelled as machine-read.
+  It goes into the PDF as invisible text (as a scanned page is made searchable), so anything that reads PDF text reads it.
+- **Sending:** the reMarkable app declares no document types or URL schemes; its documented import is drag-and-drop. So
+  a PDF is handed to it with macOS's `open -a` and its library watched for the document; when it does not arrive, the
+  window offers the file to drag in.
+- **What comes back:** the app keeps a sent PDF as a document of its own (a new id), which Connect would bring back
+  beside the original. The sync is told a name is on its way before the app is given it (`sent.json`, kept a week)
+  and which document it became once seen, and leaves that document out of the library while nobody has written on it.
+
+### 9. Not done
+
 - Ink on ebooks over their text (it follows the tablet's own reflow of the book); images placed on a page (3.28).
+- Sending an ebook (only PDFs), and annotations made on the tablet coming back onto the Engelbart PDF they were sent from
+  (once written on, the copy comes in as a reMarkable item of its own, beside the original: ink from the tablet and
+  highlights made in Engelbart stay apart).
 - The cloud, should reMarkable ever offer an approved route: the protocol (a content-addressed hash tree, a root of
   `{hash, generation}` read from `/sync/v4/root` and written by compare-and-swap, blobs by sha256, a WebSocket that says
   when a sync completed) would make incremental sync cheap; a source for it would sit beside the desktop one.

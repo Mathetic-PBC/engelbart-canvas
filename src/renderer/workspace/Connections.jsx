@@ -155,6 +155,7 @@ export function remarkableSyncLine(status) {
   const problems = Array.isArray(status.problems) ? status.problems.filter((p) => p && p.name) : [];
   const failed = problems.length ? `${problems.length === 1 ? `“${problems[0].name}” could not be read` : `${problems.length} notebooks could not be read: ${problems.slice(0, 3).map((p) => `“${p.name}”`).join(', ')}${problems.length > 3 ? '…' : ''}`}. They’ll be tried again.` : '';
   if (status.state === 'syncing') return { text: 'Syncing…', busy: true, error: false, problems: failed };
+  if (status.state === 'reading' && status.reading) return { text: `Reading handwriting… ${Math.min(status.reading.done + 1, status.reading.of)} of ${status.reading.of}`, busy: true, error: false, problems: failed };
   if (status.state === 'error') return { text: status.error || 'Your notebooks could not be synced.', busy: false, error: true, problems: failed };
   const kept = Number(status.kept) || 0;
   if (status.state === 'synced') return { text: `Synced · ${status.documents} ${status.documents === 1 ? 'notebook' : 'notebooks'} in your library${kept ? ` · ${kept} kept that the reMarkable app no longer has` : ''}`, busy: false, error: false, problems: failed };

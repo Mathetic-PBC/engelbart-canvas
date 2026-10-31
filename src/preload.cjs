@@ -117,6 +117,12 @@ const engelbartAPI = Object.freeze({
   remarkableSync: invoke('remarkable-sync'),
   remarkableHelp: invoke('remarkable-help'),
   onRemarkable: (callback) => subscribe('engelbart:remarkable', callback),
+  // Send to reMarkable: remarkableSend(name, bytes) → { state: 'sent' | 'drop' | 'given', name, file, since } or { error };
+  // after a 'drop', remarkableDrag(file) on the chip's dragstart, and remarkableAwaitDrop({ name, since }).
+  remarkableSend: invoke('remarkable-send'),
+  remarkableAwaitDrop: invoke('remarkable-await-drop'),
+  remarkableCancelDrop: invoke('remarkable-cancel-drop'),
+  remarkableDrag: (file) => ipcRenderer.send('remarkable:drag', String(file)),
   // ⌘J pressed while a Browser page has the keyboard (src/main/browser/views.cjs); the app's own pages see the key themselves.
   onNextWorkspace: (callback) => subscribe('engelbart:next-workspace', callback),
   listProjects: invoke('list-projects'),

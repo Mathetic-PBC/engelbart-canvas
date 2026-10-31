@@ -52,6 +52,8 @@ const { createZoteroSync, scheduleSyncs: scheduleZoteroSyncs } = require('./zote
 const { mirrorDir: zoteroMirrorDir } = require('./zotero/mirror.cjs');
 const { createRemarkableSync, scheduleSyncs: scheduleRemarkableSyncs, mirrorDir: remarkableMirrorDir } = require('./remarkable/sync.cjs');
 const { reconcileRows: reconcileRemarkableRows, removeRows: removeRemarkableRows } = require('./remarkable/rows.cjs');
+const { createRemarkableSend } = require('./remarkable/send.cjs');
+const createRemarkableDesktop = (...args) => require('remarkable-bridge').createDesktopSource(...args);
 const { createOverleafCopies } = require('./overleaf/copy.cjs');
 const { createOverleafStage } = require('./overleaf/stage.cjs');
 const { createSandboxManager } = require('./sandbox/manager.cjs');
@@ -110,7 +112,9 @@ let settings = null;
 let store = null;
 let sweeper = null;
 let zoteroLibrary = null; // the Zotero library's mirror (src/main/zotero/sync.cjs), made with the Zotero sign-in
-let remarkable = null; // the reMarkable app's notebooks as a library folder (src/main/remarkable/sync.cjs)
+let remarkable = null; // the reMarkable app's notebooks as library items (src/main/remarkable/sync.cjs)
+let remarkableSend = null; // Send to reMarkable (src/main/remarkable/send.cjs)
+const remarkableDragIcons = new Map(); // a copy it made → its icon, for the drag into the reMarkable app
 let bart = null;
 let builds = null;
 let sandbox = null;
@@ -315,6 +319,18 @@ function registerTerminalIpc() {
       } else if (phase === 'end') ctx.edgeResize = null;
     } catch {
       // A send-only gesture is deliberately ignored when malformed.
+    }
+  });
+  // Send to reMarkable's fallback (remarkable/send.cjs): the copy it made, dragged out of the window into the reMarkable
+  // app. Only a file it made, from the app's own page.
+  ipcMain.on('remarkable:drag', (event, file) => {
+    try {
+      assertTrustedRenderer(event, APP_URL);
+      if (!remarkableSend || !remarkableSend.owns(file)) return;
+      const icon = remarkableDragIcons.get(file);
+      if (icon && !icon.isEmpty()) event.sender.startDrag({ file, icon });
+    } catch {
+      // A drag that cannot start leaves the window as it was.
     }
   });
   // A Stage starts (true) or stops (false) taking its window's new-window links; the window's open handler asks.
@@ -884,8 +900,17 @@ if (!hasSingleInstanceLock) {
       ...(process.env.ENGELBART_REMARKABLE_LIBRARY ? { findLibrary: async () => process.env.ENGELBART_REMARKABLE_LIBRARY } : {}),
       onChange: (status) => sendToWindow('engelbart:remarkable', status),
       onSynced: () => remarkableRows.reconcile(),
+      // Handwriting read into a notebook's PDF: its text is read again for search and summaries (the sweeper's pass).
+      onRead: () => pdfAdded(),
+      // ENGELBART_REMARKABLE_HANDWRITING=off reads no handwriting, for scripted runs only.
+      handwriting: process.env.ENGELBART_REMARKABLE_HANDWRITING !== 'off',
     });
     app.on('will-quit', () => remarkable.stop());
+    // Send to reMarkable (remarkable/send.cjs): a PDF handed to the reMarkable app, which imports it and syncs it to the
+    // tablet; its library (the one Connect reads) says when it has come. The window drags the file in when the app
+    // does not take it by itself (remarkable-drag below).
+    // What it sends comes back from the app as a copy, which the sync keeps out of the library until it is written on.
+    remarkableSend = createRemarkableSend({ list: () => createRemarkableDesktop().list(), expect: (name) => remarkable.expectSent(name), arrived: (entry) => remarkable.sentArrived(entry) });
     const remarkableConnected = () => { try { return remarkable.status().connected; } catch { return false; } };
     setTimeout(() => { if (remarkableConnected()) { remarkable.watch(); void remarkable.autoSync().catch(() => {}); } }, 4000);
     const remarkableSchedule = scheduleRemarkableSyncs(remarkable, { connected: remarkableConnected });
@@ -1033,6 +1058,17 @@ if (!hasSingleInstanceLock) {
       zoteroLibrary,
       remarkable,
       remarkableRows,
+      remarkableSend: {
+        async send(input) {
+          for (const file of remarkableDragIcons.keys()) if (!fs.existsSync(file)) remarkableDragIcons.delete(file); // copies gone
+          const result = await remarkableSend.send(input);
+          // macOS wants a picture for a drag: the file's own icon, made now, since a drag's start cannot wait for it.
+          if (result.state === 'drop') remarkableDragIcons.set(result.file, await app.getFileIcon(result.file).catch(() => null));
+          return result;
+        },
+        awaitDrop: (input) => remarkableSend.awaitDrop(input),
+        cancel: (name) => remarkableSend.cancel(name),
+      },
       openPrivacySettings: () => electronShell.openExternal('x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles'),
       identifyRepo: createRepoIdentifier({ auth: github.authHeaders }),
       listRemoteFiles: createRemoteFileLister({ auth: github.authHeaders }),

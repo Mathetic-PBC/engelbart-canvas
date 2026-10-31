@@ -3,7 +3,7 @@
 //
 //   remarkable                    what it found, and what to type next
 //   remarkable list               every notebook and PDF, by folder
-//   remarkable read <name>        a notebook's typed text and highlights
+//   remarkable read <name>        a notebook's typed text, highlights and handwriting (read by the Mac)
 //   remarkable save <name>        a PDF of it (ink included) and its text, in Downloads, shown in Finder
 //   remarkable watch              notebooks as they change
 //
@@ -16,6 +16,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import type { Entry } from './doc/bundle.ts';
 import { documentMarkdown, readDocument } from './document.ts';
+import { hasHandwriting, readHandwriting } from './ocr/handwriting.ts';
 import { createDesktopSource } from './sources/desktop.ts';
 import { createFolderSource } from './sources/folder.ts';
 import { SourceError, type DocumentSource } from './sources/source.ts';
@@ -23,7 +24,7 @@ import { SourceError, type DocumentSource } from './sources/source.ts';
 const HELP = `remarkable: your reMarkable notebooks, from the reMarkable app on this computer
 
   remarkable list            every notebook and PDF, by folder
-  remarkable read <name>     a notebook's typed text and highlights
+  remarkable read <name>     a notebook's text: typed, highlighted, and handwriting
   remarkable save <name>     save it as a PDF (with your ink) and its text, into Downloads
   remarkable watch           show notebooks as you change them
 
@@ -113,10 +114,11 @@ async function read(source: DocumentSource, name: string): Promise<void> {
   const entry = await find(source, name);
   if (!entry) return;
   const doc = await readDocument(await source.open(entry.id));
-  const text = documentMarkdown(doc);
+  const { handwriting } = await readWriting(doc);
+  const text = documentMarkdown(doc, { handwriting });
   const body = text.split('\n').slice(1).join('\n').trim();
   say(text);
-  if (!body) say(dim('\n(No typed text or highlights. Handwriting is saved as ink: try  remarkable save ' + name + ')'));
+  if (!body) say(dim('\n(Nothing on it could be read as text.)'));
 }
 
 async function save(source: DocumentSource, name: string): Promise<void> {
@@ -126,12 +128,13 @@ async function save(source: DocumentSource, name: string): Promise<void> {
   const doc = await readDocument(bundle);
   const { documentToPdf } = await import('./export/pdf.ts');
   console.warn = () => {}; // pdf-lib's notes on oddities in the PDF it reads mean nothing to the person
-  const pdf = await documentToPdf(doc, { source: await bundle.source() });
+  const { handwriting } = await readWriting(doc);
+  const pdf = await documentToPdf(doc, { source: await bundle.source(), handwriting });
   const dir = path.join(os.homedir(), 'Downloads');
   const base = uniqueBase(dir, entry.name.replace(/[/\\:]/g, '-'));
   const pdfPath = path.join(dir, `${base}.pdf`);
   fs.writeFileSync(pdfPath, pdf);
-  const text = documentMarkdown(doc);
+  const text = documentMarkdown(doc, { handwriting });
   const hasText = text.split('\n').length > 1;
   if (hasText) fs.writeFileSync(path.join(dir, `${base}.md`), `${text}\n`);
   say(`Saved ${bold(`${base}.pdf`)}${hasText ? ` and ${bold(`${base}.md`)}` : ''} in Downloads.`);
@@ -149,6 +152,13 @@ async function watch(source: DocumentSource): Promise<void> {
 }
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`;
+
+/** The document's handwriting, read by the Mac (nothing elsewhere), with a word while it reads. */
+async function readWriting(doc: Awaited<ReturnType<typeof readDocument>>) {
+  const pages = doc.pages.filter(({ page }) => hasHandwriting(page)).length;
+  if (pages && process.platform === 'darwin') process.stderr.write(dim(`Reading the handwriting on ${plural(pages, 'page')}…\n`));
+  return readHandwriting(doc);
+}
 
 function when(ms: number): string {
   if (!ms) return 'date unknown';
